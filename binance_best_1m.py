@@ -377,67 +377,93 @@ def _parse_zip_csv(data: bytes) -> dict[int, dict[str, Any]]:
     return result
 
 
+def _stream_download_bytes(
+    url: str,
+    *,
+    stop_check: Callable[[], bool] | None = None,
+    chunk_size: int = 65536,
+) -> bytes | None:
+    """Download URL with streaming so stop_check is honoured between chunks.
+
+    Returns the full content as bytes, or None on HTTP error / stop / exception.
+    """
+    try:
+        with requests.get(url, timeout=ARCHIVE_TIMEOUT_S, stream=True) as r:
+            if r.status_code != 200:
+                return None
+            buf: list[bytes] = []
+            for chunk in r.iter_content(chunk_size=chunk_size):
+                if stop_check and stop_check():
+                    return None  # cancelled mid-download
+                if chunk:
+                    buf.append(chunk)
+            return b"".join(buf)
+    except Exception as e:
+        append_exchange_download_log(
+            STORAGE_EXCHANGE,
+            f"[binance_best_1m] stream_download_error url={url} err={e}",
+            level="WARNING",
+        )
+        return None
+
+
 def _download_archive_monthly(
     symbol_code: str,
     year: int,
     month: int,
+    *,
+    stop_check: Callable[[], bool] | None = None,
 ) -> dict[str, dict[int, dict[str, Any]]] | None:
     """Download a monthly ZIP and return {day_tag: {minute_idx: candle}}."""
     url = _archive_url_monthly(symbol_code, year, month)
+    raw_data = _stream_download_bytes(url, stop_check=stop_check)
+    if raw_data is None:
+        return None
     try:
-        r = requests.get(url, timeout=ARCHIVE_TIMEOUT_S)
-        if r.status_code != 200:
-            return None
+        zf = zipfile.ZipFile(io.BytesIO(raw_data))
+        csv_bytes = zf.read(zf.namelist()[0]).decode()
+        result: dict[str, dict[int, dict[str, Any]]] = {}
+        for line in csv_bytes.strip().split("\n"):
+            if not line or line.startswith("open_time"):
+                continue
+            parts = line.split(",")
+            if len(parts) < 6:
+                continue
+            try:
+                ts_ms = int(parts[0])
+            except Exception:
+                continue
+            day_dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
+            day_s = day_dt.strftime("%Y-%m-%d")
+            day_start = _day_start_ms(day_dt)
+            idx = int((ts_ms - day_start) // 60_000)
+            if idx < 0 or idx >= 1440:
+                continue
+            try:
+                result.setdefault(day_s, {})[idx] = {
+                    "t": ts_ms,
+                    "o": float(parts[1]),
+                    "h": float(parts[2]),
+                    "l": float(parts[3]),
+                    "c": float(parts[4]),
+                    "v": float(parts[5]),
+                }
+            except Exception:
+                continue
+        return result
     except Exception as e:
-        append_exchange_download_log(STORAGE_EXCHANGE, f"[binance_best_1m] archive_monthly_error {symbol_code} {year}-{month:02d} err={e}", level="WARNING")
+        append_exchange_download_log(STORAGE_EXCHANGE, f"[binance_best_1m] archive_monthly_parse_error {symbol_code} {year}-{month:02d} err={e}", level="WARNING")
         return None
 
-    raw_data = r.content
-    zf = zipfile.ZipFile(io.BytesIO(raw_data))
-    csv_bytes = zf.read(zf.namelist()[0]).decode()
-    result: dict[str, dict[int, dict[str, Any]]] = {}
-    for line in csv_bytes.strip().split("\n"):
-        if not line or line.startswith("open_time"):
-            continue
-        parts = line.split(",")
-        if len(parts) < 6:
-            continue
-        try:
-            ts_ms = int(parts[0])
-        except Exception:
-            continue
-        day_dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
-        day_s = day_dt.strftime("%Y-%m-%d")
-        day_start = _day_start_ms(day_dt)
-        idx = int((ts_ms - day_start) // 60_000)
-        if idx < 0 or idx >= 1440:
-            continue
-        try:
-            result.setdefault(day_s, {})[idx] = {
-                "t": ts_ms,
-                "o": float(parts[1]),
-                "h": float(parts[2]),
-                "l": float(parts[3]),
-                "c": float(parts[4]),
-                "v": float(parts[5]),
-            }
-        except Exception:
-            continue
-    return result
 
-
-def _download_archive_daily(symbol_code: str, day: str) -> dict[int, dict[str, Any]] | None:
+def _download_archive_daily(symbol_code: str, day: str, *, stop_check: Callable[[], bool] | None = None) -> dict[int, dict[str, Any]] | None:
     """Download a daily ZIP and return {minute_idx: candle}."""
     url = _archive_url_daily(symbol_code, day)
-    try:
-        r = requests.get(url, timeout=ARCHIVE_TIMEOUT_S)
-        if r.status_code != 200:
-            return None
-    except Exception as e:
-        append_exchange_download_log(STORAGE_EXCHANGE, f"[binance_best_1m] archive_daily_error {symbol_code} {day} err={e}", level="WARNING")
+    raw_data = _stream_download_bytes(url, stop_check=stop_check)
+    if raw_data is None:
         return None
     try:
-        return _parse_zip_csv(r.content)
+        return _parse_zip_csv(raw_data)
     except Exception as e:
         append_exchange_download_log(STORAGE_EXCHANGE, f"[binance_best_1m] archive_daily_parse_error {symbol_code} {day} err={e}", level="WARNING")
         return None
@@ -701,7 +727,7 @@ def improve_best_binance_1m_for_coin(
                 "done": days_checked,
             })
 
-            month_data = _download_archive_monthly(symbol_code, cur_year, cur_month)
+            month_data = _download_archive_monthly(symbol_code, cur_year, cur_month, stop_check=_stop)
             if month_data is None:
                 notes.append(f"monthly_download_failed={cur_year}-{cur_month:02d}")
                 # Fallback: try daily ZIPs for each day in the month (monthly archive may not
@@ -727,7 +753,7 @@ def improve_best_binance_1m_for_coin(
                             days_checked += 1
                             continue
                     _emit({"stage": "daily_fallback", "day": fb_day_s, "done": days_checked})
-                    fb_candles = _download_archive_daily(symbol_code, fb_day_s)
+                    fb_candles = _download_archive_daily(symbol_code, fb_day_s, stop_check=_stop)
                     if fb_candles:
                         w = _write_candles_for_day(coin_u, fb_day_s, fb_candles, overwrite=refetch)
                         minutes_written += w
@@ -786,7 +812,7 @@ def improve_best_binance_1m_for_coin(
                 continue
 
         _emit({"stage": "daily_download", "day": day_s})
-        candles = _download_archive_daily(symbol_code, day_s)
+        candles = _download_archive_daily(symbol_code, day_s, stop_check=_stop)
         if candles:
             w = _write_candles_for_day(coin_u, day_s, candles, overwrite=refetch)
             minutes_written += w
