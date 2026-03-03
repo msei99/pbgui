@@ -5086,7 +5086,6 @@ def view_market_data():
                                     rows=n_years, cols=1,
                                     shared_xaxes=True,
                                     vertical_spacing=0.0,
-                                    row_titles=[str(y) for y in years],
                                 )
 
                                 _BAR_COLORS = {
@@ -5097,7 +5096,7 @@ def view_market_data():
                                     "out-of-session": "#2c3e50",
                                     "market holiday": "#546e7a",
                                 }
-                                _shown_in_legend: set[str] = set()
+                                _shown_in_legend: set[str] = set()  # unused, kept for trace showlegend=False
 
                                 for row_i, y in enumerate(years, start=1):
                                     max_days = 366 if calendar.isleap(int(y)) else 365
@@ -5183,9 +5182,6 @@ def view_market_data():
                                         ("market holiday", holiday_row),
                                     ] if is_stock_perp_1m else []
                                     for seg_name, seg_vals in base_segs + tradfi_segs:
-                                        show_leg = seg_name not in _shown_in_legend
-                                        if show_leg:
-                                            _shown_in_legend.add(seg_name)
                                         fig.add_trace(
                                             go.Bar(
                                                 name=seg_name,
@@ -5193,7 +5189,7 @@ def view_market_data():
                                                 y=seg_vals,
                                                 marker_color=_BAR_COLORS[seg_name],
                                                 marker_line_width=0,
-                                                showlegend=show_leg,
+                                                showlegend=False,
                                                 customdata=hover_row,
                                                 hovertemplate="%{customdata}<extra></extra>",
                                             ),
@@ -5201,7 +5197,8 @@ def view_market_data():
                                         )
                                     fig.update_yaxes(
                                         range=[0, 1440], showgrid=False,
-                                        tickvals=[720, 1440], ticktext=["½", "1d"],
+                                        title_text=str(y), title_standoff=4,
+                                        tickvals=[], ticktext=[],
                                         showline=False, zeroline=False,
                                         row=row_i, col=1,
                                     )
@@ -5209,9 +5206,9 @@ def view_market_data():
                                 fig.update_layout(
                                     barmode="stack",
                                     height=80 + n_years * 90,
-                                    margin=dict(l=10, r=10, t=30, b=20),
+                                    margin=dict(l=45, r=10, t=30, b=20),
                                     xaxis=dict(range=[0.5, 366.5], showgrid=False, showline=False, tickangle=-45),
-                                    legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
+                                    showlegend=False,
                                     bargap=0,
                                     bargroupgap=0,
                                     plot_bgcolor="rgba(0,0,0,0)",
