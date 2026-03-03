@@ -5704,6 +5704,11 @@ def view_market_data():
                             xaxis=dict(tickmode="array", tickvals=list(range(0, 720, 60)), ticktext=[f"{x:02d}h" for x in range(0, 12)]),
                             yaxis=dict(autorange="reversed", showgrid=False),
                         )
+                        _has_l2book = ex in ("hyperliquid", "binance")
+                        _l2book_span = (
+                            "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>"
+                            if _has_l2book else ""
+                        )
                         if is_stock_perp_1m:
                             holiday_legend = (
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7e57c2;color:#fff;margin-right:8px;'>market holiday</span>"
@@ -5718,11 +5723,10 @@ def view_market_data():
                             st.markdown(
                                 holiday_legend
                                 + oos_legend
-                                +
-                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
+                                + "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange</span>"
-                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>",
+                                + _l2book_span,
                                 unsafe_allow_html=True,
                             )
                         else:
@@ -5730,7 +5734,7 @@ def view_market_data():
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange</span>"
-                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>",
+                                + _l2book_span,
                                 unsafe_allow_html=True,
                             )
                         st.plotly_chart(fig, width='stretch')
