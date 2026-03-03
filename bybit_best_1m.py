@@ -72,40 +72,82 @@ _DIR_CACHE_TTL = 300.0
 # Coin / symbol helpers
 # ---------------------------------------------------------------------------
 
-def _coin_base(coin: str) -> str:
-    """
-    Normalise a PBGui coin name to its base form (without USDT suffix).
+# In-process cache for the Bybit USDT-linear mapping (coin → symbol, e.g. BONK → 1000BONKUSDT)
+_BYBIT_USDT_MAP: dict[str, str] = {}
+_BYBIT_USDT_MAP_SIG: tuple[int, int] | None = None
 
-    PBGui coins already carry the exchange-specific prefix when needed
-    (e.g. the coin is stored as '1000SHIB', not 'SHIB').  So we only need
-    to strip formatting artefacts.
+
+def _get_bybit_usdt_symbol(coin: str) -> str:
+    """Look up the Bybit USDT-linear perpetual symbol for *coin* from mapping.json.
+
+    Filters entries to ``quote == "USDT"`` and ``swap == True`` so that USDC-quoted
+    perps (e.g. BTCPERP) are excluded.  Falls back to ``{coin}USDT`` if not found.
+
+    Examples: BTC → BTCUSDT, BONK → 1000BONKUSDT, BABYDOGE → 1000000BABYDOGEUSDT
     """
-    c = str(coin or "").strip().upper()
-    # Dir format BTC_USDT:USDT → BTC
-    if c.endswith("_USDT:USDT"):
-        return c[:-len("_USDT:USDT")]
-    # CCXT format BTC/USDT:USDT → BTC
-    if "/" in c:
-        c = c.split("/")[0].strip()
-    # Archive / plain USDT suffix → strip
-    if c.endswith("USDT") and not c.endswith("_USDT"):
-        return c[:-4]
-    return c
+    global _BYBIT_USDT_MAP, _BYBIT_USDT_MAP_SIG
+    coin_key = str(coin or "").strip().upper()
+
+    mapping_path = Path.cwd() / "data" / "coindata" / "bybit" / "mapping.json"
+    sig: tuple[int, int] | None = None
+    if mapping_path.exists():
+        st = mapping_path.stat()
+        sig = (st.st_mtime_ns, st.st_size)
+
+    if sig != _BYBIT_USDT_MAP_SIG:
+        new_map: dict[str, str] = {}
+        try:
+            import json as _json
+            with open(mapping_path, encoding="utf-8") as fh:
+                raw = _json.load(fh)
+            for rec in raw if isinstance(raw, list) else []:
+                if not bool(rec.get("swap")):
+                    continue
+                if str(rec.get("quote") or "").strip().upper() != "USDT":
+                    continue
+                sym = str(rec.get("symbol") or "").strip().upper()
+                c = str(rec.get("coin") or "").strip().upper()
+                if sym and c and c not in new_map:
+                    new_map[c] = sym
+        except Exception:
+            pass
+        _BYBIT_USDT_MAP = new_map
+        _BYBIT_USDT_MAP_SIG = sig
+
+    if coin_key in _BYBIT_USDT_MAP:
+        return _BYBIT_USDT_MAP[coin_key]
+    # Fallback
+    return f"{coin_key}USDT"
 
 
 def _coin_to_archive_symbol(coin: str) -> str:
-    """BTC → BTCUSDT, 1000SHIB → 1000SHIBUSDT  (Bybit archive / REST symbol)."""
-    return _coin_base(coin) + "USDT"
+    """BTC → BTCUSDT, BONK → 1000BONKUSDT (via data/coindata/bybit/mapping.json, USDT linear perps only)."""
+    c = str(coin or "").strip().upper()
+    if c.endswith("USDT"):
+        return c
+    return _get_bybit_usdt_symbol(c)
 
 
 def _coin_to_ccxt_symbol(coin: str) -> str:
-    """BTC → BTC/USDT:USDT  (CCXT linear perp format)."""
-    return f"{_coin_base(coin)}/USDT:USDT"
+    """BTC → BTC/USDT:USDT, BONK → 1000BONK/USDT:USDT (via data/coindata/bybit/mapping.json)."""
+    archive = _coin_to_archive_symbol(coin)
+    base = archive[:-4] if archive.endswith("USDT") else archive
+    return f"{base}/USDT:USDT"
 
 
 def _coin_dir(coin: str) -> str:
-    """Return PB7-compatible dir name: BTC → BTC_USDT:USDT, 1000SHIB → 1000SHIB_USDT:USDT."""
-    return f"{_coin_base(coin)}_USDT:USDT"
+    """Return the directory name matching PB7 cache layout: BTC → BTC_USDT:USDT, BONK → 1000BONK_USDT:USDT."""
+    c = str(coin or "").strip().upper()
+    if c.endswith("_USDT:USDT"):
+        return c
+    if "/" in c:
+        c = c.split("/")[0].strip()
+    if c.endswith("USDT") and not c.endswith("_USDT"):
+        c = c[:-4]
+    base = _get_bybit_usdt_symbol(c)  # → 1000BONKUSDT
+    if base.endswith("USDT"):
+        base = base[:-4]  # → 1000BONK
+    return f"{base}_USDT:USDT"
 
 
 # ---------------------------------------------------------------------------
