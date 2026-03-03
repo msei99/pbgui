@@ -1139,8 +1139,7 @@ def get_minute_presence_for_dataset(
                 if ds_l == "1m_api" or ds_l == "candles_1m_api" or ds_l.endswith("_api"):
                     src = "api"
                 elif ds_l in ("candles_1m", "1m"):
-                    # "best" = NPZ fallback (no sources.idx); sources.idx path yields "api" instead
-                    src = "best"
+                    src = "api"
                 else:
                     src = "unknown"
                 with np.load(p) as data:
