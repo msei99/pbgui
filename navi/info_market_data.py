@@ -5279,6 +5279,8 @@ def view_market_data():
                     # Choose presence resolution
                     if ds_l in ("1m", "candles_1m", "1m_api", "candles_1m_api"):
                         day_counts = {}
+                        chart_full_start_day = str(start_day or "")
+                        chart_full_end_day = str(end_day or "")
                         if ds_l in ("1m", "candles_1m") and ex in ("hyperliquid", "binance"):
                             day_counts = get_daily_source_counts_for_range(
                                 exchange=_storage_ex,
@@ -5719,7 +5721,6 @@ def view_market_data():
                                 +
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
-                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#00897b;color:#fff;margin-right:8px;'>best (NPZ fallback)</span>"
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange</span>"
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>",
                                 unsafe_allow_html=True,
@@ -5728,7 +5729,6 @@ def view_market_data():
                             st.markdown(
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
-                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#00897b;color:#fff;margin-right:8px;'>best (NPZ fallback)</span>"
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange</span>"
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>",
                                 unsafe_allow_html=True,
