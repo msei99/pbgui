@@ -2408,6 +2408,18 @@ def view_market_data():
     if not _stored_exchange or _stored_exchange not in exchanges:
         st.session_state["market_data_exchange"] = default_exchange
 
+    # Apply pending navigation (set by _goto_job_log before widget is instantiated)
+    if "market_data_main_view_pending" in st.session_state:
+        st.session_state["market_data_main_view"] = st.session_state.pop("market_data_main_view_pending")
+
+    main_view = st.segmented_control(
+        "View",
+        label_visibility="collapsed",
+        options=["Actions", "Already have", "Activity log"],
+        default="Actions",
+        key="market_data_main_view",
+    )
+
     exchange = st.selectbox(
         "Exchange",
         options=exchanges or [default_exchange],
@@ -2840,18 +2852,6 @@ def view_market_data():
                     st.success('✅ Settings saved. Applied automatically in the next Binance refresh cycle.')
                 except Exception as e:
                     st.error(f'Failed to save settings: {e}')
-
-    # Apply pending navigation (set by _goto_job_log before widget is instantiated)
-    if "market_data_main_view_pending" in st.session_state:
-        st.session_state["market_data_main_view"] = st.session_state.pop("market_data_main_view_pending")
-
-    main_view = st.segmented_control(
-        "View",
-        label_visibility="collapsed",
-        options=["Actions", "Already have", "Activity log"],
-        default="Actions",
-        key="market_data_main_view",
-    )
 
     if main_view == "Actions":
         if str(exchange).lower() == "binance":
