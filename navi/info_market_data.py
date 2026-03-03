@@ -5094,9 +5094,8 @@ def view_market_data():
                                     "api":            "#7e57c2",
                                     "other_exchange": "#ef6c00",
                                     "missing":        "#b23b3b",
-                                    "out-of-session": "#1e2a30",
-                                    "market holiday": "#6a1b9a",
-                                    "non-trading":    "#37474f",
+                                    "out-of-session": "#2c3e50",
+                                    "market holiday": "#546e7a",
                                 }
                                 _shown_in_legend: set[str] = set()
 
@@ -5107,9 +5106,8 @@ def view_market_data():
                                     api_row      = [0] * max_days
                                     oth_row      = [0] * max_days
                                     miss_row     = [0] * max_days
-                                    outsess_row  = [0] * max_days  # non-session time within a trading day
-                                    holiday_row  = [0] * max_days
-                                    notsess_row  = [0] * max_days  # entire non-trading day
+                                    outsess_row  = [0] * max_days  # non-trading days / out-of-session
+                                    holiday_row  = [0] * max_days  # market holidays
                                     hover_row = [""] * max_days
 
                                     cur_day = dt0
@@ -5151,7 +5149,7 @@ def view_market_data():
                                                         holiday_row[doy_idx] = 1440
                                                         hover_row[doy_idx] = f"{day_s_ov} | market holiday"
                                                     else:
-                                                        notsess_row[doy_idx] = 1440
+                                                        outsess_row[doy_idx] = 1440
                                                         hover_row[doy_idx] = f"{day_s_ov} | non-trading session"
                                                     cur_day = cur_day + _timedelta(days=1)
                                                     continue
@@ -5183,7 +5181,6 @@ def view_market_data():
                                     tradfi_segs = [
                                         ("out-of-session", outsess_row),
                                         ("market holiday", holiday_row),
-                                        ("non-trading", notsess_row),
                                     ] if is_stock_perp_1m else []
                                     for seg_name, seg_vals in base_segs + tradfi_segs:
                                         show_leg = seg_name not in _shown_in_legend
