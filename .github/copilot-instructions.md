@@ -28,6 +28,7 @@
 - Before writing any `Merke Dir:` entry to the file, show the planned text as a proposal and wait for user confirmation.
 - Always write `Merke Dir:` entries in English, even if the user submits them in German.
 - **NEVER make large unsolicited design changes**: no module rewrites, file deletions, architecture overhauls, or replacing/deleting existing code without explicit user confirmation. Always propose first, ask, wait for "Yes" — then implement.
+- **Never extend the scope of a task on your own**: if you think something additional should be done, ask first — never silently do more than was requested.
 - GUI language is English throughout; only guides/tutorials are offered in both English and German.
 - **Logging architecture (3-tier model)**:
   - **Tier 1 — Daemon logs** (each own file): services with their own long-running daemon loop. Do NOT add to `LOG_GROUPS` — they get `data/logs/{service}.log` automatically.
