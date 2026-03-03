@@ -830,6 +830,27 @@ def _render_job_static_buttons(panel_key: str) -> None:
                 _goto_job_log([j])
 
 
+def _render_jobs_static_controls(
+    panel_key: str,
+    job_types: list[str] | None,
+    details_key: str,
+) -> None:
+    """Render Stop/Log buttons + Running/Pending/Failed/Done expanders outside any fragment.
+
+    Called immediately after the auto-refresh fragment so that:
+    - buttons never flicker or lose clicks due to fragment reruns
+    - expanders remain stable and can hold scroll/expand state between refreshes
+    """
+    _render_job_static_buttons(panel_key)
+    _render_jobs_panel(
+        job_types=job_types,
+        details_key=details_key,
+        panel_key=panel_key,
+        show_worker_controls=False,
+        expanders_only=True,
+    )
+
+
 def _render_jobs_panel(
     *,
     job_types: list[str] | None,
@@ -837,15 +858,15 @@ def _render_jobs_panel(
     panel_key: str,
     show_worker_controls: bool = False,
     auto_refresh_key: str | None = None,
-    skip_action_buttons: bool = False,
+    fragment_progress_only: bool = False,
+    expanders_only: bool = False,
 ) -> None:
     """Render the jobs panel.
 
-    skip_action_buttons=True: omit Stop/Log buttons from the progress table and
-    store active jobs in session state instead.  Used when this function runs
-    inside an auto-refresh fragment so that the action buttons can be rendered
-    *outside* the fragment (preventing them from flickering/disappearing on
-    every auto-rerun).
+    fragment_progress_only=True: store all job lists in session state, render only
+    summary + progress rows, then return early — expanders go outside the fragment.
+    expanders_only=True: skip summary and progress rows; only render Running/Pending/
+    Failed/Done expanders. Used by _render_jobs_static_controls.
     """
     if show_worker_controls:
         pass
@@ -853,8 +874,8 @@ def _render_jobs_panel(
     try:
         jobs = list_jobs(states=["pending", "running"], limit=20)
         jobs = _filter_jobs_by_type(jobs, job_types)
-        if skip_action_buttons:
-            # Bridge: expose current jobs to the static button renderer outside this fragment
+        if fragment_progress_only:
+            # Store active jobs for _render_jobs_static_controls outside the fragment
             st.session_state[f"{panel_key}_live_jobs"] = jobs
         pending_jobs = list_jobs(states=["pending"], limit=200)
         pending_jobs = _filter_jobs_by_type(pending_jobs, job_types)
@@ -862,88 +883,99 @@ def _render_jobs_panel(
         done_jobs = _filter_jobs_by_type(done_jobs, job_types)
         failed_jobs = list_jobs(states=["failed"], limit=200)
         failed_jobs = _filter_jobs_by_type(failed_jobs, job_types)
-        # --- Summary line (always visible) ---
-        st.caption(
-            f"Queued/running jobs: {len(jobs)} · Pending: {len(pending_jobs)} · Done: {len(done_jobs)} · Failed: {len(failed_jobs)}"
-        )
-        if not jobs:
-            st.write("No active jobs.")
+        if fragment_progress_only:
+            st.session_state[f"{panel_key}_pending_jobs"] = pending_jobs
+            st.session_state[f"{panel_key}_done_jobs"] = done_jobs
+            st.session_state[f"{panel_key}_failed_jobs"] = failed_jobs
+        if not expanders_only:
+            # --- Summary line (always visible) ---
+            st.caption(
+                f"Queued/running jobs: {len(jobs)} · Pending: {len(pending_jobs)} · Done: {len(done_jobs)} · Failed: {len(failed_jobs)}"
+            )
+            if not jobs:
+                st.write("No active jobs.")
 
-        # Auto-restart: if there are active jobs but the worker process is dead,
-        # restart it automatically so jobs don't get stuck forever.
-        if jobs:
-            _wp = read_worker_pid()
-            if not (_wp and is_pid_running(int(_wp))):
-                try:
-                    clear_worker_pid()
-                    subprocess.Popen(
-                        [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        close_fds=True,
-                    )
-                    append_exchange_download_log(
-                        "hyperliquid",
-                        "[worker] auto-restart: worker dead but active jobs found",
-                        level="WARNING",
-                    )
-                except Exception:
-                    pass
+            # Auto-restart: if there are active jobs but the worker process is dead,
+            # restart it automatically so jobs don't get stuck forever.
+            if jobs:
+                _wp = read_worker_pid()
+                if not (_wp and is_pid_running(int(_wp))):
+                    try:
+                        clear_worker_pid()
+                        subprocess.Popen(
+                            [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            close_fds=True,
+                        )
+                        append_exchange_download_log(
+                            "hyperliquid",
+                            "[worker] auto-restart: worker dead but active jobs found",
+                            level="WARNING",
+                        )
+                    except Exception:
+                        pass
 
-        # --- Progress rows (always visible, above Running expander) ---
-        if jobs:
-            if skip_action_buttons:
-                # Wider columns — Stop/Log rendered outside the fragment as static buttons
-                h1, h2, h3, h4, h5, h6, h7 = st.columns([0.16, 0.14, 0.10, 0.07, 0.18, 0.20, 0.15])
-                h1.write("id"); h2.write("type"); h3.write("status"); h4.write("coin")
-                h5.write("chunk"); h6.write("progress"); h7.write("updated_ts")
-            else:
-                h1, h2, h3, h4, h5, h6, h7, h9, h10 = st.columns([0.14, 0.12, 0.08, 0.06, 0.16, 0.15, 0.08, 0.05, 0.05])
-                h1.write("id"); h2.write("type"); h3.write("status"); h4.write("coin")
-                h5.write("chunk"); h6.write("progress"); h7.write("updated_ts")
-                h9.write("stop"); h10.write("log")
+            # --- Progress rows (always visible, above Running expander) ---
+            if jobs:
+                if fragment_progress_only:
+                    # Wider columns — Stop/Log rendered outside the fragment as static buttons
+                    h1, h2, h3, h4, h5, h6, h7 = st.columns([0.16, 0.14, 0.10, 0.07, 0.18, 0.20, 0.15])
+                    h1.write("id"); h2.write("type"); h3.write("status"); h4.write("coin")
+                    h5.write("chunk"); h6.write("progress"); h7.write("updated_ts")
+                else:
+                    h1, h2, h3, h4, h5, h6, h7, h9, h10 = st.columns([0.14, 0.12, 0.08, 0.06, 0.16, 0.15, 0.08, 0.05, 0.05])
+                    h1.write("id"); h2.write("type"); h3.write("status"); h4.write("coin")
+                    h5.write("chunk"); h6.write("progress"); h7.write("updated_ts")
+                    h9.write("stop"); h10.write("log")
 
-        for j in jobs:
-            jid = str(j.get("id") or "").strip()
-            pr = j.get("progress") if isinstance(j.get("progress"), dict) else {}
-            coin = str((pr or {}).get("coin") or "")
-            chunk = f"{(pr or {}).get('chunk_start')}→{(pr or {}).get('chunk_end')}" if (pr or {}).get("chunk_start") else ""
+            for j in jobs:
+                jid = str(j.get("id") or "").strip()
+                pr = j.get("progress") if isinstance(j.get("progress"), dict) else {}
+                coin = str((pr or {}).get("coin") or "")
+                chunk = f"{(pr or {}).get('chunk_start')}→{(pr or {}).get('chunk_end')}" if (pr or {}).get("chunk_start") else ""
 
-            step_i = (pr or {}).get("step")
-            total_i = (pr or {}).get("total")
-            chunk_done = (pr or {}).get("chunk_done")
-            chunk_total = (pr or {}).get("chunk_total")
-            pct = 0.0
-            try:
-                if total_i:
-                    if chunk_total and step_i:
-                        frac = float(chunk_done or 0) / float(chunk_total)
-                        pct = float(max(0, int(step_i) - 1) + frac) / float(total_i)
-                    else:
-                        pct = float(step_i or 0) / float(total_i)
-            except Exception:
+                step_i = (pr or {}).get("step")
+                total_i = (pr or {}).get("total")
+                chunk_done = (pr or {}).get("chunk_done")
+                chunk_total = (pr or {}).get("chunk_total")
                 pct = 0.0
-            pct = max(0.0, min(1.0, pct))
+                try:
+                    if total_i:
+                        if chunk_total and step_i:
+                            frac = float(chunk_done or 0) / float(chunk_total)
+                            pct = float(max(0, int(step_i) - 1) + frac) / float(total_i)
+                        else:
+                            pct = float(step_i or 0) / float(total_i)
+                except Exception:
+                    pct = 0.0
+                pct = max(0.0, min(1.0, pct))
 
-            if skip_action_buttons:
-                c1, c2, c3, c4, c5, c6, c7 = st.columns([0.16, 0.14, 0.10, 0.07, 0.18, 0.20, 0.15])
-                c1.write(jid); c2.write(str(j.get("type") or "")); c3.write(str(j.get("status") or ""))
-                c4.write(coin); c5.write(chunk); c6.progress(pct); c7.write(str(j.get("updated_ts") or ""))
-            else:
-                c1, c2, c3, c4, c5, c6, c7, c9, c10 = st.columns([0.14, 0.12, 0.08, 0.06, 0.16, 0.15, 0.08, 0.05, 0.05])
-                c1.write(jid); c2.write(str(j.get("type") or "")); c3.write(str(j.get("status") or ""))
-                c4.write(coin); c5.write(chunk); c6.progress(pct); c7.write(str(j.get("updated_ts") or ""))
-                with c9:
-                    if st.button("Stop", key=f"{panel_key}_stop_{jid}"):
-                        try:
-                            ok2 = request_cancel_job(jid, reason="user stop")
-                            if not ok2:
-                                st.warning("Job not found.")
-                        except Exception as e:
-                            st.error(str(e))
-                with c10:
-                    if st.button("Log", key=f"{panel_key}_log_{jid}"):
-                        _goto_job_log([j])
+                if fragment_progress_only:
+                    c1, c2, c3, c4, c5, c6, c7 = st.columns([0.16, 0.14, 0.10, 0.07, 0.18, 0.20, 0.15])
+                    c1.write(jid); c2.write(str(j.get("type") or "")); c3.write(str(j.get("status") or ""))
+                    c4.write(coin); c5.write(chunk); c6.progress(pct); c7.write(str(j.get("updated_ts") or ""))
+                else:
+                    c1, c2, c3, c4, c5, c6, c7, c9, c10 = st.columns([0.14, 0.12, 0.08, 0.06, 0.16, 0.15, 0.08, 0.05, 0.05])
+                    c1.write(jid); c2.write(str(j.get("type") or "")); c3.write(str(j.get("status") or ""))
+                    c4.write(coin); c5.write(chunk); c6.progress(pct); c7.write(str(j.get("updated_ts") or ""))
+                    with c9:
+                        if st.button("Stop", key=f"{panel_key}_stop_{jid}"):
+                            try:
+                                ok2 = request_cancel_job(jid, reason="user stop")
+                                if not ok2:
+                                    st.warning("Job not found.")
+                            except Exception as e:
+                                st.error(str(e))
+                    with c10:
+                        if st.button("Log", key=f"{panel_key}_log_{jid}"):
+                            _goto_job_log([j])
+
+            if fragment_progress_only:
+                if auto_refresh_key and not jobs:
+                    st.session_state[auto_refresh_key] = False
+                    st.rerun()
+                return  # expanders rendered outside the fragment
 
         # --- Running expander: detailed job info (download stats, substatus etc.) ---
         def _render_job_details(match: dict) -> None:
@@ -1048,7 +1080,7 @@ def _render_jobs_panel(
                 st.code("\n".join(str(x) for x in recent_keys[:12]))
 
         if jobs:
-            with st.expander("Running", expanded=False):
+            with st.expander("Running", expanded=expanders_only):
                 for j in jobs:
                     jid_r = str(j.get("id") or "").strip()
                     status_r = str(j.get("status") or "")
@@ -1403,7 +1435,9 @@ def _goto_job_log(jobs: list[dict]) -> None:
     """
     jid = str((jobs[0] if jobs else {}).get("id") or "").strip()
     filename = f"jobs/{jid}.log" if jid else "MarketData.log"
-    st.session_state["market_data_main_view"] = "Activity log"
+    # Use a pending key — the widget key must not be modified after instantiation.
+    # The pending value is applied at the top of view_market_data before the widget renders.
+    st.session_state["market_data_main_view_pending"] = "Activity log"
     st.session_state["_log_viewer_preselect_override"] = filename
     st.rerun()
 
@@ -2791,6 +2825,10 @@ def view_market_data():
                 except Exception as e:
                     st.error(f'Failed to save settings: {e}')
 
+    # Apply pending navigation (set by _goto_job_log before widget is instantiated)
+    if "market_data_main_view_pending" in st.session_state:
+        st.session_state["market_data_main_view"] = st.session_state.pop("market_data_main_view_pending")
+
     main_view = st.segmented_control(
         "",
         options=["Actions", "Already have", "Activity log"],
@@ -2963,11 +3001,14 @@ def view_market_data():
                             panel_key="market_data_bnc_best_jobs",
                             show_worker_controls=True,
                             auto_refresh_key="market_data_bnc_best_auto_refresh",
-                            skip_action_buttons=True,
+                            fragment_progress_only=True,
                         )
                     _bnc_best_jobs_fragment()
-                    # Stop/Log buttons outside fragment — never auto-rerun, always stable
-                    _render_job_static_buttons("market_data_bnc_best_jobs")
+                    _render_jobs_static_controls(
+                        "market_data_bnc_best_jobs",
+                        ["binance_best_1m"],
+                        "market_data_bnc_best_job_details",
+                    )
                 else:
                     @st.fragment
                     def _bnc_best_jobs_fragment():
@@ -3262,11 +3303,14 @@ def view_market_data():
                             panel_key="market_data_hl_best_jobs",
                             show_worker_controls=True,
                             auto_refresh_key="market_data_best_auto_refresh",
-                            skip_action_buttons=True,
+                            fragment_progress_only=True,
                         )
                     _best_jobs_fragment()
-                    # Stop/Log buttons outside fragment — never auto-rerun, always stable
-                    _render_job_static_buttons("market_data_hl_best_jobs")
+                    _render_jobs_static_controls(
+                        "market_data_hl_best_jobs",
+                        ["hl_best_1m"],
+                        "market_data_hl_best_job_details",
+                    )
                 else:
                     @st.fragment
                     def _best_jobs_fragment():
@@ -3276,8 +3320,7 @@ def view_market_data():
                             panel_key="market_data_hl_best_jobs",
                             show_worker_controls=True,
                         )
-
-                _best_jobs_fragment()
+                    _best_jobs_fragment()
 
             with tradfi_anchor.expander("TradFi Symbol Mappings", expanded=False):
                 # Table is built live from mapping.json merged with tradfi_symbol_map.json.
@@ -3807,11 +3850,8 @@ def view_market_data():
                             panel_key="market_data_hl_jobs",
                             show_worker_controls=True,
                             auto_refresh_key="market_data_aws_auto_refresh",
-                            skip_action_buttons=True,
+                            fragment_progress_only=True,
                         )
-                    _jobs_fragment()
-                    # Stop/Log buttons outside fragment — never auto-rerun, always stable
-                    _render_job_static_buttons("market_data_hl_jobs")
                 else:
                     @st.fragment
                     def _jobs_fragment():
@@ -4006,6 +4046,12 @@ def view_market_data():
 
                 # Job queue (shown below download controls)
                 _jobs_fragment()
+                if jobs_active and _supports_fragment_run_every() and not _is_background_refresh_paused():
+                    _render_jobs_static_controls(
+                        "market_data_hl_jobs",
+                        ["hl_aws_l2book_auto"],
+                        "market_data_hl_job_details",
+                    )
 
                 # Last download job summary (auto-refresh while jobs are active)
                 try:
