@@ -5085,7 +5085,7 @@ def view_market_data():
                                 fig = make_subplots(
                                     rows=n_years, cols=1,
                                     shared_xaxes=True,
-                                    vertical_spacing=0.02,
+                                    vertical_spacing=0.0,
                                     row_titles=[str(y) for y in years],
                                 )
 
@@ -5202,6 +5202,7 @@ def view_market_data():
                                     fig.update_yaxes(
                                         range=[0, 1440], showgrid=False,
                                         tickvals=[720, 1440], ticktext=["½", "1d"],
+                                        showline=False, zeroline=False,
                                         row=row_i, col=1,
                                     )
 
@@ -5209,13 +5210,14 @@ def view_market_data():
                                     barmode="stack",
                                     height=80 + n_years * 90,
                                     margin=dict(l=10, r=10, t=30, b=20),
-                                    xaxis=dict(range=[0.5, 366.5], showgrid=False, tickangle=-45),
+                                    xaxis=dict(range=[0.5, 366.5], showgrid=False, showline=False, tickangle=-45),
                                     legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
                                     bargap=0,
                                     bargroupgap=0,
                                     plot_bgcolor="rgba(0,0,0,0)",
                                     paper_bgcolor="rgba(0,0,0,0)",
                                 )
+                                fig.update_xaxes(showline=False, zeroline=False, showgrid=False)
                                 st.caption("Overview (days). Select a month below to inspect minutes.")
                                 st.plotly_chart(fig, width='stretch')
 
