@@ -3039,6 +3039,189 @@ def view_market_data():
         elif str(exchange).lower() == "bybit":
             bybit_coin_list = [str(c).strip().upper() for c in enabled_preview if str(c).strip()]
 
+            with st.expander("Settings (Bybit Latest 1m Auto-Refresh)", expanded=False):
+                st.caption(
+                    "Configure automatic 1m candle refresh settings for Bybit. "
+                    "Changes are saved to pbgui.ini and applied automatically in the next cycle (no restart needed)."
+                )
+
+                _bbt_action_key = f"bbt_coins_action_{enabled_key}"
+                _bbt_action = st.session_state.pop(_bbt_action_key, None)
+                if _bbt_action == "all":
+                    st.session_state[enabled_key] = list(coin_options)
+                    enabled_default = list(coin_options)
+                elif _bbt_action == "clear":
+                    st.session_state[enabled_key] = []
+                    enabled_default = []
+
+                enabled_in_settings_bbt = st.multiselect(
+                    "Enabled coins",
+                    options=coin_options,
+                    default=enabled_default,
+                    key=enabled_key,
+                )
+                if dropped_defaults:
+                    st.warning(
+                        "Ignored missing saved coins (not in current options): " + ", ".join(dropped_defaults),
+                        icon="⚠️",
+                    )
+                _bbt_c_sel, _bbt_c_clr, _bbt_c_cap = st.columns([1, 1, 8])
+                with _bbt_c_sel:
+                    if st.button("Select all", key=f"bbt_sel_all_{enabled_key}"):
+                        st.session_state[_bbt_action_key] = "all"
+                        st.rerun()
+                with _bbt_c_clr:
+                    if st.button("Clear all", key=f"bbt_clr_all_{enabled_key}"):
+                        st.session_state[_bbt_action_key] = "clear"
+                        st.rerun()
+                with _bbt_c_cap:
+                    st.caption(f"Enabled: {len(enabled_in_settings_bbt)} / {len(coin_options)}")
+
+                def _bbt_read_int_ini(section: str, key: str, default: int) -> int:
+                    try:
+                        v = load_ini(section, key)
+                        s = str(v).strip() if v is not None else ''
+                        return default if s == '' else int(float(s))
+                    except Exception:
+                        return default
+
+                def _bbt_read_float_ini(section: str, key: str, default: float) -> float:
+                    try:
+                        v = load_ini(section, key)
+                        s = str(v).strip() if v is not None else ''
+                        return default if s == '' else float(s)
+                    except Exception:
+                        return default
+
+                bbt_interval_val = _bbt_read_int_ini('bybit_data', 'latest_1m_interval_seconds', 3600)
+                bbt_coin_pause_val = _bbt_read_float_ini('bybit_data', 'latest_1m_coin_pause_seconds', 0.5)
+                bbt_timeout_val = _bbt_read_float_ini('bybit_data', 'latest_1m_api_timeout_seconds', 30.0)
+                bbt_min_lb_val = _bbt_read_int_ini('bybit_data', 'latest_1m_min_lookback_days', 2)
+                bbt_max_lb_val = _bbt_read_int_ini('bybit_data', 'latest_1m_max_lookback_days', 7)
+
+                bc1, bc2, bc3, bc4, bc5 = st.columns(5)
+                with bc1:
+                    st.number_input(
+                        'Cycle interval (s)',
+                        min_value=60, max_value=3600, value=int(bbt_interval_val),
+                        step=30, key='bbt_md_setting_interval',
+                        help='How often to refresh all enabled coins (default: 3600s).',
+                    )
+                with bc2:
+                    st.number_input(
+                        'Pause between coins (s)',
+                        min_value=0.0, max_value=10.0, value=float(bbt_coin_pause_val),
+                        step=0.1, key='bbt_md_setting_coin_pause',
+                        help='Pause after each coin to avoid rate limits (default: 0.5s).',
+                    )
+                with bc3:
+                    st.number_input(
+                        'API timeout per coin (s)',
+                        min_value=10.0, max_value=120.0, value=float(bbt_timeout_val),
+                        step=5.0, key='bbt_md_setting_timeout',
+                        help='Timeout for CCXT request per coin (default: 30s).',
+                    )
+                with bc4:
+                    st.number_input(
+                        'Min lookback days',
+                        min_value=1, max_value=10, value=int(bbt_min_lb_val),
+                        step=1, key='bbt_md_setting_min_lb',
+                        help='Minimum lookback window for API fetch (default: 2 days).',
+                    )
+                with bc5:
+                    st.number_input(
+                        'Max lookback days',
+                        min_value=1, max_value=30, value=int(bbt_max_lb_val),
+                        step=1, key='bbt_md_setting_max_lb',
+                        help='Maximum lookback window for API fetch (default: 7 days).',
+                    )
+
+                if st.button('Save', key='bbt_save_settings_btn'):
+                    try:
+                        set_enabled_coins(exchange, enabled_in_settings_bbt)
+                        save_ini('bybit_data', 'latest_1m_interval_seconds', str(int(st.session_state.get('bbt_md_setting_interval', 3600))))
+                        save_ini('bybit_data', 'latest_1m_coin_pause_seconds', str(float(st.session_state.get('bbt_md_setting_coin_pause', 0.5))))
+                        save_ini('bybit_data', 'latest_1m_api_timeout_seconds', str(float(st.session_state.get('bbt_md_setting_timeout', 30.0))))
+                        save_ini('bybit_data', 'latest_1m_min_lookback_days', str(int(st.session_state.get('bbt_md_setting_min_lb', 2))))
+                        save_ini('bybit_data', 'latest_1m_max_lookback_days', str(int(st.session_state.get('bbt_md_setting_max_lb', 7))))
+                        st.success('✅ Settings saved. Applied automatically in the next Bybit refresh cycle.')
+                    except Exception as e:
+                        st.error(f'Failed to save settings: {e}')
+
+            if _supports_fragment_run_every() and not _is_background_refresh_paused():
+                @st.fragment(run_every=5)
+                def _bbt_status_fragment():
+                    _bbt_flag_path = Path(f"{PBGDIR}/data/logs/bybit_latest_1m_run_now.flag")
+                    _bbt_stop_path = Path(f"{PBGDIR}/data/logs/bybit_latest_1m_stop.flag")
+                    bbt_status_all = _load_market_data_status()
+                    bbt_status = bbt_status_all.get("bybit_latest_1m") if isinstance(bbt_status_all, dict) else {}
+                    _bbt_queued = _bbt_flag_path.exists()
+                    _bbt_running = bool(bbt_status.get("running")) if bbt_status else False
+                    with st.expander("Market Data status (Bybit Latest 1m)", expanded=False):
+                        _c1, _c2 = st.columns([1, 1])
+                        with _c1:
+                            if not _bbt_queued:
+                                if st.button("⏩ Refresh now", key="bbt_run_now_btn", help="Skip wait and trigger next Bybit refresh cycle immediately", width='stretch'):
+                                    try:
+                                        _bbt_flag_path.touch()
+                                        st.toast("Refresh triggered — cycle will start within seconds.")
+                                    except Exception as _e:
+                                        st.error(f"Failed: {_e}")
+                            else:
+                                if st.button("⏹ Cancel queued refresh", key="bbt_cancel_btn", type="primary", help="Cancel the queued refresh", width='stretch'):
+                                    try:
+                                        _bbt_flag_path.unlink(missing_ok=True)
+                                        st.toast("Queued refresh cancelled.")
+                                    except Exception as _e:
+                                        st.error(f"Failed: {_e}")
+                        with _c2:
+                            if _bbt_running:
+                                if st.button("⏹ Stop current run", key="bbt_stop_btn", type="primary", help="Stop after the current coin finishes", width='stretch'):
+                                    try:
+                                        _bbt_stop_path.touch()
+                                        st.toast("Stop signal sent — run will abort after current coin.")
+                                    except Exception as _e:
+                                        st.error(f"Failed: {_e}")
+                        if not bbt_status:
+                            st.info("No Bybit status yet. Start PBData with Bybit enabled to populate status.")
+                        else:
+                            if bbt_status.get("running"):
+                                _done = int(bbt_status.get("coins_done") or 0)
+                                _total = int(bbt_status.get("coins_total") or 0)
+                                _cur = bbt_status.get("current_coin") or "..."
+                                if _total > 0:
+                                    st.progress(_done / _total, text=f"Running: {_done} / {_total} — current: {_cur}")
+                                else:
+                                    st.info("Running...")
+                            bbt_coins_st = bbt_status.get("coins") if isinstance(bbt_status, dict) else {}
+                            bbt_interval_s = int(bbt_status.get("interval_seconds") or 0) if isinstance(bbt_status, dict) else 0
+                            if isinstance(bbt_coins_st, dict) and bbt_coins_st:
+                                bbt_status_rows = []
+                                now_bbt = _datetime.now()
+                                for coin, cst in sorted(bbt_coins_st.items()):
+                                    last_fetch = str(cst.get("last_fetch") or "") if isinstance(cst, dict) else ""
+                                    next_run = ""
+                                    if bbt_interval_s and last_fetch:
+                                        try:
+                                            last_dt = _datetime.fromisoformat(last_fetch)
+                                            next_run = max(0, int(bbt_interval_s - (now_bbt - last_dt).total_seconds()))
+                                        except Exception:
+                                            pass
+                                    api_res = cst.get("api_result") if isinstance(cst, dict) else {}
+                                    bbt_status_rows.append({
+                                        "coin": coin,
+                                        "last_fetch": last_fetch,
+                                        "result": (cst.get("result") if isinstance(cst, dict) else ""),
+                                        "lookback_days": (cst.get("lookback_days") if isinstance(cst, dict) else ""),
+                                        "minutes_written": (api_res.get("minutes_written") if isinstance(api_res, dict) else ""),
+                                        "next_run_in_s": next_run,
+                                        "note": (cst.get("note") or cst.get("error") or "") if isinstance(cst, dict) else "",
+                                    })
+                                st.dataframe(bbt_status_rows, width='stretch')
+                            else:
+                                st.info("No Bybit latest 1m status available yet.")
+                _bbt_status_fragment()
+
             # ── Best 1m archive builder ──────────────────────────────────────
             with st.expander("Build Best 1m OHLCV from Bybit Archive", expanded=True):
                 st.markdown(

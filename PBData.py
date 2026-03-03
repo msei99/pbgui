@@ -285,6 +285,14 @@ class PBData():
         self._binance_latest_1m_min_lookback_days = 2
         self._binance_latest_1m_max_lookback_days = 7
         self._binance_latest_1m_task = None
+        # Bybit latest 1m auto-refresh settings
+        self._bybit_latest_1m_enabled = True
+        self._bybit_latest_1m_interval_seconds = 3600
+        self._bybit_latest_1m_coin_pause_seconds = 0.5
+        self._bybit_latest_1m_api_timeout_seconds = 30.0
+        self._bybit_latest_1m_min_lookback_days = 2
+        self._bybit_latest_1m_max_lookback_days = 7
+        self._bybit_latest_1m_task = None
         self._market_data_status_path = _Path(f"{PBGDIR}/data/logs/market_data_status.json")
         self._market_data_status_lock = asyncio.Lock()
         # Load initial settings (ws_max, log_level, ...)
@@ -523,6 +531,23 @@ class PBData():
                 bnc_max_lb = _get_int_opt('binance_data', 'latest_1m_max_lookback_days')
                 if bnc_max_lb is not None and bnc_max_lb > 0:
                     self._binance_latest_1m_max_lookback_days = int(bnc_max_lb)
+
+                # Bybit latest 1m settings
+                bbt_interval = _get_int_opt('bybit_data', 'latest_1m_interval_seconds')
+                if bbt_interval is not None and bbt_interval > 0:
+                    self._bybit_latest_1m_interval_seconds = int(bbt_interval)
+                bbt_pause = _get_float_opt('bybit_data', 'latest_1m_coin_pause_seconds')
+                if bbt_pause is not None and bbt_pause >= 0:
+                    self._bybit_latest_1m_coin_pause_seconds = float(bbt_pause)
+                bbt_timeout = _get_float_opt('bybit_data', 'latest_1m_api_timeout_seconds')
+                if bbt_timeout is not None and bbt_timeout > 0:
+                    self._bybit_latest_1m_api_timeout_seconds = float(bbt_timeout)
+                bbt_min_lb = _get_int_opt('bybit_data', 'latest_1m_min_lookback_days')
+                if bbt_min_lb is not None and bbt_min_lb > 0:
+                    self._bybit_latest_1m_min_lookback_days = int(bbt_min_lb)
+                bbt_max_lb = _get_int_opt('bybit_data', 'latest_1m_max_lookback_days')
+                if bbt_max_lb is not None and bbt_max_lb > 0:
+                    self._bybit_latest_1m_max_lookback_days = int(bbt_max_lb)
 
                 # Pause between per-user REST calls in shared pollers
                 new_rest_pause = _get_float_opt('pbdata', 'shared_rest_user_pause_seconds')
@@ -989,6 +1014,179 @@ class PBData():
             if await _wait_for_flag(_bnc_flag, float(self._binance_latest_1m_interval_seconds)):
                 try:
                     _bnc_flag.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    async def _bybit_latest_1m_loop(self):
+        """Background loop: refresh Bybit 1m candles for enabled coins."""
+        await asyncio.sleep(16)  # Slight offset from binance loop
+        _first_iter = True
+        _resume_after_coin: str = ""
+        while True:
+            try:
+                try:
+                    self._load_settings()
+                except Exception:
+                    pass
+
+                if not self._bybit_latest_1m_enabled:
+                    await asyncio.sleep(5)
+                    continue
+
+                if _first_iter:
+                    _first_iter = False
+                    try:
+                        _saved = json.loads(self._market_data_status_path.read_text(encoding="utf-8")).get("bybit_latest_1m", {})
+                        _last_ts = float(_saved.get("last_run_ts") or 0.0)
+                        _interval = float(self._bybit_latest_1m_interval_seconds)
+                        _remaining = _interval - (datetime.now().timestamp() - _last_ts) - 16.0
+                        if _saved.get("running"):
+                            _resume_after_coin = str(_saved.get("current_coin") or "")
+                            _human_log("PBData", f"[market-data] Bybit latest_1m: resuming after restart, skipping up to {_resume_after_coin!r}", level="INFO")
+                        elif _remaining > 2.0:
+                            _human_log("PBData", f"[market-data] Bybit latest_1m: {_remaining:.0f}s remaining in cycle — waiting on restart", level="INFO")
+                            _bbt_flag_r = _Path(f"{PBGDIR}/data/logs/bybit_latest_1m_run_now.flag")
+                            if await _wait_for_flag(_bbt_flag_r, _remaining):
+                                try:
+                                    _bbt_flag_r.unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
+                cfg = load_market_data_config()
+                coins = list(cfg.enabled_coins.get("bybit", []) or [])
+                coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+
+                if not coins:
+                    await asyncio.sleep(float(self._bybit_latest_1m_interval_seconds))
+                    continue
+
+                _coins_done_offset = 0
+                if _resume_after_coin:
+                    if _resume_after_coin in coins:
+                        _coins_done_offset = coins.index(_resume_after_coin) + 1
+                    else:
+                        _resume_after_coin = ""
+
+                now = datetime.now()
+                now_ts = now.timestamp()
+                _prev_bbt: dict = {}
+                try:
+                    _prev_bbt = json.loads(self._market_data_status_path.read_text(encoding="utf-8")).get("bybit_latest_1m", {}).get("coins", {})
+                except Exception:
+                    pass
+                status_bbt = {
+                    "exchange": "bybit",
+                    "interval_seconds": int(self._bybit_latest_1m_interval_seconds),
+                    "last_run_ts": int(now_ts),
+                    "running": True,
+                    "current_coin": None,
+                    "coins_done": _coins_done_offset,
+                    "coins_total": len(coins),
+                    "coins": dict(_prev_bbt),
+                }
+                try:
+                    await self._update_market_data_status("bybit_latest_1m", status_bbt)
+                except Exception:
+                    pass
+
+                _skipping = bool(_resume_after_coin)
+                for coin in coins:
+                    if _skipping:
+                        if coin == _resume_after_coin:
+                            _skipping = False
+                            _resume_after_coin = ""
+                        continue
+                    coin_status: dict = {"last_fetch": None, "result": "skipped"}
+                    max_lb = int(self._bybit_latest_1m_max_lookback_days)
+                    lookback_days = int(self._bybit_latest_1m_min_lookback_days)
+
+                    try:
+                        from bybit_best_1m import get_newest_day as bybit_get_newest_day
+                        newest_day = bybit_get_newest_day(coin) or ""
+                        if newest_day:
+                            d_new = datetime.strptime(newest_day, "%Y%m%d").date()
+                            days_since = (datetime.utcnow().date() - d_new).days
+                            if days_since < 0:
+                                days_since = 0
+                            lookback_days = max(lookback_days, days_since + 1)
+                        else:
+                            lookback_days = max_lb
+                            coin_status["note"] = "no_local_data"
+                    except Exception as e:
+                        coin_status["error"] = f"coverage:{type(e).__name__}"
+
+                    if lookback_days > max_lb:
+                        coin_status["note"] = "window_limited"
+                        lookback_days = max_lb
+
+                    try:
+                        from bybit_best_1m import update_latest_bybit_1m_for_coin
+                        res = await asyncio.to_thread(
+                            update_latest_bybit_1m_for_coin,
+                            coin=coin,
+                            lookback_days=int(lookback_days),
+                            overwrite=True,
+                            timeout_s=float(self._bybit_latest_1m_api_timeout_seconds),
+                        )
+                        coin_status["last_fetch"] = now.isoformat(sep=" ", timespec="seconds")
+                        coin_status["result"] = "ok"
+                        coin_status["lookback_days"] = int(lookback_days)
+                        coin_status["api_result"] = res
+                        try:
+                            _refresh_inventory_coin("bybit", "1m", coin)
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        coin_status["last_fetch"] = now.isoformat(sep=" ", timespec="seconds")
+                        coin_status["result"] = "error"
+                        coin_status["error"] = str(e)
+
+                    status_bbt["coins"][coin] = coin_status
+                    status_bbt["coins_done"] = status_bbt.get("coins_done", 0) + 1
+                    status_bbt["current_coin"] = coin
+                    try:
+                        await self._update_market_data_status("bybit_latest_1m", status_bbt)
+                    except Exception:
+                        pass
+
+                    _bbt_stop = _Path(f"{PBGDIR}/data/logs/bybit_latest_1m_stop.flag")
+                    if _bbt_stop.exists():
+                        try:
+                            _bbt_stop.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        status_bbt["running"] = False
+                        status_bbt["current_coin"] = None
+                        status_bbt["stopped"] = True
+                        try:
+                            await self._update_market_data_status("bybit_latest_1m", status_bbt)
+                        except Exception:
+                            pass
+                        break
+
+                    if self._bybit_latest_1m_coin_pause_seconds > 0:
+                        await asyncio.sleep(float(self._bybit_latest_1m_coin_pause_seconds))
+
+                _resume_after_coin = ""
+                status_bbt["running"] = False
+                status_bbt["current_coin"] = None
+                try:
+                    await self._update_market_data_status("bybit_latest_1m", status_bbt)
+                except Exception:
+                    pass
+
+            except Exception as e:
+                try:
+                    _human_log('PBData', f"[market-data] bybit_latest_1m loop error: {e}", level='WARNING')
+                except Exception:
+                    pass
+
+            _bbt_flag = _Path(f"{PBGDIR}/data/logs/bybit_latest_1m_run_now.flag")
+            if await _wait_for_flag(_bbt_flag, float(self._bybit_latest_1m_interval_seconds)):
+                try:
+                    _bbt_flag.unlink(missing_ok=True)
                 except Exception:
                     pass
 
@@ -3593,6 +3791,8 @@ class PBData():
                     self._latest_1m_task = asyncio.create_task(self._latest_1m_loop())
                 if not hasattr(self, "_binance_latest_1m_task") or self._binance_latest_1m_task is None or self._binance_latest_1m_task.done():
                     self._binance_latest_1m_task = asyncio.create_task(self._binance_latest_1m_loop())
+                if not hasattr(self, "_bybit_latest_1m_task") or self._bybit_latest_1m_task is None or self._bybit_latest_1m_task.done():
+                    self._bybit_latest_1m_task = asyncio.create_task(self._bybit_latest_1m_loop())
             except Exception as e:
                 _human_log('PBData', f"Error starting shared pollers: {e}", level='DEBUG')
         else:
