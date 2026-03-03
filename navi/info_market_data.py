@@ -972,11 +972,12 @@ def _render_jobs_panel(
                             _goto_job_log([j])
 
             if fragment_progress_only:
-            # Do NOT call st.rerun() here when no jobs — with unconditionally-rendered
-            # run_every fragments, a full rerun would not remove the fragment (good),
-            # but was previously the cause of "fragment does not exist anymore" spam:
-            # the rerun caused the fragment to switch from run_every→plain, leaving
-            # the old run_every timer firing into the void every 5 seconds.
+                # Do NOT call st.rerun() here when no jobs — with unconditionally-rendered
+                # run_every fragments, a full rerun would not remove the fragment (good),
+                # but was previously the cause of "fragment does not exist anymore" spam:
+                # the rerun caused the fragment to switch from run_every→plain, leaving
+                # the old run_every timer firing into the void every 5 seconds.
+                return  # expanders rendered outside the fragment
 
         # --- Running expander: detailed job info (download stats, substatus etc.) ---
         def _render_job_details(match: dict) -> None:
