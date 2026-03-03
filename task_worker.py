@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import signal
 import time
@@ -28,6 +29,7 @@ from task_queue import (
     ensure_task_dirs,
     get_task_state_dir,
     get_job_log_path,
+    is_pid_running,
     move_job_file,
     update_job_file,
     write_worker_pid,
@@ -83,6 +85,16 @@ def _requeue_stale_running_jobs(max_age_s: int = 3600) -> None:
         return
     for p in sorted(running_dir.glob("*.json")):
         try:
+            # Skip jobs whose owning worker process is still alive — requeueing
+            # a job that another worker is actively running causes two workers to
+            # process the same job concurrently (doubled log entries, data races).
+            try:
+                wpid = int(json.loads(p.read_text(encoding="utf-8")).get("worker_pid") or 0)
+                if wpid > 0 and is_pid_running(wpid):
+                    _job_log(f"skipping running job {p.name} — worker PID {wpid} still alive")
+                    continue
+            except Exception:
+                pass
             st = p.stat()
             age = now - int(st.st_mtime)
             if age > int(max_age_s):
@@ -128,6 +140,23 @@ def _append_to_job_log(job_id: str, msg: str) -> None:
         ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         with open(p, "a", encoding="utf-8") as f:
             f.write(f"{ts}  {msg}\n")
+    except Exception:
+        pass
+
+
+def _init_job_log(job_id: str) -> None:
+    """Rotate any existing per-job log before a fresh run begins.
+
+    Renames the old file to ``<job_id>.prev.log`` so crash history is
+    preserved without polluting the current run's log with stale entries.
+    Without this, a requeued job would APPEND to the log from the previous
+    (crashed) run, making the log appear doubled.
+    """
+    try:
+        p = get_job_log_path(job_id)
+        if p.exists():
+            prev = p.with_name(f"{job_id}.prev.log")
+            os.replace(p, prev)
     except Exception:
         pass
 
@@ -191,7 +220,9 @@ def _run_job(job_path: Path) -> None:
     def mark_error(err: str) -> None:
         update_job_file(job_path, mutate=lambda o: o.update({"status": "failed", "error": str(err)}))
 
-    update_job_file(job_path, mutate=lambda o: o.update({"status": "running", "error": ""}))
+    # Stamp this worker's PID so _requeue_stale_running_jobs on a concurrent
+    # worker startup can check whether we are still alive before stealing the job.
+    update_job_file(job_path, mutate=lambda o: o.update({"status": "running", "error": "", "worker_pid": os.getpid()}))
 
     try:
         if jtype == "hl_aws_l2book_auto":
@@ -299,6 +330,7 @@ def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
         "hl_aws_l2book_auto start profile=%s region=%s range=%s->%s coins=%s timeout_s=%s workers=%s only_missing_1m_src_hours=%s"
         % (profile, region, start_day, end_day, len(coins), l2book_timeout_s, l2book_workers, only_missing_1m_src_hours)
     )
+    _init_job_log(job_id)
     _append_to_job_log(job_id, f"job started  coins={coins}  range={start_day}->{end_day}  profile={profile}  region={region}")
 
     days = _iter_days(start_day, end_day)
@@ -545,6 +577,7 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     total_steps = max(1, len(coins))
     step_i = 0
 
+    _init_job_log(job_id)
     _append_to_job_log(job_id, f"job started  coins={coins}  end_day={end_day}  start_day={start_day or 'inception'}  refetch={refetch}")
 
     def update_progress(**kw):
@@ -730,6 +763,7 @@ def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     total_steps = max(1, len(coins))
     step_i = 0
 
+    _init_job_log(job_id)
     _append_to_job_log(job_id, f"job started  coins={coins}  end_day={end_day}  start_day={start_day or 'inception'}  refetch={refetch}")
 
     def update_progress(**kw):
