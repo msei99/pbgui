@@ -2677,26 +2677,15 @@ def improve_best_hyperliquid_1m_archive_for_coin(
         
         # OPTIMIZATION 1: Skip days that are already complete
         if len(existing) >= 1440:
-            # For coins with l2book data, only skip if all 24 hours already have
-            # at least one l2book candle — otherwise l2book can still improve quality.
-            _can_skip = True
-            if not is_stock_perp and l2_rng is not None:
-                _l2_range_covers_day = l2_rng[0] <= d <= l2_rng[1]
-                if _l2_range_covers_day:
-                    _sc_check = get_source_codes_for_day(exchange="hyperliquid", coin=coin_dir, day=day_s)
-                    if _sc_check is None:
-                        _can_skip = False
-                    else:
-                        for _h in range(24):
-                            _h0, _h1 = _h * 60, _h * 60 + 60
-                            _any_l2 = any(
-                                _mi < len(_sc_check) and int(_sc_check[_mi]) == int(SOURCE_CODE_L2BOOK)
-                                for _mi in range(_h0, _h1)
-                            )
-                            if not _any_l2:
-                                _can_skip = False
-                                break
-            if _can_skip:
+            # For days within the local l2book range, never skip — even if 1440
+            # candles exist, some may still be SOURCE_CODE_OTHER/-API that l2book
+            # can replace with higher-quality mid-price data.
+            _in_l2book_range = (
+                not is_stock_perp
+                and l2_rng is not None
+                and l2_rng[0] <= d <= l2_rng[1]
+            )
+            if not _in_l2book_range:
                 if ENABLE_TIMING_LOGS:
                     day_total_time = time.time() - day_start_time
                     append_exchange_download_log(
@@ -2771,12 +2760,11 @@ def improve_best_hyperliquid_1m_archive_for_coin(
             for hour in range(24):
                 h0 = hour * 60
                 h1 = h0 + 60
-                any_src_l2book = False
-                for mi in range(h0, h1):
-                    if mi < len(source_codes) and int(source_codes[mi]) == int(SOURCE_CODE_L2BOOK):
-                        any_src_l2book = True
-                        break
-                if not any_src_l2book:
+                all_l2book = all(
+                    mi < len(source_codes) and int(source_codes[mi]) == int(SOURCE_CODE_L2BOOK)
+                    for mi in range(h0, h1)
+                )
+                if not all_l2book:
                     hours_to_rebuild.add(hour)
         t_hours_check = time.time() - t0
 
