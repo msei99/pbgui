@@ -16,6 +16,7 @@ from hyperliquid_aws import (
 )
 from hyperliquid_best_1m import improve_best_hyperliquid_1m_archive_for_coin, _is_stock_perp_coin
 from binance_best_1m import improve_best_binance_1m_for_coin
+from bybit_best_1m import improve_best_bybit_1m_for_coin
 from market_data import (
     append_exchange_download_log,
     load_aws_profile_credentials,
@@ -231,6 +232,8 @@ def _run_job(job_path: Path) -> None:
             _run_hl_best_1m(job_path, payload)
         elif jtype == "binance_best_1m":
             _run_binance_best_1m(job_path, payload)
+        elif jtype == "bybit_best_1m":
+            _run_bybit_best_1m(job_path, payload)
         else:
             raise RuntimeError(f"Unknown job type: {jtype}")
 
@@ -864,6 +867,125 @@ def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
         update_progress(stage="running", last_result=out)
         try:
             _refresh_inventory_coin("binanceusdm", "1m", coin)
+        except Exception:
+            pass
+
+    _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s")
+
+
+def _run_bybit_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
+    started_ts = time.time()
+    job_id = job_path.stem
+    coins = payload.get("coins")
+    coins = coins if isinstance(coins, list) else []
+    coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+
+    if not coins:
+        raise ValueError("No coins in job")
+
+    end_day = str(payload.get("end_day") or "").strip()
+    if not end_day:
+        end_day = datetime.utcnow().strftime("%Y%m%d")
+    start_day = str(payload.get("start_day") or "").strip()
+    refetch = bool(payload.get("refetch") or False)
+
+    total_steps = max(1, len(coins))
+    step_i = 0
+
+    _init_job_log(job_id)
+    _append_to_job_log(job_id, f"job started  coins={coins}  end_day={end_day}  start_day={start_day or 'inception'}  refetch={refetch}")
+
+    def update_progress(**kw):
+        def mut(o):
+            pr = o.get("progress")
+            pr = pr if isinstance(pr, dict) else {}
+            pr.update(kw)
+            pr["step"] = int(step_i)
+            pr["total"] = int(total_steps)
+            pr["mode"] = "bybit_best_1m"
+            o["progress"] = pr
+        update_job_file(job_path, mutate=mut)
+
+    update_progress(stage="starting", last_result={"days_checked": 0, "minutes_written": 0, "duration_s": 0})
+
+    for coin in coins:
+        if _STOP:
+            raise RuntimeError("Worker stopping")
+        if _is_cancel_requested(job_path):
+            raise RuntimeError("cancelled")
+        step_i += 1
+        _append_to_job_log(job_id, f"[{step_i}/{total_steps}] {coin}  starting")
+        update_progress(stage="running", coin=coin, chunk_done=0, chunk_total=0,
+                        last_result={"days_checked": 0, "minutes_written": 0,
+                                     "duration_s": int(max(0, time.time() - started_ts))})
+
+        last_chunk_update = 0.0
+        last_logged_stage = ""
+        last_log_ts2: list[float] = [0.0]
+
+        def progress_cb(snap: dict[str, Any], _coin=coin) -> None:
+            nonlocal last_chunk_update, last_logged_stage
+            now = time.time()
+            stage = str(snap.get("stage") or "running")
+            # Log stage transitions and periodic heartbeat (every 60s)
+            if stage != last_logged_stage or now - last_log_ts2[0] >= 60.0:
+                last_logged_stage = stage
+                last_log_ts2[0] = now
+                extra = ""
+                if snap.get("day"):
+                    extra = f"  day={snap['day']}"
+                elif snap.get("first_archive"):
+                    extra = f"  first_archive={snap['first_archive']}"
+                done = snap.get("done")
+                total = snap.get("total_days")
+                if done is not None and total is not None:
+                    extra += f"  {done}/{total}"
+                _append_to_job_log(job_id, f"  {_coin}  stage={stage}{extra}")
+            if now - last_chunk_update < 0.5:
+                return
+            last_chunk_update = now
+            kw: dict[str, Any] = {"stage": stage}
+            if snap.get("day"):
+                kw["day"] = str(snap["day"])
+            done = snap.get("done")
+            if done is not None:
+                total_days = snap.get("total_days")
+                kw["chunk_done"] = int(done)
+                kw["chunk_total"] = int(total_days) if total_days else int(total_steps * 100)
+            if any(k in snap for k in ("days_checked", "minutes_written", "archive_days_downloaded")):
+                kw["last_result"] = {
+                    "days_checked": int(snap.get("days_checked") or 0),
+                    "archive_days_downloaded": int(snap.get("archive_days_downloaded") or 0),
+                    "minutes_written": int(snap.get("minutes_written") or 0),
+                    "duration_s": int(max(0, time.time() - started_ts)),
+                }
+            update_progress(**kw)
+
+        def _job_stop_check() -> bool:
+            return bool(_STOP or _is_cancel_requested(job_path))
+
+        try:
+            res = improve_best_bybit_1m_for_coin(
+                coin=coin,
+                end_date=end_day,
+                start_date_override=start_day or None,
+                refetch=refetch,
+                progress_cb=progress_cb,
+                stop_check=_job_stop_check,
+            )
+        except RuntimeError as e:
+            _append_to_job_log(job_id, f"  {coin}  ERROR {e}")
+            if _is_cancel_requested(job_path):
+                raise RuntimeError("cancelled") from e
+            raise
+        out = res.to_dict()
+        if isinstance(out, dict):
+            out["duration_s"] = int(max(0, time.time() - started_ts))
+        append_exchange_download_log("bybit", f"[INFO] [bybit_best_1m_job] {coin} {out}")
+        _append_to_job_log(job_id, f"  {coin}  done  days_checked={out.get('days_checked', 0)}  archive_days_downloaded={out.get('archive_days_downloaded', 0)}  minutes_written={out.get('minutes_written', 0)}  notes={out.get('notes', [])}")
+        update_progress(stage="running", last_result=out)
+        try:
+            _refresh_inventory_coin("bybit", "1m", coin)
         except Exception:
             pass
 

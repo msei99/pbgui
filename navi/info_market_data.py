@@ -3036,8 +3036,113 @@ def view_market_data():
                         )
                     _bnc_best_jobs_fragment()
 
+        elif str(exchange).lower() == "bybit":
+            bybit_coin_list = [str(c).strip().upper() for c in enabled_preview if str(c).strip()]
+
+            # ── Best 1m archive builder ──────────────────────────────────────
+            with st.expander("Build Best 1m OHLCV from Bybit Archive", expanded=True):
+                st.markdown(
+                    "Downloads raw trade data from **public.bybit.com/trading** and aggregates to 1m OHLCV. "
+                    "Then tops up the last few days via CCXT REST. "
+                    "Coverage goes back to each symbol's listing date (BTC: 2020, ETH/DOGE: 2021+)."
+                )
+                bybit_c_coins, bybit_c_start, bybit_c_end, bybit_c_refetch = st.columns([2, 1, 1, 1])
+                with bybit_c_coins:
+                    bybit_build_coins = st.multiselect(
+                        "Coins to build / backfill",
+                        options=bybit_coin_list,
+                        default=bybit_coin_list,
+                        key="market_data_bybit_best_1m_coins",
+                    )
+                with bybit_c_start:
+                    bybit_start_date = st.date_input(
+                        "Start date (optional)",
+                        value=None,
+                        key="market_data_bybit_best_1m_start",
+                        help="Optional lower bound. If empty: symbol's inception date is used.",
+                    )
+                with bybit_c_end:
+                    bybit_end_date = st.date_input(
+                        "End date (optional)",
+                        value=None,
+                        key="market_data_bybit_best_1m_end",
+                        help="Optional upper bound. If empty: today is used.",
+                    )
+                with bybit_c_refetch:
+                    bybit_refetch = st.checkbox(
+                        "Refetch all days from scratch",
+                        value=False,
+                        key="market_data_bybit_best_1m_refetch",
+                        help="Re-downloads all archive files and overwrites existing data. Use to fix corrupted days.",
+                    )
+
+                bybit_run = st.button(
+                    "▶ Build / backfill Bybit 1m",
+                    key="market_data_bybit_best_1m_run",
+                    type="primary",
+                )
+
+                if bybit_run:
+                    try:
+                        if not bybit_build_coins:
+                            raise ValueError("No coins selected")
+                        if bybit_start_date and bybit_end_date and bybit_start_date > bybit_end_date:
+                            raise ValueError("Start date must be on or before End date")
+                        bybit_eff_end = bybit_end_date.strftime("%Y%m%d") if bybit_end_date else _date.today().strftime("%Y%m%d")
+                        job = enqueue_job(
+                            job_type="bybit_best_1m",
+                            payload={
+                                "coins": list(bybit_build_coins),
+                                "end_day": bybit_eff_end,
+                                "start_day": bybit_start_date.strftime("%Y%m%d") if bybit_start_date else "",
+                                "refetch": bool(bybit_refetch),
+                            },
+                        )
+                        append_exchange_download_log("bybit", f"[bybit_best_1m] queued job_id={job.job_id}")
+                        pid = read_worker_pid()
+                        if not (pid and is_pid_running(int(pid))):
+                            st.session_state.pop("market_data_worker_stopped_manually", None)
+                            subprocess.Popen(
+                                [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                close_fds=True,
+                            )
+                        st.success(f"Queued background build job: {job.job_id}")
+                        st.rerun()
+                    except Exception as e:
+                        append_exchange_download_log("bybit", f"[bybit_best_1m] ERROR {e}")
+                        st.error(str(e))
+
+                if _supports_fragment_run_every() and not _is_background_refresh_paused():
+                    @st.fragment(run_every=5)
+                    def _bybit_best_jobs_fragment():
+                        _render_jobs_panel(
+                            job_types=["bybit_best_1m"],
+                            details_key="market_data_bybit_best_job_details",
+                            panel_key="market_data_bybit_best_jobs",
+                            show_worker_controls=True,
+                            fragment_progress_only=True,
+                        )
+                    _bybit_best_jobs_fragment()
+                    _render_jobs_static_controls(
+                        "market_data_bybit_best_jobs",
+                        ["bybit_best_1m"],
+                        "market_data_bybit_best_job_details",
+                    )
+                else:
+                    @st.fragment
+                    def _bybit_best_jobs_fragment():
+                        _render_jobs_panel(
+                            job_types=["bybit_best_1m"],
+                            details_key="market_data_bybit_best_job_details",
+                            panel_key="market_data_bybit_best_jobs",
+                            show_worker_controls=True,
+                        )
+                    _bybit_best_jobs_fragment()
+
         elif str(exchange).lower() != "hyperliquid":
-            st.info("Market Data actions are currently implemented for Hyperliquid and Binance (USDM).")
+            st.info("Market Data actions are currently implemented for Hyperliquid, Binance (USDM) and Bybit.")
         else:
             coin_list = [str(c).strip().upper() for c in enabled_preview if str(c).strip()]
 
