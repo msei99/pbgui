@@ -5079,94 +5079,115 @@ def view_market_data():
                                     cur_iter = cur_iter + _timedelta(days=1)
                                 years = sorted(years)
 
-                                # Build flat per-day lists for stacked bar chart
-                                days_sorted_ov = sorted(
-                                    d for d in day_counts.keys()
-                                    if dt0 <= _datetime.strptime(d, "%Y%m%d").date() <= dt1
+                                # One subplot row per year — stacked bars at day-of-year position
+                                # matching the old heatmap layout but with proportional color segments
+                                n_years = len(years)
+                                fig = make_subplots(
+                                    rows=n_years, cols=1,
+                                    shared_xaxes=True,
+                                    vertical_spacing=0.02,
+                                    row_titles=[str(y) for y in years],
                                 )
-                                l2b_vals: list[int] = []
-                                api_vals: list[int] = []
-                                oth_vals: list[int] = []
-                                miss_vals: list[int] = []
-                                hover_ov: list[str] = []
-                                for day_s_ov in days_sorted_ov:
-                                    counts_ov = day_counts.get(day_s_ov) or {}
-                                    api_v = int(counts_ov.get("api") or 0)
-                                    l2b_v = int(counts_ov.get("l2Book_mid") or 0)
-                                    oth_v = int(counts_ov.get("other_exchange") or 0)
-                                    if is_stock_perp_1m:
-                                        cur_d_ov = _datetime.strptime(day_s_ov, "%Y%m%d").date()
-                                        is_holiday_ov = _is_tradfi_market_holiday(cur_d_ov, tradfi_type)
-                                        sess_ov = tradfi_sessions.get(day_s_ov)
-                                        if sess_ov is not None:
-                                            exp_ov = len(
-                                                _tradfi_expected_minute_indices_from_session(
-                                                    day=cur_d_ov,
-                                                    session_start_ms=int(sess_ov[0]),
-                                                    session_end_ms=int(sess_ov[1]),
-                                                )
-                                            )
-                                        elif tradfi_calendar_present:
-                                            exp_ov = 0
-                                        else:
-                                            exp_ov = len(_tradfi_expected_indices_for_type(cur_d_ov, tradfi_type))
-                                        if is_holiday_ov:
-                                            exp_ov = 0
-                                        miss_v = max(0, exp_ov - api_v - l2b_v - oth_v)
-                                    elif not counts_ov:
-                                        miss_v = 1440
-                                    else:
-                                        miss_v = max(0, 1440 - api_v - l2b_v - oth_v)
-                                    l2b_vals.append(l2b_v)
-                                    api_vals.append(api_v)
-                                    oth_vals.append(oth_v)
-                                    miss_vals.append(miss_v)
-                                    hover_ov.append(f"{day_s_ov} | api={api_v} l2Book={l2b_v} other={oth_v} missing={miss_v}")
 
-                                fig = go.Figure()
-                                fig.add_trace(go.Bar(
-                                    name="l2Book_mid",
-                                    x=days_sorted_ov, y=l2b_vals,
-                                    marker_color="#1e88e5",
-                                    customdata=hover_ov,
-                                    hovertemplate="%{customdata}<extra></extra>",
-                                ))
-                                fig.add_trace(go.Bar(
-                                    name="api",
-                                    x=days_sorted_ov, y=api_vals,
-                                    marker_color="#7e57c2",
-                                    customdata=hover_ov,
-                                    hovertemplate="%{customdata}<extra></extra>",
-                                ))
-                                fig.add_trace(go.Bar(
-                                    name="other_exchange",
-                                    x=days_sorted_ov, y=oth_vals,
-                                    marker_color="#ef6c00",
-                                    customdata=hover_ov,
-                                    hovertemplate="%{customdata}<extra></extra>",
-                                ))
-                                fig.add_trace(go.Bar(
-                                    name="missing",
-                                    x=days_sorted_ov, y=miss_vals,
-                                    marker_color="#b23b3b",
-                                    customdata=hover_ov,
-                                    hovertemplate="%{customdata}<extra></extra>",
-                                ))
+                                _BAR_COLORS = {
+                                    "l2Book_mid":     "#1e88e5",
+                                    "api":            "#7e57c2",
+                                    "other_exchange": "#ef6c00",
+                                    "missing":        "#b23b3b",
+                                }
+                                _shown_in_legend: set[str] = set()
+
+                                for row_i, y in enumerate(years, start=1):
+                                    max_days = 366 if calendar.isleap(int(y)) else 365
+                                    doy_vals:  list[int] = list(range(1, max_days + 1))
+                                    l2b_row  = [0] * max_days
+                                    api_row  = [0] * max_days
+                                    oth_row  = [0] * max_days
+                                    miss_row = [0] * max_days
+                                    hover_row = [""] * max_days
+
+                                    cur_day = dt0
+                                    while cur_day <= dt1:
+                                        day_s_ov = cur_day.strftime("%Y%m%d")
+                                        if not day_s_ov.startswith(str(y)):
+                                            cur_day = cur_day + _timedelta(days=1)
+                                            continue
+                                        try:
+                                            doy_idx = cur_day.timetuple().tm_yday - 1
+                                        except Exception:
+                                            cur_day = cur_day + _timedelta(days=1)
+                                            continue
+                                        if 0 <= doy_idx < max_days:
+                                            counts_ov = day_counts.get(day_s_ov) or {}
+                                            api_v = int(counts_ov.get("api") or 0)
+                                            l2b_v = int(counts_ov.get("l2Book_mid") or 0)
+                                            oth_v = int(counts_ov.get("other_exchange") or 0)
+                                            if is_stock_perp_1m:
+                                                cur_d_ov = cur_day
+                                                is_holiday_ov = _is_tradfi_market_holiday(cur_d_ov, tradfi_type)
+                                                sess_ov = tradfi_sessions.get(day_s_ov)
+                                                if sess_ov is not None:
+                                                    exp_ov = len(
+                                                        _tradfi_expected_minute_indices_from_session(
+                                                            day=cur_d_ov,
+                                                            session_start_ms=int(sess_ov[0]),
+                                                            session_end_ms=int(sess_ov[1]),
+                                                        )
+                                                    )
+                                                elif tradfi_calendar_present:
+                                                    exp_ov = 0
+                                                else:
+                                                    exp_ov = len(_tradfi_expected_indices_for_type(cur_d_ov, tradfi_type))
+                                                if is_holiday_ov:
+                                                    exp_ov = 0
+                                                miss_v = max(0, exp_ov - api_v - l2b_v - oth_v)
+                                            elif not counts_ov:
+                                                miss_v = 1440
+                                            else:
+                                                miss_v = max(0, 1440 - api_v - l2b_v - oth_v)
+                                            l2b_row[doy_idx]  = l2b_v
+                                            api_row[doy_idx]  = api_v
+                                            oth_row[doy_idx]  = oth_v
+                                            miss_row[doy_idx] = miss_v
+                                            hover_row[doy_idx] = (
+                                                f"{day_s_ov} | api={api_v} l2Book={l2b_v} other={oth_v} missing={miss_v}"
+                                            )
+                                        cur_day = cur_day + _timedelta(days=1)
+
+                                    for seg_name, seg_vals in (
+                                        ("l2Book_mid", l2b_row),
+                                        ("api", api_row),
+                                        ("other_exchange", oth_row),
+                                        ("missing", miss_row),
+                                    ):
+                                        show_leg = seg_name not in _shown_in_legend
+                                        if show_leg:
+                                            _shown_in_legend.add(seg_name)
+                                        fig.add_trace(
+                                            go.Bar(
+                                                name=seg_name,
+                                                x=doy_vals,
+                                                y=seg_vals,
+                                                marker_color=_BAR_COLORS[seg_name],
+                                                showlegend=show_leg,
+                                                customdata=hover_row,
+                                                hovertemplate="%{customdata}<extra></extra>",
+                                            ),
+                                            row=row_i, col=1,
+                                        )
+                                    fig.update_yaxes(
+                                        range=[0, 1440], showgrid=False,
+                                        tickvals=[720, 1440], ticktext=["½", "1d"],
+                                        row=row_i, col=1,
+                                    )
+
                                 fig.update_layout(
                                     barmode="stack",
-                                    height=max(220, min(320, 180 + len(days_sorted_ov))),
-                                    margin=dict(l=10, r=10, t=30, b=40),
-                                    xaxis=dict(
-                                        type="category",
-                                        tickangle=-60,
-                                        automargin=True,
-                                        showgrid=False,
-                                        tickmode="auto",
-                                        nticks=min(60, len(days_sorted_ov)),
-                                    ),
-                                    yaxis=dict(showgrid=False, range=[0, 1440], title="minutes"),
+                                    height=80 + n_years * 90,
+                                    margin=dict(l=10, r=10, t=30, b=20),
+                                    xaxis=dict(range=[0.5, 366.5], showgrid=False, tickangle=-45),
                                     legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
-                                    bargap=0.1,
+                                    bargap=0.05,
                                     plot_bgcolor="rgba(0,0,0,0)",
                                     paper_bgcolor="rgba(0,0,0,0)",
                                 )
