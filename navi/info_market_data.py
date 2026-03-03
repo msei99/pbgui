@@ -5407,8 +5407,9 @@ def view_market_data():
                                             )
                                         cur_day = cur_day + _timedelta(days=1)
 
-                                    base_segs = [
-                                        ("l2Book_mid", l2b_row),
+                                    base_segs = (
+                                        [("l2Book_mid", l2b_row)] if ex == "hyperliquid" else []
+                                    ) + [
                                         ("api", api_row),
                                         ("other_exchange", oth_row),
                                         ("missing", miss_row),
@@ -5428,7 +5429,7 @@ def view_market_data():
                                                 y=seg_vals,
                                                 marker_color=_BAR_COLORS[seg_name],
                                                 marker_line_width=0,
-                                                showlegend=show_leg,
+                                                showlegend=False,
                                                 customdata=hover_row,
                                                 hovertemplate="%{customdata}<extra></extra>",
                                             ),
@@ -5450,14 +5451,26 @@ def view_market_data():
                                 fig.update_layout(
                                     barmode="stack",
                                     height=80 + n_years * 90,
-                                    margin=dict(l=10, r=10, t=30, b=20),
+                                    margin=dict(l=10, r=10, t=10, b=20),
                                     xaxis=dict(range=[0.5, 366.5], showgrid=False, tickangle=-45, showline=False, zeroline=False),
-                                    legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
+                                    showlegend=False,
                                     bargap=0,
                                     bargroupgap=0,
                                     plot_bgcolor="rgba(0,0,0,0)",
                                     paper_bgcolor="rgba(0,0,0,0)",
                                 )
+                                # HTML badge legend — same style as minute heatmap
+                                _span = lambda label, color: f"<span style='display:inline-block;padding:6px;border-radius:4px;background:{color};color:#fff;margin-right:8px;'>{label}</span>"
+                                _ov_legend_parts = []
+                                if is_stock_perp_1m:
+                                    _ov_legend_parts.append(_span("market holiday", _BAR_COLORS["market holiday"]))
+                                    _ov_legend_parts.append(_span("out-of-session", _BAR_COLORS["out-of-session"]))
+                                _ov_legend_parts.append(_span("missing", _BAR_COLORS["missing"]))
+                                _ov_legend_parts.append(_span("api", _BAR_COLORS["api"]))
+                                _ov_legend_parts.append(_span("other_exchange", _BAR_COLORS["other_exchange"]))
+                                if ex == "hyperliquid":
+                                    _ov_legend_parts.append(_span("l2Book_mid", _BAR_COLORS["l2Book_mid"]))
+                                st.markdown("".join(_ov_legend_parts), unsafe_allow_html=True)
                                 st.caption("Overview (days). Select a month below to inspect minutes.")
                                 st.plotly_chart(fig, width='stretch')
 
@@ -5601,7 +5614,7 @@ def view_market_data():
                             colorscale = [
                                 [0.0, "#b23b3b"],
                                 [0.2, "#6a1b9a"],
-                                [0.4, "#2e7d32"],
+                                [0.4, "#7e57c2"],
                                 [0.6, "#00897b"],
                                 [0.8, "#ef6c00"],
                                 [1.0, "#1e88e5"],
@@ -5704,7 +5717,7 @@ def view_market_data():
                             xaxis=dict(tickmode="array", tickvals=list(range(0, 720, 60)), ticktext=[f"{x:02d}h" for x in range(0, 12)]),
                             yaxis=dict(autorange="reversed", showgrid=False),
                         )
-                        _has_l2book = ex in ("hyperliquid", "binance")
+                        _has_l2book = ex == "hyperliquid"
                         _l2book_span = (
                             "<span style='display:inline-block;padding:6px;border-radius:4px;background:#1e88e5;color:#fff;margin-right:8px;'>l2Book_mid</span>"
                             if _has_l2book else ""
@@ -5724,7 +5737,7 @@ def view_market_data():
                                 holiday_legend
                                 + oos_legend
                                 + "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
-                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7e57c2;color:#fff;margin-right:8px;'>api</span>"
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange</span>"
                                 + _l2book_span,
                                 unsafe_allow_html=True,
@@ -5732,7 +5745,7 @@ def view_market_data():
                         else:
                             st.markdown(
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#b23b3b;color:#fff;margin-right:8px;'>missing</span>"
-                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#2e7d32;color:#fff;margin-right:8px;'>api</span>"
+                                "<span style='display:inline-block;padding:6px;border-radius:4px;background:#7e57c2;color:#fff;margin-right:8px;'>api</span>"
                                 "<span style='display:inline-block;padding:6px;border-radius:4px;background:#ef6c00;color:#fff;margin-right:8px;'>other_exchange</span>"
                                 + _l2book_span,
                                 unsafe_allow_html=True,
