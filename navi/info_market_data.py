@@ -2391,10 +2391,16 @@ def view_market_data():
     else:
         default_exchange = exchanges[0] if exchanges else "hyperliquid"
 
+    # Pre-initialise session state only on first visit — never overwrite a user selection.
+    # Without this, Streamlit would fall back to index= on every rerun that clears
+    # the key (e.g. after the Stop button triggers a full-page rerun), jumping the
+    # exchange back to hyperliquid even if the user had chosen another exchange.
+    if "market_data_exchange" not in st.session_state:
+        st.session_state["market_data_exchange"] = default_exchange
+
     exchange = st.selectbox(
         "Exchange",
         options=exchanges or [default_exchange],
-        index=(exchanges.index(default_exchange) if default_exchange in exchanges else 0),
         key="market_data_exchange",
     )
 
