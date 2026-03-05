@@ -165,6 +165,17 @@ def pbmaster_overview(key_suffix=""):
     elif not desired and is_running:
         pbmaster.stop()
 
+def api_server_overview(key_suffix=""):
+    api_server = st.session_state.api_server
+    _key = f"service_api_server{key_suffix}"
+    is_running = api_server.is_running()
+    desired = st.session_state.get(_key, is_running)
+    st.toggle("API Server", value=is_running, key=_key, help="FastAPI REST + WebSocket server for job monitoring and live updates (no Streamlit reruns)")
+    if desired and not is_running:
+        api_server.run()
+    elif not desired and is_running:
+        api_server.stop()
+
 def overview():
     _services = [
         ("PBRun",      pbrun_overview),
@@ -174,6 +185,7 @@ def overview():
         ("PBData",     pbdata_overview),
         ("PBCoinData", pbcoindata_overview),
         ("PBMaster",   pbmaster_overview),
+        ("API Server", api_server_overview),
     ]
     cols = st.columns(4)
     for i, (name, fn) in enumerate(_services):
@@ -1282,6 +1294,76 @@ def pbmaster_details():
 
     render_log_viewer(preselect="PBMaster.log", iframe_height_offset=280)
 
+def api_server_details():
+    api_server = st.session_state.api_server
+
+    if "api_server_view_mode" not in st.session_state:
+        st.session_state.api_server_view_mode = "viewer"
+
+    if st.session_state.api_server_view_mode == "settings":
+        with st.sidebar:
+            if st.button(":material/arrow_back: Back", key="api_server_back_btn"):
+                st.session_state.api_server_view_mode = "viewer"
+                st.rerun()
+
+        # Bind host
+        if "api_server_host" not in st.session_state:
+            st.session_state.api_server_host = api_server.host
+
+        st.text_input(
+            "Bind address",
+            key="api_server_host",
+            help="Network interface to bind to. Use 0.0.0.0 for remote access (all interfaces), "
+                 "or 127.0.0.1 to restrict to localhost only. Requires restart to take effect.",
+            placeholder="0.0.0.0"
+        )
+
+        # Port
+        if "api_server_port" not in st.session_state:
+            st.session_state.api_server_port = api_server.port
+
+        st.number_input(
+            "Port",
+            min_value=1024, max_value=65535, step=1,
+            key="api_server_port",
+            help="Port for FastAPI REST API and WebSocket (default: 8000). Requires restart to take effect.",
+        )
+
+        st.divider()
+
+        _api_server_dirty = (
+            st.session_state.get("api_server_host", api_server.host) != api_server.host or
+            st.session_state.get("api_server_port", api_server.port) != api_server.port
+        )
+        if st.button(":material/save:", key="api_server_save_config",
+                     type="primary" if _api_server_dirty else "secondary"):
+            api_server.host = st.session_state.api_server_host
+            api_server.port = st.session_state.api_server_port
+            st.session_state.api_server_view_mode = "viewer"
+            st.rerun()
+        return
+
+    with st.sidebar:
+        if st.button(":material/settings: Settings", key="api_server_settings_btn"):
+            st.session_state.api_server_view_mode = "settings"
+            st.rerun()
+
+    # Service info
+    if api_server.is_running():
+        st.success(f"**API Server** running on `{api_server.host}:{api_server.port}`", icon="✅")
+        
+        st.info(
+            f"**Endpoints:**\n"
+            f"- API: `http://{api_server.host}:{api_server.port}`\n"
+            f"- Docs: `http://{api_server.host}:{api_server.port}/docs`\n"
+            f"- WebSocket: `ws://{api_server.host}:{api_server.port}/ws/jobs`\n"
+            f"- Frontend: `http://{api_server.host}:{api_server.port}/app/jobs_monitor.html`"
+        )
+    else:
+        st.warning("API Server is not running", icon="⚠️")
+
+    render_log_viewer(preselect="api_server.log", iframe_height_offset=280)
+
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
     st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
@@ -1292,7 +1374,7 @@ set_page_config("PBGUI Services")
 
 # Read active tab from session state *before* rendering the widget so the
 # title can be shown above the tabs on every rerun.
-_TABS = ["Overview", "PBRun", "PBRemote", "PBMon", "PBStat", "PBData", "PBCoinData", "PBMaster"]
+_TABS = ["Overview", "PBRun", "PBRemote", "PBMon", "PBStat", "PBData", "PBCoinData", "PBMaster", "API Server"]
 _cur_tab = st.session_state.get("services_active_tab") or "Overview"
 if _cur_tab not in _TABS:
     _cur_tab = "Overview"
@@ -1351,3 +1433,9 @@ elif active_tab == "PBMaster":
         with st.sidebar:
             pbmaster_overview(key_suffix="_det")
     pbmaster_details()
+
+elif active_tab == "API Server":
+    if st.session_state.get("api_server_view_mode", "viewer") == "viewer":
+        with st.sidebar:
+            api_server_overview(key_suffix="_det")
+    api_server_details()

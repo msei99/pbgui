@@ -545,6 +545,7 @@ def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
             try:
                 job = enqueue_job(
                     job_type="hl_best_1m",
+                    exchange="hyperliquid",
                     payload={
                         "coins": [coin],
                         "end_day": end_day,

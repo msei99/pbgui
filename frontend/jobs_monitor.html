@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Monitor - PBGui</title>
+    <link rel="stylesheet" href="/app/css/app.css">
+    <style>
+        /* Additional styles for new features */
+        .job-actions button { margin-left: 0.3rem; }
+        .btn-secondary { background: #4a5568; }
+        .btn-secondary:hover { background: #2d3748; }
+        .btn-info { background: #3182ce; }
+        .btn-info:hover { background: #2c5282; }
+        
+        /* Log Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.7);
+        }
+        .modal.active { display: flex; align-items: center; justify-content: center; }
+        .modal-content {
+            background: #1a202c;
+            border-radius: 8px;
+            padding: 1.5rem;
+            width: 90%;
+            max-width: 900px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid #2d3748;
+            padding-bottom: 0.75rem;
+        }
+        .modal-body {
+            overflow-y: auto;
+            flex: 1;
+            background: #0e1117;
+            padding: 1rem;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+        }
+        .log-line {
+            margin: 0.25rem 0;
+            color: #f1f5f9;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .close-btn {
+            background: #ef4444;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+        .close-btn:hover { background: #dc2626; }
+        
+        /* Progress details */
+        .progress-details {
+            font-size: 0.8rem;
+            color: #94a3b8;
+            margin-top: 0.5rem;
+        }
+        .progress-details .detail { margin-right: 1rem; }
+        
+        /* Job expander */
+        .job-expander {
+            margin-top: 0.5rem;
+            border-top: 1px solid #2d3748;
+            padding-top: 0.5rem;
+        }
+        .expander-toggle {
+            background: transparent;
+            border: none;
+            color: #60a5fa;
+            cursor: pointer;
+            font-size: 0.85rem;
+            padding: 0.25rem 0;
+        }
+        .expander-toggle:hover { text-decoration: underline; }
+        .expander-content {
+            display: none;
+            padding: 0.75rem;
+            background: #0f172a;
+            border-radius: 4px;
+            margin-top: 0.5rem;
+            font-size: 0.85rem;
+        }
+        .expander-content.open { display: block; }
+        .detail-row { margin: 0.3rem 0; }
+        
+        /* Tab header actions */
+        .tab-header-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 1rem;
+            padding: 0.5rem;
+            border-bottom: 1px solid #2d3748;
+        }
+        .tab-header-actions button {
+            background: #ef4444;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .tab-header-actions button:hover { background: #dc2626; }
+        .tab-header-actions button:disabled {
+            background: #4a5568;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Job Monitor</h1>
+            <div class="status">
+                <span id="connection-status" class="badge badge-connecting">Connecting...</span>
+                <span id="worker-status" class="badge badge-unknown">Worker: Unknown</span>
+            </div>
+        </header>
+
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="running">Active</button>
+            <button class="tab-btn" data-tab="done">Done</button>
+            <button class="tab-btn" data-tab="failed">Failed</button>
+        </div>
+
+        <div class="tab-content active" id="tab-running">
+            <div id="jobs-running" class="jobs-list">
+                <p class="loading">Loading...</p>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tab-done">
+            <div class="tab-header-actions">
+                <button onclick="deleteAllJobs('done')" id="delete-all-done-btn">Delete All Done Jobs</button>
+            </div>
+            <div id="jobs-done" class="jobs-list">
+                <p class="loading">Loading...</p>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tab-failed">
+            <div class="tab-header-actions">
+                <button onclick="deleteAllJobs('failed')" id="delete-all-failed-btn">Delete All Failed Jobs</button>
+            </div>
+            <div id="jobs-failed" class="jobs-list">
+                <p class="loading">Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Log Modal -->
+    <div id="log-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Job Log: <span id="log-job-id"></span></h2>
+                <button class="close-btn" onclick="closeLogModal()">Close</button>
+            </div>
+            <div class="modal-body" id="log-content">
+                <p>Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin + '/api';
+        
+        // Extract token and exchange filter from URL query parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const API_TOKEN = urlParams.get('token');
+        const EXCHANGE_FILTER = (urlParams.get('exchange') || '').trim().toLowerCase();
+        
+        if (!API_TOKEN) {
+            document.body.innerHTML = '<div style="padding:40px;text-align:center;color:#ff4b4b;">Error: No authentication token provided</div>';
+            throw new Error('Missing token');
+        }
+        
+        const WS_URL = `ws://${window.location.host}/ws/jobs?token=${API_TOKEN}`;
+        
+        let ws = null;
+        let currentTab = 'running';
+        let reconnectAttempts = 0;
+        const MAX_RECONNECT_ATTEMPTS = 5;
+        let expandedJobs = new Set();
+
+        // ── Job Filter ──
+        function matchesExchangeFilter(job) {
+            // No filter = show all jobs
+            if (!EXCHANGE_FILTER) return true;
+            
+            // Try explicit exchange field first
+            let jobExchange = (job.exchange || '').trim().toLowerCase();
+            
+            // Fallback: derive exchange from job_type for legacy jobs
+            if (!jobExchange && job.type) {
+                const jobType = job.type.toLowerCase();
+                if (jobType.startsWith('hl_') || jobType.includes('hyperliquid')) {
+                    jobExchange = 'hyperliquid';
+                } else if (jobType.startsWith('binance_') || jobType.includes('binance')) {
+                    jobExchange = 'binanceusdm';
+                } else if (jobType.startsWith('bybit_') || jobType.includes('bybit')) {
+                    jobExchange = 'bybit';
+                }
+            }
+            
+            // If still no exchange detected, show on all tabs (unknown job type)
+            if (!jobExchange) return true;
+            
+            // Match against detected exchange
+            return jobExchange === EXCHANGE_FILTER;
+        }
+
+        // ── WebSocket Connection ──
+        function connectWebSocket() {
+            const statusEl = document.getElementById('connection-status');
+            statusEl.textContent = 'Connecting...';
+            statusEl.className = 'badge badge-connecting';
+
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'badge badge-connected';
+                reconnectAttempts = 0;
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'jobs') {
+                        updateJobs(msg.data);
+                    }
+                } catch (e) {
+                    console.error('WebSocket message error:', e);
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                statusEl.textContent = 'Error';
+                statusEl.className = 'badge badge-error';
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket closed');
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'badge badge-error';
+                
+                // Try to reconnect
+                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    reconnectAttempts++;
+                    console.log(`Reconnecting... (attempt ${reconnectAttempts})`);
+                    setTimeout(connectWebSocket, 3000);
+                } else {
+                    console.log('Max reconnection attempts reached, falling back to polling');
+                    startPolling();
+                }
+            };
+        }
+
+        // ── Polling Fallback ──
+        let pollingInterval = null;
+        function startPolling() {
+            if (pollingInterval) return;
+            
+            const statusEl = document.getElementById('connection-status');
+            statusEl.textContent = 'Polling';
+            statusEl.className = 'badge badge-connecting';
+
+            pollingInterval = setInterval(async () => {
+                try {
+                    const resp = await fetch(`${API_BASE}/jobs/?states=pending,running&token=${API_TOKEN}`);
+                    const data = await resp.json();
+                    updateJobs(data.jobs);
+                } catch (e) {
+                    console.error('Polling error:', e);
+                }
+            }, 2000);
+        }
+
+        // ── Update Jobs Display ──
+        function updateJobs(jobs) {
+            const runningContainer = document.getElementById('jobs-running');
+            
+            // Apply exchange filter
+            const filteredJobs = jobs.filter(matchesExchangeFilter);
+            const activeJobs = filteredJobs.filter(j => ['pending', 'running'].includes(j.status));
+
+            if (!activeJobs || activeJobs.length === 0) {
+                runningContainer.innerHTML = '<p class="no-jobs">No active jobs.</p>';
+                return;
+            }
+
+            runningContainer.innerHTML = activeJobs.map(renderActiveJob).join('');
+        }
+
+        // ── Render Active Job (with details) ──
+        function renderActiveJob(job) {
+            const progress = job.progress || {};
+            const pct = calculateProgress(progress);
+            const coin = progress.coin || '';
+            const chunk = progress.chunk_start ? `${progress.chunk_start}→${progress.chunk_end}` : '';
+            const isExpanded = expandedJobs.has(job.id);
+            
+            const statusClass = job.status === 'running' ? 'status-running' : 'status-pending';
+            
+            // Progress details
+            const downloaded = progress.downloaded_total || 0;
+            const skipped = progress.skipped_existing_total || 0;
+            const failed = progress.failed_total || 0;
+            const dlBytes = formatBytes(progress.downloaded_bytes_total);
+            const skBytes = formatBytes(progress.skipped_existing_bytes_total);
+            const flBytes = formatBytes(progress.failed_bytes_total);
+            const stage = progress.stage || '';
+            const mode = progress.mode || '';
+            const chunkDone = progress.chunk_done || 0;
+            const chunkTotal = progress.chunk_total || 0;
+            const step = progress.step || 0;
+            const total = progress.total || 0;
+
+            return `
+                <div class="job-card">
+                    <div class="job-header">
+                        <div class="job-info">
+                            <strong class="job-id">${job.id}</strong>
+                            <span class="badge ${statusClass}">${job.status}</span>
+                            <span class="job-type">${job.type}</span>
+                        </div>
+                        <div class="job-actions">
+                            <button class="btn btn-info" onclick="showLog('${job.id}')">Log</button>
+                            <button class="btn btn-danger" onclick="cancelJob('${job.id}')">Cancel</button>
+                        </div>
+                    </div>
+                    <div class="job-details">
+                        ${coin ? `<span class="detail">Coin: ${coin}</span>` : ''}
+                        ${chunk ? `<span class="detail">Chunk: ${chunk}</span>` : ''}
+                        <span class="detail">Updated: ${job.updated_ts || ''}</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${pct}%">
+                            <span class="progress-text">${pct}%</span>
+                        </div>
+                    </div>
+                    ${total > 0 ? `
+                        <div class="progress-details">
+                            <span class="detail">Step: ${step}/${total}</span>
+                            ${chunkTotal > 0 ? `<span class="detail">Chunk: ${chunkDone}/${chunkTotal}</span>` : ''}
+                            ${stage ? `<span class="detail">Stage: ${stage}</span>` : ''}
+                            ${mode ? `<span class="detail">Mode: ${mode}</span>` : ''}
+                        </div>
+                    ` : ''}
+                    ${(downloaded + skipped + failed > 0) ? `
+                        <div class="job-expander">
+                            <button class="expander-toggle" onclick="toggleExpander('${job.id}', event)">
+                                ${isExpanded ? '▼' : '▶'} Details
+                            </button>
+                            <div class="expander-content ${isExpanded ? 'open' : ''}" id="expander-${job.id}">
+                                <div class="detail-row"><strong>Downloads:</strong> ${downloaded} files (${dlBytes})</div>
+                                <div class="detail-row"><strong>Skipped:</strong> ${skipped} files (${skBytes})</div>
+                                <div class="detail-row"><strong>Failed:</strong> ${failed} files (${flBytes})</div>
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        // ── Render Job for Done/Failed tabs ──
+        function renderJob(job) {
+            const isDone = job.status === 'done';
+            const isFailed = job.status === 'failed';
+            
+            return `
+                <div class="job-card simple">
+                    <div class="job-header">
+                        <div class="job-info">
+                            <strong class="job-id">${job.id}</strong>
+                            <span class="job-type">${job.type}</span>
+                            ${job.progress && job.progress.coin ? `<span class="detail">Coin: ${job.progress.coin}</span>` : ''}
+                        </div>
+                        <div class="job-actions">
+                            <button class="btn btn-info" onclick="showLog('${job.id}')">Log</button>
+                            ${isFailed ? `<button class="btn btn-secondary" onclick="retryJob('${job.id}')">Retry</button>` : ''}
+                            ${isDone ? `<button class="btn btn-secondary" onclick="requeueJob('${job.id}')">Requeue</button>` : ''}
+                            <button class="btn btn-danger" onclick="deleteJob('${job.id}')">Delete</button>
+                        </div>
+                    </div>
+                    <div class="job-details">
+                        <span class="detail">${job.updated_ts || ''}</span>
+                    </div>
+                    ${job.error ? `<div class="job-error" style="margin-top:0.5rem;color:#ef4444;font-size:0.85rem;">${job.error}</div>` : ''}
+                </div>
+            `;
+        }
+
+        // ── Helper Functions ──
+        function calculateProgress(pr) {
+            if (!pr.total) return 0;
+            const step = pr.step || 0;
+            const chunkDone = pr.chunk_done || 0;
+            const chunkTotal = pr.chunk_total || 1;
+            const frac = chunkTotal > 0 ? chunkDone / chunkTotal : 0;
+            const pct = ((step - 1 + frac) / pr.total) * 100;
+            return Math.min(100, Math.max(0, Math.round(pct)));
+        }
+
+        function formatBytes(bytes) {
+            if (!bytes) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i];
+        }
+
+        function toggleExpander(jobId, event) {
+            event.stopPropagation();
+            const content = document.getElementById(`expander-${jobId}`);
+            const btn = event.target;
+            if (content.classList.contains('open')) {
+                content.classList.remove('open');
+                btn.textContent = '▶ Details';
+                expandedJobs.delete(jobId);
+            } else {
+                content.classList.add('open');
+                btn.textContent = '▼ Details';
+                expandedJobs.add(jobId);
+            }
+        }
+
+        // ── API Actions ──
+        async function cancelJob(jobId) {
+            if (!confirm(`Cancel job ${jobId}?`)) return;
+            
+            try {
+                const resp = await fetch(`${API_BASE}/jobs/cancel?token=${API_TOKEN}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({job_id: jobId, reason: 'user cancel'})
+                });
+                
+                if (resp.ok) {
+                    console.log(`Job ${jobId} cancelled`);
+                } else {
+                    const err = await resp.json();
+                    alert(`Failed to cancel: ${err.detail}`);
+                }
+            } catch (e) {
+                console.error('Cancel error:', e);
+                alert('Failed to cancel job');
+            }
+        }
+
+        async function deleteJob(jobId) {
+            if (!confirm(`Delete job ${jobId}?`)) return;
+            
+            try {
+                const resp = await fetch(`${API_BASE}/jobs/${jobId}?token=${API_TOKEN}`, {
+                    method: 'DELETE'
+                });
+                
+                if (resp.ok) {
+                    console.log(`Job ${jobId} deleted`);
+                    loadTab(currentTab); // Refresh current tab
+                } else {
+                    const err = await resp.json();
+                    alert(`Failed to delete: ${err.detail}`);
+                }
+            } catch (e) {
+                console.error('Delete error:', e);
+                alert('Failed to delete job');
+            }
+        }
+
+        async function retryJob(jobId) {
+            if (!confirm(`Retry failed job ${jobId}?`)) return;
+            
+            try {
+                const resp = await fetch(`${API_BASE}/jobs/${jobId}/retry?token=${API_TOKEN}`, {
+                    method: 'POST'
+                });
+                
+                if (resp.ok) {
+                    console.log(`Job ${jobId} retried`);
+                    loadTab(currentTab); // Refresh current tab
+                } else {
+                    const err = await resp.json();
+                    alert(`Failed to retry: ${err.detail}`);
+                }
+            } catch (e) {
+                console.error('Retry error:', e);
+                alert('Failed to retry job');
+            }
+        }
+
+        async function requeueJob(jobId) {
+            if (!confirm(`Requeue job ${jobId}?`)) return;
+            
+            try {
+                const resp = await fetch(`${API_BASE}/jobs/${jobId}/requeue?token=${API_TOKEN}`, {
+                    method: 'POST'
+                });
+                
+                if (resp.ok) {
+                    console.log(`Job ${jobId} requeued`);
+                    loadTab(currentTab); // Refresh current tab
+                } else {
+                    const err = await resp.json();
+                    alert(`Failed to requeue: ${err.detail}`);
+                }
+            } catch (e) {
+                console.error('Requeue error:', e);
+                alert('Failed to requeue job');
+            }
+        }
+
+        async function deleteAllJobs(state) {
+            const stateLabel = state === 'done' ? 'done' : 'failed';
+            const exchangeLabel = EXCHANGE_FILTER ? ` for ${EXCHANGE_FILTER}` : '';
+            
+            if (!confirm(`⚠️ Delete ALL ${stateLabel} jobs${exchangeLabel}?\n\nThis action cannot be undone.`)) {
+                return;
+            }
+            
+            // Second confirmation for safety
+            if (!confirm(`Are you SURE? This will delete ALL ${stateLabel} jobs${exchangeLabel}.`)) {
+                return;
+            }
+            
+            try {
+                const payload = {
+                    delete_all: true,
+                    state: state
+                };
+                
+                // Add exchange filter if present
+                if (EXCHANGE_FILTER) {
+                    payload.exchange = EXCHANGE_FILTER;
+                }
+                
+                const resp = await fetch(`${API_BASE}/jobs/bulk-delete?token=${API_TOKEN}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                
+                if (resp.ok) {
+                    const data = await resp.json();
+                    alert(`Successfully deleted ${data.deleted} of ${data.total} jobs`);
+                    loadTab(currentTab); // Refresh current tab
+                } else {
+                    const err = await resp.json();
+                    alert(`Failed to delete jobs: ${err.detail}`);
+                }
+            } catch (e) {
+                console.error('Delete all error:', e);
+                alert('Failed to delete jobs');
+            }
+        }
+
+        async function showLog(jobId) {
+            const modal = document.getElementById('log-modal');
+            const logContent = document.getElementById('log-content');
+            const logJobId = document.getElementById('log-job-id');
+            
+            logJobId.textContent = jobId;
+            logContent.innerHTML = '<p>Loading...</p>';
+            modal.classList.add('active');
+            
+            try {
+                const resp = await fetch(`${API_BASE}/jobs/${jobId}/log?lines=500&token=${API_TOKEN}`);
+                const data = await resp.json();
+                
+                if (!data.exists || !data.log || data.log.length === 0) {
+                    logContent.innerHTML = '<p style="color:#94a3b8;">No log file found or log is empty.</p>';
+                    return;
+                }
+                
+                logContent.innerHTML = data.log.map(line => 
+                    `<div class="log-line">${escapeHtml(line)}</div>`
+                ).join('');
+                
+                // Auto-scroll to bottom
+                logContent.scrollTop = logContent.scrollHeight;
+            } catch (e) {
+                console.error('Log error:', e);
+                logContent.innerHTML = '<p style="color:#ef4444;">Failed to load log.</p>';
+            }
+        }
+
+        function closeLogModal() {
+            document.getElementById('log-modal').classList.remove('active');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ── Tab Switching ──
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tab = btn.dataset.tab;
+                switchTab(tab);
+            });
+        });
+
+        function switchTab(tab) {
+            currentTab = tab;
+            
+            // Update buttons
+            document.querySelectorAll('.tab-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.tab === tab);
+            });
+            
+            // Update content
+            document.querySelectorAll('.tab-content').forEach(c => {
+                c.classList.toggle('active', c.id === `tab-${tab}`);
+            });
+            
+            // Load data for non-active tabs
+            if (tab !== 'running') {
+                loadTab(tab);
+            }
+        }
+
+        async function loadTab(tab) {
+            const container = document.getElementById(`jobs-${tab}`);
+            container.innerHTML = '<p class="loading">Loading...</p>';
+            
+            try {
+                const resp = await fetch(`${API_BASE}/jobs/?states=${tab}&limit=50&token=${API_TOKEN}`);
+                const data = await resp.json();
+                
+                // Apply exchange filter
+                const filteredJobs = (data.jobs || []).filter(matchesExchangeFilter);
+                
+                if (filteredJobs.length === 0) {
+                    container.innerHTML = `<p class="no-jobs">No ${tab} jobs${EXCHANGE_FILTER ? ' for ' + EXCHANGE_FILTER : ''}.</p>`;
+                    return;
+                }
+                
+                container.innerHTML = filteredJobs.map(renderJob).join('');
+            } catch (e) {
+                console.error(`Load ${tab} error:`, e);
+                container.innerHTML = `<p class="error">Failed to load ${tab} jobs.</p>`;
+            }
+        }
+
+        // Close modal on outside click
+        document.getElementById('log-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'log-modal') {
+                closeLogModal();
+            }
+        });
+
+        // ── Initialize ──
+        connectWebSocket();
+    </script>
+</body>
+</html>

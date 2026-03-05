@@ -50,12 +50,13 @@ class EnqueueResult:
     path: str
 
 
-def enqueue_job(*, job_type: str, payload: dict[str, Any]) -> EnqueueResult:
+def enqueue_job(*, job_type: str, payload: dict[str, Any], exchange: str = "") -> EnqueueResult:
     ensure_task_dirs()
     jid = f"{int(time.time())}-{uuid4().hex[:10]}"
     job = {
         "id": jid,
         "type": str(job_type).strip(),
+        "exchange": str(exchange).strip().lower(),
         "created_ts": int(time.time()),
         "updated_ts": int(time.time()),
         "payload": payload or {},
@@ -211,9 +212,10 @@ def requeue_done_job(job_id: str) -> bool:
             return False
         payload = original.get("payload") if isinstance(original.get("payload"), dict) else {}
         job_type = str(original.get("type") or "").strip()
+        exchange = str(original.get("exchange") or "").strip()
         if not job_type:
             return False
-        enqueue_job(job_type=job_type, payload=payload)
+        enqueue_job(job_type=job_type, payload=payload, exchange=exchange)
         return True
     return False
 

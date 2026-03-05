@@ -6,6 +6,7 @@ from PBMon import PBMon
 from PBData import PBData
 from PBCoinData import CoinData
 from PBMaster import PBMaster
+from PBApiServer import PBApiServer
 
 class Services():
     def __init__(self):
@@ -23,6 +24,8 @@ class Services():
             st.session_state.pbcoindata = CoinData()
         if "pbmaster" not in st.session_state:
             st.session_state.pbmaster = PBMaster()
+        if "api_server" not in st.session_state:
+            st.session_state.api_server = PBApiServer()
         self.pbrun = st.session_state.pbrun
         self.pbremote = st.session_state.pbremote
         self.pbmon = st.session_state.pbmon
@@ -30,6 +33,7 @@ class Services():
         self.pbdata = st.session_state.pbdata
         self.pbcoindata = st.session_state.pbcoindata
         self.pbmaster = st.session_state.pbmaster
+        self.api_server = st.session_state.api_server
 
     def stop_all_started(self):
         self.pbrun_was_running = False
@@ -60,6 +64,9 @@ class Services():
         if self.pbmaster.is_running():
             self.pbmaster_was_running = True
             self.pbmaster.stop()
+        if self.api_server.is_running():
+            self.api_server_was_running = True
+            self.api_server.stop()
     
     def start_all_was_running(self):
         if self.pbrun_was_running:
