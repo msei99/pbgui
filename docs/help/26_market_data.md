@@ -1,6 +1,65 @@
 # Market Data
 
-This page manages PBGui market-data workflows for Hyperliquid and Binance USDM, including l2Book archive downloads, TradFi symbol mapping, Binance 1m auto-refresh, and Build best 1m OHLCV jobs.
+This page manages PBGui market-data workflows for Hyperliquid, Binance USDM, and Bybit, including l2Book archive downloads, TradFi symbol mapping, 1m auto-refresh loops, and Build best 1m OHLCV jobs.
+
+## Recommended Workflow — Best Practice
+
+This is the fastest, most storage-efficient way to have all coins up to date so backtests start immediately.
+
+### Step 1 — Enable all coins for Auto-Refresh
+
+1. Open **Settings (Binance USDM Latest 1m Auto-Refresh)** → click **Select all** → **Save**
+2. Open **Settings (Latest 1m Auto-Refresh) — Hyperliquid** → click **Select all** → **Save**
+3. Switch exchange dropdown to **Bybit** → open **Settings (Bybit Latest 1m Auto-Refresh)** → click **Select all** → **Save**
+
+This registers all coins for the rolling update loop. The loop will keep the last few days current automatically — no further manual action needed after the initial backfill.
+
+### Step 2 — Run "Build best 1m all" for the initial backfill
+
+Go to **Build best 1m OHLCV** and click **Build best 1m all** (or select all coins and submit).
+
+This queues one background job per exchange that downloads the complete history from inception:
+
+| Exchange | Download method | Expected duration (first run) |
+|---|---|---|
+| **Binance** | Parallel monthly + daily ZIPs (data.binance.vision) + CCXT fill | ~2–4 hours (~550 coins) |
+| **Bybit** | CCXT (async) | ~3 hours (~550 coins) |
+| **Hyperliquid** (crypto) | l2Book archive + 1m\_api conversion | depends on l2Book archive size |
+| **Hyperliquid** (XYZ stock-perps) | Tiingo IEX/FX 1m | depends on number of mapped symbols + Tiingo quota |
+
+**Benchmarks from actual runs:**
+- Binance LINK (6+ years, 2 239 days, 74 monthly ZIPs): **41 s** with parallel ZIP download
+- Binance all ~550 coins (parallel ZIPs): **estimated 2–4 h** (extrapolated: avg. coin ~3 years ≈ 24 monthly ZIPs → ~20 s/coin)
+- Bybit all 548 coins (CCXT, observed): **~3 h** (BTC alone = 102 min, short coins add proportionally little)
+
+Both jobs run in the background. You can close the browser and come back. Use the **Running** panel to watch progress.
+
+### Step 3 — Verify the last completed job
+
+After the job finishes, open the **Done** job in the job panel and click **🔍** (raw JSON). Check:
+- `status: done` (not `failed`)
+- `last_result.days_checked` — matches expected coverage
+- `last_result.minutes_written` > 0
+- Any `notes` entries (e.g. `monthly_download_failed=...` means the daily-ZIP fallback was used for that month — normal if the most recent month ZIP is not yet published)
+
+### Step 4 — Auto-Refresh keeps data current
+
+After the initial backfill, the daily update is automatic:
+
+- Binance: latest **2–7 days** are refreshed via CCXT every 3 600 s (1 h) per cycle
+- Bybit: latest **2–7 days** are refreshed via CCXT every 3 600 s (1 h) per cycle
+- Hyperliquid: latest **2–4 days** are refreshed via API every 1 800 s (30 min) per cycle
+
+For immediate refresh hit **⏩ Run now** in the respective **Market Data Status** panel.
+
+### Why this approach
+
+- **Minimal disk usage** — data is stored as compressed `.npz` files (one per day per coin); `.npz` is ~35% smaller than PB7's uncompressed `.npy` cache — e.g. BTC/USDT Binance: **61 MB** (pbgui `.npz`, Sep 2019 – today) vs **89 MB** (PB7 `.npy` cache, Dec 2019 – today)
+- **Backtests start instantly** — no on-demand fetching needed; the local files are pre-built and ready
+- **Incremental** — subsequent "Build best 1m all" runs skip already-complete days (pre-scan), only new data is downloaded
+- **No duplicate storage** — one `.npz` per day per coin replaces any previously partial version
+
+---
 
 ## Page Layout
 
@@ -176,7 +235,7 @@ This starts background build jobs for eligible symbols.
 - Downloads complete inception-to-today 1m OHLCV from official Binance archives (data.binance.vision) — monthly + daily ZIPs — with CCXT gap-fill
 - Coin selection from all enabled Binance coins
 - Controls: Start date, End date, Refetch
-- Storage: `data/ohlcv/binanceusdm/1m/<COIN>/YYYY-MM-DD.npz` (same format as PB7 cache)
+- Storage: `data/ohlcv/binanceusdm/1m/<COIN>/YYYY-MM-DD.npz` (compressed NumPy archive; PB7 cache uses uncompressed `.npy` — ~35% larger for the same data)
 
 ### Job Management
 

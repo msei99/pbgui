@@ -12,8 +12,15 @@ from typing import Any, Callable, Iterable, Iterator
 import lz4.frame
 import numpy as np
 import orjson
+import shutil
 
-from market_data import append_exchange_download_log, get_exchange_raw_root_dir, normalize_market_data_coin_dir
+from market_data import (
+    append_exchange_download_log,
+    get_exchange_raw_root_dir,
+    is_l2book_archive_enabled,
+    load_l2book_archive_dir,
+    normalize_market_data_coin_dir,
+)
 from market_data_sources import SOURCE_CODE_L2BOOK, update_source_index_for_day
 
 
@@ -48,6 +55,62 @@ def _l2book_hour_path(*, coin: str, day: str, hour: int) -> Path:
         raise ValueError("hour must be 0..23")
     base = get_exchange_raw_root_dir("hyperliquid")
     return base / "l2Book" / coin_dir / f"{day}-{hour:02d}.lz4"
+
+
+def _l2book_archive_hour_path(*, coin: str, day: str, hour: int, archive_dir: str) -> Path:
+    """Build the archive path for a l2book hour file in the NAS/external directory."""
+    coin_dir = normalize_market_data_coin_dir("hyperliquid", coin)
+    return Path(archive_dir) / coin_dir / f"{day}-{hour:02d}.lz4"
+
+
+def _resolve_l2book_hour_path(*, coin: str, day: str, hour: int) -> Path | None:
+    """Return the path to the l2book hour file, checking local first then NAS archive fallback."""
+    local = _l2book_hour_path(coin=coin, day=day, hour=hour)
+    if local.exists():
+        return local
+    archive_dir = load_l2book_archive_dir()
+    if archive_dir:
+        arch = _l2book_archive_hour_path(coin=coin, day=day, hour=hour, archive_dir=archive_dir)
+        if arch.exists():
+            return arch
+    return None
+
+
+def _maybe_archive_l2book_file(local_path: Path, *, coin: str, day: str, hour: int) -> None:
+    """Move a local l2book file to the NAS archive directory if archiving is enabled."""
+    if not is_l2book_archive_enabled():
+        append_exchange_download_log(
+            "hyperliquid",
+            f"[hl_l2book_archive] skip {local_path.name}: archive not enabled in pbgui.ini",
+        )
+        return
+    archive_dir = load_l2book_archive_dir()
+    if not archive_dir:
+        append_exchange_download_log(
+            "hyperliquid",
+            f"[hl_l2book_archive] skip {local_path.name}: l2book_archive_dir is empty in pbgui.ini",
+        )
+        return
+    if not local_path.exists():
+        append_exchange_download_log(
+            "hyperliquid",
+            f"[hl_l2book_archive] skip {local_path.name}: local file does not exist at {local_path}",
+        )
+        return
+    dest = _l2book_archive_hour_path(coin=coin, day=day, hour=hour, archive_dir=archive_dir)
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(local_path), str(dest))
+        append_exchange_download_log(
+            "hyperliquid",
+            f"[hl_l2book_archive] moved {local_path.name} → {dest}",
+        )
+    except Exception as exc:
+        append_exchange_download_log(
+            "hyperliquid",
+            f"[hl_l2book_archive] move failed {local_path.name}: {exc}",
+            level="WARNING",
+        )
 
 
 def _day_tag(day: str) -> str:
@@ -294,8 +357,8 @@ def generate_1m_candles_from_l2book_hour(
     Produces 60 candles (or fewer if no snapshots). Volume is set to 0.
     """
 
-    in_path = _l2book_hour_path(coin=coin, day=day, hour=int(hour))
-    if not in_path.exists():
+    in_path = _resolve_l2book_hour_path(coin=coin, day=day, hour=int(hour))
+    if in_path is None:
         return None
 
     out_path = _candles_day_out_path(coin=coin, interval="1m", day=day)
@@ -387,7 +450,11 @@ def generate_1m_candles_from_l2book_hour(
                 minute_indices=added_indices,
                 code=SOURCE_CODE_L2BOOK,
             )
-        else:
+        # Always archive the source l2book file if configured — even when no new
+        # candles were added (file was already processed in a previous run).
+        local_path = _l2book_hour_path(coin=coin, day=day, hour=int(hour))
+        _maybe_archive_l2book_file(local_path, coin=coin, day=day, hour=int(hour))
+        if not added:
             return GeneratedHourResult(
                 coin=coin_u,
                 day=day,
@@ -466,14 +533,26 @@ def generate_1m_candles_from_l2book_range(
         day_out_path = _candles_day_out_path(coin=coin_u, interval="1m", day=day)
         hours_present = _hours_from_npz(day_out_path) if day_out_path.exists() else set()
         if only_missing_days and day_out_path.exists() and len(hours_present) >= 24:
+            # Day is fully processed — no candle work needed, but still archive
+            # any local l2book files that haven't been moved to NAS yet.
+            if not dry_run:
+                for hour in range(24):
+                    local = _l2book_hour_path(coin=coin_u, day=day, hour=hour)
+                    if local.exists():
+                        _maybe_archive_l2book_file(local, coin=coin_u, day=day, hour=hour)
             continue
         for hour in range(24):
-            in_path = _l2book_hour_path(coin=coin_u, day=day, hour=hour)
-            if not in_path.exists():
+            in_path = _resolve_l2book_hour_path(coin=coin_u, day=day, hour=hour)
+            if in_path is None:
                 n_hours_skipped_missing += 1
                 continue
             n_hours_found += 1
             if day_out_path.exists() and not overwrite and hour in hours_present:
+                # Candles already exist for this hour — still archive the source file.
+                if not dry_run:
+                    local = _l2book_hour_path(coin=coin_u, day=day, hour=hour)
+                    if local.exists():
+                        _maybe_archive_l2book_file(local, coin=coin_u, day=day, hour=hour)
                 n_hours_skipped_existing += 1
                 continue
             hours_plan.append((day, int(hour)))

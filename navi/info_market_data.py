@@ -40,7 +40,6 @@ from market_data import (
     load_market_data_config,
     set_enabled_coins,
     summarize_raw_inventory,
-    summarize_pb7_cache_inventory,
     get_daily_presence_for_pb7_cache,
     get_daily_hour_coverage_for_dataset,
     get_minute_presence_for_dataset,
@@ -89,6 +88,33 @@ from task_queue import (
     clear_worker_pid,
 )
 from tradfi_sync import load_xyz_spec, fetch_xyz_spec, auto_map_tradfi, fetch_tiingo_meta
+
+
+def _get_pb7_inventory_via_cache(exchange: str) -> list[dict]:
+    """Load PB7 cache inventory using inventory_cache (SQLite-backed, mtime-based),
+    iterating all available timeframes under pb7/caches/ohlcv/{exchange}/.
+    Adds a 'timeframe' key to each row (extracted from the dataset name).
+    """
+    import os
+    from inventory_cache import get_inventory as _get_inventory
+    from market_data import _get_pb7_root_dir
+
+    ex = str(exchange or "").strip().lower()
+    root = _get_pb7_root_dir()
+    if root is None:
+        return []
+    base = root / "caches" / "ohlcv" / ex
+    if not base.is_dir():
+        return []
+    try:
+        tfs = sorted([e.name for e in os.scandir(str(base)) if e.is_dir()])
+    except Exception:
+        return []
+    rows: list[dict] = []
+    for tf in tfs:
+        for r in _get_inventory(ex, f"pb7_cache:{tf}"):
+            rows.append({**r, "timeframe": tf})
+    return rows
 
 
 def _is_hyperliquid_stock_perp_1m(*, exchange: str, dataset: str, coin: str) -> bool:
@@ -2647,6 +2673,26 @@ def view_market_data():
                     help="Parallel workers used for archive scan checks.",
                 )
 
+            st.markdown("**l2Book Archive (NAS)**")
+            _arch_enabled_default = str(load_ini("market_data", "l2book_archive_enabled") or "").strip().lower() in ("true", "1", "yes")
+            _arch_dir_default = str(load_ini("market_data", "l2book_archive_dir") or "").strip()
+            c_ae, c_ad = st.columns([0.5, 2.5], vertical_alignment="bottom")
+            with c_ae:
+                st.toggle(
+                    "Archive enabled",
+                    value=_arch_enabled_default,
+                    key="market_data_l2book_archive_enabled",
+                    help="After 1m build from l2Book, move the source .lz4 file to the archive directory.",
+                )
+            with c_ad:
+                st.text_input(
+                    "Archive directory",
+                    value=_arch_dir_default,
+                    key="market_data_l2book_archive_dir",
+                    placeholder="/mnt/nas/ohlcv/l2books",
+                    help="NAS or external path. l2Book files are moved here after 1m build and used as read fallback if not found locally.",
+                )
+
             st.markdown("**Tiingo Settings (stock-perp)**")
             c_tk, c_tt, c_tl = st.columns([1.05, 0.38, 1.45], vertical_alignment="bottom")
             with c_tk:
@@ -2734,6 +2780,8 @@ def view_market_data():
                     workers = int(st.session_state.get("market_data_hl_l2book_scan_workers", 8))
                     save_ini("market_data", "hl_l2book_scan_timeout_s", str(timeout_s))
                     save_ini("market_data", "hl_l2book_scan_workers", str(workers))
+                    save_ini("market_data", "l2book_archive_enabled", "true" if st.session_state.get("market_data_l2book_archive_enabled") else "false")
+                    save_ini("market_data", "l2book_archive_dir", str(st.session_state.get("market_data_l2book_archive_dir") or "").strip())
                     tiingo_key = str(st.session_state.get("market_data_tiingo_api_key") or "").strip()
                     save_ini("tradfi_profiles", "tiingo_api_key", tiingo_key)
                     st.success('✅ Settings saved. Enabled coins and auto-refresh settings are applied automatically in the next refresh cycle.')
@@ -2857,14 +2905,20 @@ def view_market_data():
         if str(exchange).lower() == "binance":
             bnc_coin_list = [str(c).strip().upper() for c in enabled_preview if str(c).strip()]
 
-            @st.fragment(run_every=5)
-            def _bnc_status_fragment():
-                _bnc_flag_path = Path(f"{PBGDIR}/data/logs/binance_latest_1m_run_now.flag")
-                _bnc_stop_path = Path(f"{PBGDIR}/data/logs/binance_latest_1m_stop.flag")
-                bnc_status_all = _load_market_data_status()
-                bnc_status = bnc_status_all.get("binance_latest_1m") if isinstance(bnc_status_all, dict) else {}
-                _bnc_queued = _bnc_flag_path.exists()
-                _bnc_running = bool(bnc_status.get("running")) if bnc_status else False
+            # Check if Binance Latest 1m daemon is active
+            _bnc_flag_path_check = Path(f"{PBGDIR}/data/logs/binance_latest_1m_run_now.flag")
+            _bnc_status_check = _load_market_data_status().get("binance_latest_1m", {}) if _supports_fragment_run_every() else {}
+            _bnc_is_active = _bnc_flag_path_check.exists() or bool(_bnc_status_check.get("running"))
+
+            if _supports_fragment_run_every() and _bnc_is_active:
+                @st.fragment(run_every=5)
+                def _bnc_status_fragment():
+                    _bnc_flag_path = Path(f"{PBGDIR}/data/logs/binance_latest_1m_run_now.flag")
+                    _bnc_stop_path = Path(f"{PBGDIR}/data/logs/binance_latest_1m_stop.flag")
+                    bnc_status_all = _load_market_data_status()
+                    bnc_status = bnc_status_all.get("binance_latest_1m") if isinstance(bnc_status_all, dict) else {}
+                    _bnc_queued = _bnc_flag_path.exists()
+                    _bnc_running = bool(bnc_status.get("running")) if bnc_status else False
                 with st.expander("Market Data status (Binance USDM Latest 1m)", expanded=False):
                     _c1, _c2 = st.columns([1, 1])
                     with _c1:
@@ -3009,7 +3063,7 @@ def view_market_data():
                         append_exchange_download_log("binanceusdm", f"[binance_best_1m] ERROR {e}")
                         st.error(str(e))
 
-                if _supports_fragment_run_every() and not _is_background_refresh_paused():
+                if _supports_fragment_run_every() and _has_active_jobs(["binance_best_1m"]):
                     @st.fragment(run_every=5)
                     def _bnc_best_jobs_fragment():
                         _render_jobs_panel(
@@ -3348,7 +3402,7 @@ def view_market_data():
                         append_exchange_download_log("bybit", f"[bybit_best_1m] ERROR {e}")
                         st.error(str(e))
 
-                if _supports_fragment_run_every() and not _is_background_refresh_paused():
+                if _supports_fragment_run_every() and _has_active_jobs(["bybit_best_1m"]):
                     @st.fragment(run_every=5)
                     def _bybit_best_jobs_fragment():
                         _render_jobs_panel(
@@ -3649,7 +3703,7 @@ def view_market_data():
                         append_exchange_download_log("hyperliquid", f"[hl_best_1m] ERROR {e}")
                         st.error(str(e))
 
-                if _supports_fragment_run_every() and not _is_background_refresh_paused():
+                if _supports_fragment_run_every() and _has_active_jobs(["hl_best_1m"]):
                     @st.fragment(run_every=5)
                     def _best_jobs_fragment():
                         _render_jobs_panel(
@@ -4194,7 +4248,7 @@ def view_market_data():
                 region_default = load_aws_profile_region(profile) or HYPERLIQUID_AWS_REGION
                 region = str(st.session_state.get("market_data_hl_aws_region") or region_default).strip()
 
-                if _supports_fragment_run_every() and not _is_background_refresh_paused():
+                if _supports_fragment_run_every() and _has_active_jobs(["hl_aws_l2book_auto"]):
                     @st.fragment(run_every=5)
                     def _jobs_fragment():
                         _render_jobs_panel(
@@ -4399,7 +4453,7 @@ def view_market_data():
 
                 # Job queue (shown below download controls)
                 _jobs_fragment()
-                if _supports_fragment_run_every() and not _is_background_refresh_paused():
+                if _supports_fragment_run_every() and _has_active_jobs(["hl_aws_l2book_auto"]):
                     _render_jobs_static_controls(
                         "market_data_hl_jobs",
                         ["hl_aws_l2book_auto"],
@@ -4499,7 +4553,7 @@ def view_market_data():
                             st.write("No download jobs yet.")
 
                     with st.expander("Last download job", expanded=False):
-                        if _supports_fragment_run_every() and not _is_background_refresh_paused():
+                        if _supports_fragment_run_every() and _has_active_jobs(["hl_aws_l2book_auto"]):
                             @st.fragment(run_every=5)
                             def _last_download_fragment():
                                 _render_last_download_job()
@@ -4706,7 +4760,7 @@ def view_market_data():
             import shutil
 
             def _remove_source_index_dirs_for_coin(actual_coin: str) -> int:
-                base = get_exchange_raw_root_dir(str(exchange).lower())
+                base = get_exchange_raw_root_dir(_storage_ex)
                 removed_count = 0
                 src_dir = base / "1m_src" / str(actual_coin).strip()
                 if src_dir.exists():
@@ -4716,7 +4770,7 @@ def view_market_data():
 
             def _rebuild_source_index_from_api_for_coin(actual_coin: str) -> tuple[int, int]:
                 presence = get_minute_presence_for_dataset(
-                    str(exchange).lower(),
+                    _storage_ex,
                     "1m_api",
                     str(actual_coin).strip(),
                 )
@@ -4750,7 +4804,7 @@ def view_market_data():
 
                     if minute_indices:
                         update_source_index_for_day(
-                            exchange=str(exchange).lower(),
+                            exchange=_storage_ex,
                             coin=str(actual_coin).strip(),
                             day=str(day_s),
                             minute_indices=sorted(minute_indices),
@@ -4789,7 +4843,7 @@ def view_market_data():
                             actual_dataset_lower = actual_dataset.lower()
                             actual_coin = str(sel_row.get("coin", "")).strip()
                             
-                            coin_dir = get_exchange_raw_root_dir(str(exchange).lower()) / actual_dataset / actual_coin
+                            coin_dir = get_exchange_raw_root_dir(_storage_ex) / actual_dataset / actual_coin
                             if coin_dir.exists():
                                 shutil.rmtree(coin_dir)
                                 st.success(f"✅ Deleted {actual_coin}")
@@ -4862,7 +4916,7 @@ def view_market_data():
                                 
                                 # Use actual coin name (original case) from row
                                 actual_coin = str(r.get("coin", "")).strip()
-                                coin_dir = get_exchange_raw_root_dir(str(exchange).lower()) / actual_dataset / actual_coin
+                                coin_dir = get_exchange_raw_root_dir(_storage_ex) / actual_dataset / actual_coin
                                 if coin_dir.exists():
                                     shutil.rmtree(coin_dir)
                                     deleted_count += 1
@@ -4929,7 +4983,7 @@ def view_market_data():
                             
                             actual_coin = str(r.get("coin", "")).strip()
                             actual_dataset = str(r.get("dataset", "")).strip()
-                            coin_dir = get_exchange_raw_root_dir(str(exchange).lower()) / actual_dataset / actual_coin
+                            coin_dir = get_exchange_raw_root_dir(_storage_ex) / actual_dataset / actual_coin
                             
                             debug_info.append(f"Checking: {coin_dir} (exists={coin_dir.exists()})")
                             
@@ -5006,7 +5060,7 @@ def view_market_data():
                                     actual_coin = str(r.get("coin", "")).strip()
                                     actual_dataset = str(r.get("dataset", "")).strip()
                                     actual_dataset_lower = actual_dataset.lower()
-                                    coin_dir = get_exchange_raw_root_dir(str(exchange).lower()) / actual_dataset / actual_coin
+                                    coin_dir = get_exchange_raw_root_dir(_storage_ex) / actual_dataset / actual_coin
                                     
                                     if not coin_dir.exists():
                                         continue
@@ -5046,7 +5100,7 @@ def view_market_data():
                                 if coins_deleted_days:
                                     for coin, deleted_days in coins_deleted_days.items():
                                         removed = remove_days_from_index(
-                                            exchange=str(exchange).lower(),
+                                            exchange=_storage_ex,
                                             coin=coin,
                                             days_to_remove=deleted_days
                                         )
@@ -5074,16 +5128,18 @@ def view_market_data():
 
                 if st.button(f"🗑️ Clear all {dataset_label}", key=f"market_data_clear_dataset_{dataset_key}", type="secondary"):
                     try:
-                        dataset_dir = get_exchange_raw_root_dir(str(exchange).lower()) / dataset_key
+                        # Resolve actual disk dataset name from row data (dataset_key is a unique UI key, not a path)
+                        _disk_ds = str(dataset_rows[0].get("dataset", "")).strip() if dataset_rows else dataset_key
+                        dataset_dir = get_exchange_raw_root_dir(_storage_ex) / _disk_ds
                         
                         # Also clear 1m_src indexes for each coin if clearing 1m dataset
-                        dataset_key_lower = dataset_key.lower()
+                        dataset_key_lower = _disk_ds.lower()
                         cleaned_indexes = 0
                         if dataset_key_lower in ("1m", "candles_1m") and dataset_dir.exists():
                             # Get list of coins before deleting
                             coins_in_dataset = [d.name for d in dataset_dir.iterdir() if d.is_dir()]
                             for coin in coins_in_dataset:
-                                src_dir = get_exchange_raw_root_dir(str(exchange).lower()) / "1m_src" / coin
+                                src_dir = get_exchange_raw_root_dir(_storage_ex) / "1m_src" / coin
                                 if src_dir.exists():
                                     shutil.rmtree(src_dir)
                                     cleaned_indexes += 1
@@ -5118,7 +5174,7 @@ def view_market_data():
             _render_deletion_tools(_del_rows, f"{_ex_key}_l2book", "l2Book", sel_row_l2book)
 
         elif have_view == "PB7 cache":
-            pb7_rows = summarize_pb7_cache_inventory(str(exchange).lower(), limit=2000)
+            pb7_rows = _get_pb7_inventory_via_cache(str(exchange).lower())
             if not pb7_rows:
                 st.info("No PB7 cache files found for this exchange (expected path: pb7/caches/ohlcv/<exchange>/...).")
             else:
@@ -5281,7 +5337,7 @@ def view_market_data():
                         day_counts = {}
                         chart_full_start_day = str(start_day or "")
                         chart_full_end_day = str(end_day or "")
-                        if ds_l in ("1m", "candles_1m") and ex in ("hyperliquid", "binance"):
+                        if ds_l in ("1m", "candles_1m") and ex in ("hyperliquid", "binance", "bybit"):
                             day_counts = get_daily_source_counts_for_range(
                                 exchange=_storage_ex,
                                 coin=cn,
@@ -5472,7 +5528,7 @@ def view_market_data():
                                     _ov_legend_parts.append(_span("l2Book_mid", _BAR_COLORS["l2Book_mid"]))
                                 st.markdown("".join(_ov_legend_parts), unsafe_allow_html=True)
                                 st.caption("Overview (days). Select a month below to inspect minutes.")
-                                st.plotly_chart(fig, width='stretch')
+                                st.plotly_chart(fig, width='stretch', key=f"market_data_ov_chart_{ex}_{cn}")
 
                                 # Build month list from date range
                                 chart_full_start_day = str(start_day or "")
@@ -5750,7 +5806,7 @@ def view_market_data():
                                 + _l2book_span,
                                 unsafe_allow_html=True,
                             )
-                        st.plotly_chart(fig, width='stretch')
+                        st.plotly_chart(fig, width='stretch', key=f"market_data_min_heatmap_{ex}_{cn}_{start_day}_{end_day}")
 
                         with st.expander("OHLCV chart", expanded=False):
                             show_volume = True

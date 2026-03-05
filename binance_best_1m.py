@@ -24,6 +24,7 @@ Main public API:
 
 from __future__ import annotations
 
+import asyncio
 import calendar
 import io
 import os
@@ -58,6 +59,8 @@ CCXT_LIMIT = 1000
 # Minimum gap (days) before we switch from CCXT to archive.  Archive is only
 # available for data older than ~2 days anyway.
 ARCHIVE_MIN_AGE_DAYS = 2
+# Parallel ZIP downloads from data.binance.vision (no server-side throttling observed)
+MAX_CONCURRENT_DOWNLOADS = 8
 # Timeout for archive HTTP requests
 ARCHIVE_TIMEOUT_S = 60
 # Connect timeout for HEAD probes
@@ -412,18 +415,13 @@ def _stream_download_bytes(
         return None
 
 
-def _download_archive_monthly(
+def _parse_archive_monthly_bytes(
+    raw_data: bytes,
     symbol_code: str,
     year: int,
     month: int,
-    *,
-    stop_check: Callable[[], bool] | None = None,
 ) -> dict[str, dict[int, dict[str, Any]]] | None:
-    """Download a monthly ZIP and return {day_tag: {minute_idx: candle}}."""
-    url = _archive_url_monthly(symbol_code, year, month)
-    raw_data = _stream_download_bytes(url, stop_check=stop_check)
-    if raw_data is None:
-        return None
+    """Parse raw monthly ZIP bytes → {day_tag: {minute_idx: candle}}."""
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw_data))
         csv_bytes = zf.read(zf.namelist()[0]).decode()
@@ -461,6 +459,21 @@ def _download_archive_monthly(
         return None
 
 
+def _download_archive_monthly(
+    symbol_code: str,
+    year: int,
+    month: int,
+    *,
+    stop_check: Callable[[], bool] | None = None,
+) -> dict[str, dict[int, dict[str, Any]]] | None:
+    """Download a monthly ZIP and return {day_tag: {minute_idx: candle}}."""
+    url = _archive_url_monthly(symbol_code, year, month)
+    raw_data = _stream_download_bytes(url, stop_check=stop_check)
+    if raw_data is None:
+        return None
+    return _parse_archive_monthly_bytes(raw_data, symbol_code, year, month)
+
+
 def _download_archive_daily(symbol_code: str, day: str, *, stop_check: Callable[[], bool] | None = None) -> dict[int, dict[str, Any]] | None:
     """Download a daily ZIP and return {minute_idx: candle}."""
     url = _archive_url_daily(symbol_code, day)
@@ -472,6 +485,44 @@ def _download_archive_daily(symbol_code: str, day: str, *, stop_check: Callable[
     except Exception as e:
         append_exchange_download_log(STORAGE_EXCHANGE, f"[binance_best_1m] archive_daily_parse_error {symbol_code} {day} err={e}", level="WARNING")
         return None
+
+
+async def _async_download_bytes_bulk(
+    urls: list[str],
+    *,
+    concurrency: int = MAX_CONCURRENT_DOWNLOADS,
+) -> dict[str, bytes | None]:
+    """Download multiple URLs in parallel using aiohttp. Returns {url: bytes_or_None}.
+    Falls back to sequential requests if aiohttp is unavailable.
+    """
+    try:
+        import aiohttp  # type: ignore
+    except ImportError:
+        return {url: _stream_download_bytes(url) for url in urls}
+
+    results: dict[str, bytes | None] = {}
+    sem = asyncio.Semaphore(concurrency)
+    timeout = aiohttp.ClientTimeout(total=120)
+
+    async def fetch(session: aiohttp.ClientSession, url: str) -> None:
+        async with sem:
+            try:
+                async with session.get(url, timeout=timeout) as r:
+                    if r.status != 200:
+                        results[url] = None
+                    else:
+                        results[url] = await r.read()
+            except Exception as e:
+                append_exchange_download_log(
+                    STORAGE_EXCHANGE,
+                    f"[binance_best_1m] async_download_error url={url} err={e}",
+                    level="WARNING",
+                )
+                results[url] = None
+
+    async with aiohttp.ClientSession() as session:
+        await asyncio.gather(*(fetch(session, u) for u in urls))
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -687,71 +738,83 @@ def improve_best_binance_1m_for_coin(
     today = date.today()
     archive_end_month = (today.year, today.month)  # exclusive
 
-    # --- Step 4: Monthly ZIPs for complete past months ---
-    if first_archive_date:
-        cur_year = max(d_start.year, first_archive_date.year)
-        cur_month = first_archive_date.month if cur_year == first_archive_date.year else 1
-        # If start was mid-year, align to start month
-        if cur_year == d_start.year:
-            cur_month = max(cur_month, d_start.month)
+    # --- Step 4: Monthly ZIPs for complete past months (parallel download) ---
+    if first_archive_date and not _stop():
+        # Phase 4a: Pre-scan — decide which months to skip vs download
+        _scan_year = max(d_start.year, first_archive_date.year)
+        _scan_month = first_archive_date.month if _scan_year == first_archive_date.year else 1
+        if _scan_year == d_start.year:
+            _scan_month = max(_scan_month, d_start.month)
 
-        while (cur_year, cur_month) < archive_end_month:
+        months_order: list[tuple[int, int]] = []
+        months_skip: set[tuple[int, int]] = set()
+        months_skip_counts: dict[tuple[int, int], int] = {}
+        ex_days = set(_list_existing_days(coin_u)) if not refetch else set()
+
+        while (_scan_year, _scan_month) < archive_end_month:
+            ym = (_scan_year, _scan_month)
+            months_order.append(ym)
+            if not refetch:
+                ms = date(_scan_year, _scan_month, 1)
+                nd = calendar.monthrange(_scan_year, _scan_month)[1]
+                needed = {ms + timedelta(days=i) for i in range(nd) if ms + timedelta(days=i) <= d_end}
+                if needed and needed.issubset(ex_days):
+                    all_full = all(
+                        (p := _binance_day_path(coin_u, d_.strftime("%Y-%m-%d"))).exists()
+                        and len(_read_day_npz(p, day=d_.strftime("%Y-%m-%d"))) >= 1200
+                        for d_ in needed
+                    )
+                    if all_full:
+                        months_skip.add(ym)
+                        months_skip_counts[ym] = len(needed)
+            _scan_month += 1
+            if _scan_month > 12:
+                _scan_month = 1
+                _scan_year += 1
+
+        # Phase 4b: Parallel download all non-skipped months
+        months_to_fetch = [ym for ym in months_order if ym not in months_skip]
+        month_urls: dict[tuple[int, int], str] = {
+            ym: _archive_url_monthly(symbol_code, ym[0], ym[1]) for ym in months_to_fetch
+        }
+        if months_to_fetch and not _stop():
+            _emit({"stage": "monthly_downloading", "total": len(months_to_fetch), "coin": coin_u})
+            url_to_bytes: dict[str, bytes | None] = asyncio.run(
+                _async_download_bytes_bulk([month_urls[ym] for ym in months_to_fetch])
+            )
+        else:
+            url_to_bytes = {}
+
+        # Phase 4c: Process in month order
+        for (year, month) in months_order:
             if _stop():
                 break
+            mk = f"{year}-{month:02d}"
+            ym = (year, month)
 
-            # Check if we already have all days for this month on disk
-            month_start = date(cur_year, cur_month, 1)
-            num_days = calendar.monthrange(cur_year, cur_month)[1]
-            month_end = date(cur_year, cur_month, num_days)
+            if ym in months_skip:
+                days_checked += months_skip_counts.get(ym, 0)
+                _emit({"stage": "monthly_skip", "month_key": mk, "done": days_checked})
+                continue
 
-            if not refetch:
-                existing_days = set(_list_existing_days(coin_u))
-                needed = set(
-                    month_start + timedelta(days=i)
-                    for i in range(num_days)
-                    if month_start + timedelta(days=i) <= d_end
-                )
-                if needed and needed.issubset(existing_days):
-                    # All days present — check if they have enough candles
-                    all_full = True
-                    for d_ in needed:
-                        day_s = d_.strftime("%Y-%m-%d")
-                        p = _binance_day_path(coin_u, day_s)
-                        if not p.exists() or len(_read_day_npz(p, day=day_s)) < 1200:
-                            all_full = False
-                            break
-                    if all_full:
-                        days_checked += len(needed)
-                        _emit({"stage": "monthly_skip", "month_key": f"{cur_year}-{cur_month:02d}", "done": days_checked})
-                        # Advance month
-                        cur_month += 1
-                        if cur_month > 12:
-                            cur_month = 1
-                            cur_year += 1
-                        continue
+            _emit({"stage": "monthly_download", "month_key": mk, "done": days_checked})
+            raw = url_to_bytes.get(month_urls.get(ym))
+            month_data = _parse_archive_monthly_bytes(raw, symbol_code, year, month) if raw else None
 
-            _emit({
-                "stage": "monthly_download",
-                "month_key": f"{cur_year}-{cur_month:02d}",
-                "done": days_checked,
-            })
-
-            month_data = _download_archive_monthly(symbol_code, cur_year, cur_month, stop_check=_stop)
             if month_data is None:
-                notes.append(f"monthly_download_failed={cur_year}-{cur_month:02d}")
-                # Fallback: try daily ZIPs for each day in the month (monthly archive may not
-                # be published yet for the most recently completed month)
+                notes.append(f"monthly_download_failed={mk}")
                 append_exchange_download_log(
                     STORAGE_EXCHANGE,
-                    f"[binance_best_1m] monthly_zip_unavailable={cur_year}-{cur_month:02d} coin={coin_u}, falling back to daily ZIPs",
+                    f"[binance_best_1m] monthly_zip_unavailable={mk} coin={coin_u}, falling back to daily ZIPs",
                     level="WARNING",
                 )
-                num_days_fb = calendar.monthrange(cur_year, cur_month)[1]
+                # Fallback: parallel daily ZIPs for each day in the failed month
+                num_days_fb = calendar.monthrange(year, month)[1]
                 monthly_cutoff = date.today() - timedelta(days=ARCHIVE_MIN_AGE_DAYS)
+                fb_days_needed: list[str] = []
+                fb_days_skipped = 0
                 for fb_i in range(num_days_fb):
-                    if _stop():
-                        break
-                    fb_day = date(cur_year, cur_month, fb_i + 1)
+                    fb_day = date(year, month, fb_i + 1)
                     if fb_day > d_end or fb_day > monthly_cutoff:
                         continue
                     fb_day_s = fb_day.strftime("%Y-%m-%d")
@@ -759,10 +822,36 @@ def improve_best_binance_1m_for_coin(
                     if not refetch and fb_path.exists():
                         existing_fb = _read_day_npz(fb_path, day=fb_day_s)
                         if len(existing_fb) >= 1200:
-                            days_checked += 1
+                            fb_days_skipped += 1
                             continue
+                    fb_days_needed.append(fb_day_s)
+                days_checked += fb_days_skipped
+
+                fb_urls: dict[str, str] = {d: _archive_url_daily(symbol_code, d) for d in fb_days_needed}
+                if fb_days_needed and not _stop():
+                    fb_bytes: dict[str, bytes | None] = asyncio.run(
+                        _async_download_bytes_bulk(list(fb_urls.values()))
+                    )
+                else:
+                    fb_bytes = {}
+
+                for fb_day_s in fb_days_needed:
+                    if _stop():
+                        break
                     _emit({"stage": "daily_fallback", "day": fb_day_s, "done": days_checked})
-                    fb_candles = _download_archive_daily(symbol_code, fb_day_s, stop_check=_stop)
+                    fb_raw = fb_bytes.get(fb_urls.get(fb_day_s))
+                    if fb_raw is not None:
+                        try:
+                            fb_candles: dict[int, dict[str, Any]] | None = _parse_zip_csv(fb_raw)
+                        except Exception as _e:
+                            append_exchange_download_log(
+                                STORAGE_EXCHANGE,
+                                f"[binance_best_1m] daily_fallback_parse_error {symbol_code} {fb_day_s} err={_e}",
+                                level="WARNING",
+                            )
+                            fb_candles = None
+                    else:
+                        fb_candles = None
                     if fb_candles:
                         w = _write_candles_for_day(coin_u, fb_day_s, fb_candles, overwrite=refetch)
                         minutes_written += w
@@ -783,19 +872,13 @@ def improve_best_binance_1m_for_coin(
                     days_checked += 1
                     _emit({
                         "stage": "monthly_download",
-                        "month_key": f"{cur_year}-{cur_month:02d}",
+                        "month_key": mk,
                         "day": day_s,
                         "month_day_index": i + 1,
                         "month_day_total": len(month_days),
                         "done": days_checked,
                         "minutes_written": minutes_written,
                     })
-
-            # Advance month
-            cur_month += 1
-            if cur_month > 12:
-                cur_month = 1
-                cur_year += 1
 
     if _stop():
         return ImproveBest1mBinanceResult(
@@ -805,30 +888,61 @@ def improve_best_binance_1m_for_coin(
             ccxt_minutes_fetched=ccxt_minutes_fetched, minutes_written=minutes_written, notes=notes + ["stopped"],
         )
 
-    # --- Step 5: Daily ZIPs for current month (up to 2 days ago) ---
+    # --- Step 5: Daily ZIPs for current month (up to 2 days ago, parallel download) ---
     archive_cutoff = today - timedelta(days=ARCHIVE_MIN_AGE_DAYS)
     cur_month_start = date(today.year, today.month, 1)
-    d_ = cur_month_start
-    while d_ <= min(d_end, archive_cutoff) and not _stop():
-        day_s = d_.strftime("%Y-%m-%d")
-        path = _binance_day_path(coin_u, day_s)
 
-        if not refetch and path.exists():
-            existing = _read_day_npz(path, day=day_s)
-            if len(existing) >= 1200:
-                days_checked += 1
-                d_ = d_ + timedelta(days=1)
-                continue
+    # Pre-scan: collect days that need download vs can be skipped
+    step5_days_needed: list[str] = []
+    step5_days_skip: set[str] = set()
+    _d5 = cur_month_start
+    while _d5 <= min(d_end, archive_cutoff):
+        _day_s5 = _d5.strftime("%Y-%m-%d")
+        _path5 = _binance_day_path(coin_u, _day_s5)
+        if not refetch and _path5.exists() and len(_read_day_npz(_path5, day=_day_s5)) >= 1200:
+            step5_days_skip.add(_day_s5)
+        else:
+            step5_days_needed.append(_day_s5)
+        _d5 = _d5 + timedelta(days=1)
 
+    # Parallel bulk download
+    step5_urls: dict[str, str] = {d: _archive_url_daily(symbol_code, d) for d in step5_days_needed}
+    if step5_days_needed and not _stop():
+        step5_bytes: dict[str, bytes | None] = asyncio.run(
+            _async_download_bytes_bulk(list(step5_urls.values()))
+        )
+    else:
+        step5_bytes = {}
+
+    # Process in order
+    _d5 = cur_month_start
+    while _d5 <= min(d_end, archive_cutoff) and not _stop():
+        day_s = _d5.strftime("%Y-%m-%d")
+        if day_s in step5_days_skip:
+            days_checked += 1
+            _d5 = _d5 + timedelta(days=1)
+            continue
         _emit({"stage": "daily_download", "day": day_s})
-        candles = _download_archive_daily(symbol_code, day_s, stop_check=_stop)
+        raw5 = step5_bytes.get(step5_urls.get(day_s))
+        if raw5 is not None:
+            try:
+                candles: dict[int, dict[str, Any]] | None = _parse_zip_csv(raw5)
+            except Exception as _e:
+                append_exchange_download_log(
+                    STORAGE_EXCHANGE,
+                    f"[binance_best_1m] daily_parse_error {symbol_code} {day_s} err={_e}",
+                    level="WARNING",
+                )
+                candles = None
+        else:
+            candles = None
         if candles:
             w = _write_candles_for_day(coin_u, day_s, candles, overwrite=refetch)
             minutes_written += w
             archive_daily_downloaded += 1
         days_checked += 1
         _emit({"stage": "daily_download", "day": day_s, "done": days_checked, "minutes_written": minutes_written})
-        d_ = d_ + timedelta(days=1)
+        _d5 = _d5 + timedelta(days=1)
 
     # --- Step 6: CCXT for last 2 days (no archive yet) ---
     ccxt_start = archive_cutoff + timedelta(days=1)
