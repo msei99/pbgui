@@ -952,10 +952,10 @@ def _run_bybit_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
                 total_days = snap.get("total_days")
                 kw["chunk_done"] = int(done)
                 kw["chunk_total"] = int(total_days) if total_days else int(total_steps * 100)
-            if any(k in snap for k in ("days_checked", "minutes_written", "archive_days_downloaded")):
+            if any(k in snap for k in ("days_checked", "minutes_written", "ccxt_days_fetched")):
                 kw["last_result"] = {
                     "days_checked": int(snap.get("days_checked") or 0),
-                    "archive_days_downloaded": int(snap.get("archive_days_downloaded") or 0),
+                    "ccxt_days_fetched": int(snap.get("ccxt_days_fetched") or 0),
                     "minutes_written": int(snap.get("minutes_written") or 0),
                     "duration_s": int(max(0, time.time() - started_ts)),
                 }
@@ -982,7 +982,7 @@ def _run_bybit_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
         if isinstance(out, dict):
             out["duration_s"] = int(max(0, time.time() - started_ts))
         append_exchange_download_log("bybit", f"[INFO] [bybit_best_1m_job] {coin} {out}")
-        _append_to_job_log(job_id, f"  {coin}  done  days_checked={out.get('days_checked', 0)}  archive_days_downloaded={out.get('archive_days_downloaded', 0)}  minutes_written={out.get('minutes_written', 0)}  notes={out.get('notes', [])}")
+        _append_to_job_log(job_id, f"  {coin}  done  days_checked={out.get('days_checked', 0)}  ccxt_days_fetched={out.get('ccxt_days_fetched', 0)}  minutes_written={out.get('minutes_written', 0)}  notes={out.get('notes', [])}")
         update_progress(stage="running", last_result=out)
         try:
             _refresh_inventory_coin("bybit", "1m", coin)

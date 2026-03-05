@@ -26,7 +26,7 @@ from hyperliquid_api import (
     normalize_hyperliquid_coin,
     resolve_hyperliquid_coin_name,
 )
-from hyperliquid_l2book_candles import generate_1m_candles_from_l2book_range, iter_hyperliquid_l2book_mid_prices
+from hyperliquid_l2book_candles import generate_1m_candles_from_l2book_range, iter_hyperliquid_l2book_mid_prices, _maybe_archive_l2book_file, _l2book_hour_path
 from market_data import (
     append_exchange_download_log,
     get_exchange_raw_root_dir,
@@ -2686,6 +2686,12 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                 and l2_rng[0] <= d <= l2_rng[1]
             )
             if not _in_l2book_range:
+                # Archive any remaining local l2book files even for skipped days
+                if not dry_run and not is_stock_perp:
+                    for _h in range(24):
+                        _lp = _l2book_hour_path(coin=coin_u, day=day_s, hour=_h)
+                        if _lp.exists():
+                            _maybe_archive_l2book_file(_lp, coin=coin_u, day=day_s, hour=_h)
                 if ENABLE_TIMING_LOGS:
                     day_total_time = time.time() - day_start_time
                     append_exchange_download_log(
@@ -2803,6 +2809,13 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                 )
                 l2book_minutes_added += len(added_indices)
             t_l2book_write = time.time() - t0
+
+            # Archive local l2book files to NAS after processing this day
+            if not dry_run:
+                for _h in range(24):
+                    _lp = _l2book_hour_path(coin=coin_u, day=day_s, hour=_h)
+                    if _lp.exists():
+                        _maybe_archive_l2book_file(_lp, coin=coin_u, day=day_s, hour=_h)
 
         # OPTIMIZATION 2: Only call Binance/Bybit if there are actual gaps
         t_binance = 0.0

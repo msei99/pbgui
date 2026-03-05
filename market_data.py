@@ -1297,3 +1297,27 @@ def save_aws_profile_region(*, profile: str, region: str) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         cp.write(f)
     os.replace(tmp, path)
+
+
+def load_l2book_archive_dir() -> str:
+    """Return configured l2book archive directory from pbgui.ini, or empty string."""
+    try:
+        cfg = configparser.ConfigParser()
+        cfg.read(Path(__file__).resolve().parent / "pbgui.ini")
+        if cfg.has_option("market_data", "l2book_archive_dir"):
+            return str(cfg.get("market_data", "l2book_archive_dir")).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def is_l2book_archive_enabled() -> bool:
+    """Return True if l2book archiving to NAS is enabled in pbgui.ini."""
+    try:
+        cfg = configparser.ConfigParser()
+        cfg.read(Path(__file__).resolve().parent / "pbgui.ini")
+        if cfg.has_option("market_data", "l2book_archive_enabled"):
+            return str(cfg.get("market_data", "l2book_archive_enabled")).strip().lower() in ("1", "true", "yes")
+    except Exception:
+        pass
+    return False

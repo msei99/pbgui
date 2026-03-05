@@ -1,6 +1,63 @@
 # Market Data
 
-Diese Seite steuert die PBGui-Market-Data-Workflows für Hyperliquid und Binance USDM: l2Book-Archiv-Downloads, TradFi-Symbol-Mapping, Binance 1m Auto-Refresh und Build best 1m OHLCV Jobs.
+Diese Seite steuert die PBGui-Market-Data-Workflows für Hyperliquid, Binance USDM und Bybit: l2Book-Archiv-Downloads, TradFi-Symbol-Mapping, 1m Auto-Refresh-Loops und Build best 1m OHLCV Jobs.
+
+## Empfohlener Workflow — Best Practice
+
+Das ist der schnellste und speichereffizienteste Weg, damit alle Coins aktuell sind und Backtests sofort starten.
+
+### Schritt 1 — Alle Coins für Auto-Refresh aktivieren
+
+1. **Settings (Binance USDM Latest 1m Auto-Refresh)** öffnen → **Select all** → **Save**
+2. **Settings (Latest 1m Auto-Refresh) — Hyperliquid** öffnen → **Select all** → **Save**
+3. Exchange-Dropdown auf **Bybit** umschalten → **Settings (Bybit Latest 1m Auto-Refresh)** öffnen → **Select all** → **Save**
+
+Damit sind alle Coins für den fortlaufenden Update-Loop registriert. Der Loop hält die letzten Tage automatisch aktuell — nach dem ersten vollständigen Download ist kein weiterer manueller Eingriff nötig.
+
+### Schritt 2 — „Build best 1m all" für den initialen Backfill starten
+
+Unter **Build best 1m OHLCV** auf **Build best 1m all** klicken (oder alle Coins auswählen und abschicken).
+
+Damit wird ein Background-Job pro Exchange gestartet, der die komplette Historie von Inception bis heute herunterlädt:
+
+| Exchange | Download-Methode | Erwartete Dauer (erstmaliger Download) |
+|---|---|---|
+| **Binance** | Parallele monatl. + tägl. ZIPs (data.binance.vision) + CCXT-Lückenfüllung | ~2–4 Stunden (~550 Coins) |
+| **Bybit** | CCXT (async) | ~3 Stunden (~550 Coins) || **Hyperliquid** (Crypto) | l2Book-Archiv + 1m\_api-Konvertierung | abhängig von der l2Book-Archivgröße |
+| **Hyperliquid** (XYZ Stock-Perps) | Tiingo IEX/FX 1m | abhängig von der Anzahl gemappter Symbole + Tiingo-Quota |
+**Gemessene Werte aus echten Jobs:**
+- Binance LINK (6+ Jahre, 2 239 Tage, 74 monatliche ZIPs): **41 Sekunden** mit parallelem ZIP-Download
+- Binance alle ~550 Coins (parallele ZIPs): **geschätzt 2–4 h** (Hochrechnung: Ø Coin ~3 Jahre ≈ 24 monatliche ZIPs → ~20 s/Coin)
+- Bybit alle 548 Coins (CCXT, gemessen): **~3 h** (BTC allein = 102 min, kurze Coins anteilig wenig)
+
+Beide Jobs laufen im Hintergrund. Browser schließen und später zurückkommen ist problemlos. Im **Running**-Panel kann der Fortschritt beobachtet werden.
+
+### Schritt 3 — Letzten abgeschlossenen Job prüfen
+
+Nach Abschluss des Jobs den **Done**-Eintrag im Job-Panel öffnen und **🔍** (Raw JSON) anklicken. Prüfen:
+- `status: done` (nicht `failed`)
+- `last_result.days_checked` — entspricht der erwarteten Abdeckung
+- `last_result.minutes_written` > 0
+- Eventuelle `notes`-Einträge (z. B. `monthly_download_failed=...` bedeutet, dass der Daily-ZIP-Fallback für diesen Monat verwendet wurde — normal, wenn das neuste Monats-ZIP noch nicht veröffentlicht ist)
+
+### Schritt 4 — Auto-Refresh hält Daten aktuell
+
+Nach dem initialen Backfill ist das tägliche Update automatisch:
+
+- Binance: letzte **2–7 Tage** werden per CCXT alle 3 600 s (1 h) pro Zyklus aktualisiert
+- Bybit: letzte **2–7 Tage** werden per CCXT alle 3 600 s (1 h) pro Zyklus aktualisiert
+- Hyperliquid: letzte **2–4 Tage** werden per API alle 1 800 s (30 min) pro Zyklus aktualisiert
+
+Für sofortiges Update auf **⏩ Run now** im jeweiligen **Market Data Status**-Panel klicken.
+
+### Warum diese Vorgehensweise
+
+- **Minimaler Speicherbedarf** — Daten werden als komprimierte `.npz`-Dateien gespeichert (eine pro Tag und Coin); `.npz` ist ~35% kleiner als der unkomprimierte `.npy`-Cache von PB7 — z. B. BTC/USDT Binance: **61 MB** (pbgui `.npz`, Sep 2019 – heute) vs **89 MB** (PB7 `.npy`-Cache, Dez 2019 – heute)
+- **Backtests starten sofort** — kein On-Demand-Fetch nötig; die lokalen Dateien sind fertig aufgebaut
+- **Inkrementell** — bei einem erneuten „Build best 1m all" werden bereits vollständige Tage übersprungen (Pre-Scan), nur neue Daten werden heruntergeladen
+- **Kein doppelter Speicher** — eine `.npz` pro Tag und Coin ersetzt jede frühere partielle Version
+
+---
 
 ## Seitenaufbau
 
@@ -176,7 +233,7 @@ Startet Background-Build-Jobs für berechtigte Symbole.
 - Lädt komplette 1m OHLCV-Daten von Inception bis heute aus offiziellen Binance-Archiven (data.binance.vision) — monatliche + tägliche ZIPs — mit CCXT-Lückenfüllung
 - Coin-Auswahl aus allen aktivierten Binance Coins
 - Controls: Start date, End date, Refetch
-- Speicherpfad: `data/ohlcv/binanceusdm/1m/<COIN>/YYYY-MM-DD.npz` (gleiches Format wie PB7 Cache)
+- Speicherpfad: `data/ohlcv/binanceusdm/1m/<COIN>/YYYY-MM-DD.npz` (komprimiertes NumPy-Archiv; PB7-Cache nutzt unkomprimiertes `.npy` — ~35% mehr Speicher für dieselben Daten)
 
 ### Job-Verwaltung
 
