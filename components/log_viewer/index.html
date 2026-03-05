@@ -368,7 +368,9 @@ body {
    ═══════════════════════════════════════════════════════════════ */
 
 // ── Config ─────────────────────────────────────────────────
-let wsPort = __WS_PORT__;
+let apiPort = __API_PORT__;      // Injected by Python
+let apiToken = '__API_TOKEN__';  // Injected by Python
+let apiHost = '__API_HOST__';    // Injected by Python (srcdoc iframes have empty hostname)
 
 // ── State ──────────────────────────────────────────────────
 let ws = null;
@@ -404,8 +406,8 @@ const SEARCH_CHUNK_SIZE = 400;
 
 // ── WebSocket ──────────────────────────────────────────────
 function connect() {
-  const host = window.location.hostname || '127.0.0.1';
-  ws = new WebSocket(`ws://${host}:${wsPort}`);
+  const url = `ws://${apiHost}:${apiPort}/ws/vps?token=${apiToken}`;
+  ws = new WebSocket(url);
 
   ws.onopen = () => {
     setBanner('ok');

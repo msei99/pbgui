@@ -154,17 +154,6 @@ def pbcoindata_overview(key_suffix=""):
     elif not desired and is_running:
         pbcoindata.stop()
 
-def pbmaster_overview(key_suffix=""):
-    pbmaster = st.session_state.pbmaster
-    _key = f"service_pbmaster{key_suffix}"
-    is_running = pbmaster.is_running()
-    desired = st.session_state.get(_key, is_running)
-    st.toggle("PBMaster", value=is_running, key=_key, help=pbgui_help.pbmaster)
-    if desired and not is_running:
-        pbmaster.run()
-    elif not desired and is_running:
-        pbmaster.stop()
-
 def api_server_overview(key_suffix=""):
     api_server = st.session_state.api_server
     _key = f"service_api_server{key_suffix}"
@@ -184,7 +173,6 @@ def overview():
         ("PBStat",     pbstat_overview),
         ("PBData",     pbdata_overview),
         ("PBCoinData", pbcoindata_overview),
-        ("PBMaster",   pbmaster_overview),
         ("API Server", api_server_overview),
     ]
     cols = st.columns(4)
@@ -1154,145 +1142,114 @@ def pbcoindata_details():
                 st.error(_api_cache["error"] or "Unknown API error", icon="🚨")
     render_log_viewer(preselect="PBCoinData.log", iframe_height_offset=340)
 
-def pbmaster_details():
-    pbmaster = st.session_state.pbmaster
+def vps_settings_details():
+    """VPS monitoring settings — replaces PBMaster tab.
 
-    if "pbmaster_view_mode" not in st.session_state:
-        st.session_state.pbmaster_view_mode = "viewer"
+    VPS monitoring now runs automatically inside the API Server process.
+    This tab configures which hosts to monitor and auto-restart behavior.
+    """
+    from pbgui_purefunc import load_ini, save_ini, PBGDIR
+    import json, glob
+    from pathlib import Path
 
-    if st.session_state.pbmaster_view_mode == "settings":
-        with st.sidebar:
-            if st.button(":material/arrow_back: Back", key="pbmaster_back_btn"):
-                st.session_state.pbmaster_view_mode = "viewer"
+    # ── Read current settings from pbgui.ini ──
+    def _load_auto_restart() -> bool:
+        val = load_ini("pbmaster", "auto_restart")
+        return val.lower() == "true" if val else True
+
+    def _load_enabled_hosts() -> set[str]:
+        val = load_ini("pbmaster", "enabled_hosts")
+        if val and val.strip():
+            return {h.strip() for h in val.split(",") if h.strip()}
+        return set()
+
+    def _available_hosts() -> list[str]:
+        vps_dir = Path(f'{PBGDIR}/data/vpsmanager/hosts')
+        hostnames = []
+        pattern = str(vps_dir / '*' / '*.json')
+        for filepath in sorted(glob.glob(pattern)):
+            try:
+                with open(filepath, 'r') as f:
+                    config = json.load(f)
+                hostname = config.get('_hostname')
+                if hostname:
+                    hostnames.append(hostname)
+            except Exception:
+                pass
+        return sorted(set(hostnames))
+
+    st.info(
+        "VPS monitoring runs automatically inside the **API Server**. "
+        "No separate daemon needed — just ensure the API Server is running.",
+        icon=":material/info:"
+    )
+
+    st.subheader("Auto-Restart")
+    auto_restart = _load_auto_restart()
+    if "vps_auto_restart" not in st.session_state:
+        st.session_state.vps_auto_restart = auto_restart
+
+    st.toggle(
+        "Auto-restart services",
+        key="vps_auto_restart",
+        help=pbgui_help.pbmaster_auto_restart,
+    )
+
+    st.divider()
+
+    # ── VPS Host Selection ──
+    st.subheader("Monitored VPS Hosts")
+    st.caption("Select which VPS servers to monitor. Default: all off.")
+
+    available = _available_hosts()
+    current_enabled = _load_enabled_hosts()
+
+    if not available:
+        st.info("No VPS configured. Add VPS in **VPS Manager** first.")
+    else:
+        _btn_cols = st.columns([0.2, 0.2, 0.6])
+        with _btn_cols[0]:
+            if st.button("Enable All", key="vps_enable_all", width='stretch'):
+                for h in available:
+                    st.session_state[f"vps_host_{h}"] = True
+                st.rerun()
+        with _btn_cols[1]:
+            if st.button("Disable All", key="vps_disable_all", width='stretch'):
+                for h in available:
+                    st.session_state[f"vps_host_{h}"] = False
                 st.rerun()
 
-        # Auto-restart toggle
-        if "pbmaster_auto_restart" not in st.session_state:
-            st.session_state.pbmaster_auto_restart = pbmaster.auto_restart
+        for hostname in available:
+            _hkey = f"vps_host_{hostname}"
+            if _hkey not in st.session_state:
+                st.session_state[_hkey] = hostname in current_enabled
+            st.toggle(
+                f":material/computer: {hostname}",
+                key=_hkey,
+                help=pbgui_help.pbmaster_enabled_hosts,
+            )
 
-        st.toggle(
-            "Auto-restart services",
-            key="pbmaster_auto_restart",
-            help=pbgui_help.pbmaster_auto_restart,
-        )
+    st.divider()
 
-        # Monitor interval
-        if "pbmaster_monitor_interval" not in st.session_state:
-            st.session_state.pbmaster_monitor_interval = pbmaster.monitor_interval
+    # ── Save ──
+    _new_enabled = {
+        h for h in available
+        if st.session_state.get(f"vps_host_{h}", False)
+    } if available else set()
 
-        st.number_input(
-            "Monitor interval (seconds)",
-            min_value=5, max_value=300, step=5,
-            key="pbmaster_monitor_interval",
-            help=pbgui_help.pbmaster_monitor_interval,
-        )
+    _dirty = (
+        st.session_state.get("vps_auto_restart", auto_restart) != auto_restart or
+        _new_enabled != current_enabled
+    )
+    if st.button(":material/save:", key="vps_save_config",
+                 type="primary" if _dirty else "secondary"):
+        save_ini("pbmaster", "auto_restart",
+                 str(st.session_state.vps_auto_restart))
+        save_ini("pbmaster", "enabled_hosts",
+                 ",".join(sorted(_new_enabled)))
+        st.rerun()
 
-        # WebSocket port
-        if "pbmaster_ws_port" not in st.session_state:
-            st.session_state.pbmaster_ws_port = pbmaster.ws_port
-
-        st.number_input(
-            "WebSocket port",
-            min_value=1024, max_value=65535, step=1,
-            key="pbmaster_ws_port",
-            help="Port for the real-time WebSocket server (default: 8765). "
-                 "Requires daemon restart to take effect.",
-        )
-
-        st.divider()
-
-        # ── VPS Host Selection ──
-        st.markdown("**Monitored VPS Hosts**")
-        st.caption("Select which VPS servers PBMaster should monitor. "
-                   "Default: all off.")
-
-        available = pbmaster.available_hosts()
-        current_enabled = pbmaster.enabled_hosts
-
-        if not available:
-            st.info("No VPS configured. Add VPS in **VPS Manager** first.")
-        else:
-            # Enable All / Disable All buttons
-            _btn_cols = st.columns([0.2, 0.2, 0.6])
-            with _btn_cols[0]:
-                if st.button("Enable All", key="pbmaster_enable_all",
-                             width='stretch'):
-                    for h in available:
-                        st.session_state[f"pbmaster_host_{h}"] = True
-                    st.rerun()
-            with _btn_cols[1]:
-                if st.button("Disable All", key="pbmaster_disable_all",
-                             width='stretch'):
-                    for h in available:
-                        st.session_state[f"pbmaster_host_{h}"] = False
-                    st.rerun()
-
-            # Individual host toggles
-            for hostname in available:
-                _hkey = f"pbmaster_host_{hostname}"
-                if _hkey not in st.session_state:
-                    st.session_state[_hkey] = hostname in current_enabled
-                st.toggle(
-                    f":material/computer: {hostname}",
-                    key=_hkey,
-                    help=pbgui_help.pbmaster_enabled_hosts,
-                )
-
-        st.divider()
-
-        # ── Save button ──
-        _new_enabled = {
-            h for h in available
-            if st.session_state.get(f"pbmaster_host_{h}", False)
-        } if available else set()
-
-        _pbmaster_dirty = (
-            st.session_state.get("pbmaster_auto_restart", pbmaster.auto_restart) != pbmaster.auto_restart or
-            st.session_state.get("pbmaster_monitor_interval", pbmaster.monitor_interval) != pbmaster.monitor_interval or
-            st.session_state.get("pbmaster_ws_port", pbmaster.ws_port) != pbmaster.ws_port or
-            _new_enabled != current_enabled
-        )
-        if st.button(":material/save:", key="pbmaster_save_config",
-                     type="primary" if _pbmaster_dirty else "secondary"):
-            pbmaster.auto_restart = st.session_state.pbmaster_auto_restart
-            pbmaster.monitor_interval = st.session_state.pbmaster_monitor_interval
-            pbmaster.ws_port = st.session_state.pbmaster_ws_port
-            pbmaster.enabled_hosts = _new_enabled
-            st.session_state.pbmaster_view_mode = "viewer"
-            st.rerun()
-        return
-
-    with st.sidebar:
-        if st.button(":material/settings: Settings", key="pbmaster_settings_btn"):
-            st.session_state.pbmaster_view_mode = "settings"
-            st.rerun()
-
-    # Connection status
-    if pbmaster.is_running() and pbmaster.pool:
-        st.subheader("SSH Connections")
-        summary = pbmaster.pool.get_status_summary()
-        _conn_cols = st.columns(3)
-        with _conn_cols[0]:
-            st.metric("Total VPS", summary["total"])
-        with _conn_cols[1]:
-            st.metric("Connected", summary["connected"])
-        with _conn_cols[2]:
-            st.metric("Disconnected", summary["disconnected"] + summary["auth_failed"])
-
-        if summary["connections"]:
-            for hostname, info in sorted(summary["connections"].items()):
-                status = info["status"]
-                if status == "connected":
-                    st.success(f"**{hostname}** ({info['ip']})", icon="✅")
-                elif status == "auth_failed":
-                    st.error(f"**{hostname}** ({info['ip']}): Auth failed", icon="🔒")
-                else:
-                    st.warning(
-                        f"**{hostname}** ({info['ip']}): {info.get('last_error', 'disconnected')}",
-                        icon="⚠️"
-                    )
-
-    render_log_viewer(preselect="PBMaster.log", iframe_height_offset=280)
+    render_log_viewer(preselect="VPSMonitor.log", iframe_height_offset=340)
 
 def api_server_details():
     api_server = st.session_state.api_server
@@ -1362,7 +1319,7 @@ def api_server_details():
     else:
         st.warning("API Server is not running", icon="⚠️")
 
-    render_log_viewer(preselect="api_server.log", iframe_height_offset=280)
+    render_log_viewer(preselect="PBApiServer.log", iframe_height_offset=280)
 
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
@@ -1374,7 +1331,7 @@ set_page_config("PBGUI Services")
 
 # Read active tab from session state *before* rendering the widget so the
 # title can be shown above the tabs on every rerun.
-_TABS = ["Overview", "PBRun", "PBRemote", "PBMon", "PBStat", "PBData", "PBCoinData", "PBMaster", "API Server"]
+_TABS = ["Overview", "PBRun", "PBRemote", "PBMon", "PBStat", "PBData", "PBCoinData", "VPS Settings", "API Server"]
 _cur_tab = st.session_state.get("services_active_tab") or "Overview"
 if _cur_tab not in _TABS:
     _cur_tab = "Overview"
@@ -1428,11 +1385,8 @@ elif active_tab == "PBCoinData":
             pbcoindata_overview(key_suffix="_det")
     pbcoindata_details()
 
-elif active_tab == "PBMaster":
-    if st.session_state.get("pbmaster_view_mode", "viewer") == "viewer":
-        with st.sidebar:
-            pbmaster_overview(key_suffix="_det")
-    pbmaster_details()
+elif active_tab == "VPS Settings":
+    vps_settings_details()
 
 elif active_tab == "API Server":
     if st.session_state.get("api_server_view_mode", "viewer") == "viewer":

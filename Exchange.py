@@ -348,6 +348,29 @@ class Exchange:
         if self._user and self.user.key != 'key':
             self.instance.apiKey = self.user.key
             self.instance.secret = self.user.secret
+
+    def close(self):
+        """Close the exchange instance and release resources (e.g. aiohttp sessions)."""
+        if self.instance and hasattr(self.instance, 'close'):
+            try:
+                # CCXT may use async close() even in sync mode
+                import asyncio
+                import inspect
+                if inspect.iscoroutinefunction(self.instance.close):
+                    # If we're in an event loop, create task; else run_until_complete
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.create_task(self.instance.close())
+                        else:
+                            loop.run_until_complete(self.instance.close())
+                    except RuntimeError:
+                        # No event loop available
+                        asyncio.run(self.instance.close())
+                else:
+                    self.instance.close()
+            except Exception as e:
+                _human_log('Exchange', f'Error closing exchange {self.id}: {e}', level='debug')
             self.instance.password = self.user.passphrase
             self.instance.walletAddress = self.user.wallet_address
             self.instance.privateKey = self.user.private_key

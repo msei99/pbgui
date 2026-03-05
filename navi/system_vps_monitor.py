@@ -31,6 +31,7 @@ from pbgui_purefunc import load_ini
 
 _COMPONENT_DIR = Path(__file__).resolve().parent.parent / "components" / "vps_monitor"
 _COMPONENT_HTML: str | None = None
+_COMPONENT_MTIME: float = 0.0
 
 
 def _docs_index(lang: str) -> list[tuple[str, str]]:
@@ -103,22 +104,26 @@ def _help_modal(default_topic: str = "VPS Monitor"):
 
 
 def _load_component_html() -> str:
-    """Load and cache the VPS Monitor HTML component."""
-    global _COMPONENT_HTML
-    if _COMPONENT_HTML is None:
-        html_path = _COMPONENT_DIR / "index.html"
+    """Load and cache the VPS Monitor HTML component.
+    
+    Auto-reloads if the template file was modified on disk.
+    """
+    global _COMPONENT_HTML, _COMPONENT_MTIME
+    html_path = _COMPONENT_DIR / "index.html"
+    try:
+        mtime = html_path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    if _COMPONENT_HTML is None or mtime != _COMPONENT_MTIME:
         _COMPONENT_HTML = html_path.read_text(encoding="utf-8")
+        _COMPONENT_MTIME = mtime
     return _COMPONENT_HTML
 
 
-def _get_ws_port() -> int:
-    """Read WS port from config, default 8765."""
-    val = load_ini("pbmaster", "ws_port")
-    if val and val.isdigit():
-        port = int(val)
-        if 1024 <= port <= 65535:
-            return port
-    return 8765
+def _get_api_port() -> int:
+    """Read API server port from config, default 8000."""
+    import os
+    return int(os.getenv("PBGUI_API_PORT", "8000"))
 
 
 # ── Page ───────────────────────────────────────────────────
@@ -136,17 +141,48 @@ render_header_with_guide(
     guide_key="vps_monitor_guide_btn",
 )
 
-# Check if PBMaster daemon is accessible
-from PBMaster import PBMaster
+# Ensure API server and get auth token
+from pbgui_func import _start_fastapi_server_if_needed
+from api.auth import generate_token
 
-if "pbmaster" not in st.session_state:
-    st.session_state.pbmaster = PBMaster()
+api_host, api_port_val, api_ok = _start_fastapi_server_if_needed()
+if not api_ok:
+    st.error(
+        f"⚠️ FastAPI server could not be started on {api_host}:{api_port_val}. "
+        "Please check **System → Services → API Server** or start manually: "
+        "`python api_server.py`"
+    )
+    st.stop()
 
-pbmaster = st.session_state.pbmaster
+if "api_token" not in st.session_state:
+    user_id = (
+        st.session_state.get("user", {}).get("id")
+        or st.session_state.get("user")
+        or "anonymous"
+    )
+    token_obj = generate_token(str(user_id), expires_in_seconds=86400)
+    st.session_state["api_token"] = token_obj.token
 
-# Load HTML and inject WS port
-ws_port = _get_ws_port()
-html = _load_component_html().replace("__WS_PORT__", str(ws_port))
+api_token = st.session_state["api_token"]
+
+# Determine browser-usable host for WebSocket connections.
+# api_host from config may be "0.0.0.0" (bind all interfaces) which
+# is not a valid WS target for browsers.  Use the Streamlit request
+# host header so remote access works too.
+_ws_host = "127.0.0.1"
+try:
+    _req_host = st.context.headers.get("Host", "")
+    if _req_host:
+        # Strip port from Host header (e.g. "192.168.1.100:8501" → "192.168.1.100")
+        _ws_host = _req_host.split(":")[0] or "127.0.0.1"
+except Exception:
+    pass
+
+# Load HTML and inject API port + token + host
+html = _load_component_html()
+html = html.replace("__API_PORT__", str(api_port_val))
+html = html.replace("__API_TOKEN__", api_token)
+html = html.replace("__API_HOST__", _ws_host)
 
 # CSS to make the iframe fill the remaining viewport.
 st.markdown("""

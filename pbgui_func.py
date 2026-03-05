@@ -453,12 +453,30 @@ def render_log_viewer(
         display_title: optional human-readable label shown in the viewer
             toolbar alongside the filename (e.g. the backtest name).
     """
-    ws_port_val = load_ini("pbmaster", "ws_port")
-    ws_port = (
-        int(ws_port_val)
-        if ws_port_val and ws_port_val.isdigit() and 1024 <= int(ws_port_val) <= 65535
-        else 8765
-    )
+    # API server connection for WebSocket log streaming
+    api_host_cfg, api_port_val, _api_ok = _start_fastapi_server_if_needed()
+
+    # Determine browser-usable hostname (bind address 0.0.0.0 is not valid for WS)
+    _ws_host = "127.0.0.1"
+    try:
+        import streamlit as _st
+        _req_host = _st.context.headers.get("Host", "")
+        if _req_host:
+            _ws_host = _req_host.split(":")[0] or "127.0.0.1"
+    except Exception:
+        pass
+
+    # Generate / reuse API token for this session
+    from api.auth import generate_token as _gen_token
+    if "api_token" not in __import__('streamlit').session_state:
+        _user_id = (
+            __import__('streamlit').session_state.get("user", {}).get("id")
+            or __import__('streamlit').session_state.get("user")
+            or "anonymous"
+        )
+        _tok = _gen_token(str(_user_id), expires_in_seconds=86400)
+        __import__('streamlit').session_state["api_token"] = _tok.token
+    _api_token = __import__('streamlit').session_state["api_token"]
     logs_dir = Path(__file__).resolve().parent / "data" / "logs"
     log_files: list[str] = []
     if logs_dir.exists():
@@ -487,7 +505,9 @@ def render_log_viewer(
 
     html = (
         _load_log_viewer_html()
-        .replace("__WS_PORT__", str(ws_port))
+        .replace("__API_PORT__", str(api_port_val))
+        .replace("__API_TOKEN__", _api_token)
+        .replace("__API_HOST__", _ws_host)
         .replace("__INITIAL_FILES__", json.dumps(log_files))
         .replace("__FILE_SIZES__", json.dumps(file_sizes))
         .replace("__ROTATED_FILES__", json.dumps(rotated_files))
@@ -632,4 +652,125 @@ def render_fastapi_job_monitor(height: int = 800, exchange: str = "") -> None:
     exchange_param = f"&exchange={exchange}" if exchange else ""
     iframe_url = f"http://localhost:{api_port}/app/jobs_monitor.html?token={token}{exchange_param}"
     _st_components.iframe(iframe_url, height=height, scrolling=True)
+
+
+
+def render_fastapi_market_data_status(exchange: str) -> None:
+    """
+    Render FastAPI-based Market Data Status monitor (vanilla HTML/JS).
+
+    Uses st.html(unsafe_allow_javascript=True) to inject the HTML directly
+    into the Streamlit DOM (NO iframe). This allows natural height flow —
+    collapsed state takes zero extra space, expanded state grows naturally.
+    All CSS is scoped under .mds-root to avoid Streamlit style conflicts.
+    Collapse/expand uses vanilla JS + localStorage persistence.
+
+    Args:
+        exchange: Exchange name ("binanceusdm", "bybit", "hyperliquid")
+    """
+    from pathlib import Path
+    from api.auth import generate_token
+
+    # Ensure FastAPI server is running and get config
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+
+    if not success:
+        st.error(f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+                 f"Please check **System → Services → API Server** or start manually: `python api_server.py`")
+        return
+
+    # Get or create token for current session
+    if "api_token" not in st.session_state:
+        user_id = st.session_state.get("user", {}).get("id") or st.session_state.get("user") or "anonymous"
+        token_obj = generate_token(str(user_id), expires_in_seconds=86400)
+        st.session_state["api_token"] = token_obj.token
+
+    token = st.session_state["api_token"]
+    exchange_param = exchange.lower().strip()
+    api_host_str = f"localhost:{api_port}"
+    api_base_str = f"http://localhost:{api_port}/api"
+
+    # Read HTML template and make element IDs unique per exchange
+    html_path = Path(__file__).parent / "frontend" / "market_data_status.html"
+    html_content = html_path.read_text(encoding="utf-8")
+
+    # Unique IDs so multiple instances on the same page don't conflict
+    instance_id = f"mds_{exchange_param}"
+    html_content = html_content.replace("__MDS_ROOT_ID__", instance_id)
+    html_content = html_content.replace("__MDS_ID__", f"{instance_id}_")
+
+    # Inject config via data-* attributes on root element (no separate script needed)
+    html_content = html_content.replace(
+        'data-token=""', f'data-token="{token}"'
+    ).replace(
+        'data-exchange=""', f'data-exchange="{exchange_param}"'
+    ).replace(
+        'data-api-host=""', f'data-api-host="{api_host_str}"'
+    ).replace(
+        'data-api-base=""', f'data-api-base="{api_base_str}"'
+    )
+
+    # st.html with unsafe_allow_javascript: renders directly in DOM (no iframe!)
+    # Natural height flow — collapsed = just header, expanded = full content
+    st.html(html_content, unsafe_allow_javascript=True)
+
+
+def render_fastapi_gap_heatmap(exchange: str, dataset: str, coin: str) -> None:
+    """
+    Render the Gap / Coverage Heatmap via FastAPI + Vanilla JS (Plotly.js).
+
+    Uses st.html(unsafe_allow_javascript=True) to inject the HTML directly
+    into the Streamlit DOM (NO iframe, NO run_every fragment).
+    The JS frontend loads Plotly.js from the local API server, fetches chart
+    data from /api/heatmap/* endpoints, and keeps itself up-to-date via a
+    WebSocket (/ws/heatmap-watch) that fires when the underlying data changes.
+
+    Args:
+        exchange: Exchange name ("hyperliquid", "binanceusdm", "bybit", ...)
+        dataset:  Dataset name ("1m", "candles_1m", "l2Book", "pb7_cache:…", …)
+        coin:     Coin symbol (e.g. "BTC", "AAPL")
+    """
+    from pathlib import Path
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+                 f"Please check **System → Services → API Server** or start manually: `python api_server.py`")
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (st.session_state.get("user", {}).get("id")
+                   or st.session_state.get("user")
+                   or "anonymous")
+        token_obj = generate_token(str(user_id), expires_in_seconds=86400)
+        st.session_state["api_token"] = token_obj.token
+
+    token = st.session_state["api_token"]
+    exchange_param = str(exchange).lower().strip()
+    dataset_param  = str(dataset).strip()
+    coin_param     = str(coin).strip()
+    api_base_str   = f"http://localhost:{api_port}/api"
+
+    html_path = Path(__file__).parent / "frontend" / "gap_heatmap.html"
+    html_content = html_path.read_text(encoding="utf-8")
+
+    # Make element IDs unique per exchange/dataset/coin so multiple instances
+    # on the same Streamlit page don't collide.
+    safe_ds   = dataset_param.replace(":", "_").replace("/", "_")
+    safe_coin = coin_param.replace("/", "_").replace(":", "_")
+    instance_id = f"hm_{exchange_param}_{safe_ds}_{safe_coin}"
+    html_content = html_content.replace("__HM_ROOT_ID__", instance_id)
+
+    html_content = (
+        html_content
+        .replace('data-token=""',    f'data-token="{token}"')
+        .replace('data-exchange=""', f'data-exchange="{exchange_param}"')
+        .replace('data-dataset=""',  f'data-dataset="{dataset_param}"')
+        .replace('data-coin=""',     f'data-coin="{coin_param}"')
+        .replace('data-api-host=""', f'data-api-host="localhost:{api_port}"')
+        .replace('data-api-base=""', f'data-api-base="{api_base_str}"')
+    )
+
+    st.html(html_content, unsafe_allow_javascript=True)
 

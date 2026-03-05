@@ -2905,86 +2905,14 @@ def view_market_data():
         if str(exchange).lower() == "binance":
             bnc_coin_list = [str(c).strip().upper() for c in enabled_preview if str(c).strip()]
 
-            # Check if Binance Latest 1m daemon is active
-            _bnc_flag_path_check = Path(f"{PBGDIR}/data/logs/binance_latest_1m_run_now.flag")
-            _bnc_status_check = _load_market_data_status().get("binance_latest_1m", {}) if _supports_fragment_run_every() else {}
-            _bnc_is_active = _bnc_flag_path_check.exists() or bool(_bnc_status_check.get("running"))
-
-            if _supports_fragment_run_every() and _bnc_is_active:
-                @st.fragment(run_every=5)
-                def _bnc_status_fragment():
-                    _bnc_flag_path = Path(f"{PBGDIR}/data/logs/binance_latest_1m_run_now.flag")
-                    _bnc_stop_path = Path(f"{PBGDIR}/data/logs/binance_latest_1m_stop.flag")
-                    bnc_status_all = _load_market_data_status()
-                    bnc_status = bnc_status_all.get("binance_latest_1m") if isinstance(bnc_status_all, dict) else {}
-                    _bnc_queued = _bnc_flag_path.exists()
-                    _bnc_running = bool(bnc_status.get("running")) if bnc_status else False
-                    
-                    with st.expander("Market Data status (Binance USDM Latest 1m)", expanded=False):
-                        _c1, _c2 = st.columns([1, 1])
-                        with _c1:
-                            if not _bnc_queued:
-                                if st.button("⏩ Refresh now", key="bnc_run_now_btn", help="Skip wait and trigger next Binance refresh cycle immediately", width='stretch'):
-                                    try:
-                                        _bnc_flag_path.touch()
-                                        st.toast("Refresh triggered — cycle will start within seconds.")
-                                    except Exception as _e:
-                                        st.error(f"Failed: {_e}")
-                            else:
-                                if st.button("⏹ Cancel queued refresh", key="bnc_cancel_btn", type="primary", help="Cancel the queued refresh — loop will do the normal wait instead", width='stretch'):
-                                    try:
-                                        _bnc_flag_path.unlink(missing_ok=True)
-                                        st.toast("Queued refresh cancelled.")
-                                    except Exception as _e:
-                                        st.error(f"Failed: {_e}")
-                        with _c2:
-                            if _bnc_running:
-                                if st.button("⏹ Stop current run", key="bnc_stop_btn", type="primary", help="Stop after the current coin finishes", width='stretch'):
-                                    try:
-                                        _bnc_stop_path.touch()
-                                        st.toast("Stop signal sent — run will abort after current coin.")
-                                    except Exception as _e:
-                                        st.error(f"Failed: {_e}")
-                        if not bnc_status:
-                            st.info("No Binance status yet. Start PBData with Binance enabled to populate status.")
-                        else:
-                            if bnc_status.get("running"):
-                                _done = int(bnc_status.get("coins_done") or 0)
-                                _total = int(bnc_status.get("coins_total") or 0)
-                                _cur = bnc_status.get("current_coin") or "..."
-                                if _total > 0:
-                                    st.progress(_done / _total, text=f"Running: {_done} / {_total} — current: {_cur}")
-                                else:
-                                    st.info("Running...")
-                            bnc_coins_st = bnc_status.get("coins") if isinstance(bnc_status, dict) else {}
-                            bnc_interval_s = int(bnc_status.get("interval_seconds") or 0) if isinstance(bnc_status, dict) else 0
-                            if isinstance(bnc_coins_st, dict) and bnc_coins_st:
-                                bnc_status_rows = []
-                                now_bnc = _datetime.now()
-                                for coin, cst in sorted(bnc_coins_st.items()):
-                                    last_fetch = str(cst.get("last_fetch") or "") if isinstance(cst, dict) else ""
-                                    next_run = ""
-                                    if bnc_interval_s and last_fetch:
-                                        try:
-                                            last_dt = _datetime.fromisoformat(last_fetch)
-                                            next_run = max(0, int(bnc_interval_s - (now_bnc - last_dt).total_seconds()))
-                                        except Exception:
-                                            pass
-                                    api_res = cst.get("api_result") if isinstance(cst, dict) else {}
-                                    bnc_status_rows.append({
-                                        "coin": coin,
-                                        "last_fetch": last_fetch,
-                                        "result": (cst.get("result") if isinstance(cst, dict) else ""),
-                                        "lookback_days": (cst.get("lookback_days") if isinstance(cst, dict) else ""),
-                                        "minutes_written": (api_res.get("minutes_written") if isinstance(api_res, dict) else ""),
-                                        "next_run_in_s": next_run,
-                                        "note": (cst.get("note") or cst.get("error") or "") if isinstance(cst, dict) else "",
-                                    })
-                                st.dataframe(bnc_status_rows, width='stretch')
-                            else:
-                                st.info("No Binance latest 1m status available yet.")
-                
-                _bnc_status_fragment()
+            # Market Data status monitor (Binance USDM Latest 1m)
+            # Live updates via WebSocket (no polling needed)
+            # Has built-in collapse/expand functionality
+            @st.fragment
+            def _bnc_status_fragment():
+                from pbgui_func import render_fastapi_market_data_status
+                render_fastapi_market_data_status(exchange="binanceusdm")
+            _bnc_status_fragment()
 
             with st.expander("Build best 1m OHLCV (Binance USDM)", expanded=False):
                 st.caption(
@@ -3185,122 +3113,14 @@ def view_market_data():
                     except Exception as e:
                         st.error(f'Failed to save settings: {e}')
 
-            if _supports_fragment_run_every() and not _is_background_refresh_paused():
-                @st.fragment(run_every=5)
-                def _bbt_status_fragment():
-                    _bbt_flag_path = Path(f"{PBGDIR}/data/logs/bybit_latest_1m_run_now.flag")
-                    _bbt_stop_path = Path(f"{PBGDIR}/data/logs/bybit_latest_1m_stop.flag")
-                    bbt_status_all = _load_market_data_status()
-                    bbt_status = bbt_status_all.get("bybit_latest_1m") if isinstance(bbt_status_all, dict) else {}
-                    _bbt_queued = _bbt_flag_path.exists()
-                    _bbt_running = bool(bbt_status.get("running")) if bbt_status else False
-                    with st.expander("Market Data status (Bybit Latest 1m)", expanded=False):
-                        _c1, _c2 = st.columns([1, 1])
-                        with _c1:
-                            if not _bbt_queued:
-                                if st.button("⏩ Refresh now", key="bbt_run_now_btn", help="Skip wait and trigger next Bybit refresh cycle immediately", width='stretch'):
-                                    try:
-                                        _bbt_flag_path.touch()
-                                        st.toast("Refresh triggered — cycle will start within seconds.")
-                                    except Exception as _e:
-                                        st.error(f"Failed: {_e}")
-                            else:
-                                if st.button("⏹ Cancel queued refresh", key="bbt_cancel_btn", type="primary", help="Cancel the queued refresh", width='stretch'):
-                                    try:
-                                        _bbt_flag_path.unlink(missing_ok=True)
-                                        st.toast("Queued refresh cancelled.")
-                                    except Exception as _e:
-                                        st.error(f"Failed: {_e}")
-                        with _c2:
-                            if _bbt_running:
-                                if st.button("⏹ Stop current run", key="bbt_stop_btn", type="primary", help="Stop after the current coin finishes", width='stretch'):
-                                    try:
-                                        _bbt_stop_path.touch()
-                                        st.toast("Stop signal sent — run will abort after current coin.")
-                                    except Exception as _e:
-                                        st.error(f"Failed: {_e}")
-                        if not bbt_status:
-                            st.info("No Bybit status yet. Start PBData with Bybit enabled to populate status.")
-                        else:
-                            if bbt_status.get("running"):
-                                _done = int(bbt_status.get("coins_done") or 0)
-                                _total = int(bbt_status.get("coins_total") or 0)
-                                _cur = bbt_status.get("current_coin") or "..."
-                                if _total > 0:
-                                    st.progress(_done / _total, text=f"Running: {_done} / {_total} — current: {_cur}")
-                                else:
-                                    st.info("Running...")
-                            bbt_coins_st = bbt_status.get("coins") if isinstance(bbt_status, dict) else {}
-                            bbt_interval_s = int(bbt_status.get("interval_seconds") or 0) if isinstance(bbt_status, dict) else 0
-                            if isinstance(bbt_coins_st, dict) and bbt_coins_st:
-                                bbt_status_rows = []
-                                now_bbt = _datetime.now()
-                                for coin, cst in sorted(bbt_coins_st.items()):
-                                    last_fetch = str(cst.get("last_fetch") or "") if isinstance(cst, dict) else ""
-                                    next_run = ""
-                                    if bbt_interval_s and last_fetch:
-                                        try:
-                                            last_dt = _datetime.fromisoformat(last_fetch)
-                                            next_run = max(0, int(bbt_interval_s - (now_bbt - last_dt).total_seconds()))
-                                        except Exception:
-                                            pass
-                                    api_res = cst.get("api_result") if isinstance(cst, dict) else {}
-                                    bbt_status_rows.append({
-                                        "coin": coin,
-                                        "last_fetch": last_fetch,
-                                        "result": (cst.get("result") if isinstance(cst, dict) else ""),
-                                        "lookback_days": (cst.get("lookback_days") if isinstance(cst, dict) else ""),
-                                        "minutes_written": (api_res.get("minutes_written") if isinstance(api_res, dict) else ""),
-                                        "next_run_in_s": next_run,
-                                        "note": (cst.get("note") or cst.get("error") or "") if isinstance(cst, dict) else "",
-                                    })
-                                st.dataframe(bbt_status_rows, width='stretch')
-                            else:
-                                st.info("No Bybit latest 1m status available yet.")
-                _bbt_status_fragment()
-            else:
-                @st.fragment
-                def _bbt_status_fragment_static():
-                    _bbt_flag_path = Path(f"{PBGDIR}/data/logs/bybit_latest_1m_run_now.flag")
-                    _bbt_stop_path = Path(f"{PBGDIR}/data/logs/bybit_latest_1m_stop.flag")
-                    bbt_status_all = _load_market_data_status()
-                    bbt_status = bbt_status_all.get("bybit_latest_1m") if isinstance(bbt_status_all, dict) else {}
-                    _bbt_queued = _bbt_flag_path.exists()
-                    _bbt_running = bool(bbt_status.get("running")) if bbt_status else False
-                    with st.expander("Market Data status (Bybit Latest 1m)", expanded=False):
-                        _c1, _c2 = st.columns([1, 1])
-                        with _c1:
-                            if not _bbt_queued:
-                                if st.button("⏩ Refresh now", key="bbt_run_now_btn_s", help="Skip wait and trigger next Bybit refresh cycle immediately", width='stretch'):
-                                    try:
-                                        _bbt_flag_path.touch()
-                                        st.toast("Refresh triggered — cycle will start within seconds.")
-                                    except Exception as _e:
-                                        st.error(f"Failed: {_e}")
-                            else:
-                                if st.button("⏹ Cancel queued refresh", key="bbt_cancel_btn_s", type="primary", help="Cancel the queued refresh", width='stretch'):
-                                    try:
-                                        _bbt_flag_path.unlink(missing_ok=True)
-                                        st.toast("Queued refresh cancelled.")
-                                    except Exception as _e:
-                                        st.error(f"Failed: {_e}")
-                        with _c2:
-                            if _bbt_running:
-                                if st.button("⏹ Stop current run", key="bbt_stop_btn_s", type="primary", help="Stop after the current coin finishes", width='stretch'):
-                                    try:
-                                        _bbt_stop_path.touch()
-                                        st.toast("Stop signal sent — run will abort after current coin.")
-                                    except Exception as _e:
-                                        st.error(f"Failed: {_e}")
-                        if not bbt_status:
-                            st.info("No Bybit status yet. Start PBData with Bybit enabled to populate status.")
-                        else:
-                            bbt_coins_st = bbt_status.get("coins") if isinstance(bbt_status, dict) else {}
-                            if isinstance(bbt_coins_st, dict) and bbt_coins_st:
-                                st.dataframe(list(bbt_coins_st.values()), width='stretch')
-                            else:
-                                st.info("No Bybit latest 1m status available yet.")
-                _bbt_status_fragment_static()
+            # Market Data status monitor (Bybit Latest 1m)
+            # Live updates via WebSocket (no polling needed)
+            # Has built-in collapse/expand functionality
+            @st.fragment
+            def _bbt_status_fragment():
+                from pbgui_func import render_fastapi_market_data_status
+                render_fastapi_market_data_status(exchange="bybit")
+            _bbt_status_fragment()
 
             # ── Best 1m archive builder ──────────────────────────────────────
             with st.expander("Build best 1m OHLCV (Bybit)", expanded=False):
@@ -3398,87 +3218,14 @@ def view_market_data():
         else:
             coin_list = [str(c).strip().upper() for c in enabled_preview if str(c).strip()]
 
-            @st.fragment(run_every=5)
+            # Market Data status monitor (Hyperliquid Latest 1m)
+            # Live updates via WebSocket (no polling needed)
+            # Has built-in collapse/expand functionality
+            @st.fragment
             def _hl_status_fragment():
-                _hl_flag_path = Path(f"{PBGDIR}/data/logs/hyperliquid_latest_1m_run_now.flag")
-                _hl_stop_path = Path(f"{PBGDIR}/data/logs/hyperliquid_latest_1m_stop.flag")
-                status = _load_market_data_status()
-                _hl_queued = _hl_flag_path.exists()
-                _hl_running = bool((status.get("latest_1m") or {}).get("running")) if status else False
-                with st.expander("Market Data status", expanded=False):
-                    _c1, _c2 = st.columns([1, 1])
-                    with _c1:
-                        if not _hl_queued:
-                            if st.button("⏩ Refresh now", key="hl_run_now_btn", help="Skip wait and trigger next Hyperliquid refresh cycle immediately", width='stretch'):
-                                try:
-                                    _hl_flag_path.touch()
-                                    st.toast("Refresh triggered — cycle will start within seconds.")
-                                except Exception as _e:
-                                    st.error(f"Failed: {_e}")
-                        else:
-                            if st.button("⏹ Cancel queued refresh", key="hl_cancel_btn", type="primary", help="Cancel the queued refresh — loop will do the normal wait instead", width='stretch'):
-                                try:
-                                    _hl_flag_path.unlink(missing_ok=True)
-                                    st.toast("Queued refresh cancelled.")
-                                except Exception as _e:
-                                    st.error(f"Failed: {_e}")
-                    with _c2:
-                        if _hl_running:
-                            if st.button("⏹ Stop current run", key="hl_stop_btn", type="primary", help="Stop after the current coin finishes", width='stretch'):
-                                try:
-                                    _hl_stop_path.touch()
-                                    st.toast("Stop signal sent — run will abort after current coin.")
-                                except Exception as _e:
-                                    st.error(f"Failed: {_e}")
-                    if not status:
-                        st.info("No status yet. Start PBData to populate market data status.")
-                    else:
-                        latest = status.get("latest_1m") if isinstance(status, dict) else {}
-                        if latest and latest.get("running"):
-                            _done = int(latest.get("coins_done") or 0)
-                            _total = int(latest.get("coins_total") or 0)
-                            _cur = latest.get("current_coin") or "..."
-                            if _total > 0:
-                                st.progress(_done / _total, text=f"Running: {_done} / {_total} — current: {_cur}")
-                            else:
-                                st.info("Running...")
-                        latest_coins = latest.get("coins") if isinstance(latest, dict) else {}
-                        interval_s = int(latest.get("interval_seconds") or 0) if isinstance(latest, dict) else 0
-                        if isinstance(latest_coins, dict) and latest_coins:
-                            rows = []
-                            now = _datetime.now()
-                            for coin, cst in sorted(latest_coins.items()):
-                                last_fetch = str(cst.get("last_fetch") or "") if isinstance(cst, dict) else ""
-                                next_run = ""
-                                if interval_s and last_fetch:
-                                    try:
-                                        last_dt = _datetime.fromisoformat(last_fetch)
-                                        next_run = max(0, int(interval_s - (now - last_dt).total_seconds()))
-                                    except Exception:
-                                        next_run = ""
-                                coin_display = _display_market_data_status_coin(
-                                    exchange=str(exchange),
-                                    coin=coin,
-                                )
-                                rows.append(
-                                    {
-                                        "coin": coin_display,
-                                        "last_fetch": last_fetch,
-                                        "result": (cst.get("result") if isinstance(cst, dict) else ""),
-                                        "lookback_days": (cst.get("lookback_days") if isinstance(cst, dict) else ""),
-                                        "newest_day": (cst.get("newest_day") if isinstance(cst, dict) else ""),
-                                        "next_run_in_s": next_run,
-                                    }
-                                )
-                            st.dataframe(rows, width='stretch')
-                        else:
-                            st.info("No latest 1m status available yet.")
+                from pbgui_func import render_fastapi_market_data_status
+                render_fastapi_market_data_status(exchange="hyperliquid")
             _hl_status_fragment()
-
-            tradfi_anchor = st.container()
-            download_anchor = st.container()
-            build_anchor = st.container()
-
             if False:
                 st.caption(
                     "Automatic refresh for newest data. Merges missing minutes in a small lookback window per coin. "
@@ -3532,7 +3279,7 @@ def view_market_data():
                         append_exchange_download_log("hyperliquid", f"[hl_latest_1m] ERROR {e}")
                         st.error(str(e))
 
-            with build_anchor.expander("Build best 1m OHLCV", expanded=False):
+            with st.expander("Build best 1m OHLCV", expanded=False):
                 def _extract_xyz_coin_name(coin: str) -> str | None:
                     c_u = str(coin or "").strip().upper()
                     if not c_u:
@@ -3675,7 +3422,7 @@ def view_market_data():
                     render_fastapi_job_monitor(height=600, exchange="hyperliquid")
                 _best_jobs_fragment()
 
-            with tradfi_anchor.expander("TradFi Symbol Mappings", expanded=False):
+            with st.expander("TradFi Symbol Mappings", expanded=False):
                 # Table is built live from mapping.json merged with tradfi_symbol_map.json.
                 # No sync step needed — new coins from mapping.json appear automatically.
                 st.markdown("##### 🗂 Symbol Map")
@@ -4188,30 +3935,17 @@ def view_market_data():
                         st.session_state.pop("tradfi_map_test_result", None)
                         st.rerun()
 
-            with download_anchor.expander("Download l2Book from AWS", expanded=False):
+            with st.expander("Download l2Book from AWS", expanded=False):
                 profile = str(st.session_state.get("market_data_hl_aws_profile") or "pbgui-hyperliquid").strip() or "pbgui-hyperliquid"
                 region_default = load_aws_profile_region(profile) or HYPERLIQUID_AWS_REGION
                 region = str(st.session_state.get("market_data_hl_aws_region") or region_default).strip()
 
-                if _supports_fragment_run_every() and _has_active_jobs(["hl_aws_l2book_auto"]):
-                    @st.fragment(run_every=5)
-                    def _jobs_fragment():
-                        _render_jobs_panel(
-                            job_types=["hl_aws_l2book_auto"],
-                            details_key="market_data_hl_job_details",
-                            panel_key="market_data_hl_jobs",
-                            show_worker_controls=True,
-                            fragment_progress_only=True,
-                        )
-                else:
-                    @st.fragment
-                    def _jobs_fragment():
-                        _render_jobs_panel(
-                            job_types=["hl_aws_l2book_auto"],
-                            details_key="market_data_hl_job_details",
-                            panel_key="market_data_hl_jobs",
-                            show_worker_controls=True,
-                        )
+                # Live job monitor with WebSocket updates (no reruns needed)
+                @st.fragment
+                def _jobs_fragment():
+                    from pbgui_func import render_fastapi_job_monitor
+                    render_fastapi_job_monitor(height=600, exchange="hyperliquid")
+                _jobs_fragment()
 
                 if coin_list:
                     aws_coin_options = ["All"] + coin_list if coin_list else []
@@ -4398,15 +4132,9 @@ def view_market_data():
                         st.error(str(e))
 
                 # Job queue (shown below download controls)
-                _jobs_fragment()
-                if _supports_fragment_run_every() and _has_active_jobs(["hl_aws_l2book_auto"]):
-                    _render_jobs_static_controls(
-                        "market_data_hl_jobs",
-                        ["hl_aws_l2book_auto"],
-                        "market_data_hl_job_details",
-                    )
+                # Removed: _render_jobs_static_controls - now handled by FastAPI monitor
 
-                # Last download job summary (auto-refresh while jobs are active)
+                # Last download job summary
                 try:
                     def _render_last_download_job() -> None:
                         jobs_any = list_jobs(states=["running", "done", "failed"], limit=50)
@@ -4499,14 +4227,9 @@ def view_market_data():
                             st.write("No download jobs yet.")
 
                     with st.expander("Last download job", expanded=False):
-                        if _supports_fragment_run_every() and _has_active_jobs(["hl_aws_l2book_auto"]):
-                            @st.fragment(run_every=5)
-                            def _last_download_fragment():
-                                _render_last_download_job()
-                        else:
-                            @st.fragment
-                            def _last_download_fragment():
-                                _render_last_download_job()
+                        @st.fragment
+                        def _last_download_fragment():
+                            _render_last_download_job()
                         _last_download_fragment()
                 except Exception:
                     pass
@@ -5252,7 +4975,7 @@ def view_market_data():
         # Get the selected row from any of the tabs
         sel_row = sel_row_1m or sel_row_1m_api or sel_row_l2book or sel_row_pb7
 
-        def _render_gap_heatmap() -> None:
+        def _render_gap_heatmap(ohlcv_only: bool = False) -> None:
             if sel_row:
                 r = sel_row
                 ex = str(exchange).lower()
@@ -5275,7 +4998,49 @@ def view_market_data():
                         start_day = l2_newest
 
                 if ds_l in ("1m", "candles_1m", "1m_api", "candles_1m_api"):
-                    # Candles view:
+                    # --- OHLCV-only shortcut: skip heatmap, render only the expander ---
+                    if ohlcv_only:
+                        with st.expander("OHLCV chart", expanded=False):
+                            _storage_ex_ohlcv = {"binance": "binanceusdm"}.get(ex, ex)
+                            ohlcv_df = _load_ohlcv_from_npz_range(
+                                exchange=_storage_ex_ohlcv,
+                                dataset=ds,
+                                coin=cn,
+                                start_day="",
+                                end_day="",
+                            )
+                            if ohlcv_df.empty:
+                                st.info("No OHLCV candles found for selected range.")
+                            else:
+                                from ohlcv_component import ohlcv_chart as _ohlcv_chart_oo
+                                _pyr_key_oo = f"_c_ohlcv_pyr_{ex}_{cn}"
+                                _zoom_key_oo = f"_c_ohlcv_zr_{ex}_{cn}"
+                                _fp_key_oo = f"_c_ohlcv_fp_{ex}_{cn}"
+                                _fp_oo = f"{int(ohlcv_df['ts'].iloc[0])}_{int(ohlcv_df['ts'].iloc[-1])}_{len(ohlcv_df)}"
+                                if st.session_state.get(_fp_key_oo) != _fp_oo:
+                                    st.session_state[_fp_key_oo] = _fp_oo
+                                    st.session_state.pop(_pyr_key_oo, None)
+                                    st.session_state.pop(_zoom_key_oo, None)
+                                _pyramid_oo = {
+                                    "1d": _df_to_columnar(_resample_ohlcv(ohlcv_df, "1D")),
+                                    "1h": _df_to_columnar(_resample_ohlcv(ohlcv_df, "1h")),
+                                }
+                                _pyramid_oo.update(st.session_state.get(_pyr_key_oo, {}))
+                                _coin_display_oo = cn
+                                for _sfx in ("_USDC:USDC", "_USDT:USDT", "/USDC:USDC", "/USDT:USDT"):
+                                    if _coin_display_oo.upper().endswith(_sfx):
+                                        _coin_display_oo = _coin_display_oo[: -len(_sfx)]
+                                        break
+                                _ohlcv_chart_oo(
+                                    layers=_pyramid_oo,
+                                    zoom_range=st.session_state.get(_zoom_key_oo),
+                                    show_volume=True,
+                                    height=630,
+                                    coin_name=_coin_display_oo,
+                                    key=f"ohlcv_oo_{ex}_{cn}",
+                                )
+                        return
+                    # --- end OHLCV-only shortcut ---
                     # - 1m: 1 row per day, 24 hour cells
 
                     # Choose presence resolution
@@ -5968,7 +5733,7 @@ def view_market_data():
                         xaxis=dict(tickangle=-45, automargin=True, showgrid=False),
                         yaxis=dict(autorange="reversed", showgrid=False),
                     )
-                    st.plotly_chart(fig, width='stretch')
+                    st.plotly_chart(fig, width='stretch') if not ohlcv_only else None
 
                     if ds_l.startswith("pb7_cache:"):
                         with st.expander("OHLCV chart", expanded=False):
@@ -6067,17 +5832,13 @@ def view_market_data():
                     st.info("No day range found for this selection.")
 
         if sel_row:
-            gaps_active = False
-            if _supports_fragment_run_every() and not _is_background_refresh_paused():
-                @st.fragment(run_every=5)
-                def _gap_fragment():
-                    _render_gap_heatmap()
-            else:
-                @st.fragment
-                def _gap_fragment():
-                    _render_gap_heatmap()
-
-            _gap_fragment()
+            from pbgui_func import render_fastapi_gap_heatmap
+            render_fastapi_gap_heatmap(
+                exchange=str(exchange).lower(),
+                dataset=str(sel_row.get("dataset") or ""),
+                coin=str(sel_row.get("coin") or ""),
+            )
+            _render_gap_heatmap(ohlcv_only=True)
 
     if main_view == "Activity log":
         _preselect = st.session_state.pop("_log_viewer_preselect_override", "MarketData.log")

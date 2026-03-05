@@ -543,6 +543,7 @@ class Database():
         try:
             executions = exchange.fetch_executions(since, symbols=symbols)
         except Exception as e:
+            exchange.close()  # Clean up resources before returning
             _human_log(
                 'Database',
                 f"fetch_executions ERROR: user={user.name} exchange={exchange.id} since={since} err={e}",
@@ -550,6 +551,10 @@ class Database():
                 user=user.name,
             )
             return {'fetched': 0, 'prepared': 0, 'inserted': 0, 'error': str(e)}
+        finally:
+            # Always close exchange to release aiohttp sessions
+            exchange.close()
+        
         dur = time.time() - start_ts
         try:
             n = len(executions) if executions is not None else 0
@@ -623,7 +628,11 @@ class Database():
     def update_positions(self, user: User):
         positions_db = self.fetch_positions(user)
         exchange = Exchange(user.exchange, user)
-        positions = exchange.fetch_positions()
+        
+        try:
+            positions = exchange.fetch_positions()
+        finally:
+            exchange.close()  # Release aiohttp resources
 
         # Live positions as set of (symbol, side) for correct membership checks
         symbols = set()
@@ -706,18 +715,21 @@ class Database():
         orders_db = self.fetch_orders(user)
         exchange = Exchange(user.exchange, user)
         all_orders = []
-        for position in positions_db:
-            try:
-                stable_coin = position[1][-4:]
-                orders = exchange.fetch_all_open_orders(position[1][0:-4] + f"/{stable_coin}:{stable_coin}")
-                # If fetch returns None or an exception-like value, skip
-                if orders is None:
+        try:
+            for position in positions_db:
+                try:
+                    stable_coin = position[1][-4:]
+                    orders = exchange.fetch_all_open_orders(position[1][0:-4] + f"/{stable_coin}:{stable_coin}")
+                    # If fetch returns None or an exception-like value, skip
+                    if orders is None:
+                        continue
+                    all_orders.extend(orders)
+                except Exception as e:
+                    # Fetch failed (possibly rate limit) — log and skip this position
+                    _human_log('Database', f"DB update_orders fetch_all_open_orders failed for {user.name} pos={position[1]}: {e}", level='WARNING', user=user.name)
                     continue
-                all_orders.extend(orders)
-            except Exception as e:
-                # Fetch failed (possibly rate limit) — log and skip this position
-                _human_log('Database', f"DB update_orders fetch_all_open_orders failed for {user.name} pos={position[1]}: {e}", level='WARNING', user=user.name)
-                continue
+        finally:
+            exchange.close()  # Release aiohttp resources
         # Existing order IDs in DB (uniqueid column); use a set to avoid
         # inserting duplicates even if the DB uniqueness constraint is
         # missing or was added after the table was first created.
@@ -765,16 +777,19 @@ class Database():
         exchange = Exchange(user.exchange, user)
         symbols = []
         prices = {}
-        for position in positions_db:
-            symbol = position[1]
-            if symbol[-4:] == "USDT":
-                symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
-            elif symbol[-4:] == "USDC":
-                symbol_ccxt = f'{symbol[0:-4]}/USDC:USDC'
-            symbols.append(symbol_ccxt)
-        if symbols:
-            market_type = "futures"
-            prices = exchange.fetch_prices(symbols, market_type)
+        try:
+            for position in positions_db:
+                symbol = position[1]
+                if symbol[-4:] == "USDT":
+                    symbol_ccxt = f'{symbol[0:-4]}/USDT:USDT'
+                elif symbol[-4:] == "USDC":
+                    symbol_ccxt = f'{symbol[0:-4]}/USDC:USDC'
+                symbols.append(symbol_ccxt)
+            if symbols:
+                market_type = "futures"
+                prices = exchange.fetch_prices(symbols, market_type)
+        finally:
+            exchange.close()  # Release aiohttp resources
         symbols = []
         for symbol_ccxt in prices:
             symbol = symbol_ccxt[0:-5].replace("/", "").replace("-", "")
@@ -817,9 +832,12 @@ class Database():
         try:
             balance = exchange.fetch_balance(market_type)
         except Exception as e:
+            exchange.close()  # Release aiohttp resources
             # Exchange fetch failed (rate limit or other). Log and skip writing.
             _human_log('Database', f"DB update_balances fetch_balance failed for {user.name}: {e}", level='WARNING', user=user.name)
             return
+        finally:
+            exchange.close()  # Release aiohttp resources
         with self._write_lock:
             try:
                 with self._connect() as conn:
@@ -1093,6 +1111,8 @@ class Database():
             # can inspect the full traceback and we can debug exchange.fetch_history.
             _human_log('Database', f"fetch_history ERROR for user={user.name} exchange={user.exchange}: {e}", level='ERROR', user=user.name)
             raise
+        finally:
+            exchange.close()  # Release aiohttp resources
 
     def fetch_positions(self, user: User):
         sql = '''SELECT * FROM "position"
@@ -1679,11 +1699,17 @@ class Database():
 
     def fetch_history2(self, user: User):
         exchange = Exchange(user.exchange, user)
-        return exchange.fetch_transactions(1724390528161)
+        try:
+            return exchange.fetch_transactions(1724390528161)
+        finally:
+            exchange.close()
 
     def fetch_futures(self, user: User):
         exchange = Exchange(user.exchange, user)
-        return exchange.fetch_futures(1724390528161)
+        try:
+            return exchange.fetch_futures(1724390528161)
+        finally:
+            exchange.close()
     
     def import_from_save_income_other(self, user: User):
         # Load data from file

@@ -40,6 +40,7 @@
   - The service tag (e.g. `[VPSManager]`) is always embedded in each log entry → grep works even in a shared file.
   - All logs go to `data/logs/` — never to any other directory.
   - **No direct `print()` or `logging.xxx`** in GUI modules — exclusively use `_log('ServiceName', msg, level='...')` via `from logging_helpers import human_log as _log`.
+- **Migrate everything to FastAPI**: whenever code needs to be rewritten, always prefer a pure FastAPI + Vanilla JS approach (REST endpoints + WebSocket, no JS frameworks). We are gradually migrating away from Streamlit — no new Streamlit polling fragments, no `run_every`, no `st.components.v1.html()` iframes. Use `st.html(unsafe_allow_javascript=True)` only as the thin embedding shim; all logic, state, and updates go through FastAPI. Frontend is always plain Vanilla JS — no React, no Vue, no jQuery.
 
 ## Repo boundaries (important)
 
