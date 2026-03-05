@@ -506,3 +506,130 @@ def render_log_viewer(
 </style>""", unsafe_allow_html=True)
 
     _st_components.html(html, height=600, scrolling=False)
+
+
+def _start_fastapi_server_if_needed() -> tuple[str, int, bool]:
+    """Start FastAPI server if not already running.
+    
+    Reads configuration from pbgui.ini ([api_server] section).
+    Checks if the FastAPI server is reachable via health endpoint.
+    If not, starts it as a background process.
+    
+    Returns:
+        Tuple of (host, port, success): host and port from config, and whether server is running
+    """
+    import requests
+    import subprocess
+    import sys
+    import traceback
+    import time
+    from pathlib import Path
+    from logging_helpers import human_log as _log
+    
+    # Read config from pbgui.ini
+    api_host_cfg = load_ini("api_server", "host")
+    api_host = api_host_cfg.strip() if api_host_cfg and api_host_cfg.strip() else "0.0.0.0"
+    
+    api_port_cfg = load_ini("api_server", "port")
+    api_port = int(api_port_cfg) if api_port_cfg and api_port_cfg.isdigit() else 8000
+    
+    # Health check uses localhost even if server binds to 0.0.0.0
+    health_url = f"http://localhost:{api_port}/health"
+    
+    # Check if server is already running
+    try:
+        response = requests.get(health_url, timeout=2)
+        if response.status_code == 200:
+            _log('FastAPI', f'Server already running on {api_host}:{api_port}', level='debug')
+            return (api_host, api_port, True)
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        pass
+    
+    # Server not running, try to start it
+    _log('FastAPI', f'Starting API server on {api_host}:{api_port}...', level='info')
+    
+    try:
+        # Get paths
+        venv_python = Path(sys.executable)  # Use same venv as Streamlit
+        api_server_script = Path(__file__).parent / "api_server.py"
+        log_file = Path(__file__).parent / "data" / "logs" / "api_server.log"
+        
+        if not api_server_script.exists():
+            _log('FastAPI', f'api_server.py not found at {api_server_script}', level='error')
+            return (api_host, api_port, False)
+        
+        # Ensure log directory exists
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Set environment variables for config
+        import os
+        env = os.environ.copy()
+        env["PBGUI_API_HOST"] = api_host
+        env["PBGUI_API_PORT"] = str(api_port)
+        
+        # Start as background process with logs
+        with open(log_file, 'a') as log_f:
+            subprocess.Popen(
+                [str(venv_python), str(api_server_script)],
+                stdout=log_f,
+                stderr=log_f,
+                env=env,
+                start_new_session=True  # Detach from parent process
+            )
+        
+        # Wait for server to start (max 5 seconds)
+        for i in range(10):
+            time.sleep(0.5)
+            try:
+                response = requests.get(health_url, timeout=1)
+                if response.status_code == 200:
+                    _log('FastAPI', f'Server started successfully on {api_host}:{api_port}', level='info')
+                    return (api_host, api_port, True)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                continue
+        
+        _log('FastAPI', 'Server did not respond after 5 seconds', level='warning')
+        return (api_host, api_port, False)
+        
+    except Exception as e:
+        _log('FastAPI', f'Failed to start server: {e}', level='error', meta={'traceback': traceback.format_exc()})
+        return (api_host, api_port, False)
+
+
+def render_fastapi_job_monitor(height: int = 800, exchange: str = "") -> None:
+    """Render the FastAPI job monitor component via iframe.
+    
+    Automatically starts the FastAPI server if not already running.
+    Generates an API token for the current user session and embeds the
+    job monitor in an iframe with the token for authentication.
+    
+    Configuration is read from pbgui.ini ([api_server] section).
+    
+    Args:
+        height: iframe height in pixels (default: 800)
+        exchange: optional exchange filter (e.g. "binanceusdm", "bybit", "hyperliquid")
+    """
+    from api.auth import generate_token
+    
+    # Ensure FastAPI server is running and get config
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    
+    if not success:
+        st.error(f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+                 f"Please check **System → Services → API Server** or start manually: `python api_server.py`")
+        return
+    
+    # Get or create token for current session
+    if "api_token" not in st.session_state:
+        # Use Streamlit's session_id if available, else generate one
+        user_id = st.session_state.get("user", {}).get("id") or st.session_state.get("user") or "anonymous"
+        token_obj = generate_token(str(user_id), expires_in_seconds=86400)
+        st.session_state["api_token"] = token_obj.token
+    
+    token = st.session_state["api_token"]
+    
+    # Build iframe URL with token and optional exchange filter
+    exchange_param = f"&exchange={exchange}" if exchange else ""
+    iframe_url = f"http://localhost:{api_port}/app/jobs_monitor.html?token={token}{exchange_param}"
+    _st_components.iframe(iframe_url, height=height, scrolling=True)
+

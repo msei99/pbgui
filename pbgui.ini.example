@@ -13,3 +13,15 @@ api_key = <api_key>
 fetch_limit = 1000
 fetch_interval = 4
 
+[pbmaster]
+# WebSocket server bind address (default: 0.0.0.0 = all interfaces)
+# Use 127.0.0.1 to restrict to localhost only
+ws_host = 0.0.0.0
+ws_port = 8765
+
+[api_server]
+# FastAPI REST + WebSocket server for job monitoring
+# Bind address (0.0.0.0 = all interfaces, 127.0.0.1 = localhost only)
+host = 0.0.0.0
+port = 8000
+

@@ -2919,70 +2919,72 @@ def view_market_data():
                     bnc_status = bnc_status_all.get("binance_latest_1m") if isinstance(bnc_status_all, dict) else {}
                     _bnc_queued = _bnc_flag_path.exists()
                     _bnc_running = bool(bnc_status.get("running")) if bnc_status else False
-                with st.expander("Market Data status (Binance USDM Latest 1m)", expanded=False):
-                    _c1, _c2 = st.columns([1, 1])
-                    with _c1:
-                        if not _bnc_queued:
-                            if st.button("⏩ Refresh now", key="bnc_run_now_btn", help="Skip wait and trigger next Binance refresh cycle immediately", width='stretch'):
-                                try:
-                                    _bnc_flag_path.touch()
-                                    st.toast("Refresh triggered — cycle will start within seconds.")
-                                except Exception as _e:
-                                    st.error(f"Failed: {_e}")
-                        else:
-                            if st.button("⏹ Cancel queued refresh", key="bnc_cancel_btn", type="primary", help="Cancel the queued refresh — loop will do the normal wait instead", width='stretch'):
-                                try:
-                                    _bnc_flag_path.unlink(missing_ok=True)
-                                    st.toast("Queued refresh cancelled.")
-                                except Exception as _e:
-                                    st.error(f"Failed: {_e}")
-                    with _c2:
-                        if _bnc_running:
-                            if st.button("⏹ Stop current run", key="bnc_stop_btn", type="primary", help="Stop after the current coin finishes", width='stretch'):
-                                try:
-                                    _bnc_stop_path.touch()
-                                    st.toast("Stop signal sent — run will abort after current coin.")
-                                except Exception as _e:
-                                    st.error(f"Failed: {_e}")
-                    if not bnc_status:
-                        st.info("No Binance status yet. Start PBData with Binance enabled to populate status.")
-                    else:
-                        if bnc_status.get("running"):
-                            _done = int(bnc_status.get("coins_done") or 0)
-                            _total = int(bnc_status.get("coins_total") or 0)
-                            _cur = bnc_status.get("current_coin") or "..."
-                            if _total > 0:
-                                st.progress(_done / _total, text=f"Running: {_done} / {_total} — current: {_cur}")
-                            else:
-                                st.info("Running...")
-                        bnc_coins_st = bnc_status.get("coins") if isinstance(bnc_status, dict) else {}
-                        bnc_interval_s = int(bnc_status.get("interval_seconds") or 0) if isinstance(bnc_status, dict) else 0
-                        if isinstance(bnc_coins_st, dict) and bnc_coins_st:
-                            bnc_status_rows = []
-                            now_bnc = _datetime.now()
-                            for coin, cst in sorted(bnc_coins_st.items()):
-                                last_fetch = str(cst.get("last_fetch") or "") if isinstance(cst, dict) else ""
-                                next_run = ""
-                                if bnc_interval_s and last_fetch:
+                    
+                    with st.expander("Market Data status (Binance USDM Latest 1m)", expanded=False):
+                        _c1, _c2 = st.columns([1, 1])
+                        with _c1:
+                            if not _bnc_queued:
+                                if st.button("⏩ Refresh now", key="bnc_run_now_btn", help="Skip wait and trigger next Binance refresh cycle immediately", width='stretch'):
                                     try:
-                                        last_dt = _datetime.fromisoformat(last_fetch)
-                                        next_run = max(0, int(bnc_interval_s - (now_bnc - last_dt).total_seconds()))
-                                    except Exception:
-                                        pass
-                                api_res = cst.get("api_result") if isinstance(cst, dict) else {}
-                                bnc_status_rows.append({
-                                    "coin": coin,
-                                    "last_fetch": last_fetch,
-                                    "result": (cst.get("result") if isinstance(cst, dict) else ""),
-                                    "lookback_days": (cst.get("lookback_days") if isinstance(cst, dict) else ""),
-                                    "minutes_written": (api_res.get("minutes_written") if isinstance(api_res, dict) else ""),
-                                    "next_run_in_s": next_run,
-                                    "note": (cst.get("note") or cst.get("error") or "") if isinstance(cst, dict) else "",
-                                })
-                            st.dataframe(bnc_status_rows, width='stretch')
+                                        _bnc_flag_path.touch()
+                                        st.toast("Refresh triggered — cycle will start within seconds.")
+                                    except Exception as _e:
+                                        st.error(f"Failed: {_e}")
+                            else:
+                                if st.button("⏹ Cancel queued refresh", key="bnc_cancel_btn", type="primary", help="Cancel the queued refresh — loop will do the normal wait instead", width='stretch'):
+                                    try:
+                                        _bnc_flag_path.unlink(missing_ok=True)
+                                        st.toast("Queued refresh cancelled.")
+                                    except Exception as _e:
+                                        st.error(f"Failed: {_e}")
+                        with _c2:
+                            if _bnc_running:
+                                if st.button("⏹ Stop current run", key="bnc_stop_btn", type="primary", help="Stop after the current coin finishes", width='stretch'):
+                                    try:
+                                        _bnc_stop_path.touch()
+                                        st.toast("Stop signal sent — run will abort after current coin.")
+                                    except Exception as _e:
+                                        st.error(f"Failed: {_e}")
+                        if not bnc_status:
+                            st.info("No Binance status yet. Start PBData with Binance enabled to populate status.")
                         else:
-                            st.info("No Binance latest 1m status available yet.")
-            _bnc_status_fragment()
+                            if bnc_status.get("running"):
+                                _done = int(bnc_status.get("coins_done") or 0)
+                                _total = int(bnc_status.get("coins_total") or 0)
+                                _cur = bnc_status.get("current_coin") or "..."
+                                if _total > 0:
+                                    st.progress(_done / _total, text=f"Running: {_done} / {_total} — current: {_cur}")
+                                else:
+                                    st.info("Running...")
+                            bnc_coins_st = bnc_status.get("coins") if isinstance(bnc_status, dict) else {}
+                            bnc_interval_s = int(bnc_status.get("interval_seconds") or 0) if isinstance(bnc_status, dict) else 0
+                            if isinstance(bnc_coins_st, dict) and bnc_coins_st:
+                                bnc_status_rows = []
+                                now_bnc = _datetime.now()
+                                for coin, cst in sorted(bnc_coins_st.items()):
+                                    last_fetch = str(cst.get("last_fetch") or "") if isinstance(cst, dict) else ""
+                                    next_run = ""
+                                    if bnc_interval_s and last_fetch:
+                                        try:
+                                            last_dt = _datetime.fromisoformat(last_fetch)
+                                            next_run = max(0, int(bnc_interval_s - (now_bnc - last_dt).total_seconds()))
+                                        except Exception:
+                                            pass
+                                    api_res = cst.get("api_result") if isinstance(cst, dict) else {}
+                                    bnc_status_rows.append({
+                                        "coin": coin,
+                                        "last_fetch": last_fetch,
+                                        "result": (cst.get("result") if isinstance(cst, dict) else ""),
+                                        "lookback_days": (cst.get("lookback_days") if isinstance(cst, dict) else ""),
+                                        "minutes_written": (api_res.get("minutes_written") if isinstance(api_res, dict) else ""),
+                                        "next_run_in_s": next_run,
+                                        "note": (cst.get("note") or cst.get("error") or "") if isinstance(cst, dict) else "",
+                                    })
+                                st.dataframe(bnc_status_rows, width='stretch')
+                            else:
+                                st.info("No Binance latest 1m status available yet.")
+                
+                _bnc_status_fragment()
 
             with st.expander("Build best 1m OHLCV (Binance USDM)", expanded=False):
                 st.caption(
@@ -3040,6 +3042,7 @@ def view_market_data():
                         bnc_eff_end = bnc_end_date.strftime("%Y%m%d") if bnc_end_date else _date.today().strftime("%Y%m%d")
                         job = enqueue_job(
                             job_type="binance_best_1m",
+                            exchange="binanceusdm",
                             payload={
                                 "coins": list(bnc_build_coins),
                                 "end_day": bnc_eff_end,
@@ -3063,32 +3066,12 @@ def view_market_data():
                         append_exchange_download_log("binanceusdm", f"[binance_best_1m] ERROR {e}")
                         st.error(str(e))
 
-                if _supports_fragment_run_every() and _has_active_jobs(["binance_best_1m"]):
-                    @st.fragment(run_every=5)
-                    def _bnc_best_jobs_fragment():
-                        _render_jobs_panel(
-                            job_types=["binance_best_1m"],
-                            details_key="market_data_bnc_best_job_details",
-                            panel_key="market_data_bnc_best_jobs",
-                            show_worker_controls=True,
-                            fragment_progress_only=True,
-                        )
-                    _bnc_best_jobs_fragment()
-                    _render_jobs_static_controls(
-                        "market_data_bnc_best_jobs",
-                        ["binance_best_1m"],
-                        "market_data_bnc_best_job_details",
-                    )
-                else:
-                    @st.fragment
-                    def _bnc_best_jobs_fragment():
-                        _render_jobs_panel(
-                            job_types=["binance_best_1m"],
-                            details_key="market_data_bnc_best_job_details",
-                            panel_key="market_data_bnc_best_jobs",
-                            show_worker_controls=True,
-                        )
-                    _bnc_best_jobs_fragment()
+                # Live job monitor with WebSocket updates (no reruns needed)
+                @st.fragment
+                def _bnc_best_jobs_fragment():
+                    from pbgui_func import render_fastapi_job_monitor
+                    render_fastapi_job_monitor(height=600, exchange="binanceusdm")
+                _bnc_best_jobs_fragment()
 
         elif str(exchange).lower() == "bybit":
             bybit_coin_list = [str(c).strip().upper() for c in enabled_preview if str(c).strip()]
@@ -3379,6 +3362,7 @@ def view_market_data():
                         bybit_eff_end = bybit_end_date.strftime("%Y%m%d") if bybit_end_date else _date.today().strftime("%Y%m%d")
                         job = enqueue_job(
                             job_type="bybit_best_1m",
+                            exchange="bybit",
                             payload={
                                 "coins": list(bybit_build_coins),
                                 "end_day": bybit_eff_end,
@@ -3402,32 +3386,12 @@ def view_market_data():
                         append_exchange_download_log("bybit", f"[bybit_best_1m] ERROR {e}")
                         st.error(str(e))
 
-                if _supports_fragment_run_every() and _has_active_jobs(["bybit_best_1m"]):
-                    @st.fragment(run_every=5)
-                    def _bybit_best_jobs_fragment():
-                        _render_jobs_panel(
-                            job_types=["bybit_best_1m"],
-                            details_key="market_data_bybit_best_job_details",
-                            panel_key="market_data_bybit_best_jobs",
-                            show_worker_controls=True,
-                            fragment_progress_only=True,
-                        )
-                    _bybit_best_jobs_fragment()
-                    _render_jobs_static_controls(
-                        "market_data_bybit_best_jobs",
-                        ["bybit_best_1m"],
-                        "market_data_bybit_best_job_details",
-                    )
-                else:
-                    @st.fragment
-                    def _bybit_best_jobs_fragment():
-                        _render_jobs_panel(
-                            job_types=["bybit_best_1m"],
-                            details_key="market_data_bybit_best_job_details",
-                            panel_key="market_data_bybit_best_jobs",
-                            show_worker_controls=True,
-                        )
-                    _bybit_best_jobs_fragment()
+                # Live job monitor with WebSocket updates (no reruns needed)
+                @st.fragment
+                def _bybit_best_jobs_fragment():
+                    from pbgui_func import render_fastapi_job_monitor
+                    render_fastapi_job_monitor(height=600, exchange="bybit")
+                _bybit_best_jobs_fragment()
 
         elif str(exchange).lower() != "hyperliquid":
             st.info("Market Data actions are currently implemented for Hyperliquid, Binance (USDM) and Bybit.")
@@ -3674,6 +3638,7 @@ def view_market_data():
 
                         job = enqueue_job(
                             job_type="hl_best_1m",
+                            exchange="hyperliquid",
                             payload={
                                 "coins": list(build_coins),
                                 "end_day": effective_end_day,
@@ -3703,32 +3668,12 @@ def view_market_data():
                         append_exchange_download_log("hyperliquid", f"[hl_best_1m] ERROR {e}")
                         st.error(str(e))
 
-                if _supports_fragment_run_every() and _has_active_jobs(["hl_best_1m"]):
-                    @st.fragment(run_every=5)
-                    def _best_jobs_fragment():
-                        _render_jobs_panel(
-                            job_types=["hl_best_1m"],
-                            details_key="market_data_hl_best_job_details",
-                            panel_key="market_data_hl_best_jobs",
-                            show_worker_controls=True,
-                            fragment_progress_only=True,
-                        )
-                    _best_jobs_fragment()
-                    _render_jobs_static_controls(
-                        "market_data_hl_best_jobs",
-                        ["hl_best_1m"],
-                        "market_data_hl_best_job_details",
-                    )
-                else:
-                    @st.fragment
-                    def _best_jobs_fragment():
-                        _render_jobs_panel(
-                            job_types=["hl_best_1m"],
-                            details_key="market_data_hl_best_job_details",
-                            panel_key="market_data_hl_best_jobs",
-                            show_worker_controls=True,
-                        )
-                    _best_jobs_fragment()
+                # Live job monitor with WebSocket updates (no reruns needed)
+                @st.fragment
+                def _best_jobs_fragment():
+                    from pbgui_func import render_fastapi_job_monitor
+                    render_fastapi_job_monitor(height=600, exchange="hyperliquid")
+                _best_jobs_fragment()
 
             with tradfi_anchor.expander("TradFi Symbol Mappings", expanded=False):
                 # Table is built live from mapping.json merged with tradfi_symbol_map.json.
@@ -4418,6 +4363,7 @@ def view_market_data():
                         # Enqueue background job
                         job = enqueue_job(
                             job_type="hl_aws_l2book_auto",
+                            exchange="hyperliquid",
                             payload={
                                 "profile": str(profile).strip() or "pbgui-hyperliquid",
                                 "region": str(region).strip(),
