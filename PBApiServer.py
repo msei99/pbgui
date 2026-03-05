@@ -114,19 +114,20 @@ class PBApiServer:
         env["PBGUI_API_PORT"] = str(self.port)
 
         try:
-            # Start as detached background process
-            with open(log_file, 'a') as log:
-                proc = subprocess.Popen(
-                    [venv_python, str(api_script)],
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    env=env,
-                    start_new_session=True,  # Detach from parent
-                )
-                # Write PID file
-                with open(self.pidfile, 'w') as f:
-                    f.write(str(proc.pid))
-                self.my_pid = proc.pid
+            # Start as detached background process.
+            # Logging goes through human_log → data/logs/PBApiServer.log,
+            # so stdout/stderr are discarded.
+            proc = subprocess.Popen(
+                [venv_python, str(api_script)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                start_new_session=True,  # Detach from parent
+            )
+            # Write PID file
+            with open(self.pidfile, 'w') as f:
+                f.write(str(proc.pid))
+            self.my_pid = proc.pid
 
             _log(SERVICE, f"API server started (PID: {proc.pid}, {self.host}:{self.port})", level="INFO")
             sleep(2)  # Give it time to bind to port

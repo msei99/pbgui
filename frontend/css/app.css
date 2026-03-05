@@ -1,0 +1,282 @@
+/* PBGui Job Monitor Styles */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    background: #0e1117;
+    color: #fafafa;
+    line-height: 1.6;
+    padding: 20px;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 2px solid #262730;
+}
+
+h1 {
+    font-size: 28px;
+    font-weight: 600;
+    color: #fafafa;
+}
+
+.status {
+    display: flex;
+    gap: 12px;
+}
+
+.badge {
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.badge-connected {
+    background: #26a69a;
+    color: white;
+}
+
+.badge-connecting {
+    background: #ffa726;
+    color: white;
+}
+
+.badge-error {
+    background: #ff4b4b;
+    color: white;
+}
+
+.badge-unknown {
+    background: #757575;
+    color: white;
+}
+
+/* Tabs */
+.tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid #262730;
+}
+
+.tab-btn {
+    background: transparent;
+    border: none;
+    color: #999;
+    padding: 12px 24px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+}
+
+.tab-btn:hover {
+    color: #fafafa;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.tab-btn.active {
+    color: #26a69a;
+    border-bottom-color: #26a69a;
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Jobs List */
+.jobs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.job-card {
+    background: #262730;
+    border-radius: 8px;
+    padding: 16px;
+    transition: all 0.2s;
+}
+
+.job-card:hover {
+    background: #2d2e3a;
+}
+
+.job-card.simple {
+    padding: 12px;
+}
+
+.job-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.job-info {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.job-id {
+    font-size: 14px;
+    font-family: 'Courier New', monospace;
+    color: #fafafa;
+}
+
+.job-type {
+    color: #999;
+    font-size: 13px;
+}
+
+.status-running {
+    background: #26a69a;
+    color: white;
+}
+
+.status-pending {
+    background: #ffa726;
+    color: white;
+}
+
+.job-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.btn {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-danger {
+    background: #ff4b4b;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #ff6b6b;
+}
+
+.job-details {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    font-size: 13px;
+}
+
+.detail {
+    color: #999;
+}
+
+.detail:first-child {
+    color: #fafafa;
+    font-weight: 500;
+}
+
+.job-error {
+    background: rgba(255, 75, 75, 0.1);
+    border-left: 3px solid #ff4b4b;
+    padding: 8px 12px;
+    margin-top: 8px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #ffcccb;
+}
+
+/* Progress Bar */
+.progress-bar {
+    width: 100%;
+    height: 24px;
+    background: #1a1a1a;
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #26a69a, #66bb6a);
+    transition: width 0.5s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+}
+
+.progress-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: white;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+
+/* Messages */
+.loading,
+.no-jobs,
+.error {
+    text-align: center;
+    padding: 40px 20px;
+    color: #999;
+    font-size: 15px;
+}
+
+.error {
+    color: #ff4b4b;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    body {
+        padding: 12px;
+    }
+    
+    header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+    }
+    
+    .job-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    
+    .job-actions {
+        width: 100%;
+    }
+    
+    .btn {
+        flex: 1;
+    }
+}

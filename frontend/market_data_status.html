@@ -1,0 +1,744 @@
+<!-- Market Data Status Monitor — embedded via st.html(unsafe_allow_javascript=True)
+     This HTML fragment is injected directly into the DOM (NOT iframed).
+     All CSS is scoped under .mds-root to avoid Streamlit style conflicts.
+     Variables are injected by Python into data-attributes on the root element. -->
+
+<style>
+    /* ============================================================
+       SCOPED STYLES — all selectors prefixed with .mds-root
+       ============================================================ */
+    .mds-root {
+        --mds-bg-primary: #1a202c;
+        --mds-bg-secondary: #2d3748;
+        --mds-bg-tertiary: #374151;
+        --mds-text-primary: #f7fafc;
+        --mds-text-secondary: #cbd5e0;
+        --mds-border-color: #4a5568;
+        --mds-accent-info: #3b82f6;
+        --mds-accent-success: #10b981;
+        --mds-accent-warning: #f59e0b;
+        --mds-accent-danger: #ef4444;
+
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        color: var(--mds-text-primary);
+        line-height: 1.6;
+        margin: 0;
+        padding: 0;
+    }
+
+    .mds-root * {
+        box-sizing: border-box;
+    }
+
+    .mds-root .mds-container {
+        max-width: 100%;
+        margin: 0 auto;
+    }
+
+    .mds-root .mds-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0;
+        padding: 0.5rem 0.75rem;
+        background: var(--mds-bg-secondary);
+        border-radius: 8px;
+        border: 1px solid var(--mds-border-color);
+        cursor: pointer;
+        user-select: none;
+        transition: background 0.2s;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .mds-root .mds-header:hover {
+        background: var(--mds-bg-tertiary);
+    }
+
+    .mds-root .mds-header h2 {
+        font-size: 1.2rem;
+        font-weight: 600;
+        color: var(--mds-text-primary);
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin: 0;
+        padding: 0;
+    }
+
+    .mds-root .mds-header-left {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        flex: 1;
+        min-width: 200px;
+    }
+
+    .mds-root .mds-header-right {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .mds-root .mds-expand-icon {
+        font-size: 1rem;
+        transition: transform 0.2s;
+        flex-shrink: 0;
+    }
+
+    .mds-root .mds-expand-icon.expanded {
+        transform: rotate(90deg);
+    }
+
+    .mds-root .mds-content-wrapper {
+        transition: max-height 0.3s ease, opacity 0.3s ease, margin 0.3s ease, padding 0.3s ease;
+        overflow: hidden;
+    }
+
+    .mds-root .mds-content-wrapper.collapsed {
+        max-height: 0;
+        opacity: 0;
+        margin: 0;
+        padding: 0;
+        pointer-events: none;
+    }
+
+    .mds-root .mds-content-wrapper.expanded {
+        max-height: 2000px;
+        opacity: 1;
+        margin-top: 0.5rem;
+    }
+
+    .mds-root .mds-status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4rem 0.8rem;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        white-space: nowrap;
+    }
+
+    .mds-root .mds-status-badge.running {
+        background: var(--mds-accent-success);
+        color: white;
+    }
+
+    .mds-root .mds-status-badge.idle {
+        background: var(--mds-bg-tertiary);
+        color: var(--mds-text-secondary);
+    }
+
+    .mds-root .mds-status-badge.queued {
+        background: var(--mds-accent-info);
+        color: white;
+    }
+
+    .mds-root .mds-controls {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .mds-root .mds-btn {
+        padding: 0.5rem 1rem;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        font-weight: 500;
+        transition: all 0.2s;
+        white-space: nowrap;
+    }
+
+    .mds-root .mds-btn.primary {
+        background: var(--mds-accent-info);
+        color: white;
+    }
+
+    .mds-root .mds-btn.primary:hover:not(:disabled) {
+        background: #2563eb;
+    }
+
+    .mds-root .mds-btn.danger {
+        background: var(--mds-accent-danger);
+        color: white;
+    }
+
+    .mds-root .mds-btn.danger:hover:not(:disabled) {
+        background: #dc2626;
+    }
+
+    .mds-root .mds-btn.secondary {
+        background: var(--mds-bg-tertiary);
+        color: var(--mds-text-primary);
+        border: 1px solid var(--mds-border-color);
+    }
+
+    .mds-root .mds-btn.secondary:hover:not(:disabled) {
+        background: var(--mds-bg-secondary);
+    }
+
+    .mds-root .mds-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .mds-root .mds-progress-section {
+        margin-bottom: 0.75rem;
+        padding: 0.75rem;
+        background: var(--mds-bg-secondary);
+        border-radius: 8px;
+        border: 1px solid var(--mds-border-color);
+    }
+
+    .mds-root .mds-progress-bar-container {
+        position: relative;
+        width: 100%;
+        height: 20px;
+        background: var(--mds-bg-tertiary);
+        border-radius: 10px;
+        overflow: hidden;
+        margin-bottom: 0.4rem;
+    }
+
+    .mds-root .mds-progress-bar {
+        height: 100%;
+        background: linear-gradient(90deg, var(--mds-accent-info), var(--mds-accent-success));
+        transition: width 0.3s ease;
+        border-radius: 10px;
+    }
+
+    .mds-root .mds-progress-label {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--mds-text-primary);
+        text-shadow: 0 0 4px rgba(0,0,0,0.8);
+        pointer-events: none;
+    }
+
+    .mds-root .mds-progress-text {
+        font-size: 0.85rem;
+        color: var(--mds-text-secondary);
+    }
+
+    .mds-root .mds-coin-table-container {
+        background: var(--mds-bg-secondary);
+        border-radius: 8px;
+        border: 1px solid var(--mds-border-color);
+        overflow: hidden;
+    }
+
+    .mds-root .mds-table-wrapper {
+        overflow-x: auto;
+        max-height: 350px;
+        overflow-y: auto;
+    }
+
+    .mds-root table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .mds-root thead {
+        position: sticky;
+        top: 0;
+        background: var(--mds-bg-tertiary);
+        z-index: 10;
+    }
+
+    .mds-root th {
+        padding: 0.6rem 0.75rem;
+        text-align: left;
+        font-weight: 600;
+        color: var(--mds-text-primary);
+        border-bottom: 2px solid var(--mds-border-color);
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        white-space: nowrap;
+    }
+
+    .mds-root td {
+        padding: 0.6rem 0.75rem;
+        border-bottom: 1px solid var(--mds-border-color);
+        font-size: 0.85rem;
+        color: var(--mds-text-secondary);
+    }
+
+    .mds-root tbody tr:hover {
+        background: var(--mds-bg-tertiary);
+    }
+
+    .mds-root .mds-result-success {
+        color: var(--mds-accent-success);
+        font-weight: 500;
+    }
+
+    .mds-root .mds-result-error {
+        color: var(--mds-accent-danger);
+        font-weight: 500;
+    }
+
+    .mds-root .mds-note-cell {
+        max-width: 300px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 0.85rem;
+        color: var(--mds-accent-warning);
+    }
+
+    .mds-root .mds-empty-state {
+        padding: 3rem;
+        text-align: center;
+        color: var(--mds-text-secondary);
+    }
+
+    .mds-root .mds-empty-state-icon {
+        font-size: 3rem;
+        margin-bottom: 1rem;
+        opacity: 0.3;
+    }
+
+    .mds-root .mds-ws-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.3rem 0.6rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        background: var(--mds-bg-tertiary);
+        border: 1px solid var(--mds-border-color);
+        white-space: nowrap;
+    }
+
+    .mds-root .mds-ws-indicator {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--mds-accent-success);
+        animation: mds-pulse 2s infinite;
+        flex-shrink: 0;
+    }
+
+    .mds-root .mds-ws-indicator.disconnected {
+        background: var(--mds-accent-danger);
+        animation: none;
+    }
+
+    @keyframes mds-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+
+    .mds-root .mds-toast {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 1rem 1.5rem;
+        border-radius: 6px;
+        color: white;
+        font-weight: 500;
+        z-index: 10000;
+        animation: mds-slideIn 0.3s ease;
+    }
+
+    @keyframes mds-slideIn {
+        from { transform: translateX(400px); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+    }
+
+    @keyframes mds-slideOut {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(400px); opacity: 0; }
+    }
+</style>
+
+<div class="mds-root" id="__MDS_ROOT_ID__" data-token="" data-exchange="" data-api-host="" data-api-base="">
+    <div class="mds-container">
+        <div class="mds-header" id="__MDS_ID__header-toggle">
+            <div class="mds-header-left">
+                <h2>
+                    <span class="mds-expand-icon" id="__MDS_ID__expand-icon">&#9654;</span>
+                    Market Data Status Monitor
+                </h2>
+                <div style="font-size: 0.8rem; color: var(--mds-text-secondary); margin-left: 1.5rem;" id="__MDS_ID__exchange-name">
+                    Loading...
+                </div>
+            </div>
+            <div class="mds-header-right" id="__MDS_ID__header-right">
+                <div class="mds-ws-status">
+                    <span class="mds-ws-indicator" id="__MDS_ID__ws-indicator"></span>
+                    <span id="__MDS_ID__ws-status-text">Connected</span>
+                </div>
+                <div class="mds-status-badge idle" id="__MDS_ID__status-badge">
+                    Idle
+                </div>
+            </div>
+        </div>
+
+        <div class="mds-content-wrapper collapsed" id="__MDS_ID__content-wrapper">
+            <div class="mds-controls">
+                <button id="__MDS_ID__btn-refresh-now" class="mds-btn primary" disabled>
+                    &#9193; Refresh Now
+                </button>
+                <button id="__MDS_ID__btn-cancel" class="mds-btn danger" disabled style="display: none;">
+                    &#9209; Cancel Queued Refresh
+                </button>
+                <button id="__MDS_ID__btn-stop" class="mds-btn danger" disabled style="display: none;">
+                    &#9209; Stop Current Run
+                </button>
+            </div>
+
+            <div class="mds-progress-section" id="__MDS_ID__progress-section" style="display: none;">
+                <div class="mds-progress-bar-container">
+                    <div class="mds-progress-bar" id="__MDS_ID__progress-bar" style="width: 0%;"></div>
+                    <span class="mds-progress-label" id="__MDS_ID__progress-text">0 / 0</span>
+                </div>
+                <div class="mds-progress-text" id="__MDS_ID__progress-details">
+                    Idle
+                </div>
+            </div>
+
+            <div class="mds-coin-table-container">
+                <div class="mds-table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Coin</th>
+                                <th>Last Fetch</th>
+                                <th>Result</th>
+                                <th>Lookback Days</th>
+                                <th>Minutes Written</th>
+                                <th>Newest Day</th>
+                                <th>Next Run (s)</th>
+                                <th>Note</th>
+                            </tr>
+                        </thead>
+                        <tbody id="__MDS_ID__coin-table-body">
+                            <tr>
+                                <td colspan="8" class="mds-empty-state">
+                                    <div class="mds-empty-state-icon">&#9203;</div>
+                                    <div>Waiting for market data status...</div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    // === Per-instance scope: all DOM queries use this root ===
+    var ROOT_ID = '__MDS_ROOT_ID__';
+    var ID_PREFIX = '__MDS_ID__';
+    var root = document.getElementById(ROOT_ID);
+    if (!root) return;
+
+    function $(id) { return document.getElementById(ID_PREFIX + id); }
+
+    // === Config (read from data-* attributes on root element) ===
+    var API_TOKEN = root.getAttribute('data-token') || '';
+    var EXCHANGE = (root.getAttribute('data-exchange') || '').trim().toLowerCase();
+    var API_HOST = root.getAttribute('data-api-host') || window.location.host;
+    var API_BASE = root.getAttribute('data-api-base') || (window.location.origin + '/api');
+
+    // === Collapsible state (persisted in localStorage per exchange) ===
+    var STORAGE_KEY = 'market_data_expanded_' + EXCHANGE;
+    var isExpanded = localStorage.getItem(STORAGE_KEY) === 'true';
+
+    // === WebSocket ===
+    var ws = null;
+    var reconnectAttempts = 0;
+    var MAX_RECONNECT_ATTEMPTS = Infinity; // always retry
+
+    // === State ===
+    var currentStatus = {
+        running: false,
+        queued: false,
+        coins_done: 0,
+        coins_total: 0,
+        current_coin: '',
+        coin_rows: []
+    };
+
+    // === Init ===
+    if (!API_TOKEN || !EXCHANGE) {
+        root.innerHTML = '\x3cdiv class="mds-empty-state">\x3cdiv class="mds-empty-state-icon">\u26A0\x3c/div>\x3cdiv>Missing token or exchange parameter\x3c/div>\x3c/div>';
+        return;
+    }
+
+    $('exchange-name').textContent = getExchangeDisplayName(EXCHANGE);
+    initCollapsibleState();
+    connectWebSocket();
+    setupEventListeners();
+
+    // === Collapse / Expand ===
+    function initCollapsibleState() {
+        var cw = $('content-wrapper');
+        var icon = $('expand-icon');
+        if (isExpanded) {
+            cw.classList.remove('collapsed');
+            cw.classList.add('expanded');
+            icon.classList.add('expanded');
+        } else {
+            cw.classList.remove('expanded');
+            cw.classList.add('collapsed');
+            icon.classList.remove('expanded');
+        }
+    }
+
+    function toggleContent() {
+        isExpanded = !isExpanded;
+        localStorage.setItem(STORAGE_KEY, isExpanded.toString());
+        var cw = $('content-wrapper');
+        var icon = $('expand-icon');
+        if (isExpanded) {
+            cw.classList.remove('collapsed');
+            cw.classList.add('expanded');
+            icon.classList.add('expanded');
+        } else {
+            cw.classList.remove('expanded');
+            cw.classList.add('collapsed');
+            icon.classList.remove('expanded');
+        }
+    }
+
+    // Header click toggles (addEventListener — DOMPurify strips inline onclick)
+    $('header-toggle').addEventListener('click', toggleContent);
+    // Prevent toggle when clicking controls in header-right
+    $('header-right').addEventListener('click', function(e) { e.stopPropagation(); });
+
+    // === Exchange display name ===
+    function getExchangeDisplayName(exchange) {
+        var names = {
+            'binanceusdm': 'Binance USDM',
+            'binance': 'Binance USDM',
+            'bybit': 'Bybit',
+            'hyperliquid': 'Hyperliquid'
+        };
+        return names[exchange] || exchange.toUpperCase();
+    }
+
+    // === WebSocket ===
+    function connectWebSocket() {
+        var wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var wsUrl = wsProtocol + '//' + API_HOST + '/ws/market-data?token=' + API_TOKEN + '&exchange=' + EXCHANGE;
+
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = function() {
+            reconnectAttempts = 0;
+            updateConnectionStatus(true);
+        };
+
+        ws.onmessage = function(event) {
+            var data = JSON.parse(event.data);
+            if (data.error) {
+                updateConnectionStatus(false, data.error);
+                return;
+            }
+            if (data.type === 'market_data_status') {
+                currentStatus = data;
+                updateUI(data);
+            }
+        };
+
+        ws.onclose = function() {
+            updateConnectionStatus(false);
+            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                reconnectAttempts++;
+                var delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                setTimeout(connectWebSocket, delay);
+            }
+        };
+
+        ws.onerror = function() {
+            updateConnectionStatus(false, 'Connection error');
+        };
+    }
+
+    function updateConnectionStatus(connected, message) {
+        var indicator = $('ws-indicator');
+        var statusText = $('ws-status-text');
+        if (connected) {
+            indicator.classList.remove('disconnected');
+            statusText.textContent = 'Connected';
+        } else {
+            indicator.classList.add('disconnected');
+            statusText.textContent = message || 'Disconnected';
+        }
+    }
+
+    // === UI updates ===
+    function updateUI(data) {
+        // Status badge
+        var badge = $('status-badge');
+        if (data.running) {
+            badge.className = 'mds-status-badge running';
+            badge.textContent = 'Running';
+        } else if (data.queued) {
+            badge.className = 'mds-status-badge queued';
+            badge.textContent = 'Queued';
+        } else {
+            badge.className = 'mds-status-badge idle';
+            badge.textContent = 'Idle';
+        }
+
+        // Buttons
+        var btnRefresh = $('btn-refresh-now');
+        var btnCancel = $('btn-cancel');
+        var btnStop = $('btn-stop');
+
+        btnRefresh.disabled = data.queued;
+        btnRefresh.style.display = data.queued ? 'none' : 'block';
+        btnCancel.disabled = !data.queued;
+        btnCancel.style.display = data.queued ? 'block' : 'none';
+        btnStop.disabled = !data.running;
+        btnStop.style.display = data.running ? 'block' : 'none';
+
+        // Progress
+        var progressSection = $('progress-section');
+        var progressBar = $('progress-bar');
+        var progressText = $('progress-text');
+        var progressDetails = $('progress-details');
+
+        if (data.running && data.coins_total > 0) {
+            progressSection.style.display = 'block';
+            var percent = Math.round((data.coins_done / data.coins_total) * 100);
+            progressBar.style.width = percent + '%';
+            progressText.textContent = data.coins_done + ' / ' + data.coins_total;
+            progressDetails.textContent = 'Current: ' + (data.current_coin || '...');
+        } else if (data.running) {
+            progressSection.style.display = 'block';
+            progressBar.style.width = '100%';
+            progressText.textContent = 'Running...';
+            progressDetails.textContent = 'Starting...';
+        } else {
+            progressSection.style.display = 'none';
+        }
+
+        // Coin table
+        updateCoinTable(data.coin_rows || []);
+    }
+
+    function updateCoinTable(rows) {
+        var tbody = $('coin-table-body');
+        if (!rows || rows.length === 0) {
+            tbody.innerHTML = '\x3ctr>\x3ctd colspan="8" class="mds-empty-state">\x3cdiv class="mds-empty-state-icon">\uD83D\uDCCA\x3c/div>\x3cdiv>No coin status available yet\x3c/div>\x3c/td>\x3c/tr>';
+            return;
+        }
+
+        var html = '';
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var resultClass = row.result === 'success' ? 'mds-result-success' :
+                              row.result === 'error' ? 'mds-result-error' : '';
+            html += '\x3ctr>' +
+                '\x3ctd>\x3cstrong>' + escapeHtml(row.coin || '') + '\x3c/strong>\x3c/td>' +
+                '\x3ctd>' + escapeHtml(formatTimestamp(row.last_fetch || '')) + '\x3c/td>' +
+                '\x3ctd class="' + resultClass + '">' + escapeHtml(row.result || '') + '\x3c/td>' +
+                '\x3ctd>' + escapeHtml(String(row.lookback_days || '')) + '\x3c/td>' +
+                '\x3ctd>' + escapeHtml(String(row.minutes_written || '')) + '\x3c/td>' +
+                '\x3ctd>' + escapeHtml(String(row.newest_day || '')) + '\x3c/td>' +
+                '\x3ctd>' + escapeHtml(formatNextRun(row.next_run_in_s)) + '\x3c/td>' +
+                '\x3ctd class="mds-note-cell" title="' + escapeHtml(row.note || '') + '">' + escapeHtml(row.note || '') + '\x3c/td>' +
+                '\x3c/tr>';
+        }
+        tbody.innerHTML = html;
+    }
+
+    function formatTimestamp(ts) {
+        if (!ts) return '';
+        try {
+            var date = new Date(ts);
+            return date.toLocaleString('de-DE', {
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
+        } catch (e) {
+            return ts;
+        }
+    }
+
+    function formatNextRun(seconds) {
+        if (seconds === '' || seconds === null || seconds === undefined) return '';
+        var s = parseInt(seconds);
+        if (isNaN(s) || s <= 0) return 'Ready';
+        if (s < 60) return s + 's';
+        var m = Math.floor(s / 60);
+        var remaining = s % 60;
+        return m + 'm ' + remaining + 's';
+    }
+
+    function escapeHtml(str) {
+        var div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    // === Event listeners (buttons) ===
+    function setupEventListeners() {
+        $('btn-refresh-now').addEventListener('click', function() {
+            callAPI('/market-data/refresh-now', { exchange: EXCHANGE }, 'Refresh triggered');
+        });
+        $('btn-cancel').addEventListener('click', function() {
+            callAPI('/market-data/cancel-refresh', { exchange: EXCHANGE }, 'Refresh cancelled');
+        });
+        $('btn-stop').addEventListener('click', function() {
+            if (confirm('Stop the current market data refresh run?')) {
+                callAPI('/market-data/stop-run', { exchange: EXCHANGE }, 'Stop signal sent');
+            }
+        });
+    }
+
+    function callAPI(endpoint, body, successMessage) {
+        fetch(API_BASE + endpoint + '?token=' + API_TOKEN, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        })
+        .then(function(resp) { return resp.json(); })
+        .then(function(data) {
+            if (data.success) {
+                showToast(successMessage, 'success');
+            } else {
+                showToast(data.error || 'Action failed', 'error');
+            }
+        })
+        .catch(function(error) {
+            showToast('Error: ' + error.message, 'error');
+        });
+    }
+
+    function showToast(message, type) {
+        var toast = document.createElement('div');
+        toast.className = 'mds-toast';
+        toast.style.background = type === 'success' ? 'var(--mds-accent-success)' :
+                                  type === 'error' ? 'var(--mds-accent-danger)' :
+                                  'var(--mds-accent-info)';
+        toast.textContent = message;
+        root.appendChild(toast);
+        setTimeout(function() {
+            toast.style.animation = 'mds-slideOut 0.3s ease';
+            setTimeout(function() { toast.remove(); }, 300);
+        }, 3000);
+    }
+
+})();
+</script>

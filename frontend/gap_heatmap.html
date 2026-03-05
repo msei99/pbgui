@@ -1,0 +1,531 @@
+<!-- Gap / Coverage Heatmap — embedded via st.html(unsafe_allow_javascript=True)
+     This HTML fragment is injected directly into the DOM (NOT iframed).
+     All CSS is scoped under .hm-root to avoid Streamlit style conflicts.
+     Variables are injected by Python into data-attributes on the root element.
+     DOMPurify constraint: ALL '<' in JS string literals must be \x3c -->
+
+<style>
+    /* ============================================================
+       SCOPED STYLES — all selectors prefixed with .hm-root
+       ============================================================ */
+    .hm-root {
+        --hm-bg-primary:   #1a202c;
+        --hm-bg-secondary: #2d3748;
+        --hm-bg-tertiary:  #374151;
+        --hm-text-primary: #f7fafc;
+        --hm-text-secondary: #a0aec0;
+        --hm-border:       #4a5568;
+        --hm-accent:       #3b82f6;
+        --hm-success:      #10b981;
+        --hm-warning:      #f59e0b;
+        --hm-danger:       #ef4444;
+
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        color: var(--hm-text-primary);
+        line-height: 1.5;
+        margin: 0;
+        padding: 0;
+    }
+
+    .hm-root * {
+        box-sizing: border-box;
+    }
+
+    /* ---- header ---- */
+    .hm-root .hm-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.5rem 0.75rem;
+        background: var(--hm-bg-secondary);
+        border: 1px solid var(--hm-border);
+        border-radius: 8px;
+        margin-bottom: 0.5rem;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .hm-root .hm-header-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin: 0;
+    }
+
+    .hm-root .hm-header-meta {
+        font-size: 0.8rem;
+        color: var(--hm-text-secondary);
+    }
+
+    .hm-root .hm-ws-indicator {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--hm-text-secondary);
+        margin-right: 4px;
+        transition: background 0.3s;
+    }
+
+    .hm-root .hm-ws-indicator.connected { background: var(--hm-success); }
+    .hm-root .hm-ws-indicator.disconnected { background: var(--hm-danger); }
+    .hm-root .hm-ws-indicator.reconnecting { background: var(--hm-warning); animation: hm-pulse 1s infinite; }
+
+    @keyframes hm-pulse {
+        0%, 100% { opacity: 1; }
+        50%       { opacity: 0.3; }
+    }
+
+    /* ---- controls ---- */
+    .hm-root .hm-controls {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin-bottom: 0.5rem;
+    }
+
+    .hm-root .hm-select {
+        background: var(--hm-bg-tertiary);
+        color: var(--hm-text-primary);
+        border: 1px solid var(--hm-border);
+        border-radius: 6px;
+        padding: 0.3rem 0.6rem;
+        font-size: 0.85rem;
+        cursor: pointer;
+    }
+
+    .hm-root .hm-label {
+        font-size: 0.82rem;
+        color: var(--hm-text-secondary);
+    }
+
+    .hm-root .hm-checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        font-size: 0.82rem;
+        color: var(--hm-text-secondary);
+        cursor: pointer;
+    }
+
+    .hm-root .hm-btn {
+        background: var(--hm-bg-tertiary);
+        color: var(--hm-text-primary);
+        border: 1px solid var(--hm-border);
+        border-radius: 6px;
+        padding: 0.3rem 0.7rem;
+        font-size: 0.82rem;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+
+    .hm-root .hm-btn:hover {
+        background: var(--hm-accent);
+        border-color: var(--hm-accent);
+    }
+
+    /* ---- chart areas ---- */
+    .hm-root .hm-section {
+        background: var(--hm-bg-primary);
+        border: 1px solid var(--hm-border);
+        border-radius: 8px;
+        padding: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .hm-root .hm-section-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin: 0 0 0.4rem 0;
+        color: var(--hm-text-secondary);
+    }
+
+    .hm-root .hm-chart-div {
+        width: 100%;
+        min-height: 200px;
+    }
+
+    .hm-root .hm-legend {
+        font-size: 0.78rem;
+        margin-top: 0.3rem;
+        line-height: 1.8;
+    }
+
+    /* ---- loading / error overlay ---- */
+    .hm-root .hm-status-msg {
+        padding: 0.5rem;
+        font-size: 0.85rem;
+        color: var(--hm-text-secondary);
+        text-align: center;
+    }
+
+    .hm-root .hm-error-msg {
+        padding: 0.5rem;
+        font-size: 0.85rem;
+        color: var(--hm-danger);
+    }
+</style>
+
+<div class="hm-root" id="__HM_ROOT_ID__"
+     data-token=""
+     data-exchange=""
+     data-dataset=""
+     data-coin=""
+     data-api-host=""
+     data-api-base="">
+
+    <!-- header -->
+    <div class="hm-header">
+        <div>
+            <p class="hm-header-title" id="__HM_ROOT_ID___title">Gap Heatmap</p>
+            <div class="hm-header-meta" id="__HM_ROOT_ID___meta">Loading&#8230;</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.4rem;">
+            <span class="hm-ws-indicator disconnected" id="__HM_ROOT_ID___ws-dot"></span>
+            <span style="font-size:0.78rem;color:var(--hm-text-secondary);" id="__HM_ROOT_ID___ws-txt">Connecting</span>
+        </div>
+    </div>
+
+    <!-- overview chart -->
+    <div class="hm-section">
+        <p class="hm-section-title">Overview</p>
+        <div id="__HM_ROOT_ID___overview-chart" class="hm-chart-div">
+            <div class="hm-status-msg">Loading overview chart&#8230;</div>
+        </div>
+        <div class="hm-legend" id="__HM_ROOT_ID___overview-legend"></div>
+    </div>
+
+    <!-- month detail chart -->
+    <div class="hm-section" id="__HM_ROOT_ID___minutes-section">
+        <div class="hm-controls">
+            <span class="hm-label">Month:</span>
+            <select class="hm-select" id="__HM_ROOT_ID___month-select" disabled>
+                <option value="">— select month —</option>
+            </select>
+            <label class="hm-checkbox-label">
+                <input type="checkbox" id="__HM_ROOT_ID___cb-holiday"> Show holidays
+            </label>
+            <label class="hm-checkbox-label">
+                <input type="checkbox" id="__HM_ROOT_ID___cb-oos" checked> Show out-of-session
+            </label>
+            <button class="hm-btn" id="__HM_ROOT_ID___btn-reload" title="Reload charts">&#8635;</button>
+        </div>
+        <div id="__HM_ROOT_ID___minutes-chart" class="hm-chart-div">
+            <div class="hm-status-msg">Select a month to view minute-level detail.</div>
+        </div>
+        <div class="hm-legend" id="__HM_ROOT_ID___minutes-legend"></div>
+    </div>
+
+</div>
+
+<script>
+(function() {
+    var ROOT_ID = '__HM_ROOT_ID__';
+    var root = document.getElementById(ROOT_ID);
+    if (!root) return;
+
+    // ---------------------------------------------------------------- config
+    var TOKEN    = root.dataset.token    || '';
+    var EXCHANGE = root.dataset.exchange || '';
+    var DATASET  = root.dataset.dataset  || '';
+    var COIN     = root.dataset.coin     || '';
+    var API_BASE = root.dataset.apiBase  || '';   // e.g. http://localhost:8765/api
+    // derive origin (scheme + host + port) for WebSocket and static files
+    var API_ORIGIN = API_BASE.replace(/\/api$/, '');  // e.g. http://localhost:8765
+
+    // ---------------------------------------------------------------- ids
+    // NOTE: suffix already includes the leading underscore (e.g. '_title')
+    function $id(suffix) { return document.getElementById(ROOT_ID + suffix); }
+    var elTitle      = $id('_title');
+    var elMeta       = $id('_meta');
+    var elWsDot      = $id('_ws-dot');
+    var elWsTxt      = $id('_ws-txt');
+    var elOvChart    = $id('_overview-chart');
+    var elOvLegend   = $id('_overview-legend');
+    var elMoSelect   = $id('_month-select');
+    var elMinChart   = $id('_minutes-chart');
+    var elMinLegend  = $id('_minutes-legend');
+    var elCbHoliday  = $id('_cb-holiday');
+    var elCbOos      = $id('_cb-oos');
+    var elBtnReload  = $id('_btn-reload');
+
+    if (elTitle) elTitle.textContent = COIN + ' \u2014 ' + DATASET + ' (' + EXCHANGE + ')';
+
+    // ---------------------------------------------------------------- state
+    var infoData      = null;
+    var currentMonth  = null;
+    var wsSocket      = null;
+    var wsReconnectDelay = 2000;
+    var wsLastMtime   = 0;
+    var wsAlive       = false;
+
+    // ---------------------------------------------------------------- auth header
+    function authHeaders() {
+        return {'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json'};
+    }
+
+    // ---------------------------------------------------------------- Plotly loader
+    // plotly.min.js is served as a static file from the FastAPI server at
+    // {API_ORIGIN}/app/plotly.min.js — avoids any inline HTML-injection issues.
+    function waitForPlotly(cb) {
+        if (window.Plotly) { cb(); return; }
+        if (document.getElementById('hm-plotly-script')) {
+            // Already injected but not yet loaded — poll
+            var tries = 0;
+            var poller = setInterval(function() {
+                if (window.Plotly) { clearInterval(poller); cb(); }
+                else if (++tries > 100) { clearInterval(poller); }
+            }, 100);
+            return;
+        }
+        var s = document.createElement('script');
+        s.id  = 'hm-plotly-script';
+        s.src = API_ORIGIN + '/app/plotly.min.js';
+        s.onload = function() { cb(); };
+        s.onerror = function() {
+            if (elOvChart) elOvChart.innerHTML =
+                '\x3cdiv class="hm-error-msg">\u26a0 Could not load Plotly.js from ' +
+                API_ORIGIN + '/app/plotly.min.js\x3c/div>';
+        };
+        document.head.appendChild(s);
+    }
+
+    // ---------------------------------------------------------------- API helpers
+    function buildQS(extra) {
+        var p = 'exchange=' + encodeURIComponent(EXCHANGE) +
+                '&dataset='  + encodeURIComponent(DATASET)  +
+                '&coin='     + encodeURIComponent(COIN);
+        if (extra) p += '&' + extra;
+        return p;
+    }
+
+    function apiGet(path, qs, cb, cbErr) {
+        var url = API_BASE + path + '?' + qs;
+        fetch(url, {method: 'GET', headers: authHeaders()})
+            .then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(cb)
+            .catch(function(e) {
+                if (cbErr) cbErr(e);
+                else console.error('[HeatMap] fetch error', path, e);
+            });
+    }
+
+    // ---------------------------------------------------------------- render helpers
+    var PLOTLY_CONFIG = {responsive: true, displaylogo: false, toImageButtonOptions: {scale: 2}};
+
+    function renderPlotly(el, figJson) {
+        if (!el) return;
+        if (!figJson) {
+            if (window.Plotly) Plotly.purge(el);
+            el.innerHTML = '\x3cdiv class="hm-status-msg">\u2014 No data \u2014\x3c/div>';
+            return;
+        }
+        try {
+            var fig = (typeof figJson === 'string') ? JSON.parse(figJson) : figJson;
+            // ensure dark background
+            if (!fig.layout) fig.layout = {};
+            fig.layout.paper_bgcolor = fig.layout.paper_bgcolor || '#1a202c';
+            fig.layout.plot_bgcolor  = fig.layout.plot_bgcolor  || '#1a202c';
+            fig.layout.font          = fig.layout.font          || {};
+            fig.layout.font.color    = fig.layout.font.color    || '#f7fafc';
+            Plotly.react(el, fig.data || [], fig.layout || {}, PLOTLY_CONFIG);
+        } catch (e) {
+            if (window.Plotly) Plotly.purge(el);
+            el.innerHTML = '\x3cdiv class="hm-error-msg">\u26a0 Chart render error: ' + e.message + '\x3c/div>';
+        }
+    }
+
+    function setLoading(el, msg) {
+        if (!el) return;
+        // Purge Plotly state before clearing innerHTML — otherwise react() fails on next call.
+        if (window.Plotly) Plotly.purge(el);
+        el.innerHTML = '\x3cdiv class="hm-status-msg">' + msg + '\x3c/div>';
+    }
+
+    function setError(el, msg) {
+        if (!el) return;
+        if (window.Plotly) Plotly.purge(el);
+        el.innerHTML = '\x3cdiv class="hm-error-msg">\u26a0 ' + msg + '\x3c/div>';
+    }
+
+    // ---------------------------------------------------------------- load info
+    function loadInfo(then) {
+        apiGet('/heatmap/info', buildQS(), function(data) {
+            infoData = data;
+            var meta = '';
+            if (data.tradfi_type) meta += 'TradFi: ' + data.tradfi_type + ' \u00b7 ';
+            if (data.is_candles)  meta += 'candles \u00b7 ';
+            meta += data.months ? (data.months.length + ' months') : '';
+            if (elMeta) elMeta.textContent = meta;
+            // populate month selector
+            if (elMoSelect && data.months && data.months.length > 0) {
+                while (elMoSelect.options.length > 1) elMoSelect.remove(1);
+                var months = data.months.slice().reverse();  // newest first
+                months.forEach(function(m) {
+                    var opt = document.createElement('option');
+                    opt.value = m;
+                    opt.textContent = m;
+                    elMoSelect.appendChild(opt);
+                });
+                elMoSelect.disabled = false;
+                // pre-select latest (first in reversed list)
+                elMoSelect.value = months[0];
+                currentMonth = months[0];
+            } else if (elMoSelect) {
+                elMoSelect.disabled = true;
+            }
+            if (then) then();
+        }, function() {
+            if (elMeta) elMeta.textContent = 'Could not load metadata.';
+        });
+    }
+
+    // ---------------------------------------------------------------- load overview
+    function loadOverview() {
+        setLoading(elOvChart, 'Loading overview…');
+        apiGet('/heatmap/overview', buildQS(), function(data) {
+            if (data.error && !data.figure) {
+                setError(elOvChart, data.error);
+                return;
+            }
+            renderPlotly(elOvChart, data.figure);
+            if (elOvLegend) elOvLegend.innerHTML = data.legend_html || '';
+        }, function(e) {
+            setError(elOvChart, e.message);
+        });
+    }
+
+    // ---------------------------------------------------------------- load minutes
+    function loadMinutes(month, showHoliday, showOos) {
+        if (!month) return;
+        setLoading(elMinChart, 'Loading minute detail for ' + month + '…');
+        var extra = 'month=' + encodeURIComponent(month) +
+                    '&show_holiday=' + (showHoliday ? 'true' : 'false') +
+                    '&show_oos='     + (showOos     ? 'true' : 'false');
+        apiGet('/heatmap/minutes', buildQS(extra), function(data) {
+            if (data.error && !data.figure) {
+                if (elMinChart) elMinChart.innerHTML = '\x3cdiv class="hm-error-msg">\u26a0 ' + data.error + '\x3c/div>';
+                return;
+            }
+            renderPlotly(elMinChart, data.figure);
+            if (elMinLegend) elMinLegend.innerHTML = data.legend_html || '';
+        }, function(e) {
+            if (elMinChart) elMinChart.innerHTML = '\x3cdiv class="hm-error-msg">\u26a0 ' + e.message + '\x3c/div>';
+        });
+    }
+
+    // ---------------------------------------------------------------- reload all
+    function reloadAll() {
+        loadOverview();
+        if (currentMonth) {
+            loadMinutes(
+                currentMonth,
+                elCbHoliday ? elCbHoliday.checked : false,
+                elCbOos     ? elCbOos.checked     : true
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------- event listeners
+    if (elMoSelect) {
+        elMoSelect.addEventListener('change', function() {
+            currentMonth = elMoSelect.value || null;
+            loadMinutes(
+                currentMonth,
+                elCbHoliday ? elCbHoliday.checked : false,
+                elCbOos     ? elCbOos.checked     : true
+            );
+        });
+    }
+
+    function onCheckboxChange() {
+        if (currentMonth) {
+            loadMinutes(
+                currentMonth,
+                elCbHoliday ? elCbHoliday.checked : false,
+                elCbOos     ? elCbOos.checked     : true
+            );
+        }
+    }
+
+    if (elCbHoliday) elCbHoliday.addEventListener('change', onCheckboxChange);
+    if (elCbOos)     elCbOos.addEventListener('change',     onCheckboxChange);
+
+    if (elBtnReload) {
+        elBtnReload.addEventListener('click', function() {
+            loadInfo(reloadAll);
+        });
+    }
+
+    // ---------------------------------------------------------------- WebSocket
+    function wsSetState(state) {
+        wsAlive = (state === 'connected');
+        if (!elWsDot || !elWsTxt) return;
+        elWsDot.className = 'hm-ws-indicator ' + state;
+        var labels = {connected: 'Live', reconnecting: 'Reconnecting\u2026', disconnected: 'Offline'};
+        elWsTxt.textContent = labels[state] || state;
+    }
+
+    function wsConnect() {
+        if (!TOKEN || !EXCHANGE) return;
+        wsSetState('reconnecting');
+        var wsBase = API_ORIGIN.replace(/^http/, 'ws');
+        var url = wsBase + '/ws/heatmap-watch?token=' + encodeURIComponent(TOKEN) +
+                  '&exchange=' + encodeURIComponent(EXCHANGE) +
+                  '&dataset='  + encodeURIComponent(DATASET)  +
+                  '&coin='     + encodeURIComponent(COIN);
+        try {
+            wsSocket = new WebSocket(url);
+        } catch(e) {
+            scheduleReconnect();
+            return;
+        }
+
+        wsSocket.onopen = function() {
+            wsSetState('connected');
+            wsReconnectDelay = 2000;
+        };
+
+        wsSocket.onmessage = function(evt) {
+            try {
+                var msg = JSON.parse(evt.data);
+                if (msg.type === 'updated') {
+                    var newMtime = msg.mtime || 0;
+                    if (newMtime > wsLastMtime) {
+                        wsLastMtime = newMtime;
+                        reloadAll();
+                    }
+                }
+            } catch(e) {}
+        };
+
+        wsSocket.onclose = function() {
+            wsSetState('disconnected');
+            scheduleReconnect();
+        };
+
+        wsSocket.onerror = function() {
+            wsSetState('disconnected');
+        };
+    }
+
+    function scheduleReconnect() {
+        setTimeout(function() {
+            wsConnect();
+        }, wsReconnectDelay);
+        wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, 30000);
+    }
+
+    // ---------------------------------------------------------------- init
+    waitForPlotly(function() {
+        loadInfo(function() {
+            reloadAll();
+            wsConnect();
+        });
+    });
+
+})();
+</script>

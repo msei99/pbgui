@@ -81,7 +81,7 @@ def _tail_file(path: Path, n: int) -> list[str]:
 
 SERVICE = "PBMaster"
 
-DEFAULT_WS_HOST = "127.0.0.1"
+DEFAULT_WS_HOST = "0.0.0.0"  # Bind to all interfaces for remote access
 DEFAULT_WS_PORT = 8765
 
 # How often to push state to all connected clients (seconds)
@@ -109,8 +109,6 @@ class WSServer:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._stop_event = asyncio.Event()
         self._clients: set = set()  # set of websocket connections
-        self._host = DEFAULT_WS_HOST
-        self._port = self._load_port()
 
         # Per-client log subscriptions: ws -> stream_id
         self._log_subs: dict = {}
@@ -122,6 +120,9 @@ class WSServer:
 
         # Cached service results (set by PBMaster main loop)
         self._last_services: dict = {}
+        
+        self._host = self._load_host()
+        self._port = self._load_port()
 
     # ── Configuration ───────────────────────────────────────
 
@@ -133,6 +134,14 @@ class WSServer:
             if 1024 <= port <= 65535:
                 return port
         return DEFAULT_WS_PORT
+
+    @staticmethod
+    def _load_host() -> str:
+        """Load bind host from config (default: 0.0.0.0 for remote access)."""
+        val = load_ini("pbmaster", "ws_host")
+        if val and val.strip():
+            return val.strip()
+        return DEFAULT_WS_HOST
 
     @property
     def port(self) -> int:

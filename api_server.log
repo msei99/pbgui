@@ -1,0 +1,561 @@
+nohup: Eingabe wird ignoriert
+/home/mani/software/pbgui/api_server.py:59: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("startup")
+/home/mani/software/pbgui/api_server.py:74: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("shutdown")
+INFO:     Started server process [88041]
+INFO:     Waiting for application startup.
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [3838409]
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 242, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 93, in app
+    await func(session)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "/home/mani/software/pbgui/api_server.py", line 250, in websocket_heatmap_watch
+    from api.auth import verify_token
+ImportError: cannot import name 'verify_token' from 'api.auth' (/home/mani/software/pbgui/api/auth.py)
+INFO:     connection open
+INFO:     connection closed
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 242, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 93, in app
+    await func(session)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "/home/mani/software/pbgui/api_server.py", line 250, in websocket_heatmap_watch
+    from api.auth import verify_token
+ImportError: cannot import name 'verify_token' from 'api.auth' (/home/mani/software/pbgui/api/auth.py)
+INFO:     connection open
+INFO:     connection closed
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 242, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 93, in app
+    await func(session)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "/home/mani/software/pbgui/api_server.py", line 250, in websocket_heatmap_watch
+    from api.auth import verify_token
+ImportError: cannot import name 'verify_token' from 'api.auth' (/home/mani/software/pbgui/api/auth.py)
+INFO:     connection open
+INFO:     connection closed
+Starting PBGui API Server...
+API:      http://0.0.0.0:8000
+Docs:     http://0.0.0.0:8000/docs
+Frontend: http://0.0.0.0:8000/app/jobs_monitor.html
+WebSocket: ws://0.0.0.0:8000/ws/jobs
+Info: Binding to 0.0.0.0 - accessible from network
+INFO:     127.0.0.1:39370 - "GET /health HTTP/1.1" 200 OK
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 242, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 93, in app
+    await func(session)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "/home/mani/software/pbgui/api_server.py", line 250, in websocket_heatmap_watch
+    from api.auth import verify_token
+ImportError: cannot import name 'verify_token' from 'api.auth' (/home/mani/software/pbgui/api/auth.py)
+INFO:     connection open
+INFO:     connection closed
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 242, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 93, in app
+    await func(session)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "/home/mani/software/pbgui/api_server.py", line 250, in websocket_heatmap_watch
+    from api.auth import verify_token
+ImportError: cannot import name 'verify_token' from 'api.auth' (/home/mani/software/pbgui/api/auth.py)
+INFO:     connection open
+INFO:     connection closed
+INFO:     ('127.0.0.1', 46164) - "WebSocket /ws/vps?token=a2f5220c-7035-409a-8220-a407f04f17b4" [accepted]
+INFO:     connection open
+INFO:     connection closed
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 242, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 93, in app
+    await func(session)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "/home/mani/software/pbgui/api_server.py", line 250, in websocket_heatmap_watch
+    from api.auth import verify_token
+ImportError: cannot import name 'verify_token' from 'api.auth' (/home/mani/software/pbgui/api/auth.py)
+INFO:     connection open
+INFO:     connection closed
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 242, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 93, in app
+    await func(session)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "/home/mani/software/pbgui/api_server.py", line 250, in websocket_heatmap_watch
+    from api.auth import verify_token
+ImportError: cannot import name 'verify_token' from 'api.auth' (/home/mani/software/pbgui/api/auth.py)
+INFO:     connection open
+INFO:     connection closed
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 242, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 93, in app
+    await func(session)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "/home/mani/software/pbgui/api_server.py", line 250, in websocket_heatmap_watch
+    from api.auth import verify_token
+ImportError: cannot import name 'verify_token' from 'api.auth' (/home/mani/software/pbgui/api/auth.py)
+INFO:     connection open
+INFO:     connection closed
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 242, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 93, in app
+    await func(session)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "/home/mani/software/pbgui/api_server.py", line 250, in websocket_heatmap_watch
+    from api.auth import verify_token
+ImportError: cannot import name 'verify_token' from 'api.auth' (/home/mani/software/pbgui/api/auth.py)
+INFO:     connection open
+INFO:     connection closed
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 242, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 93, in app
+    await func(session)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "/home/mani/software/pbgui/api_server.py", line 250, in websocket_heatmap_watch
+    from api.auth import verify_token
+ImportError: cannot import name 'verify_token' from 'api.auth' (/home/mani/software/pbgui/api/auth.py)
+INFO:     connection open
+INFO:     connection closed
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 242, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 93, in app
+    await func(session)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "/home/mani/software/pbgui/api_server.py", line 250, in websocket_heatmap_watch
+    from api.auth import verify_token
+ImportError: cannot import name 'verify_token' from 'api.auth' (/home/mani/software/pbgui/api/auth.py)
+INFO:     connection open
+INFO:     connection closed
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py", line 242, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/starlette/routing.py", line 93, in app
+    await func(session)
+  File "/home/mani/software/venv_pbgui/lib/python3.12/site-packages/fastapi/routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "/home/mani/software/pbgui/api_server.py", line 250, in websocket_heatmap_watch
+    from api.auth import verify_token
+ImportError: cannot import name 'verify_token' from 'api.auth' (/home/mani/software/pbgui/api/auth.py)
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:37678 - "GET /health HTTP/1.1" 200 OK
+INFO:     ('127.0.0.1', 37684) - "WebSocket /ws/vps?token=efd86edb-587e-4c3e-8c9e-a6b4dc80009f" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:39308 - "GET /app/jobs_monitor.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39308 - "GET /app/css/app.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39308 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:39314 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39314 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [88041]

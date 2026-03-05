@@ -5,7 +5,6 @@ from PBRemote import PBRemote
 from PBMon import PBMon
 from PBData import PBData
 from PBCoinData import CoinData
-from PBMaster import PBMaster
 from PBApiServer import PBApiServer
 
 class Services():
@@ -22,8 +21,6 @@ class Services():
             st.session_state.pbdata = PBData()
         if "pbcoindata" not in st.session_state:
             st.session_state.pbcoindata = CoinData()
-        if "pbmaster" not in st.session_state:
-            st.session_state.pbmaster = PBMaster()
         if "api_server" not in st.session_state:
             st.session_state.api_server = PBApiServer()
         self.pbrun = st.session_state.pbrun
@@ -32,7 +29,6 @@ class Services():
         self.pbstat = st.session_state.pbstat
         self.pbdata = st.session_state.pbdata
         self.pbcoindata = st.session_state.pbcoindata
-        self.pbmaster = st.session_state.pbmaster
         self.api_server = st.session_state.api_server
 
     def stop_all_started(self):
@@ -42,7 +38,6 @@ class Services():
         self.pbstat_was_running = False
         self.pbdata_was_running = False
         self.pbcoindata_was_running = False
-        self.pbmaster_was_running = False
         if self.pbrun.is_running():
             self.pbrun_was_running = True
             self.pbrun.stop()
@@ -61,9 +56,6 @@ class Services():
         if self.pbcoindata.is_running():
             self.pbcoindata_was_running = True
             self.pbcoindata.stop()
-        if self.pbmaster.is_running():
-            self.pbmaster_was_running = True
-            self.pbmaster.stop()
         if self.api_server.is_running():
             self.api_server_was_running = True
             self.api_server.stop()
@@ -81,5 +73,3 @@ class Services():
             self.pbdata.run()
         if self.pbcoindata_was_running:
             self.pbcoindata.run()
-        if self.pbmaster_was_running:
-            self.pbmaster.run()
