@@ -9,6 +9,7 @@ Usage:
     uvicorn api_server:app --reload --host 127.0.0.1 --port 8000
 """
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -81,6 +82,12 @@ async def _lifespan(app: FastAPI):
     from master.async_monitor import VPSMonitor
     from master.async_logs import AsyncLogStreamer
     from api.vps import init as vps_init
+    from pbgui_purefunc import PBGDIR
+
+    # Write PID file so PBApiServer.is_running() can detect us
+    _pidfile = Path(PBGDIR) / "data" / "pid" / "api_server.pid"
+    _pidfile.parent.mkdir(parents=True, exist_ok=True)
+    _pidfile.write_text(str(os.getpid()))
 
     monitor = VPSMonitor()
     streamer = AsyncLogStreamer(monitor.pool)
@@ -92,6 +99,12 @@ async def _lifespan(app: FastAPI):
 
     if _vps_monitor:
         await _vps_monitor.stop()
+
+    # Remove PID file on clean shutdown
+    try:
+        _pidfile.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 app = FastAPI(
