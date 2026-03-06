@@ -1,42 +1,15 @@
-# PBMaster Service Details
+# VPS-Einstellungen (ehemals PBMaster)
 
-PBMaster ist der SSH-basierte VPS-Management-Service von PBGui.
+> **PBMaster wurde ersetzt.** Die Funktionalität ist jetzt Teil des **PBAPIServer**.
 
-Er hält persistente SSH-Verbindungen zu aktivierten VPS-Hosts, überwacht wichtige Services und liefert die Echtzeitdaten für die VPS-Monitor-Seite.
+- Für die **Dienste-Übersicht** und Startreihenfolge siehe **Guide 23 — Services Overview**.
+- Für die **PBAPIServer**-Einstellungen (Host, Port, VPS-Hosts) siehe **Guide 26 — PBAPIServer**.
+- Für das **VPS Monitor**-Dashboard und Live-Logs siehe **Guide 29 — VPS Monitor**.
 
-## Was PBMaster macht
+## Was sich geändert hat
 
-- Hält persistente SSH-Sessions zu aktivierten VPS-Hosts
-- Sammelt fortlaufend Host-Status und Service-Zustand
-- Unterstützt Remote-Service-Neustarts aus der Monitor-UI
-- Streamt Live-Logs über einen lokalen WebSocket-Server
-- Schreibt Logs nach `data/logs/PBMaster.log`
-
-## Voraussetzungen
-
-- Dieser Service ist für den **Master**-Node vorgesehen
-- VPS-Hosts müssen im VPS Manager konfiguriert sein
-- SSH-Key-Setup muss pro VPS abgeschlossen sein
-
-## PBMaster-Detailseite
-
-Auf `System → Services → PBMaster → Show Details` kannst du:
-
-- PBMaster starten/stoppen
-- `Auto-restart services` konfigurieren
-- `Monitor interval (seconds)` setzen
-- `WebSocket port` für das VPS-Monitor-Frontend setzen
-- Überwachte VPS-Hosts aktivieren/deaktivieren
-- Den integrierten gefilterten PBMaster-Log-Viewer öffnen
-
-## Verhalten bei Host-Aktivierung
-
-- Hosts sind für PBMaster-Monitoring standardmäßig deaktiviert
-- Hosts müssen in den PBMaster-Einstellungen explizit aktiviert werden
-- Änderungen greifen nach Speichern und Neustart von PBMaster
-
-## Schnelle Fehlersuche
-
-- **PBMaster läuft nicht**: die VPS-Monitor-Seite zeigt Warnung und keine Live-Daten
-- **Host bleibt disconnected**: SSH-Keys und Erreichbarkeit vom Master prüfen
-- **Keine Live-Updates im VPS Monitor**: PBMaster-WebSocket-Port prüfen und PBMaster nach Port-Änderung neu starten
+- PBMaster lief als separater Daemon auf Port 8765. Er wurde entfernt.
+- Der **PBAPIServer** (FastAPI, Port 8000) übernimmt jetzt alle SSH-Verbindungen, VPS-Monitoring und WebSocket-Streaming.
+- VPS-Host-Einstellungen wurden von `System → Services → PBMaster` nach `System → Services → PBAPIServer → Settings` verschoben.
+- INI-Sektionen wurden automatisch umbenannt: `[pbmaster]` → `[vps_monitor]`, `[pbmaster_ui]` → `[vps_monitor_ui]`.
+- Log-Ausgabe verschoben von `PBMaster.log` nach `VPSMonitor.log` (SSH-Verbindungen, Metriken) und `PBApiServer.log` (API-Server Start/Requests).

@@ -156,14 +156,58 @@ def pbcoindata_overview(key_suffix=""):
 
 def api_server_overview(key_suffix=""):
     api_server = st.session_state.api_server
-    _key = f"service_api_server{key_suffix}"
     is_running = api_server.is_running()
-    desired = st.session_state.get(_key, is_running)
-    st.toggle("API Server", value=is_running, key=_key, help="FastAPI REST + WebSocket server for job monitoring and live updates (no Streamlit reruns)")
-    if desired and not is_running:
-        api_server.run()
-    elif not desired and is_running:
-        api_server.stop()
+
+    # Fire centered notification on the rerun *after* restart (pop ensures exactly once)
+    _msg_key = "api_server_restart_msg"
+    _pending = st.session_state.pop(_msg_key, None)
+    if _pending:
+        kind, pid = _pending
+        if kind == "success":
+            _notif_text = f"✅ PBAPIServer restarted (PID {pid})"
+            _notif_color = "#1e7e34"
+        else:
+            _notif_text = "🚨 PBAPIServer failed to start — check logs"
+            _notif_color = "#8b0000"
+        st.html(f"""
+<style>
+@keyframes _pbapi_fade {{
+  0%   {{ opacity: 1; transform: translate(-50%, -50%) scale(1); }}
+  70%  {{ opacity: 1; transform: translate(-50%, -50%) scale(1); }}
+  100% {{ opacity: 0; transform: translate(-50%, -50%) scale(0.95); }}
+}}
+._pbapi_notif {{
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: {_notif_color};
+  color: #fff;
+  padding: 1rem 2rem;
+  border-radius: 10px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  z-index: 99999;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+  animation: _pbapi_fade 3s ease forwards;
+  pointer-events: none;
+}}
+</style>
+<div class="_pbapi_notif">{_notif_text}</div>
+""")
+
+    if is_running:
+        label = ":green[🟢 PBAPIServer ●]"
+    else:
+        label = ":red[🔴 PBAPIServer ○]"
+
+    if st.button(label, key=f"restart_api{key_suffix}", help="Click to restart PBAPIServer"):
+        api_server.restart()
+        if api_server.is_running():
+            st.session_state[_msg_key] = ("success", api_server.my_pid)
+        else:
+            st.session_state[_msg_key] = ("error", None)
+        st.rerun()
 
 def overview():
     _services = [
@@ -173,7 +217,7 @@ def overview():
         ("PBStat",     pbstat_overview),
         ("PBData",     pbdata_overview),
         ("PBCoinData", pbcoindata_overview),
-        ("API Server", api_server_overview),
+        ("PBAPIServer", api_server_overview),
     ]
     cols = st.columns(4)
     for i, (name, fn) in enumerate(_services):
@@ -468,13 +512,14 @@ def pbremote_details():
             abs(getattr(monitor.monitor_config, f) - _snap[f]) > 1e-9
             for f in _MC_FIELDS
         )
-        if st.button(":material/save:", key="pbremote_save_monitor",
-                     type="primary" if _mc_dirty else "secondary"):
-            monitor.monitor_config.save_monitor_config()
-            st.session_state["_monitor_saved_snapshot"] = {
-                f: getattr(monitor.monitor_config, f) for f in _MC_FIELDS
-            }
-            st.rerun()
+        with st.sidebar:
+            if st.button(":material/save:", key="pbremote_save_monitor",
+                         type="primary" if _mc_dirty else "secondary"):
+                monitor.monitor_config.save_monitor_config()
+                st.session_state["_monitor_saved_snapshot"] = {
+                    f: getattr(monitor.monitor_config, f) for f in _MC_FIELDS
+                }
+                st.rerun()
         return
 
     # ── Server panel ────────────────────────────────────────────────────────
@@ -520,11 +565,11 @@ def pbmon_details():
             st.session_state.get("pbmon_telegram_token", pbmon.telegram_token) != (pbmon.telegram_token or "") or
             st.session_state.get("pbmon_telegram_chat_id", pbmon.telegram_chat_id) != (pbmon.telegram_chat_id or "")
         )
-        if st.button(":material/save:", key="pbmon_save_config", type="primary" if _pbmon_dirty else "secondary"):
-            pbmon.telegram_token = st.session_state.pbmon_telegram_token
-            pbmon.telegram_chat_id = st.session_state.pbmon_telegram_chat_id
-            st.session_state.pbmon_view_mode = "viewer"
-            st.rerun()
+        with st.sidebar:
+            if st.button(":material/save:", key="pbmon_save_config", type="primary" if _pbmon_dirty else "secondary"):
+                pbmon.telegram_token = st.session_state.pbmon_telegram_token
+                pbmon.telegram_chat_id = st.session_state.pbmon_telegram_chat_id
+                st.rerun()
         return
 
     with st.sidebar:
@@ -760,7 +805,9 @@ def pbdata_details():
             st.session_state.get("pbdata_poll_interval_executions_input", cur_exec if cur_exec is not None else _def_exec) != (cur_exec if cur_exec is not None else _def_exec) or
             abs(st.session_state.get("pbdata_shared_rest_user_pause_input", cur_rest_pause if cur_rest_pause is not None else _def_rest_pause) - (cur_rest_pause if cur_rest_pause is not None else _def_rest_pause)) > 1e-9
         )
-        if st.button(":material/save:", key='pbdata_save_config_btn', type="primary" if _pbdata_dirty else "secondary"):
+        with st.sidebar:
+            _pbdata_save_clicked = st.button(":material/save:", key='pbdata_save_config_btn', type="primary" if _pbdata_dirty else "secondary")
+        if _pbdata_save_clicked:
             _save_errors = []
             # Users
             try:
@@ -807,7 +854,6 @@ def pbdata_details():
             if _save_errors:
                 st.error('Errors saving config: ' + '; '.join(_save_errors))
             else:
-                st.success('Config saved.')
                 st.rerun()
 
         return
@@ -1081,16 +1127,15 @@ def pbcoindata_details():
             st.session_state.get("edit_coindata_metadata_interval", pbcoindata.metadata_interval) != pbcoindata.metadata_interval or
             st.session_state.get("edit_coindata_mapping_interval", pbcoindata.mapping_interval) != pbcoindata.mapping_interval
         )
-        if st.button(":material/save:", key="button_pbcoindata_save", type="primary" if _pbcoindata_dirty else "secondary"):
-            pbcoindata.api_key = st.session_state.get("edit_coindata_api_key", pbcoindata.api_key)
-            pbcoindata.fetch_limit = st.session_state.get("edit_coindata_fetch_limit", pbcoindata.fetch_limit)
-            pbcoindata.fetch_interval = st.session_state.get("edit_coindata_fetch_interval", pbcoindata.fetch_interval)
-            pbcoindata.metadata_interval = st.session_state.get("edit_coindata_metadata_interval", pbcoindata.metadata_interval)
-            pbcoindata.mapping_interval = st.session_state.get("edit_coindata_mapping_interval", pbcoindata.mapping_interval)
-            pbcoindata.save_config()
-            st.success("Config saved.")
-            st.session_state.pbcoindata_view_mode = "viewer"
-            st.rerun()
+        with st.sidebar:
+            if st.button(":material/save:", key="button_pbcoindata_save", type="primary" if _pbcoindata_dirty else "secondary"):
+                pbcoindata.api_key = st.session_state.get("edit_coindata_api_key", pbcoindata.api_key)
+                pbcoindata.fetch_limit = st.session_state.get("edit_coindata_fetch_limit", pbcoindata.fetch_limit)
+                pbcoindata.fetch_interval = st.session_state.get("edit_coindata_fetch_interval", pbcoindata.fetch_interval)
+                pbcoindata.metadata_interval = st.session_state.get("edit_coindata_metadata_interval", pbcoindata.metadata_interval)
+                pbcoindata.mapping_interval = st.session_state.get("edit_coindata_mapping_interval", pbcoindata.mapping_interval)
+                pbcoindata.save_config()
+                st.rerun()
         return
 
     with st.sidebar:
@@ -1142,23 +1187,23 @@ def pbcoindata_details():
                 st.error(_api_cache["error"] or "Unknown API error", icon="🚨")
     render_log_viewer(preselect="PBCoinData.log", iframe_height_offset=340)
 
-def vps_settings_details():
-    """VPS monitoring settings — replaces PBMaster tab.
+def _vps_settings_body():
+    """VPS monitoring settings body (embedded in PBAPIServer tab).
 
-    VPS monitoring now runs automatically inside the API Server process.
-    This tab configures which hosts to monitor and auto-restart behavior.
+    VPS monitoring runs automatically inside the PBAPIServer process.
+    This section configures which hosts to monitor and auto-restart behavior.
     """
-    from pbgui_purefunc import load_ini, save_ini, PBGDIR
+    from pbgui_purefunc import load_ini, PBGDIR
     import json, glob
     from pathlib import Path
 
     # ── Read current settings from pbgui.ini ──
     def _load_auto_restart() -> bool:
-        val = load_ini("pbmaster", "auto_restart")
+        val = load_ini("vps_monitor", "auto_restart")
         return val.lower() == "true" if val else True
 
     def _load_enabled_hosts() -> set[str]:
-        val = load_ini("pbmaster", "enabled_hosts")
+        val = load_ini("vps_monitor", "enabled_hosts")
         if val and val.strip():
             return {h.strip() for h in val.split(",") if h.strip()}
         return set()
@@ -1178,12 +1223,6 @@ def vps_settings_details():
                 pass
         return sorted(set(hostnames))
 
-    st.info(
-        "VPS monitoring runs automatically inside the **API Server**. "
-        "No separate daemon needed — just ensure the API Server is running.",
-        icon=":material/info:"
-    )
-
     st.subheader("Auto-Restart")
     auto_restart = _load_auto_restart()
     if "vps_auto_restart" not in st.session_state:
@@ -1192,14 +1231,11 @@ def vps_settings_details():
     st.toggle(
         "Auto-restart services",
         key="vps_auto_restart",
-        help=pbgui_help.pbmaster_auto_restart,
+        help=pbgui_help.vps_auto_restart,
     )
-
-    st.divider()
 
     # ── VPS Host Selection ──
     st.subheader("Monitored VPS Hosts")
-    st.caption("Select which VPS servers to monitor. Default: all off.")
 
     available = _available_hosts()
     current_enabled = _load_enabled_hosts()
@@ -1207,49 +1243,28 @@ def vps_settings_details():
     if not available:
         st.info("No VPS configured. Add VPS in **VPS Manager** first.")
     else:
-        _btn_cols = st.columns([0.2, 0.2, 0.6])
-        with _btn_cols[0]:
-            if st.button("Enable All", key="vps_enable_all", width='stretch'):
-                for h in available:
-                    st.session_state[f"vps_host_{h}"] = True
-                st.rerun()
-        with _btn_cols[1]:
-            if st.button("Disable All", key="vps_disable_all", width='stretch'):
-                for h in available:
-                    st.session_state[f"vps_host_{h}"] = False
-                st.rerun()
-
-        for hostname in available:
-            _hkey = f"vps_host_{hostname}"
-            if _hkey not in st.session_state:
-                st.session_state[_hkey] = hostname in current_enabled
-            st.toggle(
-                f":material/computer: {hostname}",
-                key=_hkey,
-                help=pbgui_help.pbmaster_enabled_hosts,
+        if "vps_enabled_hosts_select" not in st.session_state:
+            st.session_state.vps_enabled_hosts_select = sorted(
+                h for h in current_enabled if h in available
             )
+        _c1, _c2, _c3 = st.columns([0.1, 0.1, 0.8])
+        with _c1:
+            if st.button("All", key="vps_select_all", use_container_width=True):
+                st.session_state.vps_enabled_hosts_select = available[:]
+                st.rerun()
+        with _c2:
+            if st.button("None", key="vps_clear_all", use_container_width=True):
+                st.session_state.vps_enabled_hosts_select = []
+                st.rerun()
+        st.multiselect(
+            "Monitored hosts",
+            options=available,
+            key="vps_enabled_hosts_select",
+            help=pbgui_help.vps_enabled_hosts,
+            label_visibility="collapsed",
+        )
 
-    st.divider()
-
-    # ── Save ──
-    _new_enabled = {
-        h for h in available
-        if st.session_state.get(f"vps_host_{h}", False)
-    } if available else set()
-
-    _dirty = (
-        st.session_state.get("vps_auto_restart", auto_restart) != auto_restart or
-        _new_enabled != current_enabled
-    )
-    if st.button(":material/save:", key="vps_save_config",
-                 type="primary" if _dirty else "secondary"):
-        save_ini("pbmaster", "auto_restart",
-                 str(st.session_state.vps_auto_restart))
-        save_ini("pbmaster", "enabled_hosts",
-                 ",".join(sorted(_new_enabled)))
-        st.rerun()
-
-    render_log_viewer(preselect="VPSMonitor.log", iframe_height_offset=340)
+    return available, current_enabled, auto_restart
 
 def api_server_details():
     api_server = st.session_state.api_server
@@ -1263,61 +1278,71 @@ def api_server_details():
                 st.session_state.api_server_view_mode = "viewer"
                 st.rerun()
 
-        # Bind host
-        if "api_server_host" not in st.session_state:
-            st.session_state.api_server_host = api_server.host
-
-        st.text_input(
-            "Bind address",
-            key="api_server_host",
-            help="Network interface to bind to. Use 0.0.0.0 for remote access (all interfaces), "
-                 "or 127.0.0.1 to restrict to localhost only. Requires restart to take effect.",
-            placeholder="0.0.0.0"
+        # ── Endpoints ──
+        h = api_server.host
+        p = api_server.port
+        st.info(
+            f"**Endpoints:**\n"
+            f"- API: `http://{h}:{p}`\n"
+            f"- Docs: `http://{h}:{p}/docs`\n"
+            f"- WebSocket: `ws://{h}:{p}/ws/jobs`\n"
+            f"- Frontend: `http://{h}:{p}/app/jobs_monitor.html`"
         )
 
-        # Port
+        # ── Connection settings ──
+        if "api_server_host" not in st.session_state:
+            st.session_state.api_server_host = api_server.host
         if "api_server_port" not in st.session_state:
             st.session_state.api_server_port = api_server.port
 
-        st.number_input(
-            "Port",
-            min_value=1024, max_value=65535, step=1,
-            key="api_server_port",
-            help="Port for FastAPI REST API and WebSocket (default: 8000). Requires restart to take effect.",
-        )
+        _col_host, _col_port = st.columns([0.7, 0.3])
+        with _col_host:
+            st.text_input(
+                "Bind address",
+                key="api_server_host",
+                help="Network interface to bind to. Use 0.0.0.0 for remote access (all interfaces), "
+                     "or 127.0.0.1 to restrict to localhost only. Requires restart to take effect.",
+                placeholder="0.0.0.0"
+            )
+        with _col_port:
+            st.number_input(
+                "Port",
+                min_value=1024, max_value=65535, step=1,
+                key="api_server_port",
+                help="Port for FastAPI REST API and WebSocket (default: 8000). Requires restart to take effect.",
+            )
 
-        st.divider()
+        st.subheader("VPS Monitoring")
+        _vps_available, _vps_current_enabled, _vps_auto_restart = _vps_settings_body()
 
-        _api_server_dirty = (
+        # ── Single save button for all settings ──
+        _new_enabled = set(
+            st.session_state.get("vps_enabled_hosts_select", [])
+        ) if _vps_available else set()
+
+        _dirty = (
             st.session_state.get("api_server_host", api_server.host) != api_server.host or
-            st.session_state.get("api_server_port", api_server.port) != api_server.port
+            st.session_state.get("api_server_port", api_server.port) != api_server.port or
+            st.session_state.get("vps_auto_restart", _vps_auto_restart) != _vps_auto_restart or
+            _new_enabled != _vps_current_enabled
         )
-        if st.button(":material/save:", key="api_server_save_config",
-                     type="primary" if _api_server_dirty else "secondary"):
-            api_server.host = st.session_state.api_server_host
-            api_server.port = st.session_state.api_server_port
-            st.session_state.api_server_view_mode = "viewer"
-            st.rerun()
+        with st.sidebar:
+            if st.button(":material/save:", key="api_server_save_config",
+                         type="primary" if _dirty else "secondary"):
+                api_server.host = st.session_state.api_server_host
+                api_server.port = st.session_state.api_server_port
+                from pbgui_purefunc import save_ini
+                save_ini("vps_monitor", "auto_restart",
+                         str(st.session_state.vps_auto_restart))
+                save_ini("vps_monitor", "enabled_hosts",
+                         ",".join(sorted(_new_enabled)))
+                st.rerun()
         return
 
     with st.sidebar:
         if st.button(":material/settings: Settings", key="api_server_settings_btn"):
             st.session_state.api_server_view_mode = "settings"
             st.rerun()
-
-    # Service info
-    if api_server.is_running():
-        st.success(f"**API Server** running on `{api_server.host}:{api_server.port}`", icon="✅")
-        
-        st.info(
-            f"**Endpoints:**\n"
-            f"- API: `http://{api_server.host}:{api_server.port}`\n"
-            f"- Docs: `http://{api_server.host}:{api_server.port}/docs`\n"
-            f"- WebSocket: `ws://{api_server.host}:{api_server.port}/ws/jobs`\n"
-            f"- Frontend: `http://{api_server.host}:{api_server.port}/app/jobs_monitor.html`"
-        )
-    else:
-        st.warning("API Server is not running", icon="⚠️")
 
     render_log_viewer(preselect="PBApiServer.log", iframe_height_offset=280)
 
@@ -1331,7 +1356,7 @@ set_page_config("PBGUI Services")
 
 # Read active tab from session state *before* rendering the widget so the
 # title can be shown above the tabs on every rerun.
-_TABS = ["Overview", "PBRun", "PBRemote", "PBMon", "PBStat", "PBData", "PBCoinData", "VPS Settings", "API Server"]
+_TABS = ["Overview", "PBRun", "PBRemote", "PBMon", "PBStat", "PBData", "PBCoinData", "PBAPIServer"]
 _cur_tab = st.session_state.get("services_active_tab") or "Overview"
 if _cur_tab not in _TABS:
     _cur_tab = "Overview"
@@ -1385,10 +1410,7 @@ elif active_tab == "PBCoinData":
             pbcoindata_overview(key_suffix="_det")
     pbcoindata_details()
 
-elif active_tab == "VPS Settings":
-    vps_settings_details()
-
-elif active_tab == "API Server":
+elif active_tab == "PBAPIServer":
     if st.session_state.get("api_server_view_mode", "viewer") == "viewer":
         with st.sidebar:
             api_server_overview(key_suffix="_det")

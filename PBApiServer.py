@@ -7,13 +7,13 @@ Provides:
 - Static file serving for Vanilla JS frontend
 - Token-based authentication
 
-Runs as a background daemon, following the same pattern as PBRun/PBMaster etc.
+Runs as a background daemon, following the same pattern as PBRun etc.
 """
 
 import os
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePath
 from time import sleep
 
 import psutil
@@ -33,6 +33,7 @@ class PBApiServer:
         api.run()        # Start daemon in background
         api.stop()       # Stop daemon
         api.is_running() # Check if running
+        api.restart()    # Stop + start
     """
 
     def __init__(self):
@@ -76,104 +77,95 @@ class PBApiServer:
             self._port = max(1024, min(65535, value))
             save_ini("api_server", "port", str(self._port))
 
+    # ── PID management (same pattern as PBRun, PBData, etc.) ──
+
+    def load_pid(self):
+        """Load PID from pidfile into self.my_pid."""
+        if self.pidfile.exists():
+            with open(self.pidfile) as f:
+                pid = f.read().strip()
+                try:
+                    self.my_pid = int(pid) if pid.isnumeric() else None
+                except ValueError:
+                    self.my_pid = None
+
+    def save_pid(self):
+        """Write current process PID to pidfile. Called from the daemon process."""
+        self.my_pid = os.getpid()
+        tmp_path = self.pidfile.with_suffix(self.pidfile.suffix + '.tmp')
+        with tmp_path.open('w', encoding='utf-8') as f:
+            f.write(str(self.my_pid))
+        tmp_path.replace(self.pidfile)
+
     # ── Daemon lifecycle ──
 
     def is_running(self) -> bool:
         """Check if the API server daemon is running."""
-        if not self.pidfile.exists():
-            return False
+        self.load_pid()
         try:
-            with open(self.pidfile, 'r') as f:
-                pid = int(f.read().strip())
-            # Check if process exists and matches our command
-            if psutil.pid_exists(pid):
-                proc = psutil.Process(pid)
-                cmdline = ' '.join(proc.cmdline())
-                if 'api_server.py' in cmdline:
-                    return True
-            # Stale PID file
-            self.pidfile.unlink(missing_ok=True)
-            return False
-        except Exception:
-            return False
+            if self.my_pid and psutil.pid_exists(self.my_pid) and any(
+                sub.lower().endswith("api_server.py") for sub in psutil.Process(self.my_pid).cmdline()
+            ):
+                return True
+        except psutil.NoSuchProcess:
+            pass
+        return False
 
     def run(self):
         """Start the API server daemon in the background."""
-        if self.is_running():
-            _log(SERVICE, "API server is already running", level="INFO")
-            return
+        if not self.is_running():
+            pbgdir = Path.cwd()
+            venv_python = self._get_venv_python()
+            cmd = [venv_python, '-u', str(PurePath(f'{pbgdir}/api_server.py'))]
 
-        venv_python = self._get_venv_python()
-        api_script = Path(__file__).resolve().parent / "api_server.py"
-        log_file = Path(PBGDIR) / "data" / "logs" / "api_server.log"
-        log_file.parent.mkdir(parents=True, exist_ok=True)
+            # Set environment variables for config
+            env = os.environ.copy()
+            env["PBGUI_API_HOST"] = self.host
+            env["PBGUI_API_PORT"] = str(self.port)
 
-        # Set environment variables for config
-        env = os.environ.copy()
-        env["PBGUI_API_HOST"] = self.host
-        env["PBGUI_API_PORT"] = str(self.port)
-
-        try:
-            # Start as detached background process.
-            # Logging goes through human_log → data/logs/PBApiServer.log,
-            # so stdout/stderr are discarded.
-            proc = subprocess.Popen(
-                [venv_python, str(api_script)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            subprocess.Popen(
+                cmd,
+                stdout=None,
+                stderr=None,
+                cwd=pbgdir,
+                text=True,
                 env=env,
-                start_new_session=True,  # Detach from parent
+                start_new_session=True,
             )
-            # Write PID file
-            with open(self.pidfile, 'w') as f:
-                f.write(str(proc.pid))
-            self.my_pid = proc.pid
-
-            _log(SERVICE, f"API server started (PID: {proc.pid}, {self.host}:{self.port})", level="INFO")
-            sleep(2)  # Give it time to bind to port
-
-            # Verify it's actually running
-            if not self.is_running():
-                _log(SERVICE, "API server failed to start - check logs", level="ERROR")
-                return
-
-        except Exception as e:
-            _log(SERVICE, f"Failed to start API server: {e}", level="ERROR",
-                 meta={'traceback': __import__('traceback').format_exc()})
+            count = 0
+            while True:
+                if count > 5:
+                    _log(SERVICE, 'Error: Can not start API server', level='ERROR')
+                    break
+                sleep(2)
+                if self.is_running():
+                    break
+                count += 1
 
     def stop(self):
         """Stop the API server daemon."""
-        if not self.is_running():
-            _log(SERVICE, "API server is not running", level="INFO")
-            return
-
-        try:
-            with open(self.pidfile, 'r') as f:
-                pid = int(f.read().strip())
-
-            proc = psutil.Process(pid)
-            proc.terminate()  # SIGTERM
-            proc.wait(timeout=5)  # Wait for graceful shutdown
-
+        if self.is_running():
+            _log(SERVICE, 'Stop: API server', level='INFO')
+            try:
+                psutil.Process(self.my_pid).terminate()
+                psutil.Process(self.my_pid).wait(timeout=5)
+            except psutil.TimeoutExpired:
+                try:
+                    psutil.Process(self.my_pid).kill()
+                except psutil.NoSuchProcess:
+                    pass
+            except psutil.NoSuchProcess:
+                pass
             self.pidfile.unlink(missing_ok=True)
-            _log(SERVICE, f"API server stopped (PID: {pid})", level="INFO")
 
-        except psutil.TimeoutExpired:
-            # Force kill if it doesn't stop gracefully
-            proc.kill()
-            proc.wait()
-            self.pidfile.unlink(missing_ok=True)
-            _log(SERVICE, "API server force-killed (didn't respond to TERM)", level="WARNING")
-
-        except Exception as e:
-            _log(SERVICE, f"Error stopping API server: {e}", level="ERROR",
-                 meta={'traceback': __import__('traceback').format_exc()})
-            # Clean up stale PID file
-            self.pidfile.unlink(missing_ok=True)
+    def restart(self):
+        """Restart the API server daemon (stop if running, then start)."""
+        if self.is_running():
+            self.stop()
+        self.run()
 
     def _get_venv_python(self) -> str:
         """Get the path to the virtual environment Python executable."""
-        # Try pbgui venv first
         venv_candidates = [
             Path(f"{PBGDIR}/../venv_pbgui/bin/python"),
             Path(f"{PBGDIR}/../venv_pbgui312/bin/python"),
@@ -181,6 +173,7 @@ class PBApiServer:
         ]
         for venv_py in venv_candidates:
             if venv_py.exists():
-                return str(venv_py.resolve())
-        # Fallback to system python
+                # Return the venv path (not .resolve()) so that the
+                # venv's site-packages are on sys.path at runtime.
+                return str(venv_py)
         return sys.executable

@@ -164,6 +164,50 @@
         font-size: 0.85rem;
         color: var(--hm-danger);
     }
+
+    .hm-root .hm-progress-bar {
+        width: 100%;
+        height: 4px;
+        background: var(--hm-bg-tertiary);
+        border-radius: 2px;
+        margin-top: 0.4rem;
+        overflow: hidden;
+    }
+
+    .hm-root .hm-progress-bar-fill {
+        height: 100%;
+        background: var(--hm-accent);
+        border-radius: 2px;
+        transition: width 0.3s ease;
+    }
+
+    .hm-root .hm-progress-bar-indeterminate {
+        height: 100%;
+        width: 30%;
+        background: var(--hm-accent);
+        border-radius: 2px;
+        animation: hm-slide 1.2s ease-in-out infinite;
+    }
+
+    @keyframes hm-slide {
+        0%   { transform: translateX(-100%); }
+        100% { transform: translateX(400%); }
+    }
+
+    /* ---- toast ---- */
+    .hm-root .hm-toast {
+        display: inline-block;
+        margin-left: 12px;
+        padding: 0.4rem 0.8rem;
+        border-radius: 6px;
+        font-size: 0.82rem;
+        color: #fff;
+        vertical-align: middle;
+        opacity: 1;
+        transition: opacity 0.5s;
+    }
+    .hm-root .hm-toast.success { background: var(--hm-success); }
+    .hm-root .hm-toast.error   { background: var(--hm-danger); }
 </style>
 
 <div class="hm-root" id="__HM_ROOT_ID__"
@@ -192,7 +236,10 @@
         <div id="__HM_ROOT_ID___overview-chart" class="hm-chart-div">
             <div class="hm-status-msg">Loading overview chart&#8230;</div>
         </div>
-        <div class="hm-legend" id="__HM_ROOT_ID___overview-legend"></div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <div class="hm-legend" id="__HM_ROOT_ID___overview-legend" style="flex:1;"></div>
+            <button class="hm-btn" id="__HM_ROOT_ID___btn-dl-ov-missing" title="Queue l2Book download for missing days (last data &#8594; today)" style="display:none;background:var(--hm-success);border-color:var(--hm-success);white-space:nowrap;">&#9660; Download missing</button>
+        </div>
     </div>
 
     <!-- month detail chart -->
@@ -209,6 +256,8 @@
                 <input type="checkbox" id="__HM_ROOT_ID___cb-oos" checked> Show out-of-session
             </label>
             <button class="hm-btn" id="__HM_ROOT_ID___btn-reload" title="Reload charts">&#8635;</button>
+            <button class="hm-btn" id="__HM_ROOT_ID___btn-stop-min" title="Stop loading" style="display:none;background:var(--hm-danger);border-color:var(--hm-danger);">&#9632; Stop</button>
+            <button class="hm-btn" id="__HM_ROOT_ID___btn-dl-l2book" title="Queue l2Book download for this month" style="display:none;background:var(--hm-success);border-color:var(--hm-success);">&#9660; Download month</button>
         </div>
         <div id="__HM_ROOT_ID___minutes-chart" class="hm-chart-div">
             <div class="hm-status-msg">Select a month to view minute-level detail.</div>
@@ -248,6 +297,9 @@
     var elCbHoliday  = $id('_cb-holiday');
     var elCbOos      = $id('_cb-oos');
     var elBtnReload  = $id('_btn-reload');
+    var elBtnStopMin = $id('_btn-stop-min');
+    var elBtnDlL2book = $id('_btn-dl-l2book');
+    var elBtnDlOvMissing = $id('_btn-dl-ov-missing');
 
     if (elTitle) elTitle.textContent = COIN + ' \u2014 ' + DATASET + ' (' + EXCHANGE + ')';
 
@@ -258,6 +310,8 @@
     var wsReconnectDelay = 2000;
     var wsLastMtime   = 0;
     var wsAlive       = false;
+    var minutesAbort  = null;  // AbortController for minutes SSE
+    var newestDataDay = null;  // YYYYMMDD — last day with actual l2Book data
 
     // ---------------------------------------------------------------- auth header
     function authHeaders() {
@@ -331,18 +385,26 @@
             fig.layout.plot_bgcolor  = fig.layout.plot_bgcolor  || '#1a202c';
             fig.layout.font          = fig.layout.font          || {};
             fig.layout.font.color    = fig.layout.font.color    || '#f7fafc';
-            Plotly.react(el, fig.data || [], fig.layout || {}, PLOTLY_CONFIG);
+            // Explicitly clear loading indicators before rendering chart
+            el.innerHTML = '';
+            Plotly.newPlot(el, fig.data || [], fig.layout || {}, PLOTLY_CONFIG);
         } catch (e) {
             if (window.Plotly) Plotly.purge(el);
             el.innerHTML = '\x3cdiv class="hm-error-msg">\u26a0 Chart render error: ' + e.message + '\x3c/div>';
         }
     }
 
-    function setLoading(el, msg) {
+    function setLoading(el, msg, pct) {
         if (!el) return;
         // Purge Plotly state before clearing innerHTML — otherwise react() fails on next call.
         if (window.Plotly) Plotly.purge(el);
-        el.innerHTML = '\x3cdiv class="hm-status-msg">' + msg + '\x3c/div>';
+        var bar = '';
+        if (typeof pct === 'number' && pct >= 0) {
+            bar = '\x3cdiv class="hm-progress-bar">\x3cdiv class="hm-progress-bar-fill" style="width:' + Math.min(pct, 100) + '%">\x3c/div>\x3c/div>';
+        } else {
+            bar = '\x3cdiv class="hm-progress-bar">\x3cdiv class="hm-progress-bar-indeterminate">\x3c/div>\x3c/div>';
+        }
+        el.innerHTML = '\x3cdiv class="hm-status-msg">' + msg + bar + '\x3c/div>';
     }
 
     function setError(el, msg) {
@@ -374,6 +436,7 @@
                 // pre-select latest (first in reversed list)
                 elMoSelect.value = months[0];
                 currentMonth = months[0];
+                updateDlButton();
             } else if (elMoSelect) {
                 elMoSelect.disabled = true;
             }
@@ -385,36 +448,170 @@
 
     // ---------------------------------------------------------------- load overview
     function loadOverview() {
-        setLoading(elOvChart, 'Loading overview…');
-        apiGet('/heatmap/overview', buildQS(), function(data) {
-            if (data.error && !data.figure) {
-                setError(elOvChart, data.error);
-                return;
-            }
-            renderPlotly(elOvChart, data.figure);
-            if (elOvLegend) elOvLegend.innerHTML = data.legend_html || '';
-        }, function(e) {
-            setError(elOvChart, e.message);
-        });
+        setLoading(elOvChart, 'Loading overview\u2026');
+        var url = API_BASE + '/heatmap/overview-stream?' + buildQS();
+        fetch(url, {method: 'GET', headers: authHeaders()})
+            .then(function(response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                var reader = response.body.getReader();
+                var decoder = new TextDecoder();
+                var buffer = '';
+                var evtType = '', evtData = '';
+
+                function pump() {
+                    return reader.read().then(function(result) {
+                        if (result.done) return;
+                        buffer += decoder.decode(result.value, {stream: true});
+                        var lines = buffer.split('\n');
+                        buffer = lines.pop(); // keep incomplete line in buffer
+
+                        for (var i = 0; i < lines.length; i++) {
+                            var line = lines[i];
+                            if (line.indexOf('event: ') === 0) {
+                                evtType = line.substring(7);
+                            } else if (line.indexOf('data: ') === 0) {
+                                evtData = line.substring(6);
+                            } else if (line === '' && evtData) {
+                                try {
+                                    var msg = JSON.parse(evtData);
+                                    if (evtType === 'progress') {
+                                        var txt = msg.msg || 'Loading\u2026';
+                                        var pctVal = -1;
+                                        if (msg.total > 0) {
+                                            pctVal = Math.round(msg.current / msg.total * 100);
+                                            txt += ' (' + msg.current.toLocaleString() + '/' + msg.total.toLocaleString() + ' files \u2014 ' + pctVal + '%)';
+                                        }
+                                        setLoading(elOvChart, txt, pctVal >= 0 ? pctVal : undefined);
+                                    } else if (evtType === 'result') {
+                                        if (msg.error && !msg.figure) {
+                                            setError(elOvChart, msg.error);
+                                        } else {
+                                            renderPlotly(elOvChart, msg.figure);
+                                            if (elOvLegend) elOvLegend.innerHTML = msg.legend_html || '';
+                                            newestDataDay = msg.newest_data_day || null;
+                                            updateOvDlButton();
+                                        }
+                                    }
+                                } catch(e) {}
+                                evtType = '';
+                                evtData = '';
+                            }
+                        }
+                        return pump();
+                    });
+                }
+                return pump();
+            })
+            .catch(function(e) {
+                // Fallback: if SSE endpoint fails, try regular overview
+                apiGet('/heatmap/overview', buildQS(), function(data) {
+                    if (data.error && !data.figure) {
+                        setError(elOvChart, data.error);
+                        return;
+                    }
+                    renderPlotly(elOvChart, data.figure);
+                    if (elOvLegend) elOvLegend.innerHTML = data.legend_html || '';
+                    newestDataDay = data.newest_data_day || null;
+                    updateOvDlButton();
+                }, function(e2) {
+                    setError(elOvChart, e2.message || e.message);
+                });
+            });
     }
 
-    // ---------------------------------------------------------------- load minutes
+    // ---------------------------------------------------------------- load minutes (SSE with progress + abort)
+    function showStopBtn(show) {
+        if (elBtnStopMin) elBtnStopMin.style.display = show ? 'inline-block' : 'none';
+    }
+
+    function abortMinutes() {
+        if (minutesAbort) { minutesAbort.abort(); minutesAbort = null; }
+        showStopBtn(false);
+    }
+
     function loadMinutes(month, showHoliday, showOos) {
         if (!month) return;
-        setLoading(elMinChart, 'Loading minute detail for ' + month + '…');
+        abortMinutes();
+        setLoading(elMinChart, 'Loading minute detail for ' + month + '\u2026');
+        showStopBtn(true);
+
+        minutesAbort = new AbortController();
         var extra = 'month=' + encodeURIComponent(month) +
                     '&show_holiday=' + (showHoliday ? 'true' : 'false') +
                     '&show_oos='     + (showOos     ? 'true' : 'false');
-        apiGet('/heatmap/minutes', buildQS(extra), function(data) {
-            if (data.error && !data.figure) {
-                if (elMinChart) elMinChart.innerHTML = '\x3cdiv class="hm-error-msg">\u26a0 ' + data.error + '\x3c/div>';
-                return;
-            }
-            renderPlotly(elMinChart, data.figure);
-            if (elMinLegend) elMinLegend.innerHTML = data.legend_html || '';
-        }, function(e) {
-            if (elMinChart) elMinChart.innerHTML = '\x3cdiv class="hm-error-msg">\u26a0 ' + e.message + '\x3c/div>';
-        });
+        var url = API_BASE + '/heatmap/minutes-stream?' + buildQS(extra);
+
+        fetch(url, {method: 'GET', headers: authHeaders(), signal: minutesAbort.signal})
+            .then(function(response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                var reader = response.body.getReader();
+                var decoder = new TextDecoder();
+                var buffer = '';
+                var evtType = '', evtData = '';
+
+                function pump() {
+                    return reader.read().then(function(result) {
+                        if (result.done) { showStopBtn(false); return; }
+                        buffer += decoder.decode(result.value, {stream: true});
+                        var lines = buffer.split('\n');
+                        buffer = lines.pop();
+
+                        for (var i = 0; i < lines.length; i++) {
+                            var line = lines[i];
+                            if (line.indexOf('event: ') === 0) {
+                                evtType = line.substring(7);
+                            } else if (line.indexOf('data: ') === 0) {
+                                evtData = line.substring(6);
+                            } else if (line === '' && evtData) {
+                                try {
+                                    var msg = JSON.parse(evtData);
+                                    if (evtType === 'progress') {
+                                        var txt = msg.msg || 'Loading\u2026';
+                                        var pctVal = -1;
+                                        if (msg.total > 0) {
+                                            pctVal = Math.round(msg.current / msg.total * 100);
+                                            txt += ' (' + msg.current + '/' + msg.total + ' files \u2014 ' + pctVal + '%)';
+                                        }
+                                        setLoading(elMinChart, txt, pctVal >= 0 ? pctVal : undefined);
+                                    } else if (evtType === 'result') {
+                                        showStopBtn(false);
+                                        minutesAbort = null;
+                                        if (msg.error && !msg.figure) {
+                                            setError(elMinChart, msg.error);
+                                        } else {
+                                            renderPlotly(elMinChart, msg.figure);
+                                            if (elMinLegend) elMinLegend.innerHTML = msg.legend_html || '';
+                                        }
+                                    }
+                                } catch(e) {}
+                                evtType = '';
+                                evtData = '';
+                            }
+                        }
+                        return pump();
+                    });
+                }
+                return pump();
+            })
+            .catch(function(e) {
+                showStopBtn(false);
+                minutesAbort = null;
+                if (e.name === 'AbortError') {
+                    if (elMinChart) elMinChart.innerHTML = '\x3cdiv class="hm-status-msg">Cancelled.\x3c/div>';
+                    return;
+                }
+                // Fallback: try regular /minutes endpoint
+                apiGet('/heatmap/minutes', buildQS(extra), function(data) {
+                    if (data.error && !data.figure) {
+                        if (elMinChart) elMinChart.innerHTML = '\x3cdiv class="hm-error-msg">\u26a0 ' + data.error + '\x3c/div>';
+                        return;
+                    }
+                    renderPlotly(elMinChart, data.figure);
+                    if (elMinLegend) elMinLegend.innerHTML = data.legend_html || '';
+                }, function(e2) {
+                    if (elMinChart) elMinChart.innerHTML = '\x3cdiv class="hm-error-msg">\u26a0 ' + (e2.message || e.message) + '\x3c/div>';
+                });
+            });
     }
 
     // ---------------------------------------------------------------- reload all
@@ -433,6 +630,7 @@
     if (elMoSelect) {
         elMoSelect.addEventListener('change', function() {
             currentMonth = elMoSelect.value || null;
+            updateDlButton();
             loadMinutes(
                 currentMonth,
                 elCbHoliday ? elCbHoliday.checked : false,
@@ -457,6 +655,114 @@
     if (elBtnReload) {
         elBtnReload.addEventListener('click', function() {
             loadInfo(reloadAll);
+        });
+    }
+
+    if (elBtnStopMin) {
+        elBtnStopMin.addEventListener('click', function() {
+            abortMinutes();
+            if (elMinChart) elMinChart.innerHTML = '\x3cdiv class="hm-status-msg">Cancelled.\x3c/div>';
+        });
+    }
+
+    // ---------------------------------------------------------------- toast helper
+    function showToast(msg, cls) {
+        var t = document.createElement('span');
+        t.className = 'hm-toast ' + (cls || 'success');
+        t.textContent = msg;
+        // Insert next to the download button so it's always visible
+        if (elBtnDlL2book && elBtnDlL2book.parentNode) {
+            elBtnDlL2book.parentNode.appendChild(t);
+        } else {
+            root.appendChild(t);
+        }
+        setTimeout(function() { t.style.opacity = '0'; }, 5000);
+        setTimeout(function() { if (t.parentNode) t.parentNode.removeChild(t); }, 5500);
+    }
+
+    // ---------------------------------------------------------------- download l2Book (overview — missing tail)
+    function updateOvDlButton() {
+        if (!elBtnDlOvMissing) return;
+        var isL2 = DATASET.toLowerCase().indexOf('l2book') >= 0;
+        // Show only if l2Book and there is a gap (newestDataDay is in the past)
+        var today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        var hasGap = isL2 && newestDataDay && newestDataDay < today;
+        elBtnDlOvMissing.style.display = hasGap ? 'inline-block' : 'none';
+    }
+
+    if (elBtnDlOvMissing) {
+        elBtnDlOvMissing.addEventListener('click', function() {
+            if (!newestDataDay) return;
+            var today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+            // Start one day after newest data
+            var sd = newestDataDay;
+            // Increment day by 1
+            var dt = new Date(sd.substring(0, 4) + '-' + sd.substring(4, 6) + '-' + sd.substring(6, 8));
+            dt.setDate(dt.getDate() + 1);
+            var y = dt.getFullYear();
+            var m = ('0' + (dt.getMonth() + 1)).slice(-2);
+            var d = ('0' + dt.getDate()).slice(-2);
+            sd = '' + y + m + d;
+            if (sd > today) { showToast('No missing days — data is up to date', 'success'); return; }
+
+            elBtnDlOvMissing.disabled = true;
+            elBtnDlOvMissing.textContent = 'Queueing\u2026';
+            var url = API_BASE + '/heatmap/queue-l2book-download?exchange=' +
+                      encodeURIComponent(EXCHANGE) +
+                      '&coin=' + encodeURIComponent(COIN) +
+                      '&start_day=' + encodeURIComponent(sd) +
+                      '&end_day=' + encodeURIComponent(today);
+            fetch(url, {method: 'POST', headers: authHeaders()})
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    elBtnDlOvMissing.disabled = false;
+                    elBtnDlOvMissing.textContent = '\u25bc Download missing';
+                    if (data.error) {
+                        showToast(data.error, 'error');
+                    } else {
+                        showToast('Queued: ' + data.coin + ' ' + data.start_day + '\u2013' + data.end_day + ' (job ' + data.job_id.substring(0, 12) + '\u2026)', 'success');
+                    }
+                })
+                .catch(function(e) {
+                    elBtnDlOvMissing.disabled = false;
+                    elBtnDlOvMissing.textContent = '\u25bc Download missing';
+                    showToast('Queue failed: ' + e.message, 'error');
+                });
+        });
+    }
+
+    // ---------------------------------------------------------------- download l2Book (month)
+    function updateDlButton() {
+        if (!elBtnDlL2book) return;
+        var isL2 = DATASET.toLowerCase().indexOf('l2book') >= 0;
+        elBtnDlL2book.style.display = (isL2 && currentMonth) ? 'inline-block' : 'none';
+    }
+
+    if (elBtnDlL2book) {
+        elBtnDlL2book.addEventListener('click', function() {
+            if (!currentMonth) return;
+            elBtnDlL2book.disabled = true;
+            elBtnDlL2book.textContent = 'Queueing\u2026';
+            var url = API_BASE + '/heatmap/queue-l2book-download?exchange=' +
+                      encodeURIComponent(EXCHANGE) +
+                      '&coin=' + encodeURIComponent(COIN) +
+                      '&month=' + encodeURIComponent(currentMonth);
+            fetch(url, {method: 'POST', headers: authHeaders()})
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    elBtnDlL2book.disabled = false;
+                    elBtnDlL2book.textContent = '\u25bc Download month';
+                    if (data.error) {
+                        showToast(data.error, 'error');
+                    } else {
+                        showToast('Download queued: ' + data.coin + ' ' + data.start_day + '\u2013' + data.end_day + ' (job ' + data.job_id.substring(0, 12) + '\u2026)', 'success');
+                    }
+                })
+                .catch(function(e) {
+                    elBtnDlL2book.disabled = false;
+                    elBtnDlL2book.textContent = '\u25bc Download month';
+                    showToast('Queue failed: ' + e.message, 'error');
+                });
         });
     }
 
@@ -526,6 +832,9 @@
             wsConnect();
         });
     });
+
+    // Cancel any in-flight minutes SSE when the page is unloaded / Streamlit rerenders
+    window.addEventListener('beforeunload', function() { abortMinutes(); });
 
 })();
 </script>

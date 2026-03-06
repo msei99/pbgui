@@ -46,7 +46,7 @@ Click **⚙ Settings** in the sidebar to open the settings view.
 | **Telegram Bot Token** | Token from @BotFather (stored in `pbgui.ini`) |
 | **Telegram Chat ID** | Your personal or group chat ID |
 
-Press **💾** to save and return to the viewer. The save button turns **primary (red)**
+Press **💾** in the sidebar to save. The save button turns **primary (red)**
 whenever there are unsaved changes.
 
 > Changes take effect on the **next monitoring cycle** (within 60 seconds) — no restart needed.

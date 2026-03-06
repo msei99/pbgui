@@ -198,14 +198,14 @@ class VPSMonitor:
     @property
     def auto_restart(self) -> bool:
         if self._auto_restart is None:
-            val = load_ini("pbmaster", "auto_restart")
+            val = load_ini("vps_monitor", "auto_restart")
             self._auto_restart = val.lower() == "true" if val else True
         return self._auto_restart
 
     @property
     def enabled_hosts(self) -> set[str]:
         if self._enabled_hosts is None:
-            val = load_ini("pbmaster", "enabled_hosts")
+            val = load_ini("vps_monitor", "enabled_hosts")
             if val and val.strip():
                 self._enabled_hosts = {
                     h.strip() for h in val.split(",") if h.strip()

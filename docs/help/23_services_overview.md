@@ -18,7 +18,7 @@ The page displays service columns, each with:
 | **PBStat** | Collects spot trade statistics for the legacy v6 single bot only |
 | **PBData** | Fetches real-time market data (OHLCV, orders, positions) from exchanges |
 | **PBCoinData** | Fetches CoinMarketCap data and builds exchange symbol mappings for dynamic filters |
-| **PBMaster** | Maintains persistent SSH connections to VPS hosts and powers the real-time VPS Monitor |
+| **PBAPIServer** | Runs the FastAPI backend (REST + WebSocket) that powers the VPS Monitor with live SSH connections |
 
 ## Toggling services
 
@@ -42,7 +42,7 @@ A healthy setup usually starts services in this order:
 2. **PBRun** — starts bot processes (uses mappings from PBCoinData)
 3. **PBData** — provides live market data
 4. **PBStat** — collects spot trade statistics (v6 single bot only)
-5. **PBMaster** — enables persistent VPS connections and real-time monitor data (if used)
+5. **PBAPIServer** — enables persistent VPS connections and real-time monitor data (if used)
 6. **PBRemote** — connects to remote VPS (if used)
 7. **PBMon** — enables monitoring and alerts (if used)
 

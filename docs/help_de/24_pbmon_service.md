@@ -47,7 +47,7 @@ Klicke auf **⚙ Settings** in der linken Seitenleiste, um die Einstellungsansic
 | **Telegram Bot Token** | Token von @BotFather (gespeichert in `pbgui.ini`) |
 | **Telegram Chat ID** | Deine persönliche oder Gruppen-Chat-ID |
 
-Drücke **💾** zum Speichern und Rückkehr zum Viewer. Der Speichern-Button wird
+Drücke **💾** in der Sidebar zum Speichern. Der Speichern-Button wird
 **primär (rot)**, sobald es ungespeicherte Änderungen gibt.
 
 > Änderungen wirken beim **nächsten Überwachungszyklus** (innerhalb von 60 Sekunden) —

@@ -5,7 +5,7 @@ Monitors pbgui.ini via mtime polling (one stat() call every 0.5s).
 When the file changes, sets a threading.Event that can wake up any
 sleeping main loop instantly.
 
-Usage in any daemon (PBMaster, PBCoinData, PBData, …):
+Usage in any daemon (PBCoinData, PBData, …):
 
     from ini_watcher import IniWatcher
 

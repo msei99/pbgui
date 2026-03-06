@@ -72,7 +72,7 @@ Auf **⚙ Settings** in der Sidebar klicken, um die Log-Rotation zu konfiguriere
 ## Fehlerbehebung
 
 - **Keine Log-Dateien aufgelistet**: Sicherstellen, dass PBGui-Dienste mindestens einmal gestartet wurden
-- **Streaming stoppt**: PBMaster-WebSocket-Verbindung unterbrochen — der Viewer verbindet sich automatisch neu
+- **Streaming stoppt**: API-Server-WebSocket-Verbindung unterbrochen — der Viewer verbindet sich automatisch neu
 - **„All" ist langsam**: Sehr große Dateien können einen Moment brauchen; bei großen Logs ein Zeilenlimit setzen
 
 ---
@@ -105,7 +105,8 @@ Enthält Meldungen aller GUI-Hilfskomponenten:
 | `PBRun.log` | PBRun | Live-Bot Start/Stop, Order-Loop |
 | `PBRemote.log` | PBRemote | Remote-Sync, VPS-Kommunikation |
 | `PBCoinData.log` | PBCoinData | CMC-Daten-Updates, Symbol-Listen |
-| `PBMaster.log` | PBMaster | WebSocket-Server, Log-Streaming |
+| `VPSMonitor.log` | VPS Monitor | SSH-Verbindungen, Host-Metriken, Service-Auto-Heal |
+| `PBApiServer.log` | PBAPIServer | FastAPI-Start, REST/WebSocket-Requests |
 | `PBStat.log` | PBStat | Statistik-Erfassung |
 | `Database.log` | Database | DB-Abfragen, Verbindungsfehler |
 | `Exchange.log` | Exchange | Marktdaten, Symbol-Infos, CCXT-Fehler |
