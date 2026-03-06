@@ -122,9 +122,10 @@ else
   done
 fi
 
-# --- PBGui access logic (port 8501) ---
+# --- PBGui access logic (ports 8501 + 8000) ---
 info "Allowing PBGui access over VPN..."
 sudo ufw allow from "$VPN_CIDR" to any port 8501 proto tcp comment "PBGui via VPN"
+sudo ufw allow from "$VPN_CIDR" to any port 8000 proto tcp comment "PBGui API via VPN"
 
 # --- Default policies and enable UFW ---
 info "Setting default policies..."
@@ -148,5 +149,7 @@ else
     echo -e "   - SSH access: Allowed from: ${SSH_ALLOWED[*]}"
 fi
 echo -e "   - OpenVPN access: Allowed on UDP port 1194"
+echo -e "   - PBGui Streamlit: Allowed on TCP port 8501 (VPN only)"
+echo -e "   - PBGui API/WS:    Allowed on TCP port 8000 (VPN only)"
 echo -e "   - All other incoming traffic denied"
 echo
