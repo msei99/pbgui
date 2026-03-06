@@ -575,7 +575,7 @@ def render_fastapi_job_monitor(height: int = 800, exchange: str = "") -> None:
     
     if not success:
         st.error(f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
-                 f"Please check **System → Services → API Server** or start manually: `python api_server.py`")
+                 f"Please check **System → Services → API Server** or start manually: `python PBApiServer.py`")
         return
     
     # Get or create token for current session
@@ -624,7 +624,7 @@ def render_fastapi_market_data_status(exchange: str) -> None:
 
     if not success:
         st.error(f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
-                 f"Please check **System → Services → API Server** or start manually: `python api_server.py`")
+                 f"Please check **System → Services → API Server** or start manually: `python PBApiServer.py`")
         return
 
     # Get or create token for current session
@@ -694,7 +694,7 @@ def render_fastapi_gap_heatmap(exchange: str, dataset: str, coin: str) -> None:
     api_host, api_port, success = _start_fastapi_server_if_needed()
     if not success:
         st.error(f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
-                 f"Please check **System → Services → API Server** or start manually: `python api_server.py`")
+                 f"Please check **System → Services → API Server** or start manually: `python PBApiServer.py`")
         return
 
     if "api_token" not in st.session_state:
