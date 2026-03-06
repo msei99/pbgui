@@ -8,20 +8,341 @@ Provides:
 - Token-based authentication
 
 Runs as a background daemon, following the same pattern as PBRun etc.
+
+Usage (same pattern as all other PB services):
+    python PBApiServer.py          # start the server directly
+    uvicorn PBApiServer:app        # for development with reload
 """
 
+import asyncio
+import json
+import logging
 import os
 import subprocess
 import sys
+import warnings
+from contextlib import asynccontextmanager
 from pathlib import Path, PurePath
 from time import sleep
 
 import psutil
+import uvicorn
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
-from pbgui_purefunc import PBGDIR, load_ini, save_ini
+from api.jobs import router as jobs_router
+from api.market_data import router as market_data_router
+from api.heatmap import router as heatmap_router
+from api.vps import router as vps_router
 from logging_helpers import human_log as _log
+from pbgui_purefunc import PBGDIR, load_ini, save_ini
 
 SERVICE = "PBApiServer"
+
+
+# ── Route uvicorn logs through human_log ─────────────────────
+
+class _UvicornLogHandler(logging.Handler):
+    """Bridges Python logging → human_log for uvicorn access/error logs."""
+
+    _LEVEL_MAP = {
+        logging.DEBUG: "DEBUG",
+        logging.INFO: "INFO",
+        logging.WARNING: "WARNING",
+        logging.ERROR: "ERROR",
+        logging.CRITICAL: "CRITICAL",
+    }
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            msg = self.format(record)
+            level = self._LEVEL_MAP.get(record.levelno, "INFO")
+            _log(SERVICE, msg, level=level)
+        except Exception:
+            pass
+
+
+def _setup_uvicorn_logging():
+    """Replace uvicorn's default handlers with our human_log bridge."""
+    handler = _UvicornLogHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "py.warnings"):
+        logger = logging.getLogger(name)
+        logger.handlers = [handler]
+        logger.propagate = False
+    logging.captureWarnings(True)
+
+
+# ── VPS monitoring lifecycle ─────────────────────────────────
+
+_vps_monitor = None
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """FastAPI lifespan: startup and graceful shutdown of VPS monitoring."""
+    global _vps_monitor
+    from master.async_monitor import VPSMonitor
+    from master.async_logs import AsyncLogStreamer
+    from api.vps import init as vps_init
+
+    monitor = VPSMonitor()
+    streamer = AsyncLogStreamer(monitor.pool)
+    vps_init(monitor, streamer)
+    _vps_monitor = monitor
+    await monitor.start()
+
+    yield  # app runs here
+
+    if _vps_monitor:
+        await _vps_monitor.stop()
+
+
+# ── FastAPI app ───────────────────────────────────────────────
+
+app = FastAPI(
+    lifespan=_lifespan,
+    title="PBGui API",
+    description=(
+        "REST API + WebSocket for PBGui backend services.\n\n"
+        "## Authentication\n"
+        "All endpoints require an API token, passed as `?token=xxx` query param "
+        "or `Authorization: Bearer xxx` header.\n\n"
+        "---\n\n"
+        "## WebSocket — VPS Monitor (`/ws/vps`)\n"
+        "Real-time VPS monitoring and log streaming.\n\n"
+        "**Server → Client push messages:**\n"
+        "- `{\"type\": \"state\", \"data\": {…}}` — full VPS state (connections, system metrics, instances, services)\n"
+        "- `{\"type\": \"log_lines\", \"lines\": [...]}` — incremental remote log lines\n"
+        "- `{\"type\": \"local_log_lines\", \"lines\": [...]}` — incremental local log lines\n\n"
+        "**Client → Server commands:**\n"
+        "- `{\"cmd\": \"get_logs\", \"host\": …, \"service\": …, \"lines\": 200}`\n"
+        "- `{\"cmd\": \"subscribe_logs\", \"host\": …, \"service\": …}` / `unsubscribe_logs`\n"
+        "- `{\"cmd\": \"restart_service\", \"host\": …, \"service\": …}`\n"
+        "- `{\"cmd\": \"kill_instance\", \"host\": …, \"name\": …}`\n"
+        "- `{\"cmd\": \"list_local_logs\"}` / `get_local_logs` / `subscribe_local_logs` / `unsubscribe_local_logs`\n\n"
+        "---\n\n"
+        "## WebSocket — Jobs (`/ws/jobs`)\n"
+        "Pushes job queue state every 2 s. Auth via `?token=xxx`.\n\n"
+        "**Server → Client:** `{\"jobs\": [...]}` — full list of jobs (pending, running, done, failed).\n\n"
+        "---\n\n"
+        "## WebSocket — Market Data (`/ws/market-data`)\n"
+        "Pushes per-exchange status every 2 s. Auth via `?token=xxx`.\n\n"
+        "**Query params:** `exchange` (required).\n\n"
+        "**Server → Client:** `{\"status\": {…}}` — daemon status, progress, cycle info.\n\n"
+        "---\n\n"
+        "## WebSocket — Heatmap Watch (`/ws/heatmap-watch`)\n"
+        "Watches data file mtimes and notifies when heatmap data changes. Auth via `?token=xxx`.\n\n"
+        "**Query params:** `exchange`, `dataset`, `coin` (all required).\n\n"
+        "**Server → Client:** `{\"type\": \"updated\", \"mtime\": …}` — sent when the underlying data files change (polls every 5 s).\n"
+    ),
+    version="1.65",
+    openapi_tags=[
+        {"name": "jobs", "description": "Background job queue — list, cancel, retry, delete, bulk-delete, view logs"},
+        {"name": "market-data", "description": "Market data pipeline — status, trigger refresh, cancel, stop"},
+        {"name": "heatmap", "description": "Gap / coverage heatmap — info, overview (with SSE progress streaming), minute-detail, mtime check"},
+        {"name": "vps", "description": "VPS monitoring WebSocket (`/ws/vps`) — live metrics, log streaming, service control"},
+    ],
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])
+app.include_router(market_data_router, prefix="/api", tags=["market-data"])
+app.include_router(heatmap_router, prefix="/api/heatmap", tags=["heatmap"])
+app.include_router(vps_router, tags=["vps"])
+
+frontend_dir = Path(__file__).parent / "frontend"
+if frontend_dir.exists():
+    app.mount("/app", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+
+
+# ── WebSocket endpoints ───────────────────────────────────────
+
+active_connections: list[WebSocket] = []
+
+
+@app.websocket("/ws/jobs")
+async def websocket_jobs(websocket: WebSocket):
+    """WebSocket endpoint for real-time job updates."""
+    await websocket.accept()
+    from api.auth import validate_token
+    token = websocket.query_params.get("token")
+    session = validate_token(token) if token else None
+    if not session:
+        await websocket.send_json({"error": "Invalid or missing token"})
+        await websocket.close(code=1008)
+        return
+    active_connections.append(websocket)
+    try:
+        while True:
+            from task_queue import list_jobs
+            jobs = list_jobs(states=["pending", "running"], limit=50)
+            await websocket.send_json({
+                "type": "jobs",
+                "data": jobs,
+                "timestamp": asyncio.get_event_loop().time()
+            })
+            await asyncio.sleep(2)
+    except WebSocketDisconnect:
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+    except Exception as e:
+        _log(SERVICE, f"[ws/jobs] Error: {e}", level="ERROR")
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+
+
+@app.websocket("/ws/market-data")
+async def websocket_market_data(websocket: WebSocket):
+    """WebSocket endpoint for real-time market data status updates."""
+    await websocket.accept()
+    from api.auth import validate_token
+    token = websocket.query_params.get("token")
+    session = validate_token(token) if token else None
+    if not session:
+        await websocket.send_json({"error": "Invalid or missing token"})
+        await websocket.close(code=1008)
+        return
+    exchange = websocket.query_params.get("exchange", "").lower().strip()
+    if not exchange:
+        await websocket.send_json({"error": "Missing exchange parameter"})
+        await websocket.close(code=1008)
+        return
+    active_connections.append(websocket)
+    try:
+        while True:
+            from api.market_data import _get_exchange_status_key, _get_exchange_flag_prefix, _load_market_data_status
+            from datetime import datetime
+            status_key = _get_exchange_status_key(exchange)
+            flag_prefix = _get_exchange_flag_prefix(exchange)
+            if status_key and flag_prefix:
+                all_status = _load_market_data_status()
+                exchange_status = all_status.get(status_key, {})
+                pbgdir = Path(__file__).parent
+                flag_path = pbgdir / "data" / "logs" / f"{flag_prefix}_run_now.flag"
+                queued = flag_path.exists()
+                running = bool(exchange_status.get("running", False))
+                coins_data = exchange_status.get("coins", {})
+                interval_s = int(exchange_status.get("interval_seconds", 0))
+                coin_rows = []
+                if isinstance(coins_data, dict):
+                    now = datetime.now()
+                    for coin, cst in sorted(coins_data.items()):
+                        if not isinstance(cst, dict):
+                            continue
+                        last_fetch = str(cst.get("last_fetch") or "")
+                        next_run = ""
+                        if interval_s and last_fetch:
+                            try:
+                                last_fetch_clean = last_fetch.replace(" ", "T") if " " in last_fetch else last_fetch
+                                last_dt = datetime.fromisoformat(last_fetch_clean)
+                                next_run = max(0, int(interval_s - (now - last_dt).total_seconds()))
+                            except Exception:
+                                pass
+                        api_res = cst.get("api_result", {})
+                        coin_rows.append({
+                            "coin": coin,
+                            "last_fetch": last_fetch,
+                            "result": cst.get("result", ""),
+                            "lookback_days": cst.get("lookback_days", ""),
+                            "minutes_written": api_res.get("minutes_written", "") if isinstance(api_res, dict) else "",
+                            "newest_day": cst.get("newest_day", ""),
+                            "next_run_in_s": next_run,
+                            "note": cst.get("note") or cst.get("error") or "",
+                        })
+                await websocket.send_json({
+                    "type": "market_data_status",
+                    "exchange": exchange,
+                    "running": running,
+                    "queued": queued,
+                    "coins_done": int(exchange_status.get("coins_done", 0)),
+                    "coins_total": int(exchange_status.get("coins_total", 0)),
+                    "current_coin": exchange_status.get("current_coin", ""),
+                    "interval_seconds": interval_s,
+                    "coin_rows": coin_rows,
+                    "timestamp": asyncio.get_event_loop().time()
+                })
+            else:
+                await websocket.send_json({"error": f"Unknown exchange: {exchange}"})
+            await asyncio.sleep(2)
+    except WebSocketDisconnect:
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+    except Exception as e:
+        _log(SERVICE, f"[ws/market-data] Error: {e}", level="ERROR")
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+
+
+@app.websocket("/ws/heatmap-watch")
+async def websocket_heatmap_watch(websocket: WebSocket):
+    """WebSocket endpoint: sends {type: 'updated', mtime: float} when data files change."""
+    from api.auth import verify_token
+    from api.heatmap import _latest_mtime
+    token = websocket.query_params.get("token", "")
+    try:
+        verify_token(token)
+    except Exception:
+        await websocket.close(code=4001)
+        return
+    exchange = websocket.query_params.get("exchange", "")
+    dataset = websocket.query_params.get("dataset", "")
+    coin = websocket.query_params.get("coin", "")
+    await websocket.accept()
+    last_mtime: float = 0.0
+    try:
+        while True:
+            current = _latest_mtime(exchange, dataset, coin)
+            if current != last_mtime:
+                last_mtime = current
+                await websocket.send_json({"type": "updated", "mtime": current})
+            await asyncio.sleep(5)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        _log(SERVICE, f"[ws/heatmap-watch] Error: {e}", level="ERROR")
+
+
+# ── REST endpoints ────────────────────────────────────────────
+
+@app.get("/static/plotly.min.js")
+def serve_plotly_js():
+    """Serve Plotly.js from the local Python package (no CDN needed)."""
+    import plotly as _plotly
+    path = Path(_plotly.__file__).parent / "package_data" / "plotly.min.js"
+    return FileResponse(str(path), media_type="application/javascript")
+
+
+@app.get("/")
+def root():
+    """API root endpoint."""
+    return {
+        "service": "PBGui API",
+        "version": "1.65",
+        "endpoints": {
+            "jobs": "/api/jobs/",
+            "websocket": "ws://localhost:8000/ws/jobs",
+            "frontend": "/app/jobs_monitor.html"
+        }
+    }
+
+
+@app.get("/health")
+def health():
+    """Health check endpoint."""
+    return {
+        "status": "ok",
+        "websocket_clients": len(active_connections)
+    }
 
 
 class PBApiServer:
@@ -104,7 +425,7 @@ class PBApiServer:
         self.load_pid()
         try:
             if self.my_pid and psutil.pid_exists(self.my_pid) and any(
-                sub.lower().endswith("api_server.py") for sub in psutil.Process(self.my_pid).cmdline()
+                sub.lower().endswith("pbapiserver.py") for sub in psutil.Process(self.my_pid).cmdline()
             ):
                 return True
         except psutil.NoSuchProcess:
@@ -116,7 +437,7 @@ class PBApiServer:
         if not self.is_running():
             pbgdir = Path.cwd()
             venv_python = self._get_venv_python()
-            cmd = [venv_python, '-u', str(PurePath(f'{pbgdir}/api_server.py'))]
+            cmd = [venv_python, '-u', str(PurePath(f'{pbgdir}/PBApiServer.py'))]
 
             # Set environment variables for config
             env = os.environ.copy()
@@ -177,3 +498,28 @@ class PBApiServer:
                 # venv's site-packages are on sys.path at runtime.
                 return str(venv_py)
         return sys.executable
+
+
+if __name__ == "__main__":
+    server = PBApiServer()
+    if server.is_running():
+        _log(SERVICE, 'Error: API server already started', level='ERROR')
+        sys.exit(1)
+    server.save_pid()
+
+    host = os.getenv("PBGUI_API_HOST", server.host)
+    port = int(os.getenv("PBGUI_API_PORT", str(server.port)))
+
+    _log(SERVICE, f"Starting PBGui API Server on {host}:{port}")
+    _log(SERVICE, f"Docs: http://{host}:{port}/docs")
+    _log(SERVICE, f"Frontend: http://{host}:{port}/app/jobs_monitor.html")
+
+    _setup_uvicorn_logging()
+
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+        log_config=None,
+    )
