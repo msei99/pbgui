@@ -435,6 +435,10 @@ class PBApiServer:
     def run(self):
         """Start the API server daemon in the background."""
         if not self.is_running():
+            # Small delay + re-check to avoid double-spawn on rapid Streamlit reruns
+            sleep(0.3)
+            if self.is_running():
+                return
             pbgdir = Path.cwd()
             venv_python = self._get_venv_python()
             cmd = [venv_python, '-u', str(PurePath(f'{pbgdir}/PBApiServer.py'))]
@@ -503,8 +507,8 @@ class PBApiServer:
 if __name__ == "__main__":
     server = PBApiServer()
     if server.is_running():
-        _log(SERVICE, 'Error: API server already started', level='ERROR')
-        sys.exit(1)
+        _log(SERVICE, 'Already running — exit', level='INFO')
+        sys.exit(0)
     server.save_pid()
 
     host = os.getenv("PBGUI_API_HOST", server.host)
