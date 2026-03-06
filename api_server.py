@@ -9,6 +9,8 @@ Usage:
     uvicorn api_server:app --reload --host 127.0.0.1 --port 8000
 """
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,6 +19,7 @@ import uvicorn
 import asyncio
 import json
 import logging
+import warnings
 from pathlib import Path
 
 from api.jobs import router as jobs_router
@@ -51,18 +54,89 @@ class _UvicornLogHandler(logging.Handler):
 
 
 def _setup_uvicorn_logging():
-    """Replace uvicorn's default handlers with our human_log bridge."""
+    """Replace uvicorn's default handlers with our human_log bridge.
+
+    Also captures Python warnings (DeprecationWarning etc.) so they
+    appear in PBApiServer.log instead of raw stderr.
+    """
     handler = _UvicornLogHandler()
     handler.setFormatter(logging.Formatter("%(message)s"))
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "py.warnings"):
         logger = logging.getLogger(name)
         logger.handlers = [handler]
         logger.propagate = False
+    # Redirect all warnings.warn() calls (incl. DeprecationWarning) through logging
+    logging.captureWarnings(True)
+
+
+# ── VPS monitoring lifecycle ─────────────────────────────────
+
+_vps_monitor = None
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """FastAPI lifespan: startup and graceful shutdown of VPS monitoring."""
+    global _vps_monitor
+    from master.async_monitor import VPSMonitor
+    from master.async_logs import AsyncLogStreamer
+    from api.vps import init as vps_init
+
+    monitor = VPSMonitor()
+    streamer = AsyncLogStreamer(monitor.pool)
+    vps_init(monitor, streamer)
+    _vps_monitor = monitor
+    await monitor.start()
+
+    yield  # app runs here
+
+    if _vps_monitor:
+        await _vps_monitor.stop()
+
 
 app = FastAPI(
+    lifespan=_lifespan,
     title="PBGui API",
-    description="REST API + WebSocket for PBGui backend services",
-    version="0.1.0"
+    description=(
+        "REST API + WebSocket for PBGui backend services.\n\n"
+        "## Authentication\n"
+        "All endpoints require an API token, passed as `?token=xxx` query param "
+        "or `Authorization: Bearer xxx` header.\n\n"
+        "---\n\n"
+        "## WebSocket — VPS Monitor (`/ws/vps`)\n"
+        "Real-time VPS monitoring and log streaming.\n\n"
+        "**Server → Client push messages:**\n"
+        "- `{\"type\": \"state\", \"data\": {…}}` — full VPS state (connections, system metrics, instances, services)\n"
+        "- `{\"type\": \"log_lines\", \"lines\": [...]}` — incremental remote log lines\n"
+        "- `{\"type\": \"local_log_lines\", \"lines\": [...]}` — incremental local log lines\n\n"
+        "**Client → Server commands:**\n"
+        "- `{\"cmd\": \"get_logs\", \"host\": …, \"service\": …, \"lines\": 200}`\n"
+        "- `{\"cmd\": \"subscribe_logs\", \"host\": …, \"service\": …}` / `unsubscribe_logs`\n"
+        "- `{\"cmd\": \"restart_service\", \"host\": …, \"service\": …}`\n"
+        "- `{\"cmd\": \"kill_instance\", \"host\": …, \"name\": …}`\n"
+        "- `{\"cmd\": \"list_local_logs\"}` / `get_local_logs` / `subscribe_local_logs` / `unsubscribe_local_logs`\n\n"
+        "---\n\n"
+        "## WebSocket — Jobs (`/ws/jobs`)\n"
+        "Pushes job queue state every 2 s. Auth via `?token=xxx`.\n\n"
+        "**Server → Client:** `{\"jobs\": [...]}` — full list of jobs (pending, running, done, failed).\n\n"
+        "---\n\n"
+        "## WebSocket — Market Data (`/ws/market-data`)\n"
+        "Pushes per-exchange status every 2 s. Auth via `?token=xxx`.\n\n"
+        "**Query params:** `exchange` (required).\n\n"
+        "**Server → Client:** `{\"status\": {…}}` — daemon status, progress, cycle info.\n\n"
+        "---\n\n"
+        "## WebSocket — Heatmap Watch (`/ws/heatmap-watch`)\n"
+        "Watches data file mtimes and notifies when heatmap data changes. Auth via `?token=xxx`.\n\n"
+        "**Query params:** `exchange`, `dataset`, `coin` (all required).\n\n"
+        "**Server → Client:** `{\"type\": \"updated\", \"mtime\": …}` — sent when the underlying data files change (polls every 5 s).\n"
+    ),
+    version="1.65",
+    openapi_tags=[
+        {"name": "jobs", "description": "Background job queue — list, cancel, retry, delete, bulk-delete, view logs"},
+        {"name": "market-data", "description": "Market data pipeline — status, trigger refresh, cancel, stop"},
+        {"name": "heatmap", "description": "Gap / coverage heatmap — info, overview (with SSE progress streaming), minute-detail, mtime check"},
+        {"name": "vps", "description": "VPS monitoring WebSocket (`/ws/vps`) — live metrics, log streaming, service control"},
+    ],
 )
 
 # CORS: Allow Streamlit (port 8501) to call FastAPI (port 8000)
@@ -86,32 +160,6 @@ frontend_dir = Path(__file__).parent / "frontend"
 if frontend_dir.exists():
     app.mount("/app", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
-
-# ── VPS monitoring lifecycle ─────────────────────────────────
-
-_vps_monitor = None
-
-
-@app.on_event("startup")
-async def _start_vps_monitor():
-    """Auto-start VPS monitoring as async background tasks."""
-    global _vps_monitor
-    from master.async_monitor import VPSMonitor
-    from master.async_logs import AsyncLogStreamer
-    from api.vps import init as vps_init
-
-    monitor = VPSMonitor()
-    streamer = AsyncLogStreamer(monitor.pool)
-    vps_init(monitor, streamer)
-    _vps_monitor = monitor
-    await monitor.start()
-
-
-@app.on_event("shutdown")
-async def _stop_vps_monitor():
-    """Gracefully stop VPS monitoring."""
-    if _vps_monitor:
-        await _vps_monitor.stop()
 
 # WebSocket: Job live updates
 active_connections: list[WebSocket] = []
@@ -345,17 +393,25 @@ def health():
 
 if __name__ == "__main__":
     import os
-    
+    import sys
+    from PBApiServer import PBApiServer
+
+    server = PBApiServer()
+    if server.is_running():
+        _log(SERVICE, 'Error: API server already started', level='ERROR')
+        sys.exit(1)
+    server.save_pid()
+
     # Bind to 0.0.0.0 for remote access (configurable via env var)
     host = os.getenv("PBGUI_API_HOST", "0.0.0.0")
     port = int(os.getenv("PBGUI_API_PORT", "8000"))
-    
+
     _log(SERVICE, f"Starting PBGui API Server on {host}:{port}")
     _log(SERVICE, f"Docs: http://{host}:{port}/docs")
     _log(SERVICE, f"Frontend: http://{host}:{port}/app/jobs_monitor.html")
-    
+
     _setup_uvicorn_logging()
-    
+
     uvicorn.run(
         app,
         host=host,

@@ -2,7 +2,7 @@
 VPS Monitor — Real-time monitoring of all VPS servers.
 
 Embeds a WebSocket-powered Custom Component that connects directly to
-PBMaster's WebSocket server. All data updates are pushed in real-time
+the API Server's WebSocket endpoint. All data updates are pushed in real-time
 (~2s latency for system metrics, ~0.5s for live logs) — zero Streamlit
 reruns, zero polling.
 
@@ -149,7 +149,7 @@ api_host, api_port_val, api_ok = _start_fastapi_server_if_needed()
 if not api_ok:
     st.error(
         f"⚠️ FastAPI server could not be started on {api_host}:{api_port_val}. "
-        "Please check **System → Services → API Server** or start manually: "
+        "Please check **System → Services → PBAPIServer** or start manually: "
         "`python api_server.py`"
     )
     st.stop()

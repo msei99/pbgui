@@ -767,6 +767,47 @@ def get_daily_presence_for_dataset(exchange: str, dataset: str, coin: str) -> di
     return {"oldest_day": oldest_day, "newest_day": newest_day, "days": days}
 
 
+def _resolve_dataset_coin_dirs(
+    exchange: str, dataset: str, coin: str,
+) -> list[Path]:
+    """Return list of existing directories to scan for a dataset/coin.
+
+    Handles the l2Book/l2book casing issue and includes the NAS archive
+    directory for l2book if configured.
+    """
+    ex = str(exchange or "").strip().lower()
+    ds = normalize_market_data_dataset(dataset)
+    cn = normalize_market_data_coin_dir(ex, coin)
+    ds_l = ds.strip().lower()
+    if not ex or not ds or not cn:
+        return []
+
+    dirs: list[Path] = []
+
+    # Primary local path
+    base = get_exchange_raw_root_dir(ex) / ds / cn
+    if base.exists():
+        dirs.append(base)
+
+    # l2book / l2Book casing fallback
+    if ds_l == "l2book" and not dirs:
+        for alt in ("l2Book", "l2book"):
+            alt_base = get_exchange_raw_root_dir(ex) / alt / cn
+            if alt_base.exists():
+                dirs.append(alt_base)
+                break
+
+    # NAS archive for l2book
+    if ds_l == "l2book" and is_l2book_archive_enabled():
+        archive_root = load_l2book_archive_dir()
+        if archive_root:
+            archive_base = Path(archive_root) / cn
+            if archive_base.exists() and archive_base not in dirs:
+                dirs.append(archive_base)
+
+    return dirs
+
+
 def get_daily_hour_coverage_for_dataset(
     exchange: str,
     dataset: str,
@@ -774,11 +815,14 @@ def get_daily_hour_coverage_for_dataset(
     *,
     start_day: str | None = None,
     end_day: str | None = None,
+    progress_cb: Any | None = None,
 ) -> dict[str, Any]:
     """Return per-day hour coverage and status (0=missing, 1=partial, 2=full).
 
     If start_day/end_day are provided (YYYYMMDD), coverage is limited to that
     inclusive range.
+    If *progress_cb* is provided it is called as ``progress_cb(msg, current, total)``
+    periodically during directory scanning.
 
     Output keys: oldest_day, newest_day, days=[{day, hours, status}]
     """
@@ -790,26 +834,48 @@ def get_daily_hour_coverage_for_dataset(
     if not ex or not ds or not cn:
         return {"oldest_day": "", "newest_day": "", "days": []}
 
-    base = get_exchange_raw_root_dir(ex) / ds / cn
-    if not base.exists():
+    scan_dirs = _resolve_dataset_coin_dirs(ex, ds, cn)
+    if not scan_dirs:
         return {"oldest_day": "", "newest_day": "", "days": []}
 
+    _VALID_SUFFIXES = {".lz4", ".jsonl", ".npz"}
+    _CANDLE_DS = {"1m", "candles_1m", "1m_api", "candles_1m_api"}
+
     hours_present: dict[str, set[str]] = {}
-    for p in base.iterdir():
-        if not p.is_file():
+    for dir_idx, base in enumerate(scan_dirs):
+        # Use os.listdir (single readdir, no per-file stat) for speed on NFS
+        try:
+            filenames = os.listdir(base)
+        except OSError:
             continue
-        if p.suffix.lower() not in (".lz4", ".jsonl", ".npz"):
-            continue
-        if ds_l in ("1m", "candles_1m", "1m_api", "candles_1m_api") and p.suffix.lower() != ".npz":
-            continue
-        parsed = _parse_day_hour_from_filename(p.name)
-        if not parsed:
-            continue
-        day, hour = parsed
-        if hour is None and p.suffix.lower() == ".npz":
-            hours_present.setdefault(day, set()).update(_hours_from_npz(p))
-        elif hour is not None:
-            hours_present.setdefault(day, set()).add(hour)
+        total = len(filenames)
+        label = "local" if dir_idx == 0 and len(scan_dirs) > 1 else (
+            "archive" if dir_idx > 0 else "")
+        if progress_cb and total > 0:
+            progress_cb(f"Scanning {label}".strip(), 0, total)
+
+        for i, name in enumerate(filenames):
+            if progress_cb and i > 0 and i % 500 == 0:
+                progress_cb(f"Scanning {label}".strip(), i, total)
+            dot = name.rfind(".")
+            if dot < 0:
+                continue
+            suffix = name[dot:].lower()
+            if suffix not in _VALID_SUFFIXES:
+                continue
+            if ds_l in _CANDLE_DS and suffix != ".npz":
+                continue
+            parsed = _parse_day_hour_from_filename(name)
+            if not parsed:
+                continue
+            day, hour = parsed
+            if hour is None and suffix == ".npz":
+                hours_present.setdefault(day, set()).update(_hours_from_npz(base / name))
+            elif hour is not None:
+                hours_present.setdefault(day, set()).add(hour)
+
+        if progress_cb:
+            progress_cb(f"Scanning {label}".strip(), total, total)
 
     if not hours_present:
         return {"oldest_day": "", "newest_day": "", "days": []}
@@ -1060,8 +1126,8 @@ def get_minute_presence_for_dataset(
     if not ex or not ds or not cn:
         return {"oldest_day": "", "newest_day": "", "days": {}}
 
-    base = get_exchange_raw_root_dir(ex) / ds / cn
-    if not base.exists():
+    scan_dirs = _resolve_dataset_coin_dirs(ex, ds, cn)
+    if not scan_dirs:
         return {"oldest_day": "", "newest_day": "", "days": {}}
 
     s0 = _normalize_day_str(start_day) if start_day else ""
@@ -1081,88 +1147,89 @@ def get_minute_presence_for_dataset(
 
     # Return per-minute source mapping: days -> hours -> {minute: src}
     out: dict[str, dict[str, dict[int, str]]] = {}
-    for p in base.iterdir():
-        if not p.is_file():
-            continue
-        if p.suffix.lower() not in (".jsonl", ".npz"):
-            continue
-        if ds_l in ("1m", "candles_1m", "1m_api", "candles_1m_api") and p.suffix.lower() != ".npz":
-            continue
-        parsed = _parse_day_hour_from_filename(p.name)
-        if not parsed:
-            continue
-        day, hour = parsed
-        if day and (s0 and day < s0):
-            continue
-        if day and (s1 and day > s1):
-            continue
+    for base in scan_dirs:
+        for p in base.iterdir():
+            if not p.is_file():
+                continue
+            if p.suffix.lower() not in (".jsonl", ".npz"):
+                continue
+            if ds_l in ("1m", "candles_1m", "1m_api", "candles_1m_api") and p.suffix.lower() != ".npz":
+                continue
+            parsed = _parse_day_hour_from_filename(p.name)
+            if not parsed:
+                continue
+            day, hour = parsed
+            if day and (s0 and day < s0):
+                continue
+            if day and (s1 and day > s1):
+                continue
 
-        minutes: dict[int, str] = {}
-        try:
-            if p.suffix.lower() == ".jsonl":
-                with open(p, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            obj = json.loads(line)
-                        except Exception:
-                            continue
-                        if not isinstance(obj, dict):
-                            continue
-                        t = obj.get("t")
-                        if t is None:
-                            continue
-                        try:
-                            ts_ms = int(t)
-                        except Exception:
-                            continue
-                        dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
-                        minute = int(dt.minute)
+            minutes: dict[int, str] = {}
+            try:
+                if p.suffix.lower() == ".jsonl":
+                    with open(p, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                obj = json.loads(line)
+                            except Exception:
+                                continue
+                            if not isinstance(obj, dict):
+                                continue
+                            t = obj.get("t")
+                            if t is None:
+                                continue
+                            try:
+                                ts_ms = int(t)
+                            except Exception:
+                                continue
+                            dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
+                            minute = int(dt.minute)
 
-                        # Determine source label for this minute
-                        src = None
-                        if isinstance(obj.get("src"), str) and obj.get("src"):
-                            src = str(obj.get("src"))
-                        else:
-                            # default source inference: if dataset is an API dataset, mark as 'api'
-                            ds_l = ds.strip().lower()
-                            if ds_l.endswith("_api") or ds_l in ("1m_api", "candles_1m_api", "candles_1m", "1m"):
-                                src = "api"
+                            # Determine source label for this minute
+                            src = None
+                            if isinstance(obj.get("src"), str) and obj.get("src"):
+                                src = str(obj.get("src"))
                             else:
-                                src = "unknown"
+                                # default source inference: if dataset is an API dataset, mark as 'api'
+                                ds_l2 = ds.strip().lower()
+                                if ds_l2.endswith("_api") or ds_l2 in ("1m_api", "candles_1m_api", "candles_1m", "1m"):
+                                    src = "api"
+                                else:
+                                    src = "unknown"
 
-                        minutes[minute] = src
-            else:
-                ds_l = ds.strip().lower()
-                if ds_l == "1m_api" or ds_l == "candles_1m_api" or ds_l.endswith("_api"):
-                    src = "api"
-                elif ds_l in ("candles_1m", "1m"):
-                    src = "api"
+                            minutes[minute] = src
                 else:
-                    src = "unknown"
-                with np.load(p) as data:
-                    arr = data["candles"] if "candles" in data else None
-                if arr is not None:
-                    for row in arr:
-                        try:
-                            ts_ms = int(row["ts"])
-                        except Exception:
-                            continue
-                        dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
-                        day_s = dt.strftime("%Y%m%d")
-                        if s0 and day_s < s0:
-                            continue
-                        if s1 and day_s > s1:
-                            continue
-                        hour_s = f"{int(dt.hour):02d}"
-                        out.setdefault(day_s, {}).setdefault(hour_s, {})[int(dt.minute)] = src
-        except Exception:
-            minutes = {}
+                    ds_l2 = ds.strip().lower()
+                    if ds_l2 == "1m_api" or ds_l2 == "candles_1m_api" or ds_l2.endswith("_api"):
+                        src = "api"
+                    elif ds_l2 in ("candles_1m", "1m"):
+                        src = "api"
+                    else:
+                        src = "unknown"
+                    with np.load(p) as data:
+                        arr = data["candles"] if "candles" in data else None
+                    if arr is not None:
+                        for row in arr:
+                            try:
+                                ts_ms = int(row["ts"])
+                            except Exception:
+                                continue
+                            dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
+                            day_s = dt.strftime("%Y%m%d")
+                            if s0 and day_s < s0:
+                                continue
+                            if s1 and day_s > s1:
+                                continue
+                            hour_s = f"{int(dt.hour):02d}"
+                            out.setdefault(day_s, {}).setdefault(hour_s, {})[int(dt.minute)] = src
+            except Exception:
+                minutes = {}
 
-        if p.suffix.lower() == ".jsonl" and hour is not None:
-            out.setdefault(day, {})[hour] = minutes
+            if p.suffix.lower() == ".jsonl" and hour is not None:
+                out.setdefault(day, {})[hour] = minutes
 
     if not out:
         return {"oldest_day": "", "newest_day": "", "days": {}}

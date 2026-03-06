@@ -71,6 +71,30 @@ def load_ini(section : str, parameter : str):
     else:
         return ""
 
+
+def migrate_ini_sections():
+    """One-time migration: rename [pbmaster] → [vps_monitor], [pbmaster_ui] → [vps_monitor_ui].
+
+    Preserves all existing keys. Safe to call multiple times (no-op if already migrated).
+    Called once at application startup.
+    """
+    ini_path = Path("pbgui.ini")
+    if not ini_path.exists():
+        return
+    cfg = configparser.ConfigParser()
+    cfg.read(str(ini_path))
+    changed = False
+    for old, new in [("pbmaster", "vps_monitor"), ("pbmaster_ui", "vps_monitor_ui")]:
+        if cfg.has_section(old) and not cfg.has_section(new):
+            cfg.add_section(new)
+            for key, val in cfg.items(old):
+                cfg.set(new, key, val)
+            cfg.remove_section(old)
+            changed = True
+    if changed:
+        with open(str(ini_path), "w") as f:
+            cfg.write(f)
+
 def pbdir(): return load_ini("main", "pbdir")
 
 def pbvenv(): return load_ini("main", "pbvenv")

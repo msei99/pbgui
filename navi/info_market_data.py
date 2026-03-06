@@ -3279,149 +3279,6 @@ def view_market_data():
                         append_exchange_download_log("hyperliquid", f"[hl_latest_1m] ERROR {e}")
                         st.error(str(e))
 
-            with st.expander("Build best 1m OHLCV", expanded=False):
-                def _extract_xyz_coin_name(coin: str) -> str | None:
-                    c_u = str(coin or "").strip().upper()
-                    if not c_u:
-                        return None
-                    if c_u.startswith("XYZ:") or c_u.startswith("XYZ-"):
-                        tail = c_u[4:].strip()
-                    else:
-                        # Some enabled coin lists store stock-perp tickers without XYZ prefix
-                        # (e.g. "EUR"). Treat as candidate XYZ coin name.
-                        tail = c_u
-                    for suffix in (
-                        "/USDC:USDC", "_USDC:USDC", "_USDC_USDC", "USDC",
-                        "/USDT:USDT", "_USDT:USDT", "_USDT_USDT", "USDT",
-                    ):
-                        if tail.endswith(suffix):
-                            tail = tail[: -len(suffix)]
-                            break
-                    tail = tail.strip(" _:-")
-                    return tail or None
-
-                tradfi_by_xyz: dict[str, dict] = {
-                    str(r.get("xyz_coin") or "").strip().upper(): dict(r)
-                    for r in _load_tradfi_map_for_ui()
-                    if str(r.get("xyz_coin") or "").strip()
-                }
-
-                eligible_build_coins: list[str] = []
-                for coin in coin_list:
-                    xyz_name = _extract_xyz_coin_name(coin)
-                    if not xyz_name:
-                        continue
-                    entry = tradfi_by_xyz.get(xyz_name)
-                    if isinstance(entry, dict):
-                        # TradFi/XYZ coin: enforce Tiingo mapping + status=ok
-                        status = str(entry.get("status") or "").strip().lower()
-                        has_tiingo = bool(
-                            str(entry.get("tiingo_ticker") or "").strip()
-                            or str(entry.get("tiingo_fx_ticker") or "").strip()
-                        )
-                        if status == "ok" and has_tiingo:
-                            eligible_build_coins.append(coin)
-                    else:
-                        # Non-XYZ (crypto): always allow build selection
-                        eligible_build_coins.append(coin)
-
-                if not eligible_build_coins:
-                    st.warning("No eligible coins found. XYZ symbols require Tiingo mapping with status 'ok'.")
-
-                build_coin_options = ["All"] + eligible_build_coins if eligible_build_coins else []
-                build_coin_sel = st.multiselect(
-                    "Coins for build",
-                    options=build_coin_options,
-                    default=["All"] if eligible_build_coins else [],
-                    key="market_data_hl_best_1m_coins",
-                )
-                if "All" in build_coin_sel or not build_coin_sel:
-                    build_coins = list(eligible_build_coins)
-                else:
-                    build_coins = [c for c in build_coin_sel if c in eligible_build_coins]
-
-                c_build, c_start, c_end, c_refetch = st.columns([0.18, 0.22, 0.22, 0.38], vertical_alignment="bottom")
-                with c_build:
-                    run_improve = st.button("Build best 1m", key="market_data_hl_best_1m_run_improve", width='stretch')
-                with c_start:
-                    build_start_date = st.date_input(
-                        "Start date (optional)",
-                        value=None,
-                        key="market_data_hl_best_1m_start_date",
-                        help=(
-                            "Optional lower bound for Build best 1m. "
-                            "If set: FX backfill runs newest→oldest only down to this date; "
-                            "other symbols use this as start date even if older data exists."
-                        ),
-                    )
-                with c_end:
-                    build_end_date = st.date_input(
-                        "End date (optional)",
-                        value=None,
-                        key="market_data_hl_best_1m_end_date",
-                        help=(
-                            "Optional upper bound for Build best 1m. "
-                            "If empty: today is used."
-                        ),
-                    )
-                with c_refetch:
-                    refetch_tradfi = st.checkbox(
-                        "Refetch TradFi data from scratch (stock-perps)",
-                        value=False,
-                        key="market_data_hl_best_1m_refetch",
-                        help="Ignores existing TradFi 1m data and re-fetches from 2016-12-12. "
-                             "Use after symbol mapping corrections. Applies only to XYZ-* coins.",
-                    )
-
-                if run_improve:
-                    try:
-                        if not build_coins:
-                            raise ValueError("No eligible coins selected")
-
-                        if build_start_date and build_end_date and build_start_date > build_end_date:
-                            raise ValueError("Start date must be on or before End date")
-
-                        effective_end_day = build_end_date.strftime("%Y%m%d") if build_end_date else _date.today().strftime("%Y%m%d")
-
-                        job = enqueue_job(
-                            job_type="hl_best_1m",
-                            exchange="hyperliquid",
-                            payload={
-                                "coins": list(build_coins),
-                                "end_day": effective_end_day,
-                                "start_day": build_start_date.strftime("%Y%m%d") if build_start_date else "",
-                                "refetch": bool(refetch_tradfi),
-                            },
-                        )
-                        st.session_state["market_data_hl_last_job_id"] = job.job_id
-                        append_exchange_download_log(
-                            "hyperliquid",
-                            f"[hl_best_1m] queued job_id={job.job_id}",
-                        )
-
-                        pid = read_worker_pid()
-                        if not (pid and is_pid_running(int(pid))):
-                            st.session_state.pop("market_data_worker_stopped_manually", None)
-                            subprocess.Popen(
-                                [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                                close_fds=True,
-                            )
-
-                        st.success(f"Queued background build job: {job.job_id}")
-                        st.rerun()
-                    except Exception as e:
-                        append_exchange_download_log("hyperliquid", f"[hl_best_1m] ERROR {e}")
-                        st.error(str(e))
-
-                # Live job monitor with WebSocket updates (no reruns needed)
-                @st.fragment
-                def _best_jobs_fragment():
-                    from pbgui_func import render_fastapi_job_monitor
-                    render_fastapi_job_monitor(height=600, exchange="hyperliquid")
-                _best_jobs_fragment()
-
             with st.expander("TradFi Symbol Mappings", expanded=False):
                 # Table is built live from mapping.json merged with tradfi_symbol_map.json.
                 # No sync step needed — new coins from mapping.json appear automatically.
@@ -4233,6 +4090,149 @@ def view_market_data():
                         _last_download_fragment()
                 except Exception:
                     pass
+
+            with st.expander("Build best 1m OHLCV", expanded=False):
+                def _extract_xyz_coin_name(coin: str) -> str | None:
+                    c_u = str(coin or "").strip().upper()
+                    if not c_u:
+                        return None
+                    if c_u.startswith("XYZ:") or c_u.startswith("XYZ-"):
+                        tail = c_u[4:].strip()
+                    else:
+                        # Some enabled coin lists store stock-perp tickers without XYZ prefix
+                        # (e.g. "EUR"). Treat as candidate XYZ coin name.
+                        tail = c_u
+                    for suffix in (
+                        "/USDC:USDC", "_USDC:USDC", "_USDC_USDC", "USDC",
+                        "/USDT:USDT", "_USDT:USDT", "_USDT_USDT", "USDT",
+                    ):
+                        if tail.endswith(suffix):
+                            tail = tail[: -len(suffix)]
+                            break
+                    tail = tail.strip(" _:-")
+                    return tail or None
+
+                tradfi_by_xyz: dict[str, dict] = {
+                    str(r.get("xyz_coin") or "").strip().upper(): dict(r)
+                    for r in _load_tradfi_map_for_ui()
+                    if str(r.get("xyz_coin") or "").strip()
+                }
+
+                eligible_build_coins: list[str] = []
+                for coin in coin_list:
+                    xyz_name = _extract_xyz_coin_name(coin)
+                    if not xyz_name:
+                        continue
+                    entry = tradfi_by_xyz.get(xyz_name)
+                    if isinstance(entry, dict):
+                        # TradFi/XYZ coin: enforce Tiingo mapping + status=ok
+                        status = str(entry.get("status") or "").strip().lower()
+                        has_tiingo = bool(
+                            str(entry.get("tiingo_ticker") or "").strip()
+                            or str(entry.get("tiingo_fx_ticker") or "").strip()
+                        )
+                        if status == "ok" and has_tiingo:
+                            eligible_build_coins.append(coin)
+                    else:
+                        # Non-XYZ (crypto): always allow build selection
+                        eligible_build_coins.append(coin)
+
+                if not eligible_build_coins:
+                    st.warning("No eligible coins found. XYZ symbols require Tiingo mapping with status 'ok'.")
+
+                build_coin_options = ["All"] + eligible_build_coins if eligible_build_coins else []
+                build_coin_sel = st.multiselect(
+                    "Coins for build",
+                    options=build_coin_options,
+                    default=["All"] if eligible_build_coins else [],
+                    key="market_data_hl_best_1m_coins",
+                )
+                if "All" in build_coin_sel or not build_coin_sel:
+                    build_coins = list(eligible_build_coins)
+                else:
+                    build_coins = [c for c in build_coin_sel if c in eligible_build_coins]
+
+                c_build, c_start, c_end, c_refetch = st.columns([0.18, 0.22, 0.22, 0.38], vertical_alignment="bottom")
+                with c_build:
+                    run_improve = st.button("Build best 1m", key="market_data_hl_best_1m_run_improve", width='stretch')
+                with c_start:
+                    build_start_date = st.date_input(
+                        "Start date (optional)",
+                        value=None,
+                        key="market_data_hl_best_1m_start_date",
+                        help=(
+                            "Optional lower bound for Build best 1m. "
+                            "If set: FX backfill runs newest→oldest only down to this date; "
+                            "other symbols use this as start date even if older data exists."
+                        ),
+                    )
+                with c_end:
+                    build_end_date = st.date_input(
+                        "End date (optional)",
+                        value=None,
+                        key="market_data_hl_best_1m_end_date",
+                        help=(
+                            "Optional upper bound for Build best 1m. "
+                            "If empty: today is used."
+                        ),
+                    )
+                with c_refetch:
+                    refetch_tradfi = st.checkbox(
+                        "Refetch TradFi data from scratch (stock-perps)",
+                        value=False,
+                        key="market_data_hl_best_1m_refetch",
+                        help="Ignores existing TradFi 1m data and re-fetches from 2016-12-12. "
+                             "Use after symbol mapping corrections. Applies only to XYZ-* coins.",
+                    )
+
+                if run_improve:
+                    try:
+                        if not build_coins:
+                            raise ValueError("No eligible coins selected")
+
+                        if build_start_date and build_end_date and build_start_date > build_end_date:
+                            raise ValueError("Start date must be on or before End date")
+
+                        effective_end_day = build_end_date.strftime("%Y%m%d") if build_end_date else _date.today().strftime("%Y%m%d")
+
+                        job = enqueue_job(
+                            job_type="hl_best_1m",
+                            exchange="hyperliquid",
+                            payload={
+                                "coins": list(build_coins),
+                                "end_day": effective_end_day,
+                                "start_day": build_start_date.strftime("%Y%m%d") if build_start_date else "",
+                                "refetch": bool(refetch_tradfi),
+                            },
+                        )
+                        st.session_state["market_data_hl_last_job_id"] = job.job_id
+                        append_exchange_download_log(
+                            "hyperliquid",
+                            f"[hl_best_1m] queued job_id={job.job_id}",
+                        )
+
+                        pid = read_worker_pid()
+                        if not (pid and is_pid_running(int(pid))):
+                            st.session_state.pop("market_data_worker_stopped_manually", None)
+                            subprocess.Popen(
+                                [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                close_fds=True,
+                            )
+
+                        st.success(f"Queued background build job: {job.job_id}")
+                        st.rerun()
+                    except Exception as e:
+                        append_exchange_download_log("hyperliquid", f"[hl_best_1m] ERROR {e}")
+                        st.error(str(e))
+
+                # Live job monitor with WebSocket updates (no reruns needed)
+                @st.fragment
+                def _best_jobs_fragment():
+                    from pbgui_func import render_fastapi_job_monitor
+                    render_fastapi_job_monitor(height=600, exchange="hyperliquid")
+                _best_jobs_fragment()
 
 
     if main_view == "Already have":

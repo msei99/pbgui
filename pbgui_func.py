@@ -165,6 +165,11 @@ def check_password():
         return True
 
 def set_page_config(page : str = "Start"):
+    # One-time INI migration (pbmaster → vps_monitor)
+    if "_ini_migrated" not in st.session_state:
+        from pbgui_purefunc import migrate_ini_sections
+        migrate_ini_sections()
+        st.session_state._ini_migrated = True
     st.session_state.page = page
     st.set_page_config(
         page_title=f"PBGUI - {page}",
@@ -173,7 +178,7 @@ def set_page_config(page : str = "Start"):
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': "Passivbot GUI v1.64 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
+            'About': "Passivbot GUI v1.65 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
         }
     )
     # Global layout CSS — applied on every page
@@ -530,90 +535,24 @@ def render_log_viewer(
 
 def _start_fastapi_server_if_needed() -> tuple[str, int, bool]:
     """Start FastAPI server if not already running.
-    
-    Reads configuration from pbgui.ini ([api_server] section).
-    Checks if the FastAPI server is reachable via health endpoint.
-    If not, starts it as a background process.
-    
+
+    Delegates to PBApiServer (single source of truth for PID lifecycle).
     Returns:
-        Tuple of (host, port, success): host and port from config, and whether server is running
+        Tuple of (host, port, success)
     """
-    import requests
-    import subprocess
-    import sys
-    import traceback
-    import time
-    from pathlib import Path
-    from logging_helpers import human_log as _log
-    
-    # Read config from pbgui.ini
-    api_host_cfg = load_ini("api_server", "host")
-    api_host = api_host_cfg.strip() if api_host_cfg and api_host_cfg.strip() else "0.0.0.0"
-    
-    api_port_cfg = load_ini("api_server", "port")
-    api_port = int(api_port_cfg) if api_port_cfg and api_port_cfg.isdigit() else 8000
-    
-    # Health check uses localhost even if server binds to 0.0.0.0
-    health_url = f"http://localhost:{api_port}/health"
-    
-    # Check if server is already running
-    try:
-        response = requests.get(health_url, timeout=2)
-        if response.status_code == 200:
-            _log('FastAPI', f'Server already running on {api_host}:{api_port}', level='debug')
-            return (api_host, api_port, True)
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-        pass
-    
-    # Server not running, try to start it
-    _log('FastAPI', f'Starting API server on {api_host}:{api_port}...', level='info')
-    
-    try:
-        # Get paths
-        venv_python = Path(sys.executable)  # Use same venv as Streamlit
-        api_server_script = Path(__file__).parent / "api_server.py"
-        log_file = Path(__file__).parent / "data" / "logs" / "api_server.log"
-        
-        if not api_server_script.exists():
-            _log('FastAPI', f'api_server.py not found at {api_server_script}', level='error')
-            return (api_host, api_port, False)
-        
-        # Ensure log directory exists
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Set environment variables for config
-        import os
-        env = os.environ.copy()
-        env["PBGUI_API_HOST"] = api_host
-        env["PBGUI_API_PORT"] = str(api_port)
-        
-        # Start as background process with logs
-        with open(log_file, 'a') as log_f:
-            subprocess.Popen(
-                [str(venv_python), str(api_server_script)],
-                stdout=log_f,
-                stderr=log_f,
-                env=env,
-                start_new_session=True  # Detach from parent process
-            )
-        
-        # Wait for server to start (max 5 seconds)
-        for i in range(10):
-            time.sleep(0.5)
-            try:
-                response = requests.get(health_url, timeout=1)
-                if response.status_code == 200:
-                    _log('FastAPI', f'Server started successfully on {api_host}:{api_port}', level='info')
-                    return (api_host, api_port, True)
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-                continue
-        
-        _log('FastAPI', 'Server did not respond after 5 seconds', level='warning')
-        return (api_host, api_port, False)
-        
-    except Exception as e:
-        _log('FastAPI', f'Failed to start server: {e}', level='error', meta={'traceback': traceback.format_exc()})
-        return (api_host, api_port, False)
+    from PBApiServer import PBApiServer
+
+    # Reuse the session-state instance when available (Streamlit context),
+    # otherwise create a transient one (in tests / non-UI callers).
+    if "api_server" in st.session_state:
+        srv = st.session_state.api_server
+    else:
+        srv = PBApiServer()
+
+    if not srv.is_running():
+        srv.run()
+
+    return (srv.host, srv.port, srv.is_running())
 
 
 def render_fastapi_job_monitor(height: int = 800, exchange: str = "") -> None:
@@ -647,10 +586,19 @@ def render_fastapi_job_monitor(height: int = 800, exchange: str = "") -> None:
         st.session_state["api_token"] = token_obj.token
     
     token = st.session_state["api_token"]
-    
+
+    # Derive browser-usable hostname (0.0.0.0 is not routable from the browser)
+    _browser_host = "127.0.0.1"
+    try:
+        _req_host = st.context.headers.get("Host", "")
+        if _req_host:
+            _browser_host = _req_host.split(":")[0] or "127.0.0.1"
+    except Exception:
+        pass
+
     # Build iframe URL with token and optional exchange filter
     exchange_param = f"&exchange={exchange}" if exchange else ""
-    iframe_url = f"http://localhost:{api_port}/app/jobs_monitor.html?token={token}{exchange_param}"
+    iframe_url = f"http://{_browser_host}:{api_port}/app/jobs_monitor.html?token={token}{exchange_param}"
     _st_components.iframe(iframe_url, height=height, scrolling=True)
 
 
@@ -687,8 +635,18 @@ def render_fastapi_market_data_status(exchange: str) -> None:
 
     token = st.session_state["api_token"]
     exchange_param = exchange.lower().strip()
-    api_host_str = f"localhost:{api_port}"
-    api_base_str = f"http://localhost:{api_port}/api"
+
+    # Derive browser-usable hostname (0.0.0.0 is not routable from the browser)
+    _browser_host = "127.0.0.1"
+    try:
+        _req_host = st.context.headers.get("Host", "")
+        if _req_host:
+            _browser_host = _req_host.split(":")[0] or "127.0.0.1"
+    except Exception:
+        pass
+
+    api_host_str = f"{_browser_host}:{api_port}"
+    api_base_str = f"http://{_browser_host}:{api_port}/api"
 
     # Read HTML template and make element IDs unique per exchange
     html_path = Path(__file__).parent / "frontend" / "market_data_status.html"
@@ -750,7 +708,17 @@ def render_fastapi_gap_heatmap(exchange: str, dataset: str, coin: str) -> None:
     exchange_param = str(exchange).lower().strip()
     dataset_param  = str(dataset).strip()
     coin_param     = str(coin).strip()
-    api_base_str   = f"http://localhost:{api_port}/api"
+
+    # Derive browser-usable hostname (0.0.0.0 is not routable from the browser)
+    _browser_host = "127.0.0.1"
+    try:
+        _req_host = st.context.headers.get("Host", "")
+        if _req_host:
+            _browser_host = _req_host.split(":")[0] or "127.0.0.1"
+    except Exception:
+        pass
+
+    api_base_str   = f"http://{_browser_host}:{api_port}/api"
 
     html_path = Path(__file__).parent / "frontend" / "gap_heatmap.html"
     html_content = html_path.read_text(encoding="utf-8")
@@ -768,7 +736,7 @@ def render_fastapi_gap_heatmap(exchange: str, dataset: str, coin: str) -> None:
         .replace('data-exchange=""', f'data-exchange="{exchange_param}"')
         .replace('data-dataset=""',  f'data-dataset="{dataset_param}"')
         .replace('data-coin=""',     f'data-coin="{coin_param}"')
-        .replace('data-api-host=""', f'data-api-host="localhost:{api_port}"')
+        .replace('data-api-host=""', f'data-api-host="{_browser_host}:{api_port}"')
         .replace('data-api-base=""', f'data-api-base="{api_base_str}"')
     )
 

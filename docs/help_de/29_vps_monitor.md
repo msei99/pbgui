@@ -2,7 +2,7 @@
 
 Der VPS Monitor ist ein Echtzeit-Operations-Dashboard für alle konfigurierten VPS-Hosts.
 
-Er nutzt PBMaster als Backend und erhält Updates per WebSocket, sodass die UI ohne Streamlit-Reruns live aktualisiert wird.
+Er nutzt den PBAPIServer als Backend und erhält Updates per WebSocket, sodass die UI ohne Streamlit-Reruns live aktualisiert wird.
 
 ## Was du überwachen kannst
 
@@ -29,12 +29,12 @@ Er nutzt PBMaster als Backend und erhält Updates per WebSocket, sodass die UI o
 
 ## Voraussetzungen
 
-- PBMaster muss laufen
-- Ziel-VPS-Hosts müssen in den PBMaster-Einstellungen aktiviert sein
-- Der PBMaster-WebSocket-Port muss für den UI-Prozess erreichbar sein
+- Der PBAPIServer muss laufen
+- Ziel-VPS-Hosts müssen in den PBAPIServer-Einstellungen aktiviert sein (`System → Services → PBAPIServer → Settings`)
+- Der API-Server-WebSocket-Endpunkt muss für den UI-Prozess erreichbar sein
 
 ## Schnelle Fehlersuche
 
-- **Keine Daten sichtbar**: PBMaster unter `System → Services` starten
-- **Ein Host fehlt**: prüfen, ob der Host in PBMaster aktiviert ist
-- **Logs streamen nicht**: WebSocket-Port und PBMaster-Log auf Verbindungsfehler prüfen
+- **Keine Daten sichtbar**: PBAPIServer unter `System → Services` starten
+- **Ein Host fehlt**: prüfen, ob der Host in den PBAPIServer-Einstellungen aktiviert ist
+- **Logs streamen nicht**: API-Server-Log (`PBApiServer.log`) auf Verbindungsfehler prüfen

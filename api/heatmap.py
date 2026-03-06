@@ -8,12 +8,15 @@ All endpoints require auth (Bearer token).
 """
 from __future__ import annotations
 
+import asyncio
 import calendar
+import json as _json
 from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -53,7 +56,16 @@ def _data_dir_for(exchange: str, dataset: str, coin: str) -> Path | None:
         if ds_l.startswith("pb7_cache:"):
             # PB7 cache lives under pb7/ dir — just watch the generic ohlcv dir
             return root / str(exchange).lower() / "1m" / str(coin)
-        return root / _storage_ex(exchange) / dataset / str(coin)
+        base = root / _storage_ex(exchange) / dataset / str(coin)
+        if base.exists():
+            return base
+        # l2book / l2Book casing fallback
+        if ds_l == "l2book":
+            for alt in ("l2Book", "l2book"):
+                alt_base = root / _storage_ex(exchange) / alt / str(coin)
+                if alt_base.exists():
+                    return alt_base
+        return base
     except Exception:
         return None
 
@@ -115,6 +127,7 @@ def get_heatmap_info(
         tradfi_canonical_type_for_coin,
     )
     from market_data_sources import get_daily_source_counts_for_range
+    from market_data import get_daily_hour_coverage_for_dataset
 
     ex = str(exchange).lower().strip()
     ds = str(dataset).strip()
@@ -127,29 +140,78 @@ def get_heatmap_info(
 
     months: list[str] = []
     if is_candles:
+        if ds_l in ("1m_api", "candles_1m_api"):
+            # 1m_api has no source index — derive months from coverage data
+            try:
+                cov = get_daily_hour_coverage_for_dataset(
+                    _storage_ex(ex), ds, cn,
+                )
+                cov_days = cov.get("days") if isinstance(cov, dict) else []
+                if isinstance(cov_days, list) and cov_days:
+                    day_strs = [str(d.get("day") or "") for d in cov_days if d.get("day")]
+                    if day_strs:
+                        oldest_s = min(day_strs)
+                        newest_s = max(day_strs)
+                        dt0 = _datetime.strptime(oldest_s, "%Y%m%d").date()
+                        dt1 = _datetime.strptime(newest_s, "%Y%m%d").date()
+                        cur_m = dt0.replace(day=1)
+                        end_m = dt1.replace(day=1)
+                        while cur_m <= end_m:
+                            months.append(cur_m.strftime("%Y-%m"))
+                            if cur_m.month == 12:
+                                cur_m = cur_m.replace(year=cur_m.year + 1, month=1)
+                            else:
+                                cur_m = cur_m.replace(month=cur_m.month + 1)
+            except Exception:
+                pass
+        else:
+            try:
+                lag = _get_missing_lag_minutes(ex)
+                day_counts = get_daily_source_counts_for_range(
+                    exchange=_storage_ex(ex),
+                    coin=cn,
+                    start_day=None,
+                    end_day=None,
+                    lag_minutes=lag,
+                    cutoff_ts_ms=None,
+                )
+                if isinstance(day_counts, dict) and day_counts:
+                    oldest_s = min(day_counts.keys())
+                    newest_s = max(day_counts.keys())
+                    dt0 = _datetime.strptime(oldest_s, "%Y%m%d").date()
+                    dt1 = _datetime.strptime(newest_s, "%Y%m%d").date()
+                    cur_m = dt0.replace(day=1)
+                    end_m = dt1.replace(day=1)
+                    while cur_m <= end_m:
+                        months.append(cur_m.strftime("%Y-%m"))
+                        if cur_m.month == 12:
+                            cur_m = cur_m.replace(year=cur_m.year + 1, month=1)
+                        else:
+                            cur_m = cur_m.replace(month=cur_m.month + 1)
+            except Exception:
+                pass
+    else:
+        # Non-candle datasets (l2book, pb7_cache, etc.) — derive months from coverage
+        # Extend to today so months without any data appear in the dropdown
         try:
-            lag = _get_missing_lag_minutes(ex)
-            day_counts = get_daily_source_counts_for_range(
-                exchange=_storage_ex(ex),
-                coin=cn,
-                start_day=None,
-                end_day=None,
-                lag_minutes=lag,
-                cutoff_ts_ms=None,
+            cov = get_daily_hour_coverage_for_dataset(
+                _storage_ex(ex), ds, cn,
             )
-            if isinstance(day_counts, dict) and day_counts:
-                oldest_s = min(day_counts.keys())
-                newest_s = max(day_counts.keys())
-                dt0 = _datetime.strptime(oldest_s, "%Y%m%d").date()
-                dt1 = _datetime.strptime(newest_s, "%Y%m%d").date()
-                cur_m = dt0.replace(day=1)
-                end_m = dt1.replace(day=1)
-                while cur_m <= end_m:
-                    months.append(cur_m.strftime("%Y-%m"))
-                    if cur_m.month == 12:
-                        cur_m = cur_m.replace(year=cur_m.year + 1, month=1)
-                    else:
-                        cur_m = cur_m.replace(month=cur_m.month + 1)
+            cov_days = cov.get("days") if isinstance(cov, dict) else []
+            if isinstance(cov_days, list) and cov_days:
+                day_strs = [str(d.get("day") or "") for d in cov_days if d.get("day")]
+                if day_strs:
+                    oldest_s = min(day_strs)
+                    dt0 = _datetime.strptime(oldest_s, "%Y%m%d").date()
+                    dt1 = _date.today()  # extend to today
+                    cur_m = dt0.replace(day=1)
+                    end_m = dt1.replace(day=1)
+                    while cur_m <= end_m:
+                        months.append(cur_m.strftime("%Y-%m"))
+                        if cur_m.month == 12:
+                            cur_m = cur_m.replace(year=cur_m.year + 1, month=1)
+                        else:
+                            cur_m = cur_m.replace(month=cur_m.month + 1)
         except Exception:
             pass
 
@@ -213,6 +275,10 @@ def get_heatmap_overview(
 
     if not is_candles:
         # l2Book / pb7 / other — use daily hour coverage heatmap (year × doy)
+        return _build_coverage_heatmap(ex, ds, cn)
+
+    if ds_l in ("1m_api", "candles_1m_api"):
+        # 1m_api has no source index — show simple coverage heatmap from NPZ files
         return _build_coverage_heatmap(ex, ds, cn)
 
     # Candles: stacked-bar overview
@@ -383,7 +449,10 @@ def get_heatmap_overview(
     }
 
 
-def _build_coverage_heatmap(exchange: str, dataset: str, coin: str) -> dict[str, Any]:
+def _build_coverage_heatmap(
+    exchange: str, dataset: str, coin: str,
+    progress_cb: Any | None = None,
+) -> dict[str, Any]:
     """Year×DayOfYear heatmap for l2Book / pb7-cache / other non-candle datasets."""
     from market_data import get_daily_hour_coverage_for_dataset, get_daily_presence_for_pb7_cache
     ds = str(dataset).strip()
@@ -394,11 +463,29 @@ def _build_coverage_heatmap(exchange: str, dataset: str, coin: str) -> dict[str,
         tf = str(ds.split(":", 1)[1] if ":" in ds else "1m").strip() or "1m"
         cov = get_daily_presence_for_pb7_cache(ex, tf, coin)
     else:
-        cov = get_daily_hour_coverage_for_dataset(ex, ds, coin)
+        cov = get_daily_hour_coverage_for_dataset(ex, ds, coin, progress_cb=progress_cb)
 
     days = cov.get("days") if isinstance(cov, dict) else []
     if not (isinstance(days, list) and days):
         return {"figure": None, "legend_html": "", "error": "No data"}
+
+    # --- extend coverage to today so months without data show as missing ---
+    today = _date.today()
+    newest_in_data = ""
+    for d in days:
+        ds_ = str(d.get("day") or "")
+        if ds_ > newest_in_data:
+            newest_in_data = ds_
+    if newest_in_data:
+        try:
+            newest_dt = _datetime.strptime(newest_in_data, "%Y%m%d").date()
+            if newest_dt < today:
+                fill_cur = newest_dt + _timedelta(days=1)
+                while fill_cur <= today:
+                    days.append({"day": fill_cur.strftime("%Y%m%d"), "hours": 0, "status": 0})
+                    fill_cur = fill_cur + _timedelta(days=1)
+        except Exception:
+            pass
 
     years: list[int] = []
     for d in days:
@@ -453,7 +540,98 @@ def _build_coverage_heatmap(exchange: str, dataset: str, coin: str) -> dict[str,
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
     )
-    return {"figure": fig.to_json(), "legend_html": "", "error": None}
+    if progress_cb:
+        progress_cb("Building chart", 0, 0)
+
+    # Legend HTML for coverage heatmap
+    legend_parts: list[str] = [
+        _LEGEND_SPAN("missing", "#b23b3b"),
+        _LEGEND_SPAN("partial", "#c9a227"),
+    ]
+    # Use dataset-specific label for the "full" color
+    full_label = "l2Book" if ds_l in ("l2book",) else "complete"
+    legend_parts.append(_LEGEND_SPAN(full_label, "#2e7d32"))
+
+    return {
+        "figure": fig.to_json(),
+        "legend_html": "".join(legend_parts),
+        "error": None,
+        "newest_data_day": newest_in_data or None,
+    }
+
+
+# --------------------------------------------------------------------------- /overview-stream (SSE)
+
+@router.get("/overview-stream")
+async def get_heatmap_overview_stream(
+    exchange: str = Query(...),
+    dataset: str = Query(...),
+    coin: str = Query(...),
+    session: SessionToken = Depends(require_auth),
+):
+    """
+    SSE (Server-Sent Events) version of /overview that streams progress
+    updates while scanning directories (useful for slow NAS mounts).
+
+    Events:
+      - ``event: progress`` with ``{"msg": "...", "current": N, "total": M}``
+      - ``event: result``   with the same payload as GET /overview
+    """
+    ex = str(exchange).lower().strip()
+    sx = _storage_ex(ex)
+    ds = str(dataset).strip()
+    ds_l = ds.lower()
+    cn = str(coin).strip()
+
+    is_candles = ds_l in ("1m", "candles_1m", "1m_api", "candles_1m_api")
+
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _make_progress_cb(loop: asyncio.AbstractEventLoop):
+        """Return a thread-safe progress callback that posts into the asyncio queue."""
+        def progress_cb(msg: str, current: int, total: int) -> None:
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {"type": "progress", "msg": msg, "current": current, "total": total},
+            )
+        return progress_cb
+
+    def _run_sync(loop: asyncio.AbstractEventLoop) -> dict[str, Any]:
+        cb = _make_progress_cb(loop)
+        if not is_candles:
+            return _build_coverage_heatmap(ex, ds, cn, progress_cb=cb)
+        if ds_l in ("1m_api", "candles_1m_api"):
+            return _build_coverage_heatmap(ex, ds, cn, progress_cb=cb)
+        # Regular candle datasets: source-index based, no progress needed
+        return get_heatmap_overview(
+            exchange=exchange, dataset=dataset, coin=coin, session=session,
+        )
+
+    async def generate():
+        loop = asyncio.get_event_loop()
+
+        async def _worker():
+            result = await loop.run_in_executor(None, _run_sync, loop)
+            await queue.put({"type": "result", "payload": result})
+
+        task = asyncio.create_task(_worker())
+        try:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if msg["type"] == "result":
+                    yield f"event: result\ndata: {_json.dumps(msg['payload'])}\n\n"
+                    break
+                else:
+                    yield f"event: progress\ndata: {_json.dumps(msg)}\n\n"
+            await task
+        except Exception:
+            await task
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 # --------------------------------------------------------------------------- /minutes
@@ -490,6 +668,14 @@ def get_heatmap_minutes(
 
     is_sp = is_hyperliquid_stock_perp_1m(exchange=ex, dataset=ds, coin=cn)
     tradfi_type = tradfi_canonical_type_for_coin(cn) if is_sp else ""
+
+    # l2Book datasets use SSE streaming endpoint for minute detail
+    if ds_l in ("l2book", "l2book_mid"):
+        return {
+            "figure": None,
+            "legend_html": "",
+            "error": "l2Book minute detail uses streaming — please use /minutes-stream endpoint",
+        }
 
     # parse month → start/end day
     try:
@@ -646,4 +832,477 @@ def get_heatmap_minutes(
         "figure": fig.to_json(),
         "legend_html": legend_html,
         "error": None,
+    }
+
+
+# --------------------------------------------------------------------------- /minutes-stream (SSE)
+
+def _parse_l2book_minutes(
+    exchange: str,
+    dataset: str,
+    coin: str,
+    start_day: str,
+    end_day: str,
+    progress_cb: Any | None = None,
+    cancel_event: Any | None = None,
+) -> dict[str, Any]:
+    """Parse l2Book .lz4 files and extract per-minute presence for a date range.
+
+    Returns dict compatible with get_minute_presence_for_dataset output:
+      {oldest_day, newest_day, days: {YYYYMMDD: {HH: {mm: "l2Book"}}}}
+    """
+    import lz4.frame
+    import re as _re
+    from market_data import _resolve_dataset_coin_dirs
+
+    # Pre-compile regex for fast timestamp extraction from l2Book JSON lines
+    # Matches "time":1704067204224 (epoch ms) inside "data":{...}
+    _TS_RE = _re.compile(r'"data":\{[^}]*"time"\s*:\s*(\d{13})')
+
+    sx = _storage_ex(exchange)
+    scan_dirs = _resolve_dataset_coin_dirs(sx, dataset, coin)
+    if not scan_dirs:
+        return {}
+
+    # Collect all .lz4 files in the date range
+    lz4_files: list[tuple[str, Path]] = []  # (YYYYMMDD-HH, path)
+    for d in scan_dirs:
+        for fp in sorted(d.glob("*.lz4")):
+            fname = fp.stem  # e.g. "20240101-00"
+            if len(fname) >= 8:
+                day_part = fname[:8]
+                if start_day <= day_part <= end_day:
+                    lz4_files.append((fname, fp))
+
+    if not lz4_files:
+        return {}
+
+    # De-duplicate by filename (prefer first occurrence = local over NAS)
+    seen: set[str] = set()
+    unique_files: list[tuple[str, Path]] = []
+    for fname, fp in lz4_files:
+        if fname not in seen:
+            seen.add(fname)
+            unique_files.append((fname, fp))
+
+    total = len(unique_files)
+    days: dict[str, dict[str, dict[int, str]]] = {}
+    all_days: list[str] = []
+
+    for idx, (fname, fp) in enumerate(unique_files):
+        # Check cancellation
+        if cancel_event is not None and cancel_event.is_set():
+            break
+
+        if progress_cb:
+            progress_cb(f"Parsing l2Book files", idx, total)
+
+        day_s = fname[:8]      # YYYYMMDD
+        hour_s = fname[9:11]   # HH
+
+        try:
+            with open(fp, "rb") as f:
+                raw = lz4.frame.decompress(f.read())
+            text = raw.decode("utf-8", errors="replace")
+            minutes_found: set[int] = set()
+            # Use regex for ~10x faster extraction than full JSON parse
+            for m in _TS_RE.finditer(text):
+                ts_ms = int(m.group(1))
+                minutes_found.add((ts_ms // 60000) % 60)
+
+            if day_s not in days:
+                days[day_s] = {}
+                all_days.append(day_s)
+            if hour_s not in days[day_s]:
+                days[day_s][hour_s] = {}
+            for m in minutes_found:
+                days[day_s][hour_s][m] = "l2Book"
+
+        except Exception:
+            # If we can't parse a file, mark all 60 minutes based on filename
+            if day_s not in days:
+                days[day_s] = {}
+                all_days.append(day_s)
+            if hour_s not in days[day_s]:
+                days[day_s][hour_s] = {}
+            for m in range(60):
+                days[day_s][hour_s][m] = "l2Book"
+
+    if progress_cb:
+        progress_cb("Building chart", total, total)
+
+    if not all_days:
+        return {}
+
+    all_days_sorted = sorted(set(all_days))
+    return {
+        "oldest_day": all_days_sorted[0],
+        "newest_day": all_days_sorted[-1],
+        "days": days,
+    }
+
+
+def _build_minutes_chart(
+    exchange: str,
+    dataset: str,
+    coin: str,
+    month: str,
+    show_holiday: bool,
+    show_oos: bool,
+    hp: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the per-minute heatmap Plotly figure from parsed minute data.
+
+    Shared by both /minutes and /minutes-stream.
+    """
+    from market_data_tradfi import (
+        is_hyperliquid_stock_perp_1m,
+        tradfi_canonical_type_for_coin,
+        is_tradfi_market_holiday,
+        tradfi_expected_indices_for_type,
+        tradfi_expected_minute_indices,
+    )
+
+    ex = str(exchange).lower().strip()
+    ds = str(dataset).strip()
+    cn = str(coin).strip()
+
+    is_sp = is_hyperliquid_stock_perp_1m(exchange=ex, dataset=ds, coin=cn)
+    tradfi_type = tradfi_canonical_type_for_coin(cn) if is_sp else ""
+
+    present = hp.get("days") if isinstance(hp, dict) else {}
+    if not isinstance(present, dict) or not present:
+        return {"figure": None, "legend_html": "", "error": "No minute data for this month"}
+
+    oldest_s = str(hp.get("oldest_day") or "")
+    newest_s = str(hp.get("newest_day") or "")
+    try:
+        dt0 = _datetime.strptime(oldest_s, "%Y%m%d").date()
+        dt1 = _datetime.strptime(newest_s, "%Y%m%d").date()
+    except Exception:
+        return {"figure": None, "legend_html": "", "error": "No date range"}
+
+    src_code = {
+        None: 0, "missing": 0, "api": 2, "best": 3,
+        "other_exchange": 4, "binance_perp_usdt": 4, "l2Book_mid": 5,
+        "l2Book": 5,
+    }
+
+    if is_sp:
+        colorscale = [
+            [0.0, "#7e57c2"], [1/7, "#4e4e4e"], [2/7, "#b23b3b"],
+            [3/7, "#6a1b9a"], [4/7, "#2e7d32"], [5/7, "#00897b"],
+            [6/7, "#ef6c00"], [1.0, "#1e88e5"],
+        ]
+    else:
+        colorscale = [
+            [0.0, "#b23b3b"], [0.2, "#6a1b9a"], [0.4, "#7e57c2"],
+            [0.6, "#00897b"], [0.8, "#ef6c00"], [1.0, "#1e88e5"],
+        ]
+
+    z, text, y_labels = [], [], []
+
+    days_list: list[_date] = []
+    cur = dt0
+    while cur <= dt1:
+        days_list.append(cur)
+        cur = cur + _timedelta(days=1)
+
+    for d in days_list:
+        day_s = d.strftime("%Y%m%d")
+        hours_map = present.get(day_s) if isinstance(present.get(day_s), dict) else {}
+
+        is_hday = False
+        holiday_session_indices: set[int] = set()
+        expected_indices: set[int] | None = None
+
+        if is_sp:
+            holiday_session_indices = tradfi_expected_minute_indices(d) if str(tradfi_type or "").strip().lower() != "fx" else set(range(1440))
+            is_hday = is_tradfi_market_holiday(d, tradfi_type)
+            expected_indices = tradfi_expected_indices_for_type(d, tradfi_type)
+            if is_hday:
+                expected_indices = set()
+
+        for block_start in (0, 12):
+            row, row_text = [], []
+            for h in range(block_start, block_start + 12):
+                hh = f"{h:02d}"
+                mins_map = hours_map.get(hh) or {}
+                for minute in range(60):
+                    minute_idx = (h * 60) + minute
+                    src = mins_map.get(minute)
+                    code = int(src_code.get(str(src), src_code.get(src, 0)))
+                    if code == 0:
+                        if (
+                            show_holiday
+                            and is_hday
+                            and minute_idx in holiday_session_indices
+                        ):
+                            row.append(-2)
+                            row_text.append(f"{day_s} {h:02d}:{minute:02d} (market holiday)")
+                            continue
+                        if (
+                            show_oos
+                            and is_sp
+                            and expected_indices is not None
+                            and minute_idx not in expected_indices
+                        ):
+                            row.append(-1)
+                            row_text.append(f"{day_s} {h:02d}:{minute:02d} (expected out-of-session gap)")
+                            continue
+                    row.append(code)
+                    src_label = str(src) if src is not None else "missing"
+                    row_text.append(f"{day_s} {h:02d}:{minute:02d} ({src_label})")
+            z.append(row)
+            text.append(row_text)
+            y_labels.append(f"{day_s} {block_start:02d}-{block_start+11:02d}")
+
+    if not z:
+        return {"figure": None, "legend_html": "", "error": "No minute data"}
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=list(range(720)),
+            y=[str(y) for y in y_labels],
+            text=text,
+            hovertemplate="%{text}<extra></extra>",
+            colorscale=colorscale,
+            zmin=-2 if is_sp else 0,
+            zmax=5,
+            showscale=False,
+            xgap=0, ygap=0,
+        )
+    )
+    fig.update_layout(
+        height=max(300, 80 + (len(y_labels) * 18)),
+        margin=dict(l=10, r=10, t=20, b=20),
+        xaxis=dict(
+            tickmode="array",
+            tickvals=list(range(0, 720, 60)),
+            ticktext=[f"{x:02d}h" for x in range(0, 12)],
+        ),
+        yaxis=dict(autorange="reversed", showgrid=False),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+
+    _has_l2 = ex == "hyperliquid"
+    _l2_span = _LEGEND_SPAN("l2Book", "#1e88e5") if _has_l2 else ""
+    legend_html = (
+        _LEGEND_SPAN("missing", "#b23b3b")
+        + _l2_span
+    )
+
+    return {
+        "figure": fig.to_json(),
+        "legend_html": legend_html,
+        "error": None,
+    }
+
+
+@router.get("/minutes-stream")
+async def get_heatmap_minutes_stream(
+    exchange: str = Query(...),
+    dataset: str = Query(...),
+    coin: str = Query(...),
+    month: str = Query(..., description="YYYY-MM"),
+    show_holiday: bool = Query(True),
+    show_oos: bool = Query(True),
+    session: SessionToken = Depends(require_auth),
+):
+    """
+    SSE (Server-Sent Events) version of /minutes.
+
+    For l2Book datasets this decompresses and parses .lz4 files with progress
+    updates. For other datasets it delegates to the sync path immediately.
+
+    Events:
+      - ``event: progress`` — ``{"msg": "...", "current": N, "total": M}``
+      - ``event: result``   — same payload as GET /minutes
+    """
+    import threading
+
+    ex = str(exchange).lower().strip()
+    sx = _storage_ex(ex)
+    ds = str(dataset).strip()
+    ds_l = ds.lower()
+    cn = str(coin).strip()
+
+    # parse month
+    try:
+        sm_year = int(month[:4])
+        sm_mon = int(month[5:7])
+        last_day = calendar.monthrange(sm_year, sm_mon)[1]
+        start_day = f"{sm_year:04d}{sm_mon:02d}01"
+        end_day = f"{sm_year:04d}{sm_mon:02d}{last_day:02d}"
+    except Exception:
+        async def _err():
+            yield f"event: result\ndata: {_json.dumps({'figure': None, 'legend_html': '', 'error': 'Invalid month'})}\n\n"
+        return StreamingResponse(_err(), media_type="text/event-stream")
+
+    is_l2book = ds_l in ("l2book", "l2book_mid")
+
+    if not is_l2book:
+        # Non-l2Book: run sync and return immediately (no streaming needed)
+        from market_data import get_minute_presence_for_dataset
+        try:
+            hp = get_minute_presence_for_dataset(sx, ds, cn, start_day=start_day, end_day=end_day)
+        except Exception as e:
+            hp = {}
+
+        result = _build_minutes_chart(ex, ds, cn, month, show_holiday, show_oos, hp)
+
+        async def _immediate():
+            yield f"event: result\ndata: {_json.dumps(result)}\n\n"
+        return StreamingResponse(_immediate(), media_type="text/event-stream")
+
+    # l2Book: stream with progress
+    queue: asyncio.Queue = asyncio.Queue()
+    cancel_event = threading.Event()
+
+    def _make_progress_cb(loop: asyncio.AbstractEventLoop):
+        def progress_cb(msg: str, current: int, total: int) -> None:
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {"type": "progress", "msg": msg, "current": current, "total": total},
+            )
+        return progress_cb
+
+    def _run_sync(loop: asyncio.AbstractEventLoop) -> dict[str, Any]:
+        cb = _make_progress_cb(loop)
+        hp = _parse_l2book_minutes(
+            ex, ds, cn, start_day, end_day,
+            progress_cb=cb, cancel_event=cancel_event,
+        )
+        if cancel_event.is_set():
+            return {"figure": None, "legend_html": "", "error": "Cancelled"}
+        return _build_minutes_chart(ex, ds, cn, month, show_holiday, show_oos, hp)
+
+    async def generate():
+        loop = asyncio.get_event_loop()
+
+        async def _worker():
+            result = await loop.run_in_executor(None, _run_sync, loop)
+            await queue.put({"type": "result", "payload": result})
+
+        task = asyncio.create_task(_worker())
+        try:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if msg["type"] == "result":
+                    yield f"event: result\ndata: {_json.dumps(msg['payload'])}\n\n"
+                    break
+                else:
+                    yield f"event: progress\ndata: {_json.dumps(msg)}\n\n"
+            await task
+        except (asyncio.CancelledError, GeneratorExit):
+            cancel_event.set()
+            await task
+        except Exception:
+            cancel_event.set()
+            await task
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# --------------------------------------------------------------------------- /queue-l2book-download
+
+@router.post("/queue-l2book-download")
+def queue_l2book_download(
+    exchange: str = Query(...),
+    coin: str = Query(...),
+    month: str = Query("", description="YYYY-MM (optional if start_day/end_day given)"),
+    start_day: str = Query("", description="YYYYMMDD — explicit start (overrides month)"),
+    end_day: str = Query("", description="YYYYMMDD — explicit end (overrides month)"),
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """
+    Queue a background job to download l2Book data for a specific coin
+    from AWS S3.  Provide either *month* (YYYY-MM) **or** explicit
+    *start_day*/*end_day* (YYYYMMDD).
+
+    Returns ``{"job_id": "...", "start_day": "...", "end_day": "..."}``
+    or ``{"error": "..."}`` on failure.
+    """
+    import subprocess
+    import sys
+    from task_queue import enqueue_job, read_worker_pid, is_pid_running
+    from market_data import load_aws_profile_region
+    import re as _re
+
+    cn = str(coin).strip()
+    ex = str(exchange).lower().strip()
+
+    if ex != "hyperliquid":
+        return {"error": "l2Book download is only available for Hyperliquid"}
+
+    sd = str(start_day).strip()
+    ed = str(end_day).strip()
+    mo = str(month).strip()
+
+    if sd and ed:
+        # Explicit date range
+        if not (_re.fullmatch(r"\d{8}", sd) and _re.fullmatch(r"\d{8}", ed)):
+            return {"error": "Invalid date format (expected YYYYMMDD)"}
+        if ed < sd:
+            return {"error": "end_day must be >= start_day"}
+        start_day_val = sd
+        end_day_val = ed
+    elif mo:
+        # Parse month
+        try:
+            sm_year = int(mo[:4])
+            sm_mon = int(mo[5:7])
+            last_day = calendar.monthrange(sm_year, sm_mon)[1]
+            start_day_val = f"{sm_year:04d}{sm_mon:02d}01"
+            end_day_val = f"{sm_year:04d}{sm_mon:02d}{last_day:02d}"
+        except Exception:
+            return {"error": "Invalid month format (expected YYYY-MM)"}
+    else:
+        return {"error": "Provide either month (YYYY-MM) or start_day + end_day (YYYYMMDD)"}
+
+    # AWS profile settings
+    profile = "pbgui-hyperliquid"
+    region = load_aws_profile_region(profile) or "us-east-2"
+
+    try:
+        job = enqueue_job(
+            job_type="hl_aws_l2book_auto",
+            exchange="hyperliquid",
+            payload={
+                "profile": profile,
+                "region": region,
+                "coins": [cn],
+                "chunk_days": 7,
+                "start_day": start_day_val,
+                "end_day": end_day_val,
+                "only_missing_1m_src_hours": False,
+            },
+        )
+    except Exception as e:
+        return {"error": f"Failed to enqueue job: {e}"}
+
+    # Start worker if not running
+    try:
+        pid = read_worker_pid()
+        if not (pid and is_pid_running(int(pid))):
+            subprocess.Popen(
+                [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
+    except Exception:
+        pass
+
+    return {
+        "job_id": job.job_id,
+        "start_day": start_day_val,
+        "end_day": end_day_val,
+        "coin": cn,
     }

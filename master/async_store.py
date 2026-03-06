@@ -135,7 +135,7 @@ class VPSStore:
         """Load UI settings from pbgui.ini."""
         from pbgui_purefunc import load_ini
         for key in ("compact",):
-            val = load_ini("pbmaster_ui", key)
+            val = load_ini("vps_monitor_ui", key)
             if val:
                 self._ui_settings[key] = val
 

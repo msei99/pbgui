@@ -37,6 +37,8 @@ from market_data import (
     _parse_pb7_cache_day_from_name,
     get_exchange_raw_root_dir,
     _get_pb7_root_dir,
+    is_l2book_archive_enabled,
+    load_l2book_archive_dir,
 )
 from market_data_sources import (
     get_daily_source_counts_for_range,
@@ -320,38 +322,44 @@ def _compute_1m_api_coin(coin_path: Path) -> dict[str, Any]:
     }
 
 
-def _compute_l2book_coin(coin_path: Path) -> dict[str, Any]:
+def _compute_l2book_coin(coin_path: Path, archive_path: Path | None = None) -> dict[str, Any]:
     n_files = 0
     total_bytes = 0
     oldest_day = ""
     newest_day = ""
     hours_present: set[tuple[str, str]] = set()
 
-    try:
-        with os.scandir(str(coin_path)) as it:
-            for fe in it:
-                nm = fe.name.lower()
-                if not (nm.endswith(".lz4") or nm.endswith(".jsonl")):
-                    continue
-                parsed = _parse_day_hour_from_filename(fe.name)
-                if not parsed:
-                    continue
-                day_s, hour = parsed
-                if not day_s:
-                    continue
-                n_files += 1
-                try:
-                    total_bytes += fe.stat().st_size
-                except Exception:
-                    pass
-                if hour is not None:
-                    hours_present.add((day_s, str(hour)))
-                if not oldest_day or day_s < oldest_day:
-                    oldest_day = day_s
-                if not newest_day or day_s > newest_day:
-                    newest_day = day_s
-    except Exception:
-        pass
+    # Scan both local and archive directories
+    scan_dirs = [coin_path]
+    if archive_path is not None and archive_path.is_dir():
+        scan_dirs.append(archive_path)
+
+    for scan_dir in scan_dirs:
+        try:
+            with os.scandir(str(scan_dir)) as it:
+                for fe in it:
+                    nm = fe.name.lower()
+                    if not (nm.endswith(".lz4") or nm.endswith(".jsonl")):
+                        continue
+                    parsed = _parse_day_hour_from_filename(fe.name)
+                    if not parsed:
+                        continue
+                    day_s, hour = parsed
+                    if not day_s:
+                        continue
+                    n_files += 1
+                    try:
+                        total_bytes += fe.stat().st_size
+                    except Exception:
+                        pass
+                    if hour is not None:
+                        hours_present.add((day_s, str(hour)))
+                    if not oldest_day or day_s < oldest_day:
+                        oldest_day = day_s
+                    if not newest_day or day_s > newest_day:
+                        newest_day = day_s
+        except Exception:
+            pass
 
     n_days = 0
     expected_hours = 0
@@ -464,6 +472,7 @@ def _compute_coin(
     lag_minutes: int,
     tradfi_type_fn: Callable[[str], str] | None,
     expected_minutes_fn: "Callable[[str, Any], set[int]] | None" = None,
+    archive_path: Path | None = None,
 ) -> dict[str, Any]:
     """Dispatch per-coin computation to the right function."""
     ds_l = str(dataset).strip().lower()
@@ -472,7 +481,7 @@ def _compute_coin(
     elif ds_l in ("1m_api", "candles_1m_api"):
         return _compute_1m_api_coin(coin_path)
     elif ds_l in ("l2book",):
-        return _compute_l2book_coin(coin_path)
+        return _compute_l2book_coin(coin_path, archive_path=archive_path)
     elif ds_l.startswith("pb7_cache:"):
         return _compute_pb7_coin(coin_path)
     else:
@@ -529,6 +538,24 @@ def _coin_dirs_for_dataset(exchange: str, dataset: str) -> dict[str, Path]:
         for e in it:
             if e.is_dir(follow_symlinks=False) and not e.name.endswith("_src"):
                 result[e.name] = Path(e.path)
+
+    # For l2book: also include coins that exist only in the NAS archive
+    if ds_l == "l2book" and is_l2book_archive_enabled():
+        archive_dir = load_l2book_archive_dir()
+        if archive_dir:
+            archive_base = Path(archive_dir)
+            if archive_base.is_dir():
+                try:
+                    with os.scandir(str(archive_base)) as it:
+                        for e in it:
+                            if e.is_dir(follow_symlinks=False) and e.name not in result:
+                                # Coin exists only in archive — create an empty local
+                                # placeholder path (won't be scanned, archive scan
+                                # handles the files)
+                                result[e.name] = base / e.name
+                except Exception:
+                    pass
+
     return result
 
 
@@ -559,10 +586,25 @@ def get_inventory(
     if not coin_dirs:
         return []
 
+    # For l2book: build archive path lookup
+    is_l2book = ds in ("l2book",)
+    l2book_archive_base: Path | None = None
+    if is_l2book and is_l2book_archive_enabled():
+        adir = load_l2book_archive_dir()
+        if adir:
+            l2book_archive_base = Path(adir)
+            if not l2book_archive_base.is_dir():
+                l2book_archive_base = None
+
     # Fast mtime read for all coin dirs (< 1ms for 227 dirs)
     live_mtimes: dict[str, float] = {}
     for coin, cpath in coin_dirs.items():
-        live_mtimes[coin] = _dir_mtime(cpath)
+        mt = _dir_mtime(cpath)
+        # For l2book with archive: combine local + archive mtime
+        if l2book_archive_base is not None:
+            archive_coin = l2book_archive_base / coin
+            mt = max(mt, _dir_mtime(archive_coin))
+        live_mtimes[coin] = mt
 
     # For 1m datasets: also check source-index mtime
     is_1m = ds in ("1m", "candles_1m")
@@ -623,8 +665,12 @@ def get_inventory(
         upsert_params: list[tuple] = []
         for coin in coins_to_recompute:
             cpath = coin_dirs[coin]
+            # Resolve archive path for l2book coins
+            arc_path: Path | None = None
+            if l2book_archive_base is not None:
+                arc_path = l2book_archive_base / coin
             try:
-                computed = _compute_coin(ex, ds, coin, cpath, lag_minutes, tradfi_type_fn, expected_minutes_fn)
+                computed = _compute_coin(ex, ds, coin, cpath, lag_minutes, tradfi_type_fn, expected_minutes_fn, archive_path=arc_path)
             except Exception:
                 computed = {
                     "n_files": 0, "total_bytes": 0, "oldest_day": "", "newest_day": "",
@@ -803,8 +849,17 @@ def refresh_coin(
     lmt = _dir_mtime(cpath)
     is_1m = ds in ("1m", "candles_1m")
     lsmt = _src_mtime(ex, cn) if is_1m else 0.0
+    # Resolve archive path for l2book
+    arc_path: Path | None = None
+    if ds in ("l2book",) and is_l2book_archive_enabled():
+        adir = load_l2book_archive_dir()
+        if adir:
+            arc_base = Path(adir)
+            if arc_base.is_dir():
+                arc_path = arc_base / cn
+                lmt = max(lmt, _dir_mtime(arc_path))
     try:
-        computed = _compute_coin(ex, ds, cn, cpath, lag_minutes, tradfi_type_fn, expected_minutes_fn)
+        computed = _compute_coin(ex, ds, cn, cpath, lag_minutes, tradfi_type_fn, expected_minutes_fn, archive_path=arc_path)
     except Exception:
         return
     with _get_conn() as conn:

@@ -418,7 +418,7 @@ def _cmd_set_setting(request: dict):
     key = request.get("key", "")
     value = request.get("value", "")
     if key in _UI_SETTINGS_KEYS:
-        save_ini("pbmaster_ui", key, str(value))
+        save_ini("vps_monitor_ui", key, str(value))
         _log(SERVICE, f"[setting] {key} = {value}")
 
 

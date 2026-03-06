@@ -276,7 +276,7 @@ body {
 <body>
 
 <!-- Connection Banner -->
-<div id="conn-banner" class="conn-waiting">Connecting to PBMaster...</div>
+<div id="conn-banner" class="conn-waiting">Connecting to API Server...</div>
 
 <!-- Main Layout -->
 <div id="main-layout">
@@ -441,11 +441,11 @@ function send(obj) {
 
 function setBanner(status) {
   const b = document.getElementById('conn-banner');
-  b.className = 'conn-' + (status === 'ok' ? 'ok' : status === 'lost' ? 'conn-lost' : 'conn-waiting');
+  b.className = 'conn-' + (status === 'ok' ? 'ok' : status === 'lost' ? 'lost' : 'waiting');
   if (status === 'ok') b.style.display = 'none';
   else {
     b.style.display = 'block';
-    b.textContent = status === 'lost' ? 'Connection lost — reconnecting...' : 'Connecting to PBMaster...';
+    b.textContent = status === 'lost' ? 'Connection lost — reconnecting...' : 'Connecting to API Server...';
   }
 }
 

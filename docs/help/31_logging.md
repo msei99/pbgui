@@ -72,7 +72,7 @@ Changes take effect when the service logger is next initialized (restart service
 ## Troubleshooting
 
 - **No log files listed**: make sure PBGui services have been started at least once
-- **Streaming stops**: PBMaster WebSocket connection lost — the viewer reconnects automatically
+- **Streaming stops**: PBAPIServer WebSocket connection lost — the viewer reconnects automatically
 - **Lines count "All" is slow**: loading very large files may take a moment; use a line limit for large logs
 
 ---
@@ -105,7 +105,8 @@ Contains messages from all GUI helper components:
 | `PBRun.log` | PBRun | Live bot start/stop, order loop |
 | `PBRemote.log` | PBRemote | Remote sync, VPS communication |
 | `PBCoinData.log` | PBCoinData | CMC data updates, symbol lists |
-| `PBMaster.log` | PBMaster | WebSocket server, log streaming |
+| `VPSMonitor.log` | VPS Monitor | SSH connections, host metrics, service auto-heal |
+| `PBApiServer.log` | PBAPIServer | FastAPI startup, REST/WebSocket requests |
 | `PBStat.log` | PBStat | Statistics collection |
 | `Database.log` | Database | DB queries, connection errors |
 | `Exchange.log` | Exchange | Market fetch, symbol info, CCXT errors |

@@ -1,42 +1,15 @@
-# PBMaster Service Details
+# VPS Settings (formerly PBMaster)
 
-PBMaster is the SSH-based VPS management service for PBGui.
+> **PBMaster has been replaced.** Its functionality is now part of **PBAPIServer**.
 
-It keeps persistent SSH connections to enabled VPS hosts, monitors key services, and provides the real-time data backend for the VPS Monitor page.
+- For the **services overview** and startup sequence, see **Guide 23 — Services Overview**.
+- For the **PBAPIServer** settings (host, port, VPS hosts), see **Guide 26 — PBAPIServer**.
+- For the **VPS Monitor** dashboard and live logs, see **Guide 29 — VPS Monitor**.
 
-## What PBMaster does
+## What changed
 
-- Maintains persistent SSH sessions to enabled VPS hosts
-- Collects host status and service state continuously
-- Supports remote service restart actions from the monitor UI
-- Streams live logs through a local WebSocket server
-- Writes logs to `data/logs/PBMaster.log`
-
-## Requirements
-
-- This service is intended for the **Master** node
-- VPS hosts must be configured in VPS Manager
-- SSH key setup must be completed for each VPS
-
-## PBMaster details page
-
-On `System → Services → PBMaster → Show Details` you can:
-
-- Start/stop PBMaster
-- Configure `Auto-restart services`
-- Set `Monitor interval (seconds)`
-- Set `WebSocket port` for the VPS Monitor frontend
-- Enable/disable monitored VPS hosts
-- Open the integrated filtered PBMaster log viewer
-
-## Host enablement behavior
-
-- Hosts are disabled by default for PBMaster monitoring
-- Enable hosts explicitly in PBMaster settings
-- Changes take effect after saving and restarting PBMaster
-
-## Troubleshooting
-
-- **PBMaster not running**: the VPS Monitor page will show a warning and no live data
-- **Host stays disconnected**: verify SSH keys and host reachability from the master
-- **No live updates in VPS Monitor**: verify PBMaster WebSocket port and restart PBMaster after port changes
+- PBMaster ran as a separate daemon on port 8765. It has been removed.
+- The **PBAPIServer** (FastAPI, port 8000) now handles all SSH connections, VPS monitoring, and WebSocket streaming.
+- VPS host settings moved from `System → Services → PBMaster` to `System → Services → PBAPIServer → Settings`.
+- INI sections were renamed automatically: `[pbmaster]` → `[vps_monitor]`, `[pbmaster_ui]` → `[vps_monitor_ui]`.
+- Log output moved from `PBMaster.log` to `VPSMonitor.log` (SSH connections, metrics) and `PBApiServer.log` (API server startup/requests).

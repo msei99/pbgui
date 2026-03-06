@@ -267,55 +267,56 @@ pbmon = """
     Run "crontab -e" and add the @reboot with your path
     ```"""
 
-pbmaster = """
+vps_settings = """
     ```
-    PBMaster is the SSH-based VPS management service.
-    It maintains persistent SSH connections to all registered VPS servers,
-    monitors PBRun, PBRemote and PBCoinData services, and auto-restarts
-    them if they go down. It also sends Telegram alerts on connection
-    loss or service failures.
+    VPS Settings configures monitoring for your VPS servers.
+    The VPS monitoring runs inside the API Server — no separate daemon needed.
+    It maintains persistent SSH connections (asyncssh), monitors services
+    (PBRun, PBRemote, PBCoinData), auto-restarts them on failure,
+    and sends Telegram alerts on connection loss or service issues.
 
     Requirements:
     - SSH keys must be installed on VPS (via VPS Manager)
     - VPS must be registered in VPS Manager
     - Telegram config (shared with PBMon) for alerts
+    - API Server must be running
 
     Only relevant on the Master node.
     ```"""
 
-pbmaster_auto_restart = """
+vps_auto_restart = """
     ```
-    When enabled, PBMaster will automatically restart services
+    When enabled, the VPS monitor will automatically restart services
     (PBRun, PBRemote, PBCoinData) that are detected as down.
     Rate limited to 3 restarts per service per hour.
     ```"""
 
-pbmaster_monitor_interval = """
+vps_monitor_interval = """
     ```
-    How often PBMaster checks connections and services (in seconds).
+    How often the VPS monitor checks connections and services (in seconds).
     Default: 15 seconds. Minimum: 5 seconds.
     ```"""
 
-pbmaster_enabled_hosts = """
+vps_enabled_hosts = """
     ```
     Enable or disable monitoring for this VPS host.
     Only enabled hosts will be connected via SSH and monitored.
     Default: all hosts are disabled. Enable them individually
     or use "Enable All" to activate all at once.
-    Changes take effect after saving and restarting PBMaster.
+    Changes take effect after saving (API Server picks up changes automatically).
     ```"""
 
-vps_monitor = """
+vps_monitor_page = """
     ```
     VPS Monitor provides real-time monitoring of all VPS servers
-    via PBMaster's persistent SSH connections.
+    via the API Server's persistent SSH connections.
     
     Dashboard: Live system metrics (CPU, RAM, Disk, Swap) with ~1-3s latency.
     Instances: All bot instances across all VPS with PnL, errors, tracebacks.
     Services: PBRun, PBRemote, PBCoinData status per VPS with restart buttons.
     Live Logs: Real-time log streaming (tail -f) for services and bots.
     
-    Requires PBMaster to be running (start from Services → PBMaster).
+    Requires API Server to be running (start from Services → API Server).
     ```"""
 
 pbstat = """
