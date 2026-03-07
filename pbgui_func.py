@@ -178,7 +178,7 @@ def set_page_config(page : str = "Start"):
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': "Passivbot GUI v1.65 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
+            'About': "Passivbot GUI v1.66 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
         }
     )
     # Global layout CSS — applied on every page
@@ -555,7 +555,7 @@ def _start_fastapi_server_if_needed() -> tuple[str, int, bool]:
     return (srv.host, srv.port, srv.is_running())
 
 
-def render_fastapi_job_monitor(height: int = 800, exchange: str = "") -> None:
+def render_fastapi_job_monitor(height: int = 800, exchange: str = "", job_type: str = "") -> None:
     """Render the FastAPI job monitor component via iframe.
     
     Automatically starts the FastAPI server if not already running.
@@ -567,6 +567,7 @@ def render_fastapi_job_monitor(height: int = 800, exchange: str = "") -> None:
     Args:
         height: iframe height in pixels (default: 800)
         exchange: optional exchange filter (e.g. "binanceusdm", "bybit", "hyperliquid")
+        job_type: optional job type filter — comma-separated (e.g. "hl_best_1m" or "hl_aws_l2book_auto")
     """
     from api.auth import generate_token
     
@@ -596,11 +597,68 @@ def render_fastapi_job_monitor(height: int = 800, exchange: str = "") -> None:
     except Exception:
         pass
 
-    # Build iframe URL with token and optional exchange filter
+    # Build iframe URL with token and optional filters
     exchange_param = f"&exchange={exchange}" if exchange else ""
-    iframe_url = f"http://{_browser_host}:{api_port}/app/jobs_monitor.html?token={token}{exchange_param}"
+    job_type_param = f"&job_type={job_type}" if job_type else ""
+    iframe_url = f"http://{_browser_host}:{api_port}/app/jobs_monitor.html?token={token}{exchange_param}{job_type_param}"
     _st_components.iframe(iframe_url, height=height, scrolling=True)
 
+
+def render_fastapi_hl_data_actions() -> None:
+    """Render combined HL data actions (Download l2Book + Build OHLCV).
+
+    Uses st.html(unsafe_allow_javascript=True) to inject the HTML directly
+    into the Streamlit DOM (NO iframe). This allows natural height flow —
+    collapsed sections take zero extra space, expanded sections grow naturally.
+    All CSS is scoped under .hlda-root to avoid Streamlit style conflicts.
+    Collapse/expand uses vanilla JS + localStorage persistence.
+    Job monitors are inline WebSocket-connected divs (no iframe).
+    """
+    from pathlib import Path
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(f"⚠️ FastAPI server could not be started on {api_host}:{api_port}.")
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = st.session_state.get("user", {}).get("id") or st.session_state.get("user") or "anonymous"
+        token_obj = generate_token(str(user_id), expires_in_seconds=86400)
+        st.session_state["api_token"] = token_obj.token
+
+    token = st.session_state["api_token"]
+
+    _browser_host = "127.0.0.1"
+    try:
+        _req_host = st.context.headers.get("Host", "")
+        if _req_host:
+            _browser_host = _req_host.split(":")[0] or "127.0.0.1"
+    except Exception:
+        pass
+
+    api_host_str = f"{_browser_host}:{api_port}"
+    api_base_str = f"http://{_browser_host}:{api_port}/api"
+
+    # Read HTML template
+    html_path = Path(__file__).parent / "frontend" / "hl_data_actions.html"
+    html_content = html_path.read_text(encoding="utf-8")
+
+    # Unique IDs so multiple instances don't conflict
+    instance_id = "hlda_inst"
+    html_content = html_content.replace("__HLDA_ROOT__", instance_id)
+    html_content = html_content.replace("__HLDA__", f"{instance_id}_")
+
+    # Inject config via data-* attributes on root element
+    html_content = html_content.replace(
+        'data-token=""', f'data-token="{token}"'
+    ).replace(
+        'data-api-base=""', f'data-api-base="{api_base_str}"'
+    ).replace(
+        'data-api-host=""', f'data-api-host="{api_host_str}"'
+    )
+
+    st.html(html_content, unsafe_allow_javascript=True)
 
 
 def render_fastapi_market_data_status(exchange: str) -> None:
