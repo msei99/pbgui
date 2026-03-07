@@ -348,6 +348,12 @@ class Exchange:
         if self._user and self.user.key != 'key':
             self.instance.apiKey = self.user.key
             self.instance.secret = self.user.secret
+            if getattr(self.user, 'passphrase', None):
+                self.instance.password = self.user.passphrase
+            if getattr(self.user, 'wallet_address', None):
+                self.instance.walletAddress = self.user.wallet_address
+            if getattr(self.user, 'private_key', None):
+                self.instance.privateKey = self.user.private_key
 
     def close(self):
         """Close the exchange instance and release resources (e.g. aiohttp sessions)."""
@@ -371,14 +377,6 @@ class Exchange:
                     self.instance.close()
             except Exception as e:
                 _human_log('Exchange', f'Error closing exchange {self.id}: {e}', level='debug')
-            self.instance.password = self.user.passphrase
-            self.instance.walletAddress = self.user.wallet_address
-            self.instance.privateKey = self.user.private_key
-        try:
-            self.instance.checkRequiredCredentials()
-        except Exception as e:
-            self.error = (str(e))
-            return
 
     def create_ws_client(self):
         """Create and return a ccxt.pro client configured for this exchange and user.

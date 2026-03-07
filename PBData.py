@@ -745,7 +745,7 @@ class PBData():
                             dry_run=False,
                             timeout_s=float(self._latest_1m_api_timeout_seconds),
                         )
-                        coin_status["last_fetch"] = now.isoformat(sep=" ", timespec="seconds")
+                        coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "ok"
                         coin_status["lookback_days"] = int(lookback_days)
                         coin_status["newest_day"] = newest_day
@@ -760,7 +760,7 @@ class PBData():
                         except Exception:
                             pass
                     except Exception as e:
-                        coin_status["last_fetch"] = now.isoformat(sep=" ", timespec="seconds")
+                        coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "error"
                         coin_status["error"] = str(e)
 
@@ -834,7 +834,12 @@ class PBData():
                     pass
 
             _hl_flag = _Path(f"{PBGDIR}/data/logs/hyperliquid_latest_1m_run_now.flag")
-            if await _wait_for_flag(_hl_flag, float(self._latest_1m_interval_seconds)):
+            try:
+                _elapsed = datetime.now().timestamp() - now_ts
+                _remaining_wait = max(0.0, float(self._latest_1m_interval_seconds) - _elapsed)
+            except Exception:
+                _remaining_wait = float(self._latest_1m_interval_seconds)
+            if await _wait_for_flag(_hl_flag, _remaining_wait):
                 try:
                     _hl_flag.unlink(missing_ok=True)
                 except Exception:
@@ -955,7 +960,7 @@ class PBData():
                             overwrite=True,
                             timeout_s=float(self._binance_latest_1m_api_timeout_seconds),
                         )
-                        coin_status["last_fetch"] = now.isoformat(sep=" ", timespec="seconds")
+                        coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "ok"
                         coin_status["lookback_days"] = int(lookback_days)
                         coin_status["api_result"] = res
@@ -1011,7 +1016,12 @@ class PBData():
                     pass
 
             _bnc_flag = _Path(f"{PBGDIR}/data/logs/binance_latest_1m_run_now.flag")
-            if await _wait_for_flag(_bnc_flag, float(self._binance_latest_1m_interval_seconds)):
+            try:
+                _elapsed = datetime.now().timestamp() - now_ts
+                _remaining_wait = max(0.0, float(self._binance_latest_1m_interval_seconds) - _elapsed)
+            except Exception:
+                _remaining_wait = float(self._binance_latest_1m_interval_seconds)
+            if await _wait_for_flag(_bnc_flag, _remaining_wait):
                 try:
                     _bnc_flag.unlink(missing_ok=True)
                 except Exception:
@@ -1130,7 +1140,7 @@ class PBData():
                             overwrite=True,
                             timeout_s=float(self._bybit_latest_1m_api_timeout_seconds),
                         )
-                        coin_status["last_fetch"] = now.isoformat(sep=" ", timespec="seconds")
+                        coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "ok"
                         coin_status["lookback_days"] = int(lookback_days)
                         coin_status["api_result"] = res
@@ -1139,7 +1149,7 @@ class PBData():
                         except Exception:
                             pass
                     except Exception as e:
-                        coin_status["last_fetch"] = now.isoformat(sep=" ", timespec="seconds")
+                        coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "error"
                         coin_status["error"] = str(e)
 
@@ -1184,7 +1194,12 @@ class PBData():
                     pass
 
             _bbt_flag = _Path(f"{PBGDIR}/data/logs/bybit_latest_1m_run_now.flag")
-            if await _wait_for_flag(_bbt_flag, float(self._bybit_latest_1m_interval_seconds)):
+            try:
+                _elapsed = datetime.now().timestamp() - now_ts
+                _remaining_wait = max(0.0, float(self._bybit_latest_1m_interval_seconds) - _elapsed)
+            except Exception:
+                _remaining_wait = float(self._bybit_latest_1m_interval_seconds)
+            if await _wait_for_flag(_bbt_flag, _remaining_wait):
                 try:
                     _bbt_flag.unlink(missing_ok=True)
                 except Exception:
@@ -1523,6 +1538,29 @@ class PBData():
                         tb = traceback.format_exc()
                     except Exception:
                         tb = None
+                    # Detect permanent auth errors (missing credentials) — no point retrying
+                    is_auth_error = False
+                    try:
+                        try:
+                            from ccxt.base.errors import AuthenticationError as _AuthError
+                        except Exception:
+                            _AuthError = None
+                        if _AuthError is not None and isinstance(e, _AuthError):
+                            is_auth_error = True
+                    except Exception:
+                        pass
+
+                    if is_auth_error:
+                        try:
+                            _human_log('PBData', f"[debounce] permanent auth error for {kind} {user_name}: {e} (dropped, will not retry)", level='WARNING', meta={'traceback': tb} if tb else None)
+                        except Exception:
+                            pass
+                        try:
+                            buf.pop(user_name, None)
+                        except Exception:
+                            pass
+                        return
+
                     # Detect ccxt InvalidNonce (recv_window / server timestamp mismatch)
                     is_invalid_nonce = False
                     try:
