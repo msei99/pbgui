@@ -79,6 +79,53 @@ def _setup_uvicorn_logging():
 
 _vps_monitor = None
 
+# ── Task-worker watchdog ──────────────────────────────────────
+
+_WATCHDOG_INTERVAL_S = 60  # check every 60 seconds
+
+
+async def _worker_watchdog_loop() -> None:
+    """Periodically restart task_worker if it's dead but jobs are waiting.
+
+    This prevents the queue from silently stalling when the worker process
+    crashes or is killed without cleanly transitioning its jobs back to
+    pending state (e.g. SIGKILL). The fix mirrors the auto-restart logic
+    that exists in the old Streamlit polling panel but runs at the API-server
+    level so it fires regardless of which UI is open.
+    """
+    from task_queue import list_jobs, read_worker_pid, is_pid_running, clear_worker_pid
+    _log(SERVICE, "[watchdog] task-worker watchdog started", level="INFO")
+    while True:
+        try:
+            await asyncio.sleep(_WATCHDOG_INTERVAL_S)
+            active = list_jobs(states=["pending", "running"], limit=1)
+            if not active:
+                continue
+            pid = read_worker_pid()
+            if pid and is_pid_running(int(pid)):
+                continue
+            # Worker is dead but jobs are queued — restart it.
+            try:
+                clear_worker_pid()
+                subprocess.Popen(
+                    [sys.executable, str(Path(__file__).resolve().parent / "task_worker.py")],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                )
+                _log(
+                    SERVICE,
+                    "[watchdog] auto-restarted task_worker (worker dead, active jobs found)",
+                    level="WARNING",
+                )
+            except Exception as e:
+                _log(SERVICE, f"[watchdog] failed to restart task_worker: {e}", level="ERROR")
+        except asyncio.CancelledError:
+            _log(SERVICE, "[watchdog] task-worker watchdog stopped", level="INFO")
+            return
+        except Exception as e:
+            _log(SERVICE, f"[watchdog] unexpected error: {e}", level="ERROR")
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
@@ -94,8 +141,15 @@ async def _lifespan(app: FastAPI):
     _vps_monitor = monitor
     await monitor.start()
 
+    watchdog_task = asyncio.create_task(_worker_watchdog_loop(), name="worker-watchdog")
+
     yield  # app runs here
 
+    watchdog_task.cancel()
+    try:
+        await watchdog_task
+    except asyncio.CancelledError:
+        pass
     if _vps_monitor:
         await _vps_monitor.stop()
 
@@ -286,12 +340,10 @@ async def websocket_market_data(websocket: WebSocket):
 @app.websocket("/ws/heatmap-watch")
 async def websocket_heatmap_watch(websocket: WebSocket):
     """WebSocket endpoint: sends {type: 'updated', mtime: float} when data files change."""
-    from api.auth import verify_token
+    from api.auth import validate_token
     from api.heatmap import _latest_mtime
     token = websocket.query_params.get("token", "")
-    try:
-        verify_token(token)
-    except Exception:
+    if not validate_token(token):
         await websocket.close(code=4001)
         return
     exchange = websocket.query_params.get("exchange", "")
