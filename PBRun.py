@@ -623,9 +623,7 @@ class RunSingle():
         for process in psutil.process_iter():
             try:
                 cmdline = process.cmdline()
-            except psutil.NoSuchProcess:
-                continue
-            except psutil.AccessDenied:
+            except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
                 continue
             if (
                 any("passivbot.py" in sub for sub in cmdline)
@@ -809,9 +807,7 @@ class RunMulti():
         for process in psutil.process_iter():
             try:
                 cmdline = process.cmdline()
-            except psutil.NoSuchProcess:
-                continue
-            except psutil.AccessDenied:
+            except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
                 continue
             if (
                 any("passivbot_multi.py" in sub for sub in cmdline)
@@ -988,9 +984,7 @@ class RunV7():
         for process in psutil.process_iter():
             try:
                 cmdline = process.cmdline()
-            except psutil.NoSuchProcess:
-                continue
-            except psutil.AccessDenied:
+            except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
                 continue
             if (
                 any("main.py" in sub for sub in cmdline)

@@ -783,7 +783,7 @@ class PBRemote():
         for process in psutil.process_iter():
             try:
                 cmdline = process.cmdline()
-            except psutil.AccessDenied:
+            except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
                 continue
             if any("rclone" in sub for sub in cmdline) and any(f'{self.bucket_dir}' in sub for sub in cmdline):
                 return process
