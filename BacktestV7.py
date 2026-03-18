@@ -81,9 +81,7 @@ class BacktestV7QueueItem():
         try:
             if self.pid and psutil.pid_exists(self.pid) and (any(sub.lower().endswith("backtest.py") for sub in psutil.Process(self.pid).cmdline())):
                 return True
-        except psutil.NoSuchProcess:
-            pass
-        except psutil.AccessDenied:
+        except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
             pass
         return False
 

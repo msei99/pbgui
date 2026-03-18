@@ -119,9 +119,7 @@ class OptimizeV7QueueItem:
         try:
             if self.pid and psutil.pid_exists(self.pid) and any(sub.lower().endswith("optimize.py") for sub in psutil.Process(self.pid).cmdline()):
                 return True
-        except psutil.NoSuchProcess:
-            pass
-        except psutil.AccessDenied:
+        except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
             pass
         return False
 
@@ -364,7 +362,7 @@ class OptimizeV7Queue:
         for process in psutil.process_iter():
             try:
                 cmdline = process.cmdline()
-            except psutil.AccessDenied:
+            except (psutil.AccessDenied, psutil.ZombieProcess, psutil.NoSuchProcess):
                 continue
             if any("OptimizeV7.py" in sub for sub in cmdline):
                 return process
