@@ -681,7 +681,7 @@ class Dashboard():
                             dashboard_config[f'dashboard_income_filter_{row}_1'] = 0.0
                         _register_fragment(self.view_income_impl, f'{row}_1', 'income', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'], dashboard_config[f'dashboard_income_last_{row}_1'], dashboard_config[f'dashboard_income_filter_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "TOP":
-                        _register_fragment(self.view_top_symbols_impl, f'{row}_1', 'top_symbols', dashboard_config[f'dashboard_top_symbols_users_{row}_1'], dashboard_config[f'dashboard_top_symbols_period_{row}_1'], dashboard_config[f'dashboard_top_symbols_top_{row}_1'])
+                        self.view_top_symbols_impl(f'{row}_1', dashboard_config[f'dashboard_top_symbols_users_{row}_1'], dashboard_config[f'dashboard_top_symbols_period_{row}_1'], dashboard_config[f'dashboard_top_symbols_top_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "POSITIONS":
                         _register_fragment(self.view_positions_impl, f'{row}_1', 'positions', dashboard_config[f'dashboard_positions_users_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "ORDERS":
@@ -705,7 +705,7 @@ class Dashboard():
                             dashboard_config[f'dashboard_income_filter_{row}_2'] = 0.0
                         _register_fragment(self.view_income_impl, f'{row}_2', 'income', dashboard_config[f'dashboard_income_users_{row}_2'], dashboard_config[f'dashboard_income_period_{row}_2'], dashboard_config[f'dashboard_income_last_{row}_2'], dashboard_config[f'dashboard_income_filter_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "TOP":
-                        _register_fragment(self.view_top_symbols_impl, f'{row}_2', 'top_symbols', dashboard_config[f'dashboard_top_symbols_users_{row}_2'], dashboard_config[f'dashboard_top_symbols_period_{row}_2'], dashboard_config[f'dashboard_top_symbols_top_{row}_2'])
+                        self.view_top_symbols_impl(f'{row}_2', dashboard_config[f'dashboard_top_symbols_users_{row}_2'], dashboard_config[f'dashboard_top_symbols_period_{row}_2'], dashboard_config[f'dashboard_top_symbols_top_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "POSITIONS":
                         _register_fragment(self.view_positions_impl, f'{row}_2', 'positions', dashboard_config[f'dashboard_positions_users_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "ORDERS":
@@ -729,7 +729,7 @@ class Dashboard():
                         dashboard_config[f'dashboard_income_filter_{row}_1'] = 0.0
                     _register_fragment(self.view_income_impl, f'{row}_1', 'income', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'], dashboard_config[f'dashboard_income_last_{row}_1'], dashboard_config[f'dashboard_income_filter_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "TOP":
-                    _register_fragment(self.view_top_symbols_impl, f'{row}_1', 'top_symbols', dashboard_config[f'dashboard_top_symbols_users_{row}_1'], dashboard_config[f'dashboard_top_symbols_period_{row}_1'], dashboard_config[f'dashboard_top_symbols_top_{row}_1'])
+                    self.view_top_symbols_impl(f'{row}_1', dashboard_config[f'dashboard_top_symbols_users_{row}_1'], dashboard_config[f'dashboard_top_symbols_period_{row}_1'], dashboard_config[f'dashboard_top_symbols_top_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "POSITIONS":
                     _register_fragment(self.view_positions_impl, f'{row}_1', 'positions', dashboard_config[f'dashboard_positions_users_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "ORDERS":
@@ -1224,38 +1224,62 @@ class Dashboard():
                 st.session_state.pop(f'income_delete_older_cutoff_{position}', None)
                 st.rerun()
 
-    def view_top_symbols_impl(self, position : str, user : str = None, period : str = None, top : int = None):
-        users = st.session_state.users
-        if f"dashboard_top_symbols_users_{position}" not in st.session_state:
-            if user:
-                st.session_state[f'dashboard_top_symbols_users_{position}'] = user
-                for user in st.session_state[f'dashboard_top_symbols_users_{position}']:
-                    if user not in users.list() and user != 'ALL':
-                        st.session_state[f'dashboard_top_symbols_users_{position}'].remove(user)
-        if f"dashboard_top_symbols_period_{position}" not in st.session_state:
-            if period:
-                st.session_state[f'dashboard_top_symbols_period_{position}'] = period
-        if f"dashboard_top_symbols_top_{position}" not in st.session_state:
-            if top:
-                st.session_state[f'dashboard_top_symbols_top_{position}'] = top
-        st.markdown("#### :blue[Top Symbols]")
-        col1, col2, col3 = st.columns([2,1,1])
-        with col1:
-            st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_top_symbols_users_{position}")
-        with col2:
-            st.selectbox('period', self.PERIOD, key=f"dashboard_top_symbols_period_{position}")
-        with col3:
-            st.number_input('Top', value=10, min_value=1, step=5, key=f"dashboard_top_symbols_top_{position}")
-        if st.session_state[f'dashboard_top_symbols_users_{position}']:
-            if st.session_state[f'dashboard_top_symbols_period_{position}'] in self.PERIOD:
-                period_index = self.PERIOD.index(st.session_state[f'dashboard_top_symbols_period_{position}'])
-                period_range = getattr(self, self.PERIOD[period_index])
-                top = self.db.select_top(st.session_state[f'dashboard_top_symbols_users_{position}'], period_range[0], period_range[1], st.session_state[f'dashboard_top_symbols_top_{position}'])
-            df = pd.DataFrame(top, columns =['Date', 'Symbol', 'Income'])
-            # st.write(df)
-            fig = px.bar(df, x="Symbol", y="Income", title=f"From: {df['Date'].min()} To: {df['Date'].max()}")
-            fig.update_traces(marker_color=['red' if val < 0 else 'green' for val in df['Income']])
-            st.plotly_chart(fig, key=f"dashboard_top_symbols_plot_{position}_{st.session_state.get('dashboard_reload_token', 0)}")
+    def view_top_symbols_impl(self, position: str, user=None, period=None, top=None):
+        """Render the Top Symbols bar chart via st.html (FastAPI + Vanilla JS / Plotly)."""
+        from pathlib import Path as _Path
+        from pbgui_func import _start_fastapi_server_if_needed
+        from api.auth import generate_token
+        import json as _json
+
+        api_host, api_port, success = _start_fastapi_server_if_needed()
+        if not success:
+            st.error(
+                f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+                "Please check **System → Services → API Server**."
+            )
+            return
+
+        if 'api_token' not in st.session_state:
+            user_id = (
+                st.session_state.get('user', {}).get('id')
+                or st.session_state.get('user')
+                or 'anonymous'
+            )
+            st.session_state['api_token'] = generate_token(
+                str(user_id), expires_in_seconds=86400
+            ).token
+        token = st.session_state['api_token']
+
+        _browser_host = '127.0.0.1'
+        try:
+            req_host = st.context.headers.get('Host', '')
+            if req_host:
+                _browser_host = req_host.split(':')[0] or '127.0.0.1'
+        except Exception:
+            pass
+        api_base_str = f'http://{_browser_host}:{api_port}/api'
+
+        # Resolve users list
+        if user and isinstance(user, (list, tuple)) and len(user) > 0:
+            users_json = _json.dumps(list(user))
+        elif user and isinstance(user, str) and user != 'ALL':
+            users_json = _json.dumps([user])
+        else:
+            users_json = '["ALL"]'
+
+        period_str  = str(period) if period else 'THIS_MONTH'
+        top_val     = int(top) if top else 10
+        refresh_val = self._get_refresh_interval(position, 'top_symbols')
+
+        html_path = _Path(__file__).parent / 'frontend' / 'dashboard_top.html'
+        html = html_path.read_text(encoding='utf-8')
+        html = html.replace('"%%TOKEN%%"',    f'"{token}"')
+        html = html.replace('"%%API_BASE%%"', f'"{api_base_str}"')
+        html = html.replace('"%%API_HOST%%"', f'"{api_host_str}"')
+        html = html.replace('%%USERS%%',      users_json)
+        html = html.replace('"%%PERIOD%%"',   f'"{period_str}"')
+        html = html.replace('%%TOP%%',        str(top_val))
+        st.html(html, unsafe_allow_javascript=True)
 
     def color_we(self, value):
         # bgcolor green < 10, orange 100-200, red > 200

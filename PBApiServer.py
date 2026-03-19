@@ -416,6 +416,26 @@ async def internal_notify_balance(request: Request):
     return {"ok": True, "notified": len(dashboard_ws_clients)}
 
 
+@app.post("/api/internal/notify/income")
+async def internal_notify_income(request: Request):
+    """Internal endpoint called by PBData after writing history/income data.
+
+    Broadcasts {"type": "income_updated"} to all connected /ws/dashboard clients.
+    Only accepts requests from localhost.
+    """
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="Internal endpoint")
+    dead: set[WebSocket] = set()
+    for ws in list(dashboard_ws_clients):
+        try:
+            await ws.send_json({"type": "income_updated"})
+        except Exception:
+            dead.add(ws)
+    dashboard_ws_clients.difference_update(dead)
+    return {"ok": True, "notified": len(dashboard_ws_clients)}
+
+
 # ── REST endpoints ────────────────────────────────────────────
 
 @app.get("/static/plotly.min.js")
