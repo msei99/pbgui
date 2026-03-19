@@ -1,0 +1,480 @@
+<!-- Dashboard Balance component — embedded via st.html(unsafe_allow_javascript=True).
+     Config injected as JS variables (%%PLACEHOLDER%% pattern) by Dashboard.py.
+     All angle brackets inside JS strings escaped as \x3C / \x3E for DOMPurify. -->
+<style>
+.db-root {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 0.875rem;
+    color: #e2e8f0;
+    background: #0e1117;
+}
+.db-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 0.5rem 0.75rem;
+    background: #1a202c;
+    border-bottom: 1px solid #2d3748;
+    border-radius: 6px 6px 0 0;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+.db-totals { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+.db-total-item label {
+    color: #64748b; font-size: 0.68rem;
+    text-transform: uppercase; letter-spacing: 0.05em; display: block;
+}
+.db-total-item span { font-weight: 600; font-size: 0.88rem; }
+.db-user-sel { display: flex; align-items: center; gap: 0.4rem; position: relative; }
+.db-user-sel label { color: #94a3b8; font-size: 0.73rem; }
+/* Custom checkbox dropdown */
+.db-msel-btn {
+    background: #2d3748; color: #e2e8f0;
+    border: 1px solid #4a5568; border-radius: 4px;
+    padding: 0.25rem 0.5rem; font-size: 0.78rem;
+    cursor: pointer; min-width: 120px; text-align: left;
+    display: flex; justify-content: space-between; align-items: center;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 260px;
+}
+.db-msel-btn:hover { border-color: #63b3ed; }
+.db-msel-arrow { font-size: 0.55rem; margin-left: 0.4rem; flex-shrink: 0; }
+.db-msel-drop {
+    display: none; position: absolute; top: 100%; right: 0;
+    background: #1a202c; border: 1px solid #4a5568; border-radius: 4px;
+    min-width: 180px; max-height: 260px; overflow: hidden;
+    z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    margin-top: 2px;
+}
+.db-msel-drop.open { display: block; }
+.db-msel-item {
+    display: flex; align-items: center; gap: 0.4rem;
+    padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.78rem;
+    color: #e2e8f0; white-space: nowrap;
+}
+.db-msel-item:hover { background: #2d3748; }
+.db-msel-item input[type="checkbox"] {
+    accent-color: #63b3ed; margin: 0; cursor: pointer;
+}
+.db-msel-sep { border-top: 1px solid #2d3748; margin: 0.15rem 0; }
+.db-msel-filter {
+    width: 100%; box-sizing: border-box;
+    background: #2d3748; color: #e2e8f0;
+    border: none; border-bottom: 1px solid #4a5568;
+    padding: 0.35rem 0.5rem; font-size: 0.76rem;
+    outline: none;
+}
+.db-msel-filter::placeholder { color: #64748b; }
+.db-msel-list { max-height: 180px; overflow-y: auto; }
+.db-status {
+    font-size: 0.68rem; color: #64748b;
+    padding: 0.15rem 0.75rem;
+    background: #0e1117; border-bottom: 1px solid #1a202c;
+}
+.db-table-wrap { overflow-x: auto; }
+.db-table { width: 100%; border-collapse: collapse; }
+.db-table thead th {
+    background: #1a202c; color: #94a3b8;
+    padding: 0.4rem 0.7rem;
+    text-align: left; font-weight: 500; font-size: 0.75rem;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    border-bottom: 1px solid #2d3748;
+    cursor: pointer; user-select: none;
+}
+.db-table thead th:hover { color: #e2e8f0; }
+.db-sort-arrow { font-size: 0.6rem; margin-left: 0.25rem; color: #64748b; }
+.db-table thead th.db-sorted .db-sort-arrow { color: #e2e8f0; }
+.db-table tbody td { padding: 0.35rem 0.7rem; border-bottom: 1px solid #1a202c; }
+.db-table tbody tr:hover td { background: #1e2a3a; }
+.db-green  { color: #22c55e; }
+.db-red    { color: #ef4444; }
+.db-orange { color: #f59e0b; }
+.db-muted  { color: #94a3b8; font-size: 0.76rem; }
+.db-twe-cell { display: flex; align-items: center; gap: 0.4rem; }
+.db-twe-track {
+    flex: 1; height: 7px; border-radius: 3px;
+    background: #2d3748; overflow: hidden; min-width: 50px;
+}
+.db-twe-fill { height: 100%; border-radius: 3px; transition: width .3s, background .3s; }
+.db-twe-lbl  { font-size: 0.76rem; min-width: 44px; text-align: right; }
+.db-nodata   { padding: 1.5rem; text-align: center; color: #4a5568; font-size: 0.85rem; }
+</style>
+
+<div id="db-root" class="db-root" data-token="" data-api-base="" data-api-host="">
+    <div class="db-header">
+        <div class="db-totals">
+            <div class="db-total-item">
+                <label>Total Balance</label>
+                <span class="db-green" id="db-tot-balance">—</span>
+            </div>
+            <div class="db-total-item">
+                <label>Total uPnl</label>
+                <span id="db-tot-upnl">—</span>
+            </div>
+            <div class="db-total-item">
+                <label>Total TWE</label>
+                <span id="db-tot-twe">—</span>
+            </div>
+        </div>
+        <div class="db-user-sel" id="db-user-sel-edit" style="display:none">
+            <label>Users:</label>
+            <div style="position:relative">
+                <div class="db-msel-btn" id="db-msel-btn">
+                    <span id="db-msel-label">ALL</span>
+                    <span class="db-msel-arrow">▼</span>
+                </div>
+                <div class="db-msel-drop" id="db-msel-drop">
+                    <input class="db-msel-filter" id="db-msel-filter" type="text" placeholder="Filter...">
+                    <div class="db-msel-list" id="db-msel-list"></div>
+                </div>
+            </div>
+        </div>
+        <div class="db-user-sel" id="db-user-sel-static">
+            <label>Users:</label>
+            <span id="db-user-static" style="color:#e2e8f0;font-size:0.78rem;"></span>
+        </div>
+    </div>
+    <div class="db-status" id="db-status">Connecting…</div>
+    <div class="db-table-wrap">
+        <table class="db-table">
+            <thead>
+                <tr>
+                    <th data-col="user">User <span class="db-sort-arrow"></span></th>
+                    <th data-col="date">Date <span class="db-sort-arrow"></span></th>
+                    <th data-col="balance">Balance USDT <span class="db-sort-arrow"></span></th>
+                    <th data-col="upnl">uPnl <span class="db-sort-arrow"></span></th>
+                    <th data-col="we">TWE % <span class="db-sort-arrow"></span></th>
+                </tr>
+            </thead>
+            <tbody id="db-body"></tbody>
+        </table>
+        <div class="db-nodata" id="db-nodata" style="display:none">No balance data available.</div>
+    </div>
+</div>
+
+<script>
+(function () {
+    // Config injected directly by view_balance_impl in Dashboard.py
+    var TOKEN    = "%%TOKEN%%";
+    var API_BASE = "%%API_BASE%%";
+    var API_HOST = "%%API_HOST%%";
+    var EDIT_MODE = %%EDIT_MODE%%;
+    var selectedUsers = %%USERS%%;
+    var allUsers = %%ALL_USERS%%;
+    var INSTANCE_ID = "%%INSTANCE_ID%%";
+    var POSITION = "%%POSITION%%";
+
+    // Kill previous instance's WebSocket so it cannot overwrite our DOM
+    if (window._dbBalanceWs) { try { window._dbBalanceWs.close(); } catch(_) {} }
+    if (window._dbBalanceReconnTimer) clearTimeout(window._dbBalanceReconnTimer);
+    window._dbBalanceInstanceId = INSTANCE_ID;
+
+    function isStale() { return window._dbBalanceInstanceId !== INSTANCE_ID; }
+
+    // Show/hide user select vs static label
+    var editSel   = document.getElementById('db-user-sel-edit');
+    var staticSel = document.getElementById('db-user-sel-static');
+    var staticLbl = document.getElementById('db-user-static');
+    if (EDIT_MODE) {
+        if (editSel) editSel.style.display = '';
+        if (staticSel) staticSel.style.display = 'none';
+    } else {
+        if (editSel) editSel.style.display = 'none';
+        if (staticSel) staticSel.style.display = '';
+        if (staticLbl) staticLbl.textContent = selectedUsers.join(', ');
+    }
+    var ws            = null;
+    var reconnTimer   = null;
+    var lastRows      = [];     // cached rows for re-sorting
+    var sortCol       = null;   // current sort column key
+    var sortAsc       = true;   // sort direction
+
+    function tweColor(v)  { return v < 100 ? '#22c55e' : v < 200 ? '#f59e0b' : '#ef4444'; }
+    function upnlColor(v) { return v >= 0  ? '#22c55e' : '#ef4444'; }
+    function tweBarPct(v) { return Math.min(100, (v / 300) * 100).toFixed(1); }
+    function signedFmt(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); }
+    function setStatus(m) { var e = document.getElementById('db-status'); if (e) e.textContent = m; }
+
+    function renderRows(rows) {
+        var tbody  = document.getElementById('db-body');
+        var noData = document.getElementById('db-nodata');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        noData.style.display = rows.length === 0 ? 'block' : 'none';
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var tc  = tweColor(row.we);
+            var uc  = upnlColor(row.upnl);
+            var pct = tweBarPct(row.we);
+            var tr  = document.createElement('tr');
+            tr.innerHTML =
+                '\x3Ctd\x3E' + row.user + '\x3C/td\x3E' +
+                '\x3Ctd class="db-muted"\x3E' + row.date + '\x3C/td\x3E' +
+                '\x3Ctd\x3E' + row.balance.toFixed(2) + '\x3C/td\x3E' +
+                '\x3Ctd style="color:' + uc + '"\x3E' + signedFmt(row.upnl) + '\x3C/td\x3E' +
+                '\x3Ctd\x3E\x3Cdiv class="db-twe-cell"\x3E' +
+                  '\x3Cdiv class="db-twe-track"\x3E' +
+                    '\x3Cdiv class="db-twe-fill" style="width:' + pct + '%;background:' + tc + '"\x3E\x3C/div\x3E' +
+                  '\x3C/div\x3E' +
+                  '\x3Cspan class="db-twe-lbl" style="color:' + tc + '"\x3E' + row.we.toFixed(2) + '\x3C/span\x3E' +
+                '\x3C/div\x3E\x3C/td\x3E';
+            tbody.appendChild(tr);
+        }
+    }
+
+    function applySortAndRender() {
+        var rows = lastRows.slice();
+        if (sortCol) {
+            var isNum = (sortCol === 'balance' || sortCol === 'upnl' || sortCol === 'we');
+            rows.sort(function(a, b) {
+                var va = a[sortCol], vb = b[sortCol];
+                if (isNum) return sortAsc ? va - vb : vb - va;
+                va = String(va).toLowerCase(); vb = String(vb).toLowerCase();
+                if (va < vb) return sortAsc ? -1 : 1;
+                if (va > vb) return sortAsc ? 1 : -1;
+                return 0;
+            });
+        }
+        renderRows(rows);
+        updateSortIndicators();
+    }
+
+    function updateSortIndicators() {
+        var ths = document.querySelectorAll('.db-table thead th');
+        for (var i = 0; i < ths.length; i++) {
+            var th = ths[i];
+            var col = th.getAttribute('data-col');
+            var arrow = th.querySelector('.db-sort-arrow');
+            if (col === sortCol) {
+                th.classList.add('db-sorted');
+                if (arrow) arrow.textContent = sortAsc ? '\u25B2' : '\u25BC';
+            } else {
+                th.classList.remove('db-sorted');
+                if (arrow) arrow.textContent = '';
+            }
+        }
+    }
+
+    function dbSortByCol(col) {
+        if (sortCol === col) {
+            sortAsc = !sortAsc;
+        } else {
+            sortCol = col;
+            sortAsc = (col === 'balance' || col === 'upnl' || col === 'we') ? false : true;
+        }
+        applySortAndRender();
+    }
+
+    function renderData(data) {
+        var rows = (data && data.rows) ? data.rows : [];
+        lastRows = rows;
+        if (sortCol) {
+            applySortAndRender();
+        } else {
+            var noData = document.getElementById('db-nodata');
+            if (noData) noData.style.display = rows.length === 0 ? 'block' : 'none';
+            renderRows(rows);
+        }
+        var t   = (data && data.totals) ? data.totals : {};
+        var tc2 = tweColor(t.we   || 0);
+        var uc2 = upnlColor(t.upnl || 0);
+        var eB = document.getElementById('db-tot-balance');
+        var eU = document.getElementById('db-tot-upnl');
+        var eT = document.getElementById('db-tot-twe');
+        if (eB) eB.textContent = '$' + (t.balance || 0).toFixed(2) + ' USDT';
+        if (eU) { eU.textContent = signedFmt(t.upnl || 0); eU.style.color = uc2; }
+        if (eT) { eT.textContent = (t.we || 0).toFixed(2) + ' %'; eT.style.color = tc2; }
+        // Merge any new users from response into allUsers
+        if (rows.length > 0) {
+            for (var ri = 0; ri < rows.length; ri++) {
+                if (allUsers.indexOf(rows[ri].user) < 0) allUsers.push(rows[ri].user);
+            }
+        }
+    }
+
+    function buildUserSelect() {
+        var list = document.getElementById('db-msel-list');
+        if (!list) return;
+        list.innerHTML = '';
+        for (var i = 0; i < allUsers.length; i++) {
+            var u = allUsers[i];
+            var item = document.createElement('div');
+            item.className = 'db-msel-item';
+            item.setAttribute('data-user', u.toLowerCase());
+            var cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.value = u;
+            cb.checked = (selectedUsers.indexOf(u) >= 0);
+            cb.addEventListener('change', (function(val) {
+                return function() { dbOnCheckChange(val, this.checked); };
+            })(u));
+            var lbl = document.createElement('span');
+            lbl.textContent = u;
+            item.appendChild(cb);
+            item.appendChild(lbl);
+            item.addEventListener('click', function(e) {
+                if (e.target.tagName !== 'INPUT') {
+                    var c = this.querySelector('input');
+                    c.checked = !c.checked;
+                    c.dispatchEvent(new Event('change'));
+                }
+            });
+            list.appendChild(item);
+            if (u === 'ALL') {
+                var sep = document.createElement('div');
+                sep.className = 'db-msel-sep';
+                list.appendChild(sep);
+            }
+        }
+        updateMselLabel();
+    }
+
+    function dbOnCheckChange(val, checked) {
+        if (val === 'ALL') {
+            if (checked) {
+                selectedUsers = ['ALL'];
+                uncheckAllExcept('ALL');
+            } else {
+                selectedUsers = ['ALL'];
+                recheckAll();
+                return;
+            }
+        } else {
+            var idx = selectedUsers.indexOf(val);
+            if (checked) {
+                var ai = selectedUsers.indexOf('ALL');
+                if (ai >= 0) selectedUsers.splice(ai, 1);
+                if (idx < 0) selectedUsers.push(val);
+                uncheckByVal('ALL');
+            } else {
+                if (idx >= 0) selectedUsers.splice(idx, 1);
+            }
+            if (selectedUsers.length === 0) {
+                selectedUsers = ['ALL'];
+                recheckAll();
+            }
+        }
+        updateMselLabel();
+        syncSelection();
+        fetchBalance();
+    }
+
+    function syncSelection() {
+        if (!EDIT_MODE || !TOKEN || !API_BASE || !POSITION) return;
+        fetch(API_BASE + '/dashboard/balance/selection?token=' + TOKEN, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({position: POSITION, users: selectedUsers})
+        }).catch(function() {});
+    }
+
+    function uncheckAllExcept(keep) {
+        var cbs = document.querySelectorAll('#db-msel-list input[type="checkbox"]');
+        for (var i = 0; i < cbs.length; i++) {
+            if (cbs[i].value !== keep) cbs[i].checked = false;
+        }
+    }
+    function uncheckByVal(val) {
+        var cbs = document.querySelectorAll('#db-msel-list input[type="checkbox"]');
+        for (var i = 0; i < cbs.length; i++) {
+            if (cbs[i].value === val) cbs[i].checked = false;
+        }
+    }
+    function recheckAll() {
+        var cbs = document.querySelectorAll('#db-msel-list input[type="checkbox"]');
+        for (var i = 0; i < cbs.length; i++) {
+            cbs[i].checked = (cbs[i].value === 'ALL');
+        }
+    }
+
+    function updateMselLabel() {
+        var lbl = document.getElementById('db-msel-label');
+        if (!lbl) return;
+        if (selectedUsers.indexOf('ALL') >= 0 || selectedUsers.length === 0) {
+            lbl.textContent = 'ALL';
+        } else if (selectedUsers.length === 1) {
+            lbl.textContent = selectedUsers[0];
+        } else {
+            lbl.textContent = selectedUsers.length + ' users';
+        }
+    }
+
+    function usersParam() {
+        if (!selectedUsers.length || selectedUsers.indexOf('ALL') >= 0) return 'ALL';
+        return selectedUsers.join(',');
+    }
+
+    function fetchBalance() {
+        if (isStale()) return;
+        if (!TOKEN || !API_BASE) return;
+        var url = API_BASE + '/dashboard/balance?users=' + usersParam() + '&token=' + TOKEN;
+        fetch(url)
+            .then(function(r) { if (isStale()) return; if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function(d) { if (isStale() || !d) return; renderData(d); setStatus('Updated: ' + new Date().toLocaleTimeString()); })
+            .catch(function(e) { if (!isStale()) setStatus('\u26a0 Fetch error: ' + e); });
+    }
+
+    function connect() {
+        if (isStale()) return;
+        if (!TOKEN || !API_HOST) return;
+        clearTimeout(reconnTimer);
+        var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
+        ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
+        window._dbBalanceWs = ws;
+        ws.onopen    = function() { if (isStale()) { ws.close(); return; } setStatus('Connected — fetching\u2026'); fetchBalance(); };
+        ws.onmessage = function(evt) {
+            if (isStale()) { ws.close(); return; }
+            try { var m = JSON.parse(evt.data); if (m.type === 'balance_updated') fetchBalance(); } catch(_) {}
+        };
+        ws.onclose   = function() {
+            if (isStale()) return;
+            setStatus('Disconnected — reconnecting in 5 s\u2026');
+            reconnTimer = setTimeout(connect, 5000);
+            window._dbBalanceReconnTimer = reconnTimer;
+        };
+        ws.onerror   = function() { ws.close(); };
+    }
+
+    // Build user select immediately from injected list
+    buildUserSelect();
+
+    // Toggle dropdown open/close
+    var mselBtn = document.getElementById('db-msel-btn');
+    var mselDrop = document.getElementById('db-msel-drop');
+    var mselFilter = document.getElementById('db-msel-filter');
+    if (mselBtn && mselDrop) {
+        mselBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var wasOpen = mselDrop.classList.contains('open');
+            mselDrop.classList.toggle('open');
+            if (!wasOpen && mselFilter) { mselFilter.value = ''; filterUsers(''); mselFilter.focus(); }
+        });
+        mselDrop.addEventListener('click', function(e) { e.stopPropagation(); });
+        document.addEventListener('click', function() { mselDrop.classList.remove('open'); });
+    }
+    if (mselFilter) {
+        mselFilter.addEventListener('input', function() { filterUsers(this.value); });
+    }
+
+    function filterUsers(q) {
+        q = q.toLowerCase();
+        var items = document.querySelectorAll('#db-msel-list .db-msel-item');
+        for (var i = 0; i < items.length; i++) {
+            var u = items[i].getAttribute('data-user') || '';
+            items[i].style.display = (!q || u === 'all' || u.indexOf(q) >= 0) ? '' : 'none';
+        }
+    }
+
+    // Attach event listeners (DOMPurify strips inline onclick/onchange)
+    var ths = document.querySelectorAll('.db-table thead th[data-col]');
+    for (var ti = 0; ti < ths.length; ti++) {
+        (function(th) {
+            th.addEventListener('click', function() { dbSortByCol(th.getAttribute('data-col')); });
+        })(ths[ti]);
+    }
+
+    connect();
+    // Also fetch immediately so data appears before WS is established
+    fetchBalance();
+})();
+</script>

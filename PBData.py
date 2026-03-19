@@ -119,6 +119,27 @@ async def _wait_for_flag(flag_path: _Path, timeout: float) -> bool:
         return False
 
 
+async def _notify_api_balance():
+    """Fire-and-forget: POST to FastAPI to fan-out balance_updated to all /ws/dashboard clients.
+
+    Called via asyncio.create_task() after each successful update_balances() write.
+    Errors are silently swallowed — a missed notification is not critical.
+    """
+    import urllib.request
+    from pbgui_purefunc import load_ini
+    try:
+        port_val = load_ini("api_server", "port")
+        port = int(port_val) if port_val and str(port_val).isdigit() else 8000
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/internal/notify/balance",
+            data=b"",
+            method="POST",
+        )
+        await asyncio.to_thread(urllib.request.urlopen, req, None, 2)
+    except Exception:
+        pass
+
+
 class PBData():
     def __init__(self):
         self.piddir = Path(f'{PBGDIR}/data/pid')
@@ -1508,6 +1529,7 @@ class PBData():
                         if got:
                             if kind == 'balances':
                                 await asyncio.to_thread(self.db.update_balances, user)
+                                asyncio.create_task(_notify_api_balance())
                             elif kind == 'positions':
                                 await asyncio.to_thread(self.db.update_positions, user)
                             elif kind == 'orders':
@@ -3067,6 +3089,7 @@ class PBData():
                                 async with self._rest_slot(exchange_for_slot) as got:
                                     if got:
                                         await asyncio.to_thread(self.db.update_balances, user)
+                                        asyncio.create_task(_notify_api_balance())
                                         try:
                                             self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
                                         except Exception:
@@ -3173,6 +3196,7 @@ class PBData():
                         ws_bal = self._balance_ws_tasks.get(user.name)
                         if not (ws_bal and not ws_bal.done()):
                             await asyncio.to_thread(self.db.update_balances, user)
+                            asyncio.create_task(_notify_api_balance())
                             try:
                                 self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
                             except Exception:
@@ -3225,6 +3249,7 @@ class PBData():
         while True:
             try:
                 await asyncio.to_thread(self.db.update_balances, user)
+                asyncio.create_task(_notify_api_balance())
                 try:
                     self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
                 except Exception:

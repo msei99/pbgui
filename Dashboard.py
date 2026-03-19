@@ -24,7 +24,7 @@ DASHBOARD_VIEW_REFRESH = {
     'ppl': 60,
     'income': 30,
     'top_symbols': 60,
-    'balance': 10,
+    'balance': 86400,  # WS-driven — no periodic fragment re-run needed
     'positions': 5,
     'orders': 15,
 }
@@ -407,9 +407,9 @@ class Dashboard():
                             self.view_orders_impl(f'{row}_1', edit=True)
                     if st.session_state[f'dashboard_type_{row}_1'] == "BALANCE":
                         if f'dashboard_balance_users_{row}_1' in self.dashboard_config:
-                            self.view_balance_impl(f'{row}_1', self.dashboard_config[f'dashboard_balance_users_{row}_1'])
+                            self.view_balance_impl(f'{row}_1', self.dashboard_config[f'dashboard_balance_users_{row}_1'], edit=True)
                         else:
-                            self.view_balance_impl(f'{row}_1')
+                            self.view_balance_impl(f'{row}_1', edit=True)
                     if st.session_state[f'dashboard_type_{row}_1'] == "P+L":
                         if f'dashboard_ppl_users_{row}_1' in self.dashboard_config and f'dashboard_ppl_period_{row}_1' in self.dashboard_config and f'dashboard_ppl_sum_period_{row}_1' in self.dashboard_config:
                             self.view_ppl_impl(f'{row}_1', self.dashboard_config[f'dashboard_ppl_users_{row}_1'], self.dashboard_config[f'dashboard_ppl_period_{row}_1'], self.dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
@@ -482,9 +482,9 @@ class Dashboard():
                             self.view_orders_impl(f'{row}_2', edit=True)
                     if st.session_state[f'dashboard_type_{row}_2'] == "BALANCE":
                         if f'dashboard_balance_users_{row}_2' in self.dashboard_config:
-                            self.view_balance_impl(f'{row}_2', self.dashboard_config[f'dashboard_balance_users_{row}_2'])
+                            self.view_balance_impl(f'{row}_2', self.dashboard_config[f'dashboard_balance_users_{row}_2'], edit=True)
                         else:
-                            self.view_balance_impl(f'{row}_2')
+                            self.view_balance_impl(f'{row}_2', edit=True)
                     if st.session_state[f'dashboard_type_{row}_2'] == "P+L":
                         if f'dashboard_ppl_users_{row}_2' in self.dashboard_config and f'dashboard_ppl_period_{row}_2' in self.dashboard_config and f'dashboard_ppl_sum_period_{row}_2' in self.dashboard_config:
                             self.view_ppl_impl(f'{row}_2', self.dashboard_config[f'dashboard_ppl_users_{row}_2'], self.dashboard_config[f'dashboard_ppl_period_{row}_2'], self.dashboard_config[f'dashboard_ppl_sum_period_{row}_2'])
@@ -550,9 +550,9 @@ class Dashboard():
                         self.view_orders_impl(f'{row}_1', edit=True)
                 if st.session_state[f'dashboard_type_{row}_1'] == "BALANCE":
                     if f'dashboard_balance_users_{row}_1' in self.dashboard_config:
-                        self.view_balance_impl(f'{row}_1', self.dashboard_config[f'dashboard_balance_users_{row}_1'])
+                        self.view_balance_impl(f'{row}_1', self.dashboard_config[f'dashboard_balance_users_{row}_1'], edit=True)
                     else:
-                        self.view_balance_impl(f'{row}_1')
+                        self.view_balance_impl(f'{row}_1', edit=True)
                 if st.session_state[f'dashboard_type_{row}_1'] == "P+L":
                     if f'dashboard_ppl_users_{row}_1' in self.dashboard_config and f'dashboard_ppl_period_{row}_1' in self.dashboard_config and f'dashboard_ppl_sum_period_{row}_1' in self.dashboard_config:
                         self.view_ppl_impl(f'{row}_1', self.dashboard_config[f'dashboard_ppl_users_{row}_1'], self.dashboard_config[f'dashboard_ppl_period_{row}_1'], self.dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
@@ -608,7 +608,33 @@ class Dashboard():
                         else:
                             dashboard_config[f'dashboard_orders_{row}_{col}'] = None
                     if st.session_state[f'dashboard_type_{row}_{col}'] == "BALANCE":
-                        dashboard_config[f'dashboard_balance_users_{row}_{col}'] = st.session_state[f'dashboard_balance_users_{row}_{col}']
+                        key = f'dashboard_balance_users_{row}_{col}'
+                        # Read from JS→API selection sync (HTTP call to FastAPI process)
+                        js_sel = None
+                        try:
+                            from pbgui_func import _start_fastapi_server_if_needed
+                            from api.auth import generate_token
+                            _h, _p, _ok = _start_fastapi_server_if_needed()
+                            if _ok:
+                                import urllib.request, json as _json2
+                                _tok = st.session_state.get('api_token', '')
+                                if not _tok:
+                                    _tok = generate_token('save', expires_in_seconds=60).token
+                                _url = f'http://127.0.0.1:{_p}/api/dashboard/balance/selection?position={row}_{col}&token={_tok}'
+                                with urllib.request.urlopen(_url, timeout=2) as _resp:
+                                    _data = _json2.loads(_resp.read())
+                                    if _data.get('found'):
+                                        js_sel = _data['users']
+                        except Exception:
+                            pass
+                        if js_sel is not None:
+                            dashboard_config[key] = js_sel
+                        elif key in st.session_state:
+                            dashboard_config[key] = st.session_state[key]
+                        elif key in self.dashboard_config:
+                            dashboard_config[key] = self.dashboard_config[key]
+                        else:
+                            dashboard_config[key] = ['ALL']
                     if st.session_state[f'dashboard_type_{row}_{col}'] == "P+L":
                         dashboard_config[f'dashboard_ppl_users_{row}_{col}'] = st.session_state[f'dashboard_ppl_users_{row}_{col}']
                         dashboard_config[f'dashboard_ppl_period_{row}_{col}'] = st.session_state[f'dashboard_ppl_period_{row}_{col}']
@@ -700,7 +726,7 @@ class Dashboard():
                     if dashboard_config[f'dashboard_type_{row}_1'] == "ORDERS":
                         _register_fragment(self.view_orders_impl, f'{row}_1', 'orders', dashboard_config[f'dashboard_orders_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "BALANCE":
-                        _register_fragment(self.view_balance_impl, f'{row}_1', 'balance', dashboard_config[f'dashboard_balance_users_{row}_1'])
+                        self.view_balance_impl(f'{row}_1', dashboard_config[f'dashboard_balance_users_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "P+L":
                         # Compatibility for 1st P+L implementation
                         if f'dashboard_ppl_sum_period_{row}_1' not in dashboard_config:
@@ -724,7 +750,7 @@ class Dashboard():
                     if dashboard_config[f'dashboard_type_{row}_2'] == "ORDERS":
                         _register_fragment(self.view_orders_impl, f'{row}_2', 'orders', dashboard_config[f'dashboard_orders_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "BALANCE":
-                        _register_fragment(self.view_balance_impl, f'{row}_2', 'balance', dashboard_config[f'dashboard_balance_users_{row}_2'])
+                        self.view_balance_impl(f'{row}_2', dashboard_config[f'dashboard_balance_users_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "P+L":
                         # Compatibility for 1st P+L implementation
                         if f'dashboard_ppl_sum_period_{row}_2' not in dashboard_config:
@@ -748,7 +774,7 @@ class Dashboard():
                 if dashboard_config[f'dashboard_type_{row}_1'] == "ORDERS":
                     _register_fragment(self.view_orders_impl, f'{row}_1', 'orders', dashboard_config[f'dashboard_orders_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "BALANCE":
-                    _register_fragment(self.view_balance_impl, f'{row}_1', 'balance', dashboard_config[f'dashboard_balance_users_{row}_1'])
+                    self.view_balance_impl(f'{row}_1', dashboard_config[f'dashboard_balance_users_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "P+L":
                     # Compatibility for 1st P+L implementation
                     if f'dashboard_ppl_sum_period_{row}_1' not in dashboard_config:
@@ -1279,66 +1305,82 @@ class Dashboard():
         color = "red" if value < 0 else "green"
         return f"color: {color};"
     
-    def view_balance_impl(self, position : str, user : str = None):
-        users = st.session_state.users
-        if f"dashboard_balance_users_{position}" not in st.session_state:
-            if user:
-                st.session_state[f'dashboard_balance_users_{position}'] = user
-                for user in st.session_state[f'dashboard_balance_users_{position}']:
-                    if user not in users.list() and user != 'ALL':
-                        st.session_state[f'dashboard_balance_users_{position}'].remove(user)
-        st.markdown("#### :blue[Balance]")
-        st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_balance_users_{position}")
-        if st.session_state[f'dashboard_balance_users_{position}']:
-            if 'ALL' in st.session_state[f'dashboard_balance_users_{position}']:
-                users_selected = users.list()
-            else:
-                users_selected = st.session_state[f'dashboard_balance_users_{position}']
-            balances = self.db.fetch_balances(users_selected)
-            if not balances:
-                return
-            df = pd.DataFrame(balances, columns=['Id', 'Date', 'Balance', 'User'])
-            my_tz = datetime.now().astimezone().tzinfo
-            df['Date'] = pd.to_datetime(df['Date'], unit='ms').dt.tz_localize('UTC').dt.tz_convert(my_tz).dt.strftime('%Y-%m-%d %H:%M:%S')
-            # print(df)
-            # loop over df and select balance
-            all_pprices = 0
-            for index, balance in df.iterrows():
-                # Fetch positions
-                user = users.find_user(balance['User'])
-                positions = self.db.fetch_positions(user)
-                # calculate WE for user
-                upnl = 0
-                pprices = 0
-                for pos in positions:
-                    pprices += pos[3] * pos[5]
-                    upnl += pos[4]
-                all_pprices += pprices
-                if balance['Balance'] == 0 or pprices == 0:
-                    twe = 0
-                else:
-                    twe = 100 / balance['Balance'] * pprices
-                # add twe to df as new column name we
-                df.at[index, 'WE'] = twe
-                df.at[index, 'uPnl'] = upnl
-            total_balance = df['Balance'].sum()
-            total_upnl = df['uPnl'].sum()
-            if total_balance == 0 or all_pprices == 0:
-                total_twe = 0
-            else:
-                total_twe = 100 / total_balance * all_pprices
-            color = "green" if total_twe < 100 else "orange" if total_twe < 200 else "red"
-            color_upnl = "red" if total_upnl < 0 else "green"
-            st.markdown(f"#### :blue[Total Balance:] :green[${total_balance:.2f} USDT]&emsp; :blue[Total uPnl:] :{color_upnl}[${total_upnl:.2f}]&emsp; :blue[Total TWE:] :{color}[{total_twe:.2f} %]")
-            column_config = {
-                "Id": None,
-                "Balance": st.column_config.NumberColumn(f'Total Balance: ${total_balance:.2f}' ,format="%.2f"),
-                "uPnl": st.column_config.NumberColumn(f'Total uPnl: ${total_upnl:.2f}' ,format="%.2f"),
-                "WE": st.column_config.ProgressColumn(f'TWE: {total_twe:.2f} %', format="%.2f %%", min_value=0, max_value=300)
-            }
-            df = df[['Id', 'User', 'Date', 'Balance', 'uPnl', 'WE']]
-            sdf = df.style.map(self.color_we, subset=['WE']).map(self.color_upnl, subset=['uPnl']).format({'Balance': "{:.2f}"})
-            st.dataframe(sdf, height=36+(len(df))*35, key=f"dashboard_balance_{position}_{st.session_state.get('dashboard_reload_token', 0)}", on_select="rerun", selection_mode='single-row', hide_index=None, column_order=None, column_config=column_config)
+    def view_balance_impl(self, position: str, user=None, edit=False):
+        """Render the Balance view via st.html (FastAPI + Vanilla JS).
+
+        The HTML component connects via WebSocket (/ws/dashboard) and fetches
+        fresh data from /api/dashboard/balance. PBData notifies the server
+        after each update_balances() write, triggering a fan-out to all
+        connected WS clients. No Streamlit reruns needed.
+        """
+        from pathlib import Path as _Path
+        from pbgui_func import _start_fastapi_server_if_needed
+        from api.auth import generate_token
+
+        api_host, api_port, success = _start_fastapi_server_if_needed()
+        if not success:
+            st.error(
+                f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+                "Please check **System → Services → API Server**."
+            )
+            return
+
+        # Get or create session token
+        if "api_token" not in st.session_state:
+            user_id = (
+                st.session_state.get("user", {}).get("id")
+                or st.session_state.get("user")
+                or "anonymous"
+            )
+            st.session_state["api_token"] = generate_token(
+                str(user_id), expires_in_seconds=86400
+            ).token
+        token = st.session_state["api_token"]
+
+        # Resolve browser-usable hostname (0.0.0.0 is not routable from browser)
+        _browser_host = "127.0.0.1"
+        try:
+            req_host = st.context.headers.get("Host", "")
+            if req_host:
+                _browser_host = req_host.split(":")[0] or "127.0.0.1"
+        except Exception:
+            pass
+
+        api_host_str = f"{_browser_host}:{api_port}"
+        api_base_str = f"http://{_browser_host}:{api_port}/api"
+
+        # Load HTML template and inject config as JS variables (%%PLACEHOLDER%% pattern)
+        html_path = _Path(__file__).parent / "frontend" / "dashboard_balance.html"
+        html = html_path.read_text(encoding="utf-8")
+
+        # Build users list for initial selection
+        import json as _json
+        if user and isinstance(user, (list, tuple)) and len(user) > 0:
+            users_json = _json.dumps(list(user))
+        else:
+            users_json = '["ALL"]'
+
+        # Build full list of available users for the select dropdown
+        try:
+            all_users_list = ['ALL'] + sorted(st.session_state.users.list(), key=str.lower)
+        except Exception:
+            all_users_list = ['ALL']
+        all_users_json = _json.dumps(all_users_list)
+
+        # Unique instance ID to prevent stale WS connections overwriting DOM
+        import uuid as _uuid
+        instance_id = _uuid.uuid4().hex[:8]
+
+        html = html.replace('"%%TOKEN%%"',    f'"{token}"')
+        html = html.replace('"%%API_BASE%%"', f'"{api_base_str}"')
+        html = html.replace('"%%API_HOST%%"', f'"{api_host_str}"')
+        html = html.replace('%%USERS%%',      users_json)
+        html = html.replace('%%ALL_USERS%%',  all_users_json)
+        html = html.replace('%%EDIT_MODE%%',  'true' if edit else 'false')
+        html = html.replace('"%%INSTANCE_ID%%"', f'"{instance_id}"')
+        html = html.replace('"%%POSITION%%"', f'"{position}"')
+
+        st.html(html, unsafe_allow_javascript=True)
 
     def bgcolor_positive_or_negative(self, value):
         bgcolor = "red" if value < 0 else "green"
