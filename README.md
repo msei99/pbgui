@@ -324,6 +324,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.67 (unreleased)
+- Improved: Dashboard Balance widget migrated to FastAPI + Vanilla JS — live updates via WebSocket push (no Streamlit polling), custom checkbox user dropdown with text filter, sortable columns, stale-instance guard; user selection persisted across saves via HTTP sync with API server
 - Fix: `psutil.ZombieProcess` now caught in all process-detection loops (`OptimizeV7`, `BacktestV7`, `PBRun`, `PBRemote`) — prevents Streamlit crash after ~130k optimizer iterations when zombie subprocesses appear in the process table
 - Fix: Task-worker watchdog added to `PBApiServer` — checks every 60 s whether the `task_worker` process is alive; auto-restarts it if jobs are pending/running but the worker is dead (previously a crashed worker could leave the entire job queue stalled indefinitely)
 
