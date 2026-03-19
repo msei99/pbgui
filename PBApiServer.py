@@ -27,11 +27,12 @@ from time import sleep
 
 import psutil
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from api.dashboard import router as dashboard_router
 from api.jobs import router as jobs_router
 from api.market_data import router as market_data_router
 from api.heatmap import router as heatmap_router
@@ -209,6 +210,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(market_data_router, prefix="/api", tags=["market-data"])
 app.include_router(heatmap_router, prefix="/api/heatmap", tags=["heatmap"])
@@ -222,6 +224,9 @@ if frontend_dir.exists():
 # ── WebSocket endpoints ───────────────────────────────────────
 
 active_connections: list[WebSocket] = []
+
+# Set of active /ws/dashboard connections (notified by PBData via internal POST)
+dashboard_ws_clients: set[WebSocket] = set()
 
 
 @app.websocket("/ws/jobs")
@@ -362,6 +367,51 @@ async def websocket_heatmap_watch(websocket: WebSocket):
         pass
     except Exception as e:
         _log(SERVICE, f"[ws/heatmap-watch] Error: {e}", level="ERROR")
+
+
+@app.websocket("/ws/dashboard")
+async def websocket_dashboard(websocket: WebSocket):
+    """WebSocket endpoint for dashboard live updates.
+
+    Clients receive {"type": "balance_updated"} whenever PBData writes
+    fresh balance/position data to the database.
+    """
+    from api.auth import validate_token
+    token = websocket.query_params.get("token", "")
+    if not validate_token(token):
+        await websocket.close(code=4001)
+        return
+    await websocket.accept()
+    dashboard_ws_clients.add(websocket)
+    try:
+        while True:
+            await asyncio.sleep(60)  # keep-alive; real pushes come from /api/internal/notify/balance
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        _log(SERVICE, f"[ws/dashboard] Error: {e}", level="ERROR")
+    finally:
+        dashboard_ws_clients.discard(websocket)
+
+
+@app.post("/api/internal/notify/balance")
+async def internal_notify_balance(request: Request):
+    """Internal endpoint called by PBData after writing balance/position data.
+
+    Broadcasts {"type": "balance_updated"} to all connected /ws/dashboard clients.
+    Only accepts requests from localhost.
+    """
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="Internal endpoint")
+    dead: set[WebSocket] = set()
+    for ws in list(dashboard_ws_clients):
+        try:
+            await ws.send_json({"type": "balance_updated"})
+        except Exception:
+            dead.add(ws)
+    dashboard_ws_clients.difference_update(dead)
+    return {"ok": True, "notified": len(dashboard_ws_clients)}
 
 
 # ── REST endpoints ────────────────────────────────────────────
