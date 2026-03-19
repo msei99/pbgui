@@ -334,6 +334,7 @@ class VPSMonitor:
 
         # 2. Reconnect lost
         reconnected = await self.pool.reconnect_lost(enabled)
+        newly_reconnected: list[str] = []
         for hostname, success in reconnected.items():
             if success:
                 _log(SERVICE, f"Reconnected to {hostname}")
@@ -341,8 +342,22 @@ class VPSMonitor:
                 alert_key = f"conn:{hostname}"
                 if alert_key in self._connection_alerts:
                     self._connection_alerts.discard(alert_key)
+                    newly_reconnected.append(hostname)
+
+        # Send reconnect alerts (batched if mass reconnect)
+        if newly_reconnected:
+            if len(newly_reconnected) >= max(2, len(enabled) * 0.5):
+                hosts_str = ", ".join(sorted(newly_reconnected))
+                await self._send_alert(
+                    f"✅ *VPSMonitor*: Network recovered — "
+                    f"SSH reconnected to *{len(newly_reconnected)}* "
+                    f"hosts ({hosts_str})"
+                )
+            else:
+                for hostname in newly_reconnected:
                     await self._send_alert(
-                        f"✅ *VPSMonitor*: SSH reconnected to *{hostname}*"
+                        f"✅ *VPSMonitor*: SSH reconnected to "
+                        f"*{hostname}*"
                     )
 
         # 3. Restart dead metric streams
@@ -668,19 +683,33 @@ class VPSMonitor:
     # ── Connection alerts ───────────────────────────────────
 
     def _handle_connection_changes(self, status: dict[str, ConnectionStatus]):
+        newly_disconnected: list[str] = []
         for hostname, conn_status in status.items():
             alert_key = f"conn:{hostname}"
             if conn_status == ConnectionStatus.DISCONNECTED:
                 if alert_key not in self._connection_alerts:
                     self._connection_alerts.add(alert_key)
-                    # Sync wrapper for alert (we're in an async context but
-                    # this is called from _loop_iteration which is async)
-                    asyncio.create_task(self._send_alert(
-                        f"⚠️ *VPSMonitor*: SSH connection lost to "
-                        f"*{hostname}*"
-                    ))
+                    newly_disconnected.append(hostname)
             elif conn_status == ConnectionStatus.CONNECTED:
                 self._connection_alerts.discard(alert_key)
+
+        if not newly_disconnected:
+            return
+
+        total_hosts = len(status)
+        # Mass disconnect: ≥50% of monitored hosts lost simultaneously
+        if len(newly_disconnected) >= max(2, total_hosts * 0.5):
+            hosts_str = ", ".join(sorted(newly_disconnected))
+            asyncio.create_task(self._send_alert(
+                f"⚠️ *VPSMonitor*: Network blip — SSH lost to "
+                f"*{len(newly_disconnected)}* hosts ({hosts_str})"
+            ))
+        else:
+            for hostname in newly_disconnected:
+                asyncio.create_task(self._send_alert(
+                    f"⚠️ *VPSMonitor*: SSH connection lost to "
+                    f"*{hostname}*"
+                ))
 
     async def _send_alert(self, message: str):
         """Send Telegram alert."""

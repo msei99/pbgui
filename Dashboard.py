@@ -162,130 +162,183 @@ class Dashboard():
             keys = list(st.session_state.keys())
         except Exception:
             keys = []
-        dashboard_keys = [k for k in keys if k.startswith("dashboard_") or k.startswith("view_orders_")]
+        dashboard_keys = [k for k in keys if
+            k.startswith("dashboard_") or
+            k.startswith("view_orders_") or
+            k.startswith("_dbe_init_")]
         for key in dashboard_keys:
             # Use pop with default to avoid KeyError if another part removed it
             st.session_state.pop(key, None)
 
+    def _push_pending_config(self):
+        """Push current dashboard_config to FastAPI so the editor can initialise from it."""
+        try:
+            from pbgui_func import _start_fastapi_server_if_needed
+            import urllib.request, urllib.parse, json as _json
+            _, api_port, ok = _start_fastapi_server_if_needed()
+            if not ok:
+                return
+            token = st.session_state.get('api_token', '')
+            cfg = dict(self.dashboard_config)
+            cfg['name'] = self.name
+            cfg['rows'] = self.rows
+            cfg['cols'] = self.cols
+            data = _json.dumps(cfg).encode()
+            url = (f'http://127.0.0.1:{api_port}/api/dashboard/pending_full'
+                   f'?name={urllib.parse.quote(self.name or "")}&token={token}')
+            req = urllib.request.Request(
+                url, data=data,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            urllib.request.urlopen(req, timeout=2)
+        except Exception:
+            pass
+
+    def get_draft_name(self) -> str:
+        """Return the working name from the JS editor (FastAPI pending config), or self.name.
+
+        Used by info_dashboards to validate the name before saving, since for new
+        (unsaved) dashboards self.name is empty and the name is only in the JS editor.
+        """
+        try:
+            pending = self._pull_pending_config()
+            n = str(pending.get('name', '') or '').strip()
+            if n:
+                return n
+        except Exception:
+            pass
+        return self.name or ''
+
+    def _pull_pending_config(self) -> dict:
+        """Pull the full pending config from FastAPI (written by the JS editor)."""
+        try:
+            from pbgui_func import _start_fastapi_server_if_needed
+            import urllib.request, urllib.parse, json as _json
+            _, api_port, ok = _start_fastapi_server_if_needed()
+            if not ok:
+                return {}
+            token = st.session_state.get('api_token', '')
+            url = (f'http://127.0.0.1:{api_port}/api/dashboard/pending_full'
+                   f'?name={urllib.parse.quote(self.name or "")}&token={token}')
+            with urllib.request.urlopen(url, timeout=2) as resp:
+                data = _json.loads(resp.read())
+                if data.get('found'):
+                    return data['config']
+        except Exception:
+            pass
+        return {}
+
     def swap(self, from_row, to_row, from_col, to_col):
-        dashboard_type_1 = st.session_state[f'dashboard_type_{from_row}_{from_col}']
-        dashboard_type_2 = st.session_state[f'dashboard_type_{to_row}_{to_col}']
-        del st.session_state[f'dashboard_type_{from_row}_{from_col}']
-        del st.session_state[f'dashboard_type_{to_row}_{to_col}']
+        # Helper: read from session_state, fall back to dashboard_config
+        def _get(key):
+            return st.session_state.get(key, self.dashboard_config.get(key))
+
+        def _del(key):
+            st.session_state.pop(key, None)
+
+        dashboard_type_1 = _get(f'dashboard_type_{from_row}_{from_col}') or 'NONE'
+        dashboard_type_2 = _get(f'dashboard_type_{to_row}_{to_col}') or 'NONE'
+        _del(f'dashboard_type_{from_row}_{from_col}')
+        _del(f'dashboard_type_{to_row}_{to_col}')
         st.session_state[f'dashboard_type_{from_row}_{from_col}'] = dashboard_type_2
         st.session_state[f'dashboard_type_{to_row}_{to_col}'] = dashboard_type_1
         move_1 = {}
         move_2 = {}
         if dashboard_type_1 == "PNL":
-            pnl_users_1 = st.session_state[f'dashboard_pnl_users_{from_row}_{from_col}']
-            pnl_period_1 = st.session_state[f'dashboard_pnl_period_{from_row}_{from_col}']
-            pnl_mode_1 = st.session_state[f'dashboard_pnl_mode_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_pnl_users_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_pnl_period_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_pnl_mode_{from_row}_{from_col}']
-            move_1 = {"pnl_users_1": pnl_users_1, "pnl_period_1": pnl_period_1, "pnl_mode_1": pnl_mode_1}
+            move_1 = {
+                "pnl_users_1": _get(f'dashboard_pnl_users_{from_row}_{from_col}'),
+                "pnl_period_1": _get(f'dashboard_pnl_period_{from_row}_{from_col}'),
+                "pnl_mode_1": _get(f'dashboard_pnl_mode_{from_row}_{from_col}'),
+            }
+            _del(f'dashboard_pnl_users_{from_row}_{from_col}'); _del(f'dashboard_pnl_period_{from_row}_{from_col}'); _del(f'dashboard_pnl_mode_{from_row}_{from_col}')
         if dashboard_type_1 == "ADG":
-            adg_users_1 = st.session_state[f'dashboard_adg_users_{from_row}_{from_col}']
-            adg_period_1 = st.session_state[f'dashboard_adg_period_{from_row}_{from_col}']
-            adg_mode_1 = st.session_state[f'dashboard_adg_mode_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_adg_users_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_adg_period_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_adg_mode_{from_row}_{from_col}']
-            move_1 = {"adg_users_1": adg_users_1, "adg_period_1": adg_period_1, "adg_mode_1": adg_mode_1}
+            move_1 = {
+                "adg_users_1": _get(f'dashboard_adg_users_{from_row}_{from_col}'),
+                "adg_period_1": _get(f'dashboard_adg_period_{from_row}_{from_col}'),
+                "adg_mode_1": _get(f'dashboard_adg_mode_{from_row}_{from_col}'),
+            }
+            _del(f'dashboard_adg_users_{from_row}_{from_col}'); _del(f'dashboard_adg_period_{from_row}_{from_col}'); _del(f'dashboard_adg_mode_{from_row}_{from_col}')
         if dashboard_type_1 == "INCOME":
-            income_users_1 = st.session_state[f'dashboard_income_users_{from_row}_{from_col}']
-            income_period_1 = st.session_state[f'dashboard_income_period_{from_row}_{from_col}']
-            income_last_1 = st.session_state[f'dashboard_income_last_{from_row}_{from_col}']
-            income_filter_1 = st.session_state[f'dashboard_income_filter_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_income_users_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_income_period_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_income_last_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_income_filter_{from_row}_{from_col}']
-            move_1 = {"income_users_1": income_users_1, "income_period_1": income_period_1, "income_last_1": income_last_1, "income_filter_1": income_filter_1}
+            move_1 = {
+                "income_users_1": _get(f'dashboard_income_users_{from_row}_{from_col}'),
+                "income_period_1": _get(f'dashboard_income_period_{from_row}_{from_col}'),
+                "income_last_1": _get(f'dashboard_income_last_{from_row}_{from_col}'),
+                "income_filter_1": _get(f'dashboard_income_filter_{from_row}_{from_col}'),
+            }
+            _del(f'dashboard_income_users_{from_row}_{from_col}'); _del(f'dashboard_income_period_{from_row}_{from_col}')
+            _del(f'dashboard_income_last_{from_row}_{from_col}'); _del(f'dashboard_income_filter_{from_row}_{from_col}')
         if dashboard_type_1 == "TOP":
-            top_symbols_users_1 = st.session_state[f'dashboard_top_symbols_users_{from_row}_{from_col}']
-            top_symbols_period_1 = st.session_state[f'dashboard_top_symbols_period_{from_row}_{from_col}']
-            top_symbols_top_1 = st.session_state[f'dashboard_top_symbols_top_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_top_symbols_users_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_top_symbols_period_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_top_symbols_top_{from_row}_{from_col}']
-            move_1 = {"top_symbols_users_1": top_symbols_users_1, "top_symbols_period_1": top_symbols_period_1, "top_symbols_top_1": top_symbols_top_1}
+            move_1 = {
+                "top_symbols_users_1": _get(f'dashboard_top_symbols_users_{from_row}_{from_col}'),
+                "top_symbols_period_1": _get(f'dashboard_top_symbols_period_{from_row}_{from_col}'),
+                "top_symbols_top_1": _get(f'dashboard_top_symbols_top_{from_row}_{from_col}'),
+            }
+            _del(f'dashboard_top_symbols_users_{from_row}_{from_col}'); _del(f'dashboard_top_symbols_period_{from_row}_{from_col}'); _del(f'dashboard_top_symbols_top_{from_row}_{from_col}')
         if dashboard_type_1 == "BALANCE":
-            balance_users_1 = st.session_state[f'dashboard_balance_users_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_balance_users_{from_row}_{from_col}']
-            move_1 = {"balance_users_1": balance_users_1}
+            move_1 = {"balance_users_1": _get(f'dashboard_balance_users_{from_row}_{from_col}')}
+            _del(f'dashboard_balance_users_{from_row}_{from_col}')
         if dashboard_type_1 == "POSITIONS":
-            positions_users_1 = st.session_state[f'dashboard_positions_users_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_positions_users_{from_row}_{from_col}']
-            move_1 = {"positions_users_1": positions_users_1}
+            move_1 = {"positions_users_1": _get(f'dashboard_positions_users_{from_row}_{from_col}')}
+            _del(f'dashboard_positions_users_{from_row}_{from_col}')
         if dashboard_type_1 == "ORDERS":
-            orders_1 = st.session_state[f'dashboard_orders_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_orders_{from_row}_{from_col}']
-            move_1 = {"orders_1": orders_1}
+            move_1 = {"orders_1": _get(f'dashboard_orders_{from_row}_{from_col}')}
+            _del(f'dashboard_orders_{from_row}_{from_col}')
         if dashboard_type_1 == "P+L":
-            ppl_users_1 = st.session_state[f'dashboard_ppl_users_{from_row}_{from_col}']
-            ppl_period_1 = st.session_state[f'dashboard_ppl_period_{from_row}_{from_col}']
-            ppl_sum_period_1 = st.session_state[f'dashboard_ppl_sum_period_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_ppl_users_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_ppl_period_{from_row}_{from_col}']
-            del st.session_state[f'dashboard_ppl_sum_period_{from_row}_{from_col}']
-            move_1 = {"ppl_users_1": ppl_users_1, "ppl_period_1": ppl_period_1, "ppl_sum_period_1": ppl_sum_period_1}    
-            
-            
+            move_1 = {
+                "ppl_users_1": _get(f'dashboard_ppl_users_{from_row}_{from_col}'),
+                "ppl_period_1": _get(f'dashboard_ppl_period_{from_row}_{from_col}'),
+                "ppl_sum_period_1": _get(f'dashboard_ppl_sum_period_{from_row}_{from_col}'),
+            }
+            _del(f'dashboard_ppl_users_{from_row}_{from_col}'); _del(f'dashboard_ppl_period_{from_row}_{from_col}'); _del(f'dashboard_ppl_sum_period_{from_row}_{from_col}')
+
         if dashboard_type_2 == "PNL":
-            pnl_users_2 = st.session_state[f'dashboard_pnl_users_{to_row}_{to_col}']
-            pnl_period_2 = st.session_state[f'dashboard_pnl_period_{to_row}_{to_col}']
-            pnl_mode_2 = st.session_state[f'dashboard_pnl_mode_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_pnl_users_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_pnl_period_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_pnl_mode_{to_row}_{to_col}']
-            move_2 = {"pnl_users_2": pnl_users_2, "pnl_period_2": pnl_period_2, "pnl_mode_2": pnl_mode_2}
+            move_2 = {
+                "pnl_users_2": _get(f'dashboard_pnl_users_{to_row}_{to_col}'),
+                "pnl_period_2": _get(f'dashboard_pnl_period_{to_row}_{to_col}'),
+                "pnl_mode_2": _get(f'dashboard_pnl_mode_{to_row}_{to_col}'),
+            }
+            _del(f'dashboard_pnl_users_{to_row}_{to_col}'); _del(f'dashboard_pnl_period_{to_row}_{to_col}'); _del(f'dashboard_pnl_mode_{to_row}_{to_col}')
         if dashboard_type_2 == "ADG":
-            adg_users_2 = st.session_state[f'dashboard_adg_users_{to_row}_{to_col}']
-            adg_period_2 = st.session_state[f'dashboard_adg_period_{to_row}_{to_col}']
-            adg_mode_2 = st.session_state[f'dashboard_adg_mode_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_adg_users_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_adg_period_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_adg_mode_{to_row}_{to_col}']
-            move_2 = {"adg_users_2": adg_users_2, "adg_period_2": adg_period_2, "adg_mode_2": adg_mode_2}
+            move_2 = {
+                "adg_users_2": _get(f'dashboard_adg_users_{to_row}_{to_col}'),
+                "adg_period_2": _get(f'dashboard_adg_period_{to_row}_{to_col}'),
+                "adg_mode_2": _get(f'dashboard_adg_mode_{to_row}_{to_col}'),
+            }
+            _del(f'dashboard_adg_users_{to_row}_{to_col}'); _del(f'dashboard_adg_period_{to_row}_{to_col}'); _del(f'dashboard_adg_mode_{to_row}_{to_col}')
         if dashboard_type_2 == "INCOME":
-            income_users_2 = st.session_state[f'dashboard_income_users_{to_row}_{to_col}']
-            income_period_2 = st.session_state[f'dashboard_income_period_{to_row}_{to_col}']
-            income_last_2 = st.session_state[f'dashboard_income_last_{to_row}_{to_col}']
-            income_filter_2 = st.session_state[f'dashboard_income_filter_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_income_users_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_income_period_{to_row}_{to_col}']
-            move_2 = {"income_users_2": income_users_2, "income_period_2": income_period_2, "income_last_2": income_last_2, "income_filter_2": income_filter_2}
+            move_2 = {
+                "income_users_2": _get(f'dashboard_income_users_{to_row}_{to_col}'),
+                "income_period_2": _get(f'dashboard_income_period_{to_row}_{to_col}'),
+                "income_last_2": _get(f'dashboard_income_last_{to_row}_{to_col}'),
+                "income_filter_2": _get(f'dashboard_income_filter_{to_row}_{to_col}'),
+            }
+            _del(f'dashboard_income_users_{to_row}_{to_col}'); _del(f'dashboard_income_period_{to_row}_{to_col}')
+            _del(f'dashboard_income_last_{to_row}_{to_col}'); _del(f'dashboard_income_filter_{to_row}_{to_col}')
         if dashboard_type_2 == "TOP":
-            top_symbols_users_2 = st.session_state[f'dashboard_top_symbols_users_{to_row}_{to_col}']
-            top_symbols_period_2 = st.session_state[f'dashboard_top_symbols_period_{to_row}_{to_col}']
-            top_symbols_top_2 = st.session_state[f'dashboard_top_symbols_top_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_top_symbols_users_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_top_symbols_period_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_top_symbols_top_{to_row}_{to_col}']
-            move_2 = {"top_symbols_users_2": top_symbols_users_2, "top_symbols_period_2": top_symbols_period_2, "top_symbols_top_2": top_symbols_top_2}
+            move_2 = {
+                "top_symbols_users_2": _get(f'dashboard_top_symbols_users_{to_row}_{to_col}'),
+                "top_symbols_period_2": _get(f'dashboard_top_symbols_period_{to_row}_{to_col}'),
+                "top_symbols_top_2": _get(f'dashboard_top_symbols_top_{to_row}_{to_col}'),
+            }
+            _del(f'dashboard_top_symbols_users_{to_row}_{to_col}'); _del(f'dashboard_top_symbols_period_{to_row}_{to_col}'); _del(f'dashboard_top_symbols_top_{to_row}_{to_col}')
         if dashboard_type_2 == "BALANCE":
-            balance_users_2 = st.session_state[f'dashboard_balance_users_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_balance_users_{to_row}_{to_col}']
-            move_2 = {"balance_users_2": balance_users_2}
+            move_2 = {"balance_users_2": _get(f'dashboard_balance_users_{to_row}_{to_col}')}
+            _del(f'dashboard_balance_users_{to_row}_{to_col}')
         if dashboard_type_2 == "POSITIONS":
-            positions_users_2 = st.session_state[f'dashboard_positions_users_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_positions_users_{to_row}_{to_col}']
-            move_2 = {"positions_users_2": positions_users_2}
+            move_2 = {"positions_users_2": _get(f'dashboard_positions_users_{to_row}_{to_col}')}
+            _del(f'dashboard_positions_users_{to_row}_{to_col}')
         if dashboard_type_2 == "ORDERS":
-            orders_2 = st.session_state[f'dashboard_orders_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_orders_{to_row}_{to_col}']
-            move_2 = {"orders_2": orders_2}
+            move_2 = {"orders_2": _get(f'dashboard_orders_{to_row}_{to_col}')}
+            _del(f'dashboard_orders_{to_row}_{to_col}')
         if dashboard_type_2 == "P+L":
-            ppl_users_2 = st.session_state[f'dashboard_ppl_users_{to_row}_{to_col}']
-            ppl_period_2 = st.session_state[f'dashboard_ppl_period_{to_row}_{to_col}']
-            ppl_sum_period_2 = st.session_state[f'dashboard_ppl_sum_period_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_ppl_users_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_ppl_period_{to_row}_{to_col}']
-            del st.session_state[f'dashboard_ppl_sum_period_{to_row}_{to_col}']
-            move_2 = {"ppl_users_2": ppl_users_2, "ppl_period_2": ppl_period_2, "ppl_sum_period_2": ppl_sum_period_2}
-            
-            
+            move_2 = {
+                "ppl_users_2": _get(f'dashboard_ppl_users_{to_row}_{to_col}'),
+                "ppl_period_2": _get(f'dashboard_ppl_period_{to_row}_{to_col}'),
+                "ppl_sum_period_2": _get(f'dashboard_ppl_sum_period_{to_row}_{to_col}'),
+            }
+            _del(f'dashboard_ppl_users_{to_row}_{to_col}'); _del(f'dashboard_ppl_period_{to_row}_{to_col}'); _del(f'dashboard_ppl_sum_period_{to_row}_{to_col}')
+
         for key, val in move_1.items():
             key_new = key.replace(f"_1", f"_{to_row}_{to_col}")
             st.session_state[f'dashboard_{key_new}'] = val
@@ -296,357 +349,265 @@ class Dashboard():
             if key.startswith("dashboard_orders_")}
         for key, val in dashboard_orders.items():
             if val == f'view_orders_{from_row}_{from_col}':
-                if key in st.session_state:
-                    del st.session_state[key]
+                _del(key)
                 st.session_state[key] = f'view_orders_{to_row}_{to_col}'
-                order = st.session_state[f'view_orders_{from_row}_{from_col}']
-                del st.session_state[f'view_orders_{from_row}_{from_col}']
+                order = st.session_state.get(f'view_orders_{from_row}_{from_col}')
+                _del(f'view_orders_{from_row}_{from_col}')
                 st.session_state[f'view_orders_{to_row}_{to_col}'] = order
             if val == f'view_orders_{to_row}_{to_col}':
-                if key in st.session_state:
-                    del st.session_state[key]
+                _del(key)
                 st.session_state[key] = f'view_orders_{from_row}_{from_col}'
-                order = st.session_state[f'view_orders_{to_row}_{to_col}']
-                del st.session_state[f'view_orders_{to_row}_{to_col}']
+                order = st.session_state.get(f'view_orders_{to_row}_{to_col}')
+                _del(f'view_orders_{to_row}_{to_col}')
                 st.session_state[f'view_orders_{from_row}_{from_col}'] = order
+
+        # Also swap keys in self.dashboard_config so _render_cell_preview() uses
+        # the correct data after rerun (it reads from dashboard_config, not session_state).
+        suffix_a = f'_{from_row}_{from_col}'
+        suffix_b = f'_{to_row}_{to_col}'
+        keys_a = {k: v for k, v in self.dashboard_config.items() if k.endswith(suffix_a)}
+        keys_b = {k: v for k, v in self.dashboard_config.items() if k.endswith(suffix_b)}
+        # Delete originals first, then write at swapped positions
+        for k in keys_a:
+            del self.dashboard_config[k]
+        for k in keys_b:
+            del self.dashboard_config[k]
+        for k, v in keys_a.items():
+            self.dashboard_config[k[:-len(suffix_a)] + suffix_b] = v
+        for k, v in keys_b.items():
+            self.dashboard_config[k[:-len(suffix_b)] + suffix_a] = v
+
         st.session_state.swap_rerun = True
 
-    def create_dashboard(self):
-        # Init session_state for keys
-        if "dashboard_cols" in st.session_state:
-            if st.session_state.dashboard_cols != self.cols:
-                self.cols = st.session_state.dashboard_cols
-        else:
-            st.session_state.dashboard_cols = self.cols
-        if "dashboard_rows" in st.session_state:
-            if st.session_state.dashboard_rows != self.rows:
-                self.rows = st.session_state.dashboard_rows
-        else:
-            st.session_state.dashboard_rows = self.rows
-        if "dashboard_name" in st.session_state:
-            if st.session_state.dashboard_name != self.name:
-                self.name = st.session_state.dashboard_name
-        col1, col2, col3 = st.columns([1,1,2])
-        with col1:
-            st.number_input('cols', min_value=1, max_value=2, step=1, key="dashboard_cols")
-        with col2:
-            st.number_input('rows', min_value=1, max_value=6, step=1, key="dashboard_rows")
-        with col3:
-            if not self.name:
-                st.text_input(f":red[Dashboard Name]", self.name, max_chars=32, key="dashboard_name")
+    # ---------------------------------------------------------------------- FastAPI helpers
+
+    def _get_pending_grid_config(self) -> dict | None:
+        """Read the pending grid config from the JS editor via FastAPI."""
+        try:
+            from pbgui_func import _start_fastapi_server_if_needed
+            from api.auth import generate_token
+            import urllib.request
+            import json as _j
+            _h, _p, _ok = _start_fastapi_server_if_needed()
+            if not _ok:
+                return None
+            _tok = st.session_state.get('api_token', '') or generate_token('save', expires_in_seconds=60).token
+            _url = f'http://127.0.0.1:{_p}/api/dashboard/grid/pending'
+            req = urllib.request.Request(_url, headers={'Authorization': f'Bearer {_tok}'})
+            with urllib.request.urlopen(req, timeout=2) as r:
+                data = _j.loads(r.read())
+            return data if data.get('found') else None
+        except Exception:
+            return None
+
+    def _render_grid_editor(self):
+        """Embed the compact JS header (name, cols, rows) via st.html.
+        Cell type selectors and swap buttons are handled by Streamlit inline."""
+        from pathlib import Path as _Path
+        from pbgui_func import _start_fastapi_server_if_needed
+        from api.auth import generate_token
+        import json as _json
+
+        api_host, api_port, success = _start_fastapi_server_if_needed()
+        if not success:
+            st.error("⚠️ FastAPI server not available. Please check System → Services → API Server.")
+            return
+
+        if "api_token" not in st.session_state:
+            user_id = (
+                st.session_state.get("user", {}).get("id")
+                or st.session_state.get("user")
+                or "anonymous"
+            )
+            st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+        token = st.session_state["api_token"]
+
+        _browser_host = "127.0.0.1"
+        try:
+            req_host = st.context.headers.get("Host", "")
+            if req_host:
+                _browser_host = req_host.split(":")[0] or "127.0.0.1"
+        except Exception:
+            pass
+
+        api_base_str = f"http://{_browser_host}:{api_port}/api"
+        name_json = _json.dumps(self.name or "")
+
+        html_path = _Path(__file__).parent / "frontend" / "dashboard_grid_editor.html"
+        html = html_path.read_text(encoding="utf-8")
+        html = html.replace('"%%TOKEN%%"', f'"{token}"')
+        html = html.replace('"%%API_BASE%%"', f'"{api_base_str}"')
+        html = html.replace('%%DASHBOARD_NAME%%', name_json)
+        html = html.replace('%%DASHBOARD_ROWS%%', str(self.rows))
+        html = html.replace('%%DASHBOARD_COLS%%', str(self.cols))
+        st.html(html, unsafe_allow_javascript=True)
+
+    def _render_cell_preview(self, row: int, col: int, dashboard_config: dict):
+        """Render a widget preview for one cell in edit mode (based on the loaded config)."""
+        pos = f'{row}_{col}'
+        # Use live session_state value (selectbox), fall back to saved config
+        cell_type = st.session_state.get(f'dashboard_type_{pos}',
+                    dashboard_config.get(f'dashboard_type_{pos}', 'NONE'))
+        if cell_type == 'NONE':
+            return
+        # Note: _render_refresh_input is called by create_dashboard() inline
+        # before this method — do NOT call it here to avoid duplicate key errors.
+        if cell_type == "PNL":
+            if all(k in dashboard_config for k in [f'dashboard_pnl_users_{pos}', f'dashboard_pnl_period_{pos}', f'dashboard_pnl_mode_{pos}']):
+                self.view_pnl_impl(pos, dashboard_config[f'dashboard_pnl_users_{pos}'], dashboard_config[f'dashboard_pnl_period_{pos}'], dashboard_config[f'dashboard_pnl_mode_{pos}'])
             else:
-                st.text_input(f"Dashboard Name", self.name, max_chars=32, key="dashboard_name")
-        if st.session_state.dashboard_cols == 2:
-            for row in range(1, self.rows + 1):
-                db_col1, db_col2 = st.columns([1,1])
-                with db_col1:
-                    bu_col1, bu_col2, bu_col_empty = st.columns([1,1,20])
-                    with bu_col1:
-                        if st.button(":material/arrow_right_alt:", key=f"swap_{row}_col1"):
-                            self.swap(row, row, 1, 2)
-                            # self.swap_col(row)
-                    with bu_col2:
-                        if row > 1:
-                            if st.button(":material/arrow_upward_alt:", key=f"swap_vert_{row}_col1"):
-                                self.swap(row, row -1, 1, 1)
-                        else:
-                            if st.button(":material/arrow_downward_alt:", key=f"swap_vert_{row}_col1"):
-                                self.swap(row, row +1, 1, 1)
-                    if f'dashboard_type_{row}_1' in st.session_state:
-                        if st.session_state[f'dashboard_type_{row}_1'] != self.dashboard_config.get(f'dashboard_type_{row}_1'):
-                            self.dashboard_config[f'dashboard_type_{row}_1'] = st.session_state[f'dashboard_type_{row}_1']
-                    else:
-                        if f'dashboard_type_{row}_1' in self.dashboard_config:
-                            st.session_state[f'dashboard_type_{row}_1'] = self.dashboard_config[f'dashboard_type_{row}_1']
-                        else:
-                            st.session_state[f'dashboard_type_{row}_1'] = "NONE"
-                    col_type, col_refresh = st.columns([3,1])
-                    with col_type:
-                        st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, key=f'dashboard_type_{row}_1')
-                    with col_refresh:
-                        type_to_key = {
-                            'PNL': 'pnl', 'ADG': 'adg', 'P+L': 'ppl', 'INCOME': 'income',
-                            'TOP': 'top_symbols', 'BALANCE': 'balance', 'POSITIONS': 'positions', 'ORDERS': 'orders'
-                        }
-                        sel = st.session_state.get(f'dashboard_type_{row}_1', 'NONE')
-                        view_key = type_to_key.get(sel)
-                        if view_key:
-                            self._render_refresh_input(row, 1, view_key)
-                    if st.session_state[f'dashboard_type_{row}_1'] == "PNL":
-                        if f'dashboard_pnl_users_{row}_1' in self.dashboard_config and f'dashboard_pnl_period_{row}_1' in self.dashboard_config and f'dashboard_pnl_mode_{row}_1' in self.dashboard_config:
-                            self.view_pnl_impl(f'{row}_1', self.dashboard_config[f'dashboard_pnl_users_{row}_1'], self.dashboard_config[f'dashboard_pnl_period_{row}_1'], self.dashboard_config[f'dashboard_pnl_mode_{row}_1'])
-                        else:
-                            self.view_pnl_impl(f'{row}_1')
-                    if st.session_state[f'dashboard_type_{row}_1'] == "ADG":
-                        if f'dashboard_adg_users_{row}_1' in self.dashboard_config and f'dashboard_adg_period_{row}_1' in self.dashboard_config and f'dashboard_adg_mode_{row}_1' in self.dashboard_config:
-                            self.view_adg_impl(f'{row}_1', self.dashboard_config[f'dashboard_adg_users_{row}_1'], self.dashboard_config[f'dashboard_adg_period_{row}_1'], self.dashboard_config[f'dashboard_adg_mode_{row}_1'])
-                        else:
-                            self.view_adg_impl(f'{row}_1')
-                    if st.session_state[f'dashboard_type_{row}_1'] == "INCOME":
-                        if f'dashboard_income_last_{row}_1' not in self.dashboard_config:
-                            self.dashboard_config[f'dashboard_income_last_{row}_1'] = 0
-                            self.dashboard_config[f'dashboard_income_filter_{row}_1'] = 0.0
-                        if f'dashboard_income_users_{row}_1' in self.dashboard_config and f'dashboard_income_period_{row}_1' in self.dashboard_config and f'dashboard_income_last_{row}_1' in self.dashboard_config and f'dashboard_income_filter_{row}_1' in self.dashboard_config:
-                            self.view_income_impl(f'{row}_1', self.dashboard_config[f'dashboard_income_users_{row}_1'], self.dashboard_config[f'dashboard_income_period_{row}_1'], self.dashboard_config[f'dashboard_income_last_{row}_1'], self.dashboard_config[f'dashboard_income_filter_{row}_1'])
-                        else:
-                            self.view_income_impl(f'{row}_1')
-                    if st.session_state[f'dashboard_type_{row}_1'] == "TOP":
-                        if f'dashboard_top_symbols_users_{row}_1' in self.dashboard_config and f'dashboard_top_symbols_period_{row}_1' in self.dashboard_config and f'dashboard_top_symbols_top_{row}_1' in self.dashboard_config:
-                            self.view_top_symbols_impl(f'{row}_1', self.dashboard_config[f'dashboard_top_symbols_users_{row}_1'], self.dashboard_config[f'dashboard_top_symbols_period_{row}_1'], self.dashboard_config[f'dashboard_top_symbols_top_{row}_1'])
-                        else:
-                            self.view_top_symbols_impl(f'{row}_1')
-                    if st.session_state[f'dashboard_type_{row}_1'] == "POSITIONS":
-                        if f'dashboard_positions_users_{row}_1' in self.dashboard_config:
-                            self.view_positions_impl(f'{row}_1', self.dashboard_config[f'dashboard_positions_users_{row}_1'])
-                        else:
-                            self.view_positions_impl(f'{row}_1')
-                    if st.session_state[f'dashboard_type_{row}_1'] == "ORDERS":
-                        if f'dashboard_orders_{row}_1' in self.dashboard_config:
-                            self.view_orders_impl(f'{row}_1', self.dashboard_config[f'dashboard_orders_{row}_1'], edit=True)
-                        else:
-                            self.view_orders_impl(f'{row}_1', edit=True)
-                    if st.session_state[f'dashboard_type_{row}_1'] == "BALANCE":
-                        if f'dashboard_balance_users_{row}_1' in self.dashboard_config:
-                            self.view_balance_impl(f'{row}_1', self.dashboard_config[f'dashboard_balance_users_{row}_1'], edit=True)
-                        else:
-                            self.view_balance_impl(f'{row}_1', edit=True)
-                    if st.session_state[f'dashboard_type_{row}_1'] == "P+L":
-                        if f'dashboard_ppl_users_{row}_1' in self.dashboard_config and f'dashboard_ppl_period_{row}_1' in self.dashboard_config and f'dashboard_ppl_sum_period_{row}_1' in self.dashboard_config:
-                            self.view_ppl_impl(f'{row}_1', self.dashboard_config[f'dashboard_ppl_users_{row}_1'], self.dashboard_config[f'dashboard_ppl_period_{row}_1'], self.dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
-                        else:
-                            self.view_ppl_impl(f'{row}_1')
-                with db_col2:
-                    bu_col1, bu_col2, bu_col_empty = st.columns([1,1,20])
-                    with bu_col1:
-                        if st.button(":material/arrow_left_alt:", key=f"swap_{row}_col2"):
-                            self.swap(row, row, 2, 1)
-                    with bu_col2:
-                        if row > 1:
-                            if st.button(":material/arrow_upward_alt:", key=f"swap_vert_{row}_col2"):
-                                self.swap(row, row -1, 2, 2)
-                        else:
-                            if st.button(":material/arrow_downward_alt:", key=f"swap_vert_{row}_col2"):
-                                self.swap(row, row +1, 2, 2)
-                    if f'dashboard_type_{row}_2' in st.session_state:
-                        if st.session_state[f'dashboard_type_{row}_2'] != self.dashboard_config.get(f'dashboard_type_{row}_2'):
-                            self.dashboard_config[f'dashboard_type_{row}_2'] = st.session_state[f'dashboard_type_{row}_2']
-                    else:
-                        if f'dashboard_type_{row}_2' in self.dashboard_config:
-                            st.session_state[f'dashboard_type_{row}_2'] = self.dashboard_config[f'dashboard_type_{row}_2']
-                        else:
-                            st.session_state[f'dashboard_type_{row}_2'] = "NONE"
-                    col_type, col_refresh = st.columns([3,1])
-                    with col_type:
-                        st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, key=f"dashboard_type_{row}_2")
-                    with col_refresh:
-                        type_to_key = {
-                            'PNL': 'pnl', 'ADG': 'adg', 'P+L': 'ppl', 'INCOME': 'income',
-                            'TOP': 'top_symbols', 'BALANCE': 'balance', 'POSITIONS': 'positions', 'ORDERS': 'orders'
-                        }
-                        sel = st.session_state.get(f'dashboard_type_{row}_2', 'NONE')
-                        view_key = type_to_key.get(sel)
-                        if view_key:
-                            self._render_refresh_input(row, 2, view_key)
-                    if st.session_state[f'dashboard_type_{row}_2'] == "PNL":
-                        if f'dashboard_pnl_users_{row}_2' in self.dashboard_config and f'dashboard_pnl_period_{row}_2' in self.dashboard_config and f'dashboard_pnl_mode_{row}_2' in self.dashboard_config:
-                            self.view_pnl_impl(f'{row}_2', self.dashboard_config[f'dashboard_pnl_users_{row}_2'], self.dashboard_config[f'dashboard_pnl_period_{row}_2'], self.dashboard_config[f'dashboard_pnl_mode_{row}_2'])
-                        else:
-                            self.view_pnl_impl(f'{row}_2')
-                    if st.session_state[f'dashboard_type_{row}_2'] == "ADG":
-                        if f'dashboard_adg_users_{row}_2' in self.dashboard_config and f'dashboard_adg_period_{row}_2' in self.dashboard_config and f'dashboard_adg_mode_{row}_2' in self.dashboard_config:
-                            self.view_adg_impl(f'{row}_2', self.dashboard_config[f'dashboard_adg_users_{row}_2'], self.dashboard_config[f'dashboard_adg_period_{row}_2'], self.dashboard_config[f'dashboard_adg_mode_{row}_2'])
-                        else:
-                            self.view_adg_impl(f'{row}_2')
-                    if st.session_state[f'dashboard_type_{row}_2'] == "INCOME":
-                        if f'dashboard_income_last_{row}_2' not in self.dashboard_config:
-                            self.dashboard_config[f'dashboard_income_last_{row}_2'] = 0
-                            self.dashboard_config[f'dashboard_income_filter_{row}_2'] = 0.0
-                        if f'dashboard_income_users_{row}_2' in self.dashboard_config and f'dashboard_income_period_{row}_2' in self.dashboard_config and f'dashboard_income_last_{row}_2' in self.dashboard_config and f'dashboard_income_filter_{row}_2' in self.dashboard_config:
-                            self.view_income_impl(f'{row}_2', self.dashboard_config[f'dashboard_income_users_{row}_2'], self.dashboard_config[f'dashboard_income_period_{row}_2'], self.dashboard_config[f'dashboard_income_last_{row}_2'], self.dashboard_config[f'dashboard_income_filter_{row}_2'])
-                        else:
-                            self.view_income_impl(f'{row}_2')
-                    if st.session_state[f'dashboard_type_{row}_2'] == "TOP":
-                        if f'dashboard_top_symbols_users_{row}_2' in self.dashboard_config and f'dashboard_top_symbols_period_{row}_2' in self.dashboard_config and f'dashboard_top_symbols_top_{row}_2' in self.dashboard_config:
-                            self.view_top_symbols_impl(f'{row}_2', self.dashboard_config[f'dashboard_top_symbols_users_{row}_2'], self.dashboard_config[f'dashboard_top_symbols_period_{row}_2'], self.dashboard_config[f'dashboard_top_symbols_top_{row}_2'])
-                        else:
-                            self.view_top_symbols_impl(f'{row}_2')
-                    if st.session_state[f'dashboard_type_{row}_2'] == "POSITIONS":
-                        if f'dashboard_positions_users_{row}_2' in self.dashboard_config:
-                            self.view_positions_impl(f'{row}_2', self.dashboard_config[f'dashboard_positions_users_{row}_2'])
-                        else:
-                            self.view_positions_impl(f'{row}_2')
-                    if st.session_state[f'dashboard_type_{row}_2'] == "ORDERS":
-                        if f'dashboard_orders_{row}_2' in self.dashboard_config:
-                            self.view_orders_impl(f'{row}_2', self.dashboard_config[f'dashboard_orders_{row}_2'], edit=True)
-                        else:
-                            self.view_orders_impl(f'{row}_2', edit=True)
-                    if st.session_state[f'dashboard_type_{row}_2'] == "BALANCE":
-                        if f'dashboard_balance_users_{row}_2' in self.dashboard_config:
-                            self.view_balance_impl(f'{row}_2', self.dashboard_config[f'dashboard_balance_users_{row}_2'], edit=True)
-                        else:
-                            self.view_balance_impl(f'{row}_2', edit=True)
-                    if st.session_state[f'dashboard_type_{row}_2'] == "P+L":
-                        if f'dashboard_ppl_users_{row}_2' in self.dashboard_config and f'dashboard_ppl_period_{row}_2' in self.dashboard_config and f'dashboard_ppl_sum_period_{row}_2' in self.dashboard_config:
-                            self.view_ppl_impl(f'{row}_2', self.dashboard_config[f'dashboard_ppl_users_{row}_2'], self.dashboard_config[f'dashboard_ppl_period_{row}_2'], self.dashboard_config[f'dashboard_ppl_sum_period_{row}_2'])
-                        else:
-                            self.view_ppl_impl(f'{row}_2')
-        else:
-            for row in range(1, self.rows + 1):
-                if row > 1:
-                    if st.button(":material/swap_vert:", key=f"swap_vert_{row}_col1"):
-                        self.swap(row, row -1, 1, 1)
-                if f'dashboard_type_{row}_1' in st.session_state:
-                    if st.session_state[f'dashboard_type_{row}_1'] != self.dashboard_config.get(f'dashboard_type_{row}_1'):
-                        self.dashboard_config[f'dashboard_type_{row}_1'] = st.session_state[f'dashboard_type_{row}_1']
+                self.view_pnl_impl(pos)
+        elif cell_type == "ADG":
+            if all(k in dashboard_config for k in [f'dashboard_adg_users_{pos}', f'dashboard_adg_period_{pos}', f'dashboard_adg_mode_{pos}']):
+                self.view_adg_impl(pos, dashboard_config[f'dashboard_adg_users_{pos}'], dashboard_config[f'dashboard_adg_period_{pos}'], dashboard_config[f'dashboard_adg_mode_{pos}'])
+            else:
+                self.view_adg_impl(pos)
+        elif cell_type == "INCOME":
+            if f'dashboard_income_last_{pos}' not in dashboard_config:
+                dashboard_config[f'dashboard_income_last_{pos}'] = 0
+                dashboard_config[f'dashboard_income_filter_{pos}'] = 0.0
+            if all(k in dashboard_config for k in [f'dashboard_income_users_{pos}', f'dashboard_income_period_{pos}', f'dashboard_income_last_{pos}', f'dashboard_income_filter_{pos}']):
+                self.view_income_impl(pos, dashboard_config[f'dashboard_income_users_{pos}'], dashboard_config[f'dashboard_income_period_{pos}'], dashboard_config[f'dashboard_income_last_{pos}'], dashboard_config[f'dashboard_income_filter_{pos}'])
+            else:
+                self.view_income_impl(pos)
+        elif cell_type == "TOP":
+            if all(k in dashboard_config for k in [f'dashboard_top_symbols_users_{pos}', f'dashboard_top_symbols_period_{pos}', f'dashboard_top_symbols_top_{pos}']):
+                self.view_top_symbols_impl(pos, dashboard_config[f'dashboard_top_symbols_users_{pos}'], dashboard_config[f'dashboard_top_symbols_period_{pos}'], dashboard_config[f'dashboard_top_symbols_top_{pos}'])
+            else:
+                self.view_top_symbols_impl(pos)
+        elif cell_type == "POSITIONS":
+            if f'dashboard_positions_users_{pos}' in dashboard_config:
+                self.view_positions_impl(pos, dashboard_config[f'dashboard_positions_users_{pos}'])
+            else:
+                self.view_positions_impl(pos)
+        elif cell_type == "ORDERS":
+            self.view_orders_impl(pos, dashboard_config.get(f'dashboard_orders_{pos}'), edit=True)
+        elif cell_type == "BALANCE":
+            users = dashboard_config.get(f'dashboard_balance_users_{pos}') or None
+            self.view_balance_impl(pos, users, edit=True)
+        elif cell_type == "P+L":
+            if all(k in dashboard_config for k in [f'dashboard_ppl_users_{pos}', f'dashboard_ppl_period_{pos}', f'dashboard_ppl_sum_period_{pos}']):
+                self.view_ppl_impl(pos, dashboard_config[f'dashboard_ppl_users_{pos}'], dashboard_config[f'dashboard_ppl_period_{pos}'], dashboard_config[f'dashboard_ppl_sum_period_{pos}'])
+            else:
+                self.view_ppl_impl(pos)
+
+    def create_dashboard(self):
+        """Edit mode: embed the full FastAPI/Vanilla JS dashboard grid editor via st.html.
+
+        The editor HTML is read from frontend/dashboard_editor.html, placeholders
+        are substituted in Python, and the result is passed to st.html().
+        No iframe — height is dynamic and the preview renders directly below.
+        save() pulls the final config back from FastAPI.
+        """
+        from pbgui_func import _start_fastapi_server_if_needed
+        from api.auth import generate_token
+        from pathlib import Path as _Path
+        import json as _json
+
+        api_host, api_port, success = _start_fastapi_server_if_needed()
+        if not success:
+            st.error(
+                f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+                "Please check **System → Services → API Server**."
+            )
+            return
+
+        # Ensure session token
+        if "api_token" not in st.session_state:
+            user_id = (
+                st.session_state.get("user", {}).get("id")
+                or st.session_state.get("user")
+                or "anonymous"
+            )
+            st.session_state["api_token"] = generate_token(
+                str(user_id), expires_in_seconds=86400
+            ).token
+        token = st.session_state["api_token"]
+
+        # Resolve browser-usable hostname
+        _browser_host = "127.0.0.1"
+        try:
+            req_host = st.context.headers.get("Host", "")
+            if req_host:
+                _browser_host = req_host.split(":")[0] or "127.0.0.1"
+        except Exception:
+            pass
+
+        api_base = f"http://{_browser_host}:{api_port}/api"
+
+        # Push current config to FastAPI once when entering edit mode,
+        # so the editor initialises from the saved state (not an empty grid).
+        _init_key = f'_dbe_init_{self.name or "__new__"}'
+        if _init_key not in st.session_state:
+            self._push_pending_config()
+            st.session_state[_init_key] = True
+
+        # Read template, inject config as JS variables — no iframe needed.
+        html_path = _Path(__file__).parent / "frontend" / "dashboard_editor.html"
+        html = html_path.read_text(encoding="utf-8")
+        html = html.replace('"%%TOKEN%%"',        f'"{token}"')
+        html = html.replace('"%%API_BASE%%"',    f'"{api_base}"')
+        html = html.replace('%%DASHBOARD_NAME%%', _json.dumps(self.name or ''))
+        st.html(html, unsafe_allow_javascript=True)
+
+        # ── Full preview below editor ───────────────────────────────────────
+        cfg = self._pull_pending_config() or {}
+        if not cfg.get('rows'):
+            cfg = self.dashboard_config
+        if cfg.get('rows'):
+            st.divider()
+            prev_rows = int(cfg.get('rows', 1))
+            prev_cols = int(cfg.get('cols', 1))
+            for _r in range(1, prev_rows + 1):
+                if prev_cols == 2:
+                    _c1, _c2 = st.columns([1, 1])
+                    with _c1:
+                        self._render_cell_preview(_r, 1, cfg)
+                    with _c2:
+                        self._render_cell_preview(_r, 2, cfg)
                 else:
-                    if f'dashboard_type_{row}_1' in self.dashboard_config:
-                        st.session_state[f'dashboard_type_{row}_1'] = self.dashboard_config[f'dashboard_type_{row}_1']
-                    else:
-                        st.session_state[f'dashboard_type_{row}_1'] = "NONE"
-                col_type, col_refresh = st.columns([3,1])
-                with col_type:
-                    st.selectbox('Dashboard Type', self.DASHBOARD_TYPES, key=f"dashboard_type_{row}_1")
-                with col_refresh:
-                    type_to_key = {
-                        'PNL': 'pnl', 'ADG': 'adg', 'P+L': 'ppl', 'INCOME': 'income',
-                        'TOP': 'top_symbols', 'BALANCE': 'balance', 'POSITIONS': 'positions', 'ORDERS': 'orders'
-                    }
-                    sel = st.session_state.get(f'dashboard_type_{row}_1', 'NONE')
-                    view_key = type_to_key.get(sel)
-                    if view_key:
-                        self._render_refresh_input(row, 1, view_key)
-                if st.session_state[f'dashboard_type_{row}_1'] == "PNL":
-                    if f'dashboard_pnl_users_{row}_1' in self.dashboard_config and f'dashboard_pnl_period_{row}_1' in self.dashboard_config and f'dashboard_pnl_mode_{row}_1' in self.dashboard_config:
-                        self.view_pnl_impl(f'{row}_1', self.dashboard_config[f'dashboard_pnl_users_{row}_1'], self.dashboard_config[f'dashboard_pnl_period_{row}_1'], self.dashboard_config[f'dashboard_pnl_mode_{row}_1'])
-                    else:
-                        self.view_pnl_impl(f'{row}_1')
-                if st.session_state[f'dashboard_type_{row}_1'] == "ADG":
-                    if f'dashboard_adg_users_{row}_1' in self.dashboard_config and f'dashboard_adg_period_{row}_1' in self.dashboard_config and f'dashboard_adg_mode_{row}_1' in self.dashboard_config:
-                        self.view_adg_impl(f'{row}_1', self.dashboard_config[f'dashboard_adg_users_{row}_1'], self.dashboard_config[f'dashboard_adg_period_{row}_1'], self.dashboard_config[f'dashboard_adg_mode_{row}_1'])
-                    else:
-                        self.view_adg_impl(f'{row}_1')
-                if st.session_state[f'dashboard_type_{row}_1'] == "INCOME":
-                    if f'dashboard_income_last_{row}_1' not in self.dashboard_config:
-                        self.dashboard_config[f'dashboard_income_last_{row}_1'] = 0
-                        self.dashboard_config[f'dashboard_income_filter_{row}_1'] = 0.0
-                    if f'dashboard_income_users_{row}_1' in self.dashboard_config and f'dashboard_income_period_{row}_1' in self.dashboard_config and f'dashboard_income_last_{row}_1' in self.dashboard_config and f'dashboard_income_filter_{row}_1' in self.dashboard_config:
-                        self.view_income_impl(f'{row}_1', self.dashboard_config[f'dashboard_income_users_{row}_1'], self.dashboard_config[f'dashboard_income_period_{row}_1'], self.dashboard_config[f'dashboard_income_last_{row}_1'], self.dashboard_config[f'dashboard_income_filter_{row}_1'])
-                    else:
-                        self.view_income_impl(f'{row}_1')
-                if st.session_state[f'dashboard_type_{row}_1'] == "TOP":
-                    if f'dashboard_top_symbols_users_{row}_1' in self.dashboard_config and f'dashboard_top_symbols_period_{row}_1' in self.dashboard_config and f'dashboard_top_symbols_top_{row}_1' in self.dashboard_config:
-                        self.view_top_symbols_impl(f'{row}_1', self.dashboard_config[f'dashboard_top_symbols_users_{row}_1'], self.dashboard_config[f'dashboard_top_symbols_period_{row}_1'], self.dashboard_config[f'dashboard_top_symbols_top_{row}_1'])
-                    else:
-                        self.view_top_symbols_impl(f'{row}_1')
-                if st.session_state[f'dashboard_type_{row}_1'] == "POSITIONS":
-                    if f'dashboard_positions_users_{row}_1' in self.dashboard_config:
-                        self.view_positions_impl(f'{row}_1', self.dashboard_config[f'dashboard_positions_users_{row}_1'])
-                    else:
-                        self.view_positions_impl(f'{row}_1')
-                if st.session_state[f'dashboard_type_{row}_1'] == "ORDERS":
-                    if f'dashboard_orders_{row}_1' in self.dashboard_config:
-                        self.view_orders_impl(f'{row}_1', self.dashboard_config[f'dashboard_orders_{row}_1'], edit=True)
-                    else:
-                        self.view_orders_impl(f'{row}_1', edit=True)
-                if st.session_state[f'dashboard_type_{row}_1'] == "BALANCE":
-                    if f'dashboard_balance_users_{row}_1' in self.dashboard_config:
-                        self.view_balance_impl(f'{row}_1', self.dashboard_config[f'dashboard_balance_users_{row}_1'], edit=True)
-                    else:
-                        self.view_balance_impl(f'{row}_1', edit=True)
-                if st.session_state[f'dashboard_type_{row}_1'] == "P+L":
-                    if f'dashboard_ppl_users_{row}_1' in self.dashboard_config and f'dashboard_ppl_period_{row}_1' in self.dashboard_config and f'dashboard_ppl_sum_period_{row}_1' in self.dashboard_config:
-                        self.view_ppl_impl(f'{row}_1', self.dashboard_config[f'dashboard_ppl_users_{row}_1'], self.dashboard_config[f'dashboard_ppl_period_{row}_1'], self.dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
-                    else:
-                        self.view_ppl_impl(f'{row}_1')
-        if "swap_rerun" in st.session_state:
-            del st.session_state.swap_rerun
-            st.rerun()
+                    self._render_cell_preview(_r, 1, cfg)
+
 
     def save(self):
-        dashboard_config = {}
-        dashboard_config["rows"] = self.rows
-        dashboard_config["cols"] = self.cols
-        for row in range(1, self.rows + 1):
-            for col in range(1, self.cols + 1):
-                if f'dashboard_type_{row}_{col}' in st.session_state:
-                    dashboard_config[f'dashboard_type_{row}_{col}'] = st.session_state[f'dashboard_type_{row}_{col}']
-                    # Persist per-cell refresh value (store as seconds)
-                    type_to_key = {
-                        'PNL': 'pnl', 'ADG': 'adg', 'P+L': 'ppl', 'INCOME': 'income',
-                        'TOP': 'top_symbols', 'BALANCE': 'balance', 'POSITIONS': 'positions', 'ORDERS': 'orders'
-                    }
-                    view_type = st.session_state.get(f'dashboard_type_{row}_{col}', 'PNL')
-                    view_key = type_to_key.get(view_type, 'pnl')
-                    refresh_key = f'dashboard_refresh_{row}_{col}'
-                    refresh_val = st.session_state.get(refresh_key, DASHBOARD_VIEW_REFRESH.get(view_key, 5))
-                    try:
-                        dashboard_config[refresh_key] = int(refresh_val)
-                    except Exception:
-                        dashboard_config[refresh_key] = DASHBOARD_VIEW_REFRESH.get(view_key, 5)
-                    if st.session_state[f'dashboard_type_{row}_{col}'] == "PNL":
-                        dashboard_config[f'dashboard_pnl_users_{row}_{col}'] = st.session_state[f'dashboard_pnl_users_{row}_{col}']
-                        dashboard_config[f'dashboard_pnl_period_{row}_{col}'] = st.session_state[f'dashboard_pnl_period_{row}_{col}']
-                        dashboard_config[f'dashboard_pnl_mode_{row}_{col}'] = st.session_state[f'dashboard_pnl_mode_{row}_{col}']
-                    if st.session_state[f'dashboard_type_{row}_{col}'] == "ADG":
-                        dashboard_config[f'dashboard_adg_users_{row}_{col}'] = st.session_state[f'dashboard_adg_users_{row}_{col}']
-                        dashboard_config[f'dashboard_adg_period_{row}_{col}'] = st.session_state[f'dashboard_adg_period_{row}_{col}']
-                        dashboard_config[f'dashboard_adg_mode_{row}_{col}'] = st.session_state[f'dashboard_adg_mode_{row}_{col}']
-                    if st.session_state[f'dashboard_type_{row}_{col}'] == "INCOME":
-                        dashboard_config[f'dashboard_income_users_{row}_{col}'] = st.session_state[f'dashboard_income_users_{row}_{col}']
-                        dashboard_config[f'dashboard_income_period_{row}_{col}'] = st.session_state[f'dashboard_income_period_{row}_{col}']
-                        dashboard_config[f'dashboard_income_last_{row}_{col}'] = st.session_state[f'dashboard_income_last_{row}_{col}']
-                        dashboard_config[f'dashboard_income_filter_{row}_{col}'] = st.session_state[f'dashboard_income_filter_{row}_{col}']
-                    if st.session_state[f'dashboard_type_{row}_{col}'] == "TOP":
-                        dashboard_config[f'dashboard_top_symbols_users_{row}_{col}'] = st.session_state[f'dashboard_top_symbols_users_{row}_{col}']
-                        dashboard_config[f'dashboard_top_symbols_period_{row}_{col}'] = st.session_state[f'dashboard_top_symbols_period_{row}_{col}']
-                        dashboard_config[f'dashboard_top_symbols_top_{row}_{col}'] = st.session_state[f'dashboard_top_symbols_top_{row}_{col}']
-                    if st.session_state[f'dashboard_type_{row}_{col}'] == "POSITIONS":
-                        dashboard_config[f'dashboard_positions_users_{row}_{col}'] = st.session_state[f'dashboard_positions_users_{row}_{col}']
-                    if st.session_state[f'dashboard_type_{row}_{col}'] == "ORDERS":
-                        if f'dashboard_orders_{row}_{col}' in st.session_state:
-                            dashboard_config[f'dashboard_orders_{row}_{col}'] = st.session_state[f'dashboard_orders_{row}_{col}']
-                        else:
-                            dashboard_config[f'dashboard_orders_{row}_{col}'] = None
-                    if st.session_state[f'dashboard_type_{row}_{col}'] == "BALANCE":
-                        key = f'dashboard_balance_users_{row}_{col}'
-                        # Read from JS→API selection sync (HTTP call to FastAPI process)
-                        js_sel = None
-                        try:
-                            from pbgui_func import _start_fastapi_server_if_needed
-                            from api.auth import generate_token
-                            _h, _p, _ok = _start_fastapi_server_if_needed()
-                            if _ok:
-                                import urllib.request, json as _json2
-                                _tok = st.session_state.get('api_token', '')
-                                if not _tok:
-                                    _tok = generate_token('save', expires_in_seconds=60).token
-                                _url = f'http://127.0.0.1:{_p}/api/dashboard/balance/selection?position={row}_{col}&token={_tok}'
-                                with urllib.request.urlopen(_url, timeout=2) as _resp:
-                                    _data = _json2.loads(_resp.read())
-                                    if _data.get('found'):
-                                        js_sel = _data['users']
-                        except Exception:
-                            pass
-                        if js_sel is not None:
-                            dashboard_config[key] = js_sel
-                        elif key in st.session_state:
-                            dashboard_config[key] = st.session_state[key]
-                        elif key in self.dashboard_config:
-                            dashboard_config[key] = self.dashboard_config[key]
-                        else:
-                            dashboard_config[key] = ['ALL']
-                    if st.session_state[f'dashboard_type_{row}_{col}'] == "P+L":
-                        dashboard_config[f'dashboard_ppl_users_{row}_{col}'] = st.session_state[f'dashboard_ppl_users_{row}_{col}']
-                        dashboard_config[f'dashboard_ppl_period_{row}_{col}'] = st.session_state[f'dashboard_ppl_period_{row}_{col}']
-                        dashboard_config[f'dashboard_ppl_sum_period_{row}_{col}'] = st.session_state[f'dashboard_ppl_sum_period_{row}_{col}']
-                else:
-                    dashboard_config[f'dashboard_type_{row}_{col}'] = "NONE"
+        """Save by pulling the full config from the FastAPI JS editor, then writing to JSON."""
+        pending = self._pull_pending_config()
+        if not pending:
+            # Fallback: save whatever is currently in memory (should not normally happen)
+            pending = dict(self.dashboard_config)
+            pending['name'] = self.name
+            pending['rows'] = self.rows
+            pending['cols'] = self.cols
+
+        rows = max(1, min(6, int(pending.get('rows', self.rows) or self.rows)))
+        cols = max(1, min(2, int(pending.get('cols', self.cols) or self.cols)))
+        name = str(pending.get('name', '') or '').strip()
+        if name:
+            self.name = name
+        self.rows = rows
+        self.cols = cols
+
+        # Build a clean, normalised dashboard_config from the pending dict.
+        # Copy only valid keys: rows/cols/name and per-cell keys ending in _{row}_{col}.
+        dashboard_config: dict = {'rows': rows, 'cols': cols}
+        for row in range(1, rows + 1):
+            for col in range(1, cols + 1):
+                pos = f'{row}_{col}'
+                cell_type = pending.get(f'dashboard_type_{pos}', 'NONE') or 'NONE'
+                dashboard_config[f'dashboard_type_{pos}'] = cell_type
+                # Copy every key from pending that ends with _{pos}
+                suffix = f'_{pos}'
+                for k, v in pending.items():
+                    if k != f'dashboard_type_{pos}' and k.endswith(suffix):
+                        dashboard_config[k] = v
+
         self.dashboard_config = dashboard_config
         dashboard_path = Path(f'{PBGDIR}/data/dashboards')
         dashboard_path.mkdir(parents=True, exist_ok=True)
         dashboard_file = Path(f'{dashboard_path}/{self.name}.json')
-        with dashboard_file.open("w") as f:
+        with dashboard_file.open('w') as f:
             json.dump(dashboard_config, f, indent=4)
+
 
     def load(self, name : str):
         self.cleanup_dashboard_session_state()
@@ -1353,10 +1314,27 @@ class Dashboard():
         html_path = _Path(__file__).parent / "frontend" / "dashboard_balance.html"
         html = html_path.read_text(encoding="utf-8")
 
-        # Build users list for initial selection
+        # Build users list for initial selection.
+        # In edit mode: prefer the live selection stored in FastAPI (survives Streamlit reruns).
         import json as _json
-        if user and isinstance(user, (list, tuple)) and len(user) > 0:
-            users_json = _json.dumps(list(user))
+        resolved_user = user
+        # Key for the balance selection API: {dashboard_name}:{position}
+        # Using the dashboard name prevents different dashboards at the same position
+        # (e.g. 1_1) from sharing each other's user selections.
+        _sel_key = f'{self.name}:{position}' if edit else position
+        if edit:
+            try:
+                import urllib.request as _ureq
+                _tok = st.session_state.get('api_token', token)
+                _url = f'http://127.0.0.1:{api_port}/api/dashboard/balance/selection?position={_sel_key}&token={_tok}'
+                with _ureq.urlopen(_url, timeout=2) as _resp:
+                    _data = _json.loads(_resp.read())
+                    if _data.get('found'):
+                        resolved_user = _data['users']
+            except Exception:
+                pass
+        if resolved_user and isinstance(resolved_user, (list, tuple)) and len(resolved_user) > 0:
+            users_json = _json.dumps(list(resolved_user))
         else:
             users_json = '["ALL"]'
 
@@ -1378,7 +1356,9 @@ class Dashboard():
         html = html.replace('%%ALL_USERS%%',  all_users_json)
         html = html.replace('%%EDIT_MODE%%',  'true' if edit else 'false')
         html = html.replace('"%%INSTANCE_ID%%"', f'"{instance_id}"')
-        html = html.replace('"%%POSITION%%"', f'"{position}"')
+        # In edit mode use namespaced key so each dashboard has its own selection store
+        _pos_key = f'{self.name}:{position}' if edit else position
+        html = html.replace('"%%POSITION%%"', f'"{_pos_key}"')
 
         st.html(html, unsafe_allow_javascript=True)
 

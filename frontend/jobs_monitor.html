@@ -189,6 +189,7 @@
         const urlParams = new URLSearchParams(window.location.search);
         const API_TOKEN = urlParams.get('token');
         const EXCHANGE_FILTER = (urlParams.get('exchange') || '').trim().toLowerCase();
+        const JOB_TYPE_FILTER = (urlParams.get('job_type') || '').trim().toLowerCase();
         
         if (!API_TOKEN) {
             document.body.innerHTML = '<div style="padding:40px;text-align:center;color:#ff4b4b;">Error: No authentication token provided</div>';
@@ -206,7 +207,14 @@
         // ── Job Filter ──
         function matchesExchangeFilter(job) {
             // No filter = show all jobs
-            if (!EXCHANGE_FILTER) return true;
+            if (!EXCHANGE_FILTER && !JOB_TYPE_FILTER) return true;
+
+            // Job type filter (comma-separated list)
+            if (JOB_TYPE_FILTER) {
+                const allowedTypes = JOB_TYPE_FILTER.split(',').map(t => t.trim());
+                const jt = (job.type || '').toLowerCase();
+                if (!allowedTypes.some(t => jt === t)) return false;
+            }
             
             // Try explicit exchange field first
             let jobExchange = (job.exchange || '').trim().toLowerCase();
@@ -312,6 +320,12 @@
                 return;
             }
 
+            // Sort: running first, then by updated_ts descending (newest on top)
+            activeJobs.sort((a, b) => {
+                if (a.status !== b.status) return a.status === 'running' ? -1 : 1;
+                return (b.updated_ts || 0) - (a.updated_ts || 0);
+            });
+
             runningContainer.innerHTML = activeJobs.map(renderActiveJob).join('');
         }
 
@@ -355,7 +369,7 @@
                     <div class="job-details">
                         ${coin ? `<span class="detail">Coin: ${coin}</span>` : ''}
                         ${chunk ? `<span class="detail">Chunk: ${chunk}</span>` : ''}
-                        <span class="detail">Updated: ${job.updated_ts || ''}</span>
+                        <span class="detail">Updated: ${formatTimestamp(job.updated_ts)}</span>
                     </div>
                     <div class="progress-bar">
                         <div class="progress-fill" style="width: ${pct}%">
@@ -390,14 +404,55 @@
         function renderJob(job) {
             const isDone = job.status === 'done';
             const isFailed = job.status === 'failed';
-            
+            const payload = job.payload || {};
+            const progress = job.progress || {};
+            const lr = progress.last_result || {};
+
+            // Coins
+            const coins = Array.isArray(payload.coins) ? payload.coins : [];
+            const coinPreview = coins.length <= 8
+                ? coins.join(', ')
+                : coins.slice(0, 8).join(', ') + ` … (${coins.length} total)`;
+
+            // Date range
+            const startDay = payload.start_day || '';
+            const endDay = payload.end_day || '';
+            const rangeStr = (startDay || endDay)
+                ? `${fmtDayCompact(startDay)} → ${fmtDayCompact(endDay)}`
+                : '';
+
+            // Stats
+            const downloaded = progress.downloaded_total || lr.downloaded || 0;
+            const skipped = progress.skipped_existing_total || lr.skipped_existing || 0;
+            const failed = progress.failed_total || lr.failed || 0;
+            const dlBytes = formatBytes(progress.downloaded_bytes_total || lr.downloaded_bytes || 0);
+            const skBytes = formatBytes(progress.skipped_existing_bytes_total || lr.skipped_existing_bytes || 0);
+            const flBytes = formatBytes(progress.failed_bytes_total || lr.failed_bytes || 0);
+            const hasStats = (downloaded + skipped + failed) > 0;
+
+            // Duration
+            const createdTs = parseFloat(job.created_ts || 0);
+            const updatedTs = parseFloat(job.updated_ts || 0);
+            let durationStr = '';
+            if (createdTs > 0 && updatedTs >= createdTs) {
+                let dur = Math.round(updatedTs - createdTs);
+                const h = Math.floor(dur / 3600);
+                const m = Math.floor((dur % 3600) / 60);
+                const s = dur % 60;
+                if (h > 0) durationStr = `${h}h ${String(m).padStart(2,'0')}m ${String(s).padStart(2,'0')}s`;
+                else if (m > 0) durationStr = `${m}m ${String(s).padStart(2,'0')}s`;
+                else durationStr = `${s}s`;
+            }
+
+            const isExpanded = expandedJobs.has(job.id);
+
             return `
                 <div class="job-card simple">
                     <div class="job-header">
                         <div class="job-info">
                             <strong class="job-id">${job.id}</strong>
                             <span class="job-type">${job.type}</span>
-                            ${job.progress && job.progress.coin ? `<span class="detail">Coin: ${job.progress.coin}</span>` : ''}
+                            ${durationStr ? `<span class="detail" style="color:#8899aa;">${durationStr}</span>` : ''}
                         </div>
                         <div class="job-actions">
                             <button class="btn btn-info" onclick="showLog('${job.id}')">Log</button>
@@ -407,11 +462,33 @@
                         </div>
                     </div>
                     <div class="job-details">
-                        <span class="detail">${job.updated_ts || ''}</span>
+                        <span class="detail">${formatTimestamp(job.updated_ts)}</span>
+                        ${rangeStr ? `<span class="detail" style="margin-left:0.8rem;">Range: ${rangeStr}</span>` : ''}
                     </div>
                     ${job.error ? `<div class="job-error" style="margin-top:0.5rem;color:#ef4444;font-size:0.85rem;">${job.error}</div>` : ''}
+                    ${(hasStats || coinPreview) ? `
+                        <div class="job-expander">
+                            <button class="expander-toggle" onclick="toggleExpander('${job.id}', event)">
+                                ${isExpanded ? '▼' : '▶'} Details
+                            </button>
+                            <div class="expander-content ${isExpanded ? 'open' : ''}" id="expander-${job.id}">
+                                ${coinPreview ? `<div class="detail-row"><strong>Coins:</strong> ${coinPreview}</div>` : ''}
+                                ${payload.only_missing_1m_src_hours !== undefined ? `<div class="detail-row"><strong>Only missing 1m_src hours:</strong> ${payload.only_missing_1m_src_hours ? 'Yes' : 'No'}</div>` : ''}
+                                ${hasStats ? `
+                                    <div class="detail-row"><strong>Downloaded:</strong> ${downloaded} files (${dlBytes})</div>
+                                    <div class="detail-row"><strong>Skipped:</strong> ${skipped} files (${skBytes})</div>
+                                    <div class="detail-row"><strong>Failed:</strong> ${failed} files (${flBytes})</div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    ` : ''}
                 </div>
             `;
+        }
+
+        function fmtDayCompact(yyyymmdd) {
+            if (!yyyymmdd || yyyymmdd.length !== 8) return yyyymmdd || '?';
+            return yyyymmdd.slice(0,4) + '-' + yyyymmdd.slice(4,6) + '-' + yyyymmdd.slice(6,8);
         }
 
         // ── Helper Functions ──
@@ -431,6 +508,15 @@
             const sizes = ['B', 'KB', 'MB', 'GB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i];
+        }
+
+        function formatTimestamp(ts) {
+            if (!ts) return '';
+            const d = new Date(Number(ts) * 1000);
+            if (isNaN(d.getTime())) return String(ts);
+            const pad = n => String(n).padStart(2, '0');
+            return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' '
+                 + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
         }
 
         function toggleExpander(jobId, event) {
@@ -653,8 +739,9 @@
                 const resp = await fetch(`${API_BASE}/jobs/?states=${tab}&limit=50&token=${API_TOKEN}`);
                 const data = await resp.json();
                 
-                // Apply exchange filter
+                // Apply exchange filter + sort newest first
                 const filteredJobs = (data.jobs || []).filter(matchesExchangeFilter);
+                filteredJobs.sort((a, b) => (b.updated_ts || 0) - (a.updated_ts || 0));
                 
                 if (filteredJobs.length === 0) {
                     container.innerHTML = `<p class="no-jobs">No ${tab} jobs${EXCHANGE_FILTER ? ' for ' + EXCHANGE_FILTER : ''}.</p>`;

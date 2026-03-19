@@ -214,7 +214,7 @@ def dashboard():
             col1, col2, col3 = st.columns([1, 1, 2])
             with col1:
                 if st.button(":material/save:"):
-                    if st.session_state.dashboard.name:
+                    if st.session_state.dashboard.get_draft_name():
                         st.session_state.dashboard.save()
                         st.session_state.dashboards = st.session_state.dashboard.list_dashboards()
                         # Clear edit mode and reload the saved dashboard
