@@ -140,6 +140,27 @@ async def _notify_api_balance():
         pass
 
 
+async def _notify_api_income():
+    """Fire-and-forget: POST to FastAPI to fan-out income_updated to all /ws/dashboard clients.
+
+    Called via asyncio.create_task() after each successful update_history() write.
+    Errors are silently swallowed — a missed notification is not critical.
+    """
+    import urllib.request
+    from pbgui_purefunc import load_ini
+    try:
+        port_val = load_ini("api_server", "port")
+        port = int(port_val) if port_val and str(port_val).isdigit() else 8000
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/internal/notify/income",
+            data=b"",
+            method="POST",
+        )
+        await asyncio.to_thread(urllib.request.urlopen, req, None, 2)
+    except Exception:
+        pass
+
+
 class PBData():
     def __init__(self):
         self.piddir = Path(f'{PBGDIR}/data/pid')
@@ -2957,6 +2978,7 @@ class PBData():
                                     else:
                                         try:
                                             await asyncio.to_thread(self.db.update_history, user)
+                                            asyncio.create_task(_notify_api_income())
                                         except Exception as e:
                                             # Some runtime errors seen under heavy load look like
                                             # "generator didn't stop after athrow()". Treat these

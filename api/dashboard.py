@@ -235,6 +235,103 @@ def get_editor_page(
     return HTMLResponse(content=html)
 
 
+# ---------------------------------------------------------------- period helper
+
+def _period_to_range(period: str) -> tuple:
+    """Return (start_ms, end_ms, from_date_str, to_date_str) for a period key."""
+    from datetime import date, timedelta
+    from dateutil.relativedelta import relativedelta, MO
+    import time
+
+    today = date.today()
+    now_ms = int(time.time()) * 1000
+
+    def ts(d: date) -> int:
+        return int(time.mktime(d.timetuple())) * 1000
+
+    p = period.upper()
+    if p == 'TODAY':
+        start, end = ts(today), now_ms
+    elif p == 'YESTERDAY':
+        y = today - timedelta(days=1)
+        start, end = ts(y), ts(today)
+    elif p == 'THIS_WEEK':
+        mon = today + relativedelta(weekday=MO(-1))
+        start, end = ts(mon), now_ms
+    elif p == 'LAST_WEEK':
+        mon = today + relativedelta(weekday=MO(-1))
+        start, end = ts(mon - timedelta(days=7)), ts(mon)
+    elif p == 'LAST_WEEK_NOW':
+        mon = today + relativedelta(weekday=MO(-1))
+        start, end = ts(mon - timedelta(days=7)), now_ms
+    elif p == 'THIS_MONTH':
+        m = today + relativedelta(day=1)
+        start, end = ts(m), now_ms
+    elif p == 'LAST_MONTH':
+        m = today + relativedelta(day=1)
+        start, end = ts(m - relativedelta(months=1)), ts(m)
+    elif p == 'LAST_MONTH_NOW':
+        m = today + relativedelta(day=1)
+        start, end = ts(m - relativedelta(months=1)), now_ms
+    elif p == 'THIS_QUARTER':
+        q_month = ((today.month - 1) // 3) * 3 + 1
+        q_start = date(today.year, q_month, 1)
+        start, end = ts(q_start), now_ms
+    elif p == 'LAST_QUARTER':
+        q_month = ((today.month - 1) // 3) * 3 + 1
+        q_start = date(today.year, q_month, 1)
+        lq_month = q_month - 3
+        if lq_month < 1:
+            lq_start = date(today.year - 1, lq_month + 12, 1)
+        else:
+            lq_start = date(today.year, lq_month, 1)
+        start, end = ts(lq_start), ts(q_start)
+    elif p == 'THIS_YEAR':
+        y = date(today.year, 1, 1)
+        start, end = ts(y), now_ms
+    elif p == 'LAST_YEAR':
+        start, end = ts(date(today.year - 1, 1, 1)), ts(date(today.year, 1, 1))
+    elif p == 'LAST_YEAR_NOW':
+        start, end = ts(date(today.year - 1, 1, 1)), now_ms
+    elif p == 'LAST_7_DAYS':
+        start, end = ts(today - timedelta(days=7)), now_ms
+    elif p == 'LAST_30_DAYS':
+        start, end = ts(today - timedelta(days=30)), now_ms
+    elif p == 'LAST_365_DAYS':
+        start, end = ts(today - timedelta(days=365)), now_ms
+    elif p == 'ALL_TIME':
+        start, end = 0, now_ms
+    else:  # default THIS_MONTH
+        m = today + relativedelta(day=1)
+        start, end = ts(m), now_ms
+
+    from datetime import datetime
+    from_str = datetime.fromtimestamp(start / 1000).strftime('%Y-%m-%d') if start > 0 else ''
+    to_str   = datetime.fromtimestamp(end   / 1000).strftime('%Y-%m-%d')
+    return start, end, from_str, to_str
+
+
+# ---------------------------------------------------------------- /top_data
+
+@router.get("/top_data")
+def get_top_data(
+    users:  str = Query(default="ALL"),
+    period: str = Query(default="THIS_MONTH"),
+    top:    int = Query(default=10, ge=1, le=500),
+    session: SessionToken = Depends(require_auth),
+):
+    """Return top-symbols income data as JSON for the dashboard_top.html component."""
+    start_ms, end_ms, from_date, to_date = _period_to_range(period)
+    user_list = [u.strip() for u in users.split(",") if u.strip()] or ["ALL"]
+    db = _get_db()
+    rows = db.select_top(user_list, start_ms, end_ms, top) or []
+    return {
+        "rows":      [list(r) for r in rows],
+        "from_date": from_date,
+        "to_date":   to_date,
+    }
+
+
 # ---------------------------------------------------------------- /balance_page
 
 @router.get("/balance_page", response_class=HTMLResponse)

@@ -1,0 +1,165 @@
+<!-- Dashboard Top Symbols component — embedded via st.html(unsafe_allow_javascript=True).
+     Config injected as JS variables (%%PLACEHOLDER%%) by Dashboard.py.
+     All < > inside JS string literals escaped as \x3C / \x3E for DOMPurify.
+     Comparison operators use spaces (a < b) — safe per DOMPurify check.
+     Data updates driven by WebSocket income_updated events — zero polling. -->
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+.dt-root {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 0.875rem;
+    color: #e2e8f0;
+    background: #0e1117;
+    border-radius: 6px;
+    overflow: hidden;
+}
+.dt-header {
+    padding: 0.45rem 0.75rem;
+    background: #1a202c;
+    border-bottom: 1px solid #2d3748;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.dt-title { font-size: 0.88rem; font-weight: 600; color: #63b3ed; }
+.dt-period { font-size: 0.68rem; color: #94a3b8; }
+.dt-status { font-size: 0.68rem; color: #64748b; padding: 0.2rem 0.75rem; min-height: 1.1em; }
+.dt-nodata { padding: 1.5rem; text-align: center; color: #4a5568; font-size: 0.85rem; }
+.dt-chart  { width: 100%; }
+</style>
+
+<div id="dt-root" class="dt-root">
+    <div class="dt-header">
+        <span class="dt-title">Top Symbols</span>
+        <span class="dt-period" id="dt-period"></span>
+    </div>
+    <div class="dt-status" id="dt-status">Loading…</div>
+    <div class="dt-nodata" id="dt-nodata" style="display:none">No data for the selected period.</div>
+    <div class="dt-chart" id="dt-chart"></div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    var TOKEN    = "%%TOKEN%%";
+    var API_BASE = "%%API_BASE%%";
+    var API_HOST = "%%API_HOST%%";
+    var USERS    = %%USERS%%;
+    var PERIOD   = "%%PERIOD%%";
+    var TOP      = %%TOP%%;
+
+    /* Kill any previous WS + reconnect timer from a prior render */
+    if (window._dtWs) { try { window._dtWs.close(); } catch (_) {} window._dtWs = null; }
+    if (window._dtReconnTimer) { clearTimeout(window._dtReconnTimer); window._dtReconnTimer = null; }
+
+    var ws          = null;
+    var reconnTimer = null;
+
+    function reportHeight() {
+        var h = document.documentElement.scrollHeight + 16;
+        try {
+            window.parent.postMessage(
+                { isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'
+            );
+        } catch (_) {}
+    }
+
+    function setStatus(msg) {
+        var el = document.getElementById('dt-status');
+        if (el) el.textContent = msg;
+    }
+
+    function load() {
+        var usersParam = (Array.isArray(USERS) && USERS.length > 0) ? USERS.join(',') : 'ALL';
+        var url = API_BASE + '/dashboard/top_data'
+            + '?users='  + encodeURIComponent(usersParam)
+            + '&period=' + encodeURIComponent(PERIOD)
+            + '&top='    + TOP
+            + '&token='  + encodeURIComponent(TOKEN);
+
+        fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                setStatus('');
+                if (!d.rows || d.rows.length === 0) {
+                    document.getElementById('dt-nodata').style.display = 'block';
+                    document.getElementById('dt-chart').innerHTML = '';
+                    document.getElementById('dt-period').textContent = '';
+                    reportHeight();
+                    return;
+                }
+                document.getElementById('dt-nodata').style.display = 'none';
+                if (d.from_date && d.to_date) {
+                    document.getElementById('dt-period').textContent =
+                        d.from_date + ' \u2013 ' + d.to_date;
+                }
+                var symbols = d.rows.map(function (r) { return r[1]; });
+                var incomes = d.rows.map(function (r) { return parseFloat(r[2]); });
+                var colors  = incomes.map(function (v) { return v < 0 ? '#fc8181' : '#68d391'; });
+
+                var trace = {
+                    x: symbols,
+                    y: incomes,
+                    type: 'bar',
+                    marker: { color: colors },
+                    hovertemplate: '\x3Cb\x3E%{x}\x3C/b\x3E\x3Cbr\x3EIncome: %{y:.4f}\x3Cextra\x3E\x3C/extra\x3E'
+                };
+                var layout = {
+                    paper_bgcolor: '#0e1117',
+                    plot_bgcolor:  '#0e1117',
+                    font:   { color: '#e2e8f0', size: 11 },
+                    margin: { l: 50, r: 20, t: 16, b: 120 },
+                    xaxis:  { tickangle: -45, gridcolor: '#2d3748', color: '#e2e8f0' },
+                    yaxis:  { gridcolor: '#2d3748', color: '#e2e8f0',
+                              zeroline: true, zerolinecolor: '#4a5568' },
+                    bargap: 0.3
+                };
+                Plotly.react('dt-chart', [trace], layout,
+                             { displayModeBar: false, responsive: true });
+                reportHeight();
+            })
+            .catch(function (e) {
+                setStatus('\u26a0 Fetch error: ' + e.message);
+                reportHeight();
+            });
+    }
+
+    function connect() {
+        if (!TOKEN || !API_HOST) return;
+        clearTimeout(reconnTimer);
+        var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
+        ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
+        window._dtWs = ws;
+        ws.onopen = function () {
+            setStatus('Connected \u2014 loading\u2026');
+            load();
+        };
+        ws.onmessage = function (evt) {
+            try {
+                var m = JSON.parse(evt.data);
+                if (m.type === 'income_updated') load();
+            } catch (_) {}
+        };
+        ws.onclose = function () {
+            setStatus('Disconnected \u2014 reconnecting in 5 s\u2026');
+            reconnTimer = setTimeout(connect, 5000);
+            window._dtReconnTimer = reconnTimer;
+        };
+        ws.onerror = function () { ws.close(); };
+    }
+
+    function waitForPlotly(cb) {
+        if (typeof Plotly !== 'undefined') { cb(); }
+        else { setTimeout(function () { waitForPlotly(cb); }, 50); }
+    }
+
+    waitForPlotly(function () {
+        connect();
+        window.addEventListener('resize', function () {
+            var chart = document.getElementById('dt-chart');
+            if (chart && chart.data) { Plotly.Plots.resize('dt-chart'); }
+        });
+    });
+}());
+</script>
