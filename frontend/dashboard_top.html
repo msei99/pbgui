@@ -138,7 +138,14 @@
         ws.onmessage = function (evt) {
             try {
                 var m = JSON.parse(evt.data);
-                if (m.type === 'income_updated') load();
+                if (m.type === 'income_updated') {
+                    // Only reload when the event is for one of *our* configured users.
+                    // m.user == '' means the caller couldn't determine the user → reload to be safe.
+                    // USERS == [] means "ALL users" → always reload.
+                    var mu = m.user || '';
+                    var relevant = !mu || !Array.isArray(USERS) || USERS.length === 0 || USERS.indexOf(mu) !== -1;
+                    if (relevant) load();
+                }
             } catch (_) {}
         };
         ws.onclose = function () {

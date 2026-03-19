@@ -140,10 +140,11 @@ async def _notify_api_balance():
         pass
 
 
-async def _notify_api_income():
+async def _notify_api_income(user_name: str = ""):
     """Fire-and-forget: POST to FastAPI to fan-out income_updated to all /ws/dashboard clients.
 
     Called via asyncio.create_task() after each successful update_history() write.
+    user_name is forwarded so clients can filter and only reload for their configured user(s).
     Errors are silently swallowed — a missed notification is not critical.
     """
     import urllib.request
@@ -151,10 +152,12 @@ async def _notify_api_income():
     try:
         port_val = load_ini("api_server", "port")
         port = int(port_val) if port_val and str(port_val).isdigit() else 8000
+        body = json.dumps({"user": user_name}).encode()
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/internal/notify/income",
-            data=b"",
+            data=body,
             method="POST",
+            headers={"Content-Type": "application/json"},
         )
         await asyncio.to_thread(urllib.request.urlopen, req, None, 2)
     except Exception:
@@ -2978,7 +2981,7 @@ class PBData():
                                     else:
                                         try:
                                             await asyncio.to_thread(self.db.update_history, user)
-                                            asyncio.create_task(_notify_api_income())
+                                            asyncio.create_task(_notify_api_income(getattr(user, 'name', '')))
                                         except Exception as e:
                                             # Some runtime errors seen under heavy load look like
                                             # "generator didn't stop after athrow()". Treat these
