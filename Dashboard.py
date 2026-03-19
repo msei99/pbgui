@@ -1258,6 +1258,7 @@ class Dashboard():
         except Exception:
             pass
         api_base_str = f'http://{_browser_host}:{api_port}/api'
+        api_host_str = f'{_browser_host}:{api_port}'
 
         # Resolve users list
         if user and isinstance(user, (list, tuple)) and len(user) > 0:
@@ -1269,7 +1270,6 @@ class Dashboard():
 
         period_str  = str(period) if period else 'THIS_MONTH'
         top_val     = int(top) if top else 10
-        refresh_val = self._get_refresh_interval(position, 'top_symbols')
 
         html_path = _Path(__file__).parent / 'frontend' / 'dashboard_top.html'
         html = html_path.read_text(encoding='utf-8')
