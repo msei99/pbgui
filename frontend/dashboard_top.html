@@ -20,9 +20,18 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.4rem;
 }
 .dt-title { font-size: 0.88rem; font-weight: 600; color: #63b3ed; }
-.dt-period { font-size: 0.68rem; color: #94a3b8; }
+.dt-meta  { font-size: 0.73rem; color: #94a3b8; white-space: nowrap; }
+.dt-meta-user { color: #e2e8f0; }
+.dt-daterange {
+    font-size: 0.68rem; color: #64748b;
+    padding: 0.2rem 0.75rem;
+    background: #0e1117; border-bottom: 1px solid #1a202c;
+    min-height: 1.1em;
+}
 .dt-status { font-size: 0.68rem; color: #64748b; padding: 0.2rem 0.75rem; min-height: 1.1em; }
 .dt-nodata { padding: 1.5rem; text-align: center; color: #4a5568; font-size: 0.85rem; }
 .dt-chart  { width: 100%; }
@@ -31,8 +40,9 @@
 <div id="dt-root" class="dt-root">
     <div class="dt-header">
         <span class="dt-title">Top Symbols</span>
-        <span class="dt-period" id="dt-period"></span>
+        <span class="dt-meta">Users:&nbsp;<span class="dt-meta-user" id="dt-meta-users"></span>&nbsp;&middot;&nbsp;Top&nbsp;<span id="dt-meta-top"></span>&nbsp;&middot;&nbsp;<span id="dt-meta-period"></span></span>
     </div>
+    <div class="dt-daterange" id="dt-daterange"></div>
     <div class="dt-status" id="dt-status">Loading…</div>
     <div class="dt-nodata" id="dt-nodata" style="display:none">No data for the selected period.</div>
     <div class="dt-chart" id="dt-chart"></div>
@@ -48,6 +58,19 @@
     var USERS    = %%USERS%%;
     var PERIOD   = "%%PERIOD%%";
     var TOP      = %%TOP%%;
+
+    /* Populate header meta */
+    (function () {
+        var usersLabel = (Array.isArray(USERS) && USERS.length > 0 &&
+                          !(USERS.length === 1 && USERS[0] === 'ALL'))
+            ? USERS.join(', ') : 'ALL';
+        var elU = document.getElementById('dt-meta-users');
+        var elT = document.getElementById('dt-meta-top');
+        var elP = document.getElementById('dt-meta-period');
+        if (elU) elU.textContent = usersLabel;
+        if (elT) elT.textContent = String(TOP);
+        if (elP) elP.textContent = PERIOD;
+    }());
 
     /* Kill any previous WS + reconnect timer from a prior render */
     if (window._dtWs) { try { window._dtWs.close(); } catch (_) {} window._dtWs = null; }
@@ -91,8 +114,8 @@
                 }
                 document.getElementById('dt-nodata').style.display = 'none';
                 if (d.from_date && d.to_date) {
-                    document.getElementById('dt-period').textContent =
-                        d.from_date + ' \u2013 ' + d.to_date;
+                    var dr = document.getElementById('dt-daterange');
+                    if (dr) dr.textContent = 'From: ' + d.from_date + '  To: ' + d.to_date;
                 }
                 var symbols = d.rows.map(function (r) { return r[1]; });
                 var incomes = d.rows.map(function (r) { return parseFloat(r[2]); });
