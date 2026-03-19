@@ -420,16 +420,22 @@ async def internal_notify_balance(request: Request):
 async def internal_notify_income(request: Request):
     """Internal endpoint called by PBData after writing history/income data.
 
-    Broadcasts {"type": "income_updated"} to all connected /ws/dashboard clients.
+    Broadcasts {"type": "income_updated", "user": "<name>"} to all /ws/dashboard clients.
+    Clients filter by their configured user list — only reload when relevant.
     Only accepts requests from localhost.
     """
     client_host = request.client.host if request.client else ""
     if client_host not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=403, detail="Internal endpoint")
+    try:
+        body = await request.json()
+        user_name = body.get("user", "") if isinstance(body, dict) else ""
+    except Exception:
+        user_name = ""
     dead: set[WebSocket] = set()
     for ws in list(dashboard_ws_clients):
         try:
-            await ws.send_json({"type": "income_updated"})
+            await ws.send_json({"type": "income_updated", "user": user_name})
         except Exception:
             dead.add(ws)
     dashboard_ws_clients.difference_update(dead)
