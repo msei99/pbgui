@@ -15,19 +15,6 @@ import pbgui_help
 
 import time
 
-# Per-view refresh intervals (seconds). Used by the runtime fragment registration
-# in `view()` to set each fragment's `run_every` interval.
-# Adjust these values to tune how often each dashboard view reruns.
-DASHBOARD_VIEW_REFRESH = {
-    'pnl': 60,
-    'adg': 60,
-    'ppl': 60,
-    'income': 30,
-    'top_symbols': 60,
-    'balance': 86400,  # WS-driven — no periodic fragment re-run needed
-    'positions': 5,
-    'orders': 15,
-}
 class Dashboard():
 
     # Periods
@@ -121,40 +108,7 @@ class Dashboard():
             pass
         if self.name:
             self.load(name)
-        # Use module-level `DASHBOARD_VIEW_REFRESH` defaults so there's a single source
-        # of truth for refresh intervals. This keeps per-cell JSON values as the
-        # primary override while providing sane defaults here.
-        self.DASHBOARD_VIEW_REFRESH = DASHBOARD_VIEW_REFRESH
 
-    def _render_refresh_input(self, row: int, col: int, view_key: str, label: str = 'Refresh (sec)'):
-        """Render a per-cell refresh number input and ensure session_state key exists.
-
-        The value is stored in `st.session_state['dashboard_refresh_{row}_{col}']` and
-        will be saved into the dashboard JSON by `save()`.
-        """
-        key = f'dashboard_refresh_{row}_{col}'
-        default = self.dashboard_config.get(key, DASHBOARD_VIEW_REFRESH.get(view_key, 5))
-        # If not set yet, initialize session state so number_input shows the correct value
-        if key not in st.session_state:
-            try:
-                st.session_state[key] = int(default)
-            except Exception:
-                st.session_state[key] = DASHBOARD_VIEW_REFRESH.get(view_key, 5)
-        st.number_input(label, min_value=1, step=1, key=key)
-
-    def _get_refresh_interval(self, position: str, view_key: str):
-        """Return the configured refresh interval (seconds) for this dashboard cell.
-
-        Priority: dashboard JSON value -> fallback to module defaults `DASHBOARD_VIEW_REFRESH`.
-        """
-        key = f'dashboard_refresh_{position}'
-        try:
-            if key in self.dashboard_config:
-                return int(self.dashboard_config.get(key))
-        except Exception:
-            pass
-        return DASHBOARD_VIEW_REFRESH.get(view_key, 5)
-        
     def cleanup_dashboard_session_state(self):
         # Snapshot keys first to avoid Streamlit session_state KeyError when
         # session state is mutated during iteration (concurrent access).
@@ -450,8 +404,6 @@ class Dashboard():
                     dashboard_config.get(f'dashboard_type_{pos}', 'NONE'))
         if cell_type == 'NONE':
             return
-        # Note: _render_refresh_input is called by create_dashboard() inline
-        # before this method — do NOT call it here to avoid duplicate key errors.
         if cell_type == "PNL":
             if all(k in dashboard_config for k in [f'dashboard_pnl_users_{pos}', f'dashboard_pnl_period_{pos}', f'dashboard_pnl_mode_{pos}']):
                 self.view_pnl_impl(pos, dashboard_config[f'dashboard_pnl_users_{pos}'], dashboard_config[f'dashboard_pnl_period_{pos}'], dashboard_config[f'dashboard_pnl_mode_{pos}'])
@@ -634,113 +586,83 @@ class Dashboard():
         dashboards.sort()
         return dashboards
 
-
-    # Central scheduler removed. Each fragment uses per-view `run_every` intervals
-    # defined in the module-level `DASHBOARD_VIEW_REFRESH` mapping.
-
     def view(self):
         # Init
         dashboard_config = self.dashboard_config
         self.rows = dashboard_config["rows"]
         self.cols = dashboard_config["cols"]
-        # Per-view fragments control their own refresh via `run_every`.
         # Titel
         st.subheader(f"Dashboard: {self.name}")
 
-        # Local helper to register a fragment at runtime with a per-cell interval
-        def _register_fragment(impl, position: str, view_key: str, *impl_args, **impl_kwargs):
-            """Define and register a Streamlit fragment decorated with `run_every` at runtime.
-
-            impl: the corresponding `view_*_impl` method to call
-            position: position id like '1_1' or '2_1' used for session keys
-            view_key: one of the keys from `DASHBOARD_VIEW_REFRESH` (e.g. 'pnl')
-            """
-            try:
-                interval = int(self._get_refresh_interval(position, view_key))
-            except Exception:
-                interval = int(DASHBOARD_VIEW_REFRESH.get(view_key, 5))
-
-            def _inner():
-                impl(position, *impl_args, **impl_kwargs)
-
-            # Decorate the inner function with the runtime interval and execute it
-            decorated = st.fragment(run_every=interval)(_inner)
-            decorated()
         for row in range(1, self.rows + 1):
             if self.cols == 2:
                 db_col1, db_col2 = st.columns([1,1])
                 with db_col1:
                     if dashboard_config[f'dashboard_type_{row}_1'] == "PNL":
-                        _register_fragment(self.view_pnl_impl, f'{row}_1', 'pnl', dashboard_config[f'dashboard_pnl_users_{row}_1'], dashboard_config[f'dashboard_pnl_period_{row}_1'], dashboard_config[f'dashboard_pnl_mode_{row}_1'])
+                        self.view_pnl_impl(f'{row}_1', dashboard_config[f'dashboard_pnl_users_{row}_1'], dashboard_config[f'dashboard_pnl_period_{row}_1'], dashboard_config[f'dashboard_pnl_mode_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "ADG":
-                        _register_fragment(self.view_adg_impl, f'{row}_1', 'adg', dashboard_config[f'dashboard_adg_users_{row}_1'], dashboard_config[f'dashboard_adg_period_{row}_1'], dashboard_config[f'dashboard_adg_mode_{row}_1'])
+                        self.view_adg_impl(f'{row}_1', dashboard_config[f'dashboard_adg_users_{row}_1'], dashboard_config[f'dashboard_adg_period_{row}_1'], dashboard_config[f'dashboard_adg_mode_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "INCOME":
-                        # Compatibility for 1st Income implementation
                         if f'dashboard_income_last_{row}_1' not in dashboard_config:
                             dashboard_config[f'dashboard_income_last_{row}_1'] = 0
                             dashboard_config[f'dashboard_income_filter_{row}_1'] = 0.0
-                        _register_fragment(self.view_income_impl, f'{row}_1', 'income', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'], dashboard_config[f'dashboard_income_last_{row}_1'], dashboard_config[f'dashboard_income_filter_{row}_1'])
+                        self.view_income_impl(f'{row}_1', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'], dashboard_config[f'dashboard_income_last_{row}_1'], dashboard_config[f'dashboard_income_filter_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "TOP":
                         self.view_top_symbols_impl(f'{row}_1', dashboard_config[f'dashboard_top_symbols_users_{row}_1'], dashboard_config[f'dashboard_top_symbols_period_{row}_1'], dashboard_config[f'dashboard_top_symbols_top_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "POSITIONS":
-                        _register_fragment(self.view_positions_impl, f'{row}_1', 'positions', dashboard_config[f'dashboard_positions_users_{row}_1'])
+                        self.view_positions_impl(f'{row}_1', dashboard_config[f'dashboard_positions_users_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "ORDERS":
-                        _register_fragment(self.view_orders_impl, f'{row}_1', 'orders', dashboard_config[f'dashboard_orders_{row}_1'])
+                        self.view_orders_impl(f'{row}_1', dashboard_config[f'dashboard_orders_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "BALANCE":
                         self.view_balance_impl(f'{row}_1', dashboard_config[f'dashboard_balance_users_{row}_1'])
                     if dashboard_config[f'dashboard_type_{row}_1'] == "P+L":
-                        # Compatibility for 1st P+L implementation
                         if f'dashboard_ppl_sum_period_{row}_1' not in dashboard_config:
                             dashboard_config[f'dashboard_ppl_sum_period_{row}_1'] = 'DAY'
-                        _register_fragment(self.view_ppl_impl, f'{row}_1', 'ppl', dashboard_config[f'dashboard_ppl_users_{row}_1'], dashboard_config[f'dashboard_ppl_period_{row}_1'], dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
+                        self.view_ppl_impl(f'{row}_1', dashboard_config[f'dashboard_ppl_users_{row}_1'], dashboard_config[f'dashboard_ppl_period_{row}_1'], dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
                 with db_col2:
                     if dashboard_config[f'dashboard_type_{row}_2'] == "PNL":
-                        _register_fragment(self.view_pnl_impl, f'{row}_2', 'pnl', dashboard_config[f'dashboard_pnl_users_{row}_2'], dashboard_config[f'dashboard_pnl_period_{row}_2'], dashboard_config[f'dashboard_pnl_mode_{row}_2'])
+                        self.view_pnl_impl(f'{row}_2', dashboard_config[f'dashboard_pnl_users_{row}_2'], dashboard_config[f'dashboard_pnl_period_{row}_2'], dashboard_config[f'dashboard_pnl_mode_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "ADG":
-                        _register_fragment(self.view_adg_impl, f'{row}_2', 'adg', dashboard_config[f'dashboard_adg_users_{row}_2'], dashboard_config[f'dashboard_adg_period_{row}_2'], dashboard_config[f'dashboard_adg_mode_{row}_2'])
+                        self.view_adg_impl(f'{row}_2', dashboard_config[f'dashboard_adg_users_{row}_2'], dashboard_config[f'dashboard_adg_period_{row}_2'], dashboard_config[f'dashboard_adg_mode_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "INCOME":
-                        # Compatibility for 1st Income implementation
                         if f'dashboard_income_last_{row}_2' not in dashboard_config:
                             dashboard_config[f'dashboard_income_last_{row}_2'] = 0
                             dashboard_config[f'dashboard_income_filter_{row}_2'] = 0.0
-                        _register_fragment(self.view_income_impl, f'{row}_2', 'income', dashboard_config[f'dashboard_income_users_{row}_2'], dashboard_config[f'dashboard_income_period_{row}_2'], dashboard_config[f'dashboard_income_last_{row}_2'], dashboard_config[f'dashboard_income_filter_{row}_2'])
+                        self.view_income_impl(f'{row}_2', dashboard_config[f'dashboard_income_users_{row}_2'], dashboard_config[f'dashboard_income_period_{row}_2'], dashboard_config[f'dashboard_income_last_{row}_2'], dashboard_config[f'dashboard_income_filter_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "TOP":
                         self.view_top_symbols_impl(f'{row}_2', dashboard_config[f'dashboard_top_symbols_users_{row}_2'], dashboard_config[f'dashboard_top_symbols_period_{row}_2'], dashboard_config[f'dashboard_top_symbols_top_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "POSITIONS":
-                        _register_fragment(self.view_positions_impl, f'{row}_2', 'positions', dashboard_config[f'dashboard_positions_users_{row}_2'])
+                        self.view_positions_impl(f'{row}_2', dashboard_config[f'dashboard_positions_users_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "ORDERS":
-                        _register_fragment(self.view_orders_impl, f'{row}_2', 'orders', dashboard_config[f'dashboard_orders_{row}_2'])
+                        self.view_orders_impl(f'{row}_2', dashboard_config[f'dashboard_orders_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "BALANCE":
                         self.view_balance_impl(f'{row}_2', dashboard_config[f'dashboard_balance_users_{row}_2'])
                     if dashboard_config[f'dashboard_type_{row}_2'] == "P+L":
-                        # Compatibility for 1st P+L implementation
                         if f'dashboard_ppl_sum_period_{row}_2' not in dashboard_config:
                             dashboard_config[f'dashboard_ppl_sum_period_{row}_2'] = 'DAY'
-                        _register_fragment(self.view_ppl_impl, f'{row}_2', 'ppl', dashboard_config[f'dashboard_ppl_users_{row}_2'], dashboard_config[f'dashboard_ppl_period_{row}_2'], dashboard_config[f'dashboard_ppl_sum_period_{row}_2'])
+                        self.view_ppl_impl(f'{row}_2', dashboard_config[f'dashboard_ppl_users_{row}_2'], dashboard_config[f'dashboard_ppl_period_{row}_2'], dashboard_config[f'dashboard_ppl_sum_period_{row}_2'])
             else:
                 if dashboard_config[f'dashboard_type_{row}_1'] == "PNL":
-                    _register_fragment(self.view_pnl_impl, f'{row}_1', 'pnl', dashboard_config[f'dashboard_pnl_users_{row}_1'], dashboard_config[f'dashboard_pnl_period_{row}_1'], dashboard_config[f'dashboard_pnl_mode_{row}_1'])
+                    self.view_pnl_impl(f'{row}_1', dashboard_config[f'dashboard_pnl_users_{row}_1'], dashboard_config[f'dashboard_pnl_period_{row}_1'], dashboard_config[f'dashboard_pnl_mode_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "ADG":
-                    _register_fragment(self.view_adg_impl, f'{row}_1', 'adg', dashboard_config[f'dashboard_adg_users_{row}_1'], dashboard_config[f'dashboard_adg_period_{row}_1'], dashboard_config[f'dashboard_adg_mode_{row}_1'])
+                    self.view_adg_impl(f'{row}_1', dashboard_config[f'dashboard_adg_users_{row}_1'], dashboard_config[f'dashboard_adg_period_{row}_1'], dashboard_config[f'dashboard_adg_mode_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "INCOME":
-                    # Compatibility for 1st Income implementation
                     if f'dashboard_income_last_{row}_1' not in dashboard_config:
                         dashboard_config[f'dashboard_income_last_{row}_1'] = 0
                         dashboard_config[f'dashboard_income_filter_{row}_1'] = 0.0
-                    _register_fragment(self.view_income_impl, f'{row}_1', 'income', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'], dashboard_config[f'dashboard_income_last_{row}_1'], dashboard_config[f'dashboard_income_filter_{row}_1'])
+                    self.view_income_impl(f'{row}_1', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'], dashboard_config[f'dashboard_income_last_{row}_1'], dashboard_config[f'dashboard_income_filter_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "TOP":
                     self.view_top_symbols_impl(f'{row}_1', dashboard_config[f'dashboard_top_symbols_users_{row}_1'], dashboard_config[f'dashboard_top_symbols_period_{row}_1'], dashboard_config[f'dashboard_top_symbols_top_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "POSITIONS":
-                    _register_fragment(self.view_positions_impl, f'{row}_1', 'positions', dashboard_config[f'dashboard_positions_users_{row}_1'])
+                    self.view_positions_impl(f'{row}_1', dashboard_config[f'dashboard_positions_users_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "ORDERS":
-                    _register_fragment(self.view_orders_impl, f'{row}_1', 'orders', dashboard_config[f'dashboard_orders_{row}_1'])
+                    self.view_orders_impl(f'{row}_1', dashboard_config[f'dashboard_orders_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "BALANCE":
                     self.view_balance_impl(f'{row}_1', dashboard_config[f'dashboard_balance_users_{row}_1'])
                 if dashboard_config[f'dashboard_type_{row}_1'] == "P+L":
-                    # Compatibility for 1st P+L implementation
                     if f'dashboard_ppl_sum_period_{row}_1' not in dashboard_config:
                         dashboard_config[f'dashboard_ppl_sum_period_{row}_1'] = 'DAY'
-                    _register_fragment(self.view_ppl_impl, f'{row}_1', 'ppl', dashboard_config[f'dashboard_ppl_users_{row}_1'], dashboard_config[f'dashboard_ppl_period_{row}_1'], dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
+                    self.view_ppl_impl(f'{row}_1', dashboard_config[f'dashboard_ppl_users_{row}_1'], dashboard_config[f'dashboard_ppl_period_{row}_1'], dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
 
     def view_pnl_impl(self, position : str, user : str = None, period : str = None, mode : str = "bar"):
         users = st.session_state.users
@@ -1413,7 +1335,7 @@ class Dashboard():
             st.multiselect('Users', ['ALL'] + users.list(), key=f"dashboard_positions_users_{position}")
         with col2:
             if st.button(":material/refresh:", key=f"dashboard_positions_rerun_{position}"):
-                st.rerun(scope="fragment")
+                st.rerun()
         # Init view_orders that it can be selected in edit mode
         if f'view_orders_{position}' not in st.session_state:
             st.session_state[f'view_orders_{position}'] = None
@@ -1424,7 +1346,6 @@ class Dashboard():
                 users_selected = users.list()
             else:
                 users_selected = st.session_state[f'dashboard_positions_users_{position}']
-            # regular refresh via run_every handles updates
             for user in users_selected:
                 positions = self.db.fetch_positions(users.find_user(user))
                 prices = self.db.fetch_prices(users.find_user(user))
@@ -1528,7 +1449,7 @@ class Dashboard():
             st.markdown(f"#### :blue[Time:] :green[{time}]")
         with col4:
             if st.button(":material/refresh:", key=f"dashboard_orders_rerun_{pos}"):
-                st.rerun(scope="fragment")
+                st.rerun()
         # layout = go.Layout(title=f'{symbol} | {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")} UTC', title_font=dict(size=36), showlegend=True)
         fig = go.Figure(data=[go.Candlestick(x=pd.to_datetime(ohlcv_df["timestamp"], unit='ms'),
                open=ohlcv_df["open"], high=ohlcv_df["high"],
