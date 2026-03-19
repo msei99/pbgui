@@ -158,11 +158,6 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
   gap: 0.4rem;
 }
 .cfg-grid.one-col { grid-template-columns: 1fr; }
-.cell-preview { margin-top: 0.4rem; }
-.cell-preview iframe {
-  width: 100%; border: none; border-radius: 6px;
-  background: #0e1117; min-height: 200px;
-}
 </style>
 </head>
 <body>
@@ -426,9 +421,6 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
       var uKey = 'dashboard_balance_users_' + pos;
       grid.appendChild(cfgRow('Users', makeUsersDropdown(state[uKey], function (v) {
         stateSet(uKey, v);
-        /* rebuild preview with new users */
-        var cell = cfgDiv.closest('.editor-cell');
-        if (cell) buildBalancePreview(cell.querySelector('.cell-preview'), r, c);
       })));
 
     } else if (type === 'POSITIONS') {
@@ -501,47 +493,7 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
     }
 
     cfgDiv.appendChild(grid);
-    /* build preview for BALANCE cells */
-    var cell = cfgDiv.closest('.editor-cell');
-    if (cell) {
-      var prevDiv = cell.querySelector('.cell-preview');
-      if (prevDiv) {
-        if (type === 'BALANCE') {
-          buildBalancePreview(prevDiv, r, c);
-        } else {
-          prevDiv.innerHTML = '';
-        }
-      }
-    }
     reportHeight();
-  }
-
-  function buildBalancePreview(prevDiv, r, c) {
-    if (!prevDiv) return;
-    var pos = r + '_' + c;
-    var users = state['dashboard_balance_users_' + pos];
-    var usersParam = 'ALL';
-    if (users && users.length > 0) usersParam = users.join(',');
-    var url = API_BASE + '/dashboard/balance_page'
-      + '?users=' + encodeURIComponent(usersParam)
-      + '&position=preview_' + pos
-      + '&token=' + encodeURIComponent(TOKEN);
-    /* reuse existing iframe or create new one */
-    var iframe = prevDiv.querySelector('iframe');
-    if (!iframe) {
-      iframe = document.createElement('iframe');
-      prevDiv.innerHTML = '';
-      prevDiv.appendChild(iframe);
-    }
-    iframe.src = url;
-    /* auto-resize when content loads */
-    iframe.onload = function () {
-      try {
-        var h = iframe.contentDocument.documentElement.scrollHeight;
-        if (h > 50) iframe.style.height = h + 'px';
-      } catch (e) { iframe.style.height = '350px'; }
-      reportHeight();
-    };
   }
 
   /* ── drag & drop state ── */
@@ -643,9 +595,6 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
             state['dashboard_type_' + row + '_' + col] = v;
             var cfgDiv = cellEl.querySelector('.cell-cfg');
             if (cfgDiv) buildCellConfig(cfgDiv, row, col);
-            /* clear preview if type changed away from BALANCE */
-            var prevDiv = cellEl.querySelector('.cell-preview');
-            if (prevDiv && v !== 'BALANCE') prevDiv.innerHTML = '';
             scheduleSync();
           };
         })(r, c, cell));
@@ -654,10 +603,6 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
         /* ── config panel ── */
         var cfgDiv = el('div', 'cell-cfg');
         cell.appendChild(cfgDiv);
-
-        /* ── preview area (for BALANCE etc.) ── */
-        var prevDiv = el('div', 'cell-preview');
-        cell.appendChild(prevDiv);
 
         buildCellConfig(cfgDiv, r, c);
 
