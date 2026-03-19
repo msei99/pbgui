@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<!-- Dashboard Grid Editor — served as full page by FastAPI /api/dashboard/editor_page.
+     Handles Name, Columns, Rows, per-cell type + config entirely in Vanilla JS.
+     No Streamlit reruns needed when layout or cell settings change.
+     Config is synced to FastAPI /api/dashboard/pending_full; Streamlit save() reads it.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard Editor</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 0.875rem;
+  background: #0e1117;
+  color: #e2e8f0;
+  padding: 0.75rem;
+  min-height: 100vh;
+}
+/* ── Header ── */
+.editor-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+  background: #1a202c;
+  border: 1px solid #2d3748;
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+}
+.hdr-field { display: flex; flex-direction: column; gap: 0.2rem; }
+.hdr-field label {
+  font-size: 0.68rem; color: #94a3b8;
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.hdr-field input[type="text"] {
+  background: #2d3748; color: #e2e8f0;
+  border: 1px solid #4a5568; border-radius: 4px;
+  padding: 0.3rem 0.5rem; font-size: 0.83rem;
+  min-width: 200px;
+}
+.hdr-field input[type="number"] {
+  background: #2d3748; color: #e2e8f0;
+  border: 1px solid #4a5568; border-radius: 4px;
+  padding: 0.3rem 0.5rem; font-size: 0.83rem;
+  width: 64px;
+}
+.hdr-field input:focus { outline: none; border-color: #63b3ed; }
+.hdr-field input.empty { border-color: #fc8181; }
+.status {
+  font-size: 0.68rem; color: #4a5568;
+  align-self: flex-end; padding-bottom: 0.15rem;
+}
+.status.saved { color: #48bb78; }
+.status.error  { color: #fc8181; }
+/* ── Grid ── */
+.editor-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+.editor-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+.editor-grid.cols-1 { grid-template-columns: 1fr; }
+/* ── Cell ── */
+.editor-cell {
+  background: #1a202c;
+  border: 1px solid #2d3748;
+  border-radius: 6px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  cursor: grab;
+  transition: opacity 0.2s, border-color 0.2s, transform 0.15s;
+}
+.editor-cell.dragging {
+  opacity: 0.4;
+  border-color: #63b3ed;
+  cursor: grabbing;
+}
+.editor-cell.drag-over {
+  border-color: #63b3ed;
+  border-style: dashed;
+  transform: scale(1.01);
+}
+.cell-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  font-weight: 600;
+}
+.cell-header .drag-handle {
+  cursor: grab;
+  color: #4a5568;
+  font-size: 1rem;
+  margin-right: 0.2rem;
+  user-select: none;
+}
+select, input[type="number"] {
+  background: #2d3748; color: #e2e8f0;
+  border: 1px solid #4a5568; border-radius: 4px;
+  padding: 0.25rem 0.4rem; font-size: 0.8rem;
+  width: 100%;
+}
+select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed; }
+/* ── custom multi-select dropdown ── */
+.msel-wrap { position: relative; width: 100%; }
+.msel-btn {
+  background: #2d3748; color: #e2e8f0;
+  border: 1px solid #4a5568; border-radius: 4px;
+  padding: 0.25rem 0.5rem; font-size: 0.8rem;
+  cursor: pointer; width: 100%; text-align: left;
+  display: flex; justify-content: space-between; align-items: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.msel-btn:hover { border-color: #63b3ed; }
+.msel-arrow { font-size: 0.55rem; margin-left: 0.4rem; flex-shrink: 0; }
+.msel-drop {
+  display: none; position: absolute; top: 100%; left: 0;
+  background: #1a202c; border: 1px solid #4a5568; border-radius: 4px;
+  min-width: 180px; max-height: 260px; overflow: hidden;
+  z-index: 200; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  margin-top: 2px; width: 100%;
+}
+.msel-drop.open { display: block; }
+.msel-filter {
+  width: 100%; box-sizing: border-box;
+  background: #2d3748; color: #e2e8f0;
+  border: none; border-bottom: 1px solid #4a5568;
+  padding: 0.35rem 0.5rem; font-size: 0.76rem; outline: none;
+}
+.msel-filter::placeholder { color: #64748b; }
+.msel-list { max-height: 180px; overflow-y: auto; }
+.msel-item {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.78rem;
+  color: #e2e8f0; white-space: nowrap;
+}
+.msel-item:hover { background: #2d3748; }
+.msel-item input[type="checkbox"] { accent-color: #63b3ed; margin: 0; cursor: pointer; }
+.msel-sep { border-top: 1px solid #2d3748; margin: 0.15rem 0; }
+.cfg-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.cfg-row label {
+  font-size: 0.65rem; color: #94a3b8;
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.cfg-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+}
+.cfg-grid.one-col { grid-template-columns: 1fr; }
+.cell-preview { margin-top: 0.4rem; }
+.cell-preview iframe {
+  width: 100%; border: none; border-radius: 6px;
+  background: #0e1117; min-height: 200px;
+}
+</style>
+</head>
+<body>
+<div class="editor-header">
+  <div class="hdr-field">
+    <label>Dashboard Name</label>
+    <input id="hdr-name" type="text" maxlength="32" placeholder="Enter name...">
+  </div>
+  <div class="hdr-field">
+    <label>Columns</label>
+    <input id="hdr-cols" type="number" min="1" max="2" step="1" value="1">
+  </div>
+  <div class="hdr-field">
+    <label>Rows</label>
+    <input id="hdr-rows" type="number" min="1" max="6" step="1" value="1">
+  </div>
+  <div id="status" class="status"></div>
+</div>
+<div id="editor-grid" class="editor-grid cols-1"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ── injected by FastAPI ── */
+  var TOKEN   = "%%TOKEN%%";
+  var API_BASE = "%%API_BASE%%";
+  var ORIG_NAME = %%DASHBOARD_NAME%%;  /* JSON-encoded: "MyDash" or "" */
+
+  /* ── constants ── */
+  var TYPES   = ['NONE','PNL','ADG','P+L','INCOME','TOP','BALANCE','POSITIONS','ORDERS'];
+  var PERIODS = ['THIS_MONTH','LAST_MONTH','THIS_QUARTER','LAST_QUARTER',
+                 'THIS_YEAR','LAST_YEAR','LAST_7_DAYS','LAST_30_DAYS','LAST_365_DAYS'];
+  var MODES   = ['Cumulative','Daily'];
+  var PPL_SUM = ['DAY','WEEK','MONTH'];
+  /* ── state ── */
+  var state    = { name: ORIG_NAME, rows: 1, cols: 1 };
+  var allUsers = [];
+  var syncTimer = null;
+
+  /* ── DOM refs ── */
+  var hdrName  = document.getElementById('hdr-name');
+  var hdrCols  = document.getElementById('hdr-cols');
+  var hdrRows  = document.getElementById('hdr-rows');
+  var statusEl = document.getElementById('status');
+  var gridEl   = document.getElementById('editor-grid');
+
+  /* ─────────── helpers ─────────── */
+
+  function setStatus(msg, cls) {
+    statusEl.textContent = msg;
+    statusEl.className = 'status' + (cls ? ' ' + cls : '');
+  }
+
+  function apiFetch(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign(
+      { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      opts.headers || {}
+    );
+    return fetch(API_BASE + path, opts);
+  }
+
+  function reportHeight() {
+    var h = document.documentElement.scrollHeight + 16;
+    try {
+      window.parent.postMessage(
+        { isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h },
+        '*'
+      );
+    } catch (e) {}
+  }
+
+  function scheduleSync() {
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(doSync, 400);
+  }
+
+  function doSync() {
+    setStatus('saving…', '');
+    var payload = {};
+    Object.keys(state).forEach(function (k) { payload[k] = state[k]; });
+    apiFetch('/dashboard/pending_full?name=' + encodeURIComponent(ORIG_NAME), {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }).then(function (r) {
+      if (r.ok) setStatus('saved', 'saved'); else setStatus('error', 'error');
+    }).catch(function () { setStatus('offline', 'error'); });
+  }
+
+  /* ── DOM builders ── */
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls)  e.className = cls;
+    if (text) e.textContent = text;
+    return e;
+  }
+
+  function cfgRow(labelText, inputEl) {
+    var wrap = el('div', 'cfg-row');
+    var lbl  = el('label', null, labelText);
+    wrap.appendChild(lbl);
+    wrap.appendChild(inputEl);
+    return wrap;
+  }
+
+  function makeSelect(options, current, onChange) {
+    var sel = el('select');
+    options.forEach(function (opt) {
+      var o = el('option');
+      o.value = opt; o.textContent = opt;
+      if (opt === current) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', function () { onChange(this.value); });
+    return sel;
+  }
+
+  var _mselCounter = 0;
+
+  function makeUsersDropdown(currentUsers, onChange) {
+    var uid   = 'msel' + (++_mselCounter);
+    var selected = (currentUsers && currentUsers.length) ? currentUsers.slice() : ['ALL'];
+    var opts  = ['ALL'].concat(allUsers);
+
+    var wrap    = el('div', 'msel-wrap');
+    var btn     = el('div', 'msel-btn');
+    var btnLbl  = el('span');
+    var arrow   = el('span', 'msel-arrow', '\u25BC');
+    btn.appendChild(btnLbl);
+    btn.appendChild(arrow);
+    wrap.appendChild(btn);
+
+    var drop   = el('div', 'msel-drop');
+    drop.id    = uid + '-drop';
+    var filter = el('input');
+    filter.type = 'text'; filter.className = 'msel-filter';
+    filter.placeholder = 'Filter...';
+    var list   = el('div', 'msel-list');
+    list.id    = uid + '-list';
+    drop.appendChild(filter);
+    drop.appendChild(list);
+    wrap.appendChild(drop);
+
+    function updateLabel() {
+      if (!selected.length)                    btnLbl.textContent = '\u2014 select \u2014';
+      else if (selected.indexOf('ALL') >= 0)   btnLbl.textContent = 'ALL';
+      else if (selected.length === 1)          btnLbl.textContent = selected[0];
+      else                                     btnLbl.textContent = selected.length + ' users';
+    }
+
+    function buildList() {
+      list.innerHTML = '';
+      opts.forEach(function (u) {
+        var item = el('div', 'msel-item');
+        item.setAttribute('data-u', u.toLowerCase());
+        var cb = el('input');
+        cb.type = 'checkbox'; cb.value = u;
+        cb.checked = selected.indexOf(u) >= 0;
+        cb.addEventListener('change', (function (val) {
+          return function () {
+            if (val === 'ALL') {
+              if (this.checked) {
+                selected = ['ALL'];
+                list.querySelectorAll('input[type="checkbox"]').forEach(function (c) {
+                  c.checked = (c.value === 'ALL');
+                });
+              } else {
+                selected = [];
+              }
+            } else {
+              var ai = selected.indexOf('ALL');
+              if (ai >= 0) selected.splice(ai, 1);
+              var checked = this.checked;
+              var ix = selected.indexOf(val);
+              if (checked && ix < 0) selected.push(val);
+              else if (!checked && ix >= 0) selected.splice(ix, 1);
+              list.querySelectorAll('input[type="checkbox"]').forEach(function (c) {
+                if (c.value === 'ALL') c.checked = false;
+              });
+              if (selected.length === 0) {
+                selected = ['ALL'];
+                list.querySelectorAll('input[type="checkbox"]').forEach(function (c) {
+                  c.checked = (c.value === 'ALL');
+                });
+              }
+            }
+            updateLabel();
+            onChange(selected.slice());
+          };
+        })(u));
+        var lbl = el('span', null, u);
+        item.appendChild(cb);
+        item.appendChild(lbl);
+        item.addEventListener('click', function (e) {
+          if (e.target.tagName !== 'INPUT') {
+            var c = this.querySelector('input');
+            c.checked = !c.checked;
+            c.dispatchEvent(new Event('change'));
+          }
+        });
+        list.appendChild(item);
+        if (u === 'ALL') {
+          var sep = el('div', 'msel-sep');
+          list.appendChild(sep);
+        }
+      });
+    }
+
+    function applyFilter(q) {
+      q = q.toLowerCase();
+      list.querySelectorAll('.msel-item').forEach(function (item) {
+        var u2 = item.getAttribute('data-u') || '';
+        item.style.display = (!q || u2 === 'all' || u2.indexOf(q) >= 0) ? '' : 'none';
+      });
+    }
+
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var wasOpen = drop.classList.contains('open');
+      /* close all other open dropdowns first */
+      document.querySelectorAll('.msel-drop.open').forEach(function (d) { d.classList.remove('open'); });
+      if (!wasOpen) {
+        drop.classList.add('open');
+        filter.value = '';
+        applyFilter('');
+        filter.focus();
+      }
+    });
+    drop.addEventListener('click', function (e) { e.stopPropagation(); });
+    filter.addEventListener('input', function () { applyFilter(this.value); });
+
+    buildList();
+    updateLabel();
+    return wrap;
+  }
+
+  function makeNumber(val, min2, max2, step, onChange) {
+    var inp = el('input');
+    inp.type = 'number'; inp.min = min2; inp.max = max2; inp.step = step || 1;
+    inp.value = val;
+    inp.addEventListener('change', function () { onChange(parseFloat(this.value)); });
+    return inp;
+  }
+
+  /* ── per-cell config panel ── */
+
+  function buildCellConfig(cfgDiv, r, c) {
+    cfgDiv.innerHTML = '';
+    var pos = r + '_' + c;
+    var type = state['dashboard_type_' + pos] || 'NONE';
+    if (type === 'NONE') return;
+
+    function stateSet(k, v) { state[k] = v; scheduleSync(); }
+
+    var grid = el('div', 'cfg-grid');
+
+    if (type === 'BALANCE') {
+      grid.className = 'cfg-grid one-col';
+      var uKey = 'dashboard_balance_users_' + pos;
+      grid.appendChild(cfgRow('Users', makeUsersDropdown(state[uKey], function (v) {
+        stateSet(uKey, v);
+        /* rebuild preview with new users */
+        var cell = cfgDiv.closest('.editor-cell');
+        if (cell) buildBalancePreview(cell.querySelector('.cell-preview'), r, c);
+      })));
+
+    } else if (type === 'POSITIONS') {
+      grid.className = 'cfg-grid one-col';
+      var uKey = 'dashboard_positions_users_' + pos;
+      grid.appendChild(cfgRow('Users', makeUsersDropdown(state[uKey], function (v) { stateSet(uKey, v); })));
+
+    } else if (type === 'ORDERS') {
+      /* no extra config needed */
+
+    } else if (type === 'PNL' || type === 'ADG') {
+      var pfx  = type === 'PNL' ? 'pnl' : 'adg';
+      var uKey = 'dashboard_' + pfx + '_users_'  + pos;
+      var pKey = 'dashboard_' + pfx + '_period_' + pos;
+      var mKey = 'dashboard_' + pfx + '_mode_'   + pos;
+      grid.className = 'cfg-grid one-col';
+      grid.appendChild(cfgRow('Users',
+        makeUsersDropdown(state[uKey], function (v) { stateSet(uKey, v); })));
+      var row2 = el('div', 'cfg-grid');
+      row2.appendChild(cfgRow('Period',
+        makeSelect(PERIODS, state[pKey] || 'THIS_MONTH', function (v) { stateSet(pKey, v); })));
+      row2.appendChild(cfgRow('Mode',
+        makeSelect(MODES, state[mKey] || 'Cumulative', function (v) { stateSet(mKey, v); })));
+      grid.appendChild(row2);
+
+    } else if (type === 'INCOME') {
+      var uKey = 'dashboard_income_users_'  + pos;
+      var pKey = 'dashboard_income_period_' + pos;
+      var lKey = 'dashboard_income_last_'   + pos;
+      var fKey = 'dashboard_income_filter_' + pos;
+      grid.className = 'cfg-grid one-col';
+      grid.appendChild(cfgRow('Users',
+        makeUsersDropdown(state[uKey], function (v) { stateSet(uKey, v); })));
+      var row2 = el('div', 'cfg-grid');
+      row2.appendChild(cfgRow('Period',
+        makeSelect(PERIODS, state[pKey] || 'THIS_MONTH', function (v) { stateSet(pKey, v); })));
+      row2.appendChild(cfgRow('Last N',
+        makeNumber(state[lKey] || 0, 0, 9999, 1, function (v) { stateSet(lKey, v); })));
+      row2.appendChild(cfgRow('Min Filter',
+        makeNumber(state[fKey] || 0, 0, 1e6, 0.01, function (v) { stateSet(fKey, v); })));
+      grid.appendChild(row2);
+
+    } else if (type === 'TOP') {
+      var uKey = 'dashboard_top_symbols_users_'  + pos;
+      var pKey = 'dashboard_top_symbols_period_' + pos;
+      var tKey = 'dashboard_top_symbols_top_'    + pos;
+      grid.className = 'cfg-grid one-col';
+      grid.appendChild(cfgRow('Users',
+        makeUsersDropdown(state[uKey], function (v) { stateSet(uKey, v); })));
+      var row2 = el('div', 'cfg-grid');
+      row2.appendChild(cfgRow('Period',
+        makeSelect(PERIODS, state[pKey] || 'THIS_MONTH', function (v) { stateSet(pKey, v); })));
+      row2.appendChild(cfgRow('Top N',
+        makeNumber(state[tKey] || 10, 1, 500, 1, function (v) { stateSet(tKey, v); })));
+      grid.appendChild(row2);
+
+    } else if (type === 'P+L') {
+      var uKey = 'dashboard_ppl_users_'      + pos;
+      var pKey = 'dashboard_ppl_period_'     + pos;
+      var sKey = 'dashboard_ppl_sum_period_' + pos;
+      grid.className = 'cfg-grid one-col';
+      grid.appendChild(cfgRow('Users',
+        makeUsersDropdown(state[uKey], function (v) { stateSet(uKey, v); })));
+      var row2 = el('div', 'cfg-grid');
+      row2.appendChild(cfgRow('Period',
+        makeSelect(PERIODS, state[pKey] || 'THIS_MONTH', function (v) { stateSet(pKey, v); })));
+      row2.appendChild(cfgRow('Sum Period',
+        makeSelect(PPL_SUM, state[sKey] || 'MONTH', function (v) { stateSet(sKey, v); })));
+      grid.appendChild(row2);
+    }
+
+    cfgDiv.appendChild(grid);
+    /* build preview for BALANCE cells */
+    var cell = cfgDiv.closest('.editor-cell');
+    if (cell) {
+      var prevDiv = cell.querySelector('.cell-preview');
+      if (prevDiv) {
+        if (type === 'BALANCE') {
+          buildBalancePreview(prevDiv, r, c);
+        } else {
+          prevDiv.innerHTML = '';
+        }
+      }
+    }
+    reportHeight();
+  }
+
+  function buildBalancePreview(prevDiv, r, c) {
+    if (!prevDiv) return;
+    var pos = r + '_' + c;
+    var users = state['dashboard_balance_users_' + pos];
+    var usersParam = 'ALL';
+    if (users && users.length > 0) usersParam = users.join(',');
+    var url = API_BASE + '/dashboard/balance_page'
+      + '?users=' + encodeURIComponent(usersParam)
+      + '&position=preview_' + pos
+      + '&token=' + encodeURIComponent(TOKEN);
+    /* reuse existing iframe or create new one */
+    var iframe = prevDiv.querySelector('iframe');
+    if (!iframe) {
+      iframe = document.createElement('iframe');
+      prevDiv.innerHTML = '';
+      prevDiv.appendChild(iframe);
+    }
+    iframe.src = url;
+    /* auto-resize when content loads */
+    iframe.onload = function () {
+      try {
+        var h = iframe.contentDocument.documentElement.scrollHeight;
+        if (h > 50) iframe.style.height = h + 'px';
+      } catch (e) { iframe.style.height = '350px'; }
+      reportHeight();
+    };
+  }
+
+  /* ── drag & drop state ── */
+  var dragSrc = null; /* { row, col } of the cell being dragged */
+
+  /* ── swap ── */
+
+  function swapCells(r1, c1, r2, c2) {
+    var s1 = '_' + r1 + '_' + c1;
+    var s2 = '_' + r2 + '_' + c2;
+    /* collect all keys that belong to either cell */
+    var pairs = {};
+    Object.keys(state).forEach(function (k) {
+      if (k.endsWith(s1)) {
+        var base = k.slice(0, k.length - s1.length);
+        pairs[base] = true;
+      }
+      if (k.endsWith(s2)) {
+        var base = k.slice(0, k.length - s2.length);
+        pairs[base] = true;
+      }
+    });
+    Object.keys(pairs).forEach(function (base) {
+      var k1 = base + s1, k2 = base + s2;
+      var tmp = state.hasOwnProperty(k1) ? state[k1] : undefined;
+      var v2  = state.hasOwnProperty(k2) ? state[k2] : undefined;
+      if (v2  === undefined) { delete state[k1]; } else { state[k1] = v2;  }
+      if (tmp === undefined) { delete state[k2]; } else { state[k2] = tmp; }
+    });
+    buildGrid();
+    scheduleSync();
+  }
+
+  /* ── build grid ── */
+
+  function buildGrid() {
+    gridEl.innerHTML = '';
+    var rows = state.rows || 1;
+    var cols = state.cols || 1;
+    gridEl.className = 'editor-grid cols-' + cols;
+
+    for (var r = 1; r <= rows; r++) {
+      for (var c = 1; c <= cols; c++) {
+        var pos = r + '_' + c;
+
+        /* cell wrapper */
+        var cell = el('div', 'editor-cell');
+        cell.setAttribute('draggable', 'true');
+        cell.dataset.row = r;
+        cell.dataset.col = c;
+
+        /* ── drag & drop handlers ── */
+        (function (row, col, cellEl) {
+          cellEl.addEventListener('dragstart', function (e) {
+            dragSrc = { row: row, col: col };
+            cellEl.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', row + '_' + col);
+          });
+          cellEl.addEventListener('dragend', function () {
+            cellEl.classList.remove('dragging');
+            dragSrc = null;
+            /* remove all drag-over highlights */
+            document.querySelectorAll('.editor-cell.drag-over').forEach(function (el2) {
+              el2.classList.remove('drag-over');
+            });
+          });
+          cellEl.addEventListener('dragover', function (e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            cellEl.classList.add('drag-over');
+          });
+          cellEl.addEventListener('dragleave', function () {
+            cellEl.classList.remove('drag-over');
+          });
+          cellEl.addEventListener('drop', function (e) {
+            e.preventDefault();
+            cellEl.classList.remove('drag-over');
+            if (dragSrc && (dragSrc.row !== row || dragSrc.col !== col)) {
+              swapCells(dragSrc.row, dragSrc.col, row, col);
+            }
+            dragSrc = null;
+          });
+        })(r, c, cell);
+
+        /* ── cell header ── */
+        var hdr = el('div', 'cell-header');
+        var dragHandle = el('span', 'drag-handle', '⠿');
+        hdr.appendChild(dragHandle);
+        hdr.appendChild(el('span', null,
+          cols === 2 ? 'Row ' + r + '  Col ' + c : 'Row ' + r));
+        cell.appendChild(hdr);
+
+        /* ── type select ── */
+        var typeKey = 'dashboard_type_' + pos;
+        var curType = state[typeKey] || 'NONE';
+        var typeSel = makeSelect(TYPES, curType, (function (row, col, cellEl) {
+          return function (v) {
+            state['dashboard_type_' + row + '_' + col] = v;
+            var cfgDiv = cellEl.querySelector('.cell-cfg');
+            if (cfgDiv) buildCellConfig(cfgDiv, row, col);
+            /* clear preview if type changed away from BALANCE */
+            var prevDiv = cellEl.querySelector('.cell-preview');
+            if (prevDiv && v !== 'BALANCE') prevDiv.innerHTML = '';
+            scheduleSync();
+          };
+        })(r, c, cell));
+        cell.appendChild(typeSel);
+
+        /* ── config panel ── */
+        var cfgDiv = el('div', 'cell-cfg');
+        cell.appendChild(cfgDiv);
+
+        /* ── preview area (for BALANCE etc.) ── */
+        var prevDiv = el('div', 'cell-preview');
+        cell.appendChild(prevDiv);
+
+        buildCellConfig(cfgDiv, r, c);
+
+        gridEl.appendChild(cell);
+      }
+    }
+    reportHeight();
+  }
+
+  /* ── header events ── */
+
+  hdrName.addEventListener('input', function () {
+    state.name = this.value.trim();
+    if (state.name) this.classList.remove('empty');
+    else            this.classList.add('empty');
+    scheduleSync();
+  });
+
+  function onColsChange() {
+    state.cols = Math.max(1, Math.min(2, parseInt(hdrCols.value, 10) || 1));
+    hdrCols.value = state.cols;
+    buildGrid();
+    scheduleSync();
+  }
+  function onRowsChange() {
+    state.rows = Math.max(1, Math.min(6, parseInt(hdrRows.value, 10) || 1));
+    hdrRows.value = state.rows;
+    buildGrid();
+    scheduleSync();
+  }
+
+  hdrCols.addEventListener('change', onColsChange);
+  hdrRows.addEventListener('change', onRowsChange);
+  /* also react to up/down arrow keys for immediate feedback */
+  hdrCols.addEventListener('input', onColsChange);
+  hdrRows.addEventListener('input', onRowsChange);
+
+  /* ── init ── */
+
+  function init() {
+    /* 1. load users */
+    apiFetch('/dashboard/users')
+      .then(function (r) { return r.json(); })
+      .then(function (d) { allUsers = (d.users || []).filter(function (u) { return u !== 'ALL'; }); })
+      .catch(function () { allUsers = []; })
+      .then(function () {
+        /* 2. load pending config */
+        return apiFetch('/dashboard/pending_full?name=' + encodeURIComponent(ORIG_NAME));
+      })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.found && d.config && Object.keys(d.config).length > 0) {
+          state = d.config;
+          state.rows = Math.max(1, Math.min(6, parseInt(state.rows, 10)  || 1));
+          state.cols = Math.max(1, Math.min(2, parseInt(state.cols, 10)  || 1));
+          if (!state.name) state.name = ORIG_NAME;
+        } else {
+          state = { name: ORIG_NAME, rows: 1, cols: 1 };
+        }
+        hdrName.value = state.name || '';
+        hdrCols.value = state.cols;
+        hdrRows.value = state.rows;
+        if (!state.name) hdrName.classList.add('empty');
+        buildGrid();
+      })
+      .catch(function (e) {
+        console.error('editor init error', e);
+        state = { name: ORIG_NAME, rows: 1, cols: 1 };
+        buildGrid();
+      });
+  }
+
+  init();
+
+  /* close all dropdowns on outside click */
+  document.addEventListener('click', function () {
+    document.querySelectorAll('.msel-drop.open').forEach(function (d) {
+      d.classList.remove('open');
+    });
+  });
+}());
+</script>
+</body>
+</html>

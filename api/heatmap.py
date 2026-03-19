@@ -1306,3 +1306,419 @@ def queue_l2book_download(
         "end_day": end_day_val,
         "coin": cn,
     }
+
+
+# --------------------------------------------------------------------------- /l2book-download-info
+
+@router.get("/l2book-download-info")
+def l2book_download_info(
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """
+    Return info needed by the l2Book Download form:
+      - coins: enabled Hyperliquid coins
+      - has_aws_creds: bool
+      - archive_range: {oldest_day, newest_day} (best-effort, may be empty)
+    """
+    from market_data import load_market_data_config, load_aws_profile_credentials, load_aws_profile_region
+
+    profile = "pbgui-hyperliquid"
+    cfg = load_market_data_config()
+    coins = sorted(cfg.enabled_coins.get("hyperliquid", []))
+
+    creds = {}
+    try:
+        creds = load_aws_profile_credentials(profile)
+    except Exception:
+        pass
+
+    has_creds = bool(
+        str(creds.get("aws_access_key_id") or "").strip()
+        and str(creds.get("aws_secret_access_key") or "").strip()
+    )
+
+    region = ""
+    try:
+        region = load_aws_profile_region(profile) or "us-east-2"
+    except Exception:
+        region = "us-east-2"
+
+    # Try to detect archive range (fast S3 list)
+    oldest_day = ""
+    newest_day = ""
+    if has_creds:
+        try:
+            from hyperliquid_aws import get_hyperliquid_archive_day_range_aws
+            rng = get_hyperliquid_archive_day_range_aws(
+                aws_access_key_id=str(creds.get("aws_access_key_id") or "").strip(),
+                aws_secret_access_key=str(creds.get("aws_secret_access_key") or "").strip(),
+                region_name=region,
+            )
+            if isinstance(rng, (tuple, list)) and len(rng) >= 2:
+                oldest_day = str(rng[0] or "")
+                newest_day = str(rng[1] or "")
+            elif isinstance(rng, dict):
+                oldest_day = str(rng.get("oldest_day") or "")
+                newest_day = str(rng.get("newest_day") or "")
+        except Exception:
+            pass
+
+    return {
+        "coins": coins,
+        "has_aws_creds": has_creds,
+        "archive_range": {"oldest_day": oldest_day, "newest_day": newest_day},
+        "region": region,
+    }
+
+
+# --------------------------------------------------------------------------- /queue-l2book-download-bulk
+
+@router.post("/queue-l2book-download-bulk")
+def queue_l2book_download_bulk(
+    request: dict,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """
+    Queue a bulk l2Book download job for multiple coins.
+
+    Request body:
+        {
+            "coins": ["BTC", "ETH"] or ["All"],
+            "start_day": "20230415",
+            "end_day": "20251201",
+            "only_missing_1m_src_hours": true
+        }
+    """
+    import subprocess
+    import sys
+    import re as _re
+    from task_queue import enqueue_job, read_worker_pid, is_pid_running
+    from market_data import (
+        load_market_data_config,
+        load_aws_profile_credentials,
+        load_aws_profile_region,
+        save_aws_profile_credentials,
+        save_aws_profile_region,
+    )
+    from hyperliquid_aws import (
+        get_hyperliquid_archive_day_range_aws,
+        list_hyperliquid_archive_hours_aws,
+        check_hyperliquid_l2book_coin_exists_aws,
+    )
+    from market_data import append_exchange_download_log
+
+    profile = "pbgui-hyperliquid"
+
+    # --- resolve coins ---
+    raw_coins = request.get("coins", [])
+    if not isinstance(raw_coins, list):
+        raw_coins = []
+    raw_coins = [str(c).strip() for c in raw_coins if str(c).strip()]
+    raw_coins_upper = [c.upper() for c in raw_coins]
+
+    cfg = load_market_data_config()
+    all_coins = sorted(cfg.enabled_coins.get("hyperliquid", []))
+
+    if not all_coins:
+        return {"error": "No enabled Hyperliquid coins configured"}
+
+    if "ALL" in raw_coins_upper:
+        payload_coins = list(all_coins)
+    else:
+        payload_coins = [c for c in raw_coins if c in all_coins]
+
+    if not payload_coins:
+        return {"error": "No matching enabled coins selected"}
+
+    # --- validate dates ---
+    sd = str(request.get("start_day") or "").strip()
+    ed = str(request.get("end_day") or "").strip()
+    if not sd or not ed:
+        return {"error": "start_day and end_day are required (YYYYMMDD)"}
+    if not (_re.fullmatch(r"\d{8}", sd) and _re.fullmatch(r"\d{8}", ed)):
+        return {"error": "Invalid date format (expected YYYYMMDD)"}
+    if ed < sd:
+        return {"error": "end_day must be >= start_day"}
+
+    only_missing = bool(request.get("only_missing_1m_src_hours", True))
+
+    # --- load AWS creds ---
+    creds = {}
+    try:
+        creds = load_aws_profile_credentials(profile)
+    except Exception:
+        pass
+
+    ak = str(creds.get("aws_access_key_id") or "").strip()
+    sk = str(creds.get("aws_secret_access_key") or "").strip()
+    if not ak or not sk:
+        return {"error": "Missing AWS credentials — configure in Settings (l2Book)"}
+
+    region = load_aws_profile_region(profile) or "us-east-2"
+
+    # --- preflight: probe archive for coin existence ---
+    missing_coins: list[str] = []
+    try:
+        rng = get_hyperliquid_archive_day_range_aws(
+            aws_access_key_id=ak,
+            aws_secret_access_key=sk,
+            region_name=region,
+        )
+        probe_day = ""
+        if isinstance(rng, (tuple, list)) and len(rng) >= 2:
+            probe_day = str(rng[1] or rng[0] or "").strip()
+        elif isinstance(rng, dict):
+            probe_day = str(rng.get("newest_day") or rng.get("oldest_day") or "").strip()
+        if not probe_day:
+            return {"error": "Failed to detect archive range for preflight"}
+
+        probe_hours = list_hyperliquid_archive_hours_aws(
+            day=probe_day,
+            aws_access_key_id=ak,
+            aws_secret_access_key=sk,
+            region_name=region,
+        )
+        if not probe_hours:
+            return {"error": f"No archive hours found for probe day {probe_day}"}
+
+        missing_coins = []
+        for coin in list(payload_coins):
+            ok = check_hyperliquid_l2book_coin_exists_aws(
+                coin=coin,
+                day=probe_day,
+                aws_access_key_id=ak,
+                aws_secret_access_key=sk,
+                region_name=region,
+                hours=probe_hours,
+            )
+            if not ok:
+                missing_coins.append(coin)
+
+        if missing_coins:
+            payload_coins = [c for c in payload_coins if c not in missing_coins]
+
+        if not payload_coins:
+            return {"error": f"No selected coins exist in the archive (missing: {', '.join(missing_coins)})"}
+    except Exception as e:
+        if "Failed to detect" in str(e) or "No archive hours" in str(e):
+            return {"error": str(e)}
+        # non-critical preflight failure — proceed anyway
+        pass
+
+    # --- enqueue job ---
+    try:
+        job = enqueue_job(
+            job_type="hl_aws_l2book_auto",
+            exchange="hyperliquid",
+            payload={
+                "profile": profile,
+                "region": region,
+                "coins": list(payload_coins),
+                "chunk_days": 7,
+                "start_day": sd,
+                "end_day": ed,
+                "only_missing_1m_src_hours": only_missing,
+            },
+        )
+    except Exception as e:
+        return {"error": f"Failed to enqueue job: {e}"}
+
+    append_exchange_download_log(
+        "hyperliquid",
+        f"[hl_aws_l2book_auto] queued job_id={job.job_id} coins={payload_coins} range={sd}-{ed}",
+    )
+
+    # Start worker if not running
+    try:
+        pid = read_worker_pid()
+        if not (pid and is_pid_running(int(pid))):
+            subprocess.Popen(
+                [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
+    except Exception:
+        pass
+
+    return {
+        "job_id": job.job_id,
+        "start_day": sd,
+        "end_day": ed,
+        "coins": payload_coins,
+        "coins_count": len(payload_coins),
+        "missing_coins": missing_coins,
+    }
+
+
+# --------------------------------------------------------------------------- /build-ohlcv-info
+
+@router.get("/build-ohlcv-info")
+def build_ohlcv_info(
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """
+    Return info needed by the Build best 1m OHLCV form:
+      - eligible_coins: list[str] — coins eligible for building
+      - all_coins: list[str] — all enabled Hyperliquid coins
+    """
+    from market_data import load_market_data_config
+    import json as _j
+
+    cfg = load_market_data_config()
+    all_coins = sorted(cfg.enabled_coins.get("hyperliquid", []))
+
+    # Load TradFi map for eligibility check
+    tradfi_map_path = Path(__file__).resolve().parents[1] / "data" / "tradfi_symbol_map.json"
+    tradfi_by_xyz: dict[str, dict] = {}
+    try:
+        if tradfi_map_path.exists():
+            raw = _j.loads(tradfi_map_path.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                for r in raw:
+                    xyz = str(r.get("xyz_coin") or "").strip().upper()
+                    if xyz:
+                        tradfi_by_xyz[xyz] = dict(r)
+    except Exception:
+        pass
+
+    def _extract_xyz_coin_name(coin: str) -> str | None:
+        c_u = str(coin or "").strip().upper()
+        if not c_u:
+            return None
+        if c_u.startswith("XYZ:") or c_u.startswith("XYZ-"):
+            tail = c_u[4:].strip()
+        else:
+            tail = c_u
+        for suffix in (
+            "/USDC:USDC", "_USDC:USDC", "_USDC_USDC", "USDC",
+            "/USDT:USDT", "_USDT:USDT", "_USDT_USDT", "USDT",
+        ):
+            if tail.endswith(suffix):
+                tail = tail[: -len(suffix)]
+                break
+        tail = tail.strip(" _:-")
+        return tail or None
+
+    eligible: list[str] = []
+    for coin in all_coins:
+        xyz_name = _extract_xyz_coin_name(coin)
+        if not xyz_name:
+            continue
+        entry = tradfi_by_xyz.get(xyz_name)
+        if isinstance(entry, dict):
+            status = str(entry.get("status") or "").strip().lower()
+            has_tiingo = bool(
+                str(entry.get("tiingo_ticker") or "").strip()
+                or str(entry.get("tiingo_fx_ticker") or "").strip()
+            )
+            if status == "ok" and has_tiingo:
+                eligible.append(coin)
+        else:
+            # Non-XYZ (crypto): always allow
+            eligible.append(coin)
+
+    return {
+        "eligible_coins": eligible,
+        "all_coins": all_coins,
+    }
+
+
+# --------------------------------------------------------------------------- /queue-build-ohlcv
+
+@router.post("/queue-build-ohlcv")
+def queue_build_ohlcv(
+    request: dict,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """
+    Queue a Build best 1m OHLCV job.
+
+    Request body:
+        {
+            "coins": ["BTC", "ETH"] or ["All"],
+            "start_day": "20230415" or "",
+            "end_day": "20251201" or "",
+            "refetch": false
+        }
+    """
+    import subprocess
+    import sys
+    import re as _re
+    from task_queue import enqueue_job, read_worker_pid, is_pid_running
+    from market_data import append_exchange_download_log
+
+    # Resolve eligible coins (reuse same logic)
+    info = build_ohlcv_info(session=session)
+    eligible = info["eligible_coins"]
+
+    if not eligible:
+        return {"error": "No eligible coins found"}
+
+    raw_coins = request.get("coins", [])
+    if not isinstance(raw_coins, list):
+        raw_coins = []
+    raw_coins = [str(c).strip() for c in raw_coins if str(c).strip()]
+    raw_upper = [c.upper() for c in raw_coins]
+
+    if "ALL" in raw_upper or not raw_coins:
+        build_coins = list(eligible)
+    else:
+        build_coins = [c for c in raw_coins if c in eligible]
+
+    if not build_coins:
+        return {"error": "No matching eligible coins selected"}
+
+    sd = str(request.get("start_day") or "").strip()
+    ed = str(request.get("end_day") or "").strip()
+
+    if sd and not _re.fullmatch(r"\d{8}", sd):
+        return {"error": "Invalid start_day format (expected YYYYMMDD)"}
+    if ed and not _re.fullmatch(r"\d{8}", ed):
+        return {"error": "Invalid end_day format (expected YYYYMMDD)"}
+    if sd and ed and ed < sd:
+        return {"error": "end_day must be >= start_day"}
+
+    from datetime import date as _d
+    effective_end = ed if ed else _d.today().strftime("%Y%m%d")
+    refetch = bool(request.get("refetch", False))
+
+    try:
+        job = enqueue_job(
+            job_type="hl_best_1m",
+            exchange="hyperliquid",
+            payload={
+                "coins": list(build_coins),
+                "end_day": effective_end,
+                "start_day": sd,
+                "refetch": refetch,
+            },
+        )
+    except Exception as e:
+        return {"error": f"Failed to enqueue job: {e}"}
+
+    append_exchange_download_log(
+        "hyperliquid",
+        f"[hl_best_1m] queued job_id={job.job_id} coins={len(build_coins)} range={sd or '?'}-{effective_end}",
+    )
+
+    # Start worker if not running
+    try:
+        pid = read_worker_pid()
+        if not (pid and is_pid_running(int(pid))):
+            subprocess.Popen(
+                [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
+    except Exception:
+        pass
+
+    return {
+        "job_id": job.job_id,
+        "start_day": sd,
+        "end_day": effective_end,
+        "coins_count": len(build_coins),
+        "refetch": refetch,
+    }

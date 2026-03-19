@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.dashboard import router as dashboard_router
+from api.dashboards import router as dashboards_router
 from api.jobs import router as jobs_router
 from api.market_data import router as market_data_router
 from api.heatmap import router as heatmap_router
@@ -211,6 +212,7 @@ app.add_middleware(
 )
 
 app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])
+app.include_router(dashboards_router, prefix="/api/dashboards", tags=["dashboards"])
 app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(market_data_router, prefix="/api", tags=["market-data"])
 app.include_router(heatmap_router, prefix="/api/heatmap", tags=["heatmap"])

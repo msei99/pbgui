@@ -143,6 +143,11 @@
     .hm-root .hm-chart-div {
         width: 100%;
         min-height: 200px;
+        /* Prevent scrollbar-triggered layout jitter: when Plotly redraws
+           the chart height may briefly change, toggling the browser
+           scrollbar, which changes available width and triggers another
+           Plotly resize — an infinite loop that looks like flicker. */
+        overflow: hidden;
     }
 
     .hm-root .hm-legend {
@@ -310,6 +315,7 @@
     var wsReconnectDelay = 2000;
     var wsLastMtime   = 0;
     var wsAlive       = false;
+    var wsDebounceTimer = null;
     var minutesAbort  = null;  // AbortController for minutes SSE
     var newestDataDay = null;  // YYYYMMDD — last day with actual l2Book data
 
@@ -385,9 +391,15 @@
             fig.layout.plot_bgcolor  = fig.layout.plot_bgcolor  || '#1a202c';
             fig.layout.font          = fig.layout.font          || {};
             fig.layout.font.color    = fig.layout.font.color    || '#f7fafc';
-            // Explicitly clear loading indicators before rendering chart
-            el.innerHTML = '';
-            Plotly.newPlot(el, fig.data || [], fig.layout || {}, PLOTLY_CONFIG);
+            // Use Plotly.react() for in-place updates (no flicker) when
+            // the element already contains a Plotly chart.  Fall back to
+            // newPlot() for the very first render.
+            if (el.data && el.layout) {
+                Plotly.react(el, fig.data || [], fig.layout || {}, PLOTLY_CONFIG);
+            } else {
+                el.innerHTML = '';
+                Plotly.newPlot(el, fig.data || [], fig.layout || {}, PLOTLY_CONFIG);
+            }
         } catch (e) {
             if (window.Plotly) Plotly.purge(el);
             el.innerHTML = '\x3cdiv class="hm-error-msg">\u26a0 Chart render error: ' + e.message + '\x3c/div>';
@@ -447,8 +459,8 @@
     }
 
     // ---------------------------------------------------------------- load overview
-    function loadOverview() {
-        setLoading(elOvChart, 'Loading overview\u2026');
+    function loadOverview(silent) {
+        if (!silent) setLoading(elOvChart, 'Loading overview\u2026');
         var url = API_BASE + '/heatmap/overview-stream?' + buildQS();
         fetch(url, {method: 'GET', headers: authHeaders()})
             .then(function(response) {
@@ -475,6 +487,7 @@
                                 try {
                                     var msg = JSON.parse(evtData);
                                     if (evtType === 'progress') {
+                                        if (!silent) {
                                         var txt = msg.msg || 'Loading\u2026';
                                         var pctVal = -1;
                                         if (msg.total > 0) {
@@ -482,6 +495,7 @@
                                             txt += ' (' + msg.current.toLocaleString() + '/' + msg.total.toLocaleString() + ' files \u2014 ' + pctVal + '%)';
                                         }
                                         setLoading(elOvChart, txt, pctVal >= 0 ? pctVal : undefined);
+                                        }
                                     } else if (evtType === 'result') {
                                         if (msg.error && !msg.figure) {
                                             setError(elOvChart, msg.error);
@@ -529,11 +543,11 @@
         showStopBtn(false);
     }
 
-    function loadMinutes(month, showHoliday, showOos) {
+    function loadMinutes(month, showHoliday, showOos, silent) {
         if (!month) return;
         abortMinutes();
-        setLoading(elMinChart, 'Loading minute detail for ' + month + '\u2026');
-        showStopBtn(true);
+        if (!silent) setLoading(elMinChart, 'Loading minute detail for ' + month + '\u2026');
+        showStopBtn(!silent);
 
         minutesAbort = new AbortController();
         var extra = 'month=' + encodeURIComponent(month) +
@@ -566,6 +580,7 @@
                                 try {
                                     var msg = JSON.parse(evtData);
                                     if (evtType === 'progress') {
+                                        if (!silent) {
                                         var txt = msg.msg || 'Loading\u2026';
                                         var pctVal = -1;
                                         if (msg.total > 0) {
@@ -573,6 +588,7 @@
                                             txt += ' (' + msg.current + '/' + msg.total + ' files \u2014 ' + pctVal + '%)';
                                         }
                                         setLoading(elMinChart, txt, pctVal >= 0 ? pctVal : undefined);
+                                        }
                                     } else if (evtType === 'result') {
                                         showStopBtn(false);
                                         minutesAbort = null;
@@ -614,14 +630,22 @@
             });
     }
 
-    // ---------------------------------------------------------------- reload all
-    function reloadAll() {
-        loadOverview();
+    // ---------------------------------------------------------------- reload helpers
+    // silent=true: background refresh triggered by WebSocket — skip loading
+    // indicators so the existing chart stays visible (Plotly.react does
+    // an in-place diff instead of destroying/recreating the DOM).
+    function reloadAll(silent) {
+        loadOverview(silent);
+        reloadMinutesOnly(silent);
+    }
+
+    function reloadMinutesOnly(silent) {
         if (currentMonth) {
             loadMinutes(
                 currentMonth,
                 elCbHoliday ? elCbHoliday.checked : false,
-                elCbOos     ? elCbOos.checked     : true
+                elCbOos     ? elCbOos.checked     : true,
+                silent
             );
         }
     }
@@ -802,7 +826,13 @@
                     var newMtime = msg.mtime || 0;
                     if (newMtime > wsLastMtime) {
                         wsLastMtime = newMtime;
-                        reloadAll();
+                        // Debounce: collect rapid-fire updates (e.g.
+                        // multiple files converted in quick succession)
+                        // and reload once after a short quiet period.
+                        clearTimeout(wsDebounceTimer);
+                        wsDebounceTimer = setTimeout(function() {
+                            reloadAll(true);
+                        }, 1000);
                     }
                 }
             } catch(e) {}

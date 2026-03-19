@@ -335,8 +335,13 @@
                 selectedUsers = ['ALL'];
                 uncheckAllExcept('ALL');
             } else {
-                selectedUsers = ['ALL'];
-                recheckAll();
+                // In edit mode allow deselecting ALL (empty = no filter set yet)
+                if (EDIT_MODE) {
+                    selectedUsers = [];
+                } else {
+                    selectedUsers = ['ALL'];
+                    recheckAll();
+                }
                 return;
             }
         } else {
@@ -349,7 +354,9 @@
             } else {
                 if (idx >= 0) selectedUsers.splice(idx, 1);
             }
-            if (selectedUsers.length === 0) {
+            // Allow empty selection in edit mode (shows '— select —')
+            // In view mode fallback to ALL
+            if (selectedUsers.length === 0 && !EDIT_MODE) {
                 selectedUsers = ['ALL'];
                 recheckAll();
             }
@@ -390,7 +397,9 @@
     function updateMselLabel() {
         var lbl = document.getElementById('db-msel-label');
         if (!lbl) return;
-        if (selectedUsers.indexOf('ALL') >= 0 || selectedUsers.length === 0) {
+        if (selectedUsers.length === 0) {
+            lbl.textContent = '\u2014 select \u2014';
+        } else if (selectedUsers.indexOf('ALL') >= 0) {
             lbl.textContent = 'ALL';
         } else if (selectedUsers.length === 1) {
             lbl.textContent = selectedUsers[0];

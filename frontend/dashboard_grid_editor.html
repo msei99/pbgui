@@ -1,0 +1,150 @@
+<!-- Dashboard Grid Editor header — embedded via st.html(unsafe_allow_javascript=True).
+     Handles Dashboard Name, Columns, and Rows.
+     Rows/Cols changes are pushed into URL query params to trigger Streamlit reruns.
+     Cell type selectors and swap buttons are rendered by Streamlit inline with previews.
+     Config injected as JS variables (%%PLACEHOLDER%% pattern) by Dashboard.py.
+-->
+<style>
+.dge-root {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 0.875rem;
+    color: #e2e8f0;
+    background: #0e1117;
+    padding: 0.25rem 0;
+}
+.dge-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: flex-end;
+    padding: 0.5rem 0.75rem;
+    background: #1a202c;
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+}
+.dge-field { display: flex; flex-direction: column; gap: 0.2rem; }
+.dge-field label {
+    font-size: 0.68rem; color: #94a3b8;
+    text-transform: uppercase; letter-spacing: 0.05em;
+}
+.dge-field input[type="text"],
+.dge-field input[type="number"] {
+    background: #2d3748; color: #e2e8f0;
+    border: 1px solid #4a5568; border-radius: 4px;
+    padding: 0.3rem 0.5rem; font-size: 0.83rem;
+    outline: none;
+}
+.dge-field input[type="text"] { min-width: 200px; }
+.dge-field input[type="text"].empty { border-color: #fc8181; }
+.dge-field input[type="number"] { width: 64px; }
+.dge-field input:focus { border-color: #63b3ed; }
+.dge-status {
+    font-size: 0.68rem; color: #4a5568;
+    align-self: flex-end; padding-bottom: 0.15rem;
+}
+.dge-status.saved { color: #48bb78; }
+.dge-status.error { color: #fc8181; }
+</style>
+<div class="dge-root">
+  <div class="dge-header">
+    <div class="dge-field">
+      <label>Dashboard Name</label>
+      <input id="dge-name" type="text" maxlength="32" placeholder="Enter name...">
+    </div>
+    <div class="dge-field">
+      <label>Columns</label>
+      <input id="dge-cols" type="number" min="1" max="2" step="1">
+    </div>
+    <div class="dge-field">
+      <label>Rows</label>
+      <input id="dge-rows" type="number" min="1" max="6" step="1">
+    </div>
+    <div id="dge-status" class="dge-status"></div>
+  </div>
+</div>
+<script>
+(function () {
+  var TOKEN = "%%TOKEN%%";
+  var API_BASE = "%%API_BASE%%";
+  var name = %%DASHBOARD_NAME%%;
+  var rows = %%DASHBOARD_ROWS%%;
+  var cols = %%DASHBOARD_COLS%%;
+
+  var syncTimer = null;
+  var statusEl = null;
+
+  function setStatus(msg, cls) {
+    if (!statusEl) return;
+    statusEl.textContent = msg;
+    statusEl.className = "dge-status" + (cls ? " " + cls : "");
+  }
+
+  // Push rows/cols into URL query params so Streamlit reruns automatically
+  function pushQueryParams() {
+    var p = new URLSearchParams(window.location.search);
+    p.set('_dbe_rows', rows);
+    p.set('_dbe_cols', cols);
+    window.history.replaceState({}, '', '?' + p.toString());
+  }
+
+  function sync() {
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(function () {
+      setStatus("saving...", "");
+      var payload = { name: name, rows: rows, cols: cols };
+      fetch(API_BASE + "/dashboard/grid/pending", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + TOKEN,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      }).then(function (r) {
+        if (r.ok) { setStatus("saved", "saved"); } else { setStatus("error", "error"); }
+      }).catch(function () { setStatus("offline", "error"); });
+    }, 300);
+  }
+
+  function init() {
+    statusEl = document.getElementById("dge-status");
+    var nameEl = document.getElementById("dge-name");
+    var rowsEl = document.getElementById("dge-rows");
+    var colsEl = document.getElementById("dge-cols");
+    if (!nameEl) return;
+
+    nameEl.value = name;
+    rowsEl.value = rows;
+    colsEl.value = cols;
+
+    if (!name) { nameEl.classList.add("empty"); }
+
+    nameEl.addEventListener("input", function () {
+      name = this.value;
+      if (name) { this.classList.remove("empty"); } else { this.classList.add("empty"); }
+      sync();
+    });
+
+    rowsEl.addEventListener("change", function () {
+      rows = Math.max(1, Math.min(6, parseInt(this.value, 10) || 1));
+      this.value = rows;
+      pushQueryParams();
+      sync();
+    });
+
+    colsEl.addEventListener("change", function () {
+      cols = Math.max(1, Math.min(2, parseInt(this.value, 10) || 1));
+      this.value = cols;
+      pushQueryParams();
+      sync();
+    });
+
+    sync();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+}());
+</script>
