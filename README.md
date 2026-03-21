@@ -327,6 +327,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Improved: Dashboard Balance widget migrated to FastAPI + Vanilla JS — live updates via WebSocket push (no Streamlit polling), custom checkbox user dropdown with text filter, sortable columns, stale-instance guard; user selection persisted across saves via HTTP sync with API server
 - Fix: `psutil.ZombieProcess` now caught in all process-detection loops (`OptimizeV7`, `BacktestV7`, `PBRun`, `PBRemote`) — prevents Streamlit crash after ~130k optimizer iterations when zombie subprocesses appear in the process table
 - Fix: Task-worker watchdog added to `PBApiServer` — checks every 60 s whether the `task_worker` process is alive; auto-restarts it if jobs are pending/running but the worker is dead (previously a crashed worker could leave the entire job queue stalled indefinitely)
+- Fix: VPS log streaming now recovers automatically after a transient SSH connection drop — `_stream_worker` retries up to 5 times (waiting up to 60 s per attempt for reconnect) instead of permanently marking the stream inactive; SSH keepalive interval also reduced from 15 s → 10 s for faster dead-connection detection
 
 ## v1.66 (07-03-2026)
 - Fix: Market data loop timer accuracy — fetch interval now correctly excludes processing time; all 3 exchange loops (HL, Binance, Bybit) subtract elapsed fetch duration so the next cycle starts on schedule

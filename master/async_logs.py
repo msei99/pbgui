@@ -273,30 +273,80 @@ class AsyncLogStreamer:
             del self._streams[sid]
 
     async def _stream_worker(self, stream: LogStream, full_path: str):
-        """Async worker that reads tail -f output from SSH."""
+        """Async worker that reads tail -f output from SSH.
+
+        Retries automatically after transient connection drops (e.g. TCP
+        timeout between VPS hosts).  On each failed attempt it waits up to
+        60 s for the SSH pool to re-establish the connection before giving up.
+        """
+        _MAX_RETRIES = 5
+        _RETRY_WAIT_S = 60   # max seconds to wait for reconnect per attempt
+        _RETRY_PAUSE_S = 5   # pause between poll checks
+
+        attempt = 0
         try:
-            proc = await self._pool.start_process(
-                stream.hostname, f"tail -f -n 0 {full_path} 2>/dev/null"
-            )
-            if not proc:
-                stream.error = "No SSH connection"
-                stream.active = False
-                return
+            while stream.active and attempt <= _MAX_RETRIES:
+                proc = await self._pool.start_process(
+                    stream.hostname, f"tail -f -n 0 {full_path} 2>/dev/null"
+                )
+                if not proc:
+                    attempt += 1
+                    if attempt > _MAX_RETRIES:
+                        stream.error = "No SSH connection (retries exhausted)"
+                        stream.active = False
+                        _log(SERVICE,
+                             f"[log] Stream {stream.stream_id}: no connection "
+                             f"after {_MAX_RETRIES} retries — giving up",
+                             level="WARNING")
+                        return
+                    stream.error = f"No SSH connection (retry {attempt}/{_MAX_RETRIES})"
+                    _log(SERVICE,
+                         f"[log] Stream {stream.stream_id}: no connection, "
+                         f"waiting for reconnect (attempt {attempt}/{_MAX_RETRIES})",
+                         level="WARNING")
+                    # Wait for the pool to reconnect, polling every few seconds
+                    waited = 0
+                    while stream.active and waited < _RETRY_WAIT_S:
+                        await asyncio.sleep(_RETRY_PAUSE_S)
+                        waited += _RETRY_PAUSE_S
+                        # Check if connection is back
+                        test = await self._pool.start_process(
+                            stream.hostname, "echo ok"
+                        )
+                        if test:
+                            try:
+                                await test.wait_closed()
+                            except Exception:
+                                pass
+                            break  # connection is back, retry tail
+                    if not stream.active:
+                        return
+                    continue  # retry outer while loop
 
-            _log(SERVICE, f"[log] Stream worker started for "
-                 f"{stream.stream_id}")
+                stream.error = None
+                attempt = 0  # reset on successful connect
+                _log(SERVICE, f"[log] Stream worker started for "
+                     f"{stream.stream_id}")
 
-            async for line in proc.stdout:
+                async for line in proc.stdout:
+                    if not stream.active:
+                        break
+                    line = line.rstrip("\n")
+                    if line:
+                        stream.buffer.append(line)
+                        stream.last_activity = datetime.now()
+
+                # Process ended — check if it was an intentional stop
                 if not stream.active:
                     break
-                line = line.rstrip("\n")
-                if line:
-                    stream.buffer.append(line)
-                    stream.last_activity = datetime.now()
-
-            # Process ended
-            if stream.active:
-                stream.error = "Remote tail process ended"
+                # Unexpected end (e.g. connection drop) — retry
+                attempt += 1
+                stream.error = f"Remote tail ended — retrying ({attempt}/{_MAX_RETRIES})"
+                _log(SERVICE,
+                     f"[log] Stream {stream.stream_id}: tail process ended "
+                     f"unexpectedly, retrying ({attempt}/{_MAX_RETRIES})",
+                     level="WARNING")
+                await asyncio.sleep(_RETRY_PAUSE_S)
 
         except asyncio.CancelledError:
             pass
