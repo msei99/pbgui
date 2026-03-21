@@ -61,7 +61,7 @@ class VPSConnection:
 # ── Constants ───────────────────────────────────────────────
 
 CONNECT_TIMEOUT = 10        # seconds
-KEEPALIVE_INTERVAL = 15     # seconds
+KEEPALIVE_INTERVAL = 10     # seconds — lower = faster dead-connection detection (~30s worst-case)
 RECONNECT_COOLDOWN = 30     # seconds
 MAX_RECONNECT_ATTEMPTS = 5
 BACKOFF_MULTIPLIER = 60     # seconds
