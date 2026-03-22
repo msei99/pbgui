@@ -1,0 +1,538 @@
+<!-- Dashboard Sidebar — embedded via st.html(unsafe_allow_javascript=True).
+     Renders the dashboard list + toolbar (refresh/new/edit or save/cancel/delete).
+     Actions are sent via /api/nav/request and picked up by nav_bridge component.
+     All HTML inside JS strings uses \x3C / \x3E to survive DOMPurify. -->
+<div id="dash-sidebar-root"></div>
+<style>
+/* ── Override Streamlit sidebar background for this page ── */
+section[data-testid="stSidebar"] {
+  background: #0e1117 !important;
+}
+section[data-testid="stSidebar"] > div {
+  background: #0e1117 !important;
+}
+/* Hide the default "Dashboards Options" header Streamlit injects */
+section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+  display: none !important;
+}
+
+#dash-sidebar-root {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 0.82rem;
+  color: #e2e8f0;
+  padding: 0.1rem 0 0.5rem;
+}
+
+/* ── Edit-mode banner ── */
+.ds-edit-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(99,179,237,0.08);
+  border-left: 3px solid #63b3ed;
+  border-radius: 0 6px 6px 0;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #63b3ed;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ds-edit-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #63b3ed;
+  flex-shrink: 0;
+  animation: ds-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ds-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+/* ── Header row (title + count) ── */
+.ds-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.5rem 0.45rem;
+}
+.ds-title {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: #64748b;
+  font-weight: 700;
+}
+.ds-count {
+  font-size: 0.66rem;
+  background: #1a202c;
+  border: 1px solid #2d3748;
+  border-radius: 10px;
+  padding: 0.05rem 0.45rem;
+  color: #64748b;
+  font-weight: 600;
+  min-width: 1.4rem;
+  text-align: center;
+}
+
+/* ── Toolbar ── */
+.ds-toolbar {
+  display: flex;
+  gap: 0.3rem;
+  padding: 0 0.25rem 0.55rem;
+  margin-bottom: 0.4rem;
+  border-bottom: 1px solid #1e2736;
+  flex-wrap: wrap;
+}
+.ds-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #1a202c;
+  color: #94a3b8;
+  border: 1px solid #2d3748;
+  border-radius: 6px;
+  padding: 0.32rem 0.58rem;
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 500;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  white-space: nowrap;
+  gap: 0.25rem;
+  line-height: 1;
+}
+.ds-btn:hover {
+  background: #252d3d;
+  color: #e2e8f0;
+  border-color: #4a5568;
+}
+.ds-btn.danger { color: #f56565; }
+.ds-btn.danger:hover {
+  background: rgba(245,101,101,0.1);
+  border-color: rgba(245,101,101,0.5);
+}
+.ds-btn.save {
+  background: rgba(72,187,120,0.08);
+  color: #48bb78;
+  border-color: rgba(72,187,120,0.3);
+}
+.ds-btn.save:hover {
+  background: rgba(72,187,120,0.16);
+  border-color: #48bb78;
+}
+
+/* ── Search ── */
+.ds-search-wrap {
+  padding: 0 0.25rem 0.45rem;
+  position: relative;
+}
+.ds-search {
+  width: 100%;
+  box-sizing: border-box;
+  background: #1a202c;
+  color: #e2e8f0;
+  border: 1px solid #2d3748;
+  border-radius: 6px;
+  padding: 0.32rem 0.5rem 0.32rem 1.7rem;
+  font-size: 0.78rem;
+  outline: none;
+  transition: border-color 0.12s;
+}
+.ds-search:focus { border-color: #4a5568; }
+.ds-search::placeholder { color: #4a5568; }
+.ds-search-icon {
+  position: absolute;
+  left: 0.7rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #4a5568;
+  font-size: 0.75rem;
+  pointer-events: none;
+  line-height: 1;
+}
+
+/* ── Dashboard list ── */
+.ds-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 0.25rem;
+}
+.ds-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.42rem 0.6rem 0.42rem 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  color: #94a3b8;
+  border-left: 2px solid transparent;
+  font-size: 0.82rem;
+  line-height: 1.3;
+  border-right: 1px solid transparent;
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+}
+.ds-item:hover {
+  background: #1a202c;
+  color: #cbd5e0;
+}
+.ds-item.active {
+  background: rgba(99,179,237,0.07);
+  border-left-color: #63b3ed;
+  color: #e2e8f0;
+  font-weight: 600;
+}
+.ds-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* quick-edit icon — only visible on active+hover */
+.ds-item-edit {
+  display: none;
+  color: #63b3ed;
+  font-size: 0.9rem;
+  padding: 0.1rem 0.2rem;
+  opacity: 0.6;
+  flex-shrink: 0;
+  transition: opacity 0.1s;
+}
+.ds-item.active:hover .ds-item-edit { display: inline; }
+.ds-item-edit:hover { opacity: 1; }
+
+.ds-empty {
+  color: #4a5568;
+  font-size: 0.78rem;
+  padding: 1rem 0.6rem;
+  font-style: italic;
+  text-align: center;
+}
+.ds-no-match {
+  color: #4a5568;
+  font-size: 0.76rem;
+  padding: 0.6rem 0.6rem;
+  text-align: center;
+}
+
+/* ── Edit-mode sticky header ── */
+.ds-edit-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #0e1117;
+  padding-bottom: 0.25rem;
+}
+
+/* ── Normal-mode sticky top (title + toolbar + search) ── */
+.ds-sticky-top {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #0e1117;
+  padding-bottom: 0.1rem;
+}
+
+
+</style>
+
+<script>
+(function() {
+  'use strict';
+
+  var TOKEN    = "%%TOKEN%%";
+  var API_BASE = "%%API_BASE%%";
+  var DASHBOARDS    = (%%DASHBOARDS%%).slice().sort(function(a,b){return a.toLowerCase().localeCompare(b.toLowerCase());});
+  var CURRENT       = "%%CURRENT%%";
+  var EDIT_MODE     = %%EDIT_MODE%%;
+  var HAS_DASHBOARD = %%HAS_DASHBOARD%%;
+
+  var root = document.getElementById('dash-sidebar-root');
+
+  /* HTML-escape helper */
+  function esc(s) {
+    var el = document.createElement('span');
+    el.textContent = String(s);
+    return el.innerHTML;
+  }
+
+  /* Send action to FastAPI which broadcasts via WS to nav_bridge */
+  function sendAction(action, params) {
+    fetch(API_BASE + '/nav/request', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + TOKEN
+      },
+      body: JSON.stringify({action: action, params: params || {}})
+    }).catch(function() {});
+  }
+
+  /* ── Build list HTML from filtered names ── */
+  function buildList(names) {
+    if (DASHBOARDS.length === 0) {
+      return '\x3Cdiv class="ds-empty"\x3ENo dashboards yet\x3C/div\x3E';
+    }
+    if (names.length === 0) {
+      return '\x3Cdiv class="ds-no-match"\x3ENo match\x3C/div\x3E';
+    }
+    var h = '\x3Cdiv class="ds-list" id="ds-list"\x3E';
+    for (var i = 0; i < names.length; i++) {
+      var n = names[i];
+      var ac = (n === CURRENT) ? ' active' : '';
+      h += '\x3Cdiv class="ds-item' + ac + '" data-name="' + esc(n) + '"\x3E';
+      h += '\x3Cspan class="ds-item-name"\x3E' + esc(n) + '\x3C/span\x3E';
+      if (n === CURRENT) {
+        h += '\x3Cspan class="ds-item-edit" data-act="edit_dashboard" title="Edit"\x3E\u270E\x3C/span\x3E';
+      }
+      h += '\x3C/div\x3E';
+    }
+    h += '\x3C/div\x3E';
+    return h;
+  }
+
+  /* ── Initial render ── */
+  function renderMain() {
+  var h = '';
+
+  if (EDIT_MODE) {
+    /* Sticky header: edit banner + Dashboards title + Save/Cancel/Delete */
+    h += '\x3Cdiv class="ds-edit-sticky"\x3E';
+    h += '\x3Cdiv class="ds-edit-banner"\x3E';
+    h += '\x3Cspan class="ds-edit-dot"\x3E\x3C/span\x3E';
+    h += 'Edit Mode\x3C/div\x3E';
+    h += '\x3Cdiv class="ds-header"\x3E';
+    h += '\x3Cspan class="ds-title"\x3EDashboards\x3C/span\x3E';
+    if (DASHBOARDS.length > 0) {
+      h += '\x3Cspan class="ds-count" id="ds-count"\x3E' + DASHBOARDS.length + '\x3C/span\x3E';
+    }
+    h += '\x3C/div\x3E';
+    h += '\x3Cdiv class="ds-toolbar"\x3E';
+    h += '\x3Cbutton class="ds-btn save" data-act="save_dashboard" title="Save"\x3E\uD83D\uDCBE\x3C/button\x3E';
+    h += '\x3Cbutton class="ds-btn" data-act="cancel_edit" title="Cancel"\x3E\u2715\x3C/button\x3E';
+    h += '\x3Cbutton class="ds-btn danger" data-act="delete_dashboard" title="Delete"\x3E\uD83D\uDDD1\x3C/button\x3E';
+    h += '\x3C/div\x3E'; /* ds-toolbar */
+    h += '\x3C/div\x3E'; /* ds-edit-sticky */
+  } else {
+    /* Sticky wrapper for header + toolbar + search */
+    h += '\x3Cdiv class="ds-sticky-top"\x3E';
+    /* Header */
+    h += '\x3Cdiv class="ds-header"\x3E';
+    h += '\x3Cspan class="ds-title"\x3EDashboards\x3C/span\x3E';
+    if (DASHBOARDS.length > 0) {
+      h += '\x3Cspan class="ds-count" id="ds-count"\x3E' + DASHBOARDS.length + '\x3C/span\x3E';
+    }
+    h += '\x3C/div\x3E';
+    /* Normal toolbar */
+    h += '\x3Cdiv class="ds-toolbar"\x3E';
+    h += '\x3Cbutton class="ds-btn" data-act="refresh" title="Refresh list"\x3E\u21BB\x3C/button\x3E';
+    h += '\x3Cbutton class="ds-btn" data-act="new_dashboard" title="New dashboard"\x3E\u2795\x3C/button\x3E';
+    if (HAS_DASHBOARD) {
+      h += '\x3Cbutton class="ds-btn" data-act="edit_dashboard" title="Edit current"\x3E\u270E\x3C/button\x3E';
+      h += '\x3Cbutton class="ds-btn danger" data-act="delete_selected" title="Delete selected dashboard"\x3E\uD83D\uDDD1\x3C/button\x3E';
+    }
+    h += '\x3Cbutton class="ds-btn" data-act="open_templates" title="Templates"\x3E\uD83D\uDCCB\x3C/button\x3E';
+    h += '\x3C/div\x3E';
+    /* Search — only shown with 4+ dashboards */
+    if (DASHBOARDS.length >= 4) {
+      h += '\x3Cdiv class="ds-search-wrap"\x3E';
+      h += '\x3Cspan class="ds-search-icon"\x3E\uD83D\uDD0D\x3C/span\x3E';
+      h += '\x3Cinput class="ds-search" id="ds-search" type="text" placeholder="Filter\u2026" autocomplete="off"\x3E';
+      h += '\x3C/div\x3E';
+    }
+    h += '\x3C/div\x3E'; /* ds-sticky-top */
+  }
+
+  /* List container — no search here anymore (moved into sticky) */
+  h += '\x3Cdiv id="ds-list-wrap"\x3E' + buildList(DASHBOARDS) + '\x3C/div\x3E';
+
+  root.innerHTML = h;
+
+  /* ── Search filter ── */
+  var searchEl = document.getElementById('ds-search');
+  var listWrap = document.getElementById('ds-list-wrap');
+  var countEl  = document.getElementById('ds-count');
+
+  if (searchEl) {
+    /* Restore saved filter across reruns */
+    var savedQ = '';
+    try { savedQ = localStorage.getItem('ds_search_filter') || ''; } catch(_) {}
+    if (savedQ) {
+      searchEl.value = savedQ;
+      var restoredFiltered = DASHBOARDS.filter(function(n) {
+        return n.toLowerCase().indexOf(savedQ.toLowerCase()) !== -1;
+      });
+      listWrap.innerHTML = buildList(restoredFiltered);
+      if (countEl) {
+        countEl.textContent = restoredFiltered.length + '/' + DASHBOARDS.length;
+      }
+    }
+
+    searchEl.addEventListener('input', function() {
+      var q = searchEl.value.trim().toLowerCase();
+      try { localStorage.setItem('ds_search_filter', searchEl.value.trim()); } catch(_) {}
+      var filtered = q
+        ? DASHBOARDS.filter(function(n) { return n.toLowerCase().indexOf(q) !== -1; })
+        : DASHBOARDS;
+      listWrap.innerHTML = buildList(filtered);
+      if (countEl) {
+        countEl.textContent = q ? (filtered.length + '/' + DASHBOARDS.length) : DASHBOARDS.length;
+      }
+    });
+  }
+
+  reportHeight();
+  } /* end renderMain */
+
+  /* ── Template overlay (injected into parent Streamlit page) ── */
+  function openTemplateWindow() {
+    var doc = window.parent.document;
+    /* Remove any existing overlay */
+    var old = doc.getElementById('pbgui-tpl-overlay');
+    if (old) old.remove();
+
+    var url = API_BASE + '/dashboard/templates_page'
+      + '?current='  + encodeURIComponent(CURRENT)
+      + '&api_base=' + encodeURIComponent(API_BASE)
+      + '&token='    + encodeURIComponent(TOKEN);
+
+    /* Floating window — no backdrop, free-floating box */
+    var box = doc.createElement('div');
+    box.id = 'pbgui-tpl-overlay';
+    box.style.cssText = [
+      'position:fixed',
+      'top:50%', 'left:50%',
+      'transform:translate(-50%,-50%)',
+      'z-index:99999',
+      'width:700px', 'height:740px',
+      'min-width:360px', 'min-height:300px',
+      'border-radius:10px', 'overflow:hidden',
+      'box-shadow:0 8px 40px rgba(0,0,0,0.85)',
+      'border:1px solid #3a4a5c',
+      'display:flex', 'flex-direction:column',
+      'resize:both'
+    ].join(';');
+
+    /* Drag handle — invisible 28px strip at top (behind the iframe header) */
+    var handle = doc.createElement('div');
+    handle.style.cssText = [
+      'position:absolute', 'top:0', 'left:0', 'right:0',
+      'height:46px', 'cursor:move', 'z-index:2'
+    ].join(';');
+    box.appendChild(handle);
+
+    /* Close button — overlaid top-right, closes box directly (no postMessage) */
+    var closeBtn = doc.createElement('button');
+    closeBtn.textContent = '\u2715';
+    closeBtn.title = 'Close';
+    closeBtn.style.cssText = [
+      'position:absolute', 'top:6px', 'right:8px',
+      'z-index:10',
+      'background:transparent', 'border:none',
+      'color:#aaa', 'font-size:16px', 'line-height:1',
+      'cursor:pointer', 'padding:2px 4px',
+      'border-radius:4px'
+    ].join(';');
+    closeBtn.addEventListener('mouseover', function() { closeBtn.style.color = '#fff'; });
+    closeBtn.addEventListener('mouseout',  function() { closeBtn.style.color = '#aaa'; });
+    closeBtn.addEventListener('click', function() { box.remove(); });
+    box.appendChild(closeBtn);
+
+    var iframe = doc.createElement('iframe');
+    iframe.src = url;
+    iframe.style.cssText = 'width:100%;height:100%;border:none;flex:1;';
+    box.appendChild(iframe);
+    doc.body.appendChild(box);
+
+    /* ── Drag logic ── */
+    var dragStartX, dragStartY, boxStartLeft, boxStartTop;
+    handle.addEventListener('mousedown', function(e) {
+      e.preventDefault();
+      /* Switch from transform to absolute top/left so drag math is simple */
+      var r = box.getBoundingClientRect();
+      box.style.transform = 'none';
+      box.style.left = r.left + 'px';
+      box.style.top  = r.top  + 'px';
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      boxStartLeft = r.left;
+      boxStartTop  = r.top;
+
+      function onMove(ev) {
+        box.style.left = (boxStartLeft + ev.clientX - dragStartX) + 'px';
+        box.style.top  = (boxStartTop  + ev.clientY - dragStartY) + 'px';
+      }
+      function onUp() {
+        doc.removeEventListener('mousemove', onMove);
+        doc.removeEventListener('mouseup',  onUp);
+      }
+      doc.addEventListener('mousemove', onMove);
+      doc.addEventListener('mouseup',  onUp);
+    });
+
+    /* postMessage close from templates iframe */
+    function onMsg(e) {
+      if (e.data && e.data.type === 'pbgui_close_templates') {
+        box.remove();
+        window.parent.removeEventListener('message', onMsg);
+      }
+      if (e.data && e.data.type === 'pbgui_dashboard_created') {
+        sendAction('refresh');
+      }
+    }
+    window.parent.addEventListener('message', onMsg);
+  }
+
+
+  /* ── Event delegation ── */
+  root.addEventListener('click', function(e) {
+    /* toolbar buttons */
+    var btn = e.target.closest('.ds-btn');
+    if (btn) {
+      var act = btn.getAttribute('data-act');
+      if (act === 'delete_dashboard') {
+        if (!confirm('Delete this dashboard?')) return;
+      }
+      if (act === 'delete_selected') {
+        if (!confirm('Delete dashboard \u201c' + CURRENT + '\u201d?')) return;
+        sendAction('delete_dashboard');
+        return;
+      }
+      if (act === 'open_templates') {
+        openTemplateWindow();
+        return;
+      }
+      sendAction(act);
+      return;
+    }
+    /* inline edit icon on active item */
+    var editIcon = e.target.closest('.ds-item-edit');
+    if (editIcon) {
+      e.stopPropagation();
+      sendAction('edit_dashboard');
+      return;
+    }
+    /* dashboard list items */
+    var item = e.target.closest('.ds-item');
+    if (item) {
+      sendAction('select_dashboard', {name: item.getAttribute('data-name')});
+    }
+  });
+
+  /* ── Report height ── */
+  function reportHeight() {
+    try {
+      window.parent.postMessage(
+        {isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: root.scrollHeight + 8},
+        '*'
+      );
+    } catch(_) {}
+  }
+
+  renderMain();
+})();
+</script>

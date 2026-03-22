@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<!-- Dashboard Template Manager — served as popup by FastAPI /api/dashboard/templates_page -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard Templates</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 0.875rem;
+  background: #0e1117;
+  color: #e2e8f0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header bar ── */
+.tpl-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #1a202c;
+  border-bottom: 1px solid #2d3748;
+  padding: 0.7rem 1rem;
+  flex-shrink: 0;
+  cursor: move;
+  user-select: none;
+}
+.tpl-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.tpl-title span.icon { font-size: 1.1rem; }
+.tpl-close {
+  background: transparent;
+  border: 1px solid #4a5568;
+  border-radius: 4px;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0.25rem 0.6rem;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.tpl-close:hover { background: #2d3748; color: #e2e8f0; }
+
+/* ── Content area ── */
+.tpl-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* ── Cards ── */
+.tpl-card {
+  background: #1a202c;
+  border: 1px solid #2d3748;
+  border-radius: 7px;
+  padding: 0.85rem 1rem;
+}
+.tpl-card-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.65rem;
+}
+
+/* ── Input row ── */
+.input-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+.tpl-input {
+  flex: 1;
+  background: #2d3748;
+  border: 1px solid #4a5568;
+  border-radius: 5px;
+  color: #e2e8f0;
+  font-size: 0.84rem;
+  padding: 0.4rem 0.6rem;
+  outline: none;
+  min-width: 0;
+}
+.tpl-input:focus { border-color: #63b3ed; }
+.tpl-select {
+  width: 100%;
+  background: #2d3748;
+  border: 1px solid #4a5568;
+  border-radius: 5px;
+  color: #e2e8f0;
+  font-size: 0.84rem;
+  padding: 0.4rem 0.6rem;
+  outline: none;
+  cursor: pointer;
+  margin-bottom: 0.5rem;
+}
+.tpl-select:focus { border-color: #63b3ed; }
+
+/* ── Buttons ── */
+.btn {
+  background: #2d3748;
+  border: 1px solid #4a5568;
+  border-radius: 5px;
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 0.4rem 0.75rem;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.btn:hover { background: #3a4a5c; }
+.btn.primary {
+  background: #2b6cb0;
+  border-color: #3182ce;
+  color: #fff;
+}
+.btn.primary:hover { background: #3182ce; }
+.btn.danger {
+  background: #742a2a;
+  border-color: #9b2c2c;
+  color: #fed7d7;
+}
+.btn.danger:hover { background: #9b2c2c; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Template list ── */
+.tpl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.tpl-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #2d3748;
+  border: 1px solid #4a5568;
+  border-radius: 5px;
+  padding: 0.4rem 0.6rem;
+  gap: 0.5rem;
+}
+.tpl-item-name {
+  flex: 1;
+  font-size: 0.84rem;
+  color: #e2e8f0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tpl-empty {
+  color: #4a5568;
+  font-size: 0.8rem;
+  font-style: italic;
+  padding: 0.4rem 0;
+}
+
+
+/* ── Bottom action row ── */
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+/* ── Status messages ── */
+.msg {
+  font-size: 0.78rem;
+  min-height: 1.1rem;
+  margin-top: 0.35rem;
+  padding: 0;
+  border-radius: 4px;
+  display: none;
+}
+.msg.ok { color: #68d391; display: block; }
+.msg.err { color: #fc8181; display: block; }
+
+/* ── Divider ── */
+.tpl-label {
+  font-size: 0.78rem;
+  color: #718096;
+  margin-bottom: 0.35rem;
+}
+
+/* ── Preview text ── */
+.tpl-preview {
+  font-size: 0.76rem;
+  color: #718096;
+  margin-top: 0.25rem;
+  min-height: 1.1rem;
+  font-style: italic;
+}
+
+/* ── Template manage row ── */
+.tpl-mgmt-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+.tpl-mgmt-row .tpl-select { flex: 1; margin: 0; }
+.tpl-mgmt-row .msel-wrap   { flex: 1; }
+
+/* ── Multi-select dropdown ── */
+.msel-wrap { position: relative; width: 100%; }
+.msel-btn {
+  background: #2d3748; color: #e2e8f0;
+  border: 1px solid #4a5568; border-radius: 4px;
+  padding: 0.38rem 0.6rem; font-size: 0.84rem;
+  cursor: pointer; width: 100%; text-align: left;
+  display: flex; justify-content: space-between; align-items: center;
+  white-space: nowrap; overflow: hidden;
+}
+.msel-btn:hover { border-color: #63b3ed; }
+.msel-arrow { font-size: 0.55rem; margin-left: 0.4rem; flex-shrink: 0; }
+.msel-drop {
+  display: none; position: absolute; top: 100%; left: 0;
+  background: #1a202c; border: 1px solid #4a5568; border-radius: 4px;
+  min-width: 180px; max-height: 260px; overflow: hidden;
+  z-index: 200; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  margin-top: 2px; width: 100%;
+}
+.msel-drop.open { display: block; }
+.msel-filter {
+  width: 100%; box-sizing: border-box;
+  background: #2d3748; color: #e2e8f0;
+  border: none; border-bottom: 1px solid #4a5568;
+  padding: 0.35rem 0.5rem; font-size: 0.76rem; outline: none;
+}
+.msel-filter::placeholder { color: #64748b; }
+.msel-list { max-height: 200px; overflow-y: auto; }
+.msel-item {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.78rem;
+  color: #e2e8f0; white-space: nowrap;
+}
+.msel-item:hover { background: #2d3748; }
+.msel-item input[type="checkbox"] { accent-color: #63b3ed; margin: 0; cursor: pointer; }
+.msel-sep { border-top: 1px solid #2d3748; margin: 0.15rem 0; }
+</style>
+</head>
+<body>
+<div class="tpl-header">
+  <div class="tpl-title"><span class="icon">📋</span> Dashboard Templates</div>
+  <button class="tpl-close" id="btn-close" title="Close" style="display:none">✕</button>
+</div>
+<div class="tpl-content" id="content">
+  <div style="color:#4a5568;padding:1rem">Loading…</div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  var TOKEN    = "%%TOKEN%%";
+  var API_BASE = "%%API_BASE%%";
+  var CURRENT  = %%CURRENT%%;
+
+  var _templates    = [];
+  var _users        = [];
+  var _selUsers     = ['ALL'];
+  var _selTemplates = [];
+  var _mselCounter  = 0;
+
+  /* ── DOM helper ── */
+  function el(tag, cls, txt) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt !== undefined) e.textContent = txt;
+    return e;
+  }
+
+  /* ── API helpers ── */
+  function apiGet(path, cb) {
+    fetch(API_BASE + path, {headers: {'Authorization': 'Bearer ' + TOKEN}})
+      .then(function(r) { return r.json(); })
+      .then(cb)
+      .catch(function() { cb(null); });
+  }
+  function apiPost(path, body, cb) {
+    fetch(API_BASE + path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN},
+      body: JSON.stringify(body)
+    }).then(function(r) { return r.json(); }).then(cb).catch(function() { cb(null); });
+  }
+  function apiDel(path, cb) {
+    fetch(API_BASE + path, {
+      method: 'DELETE',
+      headers: {'Authorization': 'Bearer ' + TOKEN}
+    }).then(function(r) { return r.json(); }).then(cb).catch(function() { cb(null); });
+  }
+
+  /* ── Message helper ── */
+  function showMsg(id, text, type) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'msg ' + type;
+    setTimeout(function() { el.textContent = ''; el.className = 'msg'; }, 3500);
+  }
+
+
+
+  /* ── Effective users helper ── */
+  function getEffectiveUsers() {
+    if (_selUsers.indexOf('ALL') >= 0) return _users.slice();
+    return _selUsers.filter(function(u) { return _users.indexOf(u) >= 0; });
+  }
+
+  /* ── Update name field placeholder based on user selection ── */
+  function updatePlaceholder() {
+    var inp = document.getElementById('dash-name');
+    if (!inp) return;
+    inp.placeholder = getEffectiveUsers().length > 0 ? 'optional — default: username' : 'required';
+  }
+
+  /* ── Show/hide rename+delete buttons based on template selection ── */
+  function updateTplButtons() {
+    var renameBtn  = document.getElementById('btn-rename-tpl');
+    var delBtn     = document.getElementById('btn-del-tpl');
+    var renameWrap = document.getElementById('rename-wrap');
+    if (renameBtn)  renameBtn.style.display  = (_selTemplates.length === 1) ? '' : 'none';
+    if (delBtn)     delBtn.style.display     = (_selTemplates.length > 0) ? '' : 'none';
+    if (renameWrap && _selTemplates.length !== 1) renameWrap.style.display = 'none';
+  }
+
+  /* ── Generic multi-select dropdown (no ALL row) for templates ── */
+  function makeTplDropdown(initSelected, onChange) {
+    var uid      = 'msel' + (++_mselCounter);
+    var selected = (initSelected && initSelected.length) ? initSelected.slice() : [];
+    var opts     = _templates.slice();
+
+    var wrap   = el('div', 'msel-wrap');
+    var btn    = el('div', 'msel-btn');
+    var btnLbl = el('span');
+    var arrow  = el('span', 'msel-arrow', '\u25BC');
+    btn.appendChild(btnLbl);
+    btn.appendChild(arrow);
+    wrap.appendChild(btn);
+
+    var drop   = el('div', 'msel-drop');
+    drop.id    = uid + '-drop';
+    var filter = el('input');
+    filter.type = 'text'; filter.className = 'msel-filter';
+    filter.placeholder = 'Filter\u2026';
+    var list   = el('div', 'msel-list');
+    drop.appendChild(filter);
+    drop.appendChild(list);
+    wrap.appendChild(drop);
+
+    function updateLabel() {
+      if (!selected.length)           btnLbl.textContent = '\u2014 none \u2014';
+      else if (selected.length === 1) btnLbl.textContent = selected[0];
+      else                            btnLbl.textContent = selected.length + ' templates';
+    }
+
+    function buildList() {
+      list.innerHTML = '';
+      opts.forEach(function(t) {
+        var item = el('div', 'msel-item');
+        item.setAttribute('data-u', t.toLowerCase());
+        var cb = el('input');
+        cb.type = 'checkbox'; cb.value = t;
+        cb.checked = selected.indexOf(t) >= 0;
+        cb.addEventListener('change', (function(val) {
+          return function() {
+            var ix = selected.indexOf(val);
+            if (this.checked && ix < 0) selected.push(val);
+            else if (!this.checked && ix >= 0) selected.splice(ix, 1);
+            updateLabel();
+            onChange(selected.slice());
+          };
+        })(t));
+        var lbl = el('span', null, t);
+        item.appendChild(cb);
+        item.appendChild(lbl);
+        item.addEventListener('click', function(e) {
+          if (e.target.tagName !== 'INPUT') {
+            var c = this.querySelector('input');
+            c.checked = !c.checked;
+            c.dispatchEvent(new Event('change'));
+          }
+        });
+        list.appendChild(item);
+      });
+    }
+
+    function applyFilter(q) {
+      q = q.toLowerCase();
+      list.querySelectorAll('.msel-item').forEach(function(item) {
+        var u2 = item.getAttribute('data-u') || '';
+        item.style.display = (!q || u2.indexOf(q) >= 0) ? '' : 'none';
+      });
+    }
+
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var wasOpen = drop.classList.contains('open');
+      document.querySelectorAll('.msel-drop.open').forEach(function(d) { d.classList.remove('open'); });
+      if (!wasOpen) {
+        drop.classList.add('open');
+        filter.value = ''; applyFilter('');
+        filter.focus();
+      }
+    });
+    drop.addEventListener('click', function(e) { e.stopPropagation(); });
+    filter.addEventListener('input', function() { applyFilter(this.value); });
+
+    buildList();
+    updateLabel();
+    return wrap;
+  }
+
+  /* ── Multi-select user dropdown ── */
+  function makeUsersDropdown(initSelected, onChange) {
+    var uid      = 'msel' + (++_mselCounter);
+    var selected = (initSelected && initSelected.length) ? initSelected.slice() : ['ALL'];
+    var opts     = ['ALL'].concat(_users);
+
+    var wrap   = el('div', 'msel-wrap');
+    var btn    = el('div', 'msel-btn');
+    var btnLbl = el('span');
+    var arrow  = el('span', 'msel-arrow', '\u25BC');
+    btn.appendChild(btnLbl);
+    btn.appendChild(arrow);
+    wrap.appendChild(btn);
+
+    var drop   = el('div', 'msel-drop');
+    drop.id    = uid + '-drop';
+    var filter = el('input');
+    filter.type = 'text'; filter.className = 'msel-filter';
+    filter.placeholder = 'Filter…';
+    var list   = el('div', 'msel-list');
+    drop.appendChild(filter);
+    drop.appendChild(list);
+    wrap.appendChild(drop);
+
+    function updateLabel() {
+      if (!selected.length)                  btnLbl.textContent = '\u2014 none \u2014';
+      else if (selected.indexOf('ALL') >= 0) btnLbl.textContent = 'ALL';
+      else if (selected.length === 1)        btnLbl.textContent = selected[0];
+      else                                   btnLbl.textContent = selected.length + ' users';
+    }
+
+    function buildList() {
+      list.innerHTML = '';
+      opts.forEach(function(u) {
+        var item = el('div', 'msel-item');
+        item.setAttribute('data-u', u.toLowerCase());
+        var cb = el('input');
+        cb.type = 'checkbox'; cb.value = u;
+        cb.checked = selected.indexOf(u) >= 0;
+        cb.addEventListener('change', (function(val) {
+          return function() {
+            if (val === 'ALL') {
+              if (this.checked) {
+                selected = ['ALL'];
+                list.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
+                  c.checked = (c.value === 'ALL');
+                });
+              } else {
+                selected = [];
+              }
+            } else {
+              var ai = selected.indexOf('ALL');
+              if (ai >= 0) selected.splice(ai, 1);
+              var ix = selected.indexOf(val);
+              if (this.checked && ix < 0) selected.push(val);
+              else if (!this.checked && ix >= 0) selected.splice(ix, 1);
+              list.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
+                if (c.value === 'ALL') c.checked = false;
+              });
+              if (selected.length === 0) {
+                selected = ['ALL'];
+                list.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
+                  c.checked = (c.value === 'ALL');
+                });
+              }
+            }
+            updateLabel();
+            onChange(selected.slice());
+          };
+        })(u));
+        var lbl = el('span', null, u);
+        item.appendChild(cb);
+        item.appendChild(lbl);
+        item.addEventListener('click', function(e) {
+          if (e.target.tagName !== 'INPUT') {
+            var c = this.querySelector('input');
+            c.checked = !c.checked;
+            c.dispatchEvent(new Event('change'));
+          }
+        });
+        list.appendChild(item);
+        if (u === 'ALL') list.appendChild(el('div', 'msel-sep'));
+      });
+    }
+
+    function applyFilter(q) {
+      q = q.toLowerCase();
+      list.querySelectorAll('.msel-item').forEach(function(item) {
+        var u2 = item.getAttribute('data-u') || '';
+        item.style.display = (!q || u2 === 'all' || u2.indexOf(q) >= 0) ? '' : 'none';
+      });
+    }
+
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var wasOpen = drop.classList.contains('open');
+      document.querySelectorAll('.msel-drop.open').forEach(function(d) { d.classList.remove('open'); });
+      if (!wasOpen) {
+        drop.classList.add('open');
+        filter.value = ''; applyFilter('');
+        filter.focus();
+      }
+    });
+    drop.addEventListener('click', function(e) { e.stopPropagation(); });
+    filter.addEventListener('input', function() { applyFilter(this.value); });
+
+    buildList();
+    updateLabel();
+    return wrap;
+  }
+
+  /* ── Render ── */
+  function render() {
+    var html = '';
+
+    /* ── Card 1: Save current as template ── */
+    if (CURRENT) {
+      html += '<div class="tpl-card">';
+      html += '<div class="tpl-card-title">Save current dashboard as template</div>';
+      html += '<div class="tpl-label">Current: <strong>' + esc(CURRENT) + '</strong></div>';
+      html += '<div class="input-row">';
+      html += '<input class="tpl-input" id="save-name" type="text" placeholder="Template name…" value="' + esc(CURRENT) + '" autocomplete="off">';
+      html += '<button class="btn primary" id="btn-save">💾 Save</button>';
+      html += '</div>';
+      html += '<div class="msg" id="save-msg"></div>';
+      html += '</div>';
+    }
+
+    /* ── Card 2: My templates list ── */
+    html += '<div class="tpl-card">';
+    html += '<div class="tpl-card-title">My templates</div>';
+    if (_templates.length === 0) {
+      html += '<div class="tpl-empty">No templates saved yet.</div>';
+    } else {
+      html += '<div class="tpl-mgmt-row">';
+      html += '<div id="tpl-manage-msel" style="flex:1"></div>';
+      html += '<button class="btn" id="btn-rename-tpl" title="Rename" style="display:none">📝</button>';
+      html += '<button class="btn danger" id="btn-del-tpl" title="Delete" style="display:none">🗑</button>';
+      html += '</div>';
+      html += '<div id="rename-wrap" style="display:none;margin-top:0.5rem">';
+      html += '<div class="input-row">';
+      html += '<input class="tpl-input" id="rename-input" type="text" autocomplete="off">';
+      html += '<button class="btn primary" id="btn-rename-confirm">\u2713 Rename</button>';
+      html += '<button class="btn" id="btn-rename-cancel">\u2715</button>';
+      html += '</div>';
+      html += '</div>';
+    }
+    html += '<div class="msg" id="manage-msg"></div>';
+    html += '</div>';
+
+    /* ── Card 3: Create from template ── */
+    html += '<div class="tpl-card">';
+    html += '<div class="tpl-card-title">Create dashboards from template</div>';
+    if (_templates.length === 0) {
+      html += '<div class="tpl-empty">Save a template first.</div>';
+    } else {
+      html += '<div class="tpl-label">Template</div>';
+      html += '<select class="tpl-select" id="tpl-select">';
+      html += '<option value="">— select template —</option>';
+      for (var j = 0; j < _templates.length; j++) {
+        html += '<option value="' + esc(_templates[j]) + '">' + esc(_templates[j]) + '</option>';
+      }
+      html += '</select>';
+
+      html += '<div class="tpl-label">Users</div>';
+      html += '<div id="users-msel" style="margin-bottom:0.5rem"></div>';
+
+      html += '<div class="tpl-label">Dashboard name</div>';
+      html += '<input class="tpl-input" id="dash-name" type="text" placeholder="required" autocomplete="off">';
+
+      html += '<div class="action-row">';
+      html += '<button class="btn primary" id="btn-create">📋 Create dashboard(s)</button>';
+      html += '</div>';
+      html += '<div class="msg" id="create-msg"></div>';
+    }
+    html += '</div>';
+
+    document.getElementById('content').innerHTML = html;
+    bindEvents();
+  }
+
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  /* ── Bind events after render ── */
+  function bindEvents() {
+    /* Close */
+    document.getElementById('btn-close').addEventListener('click', function() {
+      window.parent.postMessage({type: 'pbgui_close_templates'}, '*');
+    });
+
+    /* Save as template */
+    var saveBtn = document.getElementById('btn-save');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function() {
+        var name = (document.getElementById('save-name').value || '').trim();
+        if (!name) { showMsg('save-msg', 'Name required', 'err'); return; }
+        apiGet('/dashboards/' + encodeURIComponent(CURRENT), function(data) {
+          if (!data || !data.config) { showMsg('save-msg', 'Could not load dashboard config', 'err'); return; }
+          apiPost('/dashboards/templates/' + encodeURIComponent(name), data.config, function(res) {
+            if (res && res.status === 'ok') {
+              showMsg('save-msg', '\u201c' + name + '\u201d saved', 'ok');
+              if (_templates.indexOf(name) === -1) {
+                _templates = _templates.concat([name]).sort();
+              }
+              render();
+            } else {
+              showMsg('save-msg', 'Error saving template', 'err');
+            }
+          });
+        });
+      });
+    }
+
+    /* Inject templates multiselect */
+    var tplMselContainer = document.getElementById('tpl-manage-msel');
+    if (tplMselContainer) {
+      tplMselContainer.appendChild(makeTplDropdown(_selTemplates, function(sel) {
+        _selTemplates = sel;
+        updateTplButtons();
+      }));
+      updateTplButtons();
+    }
+
+    /* Delete selected template(s) */
+    var delTplBtn = document.getElementById('btn-del-tpl');
+    if (delTplBtn) {
+      delTplBtn.addEventListener('click', function() {
+        if (!_selTemplates.length) return;
+        var label = _selTemplates.length === 1 ? '\u201c' + _selTemplates[0] + '\u201d' : _selTemplates.length + ' templates';
+        if (!confirm('Delete ' + label + '?')) return;
+        var pending = _selTemplates.slice();
+        var toDelete = pending.slice();
+        function deleteNext() {
+          if (pending.length === 0) {
+            _templates = _templates.filter(function(t) { return toDelete.indexOf(t) < 0; });
+            _selTemplates = [];
+            render();
+            return;
+          }
+          var name = pending.shift();
+          apiDel('/dashboards/templates/' + encodeURIComponent(name), function() { deleteNext(); });
+        }
+        deleteNext();
+      });
+    }
+
+    /* Rename selected template (only when exactly 1 selected) */
+    var renameTplBtn  = document.getElementById('btn-rename-tpl');
+    var renameWrap    = document.getElementById('rename-wrap');
+    var renameInput   = document.getElementById('rename-input');
+    var renameConfirm = document.getElementById('btn-rename-confirm');
+    var renameCancel  = document.getElementById('btn-rename-cancel');
+    if (renameTplBtn && renameWrap) {
+      renameTplBtn.addEventListener('click', function() {
+        if (_selTemplates.length !== 1) return;
+        renameInput.value = _selTemplates[0];
+        renameWrap.style.display = '';
+        renameInput.focus();
+        renameInput.select();
+      });
+      renameCancel.addEventListener('click', function() {
+        renameWrap.style.display = 'none';
+      });
+      renameConfirm.addEventListener('click', function() {
+        var oldName = _selTemplates.length === 1 ? _selTemplates[0] : '';
+        var newName = (renameInput.value || '').trim();
+        if (!oldName || !newName || newName === oldName) { renameWrap.style.display = 'none'; return; }
+        fetch(API_BASE + '/dashboards/templates/' + encodeURIComponent(oldName), {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN},
+          body: JSON.stringify({new_name: newName})
+        }).then(function(r) { return r.json(); }).then(function(res) {
+          if (res && res.status === 'ok') {
+            _templates = _templates.map(function(t) { return t === oldName ? newName : t; }).sort();
+            _selTemplates = [newName];
+            render();
+          } else {
+            showMsg('manage-msg', res && res.detail ? res.detail : 'Error renaming template', 'err');
+          }
+        }).catch(function() { showMsg('manage-msg', 'Network error', 'err'); });
+      });
+    }
+
+    /* Inject users multiselect dropdown */
+    var mselContainer = document.getElementById('users-msel');
+    if (mselContainer) {
+      mselContainer.appendChild(makeUsersDropdown(_selUsers, function(sel) {
+        _selUsers = sel;
+        updatePlaceholder();
+      }));
+      updatePlaceholder();
+    }
+
+    /* Preview on name input */
+    var nameInp = document.getElementById('dash-name');
+    /* (no preview needed) */
+
+    /* Close dropdowns when clicking outside */
+    document.addEventListener('click', function() {
+      document.querySelectorAll('.msel-drop.open').forEach(function(d) { d.classList.remove('open'); });
+    });
+
+    /* Create dashboard(s) */
+    var createBtn = document.getElementById('btn-create');
+    if (createBtn) {
+      createBtn.addEventListener('click', function() {
+        var template = (document.getElementById('tpl-select').value || '').trim();
+        if (!template) { showMsg('create-msg', 'Select a template', 'err'); return; }
+        var users = getEffectiveUsers();
+        var nameInput = (document.getElementById('dash-name').value || '').trim();
+
+        if (users.length > 0) {
+          /* One dashboard per user — name optional, default: username */
+          if (!confirm('Create ' + users.length + ' dashboard(s) from template \u201c' + template + '\u201d?')) return;
+          createBtn.disabled = true;
+          var pending = users.slice();
+          var nCreated = 0, nSkipped = 0;
+          function createNext() {
+            if (pending.length === 0) {
+              createBtn.disabled = false;
+              var msg = nCreated + ' dashboard(s) created';
+              if (nSkipped > 0) msg += ', ' + nSkipped + ' skipped';
+              showMsg('create-msg', msg, nCreated > 0 ? 'ok' : 'err');
+              if (nCreated > 0) window.parent.postMessage({type: 'pbgui_dashboard_created'}, '*');
+              return;
+            }
+            var user = pending.shift();
+            var dashName = nameInput || user;
+            apiGet('/dashboards/' + encodeURIComponent(dashName), function(existing) {
+              if (existing && existing.config !== undefined) {
+                if (!confirm('Dashboard \u201c' + dashName + '\u201d already exists.\nOverwrite it?')) {
+                  nSkipped++;
+                  createNext();
+                  return;
+                }
+              }
+              apiPost('/dashboards/from_template', {template: template, name: dashName}, function(res) {
+                if (res && res.status === 'ok') nCreated++; else nSkipped++;
+                createNext();
+              });
+            });
+          }
+          createNext();
+        } else {
+          /* No users — single dashboard, name required */
+          if (!nameInput) { showMsg('create-msg', 'Dashboard name required', 'err'); return; }
+          createBtn.disabled = true;
+          apiGet('/dashboards/' + encodeURIComponent(nameInput), function(existing) {
+            if (existing && existing.config !== undefined) {
+              if (!confirm('Dashboard \u201c' + nameInput + '\u201d already exists.\nOverwrite it?')) {
+                createBtn.disabled = false;
+                return;
+              }
+            }
+            apiPost('/dashboards/from_template', {template: template, name: nameInput}, function(res) {
+              createBtn.disabled = false;
+              if (res && res.status === 'ok') {
+                showMsg('create-msg', '\u201c' + nameInput + '\u201d created', 'ok');
+                document.getElementById('dash-name').value = '';
+                window.parent.postMessage({type: 'pbgui_dashboard_created'}, '*');
+              } else {
+                showMsg('create-msg', 'Error creating dashboard', 'err');
+              }
+            });
+          });
+        }
+      });
+    }
+  }
+
+  /* ── Init: load templates + users in parallel ── */
+  var _loaded = 0;
+  function _checkLoaded() { if (++_loaded === 2) render(); }
+
+  apiGet('/dashboards/templates', function(data) {
+    _templates = (data && data.templates) ? data.templates : [];
+    _checkLoaded();
+  });
+  apiGet('/dashboards/users', function(data) {
+    _users = (data && data.users) ? data.users : [];
+    _checkLoaded();
+  });
+
+  /* Close button (header) pre-bind before render */
+  document.getElementById('btn-close').addEventListener('click', function() {
+    window.parent.postMessage({type: 'pbgui_close_templates'}, '*');
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,11 +1,13 @@
-<!-- Dashboard Top Symbols — live view component.
-     Embedded via st.html(unsafe_allow_javascript=True).
+<!-- Dashboard ADG (Average Daily Growth) — live view component.
+     Embedded via st.html(unsafe_allow_javascript=True).  NOTE: st.html is NOT iframed;
+     multiple instances share the same window/document.  Every DOM id and window.*
+     variable MUST be scoped by POSITION to avoid collisions.
      Config injected as JS variables (%%PLACEHOLDER%%) by Dashboard.py.
-     All rendering delegated to DashRender.buildTop() — single source of truth.
+     All rendering delegated to DashRender.buildAdg() — single source of truth.
      Data updates driven by WebSocket income_updated events — zero polling. -->
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 
-<div id="dt-container"></div>
+<div id="da-container-%%POSITION%%" style="width:100%;"></div>
 
 <script>
 (function () {
@@ -16,28 +18,41 @@
     var API_HOST = "%%API_HOST%%";
     var USERS    = %%USERS%%;
     var PERIOD   = "%%PERIOD%%";
-    var TOP      = %%TOP%%;
+    var MODE     = "%%MODE%%";
     var HEIGHT   = %%HEIGHT%%;
     var POSITION = "%%POSITION%%";
 
-    /* mutable current values — changed by inline controls but not persisted */
+    var _wsKey    = '_daWs_' + POSITION;
+    var _timerKey = '_daReconnTimer_' + POSITION;
+
     var currentPeriod = PERIOD;
-    var currentTop    = TOP;
+    var currentMode   = MODE;
 
     var PERIODS = ['TODAY','YESTERDAY','THIS_WEEK','LAST_WEEK','LAST_WEEK_NOW',
                    'THIS_MONTH','LAST_MONTH','LAST_MONTH_NOW',
                    'LAST_7_DAYS','LAST_30_DAYS','LAST_90_DAYS','LAST_180_DAYS','LAST_365_DAYS',
                    'THIS_QUARTER','LAST_QUARTER','LAST_QUARTER_NOW',
                    'THIS_YEAR','LAST_YEAR','LAST_YEAR_NOW','ALL_TIME','CUSTOM'];
+    var MODES = ['bar', 'line'];
 
-    /* Kill any previous WS + reconnect timer from a prior render */
-    if (window._dtWs) { try { window._dtWs.close(); } catch (_) {} window._dtWs = null; }
-    if (window._dtReconnTimer) { clearTimeout(window._dtReconnTimer); window._dtReconnTimer = null; }
+    if (window[_wsKey]) { try { window[_wsKey].close(); } catch (_) {} window[_wsKey] = null; }
+    if (window[_timerKey]) { clearTimeout(window[_timerKey]); window[_timerKey] = null; }
 
     var ws          = null;
     var reconnTimer = null;
     var reconnDelay = 1000;
-    var container   = document.getElementById('dt-container');
+    var container   = document.getElementById('da-container-' + POSITION);
+    var _savedZoom  = null;
+
+    function _getZoom() {
+        var el = container ? container.querySelector('.dt-chart') : null;
+        if (!el || !el.layout) return null;
+        var xa = el.layout.xaxis || {};
+        var ya = el.layout.yaxis || {};
+        var xr = (xa.autorange === false && xa.range) ? xa.range.slice() : null;
+        var yr = (ya.autorange === false && ya.range) ? ya.range.slice() : null;
+        return (xr || yr) ? { xrange: xr, yrange: yr } : null;
+    }
 
     function reportHeight() {
         var h = document.documentElement.scrollHeight + 16;
@@ -49,8 +64,8 @@
     }
 
     function load() {
+        var zoom = _savedZoom; _savedZoom = null;
         var usersParam = (Array.isArray(USERS) && USERS.length > 0) ? USERS.join(',') : 'ALL';
-        /* parse CUSTOM:from:to */
         var isCustom = currentPeriod.indexOf('CUSTOM:') === 0;
         var customFrom = '', customTo = '';
         if (isCustom) {
@@ -58,23 +73,30 @@
             customFrom = _cp[1] || ''; customTo = _cp[2] || '';
         }
         var displayPeriod = isCustom ? 'CUSTOM' : currentPeriod;
-        var url = API_BASE + '/dashboard/top_data'
+
+        var url = API_BASE + '/dashboard/adg_data'
             + '?users='  + encodeURIComponent(usersParam)
             + '&period=' + encodeURIComponent(currentPeriod)
-            + '&top='    + currentTop;
+            + '&mode='   + encodeURIComponent(currentMode);
 
         fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (d) {
-                /* ── Top N control ── */
-                var topNCtrl = document.createElement('input');
-                topNCtrl.type = 'number'; topNCtrl.min = 1; topNCtrl.max = 500; topNCtrl.step = 1;
-                topNCtrl.value = currentTop;
-                topNCtrl.className = 'dt-ctrl-num';
-                topNCtrl.addEventListener('change', function () {
-                    currentTop = parseInt(this.value, 10) || 10;
+                /* ── Mode select ── */
+                var modeCtrl = document.createElement('select');
+                modeCtrl.className = 'dt-ctrl-sel';
+                MODES.forEach(function (m) {
+                    var opt = document.createElement('option');
+                    opt.value = m; opt.textContent = m;
+                    if (m === currentMode) opt.selected = true;
+                    modeCtrl.appendChild(opt);
+                });
+                modeCtrl.addEventListener('change', function () {
+                    _savedZoom = _getZoom();
+                    currentMode = this.value;
                     load();
                 });
+
                 /* ── Period select ── */
                 var periodCtrl = document.createElement('select');
                 periodCtrl.className = 'dt-ctrl-sel';
@@ -95,6 +117,7 @@
                     }
                     load();
                 });
+
                 /* ── CUSTOM date inputs ── */
                 var fromCtrl = null, toCtrl = null, toNowCtrl = null;
                 if (isCustom) {
@@ -116,7 +139,6 @@
                         currentPeriod = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + this.value;
                         load();
                     });
-                    /* Now-checkbox */
                     toNowCtrl = document.createElement('label');
                     toNowCtrl.className = 'dt-ctrl-now-wrap';
                     var _chk = document.createElement('input');
@@ -134,16 +156,17 @@
                         load();
                     });
                 }
-                DashRender.buildTop(container, d, {
-                    users:         USERS,
-                    topN:          currentTop,
-                    period:        currentPeriod,
-                    topNControl:   topNCtrl,
-                    periodControl: periodCtrl,
-                    fromControl:   fromCtrl,
-                    toControl:     toCtrl,
-                    toNowControl:  toNowCtrl,
-                    height:        HEIGHT > 0 ? HEIGHT : null,
+
+                DashRender.buildAdg(container, d, {
+                    users:          USERS,
+                    period:         currentPeriod,
+                    modeControl:    modeCtrl,
+                    periodControl:  periodCtrl,
+                    fromControl:    fromCtrl,
+                    toControl:      toCtrl,
+                    toNowControl:   toNowCtrl,
+                    savedZoom:      zoom,
+                    height:         HEIGHT > 0 ? HEIGHT : null,
                     displayModeBar: true,
                     responsive:     true
                 });
@@ -164,7 +187,7 @@
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
         ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
-        window._dtWs = ws;
+        window[_wsKey] = ws;
         ws.onopen = function () { reconnDelay = 1000; load(); };
         ws.onmessage = function (evt) {
             try {
@@ -179,7 +202,7 @@
         ws.onclose = function () {
             reconnTimer = setTimeout(connect, reconnDelay);
             reconnDelay = Math.min(reconnDelay * 2, 30000);
-            window._dtReconnTimer = reconnTimer;
+            window[_timerKey] = reconnTimer;
         };
         ws.onerror = function () { ws.close(); };
     }

@@ -1,43 +1,76 @@
-<!-- Dashboard Top Symbols — live view component.
-     Embedded via st.html(unsafe_allow_javascript=True).
+<!-- Dashboard P+L (Profits & Losses) — live view component.
+     Embedded via st.html(unsafe_allow_javascript=True).  NOTE: st.html is NOT iframed;
+     multiple instances share the same window/document.  Every DOM id and window.*
+     variable MUST be scoped by POSITION to avoid collisions.
      Config injected as JS variables (%%PLACEHOLDER%%) by Dashboard.py.
-     All rendering delegated to DashRender.buildTop() — single source of truth.
+     All rendering delegated to DashRender.buildPpl() — single source of truth.
      Data updates driven by WebSocket income_updated events — zero polling. -->
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 
-<div id="dt-container"></div>
+<div id="dp-container-%%POSITION%%" style="width:100%;"></div>
 
 <script>
 (function () {
     'use strict';
 
-    var TOKEN    = "%%TOKEN%%";
-    var API_BASE = "%%API_BASE%%";
-    var API_HOST = "%%API_HOST%%";
-    var USERS    = %%USERS%%;
-    var PERIOD   = "%%PERIOD%%";
-    var TOP      = %%TOP%%;
-    var HEIGHT   = %%HEIGHT%%;
-    var POSITION = "%%POSITION%%";
+    var TOKEN      = "%%TOKEN%%";
+    var API_BASE   = "%%API_BASE%%";
+    var API_HOST   = "%%API_HOST%%";
+    var USERS      = %%USERS%%;
+    var PERIOD     = "%%PERIOD%%";
+    var SUM_PERIOD = "%%SUM_PERIOD%%";
+    var HEIGHT     = %%HEIGHT%%;
+    var POSITION   = "%%POSITION%%";
 
-    /* mutable current values — changed by inline controls but not persisted */
-    var currentPeriod = PERIOD;
-    var currentTop    = TOP;
+    var _wsKey    = '_dplWs_' + POSITION;
+    var _timerKey = '_dplReconnTimer_' + POSITION;
 
-    var PERIODS = ['TODAY','YESTERDAY','THIS_WEEK','LAST_WEEK','LAST_WEEK_NOW',
-                   'THIS_MONTH','LAST_MONTH','LAST_MONTH_NOW',
-                   'LAST_7_DAYS','LAST_30_DAYS','LAST_90_DAYS','LAST_180_DAYS','LAST_365_DAYS',
-                   'THIS_QUARTER','LAST_QUARTER','LAST_QUARTER_NOW',
-                   'THIS_YEAR','LAST_YEAR','LAST_YEAR_NOW','ALL_TIME','CUSTOM'];
+    var currentPeriod    = PERIOD;
 
-    /* Kill any previous WS + reconnect timer from a prior render */
-    if (window._dtWs) { try { window._dtWs.close(); } catch (_) {} window._dtWs = null; }
-    if (window._dtReconnTimer) { clearTimeout(window._dtReconnTimer); window._dtReconnTimer = null; }
+    var PERIODS  = ['TODAY','YESTERDAY','THIS_WEEK','LAST_WEEK','LAST_WEEK_NOW',
+                    'THIS_MONTH','LAST_MONTH','LAST_MONTH_NOW',
+                    'LAST_7_DAYS','LAST_30_DAYS','LAST_90_DAYS','LAST_180_DAYS','LAST_365_DAYS',
+                    'THIS_QUARTER','LAST_QUARTER','LAST_QUARTER_NOW',
+                    'THIS_YEAR','LAST_YEAR','LAST_YEAR_NOW','ALL_TIME','CUSTOM'];
+    var PPL_SUM  = ['DAY','WEEK','MONTH'];
+    /* Normalize: legacy configs may store 'ALL_TIME' or 'YEAR' — clamp to valid PPL_SUM value */
+    var currentSumPeriod = PPL_SUM.indexOf(SUM_PERIOD) >= 0 ? SUM_PERIOD : PPL_SUM[0];
+
+    if (window[_wsKey]) { try { window[_wsKey].close(); } catch (_) {} window[_wsKey] = null; }
+    if (window[_timerKey]) { clearTimeout(window[_timerKey]); window[_timerKey] = null; }
 
     var ws          = null;
     var reconnTimer = null;
     var reconnDelay = 1000;
-    var container   = document.getElementById('dt-container');
+    var container   = document.getElementById('dp-container-' + POSITION);
+    var _savedZoom  = null;
+
+    function _getZoom() {
+        var el = container ? container.querySelector('.dt-chart') : null;
+        if (!el || !el.layout) return null;
+        var xa = el.layout.xaxis || {};
+        var ya = el.layout.yaxis || {};
+        var xr = (xa.autorange === false && xa.range) ? xa.range.slice() : null;
+        var yr = (ya.autorange === false && ya.range) ? ya.range.slice() : null;
+        if (!xr && !yr) return null;
+        return { xrange: xr, yrange: yr };
+    }
+
+    /* Returns zoom as proportional fractions [0..1] — format-agnostic, safe for sum-period switch */
+    function _getFracZoom() {
+        var el = container ? container.querySelector('.dt-chart') : null;
+        if (!el || !el.layout) return null;
+        var xa = el.layout.xaxis || {};
+        var ya = el.layout.yaxis || {};
+        var xr = (xa.autorange === false && xa.range) ? xa.range.slice() : null;
+        var yr = (ya.autorange === false && ya.range) ? ya.range.slice() : null;
+        if (!xr) return null;
+        var n = (el.data && el.data.length > 0 && el.data[0].x) ? el.data[0].x.length : 0;
+        if (n < 2) return null;
+        /* Normalize: xr values are category indices; divide by n to get [0..1] fractions */
+        var fracRange = [xr[0] / n, xr[1] / n];
+        return { fracRange: fracRange, yrange: yr };
+    }
 
     function reportHeight() {
         var h = document.documentElement.scrollHeight + 16;
@@ -49,8 +82,8 @@
     }
 
     function load() {
+        var zoom = _savedZoom; _savedZoom = null;
         var usersParam = (Array.isArray(USERS) && USERS.length > 0) ? USERS.join(',') : 'ALL';
-        /* parse CUSTOM:from:to */
         var isCustom = currentPeriod.indexOf('CUSTOM:') === 0;
         var customFrom = '', customTo = '';
         if (isCustom) {
@@ -58,23 +91,30 @@
             customFrom = _cp[1] || ''; customTo = _cp[2] || '';
         }
         var displayPeriod = isCustom ? 'CUSTOM' : currentPeriod;
-        var url = API_BASE + '/dashboard/top_data'
-            + '?users='  + encodeURIComponent(usersParam)
-            + '&period=' + encodeURIComponent(currentPeriod)
-            + '&top='    + currentTop;
+
+        var url = API_BASE + '/dashboard/ppl_data'
+            + '?users='      + encodeURIComponent(usersParam)
+            + '&period='     + encodeURIComponent(currentPeriod)
+            + '&sum_period=' + encodeURIComponent(currentSumPeriod);
 
         fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (d) {
-                /* ── Top N control ── */
-                var topNCtrl = document.createElement('input');
-                topNCtrl.type = 'number'; topNCtrl.min = 1; topNCtrl.max = 500; topNCtrl.step = 1;
-                topNCtrl.value = currentTop;
-                topNCtrl.className = 'dt-ctrl-num';
-                topNCtrl.addEventListener('change', function () {
-                    currentTop = parseInt(this.value, 10) || 10;
+                /* ── Sum Period select ── */
+                var sumCtrl = document.createElement('select');
+                sumCtrl.className = 'dt-ctrl-sel';
+                PPL_SUM.forEach(function (s) {
+                    var opt = document.createElement('option');
+                    opt.value = s; opt.textContent = s;
+                    if (s === currentSumPeriod) opt.selected = true;
+                    sumCtrl.appendChild(opt);
+                });
+                sumCtrl.addEventListener('change', function () {
+                    _savedZoom = _getFracZoom(); /* proportional fraction — works across DAY/WEEK/MONTH */
+                    currentSumPeriod = this.value;
                     load();
                 });
+
                 /* ── Period select ── */
                 var periodCtrl = document.createElement('select');
                 periodCtrl.className = 'dt-ctrl-sel';
@@ -95,6 +135,7 @@
                     }
                     load();
                 });
+
                 /* ── CUSTOM date inputs ── */
                 var fromCtrl = null, toCtrl = null, toNowCtrl = null;
                 if (isCustom) {
@@ -116,7 +157,6 @@
                         currentPeriod = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + this.value;
                         load();
                     });
-                    /* Now-checkbox */
                     toNowCtrl = document.createElement('label');
                     toNowCtrl.className = 'dt-ctrl-now-wrap';
                     var _chk = document.createElement('input');
@@ -134,18 +174,19 @@
                         load();
                     });
                 }
-                DashRender.buildTop(container, d, {
-                    users:         USERS,
-                    topN:          currentTop,
-                    period:        currentPeriod,
-                    topNControl:   topNCtrl,
-                    periodControl: periodCtrl,
-                    fromControl:   fromCtrl,
-                    toControl:     toCtrl,
-                    toNowControl:  toNowCtrl,
-                    height:        HEIGHT > 0 ? HEIGHT : null,
-                    displayModeBar: true,
-                    responsive:     true
+
+                DashRender.buildPpl(container, d, {
+                    users:            USERS,
+                    period:           currentPeriod,
+                    sumPeriodControl: sumCtrl,
+                    periodControl:    periodCtrl,
+                    fromControl:      fromCtrl,
+                    toControl:        toCtrl,
+                    toNowControl:     toNowCtrl,
+                    savedZoom:        zoom,
+                    height:           HEIGHT > 0 ? HEIGHT : null,
+                    displayModeBar:   true,
+                    responsive:       true
                 });
                 reportHeight();
             })
@@ -164,7 +205,7 @@
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
         ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
-        window._dtWs = ws;
+        window[_wsKey] = ws;
         ws.onopen = function () { reconnDelay = 1000; load(); };
         ws.onmessage = function (evt) {
             try {
@@ -179,7 +220,7 @@
         ws.onclose = function () {
             reconnTimer = setTimeout(connect, reconnDelay);
             reconnDelay = Math.min(reconnDelay * 2, 30000);
-            window._dtReconnTimer = reconnTimer;
+            window[_timerKey] = reconnTimer;
         };
         ws.onerror = function () { ws.close(); };
     }
@@ -208,9 +249,10 @@
         document.head.appendChild(s);
     }
 
-    _loadRenderScript(function () {
-        if (window.DashRender) { DashRender.injectCSS(); }
-        waitForPlotly(connect);
+    waitForPlotly(function () {
+        _loadRenderScript(function () {
+            connect();
+        });
     });
 }());
 </script>

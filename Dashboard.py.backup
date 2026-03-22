@@ -537,71 +537,71 @@ class Dashboard():
             if self.cols == 2:
                 db_col1, db_col2 = st.columns([1,1])
                 with db_col1:
-                    if dashboard_config.get(f'dashboard_type_{row}_1') == "PNL":
+                    if dashboard_config[f'dashboard_type_{row}_1'] == "PNL":
                         self.view_pnl_impl(f'{row}_1', dashboard_config[f'dashboard_pnl_users_{row}_1'], dashboard_config[f'dashboard_pnl_period_{row}_1'], dashboard_config[f'dashboard_pnl_mode_{row}_1'])
-                    if dashboard_config.get(f'dashboard_type_{row}_1') == "ADG":
+                    if dashboard_config[f'dashboard_type_{row}_1'] == "ADG":
                         self.view_adg_impl(f'{row}_1', dashboard_config[f'dashboard_adg_users_{row}_1'], dashboard_config[f'dashboard_adg_period_{row}_1'], dashboard_config[f'dashboard_adg_mode_{row}_1'])
-                    if dashboard_config.get(f'dashboard_type_{row}_1') == "INCOME":
+                    if dashboard_config[f'dashboard_type_{row}_1'] == "INCOME":
                         dashboard_config.setdefault(f'dashboard_income_users_{row}_1', ['ALL'])
                         dashboard_config.setdefault(f'dashboard_income_period_{row}_1', 'THIS_MONTH')
                         dashboard_config.setdefault(f'dashboard_income_last_{row}_1', 0)
                         dashboard_config.setdefault(f'dashboard_income_filter_{row}_1', 0.0)
                         self.view_income_impl(f'{row}_1', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'], dashboard_config[f'dashboard_income_last_{row}_1'], dashboard_config[f'dashboard_income_filter_{row}_1'])
-                    if dashboard_config.get(f'dashboard_type_{row}_1') == "TOP":
+                    if dashboard_config[f'dashboard_type_{row}_1'] == "TOP":
                         self.view_top_symbols_impl(f'{row}_1', dashboard_config[f'dashboard_top_symbols_users_{row}_1'], dashboard_config[f'dashboard_top_symbols_period_{row}_1'], dashboard_config[f'dashboard_top_symbols_top_{row}_1'])
-                    if dashboard_config.get(f'dashboard_type_{row}_1') == "POSITIONS":
+                    if dashboard_config[f'dashboard_type_{row}_1'] == "POSITIONS":
                         self.view_positions_impl(f'{row}_1', dashboard_config[f'dashboard_positions_users_{row}_1'])
-                    if dashboard_config.get(f'dashboard_type_{row}_1') == "ORDERS":
+                    if dashboard_config[f'dashboard_type_{row}_1'] == "ORDERS":
                         self.view_orders_impl(f'{row}_1', dashboard_config.get(f'dashboard_orders_{row}_1'))
-                    if dashboard_config.get(f'dashboard_type_{row}_1') == "BALANCE":
+                    if dashboard_config[f'dashboard_type_{row}_1'] == "BALANCE":
                         self.view_balance_impl(f'{row}_1', dashboard_config[f'dashboard_balance_users_{row}_1'])
-                    if dashboard_config.get(f'dashboard_type_{row}_1') == "P+L":
+                    if dashboard_config[f'dashboard_type_{row}_1'] == "P+L":
                         if f'dashboard_ppl_sum_period_{row}_1' not in dashboard_config:
                             dashboard_config[f'dashboard_ppl_sum_period_{row}_1'] = 'DAY'
                         self.view_ppl_impl(f'{row}_1', dashboard_config[f'dashboard_ppl_users_{row}_1'], dashboard_config[f'dashboard_ppl_period_{row}_1'], dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
                 with db_col2:
-                    if dashboard_config.get(f'dashboard_type_{row}_2') == "PNL":
+                    if dashboard_config[f'dashboard_type_{row}_2'] == "PNL":
                         self.view_pnl_impl(f'{row}_2', dashboard_config[f'dashboard_pnl_users_{row}_2'], dashboard_config[f'dashboard_pnl_period_{row}_2'], dashboard_config[f'dashboard_pnl_mode_{row}_2'])
-                    if dashboard_config.get(f'dashboard_type_{row}_2') == "ADG":
+                    if dashboard_config[f'dashboard_type_{row}_2'] == "ADG":
                         self.view_adg_impl(f'{row}_2', dashboard_config[f'dashboard_adg_users_{row}_2'], dashboard_config[f'dashboard_adg_period_{row}_2'], dashboard_config[f'dashboard_adg_mode_{row}_2'])
-                    if dashboard_config.get(f'dashboard_type_{row}_2') == "INCOME":
+                    if dashboard_config[f'dashboard_type_{row}_2'] == "INCOME":
                         dashboard_config.setdefault(f'dashboard_income_users_{row}_2', ['ALL'])
                         dashboard_config.setdefault(f'dashboard_income_period_{row}_2', 'THIS_MONTH')
                         dashboard_config.setdefault(f'dashboard_income_last_{row}_2', 0)
                         dashboard_config.setdefault(f'dashboard_income_filter_{row}_2', 0.0)
                         self.view_income_impl(f'{row}_2', dashboard_config[f'dashboard_income_users_{row}_2'], dashboard_config[f'dashboard_income_period_{row}_2'], dashboard_config[f'dashboard_income_last_{row}_2'], dashboard_config[f'dashboard_income_filter_{row}_2'])
-                    if dashboard_config.get(f'dashboard_type_{row}_2') == "TOP":
+                    if dashboard_config[f'dashboard_type_{row}_2'] == "TOP":
                         self.view_top_symbols_impl(f'{row}_2', dashboard_config[f'dashboard_top_symbols_users_{row}_2'], dashboard_config[f'dashboard_top_symbols_period_{row}_2'], dashboard_config[f'dashboard_top_symbols_top_{row}_2'])
-                    if dashboard_config.get(f'dashboard_type_{row}_2') == "POSITIONS":
+                    if dashboard_config[f'dashboard_type_{row}_2'] == "POSITIONS":
                         self.view_positions_impl(f'{row}_2', dashboard_config[f'dashboard_positions_users_{row}_2'])
-                    if dashboard_config.get(f'dashboard_type_{row}_2') == "ORDERS":
+                    if dashboard_config[f'dashboard_type_{row}_2'] == "ORDERS":
                         self.view_orders_impl(f'{row}_2', dashboard_config.get(f'dashboard_orders_{row}_2'))
-                    if dashboard_config.get(f'dashboard_type_{row}_2') == "BALANCE":
+                    if dashboard_config[f'dashboard_type_{row}_2'] == "BALANCE":
                         self.view_balance_impl(f'{row}_2', dashboard_config[f'dashboard_balance_users_{row}_2'])
-                    if dashboard_config.get(f'dashboard_type_{row}_2') == "P+L":
+                    if dashboard_config[f'dashboard_type_{row}_2'] == "P+L":
                         if f'dashboard_ppl_sum_period_{row}_2' not in dashboard_config:
                             dashboard_config[f'dashboard_ppl_sum_period_{row}_2'] = 'DAY'
                         self.view_ppl_impl(f'{row}_2', dashboard_config[f'dashboard_ppl_users_{row}_2'], dashboard_config[f'dashboard_ppl_period_{row}_2'], dashboard_config[f'dashboard_ppl_sum_period_{row}_2'])
             else:
-                if dashboard_config.get(f'dashboard_type_{row}_1') == "PNL":
+                if dashboard_config[f'dashboard_type_{row}_1'] == "PNL":
                     self.view_pnl_impl(f'{row}_1', dashboard_config[f'dashboard_pnl_users_{row}_1'], dashboard_config[f'dashboard_pnl_period_{row}_1'], dashboard_config[f'dashboard_pnl_mode_{row}_1'])
-                if dashboard_config.get(f'dashboard_type_{row}_1') == "ADG":
+                if dashboard_config[f'dashboard_type_{row}_1'] == "ADG":
                     self.view_adg_impl(f'{row}_1', dashboard_config[f'dashboard_adg_users_{row}_1'], dashboard_config[f'dashboard_adg_period_{row}_1'], dashboard_config[f'dashboard_adg_mode_{row}_1'])
-                if dashboard_config.get(f'dashboard_type_{row}_1') == "INCOME":
+                if dashboard_config[f'dashboard_type_{row}_1'] == "INCOME":
                     dashboard_config.setdefault(f'dashboard_income_users_{row}_1', ['ALL'])
                     dashboard_config.setdefault(f'dashboard_income_period_{row}_1', 'THIS_MONTH')
                     dashboard_config.setdefault(f'dashboard_income_last_{row}_1', 0)
                     dashboard_config.setdefault(f'dashboard_income_filter_{row}_1', 0.0)
                     self.view_income_impl(f'{row}_1', dashboard_config[f'dashboard_income_users_{row}_1'], dashboard_config[f'dashboard_income_period_{row}_1'], dashboard_config[f'dashboard_income_last_{row}_1'], dashboard_config[f'dashboard_income_filter_{row}_1'])
-                if dashboard_config.get(f'dashboard_type_{row}_1') == "TOP":
+                if dashboard_config[f'dashboard_type_{row}_1'] == "TOP":
                     self.view_top_symbols_impl(f'{row}_1', dashboard_config[f'dashboard_top_symbols_users_{row}_1'], dashboard_config[f'dashboard_top_symbols_period_{row}_1'], dashboard_config[f'dashboard_top_symbols_top_{row}_1'])
-                if dashboard_config.get(f'dashboard_type_{row}_1') == "POSITIONS":
+                if dashboard_config[f'dashboard_type_{row}_1'] == "POSITIONS":
                     self.view_positions_impl(f'{row}_1', dashboard_config[f'dashboard_positions_users_{row}_1'])
-                if dashboard_config.get(f'dashboard_type_{row}_1') == "ORDERS":
+                if dashboard_config[f'dashboard_type_{row}_1'] == "ORDERS":
                     self.view_orders_impl(f'{row}_1', dashboard_config.get(f'dashboard_orders_{row}_1'))
-                if dashboard_config.get(f'dashboard_type_{row}_1') == "BALANCE":
+                if dashboard_config[f'dashboard_type_{row}_1'] == "BALANCE":
                     self.view_balance_impl(f'{row}_1', dashboard_config[f'dashboard_balance_users_{row}_1'])
-                if dashboard_config.get(f'dashboard_type_{row}_1') == "P+L":
+                if dashboard_config[f'dashboard_type_{row}_1'] == "P+L":
                     if f'dashboard_ppl_sum_period_{row}_1' not in dashboard_config:
                         dashboard_config[f'dashboard_ppl_sum_period_{row}_1'] = 'DAY'
                     self.view_ppl_impl(f'{row}_1', dashboard_config[f'dashboard_ppl_users_{row}_1'], dashboard_config[f'dashboard_ppl_period_{row}_1'], dashboard_config[f'dashboard_ppl_sum_period_{row}_1'])
@@ -665,12 +665,6 @@ class Dashboard():
         html = html.replace('"%%PERIOD%%"',   f'"{period_str}"')
         html = html.replace('"%%MODE%%"',     f'"{mode_str}"')
         html = html.replace('%%POSITION%%',   position)
-        _h = self.dashboard_config.get(f'dashboard_height_{position}', 0)
-        try:
-            _chart_h = max(100, int(_h)) if _h else 0
-        except (TypeError, ValueError):
-            _chart_h = 0
-        html = html.replace('%%HEIGHT%%',     str(_chart_h))
 
         st.html(html, unsafe_allow_javascript=True)
 
@@ -731,12 +725,6 @@ class Dashboard():
         html = html.replace('"%%PERIOD%%"',   f'"{period_str}"')
         html = html.replace('"%%MODE%%"',     f'"{mode_str}"')
         html = html.replace('%%POSITION%%',   position)
-        _h = self.dashboard_config.get(f'dashboard_height_{position}', 0)
-        try:
-            _chart_h = max(100, int(_h)) if _h else 0
-        except (TypeError, ValueError):
-            _chart_h = 0
-        html = html.replace('%%HEIGHT%%',     str(_chart_h))
 
         st.html(html, unsafe_allow_javascript=True)
 
@@ -798,12 +786,6 @@ class Dashboard():
         html = html.replace('"%%PERIOD%%"',     f'"{period_str}"')
         html = html.replace('"%%SUM_PERIOD%%"', f'"{sum_period_str}"')
         html = html.replace('%%POSITION%%',     position)
-        _h = self.dashboard_config.get(f'dashboard_height_{position}', 0)
-        try:
-            _chart_h = max(100, int(_h)) if _h else 0
-        except (TypeError, ValueError):
-            _chart_h = 0
-        html = html.replace('%%HEIGHT%%',       str(_chart_h))
 
         st.html(html, unsafe_allow_javascript=True)
 
@@ -873,12 +855,6 @@ class Dashboard():
         html = html.replace('%%FILTER%%',     str(filter_val))
         html = html.replace('"%%LVB_USER%%"', f'"{single_user or ""}"')
         html = html.replace('%%POSITION%%',   position)
-        _h = self.dashboard_config.get(f'dashboard_height_{position}', 0)
-        try:
-            _chart_h = max(100, int(_h)) if _h else 0
-        except (TypeError, ValueError):
-            _chart_h = 0
-        html = html.replace('%%HEIGHT%%',     str(_chart_h))
 
         st.html(html, unsafe_allow_javascript=True)
 
@@ -937,13 +913,6 @@ class Dashboard():
         html = html.replace('%%USERS%%',      users_json)
         html = html.replace('"%%PERIOD%%"',   f'"{period_str}"')
         html = html.replace('%%TOP%%',        str(top_val))
-        html = html.replace('%%POSITION%%',   position)
-        _h = self.dashboard_config.get(f'dashboard_height_{position}', 0)
-        try:
-            _chart_h = max(100, int(_h)) if _h else 0
-        except (TypeError, ValueError):
-            _chart_h = 0
-        html = html.replace('%%HEIGHT%%',     str(_chart_h))
         st.html(html, unsafe_allow_javascript=True)
 
     def view_balance_impl(self, position: str, user=None, edit=False):
@@ -1040,13 +1009,6 @@ class Dashboard():
         _pos_key = f'{self.name}:{position}' if edit else position
         html = html.replace('"%%POSITION%%"', f'"{_pos_key}"')
 
-        _h = self.dashboard_config.get(f'dashboard_height_{position}', 0)
-        try:
-            _chart_h = max(100, int(_h)) if _h else 0
-        except (TypeError, ValueError):
-            _chart_h = 0
-        html = html.replace('%%HEIGHT%%', str(_chart_h))
-
         st.html(html, unsafe_allow_javascript=True)
 
     def view_positions_impl(self, position : str, user : str = None):
@@ -1102,13 +1064,6 @@ class Dashboard():
         html = html.replace('%%USERS%%',      users_json)
         html = html.replace('%%POSITION%%',   position)
 
-        _h = self.dashboard_config.get(f'dashboard_height_{position}', 0)
-        try:
-            _chart_h = max(100, int(_h)) if _h else 0
-        except (TypeError, ValueError):
-            _chart_h = 0
-        html = html.replace('%%HEIGHT%%', str(_chart_h))
-
         st.html(html, unsafe_allow_javascript=True)
 
     def view_orders_impl(self, pos : str, orders : str = None, tf : str = "4h", edit : bool = False):
@@ -1160,12 +1115,5 @@ class Dashboard():
         html = html.replace('%%POSITION%%',     pos)
         html = html.replace('"%%LINKED_POS%%"', f'"{linked_pos}"')
         html = html.replace('"%%TIMEFRAME%%"',  f'"{timeframe}"')
-
-        _h = self.dashboard_config.get(f'dashboard_height_{pos}', 0)
-        try:
-            _chart_h = max(100, int(_h)) if _h else 0
-        except (TypeError, ValueError):
-            _chart_h = 0
-        html = html.replace('%%HEIGHT%%', str(_chart_h))
 
         st.html(html, unsafe_allow_javascript=True)
