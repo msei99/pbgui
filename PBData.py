@@ -300,6 +300,13 @@ class PBData():
         # synchronized reconnect storms when many watchers detect keepalive
         # timeouts simultaneously.
         self._ws_restart_sleep = 1.5  # base sleep (s) before re-creating client
+        # Per-exchange semaphore limiting concurrent reconnect attempts to 2.
+        # When a Bybit/Hyperliquid server event drops all N connections at once,
+        # without throttling all N tasks race to reconnect simultaneously, overwhelming
+        # the asyncio event loop and delaying ping-pong for other exchanges.
+        # Semaphore(2) lets at most 2 reconnects proceed at the same time; the rest
+        # queue up naturally, spreading the reconnect storm over several seconds.
+        self._exchange_reconnect_sem: dict = {}  # exchange -> asyncio.Semaphore(2)
         # Per-user last fetch timestamps (key: (user_name, kind) -> epoch seconds)
         # kind in {'balances','positions','orders','history'}
         self._last_fetch_ts = defaultdict(dict)
@@ -1819,6 +1826,19 @@ class PBData():
                 pass
             self._last_network_error_log_ts[key] = now
 
+    def _get_reconnect_sem(self, exchange: str) -> 'asyncio.Semaphore':
+        """Return a per-exchange semaphore that limits concurrent WS reconnects to 2.
+
+        When a server-side event drops all N private connections at once, all N
+        asyncio tasks wake up and race to reconnect simultaneously.  Without
+        throttling this overwhelms the event loop and can delay ping-pong frames
+        for other exchanges, causing cascading failures.  Limiting each exchange
+        to 2 concurrent reconnects spreads the storm over several seconds.
+        """
+        if exchange not in self._exchange_reconnect_sem:
+            self._exchange_reconnect_sem[exchange] = asyncio.Semaphore(2)
+        return self._exchange_reconnect_sem[exchange]
+
     async def _metrics_loop(self):
         """Periodic metrics logger: logs counts of shared/private clients and backoff states."""
         while True:
@@ -2259,16 +2279,17 @@ class PBData():
                                     await Exchange.close_private_ws_client(user.exchange, user)
                                 except Exception:
                                     pass
-                                await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
-                                try:
-                                    ex2 = await self.request_private_client(user.exchange, user, caller='PBData._balance_ws_loop')
-                                    if ex2:
-                                        self._ws_restarted_once.add(key)
-                                        ex = ex2
-                                        _human_log('PBData', f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages", level='INFO')
-                                        continue
-                                except Exception:
-                                    pass
+                                async with self._get_reconnect_sem(user.exchange):
+                                    await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
+                                    try:
+                                        ex2 = await self.request_private_client(user.exchange, user, caller='PBData._balance_ws_loop')
+                                        if ex2:
+                                            self._ws_restarted_once.add(key)
+                                            ex = ex2
+                                            _human_log('PBData', f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages", level='INFO')
+                                            continue
+                                    except Exception:
+                                        pass
                         # If restart already used or recreate failed, fall through to normal handling
                     except Exception:
                         pass
@@ -2492,16 +2513,17 @@ class PBData():
                                     await Exchange.close_private_ws_client(user.exchange, user)
                                 except Exception:
                                     pass
-                                await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
-                                try:
-                                    ex2 = await self.request_private_client(user.exchange, user, caller='PBData._position_ws_loop')
-                                    if ex2:
-                                        self._ws_restarted_once.add(key)
-                                        ex = ex2
-                                        _human_log('PBData', f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages", level='INFO')
-                                        continue
-                                except Exception:
-                                    pass
+                                async with self._get_reconnect_sem(user.exchange):
+                                    await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
+                                    try:
+                                        ex2 = await self.request_private_client(user.exchange, user, caller='PBData._position_ws_loop')
+                                        if ex2:
+                                            self._ws_restarted_once.add(key)
+                                            ex = ex2
+                                            _human_log('PBData', f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages", level='INFO')
+                                            continue
+                                    except Exception:
+                                        pass
                             # else: fall through to normal handling
                     except Exception:
                         pass
@@ -2676,16 +2698,17 @@ class PBData():
                                     await Exchange.close_private_ws_client(user.exchange, user)
                                 except Exception:
                                     pass
-                                await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
-                                try:
-                                    ex2 = await self.request_private_client(user.exchange, user, caller='PBData._order_ws_loop')
-                                    if ex2:
-                                        self._ws_restarted_once.add(key)
-                                        ex = ex2
-                                        _human_log('PBData', f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages", level='INFO')
-                                        continue
-                                except Exception:
-                                    pass
+                                async with self._get_reconnect_sem(user.exchange):
+                                    await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
+                                    try:
+                                        ex2 = await self.request_private_client(user.exchange, user, caller='PBData._order_ws_loop')
+                                        if ex2:
+                                            self._ws_restarted_once.add(key)
+                                            ex = ex2
+                                            _human_log('PBData', f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages", level='INFO')
+                                            continue
+                                    except Exception:
+                                        pass
                             # else: fall through to normal handling
                     except Exception:
                         pass
