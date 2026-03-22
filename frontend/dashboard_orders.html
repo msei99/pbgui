@@ -1,0 +1,291 @@
+<!-- Dashboard Orders — live view component.
+     Embedded via st.html(unsafe_allow_javascript=True).  NOTE: st.html is NOT iframed;
+     multiple instances share the same window/document.  Every DOM id and window.*
+     variable MUST be scoped by POSITION to avoid collisions.
+     Config injected as JS variables (%%PLACEHOLDER%%) by Dashboard.py.
+     All rendering delegated to DashRender.buildOrders() — single source of truth.
+     Listens for dash-pos-selected events from a linked Positions widget.
+     Uses TradingView Lightweight Charts (Apache 2.0) for native candlestick rendering. -->
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+
+<div id="do-container-%%POSITION%%" style="width:100%;"></div>
+
+<script>
+(function () {
+    'use strict';
+
+    var TOKEN      = "%%TOKEN%%";
+    var API_BASE   = "%%API_BASE%%";
+    var API_HOST   = "%%API_HOST%%";
+    var POSITION   = "%%POSITION%%";
+    var LINKED_POS = "%%LINKED_POS%%";
+    var TIMEFRAME  = "%%TIMEFRAME%%";
+    var HEIGHT     = %%HEIGHT%%;
+
+    var _wsKey       = '_dordWs_' + POSITION;
+    var _candleWsKey = '_dordCandWs_' + POSITION;
+    var _timerKey    = '_dordReconnTimer_' + POSITION;
+
+    if (window[_wsKey]) { try { window[_wsKey].close(); } catch (_) {} window[_wsKey] = null; }
+    if (window[_candleWsKey]) { try { window[_candleWsKey].close(); } catch (_) {} window[_candleWsKey] = null; }
+    if (window[_timerKey]) { clearTimeout(window[_timerKey]); window[_timerKey] = null; }
+
+    var ws            = null;
+    var candleWs      = null;
+    var reconnTimer   = null;
+    var reconnDelay   = 1000;
+    var container     = document.getElementById('do-container-' + POSITION);
+
+    var currentTimeframe = TIMEFRAME || '4h';
+    var selectedPosition = null;
+    var chartCtrl        = null;   /* returned by buildOrders / renderOrders */
+    var _tfFetchId       = 0;     /* monotonic counter to discard stale timeframe fetches */
+
+    /* Extract linked positions grid position */
+    var linkedGridPos = '';
+    if (LINKED_POS) {
+        var _parts = LINKED_POS.replace('view_orders_', '');
+        if (_parts) linkedGridPos = _parts;
+    }
+
+    /* Convert timeframe string to milliseconds */
+    function _tfMs(tf) {
+        var map = { '1m':60000, '5m':300000, '15m':900000, '30m':1800000,
+                    '1h':3600000, '2h':7200000, '4h':14400000, '6h':21600000,
+                    '12h':43200000, '1d':86400000, '1w':604800000 };
+        return map[tf] || 3600000;
+    }
+
+    function reportHeight() {
+        try {
+            window.parent.postMessage(
+                { isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'
+            );
+        } catch (_) {}
+    }
+
+    /* Listen for position selection from linked Positions widget */
+    document.addEventListener('dash-pos-selected', function (e) {
+        if (e.detail && e.detail.pos === linkedGridPos) {
+            selectedPosition = e.detail.data;
+            load();
+        }
+    });
+
+    /* Check if position was already selected before this widget loaded */
+    if (linkedGridPos && window['_dashPosSelected_' + linkedGridPos]) {
+        selectedPosition = window['_dashPosSelected_' + linkedGridPos];
+    }
+
+    /* ── Live position info update (Phase 2) ── */
+    function _updatePositionInfo(posData) {
+        /* Update the position info span in the header (uPnL and size) if present.
+           Look for the dt-meta-user spans within the container. */
+        var infoEl = container.querySelector('.do-pos-info');
+        if (!infoEl) return;
+        if (!posData || !posData.entry) {
+            infoEl.textContent = '';
+            return;
+        }
+        var upnl = posData.upnl || 0;
+        var cls = upnl >= 0 ? 'dt-pos' : 'dt-neg';
+        infoEl.innerHTML = ' \u00b7 uPnL: \x3Cspan class="' + cls + '">'
+            + (upnl >= 0 ? '+' : '') + upnl.toFixed(2) + '\x3C/span>';
+    }
+
+    /* ── Candle WebSocket ── */
+    var candleReconnDelay = 1000;
+    function connectCandleWs() {
+        if (!TOKEN || !API_HOST || !selectedPosition) return;
+        /* Close existing */
+        if (candleWs) { try { candleWs.close(); } catch (_) {} }
+        var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
+        var url = proto + '://' + API_HOST + '/ws/candles'
+            + '?token=' + encodeURIComponent(TOKEN)
+            + '&user='  + encodeURIComponent(selectedPosition.user)
+            + '&symbol=' + encodeURIComponent(selectedPosition.symbol)
+            + '&tf='    + encodeURIComponent(currentTimeframe);
+        candleWs = new WebSocket(url);
+        window[_candleWsKey] = candleWs;
+        candleWs.onmessage = function (evt) {
+            try {
+                var m = JSON.parse(evt.data);
+                if (!chartCtrl) return;
+                if (m.type === 'candle' && chartCtrl.updateCandle) {
+                    chartCtrl.updateCandle(m.candle);
+                } else if (m.type === 'position' && chartCtrl.updatePosition) {
+                    chartCtrl.updatePosition(m.position);
+                    /* Update header position info */
+                    _updatePositionInfo(m.position);
+                } else if (m.type === 'orders' && chartCtrl.updateOrders) {
+                    chartCtrl.updateOrders(m.orders);
+                }
+            } catch (_) {}
+            candleReconnDelay = 1000;
+        };
+        candleWs.onclose = function () {
+            /* reconnect with backoff if still relevant */
+            setTimeout(function () {
+                if (selectedPosition) connectCandleWs();
+            }, candleReconnDelay);
+            candleReconnDelay = Math.min(candleReconnDelay * 2, 30000);
+        };
+        candleWs.onerror = function () { candleWs.close(); };
+    }
+
+    /* Timeframe-appropriate candle limits:
+       1w → 1500 (all available), 1d → 1500 (all available), else 500 */
+    function _tfLimit(tf) {
+        return (tf === '1w' || tf === '1d') ? 1500 : 500;
+    }
+
+    function load(onDone) {
+        if (!selectedPosition) {
+            if (chartCtrl && chartCtrl.destroy) chartCtrl.destroy();
+            chartCtrl = null;
+            DashRender.buildOrders(container, null, {
+                position: POSITION,
+                message: 'Select a position to view orders'
+            });
+            reportHeight();
+            return;
+        }
+
+        /* Show loading feedback immediately */
+        if (chartCtrl && chartCtrl.destroy) chartCtrl.destroy();
+        chartCtrl = null;
+        DashRender.buildOrders(container, null, {
+            position: POSITION,
+            message: 'Loading\u2026'
+        });
+        reportHeight();
+
+        var url = API_BASE + '/dashboard/orders_data'
+            + '?user='      + encodeURIComponent(selectedPosition.user)
+            + '&symbol='    + encodeURIComponent(selectedPosition.symbol)
+            + '&timeframe=' + encodeURIComponent(currentTimeframe)
+            + '&limit='     + _tfLimit(currentTimeframe);
+
+        fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (d) {
+                chartCtrl = DashRender.buildOrders(container, d, {
+                    position:  POSITION,
+                    timeframe: currentTimeframe,
+                    onTimeframeChange: function (tf) {
+                        currentTimeframe = tf;
+                        /* In-place update: fetch new candles and swap series data
+                           without destroying the chart — preserves fullscreen seamlessly */
+                        var _fetchId = ++_tfFetchId; /* cancel any previous in-flight tf fetch */
+                        var url = API_BASE + '/dashboard/orders_data'
+                            + '?user='      + encodeURIComponent(selectedPosition.user)
+                            + '&symbol='    + encodeURIComponent(selectedPosition.symbol)
+                            + '&timeframe=' + encodeURIComponent(tf)
+                            + '&limit='     + _tfLimit(tf);
+                        fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+                            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+                            .then(function (d) {
+                                /* Discard if user switched again while this fetch was in flight */
+                                if (_fetchId !== _tfFetchId) return;
+                                if (chartCtrl && chartCtrl.setData && d.candles) {
+                                    chartCtrl.setData(d.candles);
+                                    /* Reconnect WS for the new timeframe */
+                                    connectCandleWs();
+                                } else {
+                                    /* Fallback: full rebuild */
+                                    load();
+                                }
+                            })
+                            .catch(function () { if (_fetchId === _tfFetchId) load(); });
+                    },
+                    onLoadMore: function (oldestTs, done) {
+                        /* Fetch candles ending right before oldestTs.
+                           since = oldestTs - 300 periods ensures the returned batch
+                           connects seamlessly with existing data, no gap. */
+                        var fetchTf = currentTimeframe; /* capture at request time */
+                        var fetchGen = chartCtrl && chartCtrl._gen ? chartCtrl._gen() : 0;
+                        var since = oldestTs - _tfMs(fetchTf) * 300;
+                        var url = API_BASE + '/dashboard/orders_data'
+                            + '?user='      + encodeURIComponent(selectedPosition.user)
+                            + '&symbol='    + encodeURIComponent(selectedPosition.symbol)
+                            + '&timeframe=' + encodeURIComponent(fetchTf)
+                            + '&since='     + since
+                            + '&limit=300';
+                        fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+                            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+                            .then(function (older) {
+                                /* Discard if timeframe changed while fetch was in flight */
+                                if (currentTimeframe !== fetchTf) { done(); return; }
+                                if (older.candles && older.candles.length > 0 && chartCtrl) {
+                                    chartCtrl.prependData(older.candles, fetchGen);
+                                }
+                                done();
+                            })
+                            .catch(function () { done(); });
+                    }
+                });
+                reportHeight();
+                /* Connect candle WS for live updates */
+                connectCandleWs();
+                if (onDone) onDone();
+            })
+            .catch(function (e) {
+                container.innerHTML = '';
+                var st = document.createElement('div');
+                st.className = 'dt-status';
+                st.textContent = '\u26a0 Data unavailable';
+                container.appendChild(st);
+                reportHeight();
+            });
+    }
+
+    /* ── Dashboard WS (income_updated trigger) ── */
+    function connect() {
+        if (!TOKEN || !API_HOST) return;
+        clearTimeout(reconnTimer);
+        var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
+        ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
+        window[_wsKey] = ws;
+        ws.onopen = function () { reconnDelay = 1000; load(); };
+        ws.onmessage = function (evt) {
+            /* income_updated is ignored — live candle WS handles updates
+               without rebuilding the chart (preserves zoom & fullscreen) */
+        };
+        ws.onclose = function () {
+            reconnTimer = setTimeout(connect, reconnDelay);
+            reconnDelay = Math.min(reconnDelay * 2, 30000);
+            window[_timerKey] = reconnTimer;
+        };
+        ws.onerror = function () { ws.close(); };
+    }
+
+    var DR_VERSION = '20260322e';
+
+    function _loadRenderScript(cb) {
+        if (window.DashRender && window.DashRender.VERSION !== DR_VERSION) {
+            window.DashRender = null;
+            var old = document.getElementById('dr-css');
+            if (old) old.parentNode.removeChild(old);
+        }
+        if (window.DashRender) { cb(); return; }
+        if (window._drLoading) { setTimeout(function () { _loadRenderScript(cb); }, 50); return; }
+        window._drLoading = true;
+        var proto = (window.location.protocol === 'https:') ? 'https' : 'http';
+        var s = document.createElement('script');
+        s.src = proto + '://' + API_HOST + '/app/dashboard_render.js?v=' + DR_VERSION;
+        s.onload  = function () { window._drLoading = false; cb(); };
+        s.onerror = function () { window._drLoading = false; cb(); };
+        document.head.appendChild(s);
+    }
+
+    function waitForLWC(cb) {
+        if (typeof LightweightCharts !== 'undefined') { cb(); }
+        else { setTimeout(function () { waitForLWC(cb); }, 50); }
+    }
+
+    _loadRenderScript(function () {
+        if (window.DashRender) { DashRender.injectCSS(); }
+        waitForLWC(connect);
+    });
+}());
+</script>

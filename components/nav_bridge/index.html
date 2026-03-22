@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;height:0;overflow:hidden;">
+<script>
+/**
+ * nav_bridge — zero-height bidirectional Streamlit component.
+ *
+ * Connects to FastAPI WebSocket (/ws/dashboard) and listens for
+ * {type: "nav_request", page: "...", params: {...}} messages.
+ * When one arrives it sends the payload back to Python via
+ * Streamlit.setComponentValue(), which triggers a st.switch_page().
+ *
+ * This is a UNIVERSAL bridge — any widget iframe can POST a nav intent
+ * to /api/nav/request and all listening Streamlit sessions will pick it up.
+ */
+
+/* ── Minimal Streamlit component lib (no build step) ── */
+function _sendMsg(type, data) {
+    var out = Object.assign({isStreamlitMessage: true, type: type}, data || {});
+    window.parent.postMessage(out, "*");
+}
+function setReady()       { _sendMsg("streamlit:componentReady", {apiVersion: 1}); }
+function setHeight(h)     { _sendMsg("streamlit:setFrameHeight",  {height: h}); }
+function setValue(v)       { _sendMsg("streamlit:setComponentValue", {value: v}); }
+
+var ws = null;
+var wsUrl = null;
+var firstRender = true;
+var reconnectTimer = null;
+var reconnDelay = 1000;
+
+function connectWS() {
+    if (!wsUrl) return;
+    if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+
+    ws = new WebSocket(wsUrl);
+    ws.onopen = function () {
+        reconnDelay = 1000;
+    };
+    ws.onmessage = function (evt) {
+        try {
+            var msg = JSON.parse(evt.data);
+            if (msg.type === "nav_request" && msg.page) {
+                /* Forward to Python → triggers st.switch_page() */
+                setValue({page: msg.page, params: msg.params || {}});
+            } else if (msg.type === "dashboard_action" && msg.action) {
+                /* Dashboard sidebar action → forward to Python handler */
+                setValue({action: msg.action, params: msg.params || {}});
+            }
+        } catch (_) { /* ignore non-JSON */ }
+    };
+    ws.onclose = function () {
+        ws = null;
+        scheduleReconnect();
+    };
+    ws.onerror = function () {
+        try { ws.close(); } catch(_) {}
+        ws = null;
+        scheduleReconnect();
+    };
+}
+
+function scheduleReconnect() {
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(function () {
+        reconnectTimer = null;
+        connectWS();
+    }, reconnDelay);
+    reconnDelay = Math.min(reconnDelay * 2, 30000);
+}
+
+/* ── Receive render events from Streamlit ── */
+window.addEventListener("message", function (event) {
+    if (event.origin !== window.location.origin) return;
+    if (event.data && event.data.type === "streamlit:render") {
+        var args = event.data.args || {};
+        wsUrl = args.ws_url || null;
+        if (firstRender) {
+            firstRender = false;
+            connectWS();
+        }
+    }
+});
+
+setReady();
+setHeight(0);
+</script>
+</body>
+</html>

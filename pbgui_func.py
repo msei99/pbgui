@@ -800,3 +800,163 @@ def render_fastapi_gap_heatmap(exchange: str, dataset: str, coin: str) -> None:
 
     st.html(html_content, unsafe_allow_javascript=True)
 
+
+# ── Navigation bridge (WebSocket ↔ Streamlit bidirectional component) ──
+
+_nav_bridge_component = _st_components.declare_component(
+    "nav_bridge",
+    path=str(Path(__file__).parent / "components" / "nav_bridge"),
+)
+
+
+def nav_bridge() -> None:
+    """Embed a zero-height bidirectional component that listens for
+    ``nav_request`` events on the ``/ws/dashboard`` WebSocket.
+
+    When a widget iframe POSTs to ``/api/nav/request``, FastAPI broadcasts
+    a ``nav_request`` to all dashboard WS clients.  This component catches
+    it and sends the payload back to Python, which routes with
+    ``st.switch_page()`` — no page reload needed.
+
+    Call once per page that should respond to cross-widget navigation.
+    """
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        return
+
+    from api.auth import generate_token as _gen_token
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = _gen_token(
+            str(user_id), expires_in_seconds=86400
+        ).token
+    token = st.session_state["api_token"]
+
+    # Build WS URL that the browser can reach
+    _browser_host = "127.0.0.1"
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            _browser_host = req_host.split(":")[0] or "127.0.0.1"
+    except Exception:
+        pass
+    ws_url = f"ws://{_browser_host}:{api_port}/ws/dashboard?token={token}"
+
+    result = _nav_bridge_component(ws_url=ws_url, key="__nav_bridge__", default=None)
+    if result and isinstance(result, dict):
+        # Clear component value to prevent re-processing on rerun
+        if "__nav_bridge__" in st.session_state:
+            del st.session_state["__nav_bridge__"]
+        if result.get("action"):
+            _handle_dashboard_action(result["action"], result.get("params", {}))
+        elif result.get("page"):
+            page = result["page"]
+            params = result.get("params", {})
+            # Store params in session_state so the target page picks them up
+            for k, v in params.items():
+                st.session_state[k] = v
+            # Look up the page path
+            navi_paths = get_navi_paths()
+            page_path = navi_paths.get(page, "")
+            if page_path:
+                st.switch_page(page_path)
+
+
+_VALID_DASHBOARD_ACTIONS = frozenset({
+    'select_dashboard', 'new_dashboard', 'edit_dashboard',
+    'save_dashboard', 'cancel_edit', 'delete_dashboard', 'refresh',
+})
+
+def _handle_dashboard_action(action: str, params: dict) -> None:
+    """Handle dashboard sidebar actions received via nav_bridge WebSocket."""
+    if action not in _VALID_DASHBOARD_ACTIONS:
+        return
+    from Dashboard import Dashboard
+
+    if action == "select_dashboard":
+        name = params.get("name", "")
+        if name:
+            if "edit_dashboard" in st.session_state:
+                del st.session_state["edit_dashboard"]
+            if "_dashboard_edit_original_name" in st.session_state:
+                del st.session_state["_dashboard_edit_original_name"]
+            st.session_state.dashboard = Dashboard(name)
+            st.rerun()
+
+    elif action == "new_dashboard":
+        if "dashboard" in st.session_state:
+            del st.session_state.dashboard
+        st.session_state.dashboard = Dashboard()
+        st.session_state["_dashboard_edit_original_name"] = None
+        st.session_state.edit_dashboard = True
+        st.rerun()
+
+    elif action == "edit_dashboard":
+        if "dashboard" in st.session_state and "edit_dashboard" not in st.session_state:
+            try:
+                st.session_state["_dashboard_edit_original_name"] = st.session_state.dashboard.name
+            except Exception:
+                st.session_state["_dashboard_edit_original_name"] = None
+            st.session_state.edit_dashboard = True
+            st.rerun()
+
+    elif action == "save_dashboard":
+        if "dashboard" in st.session_state:
+            if st.session_state.dashboard.get_draft_name():
+                try:
+                    st.session_state.dashboard.save()
+                except Exception:
+                    return
+                st.session_state.dashboards = st.session_state.dashboard.list_dashboards()
+                if "edit_dashboard" in st.session_state:
+                    del st.session_state.edit_dashboard
+                try:
+                    st.session_state.dashboard.load(st.session_state.dashboard.name)
+                except Exception:
+                    pass
+                if "_dashboard_edit_original_name" in st.session_state:
+                    del st.session_state["_dashboard_edit_original_name"]
+                st.rerun()
+
+    elif action == "cancel_edit":
+        orig = st.session_state.get("_dashboard_edit_original_name")
+        if "edit_dashboard" in st.session_state:
+            del st.session_state.edit_dashboard
+        if "_dashboard_edit_original_name" in st.session_state:
+            del st.session_state["_dashboard_edit_original_name"]
+        if orig:
+            try:
+                available = Dashboard().list_dashboards()
+                if orig in available:
+                    st.session_state.dashboard = Dashboard(orig)
+            except Exception:
+                # Restore failed — fall through to clear dashboard
+                if "dashboard" in st.session_state:
+                    del st.session_state.dashboard
+        else:
+            # Was a new (unsaved) dashboard — clear it
+            if "dashboard" in st.session_state:
+                del st.session_state.dashboard
+        st.rerun()
+
+    elif action == "delete_dashboard":
+        if "dashboard" in st.session_state:
+            try:
+                st.session_state.dashboard.delete()
+            except Exception:
+                pass
+            st.session_state.dashboards = st.session_state.dashboard.list_dashboards()
+            if "edit_dashboard" in st.session_state:
+                del st.session_state.edit_dashboard
+            del st.session_state.dashboard
+            st.rerun()
+
+    elif action == "refresh":
+        st.session_state.dashboards = Dashboard().list_dashboards()
+        st.rerun()
+

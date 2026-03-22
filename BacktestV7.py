@@ -1514,8 +1514,8 @@ class BacktestV7Item(ConfigV7Editor):
                 st.rerun()
         with col2:
             if st.button("Cancel"):
-                # Restore the textarea to current config for next open
-                st.session_state.import_backtest_v7_config = json.dumps(self.config.config, indent=4)
+                # Remove widget key so it gets re-initialised on next dialog open
+                st.session_state.pop("import_backtest_v7_config", None)
                 st.rerun()
 
 class BacktestV7Result:

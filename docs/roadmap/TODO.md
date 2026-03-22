@@ -154,6 +154,59 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 
 ---
 
+## P1 – Unified WebSocket + VPS Error Management
+
+### Unified WebSocket `/ws/app`
+**Ziel**
+- Ein einziger WebSocket-Endpoint für die gesamte Anwendung (Navigation, Dashboard, VPS, Errors).
+
+**Hintergrund**
+- Aktuell existieren `/ws/dashboard` (nav + widget updates) und `/ws/vps` (VPS state, logs, commands) als getrennte Endpoints.
+- Jeder Client subscribed nur die Topics die er braucht (`vps_error_summary`, `vps_state`, `nav`, etc.).
+- In der Streamlit-Phase ergeben sich max. 2 Connections pro Seite (nav_bridge + error_banner als getrennte iframes). Sobald Streamlit weg ist → 1 WS pro Tab.
+
+**Umfang**
+- Neuer Endpoint `/ws/app` mit Topic-basiertem Subscribe (`{cmd: "subscribe", topics: [...]}`).
+- Messages multiplexed über `type`-Feld: `nav_request`, `dashboard_action`, `dashboard_data`, `vps_state`, `vps_error_summary`, `vps_logs`, `ack_result`, etc.
+- Bestehende `/ws/dashboard` und `/ws/vps` bleiben parallel (nicht brechen), werden schrittweise migriert.
+
+**Migration**
+1. `/ws/app` Endpoint mit Topic-Subscribe → ~50 Zeilen
+2. VPS Error Summary Topic + Ack-Command → ~40 Zeilen
+3. Error Banner HTML (`frontend/vps_error_banner.html`) → ~200 Zeilen
+4. `has_vps_errors()` → Banner ersetzen → ~10 Zeilen
+5. nav_bridge auf `/ws/app` migrieren (später)
+6. Dashboard-Widgets auf `/ws/app` migrieren (später)
+7. VPS Monitor auf `/ws/app` migrieren (später)
+8. `/ws/dashboard` + `/ws/vps` deprecaten (letzter Schritt)
+
+**Done wenn**
+- `/ws/app` existiert und wird von mindestens Error-Banner + nav_bridge genutzt.
+- Alte Endpoints funktionieren weiterhin (Übergang).
+
+### VPS Error Acknowledgement
+**Ziel**
+- VPS-Fehler bestätigen können; bestätigte Fehler tauchen erst wieder auf wenn sich die Anzahl deutlich erhöht hat.
+
+**Umfang**
+- Ack-State in `VPSStore` (in-memory) + persistiert in `data/vps_error_acks.json`.
+- WS-Command `{cmd: "ack_error", key: "server::instance"}` und `{cmd: "ack_all_errors"}` über `/ws/app`.
+- Sichtbarkeitslogik: Fehler erst wieder sichtbar wenn `current_et >= acked_et + delta` (delta konfigurierbar via MonitorConfig).
+- History: Array der letzten 20 Acks pro Key (Timestamp + Counts beim Ack).
+- Error-Banner (`vps_error_banner.html`): collapsible (localStorage), live via WS, Ack-Buttons pro Instanz + Ack All.
+- Ersetzt bestehende `has_vps_errors()` + `PBRemote.has_error()` Streamlit-Logik.
+
+**Future: Push-basierte Fehlererfassung**
+- PBRun/PBRemote auf Remote-VPS können bei Error-Detection direkt `POST /api/vps/error_event` an PBGui senden.
+- VPSStore updated → WS push → Banner zeigt Fehler innerhalb 1 Sekunde (kein SSH-Polling-Delay).
+
+**Done wenn**
+- Error-Banner auf allen Seiten sichtbar (ersetzt `st.expander`).
+- Ack funktioniert persistent (überlebt Server-Restart + Browser-Wechsel).
+- Fehler tauchen nach Ack erst bei deutlichem Anstieg wieder auf.
+
+---
+
 ## P2 – Längerfristig
 
 ### Hyperliquid Rate-Limit Budget Tracking (PB7)

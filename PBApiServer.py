@@ -234,14 +234,12 @@ dashboard_ws_clients: set[WebSocket] = set()
 @app.websocket("/ws/jobs")
 async def websocket_jobs(websocket: WebSocket):
     """WebSocket endpoint for real-time job updates."""
-    await websocket.accept()
     from api.auth import validate_token
-    token = websocket.query_params.get("token")
-    session = validate_token(token) if token else None
-    if not session:
-        await websocket.send_json({"error": "Invalid or missing token"})
-        await websocket.close(code=1008)
+    token = websocket.query_params.get("token", "")
+    if not validate_token(token):
+        await websocket.close(code=4001)
         return
+    await websocket.accept()
     active_connections.append(websocket)
     try:
         while True:
@@ -265,14 +263,12 @@ async def websocket_jobs(websocket: WebSocket):
 @app.websocket("/ws/market-data")
 async def websocket_market_data(websocket: WebSocket):
     """WebSocket endpoint for real-time market data status updates."""
-    await websocket.accept()
     from api.auth import validate_token
-    token = websocket.query_params.get("token")
-    session = validate_token(token) if token else None
-    if not session:
-        await websocket.send_json({"error": "Invalid or missing token"})
-        await websocket.close(code=1008)
+    token = websocket.query_params.get("token", "")
+    if not validate_token(token):
+        await websocket.close(code=4001)
         return
+    await websocket.accept()
     exchange = websocket.query_params.get("exchange", "").lower().strip()
     if not exchange:
         await websocket.send_json({"error": "Missing exchange parameter"})
@@ -396,6 +392,63 @@ async def websocket_dashboard(websocket: WebSocket):
         dashboard_ws_clients.discard(websocket)
 
 
+@app.websocket("/ws/candles")
+async def websocket_candles(websocket: WebSocket):
+    """WebSocket endpoint for live chart updates (Phase 2).
+
+    Clients subscribe by connecting with ?token=...&user=...&symbol=...&tf=...
+    They receive pre-formatted messages:
+      {"type": "candle",   "candle":   [t,o,h,l,c,v]}
+      {"type": "position", "position": {entry,size,upnl,side} | null}
+      {"type": "orders",   "orders":   [{price,amount,side}, ...]}
+    Data comes from ccxt.pro live streams when available, with polling fallback.
+    """
+    from api.auth import validate_token
+    from api.dashboard import (register_chart_client, unregister_chart_client,
+                                _set_event_loop)
+    token = websocket.query_params.get("token", "")
+    if not validate_token(token):
+        await websocket.close(code=4001)
+        return
+
+    user = websocket.query_params.get("user", "")
+    symbol = websocket.query_params.get("symbol", "")
+    tf = websocket.query_params.get("tf", "4h")
+
+    if not user or not symbol:
+        await websocket.close(code=4002)
+        return
+
+    await websocket.accept()
+
+    # Store event loop reference for the polling thread
+    _set_event_loop(asyncio.get_running_loop())
+
+    # One unified asyncio.Queue receives candle, position, and order messages
+    q: asyncio.Queue = asyncio.Queue(maxsize=200)
+    await register_chart_client(user, symbol, tf, q)
+
+    try:
+        while True:
+            try:
+                msg = await asyncio.wait_for(q.get(), timeout=30)
+                await websocket.send_json(msg)
+            except asyncio.TimeoutError:
+                # No data for 30s — send heartbeat to detect dead connections
+                try:
+                    await asyncio.wait_for(
+                        websocket.send_json({"type": "ping"}), timeout=5
+                    )
+                except Exception:
+                    break
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        _log(SERVICE, f"[ws/candles] Error: {e}", level="ERROR")
+    finally:
+        await unregister_chart_client(user, symbol, tf, q)
+
+
 @app.post("/api/internal/notify/balance")
 async def internal_notify_balance(request: Request):
     """Internal endpoint called by PBData after writing balance/position data.
@@ -436,6 +489,57 @@ async def internal_notify_income(request: Request):
     for ws in list(dashboard_ws_clients):
         try:
             await ws.send_json({"type": "income_updated", "user": user_name})
+        except Exception:
+            dead.add(ws)
+    dashboard_ws_clients.difference_update(dead)
+    return {"ok": True, "notified": len(dashboard_ws_clients)}
+
+
+@app.post("/api/nav/request")
+async def nav_request(request: Request):
+    """Universal navigation bridge.
+
+    Widget iframes POST ``{page: "...", params: {...}}`` here.
+    The payload is broadcast as ``{type: "nav_request", ...}`` to all
+    ``/ws/dashboard`` WebSocket clients.  A tiny Streamlit component
+    (``nav_bridge``) listens for this message type and calls
+    ``st.switch_page()`` on the Python side.
+    """
+    from api.auth import validate_token as _vt
+
+    # Accept token from header or body
+    auth = request.headers.get("Authorization", "")
+    token = auth.replace("Bearer ", "") if auth.startswith("Bearer ") else ""
+    body: dict = {}
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not token:
+        token = body.get("token", "")
+    if not _vt(token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    page = body.get("page", "")
+    action = body.get("action", "")
+    params = body.get("params", {})
+    if not page and not action:
+        raise HTTPException(status_code=400, detail="Missing 'page' or 'action'")
+
+    if action:
+        _valid_actions = {
+            'select_dashboard', 'new_dashboard', 'edit_dashboard',
+            'save_dashboard', 'cancel_edit', 'delete_dashboard', 'refresh',
+        }
+        if action not in _valid_actions:
+            raise HTTPException(status_code=400, detail="Invalid action")
+        payload = {"type": "dashboard_action", "action": action, "params": params}
+    else:
+        payload = {"type": "nav_request", "page": page, "params": params}
+    dead: set[WebSocket] = set()
+    for ws in list(dashboard_ws_clients):
+        try:
+            await ws.send_json(payload)
         except Exception:
             dead.add(ws)
     dashboard_ws_clients.difference_update(dead)

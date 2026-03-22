@@ -1,11 +1,13 @@
-<!-- Dashboard Top Symbols — live view component.
-     Embedded via st.html(unsafe_allow_javascript=True).
+<!-- Dashboard Income — live view component.
+     Embedded via st.html(unsafe_allow_javascript=True).  NOTE: st.html is NOT iframed;
+     multiple instances share the same window/document.  Every DOM id and window.*
+     variable MUST be scoped by POSITION to avoid collisions.
      Config injected as JS variables (%%PLACEHOLDER%%) by Dashboard.py.
-     All rendering delegated to DashRender.buildTop() — single source of truth.
+     All rendering delegated to DashRender.buildIncome() — single source of truth.
      Data updates driven by WebSocket income_updated events — zero polling. -->
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 
-<div id="dt-container"></div>
+<div id="di-container-%%POSITION%%" style="width:100%;"></div>
 
 <script>
 (function () {
@@ -16,13 +18,21 @@
     var API_HOST = "%%API_HOST%%";
     var USERS    = %%USERS%%;
     var PERIOD   = "%%PERIOD%%";
-    var TOP      = %%TOP%%;
+    var LAST_N   = %%LAST_N%%;
+    var FILTER   = %%FILTER%%;
     var HEIGHT   = %%HEIGHT%%;
+    var LVB_USER = "%%LVB_USER%%";
     var POSITION = "%%POSITION%%";
+
+    /* Position-scoped keys for window-level WS/timer refs.
+       st.html is NOT iframed — all instances share the same window. */
+    var _wsKey    = '_diWs_' + POSITION;
+    var _timerKey = '_diReconnTimer_' + POSITION;
 
     /* mutable current values — changed by inline controls but not persisted */
     var currentPeriod = PERIOD;
-    var currentTop    = TOP;
+    var currentLastN  = LAST_N;
+    var currentFilter = FILTER;
 
     var PERIODS = ['TODAY','YESTERDAY','THIS_WEEK','LAST_WEEK','LAST_WEEK_NOW',
                    'THIS_MONTH','LAST_MONTH','LAST_MONTH_NOW',
@@ -30,14 +40,14 @@
                    'THIS_QUARTER','LAST_QUARTER','LAST_QUARTER_NOW',
                    'THIS_YEAR','LAST_YEAR','LAST_YEAR_NOW','ALL_TIME','CUSTOM'];
 
-    /* Kill any previous WS + reconnect timer from a prior render */
-    if (window._dtWs) { try { window._dtWs.close(); } catch (_) {} window._dtWs = null; }
-    if (window._dtReconnTimer) { clearTimeout(window._dtReconnTimer); window._dtReconnTimer = null; }
+    /* Kill any previous WS + reconnect timer from a prior render of THIS position */
+    if (window[_wsKey]) { try { window[_wsKey].close(); } catch (_) {} window[_wsKey] = null; }
+    if (window[_timerKey]) { clearTimeout(window[_timerKey]); window[_timerKey] = null; }
 
     var ws          = null;
     var reconnTimer = null;
     var reconnDelay = 1000;
-    var container   = document.getElementById('dt-container');
+    var container   = document.getElementById('di-container-' + POSITION);
 
     function reportHeight() {
         var h = document.documentElement.scrollHeight + 16;
@@ -58,23 +68,16 @@
             customFrom = _cp[1] || ''; customTo = _cp[2] || '';
         }
         var displayPeriod = isCustom ? 'CUSTOM' : currentPeriod;
-        var url = API_BASE + '/dashboard/top_data'
+
+        var url = API_BASE + '/dashboard/income_data'
             + '?users='  + encodeURIComponent(usersParam)
             + '&period=' + encodeURIComponent(currentPeriod)
-            + '&top='    + currentTop;
+            + '&last_n=' + currentLastN
+            + '&filter=' + currentFilter;
 
         fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (d) {
-                /* ── Top N control ── */
-                var topNCtrl = document.createElement('input');
-                topNCtrl.type = 'number'; topNCtrl.min = 1; topNCtrl.max = 500; topNCtrl.step = 1;
-                topNCtrl.value = currentTop;
-                topNCtrl.className = 'dt-ctrl-num';
-                topNCtrl.addEventListener('change', function () {
-                    currentTop = parseInt(this.value, 10) || 10;
-                    load();
-                });
                 /* ── Period select ── */
                 var periodCtrl = document.createElement('select');
                 periodCtrl.className = 'dt-ctrl-sel';
@@ -95,6 +98,7 @@
                     }
                     load();
                 });
+
                 /* ── CUSTOM date inputs ── */
                 var fromCtrl = null, toCtrl = null, toNowCtrl = null;
                 if (isCustom) {
@@ -116,7 +120,6 @@
                         currentPeriod = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + this.value;
                         load();
                     });
-                    /* Now-checkbox */
                     toNowCtrl = document.createElement('label');
                     toNowCtrl.className = 'dt-ctrl-now-wrap';
                     var _chk = document.createElement('input');
@@ -134,18 +137,52 @@
                         load();
                     });
                 }
-                DashRender.buildTop(container, d, {
-                    users:         USERS,
-                    topN:          currentTop,
-                    period:        currentPeriod,
-                    topNControl:   topNCtrl,
-                    periodControl: periodCtrl,
-                    fromControl:   fromCtrl,
-                    toControl:     toCtrl,
-                    toNowControl:  toNowCtrl,
-                    height:        HEIGHT > 0 ? HEIGHT : null,
+
+                /* ── Last N control ── */
+                var lastNCtrl = document.createElement('input');
+                lastNCtrl.type = 'number'; lastNCtrl.min = 0; lastNCtrl.max = 9999; lastNCtrl.step = 10;
+                lastNCtrl.value = currentLastN;
+                lastNCtrl.className = 'dt-ctrl-num';
+                lastNCtrl.addEventListener('change', function () {
+                    currentLastN = parseInt(this.value, 10) || 0;
+                    load();
+                });
+
+                /* ── Filter control ── */
+                var filterCtrl = document.createElement('input');
+                filterCtrl.type = 'number'; filterCtrl.min = 0; filterCtrl.step = 0.01;
+                filterCtrl.value = currentFilter;
+                filterCtrl.className = 'dt-ctrl-num';
+                filterCtrl.style.width = '68px';
+                filterCtrl.addEventListener('change', function () {
+                    currentFilter = parseFloat(this.value) || 0;
+                    load();
+                });
+
+                DashRender.buildIncome(container, d, {
+                    users:          USERS,
+                    period:         currentPeriod,
+                    lastN:          currentLastN,
+                    filterVal:      currentFilter,
+                    periodControl:  periodCtrl,
+                    fromControl:    fromCtrl,
+                    toControl:      toCtrl,
+                    toNowControl:   toNowCtrl,
+                    lastNControl:   lastNCtrl,
+                    filterControl:  filterCtrl,
+                    apiBase:        API_BASE,
+                    token:          TOKEN,
+                    onReload:       load,
+                    onJumpToDate:   function (dateStr) {
+                        /* load the last N rows up to (and including) the target date */
+                        currentPeriod = 'CUSTOM:2017-01-01:' + dateStr;
+                        /* currentLastN stays as-is */
+                        load();
+                    },
+                    height:         HEIGHT > 0 ? HEIGHT : null,
                     displayModeBar: true,
-                    responsive:     true
+                    responsive:     true,
+                    lvbUser:        LVB_USER || ''
                 });
                 reportHeight();
             })
@@ -164,7 +201,7 @@
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
         ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
-        window._dtWs = ws;
+        window[_wsKey] = ws;
         ws.onopen = function () { reconnDelay = 1000; load(); };
         ws.onmessage = function (evt) {
             try {
@@ -179,7 +216,7 @@
         ws.onclose = function () {
             reconnTimer = setTimeout(connect, reconnDelay);
             reconnDelay = Math.min(reconnDelay * 2, 30000);
-            window._dtReconnTimer = reconnTimer;
+            window[_timerKey] = reconnTimer;
         };
         ws.onerror = function () { ws.close(); };
     }
@@ -192,6 +229,7 @@
     var DR_VERSION = '20260322e';
 
     function _loadRenderScript(cb) {
+        /* Force reload if a stale version of DashRender is cached in window */
         if (window.DashRender && window.DashRender.VERSION !== DR_VERSION) {
             window.DashRender = null;
             var old = document.getElementById('dr-css');

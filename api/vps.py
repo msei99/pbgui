@@ -79,15 +79,12 @@ async def ws_vps(websocket: WebSocket):
         - ``{"cmd": "kill_instance", "host": …, "name": …}``
         - etc.
     """
-    await websocket.accept()
-
-    # ── Auth ──
-    token = websocket.query_params.get("token")
-    session = validate_token(token) if token else None
-    if not session:
-        await websocket.send_json({"error": "Invalid or missing token"})
-        await websocket.close(code=1008)
+    # ── Auth (validate before accepting) ──
+    token = websocket.query_params.get("token", "")
+    if not validate_token(token):
+        await websocket.close(code=4001)
         return
+    await websocket.accept()
 
     _clients.add(websocket)
     _log(SERVICE, f"[ws] Client connected: {websocket.client}")

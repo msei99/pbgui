@@ -3,7 +3,7 @@ import time
 import json
 from pathlib import Path
 
-from pbgui_func import PBGDIR, set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_authenticted, get_navi_paths, render_header_with_guide
+from pbgui_func import PBGDIR, set_page_config, is_session_state_not_initialized, is_authenticted, get_navi_paths, render_header_with_guide, nav_bridge
 from Dashboard import Dashboard
 
 
@@ -142,15 +142,61 @@ def _find_best_dashboard_for_user(dashboard_names: list[str], requested_user: st
 
     return best_name
 
+def _render_sidebar_html(dashboards):
+    """Render the FastAPI/Vanilla JS sidebar for dashboard navigation."""
+    from pbgui_func import _start_fastapi_server_if_needed
+    from api.auth import generate_token
+    import json as _json
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        with st.sidebar:
+            st.error("FastAPI server not available")
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = st.session_state.get("user", {}).get("id") or "anonymous"
+        st.session_state["api_token"] = generate_token(
+            str(user_id), expires_in_seconds=86400
+        ).token
+    token = st.session_state["api_token"]
+
+    _browser_host = "127.0.0.1"
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            _browser_host = req_host.split(":")[0] or "127.0.0.1"
+    except Exception:
+        pass
+    api_base = f"http://{_browser_host}:{api_port}/api"
+
+    current_name = ""
+    edit_mode = "edit_dashboard" in st.session_state
+    has_dashboard = "dashboard" in st.session_state
+    if has_dashboard:
+        try:
+            current_name = st.session_state.dashboard.name or ""
+        except Exception:
+            pass
+
+    html_path = Path(__file__).parent.parent / "frontend" / "dashboard_sidebar.html"
+    html = html_path.read_text(encoding="utf-8")
+    html = html.replace('"%%TOKEN%%"', f'"{token}"')
+    html = html.replace('"%%API_BASE%%"', f'"{api_base}"')
+    html = html.replace('%%DASHBOARDS%%', _json.dumps(dashboards))
+    html = html.replace('"%%CURRENT%%"', _json.dumps(current_name))
+    html = html.replace('%%EDIT_MODE%%', 'true' if edit_mode else 'false')
+    html = html.replace('%%HAS_DASHBOARD%%', 'true' if has_dashboard else 'false')
+
+    with st.sidebar:
+        st.html(html, unsafe_allow_javascript=True)
+
+
 def dashboard():
     # Mark Dashboards page as recently active so other pages can infer context
     # when navigating via menu.
     st.session_state["dashboards_last_active_ts"] = time.time()
     # Init dashboard
-    # if "dashboard" not in st.session_state:
-    #     st.session_state.dashboard = Dashboard()
-    # dashboard = st.session_state.dashboard
-    # Navigation
     if "dashboards" not in st.session_state:
         st.session_state.dashboards = Dashboard().list_dashboards()
     dashboards = st.session_state.dashboards
@@ -167,7 +213,6 @@ def dashboard():
                     del st.session_state['_dashboard_edit_original_name']
                 st.session_state.dashboard = Dashboard(best)
             else:
-                # If it doesn't exist, show the dashboard selection page (not the last opened dashboard)
                 if "edit_dashboard" in st.session_state:
                     del st.session_state.edit_dashboard
                 if "dashboard" in st.session_state:
@@ -178,120 +223,36 @@ def dashboard():
                     del st.session_state['_dashboard_edit_original_name']
         except Exception:
             pass
-    
+
+    # Always render nav_bridge (handles both page navigation and sidebar actions)
+    nav_bridge()
+
+    # Render FastAPI sidebar
+    _render_sidebar_html(dashboards)
+
     if not "dashboard" in st.session_state:
-        # No Dashboard? Create a new one
         if len(dashboards) == 0:
             st.info("Please create a new dashboard.")
-        # If there's only one dashboard, load it directly
         elif len(dashboards) == 1:
             st.session_state.dashboard = Dashboard(dashboards[0])
             st.rerun()
-        # Else create Content area buttons (in addition to sidebar buttons)
-        elif len(dashboards) > 1:          
-             # Define the callback function
+        elif len(dashboards) > 1:
             def on_select_dashboard():
                 selected_dashboard = st.session_state['selected_dashboard']
-                # Ignore placeholder option
                 if not selected_dashboard or selected_dashboard == 'Select a dashboard':
                     return
                 if "edit_dashboard" in st.session_state:
                     del st.session_state.edit_dashboard
                 st.session_state.dashboard = Dashboard(selected_dashboard)
-                
-            # Create the selectbox with the callback
+
             st.selectbox(
                 "select a dashboard",
                 options=['Select a dashboard'] + dashboards,
-                #index=default_index,
                 key='selected_dashboard',
                 on_change=on_select_dashboard,
                 label_visibility="hidden"
             )
-    
-    with st.sidebar:
-        if "edit_dashboard" in st.session_state:
-            col1, col2, col3 = st.columns([1, 1, 2])
-            with col1:
-                if st.button(":material/save:"):
-                    if st.session_state.dashboard.get_draft_name():
-                        st.session_state.dashboard.save()
-                        st.session_state.dashboards = st.session_state.dashboard.list_dashboards()
-                        # Clear edit mode and reload the saved dashboard
-                        del st.session_state.edit_dashboard
-                        st.session_state.dashboard.load(st.session_state.dashboard.name)
-                        # remove stored original name
-                        if '_dashboard_edit_original_name' in st.session_state:
-                            del st.session_state['_dashboard_edit_original_name']
-                        st.rerun()
-                    else:
-                        error_popup("Name is empty")
-            with col2:
-                if st.button(":material/cancel:"):
-                    # If we were editing an existing saved dashboard, restore it.
-                    orig = st.session_state.get('_dashboard_edit_original_name')
-                    # Clean up edit flag first
-                    if 'edit_dashboard' in st.session_state:
-                        del st.session_state.edit_dashboard
-                    # If original name exists and is a known dashboard, restore it
-                    if orig:
-                        try:
-                            available = Dashboard().list_dashboards()
-                            if orig in available:
-                                st.session_state.dashboard = Dashboard(orig)
-                                # remove stored original name
-                                if '_dashboard_edit_original_name' in st.session_state:
-                                    del st.session_state['_dashboard_edit_original_name']
-                                st.rerun()
-                        except Exception:
-                            pass
-                    # Otherwise (new unsaved dashboard) remove dashboard object and show selection
-                    if 'dashboard' in st.session_state:
-                        del st.session_state.dashboard
-                    if '_dashboard_edit_original_name' in st.session_state:
-                        del st.session_state['_dashboard_edit_original_name']
-                    st.rerun()
-            with col3:
-                if st.button(":material/delete:"):
-                    st.session_state.dashboard.delete()
-                    st.session_state.dashboards = st.session_state.dashboard.list_dashboards()
-                    del st.session_state.edit_dashboard
-                    del st.session_state.dashboard
-                    info_popup("Dashboard deleted")
-        else:
-            col1, col2, col3 = st.columns([1, 1, 2])
-            with col1:
-                if st.button(":material/refresh:"):
-                    st.rerun()
-            with col2:
-                if st.button(":material/add_box:"):
-                    if "dashboard" in st.session_state:
-                        del st.session_state.dashboard
-                    # Create a new unsaved dashboard; remember original (none)
-                    st.session_state.dashboard = Dashboard()
-                    st.session_state['_dashboard_edit_original_name'] = None
-                    st.session_state.edit_dashboard = True
-                    st.rerun()
-            if "dashboard" in st.session_state:
-                with col3:
-                    if st.button(":material/edit:"):
-                        if "edit_dashboard" not in st.session_state:
-                            # Remember original dashboard name so cancel can restore it
-                            try:
-                                st.session_state['_dashboard_edit_original_name'] = st.session_state.dashboard.name
-                            except Exception:
-                                st.session_state['_dashboard_edit_original_name'] = None
-                            st.session_state.edit_dashboard = True
-                            st.rerun()
-        for db in dashboards:
-            if st.button(db):
-                if "edit_dashboard" in st.session_state:
-                    del st.session_state.edit_dashboard
-                if '_dashboard_edit_original_name' in st.session_state:
-                    del st.session_state['_dashboard_edit_original_name']
-                st.session_state.dashboard = Dashboard(db)
-                st.rerun()
-                
+
     if "edit_dashboard" in st.session_state:
         st.session_state.dashboard.create_dashboard()
     elif "dashboard" in st.session_state:
