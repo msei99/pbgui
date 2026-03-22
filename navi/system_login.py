@@ -14,6 +14,56 @@ import os
 import traceback
 from pathlib import Path, PurePath
 
+def _relay_mini_init():
+    """Initialize session state from disk without rendering any Streamlit UI.
+
+    Called by the token-relay path when the user navigates back from the
+    FastAPI dashboard.  Sets exactly the keys that
+    is_session_state_not_initialized() checks, then lets st.switch_page()
+    route to the real target page.
+    """
+    st.session_state.pbdir = load_ini("main", "pbdir")
+    if ".." in st.session_state.pbdir:
+        st.session_state.pbdir = os.path.abspath(st.session_state.pbdir)
+        save_ini("main", "pbdir", st.session_state.pbdir)
+
+    st.session_state.pbvenv = load_ini("main", "pbvenv")
+    if ".." in st.session_state.pbvenv:
+        st.session_state.pbvenv = os.path.abspath(st.session_state.pbvenv)
+        save_ini("main", "pbvenv", st.session_state.pbvenv)
+
+    st.session_state.pb7dir = load_ini("main", "pb7dir")
+    if ".." in st.session_state.pb7dir:
+        st.session_state.pb7dir = os.path.abspath(st.session_state.pb7dir)
+        save_ini("main", "pb7dir", st.session_state.pb7dir)
+
+    st.session_state.pb7venv = load_ini("main", "pb7venv")
+    if ".." in st.session_state.pb7venv:
+        st.session_state.pb7venv = os.path.abspath(st.session_state.pb7venv)
+        save_ini("main", "pb7venv", st.session_state.pb7venv)
+
+    st.session_state.pbname = load_ini("main", "pbname")
+    if not st.session_state.pbname:
+        st.session_state.pbname = platform.node()
+        save_ini("main", "pbname", st.session_state.pbname)
+
+    if "role" not in st.session_state:
+        st.session_state.role = load_ini("main", "role")
+        st.session_state.master = (st.session_state.role == "master")
+
+    if "users" not in st.session_state:
+        st.session_state.users = Users()
+    if "pbgui_instances" not in st.session_state:
+        st.session_state.pbgui_instances = Instances()
+    if "multi_instances" not in st.session_state:
+        st.session_state.multi_instances = MultiInstances()
+    if "v7_instances" not in st.session_state:
+        st.session_state.v7_instances = V7Instances()
+    if "services" not in st.session_state:
+        st.session_state.services = Services()
+    # pbcoindata is set by the Services() constructor
+
+
 def change_password():
     with st.expander("Change Password"):
         with st.form("change_password_form"):
@@ -271,6 +321,30 @@ def do_init():
     
     # Add the Change Password section
     change_password()
+
+# ── Relay mode ─────────────────────────────────────────────────────────────
+# The FastAPI dashboard navigates back to Streamlit via:
+#   window.location.href = ST_BASE + '/?target=V7_RUN&token=<API_TOKEN>'
+# We validate the FastAPI token here, skip the password form, do a minimal
+# session init, and immediately switch_page() to the target.
+_relay_target = st.query_params.get("target", "")
+_relay_token  = st.query_params.get("token",  "")
+if _relay_target and _relay_token:
+    _navi_paths = get_navi_paths()
+    _page_path  = _navi_paths.get(_relay_target, "")
+    if _page_path:
+        try:
+            from api.auth import validate_token as _vt
+            if _vt(_relay_token):
+                st.session_state["password_correct"] = True
+                _relay_mini_init()
+                # Only switch_page when the target is not this page itself
+                if _relay_target != "SYSTEM_LOGIN":
+                    st.switch_page(_page_path)
+                # else: fall through and render the normal Welcome page
+        except Exception:
+            pass  # fall through to normal login UI
+# ────────────────────────────────────────────────────────────────────────────
 
 # Page Setup
 set_page_config("Welcome")

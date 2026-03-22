@@ -80,8 +80,9 @@ def show_help_page():
             st.session_state.help_sel = int(visible[0])
 
         sel = st.radio(
-            "",
+            "Topic",
             options=visible,
+            label_visibility="collapsed",
             format_func=lambda i: labels[int(i)],
             index=visible.index(int(st.session_state.help_sel)),
             key="help_sel",
