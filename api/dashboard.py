@@ -687,6 +687,8 @@ def set_pending_full(
 def get_editor_page(
     name: str = Query(default="", description="Dashboard name"),
     api_base: str = Query(default="", description="API base URL"),
+    view_only: bool = Query(default=False, description="View-only mode (no editing controls)"),
+    standalone: bool = Query(default=False, description="Standalone mode (save/cancel post to parent)"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     """Serve the full dashboard grid editor HTML page."""
@@ -697,6 +699,52 @@ def get_editor_page(
     html = html.replace("%%TOKEN%%", session.token)
     html = html.replace("%%API_BASE%%", api_base)
     html = html.replace("%%DASHBOARD_NAME%%", _json.dumps(name))
+    html = html.replace("%%VIEW_ONLY%%", "1" if view_only else "0")
+    html = html.replace("%%STANDALONE%%", "1" if standalone else "0")
+    return HTMLResponse(content=html)
+
+
+# ---------------------------------------------------------------- /main_page
+
+@router.get("/main_page", response_class=HTMLResponse)
+def get_main_page(
+    request: Request,
+    current: str = Query(default="", description="Currently selected dashboard name"),
+    st_base: str = Query(default="", description="Browser-visible Streamlit base URL"),
+    session: SessionToken = Depends(require_auth),
+) -> HTMLResponse:
+    """Serve the standalone dashboard main page (logo + sidebar + content area)."""
+    import json as _json
+    from pathlib import Path as _P
+
+    html_path = _P(__file__).parent.parent / "frontend" / "dashboard_main.html"
+    html = html_path.read_text(encoding="utf-8")
+
+    # Derive API base from the actual request URL so iframes use the correct host/port
+    scheme = request.url.scheme
+    host   = request.url.hostname or "127.0.0.1"
+    port   = request.url.port
+    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
+    api_base = origin + "/api"
+    ws_base  = api_base.replace("http://", "ws://").replace("https://", "wss://")
+
+    html = html.replace('"%%TOKEN%%"',         _json.dumps(session.token))
+    html = html.replace('"%%API_BASE%%"',      _json.dumps(api_base))
+    html = html.replace('"%%WS_BASE%%"',       _json.dumps(ws_base))
+    html = html.replace('"%%ST_BASE%%"',       _json.dumps(st_base))
+    html = html.replace('"%%CURRENT%%"',       _json.dumps(current))
+
+    from Dashboard import Dashboard as _Dashboard
+    try:
+        dashboards = sorted(_Dashboard().list_dashboards())
+    except Exception:
+        dashboards = []
+    html = html.replace("%%DASHBOARDS_JSON%%", _json.dumps(dashboards))
+
+    from pbgui_func import PBGUI_VERSION
+    html = html.replace('"%%VERSION%%"', _json.dumps(PBGUI_VERSION))
+    html = html.replace('%%VERSION%%', PBGUI_VERSION)
+
     return HTMLResponse(content=html)
 
 

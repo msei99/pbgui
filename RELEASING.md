@@ -5,7 +5,7 @@
 ### 1) Bump version strings
 
 - `README.md`: update the header `# vX.YY`
-- `pbgui_func.py`: update the `About` string to `vX.YY`
+- `pbgui_func.py`: update `PBGUI_VERSION = "vX.YY"` (the `About` string and the FastAPI About dialog use this constant automatically)
 
 ### 2) Add changelog entry
 
