@@ -546,6 +546,77 @@ async def nav_request(request: Request):
     return {"ok": True, "notified": len(dashboard_ws_clients)}
 
 
+# ── Docs endpoints ────────────────────────────────────────────
+
+@app.get("/api/docs/index")
+async def docs_index(lang: str = "EN", token: str = ""):
+    """Return the list of help topics for the given language.
+
+    Returns ``[{title: str, file: str}, ...]`` where ``file`` is the bare
+    filename (e.g. ``00_overview.md``) and ``title`` is the first ``#``
+    heading or the filename.
+    """
+    from api.auth import validate_token
+    if not validate_token(token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    ln = str(lang or "EN").strip().upper()
+    root = Path(__file__).parent / "docs"
+    folder = "help_de" if ln == "DE" else "help"
+    docs_dir = root / folder
+    if not docs_dir.is_dir():
+        return []
+
+    result = []
+    for p in sorted(docs_dir.glob("*.md")):
+        title = p.name
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                first = f.readline().strip()
+            if first.startswith("#"):
+                title = first.lstrip("#").strip() or p.name
+        except Exception:
+            pass
+        result.append({"title": title, "file": p.name})
+    return result
+
+
+@app.get("/api/docs/content")
+async def docs_content(file: str, lang: str = "EN", token: str = ""):
+    """Return the raw Markdown text for a help file.
+
+    ``file`` must be a bare filename (no path separators), ``*.md`` only,
+    and must exist in the appropriate ``docs/help[_de]/`` directory.
+    """
+    from api.auth import validate_token
+    if not validate_token(token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Reject path traversal and non-markdown files
+    safe_name = Path(file).name
+    if safe_name != file or not safe_name.endswith(".md") or "/" in file or "\\" in file:
+        raise HTTPException(status_code=400, detail="Invalid file parameter")
+
+    ln = str(lang or "EN").strip().upper()
+    root = Path(__file__).parent / "docs"
+    folder = "help_de" if ln == "DE" else "help"
+    full_path = (root / folder / safe_name).resolve()
+
+    # Must remain within the docs dir (additional safety)
+    if not str(full_path).startswith(str((root / folder).resolve())):
+        raise HTTPException(status_code=400, detail="Invalid file parameter")
+
+    if not full_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    try:
+        content = full_path.read_text(encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Read error: {e}")
+
+    return {"content": content}
+
+
 # ── REST endpoints ────────────────────────────────────────────
 
 @app.get("/static/plotly.min.js")

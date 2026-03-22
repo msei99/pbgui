@@ -3,7 +3,7 @@ import time
 import json
 from pathlib import Path
 
-from pbgui_func import PBGDIR, set_page_config, is_session_state_not_initialized, is_authenticted, get_navi_paths, render_header_with_guide, nav_bridge
+from pbgui_func import PBGDIR, set_page_config, is_session_state_not_initialized, is_authenticted, get_navi_paths, render_header_with_guide
 from Dashboard import Dashboard
 
 
@@ -192,71 +192,94 @@ def _render_sidebar_html(dashboards):
         st.html(html, unsafe_allow_javascript=True)
 
 
-def dashboard():
-    # Mark Dashboards page as recently active so other pages can infer context
-    # when navigating via menu.
-    st.session_state["dashboards_last_active_ts"] = time.time()
-    # Init dashboard
-    if "dashboards" not in st.session_state:
-        st.session_state.dashboards = Dashboard().list_dashboards()
-    dashboards = st.session_state.dashboards
-
-    # If another page requested a specific dashboard (by user), pick best matching dashboard.
-    requested = st.session_state.pop("dashboards_open_dashboard", None)
-    if requested:
+def _wait_for_api_ready(host: str, port: int, timeout: int = 12) -> bool:
+    """Poll the FastAPI health endpoint until it responds or timeout expires."""
+    import urllib.request
+    import time
+    url = f"http://{host}:{port}/health"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
         try:
-            best = _find_best_dashboard_for_user(dashboards, str(requested))
-            if best:
-                if "edit_dashboard" in st.session_state:
-                    del st.session_state.edit_dashboard
-                if '_dashboard_edit_original_name' in st.session_state:
-                    del st.session_state['_dashboard_edit_original_name']
-                st.session_state.dashboard = Dashboard(best)
-            else:
-                if "edit_dashboard" in st.session_state:
-                    del st.session_state.edit_dashboard
-                if "dashboard" in st.session_state:
-                    del st.session_state.dashboard
-                if 'selected_dashboard' in st.session_state:
-                    del st.session_state['selected_dashboard']
-                if '_dashboard_edit_original_name' in st.session_state:
-                    del st.session_state['_dashboard_edit_original_name']
+            with urllib.request.urlopen(url, timeout=1) as resp:
+                if resp.status < 500:
+                    return True
         except Exception:
             pass
+        time.sleep(0.5)
+    return False
 
-    # Always render nav_bridge (handles both page navigation and sidebar actions)
-    nav_bridge()
 
-    # Render FastAPI sidebar
-    _render_sidebar_html(dashboards)
+def dashboard():
+    """Redirect the browser to the standalone FastAPI dashboard page.
 
-    if not "dashboard" in st.session_state:
-        if len(dashboards) == 0:
-            st.info("Please create a new dashboard.")
-        elif len(dashboards) == 1:
-            st.session_state.dashboard = Dashboard(dashboards[0])
-            st.rerun()
-        elif len(dashboards) > 1:
-            def on_select_dashboard():
-                selected_dashboard = st.session_state['selected_dashboard']
-                if not selected_dashboard or selected_dashboard == 'Select a dashboard':
-                    return
-                if "edit_dashboard" in st.session_state:
-                    del st.session_state.edit_dashboard
-                st.session_state.dashboard = Dashboard(selected_dashboard)
+    The Streamlit session is intentionally abandoned here — the dashboard is
+    100% FastAPI.  Navigation from the dashboard back to Streamlit uses the
+    relay built into system_login.py (token-authenticated, fresh session init).
+    """
+    from pbgui_func import _start_fastapi_server_if_needed
+    from api.auth import generate_token
 
-            st.selectbox(
-                "select a dashboard",
-                options=['Select a dashboard'] + dashboards,
-                key='selected_dashboard',
-                on_change=on_select_dashboard,
-                label_visibility="hidden"
-            )
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(f"FastAPI server is not available on {api_host}:{api_port}.")
+        return
 
-    if "edit_dashboard" in st.session_state:
-        st.session_state.dashboard.create_dashboard()
-    elif "dashboard" in st.session_state:
-        st.session_state.dashboard.view()
+    # Wait for uvicorn to actually accept HTTP connections (process start ≠ HTTP ready)
+    if not _wait_for_api_ready(api_host, api_port):
+        st.error(f"FastAPI server started but is not responding on port {api_port}. Please try again.")
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = st.session_state.get("user", {}).get("id") or "anonymous"
+        st.session_state["api_token"] = generate_token(
+            str(user_id), expires_in_seconds=86400
+        ).token
+    token = st.session_state["api_token"]
+
+    # Derive browser-visible host from the incoming request
+    browser_host = "127.0.0.1"
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+    except Exception:
+        pass
+
+    # Derive Streamlit port from the same Host header
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if ":" in req_host:
+            st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+
+    # Pick the best current dashboard
+    current = ""
+    try:
+        if "dashboard" in st.session_state:
+            current = st.session_state.dashboard.name or ""
+    except Exception:
+        pass
+
+    url = (
+        f"http://{browser_host}:{api_port}/api/dashboard/main_page"
+        f"?token={token}"
+        f"&st_base={st_base}"
+        f"&current={current}"
+    )
+
+    # Redirect the entire browser window to the standalone FastAPI page.
+    # st.html injects directly into the Streamlit page DOM (not a sub-iframe),
+    # so window.location.replace navigates the whole window immediately.
+    # The URL contains no < or > chars, so DOMPurify leaves the script intact.
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
 
 # Redirect to Login if not authenticated or session state not initialized
 if not is_authenticted() or is_session_state_not_initialized():
@@ -265,10 +288,14 @@ if not is_authenticted() or is_session_state_not_initialized():
 
 # Page Setup
 set_page_config("Dashboards")
+
+# Redirect to standalone FastAPI page — must run before any visible st.* calls
+# so the Streamlit chrome is never rendered.
+dashboard()  # calls st.stop() on success; only falls through on error
+
+# Only reached when FastAPI server is unavailable (error message shown above)
 render_header_with_guide(
     "Dashboards",
     guide_callback=lambda: _dashboards_help_modal(),
     guide_key="dashboards_header_help_btn",
 )
-
-dashboard()

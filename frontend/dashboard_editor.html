@@ -25,6 +25,10 @@ body {
   height: 85vh; overflow: hidden;
   padding: 0.75rem;
 }
+body.standalone-mode .editor-wrapper {
+  height: 100vh;
+  padding: 0.75rem;
+}
 /* ── Fixed top wrapper ── */
 .editor-sticky-top {
   flex-shrink: 0;
@@ -101,7 +105,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  cursor: grab;
+  cursor: default;
   transition: opacity 0.2s, border-color 0.2s, transform 0.15s;
 }
 .editor-cell.dragging {
@@ -121,6 +125,7 @@ body {
   font-size: 0.72rem;
   color: #94a3b8;
   font-weight: 600;
+  cursor: grab;
 }
 .cell-header .drag-handle {
   cursor: grab;
@@ -278,6 +283,50 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
   flex-direction: column;
   overflow: hidden;
 }
+/* ── View-only mode: hide all editing controls ── */
+body.view-mode .editor-sticky-top,
+body.view-mode #grid-footer { display: none !important; }
+body.view-mode .editor-wrapper { height: 100vh; padding: 0.5rem; }
+body.view-mode .editor-scroll-area { height: 100%; }
+body.view-mode .cell-header,
+body.view-mode .cell-cfg { display: none !important; }
+body.view-mode .cell-inline-preview {
+  margin-top: 0; border-top: none; padding-top: 0;
+  min-height: 320px; flex: 1;
+}
+body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 360px; }
+body.view-mode .dt-header { cursor: grab; }
+body.view-mode .editor-cell.dragging .dt-header { cursor: grabbing; }
+/* ── Standalone mode: extra save/cancel toolbar ── */
+#standalone-toolbar {
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.5rem;
+  flex-shrink: 0;
+}
+body.standalone-mode #standalone-toolbar { display: flex; }
+.sa-btn {
+  padding: 0.3rem 0.8rem;
+  border-radius: 5px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid;
+  transition: background 0.12s, border-color 0.12s;
+}
+.sa-btn.save {
+  background: rgba(72,187,120,0.1);
+  color: #48bb78;
+  border-color: rgba(72,187,120,0.4);
+}
+.sa-btn.save:hover { background: rgba(72,187,120,0.22); border-color: #48bb78; }
+.sa-btn.cancel {
+  background: #1a202c;
+  color: #94a3b8;
+  border-color: #4a5568;
+}
+.sa-btn.cancel:hover { background: #252d3d; color: #e2e8f0; border-color: #718096; }
 /* flex chain so Plotly charts fill the available cell height when resized */
 .cell-inline-preview > .dt-root,
 .cell-inline-preview > .di-root {
@@ -403,6 +452,10 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
         <div id="status" class="status"></div>
       </div>
       <div class="hdr-right">
+        <div id="standalone-toolbar">
+          <button id="btn-sa-save" class="sa-btn save">&#128190; Save</button>
+          <button id="btn-sa-cancel" class="sa-btn cancel">&#x2715; Cancel</button>
+        </div>
         <div id="widget-palette" class="widget-palette">
           <span class="palette-label">Widgets</span>
           <div id="palette-items" class="palette-items"></div>
@@ -426,7 +479,9 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
   /* ── injected by FastAPI ── */
   var TOKEN   = "%%TOKEN%%";
   var API_BASE = "%%API_BASE%%";
-  var ORIG_NAME = %%DASHBOARD_NAME%%;  /* JSON-encoded: "MyDash" or "" */
+  var ORIG_NAME  = %%DASHBOARD_NAME%%;  /* JSON-encoded: "MyDash" or "" */
+  var VIEW_ONLY  = %%VIEW_ONLY%%;       /* 0 = edit, 1 = view-only */
+  var STANDALONE = %%STANDALONE%%;      /* 0 = Streamlit iframe, 1 = standalone page */
 
   /* ── constants ── */
   var TYPES   = ['NONE','PNL','ADG','P+L','INCOME','TOP','BALANCE','POSITIONS','ORDERS'];
@@ -723,9 +778,7 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
       /* Users selector lives inside the inline preview header — no separate cfg row */
 
     } else if (type === 'POSITIONS') {
-      grid.className = 'cfg-grid one-col';
-      var uKey = 'dashboard_positions_users_' + pos;
-      grid.appendChild(cfgRow('Users', makeUsersDropdown(state[uKey], function (v) { stateSet(uKey, v); })));
+      /* Users selector lives inside the inline preview header — no separate cfg row */
 
     } else if (type === 'ORDERS') {
       /* Link to a POSITIONS cell via visual chip picker */
@@ -867,6 +920,7 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
             buildBalanceInline(container, r, c);
           });
           DashRender.buildBalance(container, d, { usersControl: usersCtrl });
+          _attachViewDrag(container, r, c);
           reportHeight();
         });
       })
@@ -991,6 +1045,7 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
             usersControl: usersCtrl,
             height: _storedH > 0 ? _storedH : 280, displayModeBar: true, responsive: true
           });
+          _attachViewDrag(container, r, c);
           setTimeout(reportHeight, 100);
         });
       })
@@ -1134,6 +1189,7 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
             users: users || ['ALL'],
             height: _storedH > 0 ? _storedH : 280, displayModeBar: true, responsive: true
           });
+          _attachViewDrag(container, r, c);
           setTimeout(reportHeight, 100);
         });
       })
@@ -1263,6 +1319,7 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
             usersControl: usersCtrl,
             height: _storedH > 0 ? _storedH : 280, displayModeBar: true, responsive: true
           });
+          _attachViewDrag(container, r, c);
           setTimeout(reportHeight, 100);
         });
       })
@@ -1386,6 +1443,7 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
             usersControl: usersCtrl,
             height: _storedH > 0 ? _storedH : 280, displayModeBar: true, responsive: true
           });
+          _attachViewDrag(container, r, c);
           setTimeout(reportHeight, 100);
         });
       })
@@ -1515,6 +1573,7 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
             usersControl: usersCtrl,
             height: _storedH > 0 ? _storedH : 280, displayModeBar: true, responsive: true
           });
+          _attachViewDrag(container, r, c);
           setTimeout(reportHeight, 100);
         });
       })
@@ -1551,6 +1610,7 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
             buildPositionsInline(container, r, c);
           });
           DashRender.buildPositions(container, d, { usersControl: usersCtrl, position: pos });
+          _attachViewDrag(container, r, c);
           reportHeight();
         });
       })
@@ -1610,6 +1670,7 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
         if (chartCtrl && chartCtrl.destroy) chartCtrl.destroy();
         chartCtrl = null;
         DashRender.buildOrders(container, null, { position: pos, message: msg });
+        _attachViewDrag(container, r, c);
         reportHeight();
       });
     }
@@ -1674,6 +1735,7 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
                   .catch(function () { done(); });
               }
             });
+            _attachViewDrag(container, r, c);
             reportHeight();
           });
         })
@@ -1706,6 +1768,29 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
 
   /* ── swap ── */
 
+  /* ── Attach drag to .dt-header in view-mode ── */
+  function _attachViewDrag(container, row, col) {
+    if (!VIEW_ONLY) return;
+    var hdr = container.querySelector('.dt-header');
+    if (!hdr) return;
+    var cellEl = container.closest('.editor-cell');
+    if (!cellEl) return;
+    hdr.setAttribute('draggable', 'true');
+    hdr.addEventListener('dragstart', function (e) {
+      dragSrc = { row: row, col: col };
+      cellEl.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', row + '_' + col);
+    });
+    hdr.addEventListener('dragend', function () {
+      cellEl.classList.remove('dragging');
+      dragSrc = null;
+      document.querySelectorAll('.editor-cell.drag-over').forEach(function (el2) {
+        el2.classList.remove('drag-over');
+      });
+    });
+  }
+
   function swapCells(r1, c1, r2, c2) {
     var s1 = '_' + r1 + '_' + c1;
     var s2 = '_' + r2 + '_' + c2;
@@ -1729,7 +1814,17 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
       if (tmp === undefined) { delete state[k2]; } else { state[k2] = tmp; }
     });
     buildGrid();
-    scheduleSync();
+    if (VIEW_ONLY) {
+      /* view-mode: persist swap directly to disk */
+      var payload = {};
+      Object.keys(state).forEach(function (k) { payload[k] = state[k]; });
+      apiFetch('/dashboards/' + encodeURIComponent(ORIG_NAME), {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+    } else {
+      scheduleSync();
+    }
   }
 
   /* ── build grid ── */
@@ -1764,29 +1859,11 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
 
         /* cell wrapper */
         var cell = el('div', 'editor-cell');
-        cell.setAttribute('draggable', 'true');
         cell.dataset.row = r;
         cell.dataset.col = c;
 
-        /* ── drag & drop handlers ── */
+        /* ── drop-target handlers on cell (dragover / drop) ── */
         (function (row, col, cellEl) {
-          cellEl.addEventListener('dragstart', function (e) {
-            /* don't initiate cell drag if cell is NONE */
-            var cellType = state['dashboard_type_' + row + '_' + col] || 'NONE';
-            if (cellType === 'NONE') { e.preventDefault(); return; }
-            dragSrc = { row: row, col: col };
-            cellEl.classList.add('dragging');
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', row + '_' + col);
-          });
-          cellEl.addEventListener('dragend', function () {
-            cellEl.classList.remove('dragging');
-            dragSrc = null;
-            /* remove all drag-over highlights */
-            document.querySelectorAll('.editor-cell.drag-over').forEach(function (el2) {
-              el2.classList.remove('drag-over');
-            });
-          });
           cellEl.addEventListener('dragover', function (e) {
             e.preventDefault();
             e.dataTransfer.dropEffect = dragSrc ? 'move' : 'copy';
@@ -1840,10 +1917,11 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
         }
         badge.style.marginLeft = 'auto';
         hdr.appendChild(badge);
-        /* mini trash icon */
+        /* mini trash icon (click to clear widget) */
         var trashBtn = el('button', 'cell-trash' + (curType !== 'NONE' ? ' visible' : ''));
         trashBtn.innerHTML = '&#128465;';
         trashBtn.title = 'Remove widget';
+        trashBtn.setAttribute('draggable', 'false');
         (function (_r, _c, _btn) {
           _btn.addEventListener('click', function (e) {
             e.stopPropagation();
@@ -1853,6 +1931,25 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
           });
         })(r, c, trashBtn);
         hdr.appendChild(trashBtn);
+        /* ── drag source: entire header bar is draggable ── */
+        hdr.setAttribute('draggable', 'true');
+        (function (row, col, cellEl, hdrEl) {
+          hdrEl.addEventListener('dragstart', function (e) {
+            var cellType = state['dashboard_type_' + row + '_' + col] || 'NONE';
+            if (cellType === 'NONE') { e.preventDefault(); return; }
+            dragSrc = { row: row, col: col };
+            cellEl.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', row + '_' + col);
+          });
+          hdrEl.addEventListener('dragend', function () {
+            cellEl.classList.remove('dragging');
+            dragSrc = null;
+            document.querySelectorAll('.editor-cell.drag-over').forEach(function (el2) {
+              el2.classList.remove('drag-over');
+            });
+          });
+        })(r, c, cell, hdr);
         cell.appendChild(hdr);
 
         /* drop hint overlay */
@@ -1915,14 +2012,12 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
           }
           handle.addEventListener('mousedown', function (e) {
             e.preventDefault(); e.stopPropagation();
-            cellEl.setAttribute('draggable', 'false');
             handle.classList.add('active');
             startY = e.clientY;
             startH = cellEl.getBoundingClientRect().height;
             document.addEventListener('mousemove', onMouseMove);
             document.addEventListener('mouseup', function onUp(ev) {
               document.removeEventListener('mouseup', onUp);
-              cellEl.setAttribute('draggable', 'true');
               onMouseUp(ev);
             });
           });
@@ -2059,16 +2154,46 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
   /* ── init ── */
 
   function init() {
+    /* Apply body classes for VIEW_ONLY / STANDALONE modes */
+    if (VIEW_ONLY) document.body.classList.add('view-mode');
+    if (STANDALONE) document.body.classList.add('standalone-mode');
+
     /* 1. load users */
     apiFetch('/dashboard/users')
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (d) { allUsers = (d.users || []).filter(function (u) { return u !== 'ALL'; }); })
       .catch(function () { allUsers = []; })
       .then(function () {
-        /* 2. load pending config */
-        return apiFetch('/dashboard/pending_full?name=' + encodeURIComponent(ORIG_NAME));
+        /* 2. load config: from saved file in view mode, from pending in edit mode */
+        if (VIEW_ONLY && ORIG_NAME) {
+          return apiFetch('/dashboards/' + encodeURIComponent(ORIG_NAME))
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (d) { return { found: !!(d && d.config), config: d.config || null }; });
+        }
+        /* Edit mode: try pending first, fall back to saved config on first open / server restart */
+        return apiFetch('/dashboard/pending_full?name=' + encodeURIComponent(ORIG_NAME))
+          .then(function (r) { return r.ok ? r.json() : { found: false, config: {} }; })
+          .then(function (pending) {
+            if (pending.found && pending.config && Object.keys(pending.config).length > 0) {
+              return pending;
+            }
+            if (!ORIG_NAME) return { found: false, config: {} };
+            return apiFetch('/dashboards/' + encodeURIComponent(ORIG_NAME))
+              .then(function (r2) { return r2.ok ? r2.json() : { found: false, config: {} }; })
+              .then(function (saved) {
+                if (saved && saved.config && Object.keys(saved.config).length > 0) {
+                  return { found: true, config: saved.config };
+                }
+                return { found: false, config: {} };
+              });
+          });
       })
-      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (r) {
+        /* When VIEW_ONLY mode already called r.json() above, r is already the parsed object */
+        if (r && typeof r === 'object' && ('found' in r)) return r;
+        if (!r.ok) throw new Error(r.status);
+        return r.json();
+      })
       .then(function (d) {
         if (d.found && d.config && Object.keys(d.config).length > 0) {
           state = d.config;
@@ -2078,9 +2203,9 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
         } else {
           state = { name: ORIG_NAME, rows: 1, cols: 1 };
         }
-        hdrName.value = state.name || '';
-        if (!state.name) hdrName.classList.add('empty');
-        buildPalette();
+        if (hdrName) { hdrName.value = state.name || ''; }
+        if (hdrName && !state.name) hdrName.classList.add('empty');
+        if (!VIEW_ONLY) buildPalette();
         buildLayoutPicker();
         buildGrid();
         updateFooterButtons();
@@ -2088,7 +2213,7 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
       .catch(function (e) {
         console.error('editor init error', e);
         state = { name: ORIG_NAME, rows: 1, cols: 1 };
-        buildPalette();
+        if (!VIEW_ONLY) buildPalette();
         buildLayoutPicker();
         buildGrid();
         updateFooterButtons();
@@ -2096,6 +2221,48 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
   }
 
   init();
+
+  /* ── Standalone mode: Save / Cancel buttons ── */
+  var btnSaSave   = document.getElementById('btn-sa-save');
+  var btnSaCancel = document.getElementById('btn-sa-cancel');
+
+  if (btnSaSave) {
+    btnSaSave.addEventListener('click', function () {
+      var name = (state.name || '').trim();
+      if (!name) { alert('Please enter a dashboard name.'); return; }
+      setStatus('saving…', '');
+      var payload = {};
+      Object.keys(state).forEach(function (k) { payload[k] = state[k]; });
+      apiFetch('/dashboards/' + encodeURIComponent(name), {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      }).then(function (r) {
+        if (r.ok) {
+          setStatus('saved', 'saved');
+          window.parent.postMessage({ type: 'pbgui_editor_saved', name: name }, '*');
+        } else {
+          setStatus('error', 'error');
+        }
+      }).catch(function () { setStatus('offline', 'error'); });
+    });
+  }
+
+  if (btnSaCancel) {
+    btnSaCancel.addEventListener('click', function () {
+      window.parent.postMessage({ type: 'pbgui_editor_cancelled', original_name: ORIG_NAME }, '*');
+    });
+  }
+
+  /* ── Listen for messages from parent (sidebar buttons) ── */
+  window.addEventListener('message', function (e) {
+    if (!e.data || typeof e.data !== 'object') return;
+    if (e.data.type === 'pbgui_trigger_cancel') {
+      window.parent.postMessage({ type: 'pbgui_editor_cancelled', original_name: ORIG_NAME }, '*');
+    } else if (e.data.type === 'pbgui_trigger_save') {
+      var btn = document.getElementById('btn-sa-save');
+      if (btn) btn.click();
+    }
+  });
 
   /* close all dropdowns on outside click */
   document.addEventListener('click', function () {
