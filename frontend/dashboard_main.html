@@ -1,0 +1,1664 @@
+<!DOCTYPE html>
+<!-- PBGui Dashboard — standalone FastAPI page.
+     Full dashboard view/edit experience without Streamlit chrome.
+     Injected placeholders: TOKEN, API_BASE, WS_BASE, ST_BASE, CURRENT, DASHBOARDS_JSON
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PBGui Dashboard</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%; width: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 0.875rem;
+  background: #0e1117;
+  color: #e2e8f0;
+  overflow: hidden;
+}
+
+/* ════════════════════════════════════
+   TOP NAVIGATION BAR
+   ════════════════════════════════════ */
+#topnav {
+  display: flex;
+  align-items: center;
+  height: 52px;
+  background: #111827;
+  border-bottom: 1px solid #1e2736;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 200;
+  padding: 0 0.5rem;
+  gap: 0.25rem;
+  user-select: none;
+}
+#nav-logo {
+  display: flex;
+  align-items: center;
+  padding: 0 0.75rem 0 0.25rem;
+  flex-shrink: 0;
+  cursor: pointer;
+  text-decoration: none;
+  border-right: 1px solid #1e2736;
+  margin-right: 0.25rem;
+  height: 100%;
+}
+.nav-group {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+.nav-group-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.7rem;
+  height: 100%;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+.nav-group-btn:hover {
+  color: #e2e8f0;
+  background: rgba(255,255,255,0.04);
+}
+.nav-group-btn.active {
+  color: #63b3ed;
+  border-bottom-color: #63b3ed;
+}
+.nav-arrow {
+  font-size: 0.58rem;
+  opacity: 0.6;
+  transition: transform 0.15s;
+}
+.nav-group.open .nav-arrow { transform: rotate(180deg); }
+.nav-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 1px);
+  left: 0;
+  min-width: 190px;
+  background: #1a202c;
+  border: 1px solid #2d3748;
+  border-radius: 0 0 8px 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  flex-direction: column;
+  padding: 0.3rem 0;
+  z-index: 300;
+}
+.nav-group.open .nav-dropdown { display: flex; }
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.42rem 1rem;
+  color: #94a3b8;
+  font-size: 0.82rem;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+}
+.nav-item:hover { background: #243047; color: #e2e8f0; }
+.nav-item.current {
+  color: #63b3ed;
+  font-weight: 600;
+  background: rgba(99,179,237,0.07);
+  cursor: default;
+}
+.nav-item-icon { font-size: 1rem; width: 1.1rem; text-align: center; flex-shrink: 0; }
+#nav-spacer { flex: 1; }
+
+/* ── Page body layout ── */
+#page-body {
+  display: flex;
+  height: calc(100vh - 52px);
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ── Left sidebar ── */
+#sidebar {
+  width: 240px;
+  min-width: 180px;
+  max-width: 340px;
+  flex-shrink: 0;
+  background: #0e1117;
+  border-right: 1px solid #1e2736;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  user-select: none;
+}
+#sidebar-resize {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+  z-index: 10;
+}
+#sidebar-resize:hover, #sidebar-resize.active { background: rgba(99,179,237,0.4); }
+
+/* ── Sidebar sticky top: toolbar + search ── */
+#sidebar-sticky {
+  flex-shrink: 0;
+  padding: 0.5rem 0.5rem 0;
+}
+#sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.3rem 0.25rem 0.4rem;
+}
+.sb-title {
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: #4a5568;
+  font-weight: 700;
+}
+.sb-count {
+  font-size: 0.64rem;
+  background: #1a202c;
+  border: 1px solid #2d3748;
+  border-radius: 10px;
+  padding: 0.05rem 0.4rem;
+  color: #64748b;
+  font-weight: 600;
+}
+#sidebar-toolbar {
+  display: flex;
+  gap: 0.3rem;
+  padding: 0 0.1rem 0.45rem;
+  border-bottom: 1px solid #1e2736;
+  flex-wrap: wrap;
+}
+.sb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  cursor: pointer;
+  border: 1px solid #2d3748;
+  background: #1a202c;
+  color: #94a3b8;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.sb-btn:hover { background: #252d3d; color: #e2e8f0; border-color: #4a5568; }
+.sb-btn.danger:hover { background: rgba(245,101,101,0.1); border-color: rgba(245,101,101,0.5); color: #f56565; }
+.sb-btn.edit-mode-save {
+  background: rgba(72,187,120,0.08);
+  color: #48bb78;
+  border-color: rgba(72,187,120,0.3);
+}
+.sb-btn.edit-mode-save:hover { background: rgba(72,187,120,0.18); border-color: #48bb78; }
+
+#edit-mode-banner {
+  display: none;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(99,179,237,0.07);
+  border-left: 3px solid #63b3ed;
+  border-radius: 0 6px 6px 0;
+  padding: 0.35rem 0.6rem;
+  margin-bottom: 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #63b3ed;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+#edit-mode-banner.visible { display: flex; }
+.em-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #63b3ed;
+  flex-shrink: 0;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
+
+#sidebar-search-wrap {
+  padding: 0.35rem 0.1rem 0.35rem;
+  position: relative;
+  display: none;
+}
+#sidebar-search-wrap.visible { display: block; }
+#sidebar-search {
+  width: 100%;
+  background: #1a202c;
+  color: #e2e8f0;
+  border: 1px solid #2d3748;
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem 0.3rem 1.6rem;
+  font-size: 0.78rem;
+  outline: none;
+}
+#sidebar-search:focus { border-color: #4a5568; }
+#sidebar-search::placeholder { color: #4a5568; }
+.sb-search-icon {
+  position: absolute;
+  left: 0.55rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #4a5568;
+  font-size: 0.72rem;
+  pointer-events: none;
+}
+
+/* ── Sidebar dashboard list ── */
+#sidebar-list-wrap { flex: 1; overflow-y: auto; padding: 0.25rem 0.35rem; }
+.sb-item {
+  display: flex;
+  align-items: center;
+  padding: 0.4rem 0.6rem 0.4rem 0.7rem;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #94a3b8;
+  border-left: 2px solid transparent;
+  border-right: 1px solid transparent;
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+  font-size: 0.82rem;
+  margin-bottom: 1px;
+  transition: background 0.1s, color 0.1s;
+}
+.sb-item:hover { background: #1a202c; color: #cbd5e0; }
+.sb-item.active {
+  background: rgba(99,179,237,0.07);
+  border-left-color: #63b3ed;
+  color: #e2e8f0;
+  font-weight: 600;
+}
+.sb-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-item-edit-icon {
+  display: none;
+  color: #63b3ed;
+  font-size: 0.88rem;
+  padding: 0.1rem 0.15rem;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+.sb-item.active:hover .sb-item-edit-icon { display: inline; }
+.sb-item-edit-icon:hover { opacity: 1; }
+.sb-empty { color: #4a5568; font-style: italic; padding: 1rem 0.6rem; text-align: center; font-size: 0.78rem; }
+.sb-no-match { color: #4a5568; text-align: center; padding: 0.6rem; font-size: 0.76rem; }
+
+/* ── Main content area ── */
+#main-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+#content-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #4a5568;
+  font-size: 0.9rem;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.spinner {
+  width: 32px; height: 32px;
+  border: 3px solid #2d3748;
+  border-top-color: #63b3ed;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#content-frame {
+  width: 100%; height: 100%;
+  border: none;
+  display: none;
+}
+#content-frame.visible { display: block; }
+
+/* ── New dashboard dialog ── */
+#new-dash-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+#new-dash-dialog.visible { display: flex; }
+.dlg-box {
+  background: #1a202c;
+  border: 1px solid #2d3748;
+  border-radius: 10px;
+  padding: 1.5rem;
+  width: 360px;
+  max-width: 95vw;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+}
+.dlg-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin-bottom: 1rem;
+}
+.dlg-field { margin-bottom: 0.75rem; }
+.dlg-field label {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #94a3b8;
+  margin-bottom: 0.3rem;
+}
+.dlg-field input[type="text"] {
+  width: 100%;
+  background: #2d3748;
+  color: #e2e8f0;
+  border: 1px solid #4a5568;
+  border-radius: 5px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.88rem;
+  outline: none;
+}
+.dlg-field input:focus { border-color: #63b3ed; }
+.dlg-field input.err { border-color: #f56565; }
+.dlg-err { color: #f56565; font-size: 0.75rem; margin-top: 0.35rem; display: none; }
+.dlg-err.visible { display: block; }
+.dlg-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+.dlg-btn {
+  padding: 0.35rem 1rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid;
+}
+.dlg-btn.primary {
+  background: rgba(72,187,120,0.1);
+  color: #48bb78;
+  border-color: rgba(72,187,120,0.4);
+}
+.dlg-btn.primary:hover { background: rgba(72,187,120,0.2); border-color: #48bb78; }
+.dlg-btn.secondary {
+  background: #2d3748;
+  color: #94a3b8;
+  border-color: #4a5568;
+}
+.dlg-btn.secondary:hover { background: #3a4555; color: #e2e8f0; }
+
+/* ── Delete confirm dialog ── */
+#del-dash-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+#del-dash-dialog.visible { display: flex; }
+#del-confirm-text { color: #94a3b8; font-size: 0.88rem; margin-bottom: 1rem; }
+#del-confirm-name { color: #e2e8f0; font-weight: 600; }
+
+/* ── Rename dialog ── */
+#rename-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+#rename-dialog.visible { display: flex; }
+
+/* ── Templates popup ── */
+#tpl-overlay {
+  display: none;
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2000;
+  width: 700px; height: 740px;
+  min-width: 360px; min-height: 300px;
+  border-radius: 10px; overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.85);
+  border: 1px solid #3a4a5c;
+  flex-direction: column;
+  resize: both;
+}
+#tpl-overlay.visible { display: flex; }
+#tpl-drag-handle {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 46px; cursor: move; z-index: 2;
+}
+#tpl-close-btn {
+  position: absolute; top: 6px; right: 8px;
+  z-index: 10;
+  background: transparent; border: none;
+  color: #aaa; font-size: 16px; line-height: 1;
+  cursor: pointer; padding: 2px 4px; border-radius: 4px;
+}
+#tpl-close-btn:hover { color: #fff; }
+#tpl-iframe { width: 100%; height: 100%; border: none; flex: 1; }
+
+/* ════════════════════════════════════
+   HELP & ABOUT MODALS
+   ════════════════════════════════════ */
+#nav-right {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-right: 0.5rem;
+}
+.nav-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.75rem;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: #64748b;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  height: 32px;
+}
+.nav-action-btn:hover {
+  background: rgba(255,255,255,0.05);
+  border-color: #2d3748;
+  color: #e2e8f0;
+}
+.nav-action-btn.accent {
+  color: #63b3ed;
+  border-color: rgba(99,179,237,0.25);
+  background: rgba(99,179,237,0.04);
+}
+.nav-action-btn.accent:hover {
+  background: rgba(99,179,237,0.12);
+  border-color: #63b3ed;
+}
+
+/* Shared overlay backdrop */
+.ovl-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.72);
+  z-index: 3000;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(2px);
+}
+.ovl-backdrop.visible { display: flex; }
+
+/* ── Help overlay ── */
+#help-ovl {
+  display: none;
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 3000;
+  width: min(900px, 95vw);
+  height: min(700px, 90vh);
+  min-width: 480px; min-height: 300px;
+  background: #131b2b;
+  border: 1px solid #2d3748;
+  border-radius: 12px;
+  box-shadow: 0 20px 70px rgba(0,0,0,0.9);
+  flex-direction: column;
+  overflow: hidden;
+  resize: both;
+}
+#help-ovl.visible { display: flex; }
+#help-drag-handle {
+  position: absolute; top: 0; left: 0; right: 48px;
+  height: 46px; cursor: move; z-index: 2;
+}
+#help-ovl > .ovl-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+.ovl-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.1rem 0.85rem 1.25rem;
+  border-bottom: 1px solid #1e2736;
+  flex-shrink: 0;
+  background: #111827;
+}
+.ovl-header-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.ovl-header-actions { display: flex; align-items: center; gap: 0.5rem; position: relative; z-index: 3; }
+.ovl-close {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 1.15rem;
+  cursor: pointer;
+  padding: 0.2rem 0.35rem;
+  border-radius: 5px;
+  line-height: 1;
+  transition: color 0.12s, background 0.12s;
+}
+.ovl-close:hover { color: #e2e8f0; background: rgba(255,255,255,0.06); }
+.lang-pill {
+  display: flex;
+  border: 1px solid #2d3748;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.lang-pill button {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.55rem;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.lang-pill button.active {
+  background: #1e3a5f;
+  color: #63b3ed;
+}
+.lang-pill button:hover:not(.active) { background: rgba(255,255,255,0.04); color: #e2e8f0; }
+
+#help-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+#help-toc {
+  width: 230px;
+  min-width: 170px;
+  flex-shrink: 0;
+  border-right: 1px solid #1e2736;
+  overflow-y: auto;
+  padding: 0.5rem 0;
+  background: #0e1117;
+}
+#help-toc-filter {
+  width: calc(100% - 1.2rem);
+  margin: 0 0.6rem 0.4rem;
+  background: #1a202c;
+  color: #e2e8f0;
+  border: 1px solid #2d3748;
+  border-radius: 5px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.88rem;
+  outline: none;
+}
+#help-toc-filter:focus { border-color: #4a5568; }
+#help-toc-filter::placeholder { color: #4a5568; }
+.toc-item {
+  display: block;
+  padding: 0.42rem 0.9rem;
+  color: #94a3b8;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: all 0.1s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toc-item:hover { background: #1a2030; color: #e2e8f0; }
+.toc-item.active {
+  border-left-color: #63b3ed;
+  color: #63b3ed;
+  background: rgba(99,179,237,0.07);
+  font-weight: 600;
+}
+#help-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem 1.8rem;
+  line-height: 1.7;
+  color: #cbd5e0;
+  font-size: 0.97rem;
+}
+#help-content h1 { font-size: 1.5rem; color: #e2e8f0; margin: 0 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #1e2736; }
+#help-content h2 { font-size: 1.18rem; color: #e2e8f0; margin: 1.5rem 0 0.5rem; }
+#help-content h3 { font-size: 1.03rem; color: #cbd5e0; margin: 1.1rem 0 0.35rem; }
+#help-content p  { margin: 0.5rem 0; }
+#help-content a  { color: #63b3ed; text-decoration: none; }
+#help-content a:hover { text-decoration: underline; }
+#help-content strong { color: #e2e8f0; }
+#help-content em { color: #94a3b8; font-style: italic; }
+#help-content code {
+  background: #1a202c;
+  color: #f6ad55;
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-size: 0.85em;
+  font-family: 'Fira Code', 'Consolas', monospace;
+}
+#help-content pre {
+  background: #0e1117;
+  border: 1px solid #2d3748;
+  border-radius: 6px;
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+}
+#help-content pre code { background: none; padding: 0; color: #a0aec0; }
+#help-content ul, #help-content ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+#help-content li { margin: 0.2rem 0; }
+#help-content blockquote {
+  border-left: 3px solid #63b3ed;
+  margin: 0.75rem 0;
+  padding: 0.4rem 0.9rem;
+  background: rgba(99,179,237,0.05);
+  border-radius: 0 5px 5px 0;
+  color: #94a3b8;
+}
+#help-content table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; }
+#help-content th, #help-content td {
+  border: 1px solid #2d3748;
+  padding: 0.4rem 0.7rem;
+  text-align: left;
+  font-size: 0.92rem;
+}
+#help-content th { background: #1a202c; color: #e2e8f0; font-weight: 600; }
+#help-content hr { border: none; border-top: 1px solid #1e2736; margin: 1rem 0; }
+#help-content img { max-width: 100%; border-radius: 6px; margin: 0.5rem 0; }
+.help-loading { color: #4a5568; font-style: italic; padding: 2rem; text-align: center; }
+
+/* ── About overlay ── */
+#about-ovl .ovl-panel {
+  width: min(440px, 92vw);
+  background: #131b2b;
+  border: 1px solid #2d3748;
+  border-radius: 14px;
+  box-shadow: 0 20px 70px rgba(0,0,0,0.9);
+  overflow: hidden;
+}
+#about-body {
+  padding: 2rem 2rem 1.5rem;
+  text-align: center;
+}
+#about-logo-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 1.1rem;
+}
+#about-version {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #e2e8f0;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.25rem;
+}
+#about-tagline {
+  font-size: 0.8rem;
+  color: #64748b;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 1.5rem;
+}
+.about-divider {
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #2d3748, transparent);
+  margin: 0 0 1.3rem;
+}
+.about-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 1.3rem;
+}
+.about-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  padding: 0.55rem 1.2rem;
+  border-radius: 8px;
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+.about-link.kofi {
+  background: rgba(255,94,20,0.1);
+  border: 1px solid rgba(255,94,20,0.35);
+  color: #ff6a30;
+}
+.about-link.kofi:hover {
+  background: rgba(255,94,20,0.2);
+  border-color: #ff6a30;
+}
+.about-link.github {
+  background: rgba(99,179,237,0.07);
+  border: 1px solid rgba(99,179,237,0.25);
+  color: #63b3ed;
+}
+.about-link.github:hover {
+  background: rgba(99,179,237,0.15);
+  border-color: #63b3ed;
+}
+.about-link.readme {
+  background: rgba(72,187,120,0.07);
+  border: 1px solid rgba(72,187,120,0.25);
+  color: #48bb78;
+}
+.about-link.readme:hover {
+  background: rgba(72,187,120,0.15);
+  border-color: #48bb78;
+}
+#about-footer {
+  padding: 0.75rem 2rem;
+  border-top: 1px solid #1e2736;
+  text-align: center;
+  font-size: 0.72rem;
+  color: #4a5568;
+  background: #0e1117;
+}
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<nav id="topnav">
+
+  <!-- Logo -->
+  <a id="nav-logo" href="#" title="PBGui">
+    <svg width="112" height="36" viewBox="0 0 112 36" xmlns="http://www.w3.org/2000/svg">
+      <rect x="1" y="1" width="34" height="34" rx="7" fill="#1a2744" stroke="#3182ce" stroke-width="1.5"/>
+      <rect x="7"  y="21" width="5" height="9"  rx="1.5" fill="#63b3ed"/>
+      <rect x="14.5" y="15" width="5" height="15" rx="1.5" fill="#4299e1"/>
+      <rect x="22" y="9"  width="5" height="21" rx="1.5" fill="#3182ce"/>
+      <text x="42" y="15" font-family="'Segoe UI',system-ui,sans-serif" font-size="13" font-weight="700" fill="#e2e8f0" letter-spacing="0.3">PBGui</text>
+      <text x="42" y="28" font-family="'Segoe UI',system-ui,sans-serif" font-size="7.5" font-weight="400" fill="#4299e1" letter-spacing="1.2">DASHBOARD</text>
+    </svg>
+  </a>
+
+  <!-- System -->
+  <div class="nav-group">
+    <button class="nav-group-btn" data-group="system">System <span class="nav-arrow">&#9660;</span></button>
+    <div class="nav-dropdown">
+      <a class="nav-item" data-page="/">               <span class="nav-item-icon">&#128682;</span>Welcome</a>
+      <a class="nav-item" data-page="system_api_keys">    <span class="nav-item-icon">&#128273;</span>API-Keys</a>
+      <a class="nav-item" data-page="system_services">    <span class="nav-item-icon">&#128295;</span>PBGUI Services</a>
+      <a class="nav-item" data-page="system_vps_manager"> <span class="nav-item-icon">&#128421;</span>VPS Manager</a>
+      <a class="nav-item" data-page="system_vps_monitor"> <span class="nav-item-icon">&#128223;</span>VPS Monitor</a>
+      <a class="nav-item" data-page="system_logging">     <span class="nav-item-icon">&#128196;</span>Logging</a>
+    </div>
+  </div>
+
+  <!-- Information (active group) -->
+  <div class="nav-group">
+    <button class="nav-group-btn active" data-group="information">Information <span class="nav-arrow">&#9660;</span></button>
+    <div class="nav-dropdown">
+      <span class="nav-item current">                     <span class="nav-item-icon">&#128202;</span>Dashboards</span>
+      <a class="nav-item" data-page="info_coin_data">     <span class="nav-item-icon">&#129689;</span>Coin Data</a>
+      <a class="nav-item" data-page="info_market_data">   <span class="nav-item-icon">&#128452;</span>Market Data</a>
+      <a class="nav-item" data-page="help">               <span class="nav-item-icon">&#10067;</span>Help</a>
+    </div>
+  </div>
+
+  <!-- PBv7 -->
+  <div class="nav-group">
+    <button class="nav-group-btn" data-group="pbv7">PBv7 <span class="nav-arrow">&#9660;</span></button>
+    <div class="nav-dropdown">
+      <a class="nav-item" data-page="v7_run">                <span class="nav-item-icon">&#9654;</span>Run</a>
+      <a class="nav-item" data-page="v7_backtest">           <span class="nav-item-icon">&#9194;</span>Backtest</a>
+      <a class="nav-item" data-page="v7_live_vs_backtest">   <span class="nav-item-icon">&#8644;</span>Live vs Backtest</a>
+      <a class="nav-item" data-page="v7_optimize">           <span class="nav-item-icon">&#9881;</span>Optimize</a>
+      <a class="nav-item" data-page="v7_strategy_explorer">  <span class="nav-item-icon">&#128065;</span>Strategy Explorer</a>
+      <a class="nav-item" data-page="v7_balance_calc">       <span class="nav-item-icon">&#128176;</span>Balance Calculator</a>
+      <a class="nav-item" data-page="v7_pareto_explorer">    <span class="nav-item-icon">&#127919;</span>Pareto Explorer</a>
+    </div>
+  </div>
+
+  <!-- PBv6 Multi -->
+  <div class="nav-group">
+    <button class="nav-group-btn" data-group="pbv6m">PBv6 Multi <span class="nav-arrow">&#9660;</span></button>
+    <div class="nav-dropdown">
+      <a class="nav-item" data-page="v6_multi_run">      <span class="nav-item-icon">&#9654;</span>Run</a>
+      <a class="nav-item" data-page="v6_multi_backtest"> <span class="nav-item-icon">&#9194;</span>Backtest</a>
+      <a class="nav-item" data-page="v6_multi_optimize"> <span class="nav-item-icon">&#9881;</span>Optimize</a>
+    </div>
+  </div>
+
+  <!-- PBv6 Single -->
+  <div class="nav-group">
+    <button class="nav-group-btn" data-group="pbv6s">PBv6 Single <span class="nav-arrow">&#9660;</span></button>
+    <div class="nav-dropdown">
+      <a class="nav-item" data-page="v6_single_run">      <span class="nav-item-icon">&#9654;</span>Run</a>
+      <a class="nav-item" data-page="v6_single_backtest"> <span class="nav-item-icon">&#9194;</span>Backtest</a>
+      <a class="nav-item" data-page="v6_single_optimize"> <span class="nav-item-icon">&#9881;</span>Optimize</a>
+      <a class="nav-item" data-page="v6_spot_view">       <span class="nav-item-icon">&#128065;</span>Spot View</a>
+    </div>
+  </div>
+
+  <div id="nav-spacer"></div>
+
+  <!-- Right-side nav actions -->
+  <div id="nav-right">
+    <button class="nav-action-btn accent" id="help-btn">&#128218; Guide</button>
+    <button class="nav-action-btn" id="about-btn">&#x2139;&#xFE0F; About</button>
+  </div>
+</nav>
+
+<!-- ════════════════════════════════════
+     HELP OVERLAY
+     ════════════════════════════════════ -->
+<div id="help-ovl">
+  <div class="ovl-panel">
+    <div id="help-drag-handle"></div>
+    <div class="ovl-header">
+      <div class="ovl-header-title">&#128218; Guide &amp; Help</div>
+      <div class="ovl-header-actions">
+        <div class="lang-pill">
+          <button id="help-lang-en" class="active">EN</button>
+          <button id="help-lang-de">DE</button>
+        </div>
+        <button class="ovl-close" id="help-close">&#x2715;</button>
+      </div>
+    </div>
+    <div id="help-body">
+      <div id="help-toc">
+        <input id="help-toc-filter" type="text" placeholder="Filter topics…" autocomplete="off">
+        <div id="help-toc-list"></div>
+      </div>
+      <div id="help-content"><div class="help-loading">Select a topic from the left.</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════
+     ABOUT OVERLAY
+     ════════════════════════════════════ -->
+<div id="about-ovl" class="ovl-backdrop">
+  <div class="ovl-panel">
+    <div class="ovl-header">
+      <div class="ovl-header-title">&#x2139;&#xFE0F; About PBGui</div>
+      <div class="ovl-header-actions">
+        <button class="ovl-close" id="about-close">&#x2715;</button>
+      </div>
+    </div>
+    <div id="about-body">
+      <div id="about-logo-wrap">
+        <svg width="80" height="80" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+          <rect x="1" y="1" width="34" height="34" rx="7" fill="#1a2744" stroke="#3182ce" stroke-width="1.5"/>
+          <rect x="7"  y="21" width="5" height="9"  rx="1.5" fill="#63b3ed"/>
+          <rect x="14.5" y="15" width="5" height="15" rx="1.5" fill="#4299e1"/>
+          <rect x="22" y="9"  width="5" height="21" rx="1.5" fill="#3182ce"/>
+        </svg>
+      </div>
+      <div id="about-version">PBGui <span id="about-ver-str">%%VERSION%%</span></div>
+      <div id="about-tagline">Passivbot GUI &mdash; Dashboard</div>
+      <div class="about-divider"></div>
+      <div class="about-links">
+        <a class="about-link kofi" href="https://ko-fi.com/Y8Y216Q3QS" target="_blank" rel="noopener">
+          &#9749; Support on Ko-fi
+        </a>
+        <a class="about-link github" href="https://github.com/msei99/pbgui" target="_blank" rel="noopener">
+          &#128279; GitHub Repository
+        </a>
+        <a class="about-link readme" href="https://github.com/msei99/pbgui#readme" target="_blank" rel="noopener">
+          &#128196; README
+        </a>
+      </div>
+    </div>
+    <div id="about-footer">Open-source &bull; MIT License</div>
+  </div>
+</div>
+
+<!-- ── Page body ── -->
+<div id="page-body">
+
+  <!-- ── Sidebar ── -->
+  <div id="sidebar">
+    <div id="sidebar-sticky">
+      <div id="edit-mode-banner">
+        <span class="em-dot"></span>Edit Mode
+      </div>
+      <div id="sidebar-header">
+        <span class="sb-title">Dashboards</span>
+        <span class="sb-count" id="sb-count">0</span>
+      </div>
+      <div id="sidebar-toolbar">
+        <!-- buttons populated by JS based on mode -->
+      </div>
+      <div id="sidebar-search-wrap">
+        <span class="sb-search-icon">&#128269;</span>
+        <input id="sidebar-search" type="text" placeholder="Filter&#8230;" autocomplete="off">
+      </div>
+    </div>
+    <div id="sidebar-list-wrap"></div>
+    <div id="sidebar-resize"></div>
+  </div>
+
+  <!-- ── Main content ── -->
+  <div id="main-content">
+    <div id="content-loading">
+      <div class="spinner"></div>
+      <span>Select a dashboard from the sidebar</span>
+    </div>
+    <iframe id="content-frame" src="" allowfullscreen></iframe>
+  </div>
+
+</div>
+
+<!-- ── New dashboard dialog ── -->
+<div id="new-dash-dialog">
+  <div class="dlg-box">
+    <div class="dlg-title">&#43; New Dashboard</div>
+    <div class="dlg-field">
+      <label>Dashboard Name</label>
+      <input type="text" id="new-dash-name" maxlength="32" placeholder="e.g. My Portfolio" autocomplete="off">
+      <div class="dlg-err" id="new-dash-err"></div>
+    </div>
+    <div class="dlg-actions">
+      <button class="dlg-btn secondary" id="new-dash-cancel">Cancel</button>
+      <button class="dlg-btn primary"   id="new-dash-ok">Create &amp; Edit</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Delete confirm dialog ── -->
+<div id="del-dash-dialog">
+  <div class="dlg-box">
+    <div class="dlg-title">&#128465; Delete Dashboard</div>
+    <div id="del-confirm-text">
+      Delete <span id="del-confirm-name"></span>? This cannot be undone.
+    </div>
+    <div class="dlg-actions">
+      <button class="dlg-btn secondary" id="del-cancel">Cancel</button>
+      <button class="dlg-btn primary" style="color:#f56565;border-color:rgba(245,101,101,0.4);background:rgba(245,101,101,0.08);" id="del-ok">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Templates popup overlay ── -->
+<div id="tpl-overlay">
+  <div id="tpl-drag-handle"></div>
+  <button id="tpl-close-btn" title="Close">&#x2715;</button>
+  <iframe id="tpl-iframe" src=""></iframe>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ── injected by FastAPI ── */
+  var TOKEN      = "%%TOKEN%%";
+  var API_BASE   = "%%API_BASE%%";
+  var WS_BASE    = "%%WS_BASE%%";
+  var ST_BASE    = "%%ST_BASE%%";
+  var CURRENT    = "%%CURRENT%%";
+  var DASHBOARDS = %%DASHBOARDS_JSON%%;
+
+  /* ── state ── */
+  var currentDash = CURRENT || '';
+  var editMode    = false;
+
+  /* ── DOM refs ── */
+  var editBanner     = document.getElementById('edit-mode-banner');
+  var sidebarToolbar = document.getElementById('sidebar-toolbar');
+  var sbCount        = document.getElementById('sb-count');
+  var listWrap       = document.getElementById('sidebar-list-wrap');
+  var searchWrap     = document.getElementById('sidebar-search-wrap');
+  var searchInput    = document.getElementById('sidebar-search');
+  var contentLoading = document.getElementById('content-loading');
+  var contentFrame   = document.getElementById('content-frame');
+
+  /* ── Top-nav: navigate back to Streamlit via relay (token-authenticated) ── */
+  function navTo(page) {
+    if (!page) return;              /* empty = Dashboards, stay here */
+    var pageKey = page === '/' ? 'SYSTEM_LOGIN' : page.toUpperCase();
+    /* Navigate to the Streamlit Welcome page with relay params.
+       system_login.py validates the token, inits the session, then
+       st.switch_page() to the actual target — no password prompt. */
+    window.location.href = ST_BASE + '/?target=' + pageKey + '&token=' + TOKEN;
+  }
+  document.querySelectorAll('.nav-item[data-page]').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      e.preventDefault();
+      navTo(el.getAttribute('data-page'));
+    });
+  });
+  document.querySelectorAll('.nav-group-btn').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var grp = btn.closest('.nav-group');
+      var wasOpen = grp.classList.contains('open');
+      document.querySelectorAll('.nav-group.open').forEach(function (g) { g.classList.remove('open'); });
+      if (!wasOpen) grp.classList.add('open');
+    });
+  });
+  document.addEventListener('click', function () {
+    document.querySelectorAll('.nav-group.open').forEach(function (g) { g.classList.remove('open'); });
+  });
+
+  /* ── API helpers ── */
+  function apiFetch(path, opts) {
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    opts.headers['Authorization'] = 'Bearer ' + TOKEN;
+    opts.headers['Content-Type']  = opts.headers['Content-Type'] || 'application/json';
+    return fetch(API_BASE + path, opts);
+  }
+
+  /* ── Load the view iframe for a dashboard ── */
+  function loadView(name) {
+    if (!name) return;
+    currentDash = name;
+    editMode = false;
+    editBanner.classList.remove('visible');
+    contentLoading.style.display = 'flex';
+    contentFrame.classList.remove('visible');
+    var url = API_BASE + '/dashboard/editor_page'
+      + '?name='      + encodeURIComponent(name)
+      + '&api_base='  + encodeURIComponent(API_BASE)
+      + '&view_only=1'
+      + '&token='     + encodeURIComponent(TOKEN);
+    contentFrame.src = url;
+    contentFrame.onload = function () {
+      contentLoading.style.display = 'none';
+      contentFrame.classList.add('visible');
+    };
+    renderToolbar();
+    renderList();
+  }
+
+  /* ── Load the editor iframe for a dashboard ── */
+  function loadEditor(name) {
+    currentDash = name || '';
+    editMode = true;
+    editBanner.classList.add('visible');
+    contentLoading.style.display = 'flex';
+    contentFrame.classList.remove('visible');
+    var url = API_BASE + '/dashboard/editor_page'
+      + '?name='       + encodeURIComponent(name || '')
+      + '&api_base='   + encodeURIComponent(API_BASE)
+      + '&standalone=1'
+      + '&token='      + encodeURIComponent(TOKEN);
+    contentFrame.src = url;
+    contentFrame.onload = function () {
+      contentLoading.style.display = 'none';
+      contentFrame.classList.add('visible');
+    };
+    renderToolbar();
+    renderList();
+  }
+
+  /* ── Refresh dashboard list from API ── */
+  function refreshList(thenLoad) {
+    apiFetch('/dashboards')
+      .then(function (r) { return r.ok ? r.json() : { dashboards: [] }; })
+      .then(function (d) {
+        DASHBOARDS = (d.dashboards || []).sort(function (a, b) {
+          return a.toLowerCase().localeCompare(b.toLowerCase());
+        });
+        renderList();
+        updateCount();
+        if (thenLoad) thenLoad();
+      })
+      .catch(function () {});
+  }
+
+  /* ── Render sidebar toolbar based on mode ── */
+  function renderToolbar() {
+    if (editMode) {
+      sidebarToolbar.innerHTML =
+        '<button class="sb-btn edit-mode-save" id="sb-save" title="Save dashboard">&#128190;</button>' +
+        '<button class="sb-btn"               id="sb-cancel" title="Cancel edit">&#x2715;</button>' +
+        '<button class="sb-btn danger"         id="sb-delete" title="Delete dashboard">&#128465;</button>';
+      document.getElementById('sb-save').addEventListener('click', function () {
+        contentFrame.contentWindow.postMessage({ type: 'pbgui_trigger_save' }, '*');
+      });
+      document.getElementById('sb-cancel').addEventListener('click', function () {
+        contentFrame.contentWindow.postMessage({ type: 'pbgui_trigger_cancel' }, '*');
+      });
+      document.getElementById('sb-delete').addEventListener('click', function () {
+        openDeleteDialog(currentDash);
+      });
+    } else {
+      sidebarToolbar.innerHTML =
+        '<button class="sb-btn" id="sb-refresh"   title="Refresh list">&#x21BB;</button>' +
+        '<button class="sb-btn" id="sb-new"       title="New dashboard">&#x2795;</button>' +
+        (currentDash ?
+          '<button class="sb-btn" id="sb-edit"      title="Edit current dashboard">&#x270E;</button>' +
+          '<button class="sb-btn danger" id="sb-del" title="Delete current dashboard">&#128465;</button>'
+          : '') +
+        '<button class="sb-btn" id="sb-templates" title="Templates">&#128203;</button>';
+      document.getElementById('sb-refresh').addEventListener('click', function () {
+        refreshList();
+      });
+      document.getElementById('sb-new').addEventListener('click', function () {
+        openNewDashDialog();
+      });
+      var editBtn = document.getElementById('sb-edit');
+      if (editBtn) editBtn.addEventListener('click', function () {
+        loadEditor(currentDash);
+      });
+      var delBtn = document.getElementById('sb-del');
+      if (delBtn) delBtn.addEventListener('click', function () {
+        openDeleteDialog(currentDash);
+      });
+      document.getElementById('sb-templates').addEventListener('click', function () {
+        openTemplates();
+      });
+    }
+  }
+
+  /* ── Build the dashboard list HTML ── */
+  function buildList(names) {
+    if (DASHBOARDS.length === 0) {
+      return '<div class="sb-empty">No dashboards yet</div>';
+    }
+    if (names.length === 0) {
+      return '<div class="sb-no-match">No match</div>';
+    }
+    var h = '';
+    for (var i = 0; i < names.length; i++) {
+      var n = names[i];
+      var active = (n === currentDash) ? ' active' : '';
+      h += '<div class="sb-item' + active + '" data-name="' + escAttr(n) + '">';
+      h += '<span class="sb-item-name">' + escHtml(n) + '</span>';
+      if (n === currentDash && !editMode) {
+        h += '<span class="sb-item-edit-icon" title="Edit">&#x270E;</span>';
+      }
+      h += '</div>';
+    }
+    return h;
+  }
+
+  function renderList() {
+    var q = (searchInput.value || '').trim().toLowerCase();
+    var names = q
+      ? DASHBOARDS.filter(function (n) { return n.toLowerCase().indexOf(q) !== -1; })
+      : DASHBOARDS;
+    listWrap.innerHTML = buildList(names);
+    updateCount(q ? names.length : null);
+  }
+
+  function updateCount(filtered) {
+    if (filtered !== null && filtered !== undefined) {
+      sbCount.textContent = filtered + '/' + DASHBOARDS.length;
+    } else {
+      sbCount.textContent = DASHBOARDS.length;
+    }
+    searchWrap.classList.toggle('visible', DASHBOARDS.length >= 4);
+  }
+
+  /* ── HTML helpers ── */
+  function escHtml(s) {
+    var d = document.createElement('span');
+    d.textContent = String(s);
+    return d.innerHTML;
+  }
+  function escAttr(s) { return String(s).replace(/"/g, '&quot;'); }
+
+  /* ── Sidebar list event delegation ── */
+  listWrap.addEventListener('click', function (e) {
+    var editIcon = e.target.closest('.sb-item-edit-icon');
+    if (editIcon) {
+      e.stopPropagation();
+      loadEditor(currentDash);
+      return;
+    }
+    var item = e.target.closest('.sb-item');
+    if (item) {
+      var name = item.getAttribute('data-name');
+      if (name !== currentDash) {
+        loadView(name);
+      }
+    }
+  });
+
+  /* ── Search filter ── */
+  searchInput.addEventListener('input', function () {
+    renderList();
+  });
+
+  /* ── postMessage from editor iframe ── */
+  window.addEventListener('message', function (e) {
+    if (!e.data || typeof e.data !== 'object') return;
+    var t = e.data.type;
+    if (t === 'pbgui_editor_saved') {
+      var savedName = e.data.name || currentDash;
+      editMode = false;
+      refreshList(function () { loadView(savedName); });
+    } else if (t === 'pbgui_editor_cancelled') {
+      editMode = false;
+      var origName = e.data.original_name || currentDash;
+      if (origName) {
+        loadView(origName);
+      } else {
+        editBanner.classList.remove('visible');
+        renderToolbar();
+        renderList();
+        contentLoading.style.display = 'flex';
+        contentFrame.classList.remove('visible');
+        contentFrame.src = '';
+      }
+    } else if (t === 'pbgui_dashboard_created') {
+      refreshList(function () { loadView(e.data.name || currentDash); });
+    }
+  });
+
+  /* ── New dashboard dialog ── */
+  var newDashDialog = document.getElementById('new-dash-dialog');
+  var newDashNameInput = document.getElementById('new-dash-name');
+  var newDashErr = document.getElementById('new-dash-err');
+
+  function openNewDashDialog() {
+    newDashNameInput.value = '';
+    newDashNameInput.classList.remove('err');
+    newDashErr.textContent = '';
+    newDashErr.classList.remove('visible');
+    newDashDialog.classList.add('visible');
+    setTimeout(function () { newDashNameInput.focus(); }, 50);
+  }
+
+  document.getElementById('new-dash-cancel').addEventListener('click', function () {
+    newDashDialog.classList.remove('visible');
+  });
+  newDashDialog.addEventListener('click', function (e) {
+    if (e.target === newDashDialog) newDashDialog.classList.remove('visible');
+  });
+
+  document.getElementById('new-dash-ok').addEventListener('click', function () {
+    var name = (newDashNameInput.value || '').trim();
+    if (!name) {
+      newDashNameInput.classList.add('err');
+      newDashErr.textContent = 'Please enter a name.';
+      newDashErr.classList.add('visible');
+      return;
+    }
+    if (DASHBOARDS.indexOf(name) !== -1) {
+      newDashNameInput.classList.add('err');
+      newDashErr.textContent = 'A dashboard with this name already exists.';
+      newDashErr.classList.add('visible');
+      return;
+    }
+    newDashDialog.classList.remove('visible');
+    loadEditor(name);
+  });
+  newDashNameInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') document.getElementById('new-dash-ok').click();
+    if (e.key === 'Escape') newDashDialog.classList.remove('visible');
+  });
+
+  /* ── Delete dialog ── */
+  var delDialog      = document.getElementById('del-dash-dialog');
+  var delConfirmName = document.getElementById('del-confirm-name');
+  var _pendingDelete = '';
+
+  function openDeleteDialog(name) {
+    _pendingDelete = name;
+    delConfirmName.textContent = '\u201c' + name + '\u201d';
+    delDialog.classList.add('visible');
+  }
+  document.getElementById('del-cancel').addEventListener('click', function () {
+    delDialog.classList.remove('visible');
+  });
+  delDialog.addEventListener('click', function (e) {
+    if (e.target === delDialog) delDialog.classList.remove('visible');
+  });
+  document.getElementById('del-ok').addEventListener('click', function () {
+    delDialog.classList.remove('visible');
+    apiFetch('/dashboards/' + encodeURIComponent(_pendingDelete), { method: 'DELETE' })
+      .then(function () {
+        refreshList(function () {
+          if (_pendingDelete === currentDash) {
+            currentDash = '';
+            editMode = false;
+            editBanner.classList.remove('visible');
+            contentLoading.style.display = 'flex';
+            contentFrame.classList.remove('visible');
+            contentFrame.src = '';
+            renderToolbar();
+          }
+        });
+      })
+      .catch(function () { alert('Delete failed.'); });
+  });
+
+  /* ── Templates popup ── */
+  var tplOverlay  = document.getElementById('tpl-overlay');
+  var tplIframe   = document.getElementById('tpl-iframe');
+  var tplDragHandle = document.getElementById('tpl-drag-handle');
+
+  document.getElementById('tpl-close-btn').addEventListener('click', function () {
+    tplOverlay.classList.remove('visible');
+    tplIframe.src = '';
+  });
+
+  window.addEventListener('message', function (e) {
+    if (!e.data || typeof e.data !== 'object') return;
+    if (e.data.type === 'pbgui_close_templates') {
+      tplOverlay.classList.remove('visible');
+      tplIframe.src = '';
+    }
+    if (e.data.type === 'pbgui_dashboard_created') {
+      tplOverlay.classList.remove('visible');
+      tplIframe.src = '';
+      refreshList(function () { loadView(currentDash); });
+    }
+  });
+
+  function openTemplates() {
+    var url = API_BASE + '/dashboard/templates_page'
+      + '?current='  + encodeURIComponent(currentDash)
+      + '&api_base=' + encodeURIComponent(API_BASE)
+      + '&token='    + encodeURIComponent(TOKEN);
+    tplIframe.src = url;
+    tplOverlay.classList.add('visible');
+  }
+
+  /* ── Drag to move the templates popup ── */
+  (function () {
+    var startX, startY, boxL, boxT;
+    tplDragHandle.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      var r = tplOverlay.getBoundingClientRect();
+      tplOverlay.style.transform = 'none';
+      tplOverlay.style.left = r.left + 'px';
+      tplOverlay.style.top  = r.top  + 'px';
+      startX = e.clientX; startY = e.clientY;
+      boxL = r.left;     boxT = r.top;
+      function onMove(ev) {
+        tplOverlay.style.left = (boxL + ev.clientX - startX) + 'px';
+        tplOverlay.style.top  = (boxT + ev.clientY - startY) + 'px';
+      }
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }());
+
+  /* ── Sidebar resize drag ── */
+  (function () {
+    var resizeEl = document.getElementById('sidebar-resize');
+    var sidebar  = document.getElementById('sidebar');
+    var active   = false;
+    resizeEl.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      active = true;
+      resizeEl.classList.add('active');
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!active) return;
+      var newW = e.clientX;
+      if (newW < 160) newW = 160;
+      if (newW > 420) newW = 420;
+      sidebar.style.width = newW + 'px';
+    });
+    document.addEventListener('mouseup', function () {
+      if (active) { active = false; resizeEl.classList.remove('active'); }
+    });
+  }());
+
+  /* ── Initial render ── */
+  renderToolbar();
+  refreshList(function () {
+    if (CURRENT && DASHBOARDS.indexOf(CURRENT) !== -1) {
+      loadView(CURRENT);
+    }
+  });
+
+  /* ════════════════════════════════════
+     HELP OVERLAY
+     ════════════════════════════════════ */
+  (function () {
+    var helpOvl     = document.getElementById('help-ovl');
+    var helpContent = document.getElementById('help-content');
+    var helpTocList = document.getElementById('help-toc-list');
+    var helpFilter  = document.getElementById('help-toc-filter');
+    var helpLangEN  = document.getElementById('help-lang-en');
+    var helpLangDE  = document.getElementById('help-lang-de');
+    var helpDragHandle = document.getElementById('help-drag-handle');
+
+    var helpLang  = 'EN';
+    var helpDefaultTopic = null;
+    var helpTopics = [];
+    var helpSel   = 0;
+
+    /* Minimal Markdown → HTML renderer */
+    function mdToHtml(md) {
+      var lines = md.split('\n');
+      var html = '';
+      var inPre = false;
+      var preBuf = '';
+      var inUl = false;
+      var inOl = false;
+
+      function flushList() {
+        if (inUl) { html += '\x3C/ul\x3E'; inUl = false; }
+        if (inOl) { html += '\x3C/ol\x3E'; inOl = false; }
+      }
+      function inlineFormat(t) {
+        // :material/icon_name: → Material Symbols icon
+        t = t.replace(/:material\/([\w_]+):/g, function (_, name) {
+          return '\x3Cspan class="material-symbols-outlined" style="font-size:1em;vertical-align:-0.15em;line-height:1"\x3E' + name + '\x3C/span\x3E';
+        });
+        // code (inline) — before bold/italic
+        t = t.replace(/`([^`]+)`/g, '\x3Ccode\x3E$1\x3C/code\x3E');
+        // images ![alt](src)
+        t = t.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '\x3Cimg src="$2" alt="$1"\x3E');
+        // links
+        t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '\x3Ca href="$2" target="_blank" rel="noopener"\x3E$1\x3C/a\x3E');
+        // bold
+        t = t.replace(/\*\*(.+?)\*\*/g, '\x3Cstrong\x3E$1\x3C/strong\x3E');
+        t = t.replace(/__(.+?)__/g, '\x3Cstrong\x3E$1\x3C/strong\x3E');
+        // italic
+        t = t.replace(/\*(.+?)\*/g, '\x3Cem\x3E$1\x3C/em\x3E');
+        t = t.replace(/_(.+?)_/g, '\x3Cem\x3E$1\x3C/em\x3E');
+        return t;
+      }
+
+      for (var i = 0; i < lines.length; i++) {
+        var l = lines[i];
+        // fenced code block
+        if (l.match(/^```/)) {
+          if (!inPre) {
+            flushList();
+            inPre = true;
+            preBuf = '';
+          } else {
+            html += '\x3Cpre\x3E\x3Ccode\x3E' + preBuf.replace(/&/g,'&amp;').replace(/\x3C/g,'&lt;').replace(/\x3E/g,'&gt;') + '\x3C/code\x3E\x3C/pre\x3E';
+            inPre = false;
+          }
+          continue;
+        }
+        if (inPre) { preBuf += (preBuf ? '\n' : '') + l; continue; }
+        // HR
+        if (l.match(/^---+$/) || l.match(/^\*\*\*+$/)) { flushList(); html += '\x3Chr\x3E'; continue; }
+        // headings
+        var hm = l.match(/^(#{1,6})\s+(.*)/);  if (hm) { flushList(); var lvl = hm[1].length; html += '\x3Ch' + lvl + '\x3E' + inlineFormat(hm[2]) + '\x3C/h' + lvl + '\x3E'; continue; }
+        // blockquote
+        if (l.match(/^>\s?/)) { flushList(); html += '\x3Cblockquote\x3E' + inlineFormat(l.replace(/^>\s?/, '')) + '\x3C/blockquote\x3E'; continue; }
+        // unordered list
+        var ulm = l.match(/^[\-\*]\s+(.*)/); if (ulm) { if (!inUl) { if (inOl) { html += '\x3C/ol\x3E'; inOl = false; } html += '\x3Cul\x3E'; inUl = true; } html += '\x3Cli\x3E' + inlineFormat(ulm[1]) + '\x3C/li\x3E'; continue; }
+        // ordered list
+        var olm = l.match(/^\d+\.\s+(.*)/); if (olm) { if (!inOl) { if (inUl) { html += '\x3C/ul\x3E'; inUl = false; } html += '\x3Col\x3E'; inOl = true; } html += '\x3Cli\x3E' + inlineFormat(olm[1]) + '\x3C/li\x3E'; continue; }
+        // empty line = paragraph break
+        if (l.trim() === '') { flushList(); html += '\x3Cp\x3E\x3C/p\x3E'; continue; }
+        // plain paragraph
+        flushList();
+        html += '\x3Cp\x3E' + inlineFormat(l) + '\x3C/p\x3E';
+      }
+      flushList();
+      return html;
+    }
+
+    function loadHelpIndex() {
+      helpTocList.innerHTML = '\x3Cdiv class="help-loading"\x3ELoading...\x3C/div\x3E';
+      fetch(API_BASE + '/docs/index?lang=' + helpLang + '&token=' + TOKEN)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          helpTopics = data || [];
+          renderToc();
+          if (helpTopics.length > 0) {
+            var startIdx = 0;
+            if (helpDefaultTopic) {
+              var kw = helpDefaultTopic.toLowerCase();
+              for (var i = 0; i < helpTopics.length; i++) {
+                if (helpTopics[i].title.toLowerCase().indexOf(kw) !== -1 ||
+                    (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(kw) !== -1)) {
+                  startIdx = i; break;
+                }
+              }
+            }
+            loadTopic(startIdx);
+          }
+        })
+        .catch(function () {
+          helpTocList.innerHTML = '\x3Cdiv class="help-loading"\x3EFailed to load topics.\x3C/div\x3E';
+        });
+    }
+
+    function renderToc() {
+      var flt = helpFilter.value.trim().toLowerCase();
+      helpTocList.innerHTML = '';
+      helpTopics.forEach(function (t, idx) {
+        if (flt && t.title.toLowerCase().indexOf(flt) === -1) return;
+        var el = document.createElement('div');
+        el.className = 'toc-item' + (idx === helpSel ? ' active' : '');
+        el.textContent = t.title;
+        el.addEventListener('click', function () { loadTopic(idx); });
+        helpTocList.appendChild(el);
+      });
+    }
+
+    function loadTopic(idx) {
+      helpSel = idx;
+      renderToc();
+      var t = helpTopics[idx];
+      if (!t) return;
+      helpContent.innerHTML = '\x3Cdiv class="help-loading"\x3ELoading...\x3C/div\x3E';
+      fetch(API_BASE + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+        .then(function (r) { return r.json(); })
+        .then(function (d) { helpContent.innerHTML = mdToHtml(d.content || ''); helpContent.scrollTop = 0; })
+        .catch(function () { helpContent.innerHTML = '\x3Cdiv class="help-loading"\x3EFailed to load content.\x3C/div\x3E'; });
+    }
+
+    helpFilter.addEventListener('input', renderToc);
+
+    helpLangEN.addEventListener('click', function () {
+      if (helpLang === 'EN') return;
+      helpLang = 'EN';
+      helpLangEN.classList.add('active'); helpLangDE.classList.remove('active');
+      helpSel = 0; loadHelpIndex();
+    });
+    helpLangDE.addEventListener('click', function () {
+      if (helpLang === 'DE') return;
+      helpLang = 'DE';
+      helpLangDE.classList.add('active'); helpLangEN.classList.remove('active');
+      helpSel = 0; loadHelpIndex();
+    });
+
+    document.getElementById('help-btn').addEventListener('click', function () {
+      helpOvl.classList.add('visible');
+      if (helpTopics.length === 0) {
+        helpDefaultTopic = 'dashboard';
+        loadHelpIndex();
+      } else {
+        var kw = 'dashboard';
+        for (var i = 0; i < helpTopics.length; i++) {
+          if (helpTopics[i].title.toLowerCase().indexOf(kw) !== -1 ||
+              (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(kw) !== -1)) {
+            loadTopic(i); break;
+          }
+        }
+      }
+    });
+    document.getElementById('help-close').addEventListener('click', function () {
+      helpOvl.classList.remove('visible');
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        helpOvl.classList.remove('visible');
+        document.getElementById('about-ovl').classList.remove('visible');
+      }
+    });
+
+    /* ── Drag to move the help overlay ── */
+    (function () {
+      var startX, startY, boxL, boxT;
+      helpDragHandle.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        var r = helpOvl.getBoundingClientRect();
+        helpOvl.style.transform = 'none';
+        helpOvl.style.left = r.left + 'px';
+        helpOvl.style.top  = r.top  + 'px';
+        startX = e.clientX; startY = e.clientY;
+        boxL = r.left;     boxT = r.top;
+        function onMove(ev) {
+          helpOvl.style.left = (boxL + ev.clientX - startX) + 'px';
+          helpOvl.style.top  = (boxT + ev.clientY - startY) + 'px';
+        }
+        function onUp() {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }());
+  }());
+
+  /* ════════════════════════════════════
+     ABOUT OVERLAY
+     ════════════════════════════════════ */
+  (function () {
+    var aboutOvl = document.getElementById('about-ovl');
+    document.getElementById('about-btn').addEventListener('click', function () {
+      aboutOvl.classList.add('visible');
+    });
+    document.getElementById('about-close').addEventListener('click', function () {
+      aboutOvl.classList.remove('visible');
+    });
+    aboutOvl.addEventListener('click', function (e) {
+      if (e.target === aboutOvl) aboutOvl.classList.remove('visible');
+    });
+  }());
+
+}());
+</script>
+</body>
+</html>
