@@ -56,9 +56,9 @@
         /* ── Balance widget ── */
         '.db-root{font-family:var(--db-font);font-size:0.875rem;color:var(--db-text);background:var(--db-bg);}',
 
-        '.db-header{display:flex;justify-content:space-between;align-items:flex-start;',
+        '.db-header{display:flex;justify-content:flex-start;align-items:center;',
         '  padding:0.5rem 0.75rem;background:var(--db-surface);border-bottom:1px solid var(--db-surface2);',
-        '  border-radius:var(--db-radius) var(--db-radius) 0 0;flex-wrap:wrap;gap:0.5rem;}',
+        '  border-radius:var(--db-radius) var(--db-radius) 0 0;flex-wrap:nowrap;gap:0.5rem;}',
 
         '.db-totals{display:flex;gap:1.5rem;flex-wrap:wrap;}',
 
@@ -66,7 +66,7 @@
         '  letter-spacing:0.05em;display:block;}',
         '.db-total-item span{font-weight:600;font-size:0.88rem;}',
 
-        '.db-user-sel{display:flex;align-items:center;gap:0.4rem;position:relative;}',
+        '.db-user-sel{display:flex;align-items:center;gap:0.4rem;position:relative;margin-left:auto;}',
         '.db-user-sel label{color:var(--db-text-muted);font-size:0.73rem;}',
 
         '.db-msel-btn{background:var(--db-surface2);color:var(--db-text);border:1px solid var(--db-surface3);',
@@ -126,13 +126,13 @@
            Never add widget-specific overrides for these — use var() tokens. */
         '.dt-root,.di-root{font-family:var(--db-font);font-size:0.875rem;color:var(--db-text);',
         '  background:var(--db-bg);border-radius:var(--db-radius);overflow:hidden;position:relative;}',
-        '.di-root{width:100%;}',
+        '.di-root{width:100%;display:flex;flex-direction:column;}',
 
         '.dt-header{padding:0.45rem 0.75rem;background:var(--db-surface);border-bottom:1px solid var(--db-surface2);',
-        '  display:flex;align-items:center;justify-content:space-between;',
+        '  display:flex;align-items:center;justify-content:flex-start;',
         '  flex-wrap:nowrap;gap:0.4rem;}',
         '.dt-title{font-size:0.88rem;font-weight:600;color:var(--db-title);white-space:nowrap;flex-shrink:0;}',
-        '.dt-meta{font-size:0.73rem;color:var(--db-text-muted);white-space:nowrap;}',
+        '.dt-meta{font-size:0.73rem;color:var(--db-text-muted);white-space:nowrap;margin-left:auto;}',
         '.dt-meta-user{color:var(--db-text);}',
 
         '.dt-daterange{font-size:0.68rem;color:var(--db-text-dim);padding:0.2rem 0.75rem;',
@@ -142,7 +142,7 @@
         '.dt-chart{width:100%;position:relative;}',
 
         /* inline editable controls inside the header */
-        '.dt-meta-controls{display:flex;align-items:center;gap:0.3rem;flex-wrap:nowrap;flex-shrink:0;}',
+        '.dt-meta-controls{display:flex;align-items:center;gap:0.3rem;flex-wrap:nowrap;flex-shrink:0;margin-left:auto;}',
         '.dt-meta-lbl{color:var(--db-text-muted);font-size:0.73rem;white-space:nowrap;flex-shrink:0;}',
         '.dt-meta-sep{color:var(--db-surface3);font-size:0.73rem;padding:0 0.1rem;flex-shrink:0;}',
         '.dt-meta-controls input.dt-ctrl-num{width:52px!important;flex-shrink:0;background:var(--db-surface2);color:var(--db-text);',
@@ -160,6 +160,15 @@
         '.dt-ctrl-now-wrap input[type=checkbox]{cursor:pointer;accent-color:var(--db-accent);width:13px;height:13px;flex-shrink:0;}',
         '.dt-meta-controls .msel-wrap{width:auto!important;flex-shrink:0;}',
         '.dt-meta-controls .msel-btn{min-width:80px;max-width:120px;font-size:0.73rem;padding:0.2rem 0.35rem;}',
+
+        /* widget icon before title */
+        '.dt-icon{font-size:0.85rem;line-height:1;flex-shrink:0;}',
+        /* trash button inside dt-header */
+        '.dt-trash{display:inline-flex;align-items:center;justify-content:center;',
+        '  width:22px;height:22px;border:none;background:transparent;',
+        '  color:var(--db-text-dim,#4a5568);font-size:0.85rem;cursor:pointer;border-radius:4px;',
+        '  transition:color 0.12s,background 0.12s;flex-shrink:0;padding:0;margin-left:0.25rem;line-height:1;}',
+        '.dt-trash:hover{color:#fc8181;background:rgba(252,129,129,0.1);}',
 
         /* Plotly modebar — shared rule covering both widget roots */
         '.dt-root .modebar-container .modebar,.di-root .modebar-container .modebar{display:flex!important;flex-direction:row!important;flex-wrap:nowrap!important;}',
@@ -183,7 +192,7 @@
         '.di-nav-btn{background:var(--db-surface2);color:var(--db-text);border:1px solid var(--db-surface3);border-radius:4px;',
         '  padding:0.18rem 0.55rem;font-size:0.82rem;cursor:pointer;white-space:nowrap;flex-shrink:0;}',
         '.di-nav-btn:hover{background:var(--db-surface3);border-color:var(--db-title);color:var(--db-title);}',
-        '.di-table-wrap{overflow-x:auto;overflow-y:auto;max-height:55vh;}',
+        '.di-table-wrap{overflow-x:auto;overflow-y:auto;flex:1;min-height:0;}',
         '.di-table{width:100%;border-collapse:collapse;font-size:0.78rem;}',
         '.di-table th{position:sticky;top:0;background:var(--db-surface);color:var(--db-text-muted);font-weight:600;',
         '  padding:0.35rem 0.5rem;text-align:left;border-bottom:1px solid var(--db-surface2);white-space:nowrap;cursor:pointer;user-select:none;}',
@@ -279,6 +288,29 @@
     function tweBarPct(v) { return Math.min(100, (v / 300) * 100).toFixed(1); }
     function signedFmt(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); }
 
+    /** Prepend an icon span before titleSpan and append a trash button to hdr.
+     *  @param {HTMLElement} hdr  — the .dt-header or .db-header element
+     *  @param {string|null} icon — emoji string (e.g. '\ud83d\udcca')
+     *  @param {HTMLElement|null} titleSpan — the .dt-title span (insert icon before it)
+     *  @param {Function|null} onDelete — callback when trash is clicked
+     */
+    function _decorateHeader(hdr, icon, titleSpan, onDelete) {
+        if (icon && titleSpan) {
+            var ic = document.createElement('span');
+            ic.className = 'dt-icon';
+            ic.textContent = icon;
+            hdr.insertBefore(ic, titleSpan);
+        }
+        if (typeof onDelete === 'function') {
+            var trash = document.createElement('button');
+            trash.className = 'dt-trash';
+            trash.innerHTML = '&#128465;';
+            trash.title = 'Remove widget';
+            trash.addEventListener('click', function (e) { e.stopPropagation(); onDelete(); });
+            hdr.appendChild(trash);
+        }
+    }
+
     /**
      * Fill a <tbody> element with balance rows.
      * @param {HTMLTableSectionElement} tbody
@@ -337,7 +369,14 @@
             '<span style="color:' + upnlColor(t.upnl || 0) + '">' + signedFmt(t.upnl || 0) + '</span></div>' +
             '<div class="db-total-item"><label>Total TWE</label>' +
             '<span style="color:' + tweColor(t.we || 0) + '">' + (t.we || 0).toFixed(2) + ' %</span></div>';
+        /* optional icon before totals */
         hdr.appendChild(totDiv);
+        if (opts.icon) {
+            var ic = document.createElement('span');
+            ic.className = 'dt-icon';
+            ic.textContent = opts.icon;
+            hdr.insertBefore(ic, totDiv);
+        }
         /* top-right: either a pre-built interactive control (editor) or a static label (live view) */
         if (opts.usersControl) {
             /* interactive dropdown element passed in by the editor */
@@ -361,6 +400,14 @@
             userSpan.textContent = uLabel;
             userSel.appendChild(userSpan);
             hdr.appendChild(userSel);
+        }
+        if (typeof opts.onDelete === 'function') {
+            var trash = document.createElement('button');
+            trash.className = 'dt-trash';
+            trash.innerHTML = '&#128465;';
+            trash.title = 'Remove widget';
+            trash.addEventListener('click', function (e) { e.stopPropagation(); opts.onDelete(); });
+            hdr.appendChild(trash);
         }
         root.appendChild(hdr);
 
@@ -427,13 +474,12 @@
             paper_bgcolor: '#0e1117',
             plot_bgcolor:  '#0e1117',
             font:   { color: '#e2e8f0', size: 11 },
-            margin: { l: 60, r: 20, t: 40, b: 130 },
-            xaxis:  { title: { text: 'Symbol', font: { size: 11, color: '#94a3b8' } },
-                      tickangle: -45, gridcolor: '#2d3748', color: '#e2e8f0' },
-            yaxis:  { title: { text: 'Income', font: { size: 11, color: '#94a3b8' } },
-                      gridcolor: '#2d3748', color: '#e2e8f0',
+            margin: { l: 50, r: 20, t: 40, b: 60 },
+            xaxis:  { tickangle: -45, gridcolor: '#2d3748', color: '#e2e8f0' },
+            yaxis:  { gridcolor: '#2d3748', color: '#e2e8f0',
                       zeroline: true, zerolinecolor: '#4a5568' },
-            bargap: 0.3
+            bargap: 0.3,
+            autosize: true
         };
         var origHeight = opts.height || null;
         if (origHeight) { layout.height = origHeight; }
@@ -488,6 +534,7 @@
             ]
         };
         P.react(chartDiv, [trace], layout, cfg);
+        setTimeout(function () { P.Plots.resize(chartDiv); }, 80);
     }
 
     /**
@@ -593,6 +640,7 @@
                 '&nbsp;&middot;&nbsp;Users:&nbsp;<span class="dt-meta-user">' + uLabel + '</span>';
             hdr.appendChild(metaSpan);
         }
+        _decorateHeader(hdr, opts.icon, titleSpan, opts.onDelete);
         root.appendChild(hdr);
 
         /* date range */
@@ -799,6 +847,7 @@
             }
             hdr.appendChild(metaSpan);
         }
+        _decorateHeader(hdr, opts.icon, titleSpan, opts.onDelete);
         root.appendChild(hdr);
 
         /* date range */
@@ -810,6 +859,7 @@
         root.appendChild(dr);
 
         var mode = (data && data.mode) || 'chart';
+        var origHeight = opts.height || null;
 
         if (mode === 'table') {
             _buildIncomeTable(root, data, opts);
@@ -1258,8 +1308,8 @@
             font:          { color: '#e2e8f0', size: 11 },
             margin:        { l: 55, r: 15, t: 40, b: 40 },
             autosize:      true,
-            xaxis:         { gridcolor: '#2d3748', color: '#e2e8f0', title: { text: 'Date', font: { size: 11, color: '#94a3b8' } } },
-            yaxis:         { gridcolor: '#2d3748', color: '#e2e8f0', title: { text: 'Income', font: { size: 11, color: '#94a3b8' } },
+            xaxis:         { gridcolor: '#2d3748', color: '#e2e8f0' },
+            yaxis:         { gridcolor: '#2d3748', color: '#e2e8f0',
                              zeroline: true, zerolinecolor: '#4a5568' },
             legend:        { bgcolor: 'rgba(0,0,0,0)', font: { size: 10, color: '#e2e8f0' } }
         };
@@ -1356,14 +1406,13 @@
             paper_bgcolor: '#0e1117',
             plot_bgcolor:  '#0e1117',
             font:   { color: '#e2e8f0', size: 11 },
-            margin: { l: 60, r: 20, t: 40, b: 80 },
-            xaxis:  { title: { text: 'Date', font: { size: 11, color: '#94a3b8' } },
-                      tickangle: -45, gridcolor: '#2d3748', color: '#e2e8f0',
+            margin: { l: 50, r: 20, t: 40, b: 50 },
+            xaxis:  { tickangle: -45, gridcolor: '#2d3748', color: '#e2e8f0',
                       type: 'date' },
-            yaxis:  { title: { text: 'Income', font: { size: 11, color: '#94a3b8' } },
-                      gridcolor: '#2d3748', color: '#e2e8f0',
+            yaxis:  { gridcolor: '#2d3748', color: '#e2e8f0',
                       zeroline: true, zerolinecolor: '#4a5568' },
-            bargap: 0.3
+            bargap: 0.3,
+            autosize: true
         };
         var origHeight = opts.height || null;
         if (origHeight) { layout.height = origHeight; }
@@ -1426,6 +1475,7 @@
             ]
         };
         P.react(chartDiv, [trace], layout, cfg);
+        setTimeout(function () { P.Plots.resize(chartDiv); }, 80);
     }
 
     function buildPnl(container, data, opts) {
@@ -1523,6 +1573,7 @@
                 '&nbsp;&middot;&nbsp;Users:&nbsp;<span class="dt-meta-user">' + uLabel + '</span>';
             hdr.appendChild(metaSpan);
         }
+        _decorateHeader(hdr, opts.icon, titleSpan, opts.onDelete);
         root.appendChild(hdr);
 
         /* date range */
@@ -1605,17 +1656,16 @@
             paper_bgcolor: '#0e1117',
             plot_bgcolor:  '#0e1117',
             font:   { color: '#e2e8f0', size: 11 },
-            margin: { l: 60, r: 20, t: 40, b: 80 },
+            margin: { l: 50, r: 20, t: 40, b: 50 },
             barmode: 'relative',
-            xaxis:  { title: { text: 'Date', font: { size: 11, color: '#94a3b8' } },
-                      tickangle: -45, gridcolor: '#2d3748', color: '#e2e8f0',
+            xaxis:  { tickangle: -45, gridcolor: '#2d3748', color: '#e2e8f0',
                       type: 'category', nticks: 20 },
-            yaxis:  { title: { text: 'Sum', font: { size: 11, color: '#94a3b8' } },
-                      gridcolor: '#2d3748', color: '#e2e8f0',
+            yaxis:  { gridcolor: '#2d3748', color: '#e2e8f0',
                       zeroline: true, zerolinecolor: '#4a5568',
                       range: [yMin - padding, yMax + padding] },
             bargap: 0.3,
-            legend: { font: { color: '#e2e8f0' } }
+            legend: { font: { color: '#e2e8f0' } },
+            autosize: true
         };
 
         var origHeight = opts.height || null;
@@ -1692,6 +1742,7 @@
             ]
         };
         P.react(chartDiv, [profitTrace, lossTrace], layout, cfg);
+        setTimeout(function () { P.Plots.resize(chartDiv); }, 80);
     }
 
     function buildPpl(container, data, opts) {
@@ -1789,6 +1840,7 @@
                 '&nbsp;&middot;&nbsp;Users:&nbsp;<span class="dt-meta-user">' + uLabel + '</span>';
             hdr.appendChild(metaSpan);
         }
+        _decorateHeader(hdr, opts.icon, titleSpan, opts.onDelete);
         root.appendChild(hdr);
 
         /* date range */
@@ -1865,6 +1917,7 @@
             metaSpan.innerHTML = 'Users:&nbsp;<span class="dt-meta-user">' + _uLabel + '</span>';
             hdr.appendChild(metaSpan);
         }
+        _decorateHeader(hdr, opts.icon, titleSpan, opts.onDelete);
         root.appendChild(hdr);
 
         /* status */
@@ -2342,6 +2395,7 @@
             msgSpan.className = 'dt-meta';
             msgSpan.textContent = opts.message;
             hdr.appendChild(msgSpan);
+            _decorateHeader(hdr, opts.icon, titleSpan, opts.onDelete);
             root.appendChild(hdr);
             var noData = document.createElement('div');
             noData.className = 'dt-nodata';
@@ -2414,6 +2468,7 @@
             }, 1000);
         }
         hdr.appendChild(metaDiv);
+        _decorateHeader(hdr, opts.icon, titleSpan, opts.onDelete);
         root.appendChild(hdr);
 
         /* ── Chart legend ── */
@@ -2602,14 +2657,13 @@
             paper_bgcolor: '#0e1117',
             plot_bgcolor:  '#0e1117',
             font:   { color: '#e2e8f0', size: 11 },
-            margin: { l: 60, r: 20, t: 40, b: 80 },
-            xaxis:  { title: { text: 'Date', font: { size: 11, color: '#94a3b8' } },
-                      tickangle: -45, gridcolor: '#2d3748', color: '#e2e8f0',
+            margin: { l: 50, r: 20, t: 40, b: 50 },
+            xaxis:  { tickangle: -45, gridcolor: '#2d3748', color: '#e2e8f0',
                       type: 'date' },
-            yaxis:  { title: { text: 'ADG(%)', font: { size: 11, color: '#94a3b8' } },
-                      gridcolor: '#2d3748', color: '#e2e8f0',
+            yaxis:  { gridcolor: '#2d3748', color: '#e2e8f0',
                       zeroline: true, zerolinecolor: '#4a5568' },
-            bargap: 0.3
+            bargap: 0.3,
+            autosize: true
         };
         var origHeight = opts.height || null;
         if (origHeight) { layout.height = origHeight; }
@@ -2671,6 +2725,7 @@
             ]
         };
         P.react(chartDiv, [trace], layout, cfg);
+        setTimeout(function () { P.Plots.resize(chartDiv); }, 80);
     }
 
 
@@ -2769,6 +2824,7 @@
                 '\x26nbsp;\x26middot;\x26nbsp;Users:\x26nbsp;\x3Cspan class="dt-meta-user">' + uLabel + '\x3C/span>';
             hdr.appendChild(metaSpan);
         }
+        _decorateHeader(hdr, opts.icon, titleSpan, opts.onDelete);
         root.appendChild(hdr);
 
         /* balance summary line */

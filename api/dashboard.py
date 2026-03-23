@@ -237,6 +237,43 @@ def _notify_order_update(user_name: str, symbol: str, orders_data: list,
         _push_to_subs(subs, msg, from_thread=from_thread)
 
 
+def refresh_positions_for_user(user_name: str):
+    """Read current positions from DB for user_name and push to all chart subscribers.
+
+    Called from the internal /notify/positions endpoint after PBData writes updated
+    positions.  Ensures the Orders widget entry line is corrected even when the
+    ccxt.pro watchPositions() stream missed the original 'position closed' event.
+    Runs synchronously (called via run_in_executor from the async endpoint).
+    """
+    try:
+        all_users = _get_users()
+        user_obj = all_users.find_user(user_name)
+        if not user_obj:
+            return
+        db = _get_db()
+        positions = db.fetch_positions(user_obj) or []
+        # Build a dict: symbol -> position_data (only open positions)
+        open_pos: dict[str, dict] = {}
+        for pos in positions:
+            sym = pos[1]
+            if pos[3]:  # size != 0 means open
+                open_pos[sym] = {
+                    "entry": pos[5],
+                    "size":  pos[3],
+                    "upnl":  pos[4],
+                    "side":  pos[7] if len(pos) > 7 else "long",
+                }
+        # Notify all chart subscribers for this user
+        with _position_sub_lock:
+            sub_keys = [k for k in _position_subscribers if k[0] == user_name]
+        for key in sub_keys:
+            _, sym = key
+            pos_data = open_pos.get(sym, None)  # None = position closed
+            _notify_position_update(user_name, sym, pos_data, from_thread=True)
+    except Exception:
+        pass
+
+
 # ── ccxt.pro live stream tasks (Phase 2) ───────────────────────────────────
 _ws_ohlcv_tasks: dict[tuple[str, str, str], _asyncio.Task] = {}
 _ws_position_tasks: dict[str, _asyncio.Task] = {}   # per user
@@ -405,6 +442,26 @@ async def register_chart_client(user_name: str, symbol: str, tf: str,
 
     # Touch active subscription for polling fallback
     _ohlcv_active[candle_key] = _time.time()
+
+    # Immediately push current DB position state to the new subscriber.
+    # This reconciles any stale entry line: if PBData already wrote 'position closed'
+    # to the DB (but the ccxt.pro watchPositions stream hasn't fired yet for this
+    # new subscriber), the client gets the correct state right away.
+    try:
+        user_obj = _get_users().find_user(user_name)
+        if user_obj:
+            positions = _get_db().fetch_positions(user_obj) or []
+            pos_data = None
+            for pos in positions:
+                if pos[1] == symbol and pos[3]:  # size != 0
+                    pos_data = {
+                        "entry": pos[5], "size": pos[3],
+                        "upnl":  pos[4], "side": pos[7] if len(pos) > 7 else "long",
+                    }
+                    break
+            q.put_nowait({"type": "position", "position": pos_data})
+    except Exception:
+        pass
 
     # Try to start ccxt.pro OHLCV stream
     if candle_key not in _ws_ohlcv_tasks or _ws_ohlcv_tasks[candle_key].done():
@@ -701,7 +758,18 @@ def get_editor_page(
     html = html.replace("%%DASHBOARD_NAME%%", _json.dumps(name))
     html = html.replace("%%VIEW_ONLY%%", "1" if view_only else "0")
     html = html.replace("%%STANDALONE%%", "1" if standalone else "0")
-    return HTMLResponse(content=html)
+    html = html.replace("%%EDIT_ONLY_STYLE%%",
+                         "display:none!important" if view_only else "")
+    body_classes = []
+    if view_only:
+        body_classes.append("view-mode")
+    if standalone:
+        body_classes.append("standalone-mode")
+    html = html.replace("%%BODY_CLASS%%", " ".join(body_classes))
+    return HTMLResponse(
+        content=html,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ---------------------------------------------------------------- /main_page
@@ -745,7 +813,10 @@ def get_main_page(
     html = html.replace('"%%VERSION%%"', _json.dumps(PBGUI_VERSION))
     html = html.replace('%%VERSION%%', PBGUI_VERSION)
 
-    return HTMLResponse(content=html)
+    return HTMLResponse(
+        content=html,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ---------------------------------------------------------------- /templates_page

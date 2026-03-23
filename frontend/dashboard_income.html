@@ -184,6 +184,19 @@
                     responsive:     true,
                     lvbUser:        LVB_USER || ''
                 });
+                /* Standalone live view: set explicit maxHeight on .di-table-wrap
+                   so the table scrolls within the allocated height. */
+                var _dr = container.querySelector('.di-root');
+                if (_dr && !_dr.querySelector('.js-plotly-plot')) {
+                    var _wrap = _dr.querySelector('.di-table-wrap');
+                    if (_wrap) {
+                        var capH = HEIGHT > 0 ? HEIGHT : 280;
+                        /* Subtract header row height from cap */
+                        var _hdr = _dr.querySelector('.dt-header');
+                        var _hdrH = _hdr ? _hdr.offsetHeight : 40;
+                        _wrap.style.maxHeight = Math.max(100, capH - _hdrH - 10) + 'px';
+                    }
+                }
                 reportHeight();
             })
             .catch(function (e) {

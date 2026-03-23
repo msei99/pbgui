@@ -323,7 +323,15 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
+## v1.68 (unreleased)
+- Fix: Dashboard — WebSocket connection now established on page load; live `income_updated` and `balance_updated` events from PBData are received and widgets refresh automatically (without this fix the dashboard fetched data only once at page open)
+- Fix: Dashboard — widget refresh after WS events no longer causes flicker; existing content stays visible during the background fetch, loading spinner shown only on first (empty) load; per-cell generation counter discards stale out-of-order responses
+- New: Dashboard view mode — floating "💾 Save layout" button appears whenever widgets are resized or swapped; click saves the layout directly to disk without entering the editor
+- Improved: Dashboard Balance widget header — icon and totals group flush-left, Users dropdown and trash button pushed to the right via `margin-left:auto`; removed excess spacing caused by `justify-content:space-between`
+- Fix: Orders widget — stale Entry price line is now correctly cleared when a position is closed during a WebSocket keepalive outage; two-pronged fix: (1) current DB position state is pushed to new chart subscribers immediately on connect; (2) PBData notifies the API server after every `update_positions()` write so all chart WebSocket subscribers receive the up-to-date position without waiting for the next WS delta event
+
 ## v1.67 (22-03-2026)
+- Fix: PBData — added per-exchange `asyncio.Semaphore(2)` to all three WS keepalive handlers (balance, positions, orders); when a server-side event drops all N connections simultaneously, at most 2 reconnects proceed concurrently per exchange, spreading the reconnect storm over several seconds and preventing event-loop congestion that caused cascading ping-pong failures on other exchanges
 - New: Dashboard page fully migrated to pure FastAPI + Vanilla JS — no Streamlit polling, no iframes; editor and live view are standalone HTML pages served by the API server, embedded via `st.html`
 - New: Dashboard editor — grid-based layout with configurable column count and per-cell height; drag-to-swap widgets in live view by dragging the widget title bar; resize cells via a bottom-right drag handle
 - New: Dashboard widgets: ⚖️ Balance, 📊 PNL, 📈 ADG, 📉 P+L, 💰 Income, 🏆 Top, 📋 Positions, 📝 Orders — all configurable per cell (users, period, mode)
