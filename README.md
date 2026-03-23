@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.67
+# v1.68
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
