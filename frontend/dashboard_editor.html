@@ -89,11 +89,20 @@ body.standalone-mode .editor-wrapper {
 .status.error  { color: #fc8181; }
 /* ── Grid ── */
 .editor-grid {
-  display: grid;
+  display: flex;
+  align-items: flex-start;
   gap: 0.75rem;
 }
-.editor-grid.cols-2 { grid-template-columns: 1fr 1fr; }
-.editor-grid.cols-1 { grid-template-columns: 1fr; }
+.editor-grid.cols-2 { /* column count handled via JS column wrappers */ }
+.editor-grid.cols-1 { /* column count handled via JS column wrappers */ }
+/* ── Column wrapper: independent flex column per grid column ── */
+.editor-grid-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
 /* ── Cell ── */
 .editor-cell {
   background: #1a202c;
@@ -290,12 +299,15 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
 body.view-mode .editor-sticky-top,
 body.view-mode #grid-footer { display: none !important; }
 body.view-mode .editor-wrapper { height: 100vh; padding: 0.5rem; }
-body.view-mode .editor-scroll-area { height: 100%; }
 body.view-mode .cell-inline-preview {
   min-height: 320px;
 }
 body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 360px; }
 .editor-cell { min-height: 360px; }
+/* Table-only widgets (BALANCE, POSITIONS) shrink to their content rows */
+.editor-cell.auto-height { min-height: 0 !important; }
+body.view-mode .editor-cell.auto-height { min-height: 0 !important; }
+body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !important; }
 /* ── Standalone mode: no longer has Save/Cancel buttons ── */
 #standalone-toolbar { display: none !important; }
 /* flex chain so Plotly charts fill the available cell height when resized */
@@ -392,7 +404,7 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
 /* ── Resize handle ── */
 .resize-handle {
   position: absolute; bottom: 0; left: 0; right: 0;
-  height: 6px; cursor: ns-resize;
+  height: 16px; cursor: ns-resize;
   background: transparent;
   transition: background 0.15s;
   z-index: 5;
@@ -401,7 +413,7 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
   background: rgba(99,179,237,0.3);
 }
 .resize-handle::after {
-  content: ''; position: absolute; bottom: 2px;
+  content: ''; position: absolute; bottom: 5px;
   left: 50%; transform: translateX(-50%);
   width: 32px; height: 2px; border-radius: 1px;
   background: #4a5568;
@@ -409,19 +421,20 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
 .resize-handle:hover::after, .resize-handle.active::after {
   background: #63b3ed;
 }
-/* ── View-mode floating save button ── */
-#view-save-btn {
-  position: fixed; top: 0.6rem; right: 0.6rem; z-index: 9000;
-  display: none; align-items: center; gap: 0.35rem;
-  padding: 0.3rem 0.75rem; background: #2d3748;
-  border: 1px solid #4a5568; border-radius: 6px;
-  color: #e2e8f0; font-size: 0.82rem; cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-  transition: border-color 0.2s, color 0.2s;
+.resize-btn {
+  position: absolute; top: 1px;
+  font-size: 9px; line-height: 13px;
+  padding: 0 5px; height: 13px;
+  background: rgba(55,65,81,0.85); color: #94a3b8;
+  border: 1px solid #4a5568; border-radius: 3px;
+  cursor: pointer; opacity: 0;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+  z-index: 6; user-select: none;
 }
-#view-save-btn.dirty { display: flex; }
-#view-save-btn.saved { border-color: #48bb78; color: #48bb78; }
-#view-save-btn.error { border-color: #fc8181; color: #fc8181; }
+.resize-handle:hover .resize-btn { opacity: 1; }
+.resize-btn:hover { color: #fff; background: rgba(99,179,237,0.8); border-color: #63b3ed; }
+.resize-btn-min { left: 6px; }
+.resize-btn-max { right: 6px; }
 /* .db-* and .dt-* styles are injected by dashboard_render.js via DashRender.injectCSS() */
 </style>
 </head>
@@ -456,7 +469,6 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
   </div>
 </div>
 </div>
-<div id="view-save-btn"></div>
 
 <script>
 (function () {
@@ -492,8 +504,7 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
   var btnAddRow    = document.getElementById('btn-add-row');
   var btnRemoveRow = document.getElementById('btn-remove-row');
   var paletteEl    = document.getElementById('palette-items');
-  var viewSaveBtn  = document.getElementById('view-save-btn');
-  if (viewSaveBtn) viewSaveBtn.addEventListener('click', function () { saveViewLayout(); });
+
 
 
   /* ── widget metadata (icon + label) ── */
@@ -595,27 +606,19 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
   }
 
   function markViewDirty() {
-    if (!VIEW_ONLY || !viewSaveBtn) return;
-    viewSaveBtn.textContent = '\ud83d\udcbe Save layout';
-    viewSaveBtn.className = 'dirty';
+    if (!VIEW_ONLY) return;
+    try { window.parent.postMessage({ type: 'pbgui_view_dirty' }, '*'); } catch (_) {}
   }
 
   function saveViewLayout() {
-    if (!viewSaveBtn) return;
-    viewSaveBtn.textContent = '\u23f3 Saving\u2026';
     var payload = {};
     Object.keys(state).forEach(function (k) { payload[k] = state[k]; });
     apiFetch('/dashboards/' + encodeURIComponent(ORIG_NAME), {
       method: 'POST',
       body: JSON.stringify(payload)
     }).then(function () {
-      viewSaveBtn.textContent = '\u2713 Saved';
-      viewSaveBtn.className = 'saved';
-      setTimeout(function () { viewSaveBtn.className = ''; }, 2000);
-    }).catch(function () {
-      viewSaveBtn.textContent = '\u26a0 Error';
-      viewSaveBtn.className = 'error';
-    });
+      try { window.parent.postMessage({ type: 'pbgui_view_saved' }, '*'); } catch (_) {}
+    }).catch(function () { /* stay dirty on error */ });
   }
 
   /* ── DOM builders ── */
@@ -961,6 +964,13 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
             icon: _widgetIcon('BALANCE'), onDelete: _makeDeleteCb(r, c)
           });
           _attachViewDrag(container, r, c);
+          /* shrink cell to content when no explicit height has been stored */
+          var _balCell = container.closest('.editor-cell');
+          var _balHKey = 'dashboard_height_' + r + '_' + c;
+          if (_balCell && !parseInt(state[_balHKey], 10)) {
+            _balCell.style.height = '';
+            _balCell.classList.add('auto-height');
+          }
           reportHeight();
         });
       })
@@ -1236,10 +1246,11 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
              At this point the cell is sized by CSS Grid (other widgets in the
              row or min-height: 360px) — NOT by the 100-row table content.
              Setting an explicit height gives the flex chain a definite
-             constraint so .di-table-wrap scrolls instead of expanding. */
+             constraint so .di-table-wrap scrolls instead of expanding.
+             Skip when auto-height class is present (user double-clicked to reset). */
           if (!_storedH || _storedH <= 0) {
             var _cell = container.closest('.editor-cell');
-            if (_cell && !_cell.style.height) {
+            if (_cell && !_cell.style.height && !_cell.classList.contains('auto-height')) {
               var _preH = Math.round(_cell.getBoundingClientRect().height);
               if (_preH > 100) {
                 _cell.style.height = _preH + 'px';
@@ -1710,6 +1721,13 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
             icon: _widgetIcon('POSITIONS'), onDelete: _makeDeleteCb(r, c)
           });
           _attachViewDrag(container, r, c);
+          /* shrink cell to content when no explicit height has been stored */
+          var _posCell = container.closest('.editor-cell');
+          var _posHKey = 'dashboard_height_' + r + '_' + c;
+          if (_posCell && !parseInt(state[_posHKey], 10)) {
+            _posCell.style.height = '';
+            _posCell.classList.add('auto-height');
+          }
           reportHeight();
         });
       })
@@ -1966,6 +1984,16 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
     var cols = state.cols || 1;
     gridEl.className = 'editor-grid cols-' + cols;
 
+    /* Build one column-wrapper per column so cells in different columns
+       do not share row height — each column grows/shrinks independently. */
+    var colEls = [];
+    for (var ci = 0; ci < cols; ci++) {
+      var colDiv = document.createElement('div');
+      colDiv.className = 'editor-grid-col';
+      gridEl.appendChild(colDiv);
+      colEls.push(colDiv);
+    }
+
     for (var r = 1; r <= rows; r++) {
       for (var c = 1; c <= cols; c++) {
         var pos = r + '_' + c;
@@ -2079,6 +2107,17 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
 
         /* ── resize handle ── */
         var resizeHandle = el('div', 'resize-handle');
+        resizeHandle.title = 'Drag to resize';
+        var rBtnMin = document.createElement('button');
+        rBtnMin.className = 'resize-btn resize-btn-min';
+        rBtnMin.title = 'Collapse to compact (scrollable)';
+        rBtnMin.textContent = '\u22d6 min';
+        resizeHandle.appendChild(rBtnMin);
+        var rBtnMax = document.createElement('button');
+        rBtnMax.className = 'resize-btn resize-btn-max';
+        rBtnMax.title = 'Expand to show all rows';
+        rBtnMax.textContent = 'max \u22d7';
+        resizeHandle.appendChild(rBtnMax);
         cell.appendChild(resizeHandle);
         (function (row, col, cellEl, handle) {
           var hKey = 'dashboard_height_' + row + '_' + col;
@@ -2133,30 +2172,92 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
             var finalH = Math.max(120, startH + (e.clientY - startY));
+            cellEl.style.minHeight = '';
             cellEl.style.height = finalH + 'px';
             cellEl.style.overflow = 'hidden';
             state[hKey] = finalH;
+            cellEl.classList.remove('auto-height');
             if (VIEW_ONLY) { markViewDirty(); } else { scheduleSync(); }
             /* resize Plotly charts inside this cell */
             resizePlotsInCell();
             reportHeight();
           }
+          /* Double-click resize bar → reset to auto-height (fit visible rows) */
+          handle.addEventListener('dblclick', function (e) {
+            e.stopPropagation();
+            delete state[hKey];
+            cellEl.classList.add('auto-height');
+            cellEl.style.minHeight = '';
+            cellEl.style.height = '';
+            cellEl.style.overflow = '';
+            if (VIEW_ONLY) { markViewDirty(); } else { scheduleSync(); }
+            resizePlotsInCell();
+            reportHeight();
+          });
           handle.addEventListener('mousedown', function (e) {
             e.preventDefault(); e.stopPropagation();
             handle.classList.add('active');
+            startH = Math.round(cellEl.getBoundingClientRect().height);
             startY = e.clientY;
-            startH = cellEl.getBoundingClientRect().height;
+            /* Anchor the cell at its current measured height immediately.
+               Keep auto-height class active during the drag so that CSS
+               min-height:360px cannot override style.height while shrinking.
+               Also set style.minHeight='0' for cells that had a stored height
+               (no auto-height class) so their min-height is also suppressed. */
+            cellEl.style.minHeight = '0';
+            cellEl.style.height = startH + 'px';
+            cellEl.style.overflow = 'hidden';
+            /* Tell parent to lock page scroll so the iframe doesn't shift under the mouse */
+            try { parent.postMessage({ type: 'pbgui_resize_start' }, '*'); } catch(_) {}
+            /* Freeze scroll on table wrappers so upward drag doesn't scroll the table */
+            cellEl.querySelectorAll('.di-table-wrap, .dp-table-wrap, .db-table-wrap').forEach(function (w) {
+              w._prevOverflowY = w.style.overflowY;
+              w.style.overflowY = 'hidden';
+            });
             document.addEventListener('mousemove', onMouseMove);
             document.addEventListener('mouseup', function onUp(ev) {
               document.removeEventListener('mouseup', onUp);
+              /* Restore scroll on table wrappers */
+              cellEl.querySelectorAll('.di-table-wrap, .dp-table-wrap, .db-table-wrap').forEach(function (w) {
+                w.style.overflowY = w._prevOverflowY || '';
+                delete w._prevOverflowY;
+              });
+              /* Unlock parent page scroll */
+              try { parent.postMessage({ type: 'pbgui_resize_end' }, '*'); } catch(_) {}
               onMouseUp(ev);
             });
+          });
+          /* ── Min button: collapse to compact scrollable view ── */
+          rBtnMin.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+          rBtnMin.addEventListener('click', function (e) {
+            e.stopPropagation();
+            state[hKey] = 200;
+            cellEl.classList.remove('auto-height');
+            cellEl.style.minHeight = '';
+            cellEl.style.height = '200px';
+            cellEl.style.overflow = 'hidden';
+            if (VIEW_ONLY) { markViewDirty(); } else { scheduleSync(); }
+            resizePlotsInCell();
+            reportHeight();
+          });
+          /* ── Max button: expand to show all content rows ── */
+          rBtnMax.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+          rBtnMax.addEventListener('click', function (e) {
+            e.stopPropagation();
+            delete state[hKey];
+            cellEl.classList.add('auto-height');
+            cellEl.style.minHeight = '';
+            cellEl.style.height = '';
+            cellEl.style.overflow = '';
+            if (VIEW_ONLY) { markViewDirty(); } else { scheduleSync(); }
+            resizePlotsInCell();
+            reportHeight();
           });
         })(r, c, cell, resizeHandle);
 
         buildCellConfig(cfgDiv, r, c);
 
-        gridEl.appendChild(cell);
+        colEls[c - 1].appendChild(cell);
       }
     }
     reportHeight();
@@ -2384,6 +2485,8 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
       doCancel();
     } else if (e.data.type === 'pbgui_trigger_save') {
       doSave();
+    } else if (e.data.type === 'pbgui_trigger_view_save') {
+      saveViewLayout();
     }
   });
 
@@ -2402,6 +2505,8 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
     var _ws          = null;
     var _reconnDelay = 1000;
     var _reconnTimer = null;
+    var _rebuildTimer = null;
+    var _pendingTypes = [];
 
     function _rebuildCellsOfTypes(types) {
       var rows = state.rows || 1;
@@ -2435,10 +2540,23 @@ body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 36
       _ws.onmessage = function (evt) {
         try {
           var m = JSON.parse(evt.data);
+          var types = null;
           if (m.type === 'income_updated') {
-            _rebuildCellsOfTypes(['INCOME', 'TOP', 'PNL', 'ADG', 'P+L']);
+            types = ['INCOME', 'TOP', 'PNL', 'ADG', 'P+L'];
           } else if (m.type === 'balance_updated') {
-            _rebuildCellsOfTypes(['BALANCE', 'POSITIONS']);
+            types = ['BALANCE', 'POSITIONS'];
+          }
+          if (types) {
+            /* merge into pending set and debounce rebuild by 300 ms */
+            types.forEach(function (t) {
+              if (_pendingTypes.indexOf(t) === -1) _pendingTypes.push(t);
+            });
+            clearTimeout(_rebuildTimer);
+            _rebuildTimer = setTimeout(function () {
+              var toRebuild = _pendingTypes.slice();
+              _pendingTypes = [];
+              _rebuildCellsOfTypes(toRebuild);
+            }, 300);
           }
         } catch (_e) {}
       };

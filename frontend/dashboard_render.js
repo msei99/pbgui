@@ -349,6 +349,26 @@
     function buildBalance(container, data, opts) {
         injectCSS();
         opts = opts || {};
+        /* Fast-path: update existing balance widget in-place (avoids blank-frame flicker) */
+        var _dbRoot = container.querySelector('.db-root');
+        var _dbTbody = _dbRoot && _dbRoot.querySelector('.db-table tbody');
+        if (_dbRoot && _dbTbody && data && (data.rows || []).length > 0) {
+            var _t = (data.totals) ? data.totals : {};
+            var _totDiv = _dbRoot.querySelector('.db-totals');
+            if (_totDiv) {
+                _totDiv.innerHTML =
+                    '<div class="db-total-item"><label>Total Balance</label>' +
+                    '<span class="db-green">$' + (_t.balance || 0).toFixed(2) + ' USDT</span></div>' +
+                    '<div class="db-total-item"><label>Total uPnl</label>' +
+                    '<span style="color:' + upnlColor(_t.upnl || 0) + '">' + signedFmt(_t.upnl || 0) + '</span></div>' +
+                    '<div class="db-total-item"><label>Total TWE</label>' +
+                    '<span style="color:' + tweColor(_t.we || 0) + '">' + (_t.we || 0).toFixed(2) + ' %</span></div>';
+            }
+            var _st = _dbRoot.querySelector('.db-status');
+            if (_st) _st.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+            renderBalanceRows(_dbTbody, data.rows);
+            return;
+        }
         container.innerHTML = '';
 
         var t    = (data && data.totals) ? data.totals : {};
@@ -533,8 +553,9 @@
                 }
             ]
         };
+        layout.transition = { duration: 0, easing: 'linear' };
         P.react(chartDiv, [trace], layout, cfg);
-        setTimeout(function () { P.Plots.resize(chartDiv); }, 80);
+        if (!opts.noResize) { setTimeout(function () { P.Plots.resize(chartDiv); }, 80); }
     }
 
     /**
@@ -548,6 +569,14 @@
     function buildTop(container, data, opts) {
         injectCSS();
         opts = opts || {};
+        /* Fast-path: if chart already rendered, update in-place via Plotly.react */
+        var _fc = container.querySelector('.dt-chart');
+        if (_fc && data && (data.rows || []).length > 0) {
+            var _dr = container.querySelector('.dt-daterange');
+            if (_dr) _dr.textContent = (data.from_date && data.to_date) ? 'From: ' + data.from_date + '  To: ' + data.to_date : '';
+            renderTop(_fc, data, { noResize: true });
+            return;
+        }
         container.innerHTML = '';
 
         var root = document.createElement('div');
@@ -725,6 +754,29 @@
     function buildIncome(container, data, opts) {
         injectCSS();
         opts = opts || {};
+        /* Fast-path for chart mode: update existing Plotly chart in-place */
+        var _incMode = (data && data.mode) || 'chart';
+        if (_incMode === 'chart') {
+            var _diChart = container.querySelector('.di-chart');
+            if (_diChart && data && (data.traces || []).length > 0) {
+                var _dr = container.querySelector('.dt-daterange');
+                if (_dr) _dr.textContent = (data.from_date && data.to_date) ? 'From: ' + data.from_date + '  To: ' + data.to_date : '';
+                var _plotTraces = (data.traces || []).map(function(t) {
+                    return { x: t.x, y: t.y, name: t.name, type: 'scatter', mode: 'lines', showlegend: true };
+                });
+                var _layout = {
+                    paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
+                    font: { color: '#e2e8f0', size: 11 }, margin: { l: 55, r: 15, t: 40, b: 40 },
+                    autosize: true,
+                    xaxis: { gridcolor: '#2d3748', color: '#e2e8f0' },
+                    yaxis: { gridcolor: '#2d3748', color: '#e2e8f0', zeroline: true, zerolinecolor: '#4a5568' },
+                    legend: { bgcolor: 'rgba(0,0,0,0)', font: { size: 10, color: '#e2e8f0' } },
+                    transition: { duration: 0, easing: 'linear' }
+                };
+                if (typeof Plotly !== 'undefined') { Plotly.react(_diChart, _plotTraces, _layout, { responsive: true, displayModeBar: false }); }
+                return;
+            }
+        }
         container.innerHTML = '';
 
         var root = document.createElement('div');
@@ -1362,10 +1414,11 @@
             ]
         };
 
+        layout.transition = { duration: 0, easing: 'linear' };
         if (typeof Plotly !== 'undefined') {
-            Plotly.newPlot(chartDiv, plotTraces, layout, plotCfg);
+            Plotly.react(chartDiv, plotTraces, layout, plotCfg);
             /* Ensure chart fills container after layout settles */
-            setTimeout(function () { Plotly.Plots.resize(chartDiv); }, 80);
+            if (!opts.noResize) { setTimeout(function () { Plotly.Plots.resize(chartDiv); }, 80); }
         }
     }
 
@@ -1474,13 +1527,22 @@
                 }
             ]
         };
+        layout.transition = { duration: 0, easing: 'linear' };
         P.react(chartDiv, [trace], layout, cfg);
-        setTimeout(function () { P.Plots.resize(chartDiv); }, 80);
+        if (!opts.noResize) { setTimeout(function () { P.Plots.resize(chartDiv); }, 80); }
     }
 
     function buildPnl(container, data, opts) {
         injectCSS();
         opts = opts || {};
+        /* Fast-path: if chart already rendered, update in-place via Plotly.react */
+        var _fc = container.querySelector('.dt-chart');
+        if (_fc && data && (data.bars || []).length > 0) {
+            var _dr = container.querySelector('.dt-daterange');
+            if (_dr) _dr.textContent = (data.from_date && data.to_date) ? 'From: ' + data.from_date + '  To: ' + data.to_date : '';
+            renderPnl(_fc, data, { noResize: true });
+            return;
+        }
         container.innerHTML = '';
 
         var root = document.createElement('div');
@@ -1741,13 +1803,22 @@
                 }
             ]
         };
+        layout.transition = { duration: 0, easing: 'linear' };
         P.react(chartDiv, [profitTrace, lossTrace], layout, cfg);
-        setTimeout(function () { P.Plots.resize(chartDiv); }, 80);
+        if (!opts.noResize) { setTimeout(function () { P.Plots.resize(chartDiv); }, 80); }
     }
 
     function buildPpl(container, data, opts) {
         injectCSS();
         opts = opts || {};
+        /* Fast-path: if chart already rendered, update in-place via Plotly.react */
+        var _fc = container.querySelector('.dt-chart');
+        if (_fc && data && (data.bars || []).length > 0) {
+            var _dr = container.querySelector('.dt-daterange');
+            if (_dr) _dr.textContent = (data.from_date && data.to_date) ? 'From: ' + data.from_date + '  To: ' + data.to_date : '';
+            renderPpl(_fc, data, { noResize: true });
+            return;
+        }
         container.innerHTML = '';
 
         var root = document.createElement('div');
@@ -1888,6 +1959,11 @@
     function buildPositions(container, data, opts) {
         injectCSS();
         opts = opts || {};
+        /* Fast-path: update existing positions widget in-place (avoids blank-frame flicker) */
+        if (typeof container._dpUpdate === 'function' && data && data.positions) {
+            container._dpUpdate(data.positions);
+            return;
+        }
         container.innerHTML = '';
 
         var root = document.createElement('div');
@@ -2046,6 +2122,14 @@
             }
         }
         renderRows();
+        /* Expose in-place update hook for WS fast-path (preserves sort state, avoids DOM rebuild) */
+        container._dpUpdate = function (newPositions) {
+            rows.length = 0;
+            Array.prototype.push.apply(rows, newPositions);
+            var _s = container.querySelector('.dt-status');
+            if (_s) _s.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+            renderRows();
+        };
     }
 
 
@@ -2724,14 +2808,23 @@
                 }
             ]
         };
+        layout.transition = { duration: 0, easing: 'linear' };
         P.react(chartDiv, [trace], layout, cfg);
-        setTimeout(function () { P.Plots.resize(chartDiv); }, 80);
+        if (!opts.noResize) { setTimeout(function () { P.Plots.resize(chartDiv); }, 80); }
     }
 
 
     function buildAdg(container, data, opts) {
         injectCSS();
         opts = opts || {};
+        /* Fast-path: if chart already rendered, update in-place via Plotly.react */
+        var _fc = container.querySelector('.dt-chart');
+        if (_fc && data && (data.bars || []).length > 0) {
+            var _dr = container.querySelector('.dt-daterange');
+            if (_dr) _dr.textContent = (data.from_date && data.to_date) ? 'From: ' + data.from_date + '  To: ' + data.to_date : '';
+            renderAdg(_fc, data, { noResize: true });
+            return;
+        }
         container.innerHTML = '';
 
         var root = document.createElement('div');

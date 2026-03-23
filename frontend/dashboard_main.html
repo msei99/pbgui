@@ -208,6 +208,12 @@ html, body {
   border-color: rgba(72,187,120,0.3);
 }
 .sb-btn.edit-mode-save:hover { background: rgba(72,187,120,0.18); border-color: #48bb78; }
+.sb-btn.view-save {
+  background: rgba(99,179,237,0.08);
+  color: #63b3ed;
+  border-color: rgba(99,179,237,0.35);
+}
+.sb-btn.view-save:hover { background: rgba(99,179,237,0.18); border-color: #63b3ed; }
 
 #edit-mode-banner {
   display: none;
@@ -1030,6 +1036,7 @@ html, body {
   /* ── state ── */
   var currentDash = CURRENT || '';
   var editMode    = false;
+  var viewDirty   = false;
 
   /* ── DOM refs ── */
   var editBanner     = document.getElementById('edit-mode-banner');
@@ -1083,6 +1090,8 @@ html, body {
     if (!name) return;
     currentDash = name;
     editMode = false;
+    viewDirty = false;
+    updateViewSaveBtn();
     editBanner.classList.remove('visible');
     contentLoading.style.display = 'flex';
     contentFrame.classList.remove('visible');
@@ -1134,6 +1143,31 @@ html, body {
         if (thenLoad) thenLoad();
       })
       .catch(function () {});
+  }
+
+  /* ── Show/hide view-layout save button next to templates btn ── */
+  function updateViewSaveBtn() {
+    var existing = document.getElementById('sb-view-save');
+    if (viewDirty && !editMode && currentDash) {
+      if (!existing) {
+        var tplBtn = document.getElementById('sb-templates');
+        if (tplBtn) {
+          var btn = document.createElement('button');
+          btn.className = 'sb-btn view-save';
+          btn.id = 'sb-view-save';
+          btn.title = 'Save view layout';
+          btn.innerHTML = '&#128190;';
+          btn.addEventListener('click', function () {
+            if (contentFrame.contentWindow) {
+              contentFrame.contentWindow.postMessage({ type: 'pbgui_trigger_view_save' }, '*');
+            }
+          });
+          tplBtn.parentNode.insertBefore(btn, tplBtn.nextSibling);
+        }
+      }
+    } else {
+      if (existing) existing.remove();
+    }
   }
 
   /* ── Render sidebar toolbar based on mode ── */
@@ -1272,6 +1306,19 @@ html, body {
         contentFrame.classList.remove('visible');
         contentFrame.src = '';
       }
+    } else if (t === 'pbgui_view_dirty') {
+      viewDirty = true;
+      updateViewSaveBtn();
+    } else if (t === 'pbgui_view_saved') {
+      viewDirty = false;
+      updateViewSaveBtn();
+    } else if (t === 'pbgui_resize_start') {
+      /* Lock page scroll so the iframe doesn't shift during a cell resize drag */
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden';
+    } else if (t === 'pbgui_resize_end') {
+      document.documentElement.style.overflow = '';
+      document.body.style.overflow = '';
     } else if (t === 'pbgui_dashboard_created') {
       refreshList(function () { loadView(e.data.name || currentDash); });
     }
