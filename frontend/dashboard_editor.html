@@ -274,68 +274,43 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
 .grid-footer-btn:hover:not(:disabled) { border-color: #63b3ed; color: #e2e8f0; }
 .grid-footer-btn:disabled { opacity: 0.3; cursor: default; }
 .cell-inline-preview {
-  margin-top: 0.5rem;
-  border-top: 1px solid #2d3748;
-  padding-top: 0.4rem;
   flex: 1;
   min-height: 120px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-/* ── View-only mode: hide all editing controls ── */
+/* cell-header and cell-cfg are always hidden — widgets show their own dt-header */
+.cell-header,
+.cell-cfg { display: none !important; }
+/* dt-header is always draggable for cell swap */
+.dt-header { cursor: grab; }
+.editor-cell.dragging .dt-header { cursor: grabbing; }
+/* ── View-only mode: hide editing chrome ── */
 body.view-mode .editor-sticky-top,
 body.view-mode #grid-footer { display: none !important; }
 body.view-mode .editor-wrapper { height: 100vh; padding: 0.5rem; }
 body.view-mode .editor-scroll-area { height: 100%; }
-body.view-mode .cell-header,
-body.view-mode .cell-cfg { display: none !important; }
 body.view-mode .cell-inline-preview {
-  margin-top: 0; border-top: none; padding-top: 0;
-  min-height: 320px; flex: 1;
+  min-height: 320px;
 }
 body.view-mode .editor-cell { cursor: default !important; gap: 0; min-height: 360px; }
-body.view-mode .dt-header { cursor: grab; }
-body.view-mode .editor-cell.dragging .dt-header { cursor: grabbing; }
-/* ── Standalone mode: extra save/cancel toolbar ── */
-#standalone-toolbar {
-  display: none;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0 0.5rem;
-  flex-shrink: 0;
-}
-body.standalone-mode #standalone-toolbar { display: flex; }
-.sa-btn {
-  padding: 0.3rem 0.8rem;
-  border-radius: 5px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  border: 1px solid;
-  transition: background 0.12s, border-color 0.12s;
-}
-.sa-btn.save {
-  background: rgba(72,187,120,0.1);
-  color: #48bb78;
-  border-color: rgba(72,187,120,0.4);
-}
-.sa-btn.save:hover { background: rgba(72,187,120,0.22); border-color: #48bb78; }
-.sa-btn.cancel {
-  background: #1a202c;
-  color: #94a3b8;
-  border-color: #4a5568;
-}
-.sa-btn.cancel:hover { background: #252d3d; color: #e2e8f0; border-color: #718096; }
+.editor-cell { min-height: 360px; }
+/* ── Standalone mode: no longer has Save/Cancel buttons ── */
+#standalone-toolbar { display: none !important; }
 /* flex chain so Plotly charts fill the available cell height when resized */
 .cell-inline-preview > .dt-root,
 .cell-inline-preview > .di-root {
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-height: 0; /* allow shrinking below content size */
 }
-.cell-inline-preview .dt-chart {
+.cell-inline-preview .dt-chart,
+.cell-inline-preview .di-chart {
   flex: 1;
+  min-height: 0;     /* allow flex to shrink the chart below Plotly SVG height */
+  overflow: hidden;  /* clip SVG overflow during resize drag */
 }
 /* ── Widget Palette (wraps, right side of header) ── */
 .widget-palette {
@@ -434,12 +409,25 @@ body.standalone-mode #standalone-toolbar { display: flex; }
 .resize-handle:hover::after, .resize-handle.active::after {
   background: #63b3ed;
 }
+/* ── View-mode floating save button ── */
+#view-save-btn {
+  position: fixed; top: 0.6rem; right: 0.6rem; z-index: 9000;
+  display: none; align-items: center; gap: 0.35rem;
+  padding: 0.3rem 0.75rem; background: #2d3748;
+  border: 1px solid #4a5568; border-radius: 6px;
+  color: #e2e8f0; font-size: 0.82rem; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  transition: border-color 0.2s, color 0.2s;
+}
+#view-save-btn.dirty { display: flex; }
+#view-save-btn.saved { border-color: #48bb78; color: #48bb78; }
+#view-save-btn.error { border-color: #fc8181; color: #fc8181; }
 /* .db-* and .dt-* styles are injected by dashboard_render.js via DashRender.injectCSS() */
 </style>
 </head>
-<body>
+<body class="%%BODY_CLASS%%">
 <div class="editor-wrapper">
-  <div class="editor-sticky-top">
+  <div class="editor-sticky-top" style="%%EDIT_ONLY_STYLE%%">
     <div class="editor-header">
       <div class="hdr-left">
         <div class="hdr-field">
@@ -452,10 +440,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
         <div id="status" class="status"></div>
       </div>
       <div class="hdr-right">
-        <div id="standalone-toolbar">
-          <button id="btn-sa-save" class="sa-btn save">&#128190; Save</button>
-          <button id="btn-sa-cancel" class="sa-btn cancel">&#x2715; Cancel</button>
-        </div>
+        <div id="standalone-toolbar"></div>
         <div id="widget-palette" class="widget-palette">
           <span class="palette-label">Widgets</span>
           <div id="palette-items" class="palette-items"></div>
@@ -465,12 +450,13 @@ body.standalone-mode #standalone-toolbar { display: flex; }
   </div>
   <div class="editor-scroll-area">
     <div id="editor-grid" class="editor-grid cols-1"></div>
-    <div id="grid-footer" class="grid-footer">
+    <div id="grid-footer" class="grid-footer" style="%%EDIT_ONLY_STYLE%%">
     <button id="btn-remove-row" class="grid-footer-btn" disabled>&#8722;&nbsp;Row</button>
     <button id="btn-add-row" class="grid-footer-btn">&#43;&nbsp;Row</button>
   </div>
 </div>
 </div>
+<div id="view-save-btn"></div>
 
 <script>
 (function () {
@@ -506,6 +492,8 @@ body.standalone-mode #standalone-toolbar { display: flex; }
   var btnAddRow    = document.getElementById('btn-add-row');
   var btnRemoveRow = document.getElementById('btn-remove-row');
   var paletteEl    = document.getElementById('palette-items');
+  var viewSaveBtn  = document.getElementById('view-save-btn');
+  if (viewSaveBtn) viewSaveBtn.addEventListener('click', function () { saveViewLayout(); });
 
 
   /* ── widget metadata (icon + label) ── */
@@ -604,6 +592,30 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     }).then(function (r) {
       if (r.ok) setStatus('saved', 'saved'); else setStatus('error', 'error');
     }).catch(function () { setStatus('offline', 'error'); });
+  }
+
+  function markViewDirty() {
+    if (!VIEW_ONLY || !viewSaveBtn) return;
+    viewSaveBtn.textContent = '\ud83d\udcbe Save layout';
+    viewSaveBtn.className = 'dirty';
+  }
+
+  function saveViewLayout() {
+    if (!viewSaveBtn) return;
+    viewSaveBtn.textContent = '\u23f3 Saving\u2026';
+    var payload = {};
+    Object.keys(state).forEach(function (k) { payload[k] = state[k]; });
+    apiFetch('/dashboards/' + encodeURIComponent(ORIG_NAME), {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }).then(function () {
+      viewSaveBtn.textContent = '\u2713 Saved';
+      viewSaveBtn.className = 'saved';
+      setTimeout(function () { viewSaveBtn.className = ''; }, 2000);
+    }).catch(function () {
+      viewSaveBtn.textContent = '\u26a0 Error';
+      viewSaveBtn.className = 'error';
+    });
   }
 
   /* ── DOM builders ── */
@@ -879,6 +891,12 @@ body.standalone-mode #standalone-toolbar { display: flex; }
           buildOrdersInline(ipDiv, r, c);
         } else {
           ipDiv.innerHTML = '';
+          if (!VIEW_ONLY) {
+            var _empty = el('div', 'dt-status');
+            _empty.style.cssText = 'text-align:center;padding:2rem;color:#4a5568;';
+            _empty.textContent = 'Drag a widget here';
+            ipDiv.appendChild(_empty);
+          }
         }
       }
     }
@@ -891,11 +909,25 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     if (window._drLoading) { setTimeout(function () { _ensureRenderScript(cb); }, 50); return; }
     window._drLoading = true;
     var s = document.createElement('script');
-    s.src = API_BASE.replace(/\/api$/, '') + '/app/dashboard_render.js';
+    s.src = API_BASE.replace(/\/api$/, '') + '/app/dashboard_render.js?v=' + Date.now();
     s.onload  = function () { window._drLoading = false; if (window.DashRender) { DashRender.injectCSS(); } cb(); };
     s.onerror = function () { window._drLoading = false; cb(); };
     document.head.appendChild(s);
   }
+
+  /* helper: icon string for a widget type */
+  function _widgetIcon(type) {
+    var meta = WIDGET_META[type];
+    return meta ? meta.icon : null;
+  }
+  /* helper: onDelete callback (only in edit mode) */
+  function _makeDeleteCb(r, c) {
+    if (VIEW_ONLY) return null;
+    return function () { clearCell(r, c); buildGrid(); scheduleSync(); };
+  }
+
+  /* generation counter: prevents stale WS-refresh responses from replacing newer content */
+  var _buildGen = {};
 
   /* ── inline BALANCE preview — delegates to DashRender.buildBalance ── */
   function buildBalanceInline(container, r, c) {
@@ -903,28 +935,37 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     var uKey = 'dashboard_balance_users_' + pos;
     var users = state[uKey];
     var usersParam = (users && users.length > 0) ? users.join(',') : 'ALL';
-    var loading = document.createElement('div');
-    loading.className = 'db-status';
-    loading.textContent = 'Loading\u2026';
-    container.innerHTML = '';
-    container.appendChild(loading);
+    var _gKey = 'bal_' + pos;
+    var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    if (container.children.length === 0) {
+      var loading = document.createElement('div');
+      loading.className = 'db-status';
+      loading.textContent = 'Loading\u2026';
+      container.innerHTML = '';
+      container.appendChild(loading);
+    }
     var url = API_BASE + '/dashboard/balance'
       + '?users=' + encodeURIComponent(usersParam);
     fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (d) {
+        if (_buildGen[_gKey] !== _gen) return;
         _ensureRenderScript(function () {
           /* build the interactive users dropdown to embed directly in the preview header */
           var usersCtrl = makeUsersDropdown(state[uKey], function (v) {
             state[uKey] = v; scheduleSync();
             buildBalanceInline(container, r, c);
           });
-          DashRender.buildBalance(container, d, { usersControl: usersCtrl });
+          DashRender.buildBalance(container, d, {
+            usersControl: usersCtrl,
+            icon: _widgetIcon('BALANCE'), onDelete: _makeDeleteCb(r, c)
+          });
           _attachViewDrag(container, r, c);
           reportHeight();
         });
       })
       .catch(function (e) {
+        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'db-status';
@@ -951,11 +992,15 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     var displayPeriod = isCustom ? 'CUSTOM' : period;
     /* API period param: pass as-is (backend handles CUSTOM:from:to) */
     var apiPeriod = period;
-    var loading = document.createElement('div');
-    loading.className = 'dt-status';
-    loading.textContent = 'Loading…';
-    container.innerHTML = '';
-    container.appendChild(loading);
+    var _gKey = 'top_' + pos;
+    var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    if (container.children.length === 0) {
+      var loading = document.createElement('div');
+      loading.className = 'dt-status';
+      loading.textContent = 'Loading…';
+      container.innerHTML = '';
+      container.appendChild(loading);
+    }
     var url = API_BASE + '/dashboard/top_data'
       + '?users='  + encodeURIComponent(usersParam)
       + '&period=' + encodeURIComponent(period)
@@ -963,6 +1008,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (d) {
+        if (_buildGen[_gKey] !== _gen) return;
         _ensureRenderScript(function () {
           /* ── Top N number input ── */
           var topNCtrl = document.createElement('input');
@@ -1043,6 +1089,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
             topNControl: topNCtrl, periodControl: periodCtrl,
             fromControl: fromCtrl, toControl: toCtrl, toNowControl: toNowCtrl,
             usersControl: usersCtrl,
+            icon: _widgetIcon('TOP'), onDelete: _makeDeleteCb(r, c),
             height: _storedH > 0 ? _storedH : 280, displayModeBar: true, responsive: true
           });
           _attachViewDrag(container, r, c);
@@ -1050,6 +1097,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
         });
       })
       .catch(function (e) {
+        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'dt-status';
@@ -1081,11 +1129,15 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     var customFrom = '', customTo = '';
     if (isCustom) { var _cp = period.split(':'); customFrom = _cp[1] || ''; customTo = _cp[2] || ''; }
     var displayPeriod = isCustom ? 'CUSTOM' : period;
-    var loading = document.createElement('div');
-    loading.className = 'dt-status';
-    loading.textContent = 'Loading…';
-    container.innerHTML = '';
-    container.appendChild(loading);
+    var _gKey = 'inc_' + pos;
+    var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    if (container.children.length === 0) {
+      var loading = document.createElement('div');
+      loading.className = 'dt-status';
+      loading.textContent = 'Loading…';
+      container.innerHTML = '';
+      container.appendChild(loading);
+    }
     var url = API_BASE + '/dashboard/income_data'
       + '?users='  + encodeURIComponent(usersParam)
       + '&period=' + encodeURIComponent(period)
@@ -1094,6 +1146,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
       .then(function (d) {
+        if (_buildGen[_gKey] !== _gen) return;
         _ensureRenderScript(function () {
           /* ── Period select ── */
           var periodCtrl = document.createElement('select');
@@ -1179,6 +1232,21 @@ body.standalone-mode #standalone-toolbar { display: flex; }
             buildIncomeInline(container, r, c);
           });
           var _storedH = parseInt(state['dashboard_height_' + r + '_' + c], 10);
+          /* Capture the cell height BEFORE inserting the table.
+             At this point the cell is sized by CSS Grid (other widgets in the
+             row or min-height: 360px) — NOT by the 100-row table content.
+             Setting an explicit height gives the flex chain a definite
+             constraint so .di-table-wrap scrolls instead of expanding. */
+          if (!_storedH || _storedH <= 0) {
+            var _cell = container.closest('.editor-cell');
+            if (_cell && !_cell.style.height) {
+              var _preH = Math.round(_cell.getBoundingClientRect().height);
+              if (_preH > 100) {
+                _cell.style.height = _preH + 'px';
+                _cell.style.overflow = 'hidden';
+              }
+            }
+          }
           DashRender.buildIncome(container, d, {
             periodControl: periodCtrl,
             fromControl: fromCtrl, toControl: toCtrl, toNowControl: toNowCtrl,
@@ -1187,13 +1255,15 @@ body.standalone-mode #standalone-toolbar { display: flex; }
             apiBase: API_BASE, token: TOKEN,
             onReload: function () { buildIncomeInline(container, r, c); },
             users: users || ['ALL'],
-            height: _storedH > 0 ? _storedH : 280, displayModeBar: true, responsive: true
+            icon: _widgetIcon('INCOME'), onDelete: _makeDeleteCb(r, c),
+            height: null, displayModeBar: true, responsive: true
           });
           _attachViewDrag(container, r, c);
           setTimeout(reportHeight, 100);
         });
       })
       .catch(function (e) {
+        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'dt-status';
@@ -1222,11 +1292,15 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     var customFrom = '', customTo = '';
     if (isCustom) { var _cp = period.split(':'); customFrom = _cp[1] || ''; customTo = _cp[2] || ''; }
     var displayPeriod = isCustom ? 'CUSTOM' : period;
-    var loading = document.createElement('div');
-    loading.className = 'dt-status';
-    loading.textContent = 'Loading…';
-    container.innerHTML = '';
-    container.appendChild(loading);
+    var _gKey = 'pnl_' + pos;
+    var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    if (container.children.length === 0) {
+      var loading = document.createElement('div');
+      loading.className = 'dt-status';
+      loading.textContent = 'Loading…';
+      container.innerHTML = '';
+      container.appendChild(loading);
+    }
     var url = API_BASE + '/dashboard/pnl_data'
       + '?users='  + encodeURIComponent(usersParam)
       + '&period=' + encodeURIComponent(period)
@@ -1234,6 +1308,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
       .then(function (d) {
+        if (_buildGen[_gKey] !== _gen) return;
         _ensureRenderScript(function () {
           /* ── Mode select ── */
           var modeCtrl = document.createElement('select');
@@ -1317,6 +1392,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
             modeControl: modeCtrl, periodControl: periodCtrl,
             fromControl: fromCtrl, toControl: toCtrl, toNowControl: toNowCtrl,
             usersControl: usersCtrl,
+            icon: _widgetIcon('PNL'), onDelete: _makeDeleteCb(r, c),
             height: _storedH > 0 ? _storedH : 280, displayModeBar: true, responsive: true
           });
           _attachViewDrag(container, r, c);
@@ -1324,6 +1400,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
         });
       })
       .catch(function (e) {
+        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'dt-status';
@@ -1350,11 +1427,15 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     var customFrom = '', customTo = '';
     if (isCustom) { var _cp = period.split(':'); customFrom = _cp[1] || ''; customTo = _cp[2] || ''; }
     var displayPeriod = isCustom ? 'CUSTOM' : period;
-    var loading = document.createElement('div');
-    loading.className = 'dt-status';
-    loading.textContent = 'Loading\u2026';
-    container.innerHTML = '';
-    container.appendChild(loading);
+    var _gKey = 'adg_' + pos;
+    var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    if (container.children.length === 0) {
+      var loading = document.createElement('div');
+      loading.className = 'dt-status';
+      loading.textContent = 'Loading\u2026';
+      container.innerHTML = '';
+      container.appendChild(loading);
+    }
     var url = API_BASE + '/dashboard/adg_data'
       + '?users='  + encodeURIComponent(usersParam)
       + '&period=' + encodeURIComponent(period)
@@ -1362,6 +1443,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
       .then(function (d) {
+        if (_buildGen[_gKey] !== _gen) return;
         _ensureRenderScript(function () {
           var modeCtrl = document.createElement('select');
           modeCtrl.className = 'dt-ctrl-sel';
@@ -1440,6 +1522,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
           DashRender.buildAdg(container, d, {
             modeControl: modeCtrl, periodControl: periodCtrl,
             fromControl: fromCtrl, toControl: toCtrl, toNowControl: toNowCtrl,
+            icon: _widgetIcon('ADG'), onDelete: _makeDeleteCb(r, c),
             usersControl: usersCtrl,
             height: _storedH > 0 ? _storedH : 280, displayModeBar: true, responsive: true
           });
@@ -1448,10 +1531,11 @@ body.standalone-mode #standalone-toolbar { display: flex; }
         });
       })
       .catch(function (e) {
+        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'dt-status';
-        err.textContent = '\u26A0 Data unavailable';
+        err.textContent = '\u26a0 Data unavailable';
         container.appendChild(err);
         reportHeight();
       });
@@ -1476,11 +1560,15 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     var customFrom = '', customTo = '';
     if (isCustom) { var _cp = period.split(':'); customFrom = _cp[1] || ''; customTo = _cp[2] || ''; }
     var displayPeriod = isCustom ? 'CUSTOM' : period;
-    var loading = document.createElement('div');
-    loading.className = 'dt-status';
-    loading.textContent = 'Loading\u2026';
-    container.innerHTML = '';
-    container.appendChild(loading);
+    var _gKey = 'ppl_' + pos;
+    var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    if (container.children.length === 0) {
+      var loading = document.createElement('div');
+      loading.className = 'dt-status';
+      loading.textContent = 'Loading\u2026';
+      container.innerHTML = '';
+      container.appendChild(loading);
+    }
     var url = API_BASE + '/dashboard/ppl_data'
       + '?users='      + encodeURIComponent(usersParam)
       + '&period='     + encodeURIComponent(period)
@@ -1488,6 +1576,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
       .then(function (d) {
+        if (_buildGen[_gKey] !== _gen) return;
         _ensureRenderScript(function () {
           /* ── Sum Period select ── */
           var sumCtrl = document.createElement('select');
@@ -1569,6 +1658,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
           var _storedH = parseInt(state['dashboard_height_' + r + '_' + c], 10);
           DashRender.buildPpl(container, d, {
             sumPeriodControl: sumCtrl, periodControl: periodCtrl,
+            icon: _widgetIcon('P+L'), onDelete: _makeDeleteCb(r, c),
             fromControl: fromCtrl, toControl: toCtrl, toNowControl: toNowCtrl,
             usersControl: usersCtrl,
             height: _storedH > 0 ? _storedH : 280, displayModeBar: true, responsive: true
@@ -1578,6 +1668,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
         });
       })
       .catch(function (e) {
+        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'dt-status';
@@ -1594,27 +1685,36 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     if (state[uKey] === undefined) state[uKey] = ['ALL'];
     var users = state[uKey];
     var usersParam = (users && users.length > 0) ? users.join(',') : 'ALL';
-    var loading = document.createElement('div');
-    loading.className = 'dt-status';
-    loading.textContent = 'Loading\u2026';
-    container.innerHTML = '';
-    container.appendChild(loading);
+    var _gKey = 'pos_' + pos;
+    var _gen = (_buildGen[_gKey] = (_buildGen[_gKey] || 0) + 1);
+    if (container.children.length === 0) {
+      var loading = document.createElement('div');
+      loading.className = 'dt-status';
+      loading.textContent = 'Loading\u2026';
+      container.innerHTML = '';
+      container.appendChild(loading);
+    }
     var url = API_BASE + '/dashboard/positions_data'
       + '?users=' + encodeURIComponent(usersParam);
     fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
       .then(function (d) {
+        if (_buildGen[_gKey] !== _gen) return;
         _ensureRenderScript(function () {
           var usersCtrl = makeUsersDropdown(state[uKey], function (v) {
             state[uKey] = v; scheduleSync();
             buildPositionsInline(container, r, c);
           });
-          DashRender.buildPositions(container, d, { usersControl: usersCtrl, position: pos });
+          DashRender.buildPositions(container, d, {
+            usersControl: usersCtrl, position: pos,
+            icon: _widgetIcon('POSITIONS'), onDelete: _makeDeleteCb(r, c)
+          });
           _attachViewDrag(container, r, c);
           reportHeight();
         });
       })
       .catch(function (e) {
+        if (_buildGen[_gKey] !== _gen || container.children.length > 0) return;
         container.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'dt-status';
@@ -1631,6 +1731,22 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     var linked = state[oKey] || '';
     var linkedGridPos = linked ? linked.replace('view_orders_', '') : '';
     container.innerHTML = '';
+
+    /* Auto-link to the first POSITIONS cell in the grid */
+    if (!linked) {
+      var _rows = state.rows || 1;
+      var _cols = state.cols || 1;
+      for (var _ar = 1; _ar <= _rows && !linked; _ar++) {
+        for (var _ac = 1; _ac <= _cols && !linked; _ac++) {
+          if (state['dashboard_type_' + _ar + '_' + _ac] === 'POSITIONS') {
+            linked = 'view_orders_' + _ar + '_' + _ac;
+            linkedGridPos = _ar + '_' + _ac;
+            state[oKey] = linked;
+            scheduleSync();
+          }
+        }
+      }
+    }
 
     /* Clean up previous listener if any */
     var _listenerKey = '_ordInlineListener_' + pos;
@@ -1669,7 +1785,10 @@ body.standalone-mode #standalone-toolbar { display: flex; }
       _ensureRenderScript(function () {
         if (chartCtrl && chartCtrl.destroy) chartCtrl.destroy();
         chartCtrl = null;
-        DashRender.buildOrders(container, null, { position: pos, message: msg });
+        DashRender.buildOrders(container, null, {
+          position: pos, message: msg,
+          icon: _widgetIcon('ORDERS'), onDelete: _makeDeleteCb(r, c)
+        });
         _attachViewDrag(container, r, c);
         reportHeight();
       });
@@ -1693,6 +1812,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
             chartCtrl = DashRender.buildOrders(container, d, {
               position: pos,
               timeframe: currentTimeframe,
+              icon: _widgetIcon('ORDERS'), onDelete: _makeDeleteCb(r, c),
               onTimeframeChange: function (tf) {
                 currentTimeframe = tf;
                 var _fid = ++_tfFetchId;
@@ -1770,7 +1890,6 @@ body.standalone-mode #standalone-toolbar { display: flex; }
 
   /* ── Attach drag to .dt-header in view-mode ── */
   function _attachViewDrag(container, row, col) {
-    if (!VIEW_ONLY) return;
     var hdr = container.querySelector('.dt-header');
     if (!hdr) return;
     var cellEl = container.closest('.editor-cell');
@@ -1815,13 +1934,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
     });
     buildGrid();
     if (VIEW_ONLY) {
-      /* view-mode: persist swap directly to disk */
-      var payload = {};
-      Object.keys(state).forEach(function (k) { payload[k] = state[k]; });
-      apiFetch('/dashboards/' + encodeURIComponent(ORIG_NAME), {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
+      markViewDirty();
     } else {
       scheduleSync();
     }
@@ -1978,17 +2091,35 @@ body.standalone-mode #standalone-toolbar { display: flex; }
             var plots = cellEl.querySelectorAll('.js-plotly-plot');
             if (plots.length > 0 && typeof Plotly !== 'undefined') {
               plots.forEach(function (p) {
-                /* read actual rendered height of the chart container */
-                var chartCt = p.closest('.dt-chart');
+                var chartCt = p.closest('.dt-chart') || p.closest('.di-chart');
                 if (chartCt) {
-                  var ctH = chartCt.getBoundingClientRect().height;
-                  if (ctH > 50) Plotly.relayout(p, { height: Math.round(ctH) });
+                  /* Clear fixed inline height → CSS flex (with min-height:0)
+                     computes the correct available height (grow or shrink).
+                     getBoundingClientRect forces a sync layout recalc. */
+                  chartCt.style.height = '';
+                  var ctH = Math.round(chartCt.getBoundingClientRect().height);
+                  if (ctH > 50) {
+                    chartCt.style.height = ctH + 'px';
+                    Plotly.relayout(p, { height: ctH });
+                  }
                 } else {
                   Plotly.Plots.resize(p);
                 }
               });
             }
+            /* Income table: clear inline styles — the cell has an explicit
+               height from the drag, so the flex chain constrains automatically */
+            cellEl.querySelectorAll('.di-root').forEach(function (dr) {
+              if (!dr.querySelector('.js-plotly-plot')) {
+                dr.style.height = '';
+                dr.style.maxHeight = '';
+                var wrap = dr.querySelector('.di-table-wrap');
+                if (wrap) { wrap.style.maxHeight = ''; }
+              }
+            });
           }
+          /* Expose on the cell element so widget builders can trigger it after async render */
+          cellEl._resizePlots = resizePlotsInCell;
           function onMouseMove(e) {
             var newH = Math.max(120, startH + (e.clientY - startY));
             cellEl.style.height = newH + 'px';
@@ -2005,7 +2136,7 @@ body.standalone-mode #standalone-toolbar { display: flex; }
             cellEl.style.height = finalH + 'px';
             cellEl.style.overflow = 'hidden';
             state[hKey] = finalH;
-            scheduleSync();
+            if (VIEW_ONLY) { markViewDirty(); } else { scheduleSync(); }
             /* resize Plotly charts inside this cell */
             resizePlotsInCell();
             reportHeight();
@@ -2222,45 +2353,37 @@ body.standalone-mode #standalone-toolbar { display: flex; }
 
   init();
 
-  /* ── Standalone mode: Save / Cancel buttons ── */
-  var btnSaSave   = document.getElementById('btn-sa-save');
-  var btnSaCancel = document.getElementById('btn-sa-cancel');
-
-  if (btnSaSave) {
-    btnSaSave.addEventListener('click', function () {
-      var name = (state.name || '').trim();
-      if (!name) { alert('Please enter a dashboard name.'); return; }
-      setStatus('saving…', '');
-      var payload = {};
-      Object.keys(state).forEach(function (k) { payload[k] = state[k]; });
-      apiFetch('/dashboards/' + encodeURIComponent(name), {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      }).then(function (r) {
-        if (r.ok) {
-          setStatus('saved', 'saved');
-          window.parent.postMessage({ type: 'pbgui_editor_saved', name: name }, '*');
-        } else {
-          setStatus('error', 'error');
-        }
-      }).catch(function () { setStatus('offline', 'error'); });
-    });
+  /* ── Save / Cancel — callable from sidebar messages ── */
+  function doSave() {
+    var name = (state.name || '').trim();
+    if (!name) { alert('Please enter a dashboard name.'); return; }
+    setStatus('saving\u2026', '');
+    var payload = {};
+    Object.keys(state).forEach(function (k) { payload[k] = state[k]; });
+    apiFetch('/dashboards/' + encodeURIComponent(name), {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }).then(function (r) {
+      if (r.ok) {
+        setStatus('saved', 'saved');
+        window.parent.postMessage({ type: 'pbgui_editor_saved', name: name }, '*');
+      } else {
+        setStatus('error', 'error');
+      }
+    }).catch(function () { setStatus('offline', 'error'); });
   }
 
-  if (btnSaCancel) {
-    btnSaCancel.addEventListener('click', function () {
-      window.parent.postMessage({ type: 'pbgui_editor_cancelled', original_name: ORIG_NAME }, '*');
-    });
+  function doCancel() {
+    window.parent.postMessage({ type: 'pbgui_editor_cancelled', original_name: ORIG_NAME }, '*');
   }
 
   /* ── Listen for messages from parent (sidebar buttons) ── */
   window.addEventListener('message', function (e) {
     if (!e.data || typeof e.data !== 'object') return;
     if (e.data.type === 'pbgui_trigger_cancel') {
-      window.parent.postMessage({ type: 'pbgui_editor_cancelled', original_name: ORIG_NAME }, '*');
+      doCancel();
     } else if (e.data.type === 'pbgui_trigger_save') {
-      var btn = document.getElementById('btn-sa-save');
-      if (btn) btn.click();
+      doSave();
     }
   });
 
@@ -2270,6 +2393,64 @@ body.standalone-mode #standalone-toolbar { display: flex; }
       d.classList.remove('open');
     });
   });
+
+  /* ── Live updates via WebSocket ─────────────────────────────────────────
+     Connects to /ws/dashboard and reloads affected widgets whenever
+     income_updated or balance_updated events are broadcast by PBApiServer.
+     Reconnects automatically with exponential back-off (max 30 s).        */
+  (function () {
+    var _ws          = null;
+    var _reconnDelay = 1000;
+    var _reconnTimer = null;
+
+    function _rebuildCellsOfTypes(types) {
+      var rows = state.rows || 1;
+      var cols = state.cols || 1;
+      for (var r = 1; r <= rows; r++) {
+        for (var c = 1; c <= cols; c++) {
+          var type = state['dashboard_type_' + r + '_' + c] || 'NONE';
+          if (types.indexOf(type) === -1) continue;
+          var cellEl = gridEl.querySelector('[data-row="' + r + '"][data-col="' + c + '"]');
+          if (!cellEl) continue;
+          var ipDiv = cellEl.querySelector('.cell-inline-preview');
+          if (!ipDiv) continue;
+          if      (type === 'INCOME')    buildIncomeInline(ipDiv, r, c);
+          else if (type === 'TOP')       buildTopInline(ipDiv, r, c);
+          else if (type === 'PNL')       buildPnlInline(ipDiv, r, c);
+          else if (type === 'ADG')       buildAdgInline(ipDiv, r, c);
+          else if (type === 'P+L')       buildPplInline(ipDiv, r, c);
+          else if (type === 'BALANCE')   buildBalanceInline(ipDiv, r, c);
+          else if (type === 'POSITIONS') buildPositionsInline(ipDiv, r, c);
+        }
+      }
+    }
+
+    function _connectWs() {
+      clearTimeout(_reconnTimer);
+      var wsBase = API_BASE.replace(/\/api$/, '')
+                           .replace(/^http:/, 'ws:')
+                           .replace(/^https:/, 'wss:');
+      _ws = new WebSocket(wsBase + '/ws/dashboard?token=' + encodeURIComponent(TOKEN));
+      _ws.onopen    = function () { _reconnDelay = 1000; };
+      _ws.onmessage = function (evt) {
+        try {
+          var m = JSON.parse(evt.data);
+          if (m.type === 'income_updated') {
+            _rebuildCellsOfTypes(['INCOME', 'TOP', 'PNL', 'ADG', 'P+L']);
+          } else if (m.type === 'balance_updated') {
+            _rebuildCellsOfTypes(['BALANCE', 'POSITIONS']);
+          }
+        } catch (_e) {}
+      };
+      _ws.onclose = function () {
+        _reconnTimer = setTimeout(_connectWs, _reconnDelay);
+        _reconnDelay = Math.min(_reconnDelay * 2, 30000);
+      };
+      _ws.onerror = function () { _ws.close(); };
+    }
+
+    _connectWs();
+  }());
 }());
 </script>
 </body>

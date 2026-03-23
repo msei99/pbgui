@@ -495,6 +495,34 @@ async def internal_notify_income(request: Request):
     return {"ok": True, "notified": len(dashboard_ws_clients)}
 
 
+@app.post("/api/internal/notify/positions")
+async def internal_notify_positions(request: Request):
+    """Internal endpoint called by PBData after writing position data.
+
+    Reads the updated positions from DB and pushes them directly to all chart
+    WebSocket subscribers watching that user (via dashboard._refresh_positions_for_user).
+    This ensures the Orders widget entry line is corrected when PBData reconciles
+    a position that was missed due to a WebSocket keepalive outage.
+    Only accepts requests from localhost.
+    """
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="Internal endpoint")
+    try:
+        body = await request.json()
+        user_name = body.get("user", "") if isinstance(body, dict) else ""
+    except Exception:
+        user_name = ""
+    try:
+        from api.dashboard import refresh_positions_for_user
+        await asyncio.get_running_loop().run_in_executor(
+            None, refresh_positions_for_user, user_name
+        )
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 @app.post("/api/nav/request")
 async def nav_request(request: Request):
     """Universal navigation bridge.

@@ -140,6 +140,32 @@ async def _notify_api_balance():
         pass
 
 
+async def _notify_api_positions(user_name: str = ""):
+    """Fire-and-forget: POST to FastAPI so chart subscribers get refreshed entry lines.
+
+    Called via asyncio.create_task() after each successful update_positions() write.
+    The API server reads the updated DB row and pushes it to all chart WS clients
+    watching that user — this ensures the Orders widget clears stale Entry lines even
+    when the WS missed the original 'position closed' event.
+    Errors are silently swallowed — a missed notification is not critical.
+    """
+    import urllib.request
+    from pbgui_purefunc import load_ini
+    try:
+        port_val = load_ini("api_server", "port")
+        port = int(port_val) if port_val and str(port_val).isdigit() else 8000
+        body = json.dumps({"user": user_name}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/internal/notify/positions",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        await asyncio.to_thread(urllib.request.urlopen, req, None, 2)
+    except Exception:
+        pass
+
+
 async def _notify_api_income(user_name: str = ""):
     """Fire-and-forget: POST to FastAPI to fan-out income_updated to all /ws/dashboard clients.
 
@@ -1563,6 +1589,7 @@ class PBData():
                                 asyncio.create_task(_notify_api_balance())
                             elif kind == 'positions':
                                 await asyncio.to_thread(self.db.update_positions, user)
+                                asyncio.create_task(_notify_api_positions(user.name))
                             elif kind == 'orders':
                                 await asyncio.to_thread(self.db.update_orders, user)
                             try:

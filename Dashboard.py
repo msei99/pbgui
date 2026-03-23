@@ -393,6 +393,10 @@ class Dashboard():
         html = html.replace('"%%TOKEN%%"',        f'"{token}"')
         html = html.replace('"%%API_BASE%%"',    f'"{api_base}"')
         html = html.replace('%%DASHBOARD_NAME%%', _json.dumps(self.name or ''))
+        html = html.replace('%%VIEW_ONLY%%', '0')
+        html = html.replace('%%STANDALONE%%', '0')
+        html = html.replace('%%EDIT_ONLY_STYLE%%', '')
+        html = html.replace('%%BODY_CLASS%%', '')
         st.html(html, unsafe_allow_javascript=True)
 
     def save(self):
