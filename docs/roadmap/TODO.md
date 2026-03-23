@@ -230,6 +230,25 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 
 ---
 
+### Dashboard: Gridstack.js – Flexibles Widget-Layout
+**Ziel**
+- Dashboard-Editor von festem Zeile×Spalte-Raster auf ein freies Grid-Layout umstellen.
+- Widgets frei platzierbar, beliebig breit (1/3, 1/2, 2/3, voll) und beliebig hoch.
+
+**Umfang**
+- Gridstack.js (MIT, Vanilla JS, ~30 KB) als Layout-Engine einbinden.
+- Datenmodell von `dashboard_type_R_C` auf eine geordnete Widget-Liste mit `{type, x, y, w, h}` umstellen.
+- Migration bestehender Dashboard-Configs (Zeile/Spalte → x/y/w/h Mapping).
+- Drag & Drop, Resize-Handles, Auto-Packing über Gridstack.
+- Bisherige manuelle Wide/Narrow-Logik entfällt komplett.
+
+**Done wenn**
+- Widgets frei verschiebbar und resizebar per Drag & Drop.
+- Alte 1-Spalten- und 2-Spalten-Configs werden automatisch migriert.
+- Editor- und View-Only-Modus funktionieren mit neuem Layout.
+
+---
+
 ## Arbeitsmodus (ab jetzt)
 - Neue Ideen immer als Eintrag mit **Ziel**, **Umfang**, **Done wenn** erfassen.
 - Erst priorisieren (P0/P1/P2), dann umsetzen.
