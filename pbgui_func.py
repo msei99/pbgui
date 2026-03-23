@@ -2,7 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as _st_components
 import json
 
-PBGUI_VERSION = "v1.67"
+PBGUI_VERSION = "v1.68"
 import hjson
 import pprint
 import uuid

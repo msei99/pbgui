@@ -1,7 +1,9 @@
+import ast
 import psutil
 import subprocess
 import sys
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path, PurePath
 from time import sleep
 from datetime import datetime
@@ -11,6 +13,7 @@ from pbgui_func import PBGDIR
 import json
 import re
 from pathlib import Path as _Path
+import tempfile
 from Database import Database
 from User import Users
 import configparser
@@ -136,8 +139,11 @@ async def _notify_api_balance():
             method="POST",
         )
         await asyncio.to_thread(urllib.request.urlopen, req, None, 2)
-    except Exception:
-        pass
+    except Exception as e:
+        try:
+            _human_log('PBData', f"[notify] balance notification to API failed: {e}", level='DEBUG')
+        except Exception:
+            pass
 
 
 async def _notify_api_positions(user_name: str = ""):
@@ -162,8 +168,11 @@ async def _notify_api_positions(user_name: str = ""):
             headers={"Content-Type": "application/json"},
         )
         await asyncio.to_thread(urllib.request.urlopen, req, None, 2)
-    except Exception:
-        pass
+    except Exception as e:
+        try:
+            _human_log('PBData', f"[notify] positions notification to API failed: {e}", level='DEBUG')
+        except Exception:
+            pass
 
 
 async def _notify_api_income(user_name: str = ""):
@@ -186,8 +195,11 @@ async def _notify_api_income(user_name: str = ""):
             headers={"Content-Type": "application/json"},
         )
         await asyncio.to_thread(urllib.request.urlopen, req, None, 2)
-    except Exception:
-        pass
+    except Exception as e:
+        try:
+            _human_log('PBData', f"[notify] income notification to API failed: {e}", level='DEBUG')
+        except Exception:
+            pass
 
 
 class PBData():
@@ -215,12 +227,7 @@ class PBData():
         # Key: (user_name, symbol) -> (timestamp, price)
         self._price_buffer = {}
         # Async lock protecting _price_buffer
-        try:
-            self._price_buffer_lock = asyncio.Lock()
-        except Exception:
-            # Fallback to a dummy lock if asyncio not fully available
-            import threading as _th
-            self._price_buffer_lock = _th.Lock()
+        self._price_buffer_lock = asyncio.Lock()
         # Flush interval in seconds for buffered price writes
         self._price_flush_interval = 10.0
         # Background writer task handle
@@ -274,12 +281,8 @@ class PBData():
             # (mitigation A): raised from 1.0 -> 3.0 seconds
             'bybit': 3.0,
         }
-        # Per-exchange semaphore limits for REST slot gating. Lower values
-        # (e.g. 1) serialize shared poll REST requests for sensitive APIs.
-        self._default_rest_semaphore_limit = 3
-        self._rest_semaphore_limits_by_exchange = {
-            'hyperliquid': 1,
-        }
+        # Per-exchange semaphore limits for REST slot gating are defined
+        # near _rest_semaphores (see _rest_semaphore_limits_by_exchange).
         # Per-exchange limit for how many distinct users the price watcher may track
         # Some exchanges (hyperliquid) enforce a hard cap on tracked users for websocket topics.
         self._price_subscribe_user_limit_by_exchange = {
@@ -508,157 +511,167 @@ class PBData():
                     except Exception:
                         pass
 
-                # -----------------------------
-                # Timers / intervals
-                # -----------------------------
-                def _get_int_opt(section: str, key: str):
-                    try:
-                        if not cfg.has_option(section, key):
-                            return None
-                        raw = cfg.get(section, key)
-                        sval = str(raw).strip() if raw is not None else ''
-                        if sval == '':
-                            return None
-                        return int(float(sval))
-                    except Exception:
+            # -----------------------------
+            # Timers / intervals
+            # -----------------------------
+            def _get_int_opt(section: str, key: str):
+                try:
+                    if not cfg.has_option(section, key):
                         return None
-
-                def _get_float_opt(section: str, key: str):
-                    try:
-                        if not cfg.has_option(section, key):
-                            return None
-                        raw = cfg.get(section, key)
-                        sval = str(raw).strip() if raw is not None else ''
-                        if sval == '':
-                            return None
-                        return float(sval)
-                    except Exception:
+                    raw = cfg.get(section, key)
+                    sval = str(raw).strip() if raw is not None else ''
+                    if sval == '':
                         return None
+                    return int(float(sval))
+                except Exception:
+                    return None
 
-                # Startup/grace period for starting shared pollers
-                new_pollers_delay = _get_int_opt('pbdata', 'pollers_delay_seconds')
-                if new_pollers_delay is not None and new_pollers_delay >= 0:
-                    if new_pollers_delay != getattr(self, '_pollers_delay_seconds', 60.0):
-                        old_enable_after = getattr(self, '_pollers_enabled_after_ts', None)
-                        self._pollers_delay_seconds = float(new_pollers_delay)
-                        # Only re-apply enable-after if pollers have not started yet
-                        try:
-                            now_ts = datetime.now().timestamp()
-                            if old_enable_after is not None and now_ts < old_enable_after:
-                                self._pollers_enabled_after_ts = now_ts + float(new_pollers_delay)
-                        except Exception:
-                            pass
+            def _get_float_opt(section: str, key: str):
+                try:
+                    if not cfg.has_option(section, key):
+                        return None
+                    raw = cfg.get(section, key)
+                    sval = str(raw).strip() if raw is not None else ''
+                    if sval == '':
+                        return None
+                    return float(sval)
+                except Exception:
+                    return None
 
-                # Shared poller intervals
-                new_combined = _get_int_opt('pbdata', 'poll_interval_combined_seconds')
-                if new_combined is not None and new_combined > 0:
-                    if new_combined != getattr(self, '_shared_combined_interval_seconds', 90):
-                        self._shared_combined_interval_seconds = int(new_combined)
-                        self._poll_intervals_changed = True
-
-                new_history = _get_int_opt('pbdata', 'poll_interval_history_seconds')
-                if new_history is not None and new_history > 0:
-                    if new_history != getattr(self, '_shared_history_interval_seconds', 90):
-                        self._shared_history_interval_seconds = int(new_history)
-                        self._poll_intervals_changed = True
-
-                new_exec = _get_int_opt('pbdata', 'poll_interval_executions_seconds')
-                if new_exec is not None and new_exec > 0:
-                    if new_exec != getattr(self, '_shared_executions_interval_seconds', 1800):
-                        self._shared_executions_interval_seconds = int(new_exec)
-                        self._poll_intervals_changed = True
-
-                # Latest 1m API fetch interval
-                new_latest_1m_interval = _get_int_opt('pbdata', 'latest_1m_interval_seconds')
-                if new_latest_1m_interval is not None and new_latest_1m_interval > 0:
-                    if new_latest_1m_interval != getattr(self, '_latest_1m_interval_seconds', 120):
-                        self._latest_1m_interval_seconds = int(new_latest_1m_interval)
-
-                # Latest 1m pause between coins
-                new_latest_1m_coin_pause = _get_float_opt('pbdata', 'latest_1m_coin_pause_seconds')
-                if new_latest_1m_coin_pause is not None and new_latest_1m_coin_pause >= 0:
-                    self._latest_1m_coin_pause_seconds = float(new_latest_1m_coin_pause)
-
-                # Latest 1m API timeout
-                new_latest_1m_timeout = _get_float_opt('pbdata', 'latest_1m_api_timeout_seconds')
-                if new_latest_1m_timeout is not None and new_latest_1m_timeout > 0:
-                    self._latest_1m_api_timeout_seconds = float(new_latest_1m_timeout)
-
-                # Latest 1m lookback days (min/max)
-                new_latest_1m_min_lb = _get_int_opt('pbdata', 'latest_1m_min_lookback_days')
-                if new_latest_1m_min_lb is not None and new_latest_1m_min_lb > 0:
-                    self._latest_1m_min_lookback_days = int(new_latest_1m_min_lb)
-
-                new_latest_1m_max_lb = _get_int_opt('pbdata', 'latest_1m_max_lookback_days')
-                if new_latest_1m_max_lb is not None and new_latest_1m_max_lb > 0:
-                    self._latest_1m_max_lookback_days = int(new_latest_1m_max_lb)
-
-                # Binance latest 1m settings
-                bnc_interval = _get_int_opt('binance_data', 'latest_1m_interval_seconds')
-                if bnc_interval is not None and bnc_interval > 0:
-                    self._binance_latest_1m_interval_seconds = int(bnc_interval)
-                bnc_pause = _get_float_opt('binance_data', 'latest_1m_coin_pause_seconds')
-                if bnc_pause is not None and bnc_pause >= 0:
-                    self._binance_latest_1m_coin_pause_seconds = float(bnc_pause)
-                bnc_timeout = _get_float_opt('binance_data', 'latest_1m_api_timeout_seconds')
-                if bnc_timeout is not None and bnc_timeout > 0:
-                    self._binance_latest_1m_api_timeout_seconds = float(bnc_timeout)
-                bnc_min_lb = _get_int_opt('binance_data', 'latest_1m_min_lookback_days')
-                if bnc_min_lb is not None and bnc_min_lb > 0:
-                    self._binance_latest_1m_min_lookback_days = int(bnc_min_lb)
-                bnc_max_lb = _get_int_opt('binance_data', 'latest_1m_max_lookback_days')
-                if bnc_max_lb is not None and bnc_max_lb > 0:
-                    self._binance_latest_1m_max_lookback_days = int(bnc_max_lb)
-
-                # Bybit latest 1m settings
-                bbt_interval = _get_int_opt('bybit_data', 'latest_1m_interval_seconds')
-                if bbt_interval is not None and bbt_interval > 0:
-                    self._bybit_latest_1m_interval_seconds = int(bbt_interval)
-                bbt_pause = _get_float_opt('bybit_data', 'latest_1m_coin_pause_seconds')
-                if bbt_pause is not None and bbt_pause >= 0:
-                    self._bybit_latest_1m_coin_pause_seconds = float(bbt_pause)
-                bbt_timeout = _get_float_opt('bybit_data', 'latest_1m_api_timeout_seconds')
-                if bbt_timeout is not None and bbt_timeout > 0:
-                    self._bybit_latest_1m_api_timeout_seconds = float(bbt_timeout)
-                bbt_min_lb = _get_int_opt('bybit_data', 'latest_1m_min_lookback_days')
-                if bbt_min_lb is not None and bbt_min_lb > 0:
-                    self._bybit_latest_1m_min_lookback_days = int(bbt_min_lb)
-                bbt_max_lb = _get_int_opt('bybit_data', 'latest_1m_max_lookback_days')
-                if bbt_max_lb is not None and bbt_max_lb > 0:
-                    self._bybit_latest_1m_max_lookback_days = int(bbt_max_lb)
-
-                # Pause between per-user REST calls in shared pollers
-                new_rest_pause = _get_float_opt('pbdata', 'shared_rest_user_pause_seconds')
-                if new_rest_pause is not None and new_rest_pause >= 0:
-                    self._shared_rest_user_pause = float(new_rest_pause)
-
-                # Per-exchange overrides as JSON: {"exchange": seconds, ...}
-                if cfg.has_option('pbdata', 'shared_rest_pause_by_exchange_json'):
+            # Startup/grace period for starting shared pollers
+            new_pollers_delay = _get_int_opt('pbdata', 'pollers_delay_seconds')
+            if new_pollers_delay is not None and new_pollers_delay >= 0:
+                if new_pollers_delay != getattr(self, '_pollers_delay_seconds', 60.0):
+                    old_enable_after = getattr(self, '_pollers_enabled_after_ts', None)
+                    self._pollers_delay_seconds = float(new_pollers_delay)
+                    # Only re-apply enable-after if pollers have not started yet
                     try:
-                        raw = cfg.get('pbdata', 'shared_rest_pause_by_exchange_json')
-                        sval = str(raw).strip() if raw is not None else ''
-                        if sval != '':
-                            obj = json.loads(sval)
-                            if isinstance(obj, dict):
-                                cleaned = {}
-                                for k, v in obj.items():
-                                    try:
-                                        if k is None:
-                                            continue
-                                        exid = str(k).strip()
-                                        if exid == '':
-                                            continue
-                                        sec = float(v)
-                                        if sec < 0:
-                                            continue
-                                        cleaned[exid] = sec
-                                    except Exception:
-                                        continue
-                                # merge into existing defaults
-                                if cleaned:
-                                    self._shared_rest_pause_by_exchange.update(cleaned)
+                        now_ts = datetime.now().timestamp()
+                        if old_enable_after is not None and now_ts < old_enable_after:
+                            self._pollers_enabled_after_ts = now_ts + float(new_pollers_delay)
                     except Exception:
                         pass
+
+            # Shared poller intervals
+            new_combined = _get_int_opt('pbdata', 'poll_interval_combined_seconds')
+            if new_combined is not None and new_combined > 0:
+                if new_combined != getattr(self, '_shared_combined_interval_seconds', 90):
+                    self._shared_combined_interval_seconds = int(new_combined)
+                    self._poll_intervals_changed = True
+
+            new_history = _get_int_opt('pbdata', 'poll_interval_history_seconds')
+            if new_history is not None and new_history > 0:
+                if new_history != getattr(self, '_shared_history_interval_seconds', 90):
+                    self._shared_history_interval_seconds = int(new_history)
+                    self._poll_intervals_changed = True
+
+            new_exec = _get_int_opt('pbdata', 'poll_interval_executions_seconds')
+            if new_exec is not None and new_exec > 0:
+                if new_exec != getattr(self, '_shared_executions_interval_seconds', 1800):
+                    self._shared_executions_interval_seconds = int(new_exec)
+                    self._poll_intervals_changed = True
+
+            # Latest 1m API fetch interval
+            new_latest_1m_interval = _get_int_opt('pbdata', 'latest_1m_interval_seconds')
+            if new_latest_1m_interval is not None and new_latest_1m_interval > 0:
+                if new_latest_1m_interval != getattr(self, '_latest_1m_interval_seconds', 120):
+                    self._latest_1m_interval_seconds = int(new_latest_1m_interval)
+
+            # Latest 1m pause between coins
+            new_latest_1m_coin_pause = _get_float_opt('pbdata', 'latest_1m_coin_pause_seconds')
+            if new_latest_1m_coin_pause is not None and new_latest_1m_coin_pause >= 0:
+                self._latest_1m_coin_pause_seconds = float(new_latest_1m_coin_pause)
+
+            # Latest 1m API timeout
+            new_latest_1m_timeout = _get_float_opt('pbdata', 'latest_1m_api_timeout_seconds')
+            if new_latest_1m_timeout is not None and new_latest_1m_timeout > 0:
+                self._latest_1m_api_timeout_seconds = float(new_latest_1m_timeout)
+
+            # Latest 1m lookback days (min/max)
+            new_latest_1m_min_lb = _get_int_opt('pbdata', 'latest_1m_min_lookback_days')
+            if new_latest_1m_min_lb is not None and new_latest_1m_min_lb > 0:
+                self._latest_1m_min_lookback_days = int(new_latest_1m_min_lb)
+
+            new_latest_1m_max_lb = _get_int_opt('pbdata', 'latest_1m_max_lookback_days')
+            if new_latest_1m_max_lb is not None and new_latest_1m_max_lb > 0:
+                self._latest_1m_max_lookback_days = int(new_latest_1m_max_lb)
+
+            # Binance latest 1m settings
+            bnc_interval = _get_int_opt('binance_data', 'latest_1m_interval_seconds')
+            if bnc_interval is not None and bnc_interval > 0:
+                self._binance_latest_1m_interval_seconds = int(bnc_interval)
+            bnc_pause = _get_float_opt('binance_data', 'latest_1m_coin_pause_seconds')
+            if bnc_pause is not None and bnc_pause >= 0:
+                self._binance_latest_1m_coin_pause_seconds = float(bnc_pause)
+            bnc_timeout = _get_float_opt('binance_data', 'latest_1m_api_timeout_seconds')
+            if bnc_timeout is not None and bnc_timeout > 0:
+                self._binance_latest_1m_api_timeout_seconds = float(bnc_timeout)
+            bnc_min_lb = _get_int_opt('binance_data', 'latest_1m_min_lookback_days')
+            if bnc_min_lb is not None and bnc_min_lb > 0:
+                self._binance_latest_1m_min_lookback_days = int(bnc_min_lb)
+            bnc_max_lb = _get_int_opt('binance_data', 'latest_1m_max_lookback_days')
+            if bnc_max_lb is not None and bnc_max_lb > 0:
+                self._binance_latest_1m_max_lookback_days = int(bnc_max_lb)
+
+            # Bybit latest 1m settings
+            bbt_interval = _get_int_opt('bybit_data', 'latest_1m_interval_seconds')
+            if bbt_interval is not None and bbt_interval > 0:
+                self._bybit_latest_1m_interval_seconds = int(bbt_interval)
+            bbt_pause = _get_float_opt('bybit_data', 'latest_1m_coin_pause_seconds')
+            if bbt_pause is not None and bbt_pause >= 0:
+                self._bybit_latest_1m_coin_pause_seconds = float(bbt_pause)
+            bbt_timeout = _get_float_opt('bybit_data', 'latest_1m_api_timeout_seconds')
+            if bbt_timeout is not None and bbt_timeout > 0:
+                self._bybit_latest_1m_api_timeout_seconds = float(bbt_timeout)
+            bbt_min_lb = _get_int_opt('bybit_data', 'latest_1m_min_lookback_days')
+            if bbt_min_lb is not None and bbt_min_lb > 0:
+                self._bybit_latest_1m_min_lookback_days = int(bbt_min_lb)
+            bbt_max_lb = _get_int_opt('bybit_data', 'latest_1m_max_lookback_days')
+            if bbt_max_lb is not None and bbt_max_lb > 0:
+                self._bybit_latest_1m_max_lookback_days = int(bbt_max_lb)
+
+            # Pause between per-user REST calls in shared pollers
+            new_rest_pause = _get_float_opt('pbdata', 'shared_rest_user_pause_seconds')
+            if new_rest_pause is not None and new_rest_pause >= 0:
+                self._shared_rest_user_pause = float(new_rest_pause)
+
+            # Per-exchange overrides as JSON: {"exchange": seconds, ...}
+            if cfg.has_option('pbdata', 'shared_rest_pause_by_exchange_json'):
+                try:
+                    raw = cfg.get('pbdata', 'shared_rest_pause_by_exchange_json')
+                    sval = str(raw).strip() if raw is not None else ''
+                    if sval != '':
+                        obj = json.loads(sval)
+                        if isinstance(obj, dict):
+                            cleaned = {}
+                            for k, v in obj.items():
+                                try:
+                                    if k is None:
+                                        continue
+                                    exid = str(k).strip()
+                                    if exid == '':
+                                        continue
+                                    sec = float(v)
+                                    if sec < 0:
+                                        continue
+                                    cleaned[exid] = sec
+                                except Exception:
+                                    continue
+                            # merge into existing defaults
+                            if cleaned:
+                                self._shared_rest_pause_by_exchange.update(cleaned)
+                except Exception:
+                    pass
+
+            # price_watch_timeout (float, seconds) — timeout for watch_* calls
+            new_pw_timeout = _get_float_opt('pbdata', 'price_watch_timeout')
+            if new_pw_timeout is not None and new_pw_timeout > 0:
+                self._price_watch_timeout = float(new_pw_timeout)
+
+            # rest_semaphore_acquire_timeout (float, seconds) — REST slot acquire timeout
+            new_rest_timeout = _get_float_opt('pbdata', 'rest_semaphore_acquire_timeout')
+            if new_rest_timeout is not None and new_rest_timeout > 0:
+                self._rest_semaphore_acquire_timeout = float(new_rest_timeout)
         except Exception:
             return
 
@@ -1721,12 +1734,10 @@ class PBData():
                 await asyncio.sleep(min(1.0 + random.random() * 1.5, self._debounce_max_retry_seconds))
         except Exception:
             try:
-                _human_log('PBData', f"[debounce] unexpected error in flusher for {kind} {user_name}", level='ERROR')
+                _human_log('PBData', f"[debounce] unexpected error in flusher for {kind} {user_name}", level='ERROR', meta={'traceback': traceback.format_exc()})
             except Exception:
                 pass
 
-
-    from contextlib import asynccontextmanager
 
     @asynccontextmanager
     async def _rest_slot(self, exchange: str, timeout: float = None):
@@ -1884,12 +1895,74 @@ class PBData():
                 if lines or backoffs:
                     _human_log('PBData', f"[METRICS] Clients: {', '.join(lines)}; Backoffs: {', '.join(backoffs) if backoffs else '(none)'}", level='INFO')
                 # IO debugging removed: process/db IO summary logging disabled
+                # Periodic cleanup of stale entries in unbounded data structures
+                self._cleanup_stale_state()
             except Exception:
                 try:
                     _human_log('PBData', f"[METRICS] failed to collect metrics", level='WARNING')
                 except Exception:
                     pass
             await asyncio.sleep(self._metrics_interval)
+
+    def _cleanup_stale_state(self):
+        """Prune stale entries from unbounded dicts/sets to prevent slow memory growth.
+
+        Called periodically from _metrics_loop (~every 60s).  Only removes entries
+        whose user is no longer in the active fetch_users list, so active state is
+        never touched.
+        """
+        try:
+            active_users = set(self.fetch_users) if self.fetch_users else set()
+            if not active_users:
+                return  # no users → nothing to prune
+
+            # --- _last_fetch_ts: keyed by (user_name, kind) ---
+            stale_keys = [k for k in self._last_fetch_ts if k[0] not in active_users]
+            for k in stale_keys:
+                self._last_fetch_ts.pop(k, None)
+
+            # --- _last_network_error_log_ts: keyed by (exchange, user_name) or similar ---
+            stale_keys = []
+            for k in self._last_network_error_log_ts:
+                # key is (exchange, user_name) — check index 1
+                try:
+                    uname = k[1] if isinstance(k, tuple) and len(k) >= 2 else None
+                    if uname and uname not in active_users:
+                        stale_keys.append(k)
+                except Exception:
+                    pass
+            for k in stale_keys:
+                self._last_network_error_log_ts.pop(k, None)
+
+            # --- _watch_positions_not_supported_logged: keyed by (user_name, exchange_id) ---
+            stale_keys = {k for k in self._watch_positions_not_supported_logged
+                          if isinstance(k, tuple) and len(k) >= 1 and k[0] not in active_users}
+            self._watch_positions_not_supported_logged -= stale_keys
+
+            # --- _ws_success_counts: keyed by (exchange, user_name) ---
+            stale_keys = [k for k in self._ws_success_counts
+                          if isinstance(k, tuple) and len(k) >= 2 and k[1] not in active_users]
+            for k in stale_keys:
+                self._ws_success_counts.pop(k, None)
+
+            # --- _ws_restarted_once: keyed by (exchange, user_name) ---
+            stale_keys = {k for k in self._ws_restarted_once
+                          if isinstance(k, tuple) and len(k) >= 2 and k[1] not in active_users}
+            self._ws_restarted_once -= stale_keys
+
+            # --- _exchange_network_error_users: exchange -> {user_name: ts} ---
+            for exch in list(self._exchange_network_error_users):
+                entry = self._exchange_network_error_users.get(exch, {})
+                stale = [u for u in entry if u not in active_users]
+                for u in stale:
+                    entry.pop(u, None)
+                if not entry:
+                    self._exchange_network_error_users.pop(exch, None)
+
+            if stale_keys:
+                _human_log('PBData', f"[METRICS] cleaned stale state entries for inactive users", level='DEBUG')
+        except Exception:
+            pass
 
     # fetch_users
 
@@ -2080,11 +2153,9 @@ class PBData():
             _human_log('PBData', f"Warning: failed reading pbgui.ini ({e}); keeping previous fetch_users: {self._fetch_users}", level='WARNING')
             return
         if pb_config.has_option("pbdata", "fetch_users"):
-            users = eval(pb_config.get("pbdata", "fetch_users"))
-            for user in users.copy():
-                if user not in self.users.list():
-                    users.remove(user)
-            self._fetch_users = users
+            users = ast.literal_eval(pb_config.get("pbdata", "fetch_users"))
+            valid = set(self.users.list())
+            self._fetch_users = [u for u in users if u in valid]
         else:
             self._fetch_users = []  # Default to empty list if not set
 
@@ -2107,15 +2178,13 @@ class PBData():
                 if sval == '':
                     users = []
                 else:
-                    users = eval(sval)
+                    users = ast.literal_eval(sval)
                 if not isinstance(users, list):
                     users = []
             except Exception:
                 users = []
-            for user in users.copy():
-                if user not in self.users.list():
-                    users.remove(user)
-            self._trades_users = users
+            valid = set(self.users.list())
+            self._trades_users = [u for u in users if u in valid]
         else:
             # Default to empty list unless explicitly configured.
             self._trades_users = []
@@ -2126,8 +2195,17 @@ class PBData():
         if not pb_config.has_section("pbdata"):
             pb_config.add_section("pbdata")
         pb_config.set("pbdata", "fetch_users", f'{self.fetch_users}')
-        with open('pbgui.ini', 'w') as f:
-            pb_config.write(f)
+        fd, tmp = tempfile.mkstemp(dir='.', suffix='.ini.tmp')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                pb_config.write(f)
+            os.replace(tmp, 'pbgui.ini')
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     def save_trades_users(self):
         pb_config = configparser.ConfigParser()
@@ -2135,8 +2213,17 @@ class PBData():
         if not pb_config.has_section("pbdata"):
             pb_config.add_section("pbdata")
         pb_config.set("pbdata", "trades_users", f'{self.trades_users}')
-        with open('pbgui.ini', 'w') as f:
-            pb_config.write(f)
+        fd, tmp = tempfile.mkstemp(dir='.', suffix='.ini.tmp')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                pb_config.write(f)
+            os.replace(tmp, 'pbgui.ini')
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     async def _ensure_balance_watcher(self, user):
         if user.name not in self.fetch_users:
@@ -2235,14 +2322,17 @@ class PBData():
                 self._watch_positions_not_supported_logged.add(key)
             return
         _human_log('PBData', f"[ws] Starting balance watcher for {user.name} ({exch.id})", level='INFO')
+        _last_settings_reload = 0.0
         try:
             while True:
-                # Reload settings from pbgui.ini each loop so GUI toggles
-                # (e.g. ws_max or log_level) take effect quickly.
-                try:
-                    self._load_settings()
-                except Exception:
-                    pass
+                # Reload settings from pbgui.ini at most every 30s
+                _now = datetime.now().timestamp()
+                if _now - _last_settings_reload >= 30.0:
+                    try:
+                        self._load_settings()
+                    except Exception:
+                        pass
+                    _last_settings_reload = _now
                 try:
                     # Watch balance; details vary across exchanges
                     bal = await ex.watch_balance()
@@ -2301,6 +2391,9 @@ class PBData():
                         keepalive_triggers = ['ping-pong', 'pingpong', 'keepalive', 'requesttimeout']
                         if any(k in lower for k in keepalive_triggers) or ('timed out' in lower and 'ping' in lower):
                             if key not in self._ws_restarted_once:
+                                # Claim the restart slot *before* the first await so no other
+                                # concurrent loop for this user can also enter the restart path.
+                                self._ws_restarted_once.add(key)
                                 _human_log('PBData', f"[ws] Keepalive timeout detected; restarting private ws client for {user.name} ({user.exchange})", level='WARNING')
                                 try:
                                     await Exchange.close_private_ws_client(user.exchange, user)
@@ -2311,7 +2404,6 @@ class PBData():
                                     try:
                                         ex2 = await self.request_private_client(user.exchange, user, caller='PBData._balance_ws_loop')
                                         if ex2:
-                                            self._ws_restarted_once.add(key)
                                             ex = ex2
                                             _human_log('PBData', f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages", level='INFO')
                                             continue
@@ -2454,13 +2546,17 @@ class PBData():
         _human_log('PBData', f"[ws] Starting positions watcher for {user.name} ({exch.id})", level='INFO')
         min_positions_refresh_interval = 10
         last_positions_refresh = 0
+        _last_settings_reload = 0.0
         try:
             while True:
-                # Reload settings so runtime changes (ws_max, log_level) take effect
-                try:
-                    self._load_settings()
-                except Exception:
-                    pass
+                # Reload settings at most every 30s
+                _now = datetime.now().timestamp()
+                if _now - _last_settings_reload >= 30.0:
+                    try:
+                        self._load_settings()
+                    except Exception:
+                        pass
+                    _last_settings_reload = _now
                 try:
                     _ = await ex.watch_positions()
                     # Successful watch_positions: increment success counter and clear restart marker after threshold
@@ -2535,6 +2631,9 @@ class PBData():
                         keepalive_triggers = ['ping-pong', 'pingpong', 'keepalive', 'requesttimeout']
                         if any(k in lower for k in keepalive_triggers) or ('timed out' in lower and 'ping' in lower):
                             if key not in self._ws_restarted_once:
+                                # Claim the restart slot *before* the first await so no other
+                                # concurrent loop for this user can also enter the restart path.
+                                self._ws_restarted_once.add(key)
                                 _human_log('PBData', f"[ws] Keepalive timeout detected (positions); restarting private ws client for {user.name} ({user.exchange})", level='WARNING')
                                 try:
                                     await Exchange.close_private_ws_client(user.exchange, user)
@@ -2545,7 +2644,6 @@ class PBData():
                                     try:
                                         ex2 = await self.request_private_client(user.exchange, user, caller='PBData._position_ws_loop')
                                         if ex2:
-                                            self._ws_restarted_once.add(key)
                                             ex = ex2
                                             _human_log('PBData', f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages", level='INFO')
                                             continue
@@ -2636,13 +2734,17 @@ class PBData():
         # websockets produce many events in a short time.
         min_orders_refresh_interval = 20
         last_orders_refresh = 0
+        _last_settings_reload = 0.0
         try:
             while True:
-                # Reload settings so runtime changes (ws_max, log_level) take effect
-                try:
-                    self._load_settings()
-                except Exception:
-                    pass
+                # Reload settings at most every 30s
+                _now = datetime.now().timestamp()
+                if _now - _last_settings_reload >= 30.0:
+                    try:
+                        self._load_settings()
+                    except Exception:
+                        pass
+                    _last_settings_reload = _now
                 try:
                     orders = await ex.watch_orders()
                     # Successful watch_orders: increment success counter and clear restart marker after threshold
@@ -2720,6 +2822,9 @@ class PBData():
                         keepalive_triggers = ['ping-pong', 'pingpong', 'keepalive', 'requesttimeout']
                         if any(k in lower for k in keepalive_triggers) or ('timed out' in lower and 'ping' in lower):
                             if key not in self._ws_restarted_once:
+                                # Claim the restart slot *before* the first await so no other
+                                # concurrent loop for this user can also enter the restart path.
+                                self._ws_restarted_once.add(key)
                                 _human_log('PBData', f"[ws] Keepalive timeout detected (orders); restarting private ws client for {user.name} ({user.exchange})", level='WARNING')
                                 try:
                                     await Exchange.close_private_ws_client(user.exchange, user)
@@ -2730,7 +2835,6 @@ class PBData():
                                     try:
                                         ex2 = await self.request_private_client(user.exchange, user, caller='PBData._order_ws_loop')
                                         if ex2:
-                                            self._ws_restarted_once.add(key)
                                             ex = ex2
                                             _human_log('PBData', f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages", level='INFO')
                                             continue
@@ -3266,34 +3370,39 @@ class PBData():
                     continue
                 for user in batch_users:
                     try:
-                        # balances -> positions -> orders (sequential)
-                        # Skip each part if a WS watcher exists for that kind
-                        ws_bal = self._balance_ws_tasks.get(user.name)
-                        if not (ws_bal and not ws_bal.done()):
-                            await asyncio.to_thread(self.db.update_balances, user)
-                            asyncio.create_task(_notify_api_balance())
+                        exchange_for_slot = exch or getattr(user, 'exchange', None) or 'unknown'
+                        async with self._rest_slot(exchange_for_slot) as got:
+                            if not got:
+                                _human_log('PBData', f"[poll] Shared COMBINED poll skipped {user.name}: REST slot timed out", level='DEBUG', user=user.name)
+                                continue
+                            # balances -> positions -> orders (sequential)
+                            # Skip each part if a WS watcher exists for that kind
+                            ws_bal = self._balance_ws_tasks.get(user.name)
+                            if not (ws_bal and not ws_bal.done()):
+                                await asyncio.to_thread(self.db.update_balances, user)
+                                asyncio.create_task(_notify_api_balance())
+                                try:
+                                    self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
+                                except Exception:
+                                    pass
+                            ws_pos = self._position_ws_tasks.get(user.name)
+                            if not (ws_pos and not ws_pos.done()):
+                                await asyncio.to_thread(self.db.update_positions, user)
+                                try:
+                                    self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
+                                except Exception:
+                                    pass
+                            ws_ord = self._order_ws_tasks.get(user.name)
+                            if not (ws_ord and not ws_ord.done()):
+                                await asyncio.to_thread(self.db.update_orders, user)
+                                try:
+                                    self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
+                                except Exception:
+                                    pass
                             try:
-                                self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
+                                self._write_fetch_summary()
                             except Exception:
                                 pass
-                        ws_pos = self._position_ws_tasks.get(user.name)
-                        if not (ws_pos and not ws_pos.done()):
-                            await asyncio.to_thread(self.db.update_positions, user)
-                            try:
-                                self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
-                            except Exception:
-                                pass
-                        ws_ord = self._order_ws_tasks.get(user.name)
-                        if not (ws_ord and not ws_ord.done()):
-                            await asyncio.to_thread(self.db.update_orders, user)
-                            try:
-                                self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
-                            except Exception:
-                                pass
-                        try:
-                            self._write_fetch_summary()
-                        except Exception:
-                            pass
                     except Exception as e:
                         msg = str(e)
                         tb = traceback.format_exc()
@@ -3600,39 +3709,14 @@ class PBData():
                                 delay = min(5 * subscribe_backoff, 30)
                                 await asyncio.sleep(delay)
                                 continue
-                            _human_log('PBData', f"[ws] watch_tickers ERROR for exchange {exchange}: {e}", level='ERROR')
-                            ex = await Exchange.get_shared_ws_client(exchange)
-                            if not ex:
-                                _human_log('PBData', f"[ws] ccxtpro unavailable (price) after error reconnect for exchange {exchange}")
-                                return
-                            subscribe_backoff = min(subscribe_backoff + 1, 6)
-                            delay = min(5 * subscribe_backoff, 30)
-                            await asyncio.sleep(delay)
-                            continue
-                        except asyncio.TimeoutError:
-                            _human_log('PBData', f"[ws] watch_tickers TIMEOUT for exchange {exchange}; reconnecting price client", level='WARNING')
-                            # Re-acquire shared client instance; don't close existing shared instance here.
-                            ex = await Exchange.get_shared_ws_client(exchange)
-                            if not ex:
-                                _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}", level='WARNING')
-                                return
-                            subscribe_backoff = min(subscribe_backoff + 1, 6)
-                            delay = min(5 * subscribe_backoff, 30)
-                            await asyncio.sleep(delay)
-                            continue
-                        except Exception as e:
-                            raw = str(e)
-                            lower = raw.lower()
                             # Some exchange implementations (e.g. bybit) raise an
                             # 'already subscribed' error when a topic is re-subscribed.
-                            # Treat this as non-fatal: wait briefly and continue
-                            # without force-closing the client to avoid races.
-                            if 'already subscribed' in lower or 'already subscribed' in raw:
+                            # Treat this as non-fatal.
+                            if 'already subscribed' in lower:
                                 _human_log('PBData', f"[ws] watch_tickers: already subscribed for exchange {exchange}: {e}; ignoring and continuing", level='DEBUG')
                                 await asyncio.sleep(1)
                                 continue
                             _human_log('PBData', f"[ws] watch_tickers ERROR for exchange {exchange}: {e}", level='ERROR')
-                            # Re-acquire shared client instance for subsequent iterations.
                             ex = await Exchange.get_shared_ws_client(exchange)
                             if not ex:
                                 _human_log('PBData', f"[ws] ccxtpro unavailable (price) after error reconnect for exchange {exchange}")
@@ -3691,16 +3775,11 @@ class PBData():
                                             continue
                                         if self._is_normal_ws_close(raw):
                                             _human_log('PBData', f"[ws] watch_ticker normal websocket close exchange {exchange} {ccxt_symbol}: {e}; attempting reconnect", level='WARNING')
-                                            ex = await Exchange.get_shared_ws_client(exchange)
-                                            if not ex:
-                                                _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}", level='WARNING')
-                                                raise RuntimeError("price client unavailable after watch_ticker error")
-                                            await asyncio.sleep(1)
-                                            continue
+                                        else:
                                             _human_log('PBData', f"[ws] watch_ticker ERROR exchange {exchange} {ccxt_symbol}: {e}; reconnecting price client", level='ERROR')
                                         ex = await Exchange.get_shared_ws_client(exchange)
                                         if not ex:
-                                            _human_log('PBData', f"[ws] ccxtpro unavailable (price) after error reconnect for exchange {exchange}", level='WARNING')
+                                            _human_log('PBData', f"[ws] ccxtpro unavailable (price) after reconnect for exchange {exchange}", level='WARNING')
                                             raise RuntimeError("price client unavailable after watch_ticker error")
                                         await asyncio.sleep(1)
                                         continue

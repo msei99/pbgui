@@ -292,9 +292,9 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
 /* cell-header and cell-cfg are always hidden — widgets show their own dt-header */
 .cell-header,
 .cell-cfg { display: none !important; }
-/* dt-header is always draggable for cell swap */
-.dt-header { cursor: grab; }
-.editor-cell.dragging .dt-header { cursor: grabbing; }
+/* dt-header and db-header are always draggable for cell swap */
+.dt-header, .db-header { cursor: grab; }
+.editor-cell.dragging .dt-header, .editor-cell.dragging .db-header { cursor: grabbing; }
 /* ── View-only mode: hide editing chrome ── */
 body.view-mode .editor-sticky-top,
 body.view-mode #grid-footer { display: none !important; }
@@ -1908,7 +1908,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
 
   /* ── Attach drag to .dt-header in view-mode ── */
   function _attachViewDrag(container, row, col) {
-    var hdr = container.querySelector('.dt-header');
+    var hdr = container.querySelector('.dt-header, .db-header');
     if (!hdr) return;
     var cellEl = container.closest('.editor-cell');
     if (!cellEl) return;

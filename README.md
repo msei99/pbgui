@@ -323,12 +323,28 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
-## v1.68 (unreleased)
-- Fix: Dashboard — WebSocket connection now established on page load; live `income_updated` and `balance_updated` events from PBData are received and widgets refresh automatically (without this fix the dashboard fetched data only once at page open)
-- Fix: Dashboard — widget refresh after WS events no longer causes flicker; existing content stays visible during the background fetch, loading spinner shown only on first (empty) load; per-cell generation counter discards stale out-of-order responses
-- New: Dashboard view mode — floating "💾 Save layout" button appears whenever widgets are resized or swapped; click saves the layout directly to disk without entering the editor
+## v1.68 (23-03-2026)
+- Fix: Dashboard — WebSocket connection now established on page load; live `income_updated` and `balance_updated` events from PBData are received and widgets refresh automatically
+- Fix: Dashboard — WS-triggered widget refreshes no longer cause flicker; content stays visible during background fetch (spinner only on first load); Plotly charts update in-place via `Plotly.react()` without clearing the DOM; chart animations disabled (`transition.duration:0`); WS rebuild events debounced 300 ms; per-cell generation counter discards stale out-of-order responses
+- Fix: Dashboard — resize handle double-click resets a cell to auto-height (fits visible rows)
+- New: Dashboard view mode — "💾 Layout saved" status bar always visible at the top of the view; turns into a clickable "💾 Save layout" button after any widget swap or cell resize; returns to neutral state after a successful save
+- Improved: Dashboard editor — per-cell height is persisted across saves; resize handle (bottom-right drag strip) adjusts height of any cell and immediately relayouts Plotly charts to fill the new height
 - Improved: Dashboard Balance widget header — icon and totals group flush-left, Users dropdown and trash button pushed to the right via `margin-left:auto`; removed excess spacing caused by `justify-content:space-between`
-- Fix: Orders widget — stale Entry price line is now correctly cleared when a position is closed during a WebSocket keepalive outage; two-pronged fix: (1) current DB position state is pushed to new chart subscribers immediately on connect; (2) PBData notifies the API server after every `update_positions()` write so all chart WebSocket subscribers receive the up-to-date position without waiting for the next WS delta event
+- Fix: Orders widget — stale Entry price line is now correctly cleared when a position is closed during a WebSocket keepalive outage
+- Fix: PBData — race condition in `_ws_restarted_once` during mass-disconnect events; key now claimed before first `await`
+- Fix: PBData — memory leaks in unbounded state dicts/sets; periodic `_cleanup_stale_state()` prunes entries for removed users
+- Fix: PBData — silent API notification failures now logged at DEBUG level
+- Fix: PBData — `_price_watch_timeout` and `_rest_semaphore_acquire_timeout` now reloadable from `pbgui.ini`
+- Fix: PBData — `_load_settings()` timer/interval block was nested inside `if log_level changed`; dedented so all settings reload independently
+- Fix: PBData — `eval()` replaced with `ast.literal_eval()` in `load_fetch_users` / `load_trades_users` (security)
+- Fix: PBData — dead/unreachable code in price watcher removed; duplicate `except` handlers merged
+- Fix: PBData — combined poller now uses REST slot gating to prevent rate-limit violations
+- Fix: PBData — duplicate `_rest_semaphore_limits_by_exchange` and `_default_rest_semaphore_limit` definitions consolidated
+- Fix: PBData — atomic INI writes in `save_fetch_users` / `save_trades_users` (temp file + `os.replace`)
+- Fix: PBData — removed dead `threading.Lock` fallback for `_price_buffer_lock`
+- Fix: PBData — `_load_settings()` throttled to every 30s in WS loops (was on every message)
+- Fix: PBData — O(n²) user filtering replaced with set-based list comprehension
+- Fix: PBData — `asynccontextmanager` import moved to module level; debounce flusher outer catch now logs traceback
 
 ## v1.67 (22-03-2026)
 - Fix: PBData — added per-exchange `asyncio.Semaphore(2)` to all three WS keepalive handlers (balance, positions, orders); when a server-side event drops all N connections simultaneously, at most 2 reconnects proceed concurrently per exchange, spreading the reconnect storm over several seconds and preventing event-loop congestion that caused cascading ping-pong failures on other exchanges
