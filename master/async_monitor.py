@@ -38,7 +38,7 @@ INSTANCE_COLLECT_INTERVAL = 30  # seconds
 # ── Remote scripts (same as old realtime_collector) ─────────
 
 MONITOR_AGENT_SCRIPT = r'''python3 -u -c "
-import json, os, time
+import json, os, sys, time, threading
 def rcpu():
     with open('/proc/stat') as f:
         p = f.readline().split()
@@ -60,6 +60,13 @@ def rmem():
     su = st - sf
     sp = round(su / st * 100, 1) if st else 0
     return [mt, ma, mp, mu], [st, su, sf, sp]
+def _ppid_watcher():
+    while True:
+        time.sleep(3)
+        if os.getppid() == 1:
+            os._exit(0)
+t = threading.Thread(target=_ppid_watcher, daemon=True)
+t.start()
 pi, pt = rcpu()
 time.sleep(1)
 while True:
@@ -439,6 +446,7 @@ class VPSMonitor:
 
     async def _metrics_stream(self, hostname: str):
         """Read system metrics from SSH stdout (JSON per line, 1/s)."""
+        proc = None
         try:
             proc = await self.pool.start_process(hostname, MONITOR_AGENT_SCRIPT)
             if not proc:
@@ -470,6 +478,11 @@ class VPSMonitor:
                 "alive": False, "active": False, "error": str(e),
             })
         finally:
+            if proc is not None:
+                try:
+                    proc.close()
+                except Exception:
+                    pass
             self.store.update_stream_info(hostname, {
                 "alive": False, "active": False, "error": None,
             })
