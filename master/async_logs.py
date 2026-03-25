@@ -284,6 +284,7 @@ class AsyncLogStreamer:
         _RETRY_PAUSE_S = 5   # pause between poll checks
 
         attempt = 0
+        proc = None
         try:
             while stream.active and attempt <= _MAX_RETRIES:
                 proc = await self._pool.start_process(
@@ -355,6 +356,11 @@ class AsyncLogStreamer:
             _log(SERVICE, f"[log] Stream error for {stream.stream_id}: {e}",
                  level="WARNING")
         finally:
+            if proc is not None:
+                try:
+                    proc.close()
+                except Exception:
+                    pass
             stream.active = False
             _log(SERVICE, f"[log] Stream worker ended for "
                  f"{stream.stream_id}")
