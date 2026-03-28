@@ -323,6 +323,20 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
+## v1.70 (unreleased)
+- Fix: API Keys editor (`frontend/api_keys_editor.html`) — removed DOMPurify workaround hex escapes (`\x3C`/`\x3E`); file is served as a standalone FastAPI page and is not subject to DOMPurify
+- Fix: Backtest — no-fill backtests (bot holds cash for entire period) no longer incorrectly reported as liquidated; `is_liquidated()` now checks for actual fills data instead of any timeseries data
+- Fix: Bokeh charts — replaced `streamlit-bokeh` BidiComponent (caused "could not find #st-bidi-component-* HTML tag" runtime error) with `st.bokeh_chart` in `Backtest.py`, `BacktestMulti.py`, and `Instance.py`; removed `streamlit-bokeh` from `requirements.txt`
+- Fix: VPS Monitor — `debug_logging` property no longer caches a stale `True` value from startup; now reads fresh from ini when no explicit value has been set via the GUI toggle, so debug logging is correctly disabled after a restart even if the ini was `false` at boot time
+- Fix: VPS Monitor — "Debug Logging" toggle was silently ignored; `debug_logging` was not in `_UI_SETTINGS_KEYS` in `api/vps.py`, so the WebSocket `set_setting` command was dropped; now saves to `[vps_monitor]` ini and applies live to the running monitor instance
+- Fix: `FileSync` (FileSyncWorker) reclassified as Tier 1 daemon — removed from `LOG_GROUPS` so it now writes to `data/logs/FileSync.log` instead of `ApiKeys.log`
+- Fix: Logging nav — zero-flash navigation from Streamlit: `history.pushState` is monkey-patched in every Streamlit page so clicking "Logging" in the nav bar redirects directly to FastAPI without triggering a Streamlit re-render
+- Fix: Logging nav — zero-flash navigation from FastAPI pages (Dashboard, API Editor): added `system_logging` to `FASTAPI_PAGES` in `pbgui_nav.js` so the nav bar routes directly to FastAPI without a Streamlit detour
+- Fix: Logging nav — eliminated Streamlit flash when navigating to Logging; redirect to FastAPI is now intercepted in `build_navigation()` before `navi.run()` so the Streamlit page script never executes
+- New: Logging page (`/system_logging`) fully migrated to FastAPI standalone page (`/api/logging/main_page`); Streamlit page now redirects to it
+- New: FastAPI router `api/logging.py` — endpoints for listing log files, rotation settings (GET/POST), log file purge, and the standalone page
+- New: `frontend/logging_monitor.html` — standalone log viewer with sidebar file picker, level/search filtering, live WebSocket streaming, rotated-file selector, purge button, and ⚙ Settings panel for per-log rotation config
+
 ## v1.69 (28-03-2026)
 - Fix: SSH Sync — secondary master did not pull api-keys on startup if remote serial was already higher than local (no inotify event triggered); `_fetch_remote_state()` now pulls when `remote_serial > local_serial`, with `_sync_lock` check
 - Fix: SSH Sync pull — pulled api-keys were only written to pb7 path, not pb6; both paths are now updated atomically with individual backups; startup check (`_sync_local_pb6_from_pb7`) repairs existing masters where pb6 serial is behind pb7

@@ -273,7 +273,8 @@
      ════════════════════════════════════ */
   var FASTAPI_PAGES = {
     'dashboards':        '/api/dashboard/main_page',
-    'system_api_keys':   '/api/api-keys/main_page'
+    'system_api_keys':   '/api/api-keys/main_page',
+    'system_logging':    '/api/logging/main_page'
   };
 
   /* ════════════════════════════════════

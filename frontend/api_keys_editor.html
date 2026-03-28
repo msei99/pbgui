@@ -2718,7 +2718,7 @@
                     cell.style.cssText = "color:#86efac; font-size:var(--fs-sm); text-align:right;";
                     cell.title = "In sync (MD5 match)" + (md5_detail ? " \u2014 " + _md5Tooltip(md5_detail) : "");
                 } else {
-                    cell.innerHTML = '\x3Cspan style="background:#991b1b; color:#fecaca; padding:1px 6px; border-radius:3px; font-weight:700; font-size:var(--fs-sm);">' + remote_serial + ' \u2716\x3C/span>';
+                    cell.innerHTML = '<span style="background:#991b1b; color:#fecaca; padding:1px 6px; border-radius:3px; font-weight:700; font-size:var(--fs-sm);">' + remote_serial + ' \u2716</span>';
                     cell.style.cssText = "text-align:right;";
                     cell.title = "Out of sync" + (md5_detail ? " \u2014 " + _md5Tooltip(md5_detail) : "");
                 }
@@ -3509,7 +3509,7 @@
         var re; try { re = new RegExp('(' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'); } catch(e) { return; }
         helpContent.innerHTML = _rawHtml.replace(/(<[^>]+>)|([^<]+)/g, function(_, tag, text) {
           if (tag) return tag;
-          return text.replace(re, function(_, m) { return '\x3Cmark\x3E' + m + '\x3C/mark\x3E'; });
+          return text.replace(re, function(_, m) { return '<mark>' + m + '</mark>'; });
         });
         _sMarks = Array.from(helpContent.querySelectorAll('mark'));
         _updateSCount();
@@ -3539,12 +3539,12 @@
       }
       function _showGlobalResults(term) {
         if (!term) {
-          helpContent.innerHTML = '\x3Cp style="color:#64748b;padding:8px 0;"\x3EType a search term to find across all topics.\x3C/p\x3E';
+          helpContent.innerHTML = '<p style="color:#64748b;padding:8px 0;">Type a search term to find across all topics.</p>';
           helpSearchCount.textContent = '';
           return;
         }
         var re; try { re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'); } catch(e) { return; }
-        helpContent.innerHTML = '\x3Cdiv class="help-loading"\x3ESearching\u2026\x3C/div\x3E';
+        helpContent.innerHTML = '<div class="help-loading">Searching\u2026</div>';
         var pending = helpTopics.length;
         if (pending === 0) { helpContent.innerHTML = ''; helpSearchCount.textContent = '0 found'; return; }
         var allResults = [];
@@ -3567,22 +3567,22 @@
       function _renderGlobalResults(term, results) {
         var re; try { re = new RegExp('(' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'); } catch(e) { return; }
         if (results.length === 0) {
-          helpContent.innerHTML = '\x3Cp style="color:#64748b;padding:8px 0;"\x3ENo results found.\x3C/p\x3E';
+          helpContent.innerHTML = '<p style="color:#64748b;padding:8px 0;">No results found.</p>';
           helpSearchCount.textContent = '0 found';
           return;
         }
         helpSearchCount.textContent = results.length + (results.length === 1 ? ' topic' : ' topics');
-        var html = '\x3Cdiv class="gs-results"\x3E';
+        var html = '<div class="gs-results">';
         results.forEach(function(r) {
-          html += '\x3Cdiv class="gs-item" data-idx="' + r.idx + '"\x3E';
-          html += '\x3Cdiv class="gs-topic"\x3E' + r.title + '\x3C/div\x3E';
+          html += '<div class="gs-item" data-idx="' + r.idx + '">';
+          html += '<div class="gs-topic">' + r.title + '</div>';
           r.snippets.forEach(function(s) {
-            var hi = s.replace(re, function(_, m) { return '\x3Cmark\x3E' + m + '\x3C/mark\x3E'; });
-            html += '\x3Cdiv class="gs-snip"\x3E\u2026' + hi + '\u2026\x3C/div\x3E';
+            var hi = s.replace(re, function(_, m) { return '<mark>' + m + '</mark>'; });
+            html += '<div class="gs-snip">\u2026' + hi + '\u2026</div>';
           });
-          html += '\x3C/div\x3E';
+          html += '</div>';
         });
-        html += '\x3C/div\x3E';
+        html += '</div>';
         helpContent.innerHTML = html;
         helpContent.querySelectorAll('.gs-item').forEach(function(el) {
           el.addEventListener('click', function() {
@@ -3626,35 +3626,35 @@
 
       function mdToHtml(md) {
         var lines = md.split('\n'), html = '', inPre = false, preBuf = '', inUl = false, inOl = false;
-        function flushList() { if (inUl) { html += '\x3C/ul\x3E'; inUl = false; } if (inOl) { html += '\x3C/ol\x3E'; inOl = false; } }
+        function flushList() { if (inUl) { html += '</ul>'; inUl = false; } if (inOl) { html += '</ol>'; inOl = false; } }
         function inlineFormat(t) {
-          t = t.replace(/`([^`]+)`/g, '\x3Ccode\x3E$1\x3C/code\x3E');
-          t = t.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '\x3Cimg src="$2" alt="$1"\x3E');
-          t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '\x3Ca href="$2" target="_blank" rel="noopener"\x3E$1\x3C/a\x3E');
-          t = t.replace(/\*\*(.+?)\*\*/g, '\x3Cstrong\x3E$1\x3C/strong\x3E');
-          t = t.replace(/__(.+?)__/g, '\x3Cstrong\x3E$1\x3C/strong\x3E');
-          t = t.replace(/\*(.+?)\*/g, '\x3Cem\x3E$1\x3C/em\x3E');
-          t = t.replace(/_(.+?)_/g, '\x3Cem\x3E$1\x3C/em\x3E');
+          t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+          t = t.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">');
+          t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+          t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+          t = t.replace(/__(.+?)__/g, '<strong>$1</strong>');
+          t = t.replace(/\*(.+?)\*/g, '<em>$1</em>');
+          t = t.replace(/_(.+?)_/g, '<em>$1</em>');
           return t;
         }
         for (var i = 0; i < lines.length; i++) {
           var l = lines[i];
-          if (l.match(/^```/)) { if (!inPre) { flushList(); inPre = true; preBuf = ''; } else { html += '\x3Cpre\x3E\x3Ccode\x3E' + preBuf.replace(/&/g,'&amp;').replace(/\x3C/g,'&lt;').replace(/\x3E/g,'&gt;') + '\x3C/code\x3E\x3C/pre\x3E'; inPre = false; } continue; }
+          if (l.match(/^```/)) { if (!inPre) { flushList(); inPre = true; preBuf = ''; } else { html += '<pre><code>' + preBuf.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</code></pre>'; inPre = false; } continue; }
           if (inPre) { preBuf += (preBuf ? '\n' : '') + l; continue; }
-          if (l.match(/^---+$/)) { flushList(); html += '\x3Chr\x3E'; continue; }
-          var hm = l.match(/^(#{1,6})\s+(.*)/); if (hm) { flushList(); html += '\x3Ch' + hm[1].length + '\x3E' + inlineFormat(hm[2]) + '\x3C/h' + hm[1].length + '\x3E'; continue; }
-          if (l.match(/^>\s?/)) { flushList(); html += '\x3Cblockquote\x3E' + inlineFormat(l.replace(/^>\s?/, '')) + '\x3C/blockquote\x3E'; continue; }
-          var ulm = l.match(/^[\-\*]\s+(.*)/); if (ulm) { if (!inUl) { if (inOl) { html += '\x3C/ol\x3E'; inOl = false; } html += '\x3Cul\x3E'; inUl = true; } html += '\x3Cli\x3E' + inlineFormat(ulm[1]) + '\x3C/li\x3E'; continue; }
-          var olm = l.match(/^\d+\.\s+(.*)/); if (olm) { if (!inOl) { if (inUl) { html += '\x3C/ul\x3E'; inUl = false; } html += '\x3Col\x3E'; inOl = true; } html += '\x3Cli\x3E' + inlineFormat(olm[1]) + '\x3C/li\x3E'; continue; }
-          if (l.trim() === '') { flushList(); html += '\x3Cp\x3E\x3C/p\x3E'; continue; }
-          flushList(); html += '\x3Cp\x3E' + inlineFormat(l) + '\x3C/p\x3E';
+          if (l.match(/^---+$/)) { flushList(); html += '<hr>'; continue; }
+          var hm = l.match(/^(#{1,6})\s+(.*)/); if (hm) { flushList(); html += '<h' + hm[1].length + '>' + inlineFormat(hm[2]) + '</h' + hm[1].length + '>'; continue; }
+          if (l.match(/^>\s?/)) { flushList(); html += '<blockquote>' + inlineFormat(l.replace(/^>\s?/, '')) + '</blockquote>'; continue; }
+          var ulm = l.match(/^[\-\*]\s+(.*)/); if (ulm) { if (!inUl) { if (inOl) { html += '</ol>'; inOl = false; } html += '<ul>'; inUl = true; } html += '<li>' + inlineFormat(ulm[1]) + '</li>'; continue; }
+          var olm = l.match(/^\d+\.\s+(.*)/); if (olm) { if (!inOl) { if (inUl) { html += '</ul>'; inUl = false; } html += '<ol>'; inOl = true; } html += '<li>' + inlineFormat(olm[1]) + '</li>'; continue; }
+          if (l.trim() === '') { flushList(); html += '<p></p>'; continue; }
+          flushList(); html += '<p>' + inlineFormat(l) + '</p>';
         }
         flushList();
         return html;
       }
 
       function loadHelpIndex(keyword) {
-        helpTocList.innerHTML = '\x3Cdiv class="help-loading"\x3ELoading...\x3C/div\x3E';
+        helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
         fetch(docsBase + '/docs/index?lang=' + helpLang + '&token=' + TOKEN)
           .then(function (r) { return r.json(); })
           .then(function (data) {
@@ -3675,7 +3675,7 @@
             }
           })
           .catch(function () {
-            helpTocList.innerHTML = '\x3Cdiv class="help-loading"\x3EFailed to load topics.\x3C/div\x3E';
+            helpTocList.innerHTML = '<div class="help-loading">Failed to load topics.</div>';
           });
       }
 
@@ -3698,7 +3698,7 @@
         var t = helpTopics[idx];
         if (!t) return;
         _rawHtml = null; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = '';
-        helpContent.innerHTML = '\x3Cdiv class="help-loading"\x3ELoading...\x3C/div\x3E';
+        helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
         fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
           .then(function (r) { return r.json(); })
           .then(function (d) {
@@ -3708,7 +3708,7 @@
             helpContent.scrollTop = 0;
             var st = helpSearch.value.trim(); if (st) _applySearch(st);
           })
-          .catch(function () { helpContent.innerHTML = '\x3Cdiv class="help-loading"\x3EFailed to load content.\x3C/div\x3E'; });
+          .catch(function () { helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>'; });
       }
 
       helpFilter.addEventListener('input', renderToc);

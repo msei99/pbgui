@@ -1,7 +1,6 @@
 streamlit==1.54.0
 streamlit-scrollable-textbox==0.0.3
 streamlit-autorefresh==1.0.1
-streamlit-bokeh==3.8.1
 bokeh==3.8.1
 psutil==7.2.1 ; python_version >= "3.11"
 psutil==5.9.4 ; python_version < "3.11"

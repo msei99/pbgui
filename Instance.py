@@ -13,11 +13,8 @@ import pandas as pd
 from datetime import datetime
 from time import sleep
 from bokeh.plotting import figure
-try:
-    from streamlit_bokeh import streamlit_bokeh  # type: ignore
-except Exception:
-    def streamlit_bokeh(fig, **kwargs):
-        return st.bokeh_chart(fig, width='stretch')
+def streamlit_bokeh(fig, **kwargs):
+    return st.bokeh_chart(fig, use_container_width=True)
 import numpy as np
 from shutil import rmtree
 import sys

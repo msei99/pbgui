@@ -138,6 +138,10 @@ class VPSStore:
             val = load_ini("vps_monitor_ui", key)
             if val:
                 self._ui_settings[key] = val
+        # debug_logging lives in [vps_monitor] section
+        val = load_ini("vps_monitor", "debug_logging")
+        if val:
+            self._ui_settings["debug_logging"] = val
 
     # ── Reader (called by WebSocket push) ───────────────────
 
