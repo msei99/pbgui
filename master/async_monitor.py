@@ -214,10 +214,10 @@ class VPSMonitor:
 
     @property
     def debug_logging(self) -> bool:
-        if self._debug_logging is None:
-            val = load_ini("vps_monitor", "debug_logging")
-            self._debug_logging = val.lower() == "true" if val else False
-        return self._debug_logging
+        if self._debug_logging is not None:
+            return self._debug_logging
+        val = load_ini("vps_monitor", "debug_logging")
+        return val.lower() == "true" if val else False
 
     @debug_logging.setter
     def debug_logging(self, value: bool):

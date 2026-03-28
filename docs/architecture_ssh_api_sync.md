@@ -18,7 +18,7 @@
 | 6 | Bot restart after push (always — no toggle) |
 | 7 | Dry-run mode (preview what would happen without writing) |
 | 8 | MD5 verify after every push |
-| 9 | Push-history log (via `[FileSync]` tag in shared `PBGui.log`) |
+| 9 | Push-history log (via `[FileSync]` tag in `data/logs/FileSync.log`) |
 | 10 | Generic `FileSyncWorker` reusable for future file types |
 | 11 | Generic remote `pbgui.ini` read/write over existing SSH sessions |
 | 12 | Backups follow existing PBRemote convention (`data/backup/api-keys_v7/` + `data/backup/api-keys/`) |
@@ -105,7 +105,7 @@ User clicks "SSH API Sync"
           ▼
 ┌──────────────────────┐
 │  4. Result & logging │  Per-VPS success/failure
-│                      │  Written to data/logs/PBGui.log ([FileSync] tag)
+│                      │  Written to data/logs/FileSync.log ([FileSync] tag)
 │                      │  Returned via REST response
 └──────────────────────┘
 ```
@@ -409,12 +409,12 @@ All logging via `from logging_helpers import human_log as _log`.
 
 | Component | Service tag | Log file | Routing |
 |-----------|------------|----------|---------|
-| `FileSyncWorker` | `[FileSync]` | `data/logs/PBGui.log` | Via `LOG_GROUPS` (Tier 3) |
+| `FileSyncWorker` | `[FileSync]` | `data/logs/FileSync.log` | Tier 1 daemon — NOT in `LOG_GROUPS` |
 | `AsyncSSHPool` SFTP | `[SSHPool]` | (existing pool log) | (unchanged) |
 
-No separate `api_sync.log` — `[FileSync]` tag makes grep easy in the shared `PBGui.log`:
+Grep by service tag across all logs:
 ```bash
-grep '\[FileSync\]' data/logs/PBGui.log
+grep '\[FileSync\]' data/logs/FileSync.log
 ```
 
 Log entries include: hostname, operation, serial, success/failure, MD5 hashes, timing.
@@ -468,7 +468,7 @@ Log entries include: hostname, operation, serial, success/failure, MD5 hashes, t
 | Metadata fields in JSON | Avoids sidecar files. Fields prefixed with `_` to avoid conflicts. |
 | SFTP via asyncssh (not Paramiko) | Consistent with existing pool. No second SSH library. |
 | Generic FileSyncWorker | Future reuse for config sync without duplication. |
-| Logging to PBGui.log (Tier 3) | No separate log file — `[FileSync]` tag is sufficient for filtering. |
+| Logging to FileSync.log (Tier 1) | Own log file — `FileSyncWorker` has a long-running daemon loop (inotifywait + watchdog). |
 | Dry-run mode | Safety net for reviewing changes before pushing. |
 | MD5 verify after push | Confirms file integrity after SFTP transfer. |
 | Generic remote ini read/write | Enables VPS config access for any feature, not just file sync. |

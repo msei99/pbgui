@@ -1642,12 +1642,24 @@ class BacktestV7Result:
         self._has_timeseries_data = has_data
         return has_data
 
+    def _has_fills_data(self) -> bool:
+        """Return True only if fills files contain at least one data row."""
+        fills_csv = Path(f'{self.result_path}/fills.csv')
+        fills_gz = Path(f'{self.result_path}/fills.csv.gz')
+        return (
+            self._result_file_has_data_rows(fills_csv)
+            or self._result_file_has_data_rows(fills_gz, is_gzip=True)
+        )
+
     def is_liquidated(self) -> bool:
         """Return True if the backtest ended in liquidation.
 
         The analysis writes `equity_balance_diff_neg_max` as the maximum negative
         relative difference between equity and balance. If this value is >= 1.0
         the account reached zero (or worse) and can be considered liquidated.
+
+        A backtest with no fills at all cannot be liquidated (equity_balance_diff_neg_max
+        is set to 1.0 as a default by the Rust analyzer when there are no trades).
         """
         try:
             if self.equity_balance_diff_neg_max is None:
@@ -1655,9 +1667,9 @@ class BacktestV7Result:
             if float(self.equity_balance_diff_neg_max) < 1.0:
                 return False
 
-            # Guard against degenerate result artifacts where analysis exists but
-            # fills/balance files contain headers only (no actual time-series rows).
-            return self._has_nonempty_timeseries_data()
+            # A liquidation requires fills. If no fills exist the 1.0 value is
+            # a default from the Rust analyzer (no-trade backtest), not a real liquidation.
+            return self._has_fills_data()
         except Exception:
             return False
     

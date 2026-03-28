@@ -55,6 +55,8 @@ def init(monitor: VPSMonitor, streamer: AsyncLogStreamer):
 # ── Allowed UI setting keys (whitelist) ──────────────────────
 
 _UI_SETTINGS_KEYS = {"compact"}
+# Keys stored in [vps_monitor] ini section (not [vps_monitor_ui])
+_VPS_SETTINGS_KEYS = {"debug_logging"}
 
 
 # ── WebSocket endpoint ───────────────────────────────────────
@@ -416,6 +418,16 @@ def _cmd_set_setting(request: dict):
     value = request.get("value", "")
     if key in _UI_SETTINGS_KEYS:
         save_ini("vps_monitor_ui", key, str(value))
+        if _monitor:
+            _monitor.store.set_ui_setting(key, str(value))
+        _log(SERVICE, f"[setting] {key} = {value}")
+    elif key in _VPS_SETTINGS_KEYS:
+        save_ini("vps_monitor", key, str(value))
+        if _monitor:
+            _monitor.store.set_ui_setting(key, str(value))
+            # Apply live — avoids waiting for next ini-watcher cycle
+            if key == "debug_logging":
+                _monitor._debug_logging = (str(value).lower() == "true")
         _log(SERVICE, f"[setting] {key} = {value}")
 
 
