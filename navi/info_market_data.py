@@ -562,7 +562,7 @@ def _resample_ohlcv(df, rule: str):
     if agg.empty:
         return df
     agg = agg.reset_index()
-    agg["ts"] = (agg["dt"].view("int64") // 1_000_000).astype("int64")
+    agg["ts"] = (agg["dt"].astype("int64") // 1_000_000)
     return agg[["ts", "o", "h", "l", "c", "v"]]
 
 
