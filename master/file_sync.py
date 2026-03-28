@@ -617,8 +617,46 @@ class FileSyncWorker:
 
     # ── Watchers (inotifywait) ───────────────────────────────
 
+    def _sync_local_pb6_from_pb7(self) -> None:
+        """Ensure local pb6/api-keys.json is in sync with pb7 at startup.
+
+        If pb7 has a higher (or defined) _api_serial than pb6, copy pb7 → pb6
+        atomically. This repairs cases where a previous pull only wrote pb7.
+        """
+        pb6dir_local = _pb6dir()
+        if not pb6dir_local:
+            return
+        local_pb6 = Path(pb6dir_local) / "api-keys.json"
+        if not LOCAL_API_KEYS.exists():
+            return
+        try:
+            pb7_data = json.loads(LOCAL_API_KEYS.read_bytes())
+        except (json.JSONDecodeError, OSError):
+            return
+        pb7_serial = pb7_data.get("_api_serial", 0)
+        pb6_serial = 0
+        if local_pb6.exists():
+            try:
+                pb6_data = json.loads(local_pb6.read_bytes())
+                pb6_serial = pb6_data.get("_api_serial", 0)
+            except (json.JSONDecodeError, OSError):
+                pass
+        if pb7_serial > pb6_serial:
+            raw = LOCAL_API_KEYS.read_bytes()
+            ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            if local_pb6.exists():
+                backup_dir = Path(f"{PBGDIR}/data/backup/api-keys/{ts}")
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(local_pb6, backup_dir / "api-keys.json")
+            tmp = local_pb6.with_suffix(".tmp")
+            tmp.write_bytes(raw)
+            tmp.replace(local_pb6)
+            _log(SERVICE, f"[startup] Synced pb6 api-keys.json from pb7 "
+                 f"(pb6 serial {pb6_serial} → {pb7_serial})")
+
     async def start_watchers(self, hostnames: list[str] | None = None):
         """Start inotifywait watchers on connected VPS(es)."""
+        self._sync_local_pb6_from_pb7()
         targets = hostnames or self.pool.connected_hosts()
         for h in targets:
             if h in self._watchers and not self._watchers[h].done():
