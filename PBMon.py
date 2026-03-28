@@ -51,6 +51,7 @@ class PBMon():
         self.pbremote = PBRemote()
         self._telegram_token = ""
         self._telegram_chat_id = ""
+        self._hl_expiry_last_warned: dict[str, str] = {}  # {username: "YYYY-MM-DD"}
         
     @property
     def telegram_token(self):
@@ -133,6 +134,61 @@ class PBMon():
         async with bot:
             await bot.send_message(chat_id=self.telegram_chat_id, text=message, parse_mode='Markdown')
 
+    async def check_hl_expiry(self):
+        """Check HL API key expiry and send Telegram warnings."""
+        from datetime import datetime, timezone
+        warning_days_str = load_ini("hl_expiry", "telegram_warning_days")
+        if not warning_days_str:
+            return
+        try:
+            warning_days = int(warning_days_str)
+        except ValueError:
+            return
+        if warning_days < 1:
+            return
+
+        today_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+
+        try:
+            from User import Users
+            users = Users()
+        except Exception as e:
+            _log("PBMon", f"HL expiry check: failed to load users: {e}", level="WARNING")
+            return
+
+        warnings = []
+        for user in users:
+            if user.exchange != "hyperliquid":
+                continue
+            extra = user.extra if isinstance(user.extra, dict) else {}
+            vu = extra.get("hl_valid_until")
+            if vu is None:
+                continue
+            try:
+                vu = int(vu)
+                expiry_dt = datetime.fromtimestamp(vu / 1000, tz=timezone.utc)
+                days = (expiry_dt - datetime.now(tz=timezone.utc)).days
+            except (ValueError, TypeError, OSError):
+                continue
+
+            if days <= warning_days:
+                # Only warn once per day per user
+                last = self._hl_expiry_last_warned.get(user.name)
+                if last == today_str:
+                    continue
+                self._hl_expiry_last_warned[user.name] = today_str
+                if days < 0:
+                    warnings.append(f"⚠️ *{user.name}*: HL key EXPIRED ({-days}d ago)")
+                elif days == 0:
+                    warnings.append(f"⚠️ *{user.name}*: HL key expires TODAY")
+                else:
+                    warnings.append(f"⚠️ *{user.name}*: HL key expires in {days}d ({expiry_dt.strftime('%Y-%m-%d')})")
+
+        if warnings:
+            msg = "🔑 *HL API Key Expiry Warning*\n" + "\n".join(warnings)
+            _log("PBMon", f"HL expiry warning: {len(warnings)} key(s)")
+            await self.send_telegram_message(msg)
+
     async def has_errors(self):
         self.pbremote.update_remote_servers()
         errors = self.pbremote.has_error()
@@ -178,6 +234,7 @@ def main():
         try:
             if pbmon.telegram_token and pbmon.telegram_chat_id:
                 asyncio.run(pbmon.has_errors())
+                asyncio.run(pbmon.check_hl_expiry())
             sleep(60)
         except Exception as e:
             _log("PBMon", f"Something went wrong, but continue: {e}", level="ERROR")

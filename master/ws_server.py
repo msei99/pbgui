@@ -608,6 +608,8 @@ class WSServer:
 
     # Allowed keys that clients can persist (whitelist for safety)
     _UI_SETTINGS_KEYS = {"compact"}
+    # Keys stored in vps_monitor section (not pbmaster_ui)
+    _VPS_SETTINGS_KEYS = {"debug_logging"}
 
     def _load_ui_settings(self) -> dict:
         """Load UI settings from pbgui.ini [pbmaster_ui] section."""
@@ -616,19 +618,31 @@ class WSServer:
             val = load_ini("pbmaster_ui", key)
             if val:
                 result[key] = val
+        for key in self._VPS_SETTINGS_KEYS:
+            val = load_ini("vps_monitor", key)
+            if val:
+                result[key] = val
         return result
 
     async def _cmd_set_setting(self, websocket, request: dict):
         """Persist a UI setting to pbgui.ini."""
         key = request.get("key", "")
         value = request.get("value", "")
-        if key not in self._UI_SETTINGS_KEYS:
+        if key not in self._UI_SETTINGS_KEYS and key not in self._VPS_SETTINGS_KEYS:
             await websocket.send(json.dumps({
                 "type": "error",
                 "error": f"Unknown setting: {key}",
             }))
             return
-        save_ini("pbmaster_ui", key, str(value))
+        if key in self._VPS_SETTINGS_KEYS:
+            save_ini("vps_monitor", key, str(value))
+            # Apply live to the running monitor
+            if self._pbmaster and hasattr(self._pbmaster, 'monitor'):
+                monitor = self._pbmaster.monitor
+                if monitor and hasattr(monitor, '_debug_logging'):
+                    monitor._debug_logging = (str(value).lower() == 'true')
+        else:
+            save_ini("pbmaster_ui", key, str(value))
         _log(SERVICE, f"[setting] {key} = {value}")
 
     # ── Push loops ──────────────────────────────────────────

@@ -796,6 +796,12 @@ def get_main_page(
     api_base = origin + "/api"
     ws_base  = api_base.replace("http://", "ws://").replace("https://", "wss://")
 
+    # st_base may arrive empty when DOMPurify XML-escapes '&' in the redirect
+    # URL (turning &st_base= into amp;st_base=, which FastAPI ignores).
+    # Fallback: derive from the request hostname + Streamlit default port.
+    if not st_base:
+        st_base = f"http://{host}:8501"
+
     html = html.replace('"%%TOKEN%%"',         _json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"',      _json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"',       _json.dumps(ws_base))
@@ -812,6 +818,11 @@ def get_main_page(
     from pbgui_func import PBGUI_VERSION
     html = html.replace('"%%VERSION%%"', _json.dumps(PBGUI_VERSION))
     html = html.replace('%%VERSION%%', PBGUI_VERSION)
+
+    # Cache-bust pbgui_nav.js with file mtime so browser always loads latest
+    nav_js = _P(__file__).parent.parent / "frontend" / "pbgui_nav.js"
+    nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION
+    html = html.replace('%%NAV_HASH%%', nav_hash)
 
     return HTMLResponse(
         content=html,

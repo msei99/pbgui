@@ -6,10 +6,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dashboard Templates</title>
 <style>
+:root {
+    --fs-xs: 11px;
+    --fs-sm: 13px;
+    --fs-base: 14px;
+    --fs-md: 15px;
+    --fs-lg: 18px;
+    --fs-xl: 22px;
+    --sp-xs: 4px;
+    --sp-sm: 8px;
+    --sp-md: 12px;
+    --sp-lg: 20px;
+    --input-h: 32px;
+    --btn-h: 32px;
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: 0.875rem;
+  font-size: var(--fs-base);
   background: #0e1117;
   color: #e2e8f0;
   min-height: 100vh;
@@ -30,21 +44,21 @@ body {
   user-select: none;
 }
 .tpl-title {
-  font-size: 1rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: #e2e8f0;
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
-.tpl-title span.icon { font-size: 1.1rem; }
+.tpl-title span.icon { font-size: var(--fs-lg); }
 .tpl-close {
   background: transparent;
   border: 1px solid #4a5568;
   border-radius: 4px;
   color: #94a3b8;
   cursor: pointer;
-  font-size: 1rem;
+  font-size: var(--fs-md);
   padding: 0.25rem 0.6rem;
   line-height: 1;
   transition: background 0.15s, color 0.15s;
@@ -69,7 +83,7 @@ body {
   padding: 0.85rem 1rem;
 }
 .tpl-card-title {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
   color: #94a3b8;
   text-transform: uppercase;
@@ -89,7 +103,7 @@ body {
   border: 1px solid #4a5568;
   border-radius: 5px;
   color: #e2e8f0;
-  font-size: 0.84rem;
+  font-size: var(--fs-base);
   padding: 0.4rem 0.6rem;
   outline: none;
   min-width: 0;
@@ -101,7 +115,7 @@ body {
   border: 1px solid #4a5568;
   border-radius: 5px;
   color: #e2e8f0;
-  font-size: 0.84rem;
+  font-size: var(--fs-base);
   padding: 0.4rem 0.6rem;
   outline: none;
   cursor: pointer;
@@ -116,7 +130,7 @@ body {
   border-radius: 5px;
   color: #e2e8f0;
   cursor: pointer;
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   padding: 0.4rem 0.75rem;
   white-space: nowrap;
   transition: background 0.15s;
@@ -154,7 +168,7 @@ body {
 }
 .tpl-item-name {
   flex: 1;
-  font-size: 0.84rem;
+  font-size: var(--fs-base);
   color: #e2e8f0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -162,7 +176,7 @@ body {
 }
 .tpl-empty {
   color: #4a5568;
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   font-style: italic;
   padding: 0.4rem 0;
 }
@@ -178,7 +192,7 @@ body {
 
 /* ── Status messages ── */
 .msg {
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   min-height: 1.1rem;
   margin-top: 0.35rem;
   padding: 0;
@@ -190,14 +204,14 @@ body {
 
 /* ── Divider ── */
 .tpl-label {
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   color: #718096;
   margin-bottom: 0.35rem;
 }
 
 /* ── Preview text ── */
 .tpl-preview {
-  font-size: 0.76rem;
+  font-size: var(--fs-sm);
   color: #718096;
   margin-top: 0.25rem;
   min-height: 1.1rem;
@@ -218,7 +232,7 @@ body {
 .msel-btn {
   background: #2d3748; color: #e2e8f0;
   border: 1px solid #4a5568; border-radius: 4px;
-  padding: 0.38rem 0.6rem; font-size: 0.84rem;
+  padding: 0.38rem 0.6rem; font-size: var(--fs-base);
   cursor: pointer; width: 100%; text-align: left;
   display: flex; justify-content: space-between; align-items: center;
   white-space: nowrap; overflow: hidden;
@@ -237,13 +251,13 @@ body {
   width: 100%; box-sizing: border-box;
   background: #2d3748; color: #e2e8f0;
   border: none; border-bottom: 1px solid #4a5568;
-  padding: 0.35rem 0.5rem; font-size: 0.76rem; outline: none;
+  padding: 0.35rem 0.5rem; font-size: var(--fs-sm); outline: none;
 }
 .msel-filter::placeholder { color: #64748b; }
 .msel-list { max-height: 200px; overflow-y: auto; }
 .msel-item {
   display: flex; align-items: center; gap: 0.4rem;
-  padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.78rem;
+  padding: 0.3rem 0.6rem; cursor: pointer; font-size: var(--fs-sm);
   color: #e2e8f0; white-space: nowrap;
 }
 .msel-item:hover { background: #2d3748; }

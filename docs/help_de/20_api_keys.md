@@ -1,128 +1,258 @@
-# API-Keys (PBGui / PB7)
+# API-Keys
 
-PBGui unterstützt sowohl Exchange-API-Credentials als auch TradFi-Provider-Credentials für Stock-Perp-Backtests.
+Exchange-API-Credentials und TradFi-Provider-Einstellungen verwalten. Alle Credentials werden in `api-keys.json` gespeichert und von PB7 für den Live-Betrieb gelesen.
 
-## Wo die Daten verwendet werden
+---
 
-- **Setup → API-Keys** bearbeitet Exchange-User in `api-keys.json`.
-- PB7 Live-Trading liest diese Exchange-User aus `api-keys.json`.
-- TradFi-Provider-Konfiguration wird in `pbgui.ini` (`[tradfi_profiles]`) und in der PBGui-User-Konfiguration (`users.tradfi`) gespeichert.
+## Seitenaufbau
 
-## Exchange-User (`api-keys.json`)
+Die Seite läuft als eigenständige FastAPI-Seite mit vollständiger Topnav zur Navigation zwischen allen PBGui-Bereichen. Sie besteht aus einer **Sidebar** (links) und einem **Hauptbereich** (rechts).
 
-Jeder User ist ein JSON-Objekt unter seinem Usernamen:
+### Sidebar-Buttons
 
-```json
-{
-	"myuser": {
-		"exchange": "bybit",
-		"key": "...",
-		"secret": "...",
-		"passphrase": "..."
-	}
-}
-```
+| Button | Funktion |
+|---|---|
+| **+ Add User** | Öffnet das Formular zum Anlegen eines neuen Exchange-Users |
+| **HL Expiry Check** | Prüft den Key-Ablauf aller Hyperliquid-User (Bulk) |
+| **Bybit Expiry Check** | Prüft den Key-Ablauf + IP-Whitelist aller Bybit-User (Bulk) |
+| **☁ SSH Sync** | Überträgt `api-keys.json` per SSH an alle verbundenen VPS |
+| **Advanced Sync** | Öffnet das vollständige SSH-Sync-Panel (pro VPS, Dry-Run, Retention) |
+| **Comments** | Öffnet das Kommentar-Panel |
+| **HL Warning Config** | Konfiguriert den Schwellenwert für Hyperliquid-Ablaufwarnungen via Telegram |
+| **TradFi** | Öffnet das TradFi-Data-Provider-Panel |
+| **🗄 Backups** | Öffnet den Backup-Browser mit Diff-Viewer |
+| **📋 Logs** | Öffnet den Live-Log-Viewer (streamt `ApiKeys.log` und weitere Logs) |
+| **Refresh** | Lädt die User-Liste neu von der Festplatte |
+| **🔴 API not in sync** | Sichtbar, wenn ein rclone-Sync aussteht; Klick löst ihn aus |
+| **🟠 Restart** | Sichtbar, wenn der API-Server ausstehende Code-Änderungen hat; Klick startet neu |
 
-### Erkannte Felder
+---
 
-- Pflicht
-	- `exchange`
+## User-Liste
 
-- Credentials
-	- `key` (Aliase beim Laden: `apiKey`, `api_key`)
-	- `secret`
-	- `passphrase` (Alias beim Laden: `password`)
+Zeigt alle Einträge aus `api-keys.json`.
 
-- Hyperliquid-spezifisch
-	- `wallet_address` (Aliase beim Laden: `walletAddress`, `wallet`)
-	- `private_key` (Alias beim Laden: `privateKey`)
-	- `is_vault` (boolean)
+- **Filterfeld** — nach Name oder Exchange suchen; Zustand wird in der URL gespeichert (`?filter=`)
+- **Spaltenüberschriften** — Klick zum Sortieren; Richtung bleibt in der URL erhalten (`?sort=`, `?dir=`)
+- **Tastaturnavigation** — ArrowDown aus dem Filterfeld wählt die erste Zeile; ArrowUp/ArrowDown navigiert zwischen Zeilen; Enter öffnet den gewählten User
+- **In Use-Badge** — wird angezeigt, wenn der User einem laufenden Bot zugeordnet ist
 
-- Optionaler PB7/CCXT-Passthrough
-	- `quote` (string)
-	- `options` (JSON-Objekt)
-	- `extra` (JSON-Objekt für exchange-spezifische Zusatzwerte)
+### Ablauf-Spalten
 
-Unbekannte Zusatzfelder werden erhalten, damit bestehende Setups kompatibel bleiben.
+- **HL Expiry** — zeigt verbleibende Tage / Ablaufdatum für Hyperliquid-User (aus lokalem Cache, kein API-Call); sortierbar aufsteigend (nächster Ablauf zuerst)
+- **Bybit Expiry** — zeigt verbleibende Tage für Bybit-User (aus lokalem Cache)
+
+---
+
+## User anlegen / bearbeiten
+
+Klick auf eine User-Zeile öffnet das Formular, oder **+ Add User** verwenden. Der URL-Hash wechselt auf `#edit/username`, sodass ein Browser-Refresh denselben User wiederherstellt.
+
+**Escape** schließt ohne Speichern (mit Rückfrage bei ungespeicherten Änderungen).
+
+### Felder im Bearbeitungsformular
+
+| Feld | Beschreibung |
+|---|---|
+| **Username** | Schlüssel in `api-keys.json`; kann umbenannt werden — neuen Namen eingeben und speichern |
+| **Exchange** | Exchange-Name (z. B. `bybit`, `binanceusdm`, `hyperliquid`) |
+| **API Key** | Exchange-API-Key |
+| **Secret** | API-Secret |
+| **Passphrase** | Von manchen Exchanges erforderlich (z. B. OKX) |
+| **Wallet Address** | Nur Hyperliquid |
+| **Private Key** | Nur Hyperliquid |
+| **Is Vault** | Hyperliquid-Vault-Modus |
+| **Quote** | Optionaler CCXT-Passthrough (z. B. `USDT`) |
+| **Options** | Optionales JSON-Objekt (z. B. `{"defaultType": "swap"}`) |
+| **Extra** | Optionaler JSON-Passthrough für Exchange-spezifische Felder |
+
+### Auge-Symbol (Credentials enthüllen)
+
+Alle Credential-Felder (Secret, Passphrase, Private Key, TradFi-Keys) haben einen 👁-Button:
+
+- **Klick** — ruft den echten gespeicherten Wert vom Server ab und zeigt ihn im Klartext
+- **Erneuter Klick** — verbirgt und leert das Feld (Speichern mit leerem Feld lässt den gespeicherten Wert unverändert)
+- Credential ersetzen: enthüllen, leeren, neuen Wert eingeben, speichern
+
+### Validierung
+
+- Standard-Exchanges benötigen **API Key + Secret**
+- Passphrase-Exchanges zusätzlich **Passphrase**
+- Hyperliquid benötigt **Wallet Address**; Private Key nur bei der Erstellung Pflicht (beim Bearbeiten leer lassen, um den bestehenden Wert zu behalten)
+- Username muss eindeutig sein; Umbenennung wird abgelehnt, wenn der neue Name bereits vergeben ist oder der User von einem Bot verwendet wird
+
+### Expiry prüfen / Verbindung testen
+
+Beide Buttons verwenden die **aktuell eingegebenen Credentials** aus dem Formular — nicht nur die gespeicherten. So kann ein neuer Key vor dem Speichern geprüft werden.
+
+- **Check Expiry** (HL / Bybit) — Ergebnis ist eine Vorschau; erst nach Save persistent
+- **Test Connection** — testet die Verbindung live; verwendet ebenfalls ungespeicherte Credentials
+
+---
+
+## Backups
+
+Vor jedem Speichern wird automatisch ein Backup erstellt. Backups liegen in `data/api-keys/` als zeitgestempelte JSON-Dateien.
+
+Öffnen über **🗄 Backups** in der Sidebar (URL-Hash: `#backups`).
+
+| Eintrag | Beschreibung |
+|---|---|
+| **Current (live)** | Die aktive `api-keys.json` für jede installierte PB-Version (pb7/pb6); für Diff-Vergleiche auswählbar |
+| Zeitgestempelte Einträge | Frühere Speicherstände; **Restore** überschreibt die aktuelle Datei (Pre-Restore-Snapshot wird vorher erstellt) |
+
+### Diff-Viewer
+
+Beliebige zwei Einträge nebeneinander oder unified vergleichen:
+- Grün = hinzugefügt, rot = entfernt, grau = unveränderter Kontext
+- „✓ Files are identical" wird angezeigt, wenn beide Versionen identisch sind
+
+---
+
+## SSH Sync
+
+Verteilt `api-keys.json` per SSH/SFTP an alle VPS-Server.
+
+### Schnell-Sync (☁ SSH Sync)
+
+Ein Klick überträgt an alle verbundenen VPS — kein Panel nötig. Ein 🔴/🟢-Indikator neben dem Button zeigt den Live-Sync-Status (aktualisiert via SSE).
+
+### Advanced-Sync-Panel
+
+Öffnen über **Advanced Sync** in der Sidebar. Zeigt eine vereinheitlichte VPS-Tabelle:
+
+| Spalte | Beschreibung |
+|---|---|
+| Checkbox | VPS für Bulk-Aktion auswählen |
+| Hostname | VPS-Name |
+| Status | 🟢 synchron / 🔴 nicht synchron (MD5-basiert, live via SSE) |
+| Last Sync | Zeitpunkt und Serial des letzten erfolgreichen Push |
+| Days | Backup-Aufbewahrungsdauer (Tage) |
+| Min Ver | Mindestanzahl an Backups, die immer behalten werden |
+| **Set** | Speichert Retention-Einstellungen für diesen VPS |
+| **Sync Keys** | Überträgt `api-keys.json` an diesen VPS |
+
+**Kopfzeile** wendet Days / Min Ver / Set / Sync Keys auf alle ausgewählten VPS gleichzeitig an.
+
+**Dry Run** — zeigt eine Vorschau ohne tatsächliche Übertragung; Ergebnis in einem Modal.
+
+**Filter + All / None** — filtert sichtbare VPS; All/None schaltet alle Checkboxen um.
+
+#### Was ein Push macht
+
+1. Upload von `api-keys.json` per SFTP auf den konfigurierten PB7- (und PB6-)Pfad
+2. MD5-Verifikation nach dem Upload
+3. Erstellt ein zeitgestempeltes Backup auf dem VPS; entfernt Backups außerhalb des Retention-Fensters
+4. Vergleicht alte und neue Credentials; startet nur die Bots neu, deren API-Keys sich geändert haben
+
+### Sekundäre Master synchron halten
+
+Wenn PBGui auf mehreren Servern läuft (ein primärer + ein oder mehrere sekundäre), erhalten sekundäre Master die Keys **nicht** direkt vom primären Master. Stattdessen holen sie die Keys automatisch vom gemeinsamen VPS:
+
+**Wie es funktioniert:**
+1. Der primäre Master pusht `api-keys.json` wie gewohnt via SSH Sync an den/die VPS
+2. Jeder sekundäre Master überwacht dieselben VPS mit einem inotify-Watcher. Sobald ein höherer `_api_serial` erkannt wird (höher als die lokale Version), **pullt** der sekundäre Master `api-keys.json` automatisch vom VPS auf seine lokale Festplatte
+3. Der Sekundäre ist damit sofort aktuell — kein manueller Eingriff nötig
+
+**Voraussetzungen auf jedem sekundären Master:**
+- SSH-Public-Key-Authentifizierung zwischen dem sekundären Master und jedem VPS ist eingerichtet (der öffentliche SSH-Schlüssel des Sekundären muss in `~/.ssh/authorized_keys` auf dem VPS stehen)
+- Dieselben VPS sind im VPS Manager des Sekundären mit dem korrekten `pb7dir`-Pfad konfiguriert
+
+**Auf dem sekundären Master:**
+Die API-Keys-Seite liest `api-keys.json` live von der Festplatte. Nach dem automatischen Pull ist der Sekundäre sofort aktuell — ein Neustart von PBGui oder des API-Servers ist nicht erforderlich.
+
+**Propagation an sekundäre Master verhindern:**
+In Advanced Sync die Option **"Don't sync to other masters"** aktivieren, bevor Sync Keys geklickt wird. Dadurch wird ein `_sync_lock`-Flag in die gepushte Datei gesetzt — sekundäre Master überspringen diesen Push und pullen ihn nicht.
+
+---
+
+## Live-Log-Viewer
+
+Öffnen über **📋 Logs** in der Sidebar.
+
+Streamt Logdateien in Echtzeit via WebSocket.
+
+### Steuerelemente
+
+| Steuerelement | Beschreibung |
+|---|---|
+| **Files**-Button / Sidebar | Schaltet die einklappbare linke Sidebar mit allen verfügbaren Logdateien um; Klick auf eine Datei wechselt die Ansicht |
+| **DBG / INF / WRN / ERR / CRT** | Sichtbarkeit nach Log-Level steuern |
+| **Lines** | Anzahl initial geladener Zeilen (200 – 5000) |
+| **⏸ Pause / ▶ Stream** | Live-Streaming pausieren oder fortsetzen |
+| **🗑 Clear** | Löscht die Terminal-Anzeige |
+| **↓ Download** | Lädt die aktuell geladenen Zeilen als Textdatei herunter |
+| **# Lines** | Zeilennummern ein-/ausblenden |
+| **— Preset —** | Vorgefertigte Suchmuster (Errors, Warnings, Connection, Traceback, …) |
+| **Suchfeld** | Live-Suche / Filter; Checkbox **Filter** blendet nicht passende Zeilen aus; ▲▼ navigiert zwischen Treffern |
+
+Wichtige Logdateien:
+- `ApiKeys.log` — gesamte API-Key- und SSH-Sync-Aktivität
+- `VPSMonitor.log` — VPS-Monitoring
+- `PBGui.log` — allgemeine UI-Aktivität
+
+---
+
+## Kommentare
+
+Öffnen über **Comments** in der Sidebar (URL-Hash: `#comments`).
+
+Verwaltet `_comment_*`-Einträge auf oberster Ebene in `api-keys.json` — freie Notizen ohne Zuordnung zu einem Exchange-User.
+
+---
 
 ## TradFi Data Provider (Stock-Perps Backtesting)
 
-Auf der API-Keys-Seite gibt es zusätzlich den Bereich **TradFi Data Provider**:
+Öffnen über **TradFi** in der Sidebar (URL-Hash: `#tradfi`).
 
-- **yfinance**
-	- Standardquelle für die letzten 7 Tage.
-	- Kein API-Key nötig.
-	- Install/Uninstall und Test sind direkt in der UI möglich.
+Für Hyperliquid-XYZ-Symbol-Backtests werden 1-Minuten-OHLCV-Daten traditioneller Assets (Aktien, FX) benötigt.
 
-- **Extended provider** (optional, für ältere Historie)
-	- Provider: `alpaca`, `polygon`, `finnhub`, `alphavantage`
-	- API-Key ist erforderlich.
-	- Aktionen: **Test Connection**, **Save TradFi Config**, **Clear TradFi Config**.
+> 💡 **Empfohlen für vollständige Stock-Perp-Historie:** PBGuis **Market Data**-Modul mit **Tiingo** aufbauen — deutlich vollständiger als die PB7-seitigen Provider weiter unten. Tiingo konfigurieren und **Build best 1m OHLCV** starten unter _Setup → Market Data_.
 
-### TradFi-Runtime-Verhalten (Single Source of Truth)
+### yfinance (automatischer Standard)
 
-- Diese Seite ist für **Credentials und Provider-Setup** zuständig.
-- Das Runtime-Market-Data-Verhalten (HIP-3-Flow, Quellen-Priorität und Loop-Scope) steht im Market-Data-Guide:
-	- `docs/help/26_market_data.md` (EN)
-	- `docs/help_de/26_market_data.md` (DE)
+- Kein Einrichten nötig; automatischer Fallback für die letzten ~7 Tage
+- Kostenlos, kein API-Key erforderlich
+- **Install** / **Uninstall** verwalten das Python-Paket
 
-### Free-Provider-Abdeckung (Kurzüberblick)
+### Extended Provider (optional, für ältere Daten)
 
-Die Angaben sind als praktische PBGui/PB7-Richtwerte zu verstehen; Provider-Pläne können sich ändern.
+| Anbieter | Key nötig | Free-Tier 1m-Tiefe | Hinweise |
+|---|---|---|---|
+| **alpaca** | key + secret | 5+ Jahre | Kostenlos (IEX-Feed, 15 Min. Verzögerung — für Backtests irrelevant). **Empfohlen.** |
+| **polygon** | nur key | 2 Jahre | Bezahlpläne bieten längere Historie |
+| **finnhub** | nur key | Nicht nutzbar | Free-Tier hat kein 1-Minuten-Intraday |
+| **alphavantage** | nur key | Sehr limitiert | 25 API-Calls/Tag im Free-Tier |
 
-- `yfinance`
-	- In PBGui kostenlos nutzbar, kein API-Key erforderlich.
-	- Wird im PBGui-Workflow standardmäßig für die letzten ~7 Tage genutzt.
-- `alpaca`
-	- Kostenloser API-Key verfügbar.
-	- In der API-Keys-UI als empfohlener Provider markiert.
-	- Free-Tier kann für diesen Workflow mehrjährige 1m-Historie liefern.
-- `polygon`
-	- Abdeckung ist planabhängig.
-	- Free-Pläne können bei 1m-Intraday-Abfragen `0 candles` liefern.
-- `finnhub`
-	- Free-Tier liefert für diesen Workflow keine praxistaugliche 1m-Intraday-Historie.
-	- Für PBGui-Stock-Perp-Backtests nicht empfohlen.
-- `alphavantage`
-	- Free-Tier ist stark rate-limitiert (z. B. Tageslimits bei API-Calls).
-	- Für größere historische Backfills meist zu eingeschränkt.
+Bei der Auswahl eines Providers wird ein Link zur Registrierungsseite angezeigt.
 
-### Provider-Matrix (Free-Tier-orientiert)
+**Test Connection** ruft einen Test-Quote/-Kerzen für `AAPL` ab und zeigt das Ergebnis in einem Modal. Funktioniert auch mit bereits gespeicherten Credentials, wenn die Felder leer sind.
 
-| Provider | API-Key nötig | Praxistaugliche 1m-Tiefe für PBGui/PB7 | Free-Tier-Limits (praktisch) | Empfehlung |
-|---|---:|---|---|---|
-| `yfinance` | Nein | Aktuelles Fenster (PBGui-Standard-Workflow: letzte ~7 Tage) | Kein dedizierter Key, Verhalten externer Quelle kann variieren | Für aktuelle Kerzen aktiv lassen |
-| `alpaca` | Ja (`key` + `secret`) | Mehrjährige 1m-Historie (praktisch gute Abdeckung) | Benötigt Account-Credentials mit Market-Data-Zugriff | **Empfohlener Extended Provider** |
-| `polygon` | Ja (`key`) | Planabhängig für 1m-Intraday-Historie | Free-Plan kann für Backfills unzureichend sein | Optional, Plan prüfen |
-| `finnhub` | Ja (`key`) | Für 1m-Backtest-Historie nicht praxistauglich | Free-Tier für diesen Workflow i. d. R. ungeeignet | Nicht empfohlen |
-| `alphavantage` | Ja (`key`) | Für größere 1m-Zeiträume oft zu wenig/zu langsam | Starke Tageslimits im Free-Tier | Nur für kleine Ad-hoc-Checks |
+---
 
-### Empfehlung
-
-- `yfinance` für das aktuelle Zeitfenster verwenden (in PBGui automatisch).
-- **`alpaca`** als Extended Provider für Stock-Perp (HIP-3) 1m-Backtests konfigurieren.
-
-### Verhalten von „Test Connection“
-
-- Der Test lädt `AAPL` 1m-Kerzen für die letzten 7 abgeschlossenen Tage.
-- Erfolg bedeutet: Kerzen wurden geliefert.
-- `0 candles` kann Plan-/Tier-Limits bedeuten (nicht zwingend ein technischer Fehler).
-
-## Beispiel (PB7/CCXT-Stil)
+## `api-keys.json` Feldreferenz
 
 ```json
 {
-	"myuser": {
-		"exchange": "bybit",
-		"apiKey": "...",
-		"secret": "...",
-		"password": "...",
-		"quote": "USDT",
-		"options": {"defaultType": "swap"},
-		"uid": "123456"
-	}
+  "myuser": {
+    "exchange": "bybit",
+    "key": "...",
+    "secret": "...",
+    "passphrase": "...",
+    "quote": "USDT",
+    "options": {"defaultType": "swap"},
+    "extra": {}
+  },
+  "myhl": {
+    "exchange": "hyperliquid",
+    "wallet_address": "0x...",
+    "private_key": "0x...",
+    "is_vault": false
+  }
 }
 ```
+
+---
 
 ## Upstream-Referenz
 

@@ -915,6 +915,10 @@ class Instance(Base):
                 self.__dict__.update(state)
                 self._instance_path = path
                 self.user = state["_user"]
+                # user.setter may overwrite _market_type to 'swap' when the mapping
+                # has no spot entries — restore the saved value to preserve spot instances.
+                if "_market_type" in state:
+                    self._market_type = state["_market_type"]
                 if not self._symbol_ccxt or self._symbol_ccxt.endswith("_UMCBL") or self._symbol_ccxt.endswith("_DMCBL"):
                     self._symbol_ccxt = self.exchange.symbol_to_exchange_symbol(self.symbol, self._market_type)
                     state["_symbol_ccxt"] = self._symbol_ccxt

@@ -19,6 +19,12 @@
         --hm-success:      #10b981;
         --hm-warning:      #f59e0b;
         --hm-danger:       #ef4444;
+        --fs-xs: 11px;
+        --fs-sm: 13px;
+        --fs-base: 14px;
+        --fs-md: 15px;
+        --fs-lg: 18px;
+        --fs-xl: 22px;
 
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
         color: var(--hm-text-primary);
@@ -46,13 +52,13 @@
     }
 
     .hm-root .hm-header-title {
-        font-size: 1.1rem;
+        font-size: var(--fs-lg);
         font-weight: 600;
         margin: 0;
     }
 
     .hm-root .hm-header-meta {
-        font-size: 0.8rem;
+        font-size: var(--fs-sm);
         color: var(--hm-text-secondary);
     }
 
@@ -90,12 +96,12 @@
         border: 1px solid var(--hm-border);
         border-radius: 6px;
         padding: 0.3rem 0.6rem;
-        font-size: 0.85rem;
+        font-size: var(--fs-sm);
         cursor: pointer;
     }
 
     .hm-root .hm-label {
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         color: var(--hm-text-secondary);
     }
 
@@ -103,7 +109,7 @@
         display: flex;
         align-items: center;
         gap: 0.3rem;
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         color: var(--hm-text-secondary);
         cursor: pointer;
     }
@@ -114,7 +120,7 @@
         border: 1px solid var(--hm-border);
         border-radius: 6px;
         padding: 0.3rem 0.7rem;
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         cursor: pointer;
         transition: background 0.15s;
     }
@@ -134,7 +140,7 @@
     }
 
     .hm-root .hm-section-title {
-        font-size: 0.9rem;
+        font-size: var(--fs-base);
         font-weight: 600;
         margin: 0 0 0.4rem 0;
         color: var(--hm-text-secondary);
@@ -151,7 +157,7 @@
     }
 
     .hm-root .hm-legend {
-        font-size: 0.78rem;
+        font-size: var(--fs-sm);
         margin-top: 0.3rem;
         line-height: 1.8;
     }
@@ -159,14 +165,14 @@
     /* ---- loading / error overlay ---- */
     .hm-root .hm-status-msg {
         padding: 0.5rem;
-        font-size: 0.85rem;
+        font-size: var(--fs-sm);
         color: var(--hm-text-secondary);
         text-align: center;
     }
 
     .hm-root .hm-error-msg {
         padding: 0.5rem;
-        font-size: 0.85rem;
+        font-size: var(--fs-sm);
         color: var(--hm-danger);
     }
 
@@ -205,7 +211,7 @@
         margin-left: 12px;
         padding: 0.4rem 0.8rem;
         border-radius: 6px;
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         color: #fff;
         vertical-align: middle;
         opacity: 1;

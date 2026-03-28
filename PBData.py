@@ -2941,6 +2941,7 @@ class PBData():
         start_immediately: bool = False,
         start_delay_seconds: float = 0.0,
         initial_jitter_seconds: float = 0.0,
+        exchange_filter: str = None,
     ):
         """Generic serial poller for 'positions', 'history', 'orders', 'balances', or 'executions'.
 
@@ -2950,11 +2951,16 @@ class PBData():
         the first run is delayed by a random amount in the range
         `[start_delay_seconds - initial_jitter_seconds, start_delay_seconds + initial_jitter_seconds]`.
         After the first run, the poller follows the regular interval cadence.
+
+        If `exchange_filter` is set, only users of that specific exchange are polled.
+        This enables per-exchange parallel tasks — each exchange gets its own
+        interval cycle independent of other slow exchanges.
         """
         backoff = 0
         max_backoff = 600
         base_interval = max(10, interval_seconds)
-        _human_log('PBData', f"[poll] Starting shared serial poller kind={kind} interval={base_interval}s", level='INFO')
+        exch_label = f" exchange={exchange_filter}" if exchange_filter else ""
+        _human_log('PBData', f"[poll] Starting shared serial poller kind={kind} interval={base_interval}s{exch_label}", level='INFO')
         while True:
             if start_immediately:
                 # Only the first iteration runs early.
@@ -2972,6 +2978,8 @@ class PBData():
                 delay = base_interval + backoff
                 await asyncio.sleep(delay)
             users = [u for u in self.users if u.name in self.fetch_users]
+            if exchange_filter:
+                users = [u for u in users if u.exchange == exchange_filter]
             if kind == 'executions':
                 try:
                     self.load_trades_users()
@@ -3914,6 +3922,17 @@ class PBData():
                         setattr(self, tname, None)
                     except Exception:
                         pass
+                # Also cancel per-exchange history tasks so new interval takes effect.
+                for _exch, _t in list(getattr(self, '_shared_history_tasks_by_exchange', {}).items()):
+                    try:
+                        if _t and not _t.done():
+                            _t.cancel()
+                    except Exception:
+                        pass
+                try:
+                    self._shared_history_tasks_by_exchange = {}
+                except Exception:
+                    pass
                 self._poll_intervals_changed = False
         except Exception:
             pass
@@ -3989,8 +4008,32 @@ class PBData():
                 if not hasattr(self, "_shared_combined_task") or self._shared_combined_task is None or self._shared_combined_task.done():
                     # Use a slightly longer interval for the combined poller to reduce REST load
                     self._shared_combined_task = asyncio.create_task(self._shared_combined_poll_serial(self._shared_combined_interval_seconds, per_exchange=True))
-                if not hasattr(self, "_shared_history_task") or self._shared_history_task is None or self._shared_history_task.done():
-                    self._shared_history_task = asyncio.create_task(self._shared_poll_serial('history', self._shared_history_interval_seconds, per_exchange=True))
+                # Per-exchange history pollers: one task per exchange so that slow
+                # exchanges (e.g. hyperliquid) don't block fast ones (e.g. binance).
+                if not hasattr(self, "_shared_history_tasks_by_exchange"):
+                    self._shared_history_tasks_by_exchange = {}
+                # Determine the set of exchanges currently in fetch_users.
+                _hist_exchanges = set()
+                for _uname in self.fetch_users:
+                    _u = self.users.find_user(_uname)
+                    if _u and getattr(_u, 'exchange', None):
+                        _hist_exchanges.add(_u.exchange)
+                for _exch in _hist_exchanges:
+                    _t = self._shared_history_tasks_by_exchange.get(_exch)
+                    if _t is None or _t.done():
+                        self._shared_history_tasks_by_exchange[_exch] = asyncio.create_task(
+                            self._shared_poll_serial(
+                                'history',
+                                self._shared_history_interval_seconds,
+                                per_exchange=False,
+                                exchange_filter=_exch,
+                            )
+                        )
+                # Legacy single-task attribute: keep for backwards compat (e.g. interval-change restart).
+                # Always set to a dummy done sentinel so the old restart path doesn't spin up a second
+                # all-exchanges task.
+                if not hasattr(self, "_shared_history_task") or self._shared_history_task is None:
+                    self._shared_history_task = asyncio.create_task(asyncio.sleep(0))
                 if not hasattr(self, "_shared_executions_task") or self._shared_executions_task is None or self._shared_executions_task.done():
                     # Delay first executions run a bit to avoid a big startup burst.
                     # First run: ~60s ± 15s. Subsequent runs: every 30 minutes.

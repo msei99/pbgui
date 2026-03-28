@@ -1,6 +1,7 @@
 import json
+import socket
 from pathlib import Path, PurePath
-from datetime import datetime
+from datetime import datetime, timezone
 from pbgui_purefunc import pbdir, pb7dir, PBGDIR, is_pb_installed, is_pb7_installed
 import shutil
 
@@ -99,6 +100,15 @@ class Users:
     
     def list(self):
         return list(map(lambda c: c.name, self.users))
+
+    @property
+    def api_meta(self) -> dict:
+        """Return _api_serial / _api_ts / _api_by from the loaded file."""
+        return {
+            "api_serial": self._top_level_extras.get("_api_serial", 0),
+            "api_ts":     self._top_level_extras.get("_api_ts"),
+            "api_by":     self._top_level_extras.get("_api_by"),
+        }
     
     def list_single(self):
         from Exchange import Single
@@ -287,6 +297,21 @@ class Users:
 
     def save(self):
         save_users = dict(self._top_level_extras) if isinstance(self._top_level_extras, dict) else {}
+
+        # Migrate old sync field names → new api field names (one-time, transparent)
+        for old, new in (("_sync_serial", "_api_serial"),
+                         ("_sync_ts", "_api_ts"),
+                         ("_sync_by", "_api_by")):
+            if old in save_users and new not in save_users:
+                save_users[new] = save_users.pop(old)
+            elif old in save_users:
+                del save_users[old]
+
+        # Bump api serial and record editor metadata
+        save_users["_api_serial"] = save_users.get("_api_serial", 0) + 1
+        save_users["_api_ts"] = datetime.now(timezone.utc).isoformat()
+        save_users["_api_by"] = socket.gethostname()
+
         for user in self.users:
             save_users[user.name] = ({
                         "exchange": user.exchange
