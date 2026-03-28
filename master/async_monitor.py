@@ -192,6 +192,9 @@ class VPSMonitor:
         # Instance collection timing
         self._last_instance_collect: float = 0.0
 
+        # Debug logging
+        self._debug_logging: Optional[bool] = None
+
         # ini watcher (thread-based, fine alongside asyncio)
         self._ini_watcher = IniWatcher()
 
@@ -208,6 +211,18 @@ class VPSMonitor:
             val = load_ini("vps_monitor", "auto_restart")
             self._auto_restart = val.lower() == "true" if val else True
         return self._auto_restart
+
+    @property
+    def debug_logging(self) -> bool:
+        if self._debug_logging is None:
+            val = load_ini("vps_monitor", "debug_logging")
+            self._debug_logging = val.lower() == "true" if val else False
+        return self._debug_logging
+
+    @debug_logging.setter
+    def debug_logging(self, value: bool):
+        self._debug_logging = bool(value)
+        save_ini("vps_monitor", "debug_logging", "true" if value else "false")
 
     @property
     def enabled_hosts(self) -> set[str]:
@@ -390,6 +405,7 @@ class VPSMonitor:
         prev_enabled = self._enabled_hosts or set()
         self._enabled_hosts = None
         self._auto_restart = None
+        self._debug_logging = None
         enabled = self.enabled_hosts
 
         newly_disabled = prev_enabled - enabled
@@ -522,8 +538,9 @@ class VPSMonitor:
             try:
                 instances = json.loads(result.stdout.strip())
                 self.store.update_instances(hostname, instances)
-                _log(SERVICE, f"[instances] Collected {len(instances)} from "
-                     f"{hostname}", level="DEBUG")
+                if self.debug_logging:
+                    _log(SERVICE, f"[instances] Collected {len(instances)} from "
+                         f"{hostname}", level="DEBUG")
             except json.JSONDecodeError:
                 pass
 

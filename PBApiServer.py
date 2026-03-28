@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import warnings
@@ -29,9 +30,10 @@ import psutil
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from api.api_keys import router as api_keys_router
 from api.dashboard import router as dashboard_router
 from api.dashboards import router as dashboards_router
 from api.jobs import router as jobs_router
@@ -42,6 +44,41 @@ from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR, load_ini, save_ini
 
 SERVICE = "PBApiServer"
+
+# ── Server-restart watchdog (serial.txt) ─────────────────────
+
+_SERIAL_FILE = Path(__file__).parent / "api" / "serial.txt"
+_startup_serial: int = 0
+_needs_restart: bool = False
+_sse_subscribers: list[asyncio.Queue] = []
+
+
+def _read_serial() -> int:
+    """Read current serial from api/serial.txt; return 0 on error."""
+    try:
+        return int(_SERIAL_FILE.read_text().strip())
+    except Exception:
+        return 0
+
+
+async def _serial_watcher_loop() -> None:
+    """Watch api/serial.txt via inotify; set _needs_restart and notify SSE clients."""
+    global _needs_restart
+    from watchfiles import awatch
+    _log(SERVICE, "[serial-watcher] started", level="INFO")
+    try:
+        async for _ in awatch(str(_SERIAL_FILE)):
+            current = _read_serial()
+            if current != _startup_serial:
+                _needs_restart = True
+                _log(SERVICE, f"[serial-watcher] serial changed {_startup_serial}→{current} — restart needed", level="WARNING")
+                for q in list(_sse_subscribers):
+                    try:
+                        await q.put(True)
+                    except Exception:
+                        pass
+    except asyncio.CancelledError:
+        _log(SERVICE, "[serial-watcher] stopped", level="INFO")
 
 
 # ── Route uvicorn logs through human_log ─────────────────────
@@ -135,25 +172,53 @@ async def _lifespan(app: FastAPI):
     global _vps_monitor
     from master.async_monitor import VPSMonitor
     from master.async_logs import AsyncLogStreamer
+    from master.file_sync import FileSyncWorker
     from api.vps import init as vps_init
+    from api.api_keys import init_file_sync
+
+    global _startup_serial
+    _startup_serial = _read_serial()
+    _log(SERVICE, f"[serial-watcher] startup serial: {_startup_serial}", level="INFO")
 
     monitor = VPSMonitor()
     streamer = AsyncLogStreamer(monitor.pool)
     vps_init(monitor, streamer)
+
+    file_sync = FileSyncWorker(monitor.pool, monitor.store, monitor)
+    init_file_sync(file_sync)
+
+    # Register on-connect callback so inotifywait watchers start automatically
+    # whenever a VPS connects or reconnects (including after network outages).
+    monitor.pool.set_on_connect_callback(file_sync.start_watchers_single)
+
     _vps_monitor = monitor
     await monitor.start()
 
+    # Start watchers for hosts that are already connected after startup
+    connected_now = monitor.pool.connected_hosts()
+    if connected_now:
+        await file_sync.start_watchers(connected_now)
+    file_sync.start_watchdog()
+
     watchdog_task = asyncio.create_task(_worker_watchdog_loop(), name="worker-watchdog")
+    serial_task = asyncio.create_task(_serial_watcher_loop(), name="serial-watcher")
 
     yield  # app runs here
 
     watchdog_task.cancel()
+    serial_task.cancel()
     try:
         await watchdog_task
     except asyncio.CancelledError:
         pass
+    try:
+        await serial_task
+    except asyncio.CancelledError:
+        pass
     if _vps_monitor:
         await _vps_monitor.stop()
+    file_sync.stop_watchdog()
+    await file_sync.stop_watchers()
 
 
 # ── FastAPI app ───────────────────────────────────────────────
@@ -211,6 +276,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(api_keys_router, prefix="/api/api-keys", tags=["api-keys"])
 app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(dashboards_router, prefix="/api/dashboards", tags=["dashboards"])
 app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])
@@ -676,6 +742,93 @@ def health():
         "status": "ok",
         "websocket_clients": len(active_connections)
     }
+
+
+@app.get("/api/server-status/stream")
+async def server_status_stream(token: str = ""):
+    """SSE stream: pushes {needs_restart: bool} immediately, then on every serial change."""
+    from api.auth import validate_token
+    if not validate_token(token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    queue: asyncio.Queue = asyncio.Queue()
+    _sse_subscribers.append(queue)
+
+    async def event_gen():
+        try:
+            # Send initial state immediately
+            yield f"data: {json.dumps({'needs_restart': _needs_restart})}\n\n"
+            while True:
+                try:
+                    # wait for change notification (or 25s keepalive)
+                    await asyncio.wait_for(queue.get(), timeout=25)
+                    yield f"data: {json.dumps({'needs_restart': _needs_restart})}\n\n"
+                except asyncio.TimeoutError:
+                    # keepalive comment so proxies don't close the connection
+                    yield ": keepalive\n\n"
+        except (GeneratorExit, asyncio.CancelledError):
+            pass
+        finally:
+            if queue in _sse_subscribers:
+                _sse_subscribers.remove(queue)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/server-restart")
+async def server_restart(request: Request):
+    """Restart the API server process. Auth required."""
+    from api.auth import validate_token
+    auth = request.headers.get("Authorization", "")
+    token = auth.replace("Bearer ", "") if auth.startswith("Bearer ") else ""
+    if not token:
+        try:
+            body = await request.json()
+            token = body.get("token", "") if isinstance(body, dict) else ""
+        except Exception:
+            pass
+    if not validate_token(token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    _log(SERVICE, "[restart] restart requested by user", level="WARNING")
+
+    async def _do_restart():
+        await asyncio.sleep(0.3)  # let response reach the client first
+        pbgdir = Path(__file__).resolve().parent
+        venv_python = None
+        for candidate in [
+            pbgdir.parent / "venv_pbgui" / "bin" / "python",
+            pbgdir.parent / "venv_pbgui312" / "bin" / "python",
+            pbgdir.parent / "venv" / "bin" / "python",
+            Path(sys.executable),
+        ]:
+            if candidate.exists():
+                venv_python = candidate
+                break
+        if venv_python:
+            # Delete the PID file BEFORE spawning the new process so the new
+            # process doesn't see "Already running" and exit immediately.
+            pid_file = Path(PBGDIR) / "data" / "pid" / "api_server.pid"
+            pid_file.unlink(missing_ok=True)
+            subprocess.Popen(
+                [str(venv_python), str(pbgdir / "PBApiServer.py")],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                cwd=str(pbgdir),
+            )
+            await asyncio.sleep(0.5)  # give new process time to write its PID
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    asyncio.create_task(_do_restart())
+    return {"ok": True, "message": "Restarting…"}
 
 
 class PBApiServer:

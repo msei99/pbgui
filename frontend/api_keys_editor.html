@@ -1,0 +1,3797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Keys - PBGui</title>
+    <style>
+        /* ── Design tokens (tune these to resize globally) ── */
+        :root {
+            --fs-xs: 11px; --fs-sm: 13px; --fs-base: 14px;
+            --fs-md: 15px; --fs-lg: 18px; --fs-xl: 24px;
+            --sp-xs: 4px;  --sp-sm: 8px;  --sp-md: 12px; --sp-lg: 20px;
+            --input-h: 32px; --btn-h: 32px;
+        }
+        /* Base layout — identical to dashboard_main.html */
+        html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0e1117; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; font-size: var(--fs-base); }
+        * { box-sizing: border-box; }
+
+        /* ── Page body ──────────────────────────────── */
+        #page-body {
+            display: flex;
+            height: calc(100vh - 52px);
+            overflow: hidden;
+            user-select: none;
+        }
+
+        /* ── Sidebar ──────────────────────────────────── */
+        #sidebar {
+            width: 240px;
+            min-width: 180px;
+            max-width: 340px;
+            flex-shrink: 0;
+            background: #0e1117;
+            border-right: 1px solid #1e2736;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+        #sidebar-resize {
+            position: absolute; top: 0; right: 0; bottom: 0; width: 4px;
+            cursor: col-resize; background: transparent;
+        }
+        #sidebar-resize:hover, #sidebar-resize.active { background: rgba(99,179,237,0.4); }
+        #sidebar-sticky { flex-shrink: 0; padding: 0.5rem 0.5rem 0; }
+        #sidebar-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.3rem 0.25rem 0.4rem;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        .sb-title { font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: 0.09em; color: #64748b; font-weight: 700; }
+        .sb-count { font-size: var(--fs-sm); background: #1a202c; border: 1px solid #2d3748; border-radius: 10px; padding: 0.1rem 0.5rem; color: #94a3b8; font-weight: 600; }
+        #sidebar-toolbar {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+            padding: 0.3rem 0.1rem 0.45rem;
+            border-bottom: 1px solid #1e2736;
+        }
+        .sb-sep { border: none; border-top: 1px solid #1e2736; margin: 2px 0; }
+        .sb-btn {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.38rem 0.65rem;
+            border-radius: 6px;
+            font-size: var(--fs-base);
+            cursor: pointer;
+            border: 1px solid #2d3748;
+            background: #1a202c;
+            color: #94a3b8;
+            transition: background 0.12s, border-color 0.12s, color 0.12s;
+            width: 100%;
+            text-align: left;
+        }
+        .sb-btn:hover { background: #252d3d; color: #e2e8f0; border-color: #4a5568; }
+        .sb-btn.active { background: #26a69a22; border-color: #26a69a; color: #26a69a; }
+        .sb-btn.primary { background: #26a69a; border-color: #26a69a; color: #fff; }
+        .sb-btn.primary:hover { background: #2bbbad; }
+        .sb-btn.warning { background: #d69e2e; border-color: #d69e2e; color: #1a202c; }
+        .sb-btn.warning:hover { background: #ecc94b; }
+        .sb-btn.info { color: #63b3ed; border-color: #63b3ed44; }
+        .sb-btn.info:hover { background: rgba(99,179,237,0.1); border-color: rgba(99,179,237,0.5); }
+        .sb-btn.danger { color: #ef4444; border-color: #ef444455; }
+        .sb-btn.danger:hover { background: rgba(245,101,101,0.1); border-color: rgba(245,101,101,0.5); }
+        .sb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* ── Main content ─────────────────────────────── */
+        #main-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            min-width: 0;
+            user-select: text;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            font-size: var(--fs-base);
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+            color: white;
+        }
+        .btn-primary { background: #26a69a; }
+        .btn-primary:hover { background: #2bbbad; }
+        .btn-danger { background: #ef4444; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn-secondary { background: #4a5568; }
+        .btn-secondary:hover { background: #2d3748; }
+        .btn-info { background: #3182ce; }
+        .btn-info:hover { background: #2c5282; }
+        .btn-warning { background: #d69e2e; color: #1a202c; }
+        .btn-warning:hover { background: #ecc94b; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-sm { padding: 4px 10px; font-size: var(--fs-sm); }
+
+        /* User table */
+        .user-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        .user-table th {
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 2px solid #262730;
+            color: #94a3b8;
+            font-size: var(--fs-sm);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .user-table th.sortable {
+            cursor: pointer;
+            user-select: none;
+        }
+        .user-table th.sortable:hover { color: #fafafa; }
+        .user-table th.sort-asc .sort-icon::after  { content: " ▲"; color: #26a69a; }
+        .user-table th.sort-desc .sort-icon::after { content: " ▼"; color: #26a69a; }
+        .user-table th.sort-asc .sort-icon,
+        .user-table th.sort-desc .sort-icon { display: none; }
+        .user-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #1e2533;
+            font-size: var(--fs-base);
+        }
+        .user-table tr:hover { background: rgba(255,255,255,0.03); }
+        .user-table tr.selected { background: rgba(38,166,154,0.1); }
+
+        .badge-exchange {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: var(--fs-sm);
+            font-weight: 500;
+            background: #2d3748;
+        }
+        .badge-exchange.binance { color: #f0b90b; }
+        .badge-exchange.bybit { color: #f7a600; }
+        .badge-exchange.bitget { color: #00c9a7; }
+        .badge-exchange.hyperliquid { color: #50fa7b; }
+        .badge-exchange.okx { color: #ccc; }
+        .badge-exchange.gateio { color: #2ba6ff; }
+        .badge-exchange.kucoin { color: #23af91; }
+        .badge-exchange.bingx { color: #2196f3; }
+
+        .badge-in-use {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: var(--fs-xs);
+            background: #2d3748;
+            color: #94a3b8;
+        }
+        .badge-in-use.active { background: #26a69a33; color: #26a69a; font-weight: 600; }
+
+        .badge-expiry {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: var(--fs-sm);
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .badge-expiry.ok { background: #26a69a33; color: #26a69a; }
+        .badge-expiry.expiring_soon { background: #d69e2e33; color: #ecc94b; }
+        .badge-expiry.critical { background: #ef444433; color: #ef4444; }
+        .badge-expiry.expired { background: #1a1a1a; color: #555; }
+        .badge-expiry.no_expiry { background: #2d3748; color: #94a3b8; }
+        .badge-expiry.unknown, .badge-expiry.error { background: #2d3748; color: #718096; }
+
+        /* Edit form */
+        .edit-panel {
+            background: #1a202c;
+            border: 1px solid #2d3748;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .edit-panel h3 {
+            margin-bottom: 16px;
+            font-size: var(--fs-lg);
+            color: #fafafa;
+        }
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+        .form-group label {
+            font-size: var(--fs-sm);
+            color: #94a3b8;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .form-group input, .form-group select {
+            background: #0e1117;
+            border: 1px solid #2d3748;
+            border-radius: 4px;
+            padding: 8px 12px;
+            color: #fafafa;
+            font-size: var(--fs-base);
+        }
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #26a69a;
+        }
+        .form-group input:disabled, .form-group select:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .pw-wrap { position: relative; display: flex; align-items: center; }
+        .pw-wrap input { flex: 1; padding-right: 36px !important; }
+        .pw-eye-btn {
+            position: absolute; right: 8px;
+            background: none; border: none; cursor: pointer;
+            color: #64748b; font-size: var(--fs-md); padding: 0; line-height: 1;
+            user-select: none;
+        }
+        .pw-eye-btn:hover { color: #94a3b8; }
+        .form-group textarea {
+            background: #0e1117;
+            border: 1px solid #2d3748;
+            border-radius: 4px;
+            padding: 8px 12px;
+            color: #fafafa;
+            font-size: var(--fs-sm);
+            font-family: 'Courier New', monospace;
+            resize: vertical;
+            min-height: 60px;
+        }
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #26a69a;
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #2d3748;
+        }
+
+        .form-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding-top: 20px;
+        }
+        .form-checkbox input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: #26a69a;
+        }
+
+        /* Expander */
+        .expander {
+            margin-top: 12px;
+        }
+        .expander-toggle {
+            background: transparent;
+            border: 1px solid #2d3748;
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: var(--fs-sm);
+            padding: 6px 12px;
+            border-radius: 4px;
+            width: 100%;
+            text-align: left;
+        }
+        .expander-toggle:hover { border-color: #4a5568; color: #fafafa; }
+        .expander-content {
+            display: none;
+            padding: 12px 0;
+        }
+        .expander-content.open { display: block; }
+
+        /* Balance display */
+        .balance-display {
+            display: flex;
+            gap: 24px;
+            margin-top: 16px;
+        }
+        .balance-box {
+            background: #0e1117;
+            border: 1px solid #2d3748;
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+            min-width: 200px;
+        }
+        .balance-box .label {
+            font-size: var(--fs-sm);
+            color: #94a3b8;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+        .balance-box .value {
+            font-size: var(--fs-xl);
+            font-weight: 600;
+            color: #26a69a;
+        }
+        .balance-box .error {
+            font-size: var(--fs-base);
+            color: #ef4444;
+        }
+
+        /* HL Expiry panel */
+        .hl-expiry-panel {
+            background: #1a202c;
+            border: 1px solid #2d3748;
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 20px;
+        }
+        .hl-expiry-panel h3 {
+            margin-bottom: 12px;
+            font-size: var(--fs-md);
+        }
+        .hl-expiry-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .hl-expiry-table th {
+            text-align: left;
+            padding: 8px 10px;
+            border-bottom: 2px solid #262730;
+            color: #94a3b8;
+            font-size: var(--fs-sm);
+            text-transform: uppercase;
+        }
+        .hl-expiry-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #1e2533;
+            font-size: var(--fs-sm);
+        }
+
+        /* Toast notifications (success only) */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 6px;
+            font-size: var(--fs-base);
+            z-index: 2000;
+            opacity: 0;
+            transition: opacity 0.3s;
+            max-width: 400px;
+        }
+        .toast.show { opacity: 1; }
+        .toast.success { background: #26a69a; color: white; }
+        .toast.info { background: #3b82f6; color: white; }
+
+        /* Alert modal (error / warning) */
+        .alert-modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+            z-index: 3000; display: flex; align-items: center; justify-content: center;
+        }
+        .alert-modal {
+            background: #1a1f2e; border-radius: 8px;
+            padding: 28px 32px; max-width: 500px; width: 90%;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+            border: 1px solid #2d3748;
+            display: flex; flex-direction: column; gap: 16px;
+        }
+        .alert-modal.error { border-left: 4px solid #ef4444; }
+        .alert-modal.warning { border-left: 4px solid #d69e2e; }
+        .alert-modal.success { border-left: 4px solid #38a169; }
+        .alert-modal.info { border-left: 4px solid #38bdf8; }
+        .alert-modal-title { font-size: var(--fs-md); font-weight: 700; color: #fafafa; }
+        .alert-modal.error .alert-modal-title { color: #f87171; }
+        .alert-modal.warning .alert-modal-title { color: #fbbf24; }
+        .alert-modal.success .alert-modal-title { color: #68d391; }
+        .alert-modal.info .alert-modal-title { color: #38bdf8; }
+        .dry-run-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); margin-top: 8px; }
+        .dry-run-table th { color: #64748b; text-align: left; padding: 3px 8px; border-bottom: 1px solid #334155; }
+        .dry-run-table td { color: #e2e8f0; padding: 3px 8px; border-bottom: 1px solid #1e293b; }
+        .alert-modal-body { font-size: var(--fs-sm); color: #94a3b8; line-height: 1.5; word-break: break-word; }
+        .alert-modal-footer { display: flex; justify-content: flex-end; }
+        .alert-modal-footer .btn { min-width: 80px; }
+
+        /* Diff viewer */
+        .diff-modal {
+            position: fixed; inset: 0; background: #0f1117;
+            z-index: 999; display: flex; flex-direction: column; overflow: hidden;
+        }
+        .diff-modal-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 16px; background: #1a1f2e;
+            border-bottom: 1px solid #2d3553; flex-shrink: 0;
+        }
+        .diff-legend {
+            display: flex; gap: 16px; padding: 5px 14px;
+            background: #111827; border-bottom: 1px solid #1e2533;
+            font-size: var(--fs-xs); flex-shrink: 0;
+        }
+        .diff-table {
+            width: 100%; border-collapse: collapse;
+            font-family: monospace; font-size: var(--fs-sm); white-space: pre;
+        }
+        .diff-table td { padding: 1px 8px; vertical-align: top; }
+        .diff-table .ln {
+            color: #4a5568; text-align: right; user-select: none;
+            min-width: 36px; padding-right: 10px;
+            border-right: 1px solid #2d3748;
+        }
+        .diff-table .diff-sign { width: 14px; user-select: none; text-align: center; }
+        .diff-add  { background: #0d2b1b; color: #86efac; }
+        .diff-del  { background: #2b0d0d; color: #fca5a5; }
+        .diff-ctx  { color: #94a3b8; }
+        .diff-empty { background: #111827; }
+        .diff-sep td { background: #1e2533; color: #4a5568; text-align: center;
+                       font-style: italic; padding: 3px 8px; }
+        .diff-side-wrap { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+        .diff-side-col { overflow-x: auto; border-right: 1px solid #2d3748; }
+        .diff-side-col:last-child { border-right: none; }
+        .diff-side-hdr {
+            background: #1a202c; padding: 5px 10px; font-size: var(--fs-xs); color: #94a3b8;
+            border-bottom: 1px solid #2d3748; font-family: monospace;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; position: sticky; top: 0;
+        }
+        .backup-chk { cursor: pointer; width: 14px; height: 14px; accent-color: #26a69a; }
+
+        /* Loading spinner */
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #4a5568;
+            border-top-color: #26a69a;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Fade-in for panels (edit + sidebar) */
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .edit-panel, .hl-expiry-panel { animation: fadeIn 0.18s ease; }
+
+        .loading-row td { text-align: center; color: #94a3b8; padding: 40px; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .form-grid { grid-template-columns: 1fr; }
+        }
+
+        /* ── Help overlay ── */
+        #help-ovl {
+          display: none;
+          position: fixed;
+          top: 50%; left: 50%;
+          transform: translate(-50%, -50%);
+          z-index: 3000;
+          width: min(900px, 95vw);
+          height: min(700px, 90vh);
+          min-width: 480px; min-height: 300px;
+          background: #131b2b;
+          border: 1px solid #2d3748;
+          border-radius: 12px;
+          box-shadow: 0 20px 70px rgba(0,0,0,0.9);
+          flex-direction: column;
+          overflow: hidden;
+          resize: both;
+        }
+        #help-ovl.visible { display: flex; }
+        #help-drag-handle {
+          position: absolute; top: 0; left: 0; right: 48px;
+          height: 46px; cursor: move; z-index: 2;
+        }
+        #help-ovl > .ovl-panel {
+          flex: 1; display: flex; flex-direction: column;
+          overflow: hidden; position: relative;
+        }
+        .ovl-header {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 0.85rem 1.1rem 0.85rem 1.25rem;
+          border-bottom: 1px solid #1e2736;
+          flex-shrink: 0; background: #111827;
+        }
+        .ovl-header-title { font-size: var(--fs-sm); font-weight: 700; color: #e2e8f0; display: flex; align-items: center; gap: 0.5rem; }
+        .ovl-header-actions { display: flex; align-items: center; gap: 0.5rem; position: relative; z-index: 3; }
+        .ovl-close { background: transparent; border: none; color: #64748b; font-size: var(--fs-md); cursor: pointer; padding: 0.2rem 0.35rem; border-radius: 5px; line-height: 1; transition: color 0.12s, background 0.12s; }
+        .ovl-close:hover { color: #e2e8f0; background: rgba(255,255,255,0.06); }
+        .lang-pill { display: flex; border: 1px solid #2d3748; border-radius: 6px; overflow: hidden; flex-shrink: 0; }
+        .lang-pill button { background: transparent; border: none; color: #64748b; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.05em; padding: 0.2rem 0.55rem; cursor: pointer; transition: all 0.12s; }
+        .lang-pill button.active { background: #1e3a5f; color: #63b3ed; }
+        .lang-pill button:hover:not(.active) { background: rgba(255,255,255,0.04); color: #e2e8f0; }
+        #help-body { display: flex; flex: 1; overflow: hidden; }
+        #help-toc { width: 230px; min-width: 170px; flex-shrink: 0; border-right: 1px solid #1e2736; overflow-y: auto; padding: 0.5rem 0; background: #0e1117; }
+        #help-toc-filter { width: calc(100% - 1.2rem); margin: 0 0.6rem 0.4rem; background: #1a202c; color: #e2e8f0; border: 1px solid #2d3748; border-radius: 5px; padding: 0.35rem 0.5rem; font-size: var(--fs-sm); outline: none; }
+        #help-toc-filter:focus { border-color: #4a5568; }
+        #help-toc-filter::placeholder { color: #4a5568; }
+        .toc-item { display: block; padding: 0.42rem 0.9rem; color: #94a3b8; font-size: var(--fs-sm); cursor: pointer; border-left: 3px solid transparent; transition: all 0.1s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .toc-item:hover { background: #1a2030; color: #e2e8f0; }
+        .toc-item.active { border-left-color: #63b3ed; color: #63b3ed; background: rgba(99,179,237,0.07); font-weight: 600; }
+        #help-content { flex: 1; overflow-y: auto; padding: 1.5rem 1.8rem; line-height: 1.7; color: #cbd5e0; font-size: var(--fs-base); }
+        #help-content h1 { font-size: var(--fs-xl); color: #e2e8f0; margin: 0 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #1e2736; }
+        #help-content h2 { font-size: var(--fs-lg); color: #e2e8f0; margin: 1.5rem 0 0.5rem; }
+        #help-content h3 { font-size: var(--fs-md); color: #cbd5e0; margin: 1.1rem 0 0.35rem; }
+        #help-content p  { margin: 0.5rem 0; }
+        #help-content a  { color: #63b3ed; text-decoration: none; }
+        #help-content a:hover { text-decoration: underline; }
+        #help-content strong { color: #e2e8f0; }
+        #help-content em { color: #94a3b8; font-style: italic; }
+        #help-content code { background: #1a202c; color: #f6ad55; padding: 0.1em 0.35em; border-radius: 3px; font-size: var(--fs-xs); font-family: 'Fira Code','Consolas',monospace; }
+        #help-content pre { background: #0e1117; border: 1px solid #2d3748; border-radius: 6px; padding: 0.9rem 1rem; overflow-x: auto; margin: 0.75rem 0; }
+        #help-content pre code { background: none; padding: 0; color: #a0aec0; font-size: var(--fs-sm); }
+        #help-content ul, #help-content ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+        #help-content li { margin: 0.2rem 0; }
+        #help-content blockquote { border-left: 3px solid #63b3ed; margin: 0.75rem 0; padding: 0.4rem 0.9rem; background: rgba(99,179,237,0.05); border-radius: 0 5px 5px 0; color: #94a3b8; }
+        #help-content table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; }
+        #help-content th, #help-content td { border: 1px solid #2d3748; padding: 0.4rem 0.7rem; text-align: left; font-size: var(--fs-sm); }
+        #help-content th { background: #1a202c; color: #e2e8f0; font-weight: 600; }
+        #help-content hr { border: none; border-top: 1px solid #1e2736; margin: 1rem 0; }
+        #help-content img { max-width: 100%; border-radius: 6px; margin: 0.5rem 0; }
+        .help-loading { color: #4a5568; font-style: italic; padding: 2rem; text-align: center; }
+        /* help overlay — content search */
+        #help-search-wrap { display: flex; align-items: center; gap: 3px; }
+        #help-search { background: #1a202c; color: #e2e8f0; border: 1px solid #2d3748; border-radius: 5px; padding: 0.28rem 0.5rem; font-size: var(--fs-sm); outline: none; width: 170px; }
+        #help-search:focus { border-color: #4a5568; }
+        #help-search::placeholder { color: #4a5568; }
+        .help-snav-btn { background: #1a202c; border: 1px solid #2d3748; border-radius: 3px; color: #94a3b8; cursor: pointer; font-size: var(--fs-xs); padding: 2px 5px; line-height: 1.4; transition: color 0.1s, border-color 0.1s; }
+        .help-snav-btn:hover { color: #e2e8f0; border-color: #4a5568; }
+        #help-search-count { font-size: var(--fs-xs); color: #64748b; white-space: nowrap; min-width: 44px; text-align: left; }
+        #help-content mark { background: rgba(255,200,0,0.2); color: #fcd34d; border-radius: 2px; }
+        #help-content mark.current { background: rgba(251,146,60,0.45); color: #fef08a; outline: 1px solid #f59e0b; }
+        #help-search-global-lbl { display:flex; align-items:center; gap:3px; color:#94a3b8; font-size: var(--fs-xs); cursor:pointer; white-space:nowrap; user-select:none; }
+        #help-search-global-lbl input[type=checkbox] { accent-color:#4da6ff; cursor:pointer; margin:0; }
+        .gs-results { display:flex; flex-direction:column; gap:8px; padding:4px 0; }
+        .gs-item { background:#1a202c; border:1px solid #2d3748; border-radius:6px; padding:10px 14px; cursor:pointer; transition:border-color 0.15s; }
+        .gs-item:hover { border-color:#4a5568; }
+        .gs-topic { color:#93c5fd; font-weight:600; font-size: var(--fs-sm); margin-bottom:5px; }
+        .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
+    </style>
+    <script src="/app/js/log_viewer_panel.js"></script>
+</head>
+<body>
+
+<!-- Nav bar populated by pbgui_nav.js -->
+<nav id="topnav"></nav>
+
+<!-- Help overlay -->
+<div id="help-ovl">
+  <div class="ovl-panel">
+    <div id="help-drag-handle"></div>
+    <div class="ovl-header">
+      <div class="ovl-header-title">&#128218; Guide &amp; Help</div>
+      <div class="ovl-header-actions">
+        <div id="help-search-wrap">
+          <input id="help-search" type="text" placeholder="Search in topic…" autocomplete="off">
+          <button class="help-snav-btn" id="help-search-up" title="Previous match (Shift+Enter)">&#9650;</button>
+          <button class="help-snav-btn" id="help-search-dn" title="Next match (Enter)">&#9660;</button>
+          <span id="help-search-count"></span>
+          <label id="help-search-global-lbl" title="Search across all topics"><input type="checkbox" id="help-search-global"> All</label>
+        </div>
+        <div style="width:1px;height:16px;background:#2d3748;flex-shrink:0;"></div>
+        <div class="lang-pill">
+          <button id="help-lang-en" class="active">EN</button>
+          <button id="help-lang-de">DE</button>
+        </div>
+        <button class="ovl-close" id="help-close">&#x2715;</button>
+      </div>
+    </div>
+    <div id="help-body">
+      <div id="help-toc">
+        <input id="help-toc-filter" type="text" placeholder="Filter topics…" autocomplete="off">
+        <div id="help-toc-list"></div>
+      </div>
+      <div id="help-content"><div class="help-loading">Select a topic from the left.</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ────────────────────────────────────────────
+     PAGE BODY
+     ──────────────────────────────────────────── -->
+<div id="page-body">
+    <!-- Sidebar -->
+    <div id="sidebar">
+        <div id="sidebar-sticky">
+            <div id="sidebar-header">
+                <span class="sb-title">API Keys</span>
+                <span class="sb-count" id="sb-count">…</span>
+                <span class="sb-count" id="sb-inuse" style="display:none;"></span>
+            </div>
+            <div id="sidebar-toolbar">
+                <button class="sb-btn primary" onclick="showCreateForm()">+ Add User</button>
+                <hr class="sb-sep">
+                <button class="sb-btn info" onclick="refreshHLExpiry()" id="btnHLExpiry">HL Expiry Check</button>
+                <button class="sb-btn info" onclick="refreshBybitExpiry()" id="btnBybitExpiry">Bybit Expiry Check</button>
+                <button class="sb-btn" onclick="toggleHLConfig()" id="btnHLConfig">HL Warning Config</button>
+                <hr class="sb-sep">
+                <button class="sb-btn" onclick="toggleTradfi()" id="btnTradfi">TradFi</button>
+                <button class="sb-btn" onclick="toggleComments()" id="btnComments">Comments</button>
+                <button class="sb-btn" onclick="toggleBackups()" id="btnBackups">&#x1F5C4; Backups</button>
+                <hr class="sb-sep">
+                <button class="sb-btn" id="btnSSHQuick" onclick="quickSshSync()">&#x2601; SSH Sync</button>
+                <button class="sb-btn" id="btnSSHSync" onclick="toggleSSHSync()">Advanced Sync</button>
+                <button class="sb-btn" id="btnLogs" onclick="toggleLogPanel()">&#128203; Logs</button>
+                <button class="sb-btn danger" id="btnApiSync" onclick="triggerApiSync()" style="display:none;">🔴 API not in sync (rclone)</button>
+            </div>
+        </div>
+        <div id="sidebar-resize"></div>
+    </div>
+
+    <div id="main-content">
+        <!-- User list -->
+        <div id="userListView">
+            <!-- API keys metadata bar -->
+            <div id="apiMetaBar" style="display:flex; align-items:center; gap:6px; margin-bottom:8px; padding:4px 8px; background:#0f172a; border:1px solid #1e293b; border-radius:5px; font-size:var(--fs-xs); color:#94a3b8;">
+                <span>Serial:</span>
+                <span id="metaSerial" style="color:#e2e8f0; font-weight:700;">—</span>
+                <span id="metaTs" style="color:#94a3b8;"></span>
+                <span id="metaBy" style="color:#64748b;"></span>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
+                <input type="text" id="userFilter" placeholder="Filter by name or exchange…"
+                    oninput="applyFilterSort()"
+                    onkeydown="if(event.key==='ArrowDown'){event.preventDefault();var r=document.querySelector('#userTableBody tr[tabindex]');if(r)r.focus();}"
+                    style="flex:1; background:#0e1117; border:1px solid #2d3748; border-radius:4px;
+                           padding:6px 10px; color:#fafafa; font-size:var(--fs-sm);" />
+                <button class="btn btn-sm btn-secondary" onclick="clearFilter()" title="Clear filter">✕</button>
+            </div>
+            <table class="user-table">
+                <thead>
+                    <tr>
+                        <th class="sortable" onclick="setSort('name')" id="th-name">User <span class="sort-icon">⇅</span></th>
+                        <th class="sortable" onclick="setSort('exchange')" id="th-exchange">Exchange <span class="sort-icon">⇅</span></th>
+                        <th>Credentials</th>
+                        <th class="sortable" onclick="setSort('hl_expiry')" id="th-hl_expiry">Key Expiry <span class="sort-icon">⇅</span></th>
+                        <th class="sortable" onclick="setSort('status')" id="th-status">Status <span class="sort-icon">⇅</span></th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="userTableBody">
+                    <tr class="loading-row">
+                        <td colspan="6"><span class="spinner"></span> Loading users...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Edit/Create panel (hidden by default) -->
+        <div id="editPanel" class="edit-panel" style="display:none;">
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+                <button onclick="backToList()" style="width:auto; flex-shrink:0; padding:6px 14px; border-radius:5px; border:1px solid #26a69a; background:transparent; color:#26a69a; font-size:var(--fs-sm); cursor:pointer; font-weight:600;">&#8592; Back</button>
+                <h3 id="editPanelTitle" style="margin:0;">Edit User</h3>
+            </div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="editName" maxlength="32" />
+                </div>
+                <div class="form-group">
+                    <label>Exchange</label>
+                    <select id="editExchange" onchange="onExchangeChange()"></select>
+                </div>
+                <div class="form-group" id="testBtnGroup" style="padding-top:20px;">
+                    <button class="btn btn-info" onclick="testConnection()" id="btnTest">Test Connection</button>
+                </div>
+            </div>
+
+            <!-- Standard fields (non-HL) -->
+            <div class="form-grid" id="standardFields">
+                <div class="form-group">
+                    <label>API Key</label>
+                    <input type="text" id="editKey" />
+                </div>
+                <div class="form-group">
+                    <label>API Secret</label>
+                    <div class="pw-wrap">
+                        <input type="password" id="editSecret" />
+                        <button type="button" class="pw-eye-btn" onclick="togglePwVisible('editSecret', this)" tabindex="-1">&#128065;</button>
+                    </div>
+                </div>
+                <div class="form-group" id="passphraseGroup" style="display:none;">
+                    <label>Passphrase / Password</label>
+                    <div class="pw-wrap">
+                        <input type="password" id="editPassphrase" />
+                        <button type="button" class="pw-eye-btn" onclick="togglePwVisible('editPassphrase', this)" tabindex="-1">&#128065;</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- HL Expiry (only shown for Hyperliquid users in edit mode) -->
+            <div id="hlExpiryInline" style="display:none; margin-bottom:12px; padding:10px 14px; background:#0e1117; border:1px solid #2d3748; border-radius:6px;">
+                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <span style="font-size:var(--fs-sm); color:#94a3b8;">HL Key Expiry:</span>
+                    <span id="hlExpiryInlineBadge">—</span>
+                    <span id="hlExpiryInlineDate" style="font-size:var(--fs-sm); color:#94a3b8;"></span>
+                    <button class="btn btn-sm btn-secondary" id="btnHLExpiryInline" onclick="checkSingleHLExpiry()" style="margin-left:auto;">&#8635; Check Expiry</button>
+                </div>
+            </div>
+
+            <!-- Bybit Expiry (only shown for Bybit users in edit mode) -->
+            <div id="bybitExpiryInline" style="display:none; margin-bottom:12px; padding:10px 14px; background:#0e1117; border:1px solid #2d3748; border-radius:6px;">
+                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <span style="font-size:var(--fs-sm); color:#94a3b8;">Bybit Key Expiry:</span>
+                    <span id="bybitExpiryInlineBadge">—</span>
+                    <span id="bybitExpiryInlineDate" style="font-size:var(--fs-sm); color:#94a3b8;"></span>
+                    <button class="btn btn-sm btn-secondary" id="btnBybitExpiryInline" onclick="checkSingleBybitExpiry()" style="margin-left:auto;">&#8635; Check Expiry + IPs</button>
+                </div>
+                <!-- IP list — shown only after live check, never persisted -->
+                <div id="bybitIPList" style="display:none; margin-top:8px; padding-top:8px; border-top:1px solid #2d3748;">
+                    <span style="font-size:var(--fs-xs); color:#94a3b8; display:block; margin-bottom:4px;">Whitelisted IPs (live, not saved):</span>
+                    <div id="bybitIPListContent" style="font-size:var(--fs-sm); color:#e2e8f0; line-height:1.8;"></div>
+                </div>
+            </div>
+
+            <!-- Hyperliquid fields -->
+            <div class="form-grid" id="hlFields" style="display:none;">
+                <div class="form-group">
+                    <label>Wallet Address</label>
+                    <input type="text" id="editWallet" />
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                    <label>Private Key</label>
+                    <div class="pw-wrap">
+                        <input type="password" id="editPrivateKey" />
+                        <button type="button" class="pw-eye-btn" onclick="togglePwVisible('editPrivateKey', this)" tabindex="-1">&#128065;</button>
+                    </div>
+                </div>
+                <div class="form-checkbox">
+                    <input type="checkbox" id="editIsVault" />
+                    <label for="editIsVault" style="text-transform:none; font-size:var(--fs-base); color:#fafafa;">Vault</label>
+                </div>
+            </div>
+
+            <!-- Advanced (collapsible) -->
+            <div class="expander">
+                <button class="expander-toggle" onclick="toggleAdvanced()">
+                    ▶ Advanced (optional)
+                </button>
+                <div class="expander-content" id="advancedContent">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Quote</label>
+                            <input type="text" id="editQuote" placeholder="e.g. USDT" />
+                        </div>
+                    </div>
+                    <div class="form-grid" style="grid-template-columns: 1fr 1fr;">
+                        <div class="form-group">
+                            <label>Options (JSON)</label>
+                            <textarea id="editOptions" rows="3" placeholder='{"key": "value"}'></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>Extra (JSON passthrough)</label>
+                            <textarea id="editExtra" rows="3" placeholder='{"key": "value"}'></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Balance display (after test) -->
+            <div id="balanceDisplay" class="balance-display" style="display:none;"></div>
+
+            <div class="form-actions">
+                <button class="btn btn-danger" id="btnDelete" onclick="deleteUser()" style="display:none;">Delete</button>
+                <button class="btn btn-primary" onclick="saveUser()" id="btnSave">Save</button>
+            </div>
+        </div>
+
+        <!-- HL Expiry Panel (hidden by default) -->
+        <div id="hlExpiryPanel" class="hl-expiry-panel" style="display:none;">
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+                <button onclick="backToList()" style="width:auto; flex-shrink:0; padding:6px 14px; border-radius:5px; border:1px solid #26a69a; background:transparent; color:#26a69a; font-size:var(--fs-sm); cursor:pointer; font-weight:600;">&#8592; Back</button>
+                <h3 style="margin:0;">Hyperliquid API Key Expiry</h3>
+            </div>
+            <table class="hl-expiry-table">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Type</th>
+                        <th>Expiry</th>
+                        <th>Days Left</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="hlExpiryBody"></tbody>
+            </table>
+        </div>
+
+        <!-- Bybit Expiry Panel -->
+        <div id="bybitExpiryPanel" class="hl-expiry-panel" style="display:none;">
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+                <button onclick="backToList()" style="width:auto; flex-shrink:0; padding:6px 14px; border-radius:5px; border:1px solid #26a69a; background:transparent; color:#26a69a; font-size:var(--fs-sm); cursor:pointer; font-weight:600;">&#8592; Back</button>
+                <h3 style="margin:0;">Bybit API Key Expiry</h3>
+            </div>
+            <table class="hl-expiry-table">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Expiry</th>
+                        <th>Days Left</th>
+                        <th>Status</th>
+                        <th>IPs (live)</th>
+                    </tr>
+                </thead>
+                <tbody id="bybitExpiryBody"></tbody>
+            </table>
+        </div>
+
+        <!-- Comments Panel -->
+        <div id="commentsPanel" class="hl-expiry-panel" style="display:none;">
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+                <button onclick="backToList()" style="width:auto; flex-shrink:0; padding:6px 14px; border-radius:5px; border:1px solid #26a69a; background:transparent; color:#26a69a; font-size:var(--fs-sm); cursor:pointer; font-weight:600;">&#8592; Back</button>
+                <h3 style="margin:0; flex:1;">Comment Fields</h3>
+                <button class="btn btn-sm btn-primary" onclick="showAddComment()">+ Add</button>
+            </div>
+            <div id="addCommentForm" style="display:none; margin-bottom:12px; padding:12px; background:#0e1117; border-radius:4px; border:1px solid #2d3748;">
+                <div style="display:flex; gap:8px; align-items:flex-end;">
+                    <div class="form-group" style="flex:1;">
+                        <label>Key (without _comment_ prefix)</label>
+                        <input type="text" id="newCommentKey" placeholder="e.g. notes" />
+                    </div>
+                    <div class="form-group" style="flex:2;">
+                        <label>Value</label>
+                        <input type="text" id="newCommentValue" placeholder="Comment text" />
+                    </div>
+                    <button class="btn btn-sm btn-primary" onclick="createComment()" style="margin-bottom:0;">Save</button>
+                    <button class="btn btn-sm btn-secondary" onclick="hideAddComment()" style="margin-bottom:0;">Cancel</button>
+                </div>
+            </div>
+            <table class="hl-expiry-table" id="commentsTable">
+                <thead>
+                    <tr>
+                        <th>Key</th>
+                        <th>Value</th>
+                        <th style="width:120px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="commentsBody"></tbody>
+            </table>
+        </div>
+
+        <!-- HL Expiry Warning Config -->
+        <div id="hlConfigPanel" class="hl-expiry-panel" style="display:none;">
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+                <button onclick="backToList()" style="width:auto; flex-shrink:0; padding:6px 14px; border-radius:5px; border:1px solid #26a69a; background:transparent; color:#26a69a; font-size:var(--fs-sm); cursor:pointer; font-weight:600;">&#8592; Back</button>
+                <h3 style="margin:0;">HL Expiry Telegram Warning</h3>
+            </div>
+            <div style="display:flex; gap:12px; align-items:flex-end;">
+                <div class="form-group">
+                    <label>Warning threshold (days)</label>
+                    <input type="number" id="hlWarningDays" min="1" max="365" value="7" style="width:100px;" />
+                </div>
+                <button class="btn btn-sm btn-primary" onclick="saveHLExpiryConfig()">Save</button>
+            </div>
+            <p style="font-size:var(--fs-sm); color:#94a3b8; margin-top:8px;">
+                Telegram warning when HL keys expire within this many days. Alerts repeat daily.
+            </p>
+        </div>
+
+        <!-- TradFi Data Provider Section -->
+        <div id="tradfiPanel" class="hl-expiry-panel" style="display:none;">
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+                <button onclick="backToList()" style="width:auto; flex-shrink:0; padding:6px 14px; border-radius:5px; border:1px solid #26a69a; background:transparent; color:#26a69a; font-size:var(--fs-sm); cursor:pointer; font-weight:600;">&#8592; Back</button>
+                <h3 style="margin:0;">TradFi Data Provider (Stock Perps Backtesting)</h3>
+            </div>
+            <p style="font-size:var(--fs-sm); color:#94a3b8; margin-bottom:8px;">
+                Stock perp backtests use <strong>yfinance</strong> automatically for the last 7 days (free, no key).
+                For older data (months/years), configure an extended provider like <strong>Alpaca</strong> (free, 5+ years).
+            </p>
+            <p style="font-size:var(--fs-sm); background:#1a2744; border-left:3px solid #26a69a; padding:8px 10px; border-radius:4px; margin-bottom:16px; color:#a0aec0;">
+                💡 <strong style="color:#68d391;">Better alternative for full stock-perp history:</strong>
+                PBGui's <strong>Market Data</strong> module uses <strong>Tiingo</strong> (IEX/FX feeds) to build comprehensive local 1m OHLCV archives —
+                significantly faster and more complete than the providers below.
+                See <em>Setup → Market Data → Build best 1m OHLCV</em>.
+            </p>
+
+            <!-- yfinance section -->
+            <div style="border:1px solid #2d3748; border-radius:6px; padding:12px; margin-bottom:16px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <strong>yfinance</strong> — automatic default, last 7 days, no API key
+                        <span id="yfStatus" style="margin-left:8px; font-size:var(--fs-sm); color:#94a3b8;"></span>
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn btn-sm btn-secondary" id="btnYfInstall" onclick="yfInstallToggle()">Install</button>
+                        <button class="btn btn-sm btn-info" id="btnYfTest" onclick="yfTest()" style="display:none;">Test</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Extended provider section -->
+            <div style="border:1px solid #2d3748; border-radius:6px; padding:12px;">
+                <strong>Extended provider</strong> — optional, for backtests older than 7 days
+                <div class="form-grid" style="margin-top:12px;">
+                    <div class="form-group">
+                        <label>Provider</label>
+                        <select id="tradfiProvider" onchange="onTradfiProviderChange()"></select>
+                        <a id="tradfiProviderLink" href="#" target="_blank" rel="noopener noreferrer"
+                           style="font-size:var(--fs-sm); color:#26a69a; text-decoration:none; display:none; margin-top:4px; display:flex; align-items:center; gap:4px;">
+                            &#128279; <span id="tradfiProviderLinkLabel"></span>
+                        </a>
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <div class="pw-wrap">
+                            <input type="password" id="tradfiApiKey" />
+                            <button type="button" class="pw-eye-btn" onclick="togglePwVisible('tradfiApiKey', this)" tabindex="-1">&#128065;</button>
+                        </div>
+                    </div>
+                    <div class="form-group" id="tradfiSecretGroup">
+                        <label>API Secret</label>
+                        <div class="pw-wrap">
+                            <input type="password" id="tradfiApiSecret" />
+                            <button type="button" class="pw-eye-btn" onclick="togglePwVisible('tradfiApiSecret', this)" tabindex="-1">&#128065;</button>
+                        </div>
+                    </div>
+                </div>
+                <p id="tradfiProviderNote" style="font-size:var(--fs-sm); color:#94a3b8; margin:4px 0 12px;"></p>
+                <div style="display:flex; gap:8px;">
+                    <button class="btn btn-sm btn-info" onclick="tradfiTest()">Test Connection</button>
+                    <button class="btn btn-sm btn-primary" onclick="tradfiSave()">Save TradFi Config</button>
+                    <button class="btn btn-sm btn-danger" onclick="tradfiClear()">Clear TradFi Config</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Backups Panel -->
+        <div id="backupsPanel" class="hl-expiry-panel" style="display:none;">
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+                <button onclick="backToList()" style="width:auto; flex-shrink:0; padding:6px 14px; border-radius:5px; border:1px solid #26a69a; background:transparent; color:#26a69a; font-size:var(--fs-sm); cursor:pointer; font-weight:600;">&#8592; Back</button>
+                <h3 style="margin:0;">API Key Backups</h3>
+            </div>
+            <p style="font-size:var(--fs-sm); color:#94a3b8; margin:0 0 12px;">
+                Backups are created automatically before every save. Stored in <code>data/api-keys/</code>.
+                A pre-restore snapshot is created before any restore.
+            </p>
+            <div id="backupsList">
+                <div style="text-align:center;color:#94a3b8;padding:20px;"><span class="spinner"></span> Loading...</div>
+            </div>
+        </div>
+
+        <!-- SSH API Sync panel -->
+        <div id="sshSyncPanel" class="hl-expiry-panel" style="display:none;">
+            <!-- Header -->
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+                <button onclick="backToList()" style="width:auto; flex-shrink:0; padding:6px 14px; border-radius:5px; border:1px solid #26a69a; background:transparent; color:#26a69a; font-size:var(--fs-sm); cursor:pointer; font-weight:600;">&#8592; Back</button>
+                <h3 style="margin:0;">SSH API Sync</h3>
+                <span style="flex:1"></span>
+                <label style="font-size:var(--fs-sm); color:#94a3b8; display:flex; align-items:center; gap:6px; cursor:pointer;">
+                    <input type="checkbox" id="sshDryRun"> Dry Run (preview only)
+                </label>
+                <label style="font-size:var(--fs-sm); color:#94a3b8; display:flex; align-items:center; gap:6px; cursor:pointer;" title="When checked, sets _sync_lock so other masters won't pull this push">
+                    <input type="checkbox" id="sshNoPropagate"> Don't sync to other masters
+                </label>
+                <span id="sshSpinner" style="display:none; margin-left:4px;"><span class="spinner"></span></span>
+            </div>
+            <!-- Filter row -->
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;">
+                <div style="position:relative; display:inline-flex; align-items:center;">
+                    <input type="text" id="sshFilter" placeholder="Filter VPS…" oninput="filterSshHosts(); document.getElementById('sshFilterClear').style.display=this.value?'flex':'none';"
+                           style="width:150px; font-size:var(--fs-sm); background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:5px; padding:4px 24px 4px 8px;">
+                    <button id="sshFilterClear" onclick="document.getElementById('sshFilter').value=''; filterSshHosts(); this.style.display='none'; document.getElementById('sshFilter').focus();"
+                            style="display:none; position:absolute; right:4px; background:none; border:none; color:#64748b; font-size:var(--fs-base); cursor:pointer; padding:0; line-height:1; align-items:center;" title="Clear">&times;</button>
+                </div>
+                <button class="btn btn-sm btn-secondary" onclick="sshSelectAll(true)"  style="font-size:var(--fs-xs); padding:3px 10px;">All</button>
+                <button class="btn btn-sm btn-secondary" onclick="sshSelectAll(false)" style="font-size:var(--fs-xs); padding:3px 10px;">None</button>
+                <span id="sshSelCount" style="font-size:var(--fs-xs); color:#94a3b8; min-width:60px;"></span>
+            </div>
+            <!-- Status -->
+            <div id="sshStatusLine" style="font-size:var(--fs-sm); color:#64748b; margin-bottom:6px;"></div>
+            <!-- VPS table: ALL row + per-VPS rows -->
+            <div id="sshVpsList" style="border:1px solid #334155; border-radius:6px; background:#0f172a; font-size:var(--fs-sm); color:#e2e8f0; max-height:calc(100vh - 240px); overflow-y:auto;"></div>
+        </div>
+
+        <!-- Log viewer panel -->
+        <div id="logPanel" class="hl-expiry-panel" style="display:none; flex-direction:column; padding:0; gap:0; height:calc(100vh - 120px);">
+            <div style="display:flex; align-items:center; gap:10px; padding:8px 16px; border-bottom:1px solid #1e293b; flex-shrink:0;">
+                <button onclick="backToList()" style="width:auto; flex-shrink:0; padding:5px 12px; border-radius:5px; border:1px solid #26a69a; background:transparent; color:#26a69a; font-size:var(--fs-sm); cursor:pointer; font-weight:600;">&#8592; Back</button>
+            </div>
+            <div id="logViewerTarget" style="padding:10px 16px 16px; display:flex; flex-direction:column; flex:1; min-height:0;"></div>
+        </div>
+
+    </div><!-- #main-content -->
+</div><!-- #page-body -->
+
+    <!-- Toast container -->
+    <div id="toastContainer"></div>
+
+    <!-- Alert modal (error/warning) -->
+    <div id="alertModalOverlay" class="alert-modal-overlay" style="display:none;" onclick="if(event.target===this)closeAlertModal()">
+        <div id="alertModalBox" class="alert-modal error">
+            <div id="alertModalTitle" class="alert-modal-title">Error</div>
+            <div id="alertModalBody" class="alert-modal-body"></div>
+            <div class="alert-modal-footer">
+                <button class="btn btn-primary" onclick="closeAlertModal()">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Diff viewer modal (full-screen overlay) -->
+    <div id="diffModal" style="display:none;" class="diff-modal">
+        <div class="diff-modal-header">
+            <div style="display:flex; align-items:center; gap:12px;">
+                <button class="btn btn-sm btn-secondary" onclick="closeDiffModal()">&#8592; Back</button>
+                <span id="diffTitle" style="font-size:var(--fs-sm); color:#94a3b8; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60vw;"></span>
+            </div>
+            <div style="display:flex; gap:6px;">
+                <button class="btn btn-sm btn-secondary" id="btnDiffUnified" onclick="setDiffMode('unified')">Unified</button>
+                <button class="btn btn-sm btn-secondary" id="btnDiffSide" onclick="setDiffMode('side')">Side by Side</button>
+            </div>
+        </div>
+        <div class="diff-legend">
+            <span style="color:#86efac;">&#9608; Added</span>
+            <span style="color:#fca5a5;">&#9608; Removed</span>
+            <span style="color:#94a3b8;">&#9608; Unchanged</span>
+        </div>
+        <div id="diffContent" style="flex:1; overflow:auto;"></div>
+    </div>
+
+    <script>
+    // ── Config ──────────────────────────────────────────────
+    // TOKEN, API_BASE, ST_BASE and PBGUI_VERSION are injected server-side by /main_page.
+    // The server replaces "%%PLACEHOLDER%%" (with quotes) via html.replace(),
+    // so guard strings must use a DIFFERENT form to avoid being replaced too.
+    var TOKEN          = "%%TOKEN%%";
+    var API_BASE       = "%%API_BASE%%";
+    var ST_BASE        = "%%ST_BASE%%";
+    var PBGUI_VERSION  = "%%VERSION%%";
+    if (TOKEN          === "%%" + "TOKEN%%")    TOKEN          = new URLSearchParams(window.location.search).get("token") || "";
+    if (API_BASE       === "%%" + "API_BASE%%") API_BASE       = "/api/api-keys";
+    if (ST_BASE        === "%%" + "ST_BASE%%")  ST_BASE        = "";
+    if (PBGUI_VERSION  === "%%" + "VERSION%%")  PBGUI_VERSION  = "";
+    const HEADERS = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + TOKEN,
+    };
+
+    // Exchange metadata (populated from server)
+    let EXCHANGES = [];
+    let PASSPHRASE_EXCHANGES = [];
+    let SPOT_EXCHANGES = [];
+    let V7_EXCHANGES = [];
+
+    // State
+    let currentUsers = [];
+    let editMode = null; // "create" | "edit"
+    let editingName = null;
+    let hlExpiryData = {};
+    let bybitExpiryData = {};  // live-only; ips inside are never persisted
+    // Sort / filter state
+    let sortCol = "";          // "name" | "exchange" | "status" | ""
+    let sortDir = 1;           // 1 = asc, -1 = desc
+    let filterText = "";
+    let formDirty = false;
+
+    // ── URL param persistence ────────────────────────────────
+    function restoreUrlParams() {
+        const params = new URLSearchParams(location.search);
+        const f = params.get("filter");
+        if (f) {
+            filterText = f;
+            const el = document.getElementById("userFilter");
+            if (el) el.value = f;
+        }
+        const s = params.get("sort");
+        if (s) {
+            sortCol = s;
+            sortDir = parseInt(params.get("dir") || "1") || 1;
+        }
+    }
+
+    function updateUrlParams() {
+        const params = new URLSearchParams(location.search);
+        if (filterText) { params.set("filter", filterText); } else { params.delete("filter"); }
+        if (sortCol) { params.set("sort", sortCol); params.set("dir", String(sortDir)); } else { params.delete("sort"); params.delete("dir"); }
+        const qs = params.toString();
+        history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
+    }
+
+    // ── Init ────────────────────────────────────────────────
+    document.addEventListener("DOMContentLoaded", async () => {
+        await loadExchanges();
+        restoreUrlParams();
+        // Escape closes any open panel and returns to the list
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                const panels = ["editPanel","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"];
+                const anyOpen = panels.some(id => {
+                    const el = document.getElementById(id);
+                    return el && el.style.display !== "none";
+                });
+                if (anyOpen) backToList();
+            }
+        });
+        // Dirty-tracking: any input/change inside the edit panel marks it dirty
+        document.getElementById("editPanel").addEventListener("input", () => { formDirty = true; });
+        document.getElementById("editPanel").addEventListener("change", () => { formDirty = true; });
+        // Restore panel from URL hash without showing the user list first.
+        // loadUsers() still runs in the background so Back → list works.
+        const hash = window.location.hash;
+        const hashEdit = hash.startsWith("#edit/") ? decodeURIComponent(hash.slice(6)) : null;
+        if (hashEdit) {
+            // Hide the list view immediately so there's no flash
+            document.getElementById("userListView").style.display = "none";
+            // Run user list load and panel open in parallel
+            await Promise.all([
+                loadUsers(),
+                editUser(hashEdit),
+            ]);
+        } else if (hash === "#tradfi") {
+            document.getElementById("userListView").style.display = "none";
+            await Promise.all([loadUsers(), toggleTradfi()]);
+        } else if (hash === "#backups") {
+            document.getElementById("userListView").style.display = "none";
+            await Promise.all([loadUsers(), toggleBackups()]);
+        } else if (hash === "#comments") {
+            document.getElementById("userListView").style.display = "none";
+            await Promise.all([loadUsers(), toggleComments()]);
+        } else if (hash === "#hl-config") {
+            document.getElementById("userListView").style.display = "none";
+            await Promise.all([loadUsers(), toggleHLConfig()]);
+        } else if (hash === "#ssh-sync") {
+            document.getElementById("userListView").style.display = "none";
+            await Promise.all([loadUsers(), toggleSSHSync()]);
+        } else {
+            await loadUsers();
+            setTimeout(() => { const f = document.getElementById("userFilter"); if (f) f.focus(); }, 50);
+        }
+        await checkSyncStatus();
+        await checkSshSyncStatus();
+        setInterval(checkSyncStatus, 30000);
+    });
+
+    // ── API helpers ─────────────────────────────────────────
+    async function apiFetch(path, options = {}) {
+        const url = API_BASE + path;
+        const resp = await fetch(url, { headers: HEADERS, ...options });
+        if (!resp.ok) {
+            let detail = "";
+            try {
+                const body = await resp.json();
+                detail = body.detail || JSON.stringify(body);
+            } catch { detail = resp.statusText; }
+            throw new Error(detail);
+        }
+        return resp.json();
+    }
+
+    // ── Load exchanges ──────────────────────────────────────
+    async function loadExchanges() {
+        try {
+            const data = await apiFetch("/exchanges");
+            EXCHANGES = data.exchanges || [];
+            PASSPHRASE_EXCHANGES = data.passphrase_exchanges || [];
+            SPOT_EXCHANGES = data.spot_exchanges || [];
+            V7_EXCHANGES = data.v7_exchanges || [];
+            populateExchangeSelect();
+        } catch (e) {
+            showToast("Failed to load exchanges: " + e.message, "error");
+        }
+    }
+
+    function populateExchangeSelect() {
+        const sel = document.getElementById("editExchange");
+        sel.innerHTML = "";
+        EXCHANGES.forEach(ex => {
+            const opt = document.createElement("option");
+            opt.value = ex;
+            opt.textContent = ex;
+            sel.appendChild(opt);
+        });
+    }
+
+    // ── API keys metadata bar ───────────────────────────────
+    async function loadApiMeta() {
+        try {
+            var meta = await apiFetch("/meta");
+            document.getElementById("metaSerial").textContent = meta.api_serial || "—";
+            if (meta.api_ts) {
+                var d = new Date(meta.api_ts);
+                var dateStr = d.toLocaleString("de-DE", {day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit"});
+                document.getElementById("metaTs").textContent = "— " + dateStr;
+            } else {
+                document.getElementById("metaTs").textContent = "";
+            }
+            document.getElementById("metaBy").textContent = meta.api_by ? "by " + meta.api_by : "";
+        } catch (e) { /* non-critical — ignore */ }
+    }
+
+    // ── Load users ──────────────────────────────────────────
+    async function loadUsers() {
+        const tbody = document.getElementById("userTableBody");
+        tbody.innerHTML = '<tr class="loading-row"><td colspan="6"><span class="spinner"></span> Loading users...</td></tr>';
+        document.getElementById("sb-count").textContent = "…";
+
+        try {
+            currentUsers = await apiFetch("/");
+            renderUserTable();
+            document.getElementById("sb-count").textContent = currentUsers.length + " users";
+            const inUseCount = currentUsers.filter(u => u.in_use).length;
+            const sbInuse = document.getElementById("sb-inuse");
+            if (inUseCount > 0) {
+                sbInuse.textContent = inUseCount + " in use";
+                sbInuse.style.display = "";
+            } else {
+                sbInuse.style.display = "none";
+            }
+            loadApiMeta();
+        } catch (e) {
+            tbody.innerHTML = '<tr class="loading-row"><td colspan="6" style="color:#ef4444;">Failed to load: ' +
+                escapeHtml(e.message) + '</td></tr>';
+            document.getElementById("sb-count").textContent = "Error";
+            document.getElementById("sb-inuse").style.display = "none";
+        }
+    }
+
+    function renderUserTable() {
+        const tbody = document.getElementById("userTableBody");
+        if (currentUsers.length === 0) {
+            tbody.innerHTML = '<tr class="loading-row"><td colspan="6">No API keys configured. Click "Add User" to create one.</td></tr>';
+            return;
+        }
+
+        // Apply filter
+        const q = filterText.trim().toLowerCase();
+        let users = q
+            ? currentUsers.filter(u =>
+                (u.name || "").toLowerCase().includes(q) ||
+                (u.exchange || "").toLowerCase().includes(q))
+            : currentUsers.slice();
+
+        // Apply sort
+        if (sortCol) {
+            users.sort((a, b) => {
+                let va, vb;
+                if (sortCol === "name")     { va = (a.name || "").toLowerCase();     vb = (b.name || "").toLowerCase(); }
+                if (sortCol === "exchange") { va = (a.exchange || "").toLowerCase(); vb = (b.exchange || "").toLowerCase(); }
+                if (sortCol === "status")   { va = a.in_use ? 0 : 1;                vb = b.in_use ? 0 : 1; }
+                if (sortCol === "hl_expiry") {
+                    const expirySortKey = u => {
+                        if (u.exchange === "hyperliquid") {
+                            const d = hlExpiryData[u.name];
+                            const days = d ? d.days_remaining : u.hl_days_remaining;
+                            if (days == null) return 9998;
+                            return Number(days);
+                        }
+                        if (u.exchange === "bybit") {
+                            const d = bybitExpiryData[u.name];
+                            const days = d ? d.days_remaining : u.bybit_days_remaining;
+                            if (days == null) return 9997;
+                            return Number(days);
+                        }
+                        return 99999;
+                    };
+                    va = expirySortKey(a); vb = expirySortKey(b);
+                }
+                if (va < vb) return -1 * sortDir;
+                if (va > vb) return  1 * sortDir;
+                return 0;
+            });
+        }
+
+        // Update sort header classes
+        ["name","exchange","hl_expiry","status"].forEach(col => {
+            const th = document.getElementById("th-" + col);
+            if (!th) return;
+            th.classList.remove("sort-asc", "sort-desc");
+            if (sortCol === col) th.classList.add(sortDir === 1 ? "sort-asc" : "sort-desc");
+        });
+
+        if (users.length === 0) {
+            tbody.innerHTML = '<tr class="loading-row"><td colspan="6" style="color:#94a3b8;">No users match the filter.</td></tr>';
+            return;
+        }
+
+        let html = "";
+        for (const u of users) {
+            const exchClass = u.exchange || "";
+            let creds = [];
+            if (u.exchange === "hyperliquid") {
+                if (u.has_wallet) creds.push("wallet");
+                if (u.has_private_key) creds.push("key");
+                if (u.is_vault) creds.push("vault");
+            } else {
+                if (u.has_key) creds.push("key");
+                if (u.has_secret) creds.push("secret");
+            }
+            const credStr = creds.length > 0 ? creds.join(", ") : '<span style="color:#ef4444;">none</span>';
+
+            // Key expiry — prefer live-fetched data, fall back to locally stored
+            let expiryHtml = "-";
+            if (u.exchange === "hyperliquid") {
+                if (hlExpiryData[u.name]) {
+                    expiryHtml = renderExpiryBadge(hlExpiryData[u.name]);
+                } else if (u.hl_expiry_status) {
+                    expiryHtml = renderExpiryBadge({
+                        status: u.hl_expiry_status,
+                        days_remaining: u.hl_days_remaining,
+                        valid_until_iso: u.hl_valid_until_iso,
+                        error: null,
+                    });
+                }
+            } else if (u.exchange === "bybit") {
+                if (bybitExpiryData[u.name]) {
+                    expiryHtml = renderExpiryBadge(bybitExpiryData[u.name]);
+                } else if (u.bybit_expiry_status) {
+                    expiryHtml = renderExpiryBadge({
+                        status: u.bybit_expiry_status,
+                        days_remaining: u.bybit_days_remaining,
+                        valid_until_iso: u.bybit_expires_at_iso,
+                        error: null,
+                    });
+                }
+            }
+
+            const inUseHtml = u.in_use
+                ? '<span class="badge-in-use active">In Use</span>'
+                : '<span class="badge-in-use">Unused</span>';
+
+            html += '<tr tabindex="0" onclick="editUser(\'' + escapeAttr(u.name) + '\')" onkeydown="handleRowKey(event,\'' + escapeAttr(u.name) + '\')" style="cursor:pointer;">';
+            html += '<td><strong>' + escapeHtml(u.name) + '</strong></td>';
+            html += '<td><span class="badge-exchange ' + exchClass + '">' + escapeHtml(u.exchange) + '</span></td>';
+            html += '<td>' + credStr + '</td>';
+            html += '<td>' + expiryHtml + '</td>';
+            html += '<td>' + inUseHtml + '</td>';
+            html += '<td>';
+            html += '<button class="btn btn-sm btn-info" onclick="event.stopPropagation();editUser(\'' + escapeAttr(u.name) + '\')">Edit</button> ';
+            if (!u.in_use) {
+                html += '<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();confirmDelete(\'' + escapeAttr(u.name) + '\')">Delete</button>';
+            }
+            html += '</td>';
+            html += '</tr>';
+        }
+        tbody.innerHTML = html;
+    }
+
+    function setSort(col) {
+        if (sortCol === col) {
+            sortDir = -sortDir;
+        } else {
+            sortCol = col;
+            sortDir = 1;
+        }
+        updateUrlParams();
+        renderUserTable();
+    }
+
+    function applyFilterSort() {
+        filterText = document.getElementById("userFilter").value;
+        updateUrlParams();
+        renderUserTable();
+    }
+
+    function clearFilter() {
+        filterText = "";
+        document.getElementById("userFilter").value = "";
+        updateUrlParams();
+        renderUserTable();
+        document.getElementById("userFilter").focus();
+    }
+
+    function handleRowKey(e, name) {
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            editUser(name);
+        } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            const next = e.target.nextElementSibling;
+            if (next && next.hasAttribute("tabindex")) next.focus();
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            const prev = e.target.previousElementSibling;
+            if (prev && prev.hasAttribute("tabindex")) {
+                prev.focus();
+            } else {
+                // First row — jump back to filter input
+                const f = document.getElementById("userFilter");
+                if (f) f.focus();
+            }
+        }
+    }
+
+    function renderExpiryBadge(exp) {
+        if (!exp) return "-";
+        if (exp.status === "ok") {
+            return '<span class="badge-expiry ok">' + exp.days_remaining + 'd</span>';
+        } else if (exp.status === "expiring_soon") {
+            return '<span class="badge-expiry expiring_soon">⚠ ' + exp.days_remaining + 'd</span>';
+        } else if (exp.status === "critical") {
+            return '<span class="badge-expiry critical">⚠ ' + exp.days_remaining + 'd</span>';
+        } else if (exp.status === "expired") {
+            return '<span class="badge-expiry expired">EXPIRED</span>';
+        } else if (exp.status === "no_expiry") {
+            return '<span class="badge-expiry no_expiry">No expiry</span>';
+        } else if (exp.status === "error") {
+            return '<span class="badge-expiry error" title="' + escapeAttr(exp.error || "") + '">Error</span>';
+        }
+        return '<span class="badge-expiry unknown">—</span>';
+    }
+
+    // ── Edit user ───────────────────────────────────────────
+    async function editUser(name) {
+        try {
+            const user = await apiFetch("/" + encodeURIComponent(name));
+            editMode = "edit";
+            editingName = name;
+            location.hash = "#edit/" + encodeURIComponent(name);
+            showEditPanel(user);
+        } catch (e) {
+            showToast("Failed to load user: " + e.message, "error");
+        }
+    }
+
+    function showCreateForm() {
+        editMode = "create";
+        editingName = null;
+        showEditPanel({
+            name: "",
+            exchange: EXCHANGES[0] || "binance",
+            key: "",
+            secret_masked: "",
+            passphrase_masked: "",
+            wallet_address: "",
+            private_key_masked: "",
+            is_vault: false,
+            quote: "",
+            options: null,
+            extra: null,
+            in_use: false,
+        });
+    }
+
+    function showEditPanel(user) {
+        formDirty = false;
+        ["hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+            document.getElementById(id).style.display = "none";
+        });
+        commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false;
+        logPanelVisible = false; _closeLogWs();
+        document.getElementById("btnComments").classList.remove("active");
+        document.getElementById("btnHLConfig").classList.remove("active");
+        document.getElementById("btnTradfi").classList.remove("active");
+        document.getElementById("btnBackups").classList.remove("active");
+        document.getElementById("btnLogs").classList.remove("active");
+        document.getElementById("editPanel").style.display = "block";
+        document.getElementById("userListView").style.display = "none";
+        document.getElementById("balanceDisplay").style.display = "none";
+
+        const isEdit = editMode === "edit";
+        document.getElementById("editPanelTitle").textContent = isEdit ? "Edit: " + user.name : "New User";
+        document.getElementById("editName").value = user.name || "";
+        document.getElementById("editName").disabled = isEdit && user.in_use;
+
+        // Exchange select
+        const sel = document.getElementById("editExchange");
+        sel.value = user.exchange || EXCHANGES[0];
+        sel.disabled = isEdit && user.in_use;
+
+        // Standard fields
+        document.getElementById("editKey").value = user.key || "";
+        const _encName = encodeURIComponent(user.name || "");
+        setupMaskedField("editSecret",     isEdit ? (user.secret_masked     || "") : "", isEdit ? `/${_encName}/reveal?field=secret`     : "");
+        setupMaskedField("editPassphrase", isEdit ? (user.passphrase_masked || "") : "", isEdit ? `/${_encName}/reveal?field=passphrase` : "");
+
+        // HL fields
+        document.getElementById("editWallet").value = user.wallet_address || "";
+        setupMaskedField("editPrivateKey", isEdit ? (user.private_key_masked || "") : "", isEdit ? `/${_encName}/reveal?field=private_key` : "");
+        document.getElementById("editIsVault").checked = user.is_vault || false;
+
+        // Advanced
+        document.getElementById("editQuote").value = user.quote || "";
+        document.getElementById("editOptions").value = user.options ? JSON.stringify(user.options, null, 2) : "";
+        document.getElementById("editExtra").value = user.extra ? JSON.stringify(user.extra, null, 2) : "";
+
+        // Delete button
+        document.getElementById("btnDelete").style.display = (isEdit && !user.in_use) ? "inline-block" : "none";
+
+        // HL expiry inline display
+        if (user.exchange === "hyperliquid" && isEdit) {
+            const cached = hlExpiryData[user.name];
+            const expObj = cached || {
+                status: user.hl_expiry_status || null,
+                days_remaining: user.hl_days_remaining,
+                valid_until_iso: user.hl_valid_until_iso
+            };
+            updateHLExpiryInline(expObj);
+        } else {
+            document.getElementById("hlExpiryInlineBadge").innerHTML = "—";
+            document.getElementById("hlExpiryInlineDate").textContent = "";
+        }
+
+        // Bybit expiry inline display (badge from stored data; IPs only after live check)
+        if (user.exchange === "bybit" && isEdit) {
+            const cachedB = bybitExpiryData[user.name];
+            const expObjB = cachedB || {
+                status: user.bybit_expiry_status || null,
+                days_remaining: user.bybit_days_remaining,
+                expires_at_iso: user.bybit_expires_at_iso,
+            };
+            updateBybitExpiryInline(expObjB, cachedB ? cachedB.ips : null);
+        } else {
+            document.getElementById("bybitExpiryInlineBadge").innerHTML = "—";
+            document.getElementById("bybitExpiryInlineDate").textContent = "";
+            document.getElementById("bybitIPList").style.display = "none";
+        }
+
+        // Collapse advanced
+        document.getElementById("advancedContent").classList.remove("open");
+
+        onExchangeChange();
+    }
+
+    function onExchangeChange() {
+        const exchange = document.getElementById("editExchange").value;
+        const isHL = exchange === "hyperliquid";
+        const isBybit = exchange === "bybit";
+        const needsPassphrase = PASSPHRASE_EXCHANGES.includes(exchange);
+
+        document.getElementById("standardFields").style.display = isHL ? "none" : "";
+        document.getElementById("hlFields").style.display = isHL ? "" : "none";
+        document.getElementById("hlExpiryInline").style.display = isHL && editMode === "edit" ? "flex" : "none";
+        document.getElementById("bybitExpiryInline").style.display = isBybit && editMode === "edit" ? "flex" : "none";
+        document.getElementById("passphraseGroup").style.display = needsPassphrase ? "" : "none";
+    }
+
+    function updateHLExpiryInline(exp) {
+        document.getElementById("hlExpiryInlineBadge").innerHTML = exp && exp.status ? renderExpiryBadge(exp) : "—";
+        const dateEl = document.getElementById("hlExpiryInlineDate");
+        if (exp && exp.valid_until_iso) {
+            dateEl.textContent = "(expires " + exp.valid_until_iso.split("T")[0] + ")";
+        } else {
+            dateEl.textContent = "";
+        }
+    }
+
+    async function checkSingleHLExpiry() {
+        if (!editingName) return;
+        const btn = document.getElementById("btnHLExpiryInline");
+        btn.disabled = true;
+        btn.textContent = "Checking…";
+        try {
+            // If a new (unsaved) private key is present in the field, pass it as
+            // an override so the user can verify the new key before saving.
+            const unsavedKey = getMaskedFieldValue("editPrivateKey");
+            let url = "/" + encodeURIComponent(editingName) + "/hl-expiry";
+            if (unsavedKey) {
+                url += "?private_key=" + encodeURIComponent(unsavedKey);
+            }
+            const data = await apiFetch(url);
+            // Only update the persistent cache when checking the saved key.
+            // For unsaved overrides we just show the result inline.
+            if (!unsavedKey) {
+                hlExpiryData[editingName] = data;
+                renderUserTable();
+            }
+            updateHLExpiryInline(data);
+        } catch(e) {
+            document.getElementById("hlExpiryInlineBadge").innerHTML = `<span style="color:#fc8181;">Error: ${e.message}</span>`;
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "↻ Check Expiry";
+        }
+    }
+
+    function updateBybitExpiryInline(exp, ips) {
+        document.getElementById("bybitExpiryInlineBadge").innerHTML = exp && exp.status ? renderExpiryBadge(exp) : "—";
+        const dateEl = document.getElementById("bybitExpiryInlineDate");
+        if (exp && exp.expires_at_iso && exp.status !== "no_expiry") {
+            dateEl.textContent = "(expires " + exp.expires_at_iso.split("T")[0] + ")";
+        } else {
+            dateEl.textContent = "";
+        }
+        // Show IPs only if provided (live check result)
+        const ipListDiv = document.getElementById("bybitIPList");
+        const ipContent = document.getElementById("bybitIPListContent");
+        if (ips && ips.length > 0) {
+            ipContent.innerHTML = ips.map(ip => `<span style="font-family:monospace; margin-right:12px;">${escapeHtml(ip)}</span>`).join("");
+            ipListDiv.style.display = "block";
+        } else if (ips !== null && ips !== undefined) {
+            ipContent.textContent = "No IPs (unrestricted)";
+            ipListDiv.style.display = "block";
+        } else {
+            ipListDiv.style.display = "none";
+        }
+    }
+
+    async function checkSingleBybitExpiry() {
+        if (!editingName) return;
+        const btn = document.getElementById("btnBybitExpiryInline");
+        btn.disabled = true;
+        btn.textContent = "Checking…";
+        try {
+            const data = await apiFetch("/" + encodeURIComponent(editingName) + "/bybit-expiry");
+            bybitExpiryData[editingName] = data;
+            updateBybitExpiryInline(data, data.ips);
+            renderUserTable();
+        } catch(e) {
+            document.getElementById("bybitExpiryInlineBadge").innerHTML = `<span style="color:#fc8181;">Error: ${e.message}</span>`;
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "↻ Check Expiry + IPs";
+        }
+    }
+
+    async function refreshBybitExpiry() {
+        const btn = document.getElementById("btnBybitExpiry");
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Checking...';
+
+        try {
+            const data = await apiFetch("/bybit-expiry?force=true");
+            bybitExpiryData = {};
+            for (const item of data) {
+                bybitExpiryData[item.name] = item;
+            }
+            renderUserTable();
+            renderBybitExpiryPanel(data);
+            document.getElementById("userListView").style.display = "none";
+            ["editPanel","hlExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+                document.getElementById(id).style.display = "none";
+            });
+            commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false; sshSyncVisible = false;
+            logPanelVisible = false; _closeLogWs();
+            document.getElementById("btnComments").classList.remove("active");
+            document.getElementById("btnHLConfig").classList.remove("active");
+            document.getElementById("btnTradfi").classList.remove("active");
+            document.getElementById("btnBackups").classList.remove("active");
+            document.getElementById("btnSSHSync").classList.remove("active");
+            document.getElementById("btnLogs").classList.remove("active");
+            document.getElementById("bybitExpiryPanel").style.display = "";
+            showToast("Bybit expiry data refreshed", "success");
+        } catch (e) {
+            showToast("Bybit expiry check failed: " + e.message, "error");
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "Bybit Expiry Check";
+        }
+    }
+
+    function renderBybitExpiryPanel(data) {
+        const tbody = document.getElementById("bybitExpiryBody");
+        if (!data || data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#94a3b8;">No Bybit users found</td></tr>';
+            return;
+        }
+
+        const order = { expired: 0, critical: 1, expiring_soon: 2, ok: 3, no_expiry: 4, error: 5, unknown: 6 };
+        data.sort((a, b) => (order[a.status] || 6) - (order[b.status] || 6));
+
+        let html = "";
+        for (const exp of data) {
+            const ipsText = (exp.ips && exp.ips.length > 0)
+                ? exp.ips.map(ip => `<span style="font-family:monospace;font-size:var(--fs-xs);margin-right:8px;">${escapeHtml(ip)}</span>`).join("")
+                : '<span style="color:#94a3b8;font-size:var(--fs-xs);">none (unrestricted)</span>';
+            html += "<tr>";
+            html += "<td><strong>" + escapeHtml(exp.name) + "</strong></td>";
+            html += "<td>" + (exp.expires_at_iso && exp.status !== "no_expiry" ? exp.expires_at_iso.split("T")[0] : "—") + "</td>";
+            html += "<td>" + (exp.days_remaining != null ? exp.days_remaining + "d" : "—") + "</td>";
+            html += "<td>" + renderExpiryBadge(exp) + "</td>";
+            html += "<td>" + ipsText + "</td>";
+            html += "</tr>";
+        }
+        tbody.innerHTML = html;
+    }
+
+    function toggleAdvanced() {
+        const content = document.getElementById("advancedContent");
+        const btn = content.previousElementSibling;
+        if (content.classList.contains("open")) {
+            content.classList.remove("open");
+            btn.textContent = "▶ Advanced (optional)";
+        } else {
+            content.classList.add("open");
+            btn.textContent = "▼ Advanced (optional)";
+        }
+    }
+
+    function cancelEdit() {
+        formDirty = false;
+        backToList();
+    }
+
+    // ── Panel navigation ────────────────────────────────────
+    function backToList() {
+        if (document.getElementById("editPanel").style.display !== "none" && formDirty) {
+            if (!confirm("You have unsaved changes. Leave without saving?")) return;
+        }
+        formDirty = false;
+        ["editPanel","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+            document.getElementById(id).style.display = "none";
+        });
+        document.getElementById("userListView").style.display = "";
+        commentsVisible = false;
+        hlConfigVisible = false;
+        tradfiVisible = false;
+        backupsVisible = false;
+        sshSyncVisible = false;
+        logPanelVisible = false;
+        _closeSshSSE();
+        _closeLogWs();
+        editMode = null;
+        editingName = null;
+        history.replaceState(null, "", location.pathname + location.search);
+        document.getElementById("btnComments").classList.remove("active");
+        document.getElementById("btnHLConfig").classList.remove("active");
+        document.getElementById("btnTradfi").classList.remove("active");
+        document.getElementById("btnBackups").classList.remove("active");
+        document.getElementById("btnSSHSync").classList.remove("active");
+        document.getElementById("btnLogs").classList.remove("active");
+        setTimeout(() => { const f = document.getElementById("userFilter"); if (f) f.focus(); }, 50);
+    }
+
+    // ── Save user ───────────────────────────────────────────
+    async function saveUser() {
+        const name = document.getElementById("editName").value.trim();
+        if (!name) {
+            showToast("Username is required", "error");
+            return;
+        }
+
+        const exchange = document.getElementById("editExchange").value;
+        const isHL = exchange === "hyperliquid";
+        const isCreate = editMode === "create";
+
+        // ── Required field validation ──────────────────────────────────
+        if (isHL) {
+            const wallet = document.getElementById("editWallet").value.trim();
+            if (!wallet) {
+                showToast("Wallet Address is required for Hyperliquid", "error");
+                return;
+            }
+            // Private key: always required on create; on edit required only if not already saved
+            const pkVal = getMaskedFieldValue("editPrivateKey");
+            const pkInput = document.getElementById("editPrivateKey");
+            const pkAlreadySaved = !isCreate && pkInput.placeholder.includes("saved");
+            if (pkVal === "" || (!pkVal && !pkAlreadySaved)) {
+                showToast("Private Key is required for Hyperliquid", "error");
+                return;
+            }
+        } else {
+            const apiKey = document.getElementById("editKey").value.trim();
+            if (!apiKey) {
+                showToast("API Key is required", "error");
+                return;
+            }
+            // Secret: required on create; on edit required only if not already saved
+            const secretVal = getMaskedFieldValue("editSecret");
+            const secretInput = document.getElementById("editSecret");
+            const secretAlreadySaved = !isCreate && secretInput.placeholder.includes("saved");
+            if (secretVal === "" || (!secretVal && !secretAlreadySaved)) {
+                showToast("API Secret is required", "error");
+                return;
+            }
+            if (PASSPHRASE_EXCHANGES.includes(exchange)) {
+                const ppVal = getMaskedFieldValue("editPassphrase");
+                const ppInput = document.getElementById("editPassphrase");
+                const ppAlreadySaved = !isCreate && ppInput.placeholder.includes("saved");
+                if (ppVal === "" || (!ppVal && !ppAlreadySaved)) {
+                    showToast("Passphrase is required for " + exchange, "error");
+                    return;
+                }
+            }
+        }
+        // ──────────────────────────────────────────────────────────────
+
+        // Parse options/extra JSON
+        let options = null;
+        let extra = null;
+        const optionsRaw = document.getElementById("editOptions").value.trim();
+        const extraRaw = document.getElementById("editExtra").value.trim();
+        if (optionsRaw) {
+            try { options = JSON.parse(optionsRaw); } catch {
+                showToast("Invalid JSON in Options field", "error"); return;
+            }
+        }
+        if (extraRaw) {
+            try { extra = JSON.parse(extraRaw); } catch {
+                showToast("Invalid JSON in Extra field", "error"); return;
+            }
+        }
+
+        const data = {
+            exchange: exchange,
+            key: isHL ? null : (document.getElementById("editKey").value || null),
+            secret: isHL ? null : getMaskedFieldValue("editSecret"),
+            passphrase: PASSPHRASE_EXCHANGES.includes(exchange) ? getMaskedFieldValue("editPassphrase") : null,
+            wallet_address: isHL ? (document.getElementById("editWallet").value || null) : null,
+            private_key: isHL ? getMaskedFieldValue("editPrivateKey") : null,
+            is_vault: isHL ? document.getElementById("editIsVault").checked : false,
+            quote: document.getElementById("editQuote").value || null,
+            options: options,
+            extra: extra,
+        };
+
+        const btnSave = document.getElementById("btnSave");
+        btnSave.disabled = true;
+        btnSave.innerHTML = '<span class="spinner"></span> Saving...';
+
+        try {
+            if (editMode === "create") {
+                await apiFetch("/", {
+                    method: "POST",
+                    body: JSON.stringify({ name: name, data: data }),
+                });
+                showToast("User created: " + name, "success");
+            } else {
+                // Rename first if the username was changed
+                let currentName = editingName;
+                if (name !== editingName) {
+                    await apiFetch("/" + encodeURIComponent(editingName) + "/rename", {
+                        method: "PATCH",
+                        body: JSON.stringify({ new_name: name }),
+                    });
+                    currentName = name;
+                }
+                await apiFetch("/" + encodeURIComponent(currentName), {
+                    method: "PUT",
+                    body: JSON.stringify(data),
+                });
+                showToast("User updated: " + name, "success");
+            }
+            // Clear stale expiry cache for this user so re-opening the
+            // edit panel doesn't show an outdated "no expire" result.
+            const savedName = editMode === "create" ? name : editingName;
+            delete hlExpiryData[savedName];
+            delete bybitExpiryData[savedName];
+            cancelEdit();
+            await loadUsers();
+            await checkSyncStatus();
+            await checkSshSyncStatus();
+            // Background HL expiry refresh: when a private key was submitted (new or
+            // changed), automatically fetch the real expiry so the table shows it
+            // without requiring an extra manual "Check Expiry" click.
+            if (exchange === "hyperliquid" && data.private_key) {
+                const _bgUser = savedName;
+                apiFetch("/" + encodeURIComponent(_bgUser) + "/hl-expiry").then(function(d) {
+                    hlExpiryData[_bgUser] = d;
+                    renderUserTable();
+                }).catch(function() {});
+            }
+        } catch (e) {
+            showToast("Save failed: " + e.message, "error");
+        } finally {
+            btnSave.disabled = false;
+            btnSave.textContent = "Save";
+        }
+    }
+
+    // ── Delete user ─────────────────────────────────────────
+    function confirmDelete(name) {
+        if (confirm("Delete user '" + name + "'? This cannot be undone.")) {
+            doDelete(name);
+        }
+    }
+
+    async function deleteUser() {
+        if (!editingName) return;
+        if (confirm("Delete user '" + editingName + "'? This cannot be undone.")) {
+            await doDelete(editingName);
+        }
+    }
+
+    async function doDelete(name) {
+        try {
+            await apiFetch("/" + encodeURIComponent(name), { method: "DELETE" });
+            showToast("User deleted: " + name, "success");
+            cancelEdit();
+            await loadUsers();
+            await checkSshSyncStatus();
+        } catch (e) {
+            showToast("Delete failed: " + e.message, "error");
+        }
+    }
+
+    // ── Test connection ─────────────────────────────────────
+    async function testConnection() {
+        const name = editMode === "edit" ? editingName : document.getElementById("editName").value.trim();
+        if (!name) {
+            showToast("Save the user first before testing", "warning");
+            return;
+        }
+        if (editMode === "create") {
+            showToast("Save the user first before testing", "warning");
+            return;
+        }
+
+        const btn = document.getElementById("btnTest");
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Testing...';
+
+        // Build optional override payload from unsaved field values
+        const exchange = document.getElementById("editExchange").value;
+        const isHL = exchange === "hyperliquid";
+        const override = {};
+        if (!isHL) {
+            const keyVal = document.getElementById("editKey").value.trim();
+            if (keyVal) override.key = keyVal;
+            const secretVal = getMaskedFieldValue("editSecret");
+            if (secretVal) override.secret = secretVal;
+            const ppVal = getMaskedFieldValue("editPassphrase");
+            if (ppVal) override.passphrase = ppVal;
+        } else {
+            const walletVal = document.getElementById("editWallet").value.trim();
+            if (walletVal) override.wallet_address = walletVal;
+            const pkVal = getMaskedFieldValue("editPrivateKey");
+            if (pkVal) override.private_key = pkVal;
+        }
+        const hasOverride = Object.keys(override).length > 0;
+
+        try {
+            const result = await apiFetch("/" + encodeURIComponent(name) + "/test", {
+                method: "POST",
+                body: hasOverride ? JSON.stringify(override) : undefined,
+            });
+            const display = document.getElementById("balanceDisplay");
+            let html = "";
+            if (result.success) {
+                html += '<div class="balance-box"><div class="label">Futures Balance</div>';
+                html += '<div class="value">' + (result.balance_futures !== null ? result.balance_futures.toFixed(2) : "N/A") + '</div></div>';
+                if (result.balance_spot !== null) {
+                    html += '<div class="balance-box"><div class="label">Spot Balance</div>';
+                    html += '<div class="value">' + result.balance_spot.toFixed(2) + '</div></div>';
+                }
+                showToast("Connection successful!", "success");
+            } else {
+                html += '<div class="balance-box"><div class="label">Connection Test</div>';
+                html += '<div class="error">' + escapeHtml(result.error || "Unknown error") + '</div></div>';
+                showToast("Connection failed", "error");
+            }
+            display.innerHTML = html;
+            display.style.display = "flex";
+        } catch (e) {
+            showToast("Test failed: " + e.message, "error");
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "Test Connection";
+        }
+    }
+
+    // ── HL Expiry ───────────────────────────────────────────
+    async function refreshHLExpiry() {
+        const btn = document.getElementById("btnHLExpiry");
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Checking...';
+
+        try {
+            const data = await apiFetch("/hl-expiry?force=true");
+            hlExpiryData = {};
+            for (const item of data) {
+                hlExpiryData[item.name] = item;
+            }
+            renderUserTable();
+            renderHLExpiryPanel(data);
+            // Switch to expiry panel view
+            document.getElementById("userListView").style.display = "none";
+            ["editPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+                document.getElementById(id).style.display = "none";
+            });
+            commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false; sshSyncVisible = false;
+            logPanelVisible = false; _closeLogWs();
+            document.getElementById("btnComments").classList.remove("active");
+            document.getElementById("btnHLConfig").classList.remove("active");
+            document.getElementById("btnTradfi").classList.remove("active");
+            document.getElementById("btnBackups").classList.remove("active");
+            document.getElementById("btnSSHSync").classList.remove("active");
+            document.getElementById("btnLogs").classList.remove("active");
+            document.getElementById("hlExpiryPanel").style.display = "";
+            showToast("HL expiry data refreshed", "success");
+        } catch (e) {
+            showToast("HL expiry check failed: " + e.message, "error");
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "HL Expiry Check";
+        }
+    }
+
+    function renderHLExpiryPanel(data) {
+        const tbody = document.getElementById("hlExpiryBody");
+        if (!data || data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#94a3b8;">No Hyperliquid users found</td></tr>';
+            return;
+        }
+
+        // Sort: expired first, then expiring_soon, then ok, then no_expiry
+        const order = { expired: 0, expiring_soon: 1, ok: 2, no_expiry: 3, error: 4, unknown: 5 };
+        data.sort((a, b) => (order[a.status] || 5) - (order[b.status] || 5));
+
+        let html = "";
+        for (const exp of data) {
+            html += "<tr>";
+            html += "<td><strong>" + escapeHtml(exp.name) + "</strong></td>";
+            html += "<td>" + (exp.is_vault ? "Vault" : "Wallet") + "</td>";
+            html += "<td>" + (exp.valid_until_iso ? exp.valid_until_iso.split("T")[0] : "-") + "</td>";
+            html += "<td>" + (exp.days_remaining !== null && exp.days_remaining !== undefined ? exp.days_remaining : "-") + "</td>";
+            html += "<td>" + renderExpiryBadge(exp) + "</td>";
+            html += "</tr>";
+        }
+        tbody.innerHTML = html;
+    }
+
+    // ── Utilities ───────────────────────────────────────────
+    function escapeHtml(str) {
+        const div = document.createElement("div");
+        div.textContent = str || "";
+        return div.innerHTML;
+    }
+
+    /**
+     * Initialise a masked password field so the eye-toggle reveals the masked value.
+     * Clears on focus (so the user can type a new secret); restores on blur if left empty.
+     */
+    function setupMaskedField(inputId, maskedValue, revealUrl) {
+        const inp = document.getElementById(inputId);
+        if (!inp) return;
+        inp.type = "password";
+        // Reset eye-button icon to 👁
+        const eyeBtn = inp.nextElementSibling;
+        if (eyeBtn && eyeBtn.classList.contains("pw-eye-btn")) eyeBtn.textContent = "\uD83D\uDC41";
+        // Clear any previously-revealed real value
+        delete inp.dataset.realValue;
+        if (maskedValue) {
+            inp.value = "";
+            inp.placeholder = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (saved \u2014 leave blank to keep)";
+            inp.dataset.masked = maskedValue;
+            inp.dataset.revealUrl = revealUrl || "";
+            inp.onfocus = null;
+            inp.onblur = null;
+        } else {
+            inp.value = "";
+            inp.placeholder = "";
+            delete inp.dataset.masked;
+            delete inp.dataset.revealUrl;
+            inp.onfocus = null;
+            inp.onblur = null;
+        }
+    }
+
+    /** Return null when the field is unchanged (empty while a saved value exists). */
+    function getMaskedFieldValue(inputId) {
+        const inp = document.getElementById(inputId);
+        if (!inp) return null;
+        const val = inp.value;
+        // Field was revealed (realValue set) but user explicitly cleared the content.
+        // Return "" as a sentinel meaning "intentionally cleared" so validation can catch it.
+        // Note: re-hiding unchanged deletes realValue (see togglePwVisible), so that case
+        // correctly falls through to the !val→null branch below.
+        if (!val && "realValue" in inp.dataset) return "";
+        // Unchanged revealed value still shown in the field
+        if (inp.dataset.realValue && val === inp.dataset.realValue) return null;
+        // Empty field that was never revealed (or was re-hid unchanged) → "leave unchanged"
+        if (!val) return null;
+        return val;
+    }
+
+    async function togglePwVisible(inputId, btn) {
+        const inp = document.getElementById(inputId);
+        if (!inp) return;
+        if (inp.type === "password") {
+            // --- show ---
+            if (!inp.value && inp.dataset.revealUrl) {
+                // Field is empty (masked placeholder mode) → fetch real value first
+                try {
+                    const data = await apiFetch(inp.dataset.revealUrl);
+                    if (data.value) {
+                        inp.dataset.realValue = data.value;
+                        inp.value = data.value;
+                    }
+                } catch (e) {
+                    showToast("Could not reveal key: " + e.message, "error");
+                    return;
+                }
+            }
+            inp.type = "text";
+            btn.textContent = "\uD83D\uDE48"; // 🙈
+        } else {
+            // --- hide ---
+            // If user hasn't changed the revealed value, restore empty + placeholder state
+            if (inp.dataset.realValue && inp.value === inp.dataset.realValue) {
+                inp.value = "";
+                // Delete realValue so getMaskedFieldValue can distinguish
+                // "re-hid unchanged" (no realValue) from "revealed then cleared" (has realValue)
+                delete inp.dataset.realValue;
+                inp.type = "password";
+            } else {
+                inp.type = "password";
+            }
+            btn.textContent = "\uD83D\uDC41"; // 👁
+        }
+    }
+
+    function escapeAttr(str) {
+        return (str || "").replace(/'/g, "\\'").replace(/"/g, "&quot;");
+    }
+
+    function showToast(message, type = "success") {
+        if (type === "error" || type === "warning") {
+            const overlay = document.getElementById("alertModalOverlay");
+            const box    = document.getElementById("alertModalBox");
+            const title  = document.getElementById("alertModalTitle");
+            const body   = document.getElementById("alertModalBody");
+            box.className = "alert-modal " + type;
+            title.textContent = type === "error" ? "Error" : "Warning";
+            body.textContent = message;
+            overlay.style.display = "flex";
+            return;
+        }
+        const container = document.getElementById("toastContainer");
+        const toast = document.createElement("div");
+        toast.className = "toast " + type;
+        toast.textContent = message;
+        container.appendChild(toast);
+        requestAnimationFrame(() => toast.classList.add("show"));
+        setTimeout(() => {
+            toast.classList.remove("show");
+            setTimeout(() => toast.remove(), 300);
+        }, 4000);
+    }
+
+    function closeAlertModal() {
+        document.getElementById("alertModalOverlay").style.display = "none";
+    }
+
+    function showDryRunModal(title, bodyHtml) {
+        var overlay = document.getElementById("alertModalOverlay");
+        var box     = document.getElementById("alertModalBox");
+        var tEl     = document.getElementById("alertModalTitle");
+        var bEl     = document.getElementById("alertModalBody");
+        box.className = "alert-modal info";
+        tEl.textContent = title;
+        bEl.innerHTML = bodyHtml;
+        overlay.style.display = "flex";
+    }
+
+    /** Update the already-open alert modal in place (e.g. replace "Testing..." with the result). */
+    function updateAlertModal(message, type) {
+        const box   = document.getElementById("alertModalBox");
+        const title = document.getElementById("alertModalTitle");
+        const body  = document.getElementById("alertModalBody");
+        box.className = "alert-modal " + type;
+        title.textContent = type === "error" ? "Error" : type === "warning" ? "Warning" : "Result";
+        body.textContent = message;
+    }
+
+    // ── Comments ────────────────────────────────────────────
+    let commentsVisible = false;
+
+    async function toggleComments() {
+        if (commentsVisible) { backToList(); return; }
+        commentsVisible = true;
+        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+            document.getElementById(id).style.display = "none";
+        });
+        hlConfigVisible = false; tradfiVisible = false; backupsVisible = false; sshSyncVisible = false;
+        logPanelVisible = false; _closeLogWs();
+        document.getElementById("btnHLConfig").classList.remove("active");
+        document.getElementById("btnTradfi").classList.remove("active");
+        document.getElementById("btnBackups").classList.remove("active");
+        document.getElementById("btnSSHSync").classList.remove("active");
+        document.getElementById("btnLogs").classList.remove("active");
+        document.getElementById("commentsPanel").style.display = "";
+        document.getElementById("btnComments").classList.add("active");
+        location.hash = "#comments";
+        await loadComments();
+    }
+
+    async function loadComments() {
+        const tbody = document.getElementById("commentsBody");
+        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#94a3b8;">Loading...</td></tr>';
+        try {
+            const data = await apiFetch("/comments/list");
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#94a3b8;">No comment fields</td></tr>';
+                return;
+            }
+            let html = "";
+            for (const c of data) {
+                html += "<tr>";
+                html += "<td><code>" + escapeHtml(c.key) + "</code></td>";
+                html += '<td><input type="text" class="comment-val" data-key="' + escapeAttr(c.key) + '" value="' + escapeAttr(c.value) + '" style="width:100%;background:#0e1117;border:1px solid #2d3748;border-radius:4px;padding:6px 8px;color:#fafafa;font-size:var(--fs-sm);" /></td>';
+                html += "<td>";
+                html += '<button class="btn btn-sm btn-primary" onclick="updateComment(\'' + escapeAttr(c.key) + '\')">Save</button> ';
+                html += '<button class="btn btn-sm btn-danger" onclick="deleteComment(\'' + escapeAttr(c.key) + '\')">Delete</button>';
+                html += "</td>";
+                html += "</tr>";
+            }
+            tbody.innerHTML = html;
+        } catch (e) {
+            tbody.innerHTML = '<tr><td colspan="3" style="color:#ef4444;">' + escapeHtml(e.message) + '</td></tr>';
+        }
+    }
+
+    function showAddComment() {
+        document.getElementById("addCommentForm").style.display = "block";
+        document.getElementById("newCommentKey").value = "";
+        document.getElementById("newCommentValue").value = "";
+        document.getElementById("newCommentKey").focus();
+    }
+
+    function hideAddComment() {
+        document.getElementById("addCommentForm").style.display = "none";
+    }
+
+    async function createComment() {
+        const key = document.getElementById("newCommentKey").value.trim();
+        const value = document.getElementById("newCommentValue").value;
+        if (!key) { showToast("Key is required", "error"); return; }
+        try {
+            await apiFetch("/comments/list", {
+                method: "POST",
+                body: JSON.stringify({ key: key, value: value }),
+            });
+            showToast("Comment created", "success");
+            hideAddComment();
+            await loadComments();
+        } catch (e) {
+            showToast("Failed: " + e.message, "error");
+        }
+    }
+
+    async function updateComment(key) {
+        const input = document.querySelector('.comment-val[data-key="' + key + '"]');
+        if (!input) return;
+        try {
+            await apiFetch("/comments/list/" + encodeURIComponent(key), {
+                method: "PUT",
+                body: JSON.stringify({ value: input.value }),
+            });
+            showToast("Comment updated", "success");
+        } catch (e) {
+            showToast("Failed: " + e.message, "error");
+        }
+    }
+
+    async function deleteComment(key) {
+        if (!confirm("Delete comment '" + key + "'?")) return;
+        try {
+            await apiFetch("/comments/list/" + encodeURIComponent(key), { method: "DELETE" });
+            showToast("Comment deleted", "success");
+            await loadComments();
+        } catch (e) {
+            showToast("Failed: " + e.message, "error");
+        }
+    }
+
+    // ── HL Expiry Warning Config ────────────────────────────
+    let hlConfigVisible = false;
+
+    async function toggleHLConfig() {
+        if (hlConfigVisible) { backToList(); return; }
+        hlConfigVisible = true;
+        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+            document.getElementById(id).style.display = "none";
+        });
+        commentsVisible = false; tradfiVisible = false; backupsVisible = false; sshSyncVisible = false;
+        logPanelVisible = false; _closeLogWs();
+        document.getElementById("btnComments").classList.remove("active");
+        document.getElementById("btnTradfi").classList.remove("active");
+        document.getElementById("btnBackups").classList.remove("active");
+        document.getElementById("btnSSHSync").classList.remove("active");
+        document.getElementById("btnLogs").classList.remove("active");
+        document.getElementById("hlConfigPanel").style.display = "";
+        document.getElementById("btnHLConfig").classList.add("active");
+        location.hash = "#hl-config";
+        await loadHLExpiryConfig();
+    }
+
+    async function loadHLExpiryConfig() {
+        try {
+            const data = await apiFetch("/hl-expiry/config");
+            document.getElementById("hlWarningDays").value = data.telegram_warning_days || 7;
+        } catch (e) {
+            showToast("Failed to load HL config: " + e.message, "error");
+        }
+    }
+
+    async function saveHLExpiryConfig() {
+        const days = parseInt(document.getElementById("hlWarningDays").value, 10);
+        if (isNaN(days) || days < 1) {
+            showToast("Warning days must be at least 1", "error");
+            return;
+        }
+        try {
+            await apiFetch("/hl-expiry/config", {
+                method: "PUT",
+                body: JSON.stringify({ telegram_warning_days: days }),
+            });
+            showToast("HL warning config saved", "success");
+        } catch (e) {
+            showToast("Failed: " + e.message, "error");
+        }
+    }
+
+    // ── TradFi Section ──────────────────────────────────────
+    let tradfiVisible = false;
+    let tradfiProfiles = {};
+    let tradfiProviders = [];
+    let tradfiNeedsSecret = [];
+    let tradfiProviderNotes = {};
+    let tradfiProviderLinks = {};
+    let tradfiKeySaved = false;
+    let tradfiSecretSaved = false;
+    let tradfiSavedProvider = "";  // provider for which credentials are currently stored
+    let yfInstalled = false;
+
+    async function toggleTradfi() {
+        if (tradfiVisible) { backToList(); return; }
+        tradfiVisible = true;
+        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+            document.getElementById(id).style.display = "none";
+        });
+        commentsVisible = false; hlConfigVisible = false; backupsVisible = false; sshSyncVisible = false;
+        logPanelVisible = false; _closeLogWs();
+        document.getElementById("btnComments").classList.remove("active");
+        document.getElementById("btnHLConfig").classList.remove("active");
+        document.getElementById("btnBackups").classList.remove("active");
+        document.getElementById("btnSSHSync").classList.remove("active");
+        document.getElementById("btnLogs").classList.remove("active");
+        document.getElementById("tradfiPanel").style.display = "";
+        document.getElementById("btnTradfi").classList.add("active");
+        location.hash = "#tradfi";
+        await loadTradfiData();
+    }
+
+    async function loadTradfiData() {
+        // Load profiles + provider metadata
+        try {
+            const data = await apiFetch("/tradfi/profiles");
+            tradfiProviders = data.providers || [];
+            tradfiProviderNotes = data.provider_notes || {};
+            tradfiNeedsSecret = data.needs_secret || [];
+            tradfiProfiles = data.profiles || {};
+            populateTradfiProviders();
+        } catch (e) {
+            showToast("Failed to load TradFi profiles: " + e.message, "error");
+        }
+
+        // Load profiles + provider metadata
+        try {
+            const data = await apiFetch("/tradfi/profiles");
+            tradfiProviders = data.providers || [];
+            tradfiProviderNotes = data.provider_notes || {};
+            tradfiProviderLinks = data.provider_links || {};
+            tradfiNeedsSecret = data.needs_secret || [];
+            tradfiProfiles = data.profiles || {};
+            populateTradfiProviders();
+        } catch (e) {
+            showToast("Failed to load TradFi profiles: " + e.message, "error");
+        }
+
+        // Load current config
+        try {
+            const cfg = await apiFetch("/tradfi/config");
+            if (cfg.provider) {
+                document.getElementById("tradfiProvider").value = cfg.provider;
+                onTradfiProviderChange();
+            }
+            // Populate masked values so the eye-toggle reveals them
+            tradfiKeySaved    = !!cfg.api_key;
+            tradfiSecretSaved = !!cfg.api_secret;
+            tradfiSavedProvider = cfg.provider || "";
+            setupMaskedField("tradfiApiKey",    cfg.api_key    || "", cfg.api_key    ? "/tradfi/reveal?field=api_key"    : "");
+            setupMaskedField("tradfiApiSecret", cfg.api_secret || "", cfg.api_secret ? "/tradfi/reveal?field=api_secret" : "");
+        } catch (_) {}
+
+        // Check yfinance
+        await checkYfinanceStatus();
+    }
+
+    function populateTradfiProviders() {
+        const sel = document.getElementById("tradfiProvider");
+        sel.innerHTML = "";
+        tradfiProviders.forEach(p => {
+            const opt = document.createElement("option");
+            opt.value = p;
+            opt.textContent = p;
+            sel.appendChild(opt);
+        });
+        onTradfiProviderChange();
+    }
+
+    function onTradfiProviderChange() {
+        const prov = document.getElementById("tradfiProvider").value;
+        const needsSecret = tradfiNeedsSecret.includes(prov);
+        const secretGroup = document.getElementById("tradfiSecretGroup");
+        const secretInput = document.getElementById("tradfiApiSecret");
+
+        // If the user switched to a different provider than the one with saved credentials,
+        // clear the key/secret fields so they don't accidentally use the old provider's key
+        if (tradfiSavedProvider && prov !== tradfiSavedProvider) {
+            setupMaskedField("tradfiApiKey", "");
+            setupMaskedField("tradfiApiSecret", "");
+            tradfiKeySaved = false;
+            tradfiSecretSaved = false;
+        }
+        if (needsSecret) {
+            secretGroup.style.display = "";
+            secretInput.disabled = false;
+        } else {
+            secretGroup.style.display = "";
+            secretInput.value = "";
+            secretInput.disabled = true;
+            secretInput.placeholder = "not required";
+        }
+        document.getElementById("tradfiProviderNote").textContent =
+            tradfiProviderNotes[prov] || "";
+        // Update registration link
+        const linkEl = document.getElementById("tradfiProviderLink");
+        const link = tradfiProviderLinks[prov];
+        if (link && link.url) {
+            linkEl.href = link.url;
+            document.getElementById("tradfiProviderLinkLabel").textContent = link.label || "Get API key";
+            linkEl.style.display = "flex";
+        } else {
+            linkEl.style.display = "none";
+        }
+    }
+
+    async function checkYfinanceStatus() {
+        try {
+            const data = await apiFetch("/tradfi/yfinance/status");
+            yfInstalled = data.installed;
+            const statusEl = document.getElementById("yfStatus");
+            const installBtn = document.getElementById("btnYfInstall");
+            const testBtn = document.getElementById("btnYfTest");
+            if (data.installed) {
+                statusEl.innerHTML = '<span style="color:#26a69a;">\u2713 yfinance ' + escapeHtml(data.version) + ' installed</span>';
+                installBtn.textContent = "Uninstall";
+                installBtn.className = "btn btn-sm btn-danger";
+                testBtn.style.display = "";
+            } else {
+                statusEl.innerHTML = '<span style="color:#d69e2e;">\u26a0 not installed</span>';
+                installBtn.textContent = "Install";
+                installBtn.className = "btn btn-sm btn-primary";
+                testBtn.style.display = "none";
+            }
+            if (data.error) {
+                statusEl.innerHTML = '<span style="color:#ef4444;">' + escapeHtml(data.error) + '</span>';
+            }
+        } catch (e) {
+            document.getElementById("yfStatus").innerHTML =
+                '<span style="color:#ef4444;">Error: ' + escapeHtml(e.message) + '</span>';
+        }
+    }
+
+    async function yfInstallToggle() {
+        const btn = document.getElementById("btnYfInstall");
+        const action = yfInstalled ? "uninstall" : "install";
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> ' + (yfInstalled ? "Uninstalling..." : "Installing...");
+        try {
+            const data = await apiFetch("/tradfi/yfinance/" + action, { method: "POST" });
+            if (data.success) {
+                showToast(data.message, "success");
+            } else {
+                showToast(data.message, "error");
+            }
+            await checkYfinanceStatus();
+        } catch (e) {
+            showToast("Failed: " + e.message, "error");
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = yfInstalled ? "Uninstall" : "Install";
+        }
+    }
+
+    async function yfTest() {
+        const btn = document.getElementById("btnYfTest");
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Testing...';
+        showToast("Testing yfinance...", "warning");
+        try {
+            const data = await apiFetch("/tradfi/test", {
+                method: "POST",
+                body: JSON.stringify({ provider: "yfinance" }),
+            });
+            if (data.success) {
+                updateAlertModal(data.message, "success");
+            } else {
+                updateAlertModal(data.message, "error");
+            }
+        } catch (e) {
+            updateAlertModal("Failed: " + e.message, "error");
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "Test";
+        }
+    }
+
+    async function tradfiTest() {
+        const prov = document.getElementById("tradfiProvider").value;
+        // getMaskedFieldValue returns null if field is empty OR if revealed-but-unedited
+        const key    = getMaskedFieldValue("tradfiApiKey")    || "";
+        const secret = getMaskedFieldValue("tradfiApiSecret") || "";
+        if (!key && !tradfiKeySaved) {
+            showToast("Enter an API key first", "warning");
+            return;
+        }
+        // Show "Testing..." in the modal and keep it open for the result
+        showToast("Testing " + prov + "...", "warning");
+        try {
+            const data = await apiFetch("/tradfi/test", {
+                method: "POST",
+                body: JSON.stringify({ provider: prov, api_key: key, api_secret: secret }),
+            });
+            if (data.success) {
+                updateAlertModal(data.message, "success");
+            } else {
+                updateAlertModal(data.message, "error");
+            }
+        } catch (e) {
+            updateAlertModal("Test failed: " + e.message, "error");
+        }
+    }
+
+    async function tradfiSave() {
+        const prov = document.getElementById("tradfiProvider").value;
+        // getMaskedFieldValue returns null if field is empty OR if revealed-but-unedited
+        const key    = getMaskedFieldValue("tradfiApiKey")    || "";
+        const secret = getMaskedFieldValue("tradfiApiSecret") || "";
+        if (!key && !tradfiKeySaved) {
+            showToast("Enter an API key first", "warning");
+            return;
+        }
+        try {
+            await apiFetch("/tradfi/config", {
+                method: "PUT",
+                body: JSON.stringify({ provider: prov, api_key: key, api_secret: secret || null }),
+            });
+            // Update saved flags
+            if (key) tradfiKeySaved = true;
+            if (secret) tradfiSecretSaved = true;
+            tradfiSavedProvider = prov;
+            showToast("TradFi config saved", "success");
+        } catch (e) {
+            showToast("Save failed: " + e.message, "error");
+        }
+    }
+
+    async function tradfiClear() {
+        if (!confirm("Clear TradFi config?")) return;
+        try {
+            await apiFetch("/tradfi/config", { method: "DELETE" });
+            setupMaskedField("tradfiApiKey", "");
+            setupMaskedField("tradfiApiSecret", "");
+            tradfiKeySaved = false;
+            tradfiSecretSaved = false;
+            tradfiSavedProvider = "";
+            showToast("TradFi config cleared", "success");
+        } catch (e) {
+            showToast("Failed: " + e.message, "error");
+        }
+    }
+
+    // ── API Sync (rclone / VPS distribution) ───────────────
+    let _syncPollTimer = null;
+
+    async function checkSyncStatus() {
+        try {
+            const data = await apiFetch("/sync/status");
+            const btn = document.getElementById("btnApiSync");
+            if (!data.configured || data.total_servers === 0) {
+                btn.style.display = "none";
+                return;
+            }
+            btn.style.display = "";
+            if (data.synced) {
+                btn.className = "sb-btn";
+                btn.style.opacity = "0.6";
+                btn.style.cursor = "default";
+                btn.textContent = "🟢 API in sync (rclone)";
+                btn.disabled = true;
+            } else {
+                const names = (data.unsynced_servers || []).join(", ");
+                btn.className = "sb-btn danger";
+                btn.style.opacity = "";
+                btn.style.cursor = "pointer";
+                btn.textContent = "🔴 API not in sync (rclone)";
+                btn.title = "Not in sync: " + names + " — Click to push.";
+                btn.disabled = false;
+            }
+        } catch (_) {
+            // PBRemote not configured — hide button silently
+            document.getElementById("btnApiSync").style.display = "none";
+        }
+    }
+
+    async function triggerApiSync() {
+        const btn = document.getElementById("btnApiSync");
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Syncing...';
+
+        try {
+            await apiFetch("/sync/push", { method: "POST" });
+            showToast("API keys pushed to remote storage", "success");
+        } catch (e) {
+            showToast("Sync failed: " + e.message, "error");
+            btn.disabled = false;
+            await checkSyncStatus();
+            return;
+        }
+
+        // Poll until synced (max 90s)
+        let attempts = 0;
+        const MAX = 45;
+        if (_syncPollTimer) clearInterval(_syncPollTimer);
+        _syncPollTimer = setInterval(async () => {
+            attempts++;
+            try {
+                const data = await apiFetch("/sync/status");
+                const remaining = data.unsynced_servers ? data.unsynced_servers.length : 0;
+                btn.innerHTML = '<span class="spinner"></span> Syncing… (' + remaining + ' left)';
+                if (data.synced || attempts >= MAX) {
+                    clearInterval(_syncPollTimer);
+                    _syncPollTimer = null;
+                    if (data.synced) {
+                        showToast("API keys synced ✅", "success");
+                    } else {
+                        showToast("Sync timed out — some servers may still be updating", "warning");
+                    }
+                    await checkSyncStatus();
+                }
+            } catch (_) {
+                clearInterval(_syncPollTimer);
+                _syncPollTimer = null;
+                await checkSyncStatus();
+            }
+        }, 2000);
+    }
+
+    // ── SSH API Sync ─────────────────────────────────────────
+    let sshSyncVisible = false;
+    var _sshStatusES = null;  // EventSource for live serial updates
+    var _sshSyncState = {};    // hostname → true/false/null (in-sync tracking)
+
+    async function checkSshSyncStatus() {
+        try {
+            var data = await apiFetch("/sync/ssh-status");
+            var hosts = data.connected_hosts || [];
+            hosts.forEach(function(h) {
+                var info = data.hosts[h] || {};
+                _sshSyncState[h] = info.in_sync != null ? info.in_sync : null;
+            });
+            _updateSshSyncButton();
+        } catch (_) { /* ssh sync not configured or unreachable */ }
+    }
+
+    function _updateSshSyncButton() {
+        var btn = document.getElementById("btnSSHQuick");
+        if (!btn) return;
+        var hosts = Object.keys(_sshSyncState);
+        if (hosts.length === 0) { btn.className = "sb-btn"; btn.textContent = "\u2601 SSH Sync"; return; }
+        var outOfSync = hosts.filter(function(h) { return _sshSyncState[h] === false; });
+        var unknown   = hosts.filter(function(h) { return _sshSyncState[h] == null; });
+        if (outOfSync.length > 0) {
+            btn.className = "sb-btn danger";
+            btn.textContent = "\uD83D\uDD34 SSH " + outOfSync.length + "/" + hosts.length + " out of sync";
+        } else if (unknown.length === hosts.length) {
+            btn.className = "sb-btn";
+            btn.textContent = "\u2601 SSH Sync";
+        } else {
+            btn.className = "sb-btn";
+            btn.textContent = "\uD83D\uDFE2 SSH all in sync";
+        }
+    }
+
+    function _md5Tooltip(md5_detail) {
+        if (!md5_detail || Object.keys(md5_detail).length === 0) return "";
+        var parts = [];
+        if ("pb7" in md5_detail) parts.push("PB7: " + (md5_detail.pb7 === true ? "\u2705" : md5_detail.pb7 === false ? "\u274C mismatch" : "\u2753 unknown"));
+        if ("pb6" in md5_detail) parts.push("PB6: " + (md5_detail.pb6 === true ? "\u2705" : md5_detail.pb6 === false ? "\u274C mismatch" : "\u2753 unknown"));
+        return parts.join(" | ");
+    }
+
+    function _updateSerialCell(hostname, remote_serial, local_serial, in_sync, md5_detail) {
+        var cell = document.getElementById("ssh-ser-" + hostname);
+        if (remote_serial == null) {
+            _sshSyncState[hostname] = null;
+            if (cell) {
+                cell.textContent = "\u2014";
+                cell.style.cssText = "color:#64748b; font-size:var(--fs-sm); text-align:right;";
+            }
+        } else {
+            var synced = in_sync != null ? in_sync : (remote_serial === local_serial);
+            _sshSyncState[hostname] = synced;
+            if (cell) {
+                if (synced) {
+                    cell.textContent = remote_serial;
+                    cell.style.cssText = "color:#86efac; font-size:var(--fs-sm); text-align:right;";
+                    cell.title = "In sync (MD5 match)" + (md5_detail ? " \u2014 " + _md5Tooltip(md5_detail) : "");
+                } else {
+                    cell.innerHTML = '\x3Cspan style="background:#991b1b; color:#fecaca; padding:1px 6px; border-radius:3px; font-weight:700; font-size:var(--fs-sm);">' + remote_serial + ' \u2716\x3C/span>';
+                    cell.style.cssText = "text-align:right;";
+                    cell.title = "Out of sync" + (md5_detail ? " \u2014 " + _md5Tooltip(md5_detail) : "");
+                }
+            }
+        }
+        _updateSshSyncButton();
+    }
+
+    function _updateLpCell(hostname, lp) {
+        var cell = document.getElementById("ssh-lp-" + hostname);
+        if (!cell) return;
+        cell.innerHTML = _lpBadge(lp);
+    }
+
+    function _openSshSSE() {
+        _closeSshSSE();
+        var url = API_BASE + "/sync/ssh-status/stream";
+        if (TOKEN) url += "?token=" + encodeURIComponent(TOKEN);
+        _sshStatusES = new EventSource(url);
+        _sshStatusES.onmessage = function(ev) {
+            try {
+                var d = JSON.parse(ev.data);
+                if (d.type === "init") {
+                    var ls = d.local_serial || 0;
+                    Object.keys(d.hosts || {}).forEach(function(h) {
+                        var hi = d.hosts[h] || {};
+                        _updateSerialCell(h, hi.remote_serial, ls, hi.in_sync, hi.md5_detail);
+                        if (d.last_push && d.last_push[h]) {
+                            _updateLpCell(h, d.last_push[h]);
+                        }
+                    });
+                } else if (d.type === "serial_update") {
+                    _updateSerialCell(d.hostname, d.remote_serial, d.local_serial, d.in_sync, d.md5_detail);
+                    if (d.last_push) _updateLpCell(d.hostname, d.last_push);
+                }
+            } catch (ex) { /* ignore parse errors */ }
+        };
+        _sshStatusES.onerror = function() {
+            // Browser will auto-reconnect; no action needed
+        };
+    }
+
+    function _closeSshSSE() {
+        if (_sshStatusES) { _sshStatusES.close(); _sshStatusES = null; }
+    }
+
+    async function toggleSSHSync() {
+        if (sshSyncVisible) { backToList(); return; }
+        sshSyncVisible = true;
+        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
+            document.getElementById(id).style.display = "none";
+        });
+        commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false;
+        logPanelVisible = false; _closeLogWs();
+        document.getElementById("btnComments").classList.remove("active");
+        document.getElementById("btnHLConfig").classList.remove("active");
+        document.getElementById("btnTradfi").classList.remove("active");
+        document.getElementById("btnBackups").classList.remove("active");
+        document.getElementById("btnLogs").classList.remove("active");
+        document.getElementById("sshSyncPanel").style.display = "";
+        document.getElementById("btnSSHSync").classList.add("active");
+        location.hash = "#ssh-sync";
+        await loadSSHSyncStatus();
+        _openSshSSE();
+    }
+
+    async function quickSshSync() {
+        var btn = document.getElementById("btnSSHQuick");
+        if (btn) { btn.disabled = true; btn.textContent = "…"; }
+        try {
+            var data = await apiFetch("/sync/push-ssh", {
+                method: "POST",
+                body: JSON.stringify({ dry_run: false, no_propagate: false })
+            });
+            if (data.error) { showToast("SSH Sync: " + data.error, "error"); return; }
+            var results = data.results || {};
+            var total = Object.keys(results).length;
+            var ok = Object.values(results).filter(function(r) { return r.success; }).length;
+            if (ok === total && total > 0) showToast("SSH Sync: " + ok + "/" + total + " OK", "success");
+            else if (total === 0) showToast("SSH Sync: no VPS connected", "warning");
+            else showToast("SSH Sync: " + ok + "/" + total + " succeeded", ok > 0 ? "warning" : "error");
+        } catch (e) {
+            showToast("SSH Sync failed: " + e.message, "error");
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = "\u2601 SSH Sync"; }
+        }
+    }
+
+    // ── State ────────────────────────────────────────────────
+    var _sshHosts   = [];   // [{hostname, label}]
+    var _sshHostMap = {};   // hostname → {watcher_active, last_push:{ts,serial,success}}
+
+    // Grid: cb | VPS | Last Sync | Serial | Days | Min Ver | Set | Sync Keys
+    var SSH_COLS = "22px minmax(160px,1fr) 148px 52px 68px 62px 45px 82px";
+
+    function _lpBadge(lp) {
+        if (!lp || !lp.ts) return '<span style="color:#475569; font-size:var(--fs-sm);">never</span>';
+        var d = new Date(lp.ts);
+        var dateStr = d.toLocaleString('de-DE', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+        var clr = lp.success ? '#86efac' : '#fca5a5';
+        var label = lp.success ? 'OK' : 'FAIL';
+        return '<span style="color:' + clr + '; font-weight:700; font-size:var(--fs-sm);">' + label + '</span>' +
+               '<span style="color:#64748b; margin-left:5px; font-size:var(--fs-sm);">' + dateStr + '</span>';
+    }
+
+    function escapeAttr(s) { return String(s).replace(/"/g, '&quot;'); }
+
+    function _sshVpsRowHtml(h, hostInfo) {
+        var lp = (hostInfo && hostInfo.last_push) || null;
+        var serial = (lp && lp.serial) ? lp.serial : '—';
+        var watcherDot = (hostInfo && hostInfo.watcher_active)
+            ? ' <span title="watcher active" style="color:#86efac; font-size:var(--fs-xs);">&#9679;</span>' : '';
+        return '<div class="ssh-row" data-label="' + escapeAttr(h.label) + '" ' +
+            'style="display:grid; grid-template-columns:' + SSH_COLS + '; gap:6px; align-items:center; ' +
+            'padding:6px 8px; border-bottom:1px solid #1e293b;">' +
+            '<input type="checkbox" class="ssh-cb" value="' + escapeAttr(h.hostname) + '" checked ' +
+                'style="cursor:pointer;" onchange="updateSshSelCount()">' +
+            '<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + escapeAttr(h.label) + '">' +
+                escapeHtml(h.label) + watcherDot + '</span>' +
+            '<span id="ssh-lp-' + escapeAttr(h.hostname) + '">' + _lpBadge(lp) + '</span>' +
+            '<span id="ssh-ser-' + escapeAttr(h.hostname) + '" style="color:#64748b; font-size:var(--fs-sm); text-align:right;">' + serial + '</span>' +
+            '<input type="number" id="retdays-' + escapeAttr(h.hostname) + '" min="1" max="3650" value="180" ' +
+                'style="width:100%; font-size:var(--fs-sm); background:#1e293b; color:#93c5fd; border:1px solid #334155; border-radius:4px; padding:3px 5px; text-align:right;">' +
+            '<input type="number" id="retminver-' + escapeAttr(h.hostname) + '" min="1" max="1000" value="10" ' +
+                'style="width:100%; font-size:var(--fs-sm); background:#1e293b; color:#86efac; border:1px solid #334155; border-radius:4px; padding:3px 5px; text-align:right;">' +
+            '<button id="btnset-' + escapeAttr(h.hostname) + '" ' +
+                'data-hostname="' + escapeAttr(h.hostname) + '" ' +
+                'onclick="saveRetentionSettings(\'single\', this.dataset.hostname)" ' +
+                'style="font-size:var(--fs-sm); padding:4px 7px; background:#1e293b; color:#94a3b8; border:1px solid #334155; border-radius:4px; cursor:pointer;">Set</button>' +
+            '<button id="btnsync-' + escapeAttr(h.hostname) + '" ' +
+                'data-hostname="' + escapeAttr(h.hostname) + '" ' +
+                'onclick="triggerSSHPush(\'single\', this.dataset.hostname)" ' +
+                'style="font-size:var(--fs-sm); padding:4px 7px; background:#1e40af; color:#e2e8f0; border:none; border-radius:4px; cursor:pointer; white-space:nowrap;">Sync Keys</button>' +
+        '</div>';
+    }
+
+    function _buildSshTable(hosts, hostMap) {
+        var list = document.getElementById("sshVpsList");
+        if (!hosts.length) {
+            list.innerHTML = '<div style="padding:16px; color:#94a3b8;">No VPS connected via SSH.</div>';
+            return;
+        }
+        var S = SSH_COLS;
+        // Column header row
+        var hdr = '<div style="display:grid; grid-template-columns:' + S + '; gap:6px; align-items:center; ' +
+            'padding:6px 8px 7px; border-bottom:1px solid #334155; color:#64748b; font-size:var(--fs-sm); ' +
+            'text-transform:uppercase; letter-spacing:.05em; position:sticky; top:0; background:#0f172a; z-index:2;">' +
+            '<span></span><span>VPS</span><span>Last Sync</span>' +
+            '<span style="text-align:right">Serial</span>' +
+            '<span style="text-align:right">Days</span><span style="text-align:right">Min Ver</span>' +
+            '<span style="text-align:center" title="Save retention settings">Set</span>' +
+            '<span style="text-align:center" title="Push api-keys.json">Sync Keys</span>' +
+        '</div>';
+        // ALL row — acts on all selected (checked) VPS rows
+        var allRow = '<div style="display:grid; grid-template-columns:' + S + '; gap:6px; align-items:center; ' +
+            'padding:6px 8px; border-bottom:1px solid #26a69a55; background:#0d1e2e; position:sticky; top:36px; z-index:1;">' +
+            '<span></span>' +
+            '<span style="font-weight:700; color:#26a69a; font-size:var(--fs-base); white-space:nowrap;">&#9654; All Selected</span>' +
+            '<span style="color:#475569; font-size:var(--fs-sm); white-space:nowrap;">acts on checked rows</span>' +
+            '<span></span>' +
+            '<input type="number" id="globalRetDays" min="1" max="3650" value="180" ' +
+                'style="width:100%; font-size:var(--fs-sm); background:#1e293b; color:#93c5fd; border:1px solid #475569; border-radius:4px; padding:3px 5px; text-align:right;" placeholder="days">' +
+            '<input type="number" id="globalRetMinVer" min="1" max="1000" value="10" ' +
+                'style="width:100%; font-size:var(--fs-sm); background:#1e293b; color:#86efac; border:1px solid #475569; border-radius:4px; padding:3px 5px; text-align:right;" placeholder="min ver">' +
+            '<button id="btnAllSet" onclick="saveRetentionSettings(\'selected\')" ' +
+                'style="font-size:var(--fs-sm); padding:4px 7px; background:#1e293b; color:#26a69a; border:1px solid #26a69a; border-radius:4px; cursor:pointer; font-weight:600;">Set</button>' +
+            '<button id="btnAllSync" onclick="triggerSSHPush(\'selected\')" ' +
+                'style="font-size:var(--fs-base); padding:5px 9px; background:#26a69a; color:#0f172a; border:none; border-radius:4px; cursor:pointer; font-weight:700; white-space:nowrap;">Sync Keys</button>' +
+        '</div>';
+        var rows = hosts.map(function(h) { return _sshVpsRowHtml(h, hostMap[h.hostname]); }).join('');
+        var spacer = '<div style="height:6px; background:#0f172a;"></div>';
+        list.innerHTML = hdr + allRow + spacer + rows;
+        updateSshSelCount();
+    }
+
+    async function loadSSHSyncStatus() {
+        var statusLine = document.getElementById("sshStatusLine");
+        statusLine.textContent = "Loading…";
+        try {
+            var data = await apiFetch("/sync/ssh-status");
+            var hosts = data.connected_hosts || [];
+            var lastPushAll = data.last_push || {};
+            _sshHosts = []; _sshHostMap = {};
+            hosts.forEach(function(h) {
+                var hInfo = data.hosts[h] || {};
+                var label = hInfo.pbname ? hInfo.pbname + " (" + h + ")" : h;
+                hInfo.last_push = lastPushAll[h] || null;
+                _sshHosts.push({ hostname: h, label: label });
+                _sshHostMap[h] = hInfo;
+            });
+            var watcherCount = hosts.filter(function(h) {
+                return data.hosts[h] && data.hosts[h].watcher_active;
+            }).length;
+            statusLine.innerHTML =
+                '<strong>' + hosts.length + '</strong> VPS connected' +
+                ' &middot; <strong>' + watcherCount + '</strong> watcher(s) active' +
+                ' &middot; Serial: <strong>' + (data.local_serial || '?') + '</strong>' +
+                ' &middot; Master: <strong>' + (data.local_hostname || '?') + '</strong>';
+            _buildSshTable(_sshHosts, _sshHostMap);
+            // Populate serial cells from cached remote_serials (if available)
+            var localSerial = data.local_serial || 0;
+            _sshHosts.forEach(function(h) {
+                var info = _sshHostMap[h.hostname];
+                _updateSerialCell(h.hostname, info.remote_serial != null ? info.remote_serial : null, localSerial, info.in_sync, info.md5_detail);
+            });
+            _loadAllRetention(_sshHosts);
+        } catch (e) {
+            statusLine.innerHTML = '<span style="color:#f87171;">Failed: ' + escapeHtml(e.message) + '</span>';
+        }
+    }
+
+    async function _loadAllRetention(hosts) {
+        await Promise.all(hosts.map(async function(h) {
+            try {
+                var d = await apiFetch("/sync/ssh-retention/" + encodeURIComponent(h.hostname));
+                var dEl = document.getElementById("retdays-" + h.hostname);
+                var mEl = document.getElementById("retminver-" + h.hostname);
+                if (dEl) dEl.value = d.backup_retention_days;
+                if (mEl) mEl.value = d.backup_min_versions;
+            } catch (e) { /* keep defaults */ }
+        }));
+    }
+
+    function filterSshHosts() {
+        var q = (document.getElementById("sshFilter").value || "").toLowerCase();
+        document.getElementById("sshVpsList").querySelectorAll(".ssh-row").forEach(function(row) {
+            row.style.display = row.dataset.label.toLowerCase().indexOf(q) !== -1 ? "grid" : "none";
+        });
+        updateSshSelCount();
+    }
+
+    function sshSelectAll(sel) {
+        document.getElementById("sshVpsList").querySelectorAll(".ssh-row").forEach(function(row) {
+            if (row.style.display !== "none") {
+                var cb = row.querySelector(".ssh-cb");
+                if (cb) cb.checked = sel;
+            }
+        });
+        updateSshSelCount();
+    }
+
+    function updateSshSelCount() {
+        var n = document.getElementById("sshVpsList").querySelectorAll(".ssh-cb:checked").length;
+        document.getElementById("sshSelCount").textContent = n + " selected";
+    }
+
+    function _getSelectedHosts() {
+        // Only return hosts from visible (non-filtered) rows
+        var res = [];
+        document.getElementById("sshVpsList").querySelectorAll(".ssh-row").forEach(function(row) {
+            if (row.style.display !== "none") {
+                var cb = row.querySelector(".ssh-cb:checked");
+                if (cb) res.push(cb.value);
+            }
+        });
+        return res;
+    }
+
+    function _setSshBusy(busy) {
+        document.getElementById("sshSpinner").style.display = busy ? "" : "none";
+        var allSync = document.getElementById("btnAllSync");
+        var allSet  = document.getElementById("btnAllSet");
+        if (allSync) allSync.disabled = busy;
+        if (allSet)  allSet.disabled  = busy;
+    }
+
+    // mode: 'selected' | 'single'   singleHost: hostname string (only for 'single')
+    async function triggerSSHPush(mode, singleHost) {
+        var dryRun = document.getElementById("sshDryRun").checked;
+        var hostnames;
+        if (mode === 'single') {
+            hostnames = [singleHost];
+        } else {
+            hostnames = _getSelectedHosts();
+            if (!hostnames.length) { showToast("Select at least one VPS", "warning"); return; }
+        }
+        _setSshBusy(true);
+        hostnames.forEach(function(h) {
+            var btn = document.getElementById("btnsync-" + h);
+            if (btn) { btn.disabled = true; btn.textContent = "…"; }
+        });
+        try {
+            var noPropagate = document.getElementById("sshNoPropagate").checked;
+            var body = { dry_run: dryRun, hostnames: hostnames, no_propagate: noPropagate };
+            var data = await apiFetch("/sync/push-ssh", { method: "POST", body: JSON.stringify(body) });
+            if (data.error) { showToast("SSH Sync: " + data.error, "error"); return; }
+            var results = data.results || {};
+            var ok = 0, total = 0;
+            for (var h in results) {
+                total++;
+                var r = results[h];
+                if (r.success || r.dry_run) ok++;
+                var lpEl  = document.getElementById("ssh-lp-"  + h);
+                var serEl = document.getElementById("ssh-ser-" + h);
+                if (lpEl) {
+                    var clr = r.success ? '#86efac' : r.dry_run ? '#93c5fd' : '#fca5a5';
+                    var lbl = r.success ? 'OK' : r.dry_run ? 'DRY' : 'FAIL';
+                    var now = new Date();
+                    var dateStr = now.toLocaleString('de-DE', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+                    var detail = r.error ? ' (' + escapeHtml(r.error) + ')' :
+                        r.dry_run ? ' (' + (r.bots_affected || 0) + ' bots)' :
+                        [r.pushed_v7 && 'V7\u2713', r.pushed_v6 && 'V6\u2713',
+                         r.bots_killed > 0 && r.bots_killed + ' killed'].filter(Boolean).join(' ');
+                    lpEl.innerHTML =
+                        '<span style="color:' + clr + '; font-weight:700; font-size:var(--fs-xs);">' + lbl + '</span>' +
+                        '<span style="color:#64748b; font-size:var(--fs-xs); margin-left:4px;">' + dateStr + '</span>' +
+                        (detail ? '<span style="color:#475569; font-size:var(--fs-xs); margin-left:3px;">' + detail + '</span>' : '');
+                }
+                if (serEl && r.serial) serEl.textContent = r.serial;
+            }
+            if (dryRun) {
+                var rows = Object.keys(results).map(function(h) {
+                    var r = results[h];
+                    var dirs = [r.pb7dir && 'V7: ' + escapeHtml(r.pb7dir),
+                                r.pb6dir && 'V6: ' + escapeHtml(r.pb6dir)].filter(Boolean).join('<br>');
+                    return '<tr><td>' + escapeHtml(h) + '</td>' +
+                        '<td style="color:#64748b;font-size:var(--fs-xs)">' + (dirs || '—') + '</td>' +
+                        '<td style="text-align:right;color:#93c5fd">' + (r.serial || '—') + '</td>' +
+                        '<td style="text-align:right;color:#94a3b8">' + (r.bots_affected || 0) + '</td></tr>';
+                }).join('');
+                showDryRunModal('&#128274; Dry Run &mdash; Sync Keys Preview',
+                    '<p style="color:#94a3b8;margin:0 0 6px">Would push <code>api-keys.json</code> to ' + total + ' VPS:</p>' +
+                    '<table class="dry-run-table"><thead><tr>' +
+                    '<th>VPS</th><th>Target path(s)</th>' +
+                    '<th style="text-align:right">Serial</th><th style="text-align:right">Bots</th>' +
+                    '</tr></thead><tbody>' + rows + '</tbody></table>' +
+                    '<p style="color:#475569;font-size:var(--fs-xs);margin:8px 0 0">No files were written. Uncheck Dry Run to apply.</p>');
+            } else if (ok === total) showToast("Synced " + ok + "/" + total, "success");
+            else showToast("Sync: " + ok + "/" + total + " succeeded", ok > 0 ? "warning" : "error");
+        } catch (e) {
+            showToast("SSH sync failed: " + e.message, "error");
+        } finally {
+            _setSshBusy(false);
+            hostnames.forEach(function(h) {
+                var btn = document.getElementById("btnsync-" + h);
+                if (btn) { btn.disabled = false; btn.textContent = "Sync Keys"; }
+            });
+        }
+    }
+
+    // mode: 'selected' | 'single'   singleHost: hostname string (only for 'single')
+    async function saveRetentionSettings(mode, singleHost) {
+        var dryRun = document.getElementById("sshDryRun").checked;
+        var toSave = [];
+        if (mode === 'single') {
+            var days   = parseInt((document.getElementById("retdays-"   + singleHost) || {}).value);
+            var minVer = parseInt((document.getElementById("retminver-" + singleHost) || {}).value);
+            if (!isNaN(days) && days >= 1 && !isNaN(minVer) && minVer >= 1)
+                toSave.push({ hostname: singleHost, days: days, minVer: minVer });
+        } else {
+            // 'selected' — global Days/MinVer from ALL row, only visible+checked VPS
+            var gDays   = parseInt(document.getElementById("globalRetDays").value);
+            var gMinVer = parseInt(document.getElementById("globalRetMinVer").value);
+            if (isNaN(gDays) || gDays < 1 || isNaN(gMinVer) || gMinVer < 1) {
+                showToast("Enter valid Days and Min Versions in the All Selected row", "warning"); return;
+            }
+            var selected = _getSelectedHosts();
+            if (!selected.length) { showToast("Select at least one VPS", "warning"); return; }
+            selected.forEach(function(h) { toSave.push({ hostname: h, days: gDays, minVer: gMinVer }); });
+        }
+        if (!toSave.length) { showToast("Nothing to save", "warning"); return; }
+
+        // Dry-run: preview only, no API call
+        if (dryRun) {
+            var rows = toSave.map(function(s) {
+                return '<tr><td>' + escapeHtml(s.hostname) + '</td>' +
+                    '<td style="text-align:right;color:#93c5fd">' + s.days + '</td>' +
+                    '<td style="text-align:right;color:#86efac">' + s.minVer + '</td></tr>';
+            }).join('');
+            showDryRunModal('&#128274; Dry Run &mdash; Retention Preview',
+                '<p style="color:#94a3b8;margin:0 0 6px">Would write these values to <code>pbgui.ini [filesync]</code> on ' + toSave.length + ' VPS:</p>' +
+                '<table class="dry-run-table"><thead><tr>' +
+                '<th>VPS</th><th style="text-align:right">Days</th><th style="text-align:right">Min Ver</th>' +
+                '</tr></thead><tbody>' + rows + '</tbody></table>' +
+                '<p style="color:#475569;font-size:var(--fs-xs);margin:8px 0 0">No changes were made. Uncheck Dry Run to apply.</p>');
+            return;
+        }
+
+        _setSshBusy(true);
+        var ok = 0, fail = 0;
+        try {
+            await Promise.all(toSave.map(async function(s) {
+                var btn = document.getElementById("btnset-" + s.hostname);
+                if (btn) { btn.disabled = true; btn.textContent = "…"; }
+                try {
+                    await apiFetch("/sync/ssh-retention", {
+                        method: "PUT",
+                        body: JSON.stringify({ hostname: s.hostname,
+                            backup_retention_days: s.days, backup_min_versions: s.minVer }),
+                    });
+                    ok++;
+                    // Mirror saved values back into per-row inputs
+                    var dEl = document.getElementById("retdays-"   + s.hostname);
+                    var mEl = document.getElementById("retminver-" + s.hostname);
+                    if (dEl) dEl.value = s.days;
+                    if (mEl) mEl.value = s.minVer;
+                } catch (e) { fail++; }
+                finally {
+                    if (btn) { btn.disabled = false; btn.textContent = "Set"; }
+                }
+            }));
+            if (fail === 0) {
+                var rows = toSave.map(function(s) {
+                    return '<tr><td>' + escapeHtml(s.hostname) + '</td>' +
+                        '<td style="text-align:right;color:#93c5fd">' + s.days + '</td>' +
+                        '<td style="text-align:right;color:#86efac">' + s.minVer + '</td></tr>';
+                }).join('');
+                showDryRunModal('&#10003; Retention Saved',
+                    '<p style="color:#94a3b8;margin:0 0 6px">Written to <code>pbgui.ini [filesync]</code> on ' + ok + ' VPS:</p>' +
+                    '<table class="dry-run-table"><thead><tr>' +
+                    '<th>VPS</th><th style="text-align:right">Days</th><th style="text-align:right">Min Ver</th>' +
+                    '</tr></thead><tbody>' + rows + '</tbody></table>');
+            } else {
+                showToast("Saved " + ok + ", failed " + fail, ok > 0 ? "warning" : "error");
+            }
+        } finally {
+            _setSshBusy(false);
+        }
+    }
+
+    // Kept for compat — no-op
+    async function loadRetentionSettings() {}
+    function filterRetentionHosts() {}
+    function retentionSelectAll() {}
+    function updateRetentionSelCount() {}
+    function applyGlobalRetention() {}
+
+    // ── Backups / Restore ───────────────────────────────────
+    let backupsVisible = false;
+
+    async function toggleBackups() {
+        if (backupsVisible) { backToList(); return; }
+        backupsVisible = true;
+        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","sshSyncPanel","logPanel"].forEach(id => {
+            document.getElementById(id).style.display = "none";
+        });
+        commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; sshSyncVisible = false;
+        logPanelVisible = false; _closeLogWs();
+        document.getElementById("btnComments").classList.remove("active");
+        document.getElementById("btnHLConfig").classList.remove("active");
+        document.getElementById("btnTradfi").classList.remove("active");
+        document.getElementById("btnSSHSync").classList.remove("active");
+        document.getElementById("btnLogs").classList.remove("active");
+        document.getElementById("backupsPanel").style.display = "";
+        document.getElementById("btnBackups").classList.add("active");
+        location.hash = "#backups";
+        await loadBackups();
+    }
+
+    async function loadBackups() {
+        const container = document.getElementById("backupsList");
+        container.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:20px;"><span class="spinner"></span> Loading...</div>';
+        try {
+            const data = await apiFetch("/backups");
+            renderBackupsPanel(data);
+        } catch (e) {
+            container.innerHTML = '<div style="color:#ef4444;padding:20px;">' + escapeHtml(e.message) + '</div>';
+        }
+    }
+
+    function renderBackupsPanel(data) {
+        const container = document.getElementById("backupsList");
+        if (!data || data.length === 0) {
+            container.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:20px;">No backups found.</div>';
+            return;
+        }
+        selectedBackups = [];
+        let html = '<div style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">';
+        html += '<span style="font-size:var(--fs-sm); color:#94a3b8;">Select 2 to compare:</span>';
+        html += '<button class="btn btn-sm btn-secondary" id="btnDiffSelected" onclick="openDiffSelected()" disabled style="opacity:0.4;">&#9654; Compare Selected</button>';
+        html += '</div>';
+        html += '<table class="hl-expiry-table"><thead><tr>';
+        html += '<th style="width:28px;"></th>';
+        html += '<th>File</th><th>Date / Time</th><th>Target</th><th>Size</th><th style="width:80px;"></th>';
+        html += '</tr></thead><tbody>';
+        for (const b of data) {
+            const dt = b.ts.replace("T", " ");
+            html += '<tr>';
+            html += '<td><input type="checkbox" class="backup-chk" data-fn="' + escapeHtml(b.filename) + '" onchange="toggleBackupSelect(\'' + escapeHtml(b.filename) + '\')" /></td>';
+            html += '<td style="font-size:var(--fs-xs);font-family:monospace;color:#94a3b8;word-break:break-all;">' + escapeHtml(b.filename) + '</td>';
+            html += '<td>' + escapeHtml(dt) + '</td>';
+            html += '<td><span class="badge-exchange">' + escapeHtml(b.target) + '</span></td>';
+            html += '<td>' + b.size_kb + ' KB</td>';
+            html += '<td><button class="btn btn-sm btn-warning" onclick="restoreBackup(\'' + escapeHtml(b.filename) + '\')">Restore</button></td>';
+            html += '</tr>';
+        }
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    }
+
+    async function restoreBackup(filename) {
+        if (!confirm(
+            "Restore from backup:\n" + filename + "\n\n" +
+            "This will overwrite the current api-keys.json.\n" +
+            "A pre-restore snapshot will be saved first.\n\nProceed?"
+        )) return;
+        try {
+            await apiFetch("/backups/restore", {
+                method: "POST",
+                body: JSON.stringify({ filename: filename }),
+            });
+            showToast("Restored from: " + filename, "success");
+            backToList();
+            await loadUsers();
+            await checkSyncStatus();
+        } catch (e) {
+            showToast("Restore failed: " + e.message, "error");
+        }
+    }
+
+    // ── Backup Diff Viewer ──────────────────────────────────
+    let selectedBackups = [];
+    let diffData = null;
+    let diffMode = "unified";
+
+    function toggleBackupSelect(filename) {
+        const idx = selectedBackups.indexOf(filename);
+        if (idx >= 0) {
+            selectedBackups.splice(idx, 1);
+        } else {
+            if (selectedBackups.length >= 2) {
+                // Uncheck this checkbox — only 2 allowed
+                document.querySelectorAll(".backup-chk").forEach(chk => {
+                    if (chk.dataset.fn === filename) chk.checked = false;
+                });
+                return;
+            }
+            selectedBackups.push(filename);
+        }
+        const btn = document.getElementById("btnDiffSelected");
+        if (btn) {
+            btn.disabled = selectedBackups.length !== 2;
+            btn.style.opacity = selectedBackups.length === 2 ? "1" : "0.4";
+        }
+    }
+
+    async function openDiffSelected() {
+        if (selectedBackups.length !== 2) return;
+        const btn = document.getElementById("btnDiffSelected");
+        if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Loading...'; }
+        try {
+            diffData = await apiFetch("/backups/diff", {
+                method: "POST",
+                body: JSON.stringify({ filename1: selectedBackups[0], filename2: selectedBackups[1] }),
+            });
+            function _backupLabel(fn) {
+                if (fn === '_current_pb7') return 'Current (live) pb7';
+                if (fn === '_current_pb6') return 'Current (live) pb6';
+                return fn;
+            }
+            document.getElementById("diffTitle").textContent =
+                _backupLabel(diffData.filename1) + "  →  " + _backupLabel(diffData.filename2);
+            diffMode = "unified";
+            document.getElementById("btnDiffUnified").classList.add("active");
+            document.getElementById("btnDiffSide").classList.remove("active");
+            renderDiff();
+            document.getElementById("diffModal").style.display = "flex";
+        } catch (e) {
+            showToast("Diff failed: " + e.message, "error");
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = "\u25b6 Compare Selected"; btn.style.opacity = "1"; }
+        }
+    }
+
+    function closeDiffModal() {
+        document.getElementById("diffModal").style.display = "none";
+        diffData = null;
+    }
+
+    function setDiffMode(mode) {
+        diffMode = mode;
+        document.getElementById("btnDiffUnified").classList.toggle("active", mode === "unified");
+        document.getElementById("btnDiffSide").classList.toggle("active", mode === "side");
+        renderDiff();
+    }
+
+    function renderDiff() {
+        if (!diffData) return;
+        const allEqual = diffData.opcodes.every(function(op) { return op[0] === "equal"; });
+        if (allEqual) {
+            document.getElementById("diffContent").innerHTML =
+                '<div style="text-align:center;padding:40px 20px;color:#26a69a;font-size:var(--fs-md);">' +
+                '<span style="font-size:var(--fs-xl);">&#10003;</span><br><strong>Files are identical</strong><br>' +
+                '<span style="font-size:var(--fs-sm);color:#94a3b8;margin-top:6px;display:block;">Both versions contain exactly the same content (' + diffData.lines1.length + ' lines).</span>' +
+                '</div>';
+            return;
+        }
+        diffMode === "unified" ? renderUnifiedDiff() : renderSideDiff();
+    }
+
+    function _diffUnifiedRow(cls, n1, n2, sign, text) {
+        const css = cls === "add" ? "diff-add" : cls === "del" ? "diff-del" : "diff-ctx";
+        return "<tr class=\"" + css + "\">" +
+            "<td class=\"ln\">" + (n1 != null ? n1 : "") + "</td>" +
+            "<td class=\"ln\">" + (n2 != null ? n2 : "") + "</td>" +
+            "<td class=\"diff-sign\">" + sign + "</td>" +
+            "<td>" + escapeHtml(text) + "</td></tr>";
+    }
+
+    function renderUnifiedDiff() {
+        const { lines1, lines2, opcodes } = diffData;
+        const CTX = 3;
+        let rows = "";
+        let ln1 = 1, ln2 = 1;
+        for (const [tag, i1, i2, j1, j2] of opcodes) {
+            if (tag === "equal") {
+                const len = i2 - i1;
+                if (len <= CTX * 2 + 1) {
+                    for (let i = i1; i < i2; i++) rows += _diffUnifiedRow("ctx", ln1++, ln2++, " ", lines1[i]);
+                } else {
+                    for (let i = i1; i < i1 + CTX; i++) rows += _diffUnifiedRow("ctx", ln1++, ln2++, " ", lines1[i]);
+                    rows += "<tr class=\"diff-sep\"><td colspan=\"4\">&#8943; " + (len - CTX * 2) + " identical lines &#8943;</td></tr>";
+                    ln1 += len - CTX * 2;
+                    ln2 += len - CTX * 2;
+                    for (let i = i2 - CTX; i < i2; i++) rows += _diffUnifiedRow("ctx", ln1++, ln2++, " ", lines1[i]);
+                }
+            } else if (tag === "replace") {
+                for (let i = i1; i < i2; i++) rows += _diffUnifiedRow("del", ln1++, null, "-", lines1[i]);
+                for (let j = j1; j < j2; j++) rows += _diffUnifiedRow("add", null, ln2++, "+", lines2[j]);
+            } else if (tag === "delete") {
+                for (let i = i1; i < i2; i++) rows += _diffUnifiedRow("del", ln1++, null, "-", lines1[i]);
+            } else if (tag === "insert") {
+                for (let j = j1; j < j2; j++) rows += _diffUnifiedRow("add", null, ln2++, "+", lines2[j]);
+            }
+        }
+        document.getElementById("diffContent").innerHTML =
+            "<table class=\"diff-table\"><tbody>" + rows + "</tbody></table>";
+    }
+
+    function _diffSideRow(cls, lineNum, text) {
+        const css = cls === "add" ? "diff-add" : cls === "del" ? "diff-del" : cls === "empty" ? "diff-empty" : "diff-ctx";
+        return "<tr class=\"" + css + "\"><td class=\"ln\">" + (lineNum != null ? lineNum : "") +
+               "</td><td>" + escapeHtml(text) + "</td></tr>";
+    }
+
+    function renderSideDiff() {
+        const { lines1, lines2, opcodes, filename1, filename2 } = diffData;
+        const CTX = 3;
+        let leftRows = "", rightRows = "";
+        let ln1 = 1, ln2 = 1;
+        for (const [tag, i1, i2, j1, j2] of opcodes) {
+            if (tag === "equal") {
+                const len = i2 - i1;
+                if (len <= CTX * 2 + 1) {
+                    for (let i = 0; i < len; i++) {
+                        leftRows  += _diffSideRow("ctx", ln1++, lines1[i1 + i]);
+                        rightRows += _diffSideRow("ctx", ln2++, lines2[j1 + i]);
+                    }
+                } else {
+                    for (let i = 0; i < CTX; i++) {
+                        leftRows  += _diffSideRow("ctx", ln1++, lines1[i1 + i]);
+                        rightRows += _diffSideRow("ctx", ln2++, lines2[j1 + i]);
+                    }
+                    const skip = len - CTX * 2;
+                    const sep = "<tr class=\"diff-sep\"><td colspan=\"2\">&#8943; " + skip + " lines &#8943;</td></tr>";
+                    leftRows += sep; rightRows += sep;
+                    ln1 += skip; ln2 += skip;
+                    for (let i = len - CTX; i < len; i++) {
+                        leftRows  += _diffSideRow("ctx", ln1++, lines1[i1 + i]);
+                        rightRows += _diffSideRow("ctx", ln2++, lines2[j1 + i]);
+                    }
+                }
+            } else if (tag === "replace") {
+                const maxLen = Math.max(i2 - i1, j2 - j1);
+                for (let x = 0; x < maxLen; x++) {
+                    leftRows  += x < (i2 - i1) ? _diffSideRow("del",   ln1++, lines1[i1 + x]) : _diffSideRow("empty", null, "");
+                    rightRows += x < (j2 - j1) ? _diffSideRow("add",   ln2++, lines2[j1 + x]) : _diffSideRow("empty", null, "");
+                }
+            } else if (tag === "delete") {
+                for (let i = i1; i < i2; i++) {
+                    leftRows  += _diffSideRow("del",   ln1++, lines1[i]);
+                    rightRows += _diffSideRow("empty", null,  "");
+                }
+            } else if (tag === "insert") {
+                for (let j = j1; j < j2; j++) {
+                    leftRows  += _diffSideRow("empty", null,  "");
+                    rightRows += _diffSideRow("add",   ln2++, lines2[j]);
+                }
+            }
+        }
+        document.getElementById("diffContent").innerHTML =
+            "<div class=\"diff-side-wrap\">" +
+            "<div class=\"diff-side-col\"><div class=\"diff-side-hdr\">\u2190 " + escapeHtml(filename1) + "</div>" +
+            "<table class=\"diff-table\"><tbody>" + leftRows + "</tbody></table></div>" +
+            "<div class=\"diff-side-col\"><div class=\"diff-side-hdr\">\u2192 " + escapeHtml(filename2) + "</div>" +
+            "<table class=\"diff-table\"><tbody>" + rightRows + "</tbody></table></div>" +
+            "</div>";
+    }
+
+    // ── Log Viewer Panel ─────────────────────────────────────
+    let logPanelVisible = false;
+    let _logViewer = null;
+
+    function _getWsBase() {
+        try {
+            const url = new URL(API_BASE, location.href);
+            const proto = url.protocol === 'https:' ? 'wss:' : 'ws:';
+            return proto + '//' + url.host;
+        } catch(e) {
+            return (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host;
+        }
+    }
+
+    function toggleLogPanel() {
+        if (logPanelVisible) { backToList(); return; }
+        logPanelVisible = true;
+        ['editPanel','userListView','hlExpiryPanel','bybitExpiryPanel','commentsPanel','hlConfigPanel','tradfiPanel','backupsPanel','sshSyncPanel'].forEach(id => {
+            document.getElementById(id).style.display = 'none';
+        });
+        commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false; sshSyncVisible = false;
+        _closeSshSSE();
+        document.getElementById('btnComments').classList.remove('active');
+        document.getElementById('btnHLConfig').classList.remove('active');
+        document.getElementById('btnTradfi').classList.remove('active');
+        document.getElementById('btnBackups').classList.remove('active');
+        document.getElementById('btnSSHSync').classList.remove('active');
+        document.getElementById('logPanel').style.display = 'flex';
+        document.getElementById('btnLogs').classList.add('active');
+        if (!_logViewer) {
+            _logViewer = new LogViewerPanel({
+                containerId : 'logViewerTarget',
+                wsBase      : _getWsBase(),
+                token       : TOKEN,
+                defaultFile : 'ApiKeys.log',
+                height      : 'calc(100vh - 300px)',
+            });
+        }
+        _logViewer.open();
+    }
+
+    function _closeLogWs() {
+        if (_logViewer) _logViewer.close();
+    }
+
+    // ── Sidebar resize ──────────────────────────────────────
+    (function () {
+        var resizeEl = document.getElementById('sidebar-resize');
+        var sidebar  = document.getElementById('sidebar');
+        var active   = false;
+        resizeEl.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            active = true;
+            resizeEl.classList.add('active');
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!active) return;
+            var newW = e.clientX;
+            if (newW < 160) newW = 160;
+            if (newW > 420) newW = 420;
+            sidebar.style.width = newW + 'px';
+        });
+        document.addEventListener('mouseup', function () {
+            if (active) { active = false; resizeEl.classList.remove('active'); }
+        });
+    }());
+
+    /* ── Help overlay ── */
+    (function () {
+      var helpOvl      = document.getElementById('help-ovl');
+      var helpContent  = document.getElementById('help-content');
+      var helpTocList  = document.getElementById('help-toc-list');
+      var helpFilter   = document.getElementById('help-toc-filter');
+      var helpLangEN   = document.getElementById('help-lang-en');
+      var helpLangDE   = document.getElementById('help-lang-de');
+      var helpDragHandle = document.getElementById('help-drag-handle');
+
+      var helpLang  = 'EN';
+      var helpTopics = [];
+      var helpSel    = 0;
+
+      /* ── Content search ── */
+      var helpSearch      = document.getElementById('help-search');
+      var helpSearchUp    = document.getElementById('help-search-up');
+      var helpSearchDn    = document.getElementById('help-search-dn');
+      var helpSearchCount = document.getElementById('help-search-count');
+      var helpSearchGlobal = document.getElementById('help-search-global');
+      var _sMarks = [], _sIdx = -1, _sTimer = null, _rawHtml = null;
+      var _topicCache = {}, _globalMode = false;
+
+      function _clearSearch() {
+        if (_rawHtml !== null) helpContent.innerHTML = _rawHtml;
+        _sMarks = []; _sIdx = -1;
+        helpSearchCount.textContent = '';
+      }
+      function _applySearch(term) {
+        if (_rawHtml === null) return;
+        if (!term) { _clearSearch(); return; }
+        var re; try { re = new RegExp('(' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'); } catch(e) { return; }
+        helpContent.innerHTML = _rawHtml.replace(/(<[^>]+>)|([^<]+)/g, function(_, tag, text) {
+          if (tag) return tag;
+          return text.replace(re, function(_, m) { return '\x3Cmark\x3E' + m + '\x3C/mark\x3E'; });
+        });
+        _sMarks = Array.from(helpContent.querySelectorAll('mark'));
+        _updateSCount();
+        if (_sMarks.length > 0) _gotoMark(0);
+      }
+      function _updateSCount() {
+        helpSearchCount.textContent = _sMarks.length
+          ? (_sIdx + 1) + '/' + _sMarks.length
+          : (helpSearch.value.trim() ? '0 found' : '');
+      }
+      function _gotoMark(idx) {
+        if (!_sMarks.length) return;
+        if (_sIdx >= 0 && _sIdx < _sMarks.length) _sMarks[_sIdx].classList.remove('current');
+        _sIdx = ((idx % _sMarks.length) + _sMarks.length) % _sMarks.length;
+        _sMarks[_sIdx].classList.add('current');
+        _sMarks[_sIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        _updateSCount();
+      }
+      function _ensureTopicCached(idx, cb) {
+        if (_topicCache[idx] !== undefined) { cb(_topicCache[idx]); return; }
+        var t = helpTopics[idx];
+        if (!t) { cb(''); return; }
+        fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+          .then(function(r) { return r.json(); })
+          .then(function(d) { _topicCache[idx] = mdToHtml(d.content || ''); cb(_topicCache[idx]); })
+          .catch(function() { _topicCache[idx] = ''; cb(''); });
+      }
+      function _showGlobalResults(term) {
+        if (!term) {
+          helpContent.innerHTML = '\x3Cp style="color:#64748b;padding:8px 0;"\x3EType a search term to find across all topics.\x3C/p\x3E';
+          helpSearchCount.textContent = '';
+          return;
+        }
+        var re; try { re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'); } catch(e) { return; }
+        helpContent.innerHTML = '\x3Cdiv class="help-loading"\x3ESearching\u2026\x3C/div\x3E';
+        var pending = helpTopics.length;
+        if (pending === 0) { helpContent.innerHTML = ''; helpSearchCount.textContent = '0 found'; return; }
+        var allResults = [];
+        helpTopics.forEach(function(t, idx) {
+          _ensureTopicCached(idx, function(html) {
+            var text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+            var matchIdxs = [], m;
+            re.lastIndex = 0;
+            while ((m = re.exec(text)) !== null) { matchIdxs.push(m.index); if (matchIdxs.length >= 3) break; }
+            if (matchIdxs.length > 0) {
+              var snippets = matchIdxs.map(function(mi) {
+                return text.slice(Math.max(0, mi - 55), Math.min(text.length, mi + 80));
+              });
+              allResults.push({ idx: idx, title: t.title, snippets: snippets });
+            }
+            if (--pending === 0) _renderGlobalResults(term, allResults);
+          });
+        });
+      }
+      function _renderGlobalResults(term, results) {
+        var re; try { re = new RegExp('(' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'); } catch(e) { return; }
+        if (results.length === 0) {
+          helpContent.innerHTML = '\x3Cp style="color:#64748b;padding:8px 0;"\x3ENo results found.\x3C/p\x3E';
+          helpSearchCount.textContent = '0 found';
+          return;
+        }
+        helpSearchCount.textContent = results.length + (results.length === 1 ? ' topic' : ' topics');
+        var html = '\x3Cdiv class="gs-results"\x3E';
+        results.forEach(function(r) {
+          html += '\x3Cdiv class="gs-item" data-idx="' + r.idx + '"\x3E';
+          html += '\x3Cdiv class="gs-topic"\x3E' + r.title + '\x3C/div\x3E';
+          r.snippets.forEach(function(s) {
+            var hi = s.replace(re, function(_, m) { return '\x3Cmark\x3E' + m + '\x3C/mark\x3E'; });
+            html += '\x3Cdiv class="gs-snip"\x3E\u2026' + hi + '\u2026\x3C/div\x3E';
+          });
+          html += '\x3C/div\x3E';
+        });
+        html += '\x3C/div\x3E';
+        helpContent.innerHTML = html;
+        helpContent.querySelectorAll('.gs-item').forEach(function(el) {
+          el.addEventListener('click', function() {
+            var idx = parseInt(el.getAttribute('data-idx'), 10);
+            helpSearchGlobal.checked = false;
+            _globalMode = false;
+            helpSearch.placeholder = 'Search in topic\u2026';
+            loadTopic(idx);
+          });
+        });
+      }
+      helpSearch.addEventListener('input', function() {
+        if (_sTimer) clearTimeout(_sTimer);
+        _sTimer = setTimeout(function() {
+          var term = helpSearch.value.trim();
+          if (_globalMode) _showGlobalResults(term);
+          else _applySearch(term);
+        }, 260);
+      });
+      helpSearch.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !_globalMode) { e.preventDefault(); _gotoMark(_sIdx + (e.shiftKey ? -1 : 1)); }
+        if (e.key === 'Escape') { helpSearch.value = ''; if (_globalMode) _showGlobalResults(''); else _clearSearch(); }
+      });
+      helpSearchUp.addEventListener('click', function() { _gotoMark(_sIdx - 1); });
+      helpSearchDn.addEventListener('click', function() { _gotoMark(_sIdx + 1); });
+      helpSearchGlobal.addEventListener('change', function() {
+        _globalMode = helpSearchGlobal.checked;
+        helpSearch.placeholder = _globalMode ? 'Search all topics\u2026' : 'Search in topic\u2026';
+        var term = helpSearch.value.trim();
+        if (_globalMode) {
+          _showGlobalResults(term);
+        } else {
+          if (_rawHtml !== null) { helpContent.innerHTML = _rawHtml; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = ''; }
+          if (term) _applySearch(term);
+        }
+      });
+
+      /* Docs endpoints live under /api/docs, not /api/api-keys/docs.
+         Derive the correct base from API_BASE by stripping the router prefix. */
+      var docsBase = API_BASE.replace(/\/api-keys$/, '');
+
+      function mdToHtml(md) {
+        var lines = md.split('\n'), html = '', inPre = false, preBuf = '', inUl = false, inOl = false;
+        function flushList() { if (inUl) { html += '\x3C/ul\x3E'; inUl = false; } if (inOl) { html += '\x3C/ol\x3E'; inOl = false; } }
+        function inlineFormat(t) {
+          t = t.replace(/`([^`]+)`/g, '\x3Ccode\x3E$1\x3C/code\x3E');
+          t = t.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '\x3Cimg src="$2" alt="$1"\x3E');
+          t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '\x3Ca href="$2" target="_blank" rel="noopener"\x3E$1\x3C/a\x3E');
+          t = t.replace(/\*\*(.+?)\*\*/g, '\x3Cstrong\x3E$1\x3C/strong\x3E');
+          t = t.replace(/__(.+?)__/g, '\x3Cstrong\x3E$1\x3C/strong\x3E');
+          t = t.replace(/\*(.+?)\*/g, '\x3Cem\x3E$1\x3C/em\x3E');
+          t = t.replace(/_(.+?)_/g, '\x3Cem\x3E$1\x3C/em\x3E');
+          return t;
+        }
+        for (var i = 0; i < lines.length; i++) {
+          var l = lines[i];
+          if (l.match(/^```/)) { if (!inPre) { flushList(); inPre = true; preBuf = ''; } else { html += '\x3Cpre\x3E\x3Ccode\x3E' + preBuf.replace(/&/g,'&amp;').replace(/\x3C/g,'&lt;').replace(/\x3E/g,'&gt;') + '\x3C/code\x3E\x3C/pre\x3E'; inPre = false; } continue; }
+          if (inPre) { preBuf += (preBuf ? '\n' : '') + l; continue; }
+          if (l.match(/^---+$/)) { flushList(); html += '\x3Chr\x3E'; continue; }
+          var hm = l.match(/^(#{1,6})\s+(.*)/); if (hm) { flushList(); html += '\x3Ch' + hm[1].length + '\x3E' + inlineFormat(hm[2]) + '\x3C/h' + hm[1].length + '\x3E'; continue; }
+          if (l.match(/^>\s?/)) { flushList(); html += '\x3Cblockquote\x3E' + inlineFormat(l.replace(/^>\s?/, '')) + '\x3C/blockquote\x3E'; continue; }
+          var ulm = l.match(/^[\-\*]\s+(.*)/); if (ulm) { if (!inUl) { if (inOl) { html += '\x3C/ol\x3E'; inOl = false; } html += '\x3Cul\x3E'; inUl = true; } html += '\x3Cli\x3E' + inlineFormat(ulm[1]) + '\x3C/li\x3E'; continue; }
+          var olm = l.match(/^\d+\.\s+(.*)/); if (olm) { if (!inOl) { if (inUl) { html += '\x3C/ul\x3E'; inUl = false; } html += '\x3Col\x3E'; inOl = true; } html += '\x3Cli\x3E' + inlineFormat(olm[1]) + '\x3C/li\x3E'; continue; }
+          if (l.trim() === '') { flushList(); html += '\x3Cp\x3E\x3C/p\x3E'; continue; }
+          flushList(); html += '\x3Cp\x3E' + inlineFormat(l) + '\x3C/p\x3E';
+        }
+        flushList();
+        return html;
+      }
+
+      function loadHelpIndex(keyword) {
+        helpTocList.innerHTML = '\x3Cdiv class="help-loading"\x3ELoading...\x3C/div\x3E';
+        fetch(docsBase + '/docs/index?lang=' + helpLang + '&token=' + TOKEN)
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            helpTopics = data || [];
+            renderToc();
+            if (helpTopics.length > 0) {
+              var startIdx = 0;
+              if (keyword) {
+                var kw = keyword.toLowerCase();
+                for (var i = 0; i < helpTopics.length; i++) {
+                  if (helpTopics[i].title.toLowerCase().indexOf(kw) !== -1 ||
+                      (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(kw) !== -1)) {
+                    startIdx = i; break;
+                  }
+                }
+              }
+              loadTopic(startIdx);
+            }
+          })
+          .catch(function () {
+            helpTocList.innerHTML = '\x3Cdiv class="help-loading"\x3EFailed to load topics.\x3C/div\x3E';
+          });
+      }
+
+      function renderToc() {
+        var flt = helpFilter.value.trim().toLowerCase();
+        helpTocList.innerHTML = '';
+        helpTopics.forEach(function (t, idx) {
+          if (flt && t.title.toLowerCase().indexOf(flt) === -1) return;
+          var el = document.createElement('div');
+          el.className = 'toc-item' + (idx === helpSel ? ' active' : '');
+          el.textContent = t.title;
+          el.addEventListener('click', function () { loadTopic(idx); });
+          helpTocList.appendChild(el);
+        });
+      }
+
+      function loadTopic(idx) {
+        helpSel = idx;
+        renderToc();
+        var t = helpTopics[idx];
+        if (!t) return;
+        _rawHtml = null; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = '';
+        helpContent.innerHTML = '\x3Cdiv class="help-loading"\x3ELoading...\x3C/div\x3E';
+        fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            _rawHtml = mdToHtml(d.content || '');
+            _topicCache[idx] = _rawHtml;
+            helpContent.innerHTML = _rawHtml;
+            helpContent.scrollTop = 0;
+            var st = helpSearch.value.trim(); if (st) _applySearch(st);
+          })
+          .catch(function () { helpContent.innerHTML = '\x3Cdiv class="help-loading"\x3EFailed to load content.\x3C/div\x3E'; });
+      }
+
+      helpFilter.addEventListener('input', renderToc);
+      helpLangEN.addEventListener('click', function () {
+        if (helpLang === 'EN') return;
+        helpLang = 'EN'; helpLangEN.classList.add('active'); helpLangDE.classList.remove('active');
+        _topicCache = {};
+        helpSel = 0; loadHelpIndex('api_keys');
+      });
+      helpLangDE.addEventListener('click', function () {
+        if (helpLang === 'DE') return;
+        helpLang = 'DE'; helpLangDE.classList.add('active'); helpLangEN.classList.remove('active');
+        _topicCache = {};
+        helpSel = 0; loadHelpIndex('api_keys');
+      });
+      document.getElementById('help-close').addEventListener('click', function () {
+        helpOvl.classList.remove('visible');
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') helpOvl.classList.remove('visible');
+      });
+
+      /* Drag to move */
+      (function () {
+        var startX, startY, boxL, boxT;
+        helpDragHandle.addEventListener('mousedown', function (e) {
+          e.preventDefault();
+          var r = helpOvl.getBoundingClientRect();
+          helpOvl.style.transform = 'none';
+          helpOvl.style.left = r.left + 'px'; helpOvl.style.top = r.top + 'px';
+          startX = e.clientX; startY = e.clientY; boxL = r.left; boxT = r.top;
+          function onMove(ev) { helpOvl.style.left = (boxL + ev.clientX - startX) + 'px'; helpOvl.style.top = (boxT + ev.clientY - startY) + 'px'; }
+          function onUp() { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); }
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+      }());
+
+      /* Expose opener for Guide button override (set after pbgui_nav.js loads) */
+      window._openApiKeysHelp = function () {
+        helpOvl.classList.add('visible');
+        if (helpTopics.length === 0) {
+          loadHelpIndex('api_keys');
+        } else {
+          var kw = 'api_keys';
+          for (var i = 0; i < helpTopics.length; i++) {
+            if (helpTopics[i].title.toLowerCase().indexOf(kw) !== -1 ||
+                (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(kw) !== -1)) {
+              loadTopic(i); return;
+            }
+          }
+          loadTopic(0);
+        }
+      };
+    }());
+    </script>
+
+    <!-- ── Shared nav bar (must come after TOKEN/ST_BASE/API_BASE/PBGUI_VERSION are set) ── -->
+    <script>
+    window.PBGUI_NAV_CONFIG = {
+        subtitle: 'API KEYS',
+        current:  'system_api_keys',
+        token:    TOKEN,
+        stBase:   ST_BASE,
+        apiBase:  API_BASE,
+        version:  PBGUI_VERSION
+    };
+    </script>
+    <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+    <!-- Guide button override: must run AFTER pbgui_nav.js DOMContentLoaded handler
+         (pbgui_nav.js registers its DOMContentLoaded listener first, then ours runs second,
+          so by the time ours fires the button already exists and nav.js handler is attached) -->
+    <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      var btn = document.getElementById('pbgui-guide-btn');
+      if (btn) {
+        var fresh = btn.cloneNode(true);
+        btn.parentNode.replaceChild(fresh, btn);
+        fresh.addEventListener('click', function () {
+          if (typeof window._openApiKeysHelp === 'function') window._openApiKeysHelp();
+        });
+      }
+    });
+    </script>
+</body>
+</html>

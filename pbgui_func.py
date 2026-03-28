@@ -2,7 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as _st_components
 import json
 
-PBGUI_VERSION = "v1.68"
+PBGUI_VERSION = "v1.69"
 import hjson
 import pprint
 import uuid
@@ -186,6 +186,14 @@ def set_page_config(page : str = "Start"):
     # Global layout CSS — applied on every page
     st.markdown("""
 <style>
+    :root {
+        --fs-xs: 11px;
+        --fs-sm: 13px;
+        --fs-base: 14px;
+        --fs-md: 15px;
+        --fs-lg: 18px;
+        --fs-xl: 22px;
+    }
     .stMainBlockContainer {
         padding-top: 2.25rem !important;
         padding-bottom: 1rem !important;
@@ -604,6 +612,58 @@ def render_fastapi_job_monitor(height: int = 800, exchange: str = "", job_type: 
     job_type_param = f"&job_type={job_type}" if job_type else ""
     iframe_url = f"http://{_browser_host}:{api_port}/app/jobs_monitor.html?token={token}{exchange_param}{job_type_param}"
     _st_components.iframe(iframe_url, height=height, scrolling=True)
+
+
+def redirect_to_fastapi_api_keys_editor() -> None:
+    """Redirect the browser to the standalone FastAPI API Keys editor.
+
+    Uses window.location.replace() so the Streamlit chrome is never rendered.
+    The FastAPI /main_page endpoint injects the token server-side.
+    Calls st.stop() on success so nothing else is rendered.
+    """
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    url = (
+        f"http://{browser_host}:{api_port}/api/api-keys/main_page"
+        f"?token={token}"
+        f"&st_base={st_base}"
+    )
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
 
 
 def render_fastapi_hl_data_actions() -> None:

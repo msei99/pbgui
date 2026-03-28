@@ -33,6 +33,12 @@
         --hlda-err: #ff4b4b;
         --hlda-info: #3182ce;
         --hlda-success: #26a69a;
+        --fs-xs: 11px;
+        --fs-sm: 13px;
+        --fs-base: 14px;
+        --fs-md: 15px;
+        --fs-lg: 18px;
+        --fs-xl: 22px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
         color: var(--hlda-text);
         line-height: 1.6;
@@ -50,7 +56,7 @@
         padding: 10px 14px;
         background: var(--hlda-bg2);
         cursor: pointer; user-select: none;
-        font-size: 14px; font-weight: 500;
+        font-size: var(--fs-base); font-weight: 500;
         border-radius: 8px;
     }
     .hlda-root .hlda-sh:hover { background: #1c2230; }
@@ -64,14 +70,14 @@
     .hlda-root .hlda-section.open .hlda-sh { border-radius: 8px 8px 0 0; }
     .hlda-root .hlda-fs { margin-bottom: 14px; }
     .hlda-root .hlda-lbl {
-        display: block; font-size: 13px; font-weight: 500;
+        display: block; font-size: var(--fs-sm); font-weight: 500;
         color: var(--hlda-text2); margin-bottom: 4px;
     }
     .hlda-root .hlda-cs { position: relative; }
     .hlda-root .hlda-ct {
         background: var(--hlda-bg3); border: 1px solid var(--hlda-border2);
         border-radius: 6px; padding: 8px 12px; color: var(--hlda-text);
-        font-size: 13px; cursor: pointer; min-height: 38px;
+        font-size: var(--fs-sm); cursor: pointer; min-height: 38px;
         display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
     }
     .hlda-root .hlda-ct:hover { border-color: #4a5568; }
@@ -79,9 +85,9 @@
     .hlda-root .hlda-chip {
         display: inline-flex; align-items: center;
         background: #26a69a33; color: var(--hlda-accent);
-        border-radius: 4px; padding: 2px 8px; font-size: 12px; gap: 4px;
+        border-radius: 4px; padding: 2px 8px; font-size: var(--fs-xs); gap: 4px;
     }
-    .hlda-root .hlda-chip .rm { cursor: pointer; font-size: 14px; line-height: 1; opacity: .7; }
+    .hlda-root .hlda-chip .rm { cursor: pointer; font-size: var(--fs-base); line-height: 1; opacity: .7; }
     .hlda-root .hlda-chip .rm:hover { opacity: 1; }
     .hlda-root .hlda-csm { color: var(--hlda-text3); font-size: 12px; }
     .hlda-root .hlda-dd {
@@ -95,7 +101,7 @@
     }
     .hlda-root .hlda-ddh button {
         background: var(--hlda-border2); border: none; color: var(--hlda-text2);
-        padding: 3px 10px; border-radius: 4px; font-size: 12px; cursor: pointer;
+        padding: 3px 10px; border-radius: 4px; font-size: var(--fs-xs); cursor: pointer;
     }
     .hlda-root .hlda-ddh button:hover { background: #4a5568; color: var(--hlda-text); }
     .hlda-root .hlda-dds {
@@ -104,7 +110,7 @@
         color: var(--hlda-text); padding: 6px 8px; font-size: 13px; outline: none;
     }
     .hlda-root .hlda-co {
-        padding: 5px 10px; cursor: pointer; font-size: 13px;
+        padding: 5px 10px; cursor: pointer; font-size: var(--fs-sm);
         display: flex; align-items: center; gap: 6px;
     }
     .hlda-root .hlda-co:hover { background: var(--hlda-border2); }
@@ -114,7 +120,7 @@
     .hlda-root input[type="date"] {
         background: var(--hlda-bg3); border: 1px solid var(--hlda-border2);
         border-radius: 6px; padding: 8px 12px; color: var(--hlda-text);
-        font-size: 13px; width: 100%;
+        font-size: var(--fs-sm); width: 100%;
     }
     .hlda-root input[type="date"]:hover { border-color: #4a5568; }
     .hlda-root input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
@@ -126,7 +132,7 @@
         accent-color: var(--hlda-accent); width: 16px; height: 16px;
     }
     .hlda-root .hlda-cb label {
-        display: inline; margin-bottom: 0; font-size: 13px;
+        display: inline; margin-bottom: 0; font-size: var(--fs-sm);
         color: var(--hlda-text); cursor: pointer;
     }
     .hlda-root .hlda-help {
@@ -135,7 +141,7 @@
     }
     .hlda-root .hlda-btn {
         background: var(--hlda-accent); border: none; color: white;
-        padding: 9px 28px; border-radius: 6px; font-size: 14px;
+        padding: 9px 28px; border-radius: 6px; font-size: var(--fs-base);
         font-weight: 500; cursor: pointer; transition: background 0.2s;
     }
     .hlda-root .hlda-btn:hover { background: var(--hlda-accent-hover); }
@@ -143,7 +149,7 @@
     .hlda-root .hlda-ar { display: flex; align-items: center; gap: 14px; }
     .hlda-root .hlda-lo {
         display: none; align-items: center; gap: 8px;
-        font-size: 13px; color: var(--hlda-text3); margin-top: 8px;
+        font-size: var(--fs-sm); color: var(--hlda-text3); margin-top: 8px;
     }
     .hlda-root .hlda-lo.active { display: inline-flex; }
     .hlda-root .hlda-spin {
@@ -153,7 +159,7 @@
     }
     @keyframes hlda-spin { to { transform: rotate(360deg); } }
     .hlda-root .hlda-msg {
-        padding: 8px 12px; border-radius: 6px; font-size: 13px;
+        padding: 8px 12px; border-radius: 6px; font-size: var(--fs-sm);
         margin-top: 10px; display: none;
     }
     .hlda-root .hlda-msg.success { display: block; background: #26a69a22; border: 1px solid #26a69a55; color: var(--hlda-success); }
@@ -161,24 +167,24 @@
     .hlda-root .hlda-msg.warning { display: block; background: #ffa72622; border: 1px solid #ffa72655; color: var(--hlda-warn); }
     .hlda-root .hlda-nocreds {
         background: #ffa72622; border: 1px solid #ffa72655; color: var(--hlda-warn);
-        padding: 10px 14px; border-radius: 6px; font-size: 13px;
+        padding: 10px 14px; border-radius: 6px; font-size: var(--fs-sm);
     }
     .hlda-root .hlda-jm {
         margin-top: 16px; border-top: 1px solid var(--hlda-border);
         padding-top: 12px;
     }
     .hlda-root .hlda-jm-title {
-        font-size: 13px; font-weight: 600; color: var(--hlda-text2);
+        font-size: var(--fs-sm); font-weight: 600; color: var(--hlda-text2);
         margin-bottom: 8px; display: flex; align-items: center; gap: 8px;
     }
     .hlda-root .hlda-jm-badge {
-        font-size: 11px; padding: 2px 8px; border-radius: 3px; font-weight: 500;
+        font-size: var(--fs-xs); padding: 2px 8px; border-radius: 3px; font-weight: 500;
     }
     .hlda-root .hlda-jm-badge.connected { background: #10b98133; color: #10b981; }
     .hlda-root .hlda-jm-badge.disconnected { background: #ef444433; color: #ef4444; }
     .hlda-root .hlda-tabs { display: flex; gap: 0; margin-bottom: 10px; border-bottom: 1px solid var(--hlda-border); }
     .hlda-root .hlda-tab {
-        padding: 6px 16px; font-size: 13px; cursor: pointer;
+        padding: 6px 16px; font-size: var(--fs-sm); cursor: pointer;
         background: none; border: none; color: var(--hlda-text3);
         border-bottom: 2px solid transparent; transition: all 0.15s;
     }
@@ -196,12 +202,12 @@
     .hlda-root .hlda-ji .jtype { font-size: 12px; color: var(--hlda-text3); }
     .hlda-root .hlda-ji .jdur { font-size: 12px; color: var(--hlda-text3); }
     .hlda-root .hlda-sbadge {
-        font-size: 11px; padding: 2px 8px; border-radius: 3px; font-weight: 500;
+        font-size: var(--fs-xs); padding: 2px 8px; border-radius: 3px; font-weight: 500;
     }
     .hlda-root .hlda-sbadge.running { background: #3b82f633; color: #3b82f6; }
     .hlda-root .hlda-sbadge.pending { background: #f59e0b33; color: #f59e0b; }
     .hlda-root .hlda-sh-status {
-        margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px;
+        margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs);
     }
     .hlda-root .hlda-sh-status .sh-running {
         color: #3b82f6; font-weight: 500; display: flex; align-items: center; gap: 4px;
@@ -229,7 +235,7 @@
     }
     .hlda-root .hlda-pt {
         position: absolute; top: 0; left: 0; right: 0; text-align: center;
-        font-size: 11px; line-height: 20px; color: white; font-weight: 500;
+        font-size: var(--fs-xs); line-height: 20px; color: white; font-weight: 500;
     }
     .hlda-root .hlda-pd {
         font-size: 11px; color: var(--hlda-text3); margin-top: 4px;
@@ -238,18 +244,18 @@
     .hlda-root .hlda-exp { margin-top: 6px; }
     .hlda-root .hlda-exp-toggle {
         background: none; border: none; color: var(--hlda-text3);
-        font-size: 12px; cursor: pointer; padding: 2px 0;
+        font-size: var(--fs-xs); cursor: pointer; padding: 2px 0;
     }
     .hlda-root .hlda-exp-toggle:hover { color: var(--hlda-text); }
     .hlda-root .hlda-exp-body {
-        display: none; padding: 6px 0 0 8px; font-size: 12px; color: var(--hlda-text2);
+        display: none; padding: 6px 0 0 8px; font-size: var(--fs-xs); color: var(--hlda-text2);
     }
     .hlda-root .hlda-exp-body.open { display: block; }
     .hlda-root .hlda-exp-body .dr { margin-bottom: 2px; }
     .hlda-root .hlda-exp-body .dr strong { color: var(--hlda-text); }
     .hlda-root .hlda-ja { display: flex; gap: 6px; }
     .hlda-root .hlda-jbtn {
-        font-size: 11px; padding: 3px 10px; border-radius: 4px;
+        font-size: var(--fs-xs); padding: 3px 10px; border-radius: 4px;
         border: 1px solid var(--hlda-border2); background: none;
         color: var(--hlda-text2); cursor: pointer;
     }
@@ -273,15 +279,15 @@
         display: flex; justify-content: space-between; align-items: center;
         padding: 12px 16px; border-bottom: 1px solid var(--hlda-border);
     }
-    .hlda-root .hlda-modal-hd h3 { font-size: 15px; font-weight: 600; }
+    .hlda-root .hlda-modal-hd h3 { font-size: var(--fs-md); font-weight: 600; }
     .hlda-root .hlda-modal-close {
         background: none; border: none; color: var(--hlda-text3);
-        font-size: 20px; cursor: pointer; padding: 0 4px;
+        font-size: var(--fs-xl); cursor: pointer; padding: 0 4px;
     }
     .hlda-root .hlda-modal-close:hover { color: var(--hlda-text); }
     .hlda-root .hlda-modal-body {
         padding: 12px 16px; overflow-y: auto; flex: 1;
-        font-family: 'Fira Code', 'Consolas', monospace; font-size: 12px;
+        font-family: 'Fira Code', 'Consolas', monospace; font-size: var(--fs-xs);
         line-height: 1.5; white-space: pre-wrap; color: var(--hlda-text2);
     }
 </style>

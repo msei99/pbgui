@@ -5,9 +5,17 @@
      Config injected as JS variables (%%PLACEHOLDER%% pattern) by Dashboard.py.
 -->
 <style>
+:root {
+    --fs-xs: 11px;
+    --fs-sm: 13px;
+    --fs-base: 14px;
+    --fs-md: 15px;
+    --fs-lg: 18px;
+    --fs-xl: 22px;
+}
 .dge-root {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    font-size: 0.875rem;
+    font-size: var(--fs-base);
     color: #e2e8f0;
     background: #0e1117;
     padding: 0.25rem 0;
@@ -24,14 +32,14 @@
 }
 .dge-field { display: flex; flex-direction: column; gap: 0.2rem; }
 .dge-field label {
-    font-size: 0.68rem; color: #94a3b8;
+    font-size: var(--fs-xs); color: #94a3b8;
     text-transform: uppercase; letter-spacing: 0.05em;
 }
 .dge-field input[type="text"],
 .dge-field input[type="number"] {
     background: #2d3748; color: #e2e8f0;
     border: 1px solid #4a5568; border-radius: 4px;
-    padding: 0.3rem 0.5rem; font-size: 0.83rem;
+    padding: 0.3rem 0.5rem; font-size: var(--fs-sm);
     outline: none;
 }
 .dge-field input[type="text"] { min-width: 200px; }
@@ -39,7 +47,7 @@
 .dge-field input[type="number"] { width: 64px; }
 .dge-field input:focus { border-color: #63b3ed; }
 .dge-status {
-    font-size: 0.68rem; color: #4a5568;
+    font-size: var(--fs-xs); color: #4a5568;
     align-self: flex-end; padding-bottom: 0.15rem;
 }
 .dge-status.saved { color: #48bb78; }

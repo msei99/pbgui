@@ -230,6 +230,63 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 
 ---
 
+### PBData: Ressourcen-Schonende Architektur (Dashboard-getriebene Live-Daten)
+**Ziel**
+- PBData-Speicherverbrauch von ~840 MB auf ~150–200 MB reduzieren.
+- Private WebSocket-Verbindungen im Hintergrund eliminieren; WS nur noch wo wirklich sinnvoll.
+
+**Hintergrund**
+- manibot01: 1.8 GB RAM total, PBData allein frisst 840 MB + 3.1 GB Swap.
+- Ursache: ccxtpro-Instanz pro User lädt intern `load_markets()` (Binance: ~500 Symbole), dazu WS-Tasks für Balance + Positions + Orders für alle 54 User gleichzeitig (~162 potenzielle Tasks).
+- Netzwerkprobleme (SSL-Fehler, Timeout-Kaskaden) kommen vermutlich von Ressourcenüberlastung durch Swapping.
+
+**Design: Drei-Schichten-Modell**
+
+*Layer 1 – Background (immer aktiv, nur REST):*
+- History, Executions, Balances per REST-Polling → schreibt in SQLite DB.
+- KEIN privater WebSocket mehr im Hintergrund.
+- Schrittweise Migration: Orders-WS → Balance-WS → Positions-WS entfernen.
+
+*Layer 2 – Live-Session (nur wenn Dashboard offen, ≤10 User):*
+- FastAPI öffnet Exchange-REST-Polling oder WS auf Anfrage.
+- Lifecycle: open bei Dashboard-open, close nach 30s Inaktivität → RAM sofort frei.
+- Shared Preis-WS pro Exchange (kein Auth, ref-counted): offen solange min. 1 Session aktiv.
+- Nur HL-Positions wirklich via WS (Push-Events), alle anderen via REST alle 5–10s.
+- Daten leben im RAM, nicht in DB geschrieben.
+- Streamt via SSE an Browser.
+
+*Layer 3 – Browser (Vanilla JS):*
+- Initialer Render aus DB-Snapshot (sofort).
+- Live-Patches via SSE drüber legen.
+- "All Users"-View: nur DB, kein Live-Stream.
+- ≤10 Selected Users: Live-Session starten.
+
+**Was WS wirklich braucht vs. nicht:**
+| Daten-Typ | WS sinnvoll? |
+|---|---|
+| Positionen (HL) | Ja – Push-Events |
+| Positionen (Binance/Bybit) | Nein – REST alle 5s genug |
+| Balances | Nein – REST alle 60s genug |
+| Orders | Nein – REST alle 10s genug |
+| Preise/Ticker | Ja – shared, kein Auth, hohe Frequenz |
+| History/PnL/Executions | Nein – immer aus DB |
+
+**Migrationsweg (schrittweise):**
+1. Orders-WS entfernen → REST-Combined-Poller übernimmt → sofort ~18 WS weniger
+2. Balance-WS entfernen → REST alle 60s → weitere ~18 WS weniger
+3. Positions-WS entfernen (nicht-HL) → REST alle 10s
+4. FastAPI Live-Session API + SSE-Stream bauen
+5. HL-Positions-WS in Live-Session integrieren
+6. Background komplett WS-frei
+
+**Done wenn**
+- PBData RAM unter 250 MB im normalen Betrieb.
+- Keine privaten WS im Hintergrund (nur shared Preis-WS auf Anfrage).
+- Dashboard zeigt Live-Daten via SSE wenn ≤10 User selected.
+- "All Users"-View funktioniert weiterhin aus DB.
+
+---
+
 ### Dashboard: Gridstack.js – Flexibles Widget-Layout
 **Ziel**
 - Dashboard-Editor von festem Zeile×Spalte-Raster auf ein freies Grid-Layout umstellen.

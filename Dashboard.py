@@ -9,7 +9,7 @@ from pbgui_func import PBGDIR, pb7dir
 from Database import Database
 import pbgui_help
 
-_VALID_DASHBOARD_NAME = re.compile(r'^[\w\- ]+$')
+_VALID_DASHBOARD_NAME = re.compile(r'^[^\x00-\x1f/\\]+$')
 
 def _sanitize_dashboard_name(name: str) -> str:
     """Validate and return a safe dashboard name, or raise ValueError."""

@@ -50,7 +50,7 @@
             padding: 1rem;
             border-radius: 4px;
             font-family: 'Courier New', monospace;
-            font-size: 0.85rem;
+            font-size: var(--fs-sm);
         }
         .log-line {
             margin: 0.25rem 0;
@@ -65,13 +65,13 @@
             padding: 0.5rem 1rem;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 1rem;
+            font-size: var(--fs-base);
         }
         .close-btn:hover { background: #dc2626; }
         
         /* Progress details */
         .progress-details {
-            font-size: 0.8rem;
+            font-size: var(--fs-xs);
             color: #94a3b8;
             margin-top: 0.5rem;
         }
@@ -88,7 +88,7 @@
             border: none;
             color: #60a5fa;
             cursor: pointer;
-            font-size: 0.85rem;
+            font-size: var(--fs-sm);
             padding: 0.25rem 0;
         }
         .expander-toggle:hover { text-decoration: underline; }
@@ -98,7 +98,7 @@
             background: #0f172a;
             border-radius: 4px;
             margin-top: 0.5rem;
-            font-size: 0.85rem;
+            font-size: var(--fs-sm);
         }
         .expander-content.open { display: block; }
         .detail-row { margin: 0.3rem 0; }
@@ -118,7 +118,7 @@
             padding: 0.5rem 1rem;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 0.9rem;
+            font-size: var(--fs-sm);
         }
         .tab-header-actions button:hover { background: #dc2626; }
         .tab-header-actions button:disabled {
@@ -465,7 +465,7 @@
                         <span class="detail">${formatTimestamp(job.updated_ts)}</span>
                         ${rangeStr ? `<span class="detail" style="margin-left:0.8rem;">Range: ${rangeStr}</span>` : ''}
                     </div>
-                    ${job.error ? `<div class="job-error" style="margin-top:0.5rem;color:#ef4444;font-size:0.85rem;">${job.error}</div>` : ''}
+                    ${job.error ? `<div class="job-error" style="margin-top:0.5rem;color:#ef4444;font-size:var(--fs-sm);">${job.error}</div>` : ''}
                     ${(hasStats || coinPreview) ? `
                         <div class="job-expander">
                             <button class="expander-toggle" onclick="toggleExpander('${job.id}', event)">

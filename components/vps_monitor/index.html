@@ -468,6 +468,9 @@ tr:hover td { background: var(--bg3); }
     <label class="toolbar-toggle" title="Reduce card size for many servers">
       <input type="checkbox" id="compact-check"> Compact
     </label>
+    <label class="toolbar-toggle" title="Enable DEBUG entries in VPSMonitor.log">
+      <input type="checkbox" id="debuglog-check" onchange="onDebugLogChange()"> Debug log
+    </label>
   </div>
 </div>
 
@@ -578,6 +581,8 @@ let logSearchMatchIdx = -1;  // Current match index (-1 = none)
 let logRenderAbortId = 0;    // Incremented to cancel in-progress chunked render
 let logLineBase = 0;         // Offset for real line numbering (lines trimmed from front)
 let logSessionId = 0;        // Incremented on every fetch/subscribe to ignore stale responses
+let debugLogging = false;    // VPSMonitor debug logging enabled
+let debugLoggingInitialized = false;
 const MAX_LOG_LINES = 5000;
 const SEARCH_CHUNK_SIZE = 400; // DOM nodes processed per animation frame
 const RENDER_CHUNK_SIZE = 500; // DOM nodes created per animation frame during render
@@ -649,6 +654,12 @@ function handleMessage(msg) {
           if (cb) cb.checked = true;
           document.body.classList.add('compact');
         }
+      }
+      if (!debugLoggingInitialized && state.ui_settings) {
+        debugLoggingInitialized = true;
+        debugLogging = state.ui_settings.debug_logging === 'true';
+        const cb = document.getElementById('debuglog-check');
+        if (cb) cb.checked = debugLogging;
       }
       renderActiveTab();
       break;
@@ -743,6 +754,14 @@ hideipCheck.addEventListener('change', () => {
   hideIP = hideipCheck.checked;
   renderActiveTab();
 });
+
+// ── Debug Logging Toggle ───────────────────────────────────
+function onDebugLogChange() {
+  const cb = document.getElementById('debuglog-check');
+  if (!cb) return;
+  debugLogging = cb.checked;
+  send({ cmd: 'set_setting', key: 'debug_logging', value: debugLogging ? 'true' : 'false' });
+}
 
 function activeTab() {
   const btn = document.querySelector('.tab-btn.active');

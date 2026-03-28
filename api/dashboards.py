@@ -20,7 +20,7 @@ import re
 
 router = APIRouter()
 
-_VALID_DASHBOARD_NAME = re.compile(r'^[\w\- ]+$')
+_VALID_DASHBOARD_NAME = re.compile(r'^[^\x00-\x1f/\\]+$')
 
 
 # --------------------------------------------------------------------------- helpers

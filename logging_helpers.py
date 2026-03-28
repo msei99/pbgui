@@ -35,6 +35,7 @@ LOG_GROUPS: dict[str, str] = {
     'OptimizeMulti':   'PBGui',
     'BacktestV7':      'PBGui',
     'OptimizeV7':      'PBGui',
+    'FileSync':        'ApiKeys',
 }
 
 

@@ -422,7 +422,7 @@ def get_heatmap_overview(
     fig.update_layout(
         barmode="stack",
         height=80 + n_years * 90,
-        margin=dict(l=10, r=10, t=10, b=20),
+        margin=dict(l=45, r=10, t=10, b=20),
         xaxis=dict(range=[0.5, 366.5], showgrid=False, tickangle=-45, showline=False, zeroline=False),
         showlegend=False,
         bargap=0,
@@ -534,7 +534,7 @@ def _build_coverage_heatmap(
     )
     fig.update_layout(
         height=120 + (len(years) * 26),
-        margin=dict(l=10, r=10, t=20, b=20),
+        margin=dict(l=45, r=10, t=20, b=20),
         xaxis=dict(tickangle=-45, automargin=True, showgrid=False),
         yaxis=dict(autorange="reversed", showgrid=False),
         plot_bgcolor="rgba(0,0,0,0)",
@@ -798,7 +798,7 @@ def get_heatmap_minutes(
     )
     fig.update_layout(
         height=max(300, 80 + (len(y_labels) * 18)),
-        margin=dict(l=10, r=10, t=20, b=20),
+        margin=dict(l=40, r=10, t=20, b=20),
         xaxis=dict(
             tickmode="array",
             tickvals=list(range(0, 720, 60)),
@@ -1076,7 +1076,7 @@ def _build_minutes_chart(
     )
     fig.update_layout(
         height=max(300, 80 + (len(y_labels) * 18)),
-        margin=dict(l=10, r=10, t=20, b=20),
+        margin=dict(l=40, r=10, t=20, b=20),
         xaxis=dict(
             tickmode="array",
             tickvals=list(range(0, 720, 60)),

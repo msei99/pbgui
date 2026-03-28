@@ -10,7 +10,9 @@ Fully async — no threads, no paramiko.  Runs on the FastAPI event loop.
 from __future__ import annotations
 
 import asyncio
+import configparser
 import glob
+import io
 import json
 import time
 from dataclasses import dataclass, field
@@ -56,6 +58,7 @@ class VPSConnection:
     last_disconnect: Optional[datetime] = None
     last_error: Optional[str] = None
     reconnect_attempts: int = 0
+    data: dict = field(default_factory=dict)  # Cached per-host info (ini, paths)
 
 
 # ── Constants ───────────────────────────────────────────────
@@ -82,6 +85,18 @@ class AsyncSSHPool:
 
     def __init__(self):
         self._connections: dict[str, VPSConnection] = {}
+        # Optional async callback fired after every successful connect/reconnect.
+        # Signature: async callback(hostname: str) -> None
+        self._on_connect_callback: Optional[callable] = None
+
+    def set_on_connect_callback(self, callback) -> None:
+        """Register a callback invoked after every successful SSH connect.
+
+        The callback receives the hostname as its only argument.
+        It is called as a fire-and-forget asyncio task so it never blocks
+        the connect() call itself.
+        """
+        self._on_connect_callback = callback
 
     # ── Config loading ──────────────────────────────────────
 
@@ -169,7 +184,15 @@ class AsyncSSHPool:
             entry.last_connected = datetime.now()
             entry.last_error = None
             entry.reconnect_attempts = 0
+            # Auto-read remote pbgui.ini and cache paths
+            await self._cache_remote_ini(entry)
             _log(SERVICE, f"SSH connected to {hostname} ({cfg.ip})")
+            # Fire on-connect callback (e.g. start inotifywait watchers)
+            if self._on_connect_callback:
+                asyncio.create_task(
+                    self._on_connect_callback(hostname),
+                    name=f"on-connect-{hostname}",
+                )
             return True
 
         except asyncssh.PermissionDenied as e:
@@ -231,12 +254,13 @@ class AsyncSSHPool:
     # ── Command execution ───────────────────────────────────
 
     async def run(self, hostname: str, command: str,
-                  timeout: int = 30, check: bool = False
+                  timeout: Optional[int] = 30, check: bool = False
                   ) -> Optional[asyncssh.SSHCompletedProcess]:
         """Run a command on a VPS.
 
         Returns SSHCompletedProcess or None on connection error.
         If check=True, raises ProcessError on nonzero exit.
+        timeout=None means no timeout (wait indefinitely).
         """
         entry = self._connections.get(hostname)
         if not entry or not entry.conn:
@@ -244,10 +268,11 @@ class AsyncSSHPool:
                  level="WARNING")
             return None
         try:
-            result = await asyncio.wait_for(
-                entry.conn.run(command, check=check),
-                timeout=timeout,
-            )
+            coro = entry.conn.run(command, check=check)
+            if timeout is not None:
+                result = await asyncio.wait_for(coro, timeout=timeout)
+            else:
+                result = await coro
             return result
         except asyncssh.ProcessError:
             raise  # Let caller handle
@@ -382,3 +407,256 @@ class AsyncSSHPool:
     def get_connection(self, hostname: str) -> Optional[VPSConnection]:
         """Get the VPSConnection entry (for diagnostics)."""
         return self._connections.get(hostname)
+
+    # ── SFTP file operations ────────────────────────────────
+
+    async def _open_sftp(self, hostname: str) -> Optional[asyncssh.SFTPClient]:
+        """Get an SFTP client for a connected host."""
+        entry = self._connections.get(hostname)
+        if not entry or not entry.conn:
+            _log(SERVICE, f"[sftp] Cannot open SFTP to {hostname}: no connection",
+                 level="WARNING")
+            return None
+        try:
+            return await entry.conn.start_sftp_client()
+        except Exception as e:
+            _log(SERVICE, f"[sftp] Failed to open SFTP to {hostname}: {e}",
+                 level="ERROR")
+            return None
+
+    async def push_file(self, hostname: str, local_path: Path,
+                        remote_path: str) -> bool:
+        """Push a local file to a remote path via SFTP."""
+        sftp = await self._open_sftp(hostname)
+        if not sftp:
+            return False
+        try:
+            await sftp.put(str(local_path), remote_path)
+            _log(SERVICE, f"[sftp] Pushed {local_path.name} → "
+                 f"{hostname}:{remote_path}", level="DEBUG")
+            return True
+        except Exception as e:
+            _log(SERVICE, f"[sftp] Push to {hostname}:{remote_path} failed: {e}",
+                 level="ERROR")
+            return False
+        finally:
+            sftp.exit()
+
+    async def pull_file(self, hostname: str, remote_path: str,
+                        local_path: Path) -> bool:
+        """Pull a remote file to a local path via SFTP."""
+        sftp = await self._open_sftp(hostname)
+        if not sftp:
+            return False
+        try:
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            await sftp.get(remote_path, str(local_path))
+            _log(SERVICE, f"[sftp] Pulled {hostname}:{remote_path} → "
+                 f"{local_path}", level="DEBUG")
+            return True
+        except Exception as e:
+            _log(SERVICE, f"[sftp] Pull from {hostname}:{remote_path} "
+                 f"failed: {e}", level="ERROR")
+            return False
+        finally:
+            sftp.exit()
+
+    async def read_remote_file(self, hostname: str,
+                               remote_path: str) -> Optional[bytes]:
+        """Read a remote file's contents into memory."""
+        sftp = await self._open_sftp(hostname)
+        if not sftp:
+            return None
+        try:
+            async with sftp.open(remote_path, 'rb') as f:
+                return await f.read()
+        except asyncssh.SFTPNoSuchFile:
+            return None
+        except Exception as e:
+            _log(SERVICE, f"[sftp] Read {hostname}:{remote_path} failed: "
+                 f"{type(e).__name__}: {e}", level="ERROR")
+            return None
+        finally:
+            sftp.exit()
+
+    async def list_remote_dir(self, hostname: str,
+                              remote_path: str) -> list[str]:
+        """List filenames in a remote directory."""
+        sftp = await self._open_sftp(hostname)
+        if not sftp:
+            return []
+        try:
+            return await sftp.listdir(remote_path)
+        except asyncssh.SFTPNoSuchFile:
+            # Directory doesn't exist yet — not an error (e.g. backup dir
+            # on first push before any backup has been created).
+            return []
+        except Exception as e:
+            _log(SERVICE, f"[sftp] Listdir {hostname}:{remote_path} "
+                 f"failed: {e}", level="ERROR")
+            return []
+        finally:
+            sftp.exit()
+
+    async def remove_remote_file(self, hostname: str,
+                                 remote_path: str) -> bool:
+        """Delete a single remote file."""
+        sftp = await self._open_sftp(hostname)
+        if not sftp:
+            return False
+        try:
+            await sftp.remove(remote_path)
+            return True
+        except Exception as e:
+            _log(SERVICE, f"[sftp] Remove {hostname}:{remote_path} "
+                 f"failed: {e}", level="ERROR")
+            return False
+        finally:
+            sftp.exit()
+
+    async def makedirs_remote(self, hostname: str,
+                              remote_path: str) -> bool:
+        """Create remote directory tree (like mkdir -p)."""
+        sftp = await self._open_sftp(hostname)
+        if not sftp:
+            return False
+        try:
+            await sftp.makedirs(remote_path, exist_ok=True)
+            return True
+        except Exception as e:
+            _log(SERVICE, f"[sftp] Makedirs {hostname}:{remote_path} "
+                 f"failed: {e}", level="ERROR")
+            return False
+        finally:
+            sftp.exit()
+
+    async def stat_remote(self, hostname: str,
+                          remote_path: str) -> Optional[asyncssh.SFTPAttrs]:
+        """Get file attributes (size, mtime, etc.) for a remote path."""
+        sftp = await self._open_sftp(hostname)
+        if not sftp:
+            return None
+        try:
+            return await sftp.stat(remote_path)
+        except Exception:
+            return None
+        finally:
+            sftp.exit()
+
+    async def start_file_watcher(self, hostname: str,
+                                 remote_path: str
+                                 ) -> Optional[asyncssh.SSHClientProcess]:
+        """Start inotifywait process watching a remote file for changes.
+
+        Returns the SSHClientProcess for the caller to read stdout from.
+        """
+        cmd = (f"inotifywait -m -e close_write --format '%w%f' "
+               f"'{remote_path}' 2>/dev/null")
+        return await self.start_process(hostname, cmd)
+
+    # ── Remote pbgui.ini access ─────────────────────────────
+
+    async def _cache_remote_ini(self, entry: VPSConnection):
+        """Read remote pbgui.ini on connect and cache paths in entry.data."""
+        hostname = entry.config.hostname
+        try:
+            ini = await self._read_ini_internal(entry)
+            entry.data['ini'] = ini
+            entry.data['pb6dir'] = ini.get('main', 'pbdir', fallback=None)
+            entry.data['pb7dir'] = ini.get('main', 'pb7dir', fallback=None)
+            entry.data['pbname'] = ini.get('main', 'pbname', fallback=hostname)
+            _log(SERVICE, f"[ini] Cached remote config for {hostname} "
+                 f"(pb7dir={entry.data['pb7dir']}, "
+                 f"pb6dir={entry.data['pb6dir']})", level="DEBUG")
+        except Exception as e:
+            _log(SERVICE, f"[ini] Failed to read remote ini for {hostname}: "
+                 f"{e}", level="WARNING")
+            entry.data['ini'] = None
+            entry.data['pb6dir'] = None
+            entry.data['pb7dir'] = None
+            entry.data['pbname'] = hostname
+
+    async def _read_ini_internal(self,
+                                 entry: VPSConnection
+                                 ) -> configparser.ConfigParser:
+        """Read and parse remote pbgui.ini via SFTP (uses entry.conn directly)."""
+        remote_path = f"{REMOTE_PBGUI_DIR}/pbgui.ini"
+        sftp = await entry.conn.start_sftp_client()
+        async with sftp.open(remote_path, 'r') as f:
+            content = await f.read()
+        cfg = configparser.ConfigParser()
+        cfg.read_string(content if isinstance(content, str)
+                        else content.decode('utf-8'))
+        return cfg
+
+    async def read_remote_ini(self, hostname: str
+                              ) -> Optional[configparser.ConfigParser]:
+        """Read remote pbgui.ini. Returns cached version if available."""
+        entry = self._connections.get(hostname)
+        if not entry or not entry.conn:
+            return None
+        cached = entry.data.get('ini')
+        if cached is not None:
+            return cached
+        try:
+            ini = await self._read_ini_internal(entry)
+            entry.data['ini'] = ini
+            return ini
+        except Exception as e:
+            _log(SERVICE, f"[ini] Read failed for {hostname}: {e}",
+                 level="ERROR")
+            return None
+
+    async def write_remote_ini(self, hostname: str,
+                               config: configparser.ConfigParser) -> bool:
+        """Write a full ConfigParser back to remote pbgui.ini via SFTP."""
+        entry = self._connections.get(hostname)
+        if not entry or not entry.conn:
+            return False
+        remote_path = f"{REMOTE_PBGUI_DIR}/pbgui.ini"
+        try:
+            buf = io.StringIO()
+            config.write(buf)
+            content = buf.getvalue()
+            sftp = await entry.conn.start_sftp_client()
+            async with sftp.open(remote_path, 'w') as f:
+                await f.write(content)
+            # Refresh cache
+            entry.data['ini'] = config
+            _log(SERVICE, f"[ini] Wrote remote ini for {hostname}")
+            return True
+        except Exception as e:
+            _log(SERVICE, f"[ini] Write failed for {hostname}: {e}",
+                 level="ERROR")
+            return False
+
+    async def get_remote_ini_value(self, hostname: str, section: str,
+                                   key: str,
+                                   fallback=None) -> Optional[str]:
+        """Read a single value from the cached remote pbgui.ini."""
+        ini = await self.read_remote_ini(hostname)
+        if ini is None:
+            return fallback
+        return ini.get(section, key, fallback=fallback)
+
+    async def set_remote_ini_value(self, hostname: str, section: str,
+                                   key: str, value: str) -> bool:
+        """Set a single value in the remote pbgui.ini (read-modify-write)."""
+        entry = self._connections.get(hostname)
+        if not entry or not entry.conn:
+            return False
+        try:
+            ini = await self._read_ini_internal(entry)
+            if not ini.has_section(section):
+                ini.add_section(section)
+            ini.set(section, key, value)
+            success = await self.write_remote_ini(hostname, ini)
+            if success:
+                # Also update convenience keys if relevant
+                entry.data['pb6dir'] = ini.get('main', 'pbdir', fallback=None)
+                entry.data['pb7dir'] = ini.get('main', 'pb7dir', fallback=None)
+            return success
+        except Exception as e:
+            _log(SERVICE, f"[ini] set_remote_ini_value failed for "
+                 f"{hostname}: {e}", level="ERROR")
+            return False
