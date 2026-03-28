@@ -588,17 +588,28 @@ class FileSyncWorker:
                  level="DEBUG")
             return False
 
-        # Backup local version before overwriting
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+        # Backup + write pb7 (LOCAL_API_KEYS)
         if LOCAL_API_KEYS.exists():
-            ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             backup_dir = Path(f"{PBGDIR}/data/backup/api-keys_v7/{ts}")
             backup_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(LOCAL_API_KEYS, backup_dir / "api-keys.json")
-
-        # Write new local file
         tmp = LOCAL_API_KEYS.with_suffix(".tmp")
         tmp.write_bytes(raw)
         tmp.replace(LOCAL_API_KEYS)
+
+        # Also write pb6 if configured
+        pb6dir_local = _pb6dir()
+        if pb6dir_local:
+            local_pb6 = Path(pb6dir_local) / "api-keys.json"
+            if local_pb6.exists():
+                backup_dir6 = Path(f"{PBGDIR}/data/backup/api-keys/{ts}")
+                backup_dir6.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(local_pb6, backup_dir6 / "api-keys.json")
+            tmp6 = local_pb6.with_suffix(".tmp")
+            tmp6.write_bytes(raw)
+            tmp6.replace(local_pb6)
 
         _log(SERVICE, f"[pull] Updated local api-keys.json from {hostname} "
              f"(serial {local_serial} → {remote_serial})")
