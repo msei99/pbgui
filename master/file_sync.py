@@ -732,6 +732,7 @@ class FileSyncWorker:
             local_md5 = self._compute_local_md5()
             md5s = {"pb7": None, "pb6": None}
             remote_serial = None
+            pb7_data = None
 
             if pb7dir:
                 raw = await self.pool.read_remote_file(
@@ -742,10 +743,10 @@ class FileSyncWorker:
                     # an extra SFTP round-trip during the push.
                     self._remote_content[hostname] = raw
                     try:
-                        data = json.loads(raw)
-                        remote_serial = data.get("_api_serial", 0)
+                        pb7_data = json.loads(raw)
+                        remote_serial = pb7_data.get("_api_serial", 0)
                         # Seed last_push from remote metadata
-                        sync_ts = data.get("_api_ts")
+                        sync_ts = pb7_data.get("_api_ts")
                         if sync_ts and hostname not in self._last_push:
                             self._last_push[hostname] = {
                                 "ts": sync_ts,
@@ -777,6 +778,16 @@ class FileSyncWorker:
             _log(SERVICE, f"[state-init] {hostname}: serial={remote_serial}, "
                  f"pb7_md5={md5s['pb7']}, pb6_md5={md5s['pb6']}, "
                  f"in_sync={in_sync}", level="DEBUG")
+
+            # If remote has a higher serial → pull (same logic as _watcher_callback)
+            if remote_serial is not None and remote_serial > local_serial:
+                if pb7_data and pb7_data.get("_sync_lock"):
+                    _log(SERVICE, f"[state-init] {hostname}: _sync_lock — skip pull",
+                         level="DEBUG")
+                else:
+                    _log(SERVICE, f"[state-init] {hostname}: new serial "
+                         f"{remote_serial} (local={local_serial}) — pulling")
+                    await self._pull_from_vps(hostname)
         except Exception:
             pass  # Non-critical — watcher will update on next file change
 
