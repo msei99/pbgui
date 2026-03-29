@@ -41,7 +41,8 @@ def _get_service(name: str):
     if name == "pbdata":
         from PBData import PBData
         obj = PBData.__new__(PBData)
-        obj.pidfile = Path(f'{PBGDIR}/data/pbdata.pid')
+        obj.piddir = Path(f'{PBGDIR}/data/pid')
+        obj.pidfile = Path(f'{PBGDIR}/data/pid/pbdata.pid')
         obj.my_pid = None
         return obj
     if name == "pbcoindata":

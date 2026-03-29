@@ -367,7 +367,7 @@ class PBData():
         # Latest 1m candles (API) auto-refresh settings
         self._latest_1m_enabled = True
         self._latest_1m_interval_seconds = 1800
-        self._latest_1m_coin_pause_seconds = 0.5
+        self._latest_1m_coin_pause_seconds = 2.0
         self._latest_1m_api_timeout_seconds = 30.0
         self._latest_1m_min_lookback_days = 2
         self._latest_1m_max_lookback_days = 4
@@ -418,7 +418,7 @@ class PBData():
         # Tunable per-exchange concurrent REST slots (lower for sensitive exchanges)
         self._rest_semaphore_limits_by_exchange = {
             'bybit': 1,
-            'hyperliquid': 1,
+            'hyperliquid': 2,
         }
         self._default_rest_semaphore_limit = 3
         # How long (s) to wait to acquire a REST slot before skipping the update
@@ -1797,16 +1797,17 @@ class PBData():
                 except Exception:
                     pass
 
-    async def _acquire_rate_budget(self, exchange: str, operation: str, timeout: float = 60.0) -> bool:
+    async def _acquire_rate_budget(self, exchange: str, operation: str, timeout: float = 60.0, weight_override: int = None) -> bool:
         """Acquire rate-limit budget tokens for an API operation.
 
         Returns True if budget was acquired (or exchange has no budget tracking).
         Returns False if timed out waiting for budget — caller should skip the call.
+        If *weight_override* is given it is used instead of the static table lookup.
         """
         budget = self._rate_budgets.get(exchange)
         if not budget:
             return True  # no budget tracking for this exchange
-        weight = get_weight(exchange, operation)
+        weight = weight_override if weight_override is not None else get_weight(exchange, operation)
         acquired = await budget.acquire(weight=weight, timeout=timeout)
         if not acquired:
             try:
@@ -2386,10 +2387,11 @@ class PBData():
             _serial_cycle_start = datetime.now().timestamp()
             _serial_users_polled = 0
             for exch, batch_users in batches:
-                # Skip this exchange while in backoff.
+                # Skip this exchange while in backoff (not for budget-tracked exchanges).
                 # For kind='history', also check history-specific backoff (long_history_poll).
-                in_backoff = exch and self._is_exchange_in_backoff(exch)
-                if not in_backoff and kind == 'history':
+                _has_budget_ex = exch and exch in self._rate_budgets
+                in_backoff = exch and not _has_budget_ex and self._is_exchange_in_backoff(exch)
+                if not in_backoff and not _has_budget_ex and kind == 'history':
                     in_backoff = exch and self._is_exchange_in_history_backoff(exch)
                 if in_backoff:
                     _human_log('PBData', f"[poll] Skipping shared {kind} poll for {exch} due to backoff", level='INFO')
@@ -2730,7 +2732,11 @@ class PBData():
                 except Exception:
                     pass
             if had_rate_limit:
-                backoff = min(max_backoff, backoff + 30)
+                # Skip backoff escalation for exchanges with budget tracking
+                if exchange_filter and exchange_filter in self._rate_budgets:
+                    pass
+                else:
+                    backoff = min(max_backoff, backoff + 30)
             else:
                 if backoff:
                     _human_log('PBData', f"[poll] Shared {kind} poll recovered; resetting backoff", level='INFO')
@@ -2768,7 +2774,7 @@ class PBData():
             _combined_cycle_start = datetime.now().timestamp()
             _combined_users_polled = 0
             for exch, batch_users in batches:
-                if exch and self._is_exchange_in_backoff(exch):
+                if exch and exch not in self._rate_budgets and self._is_exchange_in_backoff(exch):
                     _human_log('PBData', f"[poll] Skipping shared COMBINED poll for {exch} due to backoff")
                     continue
                 exchange_rate_limited = False
@@ -2802,7 +2808,16 @@ class PBData():
                                 self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
                             except Exception:
                                 pass
-                            if not await self._acquire_rate_budget(exchange_for_slot, 'fetch_open_orders'):
+                            # Dynamic weight: fetch_open_orders is called once PER position
+                            _n_pos = 1
+                            try:
+                                _pos_rows = self.db.fetch_positions(user)
+                                if _pos_rows:
+                                    _n_pos = max(1, len(_pos_rows))
+                            except Exception:
+                                pass
+                            _orders_weight = get_weight(exchange_for_slot, 'fetch_open_orders') * _n_pos
+                            if not await self._acquire_rate_budget(exchange_for_slot, 'fetch_open_orders', weight_override=_orders_weight):
                                 continue
                             await asyncio.to_thread(self.db.update_orders, user)
                             try:
@@ -2834,11 +2849,12 @@ class PBData():
                                 self._poller_metrics[_err_exch]['rate_limit_429'] += 1
                             except Exception:
                                 pass
-                            # Set short backoff so the next cycle skips this exchange briefly
-                            try:
-                                self._set_exchange_backoff(user.exchange, reason='rate_limit_429', duration=45, user=user)
-                            except Exception:
-                                pass
+                            # Skip backoff for exchanges with budget tracking (budget handles pacing)
+                            if _err_exch not in self._rate_budgets:
+                                try:
+                                    self._set_exchange_backoff(user.exchange, reason='rate_limit_429', duration=45, user=user)
+                                except Exception:
+                                    pass
                     if not exchange_rate_limited:
                         # Skip fixed pause for exchanges with budget tracking (budget handles pacing)
                         _has_budget = (exch or getattr(user, 'exchange', None) or '') in self._rate_budgets
@@ -2861,7 +2877,11 @@ class PBData():
             except Exception:
                 pass
             if had_rate_limit:
-                backoff = min(max_backoff, backoff + 30)
+                # Skip backoff escalation for exchanges with budget tracking
+                if exchange_filter and exchange_filter in self._rate_budgets:
+                    pass
+                else:
+                    backoff = min(max_backoff, backoff + 30)
             else:
                 if backoff:
                     _human_log('PBData', f"[poll] Shared COMBINED poll recovered; resetting backoff")

@@ -146,9 +146,9 @@ OPERATION_WEIGHTS: dict[tuple[str, str], int] = {
     ('hyperliquid', 'fetch_balance'):       2,      # clearinghouseState
     ('hyperliquid', 'fetch_positions'):     2,      # clearinghouseState / userState
     ('hyperliquid', 'fetch_open_orders'):   20,     # openOrders (per-symbol!)
-    ('hyperliquid', 'fetch_history'):       40,     # userFunding + fetch_my_trades (2 calls, paged)
-    ('hyperliquid', 'fetch_executions'):    30,     # userFillsByTime (20 base + per-item)
-    ('hyperliquid', 'candle_snapshot'):     80,     # 20 base + ~60 for ~3600 1m candles
+    ('hyperliquid', 'fetch_history'):       120,    # userFunding + fetch_my_trades (paginated, ~6 API calls)
+    ('hyperliquid', 'fetch_executions'):    60,     # userFillsByTime (paginated, ~3 API calls)
+    ('hyperliquid', 'candle_snapshot'):     160,    # meta resolve (~20) + candleSnapshot per missing day (~80 each, typically 1-2 days)
     ('hyperliquid', 'all_mids'):            2,      # allMids
     ('hyperliquid', 'meta'):                20,     # meta
 }
