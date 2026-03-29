@@ -589,16 +589,33 @@ def _read_ini_float(section: str, key: str, default: float) -> float:
 
 @router.get("/settings/pbdata")
 def get_pbdata_settings(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    from PBData import PBData
     from Exchange import MAX_PRIVATE_WS_GLOBAL
     from User import Users
+    import ast as _ast
 
-    obj = PBData()
     try:
         users = Users()
         all_users = users.list()
+        valid = set(all_users)
     except Exception:
         all_users = []
+        valid = set()
+
+    # Read fetch_users and trades_users directly from ini (no PBData() instantiation)
+    def _read_ini_list(key: str) -> list:
+        try:
+            raw = load_ini('pbdata', key)
+            if not raw or not str(raw).strip():
+                return []
+            users_list = _ast.literal_eval(str(raw).strip())
+            if not isinstance(users_list, list):
+                return []
+            return [u for u in users_list if u in valid]
+        except Exception:
+            return []
+
+    fetch_users = _read_ini_list('fetch_users')
+    trades_users = _read_ini_list('trades_users')
 
     # per-exchange overrides: read JSON from ini, merge with defaults
     default_by_ex = {'hyperliquid': 3.0, 'bybit': 3.0}
@@ -611,8 +628,8 @@ def get_pbdata_settings(session: SessionToken = Depends(require_auth)) -> Dict[s
         pass
 
     return {
-        "fetch_users": list(obj.fetch_users or []),
-        "trades_users": list(obj.trades_users or []),
+        "fetch_users": fetch_users,
+        "trades_users": trades_users,
         "all_users": all_users,
         "log_level": load_ini("pbdata", "log_level") or "INFO",
         "ws_max": _read_ini_int("pbdata", "ws_max", MAX_PRIVATE_WS_GLOBAL),
@@ -644,7 +661,18 @@ def save_pbdata_settings(
 ) -> Dict[str, Any]:
     try:
         from PBData import PBData
-        obj = PBData()
+        # Use a lightweight PBData instance only for save_fetch_users/save_trades_users
+        # (those methods write fetch_users/trades_users back to pbgui.ini).
+        # Suppress _load_settings() side-effects by deferring until after ini writes.
+        obj = PBData.__new__(PBData)
+        # Minimal init state needed for save_fetch_users / save_trades_users
+        obj._fetch_users = []
+        obj._trades_users = []
+        from User import Users
+        try:
+            obj.users = Users()
+        except Exception:
+            obj.users = None
         obj.fetch_users = body.fetch_users
         obj.trades_users = body.trades_users
         save_ini("pbdata", "log_level", "" if body.log_level == "NONE" else body.log_level)
@@ -673,6 +701,19 @@ def save_pbdata_settings(
 def get_fetch_summary(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
     try:
         p = Path(f"{PBGDIR}/data/logs/fetch_summary.json")
+        if p.exists():
+            return json.loads(p.read_text())
+        return {}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Poller metrics (PBData) ──────────────────────────────────
+
+@router.get("/poller-metrics")
+def get_poller_metrics(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    try:
+        p = Path(f"{PBGDIR}/data/logs/poller_metrics.json")
         if p.exists():
             return json.loads(p.read_text())
         return {}

@@ -179,6 +179,27 @@
     .fs-rest { color:#f59e0b; }
     .fs-never { color:#4a5568; }
 
+    /* ── Poller metrics ── */
+    .poller-metrics { padding: 0.5rem 1.5rem 1rem; }
+    .pm-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:0.6rem; margin-top:0.5rem; }
+    .pm-title { color:#e2e8f0; font-size:var(--fs-md); font-weight:600; }
+    .pm-toggle { background:#1e2736; border:1px solid #2d3748; border-radius:6px; color:#94a3b8; cursor:pointer; padding:0.25rem 0.55rem; font-size:var(--fs-sm); }
+    .pm-toggle:hover { background:#2d3748; color:#e2e8f0; }
+    .pm-section { margin-bottom:0.75rem; }
+    .pm-section-title { font-size:var(--fs-xs); color:#64748b; margin-bottom:0.3rem; text-transform:uppercase; letter-spacing:0.05em; }
+    .pm-table { width:100%; border-collapse:collapse; font-size:var(--fs-xs); }
+    .pm-table th { background:#0f1722; color:#64748b; padding:0.35rem 0.6rem; text-align:left; border-bottom:1px solid #1e2736; white-space:nowrap; }
+    .pm-table td { padding:0.3rem 0.6rem; border-bottom:1px solid #131b2b; white-space:nowrap; color:#cbd5e1; }
+    .pm-table tr:hover td { background:#131b2b; }
+    .pm-ok { color:#4ade80; }
+    .pm-warn { color:#f59e0b; }
+    .pm-err { color:#f87171; }
+    .pm-muted { color:#4a5568; }
+    .pm-badge { display:inline-block; padding:0.1rem 0.4rem; border-radius:4px; font-size:var(--fs-xs); font-weight:600; }
+    .pm-badge-run { background:#0d2a1a; color:#4ade80; }
+    .pm-badge-idle { background:#1e2736; color:#64748b; }
+    .pm-badge-backoff { background:#2d1515; color:#fca5a5; }
+
     /* ── CMC key status bar ── */
     .cmc-status-bar { display:flex; align-items:center; justify-content:space-between; gap:0.75rem;
       margin:0.5rem 1rem 0; padding:0.55rem 0.9rem; border-radius:8px; font-size:var(--fs-sm);
@@ -368,6 +389,9 @@
         <div class="fetch-summary" id="pbdata-status-wrap">
           <div style="color:#4a5568;font-style:italic;">Loading status&#8230;</div>
         </div>
+        <div class="poller-metrics" id="pbdata-poller-metrics-wrap">
+          <div style="color:#4a5568;font-style:italic;">Loading poller metrics&#8230;</div>
+        </div>
       </div>
     </div>
 
@@ -530,6 +554,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var _logViewers = {};
   var _statusTimer = null;
   var _fetchSummaryTimer = null;
+  var _pollerMetricsTimer = null;
   var _settingsLoaded = {};
 
   /* ── Status polling ────────────────────────────────────── */
@@ -592,6 +617,7 @@ document.addEventListener('DOMContentLoaded', function () {
       initLogViewer(panelId);
     }
     clearInterval(_fetchSummaryTimer); _fetchSummaryTimer = null;
+    clearInterval(_pollerMetricsTimer); _pollerMetricsTimer = null;
     if (panelId === 'pbcoindata') loadCmcKeyStatus();
     /* persist position in URL hash */
     var hash = panelId;
@@ -620,9 +646,12 @@ document.addEventListener('DOMContentLoaded', function () {
     else if (tab === 'settings' && !_settingsLoaded[svc]) loadSettings(svc);
     if (tab === 'status' && svc === 'pbdata') {
       loadFetchSummary();
+      loadPollerMetrics();
       if (!_fetchSummaryTimer) _fetchSummaryTimer = setInterval(loadFetchSummary, 5000);
+      if (!_pollerMetricsTimer) _pollerMetricsTimer = setInterval(loadPollerMetrics, 5000);
     } else {
       clearInterval(_fetchSummaryTimer); _fetchSummaryTimer = null;
+      clearInterval(_pollerMetricsTimer); _pollerMetricsTimer = null;
     }
     if (tab === 'info' && svc === 'pbremote') loadPBRemoteInfo();
     /* persist panel + tab in URL hash */
@@ -1526,6 +1555,183 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   window.applyFetchFilters = applyFetchFilters;
   window.loadFetchSummary = loadFetchSummary;
+
+  /* ── Poller metrics ────────────────────────────────────── */
+  var _pollerMetricsCollapsed = false;
+
+  function loadPollerMetrics() {
+    var wrap = document.getElementById('pbdata-poller-metrics-wrap');
+    fetch(API_BASE + '/poller-metrics?token=' + TOKEN)
+      .then(function (r) { return r.json(); })
+      .then(function (d) { renderPollerMetrics(d, wrap); })
+      .catch(function () { if (wrap) wrap.innerHTML = '<div style="color:#fca5a5;padding:0.5rem;">Failed to load poller metrics.</div>'; });
+  }
+
+  function renderPollerMetrics(data, wrap) {
+    if (!wrap) return;
+    if (!data || !data.exchanges || !Object.keys(data.exchanges).length) {
+      wrap.innerHTML = '<div style="color:#4a5568;padding:0.5rem;">No poller metrics yet. PBData must be running.</div>';
+      return;
+    }
+    var ts = data.timestamp || '';
+    var tsNote = '';
+    if (ts) {
+      try {
+        var delta = Math.floor((Date.now() - new Date(ts.replace(' ', 'T')).getTime()) / 1000);
+        tsNote = ' <span style="color:#64748b;font-size:var(--fs-xs);">(' + delta + 's ago)</span>';
+      } catch (e) {}
+    }
+
+    var html = '<div class="pm-header">';
+    html += '<span class="pm-title">Poller Metrics' + tsNote + '</span>';
+    html += '<button class="pm-toggle" onclick="togglePollerMetrics()" id="pm-toggle-btn">' + (_pollerMetricsCollapsed ? '\u25b6 Show' : '\u25bc Hide') + '</button>';
+    html += '</div>';
+    html += '<div id="pm-body" style="' + (_pollerMetricsCollapsed ? 'display:none' : '') + '">';
+
+    /* Exchange poller table */
+    var exKeys = Object.keys(data.exchanges).sort();
+    html += '<div class="pm-section"><div class="pm-section-title">Exchange Pollers</div>';
+    html += '<div style="overflow-x:auto;"><table class="pm-table"><thead><tr>';
+    html += '<th>Exchange</th><th>Combined</th><th>Cycle</th><th>Users</th>';
+    html += '<th>History</th><th>Cycle</th><th>Users</th>';
+    html += '<th>Backoff</th><th>429s</th><th>Errors</th><th>Slot T/O</th>';
+    html += '</tr></thead><tbody>';
+
+    function fmtAge(epochSec) {
+      if (!epochSec) return '<span class="pm-muted">-</span>';
+      var delta = Math.floor(Date.now() / 1000 - epochSec);
+      if (delta < 0) delta = 0;
+      if (delta < 60) return delta + 's';
+      if (delta < 3600) return Math.floor(delta / 60) + 'm';
+      return Math.floor(delta / 3600) + 'h';
+    }
+    function fmtMs(ms) {
+      if (!ms) return '<span class="pm-muted">-</span>';
+      if (ms < 1000) return ms + 'ms';
+      return (ms / 1000).toFixed(1) + 's';
+    }
+    function fmtBackoff(m) {
+      var bo = m.backoff_remaining_s || 0;
+      var hbo = m.history_backoff_remaining_s || 0;
+      if (!bo && !hbo) return '<span class="pm-ok">\u2713</span>';
+      var parts = [];
+      if (bo) parts.push('<span class="pm-err">' + bo + 's</span>');
+      if (hbo) parts.push('<span class="pm-warn">hist:' + hbo + 's</span>');
+      return parts.join(' ');
+    }
+    function cntCell(n, cls) {
+      if (!n) return '<span class="pm-muted">0</span>';
+      return '<span class="' + cls + '">' + n + '</span>';
+    }
+
+    exKeys.forEach(function (ex) {
+      var m = data.exchanges[ex];
+      html += '<tr>';
+      html += '<td><strong>' + ex + '</strong></td>';
+      html += '<td>' + fmtAge(m.combined_last_ts) + '</td>';
+      html += '<td>' + fmtMs(m.combined_cycle_ms) + '</td>';
+      html += '<td>' + (m.combined_users || 0) + '</td>';
+      html += '<td>' + fmtAge(m.history_last_ts) + '</td>';
+      html += '<td>' + fmtMs(m.history_cycle_ms) + '</td>';
+      html += '<td>' + (m.history_users || 0) + '</td>';
+      html += '<td>' + fmtBackoff(m) + '</td>';
+      html += '<td>' + cntCell(m.rate_limit_429, 'pm-err') + '</td>';
+      html += '<td>' + cntCell(m.errors, 'pm-warn') + '</td>';
+      html += '<td>' + cntCell(m.rest_slot_timeouts, 'pm-warn') + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+
+    /* REST semaphores */
+    var sems = data.semaphores || {};
+    var semKeys = Object.keys(sems).sort();
+    if (semKeys.length) {
+      html += '<div class="pm-section"><div class="pm-section-title">REST Semaphores</div>';
+      html += '<div style="overflow-x:auto;"><table class="pm-table"><thead><tr>';
+      html += '<th>Exchange</th><th>Slots</th><th>Available</th><th>In Use</th>';
+      html += '</tr></thead><tbody>';
+      semKeys.forEach(function (ex) {
+        var s = sems[ex];
+        var inUse = s.in_use || 0;
+        var cls = inUse >= s.slots ? 'pm-err' : (inUse > 0 ? 'pm-warn' : 'pm-ok');
+        html += '<tr>';
+        html += '<td><strong>' + ex + '</strong></td>';
+        html += '<td>' + s.slots + '</td>';
+        html += '<td>' + s.available + '</td>';
+        html += '<td><span class="' + cls + '">' + inUse + '</span></td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table></div></div>';
+    }
+
+    /* Market data status */
+    var md = data.market_data || {};
+    var mdKeys = Object.keys(md).sort();
+    if (mdKeys.length) {
+      html += '<div class="pm-section"><div class="pm-section-title">Market Data Loops</div>';
+      html += '<div style="overflow-x:auto;"><table class="pm-table"><thead><tr>';
+      html += '<th>Loop</th><th>Exchange</th><th>Status</th><th>Progress</th><th>Last Run</th><th>Current</th>';
+      html += '</tr></thead><tbody>';
+      mdKeys.forEach(function (key) {
+        var e = md[key];
+        var badge = e.running
+          ? '<span class="pm-badge pm-badge-run">running</span>'
+          : '<span class="pm-badge pm-badge-idle">idle</span>';
+        var prog = e.coins_total ? (e.coins_done + '/' + e.coins_total) : '<span class="pm-muted">-</span>';
+        html += '<tr>';
+        html += '<td>' + key + '</td>';
+        html += '<td>' + (e.exchange || '-') + '</td>';
+        html += '<td>' + badge + '</td>';
+        html += '<td>' + prog + '</td>';
+        html += '<td>' + fmtAge(e.last_run_ts) + '</td>';
+        html += '<td>' + (e.current_coin || '<span class="pm-muted">-</span>') + '</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table></div></div>';
+    }
+
+    /* Rate-limit budgets */
+    var budgets = data.budgets || {};
+    var budgetKeys = Object.keys(budgets).sort();
+    if (budgetKeys.length) {
+      html += '<div class="pm-section"><div class="pm-section-title">Rate Limit Budgets</div>';
+      html += '<div style="overflow-x:auto;"><table class="pm-table"><thead><tr>';
+      html += '<th>Exchange</th><th>Tokens</th><th>Capacity</th><th>Limit/min</th>';
+      html += '<th>Refill/s</th><th>Consumed</th><th>Requests</th><th>Waits</th><th>Wait Time</th>';
+      html += '</tr></thead><tbody>';
+      budgetKeys.forEach(function (ex) {
+        var b = budgets[ex];
+        var pct = b.capacity > 0 ? Math.round(b.tokens / b.capacity * 100) : 0;
+        var barCls = pct > 50 ? 'pm-ok' : (pct > 20 ? 'pm-warn' : 'pm-err');
+        var waitStr = b.total_waited_ms > 0 ? ((b.total_waited_ms / 1000).toFixed(1) + 's') : '<span class="pm-muted">0</span>';
+        html += '<tr>';
+        html += '<td><strong>' + ex + '</strong></td>';
+        html += '<td><span class="' + barCls + '">' + b.tokens + '</span> <span class="pm-muted">(' + pct + '%)</span></td>';
+        html += '<td>' + b.capacity + '</td>';
+        html += '<td>' + b.weight_per_minute + '</td>';
+        html += '<td>' + b.refill_per_second + '</td>';
+        html += '<td>' + b.total_consumed + '</td>';
+        html += '<td>' + b.requests_count + '</td>';
+        html += '<td>' + cntCell(b.waits_count, 'pm-warn') + '</td>';
+        html += '<td>' + waitStr + '</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table></div></div>';
+    }
+
+    html += '</div>'; /* close pm-body */
+    wrap.innerHTML = html;
+  }
+
+  function togglePollerMetrics() {
+    _pollerMetricsCollapsed = !_pollerMetricsCollapsed;
+    var body = document.getElementById('pm-body');
+    var btn = document.getElementById('pm-toggle-btn');
+    if (body) body.style.display = _pollerMetricsCollapsed ? 'none' : '';
+    if (btn) btn.textContent = _pollerMetricsCollapsed ? '\u25b6 Show' : '\u25bc Hide';
+  }
+  window.togglePollerMetrics = togglePollerMetrics;
+  window.loadPollerMetrics = loadPollerMetrics;
 
   /* ── CMC key status ────────────────────────────────────── */
   function loadCmcKeyStatus() {
