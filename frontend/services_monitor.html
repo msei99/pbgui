@@ -1387,6 +1387,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var bal  = data.balances   || {};
     var pos  = data.positions  || {};
     var ords = data.orders     || {};
+    var prices = data.prices   || {};
     var hist = data.history    || [];
     var execs = data.executions || [];
     var last  = data.last_fetch_ts || {};
@@ -1417,8 +1418,21 @@ document.addEventListener('DOMContentLoaded', function () {
       return '<div class="fs-group"><div class="fs-group-title">' + label + '</div><div class="fs-group-body">' +
         '<div class="fs-cnt"><span class="fs-cnt-val">' + arr.length + '</span></div></div></div>';
     }
+    function grpPrices(label, pricesObj) {
+      var exchanges = Object.keys(pricesObj);
+      var activeCount = 0, totalSymbols = 0;
+      exchanges.forEach(function (ex) {
+        if (pricesObj[ex].active) activeCount++;
+        totalSymbols += (pricesObj[ex].symbols || 0);
+      });
+      return '<div class="fs-group"><div class="fs-group-title">' + label + '</div><div class="fs-group-body">' +
+        '<div class="fs-cnt"><span class="fs-dot-ws">&#9679;</span><span class="fs-cnt-lbl">WS</span><span class="fs-cnt-val">&nbsp;' + activeCount + '/' + exchanges.length + '</span></div>' +
+        '<div class="fs-cnt"><span class="fs-cnt-lbl">Sym</span><span class="fs-cnt-val">&nbsp;' + totalSymbols + '</span></div>' +
+        '</div></div>';
+    }
     html += '<div class="fs-summary-row">' +
       grp('Balances', bal) + grp('Positions', pos) + grp('Orders', ords) +
+      grpPrices('Prices', prices) +
       grpFlat('History', hist) + grpFlat('Executions', execs) +
       '</div>';
 

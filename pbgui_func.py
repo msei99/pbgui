@@ -319,16 +319,25 @@ def build_navigation():
     except Exception:
         pass
 
-    # Ensure token exists (needed for both paths below).
-    if _fa_ok and "api_token" not in st.session_state:
-        try:
-            from api.auth import generate_token
-            _uid = (st.session_state.get("user", {}).get("id")
-                    or st.session_state.get("user")
-                    or "anonymous")
-            st.session_state["api_token"] = generate_token(str(_uid), expires_in_seconds=86400).token
-        except Exception:
-            pass
+    # Ensure token exists and is still valid (needed for both paths below).
+    if _fa_ok:
+        _need_token = "api_token" not in st.session_state
+        if not _need_token:
+            try:
+                from api.auth import validate_token
+                if not validate_token(st.session_state["api_token"]):
+                    _need_token = True
+            except Exception:
+                _need_token = True
+        if _need_token:
+            try:
+                from api.auth import generate_token
+                _uid = (st.session_state.get("user", {}).get("id")
+                        or st.session_state.get("user")
+                        or "anonymous")
+                st.session_state["api_token"] = generate_token(str(_uid), expires_in_seconds=86400).token
+            except Exception:
+                pass
 
     # Derive browser host/port once.
     _bhost, _sport = "127.0.0.1", 8501
@@ -593,17 +602,25 @@ def render_log_viewer(
     except Exception:
         pass
 
-    # Generate / reuse API token for this session
-    from api.auth import generate_token as _gen_token
-    if "api_token" not in __import__('streamlit').session_state:
+    # Generate / reuse API token for this session (refresh if expired)
+    from api.auth import generate_token as _gen_token, validate_token as _val_token
+    _st_mod = __import__('streamlit')
+    _need_tok = "api_token" not in _st_mod.session_state
+    if not _need_tok:
+        try:
+            if not _val_token(_st_mod.session_state["api_token"]):
+                _need_tok = True
+        except Exception:
+            _need_tok = True
+    if _need_tok:
         _user_id = (
-            __import__('streamlit').session_state.get("user", {}).get("id")
-            or __import__('streamlit').session_state.get("user")
+            _st_mod.session_state.get("user", {}).get("id")
+            or _st_mod.session_state.get("user")
             or "anonymous"
         )
         _tok = _gen_token(str(_user_id), expires_in_seconds=86400)
-        __import__('streamlit').session_state["api_token"] = _tok.token
-    _api_token = __import__('streamlit').session_state["api_token"]
+        _st_mod.session_state["api_token"] = _tok.token
+    _api_token = _st_mod.session_state["api_token"]
     logs_dir = Path(__file__).resolve().parent / "data" / "logs"
     log_files: list[str] = []
     if logs_dir.exists():
@@ -691,7 +708,7 @@ def render_fastapi_job_monitor(height: int = 800, exchange: str = "", job_type: 
         exchange: optional exchange filter (e.g. "binanceusdm", "bybit", "hyperliquid")
         job_type: optional job type filter — comma-separated (e.g. "hl_best_1m" or "hl_aws_l2book_auto")
     """
-    from api.auth import generate_token
+    from api.auth import generate_token, validate_token as _vt
     
     # Ensure FastAPI server is running and get config
     api_host, api_port, success = _start_fastapi_server_if_needed()
@@ -701,9 +718,15 @@ def render_fastapi_job_monitor(height: int = 800, exchange: str = "", job_type: 
                  f"Please check **System → Services → API Server** or start manually: `python PBApiServer.py`")
         return
     
-    # Get or create token for current session
-    if "api_token" not in st.session_state:
-        # Use Streamlit's session_id if available, else generate one
+    # Get or create token for current session (refresh if expired)
+    _need_tok = "api_token" not in st.session_state
+    if not _need_tok:
+        try:
+            if not _vt(st.session_state["api_token"]):
+                _need_tok = True
+        except Exception:
+            _need_tok = True
+    if _need_tok:
         user_id = st.session_state.get("user", {}).get("id") or st.session_state.get("user") or "anonymous"
         token_obj = generate_token(str(user_id), expires_in_seconds=86400)
         st.session_state["api_token"] = token_obj.token
