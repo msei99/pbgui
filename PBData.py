@@ -215,7 +215,6 @@ class PBData():
         self._trades_users = []
         self.load_fetch_users()
         self.load_trades_users()
-        self._balance_ws_tasks = {}
         self._position_ws_tasks = {}
         self._price_exchange_tasks = {}
         self._price_exchange_config = {}
@@ -2224,37 +2223,6 @@ class PBData():
                 pass
             raise
 
-    async def _ensure_balance_watcher(self, user):
-        if user.name not in self.fetch_users:
-            return
-        if user.name in self._balance_ws_tasks:
-            task = self._balance_ws_tasks[user.name]
-            if task and not task.done():
-                return
-        task = asyncio.create_task(self._balance_ws_loop(user))
-        self._balance_ws_tasks[user.name] = task
-
-    async def _reconcile_balance_watchers(self, desired_user_names: set):
-        for uname, task in list(self._balance_ws_tasks.items()):
-            if uname not in desired_user_names:
-                try:
-                    if task and not task.done():
-                        task.cancel()
-                except Exception:
-                    pass
-                self._balance_ws_tasks.pop(uname, None)
-                # Close any private ws client for this user to release resources
-                try:
-                    u = self.users.find_user(uname)
-                    if u:
-                        from Exchange import Exchange
-                        try:
-                            await Exchange.close_private_ws_client(u.exchange, u)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
     async def _reconcile_position_watchers(self, desired_user_names: set):
         for uname, task in list(self._position_ws_tasks.items()):
             if uname not in desired_user_names:
@@ -2275,202 +2243,6 @@ class PBData():
                             pass
                 except Exception:
                     pass
-
-    async def _balance_ws_loop(self, user):
-        from Exchange import Exchange
-        await asyncio.sleep((hash(user.name) % 5000) / 1000.0)
-        exch = Exchange(user.exchange, user)
-        ex = await self.request_private_client(user.exchange, user, caller='PBData._balance_ws_loop')
-        if not ex:
-            _human_log('PBData', f"[ws] ccxtpro unavailable or unsupported for {user.name} ({user.exchange}); relying on shared balances poller", level='DEBUG')
-            return
-        supports_balance = False
-        try:
-            if hasattr(ex, 'has'):
-                if isinstance(ex.has, dict):
-                    supports_balance = ex.has.get('watchBalance', False)
-                else:
-                    supports_balance = getattr(ex.has, 'watchBalance', False)
-        except Exception:
-            supports_balance = False
-        if not supports_balance:
-            key = (user.name, exch.id)
-            if key not in self._watch_positions_not_supported_logged:
-                _human_log('PBData', f"[ws] watch_balance not supported for {user.name} ({exch.id}); relying on shared balances poller", level='DEBUG')
-                self._watch_positions_not_supported_logged.add(key)
-            return
-        _human_log('PBData', f"[ws] Starting balance watcher for {user.name} ({exch.id})", level='INFO')
-        _last_settings_reload = 0.0
-        try:
-            while True:
-                # Reload settings from pbgui.ini at most every 30s
-                _now = datetime.now().timestamp()
-                if _now - _last_settings_reload >= 30.0:
-                    try:
-                        self._load_settings()
-                    except Exception:
-                        pass
-                    _last_settings_reload = _now
-                try:
-                    # Watch balance; details vary across exchanges
-                    bal = await ex.watch_balance()
-                    # Debug: optionally log payload type and a short preview so we can
-                    # see whether the WS watcher actually returns balance data.
-                    try:
-                        if is_debug_enabled('PBData'):
-                            btype = type(bal)
-                            preview = repr(bal)
-                            if len(preview) > 300:
-                                preview = preview[:300] + '...'
-                            _human_log('PBData', f"[ws] watch_balance payload for {user.name}: type={btype} preview={preview}", level='DEBUG')
-                    except Exception:
-                        if is_debug_enabled('PBData'):
-                            try:
-                                _human_log('PBData', f"[ws] watch_balance payload for {user.name}: (unrepresentable)", level='DEBUG')
-                            except Exception:
-                                pass
-
-                    # On any balance update, debounce and persist balances via background flusher
-                    try:
-                        await self._enqueue_debounce('balances', user)
-                    except Exception as e:
-                        _human_log('PBData', f"[ws->REST] enqueue debounce failed for balances {user.name}: {e}", level='ERROR')
-                except Exception as e:
-                    raw = str(e)
-                    lower = raw.lower()
-                    # If this was a benign/normal close (e.g. code 1000) try a reconnect
-                    if self._is_normal_ws_close(raw):
-                        self._throttled_log_network((user.exchange, user.name), f"[ws] normal websocket close for {user.name}: {e}; attempting reconnect", self._network_error_log_throttle)
-                        try:
-                            ex2 = await self.request_private_client(user.exchange, user, caller='PBData._balance_ws_loop')
-                            if not ex2:
-                                _human_log('PBData', f"[ws] Could not re-acquire private client for {user.name}; falling back to REST", level='WARNING')
-                                try:
-                                    await Exchange.close_private_ws_client(user.exchange, user)
-                                except Exception:
-                                    pass
-                                return
-                            await asyncio.sleep(1)
-                            continue
-                        except Exception:
-                            try:
-                                await Exchange.close_private_ws_client(user.exchange, user)
-                            except Exception:
-                                pass
-                            return
-                    # Detect keepalive/ping-pong style timeouts and attempt one restart
-                    try:
-                        key = (user.exchange, user.name)
-                        # reset consecutive success counter on any exception
-                        try:
-                            self._ws_success_counts[key] = 0
-                        except Exception:
-                            pass
-                        keepalive_triggers = ['ping-pong', 'pingpong', 'keepalive', 'requesttimeout']
-                        if any(k in lower for k in keepalive_triggers) or ('timed out' in lower and 'ping' in lower):
-                            if key not in self._ws_restarted_once:
-                                # Claim the restart slot *before* the first await so no other
-                                # concurrent loop for this user can also enter the restart path.
-                                self._ws_restarted_once.add(key)
-                                _human_log('PBData', f"[ws] Keepalive timeout detected; restarting private ws client for {user.name} ({user.exchange})", level='WARNING')
-                                try:
-                                    await Exchange.close_private_ws_client(user.exchange, user)
-                                except Exception:
-                                    pass
-                                async with self._get_reconnect_sem(user.exchange):
-                                    await asyncio.sleep(self._ws_restart_sleep + random.random() * 0.5)
-                                    try:
-                                        ex2 = await self.request_private_client(user.exchange, user, caller='PBData._balance_ws_loop')
-                                        if ex2:
-                                            ex = ex2
-                                            _human_log('PBData', f"[ws] Restarted private ws client for {user.name} ({user.exchange}); will not restart again until {self._ws_success_required} successful messages", level='INFO')
-                                            continue
-                                    except Exception:
-                                        pass
-                        # If restart already used or recreate failed, fall through to normal handling
-                    except Exception:
-                        pass
-                    # Detect network-level errors (connection closed/reset, remote abort)
-                    network_triggers = ['connection closed', 'networkerror', 'connection reset', 'remote server', 'eof', 'connection aborted', 'broken pipe']
-                    if any(k in lower for k in network_triggers) or isinstance(e, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
-                        _human_log('PBData', f"[ws] watch_balance network error for {user.name}: {e}; considering demotion to REST", level='WARNING')
-                        # Track recent network errors for this exchange and trigger backoff if threshold exceeded
-                        try:
-                            now_ts = datetime.now().timestamp()
-                            l = self._exchange_error_timestamps.get(user.exchange, [])
-                            l.append(now_ts)
-                            # prune
-                            l = [ts for ts in l if now_ts - ts <= self._error_window_seconds]
-                            self._exchange_error_timestamps[user.exchange] = l
-                            if len(l) >= self._error_threshold:
-                                try:
-                                    # include user so backoff log shows which user triggered it
-                                    self._set_exchange_backoff(user.exchange, reason='network_errors', user=user)
-                                    # also close shared client to force reconnect
-                                    from Exchange import Exchange as _ExchCls
-                                    try:
-                                        await _ExchCls.close_shared_ws_client(user.exchange)
-                                    except Exception:
-                                        pass
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                        # Coordinate demotion per-exchange so only one user is demoted
-                        exch_key = user.exchange
-                        # Ensure a lock exists for this exchange
-                        lock = self._network_error_locks.get(exch_key)
-                        if lock is None:
-                            lock = asyncio.Lock()
-                            self._network_error_locks[exch_key] = lock
-                        async with lock:
-                            now_ts = datetime.now().timestamp()
-                            # Prune stale demotion entries
-                            existing = self._exchange_network_error_users.get(exch_key, {})
-                            stale = [uname for uname, ts in existing.items() if now_ts - ts > self._network_demotion_window]
-                            for s in stale:
-                                existing.pop(s, None)
-                            # If no recent demotions, demote this user
-                            if not existing:
-                                existing[user.name] = now_ts
-                                self._exchange_network_error_users[exch_key] = existing
-                                _human_log('PBData', f"[ws] Demoting {user.name} to REST for exchange {exch_key} (first in window)", level='WARNING')
-                                try:
-                                    await Exchange.close_private_ws_client(user.exchange, user)
-                                except Exception:
-                                    pass
-                                return
-                            else:
-                                # Another user was recently demoted; attempt to keep this user's WS alive
-                                _human_log('PBData', f"[ws] Recent demotion exists for exchange {exch_key}; attempting to keep {user.name} on websocket", level='INFO')
-                                try:
-                                    # Try to re-acquire or recreate a private client for this user
-                                    ex2 = await Exchange.get_private_ws_client(user.exchange, user, caller='PBData._balance_ws_loop')
-                                    if not ex2:
-                                        _human_log('PBData', f"[ws] Could not re-acquire private client for {user.name}; falling back to REST", level='WARNING')
-                                        try:
-                                            await Exchange.close_private_ws_client(user.exchange, user)
-                                        except Exception:
-                                            pass
-                                        return
-                                    # Short backoff before continuing loop to avoid tight error loops
-                                    await asyncio.sleep(1)
-                                    continue
-                                except Exception:
-                                    try:
-                                        await Exchange.close_private_ws_client(user.exchange, user)
-                                    except Exception:
-                                        pass
-                                    return
-        finally:
-            # Intentionally not closing `ex` here. Shared websocket clients are
-            # kept open to avoid disrupting other watchers that may be using
-            # the same client instance.
-            try:
-                _human_log('PBData', f"Leaving ws client open in _balance_ws_loop for {user.name} ({exch.id})", level='DEBUG')
-            except Exception:
-                pass
-            
 
     async def _ensure_position_watcher(self, user):
         # Start one WS task per user if not running
@@ -3027,15 +2799,6 @@ class PBData():
                                 except Exception:
                                     pass
                         elif kind == 'balances':
-                            # Skip shared balances poll if user has active WS balances watcher
-                            ws_task = self._balance_ws_tasks.get(user.name)
-                            if ws_task and not ws_task.done():
-                                last_log = getattr(self, '_last_skipped_balance_log', 0)
-                                now_ts = datetime.now().timestamp()
-                                if now_ts - last_log > 300:
-                                    _human_log('PBData', f"[poll] Skipping shared balances update for {user.name} because WS watcher active")
-                                    self._last_skipped_balance_log = now_ts
-                                continue
                             exchange_for_slot = exch or user.exchange
                             try:
                                 async with self._rest_slot(exchange_for_slot) as got:
@@ -3149,15 +2912,13 @@ class PBData():
                                 _human_log('PBData', f"[poll] Shared COMBINED poll skipped {user.name}: REST slot timed out", level='DEBUG', user=user.name)
                                 continue
                             # balances -> positions -> orders (sequential)
-                            # Skip each part if a WS watcher exists for that kind
-                            ws_bal = self._balance_ws_tasks.get(user.name)
-                            if not (ws_bal and not ws_bal.done()):
-                                await asyncio.to_thread(self.db.update_balances, user)
-                                asyncio.create_task(_notify_api_balance())
-                                try:
-                                    self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
-                                except Exception:
-                                    pass
+                            # Skip positions if a WS watcher exists
+                            await asyncio.to_thread(self.db.update_balances, user)
+                            asyncio.create_task(_notify_api_balance())
+                            try:
+                                self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
+                            except Exception:
+                                pass
                             ws_pos = self._position_ws_tasks.get(user.name)
                             if not (ws_pos and not ws_pos.done()):
                                 await asyncio.to_thread(self.db.update_positions, user)
@@ -3722,7 +3483,6 @@ class PBData():
         desired_user_names = set(self.fetch_users)
 
         # Stop watchers for users no longer configured
-        await self._reconcile_balance_watchers(desired_user_names)
         await self._reconcile_position_watchers(desired_user_names)
 
         for exchange, users in users_by_exchange.items():
@@ -3733,12 +3493,11 @@ class PBData():
                 _human_log('PBData', f"[async] Queueing {count} user(s) for exchange: {exchange}", level='INFO')
                 self._last_exchange_queue_counts[exchange] = count
 
-        # Start balance + positions websocket watchers per user (staggered)
+        # Start positions websocket watchers per user (staggered)
         for uname in self.fetch_users:
             u = self.users.find_user(uname)
             if not u:
                 continue
-            await self._ensure_balance_watcher(u)
             await self._ensure_position_watcher(u)
             # Small stagger to avoid starting many watchers at once
             await asyncio.sleep(self._private_ws_stagger_ms / 1000.0)
@@ -3839,10 +3598,7 @@ class PBData():
                 if u.name not in self.fetch_users:
                     continue
                 all_users.append(u.name)
-                if self._balance_ws_tasks.get(u.name) and not self._balance_ws_tasks.get(u.name).done():
-                    balances_ws.append(u.name)
-                else:
-                    balances_rest.append(u.name)
+                balances_rest.append(u.name)
                 if self._position_ws_tasks.get(u.name) and not self._position_ws_tasks.get(u.name).done():
                     positions_ws.append(u.name)
                 else:
@@ -3998,10 +3754,7 @@ class PBData():
                 if u.name not in self.fetch_users:
                     continue
                 all_users.append(u.name)
-                if self._balance_ws_tasks.get(u.name) and not self._balance_ws_tasks.get(u.name).done():
-                    balances_ws.append(u.name)
-                else:
-                    balances_rest.append(u.name)
+                balances_rest.append(u.name)
                 if self._position_ws_tasks.get(u.name) and not self._position_ws_tasks.get(u.name).done():
                     positions_ws.append(u.name)
                 else:
