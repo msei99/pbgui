@@ -41,6 +41,7 @@ from api.logging import router as logging_router
 from api.market_data import router as market_data_router
 from api.heatmap import router as heatmap_router
 from api.vps import router as vps_router
+from api.services import router as services_router
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR, load_ini, save_ini
 
@@ -285,6 +286,7 @@ app.include_router(logging_router, prefix="/api/logging", tags=["logging"])
 app.include_router(market_data_router, prefix="/api", tags=["market-data"])
 app.include_router(heatmap_router, prefix="/api/heatmap", tags=["heatmap"])
 app.include_router(vps_router, tags=["vps"])
+app.include_router(services_router, prefix="/api/services", tags=["services"])
 
 frontend_dir = Path(__file__).parent / "frontend"
 if frontend_dir.exists():
@@ -819,14 +821,16 @@ async def server_restart(request: Request):
             # process doesn't see "Already running" and exit immediately.
             pid_file = Path(PBGDIR) / "data" / "pid" / "api_server.pid"
             pid_file.unlink(missing_ok=True)
+            env = os.environ.copy()
+            env["PBGUI_RESTART_DELAY"] = "3"  # wait for old process to free the port
             subprocess.Popen(
                 [str(venv_python), str(pbgdir / "PBApiServer.py")],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 close_fds=True,
                 cwd=str(pbgdir),
+                env=env,
             )
-            await asyncio.sleep(0.5)  # give new process time to write its PID
         os.kill(os.getpid(), signal.SIGTERM)
 
     asyncio.create_task(_do_restart())
@@ -997,6 +1001,13 @@ if __name__ == "__main__":
     if server.is_running():
         _log(SERVICE, 'Already running — exit', level='INFO')
         sys.exit(0)
+
+    # When spawned by the restart handler the old process still holds the port.
+    # Wait for it to release before binding.
+    restart_delay = int(os.getenv("PBGUI_RESTART_DELAY", "0"))
+    if restart_delay:
+        sleep(restart_delay)
+
     server.save_pid()
 
     host = os.getenv("PBGUI_API_HOST", server.host)

@@ -344,12 +344,107 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
 .per-svc-save:hover { background: #26a69a; border-color: #26a69a; color: #fff; }
 .per-svc-msg { font-size: var(--fs-xs); color: #21c354; padding-left: 4px; opacity: 0; transition: opacity .3s; }
 .per-svc-msg.visible { opacity: 1; }
+
+/* ── Help overlay ── */
+#help-ovl {
+  display: none; position: fixed; top: 50%; left: 50%;
+  transform: translate(-50%, -50%); z-index: 3000;
+  width: min(900px, 95vw); height: min(700px, 90vh);
+  min-width: 480px; min-height: 300px;
+  background: #131b2b; border: 1px solid #2d3748;
+  border-radius: 12px; box-shadow: 0 20px 70px rgba(0,0,0,0.9);
+  flex-direction: column; overflow: hidden; resize: both;
+}
+#help-ovl.visible { display: flex; }
+#help-drag-handle { position: absolute; top: 0; left: 0; right: 48px; height: 46px; cursor: move; z-index: 2; }
+#help-ovl > .ovl-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+.ovl-header { display: flex; align-items: center; justify-content: space-between; padding: 0.85rem 1.1rem 0.85rem 1.25rem; border-bottom: 1px solid #1e2736; flex-shrink: 0; background: #111827; }
+.ovl-header-title { font-size: 13px; font-weight: 700; color: #e2e8f0; display: flex; align-items: center; gap: 0.5rem; }
+.ovl-header-actions { display: flex; align-items: center; gap: 0.5rem; position: relative; z-index: 3; }
+.ovl-close { background: transparent; border: none; color: #64748b; font-size: 15px; cursor: pointer; padding: 0.2rem 0.35rem; border-radius: 5px; line-height: 1; transition: color 0.12s, background 0.12s; }
+.ovl-close:hover { color: #e2e8f0; background: rgba(255,255,255,0.06); }
+.lang-pill { display: flex; border: 1px solid #2d3748; border-radius: 6px; overflow: hidden; flex-shrink: 0; }
+.lang-pill button { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; padding: 0.2rem 0.55rem; cursor: pointer; transition: all 0.12s; }
+.lang-pill button.active { background: #1e3a5f; color: #63b3ed; }
+.lang-pill button:hover:not(.active) { background: rgba(255,255,255,0.04); color: #e2e8f0; }
+#help-body { display: flex; flex: 1; overflow: hidden; }
+#help-toc { width: 230px; min-width: 170px; flex-shrink: 0; border-right: 1px solid #1e2736; overflow-y: auto; padding: 0.5rem 0; background: #0e1117; }
+#help-toc-filter { width: calc(100% - 1.2rem); margin: 0 0.6rem 0.4rem; background: #1a202c; color: #e2e8f0; border: 1px solid #2d3748; border-radius: 5px; padding: 0.35rem 0.5rem; font-size: 13px; outline: none; }
+#help-toc-filter:focus { border-color: #4a5568; }
+.toc-item { display: block; padding: 0.42rem 0.9rem; color: #94a3b8; font-size: 13px; cursor: pointer; border-left: 3px solid transparent; transition: all 0.1s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toc-item:hover { background: #1a2030; color: #e2e8f0; }
+.toc-item.active { border-left-color: #63b3ed; color: #63b3ed; background: rgba(99,179,237,0.07); font-weight: 600; }
+#help-content { flex: 1; overflow-y: auto; padding: 1.5rem 1.8rem; line-height: 1.7; color: #cbd5e0; font-size: 14px; }
+#help-content h1 { font-size: 24px; color: #e2e8f0; margin: 0 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #1e2736; }
+#help-content h2 { font-size: 18px; color: #e2e8f0; margin: 1.5rem 0 0.5rem; }
+#help-content h3 { font-size: 15px; color: #cbd5e0; margin: 1.1rem 0 0.35rem; }
+#help-content p  { margin: 0.5rem 0; }
+#help-content a  { color: #63b3ed; }
+#help-content strong { color: #e2e8f0; }
+#help-content code { background: #1a202c; color: #f6ad55; padding: 0.1em 0.35em; border-radius: 3px; font-size: 11px; font-family: 'Fira Code','Consolas',monospace; }
+#help-content pre { background: #0e1117; border: 1px solid #2d3748; border-radius: 6px; padding: 0.9rem 1rem; overflow-x: auto; margin: 0.75rem 0; }
+#help-content pre code { background: none; padding: 0; color: #a0aec0; font-size: 13px; }
+#help-content ul, #help-content ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+#help-content li { margin: 0.2rem 0; }
+#help-content blockquote { border-left: 3px solid #63b3ed; margin: 0.75rem 0; padding: 0.4rem 0.9rem; background: rgba(99,179,237,0.05); border-radius: 0 5px 5px 0; color: #94a3b8; }
+#help-content table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; }
+#help-content th, #help-content td { border: 1px solid #2d3748; padding: 0.4rem 0.7rem; text-align: left; font-size: 13px; }
+#help-content th { background: #1a202c; color: #e2e8f0; font-weight: 600; }
+#help-content hr { border: none; border-top: 1px solid #1e2736; margin: 1rem 0; }
+.help-loading { color: #4a5568; font-style: italic; padding: 2rem; text-align: center; }
+#help-search-wrap { display: flex; align-items: center; gap: 3px; }
+#help-search { background: #1a202c; color: #e2e8f0; border: 1px solid #2d3748; border-radius: 5px; padding: 0.28rem 0.5rem; font-size: 13px; outline: none; width: 170px; }
+#help-search:focus { border-color: #4a5568; }
+.help-snav-btn { background: #1a202c; border: 1px solid #2d3748; border-radius: 3px; color: #94a3b8; cursor: pointer; font-size: 11px; padding: 2px 5px; line-height: 1.4; transition: color 0.1s, border-color 0.1s; }
+.help-snav-btn:hover { color: #e2e8f0; border-color: #4a5568; }
+#help-search-count { font-size: 11px; color: #64748b; white-space: nowrap; min-width: 44px; }
+#help-content mark { background: rgba(255,200,0,0.2); color: #fcd34d; border-radius: 2px; }
+#help-content mark.current { background: rgba(251,146,60,0.45); color: #fef08a; outline: 1px solid #f59e0b; }
+#help-search-global-lbl { display:flex; align-items:center; gap:3px; color:#94a3b8; font-size:11px; cursor:pointer; white-space:nowrap; user-select:none; }
+#help-search-global-lbl input[type=checkbox] { accent-color:#4da6ff; cursor:pointer; margin:0; }
+.gs-results { display:flex; flex-direction:column; gap:8px; padding:4px 0; }
+.gs-item { background:#1a202c; border:1px solid #2d3748; border-radius:6px; padding:10px 14px; cursor:pointer; transition:border-color 0.15s; }
+.gs-item:hover { border-color:#4a5568; }
+.gs-topic { color:#93c5fd; font-weight:600; font-size:13px; margin-bottom:5px; }
+.gs-snip { color:#94a3b8; font-size:11px; line-height:1.55; }
 </style>
 </head>
 <body>
 
 <!-- Navigation bar (filled by pbgui_nav.js) -->
 <nav id="topnav"></nav>
+
+<!-- Help overlay -->
+<div id="help-ovl">
+  <div class="ovl-panel">
+    <div id="help-drag-handle"></div>
+    <div class="ovl-header">
+      <div class="ovl-header-title">&#128218; Guide &amp; Help</div>
+      <div class="ovl-header-actions">
+        <div id="help-search-wrap">
+          <input id="help-search" type="text" placeholder="Search in topic…" autocomplete="off">
+          <button class="help-snav-btn" id="help-search-up" title="Previous match">&#9650;</button>
+          <button class="help-snav-btn" id="help-search-dn" title="Next match">&#9660;</button>
+          <span id="help-search-count"></span>
+          <label id="help-search-global-lbl" title="Search across all topics"><input type="checkbox" id="help-search-global"> All</label>
+        </div>
+        <div style="width:1px;height:16px;background:#2d3748;flex-shrink:0;"></div>
+        <div class="lang-pill">
+          <button id="help-lang-en" class="active">EN</button>
+          <button id="help-lang-de">DE</button>
+        </div>
+        <button class="ovl-close" id="help-close">&#x2715;</button>
+      </div>
+    </div>
+    <div id="help-body">
+      <div id="help-toc">
+        <input id="help-toc-filter" type="text" placeholder="Filter topics…" autocomplete="off">
+        <div id="help-toc-list"></div>
+      </div>
+      <div id="help-content"><div class="help-loading">Select a topic from the left.</div></div>
+    </div>
+  </div>
+</div>
 
 <!-- Connection Banner -->
 <div id="conn-banner" class="conn-waiting">Connecting to API Server…</div>
@@ -499,7 +594,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
      ════════════════════════════════════════════════════════ -->
 <script>
 /* ── Nav config ─────────────────────────────────────────── */
-window.PBGUI_NAV_CONFIG = { subtitle: 'Logging', current: 'system_logging' };
+window.PBGUI_NAV_CONFIG = { subtitle: 'Logging', current: 'system_logging', token: TOKEN, stBase: ST_BASE, apiBase: API_BASE, version: PBGUI_VERSION };
 
 /* ── Helper: derive WS URL from current page location ───── */
 function wsUrl() {
@@ -1191,6 +1286,198 @@ function saveService(svc) {
 /* ── Init ────────────────────────────────────────────────── */
 loadFileList();
 connect();
+</script>
+
+<!-- ── Help overlay JS ── -->
+<script>
+(function () {
+  var helpOvl       = document.getElementById('help-ovl');
+  var helpContent   = document.getElementById('help-content');
+  var helpTocList   = document.getElementById('help-toc-list');
+  var helpFilter    = document.getElementById('help-toc-filter');
+  var helpLangEN    = document.getElementById('help-lang-en');
+  var helpLangDE    = document.getElementById('help-lang-de');
+  var helpDragHandle = document.getElementById('help-drag-handle');
+  var helpSearch      = document.getElementById('help-search');
+  var helpSearchUp    = document.getElementById('help-search-up');
+  var helpSearchDn    = document.getElementById('help-search-dn');
+  var helpSearchCount = document.getElementById('help-search-count');
+  var helpSearchGlobal = document.getElementById('help-search-global');
+
+  var helpLang = 'EN';
+  var helpTopics = [];
+  var helpSel = 0;
+  var _sMarks = [], _sIdx = -1, _sTimer = null, _rawHtml = null;
+  var _topicCache = {}, _globalMode = false;
+
+  /* Docs base: strip /logging from API_BASE → /api */
+  var docsBase = API_BASE.replace(/\/logging$/, '');
+
+  function mdToHtml(md) {
+    var lines = md.split('\n'), html = '', inPre = false, preBuf = '', inUl = false, inOl = false;
+    function flushList() { if (inUl) { html += '</ul>'; inUl = false; } if (inOl) { html += '</ol>'; inOl = false; } }
+    function inlineFormat(t) {
+      t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+      t = t.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">');
+      t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      t = t.replace(/__(.+?)__/g, '<strong>$1</strong>');
+      t = t.replace(/\*(.+?)\*/g, '<em>$1</em>');
+      return t;
+    }
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      if (l.match(/^```/)) { if (!inPre) { flushList(); inPre = true; preBuf = ''; } else { html += '<pre><code>' + preBuf.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</code></pre>'; inPre = false; } continue; }
+      if (inPre) { preBuf += (preBuf ? '\n' : '') + l; continue; }
+      if (l.match(/^---+$/)) { flushList(); html += '<hr>'; continue; }
+      var hm = l.match(/^(#{1,6})\s+(.*)/); if (hm) { flushList(); html += '<h' + hm[1].length + '>' + inlineFormat(hm[2]) + '</h' + hm[1].length + '>'; continue; }
+      if (l.match(/^>\s?/)) { flushList(); html += '<blockquote>' + inlineFormat(l.replace(/^>\s?/, '')) + '</blockquote>'; continue; }
+      var ulm = l.match(/^[\-\*]\s+(.*)/); if (ulm) { if (!inUl) { if (inOl) { html += '</ol>'; inOl = false; } html += '<ul>'; inUl = true; } html += '<li>' + inlineFormat(ulm[1]) + '</li>'; continue; }
+      var olm = l.match(/^\d+\.\s+(.*)/); if (olm) { if (!inOl) { if (inUl) { html += '</ul>'; inUl = false; } html += '<ol>'; inOl = true; } html += '<li>' + inlineFormat(olm[1]) + '</li>'; continue; }
+      if (l.trim() === '') { flushList(); html += '<p></p>'; continue; }
+      flushList(); html += '<p>' + inlineFormat(l) + '</p>';
+    }
+    flushList(); return html;
+  }
+
+  function _clearSearch() { if (_rawHtml !== null) helpContent.innerHTML = _rawHtml; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = ''; }
+  function _applySearch(term) {
+    if (_rawHtml === null || !term) { _clearSearch(); return; }
+    var re; try { re = new RegExp('(' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'); } catch(e) { return; }
+    helpContent.innerHTML = _rawHtml.replace(/(<[^>]+>)|([^<]+)/g, function(_, tag, text) {
+      if (tag) return tag;
+      return text.replace(re, function(_, m) { return '<mark>' + m + '</mark>'; });
+    });
+    _sMarks = Array.from(helpContent.querySelectorAll('mark'));
+    if (_sMarks.length > 0) _gotoMark(0); else _updateSCount();
+  }
+  function _updateSCount() { helpSearchCount.textContent = _sMarks.length ? (_sIdx + 1) + '/' + _sMarks.length : (helpSearch.value.trim() ? '0 found' : ''); }
+  function _gotoMark(idx) {
+    if (!_sMarks.length) return;
+    if (_sIdx >= 0 && _sIdx < _sMarks.length) _sMarks[_sIdx].classList.remove('current');
+    _sIdx = ((idx % _sMarks.length) + _sMarks.length) % _sMarks.length;
+    _sMarks[_sIdx].classList.add('current');
+    _sMarks[_sIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    _updateSCount();
+  }
+  function _ensureTopicCached(idx, cb) {
+    if (_topicCache[idx] !== undefined) { cb(_topicCache[idx]); return; }
+    var t = helpTopics[idx]; if (!t) { cb(''); return; }
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+      .then(function(r) { return r.json(); })
+      .then(function(d) { _topicCache[idx] = mdToHtml(d.content || ''); cb(_topicCache[idx]); })
+      .catch(function() { _topicCache[idx] = ''; cb(''); });
+  }
+  function _showGlobalResults(term) {
+    if (!term) { helpContent.innerHTML = '<p style="color:#64748b;padding:8px 0;">Type a search term to find across all topics.</p>'; helpSearchCount.textContent = ''; return; }
+    var re; try { re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'); } catch(e) { return; }
+    helpContent.innerHTML = '<div class="help-loading">Searching\u2026</div>';
+    var pending = helpTopics.length;
+    if (pending === 0) { helpContent.innerHTML = ''; helpSearchCount.textContent = '0 found'; return; }
+    var allResults = [];
+    helpTopics.forEach(function(t, idx) {
+      _ensureTopicCached(idx, function(html) {
+        var text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+        var matchIdxs = [], m; re.lastIndex = 0;
+        while ((m = re.exec(text)) !== null) { matchIdxs.push(m.index); if (matchIdxs.length >= 3) break; }
+        if (matchIdxs.length > 0) {
+          var snippets = matchIdxs.map(function(mi) { return text.slice(Math.max(0, mi - 55), Math.min(text.length, mi + 80)); });
+          allResults.push({ idx: idx, title: t.title, snippets: snippets });
+        }
+        if (--pending === 0) _renderGlobalResults(term, allResults);
+      });
+    });
+  }
+  function _renderGlobalResults(term, results) {
+    var re; try { re = new RegExp('(' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'); } catch(e) { return; }
+    helpSearchCount.textContent = results.length + (results.length === 1 ? ' topic' : ' topics');
+    if (results.length === 0) { helpContent.innerHTML = '<p style="color:#64748b;padding:8px 0;">No results found.</p>'; return; }
+    var html = '<div class="gs-results">';
+    results.forEach(function(r) {
+      html += '<div class="gs-item" data-idx="' + r.idx + '"><div class="gs-topic">' + r.title + '</div>';
+      r.snippets.forEach(function(s) { html += '<div class="gs-snip">\u2026' + s.replace(re, function(_, m) { return '<mark>' + m + '</mark>'; }) + '\u2026</div>'; });
+      html += '</div>';
+    });
+    helpContent.innerHTML = html + '</div>';
+    helpContent.querySelectorAll('.gs-item').forEach(function(el) {
+      el.addEventListener('click', function() { var idx = parseInt(el.getAttribute('data-idx'), 10); helpSearchGlobal.checked = false; _globalMode = false; helpSearch.placeholder = 'Search in topic\u2026'; loadTopic(idx); });
+    });
+  }
+  helpSearch.addEventListener('input', function() { if (_sTimer) clearTimeout(_sTimer); _sTimer = setTimeout(function() { var term = helpSearch.value.trim(); if (_globalMode) _showGlobalResults(term); else _applySearch(term); }, 260); });
+  helpSearch.addEventListener('keydown', function(e) { if (e.key === 'Enter' && !_globalMode) { e.preventDefault(); _gotoMark(_sIdx + (e.shiftKey ? -1 : 1)); } if (e.key === 'Escape') { helpSearch.value = ''; if (_globalMode) _showGlobalResults(''); else _clearSearch(); } });
+  helpSearchUp.addEventListener('click', function() { _gotoMark(_sIdx - 1); });
+  helpSearchDn.addEventListener('click', function() { _gotoMark(_sIdx + 1); });
+  helpSearchGlobal.addEventListener('change', function() {
+    _globalMode = helpSearchGlobal.checked;
+    helpSearch.placeholder = _globalMode ? 'Search all topics\u2026' : 'Search in topic\u2026';
+    var term = helpSearch.value.trim();
+    if (_globalMode) { _showGlobalResults(term); } else { if (_rawHtml !== null) { helpContent.innerHTML = _rawHtml; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = ''; } if (term) _applySearch(term); }
+  });
+
+  function renderToc() {
+    var flt = helpFilter.value.trim().toLowerCase();
+    helpTocList.innerHTML = '';
+    helpTopics.forEach(function(t, idx) {
+      if (flt && t.title.toLowerCase().indexOf(flt) === -1) return;
+      var el = document.createElement('div');
+      el.className = 'toc-item' + (idx === helpSel ? ' active' : '');
+      el.textContent = t.title;
+      el.addEventListener('click', function() { loadTopic(idx); });
+      helpTocList.appendChild(el);
+    });
+  }
+  function loadTopic(idx) {
+    helpSel = idx; renderToc();
+    var t = helpTopics[idx]; if (!t) return;
+    _rawHtml = null; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = '';
+    helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+      .then(function(r) { return r.json(); })
+      .then(function(d) { _rawHtml = mdToHtml(d.content || ''); _topicCache[idx] = _rawHtml; helpContent.innerHTML = _rawHtml; helpContent.scrollTop = 0; var st = helpSearch.value.trim(); if (st) _applySearch(st); })
+      .catch(function() { helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>'; });
+  }
+  function loadHelpIndex(keyword) {
+    helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
+    fetch(docsBase + '/docs/index?lang=' + helpLang + '&token=' + TOKEN)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        helpTopics = data || []; renderToc();
+        if (helpTopics.length > 0) {
+          var startIdx = 0;
+          if (keyword) { var kw = keyword.toLowerCase(); for (var i = 0; i < helpTopics.length; i++) { if (helpTopics[i].title.toLowerCase().indexOf(kw) !== -1 || (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(kw) !== -1)) { startIdx = i; break; } } }
+          loadTopic(startIdx);
+        }
+      })
+      .catch(function() { helpTocList.innerHTML = '<div class="help-loading">Failed to load topics.</div>'; });
+  }
+  helpFilter.addEventListener('input', renderToc);
+  helpLangEN.addEventListener('click', function() { if (helpLang === 'EN') return; helpLang = 'EN'; helpLangEN.classList.add('active'); helpLangDE.classList.remove('active'); _topicCache = {}; helpSel = 0; loadHelpIndex('logging'); });
+  helpLangDE.addEventListener('click', function() { if (helpLang === 'DE') return; helpLang = 'DE'; helpLangDE.classList.add('active'); helpLangEN.classList.remove('active'); _topicCache = {}; helpSel = 0; loadHelpIndex('logging'); });
+  document.getElementById('help-close').addEventListener('click', function() { helpOvl.classList.remove('visible'); });
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape') helpOvl.classList.remove('visible'); });
+  (function() {
+    var startX, startY, boxL, boxT;
+    helpDragHandle.addEventListener('mousedown', function(e) {
+      e.preventDefault(); var r = helpOvl.getBoundingClientRect(); helpOvl.style.transform = 'none';
+      helpOvl.style.left = r.left + 'px'; helpOvl.style.top = r.top + 'px'; startX = e.clientX; startY = e.clientY; boxL = r.left; boxT = r.top;
+      function onMove(ev) { helpOvl.style.left = (boxL + ev.clientX - startX) + 'px'; helpOvl.style.top = (boxT + ev.clientY - startY) + 'px'; }
+      function onUp() { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); }
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    });
+  }());
+  window._openLoggingHelp = function() {
+    helpOvl.classList.add('visible');
+    if (helpTopics.length === 0) { loadHelpIndex('logging'); return; }
+    for (var i = 0; i < helpTopics.length; i++) {
+      if (helpTopics[i].title.toLowerCase().indexOf('logging') !== -1 || (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf('logging') !== -1)) { loadTopic(i); return; }
+    }
+    loadTopic(0);
+  };
+  document.addEventListener('DOMContentLoaded', function() {
+    var btn = document.getElementById('pbgui-guide-btn');
+    if (btn) { var fresh = btn.cloneNode(true); btn.parentNode.replaceChild(fresh, btn); fresh.addEventListener('click', function() { if (typeof window._openLoggingHelp === 'function') window._openLoggingHelp(); }); }
+  });
+}());
 </script>
 </body>
 </html>
