@@ -355,6 +355,34 @@ def build_navigation():
             st.stop()
         redirect_to_fastapi_logging()   # fallback (also handles error display)
 
+    # 1b. SERVER-SIDE interception for VPS Monitor.
+    if navi.url_path == "system_vps_monitor":
+        if not is_authenticted() or is_session_state_not_initialized():
+            st.switch_page(paths["SYSTEM_LOGIN"])
+            st.stop()
+        if _fa_ok and "api_token" in st.session_state:
+            _url = (f"http://{_bhost}:{_fa_port}/api/vps/main_page"
+                    f"?token={st.session_state['api_token']}"
+                    f"&st_base=http://{_bhost}:{_sport}")
+            st.html(f'<script>window.location.replace("{_url}");</script>',
+                    unsafe_allow_javascript=True)
+            st.stop()
+        redirect_to_fastapi_vps_monitor()
+
+    # 1c. SERVER-SIDE interception for Services.
+    if navi.url_path == "system_services":
+        if not is_authenticted() or is_session_state_not_initialized():
+            st.switch_page(paths["SYSTEM_LOGIN"])
+            st.stop()
+        if _fa_ok and "api_token" in st.session_state:
+            _url = (f"http://{_bhost}:{_fa_port}/api/services/main_page"
+                    f"?token={st.session_state['api_token']}"
+                    f"&st_base=http://{_bhost}:{_sport}")
+            st.html(f'<script>window.location.replace("{_url}");</script>',
+                    unsafe_allow_javascript=True)
+            st.stop()
+        redirect_to_fastapi_services()
+
     # 2. CLIENT-SIDE history.pushState patch — injected into every other page so
     #    clicking "Logging" in the Streamlit nav bar redirects directly to FastAPI
     #    in the browser, without triggering a Streamlit page re-render at all.
@@ -362,12 +390,16 @@ def build_navigation():
         _token = st.session_state["api_token"]
         _log_url = (f"http://{_bhost}:{_fa_port}/api/logging/main_page"
                     f"?token={_token}&st_base=http://{_bhost}:{_sport}")
+        _vps_url = (f"http://{_bhost}:{_fa_port}/api/vps/main_page"
+                    f"?token={_token}&st_base=http://{_bhost}:{_sport}")
+        _svc_url = (f"http://{_bhost}:{_fa_port}/api/services/main_page"
+                    f"?token={_token}&st_base=http://{_bhost}:{_sport}")
         # NOTE: no < or > inside this script — DOMPurify will not strip it.
         # _pbguiOk guard ensures pushState is only patched once per page load;
         # _pbguiFaPgs is updated every render so the token stays fresh.
         st.html(
             f'<script>'
-            f'window._pbguiFaPgs={{"system_logging":"{_log_url}"}};'
+            f'window._pbguiFaPgs={{"system_logging":"{_log_url}","system_vps_monitor":"{_vps_url}","system_services":"{_svc_url}"}};'
             f'if(!history._pbguiOk){{'
             f'history._pbguiOk=true;'
             f'var _pp=history.pushState,_pr=history.replaceState;'
@@ -788,6 +820,100 @@ def redirect_to_fastapi_logging() -> None:
     st_base = f"http://{browser_host}:{st_port}"
     url = (
         f"http://{browser_host}:{api_port}/api/logging/main_page"
+        f"?token={token}"
+        f"&st_base={st_base}"
+    )
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
+
+
+def redirect_to_fastapi_services() -> None:
+    """Redirect the browser to the standalone FastAPI Services page."""
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    url = (
+        f"http://{browser_host}:{api_port}/api/services/main_page"
+        f"?token={token}"
+        f"&st_base={st_base}"
+    )
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
+
+
+def redirect_to_fastapi_vps_monitor() -> None:
+    """Redirect the browser to the standalone FastAPI VPS Monitor page."""
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    url = (
+        f"http://{browser_host}:{api_port}/api/vps/main_page"
         f"?token={token}"
         f"&st_base={st_base}"
     )

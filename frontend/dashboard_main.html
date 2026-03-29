@@ -1247,26 +1247,26 @@ html, body {
       var inOl = false;
 
       function flushList() {
-        if (inUl) { html += '\x3C/ul\x3E'; inUl = false; }
-        if (inOl) { html += '\x3C/ol\x3E'; inOl = false; }
+        if (inUl) { html += '</ul>'; inUl = false; }
+        if (inOl) { html += '</ol>'; inOl = false; }
       }
       function inlineFormat(t) {
         // :material/icon_name: → Material Symbols icon
         t = t.replace(/:material\/([\w_]+):/g, function (_, name) {
-          return '\x3Cspan class="material-symbols-outlined" style="font-size:1em;vertical-align:-0.15em;line-height:1"\x3E' + name + '\x3C/span\x3E';
+          return '<span class="material-symbols-outlined" style="font-size:1em;vertical-align:-0.15em;line-height:1">' + name + '</span>';
         });
         // code (inline) — before bold/italic
-        t = t.replace(/`([^`]+)`/g, '\x3Ccode\x3E$1\x3C/code\x3E');
+        t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
         // images ![alt](src)
-        t = t.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '\x3Cimg src="$2" alt="$1"\x3E');
+        t = t.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">');
         // links
-        t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '\x3Ca href="$2" target="_blank" rel="noopener"\x3E$1\x3C/a\x3E');
+        t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
         // bold
-        t = t.replace(/\*\*(.+?)\*\*/g, '\x3Cstrong\x3E$1\x3C/strong\x3E');
-        t = t.replace(/__(.+?)__/g, '\x3Cstrong\x3E$1\x3C/strong\x3E');
+        t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        t = t.replace(/__(.+?)__/g, '<strong>$1</strong>');
         // italic
-        t = t.replace(/\*(.+?)\*/g, '\x3Cem\x3E$1\x3C/em\x3E');
-        t = t.replace(/_(.+?)_/g, '\x3Cem\x3E$1\x3C/em\x3E');
+        t = t.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        t = t.replace(/_(.+?)_/g, '<em>$1</em>');
         return t;
       }
 
@@ -1279,34 +1279,34 @@ html, body {
             inPre = true;
             preBuf = '';
           } else {
-            html += '\x3Cpre\x3E\x3Ccode\x3E' + preBuf.replace(/&/g,'&amp;').replace(/\x3C/g,'&lt;').replace(/\x3E/g,'&gt;') + '\x3C/code\x3E\x3C/pre\x3E';
+            html += '<pre><code>' + preBuf.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</code></pre>';
             inPre = false;
           }
           continue;
         }
         if (inPre) { preBuf += (preBuf ? '\n' : '') + l; continue; }
         // HR
-        if (l.match(/^---+$/) || l.match(/^\*\*\*+$/)) { flushList(); html += '\x3Chr\x3E'; continue; }
+        if (l.match(/^---+$/) || l.match(/^\*\*\*+$/)) { flushList(); html += '<hr>'; continue; }
         // headings
-        var hm = l.match(/^(#{1,6})\s+(.*)/);  if (hm) { flushList(); var lvl = hm[1].length; html += '\x3Ch' + lvl + '\x3E' + inlineFormat(hm[2]) + '\x3C/h' + lvl + '\x3E'; continue; }
+        var hm = l.match(/^(#{1,6})\s+(.*)/);  if (hm) { flushList(); var lvl = hm[1].length; html += '<h' + lvl + '>' + inlineFormat(hm[2]) + '</h' + lvl + '>'; continue; }
         // blockquote
-        if (l.match(/^>\s?/)) { flushList(); html += '\x3Cblockquote\x3E' + inlineFormat(l.replace(/^>\s?/, '')) + '\x3C/blockquote\x3E'; continue; }
+        if (l.match(/^>\s?/)) { flushList(); html += '<blockquote>' + inlineFormat(l.replace(/^>\s?/, '')) + '</blockquote>'; continue; }
         // unordered list
-        var ulm = l.match(/^[\-\*]\s+(.*)/); if (ulm) { if (!inUl) { if (inOl) { html += '\x3C/ol\x3E'; inOl = false; } html += '\x3Cul\x3E'; inUl = true; } html += '\x3Cli\x3E' + inlineFormat(ulm[1]) + '\x3C/li\x3E'; continue; }
+        var ulm = l.match(/^[\-\*]\s+(.*)/); if (ulm) { if (!inUl) { if (inOl) { html += '</ol>'; inOl = false; } html += '<ul>'; inUl = true; } html += '<li>' + inlineFormat(ulm[1]) + '</li>'; continue; }
         // ordered list
-        var olm = l.match(/^\d+\.\s+(.*)/); if (olm) { if (!inOl) { if (inUl) { html += '\x3C/ul\x3E'; inUl = false; } html += '\x3Col\x3E'; inOl = true; } html += '\x3Cli\x3E' + inlineFormat(olm[1]) + '\x3C/li\x3E'; continue; }
+        var olm = l.match(/^\d+\.\s+(.*)/); if (olm) { if (!inOl) { if (inUl) { html += '</ul>'; inUl = false; } html += '<ol>'; inOl = true; } html += '<li>' + inlineFormat(olm[1]) + '</li>'; continue; }
         // empty line = paragraph break
-        if (l.trim() === '') { flushList(); html += '\x3Cp\x3E\x3C/p\x3E'; continue; }
+        if (l.trim() === '') { flushList(); html += '<p></p>'; continue; }
         // plain paragraph
         flushList();
-        html += '\x3Cp\x3E' + inlineFormat(l) + '\x3C/p\x3E';
+        html += '<p>' + inlineFormat(l) + '</p>';
       }
       flushList();
       return html;
     }
 
     function loadHelpIndex() {
-      helpTocList.innerHTML = '\x3Cdiv class="help-loading"\x3ELoading...\x3C/div\x3E';
+      helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
       fetch(API_BASE + '/docs/index?lang=' + helpLang + '&token=' + TOKEN)
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -1327,7 +1327,7 @@ html, body {
           }
         })
         .catch(function () {
-          helpTocList.innerHTML = '\x3Cdiv class="help-loading"\x3EFailed to load topics.\x3C/div\x3E';
+          helpTocList.innerHTML = '<div class="help-loading">Failed to load topics.</div>';
         });
     }
 
@@ -1349,11 +1349,11 @@ html, body {
       renderToc();
       var t = helpTopics[idx];
       if (!t) return;
-      helpContent.innerHTML = '\x3Cdiv class="help-loading"\x3ELoading...\x3C/div\x3E';
+      helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
       fetch(API_BASE + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
         .then(function (r) { return r.json(); })
         .then(function (d) { helpContent.innerHTML = mdToHtml(d.content || ''); helpContent.scrollTop = 0; })
-        .catch(function () { helpContent.innerHTML = '\x3Cdiv class="help-loading"\x3EFailed to load content.\x3C/div\x3E'; });
+        .catch(function () { helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>'; });
     }
 
     helpFilter.addEventListener('input', renderToc);

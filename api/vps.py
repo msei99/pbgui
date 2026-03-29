@@ -16,9 +16,10 @@ import time
 import traceback
 from typing import Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, Request
+from fastapi.responses import HTMLResponse
 
-from api.auth import validate_token
+from api.auth import validate_token, require_auth, SessionToken
 from pbgui_purefunc import save_ini
 from logging_helpers import human_log as _log
 from master.async_monitor import VPSMonitor
@@ -57,6 +58,44 @@ def init(monitor: VPSMonitor, streamer: AsyncLogStreamer):
 _UI_SETTINGS_KEYS = {"compact"}
 # Keys stored in [vps_monitor] ini section (not [vps_monitor_ui])
 _VPS_SETTINGS_KEYS = {"debug_logging"}
+
+
+# ── Standalone page ──────────────────────────────────────────
+
+@router.get("/api/vps/main_page", response_class=HTMLResponse)
+def get_main_page(
+    request: Request,
+    st_base: str = Query(default="", description="Browser-visible Streamlit base URL"),
+    session: SessionToken = Depends(require_auth),
+) -> HTMLResponse:
+    """Serve the standalone VPS Monitor page with token injected server-side."""
+    from pathlib import Path as _P
+
+    html_path = _P(__file__).parent.parent / "frontend" / "vps_monitor.html"
+    html = html_path.read_text(encoding="utf-8")
+
+    scheme = request.url.scheme
+    host = request.url.hostname or "127.0.0.1"
+    port = request.url.port
+    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
+    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
+
+    if not st_base:
+        st_base = f"http://{host}:8501"
+
+    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
+    html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
+    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
+
+    from pbgui_func import PBGUI_VERSION
+    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace("%%VERSION%%", PBGUI_VERSION)
+
+    nav_js = _P(__file__).parent.parent / "frontend" / "pbgui_nav.js"
+    nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION
+    html = html.replace("%%NAV_HASH%%", nav_hash)
+
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
 
 # ── WebSocket endpoint ───────────────────────────────────────

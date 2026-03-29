@@ -1,0 +1,1657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Services - PBGui</title>
+  <style>
+    /* ── Design tokens ── */
+    :root {
+      --fs-xs: 11px; --fs-sm: 13px; --fs-base: 14px;
+      --fs-md: 15px; --fs-lg: 18px; --fs-xl: 24px;
+      --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 20px;
+      --input-h: 32px; --btn-h: 32px;
+    }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0e1117; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; font-size: var(--fs-base); }
+    * { box-sizing: border-box; }
+
+    /* ── Layout ── */
+    #page-body { display: flex; height: calc(100vh - 52px); overflow: hidden; }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      width: 200px; min-width: 150px; max-width: 300px;
+      flex-shrink: 0; background: #0e1117; border-right: 1px solid #1e2736;
+      display: flex; flex-direction: column; overflow: hidden; position: relative;
+    }
+    #sidebar-resize { position: absolute; top: 0; right: 0; bottom: 0; width: 4px; cursor: col-resize; background: transparent; z-index: 1; }
+    #sidebar-resize:hover, #sidebar-resize.active { background: rgba(99,179,237,0.4); }
+    #sidebar-inner { display: flex; flex-direction: column; gap: 2px; padding: 0.5rem; overflow-y: auto; flex: 1; }
+    .sb-btn {
+      width: 100%; text-align: left; background: transparent; border: 1px solid transparent;
+      color: #94a3b8; padding: 0.4rem 0.6rem; border-radius: 6px; cursor: pointer;
+      font-size: var(--fs-sm); font-family: inherit; display: flex; align-items: center; gap: 8px; transition: all 0.1s;
+    }
+    .sb-btn:hover { background: #1a2030; color: #e2e8f0; }
+    .sb-btn.active { background: rgba(99,179,237,0.12); border-color: rgba(99,179,237,0.3); color: #e2e8f0; font-weight: 600; }
+    .sb-dot { width: 8px; height: 8px; border-radius: 50%; background: #4a5568; flex-shrink: 0; }
+    .sb-dot.running { background: #21c354; }
+    .sb-dot.stopped { background: #ff4b4b; }
+
+    /* ── Main content ── */
+    #main-content { flex: 1; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+
+    /* ── Service panels ── */
+    .svc-panel { display: none; flex-direction: column; height: 100%; overflow: hidden; }
+    .svc-panel.active { display: flex; }
+
+    /* ── Control strip ── */
+    .ctrl-strip {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.55rem 1rem; border-bottom: 1px solid #1e2736; flex-shrink: 0; background: #111827;
+    }
+    .ctrl-title { font-size: var(--fs-md); font-weight: 700; color: #e2e8f0; }
+    .ctrl-status { display: flex; align-items: center; gap: 6px; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #4a5568; flex-shrink: 0; }
+    .status-dot.running { background: #21c354; }
+    .status-dot.stopped { background: #ff4b4b; }
+    .status-label { font-size: var(--fs-xs); color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+    .ctrl-btn {
+      padding: 0.25rem 0.75rem; border-radius: 5px; border: 1px solid #2d3748;
+      background: #1a202c; color: #94a3b8; cursor: pointer; font-size: var(--fs-sm);
+      font-family: inherit; transition: all 0.12s;
+    }
+    .ctrl-btn:hover { border-color: #4a5568; color: #e2e8f0; }
+    .ctrl-btn.start { border-color: #166534; color: #4ade80; background: #052e16; }
+    .ctrl-btn.stop { border-color: #7f1d1d; color: #fca5a5; background: #2d1515; }
+    .ctrl-btn.restart { border-color: #b45309; color: #fcd34d; background: #1c1a08; }
+
+    /* ── Tabs ── */
+    .tab-bar { display: flex; gap: 2px; padding: 0.25rem 1rem 0; border-bottom: 1px solid #1e2736; flex-shrink: 0; background: #0e1117; }
+    .tab-btn { padding: 0.3rem 0.75rem; border: none; background: transparent; color: #64748b; cursor: pointer; font-size: var(--fs-sm); font-family: inherit; border-bottom: 2px solid transparent; transition: all 0.12s; }
+    .tab-btn.active { color: #63b3ed; border-bottom-color: #63b3ed; }
+    .tab-btn:hover:not(.active) { color: #94a3b8; }
+    .tab-pane { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+    .tab-pane.active { display: flex; }
+    .log-wrap { flex: 1; overflow: hidden; }
+
+    /* ── Overview ── */
+    #panel-overview { padding: 1.5rem; overflow-y: auto; }
+    .overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 1rem; align-content: start; }
+    .svc-card {
+      background: #131b2b; border: 1px solid #1e2736; border-radius: 10px;
+      padding: 1rem; display: flex; flex-direction: column; gap: 0.6rem; cursor: pointer;
+      transition: border-color 0.12s; align-self: start;
+    }
+    .svc-card:hover { border-color: #2d3748; }
+    .svc-card.running { border-color: rgba(33,195,84,0.45); }
+    .svc-card.stopped { border-color: rgba(255,75,75,0.35); }
+    .card-name { font-size: var(--fs-sm); font-weight: 700; color: #e2e8f0; }
+    .card-status-row { display: flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: #64748b; }
+    .card-dot { width: 7px; height: 7px; border-radius: 50%; background: #4a5568; flex-shrink: 0; }
+    .card-dot.running { background: #21c354; }
+    .card-dot.stopped { background: #ff4b4b; }
+    .card-btn {
+      align-self: flex-start; padding: 0.2rem 0.65rem; border-radius: 4px;
+      border: 1px solid #2d3748; background: #1a202c; color: #94a3b8;
+      cursor: pointer; font-size: var(--fs-xs); font-family: inherit; transition: all 0.12s;
+    }
+    .card-btn:hover { border-color: #4a5568; color: #e2e8f0; }
+    .card-btn.start { border-color: #166534; color: #4ade80; background: #052e16; }
+    .card-btn.stop  { border-color: #7f1d1d; color: #fca5a5; background: #2d1515; }
+    .card-btn.restart { border-color: #b45309; color: #fcd34d; background: #1c1a08; }
+
+    /* ── Settings form ── */
+    .settings-wrap { padding: 1.25rem 1.5rem; overflow-y: auto; flex: 1; }
+    .form-section-title { font-size: var(--fs-sm); font-weight: 700; color: #94a3b8; margin: 0 0 0.5rem; }
+    .form-divider { border: none; border-top: 1px solid #1e2736; margin: 1rem 0; }
+    .form-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .form-field { display: flex; flex-direction: column; gap: 3px; }
+    .form-label { font-size: var(--fs-xs); color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; }
+    .form-hint { font-size: var(--fs-xs); color: #4a5568; }
+    .form-input {
+      background: #1a202c; color: #e2e8f0; border: 1px solid #2d3748; border-radius: 5px;
+      padding: 0 0.5rem; height: var(--input-h); font-size: var(--fs-sm); font-family: inherit; outline: none;
+    }
+    .form-input:focus { border-color: #4a5568; }
+    .form-input.wide { width: 280px; }
+    .form-input.medium { width: 140px; }
+    .form-input.narrow { width: 90px; }
+    .form-select { background: #1a202c; color: #e2e8f0; border: 1px solid #2d3748; border-radius: 5px; padding: 0 0.5rem; height: var(--input-h); font-size: var(--fs-sm); font-family: inherit; outline: none; cursor: pointer; }
+    .form-select:focus { border-color: #4a5568; }
+    .form-btn { padding: 0 1rem; height: var(--btn-h); border-radius: 5px; border: 1px solid #2d3748; background: #1a202c; color: #94a3b8; cursor: pointer; font-size: var(--fs-sm); font-family: inherit; transition: all 0.12s; }
+    .form-btn:hover { border-color: #4a5568; color: #e2e8f0; }
+    .form-btn.save { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
+    .form-btn.save:hover { background: #1d4ed8; color: #fff; }
+    .multiselect-wrap { background: #1a202c; border: 1px solid #2d3748; border-radius: 5px; padding: 0.3rem; min-height: 36px; max-height: 160px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 4px; }
+    .tag { display: inline-flex; align-items: center; background: #1e3a5f; border: 1px solid #2563eb; color: #93c5fd; border-radius: 4px; padding: 2px 8px; font-size: var(--fs-xs); cursor: pointer; user-select: none; transition: all 0.1s; }
+    .tag:hover { background: #1d4ed8; }
+    .tag.inactive { background: transparent; border-color: #2d3748; color: #64748b; }
+    .tag.inactive:hover { border-color: #4a5568; color: #94a3b8; }
+    .inline-msg { font-size: var(--fs-xs); color: #4ade80; margin-left: 0.5rem; opacity: 0; transition: opacity 0.3s; }
+    .inline-msg.visible { opacity: 1; }
+    .inline-msg.error { color: #fca5a5; }
+
+    /* ── Password reveal ── */
+    .pw-wrap { position: relative; display: inline-flex; align-items: center; }
+    .pw-wrap input { padding-right: 2rem; }
+    .pw-eye { position: absolute; right: 0.4rem; background: none; border: none; cursor: pointer; color: #64748b; font-size: 1rem; line-height: 1; padding: 0; }
+    .pw-eye:hover { color: #94a3b8; }
+
+    /* ── Result modal ── */
+    .result-modal { position:fixed;z-index:9000;background:#0d1621;border:1px solid #1e2736;border-radius:10px;width:720px;min-width:320px;min-height:160px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.6);resize:both;overflow:hidden; }
+    .result-modal-header { display:flex;justify-content:space-between;align-items:center;padding:0.75rem 1rem;border-bottom:1px solid #1e2736;cursor:grab;user-select:none;flex-shrink:0; }
+    .result-modal-header:active { cursor:grabbing; }
+    .result-modal-header h3 { margin:0;font-size:var(--fs-md);color:#e2e8f0; }
+    .result-modal-close { background:none;border:none;color:#64748b;font-size:1.4rem;cursor:pointer;padding:0 4px; }
+    .result-modal-close:hover { color:#e2e8f0; }
+    .result-modal-status { padding:0.6rem 1rem;font-size:var(--fs-sm);font-weight:600;flex-shrink:0; }
+    .result-modal-status.ok { background:#052e16;color:#4ade80;border-bottom:1px solid #166534; }
+    .result-modal-status.fail { background:#2d1515;color:#fca5a5;border-bottom:1px solid #7f1d1d; }
+    .result-modal-body { flex:1;overflow-y:auto;padding:0.75rem 1rem;font-family:monospace;font-size:var(--fs-xs);color:#cbd5e1;white-space:pre-wrap;word-break:break-all; }
+    .result-modal-footer { padding:0.5rem 1rem;border-top:1px solid #1e2736;text-align:right;flex-shrink:0; }
+    .result-modal-footer button { background:#2563eb;color:#fff;border:none;border-radius:6px;padding:0.35rem 1.2rem;cursor:pointer;font-size:var(--fs-sm); }
+    .result-modal-footer button:hover { background:#1d4ed8; }
+
+    /* ── Fetch summary ── */
+    .fetch-summary { padding: 1rem 1.5rem; overflow-y: auto; flex: 1; }
+    .fs-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:0.9rem; }
+    .fs-title { color:#e2e8f0; font-size:var(--fs-md); font-weight:600; }
+    .fs-refresh-btn { background:#1e2736; border:1px solid #2d3748; border-radius:6px; color:#94a3b8; cursor:pointer; padding:0.25rem 0.55rem; font-size:var(--fs-md); line-height:1; }
+    .fs-refresh-btn:hover { background:#2d3748; color:#e2e8f0; }
+    .fs-summary-row { display:flex; gap:0.65rem; flex-wrap:wrap; margin-bottom:1rem; }
+    .fs-group { background:#131b2b; border:1px solid #1e2736; border-radius:8px; padding:0.45rem 0.9rem; }
+    .fs-group-title { font-size:var(--fs-xs); color:#64748b; margin-bottom:0.25rem; }
+    .fs-group-body { display:flex; gap:0.9rem; }
+    .fs-cnt { display:flex; align-items:center; gap:0.25rem; }
+    .fs-dot-ws   { color:#4ade80; font-size:0.55rem; }
+    .fs-dot-rest { color:#f59e0b; font-size:0.55rem; }
+    .fs-cnt-lbl { font-size:var(--fs-xs); color:#64748b; }
+    .fs-cnt-val { font-size:var(--fs-sm); font-weight:700; color:#e2e8f0; }
+    .fs-filters { display:flex; gap:1.5rem; flex-wrap:wrap; margin:0.5rem 0 0.75rem; }
+    .fs-filter-label { display:flex; align-items:center; gap:0.4rem; font-size:var(--fs-xs); color:#94a3b8; cursor:pointer; }
+    .fs-table-wrap { overflow-x:auto; }
+    .fs-table { width:100%; border-collapse:collapse; font-size:var(--fs-xs); }
+    .fs-table th { background:#0f1722; color:#64748b; padding:0.4rem 0.6rem; text-align:left; border-bottom:1px solid #1e2736; white-space:nowrap; }
+    .fs-table td { padding:0.3rem 0.6rem; border-bottom:1px solid #131b2b; white-space:nowrap; color:#cbd5e1; }
+    .fs-table tr:hover td { background:#131b2b; }
+    .fs-ws   { color:#4ade80; }
+    .fs-rest { color:#f59e0b; }
+    .fs-never { color:#4a5568; }
+
+    /* ── CMC key status bar ── */
+    .cmc-status-bar { display:flex; align-items:center; justify-content:space-between; gap:0.75rem;
+      margin:0.5rem 1rem 0; padding:0.55rem 0.9rem; border-radius:8px; font-size:var(--fs-sm);
+      border:1px solid #1e2736; background:#0d2a1a; color:#4ade80; min-height:2.2rem; }
+    .cmc-status-bar.error { background:#2d1515; border-color:#7f1d1d; color:#fca5a5; }
+    .cmc-status-bar.loading { background:#131b2b; color:#4a5568; }
+    .cmc-status-text { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .cmc-refresh-btn { background:none; border:none; color:inherit; cursor:pointer; font-size:1rem; opacity:0.7; padding:0 2px; flex-shrink:0; }
+    .cmc-refresh-btn:hover { opacity:1; }
+
+    /* ── Responsive ── */
+    @media (max-width: 640px) {
+      #sidebar { width: 140px; min-width: 100px; }
+      .sb-btn { font-size: 11px; padding: 0.3rem 0.4rem; }
+      .overview-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+  <script src="/app/js/log_viewer_panel.js"></script>
+</head>
+<body>
+<nav id="topnav"></nav>
+<div id="page-body">
+
+  <!-- ── Sidebar ── -->
+  <div id="sidebar">
+    <div id="sidebar-resize"></div>
+    <div id="sidebar-inner">
+      <button class="sb-btn active" data-panel="overview">
+        <span class="sb-dot"></span>Overview
+      </button>
+      <button class="sb-btn" data-panel="pbrun">
+        <span class="sb-dot" id="dot-pbrun"></span>PBRun
+      </button>
+      <button class="sb-btn" data-panel="pbremote">
+        <span class="sb-dot" id="dot-pbremote"></span>PBRemote
+      </button>
+      <button class="sb-btn" data-panel="pbmon">
+        <span class="sb-dot" id="dot-pbmon"></span>PBMon
+      </button>
+      <button class="sb-btn" data-panel="pbstat">
+        <span class="sb-dot" id="dot-pbstat"></span>PBStat
+      </button>
+      <button class="sb-btn" data-panel="pbdata">
+        <span class="sb-dot" id="dot-pbdata"></span>PBData
+      </button>
+      <button class="sb-btn" data-panel="pbcoindata">
+        <span class="sb-dot" id="dot-pbcoindata"></span>PBCoinData
+      </button>
+      <button class="sb-btn" data-panel="api-server">
+        <span class="sb-dot" id="dot-api-server"></span>PBAPIServer
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Main content ── -->
+  <div id="main-content">
+
+    <!-- Overview panel -->
+    <div id="panel-overview" class="svc-panel active">
+      <div class="overview-grid" id="overview-grid" style="padding:1.5rem;overflow-y:auto;flex:1;"></div>
+    </div>
+
+    <!-- PBRun panel -->
+    <div id="panel-pbrun" class="svc-panel">
+      <div class="ctrl-strip">
+        <span class="ctrl-title">PBRun</span>
+        <div class="ctrl-status">
+          <div class="status-dot" id="cs-pbrun"></div>
+          <span class="status-label" id="sl-pbrun">checking…</span>
+        </div>
+        <button class="ctrl-btn start" onclick="svcAction('pbrun','start')">&#9654; Start</button>
+        <button class="ctrl-btn stop"  onclick="svcAction('pbrun','stop')">&#9632; Stop</button>
+      </div>
+      <div class="log-wrap"><div id="log-pbrun" style="height:100%;"></div></div>
+    </div>
+
+    <!-- PBRemote panel -->
+    <div id="panel-pbremote" class="svc-panel">
+      <div class="ctrl-strip">
+        <span class="ctrl-title">PBRemote</span>
+        <div class="ctrl-status">
+          <div class="status-dot" id="cs-pbremote"></div>
+          <span class="status-label" id="sl-pbremote">checking…</span>
+        </div>
+        <button class="ctrl-btn start" onclick="svcAction('pbremote','start')">&#9654; Start</button>
+        <button class="ctrl-btn stop"  onclick="svcAction('pbremote','stop')">&#9632; Stop</button>
+      </div>
+      <div class="tab-bar">
+        <button class="tab-btn active" data-svc="pbremote" data-tab="log" onclick="switchTab(this)">&#128203; Log</button>
+        <button class="tab-btn" data-svc="pbremote" data-tab="info" onclick="switchTab(this)">&#127760; Info</button>
+        <button class="tab-btn" data-svc="pbremote" data-tab="settings" onclick="switchTab(this)">&#9881; Settings</button>
+      </div>
+      <div id="pbremote-tab-log" class="tab-pane active log-wrap">
+        <div id="log-pbremote" style="height:100%;"></div>
+      </div>
+      <div id="pbremote-tab-info" class="tab-pane">
+        <div class="settings-wrap" id="pbremote-info-wrap">
+          <div style="color:#4a5568;font-style:italic;">Loading&#8230;</div>
+        </div>
+      </div>
+      <div id="pbremote-tab-settings" class="tab-pane">
+        <div class="settings-wrap" id="pbremote-settings-wrap">
+          <div style="color:#4a5568;font-style:italic;">Loading&#8230;</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PBMon panel -->
+    <div id="panel-pbmon" class="svc-panel">
+      <div class="ctrl-strip">
+        <span class="ctrl-title">PBMon</span>
+        <div class="ctrl-status">
+          <div class="status-dot" id="cs-pbmon"></div>
+          <span class="status-label" id="sl-pbmon">checking…</span>
+        </div>
+        <button class="ctrl-btn start" onclick="svcAction('pbmon','start')">&#9654; Start</button>
+        <button class="ctrl-btn stop"  onclick="svcAction('pbmon','stop')">&#9632; Stop</button>
+      </div>
+      <div class="tab-bar">
+        <button class="tab-btn active" data-svc="pbmon" data-tab="log" onclick="switchTab(this)">&#128203; Log</button>
+        <button class="tab-btn" data-svc="pbmon" data-tab="settings" onclick="switchTab(this)">&#9881; Settings</button>
+      </div>
+      <div id="pbmon-tab-log" class="tab-pane active log-wrap">
+        <div id="log-pbmon" style="height:100%;"></div>
+      </div>
+      <div id="pbmon-tab-settings" class="tab-pane">
+        <div class="settings-wrap">
+          <div class="form-section-title">Telegram</div>
+          <div class="form-row">
+            <div class="form-field">
+              <span class="form-label">Bot Token</span>
+              <div class="pw-wrap">
+                <input class="form-input wide" type="password" id="pbmon-token" placeholder="Paste token…" autocomplete="off" style="width:370px;">
+                <button class="pw-eye" type="button" onclick="togglePw('pbmon-token', this)" title="Show/hide">&#128065;</button>
+              </div>
+            </div>
+            <div class="form-field">
+              <span class="form-label">Chat ID</span>
+              <input class="form-input medium" type="text" id="pbmon-chat-id" placeholder="e.g. -1001234567">
+            </div>
+          </div>
+          <button class="form-btn save" onclick="savePBMonSettings()">&#128190; Save</button>
+          <span class="inline-msg" id="pbmon-save-msg"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PBStat panel -->
+    <div id="panel-pbstat" class="svc-panel">
+      <div class="ctrl-strip">
+        <span class="ctrl-title">PBStat</span>
+        <div class="ctrl-status">
+          <div class="status-dot" id="cs-pbstat"></div>
+          <span class="status-label" id="sl-pbstat">checking…</span>
+        </div>
+        <button class="ctrl-btn start" onclick="svcAction('pbstat','start')">&#9654; Start</button>
+        <button class="ctrl-btn stop"  onclick="svcAction('pbstat','stop')">&#9632; Stop</button>
+      </div>
+      <div class="log-wrap"><div id="log-pbstat" style="height:100%;"></div></div>
+    </div>
+
+    <!-- PBData panel -->
+    <div id="panel-pbdata" class="svc-panel">
+      <div class="ctrl-strip">
+        <span class="ctrl-title">PBData</span>
+        <div class="ctrl-status">
+          <div class="status-dot" id="cs-pbdata"></div>
+          <span class="status-label" id="sl-pbdata">checking…</span>
+        </div>
+        <button class="ctrl-btn start" onclick="svcAction('pbdata','start')">&#9654; Start</button>
+        <button class="ctrl-btn stop"  onclick="svcAction('pbdata','stop')">&#9632; Stop</button>
+      </div>
+      <div class="tab-bar">
+        <button class="tab-btn active" data-svc="pbdata" data-tab="log" onclick="switchTab(this)">&#128203; Log</button>
+        <button class="tab-btn" data-svc="pbdata" data-tab="settings" onclick="switchTab(this)">&#9881; Settings</button>
+        <button class="tab-btn" data-svc="pbdata" data-tab="status" onclick="switchTab(this)">&#128202; Status</button>
+      </div>
+      <div id="pbdata-tab-log" class="tab-pane active log-wrap">
+        <div id="log-pbdata" style="height:100%;"></div>
+      </div>
+      <div id="pbdata-tab-settings" class="tab-pane">
+        <div class="settings-wrap" id="pbdata-settings-wrap">
+          <div style="color:#4a5568;font-style:italic;">Loading settings&#8230;</div>
+        </div>
+      </div>
+      <div id="pbdata-tab-status" class="tab-pane">
+        <div class="fetch-summary" id="pbdata-status-wrap">
+          <div style="color:#4a5568;font-style:italic;">Loading status&#8230;</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PBCoinData panel -->
+    <div id="panel-pbcoindata" class="svc-panel">
+      <div class="ctrl-strip">
+        <span class="ctrl-title">PBCoinData</span>
+        <div class="ctrl-status">
+          <div class="status-dot" id="cs-pbcoindata"></div>
+          <span class="status-label" id="sl-pbcoindata">checking…</span>
+        </div>
+        <button class="ctrl-btn start" onclick="svcAction('pbcoindata','start')">&#9654; Start</button>
+        <button class="ctrl-btn stop"  onclick="svcAction('pbcoindata','stop')">&#9632; Stop</button>
+      </div>
+      <div class="cmc-status-bar loading" id="cmc-status-bar">
+        <button class="cmc-refresh-btn" onclick="loadCmcKeyStatus()" title="Refresh">&#8635;</button>
+        <span class="cmc-status-text" id="cmc-status-text">Loading API key status&#8230;</span>
+      </div>
+      <div class="tab-bar">
+        <button class="tab-btn active" data-svc="pbcoindata" data-tab="log" onclick="switchTab(this)">&#128203; Log</button>
+        <button class="tab-btn" data-svc="pbcoindata" data-tab="settings" onclick="switchTab(this)">&#9881; Settings</button>
+      </div>
+      <div id="pbcoindata-tab-log" class="tab-pane active log-wrap">
+        <div id="log-pbcoindata" style="height:100%;"></div>
+      </div>
+      <div id="pbcoindata-tab-settings" class="tab-pane">
+        <div class="settings-wrap">
+          <div class="form-section-title">CoinMarketCap API</div>
+          <div class="form-row">
+            <div class="form-field">
+              <span class="form-label">API Key</span>
+              <div class="pw-wrap">
+                <input class="form-input wide" type="password" id="coindata-api-key" placeholder="CMC API key…" autocomplete="off">
+                <button class="pw-eye" type="button" onclick="togglePw('coindata-api-key', this)" title="Show/hide">&#128065;</button>
+              </div>
+            </div>
+          </div>
+          <hr class="form-divider">
+          <div class="form-section-title">Intervals</div>
+          <div class="form-row">
+            <div class="form-field">
+              <span class="form-label">Fetch Interval (h)</span>
+              <input class="form-input narrow" type="number" id="coindata-fetch-interval" min="1" max="24" step="1">
+            </div>
+            <div class="form-field">
+              <span class="form-label">Fetch Limit</span>
+              <input class="form-input narrow" type="number" id="coindata-fetch-limit" min="200" max="5000" step="200">
+            </div>
+            <div class="form-field">
+              <span class="form-label">Metadata Interval (d)</span>
+              <input class="form-input narrow" type="number" id="coindata-metadata-interval" min="1" max="7" step="1">
+            </div>
+            <div class="form-field">
+              <span class="form-label">Mapping Interval (h)</span>
+              <input class="form-input narrow" type="number" id="coindata-mapping-interval" min="1" max="168" step="1">
+            </div>
+          </div>
+          <button class="form-btn save" onclick="saveCoinDataSettings()">&#128190; Save</button>
+          <span class="inline-msg" id="coindata-save-msg"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- API Server panel -->
+    <div id="panel-api-server" class="svc-panel">
+      <div class="ctrl-strip">
+        <span class="ctrl-title">PBAPIServer</span>
+        <div class="ctrl-status">
+          <div class="status-dot" id="cs-api-server"></div>
+          <span class="status-label" id="sl-api-server">checking…</span>
+        </div>
+        <button class="ctrl-btn restart" onclick="restartApiServer()">&#8635; Restart</button>
+      </div>
+      <div class="tab-bar">
+        <button class="tab-btn active" data-svc="api-server" data-tab="log" onclick="switchTab(this)">&#128203; Log</button>
+        <button class="tab-btn" data-svc="api-server" data-tab="settings" onclick="switchTab(this)">&#9881; Settings</button>
+      </div>
+      <div id="api-server-tab-log" class="tab-pane active log-wrap">
+        <div id="log-api-server" style="height:100%;"></div>
+      </div>
+      <div id="api-server-tab-settings" class="tab-pane">
+        <div class="settings-wrap">
+          <div class="form-section-title">Connection</div>
+          <div class="form-row">
+            <div class="form-field">
+              <span class="form-label">Bind Address</span>
+              <input class="form-input medium" type="text" id="apiserver-host" placeholder="0.0.0.0">
+              <span class="form-hint">Requires restart to take effect</span>
+            </div>
+            <div class="form-field">
+              <span class="form-label">Port</span>
+              <input class="form-input narrow" type="number" id="apiserver-port" min="1024" max="65535" step="1">
+              <span class="form-hint">Default: 8000</span>
+            </div>
+          </div>
+          <hr class="form-divider">
+          <div class="form-section-title">VPS Monitoring</div>
+          <div class="form-row" style="align-items:center;gap:0.75rem;margin-bottom:0.75rem;">
+            <input type="checkbox" id="apiserver-auto-restart" style="accent-color:#4da6ff;cursor:pointer;width:15px;height:15px;">
+            <label for="apiserver-auto-restart" style="color:#94a3b8;font-size:var(--fs-sm);cursor:pointer;">Auto-restart services</label>
+          </div>
+          <div class="form-field">
+            <span class="form-label">Monitored VPS Hosts <span style="color:#4a5568;font-weight:400;">(click to toggle)</span></span>
+            <div class="multiselect-wrap" id="vps-hosts-select"></div>
+          </div>
+          <div style="margin-top:1rem;">
+            <button class="form-btn save" onclick="saveApiServerSettings()">&#128190; Save</button>
+            <span class="inline-msg" id="apiserver-save-msg"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main-content -->
+</div><!-- /page-body -->
+
+<!-- Token / base URL injection (server-side replacement) -->
+<script>
+  var TOKEN         = "%%TOKEN%%";
+  var API_BASE      = "%%API_BASE%%";   /* http://host:port/api/services */
+  var WS_BASE       = "%%WS_BASE%%";   /* ws://host:port                */
+  var ST_BASE       = "%%ST_BASE%%";
+  var PBGUI_VERSION = "%%VERSION%%";
+</script>
+<script>
+window.PBGUI_NAV_CONFIG = {
+  subtitle: 'SERVICES',
+  current:  'system_services',
+  token:    TOKEN,
+  stBase:   ST_BASE,
+  version:  PBGUI_VERSION
+};
+</script>
+<script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+<!-- Guide button override — must run AFTER pbgui_nav.js DOMContentLoaded handler -->
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  /* No help overlay on this page yet — just strip the Streamlit guide handler */
+  var btn = document.getElementById('pbgui-guide-btn');
+  if (btn) { var fresh = btn.cloneNode(true); btn.parentNode.replaceChild(fresh, btn); }
+});
+</script>
+<!-- Main logic -->
+<script>
+(function () {
+  'use strict';
+
+  /* ── Service registry ─────────────────────────────────── */
+  var SERVICES = [
+    { id: 'pbrun',      label: 'PBRun',       logFile: 'PBRun.log',       isApiServer: false },
+    { id: 'pbremote',   label: 'PBRemote',    logFile: 'PBRemote.log',    isApiServer: false },
+    { id: 'pbmon',      label: 'PBMon',       logFile: 'PBMon.log',       isApiServer: false },
+    { id: 'pbstat',     label: 'PBStat',      logFile: 'PBStat.log',      isApiServer: false },
+    { id: 'pbdata',     label: 'PBData',      logFile: 'PBData.log',      isApiServer: false },
+    { id: 'pbcoindata', label: 'PBCoinData',  logFile: 'PBCoinData.log',  isApiServer: false },
+    { id: 'api-server', label: 'PBAPIServer', logFile: 'PBApiServer.log', isApiServer: true  },
+  ];
+
+  var _status = {};
+  var _logViewers = {};
+  var _statusTimer = null;
+  var _fetchSummaryTimer = null;
+  var _settingsLoaded = {};
+
+  /* ── Status polling ────────────────────────────────────── */
+  function fetchStatus() {
+    fetch(API_BASE + '/status?token=' + TOKEN)
+      .then(function (r) { return r.json(); })
+      .then(function (data) { _status = data; updateStatusUI(); scheduleStatus(); })
+      .catch(function () { scheduleStatus(); });
+  }
+
+  function scheduleStatus() {
+    clearTimeout(_statusTimer);
+    _statusTimer = setTimeout(fetchStatus, 5000);
+  }
+
+  function updateStatusUI() {
+    SERVICES.forEach(function (svc) {
+      var running = (_status[svc.id] || {}).running;
+      var dotSb = document.getElementById('dot-' + svc.id);
+      var dotCs = document.getElementById('cs-' + svc.id);
+      var lbl   = document.getElementById('sl-' + svc.id);
+      if (dotSb) dotSb.className = 'sb-dot ' + (running ? 'running' : 'stopped');
+      if (dotCs) dotCs.className = 'status-dot ' + (running ? 'running' : 'stopped');
+      if (lbl)   lbl.textContent = running ? 'Running' : 'Stopped';
+    });
+    renderOverviewCards();
+  }
+
+  /* ── Overview cards ────────────────────────────────────── */
+  function renderOverviewCards() {
+    var grid = document.getElementById('overview-grid');
+    if (!grid) return;
+    var html = '';
+    SERVICES.forEach(function (svc) {
+      var running = (_status[svc.id] || {}).running;
+      var cls = running ? 'running' : 'stopped';
+      var btn = svc.isApiServer
+        ? '<button class="card-btn restart" onclick="restartApiServer();event.stopPropagation()">&#8635; Restart</button>'
+        : (running
+            ? '<button class="card-btn stop"  onclick="svcAction(\'' + svc.id + '\',\'stop\');event.stopPropagation()">&#9632; Stop</button>'
+            : '<button class="card-btn start" onclick="svcAction(\'' + svc.id + '\',\'start\');event.stopPropagation()">&#9654; Start</button>');
+      html += '<div class="svc-card ' + cls + '" onclick="selectPanel(\'' + svc.id + '\')">'
+           +  '<div class="card-name">' + svc.label + '</div>'
+           +  '<div class="card-status-row"><span class="card-dot ' + cls + '"></span>' + (running ? 'Running' : 'Stopped') + '</div>'
+           +  btn
+           +  '</div>';
+    });
+    grid.innerHTML = html;
+  }
+
+  /* ── Panel navigation ──────────────────────────────────── */
+  function selectPanel(panelId, tab) {
+    document.querySelectorAll('.sb-btn').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-panel') === panelId);
+    });
+    document.querySelectorAll('.svc-panel').forEach(function (p) {
+      p.classList.toggle('active', p.id === 'panel-' + panelId);
+    });
+    if (panelId !== 'overview') {
+      initLogViewer(panelId);
+    }
+    clearInterval(_fetchSummaryTimer); _fetchSummaryTimer = null;
+    if (panelId === 'pbcoindata') loadCmcKeyStatus();
+    /* persist position in URL hash */
+    var hash = panelId;
+    if (tab) hash += '/' + tab;
+    history.replaceState(null, '', '#' + hash);
+  }
+
+  document.querySelectorAll('.sb-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () { selectPanel(btn.getAttribute('data-panel')); });
+  });
+
+  /* ── Tab switching ─────────────────────────────────────── */
+  window.switchTab = function (btn) {
+    var svc = btn.getAttribute('data-svc');
+    var tab = btn.getAttribute('data-tab');
+    var panel = document.getElementById('panel-' + svc);
+    if (!panel) return;
+    panel.querySelectorAll('.tab-btn').forEach(function (b) { b.classList.remove('active'); });
+    panel.querySelectorAll('.tab-pane').forEach(function (p) { p.classList.remove('active'); });
+    btn.classList.add('active');
+    /* Support both kebab-case and converted IDs e.g. api-server → api-server-tab-log */
+    var pane = document.getElementById(svc + '-tab-' + tab);
+    if (pane) pane.classList.add('active');
+    if (tab === 'log') initLogViewer(svc);
+    if (tab === 'settings' && svc === 'pbremote' && !_settingsLoaded['pbremote']) loadPBRemoteSettings();
+    else if (tab === 'settings' && !_settingsLoaded[svc]) loadSettings(svc);
+    if (tab === 'status' && svc === 'pbdata') {
+      loadFetchSummary();
+      if (!_fetchSummaryTimer) _fetchSummaryTimer = setInterval(loadFetchSummary, 5000);
+    } else {
+      clearInterval(_fetchSummaryTimer); _fetchSummaryTimer = null;
+    }
+    if (tab === 'info' && svc === 'pbremote') loadPBRemoteInfo();
+    /* persist panel + tab in URL hash */
+    history.replaceState(null, '', '#' + svc + '/' + tab);
+  };
+
+  /* ── Restore panel/tab from URL hash on load ───────────── */
+  (function restoreFromHash() {
+    var hash = window.location.hash.replace('#', '');
+    if (!hash) return;
+    var parts = hash.split('/');
+    var panelId = parts[0];
+    var tabId   = parts[1] || null;
+    var panel = document.getElementById('panel-' + panelId);
+    if (!panel) return;
+    selectPanel(panelId);
+    if (tabId) {
+      var tabBtn = panel.querySelector('.tab-btn[data-tab="' + tabId + '"]');
+      if (tabBtn) window.switchTab(tabBtn);
+    }
+  })();
+
+  /* ── Log viewer ────────────────────────────────────────── */
+  function initLogViewer(svcId) {
+    if (_logViewers[svcId]) return;
+    var svc = SERVICES.find(function (s) { return s.id === svcId; });
+    if (!svc) return;
+    var el = document.getElementById('log-' + svcId);
+    if (!el) return;
+    try {
+      var viewer = new LogViewerPanel({
+        containerId: 'log-' + svcId,
+        wsBase:      WS_BASE,
+        token:       TOKEN,
+        defaultFile: svc.logFile,
+        height:      'calc(100vh - 200px)',
+      });
+      viewer.open();
+      _logViewers[svcId] = viewer;
+    } catch (e) {
+      el.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Log viewer unavailable: ' + e.message + '</div>';
+    }
+  }
+
+  /* ── Service actions ───────────────────────────────────── */
+  window.svcAction = function (svcId, action) {
+    fetch(API_BASE + '/' + svcId + '/' + action + '?token=' + TOKEN, { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (d.running !== undefined) { _status[svcId] = d; updateStatusUI(); } })
+      .catch(function () {});
+  };
+
+  window.restartApiServer = function () {
+    var btn = document.querySelector('[onclick="restartApiServer()"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Restarting\u2026'; }
+    var origin = API_BASE.replace(/\/api\/services$/, '');
+    fetch(API_BASE + '/api-server/restart?token=' + TOKEN, { method: 'POST' })
+      .then(function () { if (typeof showRestartOverlay === 'function') showRestartOverlay(origin, TOKEN); })
+      .catch(function () { if (typeof showRestartOverlay === 'function') showRestartOverlay(origin, TOKEN); });
+  };
+
+  /* ── Settings loaders ──────────────────────────────────── */
+  function loadSettings(svcId) {
+    _settingsLoaded[svcId] = true;
+    var ep = { pbmon: '/settings/pbmon', pbcoindata: '/settings/pbcoindata', pbdata: '/settings/pbdata', 'api-server': '/settings/api-server' }[svcId];
+    if (!ep) return;
+    fetch(API_BASE + ep + '?token=' + TOKEN)
+      .then(function (r) { return r.json(); })
+      .then(function (data) { applySettings(svcId, data); })
+      .catch(function () {});
+  }
+
+  function applySettings(svcId, data) {
+    if (svcId === 'pbmon') {
+      _setVal('pbmon-token', data.telegram_token || '');
+      _setVal('pbmon-chat-id', data.telegram_chat_id || '');
+    }
+    if (svcId === 'pbcoindata') {
+      _setVal('coindata-api-key', data.api_key || '');
+      _setVal('coindata-fetch-interval', data.fetch_interval || 24);
+      _setVal('coindata-fetch-limit', data.fetch_limit || 5000);
+      _setVal('coindata-metadata-interval', data.metadata_interval || 1);
+      _setVal('coindata-mapping-interval', data.mapping_interval || 24);
+    }
+    if (svcId === 'pbdata') {
+      renderPBDataSettings(data);
+    }
+    if (svcId === 'api-server') {
+      _setVal('apiserver-host', data.host || '0.0.0.0');
+      _setVal('apiserver-port', data.port || 8000);
+      var ar = document.getElementById('apiserver-auto-restart');
+      if (ar) ar.checked = data.auto_restart !== false;
+      renderVpsHosts(data.available_hosts || [], data.enabled_hosts || []);
+    }
+  }
+
+  function _setVal(id, val) {
+    var el = document.getElementById(id);
+    if (el) el.value = val;
+  }
+
+  /* ── PBData settings renderer ──────────────────────────── */
+  function renderPBDataSettings(data) {
+    var wrap = document.getElementById('pbdata-settings-wrap');
+    if (!wrap) return;
+    var allUsers   = data.all_users || [];
+    var fetchUsers = data.fetch_users || [];
+    var trades     = data.trades_users || [];
+    var logLevel   = data.log_level || 'INFO';
+    var LL = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL', 'NONE'];
+
+    var html = '<div class="form-section-title">Users</div>';
+    html += '<div class="form-field" style="margin-bottom:0.75rem;">';
+    html += '<span class="form-label">Fetch Users <span style="color:#4a5568;font-weight:400;">(click to toggle)</span></span>';
+    html += '<input class="form-input" type="text" placeholder="Filter users\u2026" style="margin-bottom:0.35rem;width:220px;" oninput="filterTags(\'pbdata-fetch-users\',this.value)">';
+    html += '<div class="multiselect-wrap" id="pbdata-fetch-users">';
+    if (!allUsers.length) { html += '<span style="color:#4a5568;font-size:var(--fs-xs);">No users found</span>'; }
+    allUsers.forEach(function (u) {
+      var active = fetchUsers.indexOf(u) !== -1;
+      html += '<span class="tag' + (active ? '' : ' inactive') + '" data-user="' + _esc(u) + '" onclick="this.classList.toggle(\'inactive\')">' + _esc(u) + '</span>';
+    });
+    html += '</div></div>';
+
+    html += '<div class="form-field" style="margin-bottom:1rem;">';
+    html += '<span class="form-label">Executions Download <span style="color:#4a5568;font-weight:400;">(opt-in)</span></span>';
+    html += '<input class="form-input" type="text" placeholder="Filter users\u2026" style="margin-bottom:0.35rem;width:220px;" oninput="filterTags(\'pbdata-trades-users\',this.value)">';
+    html += '<div class="multiselect-wrap" id="pbdata-trades-users">';
+    if (!allUsers.length) { html += '<span style="color:#4a5568;font-size:var(--fs-xs);">No users found</span>'; }
+    allUsers.forEach(function (u) {
+      var active = trades.indexOf(u) !== -1;
+      html += '<span class="tag' + (active ? '' : ' inactive') + '" data-user="' + _esc(u) + '" onclick="this.classList.toggle(\'inactive\')">' + _esc(u) + '</span>';
+    });
+    html += '</div></div>';
+
+    html += '<hr class="form-divider">';
+    html += '<div class="form-section-title">Log Level</div>';
+    html += '<div class="form-row" style="margin-bottom:1rem;"><div class="form-field"><select class="form-select" id="pbdata-log-level">';
+    LL.forEach(function (l) { html += '<option' + (l === logLevel ? ' selected' : '') + '>' + l + '</option>'; });
+    html += '</select></div></div>';
+
+    html += '<hr class="form-divider">';
+    html += '<div class="form-section-title">Timers</div>';
+    html += '<div class="form-row">';
+    html += _numFld('pbdata-ws-max',         'Max private WS',         data.ws_max,                           0,    999,   1);
+    html += _numFld('pbdata-pollers-delay',   'Startup delay (s)',      data.pollers_delay_seconds,            0,   3600,   5);
+    html += _numFld('pbdata-combined',        'Combined interval (s)',  data.poll_interval_combined_seconds,  10,   3600,  10);
+    html += _numFld('pbdata-history',         'History interval (s)',   data.poll_interval_history_seconds,   10,   3600,  10);
+    html += '</div><div class="form-row">';
+    html += _numFld('pbdata-executions',      'Executions interval (s)',data.poll_interval_executions_seconds,60, 86400,  60);
+    html += _numFld('pbdata-rest-pause',      'REST pause/user (s)',    data.shared_rest_user_pause_seconds,   0,     10, 0.05, true);
+    html += '</div>';
+
+    /* ── Shared REST pause per exchange (collapsible) ── */
+    var exPauses = data.shared_rest_pause_by_exchange || {};
+    var EX_LIST = ['binance','bingx','bitget','bybit','gateio','hyperliquid','kucoin','okx'];
+    html += '<details id="pbdata-ex-pauses" open style="margin-top:1rem;border:1px solid #1e2736;border-radius:6px;overflow:hidden;">';
+    html += '<summary style="padding:0.5rem 0.75rem;cursor:pointer;background:#111827;color:#94a3b8;font-size:var(--fs-sm);font-weight:600;user-select:none;">&#9660; Shared REST pause per exchange</summary>';
+    html += '<div style="padding:0.6rem 0.9rem 0.4rem;font-size:var(--fs-xs);color:#4a5568;border-bottom:1px solid #1e2736;">Per-exchange pause between users. Defaults come from PBData (e.g. hyperliquid/bybit) unless you set an override; only differences vs the global pause are saved as overrides.</div>';
+    html += '<div class="form-row" style="padding:0.75rem;flex-wrap:wrap;">';
+    EX_LIST.forEach(function (ex) {
+      var def = exPauses[ex] !== undefined ? exPauses[ex] : data.shared_rest_user_pause_seconds;
+      html += '<div class="form-field"><span class="form-label">' + ex + ' (s)</span>'
+            + '<input class="form-input narrow" type="number" id="pbdata-ex-' + ex + '" min="0" max="30" step="0.25" value="' + parseFloat(def).toFixed(2) + '"'
+            + ' onblur="this.value=parseFloat(this.value||0).toFixed(2)"></div>';
+    });
+    html += '</div></details>';
+
+    html += '<button class="form-btn save" onclick="savePBDataSettings()">&#128190; Save</button>';
+    html += '<span class="inline-msg" id="pbdata-save-msg"></span>';
+    wrap.innerHTML = html;
+  }
+
+  function _numFld(id, lbl, val, min, max, step, isFloat) {
+    return '<div class="form-field"><span class="form-label">' + lbl + '</span>'
+         + '<input class="form-input narrow" type="number" id="' + id + '" min="' + min + '" max="' + max + '" step="' + step + '" value="' + (isFloat ? parseFloat(val).toFixed(2) : parseInt(val, 10)) + '"></div>';
+  }
+
+  function _esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function togglePw(inputId, btn) {
+    var inp = document.getElementById(inputId);
+    if (!inp) return;
+    if (inp.type === 'password') {
+      inp.type = 'text';
+      btn.style.color = '#93c5fd';
+    } else {
+      inp.type = 'password';
+      btn.style.color = '';
+    }
+  }
+  window.togglePw = togglePw;
+
+  function filterTags(wrapId, query) {
+    var q = query.trim().toLowerCase();
+    document.querySelectorAll('#' + wrapId + ' .tag').forEach(function (tag) {
+      tag.style.display = (!q || tag.getAttribute('data-user').toLowerCase().indexOf(q) !== -1) ? '' : 'none';
+    });
+  }
+  window.filterTags = filterTags;
+
+  /* ── VPS host toggle ───────────────────────────────────── */
+  function renderVpsHosts(available, enabled) {
+    var wrap = document.getElementById('vps-hosts-select');
+    if (!wrap) return;
+    if (!available.length) {
+      wrap.innerHTML = '<span style="color:#4a5568;font-size:var(--fs-xs);">No VPS hosts configured</span>';
+      return;
+    }
+    var html = '';
+    available.forEach(function (h) {
+      var active = enabled.indexOf(h) !== -1;
+      html += '<span class="tag' + (active ? '' : ' inactive') + '" data-host="' + _esc(h) + '" onclick="this.classList.toggle(\'inactive\')">' + _esc(h) + '</span>';
+    });
+    wrap.innerHTML = html;
+  }
+
+  /* ── PBRemote settings ─────────────────────────────────── */
+  var _bucketEditOpen = false;
+  var _bucketData = {};  /* current bucket config being edited */
+  var _monitorSnapshot = {};  /* saved values for dirty detection */
+
+  function loadPBRemoteSettings() {
+    _settingsLoaded['pbremote'] = true;
+    var wrap = document.getElementById('pbremote-settings-wrap');
+    if (wrap) wrap.innerHTML = '<div style="color:#4a5568;font-style:italic;">Loading&#8230;</div>';
+    Promise.all([
+      fetch(API_BASE + '/settings/pbremote/buckets?token=' + TOKEN).then(function (r) { return r.json(); }),
+      fetch(API_BASE + '/settings/monitor-config?token=' + TOKEN).then(function (r) { return r.json(); }),
+    ])
+    .then(function (results) { renderPBRemoteSettings(results[0], results[1], wrap); })
+    .catch(function () { if (wrap) wrap.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Failed to load settings.</div>'; });
+  }
+
+  function renderPBRemoteSettings(bucketsData, monitorData, wrap) {
+    if (!wrap) return;
+    var buckets = (bucketsData && bucketsData.buckets) || [];
+    var rcloneOk = bucketsData && bucketsData.rclone_available;
+    var selected = (bucketsData && bucketsData.selected) || '';
+
+    var bucketOpts = '<option value="">— select —</option>';
+    buckets.forEach(function (b) {
+      bucketOpts += '<option value="' + _esc(b) + '"' + (b === selected ? ' selected' : '') + '>' + _esc(b) + '</option>';
+    });
+
+    var html = '';
+
+    /* ── Bucket section ── */
+    html += '<div class="form-section-title">Bucket</div>';
+    if (!rcloneOk) {
+      html += '<div style="background:#2d1515;border:1px solid #7f1d1d;border-radius:8px;padding:0.6rem 0.9rem;color:#fca5a5;font-size:var(--fs-xs);margin-bottom:1rem;">'
+           +  '&#9888; rclone not installed. Bucket management is unavailable.</div>';
+    } else {
+      html += '<div class="form-row" style="align-items:flex-end;gap:0.75rem;width:fit-content;">';
+      html += '<div class="form-field"><span class="form-label">Select bucket</span>';
+      html += '<select class="form-select" id="pbremote-bucket-select" style="min-width:200px;" onchange="onBucketSelect(this.value)">' + bucketOpts + '</select></div>';
+      html += '<div style="display:flex;gap:0.5rem;">';
+      html += '<button class="form-btn" onclick="openBucketEdit(true)">&#43; Add</button>';
+      if (buckets.length) {
+        html += '<button class="form-btn" onclick="openBucketEdit(false)">&#9998; Edit</button>';
+      }
+      html += '</div></div>';
+      if (!buckets.length) {
+        html += '<div style="color:#64748b;font-size:var(--fs-xs);margin-top:0.5rem;">No bucket found. Click <b>Add</b> to configure rclone.</div>';
+      }
+    }
+
+    /* Bucket edit form placeholder */
+    html += '<div id="bucket-edit-form" style="display:none;"></div>';
+    html += '<span class="inline-msg" id="bucket-action-msg"></span>';
+
+    html += '<hr class="form-divider">';
+
+    /* ── Monitor Settings section ── */
+    html += '<div class="form-section-title">Monitor Settings</div>';
+
+    var groups = [
+      { title: 'Server Monitor', prefix: 'server', fields: ['mem', 'swap', 'disk', 'cpu'] },
+      { title: 'V7 Monitor', prefix: 'v7', fields: ['mem', 'swap', 'cpu', 'error', 'traceback'] },
+      { title: 'Multi Monitor', prefix: 'multi', fields: ['mem', 'swap', 'cpu', 'error', 'traceback'] },
+      { title: 'Single Monitor', prefix: 'single', fields: ['mem', 'swap', 'cpu', 'error', 'traceback'] },
+    ];
+
+    _monitorSnapshot = {};
+    groups.forEach(function (g) {
+      html += '<div style="margin-bottom:1rem;">';
+      html += '<div style="font-size:var(--fs-sm);color:#93c5fd;font-weight:600;margin-bottom:0.4rem;">' + g.title + '</div>';
+      html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:0.5rem;">';
+      g.fields.forEach(function (f) {
+        var warnKey = f + '_warning_' + g.prefix;
+        var errKey = f + '_error_' + g.prefix;
+        var warnVal = monitorData[warnKey] !== undefined ? monitorData[warnKey] : 0;
+        var errVal = monitorData[errKey] !== undefined ? monitorData[errKey] : 0;
+        _monitorSnapshot[warnKey] = warnVal;
+        _monitorSnapshot[errKey] = errVal;
+        var label = f.charAt(0).toUpperCase() + f.slice(1);
+        html += '<div style="display:flex;flex-direction:column;gap:2px;">';
+        html += '<span style="font-size:var(--fs-xs);color:#94a3b8;">' + _esc(label) + ' warn</span>';
+        html += '<input class="form-input" type="number" step="any" id="mc-' + warnKey + '" value="' + warnVal + '" style="width:100%;">';
+        html += '</div>';
+        html += '<div style="display:flex;flex-direction:column;gap:2px;">';
+        html += '<span style="font-size:var(--fs-xs);color:#94a3b8;">' + _esc(label) + ' err</span>';
+        html += '<input class="form-input" type="number" step="any" id="mc-' + errKey + '" value="' + errVal + '" style="width:100%;">';
+        html += '</div>';
+      });
+      html += '</div></div>';
+    });
+
+    html += '<div style="margin-top:1rem;">';
+    html += '<button class="form-btn save" onclick="saveMonitorConfig()">&#128190; Save Monitor Settings</button>';
+    html += '<span class="inline-msg" id="monitor-settings-msg"></span>';
+    html += '</div>';
+    wrap.innerHTML = html;
+  }
+
+  /* ── Bucket select → load config ── */
+  window.onBucketSelect = function (val) {
+    if (!val) return;
+    fetch(API_BASE + '/settings/pbremote/bucket-config?bucket=' + encodeURIComponent(val) + '&token=' + TOKEN)
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (d.ok) _bucketData = d; });
+  };
+
+  /* ── Open bucket edit form ── */
+  window.openBucketEdit = function (isNew) {
+    var form = document.getElementById('bucket-edit-form');
+    if (!form) return;
+    if (isNew) {
+      _bucketData = { region: '', endpoint: '', access_key_id: '', secret_access_key: '' };
+      _showBucketForm(form, '');
+    } else {
+      var sel = _val('pbremote-bucket-select');
+      if (!sel) return;
+      form.innerHTML = '<div style="color:#4a5568;font-style:italic;">Loading config&#8230;</div>';
+      form.style.display = 'block';
+      fetch(API_BASE + '/settings/pbremote/bucket-config?bucket=' + encodeURIComponent(sel) + '&token=' + TOKEN)
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok) {
+            _bucketData = d;
+            _showBucketForm(form, sel.replace(/:$/, ''));
+          } else {
+            form.innerHTML = '<div style="color:#fca5a5;">Failed: ' + _esc(d.error || 'unknown') + '</div>';
+          }
+        })
+        .catch(function () { form.innerHTML = '<div style="color:#fca5a5;">Failed to load bucket config.</div>'; });
+    }
+  };
+
+  function _showBucketForm(form, name) {
+    var html = '<div style="background:#0d1621;border:1px solid #1e2736;border-radius:8px;padding:1rem;margin-top:0.75rem;">';
+    html += '<div style="color:#64748b;font-size:var(--fs-xs);margin-bottom:0.75rem;">'
+         +  '1. Get your free 15 GB account at <a href="https://c2.synology.com/en-uk/object-storage/overview" target="_blank" style="color:#63b3ed;">Synology C2</a>.<br>'
+         +  '2. Create a bucket &middot; fill in details &middot; Save &middot; Test.</div>';
+    html += '<div class="form-row">';
+    html += '<div class="form-field"><span class="form-label">Bucket name</span>';
+    html += '<input class="form-input medium" type="text" id="bucket-edit-name" value="' + _esc(name) + '"></div>';
+    html += '</div>';
+    html += '<div class="form-row">';
+    html += '<div class="form-field"><span class="form-label">Region</span>';
+    html += '<input class="form-input" type="text" id="bucket-edit-region" value="' + _esc(_bucketData.region || '') + '"></div>';
+    html += '<div class="form-field"><span class="form-label">Endpoint</span>';
+    html += '<input class="form-input" type="text" id="bucket-edit-endpoint" value="' + _esc(_bucketData.endpoint || '') + '"></div>';
+    html += '</div>';
+    html += '<div class="form-row">';
+    html += '<div class="form-field"><span class="form-label">Access Key ID</span>';
+    html += '<input class="form-input" type="text" id="bucket-edit-access-key" value="' + _esc(_bucketData.access_key_id || '') + '"></div>';
+    html += '<div class="form-field"><span class="form-label">Secret Access Key</span>';
+    html += '<input class="form-input" type="password" id="bucket-edit-secret-key" value="' + _esc(_bucketData.secret_access_key || '') + '"></div>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:0.5rem;margin-top:0.75rem;">';
+    html += '<button class="form-btn save" onclick="saveBucket()">&#128190; Save</button>';
+    html += '<button class="form-btn" onclick="testBucket()">&#128268; Test</button>';
+    html += '<button class="form-btn stop" onclick="deleteBucket()">&#128465; Delete</button>';
+    html += '<button class="form-btn" onclick="closeBucketEdit()">&#10005; Cancel</button>';
+    html += '</div>';
+    html += '</div>';
+    form.innerHTML = html;
+    form.style.display = 'block';
+  }
+
+  window.closeBucketEdit = function () {
+    var form = document.getElementById('bucket-edit-form');
+    if (form) { form.style.display = 'none'; form.innerHTML = ''; }
+  };
+
+  window.saveBucket = function () {
+    var name = _val('bucket-edit-name');
+    if (!name) { _showMsg('bucket-action-msg', 'Bucket name required', true); return; }
+    var body = {
+      bucket_name: name,
+      region: _val('bucket-edit-region'),
+      endpoint: _val('bucket-edit-endpoint'),
+      access_key_id: _val('bucket-edit-access-key'),
+      secret_access_key: _val('bucket-edit-secret-key'),
+    };
+    fetch(API_BASE + '/settings/pbremote/bucket-save?token=' + TOKEN, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) {
+          _resultPopup('Info', 'Bucket saved', d.message || '', true);
+          closeBucketEdit();
+          _settingsLoaded['pbremote'] = false;
+          loadPBRemoteSettings();
+        } else {
+          _resultPopup('Error', d.error || d.detail || 'Save failed', '', false);
+        }
+      }).catch(function () { _showMsg('bucket-action-msg', 'Save failed', true); });
+  };
+
+  window.testBucket = function () {
+    var name = _val('bucket-edit-name');
+    if (!name) { _showMsg('bucket-action-msg', 'Bucket name required', true); return; }
+    var bk = name.endsWith(':') ? name : name + ':';
+    _resultPopup('Info', 'Testing\u2026', '', true, true);
+    fetch(API_BASE + '/settings/pbremote/bucket-test?token=' + TOKEN, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        bucket: bk,
+        region:             _val('bucket-edit-region'),
+        endpoint:           _val('bucket-edit-endpoint'),
+        access_key_id:      _val('bucket-edit-access-key'),
+        secret_access_key:  _val('bucket-edit-secret-key'),
+      }),
+    }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) {
+          _resultPopup('Info', 'Connection successful', d.message || '', true);
+        } else {
+          _resultPopup('Error', 'Test failed', d.message || d.error || '', false);
+        }
+      }).catch(function () { _showMsg('bucket-action-msg', 'Test failed', true); });
+  };
+
+  window.deleteBucket = function () {
+    var sel = _val('pbremote-bucket-select');
+    if (!sel) { _showMsg('bucket-action-msg', 'No bucket selected', true); return; }
+    if (!confirm('Delete bucket "' + sel + '"?')) return;
+    fetch(API_BASE + '/settings/pbremote/bucket-delete?token=' + TOKEN, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ bucket: sel }),
+    }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) {
+          _resultPopup('Info', 'Bucket deleted', d.message || '', true);
+          closeBucketEdit();
+          _settingsLoaded['pbremote'] = false;
+          loadPBRemoteSettings();
+        } else {
+          _resultPopup('Error', d.message || d.error || 'Delete failed', '', false);
+        }
+      }).catch(function () { _showMsg('bucket-action-msg', 'Delete failed', true); });
+  };
+
+  /* ── Save monitor config ── */
+  window.saveMonitorConfig = function () {
+    var body = {};
+    var fields = [
+      'mem_warning_server', 'mem_error_server', 'swap_warning_server', 'swap_error_server',
+      'disk_warning_server', 'disk_error_server', 'cpu_warning_server', 'cpu_error_server',
+      'mem_warning_v7', 'mem_error_v7', 'swap_warning_v7', 'swap_error_v7',
+      'cpu_warning_v7', 'cpu_error_v7', 'error_warning_v7', 'error_error_v7',
+      'traceback_warning_v7', 'traceback_error_v7',
+      'mem_warning_multi', 'mem_error_multi', 'swap_warning_multi', 'swap_error_multi',
+      'cpu_warning_multi', 'cpu_error_multi', 'error_warning_multi', 'error_error_multi',
+      'traceback_warning_multi', 'traceback_error_multi',
+      'mem_warning_single', 'mem_error_single', 'swap_warning_single', 'swap_error_single',
+      'cpu_warning_single', 'cpu_error_single', 'error_warning_single', 'error_error_single',
+      'traceback_warning_single', 'traceback_error_single',
+    ];
+    fields.forEach(function (f) {
+      var el = document.getElementById('mc-' + f);
+      if (el) body[f] = parseFloat(el.value) || 0;
+    });
+    fetch(API_BASE + '/settings/monitor-config?token=' + TOKEN, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) { _showMsg('monitor-settings-msg', 'Saved', false); }
+        else { _showMsg('monitor-settings-msg', d.error || d.detail || 'Save failed', true); }
+      }).catch(function () { _showMsg('monitor-settings-msg', 'Save failed', true); });
+  };
+
+  function _showMsg(id, msg, isError) { _flash(id, msg, isError); }
+
+  /* ── Result popup dialog (like old Streamlit result_popup) ── */
+  function _resultPopup(title, message, output, isOk, hideFoot) {
+    var isNew = !document.getElementById('result-modal');
+    var modal = document.getElementById('result-modal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'result-modal';
+      modal.className = 'result-modal';
+      modal.style.top  = '60px';
+      modal.style.left = Math.max(20, (window.innerWidth  - 720) / 2) + 'px';
+    }
+    /* set content first, then append/update */
+    var icon = isOk ? '&#9989;' : '&#10060;';
+    modal.innerHTML =
+      '<div class="result-modal-header"><h3>' + _esc(title) + '</h3>'
+      + '<button class="result-modal-close" onclick="document.getElementById(\'result-modal\').remove()">&times;</button></div>'
+      + '<div class="result-modal-status ' + (isOk ? 'ok' : 'fail') + '">' + icon + ' ' + _esc(message) + '</div>'
+      + (output ? '<div class="result-modal-body">' + _esc(output) + '</div>' : '')
+      + (hideFoot ? '' : '<div class="result-modal-footer"><button onclick="document.getElementById(\'result-modal\').remove()">OK</button></div>');
+    if (isNew) document.body.appendChild(modal);
+    /* attach drag to header */
+    (function () {
+      var hdr = modal.querySelector('.result-modal-header');
+      var dx = 0, dy = 0, dragging = false;
+      function onMouseDown(e) {
+        if (e.target.closest('.result-modal-close')) return;
+        dragging = true;
+        dx = e.clientX - modal.getBoundingClientRect().left;
+        dy = e.clientY - modal.getBoundingClientRect().top;
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      }
+      function onMouseMove(e) {
+        if (!dragging) return;
+        modal.style.left = (e.clientX - dx) + 'px';
+        modal.style.top  = (e.clientY - dy) + 'px';
+      }
+      function onMouseUp() {
+        dragging = false;
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      }
+      hdr.addEventListener('mousedown', onMouseDown);
+    })();
+  }
+
+  /* ── PBRemote info ─────────────────────────────────────── */
+  function loadPBRemoteInfo() {
+    var wrap = document.getElementById('pbremote-info-wrap');
+    if (wrap) wrap.innerHTML = '<div style="color:#4a5568;font-style:italic;">Loading&#8230;</div>';
+    Promise.all([
+      fetch(API_BASE + '/pbremote/info?token=' + TOKEN).then(function (r) { return r.json(); }),
+      fetch(API_BASE + '/pbremote/instances?token=' + TOKEN).then(function (r) { return r.json(); }).catch(function () { return {instances:{},available:false}; }),
+    ]).then(function (results) {
+      renderPBRemoteInfo(results[0], results[1], wrap);
+    }).catch(function () {
+      if (wrap) wrap.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Failed to load PBRemote info.</div>';
+    });
+  }
+
+  function renderPBRemoteInfo(data, instData, wrap) {
+    if (!wrap) return;
+    if (!data.configured) {
+      wrap.innerHTML = '<div style="background:#2d1515;border:1px solid #7f1d1d;border-radius:8px;padding:0.75rem 1rem;color:#fca5a5;font-size:var(--fs-sm);">'
+        + '&#9888; PBRemote not configured: ' + _esc(data.error || 'unknown error') + '</div>'
+        + '<div style="margin-top:0.75rem;color:#64748b;font-size:var(--fs-xs);">Use the &#9881; Settings tab to configure bucket, role and directories.</div>';
+      return;
+    }
+    var syncCls = data.api_synced ? 'color:#4ade80' : 'color:#fca5a5';
+    var syncLbl = data.api_synced ? '&#10003; In sync' : '&#10007; Out of sync';
+    var roleColor = data.role === 'master' ? '#fcd34d' : '#93c5fd';
+    var html = '<div class="form-row" style="margin-bottom:1rem;">';
+    html += '<div class="fetch-stat"><div class="fetch-stat-label">Role</div><div class="fetch-stat-val" style="color:' + roleColor + '">' + _esc(data.role || '\u2014') + '</div></div>';
+    html += '<div class="fetch-stat"><div class="fetch-stat-label">Bucket</div><div class="fetch-stat-val" style="font-size:var(--fs-sm);word-break:break-all;">' + _esc(data.bucket || '\u2014') + '</div></div>';
+    html += '</div>';
+    html += '<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1.25rem;">';
+    html += '<span style="font-size:var(--fs-sm);' + syncCls + '">' + syncLbl + '</span>';
+    html += '<button class="form-btn" id="pbremote-sync-btn" onclick="triggerApiSync(this)">&#8635; Push API keys</button>';
+    html += '<span class="inline-msg" id="pbremote-sync-msg"></span>';
+    html += '</div>';
+    html += '<hr class="form-divider">';
+
+    /* ── Instance table: one table, collapsible server separator rows ── */
+    var allInst = (instData && instData.instances) || {};
+    var sysMap  = (instData && instData.system)    || {};
+    var vmap = {'7': 'V7', '6': 'Multi', 's': 'Single'};
+    var sortedServers = data.remote_servers.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
+    var totalInst = 0;
+    sortedServers.forEach(function (s) { totalInst += (allInst[s.name] || []).length; });
+
+    function _mb(bytes) { return bytes ? (bytes / 1048576).toFixed(0) : '0'; }
+    function _sysCell(label, used, free, total, pct) {
+      var col = pct > 85 ? '#ff4b4b' : pct > 60 ? '#f59e0b' : '#4ade80';
+      return '<div style="display:flex;flex-direction:column;gap:2px;min-width:0;">' +
+        '<div style="font-size:var(--fs-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+        '<span style="color:#64748b;">' + label + '</span>\u00a0' +
+        '<span style="color:#4ade80;">' + _mb(free) + '</span>' +
+        '<span style="color:#4a5568;">/</span>' +
+        '<span style="color:#ff4b4b;">' + _mb(used) + '</span>' +
+        '<span style="color:#4a5568;">/</span>' +
+        '<span style="color:#93c5fd;">' + _mb(total) + '\u00a0MB</span>\u00a0' +
+        '<span style="color:' + col + ';">' + pct.toFixed(0) + '%</span>' +
+        '</div>' +
+        '<div style="width:100%;height:4px;background:#1e2736;border-radius:2px;">' +
+        '<div style="width:' + Math.min(100, pct).toFixed(0) + '%;height:100%;background:' + col + ';border-radius:2px;"></div>' +
+        '</div></div>';
+    }
+    function _cpuCell(cpu) {
+      var col = cpu > 80 ? '#ff4b4b' : cpu > 50 ? '#f59e0b' : '#4ade80';
+      return '<div style="display:flex;flex-direction:column;gap:2px;min-width:0;">' +
+        '<div style="font-size:var(--fs-xs);white-space:nowrap;">' +
+        '<span style="color:#64748b;">CPU</span>\u00a0' +
+        '<span style="color:' + col + ';">' + cpu.toFixed(1) + '%</span>' +
+        '</div>' +
+        '<div style="width:100%;height:4px;background:#1e2736;border-radius:2px;">' +
+        '<div style="width:' + Math.min(100, cpu).toFixed(0) + '%;height:100%;background:' + col + ';border-radius:2px;"></div>' +
+        '</div></div>';
+    }
+
+    html += '<hr class="form-divider">';
+    html += '<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">';
+    html += '<span class="form-section-title" style="margin:0;">Remote Servers (' + data.remote_servers.length + ') \u2014 ' + totalInst + ' instances</span>';
+    html += '<button class="form-btn" onclick="pbriExpandAll(true)">Expand all</button>';
+    html += '<button class="form-btn" onclick="pbriExpandAll(false)">Collapse all</button>';
+    html += '<button class="form-btn" id="pbri-sys-btn" onclick="pbriToggleSys(this)">Hide metrics</button>';
+    html += '</div>';
+
+    if (!data.remote_servers.length) {
+      html += '<div style="color:#4a5568;font-size:var(--fs-sm);">No remote servers found.</div>';
+    } else {
+      html += '<div style="overflow:auto;max-height:70vh;" id="pbri-table-wrap"><table class="fs-table" style="border-collapse:collapse;">';
+      html += '<thead><tr>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;">Name</th>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;">Ver</th>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;">Start</th>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;">Mem MB</th>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;">Swap MB</th>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;">CPU%</th>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="PNL fills today">PNLs T</th>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="PNL today">PNL T</th>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="PNL fills yesterday">PNLs Y</th>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="PNL yesterday">PNL Y</th>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="Infos today">Info T</th>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="Errors today">Err T</th>' +
+        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="Tracebacks today">TB T</th>' +
+        '</tr></thead><tbody>';
+      sortedServers.forEach(function (s) {
+        var serverInst = allInst[s.name] || [];
+        var sys = sysMap[s.name] || null;
+        var sid = 'pbri-srv-' + s.name.replace(/[^a-zA-Z0-9]/g,'_');
+        var onlineCol = s.online ? '#4ade80' : '#ff4b4b';
+        var onlineLbl = s.online ? 'Online' : 'Offline';
+
+        /* ── server name row (clickable toggle) ── */
+        html += '<tr class="pbri-sep" data-sid="' + _esc(sid) + '" onclick="pbriToggle(this)" style="background:#0d1320;cursor:pointer;">' +
+          '<td colspan="13" style="padding:0.3rem 0.6rem;border-top:2px solid #1e2736;user-select:none;">' +
+          '<span id="' + sid + '-ico" style="font-size:var(--fs-xs);color:#64748b;margin-right:4px;">\u25bc</span>' +
+          '<span class="card-dot ' + (s.online ? 'running' : 'stopped') + '" style="display:inline-block;vertical-align:middle;"></span>' +
+          '<span style="font-size:var(--fs-sm);color:#e2e8f0;font-weight:600;margin-left:4px;">' + _esc(s.name) + '</span>' +
+          (s.role ? '<span style="font-size:var(--fs-xs);color:#64748b;margin-left:6px;">' + _esc(s.role) + '</span>' : '') +
+          '<span style="font-size:var(--fs-xs);color:' + onlineCol + ';margin-left:8px;">' + onlineLbl + '</span>' +
+          (serverInst.length ? '<span style="font-size:var(--fs-xs);color:#64748b;margin-left:8px;">' + serverInst.length + ' instance' + (serverInst.length !== 1 ? 's' : '') + '</span>' : '') +
+          '</td></tr>';
+
+        /* ── system metrics row (always visible, 4-column grid) ── */
+        if (sys && sys.mem_total) {
+          html += '<tr class="pbri-sys" style="background:#0a1018;">' +
+            '<td colspan="13" style="padding:0.25rem 0.6rem;border-bottom:1px solid #1e2736;">' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:0.4rem 1rem;">' +
+            _sysCell('RAM',  sys.mem_used,  sys.mem_available, sys.mem_total,  sys.mem_percent) +
+            _sysCell('Disk', sys.disk_used, sys.disk_free,     sys.disk_total, sys.disk_percent) +
+            (sys.swap_total ? _sysCell('Swap', sys.swap_used, sys.swap_free, sys.swap_total, sys.swap_percent) : '<div></div>') +
+            _cpuCell(sys.cpu) +
+            '</div></td></tr>';
+        }
+
+        /* ── instance rows (collapsible) ── */
+        if (!serverInst.length) {
+          html += '<tr class="pbri-row ' + sid + '" style="display:none;background:#0d1320;">' +
+            '<td colspan="13" style="padding:0.25rem 0.6rem;color:#4a5568;font-size:var(--fs-xs);">No running instances</td></tr>';
+        }
+        serverInst.forEach(function (inst) {
+          var ver      = vmap[inst.p] || inst.p || '?';
+          var memMB    = inst.m && inst.m[0]  ? (inst.m[0]  / 1048576).toFixed(1) : '0';
+          var swapMB   = inst.m && inst.m.length >= 10 && inst.m[9] ? (inst.m[9] / 1048576).toFixed(1) : '0';
+          var startStr = inst.st ? new Date(inst.st * 1000).toISOString().slice(0,16).replace('T',' ') : '?';
+          var ptv = inst.pt || 0, pyv = inst.py || 0;
+          var pnlT    = ptv.toFixed(6);
+          var pnlY    = pyv.toFixed(6);
+          var pnlTCls = ptv > 0 ? 'color:#4ade80' : ptv === 0 ? 'color:#f59e0b' : 'color:#fca5a5';
+          var pnlYCls = pyv > 0 ? 'color:#4ade80' : pyv === 0 ? 'color:#f59e0b' : 'color:#fca5a5';
+          var cpuVal  = inst.c || 0;
+          var cpuStr  = cpuVal.toFixed(1);
+          var cpuCls  = cpuVal === 0 ? 'color:#f59e0b' : '';
+          html += '<tr class="pbri-row ' + sid + '" style="display:none;">' +
+            '<td>' + _esc(inst.u || '?') + '</td>' +
+            '<td>' + _esc(ver) + '</td>' +
+            '<td>' + startStr + '</td>' +
+            '<td>' + memMB + '</td>' +
+            '<td>' + swapMB + '</td>' +
+            '<td' + (cpuCls ? ' style="' + cpuCls + '"' : '') + '>' + cpuStr + '</td>' +
+            '<td>' + (inst.ct || 0) + '</td>' +
+            '<td style="' + pnlTCls + '">' + pnlT + '</td>' +
+            '<td>' + (inst.cy || 0) + '</td>' +
+            '<td style="' + pnlYCls + '">' + pnlY + '</td>' +
+            '<td>' + (inst.it || 0) + '</td>' +
+            '<td>' + (inst.et || 0) + '</td>' +
+            '<td>' + (inst.tt || 0) + '</td>' +
+            '</tr>';
+        });
+      });
+      html += '</tbody></table></div>';
+    }
+    wrap.innerHTML = html;
+  }
+
+  window.pbriToggle = function (sepRow) {
+    var sid = sepRow.dataset.sid;
+    var rows = document.querySelectorAll('tr.pbri-row.' + sid);
+    var ico  = document.getElementById(sid + '-ico');
+    var collapsed = rows.length && rows[0].style.display === 'none';
+    rows.forEach(function (r) { r.style.display = collapsed ? '' : 'none'; });
+    if (ico) ico.textContent = collapsed ? '\u25b2' : '\u25bc';
+  };
+
+  window.pbriExpandAll = function (expand) {
+    document.querySelectorAll('tr.pbri-row').forEach(function (r) { r.style.display = expand ? '' : 'none'; });
+    document.querySelectorAll('.pbri-sep').forEach(function (sep) {
+      var ico = document.getElementById(sep.dataset.sid + '-ico');
+      if (ico) ico.textContent = expand ? '\u25b2' : '\u25bc';
+    });
+  };
+
+  window.pbriToggleSys = function (btn) {
+    var rows = document.querySelectorAll('tr.pbri-sys');
+    var hidden = rows.length && rows[0].style.display === 'none';
+    rows.forEach(function (r) { r.style.display = hidden ? '' : 'none'; });
+    btn.textContent = hidden ? 'Hide metrics' : 'Show metrics';
+  };
+
+  window.triggerApiSync = function (btn) {
+    btn.disabled = true;
+    fetch(API_BASE + '/pbremote/api-sync?token=' + TOKEN, { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        btn.disabled = false;
+        _flash('pbremote-sync-msg', d.api_synced ? 'In sync' : 'Pushed \u2014 not yet synced', !d.api_synced);
+        loadPBRemoteInfo();
+      })
+      .catch(function (e) { btn.disabled = false; _flash('pbremote-sync-msg', 'Error', true); });
+  };
+
+  /* ── Fetch summary ─────────────────────────────────────── */
+  function loadFetchSummary() {
+    var wrap = document.getElementById('pbdata-status-wrap');
+    fetch(API_BASE + '/fetch-summary?token=' + TOKEN)
+      .then(function (r) { return r.json(); })
+      .then(function (d) { renderFetchSummary(d, wrap); })
+      .catch(function () { if (wrap) wrap.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Failed to load fetch summary.</div>'; });
+  }
+
+  function renderFetchSummary(data, wrap) {
+    if (!wrap) return;
+    if (!data || !Object.keys(data).length) {
+      wrap.innerHTML = '<div style="color:#4a5568;padding:0.5rem;">No fetch summary available yet. Start PBData or wait for the next cycle.</div>';
+      return;
+    }
+    var ts = data.timestamp || '';
+    var tsNote = '';
+    if (ts) {
+      try {
+        var delta = Math.floor((Date.now() - new Date(ts.replace(' ', 'T')).getTime()) / 1000);
+        tsNote = ' <span style="color:#64748b;font-size:var(--fs-xs);">(' + delta + 's)</span>';
+      } catch (e) {}
+    }
+    var bal  = data.balances   || {};
+    var pos  = data.positions  || {};
+    var ords = data.orders     || {};
+    var hist = data.history    || [];
+    var execs = data.executions || [];
+    var last  = data.last_fetch_ts || {};
+
+    /* read current filter state (preserve across refreshes) */
+    var fBal  = (document.getElementById('fs-f-balances')  || {}).checked !== false;
+    var fPos  = (document.getElementById('fs-f-positions') || {}).checked !== false;
+    var fOrd  = (document.getElementById('fs-f-orders')    || {}).checked !== false;
+    var fHist = (document.getElementById('fs-f-history')   || {}).checked !== false;
+    var fExec = (document.getElementById('fs-f-execs')     || {}).checked !== false;
+    var fWsOnly = (document.getElementById('fs-f-wsonly')  || {}).checked === true;
+
+    /* header */
+    var html = '<div class="fs-header">';
+    html += '<span class="fs-title">Fetch Summary' + tsNote + '</span>';
+    html += '<button class="fs-refresh-btn" onclick="loadFetchSummary()" title="Refresh now">\u21bb</button>';
+    html += '</div>';
+
+    /* summary counters */
+    function grp(label, o) {
+      var ws = (o.ws || []).length, rest = (o.rest || []).length;
+      return '<div class="fs-group"><div class="fs-group-title">' + label + '</div><div class="fs-group-body">' +
+        '<div class="fs-cnt"><span class="fs-dot-ws">&#9679;</span><span class="fs-cnt-lbl">WS</span><span class="fs-cnt-val">&nbsp;' + ws + '</span></div>' +
+        '<div class="fs-cnt"><span class="fs-dot-rest">&#9679;</span><span class="fs-cnt-lbl">REST</span><span class="fs-cnt-val">&nbsp;' + rest + '</span></div>' +
+        '</div></div>';
+    }
+    function grpFlat(label, arr) {
+      return '<div class="fs-group"><div class="fs-group-title">' + label + '</div><div class="fs-group-body">' +
+        '<div class="fs-cnt"><span class="fs-cnt-val">' + arr.length + '</span></div></div></div>';
+    }
+    html += '<div class="fs-summary-row">' +
+      grp('Balances', bal) + grp('Positions', pos) + grp('Orders', ords) +
+      grpFlat('History', hist) + grpFlat('Executions', execs) +
+      '</div>';
+
+    /* column filter checkboxes */
+    function chk(id, label, checked) {
+      return '<label class="fs-filter-label"><input type="checkbox" id="' + id + '" ' + (checked ? 'checked' : '') +
+        ' onchange="applyFetchFilters()">' + label + '</label>';
+    }
+    html += '<div class="fs-filters">' +
+      chk('fs-f-balances', 'Balances', fBal) +
+      chk('fs-f-positions', 'Positions', fPos) +
+      chk('fs-f-orders', 'Orders', fOrd) +
+      chk('fs-f-history', 'History', fHist) +
+      chk('fs-f-execs', 'Executions', fExec) +
+      chk('fs-f-wsonly', 'WS only', fWsOnly) +
+      '</div>';
+
+    /* collect all users */
+    var allUsers = Object.keys(last).sort();
+    var wsSet = new Set((bal.ws||[]).concat(pos.ws||[]).concat(ords.ws||[]));
+
+    function fmtAge(ts) {
+      if (!ts) return '<span class="fs-never">never</span>';
+      var delta = Math.floor((Date.now() / 1000) - ts);
+      if (delta < 0) delta = 0;
+      if (delta < 60) return delta + 's';
+      if (delta < 3600) return Math.floor(delta/60) + 'm';
+      return Math.floor(delta/3600) + 'h';
+    }
+    function fmtMode(user, type) {
+      var wsArr = (type === 'balances' ? bal.ws : type === 'positions' ? pos.ws : type === 'orders' ? ords.ws : []) || [];
+      var restArr = (type === 'balances' ? bal.rest : type === 'positions' ? pos.rest : type === 'orders' ? ords.rest : []) || [];
+      var isWs   = wsArr.indexOf(user) !== -1;
+      var isRest = restArr.indexOf(user) !== -1;
+      var cls = isWs ? 'fs-ws' : (isRest ? 'fs-rest' : 'fs-never');
+      return '<span class="' + cls + '">' + fmtAge((last[user] || {})[type]) + '</span>';
+    }
+    function flatMode(user, type) {
+      var arr = type === 'history' ? hist : execs;
+      return '<span class="' + (arr.indexOf(user) !== -1 ? '' : 'fs-never') + '">' + fmtAge((last[user] || {})[type]) + '</span>';
+    }
+
+    html += '<div class="fs-table-wrap" id="fs-table-wrap"><table class="fs-table" id="fs-table">';
+    html += '<thead><tr>' +
+      '<th>User</th>' +
+      '<th class="fs-col-balances">Balances</th>' +
+      '<th class="fs-col-positions">Positions</th>' +
+      '<th class="fs-col-orders">Orders</th>' +
+      '<th class="fs-col-history">History</th>' +
+      '<th class="fs-col-execs">Executions</th>' +
+      '</tr></thead><tbody>';
+
+    allUsers.forEach(function (u) {
+      var isWs = wsSet.has(u);
+      if (fWsOnly && !isWs) return;
+      html += '<tr data-ws="' + (isWs ? '1' : '0') + '">' +
+        '<td>' + u + '</td>' +
+        '<td class="fs-col-balances">' + fmtMode(u, 'balances')   + '</td>' +
+        '<td class="fs-col-positions">' + fmtMode(u, 'positions')  + '</td>' +
+        '<td class="fs-col-orders">'   + fmtMode(u, 'orders')     + '</td>' +
+        '<td class="fs-col-history">'  + flatMode(u, 'history')    + '</td>' +
+        '<td class="fs-col-execs">'    + flatMode(u, 'executions') + '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table></div>';
+    wrap.innerHTML = html;
+    applyFetchFilters();
+  }
+
+  function applyFetchFilters() {
+    var cols = {
+      'fs-col-balances':  document.getElementById('fs-f-balances'),
+      'fs-col-positions': document.getElementById('fs-f-positions'),
+      'fs-col-orders':    document.getElementById('fs-f-orders'),
+      'fs-col-history':   document.getElementById('fs-f-history'),
+      'fs-col-execs':     document.getElementById('fs-f-execs'),
+    };
+    var wsOnly = (document.getElementById('fs-f-wsonly') || {}).checked;
+    var table = document.getElementById('fs-table');
+    if (!table) return;
+    Object.keys(cols).forEach(function (cls) {
+      var visible = !cols[cls] || cols[cls].checked;
+      table.querySelectorAll('.' + cls).forEach(function (el) {
+        el.style.display = visible ? '' : 'none';
+      });
+    });
+    table.querySelectorAll('tbody tr').forEach(function (tr) {
+      var isWs = tr.getAttribute('data-ws') === '1';
+      tr.style.display = (wsOnly && !isWs) ? 'none' : '';
+    });
+  }
+  window.applyFetchFilters = applyFetchFilters;
+  window.loadFetchSummary = loadFetchSummary;
+
+  /* ── CMC key status ────────────────────────────────────── */
+  function loadCmcKeyStatus() {
+    var bar  = document.getElementById('cmc-status-bar');
+    var text = document.getElementById('cmc-status-text');
+    if (!bar || !text) return;
+    bar.className = 'cmc-status-bar loading';
+    text.textContent = 'Checking API key\u2026';
+    var t0 = Date.now();
+    fetch(API_BASE + '/settings/pbcoindata/key-status?token=' + TOKEN)
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var elapsed = Math.round((Date.now() - t0) / 1000);
+        if (!d.ok) {
+          bar.className = 'cmc-status-bar error';
+          text.textContent = '\u26a0 API Key error \u2014 ' + (d.error || 'unknown');
+          return;
+        }
+        bar.className = 'cmc-status-bar';
+        var limit  = d.credit_limit_monthly  != null ? d.credit_limit_monthly  : '?';
+        var today  = d.credits_used_day      != null ? d.credits_used_day      : '?';
+        var month  = d.credits_used_month    != null ? d.credits_used_month    : '?';
+        var left   = d.credits_left          != null ? d.credits_left          : '?';
+        var resets = '';
+        if (d.credit_limit_monthly_reset_timestamp) {
+          var secs = Math.max(0, Math.floor(new Date(d.credit_limit_monthly_reset_timestamp).getTime() / 1000 - Date.now() / 1000));
+          var days  = Math.floor(secs / 86400);
+          var hours = Math.floor((secs % 86400) / 3600);
+          var mins  = Math.floor((secs % 3600) / 60);
+          resets = ' \u2022 Resets: ' + days + 'd ' + hours + 'h ' + mins + 'm';
+        }
+        text.textContent = '\u2705 API Key valid \u2014 Limit: ' + limit +
+          ' \u2022 Today: ' + today + ' \u2022 Monthly: ' + month +
+          ' \u2022 Left: ' + left + resets +
+          ' (checked ' + elapsed + 's ago)';
+      })
+      .catch(function (e) {
+        if (bar) bar.className = 'cmc-status-bar error';
+        if (text) text.textContent = '\u26a0 Failed to check key: ' + e.message;
+      });
+  }
+  window.loadCmcKeyStatus = loadCmcKeyStatus;
+
+
+  window.savePBMonSettings = function () {
+    _post('/settings/pbmon', {
+      telegram_token:   _val('pbmon-token'),
+      telegram_chat_id: _val('pbmon-chat-id'),
+    }, 'pbmon-save-msg');
+  };
+
+  window.saveCoinDataSettings = function () {
+    _post('/settings/pbcoindata', {
+      api_key:            _val('coindata-api-key'),
+      fetch_interval:     parseInt(_val('coindata-fetch-interval') || '24', 10),
+      fetch_limit:        parseInt(_val('coindata-fetch-limit') || '5000', 10),
+      metadata_interval:  parseInt(_val('coindata-metadata-interval') || '1', 10),
+      mapping_interval:   parseInt(_val('coindata-mapping-interval') || '24', 10),
+    }, 'coindata-save-msg');
+  };
+
+  window.savePBDataSettings = function () {
+    var fUsers = [], tUsers = [];
+    document.querySelectorAll('#pbdata-fetch-users .tag:not(.inactive)').forEach(function (el) { fUsers.push(el.getAttribute('data-user')); });
+    document.querySelectorAll('#pbdata-trades-users .tag:not(.inactive)').forEach(function (el) { tUsers.push(el.getAttribute('data-user')); });
+    var EX_LIST = ['binance','bingx','bitget','bybit','gateio','hyperliquid','kucoin','okx'];
+    var exPauses = {};
+    EX_LIST.forEach(function (ex) {
+      var v = parseFloat(_val('pbdata-ex-' + ex));
+      if (!isNaN(v)) exPauses[ex] = v;
+    });
+    _post('/settings/pbdata', {
+      fetch_users:  fUsers,
+      trades_users: tUsers,
+      log_level:    _val('pbdata-log-level') || 'INFO',
+      ws_max:       parseInt(_val('pbdata-ws-max') || '10', 10),
+      pollers_delay_seconds:              parseInt(_val('pbdata-pollers-delay')  || '60',   10),
+      poll_interval_combined_seconds:     parseInt(_val('pbdata-combined')       || '90',   10),
+      poll_interval_history_seconds:      parseInt(_val('pbdata-history')        || '90',   10),
+      poll_interval_executions_seconds:   parseInt(_val('pbdata-executions')     || '1800', 10),
+      shared_rest_user_pause_seconds:     parseFloat(_val('pbdata-rest-pause')   || '0.75'),
+      shared_rest_pause_by_exchange:      exPauses,
+    }, 'pbdata-save-msg');
+  };
+
+  window.saveApiServerSettings = function () {
+    var hosts = [];
+    document.querySelectorAll('#vps-hosts-select .tag:not(.inactive)').forEach(function (el) { hosts.push(el.getAttribute('data-host')); });
+    _post('/settings/api-server', {
+      host:         _val('apiserver-host') || '0.0.0.0',
+      port:         parseInt(_val('apiserver-port') || '8000', 10),
+      auto_restart: !!(document.getElementById('apiserver-auto-restart') || {}).checked,
+      enabled_hosts: hosts,
+    }, 'apiserver-save-msg');
+  };
+
+  function _post(ep, body, msgId) {
+    fetch(API_BASE + ep + '?token=' + TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (d) { _flash(msgId, d.ok ? 'Saved' : (d.detail || 'Error'), !d.ok); })
+    .catch(function (e) { _flash(msgId, 'Error: ' + e.message, true); });
+  }
+
+  function _val(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+
+  function _flash(id, text, isErr) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'inline-msg visible' + (isErr ? ' error' : '');
+    clearTimeout(el._t);
+    el._t = setTimeout(function () { el.className = 'inline-msg'; }, 3000);
+  }
+
+  /* ── Sidebar resize ────────────────────────────────────── */
+  (function () {
+    var sb = document.getElementById('sidebar');
+    var rz = document.getElementById('sidebar-resize');
+    var active = false, startX, startW;
+    rz.addEventListener('mousedown', function (e) {
+      active = true; startX = e.clientX; startW = sb.offsetWidth;
+      rz.classList.add('active'); document.body.style.cursor = 'col-resize';
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!active) return;
+      sb.style.width = Math.max(150, Math.min(300, startW + e.clientX - startX)) + 'px';
+    });
+    document.addEventListener('mouseup', function () {
+      if (active) { active = false; rz.classList.remove('active'); document.body.style.cursor = ''; }
+    });
+  }());
+
+  /* ── Init ──────────────────────────────────────────────── */
+  fetchStatus();
+
+}());
+</script>
+</body>
+</html>

@@ -274,7 +274,9 @@
   var FASTAPI_PAGES = {
     'dashboards':        '/api/dashboard/main_page',
     'system_api_keys':   '/api/api-keys/main_page',
-    'system_logging':    '/api/logging/main_page'
+    'system_logging':     '/api/logging/main_page',
+    'system_vps_monitor': '/api/vps/main_page',
+    'system_services':    '/api/services/main_page'
   };
 
   /* ════════════════════════════════════
@@ -383,15 +385,54 @@
           headers: { 'Authorization': 'Bearer ' + c2.token, 'Content-Type': 'application/json' },
           body: JSON.stringify({ token: c2.token })
         }).then(function() {
-          setTimeout(function() { window.location.reload(); }, 3000);
+          showRestartOverlay(origin2, c2.token);
         }).catch(function() {
-          setTimeout(function() { window.location.reload(); }, 3000);
+          showRestartOverlay(origin2, c2.token);
         });
       });
     }
 
     /* SSE: watch for needs_restart */
     setupRestartSSE(TOKEN, apiOrigin);
+  }
+
+  function showRestartOverlay(origin, token) {
+    /* Remove any existing overlay first */
+    var existing = document.getElementById('pbgui-restart-overlay');
+    if (existing) existing.remove();
+
+    var ov = document.createElement('div');
+    ov.id = 'pbgui-restart-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(9,14,26,.92);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1rem;font-family:sans-serif;';
+    ov.innerHTML =
+      '<div style="color:#e2e8f0;font-size:1.1rem;font-weight:600;">Restarting API Server\u2026</div>' +
+      '<div id="pbgui-restart-status" style="color:#64748b;font-size:0.85rem;">Waiting for server\u2026</div>';
+    document.body.appendChild(ov);
+
+    var attempts = 0;
+    var maxAttempts = 30;
+    var statusEl = document.getElementById('pbgui-restart-status');
+    var apiBase = (origin || window.location.origin);
+
+    function probe() {
+      attempts++;
+      if (statusEl) statusEl.textContent = 'Reconnecting\u2026 (' + attempts + '/' + maxAttempts + ')';
+      fetch(apiBase + '/api/services/status?token=' + encodeURIComponent(token || ''), { cache: 'no-store' })
+        .then(function (r) {
+          if (r.ok) { window.location.reload(); }
+          else { if (attempts < maxAttempts) setTimeout(probe, 2000); else _overlayFail(); }
+        })
+        .catch(function () {
+          if (attempts < maxAttempts) setTimeout(probe, 2000); else _overlayFail();
+        });
+    }
+
+    function _overlayFail() {
+      if (statusEl) statusEl.textContent = 'Server did not respond \u2014 please refresh manually.';
+    }
+
+    /* First probe after PBGUI_RESTART_DELAY (3s) + a small buffer */
+    setTimeout(probe, 4000);
   }
 
   function setupRestartSSE(token, apiOrigin) {
