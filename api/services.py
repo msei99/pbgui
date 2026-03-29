@@ -40,7 +40,10 @@ def _get_service(name: str):
         return PBStat()
     if name == "pbdata":
         from PBData import PBData
-        return PBData()
+        obj = PBData.__new__(PBData)
+        obj.pidfile = Path(f'{PBGDIR}/data/pbdata.pid')
+        obj.my_pid = None
+        return obj
     if name == "pbcoindata":
         from PBCoinData import CoinData
         return CoinData()
