@@ -23,6 +23,7 @@ import random
 from logging_helpers import human_log as _human_log, set_service_min_level, is_debug_enabled
 from Exchange import set_ws_limits
 from market_data import load_market_data_config, get_daily_hour_coverage_for_dataset, set_enabled_coins
+from rate_limit_budget import RateLimitBudget, EXCHANGE_RATE_LIMITS, get_weight
 from hyperliquid_best_1m import update_latest_hyperliquid_1m_api_for_coin
 from binance_best_1m import update_latest_binance_1m_for_coin
 from inventory_cache import refresh_coin as _refresh_inventory_coin
@@ -308,6 +309,7 @@ class PBData():
         self._network_demotion_window = 60
         # Per-exchange backoff state and error tracking
         self._exchange_backoff_until = {}  # exchange -> timestamp until which we should backoff
+        self._exchange_history_backoff_until = {}  # history-only backoff (long_history_poll) – does NOT block combined poller
         self._exchange_error_timestamps = defaultdict(list)  # exchange -> [ts1, ts2, ...]
         self._error_window_seconds = 30
         self._error_threshold = 6
@@ -341,6 +343,26 @@ class PBData():
         self._metrics_task = None
         # Metrics sampling interval (seconds), configurable via env PB_METRICS_INTERVAL
         self._metrics_interval = 60
+        # ── Poller metrics (observable via API) ──────────────────
+        # Per-exchange counters / timestamps that the GUI can display.
+        # Written to data/logs/poller_metrics.json every _metrics_interval.
+        self._poller_metrics = defaultdict(lambda: {
+            'combined_last_ts': 0,        # epoch of last combined-poller cycle finish
+            'combined_cycle_ms': 0,       # duration of last combined cycle (ms)
+            'combined_users': 0,          # users polled in last combined cycle
+            'history_last_ts': 0,         # epoch of last history-poller cycle finish
+            'history_cycle_ms': 0,        # duration of last history cycle (ms)
+            'history_users': 0,           # users polled in last history cycle
+            'market_data_last_ts': 0,     # epoch of last market-data cycle finish
+            'market_data_coins': 0,       # coins processed in last market-data cycle
+            'rate_limit_429': 0,          # cumulative 429 count since startup
+            'errors': 0,                  # cumulative error count since startup
+            'rest_slot_timeouts': 0,      # cumulative REST slot timeout count
+        })
+        # ── Rate-limit budgets (token bucket per exchange) ───────
+        self._rate_budgets: dict[str, RateLimitBudget] = {}
+        for _exch_name, _cfg in EXCHANGE_RATE_LIMITS.items():
+            self._rate_budgets[_exch_name] = RateLimitBudget(**_cfg)
         # (IO debugging disabled) -- per-metrics-cycle DB/process IO logging removed
         # Latest 1m candles (API) auto-refresh settings
         self._latest_1m_enabled = True
@@ -823,28 +845,33 @@ class PBData():
                         lookback_days = max_lb
 
                     try:
-                        res = await asyncio.to_thread(
-                            update_latest_hyperliquid_1m_api_for_coin,
-                            coin=coin,
-                            lookback_days=int(lookback_days),
-                            overwrite=False,
-                            dry_run=False,
-                            timeout_s=float(self._latest_1m_api_timeout_seconds),
-                        )
-                        coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
-                        coin_status["result"] = "ok"
-                        coin_status["lookback_days"] = int(lookback_days)
-                        coin_status["newest_day"] = newest_day
-                        coin_status["api_result"] = res
-                        try:
-                            if isinstance(res, dict) and bool(res.get("skipped")) and str(res.get("skip_reason") or "") == "not_in_live_meta":
-                                invalid_live_meta_coins.add(str(coin).strip().upper())
-                        except Exception:
-                            pass
-                        try:
-                            _refresh_inventory_coin("hyperliquid", "1m_api", coin)
-                        except Exception:
-                            pass
+                        # Acquire rate budget for HL candleSnapshot
+                        if not await self._acquire_rate_budget('hyperliquid', 'candle_snapshot', timeout=120.0):
+                            coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
+                            coin_status["result"] = "budget_timeout"
+                        else:
+                            res = await asyncio.to_thread(
+                                update_latest_hyperliquid_1m_api_for_coin,
+                                coin=coin,
+                                lookback_days=int(lookback_days),
+                                overwrite=False,
+                                dry_run=False,
+                                timeout_s=float(self._latest_1m_api_timeout_seconds),
+                            )
+                            coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
+                            coin_status["result"] = "ok"
+                            coin_status["lookback_days"] = int(lookback_days)
+                            coin_status["newest_day"] = newest_day
+                            coin_status["api_result"] = res
+                            try:
+                                if isinstance(res, dict) and bool(res.get("skipped")) and str(res.get("skip_reason") or "") == "not_in_live_meta":
+                                    invalid_live_meta_coins.add(str(coin).strip().upper())
+                            except Exception:
+                                pass
+                            try:
+                                _refresh_inventory_coin("hyperliquid", "1m_api", coin)
+                            except Exception:
+                                pass
                     except Exception as e:
                         coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "error"
@@ -1770,14 +1797,36 @@ class PBData():
                 except Exception:
                     pass
 
+    async def _acquire_rate_budget(self, exchange: str, operation: str, timeout: float = 60.0) -> bool:
+        """Acquire rate-limit budget tokens for an API operation.
+
+        Returns True if budget was acquired (or exchange has no budget tracking).
+        Returns False if timed out waiting for budget — caller should skip the call.
+        """
+        budget = self._rate_budgets.get(exchange)
+        if not budget:
+            return True  # no budget tracking for this exchange
+        weight = get_weight(exchange, operation)
+        acquired = await budget.acquire(weight=weight, timeout=timeout)
+        if not acquired:
+            try:
+                _human_log('PBData', f"[budget] Rate budget timeout for {exchange} op={operation} weight={weight}", level='WARNING')
+            except Exception:
+                pass
+        return acquired
 
     def _set_exchange_backoff(self, exchange: str, reason: str = None, duration: int = None, user=None):
         try:
             now = datetime.now().timestamp()
             dur = duration if duration is not None else self._backoff_duration_seconds
+            # long_history_poll only blocks the history poller, not the combined poller
+            if reason == 'long_history_poll':
+                backoff_dict = self._exchange_history_backoff_until
+            else:
+                backoff_dict = self._exchange_backoff_until
             # If already in backoff, increase duration (exponential-ish) to avoid
             # repeated tight retry loops. Clamp to a reasonable maximum.
-            prev_until = self._exchange_backoff_until.get(exchange, 0)
+            prev_until = backoff_dict.get(exchange, 0)
             prev_remaining = max(0, prev_until - now)
             # If previously backing off, double the remaining time up to max
             if prev_remaining > 0:
@@ -1785,7 +1834,7 @@ class PBData():
             else:
                 new_dur = dur
             until = now + new_dur
-            self._exchange_backoff_until[exchange] = until
+            backoff_dict[exchange] = until
             # Pass username as `user` kwarg to human_log (human_log supports `user`)
             _human_log('PBData', f"[BACKOFF] Entering backoff for exchange {exchange} for {int(new_dur)}s (reason={reason})", level='WARNING', user=getattr(user, 'name', None))
         except Exception:
@@ -1834,6 +1883,16 @@ class PBData():
             if not exchange:
                 return False
             until = self._exchange_backoff_until.get(exchange, 0)
+            return datetime.now().timestamp() < until
+        except Exception:
+            return False
+
+    def _is_exchange_in_history_backoff(self, exchange: str) -> bool:
+        """Return True if the history poller should back off for this exchange (long_history_poll reason)."""
+        try:
+            if not exchange:
+                return False
+            until = self._exchange_history_backoff_until.get(exchange, 0)
             return datetime.now().timestamp() < until
         except Exception:
             return False
@@ -1887,8 +1946,16 @@ class PBData():
                 for exch, until in list(self._exchange_backoff_until.items()):
                     if until > now:
                         backoffs.append(f"{exch}:until={int(until-now)}s")
+                for exch, until in list(self._exchange_history_backoff_until.items()):
+                    if until > now:
+                        backoffs.append(f"{exch}(hist):until={int(until-now)}s")
                 if lines or backoffs:
                     _human_log('PBData', f"[METRICS] Clients: {', '.join(lines)}; Backoffs: {', '.join(backoffs) if backoffs else '(none)'}", level='INFO')
+                # Write poller metrics JSON for the GUI panel
+                try:
+                    self._write_poller_metrics()
+                except Exception:
+                    pass
                 # IO debugging removed: process/db IO summary logging disabled
                 # Periodic cleanup of stale entries in unbounded data structures
                 self._cleanup_stale_state()
@@ -2316,9 +2383,15 @@ class PBData():
             else:
                 batches = [(None, users)]
             had_rate_limit = False
+            _serial_cycle_start = datetime.now().timestamp()
+            _serial_users_polled = 0
             for exch, batch_users in batches:
-                # Skip this exchange while in backoff
-                if exch and self._is_exchange_in_backoff(exch):
+                # Skip this exchange while in backoff.
+                # For kind='history', also check history-specific backoff (long_history_poll).
+                in_backoff = exch and self._is_exchange_in_backoff(exch)
+                if not in_backoff and kind == 'history':
+                    in_backoff = exch and self._is_exchange_in_history_backoff(exch)
+                if in_backoff:
                     _human_log('PBData', f"[poll] Skipping shared {kind} poll for {exch} due to backoff", level='INFO')
                     continue
                 for user in batch_users:
@@ -2434,9 +2507,14 @@ class PBData():
                                             pass
                                         had_rate_limit = True
                                     else:
+                                        # Acquire rate budget before history fetch
+                                        _budget_ok = await self._acquire_rate_budget(exchange_for_slot, 'fetch_history')
+                                        if not _budget_ok:
+                                            pass  # budget timeout — skip but don't set backoff
                                         try:
-                                            await asyncio.to_thread(self.db.update_history, user)
-                                            asyncio.create_task(_notify_api_income(getattr(user, 'name', '')))
+                                            if _budget_ok:
+                                                await asyncio.to_thread(self.db.update_history, user)
+                                                asyncio.create_task(_notify_api_income(getattr(user, 'name', '')))
                                         except Exception as e:
                                             # Some runtime errors seen under heavy load look like
                                             # "generator didn't stop after athrow()". Treat these
@@ -2524,18 +2602,20 @@ class PBData():
                                             pass
                                         had_rate_limit = True
                                     else:
-                                        did_run = True
-                                        res = await asyncio.to_thread(self.db.update_executions, user)
-                                        try:
-                                            if isinstance(res, dict):
-                                                fetched = res.get('fetched')
-                                                inserted = res.get('inserted')
-                                        except Exception:
-                                            pass
-                                        try:
-                                            self._last_fetch_ts[(user.name, 'executions')] = start_ts
-                                        except Exception:
-                                            pass
+                                        _exec_budget_ok = await self._acquire_rate_budget(exchange_for_slot, 'fetch_executions')
+                                        if _exec_budget_ok:
+                                            did_run = True
+                                            res = await asyncio.to_thread(self.db.update_executions, user)
+                                            try:
+                                                if isinstance(res, dict):
+                                                    fetched = res.get('fetched')
+                                                    inserted = res.get('inserted')
+                                            except Exception:
+                                                pass
+                                            try:
+                                                self._last_fetch_ts[(user.name, 'executions')] = start_ts
+                                            except Exception:
+                                                pass
                                 try:
                                     self._write_fetch_summary()
                                 except Exception:
@@ -2613,17 +2693,42 @@ class PBData():
                             _human_log('PBData', f"[poll] Shared {kind} poll failed for {user.name}: {e}", level='ERROR', meta={'traceback': tb})
                         except Exception:
                             pass
+                        _err_exch2 = getattr(user, 'exchange', None) or exch or 'unknown'
+                        try:
+                            self._poller_metrics[_err_exch2]['errors'] += 1
+                        except Exception:
+                            pass
                         lower = msg.lower()
                         if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
                             had_rate_limit = True
+                            try:
+                                self._poller_metrics[_err_exch2]['rate_limit_429'] += 1
+                            except Exception:
+                                pass
+                    else:
+                        _serial_users_polled += 1
                     # Small stagger between per-user REST requests to avoid bursts
-                    try:
-                        pause_val = self._shared_rest_pause_by_exchange.get(exch, self._shared_rest_user_pause)
-                        if pause_val and pause_val > 0:
-                            jitter = random.uniform(0, pause_val * 0.2)
-                            await asyncio.sleep(pause_val + jitter)
-                    except Exception:
-                        pass
+                    # Skip for exchanges with budget tracking (budget handles pacing)
+                    _has_budget2 = (exch or getattr(user, 'exchange', None) or '') in self._rate_budgets
+                    if not _has_budget2:
+                        try:
+                            pause_val = self._shared_rest_pause_by_exchange.get(exch, self._shared_rest_user_pause)
+                            if pause_val and pause_val > 0:
+                                jitter = random.uniform(0, pause_val * 0.2)
+                                await asyncio.sleep(pause_val + jitter)
+                        except Exception:
+                            pass
+            # Record per-exchange history/serial-poller metrics
+            if kind == 'history':
+                _serial_cycle_end = datetime.now().timestamp()
+                _serial_exch = exchange_filter or 'all'
+                try:
+                    m = self._poller_metrics[_serial_exch]
+                    m['history_last_ts'] = _serial_cycle_end
+                    m['history_cycle_ms'] = int((_serial_cycle_end - _serial_cycle_start) * 1000)
+                    m['history_users'] = _serial_users_polled
+                except Exception:
+                    pass
             if had_rate_limit:
                 backoff = min(max_backoff, backoff + 30)
             else:
@@ -2631,21 +2736,25 @@ class PBData():
                     _human_log('PBData', f"[poll] Shared {kind} poll recovered; resetting backoff", level='INFO')
                 backoff = 0
 
-    async def _shared_combined_poll_serial(self, interval_seconds: int = 60, per_exchange: bool = True):
+    async def _shared_combined_poll_serial(self, interval_seconds: int = 60, per_exchange: bool = True, exchange_filter: str = None):
         """Shared poller that sequentially runs balances, positions and orders per user.
 
         This ensures only one REST "connection" worth of work is performed at a time
         for these combined kinds (per exchange), reducing parallel HTTP load.
         History polling remains separate because it can be long-running.
+        If `exchange_filter` is set, only users of that specific exchange are polled.
         """
         backoff = 0
         max_backoff = 600
         base_interval = max(10, interval_seconds)
-        _human_log('PBData', f"[poll] Starting shared COMBINED poller interval={base_interval}s", level='INFO')
+        exch_label = f" exchange={exchange_filter}" if exchange_filter else ""
+        _human_log('PBData', f"[poll] Starting shared COMBINED poller interval={base_interval}s{exch_label}", level='INFO')
         while True:
             delay = base_interval + backoff
             await asyncio.sleep(delay)
             users = [u for u in self.users if u.name in self.fetch_users]
+            if exchange_filter:
+                users = [u for u in users if u.exchange == exchange_filter]
             if not users:
                 continue
             if per_exchange:
@@ -2656,34 +2765,51 @@ class PBData():
             else:
                 batches = [(None, users)]
             had_rate_limit = False
+            _combined_cycle_start = datetime.now().timestamp()
+            _combined_users_polled = 0
             for exch, batch_users in batches:
                 if exch and self._is_exchange_in_backoff(exch):
                     _human_log('PBData', f"[poll] Skipping shared COMBINED poll for {exch} due to backoff")
                     continue
+                exchange_rate_limited = False
                 for user in batch_users:
+                    if exchange_rate_limited:
+                        break
                     try:
                         exchange_for_slot = exch or getattr(user, 'exchange', None) or 'unknown'
                         async with self._rest_slot(exchange_for_slot) as got:
                             if not got:
                                 _human_log('PBData', f"[poll] Shared COMBINED poll skipped {user.name}: REST slot timed out", level='DEBUG', user=user.name)
+                                try:
+                                    self._poller_metrics[exchange_for_slot]['rest_slot_timeouts'] += 1
+                                except Exception:
+                                    pass
                                 continue
                             # balances -> positions -> orders (sequential)
+                            # Acquire rate budget before each API call
+                            if not await self._acquire_rate_budget(exchange_for_slot, 'fetch_balance'):
+                                continue
                             await asyncio.to_thread(self.db.update_balances, user)
                             asyncio.create_task(_notify_api_balance())
                             try:
                                 self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
                             except Exception:
                                 pass
+                            if not await self._acquire_rate_budget(exchange_for_slot, 'fetch_positions'):
+                                continue
                             await asyncio.to_thread(self.db.update_positions, user)
                             try:
                                 self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
                             except Exception:
                                 pass
+                            if not await self._acquire_rate_budget(exchange_for_slot, 'fetch_open_orders'):
+                                continue
                             await asyncio.to_thread(self.db.update_orders, user)
                             try:
                                 self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
                             except Exception:
                                 pass
+                            _combined_users_polled += 1
                             try:
                                 self._write_fetch_summary()
                             except Exception:
@@ -2695,17 +2821,45 @@ class PBData():
                             _human_log('PBData', f"[poll] Shared COMBINED poll failed for {user.name}: {e}", level='ERROR', meta={'traceback': tb})
                         except Exception:
                             pass
+                        _err_exch = getattr(user, 'exchange', None) or exch or 'unknown'
+                        try:
+                            self._poller_metrics[_err_exch]['errors'] += 1
+                        except Exception:
+                            pass
                         lower = msg.lower()
                         if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
                             had_rate_limit = True
-                    # Small stagger between per-user REST requests to avoid bursts
-                    try:
-                        pause_val = self._shared_rest_pause_by_exchange.get(exch, self._shared_rest_user_pause)
-                        if pause_val and pause_val > 0:
-                            jitter = random.uniform(0, pause_val * 0.2)
-                            await asyncio.sleep(pause_val + jitter)
-                    except Exception:
-                        pass
+                            exchange_rate_limited = True
+                            try:
+                                self._poller_metrics[_err_exch]['rate_limit_429'] += 1
+                            except Exception:
+                                pass
+                            # Set short backoff so the next cycle skips this exchange briefly
+                            try:
+                                self._set_exchange_backoff(user.exchange, reason='rate_limit_429', duration=45, user=user)
+                            except Exception:
+                                pass
+                    if not exchange_rate_limited:
+                        # Skip fixed pause for exchanges with budget tracking (budget handles pacing)
+                        _has_budget = (exch or getattr(user, 'exchange', None) or '') in self._rate_budgets
+                        if not _has_budget:
+                            try:
+                                pause_val = self._shared_rest_pause_by_exchange.get(exch, self._shared_rest_user_pause)
+                                if pause_val and pause_val > 0:
+                                    jitter = random.uniform(0, pause_val * 0.2)
+                                    await asyncio.sleep(pause_val + jitter)
+                            except Exception:
+                                pass
+            # Record per-exchange combined-poller metrics
+            _combined_cycle_end = datetime.now().timestamp()
+            _combined_exch = exchange_filter or 'all'
+            try:
+                m = self._poller_metrics[_combined_exch]
+                m['combined_last_ts'] = _combined_cycle_end
+                m['combined_cycle_ms'] = int((_combined_cycle_end - _combined_cycle_start) * 1000)
+                m['combined_users'] = _combined_users_polled
+            except Exception:
+                pass
             if had_rate_limit:
                 backoff = min(max_backoff, backoff + 30)
             else:
@@ -3210,6 +3364,17 @@ class PBData():
                     self._shared_history_tasks_by_exchange = {}
                 except Exception:
                     pass
+                # Also cancel per-exchange combined tasks so new interval takes effect.
+                for _exch, _t in list(getattr(self, '_shared_combined_tasks_by_exchange', {}).items()):
+                    try:
+                        if _t and not _t.done():
+                            _t.cancel()
+                    except Exception:
+                        pass
+                try:
+                    self._shared_combined_tasks_by_exchange = {}
+                except Exception:
+                    pass
                 self._poll_intervals_changed = False
         except Exception:
             pass
@@ -3246,12 +3411,29 @@ class PBData():
         now_ts = datetime.now().timestamp()
         if now_ts >= self._pollers_enabled_after_ts:
             try:
-                # Start a combined poller that sequentially runs balances, positions
-                # and orders to avoid parallel REST connections, plus a separate
-                # history poller (history can be long-running and is kept separate).
-                if not hasattr(self, "_shared_combined_task") or self._shared_combined_task is None or self._shared_combined_task.done():
-                    # Use a slightly longer interval for the combined poller to reduce REST load
-                    self._shared_combined_task = asyncio.create_task(self._shared_combined_poll_serial(self._shared_combined_interval_seconds, per_exchange=True))
+                # Per-exchange combined pollers: one task per exchange so that slow or
+                # rate-limited exchanges (e.g. hyperliquid) don't block fast ones (e.g. binance).
+                if not hasattr(self, "_shared_combined_tasks_by_exchange"):
+                    self._shared_combined_tasks_by_exchange = {}
+                # Determine the set of exchanges currently in fetch_users.
+                _comb_exchanges = set()
+                for _uname in self.fetch_users:
+                    _u = self.users.find_user(_uname)
+                    if _u and getattr(_u, 'exchange', None):
+                        _comb_exchanges.add(_u.exchange)
+                for _exch in _comb_exchanges:
+                    _t = self._shared_combined_tasks_by_exchange.get(_exch)
+                    if _t is None or _t.done():
+                        self._shared_combined_tasks_by_exchange[_exch] = asyncio.create_task(
+                            self._shared_combined_poll_serial(
+                                self._shared_combined_interval_seconds,
+                                per_exchange=False,
+                                exchange_filter=_exch,
+                            )
+                        )
+                # Legacy single-task attribute: keep for backwards compat (e.g. interval-change restart).
+                if not hasattr(self, "_shared_combined_task") or self._shared_combined_task is None:
+                    self._shared_combined_task = asyncio.create_task(asyncio.sleep(0))
                 # Per-exchange history pollers: one task per exchange so that slow
                 # exchanges (e.g. hyperliquid) don't block fast ones (e.g. binance).
                 if not hasattr(self, "_shared_history_tasks_by_exchange"):
@@ -3470,6 +3652,86 @@ class PBData():
                 _human_log('PBData', f"[summary] Failed to build fetch method summary: {e}", level='WARNING')
             except Exception:
                 pass
+
+    def _write_poller_metrics(self):
+        """Write poller_metrics.json for the GUI metrics panel.
+
+        Collects per-exchange counters from _poller_metrics dict, backoff states,
+        semaphore stats, and market-data status. Safe to call from _metrics_loop.
+        """
+        try:
+            now = datetime.now().timestamp()
+            # Per-exchange poller counters
+            exchanges = {}
+            for exch, m in dict(self._poller_metrics).items():
+                exchanges[exch] = dict(m)
+                # Inject current backoff status
+                bo_until = self._exchange_backoff_until.get(exch, 0)
+                hbo_until = self._exchange_history_backoff_until.get(exch, 0)
+                exchanges[exch]['backoff_remaining_s'] = max(0, int(bo_until - now)) if bo_until > now else 0
+                exchanges[exch]['history_backoff_remaining_s'] = max(0, int(hbo_until - now)) if hbo_until > now else 0
+
+            # REST semaphore stats
+            semaphores = {}
+            for exch, sem in dict(self._rest_semaphores).items():
+                limit = self._rest_semaphore_limits_by_exchange.get(exch, self._default_rest_semaphore_limit)
+                try:
+                    available = sem._value  # asyncio.Semaphore internal counter
+                except Exception:
+                    available = -1
+                semaphores[exch] = {
+                    'slots': limit,
+                    'available': available,
+                    'in_use': max(0, limit - available) if available >= 0 else 0,
+                }
+
+            # Market data status (read existing file)
+            market_data = {}
+            try:
+                if self._market_data_status_path.exists():
+                    md = json.loads(self._market_data_status_path.read_text(encoding='utf-8'))
+                    for key in ('latest_1m', 'binance_latest_1m', 'bybit_latest_1m'):
+                        if key in md:
+                            entry = md[key]
+                            market_data[key] = {
+                                'exchange': entry.get('exchange', ''),
+                                'running': entry.get('running', False),
+                                'coins_done': entry.get('coins_done', 0),
+                                'coins_total': entry.get('coins_total', 0),
+                                'last_run_ts': entry.get('last_run_ts', 0),
+                                'current_coin': entry.get('current_coin'),
+                            }
+            except Exception:
+                pass
+
+            # Rate-limit budgets
+            budgets = {}
+            for exch_name, budget in self._rate_budgets.items():
+                try:
+                    budgets[exch_name] = budget.peek()
+                except Exception:
+                    pass
+
+            obj = {
+                'timestamp': datetime.now().isoformat(sep=' ', timespec='seconds'),
+                'exchanges': exchanges,
+                'semaphores': semaphores,
+                'market_data': market_data,
+                'budgets': budgets,
+            }
+            logs_dir = _Path(f"{PBGDIR}/data/logs")
+            if not logs_dir.exists():
+                try:
+                    logs_dir.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+            try:
+                with open(logs_dir / 'poller_metrics.json', 'w') as _f:
+                    json.dump(obj, _f, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _write_fetch_summary(self):
         """Write machine-readable `fetch_summary.json` from current in-memory state.
