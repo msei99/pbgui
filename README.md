@@ -324,6 +324,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.70 (unreleased)
+- Refactor: PBData — removed Balance WebSocket watcher entirely; balances are now fetched exclusively via REST polling (shared combined poller), eliminating another ~18 private WS connections
 - Refactor: PBData — removed Orders WebSocket watcher entirely; orders are now fetched exclusively via REST polling (shared combined poller every 90s), eliminating ~18 private WS connections and reducing memory pressure on resource-constrained VPS servers
 - New: Services page — PBRemote Info tab: "Hide/Show metrics" toggle button to collapse or expand all server resource metric rows (RAM/Disk/Swap/CPU)
 - Fix: Services page — PBRemote Info tab: RAM/Disk/Swap/CPU bars now span the full width of their grid cell (text on top, full-width bar below); bars perfectly aligned vertically across all servers
