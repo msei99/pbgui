@@ -4,18 +4,21 @@ PBRun ist der lokale Service-Orchestrator von PBGui. Er hält Bot-Prozesse mit d
 
 ## Was PBRun macht
 
-- Startet/stoppt lokale Passivbot-Prozesse für konfigurierte Instanzen
-- Überwacht dynamische Coin-Filter und schreibt `ignored_coins.json` / `approved_coins.json`
-- Reagiert auf Aktivierungs-/Status-Dateien von PBRemote
+PBRun führt eine Daemon-Schleife alle 5 Sekunden aus:
+
+- Startet/stoppt lokale Passivbot-Prozesse für konfigurierte Instanzen (PB7, PB6 Multi, PB6 Single)
+- Überwacht den Ressourcenverbrauch (CPU, Speicher) jedes laufenden Bots und sammelt PnL/Error/Traceback-Zähler aus den Log-Dateien
+- Überwacht dynamische Coin-Filter (über PBCoinData-Mappings) und schreibt `ignored_coins.json` / `approved_coins.json`
+- Reagiert auf Aktivierungs- und Status-Dateien von PBRemote (Dateisystem-basierte Nachrichtenwarteschlange in `data/cmd/`)
+- Führt einen Speicher-Watchdog aus: fällt der freie Systemspeicher unter 250 MB, wird der Bot mit dem höchsten Speicherverbrauch neu gestartet
 - Schreibt Service-Logs nach `data/logs/PBRun.log`
 
-## PBRun-Detailseite
+## PBRun-Detail-Panel
 
-Auf `System → Services → PBRun → Show Details` kannst du:
+Klicke auf die PBRun-Kachel in der Services-Übersicht (oder nutze die Sidebar), um das Detail-Panel zu öffnen:
 
-- Den aktuellen PBRun-Status prüfen (läuft/gestoppt)
-- Den Service ein-/ausschalten
-- Den integrierten gefilterten PBRun-Log-Viewer im Detailbereich nutzen (kein separates `Show logfile`-Toggle)
+- Der Control-Strip oben zeigt den aktuellen Status (läuft/gestoppt) und Start/Stop/Restart-Buttons
+- Der Log-Tab zeigt einen Live-gefilterten PBRun-Log-Viewer
 
 ## Typisches Startverhalten
 

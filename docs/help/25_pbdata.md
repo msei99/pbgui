@@ -1,26 +1,36 @@
 # PBData (Service)
 
-PBData is a background service inside PBGui. It continuously fetches account data (via WS + REST) and writes it into PBGui’s database so other pages can load it quickly.
-
+PBData is a background service inside PBGui. It continuously fetches account data via REST and live prices via public WebSocket, then writes everything into PBGui's database so other pages can load it quickly.
+Click the PBData card on the Services overview to open the detail panel with three tabs: **Log**, **Settings**, and **Status**.
 ## What PBData fetches
 
-Per selected user (see **System → Services → PBData Details**):
+### Prices (public WebSocket)
 
-- **WebSocket (private)**
-  - balances
-  - positions
-  - orders
-- **Shared REST pollers** (serialized “round-robin” style)
-  - combined poller: balances/positions/orders (fallback + periodic refresh)
-  - history poller
-  - executions poller (my trades) — *opt-in*
+PBData opens one **public** WebSocket per exchange and subscribes to price tickers for all symbols that have open positions. Prices are buffered in memory and flushed to the database every 10 seconds.
+
+### Account data (REST pollers)
+
+All account data is fetched via REST — PBData does **not** use private WebSocket connections. Per selected user (see **Settings** tab → Users):
+
+- **Combined poller** (one per exchange, serialized per user)
+  - balances (default every ~300 s)
+  - positions (default every ~300 s)
+  - orders (default every ~60 s)
+- **History poller** (one per exchange)
+  - income / funding history
+- **Executions poller** (single task)
+  - my trades — *opt-in*, only for users in the Executions download list
+
+### Latest 1-minute candles
+
+Separate tasks fetch the latest 1-minute OHLCV candles for Hyperliquid, Binance, and Bybit (used by the market data pipeline).
 
 ## Users vs. Executions download (opt-in)
 
 PBData has two separate user lists:
 
 - **Users**
-  - Users PBData actively updates (WS + REST)
+  - Users PBData actively fetches via REST
 - **Executions download**
   - **Opt-in allow-list**: only these users download/store executions (my trades)
   - Default is **none**
@@ -28,16 +38,26 @@ PBData has two separate user lists:
 
 ## Timers and performance
 
-In **PBData timers** you can tune how aggressively PBData polls.
+In the **Settings** tab under **Timers** you can tune how aggressively PBData polls.
 
+- **Max private WS**
+  - Global cap on how many private WebSocket clients the Dashboard's live-streaming layer (`api/live.py`) may open. This does not affect PBData itself (which uses only REST), but the setting is managed here because PBData owns the exchange connection pool.
 - **Startup delay (s)**
   - Grace period after PBData starts before shared REST pollers begin
 - **Combined interval (s)**
-  - How often to run the shared combined REST poll (balances/positions/orders)
+  - How often the shared combined REST poll runs (balances + positions + orders fallback/refresh)
+- **Balance interval (s)**
+  - How often the dedicated balance REST poll runs
+- **Positions interval (s)**
+  - How often the dedicated positions REST poll runs
+- **Orders interval (s)**
+  - How often the dedicated orders REST poll runs
 - **History interval (s)**
-  - How often to run shared history updates
+  - How often shared history updates run
 - **Executions interval (s)**
-  - How often to run shared executions (my trades)
+  - How often shared executions (my trades) run
+- **Market data coin pause (s)**
+  - Pause between coin fetches in the 1-minute market data pipeline
 
 General guidance:
 
@@ -59,32 +79,25 @@ Some exchanges need a higher pause.
 - If you leave a value equal to the global pause, PBGui will not save an override.
 - If no override is set, PBData uses its built-in per-exchange defaults (example: Hyperliquid/Bybit).
 
-## Private WS global limit (ws_max)
-
-- **Max private WS global** caps how many private websocket clients PBData may keep open.
-- If you run many users/exchanges, this helps prevent websocket overload.
-
 ## Log viewer tips
 
-The PBData details page uses the filtered log viewer for PBData logs. It supports:
+The PBData **Log** tab uses the live log viewer. It streams log lines via WebSocket and supports:
 
-- Selecting one or more **Logfiles** (merged by timestamp)
-- Filtering by:
-  - **Users**
-  - **Tags** (from `[tag]` tokens)
-  - **Levels (filter)**
-  - **Free-text**
-- **RAW** mode shows unformatted lines
-- Buttons:
-  - ✖ Clear filters
-  - 🔄 Refresh
-  - 🗑️ Purge/truncate the selected log file(s)
+- **Files sidebar** — click the **Files** button (or the filename badge in the toolbar) to open a sidebar listing all available log files. Click a file to switch to it. Only one file is shown at a time.
+- **Level filter buttons** — toggle **DBG**, **INF**, **WRN**, **ERR**, **CRT** to show/hide lines by severity
+- **Search** — type free text into the search box, or pick a **Preset** (Errors, Warnings, Connection, Restart/Stop, Traceback). Toggle the **Filter** checkbox to switch between filtering (hide non-matches) and highlighting (show all, highlight matches). Use the **▲ / ▼** buttons to jump between matches.
+- **Lines** — choose how many lines to keep in view (200 / 500 / 1000 / 2000 / 5000)
+- **Control buttons**:
+  - ⏸ **Pause** / ▶ **Resume** — freeze or resume the live stream
+  - 🗑 **Clear** — clear all lines from the display
+  - ↓ **Download** — download the currently viewed log
+  - **# Lines** — toggle line numbers on/off
 
-PBData also has a separate **PBData Log level** selector in the log header, which controls how verbose PBData itself logs.
+The **Log Level** setting (which controls how verbose PBData itself logs) is in the **Settings** tab, not in the log viewer.
 
-## Fetch Summary panel
+## Status tab
 
-PBData Details also shows a **Fetch Summary** panel (from `data/logs/fetch_summary.json`).
+The **Status** tab shows the Fetch Summary and Poller Metrics panels.
 
 It gives a compact runtime snapshot of:
 
@@ -121,7 +134,6 @@ Most PBData settings are persisted in `pbgui.ini` under `[pbdata]`, including:
 
 ### The UI shows stale data
 
-- Click 🔄 in the log viewer
-- Click 🔄 in the Fetch Summary panel
-- Check whether PBData is running (PBData toggle)
+- Check whether PBData is running (Start/Stop buttons in the control strip)
+- Open the **Status** tab and check the Fetch Summary for recent timestamps
 - Consider increasing the combined poll interval if the system is overloaded

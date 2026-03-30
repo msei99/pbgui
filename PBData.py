@@ -21,7 +21,7 @@ from collections import defaultdict
 import asyncio
 import random
 from logging_helpers import human_log as _human_log, set_service_min_level, is_debug_enabled
-from Exchange import set_ws_limits
+from Exchange import set_ws_limits, Exchange as _Exchange
 from market_data import load_market_data_config, get_daily_hour_coverage_for_dataset, set_enabled_coins
 from rate_limit_budget import RateLimitBudget, EXCHANGE_RATE_LIMITS, get_weight
 from hyperliquid_best_1m import update_latest_hyperliquid_1m_api_for_coin
@@ -291,8 +291,19 @@ class PBData():
         self._pollers_enabled_after_ts = datetime.now().timestamp() + self._pollers_delay_seconds
         # Shared poller intervals (seconds)
         self._shared_combined_interval_seconds = 90
-        self._shared_history_interval_seconds = 90
+        self._shared_history_interval_seconds = 300
         self._shared_executions_interval_seconds = 1800
+        # Balance has its own (longer) cadence — purely informational, no rush.
+        self._poll_interval_balance_seconds = 300
+        # Positions cadence — only changes after fills/liquidations.
+        self._poll_interval_positions_seconds = 300
+        # Orders cadence — position-per-symbol calls are expensive on HL; 60 s is still fresh enough.
+        self._poll_interval_orders_seconds = 60
+        # Users whose balance/positions/orders should be refreshed on the next combined cycle
+        # (set by history/executions pollers when new entries are detected).
+        self._balance_stale_users: set = set()
+        self._positions_stale_users: set = set()
+        self._orders_stale_users: set = set()
         # Flag to restart shared poller tasks when intervals change
         self._poll_intervals_changed = False
         self._pbgui_ini_mtime = None
@@ -342,7 +353,7 @@ class PBData():
         # Metrics task handle
         self._metrics_task = None
         # Metrics sampling interval (seconds), configurable via env PB_METRICS_INTERVAL
-        self._metrics_interval = 60
+        self._metrics_interval = 10
         # ── Poller metrics (observable via API) ──────────────────
         # Per-exchange counters / timestamps that the GUI can display.
         # Written to data/logs/poller_metrics.json every _metrics_interval.
@@ -361,8 +372,12 @@ class PBData():
         })
         # ── Rate-limit budgets (token bucket per exchange) ───────
         self._rate_budgets: dict[str, RateLimitBudget] = {}
+        # Per-exchange lock: ensures only ONE poller (combined/history/executions)
+        # draws from the budget at a time, preventing concurrent token starvation.
+        self._budget_poller_locks: dict[str, asyncio.Lock] = {}
         for _exch_name, _cfg in EXCHANGE_RATE_LIMITS.items():
             self._rate_budgets[_exch_name] = RateLimitBudget(**_cfg)
+            self._budget_poller_locks[_exch_name] = asyncio.Lock()
         # (IO debugging disabled) -- per-metrics-cycle DB/process IO logging removed
         # Latest 1m candles (API) auto-refresh settings
         self._latest_1m_enabled = True
@@ -587,6 +602,18 @@ class PBData():
                 if new_exec != getattr(self, '_shared_executions_interval_seconds', 1800):
                     self._shared_executions_interval_seconds = int(new_exec)
                     self._poll_intervals_changed = True
+
+            new_balance = _get_int_opt('pbdata', 'poll_interval_balance_seconds')
+            if new_balance is not None and new_balance > 0:
+                self._poll_interval_balance_seconds = int(new_balance)
+
+            new_positions = _get_int_opt('pbdata', 'poll_interval_positions_seconds')
+            if new_positions is not None and new_positions > 0:
+                self._poll_interval_positions_seconds = int(new_positions)
+
+            new_orders = _get_int_opt('pbdata', 'poll_interval_orders_seconds')
+            if new_orders is not None and new_orders > 0:
+                self._poll_interval_orders_seconds = int(new_orders)
 
             # Latest 1m API fetch interval
             new_latest_1m_interval = _get_int_opt('pbdata', 'latest_1m_interval_seconds')
@@ -845,8 +872,12 @@ class PBData():
                         lookback_days = max_lb
 
                     try:
-                        # Acquire rate budget for HL candleSnapshot
-                        if not await self._acquire_rate_budget('hyperliquid', 'candle_snapshot', timeout=120.0):
+                        # Acquire rate budget for HL candleSnapshot.
+                        # Weight = 44/day (20 base + ceil(1440 candles/60) = 44 per HL docs).
+                        # update_latest_hyperliquid_1m_api_for_coin makes one API call per
+                        # missing day → acquire the full upper bound up-front.
+                        _cs_weight = get_weight('hyperliquid', 'candle_snapshot') * max(1, int(lookback_days))
+                        if not await self._acquire_rate_budget('hyperliquid', 'candle_snapshot', timeout=120.0, weight_override=_cs_weight):
                             coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
                             coin_status["result"] = "budget_timeout"
                         else:
@@ -895,6 +926,7 @@ class PBData():
                         status["running"] = False
                         status["current_coin"] = None
                         status["stopped"] = True
+                        status["last_run_duration_s"] = int(datetime.now().timestamp() - now_ts)
                         try:
                             await self._update_market_data_status("latest_1m", status)
                         except Exception:
@@ -937,6 +969,7 @@ class PBData():
 
                 status["running"] = False
                 status["current_coin"] = None
+                status["last_run_duration_s"] = int(datetime.now().timestamp() - now_ts)
                 await self._update_market_data_status("latest_1m", status)
                 if "historical" in status:
                     await self._update_market_data_status("historical", status["historical"])
@@ -1104,6 +1137,7 @@ class PBData():
                         status_bnc["running"] = False
                         status_bnc["current_coin"] = None
                         status_bnc["stopped"] = True
+                        status_bnc["last_run_duration_s"] = int(datetime.now().timestamp() - now_ts)
                         try:
                             await self._update_market_data_status("binance_latest_1m", status_bnc)
                         except Exception:
@@ -1117,6 +1151,7 @@ class PBData():
                 # Merge into market data status (locked to avoid clobbering other loops)
                 status_bnc["running"] = False
                 status_bnc["current_coin"] = None
+                status_bnc["last_run_duration_s"] = int(datetime.now().timestamp() - now_ts)
                 try:
                     await self._update_market_data_status("binance_latest_1m", status_bnc)
                 except Exception:
@@ -1283,6 +1318,7 @@ class PBData():
                         status_bbt["running"] = False
                         status_bbt["current_coin"] = None
                         status_bbt["stopped"] = True
+                        status_bbt["last_run_duration_s"] = int(datetime.now().timestamp() - now_ts)
                         try:
                             await self._update_market_data_status("bybit_latest_1m", status_bbt)
                         except Exception:
@@ -1295,6 +1331,7 @@ class PBData():
                 _resume_after_coin = ""
                 status_bbt["running"] = False
                 status_bbt["current_coin"] = None
+                status_bbt["last_run_duration_s"] = int(datetime.now().timestamp() - now_ts)
                 try:
                     await self._update_market_data_status("bybit_latest_1m", status_bbt)
                 except Exception:
@@ -1808,7 +1845,7 @@ class PBData():
         if not budget:
             return True  # no budget tracking for this exchange
         weight = weight_override if weight_override is not None else get_weight(exchange, operation)
-        acquired = await budget.acquire(weight=weight, timeout=timeout)
+        acquired = await budget.acquire(weight=weight, timeout=timeout, tag=operation)
         if not acquired:
             try:
                 _human_log('PBData', f"[budget] Rate budget timeout for {exchange} op={operation} weight={weight}", level='WARNING')
@@ -2396,271 +2433,36 @@ class PBData():
                 if in_backoff:
                     _human_log('PBData', f"[poll] Skipping shared {kind} poll for {exch} due to backoff", level='INFO')
                     continue
-                for user in batch_users:
-                    try:
-                        if kind == 'positions':
-                            # Gate shared REST calls using per-exchange REST slot
-                            exchange_for_slot = exch or user.exchange
-                            try:
-                                async with self._rest_slot(exchange_for_slot) as got:
-                                    if got:
-                                        await asyncio.to_thread(self.db.update_positions, user)
-                                        try:
-                                            self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
-                                        except Exception:
-                                            pass
-                                    else:
-                                        # Could not acquire REST slot; skip this update
-                                        try:
-                                            _human_log('PBData', f"[poll] Skipped positions update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
-                                        except Exception:
-                                            pass
-                                        had_rate_limit = True
-                            except Exception as e:
-                                # Handle InvalidNonce specially to avoid generator issues and retry storms
+                # Acquire per-exchange budget lock so pollers don't starve each other.
+                _bpl2 = self._budget_poller_locks.get(exch)
+                if _bpl2:
+                    await _bpl2.acquire()
+                try:
+                    for user in batch_users:
+                        try:
+                            if kind == 'positions':
+                                # Gate shared REST calls using per-exchange REST slot
+                                exchange_for_slot = exch or user.exchange
                                 try:
-                                    msg = str(e).lower()
-                                    if 'invalid request' in msg and 'recv_window' in msg:
-                                        tb = traceback.format_exc()
-                                        try:
-                                            parsed = self._parse_recv_window_from_exception(e)
-                                        except Exception:
-                                            parsed = {}
-                                        try:
-                                            meta = {'traceback': tb} if tb else {}
-                                            if parsed:
-                                                meta.update(parsed)
-                                            if not meta:
-                                                meta = None
-                                            _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta=meta)
-                                        except Exception:
-                                            pass
-                                        try:
-                                            dur = None
-                                            if parsed and parsed.get('delta_ms') is not None:
-                                                delta_s = int(abs(int(parsed.get('delta_ms'))) / 1000)
-                                                dur = min(max(60, delta_s + 10), 600)
-                                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=dur or 60, user=user)
-                                        except Exception:
-                                            pass
-                                        had_rate_limit = True
-                                        continue
-                                except Exception:
-                                    pass
-                        elif kind == 'orders':
-                            exchange_for_slot = exch or user.exchange
-                            try:
-                                async with self._rest_slot(exchange_for_slot) as got:
-                                    if got:
-                                        await asyncio.to_thread(self.db.update_orders, user)
-                                        try:
-                                            self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
-                                        except Exception:
-                                            pass
-                                    else:
-                                        try:
-                                            _human_log('PBData', f"[poll] Skipped orders update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
-                                        except Exception:
-                                            pass
-                                        had_rate_limit = True
-                            except Exception as e:
-                                try:
-                                    msg = str(e).lower()
-                                    if 'invalid request' in msg and 'recv_window' in msg:
-                                        tb = traceback.format_exc()
-                                        try:
-                                            parsed = self._parse_recv_window_from_exception(e)
-                                        except Exception:
-                                            parsed = {}
-                                        try:
-                                            meta = {'traceback': tb} if tb else {}
-                                            if parsed:
-                                                meta.update(parsed)
-                                            if not meta:
-                                                meta = None
-                                            _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta=meta)
-                                        except Exception:
-                                            pass
-                                        try:
-                                            dur = None
-                                            if parsed and parsed.get('delta_ms') is not None:
-                                                delta_s = int(abs(int(parsed.get('delta_ms'))) / 1000)
-                                                dur = min(max(60, delta_s + 10), 600)
-                                            self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=dur or 60, user=user)
-                                        except Exception:
-                                            pass
-                                        had_rate_limit = True
-                                        continue
-                                except Exception:
-                                    pass
-                        elif kind == 'history':
-                            # Instrument shared history polling for debugging/tracing
-                            key = (user.name, user.exchange)
-                            start_ts = datetime.now().timestamp()
-                            _human_log('PBData', f"[poll] Shared history poll START for {user.name} ({user.exchange})", level='INFO', user=user)
-                            # Time the history update; if it is very long, mark exchange backoff
-                            exchange_for_slot = exch or user.exchange
-                            try:
-                                async with self._rest_slot(exchange_for_slot) as got:
-                                    if not got:
-                                        try:
-                                            _human_log('PBData', f"[poll] Skipped history update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
-                                        except Exception:
-                                            pass
-                                        had_rate_limit = True
-                                    else:
-                                        # Acquire rate budget before history fetch
-                                        _budget_ok = await self._acquire_rate_budget(exchange_for_slot, 'fetch_history')
-                                        if not _budget_ok:
-                                            pass  # budget timeout — skip but don't set backoff
-                                        try:
-                                            if _budget_ok:
-                                                await asyncio.to_thread(self.db.update_history, user)
-                                                asyncio.create_task(_notify_api_income(getattr(user, 'name', '')))
-                                        except Exception as e:
-                                            # Some runtime errors seen under heavy load look like
-                                            # "generator didn't stop after athrow()". Treat these
-                                            # as transient and escalate to backoff while logging.
-                                            msg = str(e)
-                                            lower = msg.lower()
-                                            if 'invalid request' in lower and 'recv_window' in lower:
-                                                tb = traceback.format_exc()
-                                                try:
-                                                    parsed = self._parse_recv_window_from_exception(e)
-                                                except Exception:
-                                                    parsed = {}
-                                                try:
-                                                    meta = {'traceback': tb} if tb else {}
-                                                    if parsed:
-                                                        meta.update(parsed)
-                                                    if not meta:
-                                                        meta = None
-                                                    _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta=meta)
-                                                except Exception:
-                                                    pass
-                                                try:
-                                                    dur = None
-                                                    if parsed and parsed.get('delta_ms') is not None:
-                                                        delta_s = int(abs(int(parsed.get('delta_ms'))) / 1000)
-                                                        dur = min(max(60, delta_s + 10), 600)
-                                                    self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=dur or 60, user=user)
-                                                except Exception:
-                                                    pass
-                                                had_rate_limit = True
-                                            elif 'generator didn\'t stop after athrow' in msg or 'athrow' in lower:
-                                                try:
-                                                    _human_log('PBData', f"[poll] history update failed for {user.name}: {msg}", level='ERROR')
-                                                except Exception:
-                                                    pass
-                                                had_rate_limit = True
-                                            else:
-                                                # Re-raise unexpected exceptions to be handled by outer handler
-                                                raise
-                            except Exception as e:
-                                raise
-                            dur_ms = int((datetime.now().timestamp() - start_ts) * 1000)
-                            if dur_ms / 1000.0 > self._long_poll_threshold_seconds:
-                                # mark exchange as overloaded and backoff longer (include user for logging)
-                                try:
-                                    self._set_exchange_backoff(user.exchange, reason='long_history_poll', duration=self._backoff_duration_seconds * 2, user=user)
-                                except Exception:
-                                    pass
-                            # record last successful REST history poll time per user/exchange
-                            try:
-                                self._history_rest_last[key] = start_ts
-                                try:
-                                    self._last_fetch_ts[(user.name, 'history')] = start_ts
-                                except Exception:
-                                    pass
-                            except Exception:
-                                pass
-                            try:
-                                self._write_fetch_summary()
-                            except Exception:
-                                pass
-                            _human_log('PBData', f"[poll] Shared history poll DONE for {user.name} ({user.exchange}) dur={dur_ms}ms", level='INFO', user=user)
-                        elif kind == 'executions':
-                            # Re-check allowed executions users before each fetch so that
-                            # removing a user in the UI takes effect immediately even
-                            # mid-cycle.
-                            try:
-                                self.load_trades_users()
-                                if user.name not in (self.trades_users or []):
-                                    continue
-                            except Exception:
-                                # Fail-safe: if we cannot determine the allow-list, skip.
-                                continue
-                            start_ts = datetime.now().timestamp()
-                            exchange_for_slot = exch or user.exchange
-                            did_run = False
-                            fetched = None
-                            inserted = None
-                            try:
-                                async with self._rest_slot(exchange_for_slot) as got:
-                                    if not got:
-                                        try:
-                                            _human_log('PBData', f"[poll] Skipped executions update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
-                                        except Exception:
-                                            pass
-                                        had_rate_limit = True
-                                    else:
-                                        _exec_budget_ok = await self._acquire_rate_budget(exchange_for_slot, 'fetch_executions')
-                                        if _exec_budget_ok:
-                                            did_run = True
-                                            res = await asyncio.to_thread(self.db.update_executions, user)
+                                    async with self._rest_slot(exchange_for_slot) as got:
+                                        if got:
+                                            await asyncio.to_thread(self.db.update_positions, user)
                                             try:
-                                                if isinstance(res, dict):
-                                                    fetched = res.get('fetched')
-                                                    inserted = res.get('inserted')
+                                                self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
                                             except Exception:
                                                 pass
+                                        else:
+                                            # Could not acquire REST slot; skip this update
                                             try:
-                                                self._last_fetch_ts[(user.name, 'executions')] = start_ts
+                                                _human_log('PBData', f"[poll] Skipped positions update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
                                             except Exception:
                                                 pass
-                                try:
-                                    self._write_fetch_summary()
-                                except Exception:
-                                    pass
-                            except Exception:
-                                # Let outer handler log traceback + handle rate-limit keywords.
-                                raise
-                            if did_run:
-                                try:
-                                    dur_ms = int((datetime.now().timestamp() - start_ts) * 1000)
-                                    _human_log(
-                                        'PBData',
-                                        f"[poll] Shared executions poll DONE for {user.name} ({user.exchange}) dur={dur_ms}ms fetched={fetched} inserted={inserted}",
-                                        level='INFO',
-                                        user=user,
-                                    )
-                                except Exception:
-                                    pass
-                        elif kind == 'balances':
-                            exchange_for_slot = exch or user.exchange
-                            try:
-                                async with self._rest_slot(exchange_for_slot) as got:
-                                    if got:
-                                        await asyncio.to_thread(self.db.update_balances, user)
-                                        asyncio.create_task(_notify_api_balance())
-                                        try:
-                                            self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
-                                        except Exception:
-                                            pass
-                                        try:
-                                            self._write_fetch_summary()
-                                        except Exception:
-                                            pass
-                                    else:
-                                        try:
-                                            _human_log('PBData', f"[poll] Skipped balances update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
-                                        except Exception:
-                                            pass
-                                        had_rate_limit = True
-                            except Exception as e:
-                                try:
-                                    msg = str(e).lower()
-                                    if 'invalid request' in msg and 'recv_window' in msg:
+                                            had_rate_limit = True
+                                except Exception as e:
+                                    # Handle InvalidNonce specially to avoid generator issues and retry storms
+                                    try:
+                                        msg = str(e).lower()
+                                        if 'invalid request' in msg and 'recv_window' in msg:
                                             tb = traceback.format_exc()
                                             try:
                                                 parsed = self._parse_recv_window_from_exception(e)
@@ -2685,41 +2487,296 @@ class PBData():
                                                 pass
                                             had_rate_limit = True
                                             continue
+                                    except Exception:
+                                        pass
+                            elif kind == 'orders':
+                                exchange_for_slot = exch or user.exchange
+                                try:
+                                    async with self._rest_slot(exchange_for_slot) as got:
+                                        if got:
+                                            await asyncio.to_thread(self.db.update_orders, user)
+                                            try:
+                                                self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
+                                            except Exception:
+                                                pass
+                                        else:
+                                            try:
+                                                _human_log('PBData', f"[poll] Skipped orders update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
+                                            except Exception:
+                                                pass
+                                            had_rate_limit = True
+                                except Exception as e:
+                                    try:
+                                        msg = str(e).lower()
+                                        if 'invalid request' in msg and 'recv_window' in msg:
+                                            tb = traceback.format_exc()
+                                            try:
+                                                parsed = self._parse_recv_window_from_exception(e)
+                                            except Exception:
+                                                parsed = {}
+                                            try:
+                                                meta = {'traceback': tb} if tb else {}
+                                                if parsed:
+                                                    meta.update(parsed)
+                                                if not meta:
+                                                    meta = None
+                                                _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta=meta)
+                                            except Exception:
+                                                pass
+                                            try:
+                                                dur = None
+                                                if parsed and parsed.get('delta_ms') is not None:
+                                                    delta_s = int(abs(int(parsed.get('delta_ms'))) / 1000)
+                                                    dur = min(max(60, delta_s + 10), 600)
+                                                self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=dur or 60, user=user)
+                                            except Exception:
+                                                pass
+                                            had_rate_limit = True
+                                            continue
+                                    except Exception:
+                                        pass
+                            elif kind == 'history':
+                                # Instrument shared history polling for debugging/tracing
+                                key = (user.name, user.exchange)
+                                start_ts = datetime.now().timestamp()
+                                _human_log('PBData', f"[poll] Shared history poll START for {user.name} ({user.exchange})", level='INFO', user=user)
+                                # Time the history update; if it is very long, mark exchange backoff
+                                exchange_for_slot = exch or user.exchange
+                                try:
+                                    async with self._rest_slot(exchange_for_slot) as got:
+                                        if not got:
+                                            try:
+                                                _human_log('PBData', f"[poll] Skipped history update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
+                                            except Exception:
+                                                pass
+                                            had_rate_limit = True
+                                        else:
+                                            # Acquire rate budget before history fetch
+                                            _budget_ok = await self._acquire_rate_budget(exchange_for_slot, 'fetch_history')
+                                            if not _budget_ok:
+                                                pass  # budget timeout — skip but don't set backoff
+                                            try:
+                                                if _budget_ok:
+                                                    await asyncio.to_thread(self.db.update_history, user)
+                                                    asyncio.create_task(_notify_api_income(getattr(user, 'name', '')))
+                                                    # Mark balance + positions + orders as stale so the next combined
+                                                    # cycle refreshes them (fills/funding change both).
+                                                    try:
+                                                        self._balance_stale_users.add(user.name)
+                                                        self._positions_stale_users.add(user.name)
+                                                        self._orders_stale_users.add(user.name)
+                                                    except Exception:
+                                                        pass
+                                            except Exception as e:
+                                                # Some runtime errors seen under heavy load look like
+                                                # "generator didn't stop after athrow()". Treat these
+                                                # as transient and escalate to backoff while logging.
+                                                msg = str(e)
+                                                lower = msg.lower()
+                                                if 'invalid request' in lower and 'recv_window' in lower:
+                                                    tb = traceback.format_exc()
+                                                    try:
+                                                        parsed = self._parse_recv_window_from_exception(e)
+                                                    except Exception:
+                                                        parsed = {}
+                                                    try:
+                                                        meta = {'traceback': tb} if tb else {}
+                                                        if parsed:
+                                                            meta.update(parsed)
+                                                        if not meta:
+                                                            meta = None
+                                                        _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta=meta)
+                                                    except Exception:
+                                                        pass
+                                                    try:
+                                                        dur = None
+                                                        if parsed and parsed.get('delta_ms') is not None:
+                                                            delta_s = int(abs(int(parsed.get('delta_ms'))) / 1000)
+                                                            dur = min(max(60, delta_s + 10), 600)
+                                                        self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=dur or 60, user=user)
+                                                    except Exception:
+                                                        pass
+                                                    had_rate_limit = True
+                                                elif 'generator didn\'t stop after athrow' in msg or 'athrow' in lower:
+                                                    try:
+                                                        _human_log('PBData', f"[poll] history update failed for {user.name}: {msg}", level='ERROR')
+                                                    except Exception:
+                                                        pass
+                                                    had_rate_limit = True
+                                                else:
+                                                    # Re-raise unexpected exceptions to be handled by outer handler
+                                                    raise
+                                except Exception as e:
+                                    raise
+                                dur_ms = int((datetime.now().timestamp() - start_ts) * 1000)
+                                if dur_ms / 1000.0 > self._long_poll_threshold_seconds:
+                                    # mark exchange as overloaded and backoff longer (include user for logging)
+                                    try:
+                                        self._set_exchange_backoff(user.exchange, reason='long_history_poll', duration=self._backoff_duration_seconds * 2, user=user)
+                                    except Exception:
+                                        pass
+                                # record last successful REST history poll time per user/exchange
+                                try:
+                                    self._history_rest_last[key] = start_ts
+                                    try:
+                                        self._last_fetch_ts[(user.name, 'history')] = start_ts
+                                    except Exception:
+                                        pass
                                 except Exception:
                                     pass
-                        # (duplicate branches removed)
-                    except Exception as e:
-                        msg = str(e)
-                        tb = traceback.format_exc()
-                        try:
-                            _human_log('PBData', f"[poll] Shared {kind} poll failed for {user.name}: {e}", level='ERROR', meta={'traceback': tb})
-                        except Exception:
-                            pass
-                        _err_exch2 = getattr(user, 'exchange', None) or exch or 'unknown'
-                        try:
-                            self._poller_metrics[_err_exch2]['errors'] += 1
-                        except Exception:
-                            pass
-                        lower = msg.lower()
-                        if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
-                            had_rate_limit = True
+                                try:
+                                    self._write_fetch_summary()
+                                except Exception:
+                                    pass
+                                _human_log('PBData', f"[poll] Shared history poll DONE for {user.name} ({user.exchange}) dur={dur_ms}ms", level='INFO', user=user)
+                            elif kind == 'executions':
+                                # Re-check allowed executions users before each fetch so that
+                                # removing a user in the UI takes effect immediately even
+                                # mid-cycle.
+                                try:
+                                    self.load_trades_users()
+                                    if user.name not in (self.trades_users or []):
+                                        continue
+                                except Exception:
+                                    # Fail-safe: if we cannot determine the allow-list, skip.
+                                    continue
+                                start_ts = datetime.now().timestamp()
+                                exchange_for_slot = exch or user.exchange
+                                did_run = False
+                                fetched = None
+                                inserted = None
+                                try:
+                                    async with self._rest_slot(exchange_for_slot) as got:
+                                        if not got:
+                                            try:
+                                                _human_log('PBData', f"[poll] Skipped executions update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
+                                            except Exception:
+                                                pass
+                                            had_rate_limit = True
+                                        else:
+                                            _exec_budget_ok = await self._acquire_rate_budget(exchange_for_slot, 'fetch_executions')
+                                            if _exec_budget_ok:
+                                                did_run = True
+                                                res = await asyncio.to_thread(self.db.update_executions, user)
+                                                try:
+                                                    if isinstance(res, dict):
+                                                        fetched = res.get('fetched')
+                                                        inserted = res.get('inserted')
+                                                        if inserted and inserted > 0:
+                                                            self._balance_stale_users.add(user.name)
+                                                            self._positions_stale_users.add(user.name)
+                                                            self._orders_stale_users.add(user.name)
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    self._last_fetch_ts[(user.name, 'executions')] = start_ts
+                                                except Exception:
+                                                    pass
+                                    try:
+                                        self._write_fetch_summary()
+                                    except Exception:
+                                        pass
+                                except Exception:
+                                    # Let outer handler log traceback + handle rate-limit keywords.
+                                    raise
+                                if did_run:
+                                    try:
+                                        dur_ms = int((datetime.now().timestamp() - start_ts) * 1000)
+                                        _human_log(
+                                            'PBData',
+                                            f"[poll] Shared executions poll DONE for {user.name} ({user.exchange}) dur={dur_ms}ms fetched={fetched} inserted={inserted}",
+                                            level='INFO',
+                                            user=user,
+                                        )
+                                    except Exception:
+                                        pass
+                            elif kind == 'balances':
+                                exchange_for_slot = exch or user.exchange
+                                try:
+                                    async with self._rest_slot(exchange_for_slot) as got:
+                                        if got:
+                                            await asyncio.to_thread(self.db.update_balances, user)
+                                            asyncio.create_task(_notify_api_balance())
+                                            try:
+                                                self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
+                                            except Exception:
+                                                pass
+                                            try:
+                                                self._write_fetch_summary()
+                                            except Exception:
+                                                pass
+                                        else:
+                                            try:
+                                                _human_log('PBData', f"[poll] Skipped balances update for {user.name}; rest slot busy for {exchange_for_slot}", level=self._rest_slot_busy_log_level)
+                                            except Exception:
+                                                pass
+                                            had_rate_limit = True
+                                except Exception as e:
+                                    try:
+                                        msg = str(e).lower()
+                                        if 'invalid request' in msg and 'recv_window' in msg:
+                                                tb = traceback.format_exc()
+                                                try:
+                                                    parsed = self._parse_recv_window_from_exception(e)
+                                                except Exception:
+                                                    parsed = {}
+                                                try:
+                                                    meta = {'traceback': tb} if tb else {}
+                                                    if parsed:
+                                                        meta.update(parsed)
+                                                    if not meta:
+                                                        meta = None
+                                                    _human_log('PBData', f"[poll] InvalidNonce / recv_window error for {user.name} ({user.exchange}): {e}", level='WARNING', meta=meta)
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    dur = None
+                                                    if parsed and parsed.get('delta_ms') is not None:
+                                                        delta_s = int(abs(int(parsed.get('delta_ms'))) / 1000)
+                                                        dur = min(max(60, delta_s + 10), 600)
+                                                    self._set_exchange_backoff(user.exchange, reason='invalid_nonce', duration=dur or 60, user=user)
+                                                except Exception:
+                                                    pass
+                                                had_rate_limit = True
+                                                continue
+                                    except Exception:
+                                        pass
+                            # (duplicate branches removed)
+                        except Exception as e:
+                            msg = str(e)
+                            tb = traceback.format_exc()
                             try:
-                                self._poller_metrics[_err_exch2]['rate_limit_429'] += 1
+                                _human_log('PBData', f"[poll] Shared {kind} poll failed for {user.name}: {e}", level='ERROR', meta={'traceback': tb})
                             except Exception:
                                 pass
-                    else:
-                        _serial_users_polled += 1
-                    # Small stagger between per-user REST requests to avoid bursts
-                    # Skip for exchanges with budget tracking (budget handles pacing)
-                    _has_budget2 = (exch or getattr(user, 'exchange', None) or '') in self._rate_budgets
-                    if not _has_budget2:
-                        try:
-                            pause_val = self._shared_rest_pause_by_exchange.get(exch, self._shared_rest_user_pause)
-                            if pause_val and pause_val > 0:
-                                jitter = random.uniform(0, pause_val * 0.2)
-                                await asyncio.sleep(pause_val + jitter)
-                        except Exception:
-                            pass
+                            _err_exch2 = getattr(user, 'exchange', None) or exch or 'unknown'
+                            try:
+                                self._poller_metrics[_err_exch2]['errors'] += 1
+                            except Exception:
+                                pass
+                            lower = msg.lower()
+                            if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
+                                had_rate_limit = True
+                                try:
+                                    self._poller_metrics[_err_exch2]['rate_limit_429'] += 1
+                                except Exception:
+                                    pass
+                        else:
+                            _serial_users_polled += 1
+                        # Small stagger between per-user REST requests to avoid bursts
+                        # Skip for exchanges with budget tracking (budget handles pacing)
+                        _has_budget2 = (exch or getattr(user, 'exchange', None) or '') in self._rate_budgets
+                        if not _has_budget2:
+                            try:
+                                pause_val = self._shared_rest_pause_by_exchange.get(exch, self._shared_rest_user_pause)
+                                if pause_val and pause_val > 0:
+                                    jitter = random.uniform(0, pause_val * 0.2)
+                                    await asyncio.sleep(pause_val + jitter)
+                            except Exception:
+                                pass
+                finally:
+                    if _bpl2:
+                        _bpl2.release()
             # Record per-exchange history/serial-poller metrics
             if kind == 'history':
                 _serial_cycle_end = datetime.now().timestamp()
@@ -2755,6 +2812,9 @@ class PBData():
         base_interval = max(10, interval_seconds)
         exch_label = f" exchange={exchange_filter}" if exchange_filter else ""
         _human_log('PBData', f"[poll] Starting shared COMBINED poller interval={base_interval}s{exch_label}", level='INFO')
+        # Persistent Exchange instances per user — keeps CCXT's markets cache alive
+        # across poll cycles so load_markets() is only called once (not once per cycle).
+        _user_exch: dict = {}
         while True:
             delay = base_interval + backoff
             await asyncio.sleep(delay)
@@ -2773,99 +2833,198 @@ class PBData():
             had_rate_limit = False
             _combined_cycle_start = datetime.now().timestamp()
             _combined_users_polled = 0
+            # Remove persistent instances for users no longer active
+            _active_names = {u.name for u in users}
+            for _stale_name in [n for n in list(_user_exch) if n not in _active_names]:
+                try:
+                    _user_exch.pop(_stale_name).close()
+                except Exception:
+                    pass
             for exch, batch_users in batches:
                 if exch and exch not in self._rate_budgets and self._is_exchange_in_backoff(exch):
                     _human_log('PBData', f"[poll] Skipping shared COMBINED poll for {exch} due to backoff")
                     continue
                 exchange_rate_limited = False
-                for user in batch_users:
-                    if exchange_rate_limited:
-                        break
-                    try:
-                        exchange_for_slot = exch or getattr(user, 'exchange', None) or 'unknown'
-                        async with self._rest_slot(exchange_for_slot) as got:
-                            if not got:
-                                _human_log('PBData', f"[poll] Shared COMBINED poll skipped {user.name}: REST slot timed out", level='DEBUG', user=user.name)
+                # Acquire per-exchange budget lock so combined/history don't starve each other.
+                _bpl = self._budget_poller_locks.get(exch)
+                if _bpl:
+                    await _bpl.acquire()
+                try:
+                    for user in batch_users:
+                        if exchange_rate_limited:
+                            break
+                        try:
+                            exchange_for_slot = exch or getattr(user, 'exchange', None) or 'unknown'
+                            async with self._rest_slot(exchange_for_slot) as got:
+                                if not got:
+                                    _human_log('PBData', f"[poll] Shared COMBINED poll skipped {user.name}: REST slot timed out", level='DEBUG', user=user.name)
+                                    try:
+                                        self._poller_metrics[exchange_for_slot]['rest_slot_timeouts'] += 1
+                                    except Exception:
+                                        pass
+                                    continue
+                                # ── Balance: skip if timer not due AND user not stale ──
+                                _balance_due = True
                                 try:
-                                    self._poller_metrics[exchange_for_slot]['rest_slot_timeouts'] += 1
+                                    _last_bal = self._last_fetch_ts.get((user.name, 'balances'))
+                                    if _last_bal is not None:
+                                        _bal_age = datetime.now().timestamp() - _last_bal
+                                        _bal_interval = getattr(self, '_poll_interval_balance_seconds', 300)
+                                        _is_stale = user.name in getattr(self, '_balance_stale_users', set())
+                                        if _bal_age < _bal_interval and not _is_stale:
+                                            _balance_due = False
                                 except Exception:
                                     pass
-                                continue
-                            # balances -> positions -> orders (sequential)
-                            # Acquire rate budget before each API call
-                            if not await self._acquire_rate_budget(exchange_for_slot, 'fetch_balance'):
-                                continue
-                            await asyncio.to_thread(self.db.update_balances, user)
-                            asyncio.create_task(_notify_api_balance())
-                            try:
-                                self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
-                            except Exception:
-                                pass
-                            if not await self._acquire_rate_budget(exchange_for_slot, 'fetch_positions'):
-                                continue
-                            await asyncio.to_thread(self.db.update_positions, user)
-                            try:
-                                self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
-                            except Exception:
-                                pass
-                            # Dynamic weight: fetch_open_orders is called once PER position
-                            _n_pos = 1
-                            try:
-                                _pos_rows = self.db.fetch_positions(user)
-                                if _pos_rows:
-                                    _n_pos = max(1, len(_pos_rows))
-                            except Exception:
-                                pass
-                            _orders_weight = get_weight(exchange_for_slot, 'fetch_open_orders') * _n_pos
-                            if not await self._acquire_rate_budget(exchange_for_slot, 'fetch_open_orders', weight_override=_orders_weight):
-                                continue
-                            await asyncio.to_thread(self.db.update_orders, user)
-                            try:
-                                self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
-                            except Exception:
-                                pass
-                            _combined_users_polled += 1
-                            try:
-                                self._write_fetch_summary()
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        msg = str(e)
-                        tb = traceback.format_exc()
-                        try:
-                            _human_log('PBData', f"[poll] Shared COMBINED poll failed for {user.name}: {e}", level='ERROR', meta={'traceback': tb})
-                        except Exception:
-                            pass
-                        _err_exch = getattr(user, 'exchange', None) or exch or 'unknown'
-                        try:
-                            self._poller_metrics[_err_exch]['errors'] += 1
-                        except Exception:
-                            pass
-                        lower = msg.lower()
-                        if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
-                            had_rate_limit = True
-                            exchange_rate_limited = True
-                            try:
-                                self._poller_metrics[_err_exch]['rate_limit_429'] += 1
-                            except Exception:
-                                pass
-                            # Skip backoff for exchanges with budget tracking (budget handles pacing)
-                            if _err_exch not in self._rate_budgets:
+                                # ── Positions: skip if timer not due AND user not stale ──
+                                _positions_due = True
                                 try:
-                                    self._set_exchange_backoff(user.exchange, reason='rate_limit_429', duration=45, user=user)
+                                    _last_pos = self._last_fetch_ts.get((user.name, 'positions'))
+                                    if _last_pos is not None:
+                                        _pos_age = datetime.now().timestamp() - _last_pos
+                                        _pos_interval = getattr(self, '_poll_interval_positions_seconds', 300)
+                                        _is_pos_stale = user.name in getattr(self, '_positions_stale_users', set())
+                                        if _pos_age < _pos_interval and not _is_pos_stale:
+                                            _positions_due = False
                                 except Exception:
                                     pass
-                    if not exchange_rate_limited:
-                        # Skip fixed pause for exchanges with budget tracking (budget handles pacing)
-                        _has_budget = (exch or getattr(user, 'exchange', None) or '') in self._rate_budgets
-                        if not _has_budget:
+                                # ── Orders: skip if timer not due AND user not stale ──
+                                _orders_due = True
+                                try:
+                                    _last_ord = self._last_fetch_ts.get((user.name, 'orders'))
+                                    if _last_ord is not None:
+                                        _ord_age = datetime.now().timestamp() - _last_ord
+                                        _ord_interval = getattr(self, '_poll_interval_orders_seconds', 60)
+                                        _is_ord_stale = user.name in getattr(self, '_orders_stale_users', set())
+                                        if _ord_age < _ord_interval and not _is_ord_stale:
+                                            _orders_due = False
+                                except Exception:
+                                    pass
+                                # Nothing to do for this user
+                                if not _balance_due and not _positions_due and not _orders_due:
+                                    _combined_users_polled += 1
+                                    try:
+                                        self._write_fetch_summary()
+                                    except Exception:
+                                        pass
+                                    continue
+                                # ── Persistent shared Exchange ──
+                                # Reuse the same Exchange instance across poll cycles so that
+                                # CCXT's markets cache (self.instance.markets) is not discarded
+                                # between cycles.  On Hyperliquid, fetch_positions() calls
+                                # load_markets() internally; with a fresh instance that means
+                                # 3-4 extra REST calls per user per cycle → 429s.  With a
+                                # persistent instance the cache hit skips those calls entirely.
+                                _n_due = int(_balance_due) + int(_positions_due) + int(_orders_due)
+                                if user.name not in _user_exch:
+                                    _user_exch[user.name] = _Exchange(user.exchange, user)
+                                _shared_exch = _user_exch[user.name]
+                                try:
+                                    if _balance_due:
+                                        if not await self._acquire_rate_budget(exchange_for_slot, 'fetch_balance'):
+                                            continue
+                                        await asyncio.to_thread(self.db.update_balances, user, _shared_exch)
+                                        asyncio.create_task(_notify_api_balance())
+                                        try:
+                                            self._last_fetch_ts[(user.name, 'balances')] = datetime.now().timestamp()
+                                        except Exception:
+                                            pass
+                                        try:
+                                            self._balance_stale_users.discard(user.name)
+                                        except Exception:
+                                            pass
+                                    if _positions_due:
+                                        if not await self._acquire_rate_budget(exchange_for_slot, 'fetch_positions'):
+                                            continue
+                                        await asyncio.to_thread(self.db.update_positions, user, _shared_exch)
+                                        try:
+                                            self._last_fetch_ts[(user.name, 'positions')] = datetime.now().timestamp()
+                                        except Exception:
+                                            pass
+                                        try:
+                                            self._positions_stale_users.discard(user.name)
+                                        except Exception:
+                                            pass
+                                        # Positions changed → orders probably changed too
+                                        try:
+                                            self._orders_stale_users.add(user.name)
+                                        except Exception:
+                                            pass
+                                    if not _orders_due:
+                                        _combined_users_polled += 1
+                                        try:
+                                            self._write_fetch_summary()
+                                        except Exception:
+                                            pass
+                                        continue
+                                    # Dynamic weight: fetch_open_orders is called once PER position
+                                    _n_pos = 1
+                                    try:
+                                        _pos_rows = self.db.fetch_positions(user)
+                                        if _pos_rows:
+                                            _n_pos = max(1, len(_pos_rows))
+                                    except Exception:
+                                        pass
+                                    _orders_weight = get_weight(exchange_for_slot, 'fetch_open_orders') * _n_pos
+                                    if not await self._acquire_rate_budget(exchange_for_slot, 'fetch_open_orders', weight_override=_orders_weight):
+                                        continue
+                                    await asyncio.to_thread(self.db.update_orders, user, _shared_exch)
+                                    try:
+                                        self._last_fetch_ts[(user.name, 'orders')] = datetime.now().timestamp()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        self._orders_stale_users.discard(user.name)
+                                    except Exception:
+                                        pass
+                                    _combined_users_polled += 1
+                                    try:
+                                        self._write_fetch_summary()
+                                    except Exception:
+                                        pass
+                                finally:
+                                    # Do NOT close _shared_exch here — we keep it alive
+                                    # so CCXT's markets cache survives to the next cycle.
+                                    pass
+                        except Exception as e:
+                            msg = str(e)
+                            tb = traceback.format_exc()
                             try:
-                                pause_val = self._shared_rest_pause_by_exchange.get(exch, self._shared_rest_user_pause)
-                                if pause_val and pause_val > 0:
-                                    jitter = random.uniform(0, pause_val * 0.2)
-                                    await asyncio.sleep(pause_val + jitter)
+                                _human_log('PBData', f"[poll] Shared COMBINED poll failed for {user.name}: {e}", level='ERROR', meta={'traceback': tb})
                             except Exception:
                                 pass
+                            _err_exch = getattr(user, 'exchange', None) or exch or 'unknown'
+                            try:
+                                self._poller_metrics[_err_exch]['errors'] += 1
+                            except Exception:
+                                pass
+                            lower = msg.lower()
+                            if '429' in lower or 'too many requests' in lower or 'rate limit' in lower:
+                                had_rate_limit = True
+                                exchange_rate_limited = True
+                                try:
+                                    self._poller_metrics[_err_exch]['rate_limit_429'] += 1
+                                except Exception:
+                                    pass
+                                # Skip backoff for exchanges with budget tracking (budget handles pacing)
+                                if _err_exch not in self._rate_budgets:
+                                    try:
+                                        self._set_exchange_backoff(user.exchange, reason='rate_limit_429', duration=45, user=user)
+                                    except Exception:
+                                        pass
+                        if not exchange_rate_limited:
+                            # Skip fixed pause for exchanges with budget tracking (budget handles pacing)
+                            _has_budget = (exch or getattr(user, 'exchange', None) or '') in self._rate_budgets
+                            if not _has_budget:
+                                try:
+                                    pause_val = self._shared_rest_pause_by_exchange.get(exch, self._shared_rest_user_pause)
+                                    if pause_val and pause_val > 0:
+                                        jitter = random.uniform(0, pause_val * 0.2)
+                                        await asyncio.sleep(pause_val + jitter)
+                                except Exception:
+                                    pass
+                finally:
+                    if _bpl:
+                        _bpl.release()
             # Record per-exchange combined-poller metrics
             _combined_cycle_end = datetime.now().timestamp()
             _combined_exch = exchange_filter or 'all'
@@ -3825,7 +3984,20 @@ class PBData():
                 cfg = self._price_exchange_config.get(exch_name, {})
                 sym_count = len(cfg.get('symbols', set()))
                 active = bool(task and not task.done())
-                prices_info[exch_name] = {'symbols': sym_count, 'active': active}
+                # Collect unique user-facing (internal) symbols from the mapping
+                user_syms: list = []
+                try:
+                    mapping = cfg.get('mapping', {})
+                    seen_syms: set = set()
+                    for pairs in mapping.values():
+                        for _uname, internal_sym in pairs:
+                            if internal_sym not in seen_syms:
+                                seen_syms.add(internal_sym)
+                                user_syms.append(internal_sym)
+                    user_syms.sort()
+                except Exception:
+                    user_syms = []
+                prices_info[exch_name] = {'symbols': sym_count, 'active': active, 'symbol_list': user_syms}
             summary_obj = {
                 'timestamp': datetime.now().isoformat(sep=' ', timespec='seconds'),
                 'balances': {'ws': balances_ws, 'rest': balances_rest},

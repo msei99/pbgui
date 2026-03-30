@@ -13,10 +13,11 @@ PBMon ruft alle 60 Sekunden die Fehlerprüfung von PBRemote ab und prüft auf:
 | **Server offline** | Ein entfernter VPS nicht erreichbar ist |
 | **Systemressource** | Ein Server den konfigurierten Speicher-, CPU-, Swap- oder Disk-Schwellenwert überschreitet |
 | **Instanzfehler** | Eine laufende Passivbot-Instanz einen Fehler oder unerwarteten Stopp meldet |
+| **HL API-Key-Ablauf** | Ein Hyperliquid API-Key bald abläuft (konfigurierbare Warntage in `pbgui.ini`) |
 
 Jeder Alarm wird **einmalig** pro Fehlerereignis gesendet. PBMon merkt sich, welche Fehler
 bereits gemeldet wurden, und sendet nur dann eine neue Nachricht, wenn ein zuvor behobener
-Fehler erneut auftritt.
+Fehler erneut auftritt. HL-Key-Ablauf-Warnungen werden auf einmal pro User pro Tag dedupliziert.
 
 ## Einrichtung: Telegram-Bot anlegen
 
@@ -29,38 +30,35 @@ Fehler erneut auftritt.
 > **Wichtig:** Der Bot kann dir keine Nachrichten schicken, bis du ihm mindestens eine
 > Nachricht gesendet hast. Der Befehl `/start` genügt.
 
-## PBMon-Tab — Viewer-Modus (Standard)
+## PBMon-Detail-Panel — Log-Tab (Standard)
 
-Wenn du **System → Services → PBMon** öffnest, lädt sofort der vollhöhige Log-Viewer
-mit dem Live-Stream von `PBMon.log`.
+Klicke auf die PBMon-Kachel in der Services-Übersicht (oder nutze die Sidebar), um das Detail-Panel zu öffnen.
+Der **Log**-Tab lädt standardmäßig und zeigt einen Live-Stream von `PBMon.log`.
 
-- Nutze die **Level-Filter**-Buttons (DBG / INF / WRN / ERR), um relevante Zeilen zu fokussieren
+- Nutze die **Level-Filter**-Buttons (DBG / INF / WRN / ERR / CRT), um relevante Zeilen zu fokussieren
 - Nutze **Search**, um einen bestimmten Servernamen oder Fehlertext zu finden
-- Das **Version**-Dropdown zeigt rotierte Archive (`.1`, `.old`)
+- Öffne die **Files**-Sidebar, um zu rotierten Log-Archiven (`.1`, `.old`) zu wechseln, falls vorhanden
 
-## PBMon-Tab — Einstellungsmodus
+## PBMon-Detail-Panel — Settings-Tab
 
-Klicke auf **⚙ Settings** in der linken Seitenleiste, um die Einstellungsansicht zu öffnen.
+Wechsle zum **Settings**-Tab, um Telegram-Benachrichtigungen zu konfigurieren.
 
 | Feld | Beschreibung |
 |------|--------------|
 | **Telegram Bot Token** | Token von @BotFather (gespeichert in `pbgui.ini`) |
 | **Telegram Chat ID** | Deine persönliche oder Gruppen-Chat-ID |
 
-Drücke **💾** in der Sidebar zum Speichern. Der Speichern-Button wird
-**primär (rot)**, sobald es ungespeicherte Änderungen gibt.
+Klicke **Save** zum Speichern.
 
 > Änderungen wirken beim **nächsten Überwachungszyklus** (innerhalb von 60 Sekunden) —
 > kein Neustart erforderlich.
 
 ## PBMon starten und stoppen
 
-Nutze den **PBMon-Toggle** in der linken Seitenleiste im PBMon-Tab:
+Nutze die **Start**- / **Stop**-Buttons im Control-Strip oben im PBMon-Detail-Panel oder die Buttons auf der PBMon-Übersichtskachel.
 
-- Toggle **ein** → startet PBMon als abgekoppelten Hintergrundprozess
-- Toggle **aus** → stoppt den Prozess sauber
-
-Der **Overview**-Tab zeigt ✅ / ❌ Statusindikatoren für alle Services auf einen Blick.
+- **Start** → startet PBMon als abgekoppelten Hintergrundprozess
+- **Stop** → stoppt den Prozess sauber
 
 ## Log-Format
 

@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.69
+# v1.70
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -323,52 +323,26 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
-## v1.70 (unreleased)
-- Improve: HL rate-limit budget — dynamic weights: `fetch_open_orders` now costs 20 × number of positions (was flat 20); `fetch_history` raised to 120 (paginated calls); `candle_snapshot` raised to 160 (meta + multi-day); backoff disabled for budget-tracked exchanges (budget handles pacing); HL REST semaphore increased 1→2 slots; market-data coin pause raised 0.5 s→2 s (configurable) so combined/history pollers get slot time between coin fetches
-- Fix: PBData — `GET /api/services/status` no longer creates a full `PBData()` instance on every poll; uses lightweight `__new__` with only pidfile/pid — eliminates repeated "Set Exchange.ws global cap" / "PBData log level set" log spam every 5 s
-- New: Rate-limit budget tracking for Hyperliquid — token-bucket rate limiter (`rate_limit_budget.py`) guarantees the 1200 weight/min IP budget is never exceeded; per-operation weight estimates for all HL endpoints (clearinghouseState=2, openOrders=20, candleSnapshot=80, etc.); combined/history/market-data pollers acquire budget tokens before each API call; fixed inter-user pauses (3 s) eliminated for HL (budget handles pacing automatically); budget state (tokens, consumed, waits, wait-time) shown in Poller Metrics panel
-- New: Services page — PBData Status tab now includes a **Poller Metrics** panel below the Fetch Summary; shows per-exchange Combined/History poller status (last run age, cycle duration, users polled), backoff state, cumulative 429/error/slot-timeout counts, REST semaphore slots (total/available/in-use), and Market Data loop status (running/idle, progress, current coin); auto-refreshes every 5 s with a collapsible toggle
-- Fix: Logging page — log terminal bottom edge now has a visible margin (padding-bottom increased from 10 px to 14 px)
-- Fix: PBData — combined poller no longer hit by `long_history_poll` exchange backoffs; `long_history_poll` now uses a separate history-only backoff dict, so slow history polls on one user (e.g. bybit_CPTV7HR) no longer block balances/positions/orders for all users on that exchange
-- Fix: PBData — combined poller stops cascading 429 errors across users in the same exchange; on first `RateLimitExceeded` (429) per exchange per cycle, remaining users are skipped and a 45 s exchange backoff is set, preventing all subsequent users from also failing
-- Fix: PBData — `GET /settings/pbdata` and `POST /settings/pbdata` no longer instantiate a full `PBData()` object; fetch/trades user lists are read directly from pbgui.ini, eliminating repeated "Set Exchange.ws global cap" / "PBData log level set" INFO log spam on every settings API call
-- Fix: API token validation — all token generation sites now validate existing tokens before reuse; expired tokens are automatically regenerated, preventing "Invalid or expired token" errors after long sessions
-- Refactor: PBData — Positions WebSocket watcher now restricted to Hyperliquid only (real push events); all other exchanges use REST polling for positions, further reducing private WS connections
-- Refactor: PBData — removed Balance WebSocket watcher entirely; balances are now fetched exclusively via REST polling (shared combined poller), eliminating another ~18 private WS connections
-- Refactor: PBData — removed Orders WebSocket watcher entirely; orders are now fetched exclusively via REST polling (shared combined poller every 90s), eliminating ~18 private WS connections and reducing memory pressure on resource-constrained VPS servers
-- New: Services page — PBRemote Info tab: "Hide/Show metrics" toggle button to collapse or expand all server resource metric rows (RAM/Disk/Swap/CPU)
-- Fix: Services page — PBRemote Info tab: RAM/Disk/Swap/CPU bars now span the full width of their grid cell (text on top, full-width bar below); bars perfectly aligned vertically across all servers
-- Fix: Services page — PBRemote Info tab: instances displayed in one shared table with server name as a spanning separator row between server groups; all columns stay vertically aligned across servers
-- New: Services page — PBRemote Info tab now shows a per-server instance table (Name, Version, Start time, Mem/Swap MB, CPU%, PNL/fills today & yesterday, infos/errors/tracebacks today) sourced from a new `GET /api/services/pbremote/instances` endpoint; servers with instances are rendered as collapsible `<details>` panels
-- New: Services page — PBCoinData panel shows a persistent CMC API key status bar (Limit / Today / Monthly / Left / Resets in X days) with a refresh button; loaded on panel open via new `GET /api/services/settings/pbcoindata/key-status` endpoint
-- Fix: Nav bar Restart button now shows the same "Reconnecting…" overlay as the Services page restart; probes every 2s and auto-reloads — works on all pages (overlay logic moved to `pbgui_nav.js` as shared `showRestartOverlay()`)
-- Fix: Services page — API Server Restart button no longer crashes the server (old handler called stop() on itself synchronously, killing the process before the HTTP response was sent); now uses a daemon thread with 300 ms delay, spawns new process, then sends SIGTERM; browser shows a "Reconnecting…" overlay and auto-reloads when the server is back
-- Fix: Services page — PBData Status tab now shows a full per-user table with Balances/Positions/Orders/History/Executions columns, fetch age (e.g. "2m"), WS (green) / REST (amber) colour coding, filter checkboxes per column and a "WS only" row filter; auto-refreshes every 5s while the tab is open
-- Fix: Services page — PBData Settings tab user lists (Fetch Users, Executions Download) now have a filter input above each list for quick user search
-- Fix: Services page — PBData Settings tab now shows collapsible "Shared REST pause per exchange" section (binance/bingx/bitget/bybit/gateio/hyperliquid/kucoin/okx); values are loaded from ini overrides and saved as JSON
-- Fix: PBApiServer restart — new process now waits 3s (via `PBGUI_RESTART_DELAY` env var) before binding the port, so the old process has time to release it; previously the new process crashed immediately with "Address already in use"
-- Fix: Services page — PBRemote bucket Test now uses the credentials currently entered in the form (not the saved rclone config), so wrong credentials correctly show a failure
-- Fix: Services page — PBRemote Settings tab now shows Bucket setup (add/edit/delete/test rclone buckets) and Monitor Settings (Server/V7/Multi/Single threshold configs) matching old Streamlit implementation; removed wrong Identity/Directories form
-- Fix: Services page — PBRemote Settings tab never loaded (stuck on "Loading..."); generic `loadSettings()` was called first, setting `_settingsLoaded` flag, which prevented `loadPBRemoteSettings()` from executing
-- Fix: Services page — PBRemote panel now has Log + Info tabs; Info tab shows role, bucket, API sync status (with push button), remote server list (online/offline), and a link to PBRemote Settings; `GET /api/services/pbremote/info` and `POST /api/services/pbremote/api-sync` endpoints added
-- New: Services page (`/system_services`) fully migrated to FastAPI standalone page (`/api/services/main_page`); start/stop all 7 PBGui daemons (PBRun, PBRemote, PBMon, PBStat, PBData, PBCoinData, PBAPIServer); per-service log viewer via `LogViewerPanel`; settings panels for PBMon (Telegram), PBCoinData (CMC API), PBData (users/timers/log level), PBAPIServer (host/port/VPS hosts/auto-restart); `navi/system_services.py` now redirects; zero-flash navigation via `build_navigation()` intercept and `FASTAPI_PAGES` in `pbgui_nav.js`
-- New: Guide/Help overlay (`📖 Guide` button) on Logging and VPS Monitor FastAPI pages — in-page overlay fetching docs from `/api/docs/index` and `/api/docs/content`; replaces previous Streamlit-based `@st.dialog` guides; supports EN/DE toggle, topic TOC, per-topic search, and global cross-topic search
-- Refactor: VPS Monitor (`/system_vps_monitor`) fully migrated to FastAPI standalone page (`/api/vps/main_page`); Streamlit page now redirects, zero-flash navigation via `build_navigation()` intercept and `FASTAPI_PAGES` in `pbgui_nav.js`
-- Refactor: VPS Monitor — replaced top tab bar with sidebar + buttons layout (consistent with API Keys editor); includes resizable sidebar and sidebar-based Compact/Hide IP/Debug log toggles
-- Refactor: `Dashboard.py` — removed ~950 lines of dead Streamlit rendering code (`view`, `view_*_impl`, `swap`, `create_dashboard`, `_render_grid_editor`, `_push_pending_config`, `_get_pending_grid_config`); dashboard is now 100% FastAPI standalone, Streamlit rendering path was unreachable
-- Refactor: `frontend/dashboard_main.html` — removed DOMPurify workaround hex escapes (`\x3C`/`\x3E`); file is served as a standalone FastAPI page
-- Fix: API Keys editor (`frontend/api_keys_editor.html`) — removed DOMPurify workaround hex escapes (`\x3C`/`\x3E`); file is served as a standalone FastAPI page and is not subject to DOMPurify
-- Fix: Backtest — no-fill backtests (bot holds cash for entire period) no longer incorrectly reported as liquidated; `is_liquidated()` now checks for actual fills data instead of any timeseries data
-- Fix: Bokeh charts — replaced `streamlit-bokeh` BidiComponent (caused "could not find #st-bidi-component-* HTML tag" runtime error) with `st.bokeh_chart` in `Backtest.py`, `BacktestMulti.py`, and `Instance.py`; removed `streamlit-bokeh` from `requirements.txt`
-- Fix: VPS Monitor — `debug_logging` property no longer caches a stale `True` value from startup; now reads fresh from ini when no explicit value has been set via the GUI toggle, so debug logging is correctly disabled after a restart even if the ini was `false` at boot time
-- Fix: VPS Monitor — "Debug Logging" toggle was silently ignored; `debug_logging` was not in `_UI_SETTINGS_KEYS` in `api/vps.py`, so the WebSocket `set_setting` command was dropped; now saves to `[vps_monitor]` ini and applies live to the running monitor instance
-- Fix: `FileSync` (FileSyncWorker) reclassified as Tier 1 daemon — removed from `LOG_GROUPS` so it now writes to `data/logs/FileSync.log` instead of `ApiKeys.log`
-- Fix: Logging nav — zero-flash navigation from Streamlit: `history.pushState` is monkey-patched in every Streamlit page so clicking "Logging" in the nav bar redirects directly to FastAPI without triggering a Streamlit re-render
-- Fix: Logging nav — zero-flash navigation from FastAPI pages (Dashboard, API Editor): added `system_logging` to `FASTAPI_PAGES` in `pbgui_nav.js` so the nav bar routes directly to FastAPI without a Streamlit detour
-- Fix: Logging nav — eliminated Streamlit flash when navigating to Logging; redirect to FastAPI is now intercepted in `build_navigation()` before `navi.run()` so the Streamlit page script never executes
-- New: Logging page (`/system_logging`) fully migrated to FastAPI standalone page (`/api/logging/main_page`); Streamlit page now redirects to it
-- New: FastAPI router `api/logging.py` — endpoints for listing log files, rotation settings (GET/POST), log file purge, and the standalone page
-- New: `frontend/logging_monitor.html` — standalone log viewer with sidebar file picker, level/search filtering, live WebSocket streaming, rotated-file selector, purge button, and ⚙ Settings panel for per-log rotation config
+## v1.70 (30-03-2026)
+- New: Services page — fully migrated to FastAPI; start/stop/restart all 7 PBGui daemons; per-service log viewer and settings panels; context-aware Guide overlay (📖) opens the matching service guide directly
+- New: Services page — PBData Status tab: per-user fetch table (Balances/Positions/Orders/History/Executions with fetch age and REST/WS colour coding) and Poller Metrics panel (HL rate-limit budget, Combined/History poller status, Market Data loop progress + run duration)
+- New: Services page — PBData Fetch Summary: clicking the Prices card opens a draggable overlay with all tracked symbols, current price and age
+- New: Services page — PBRemote Info tab: per-server instance table (name, version, start time, mem/cpu/pnl/fills/errors); server header shows last alive age + remote PBGui version; Hide/Show metrics toggle for RAM/Disk/Swap/CPU bars
+- New: Services page — PBCoinData panel: persistent CMC API key status bar (Limit / Today / Monthly / Left / Resets in X days)
+- New: Logging page — fully migrated to FastAPI; sidebar file picker, level/search filter, live WebSocket streaming, rotated-file selector, purge button, per-log rotation settings
+- New: VPS Monitor — fully migrated to FastAPI; sidebar layout with Compact/Hide IP/Debug toggles; Guide overlay (📖)
+- New: Dashboard — Live badge (● Live · Xs ago) in Positions and Balance widgets when ≤10 specific users are selected; updates every second via SSE-backed private WebSocket; falls back to REST polling on error
+- Improved: PBData — account data (balances, positions, orders) now polled via REST on separate configurable timers (default balance/positions 300 s, orders 60 s); Hyperliquid rate-limit token bucket ensures 1200 weight/min budget is never exceeded; per-operation weight breakdown shown in Poller Metrics
+- Improved: PBData Settings — poll intervals (balance/positions/orders/history) and market-data coin pause now configurable in the GUI
+- Improved: Prices overlay — Exchange column added; same symbol on multiple exchanges shown as separate rows; filter also searches exchange names
+- Improved: Log viewer — filename badge shown in toolbar when file sidebar is collapsed
+- Improved: Nav bar — Restart button shows "Reconnecting…" overlay on all FastAPI pages and auto-reloads when server is back
+- Improved: About dialog — shows current API serial number on FastAPI pages and in Streamlit; `PBGUI_VERSION` unified as single source of truth so `/docs` always shows the correct version
+- Improved: Service guides (EN + DE) — fully rewritten against actual source code: corrected PBData REST-only architecture, daemon loop details, HL key expiry alerts, master/slave heartbeat, 3-tier Dashboard data flow
+- Fix: Token expiry on FastAPI pages — automatic 30-min keep-alive; 401 interceptor redirects to Streamlit login instead of showing a raw error
+- Fix: Services overview cards — equal height for running and stopped cards
+- Fix: Dashboard — HL balance badge stability (correct exception handling, initial DB snapshot broadcast on connect)
+- Fix: Backtest — no-fill backtests no longer incorrectly reported as liquidated
 
 ## v1.69 (28-03-2026)
 - Fix: SSH Sync — secondary master did not pull api-keys on startup if remote serial was already higher than local (no inotify event triggered); `_fetch_remote_state()` now pulls when `remote_serial > local_serial`, with `_sync_lock` check

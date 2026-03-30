@@ -13,9 +13,11 @@ PBMon calls PBRemote's error-detection logic every 60 seconds and checks for:
 | **Server offline** | A remote VPS is unreachable |
 | **System resource** | A server exceeds the configured memory, CPU, swap or disk thresholds |
 | **Instance error** | A running Passivbot instance reports an error or unexpected stop |
+| **HL API key expiry** | A Hyperliquid API key is about to expire (configurable warning days in `pbgui.ini`) |
 
 Each alert is sent **once** per error occurrence. PBMon tracks which errors have already
 been reported and only sends a new message when a previously-cleared error reappears.
+HL key expiry warnings are deduplicated to once per user per day.
 
 ## Setup: create a Telegram bot
 
@@ -28,37 +30,34 @@ been reported and only sends a new message when a previously-cleared error reapp
 > **Important:** your bot cannot send you a message until you have sent it at least
 > one message first. The `/start` command is enough.
 
-## PBMon tab — viewer mode (default)
+## PBMon detail panel — Log tab (default)
 
-When you open **System → Services → PBMon**, the full-height log viewer loads immediately,
-showing the live `PBMon.log` stream.
+Click the PBMon card on the Services overview (or use the sidebar) to open the detail panel.
+The **Log** tab loads by default, showing a live filtered stream of `PBMon.log`.
 
-- Use the **level filter** buttons (DBG / INF / WRN / ERR) to focus on what matters
+- Use the **level filter** buttons (DBG / INF / WRN / ERR / CRT) to focus on what matters
 - Use **Search** to find a specific server name or error text
-- The **Version** dropdown lets you look at rotated archives (`.1`, `.old`)
+- Open the **Files** sidebar to switch to rotated log archives (`.1`, `.old`) if available
 
-## PBMon tab — settings mode
+## PBMon detail panel — Settings tab
 
-Click **⚙ Settings** in the sidebar to open the settings view.
+Switch to the **Settings** tab to configure Telegram notifications.
 
 | Field | Description |
 |-------|-------------|
 | **Telegram Bot Token** | Token from @BotFather (stored in `pbgui.ini`) |
 | **Telegram Chat ID** | Your personal or group chat ID |
 
-Press **💾** in the sidebar to save. The save button turns **primary (red)**
-whenever there are unsaved changes.
+Click **Save** to store the settings.
 
 > Changes take effect on the **next monitoring cycle** (within 60 seconds) — no restart needed.
 
 ## Starting and stopping PBMon
 
-Use the **PBMon toggle** in the left sidebar on the PBMon tab:
+Use the **Start** / **Stop** buttons in the control strip at the top of the PBMon detail panel, or use the buttons on the PBMon overview card.
 
-- Toggle **on** → spawns PBMon as a detached background process
-- Toggle **off** → gracefully stops the process
-
-The **Overview** tab shows a ✅ / ❌ status indicator for all services at a glance.
+- **Start** → spawns PBMon as a detached background process
+- **Stop** → gracefully stops the process
 
 ## Log format
 

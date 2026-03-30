@@ -586,6 +586,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
   var ST_BASE        = "%%ST_BASE%%";
   var API_BASE       = "%%API_BASE%%";    // e.g. http://127.0.0.1:8600/api/logging
   var PBGUI_VERSION  = "%%VERSION%%";
+  var PBGUI_SERIAL   = "%%SERIAL%%";
 </script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
@@ -594,7 +595,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
      ════════════════════════════════════════════════════════ -->
 <script>
 /* ── Nav config ─────────────────────────────────────────── */
-window.PBGUI_NAV_CONFIG = { subtitle: 'Logging', current: 'system_logging', token: TOKEN, stBase: ST_BASE, apiBase: API_BASE, version: PBGUI_VERSION };
+window.PBGUI_NAV_CONFIG = { subtitle: 'Logging', current: 'system_logging', token: TOKEN, stBase: ST_BASE, apiBase: API_BASE, version: PBGUI_VERSION, serial: PBGUI_SERIAL };
 
 /* ── Helper: derive WS URL from current page location ───── */
 function wsUrl() {

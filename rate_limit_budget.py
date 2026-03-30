@@ -38,6 +38,7 @@ class RateLimitBudget:
         'weight_per_minute', 'burst_capacity', 'refill_per_second',
         'tokens', '_last_refill', '_lock',
         'total_consumed', 'total_waited_ms', 'waits_count', 'requests_count',
+        '_per_op',
     )
 
     def __init__(self, weight_per_minute: int = 1200, burst_capacity: int = 120):
@@ -52,6 +53,8 @@ class RateLimitBudget:
         self.total_waited_ms = 0
         self.waits_count = 0
         self.requests_count = 0
+        # Per-operation breakdown: op -> {consumed, requests, waits, wait_ms}
+        self._per_op: dict = {}
 
     # ── internal ────────────────────────────────────────────
 
@@ -67,12 +70,15 @@ class RateLimitBudget:
 
     # ── public API ──────────────────────────────────────────
 
-    async def acquire(self, weight: int = 1, timeout: float = 60.0) -> bool:
+    async def acquire(self, weight: int = 1, timeout: float = 60.0, tag: str = '') -> bool:
         """Wait until *weight* tokens are available, then consume them.
 
         Returns ``True`` if tokens were consumed, ``False`` on timeout.
+        *tag* is an optional operation name used for per-op breakdown metrics.
         """
         deadline = time.monotonic() + timeout
+        local_waits = 0
+        local_wait_ms = 0
         while True:
             async with self._lock:
                 self._refill()
@@ -80,6 +86,12 @@ class RateLimitBudget:
                     self.tokens -= weight
                     self.total_consumed += weight
                     self.requests_count += 1
+                    if tag:
+                        op = self._per_op.setdefault(tag, {'consumed': 0, 'requests': 0, 'waits': 0, 'wait_ms': 0})
+                        op['consumed'] += weight
+                        op['requests'] += 1
+                        op['waits'] += local_waits
+                        op['wait_ms'] += local_wait_ms
                     return True
                 # How long until enough tokens refill?
                 deficit = weight - self.tokens
@@ -91,8 +103,11 @@ class RateLimitBudget:
             sleep_time = min(wait + 0.02, remaining)
             t0 = time.monotonic()
             await asyncio.sleep(sleep_time)
-            self.total_waited_ms += int((time.monotonic() - t0) * 1000)
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            self.total_waited_ms += elapsed_ms
             self.waits_count += 1
+            local_waits += 1
+            local_wait_ms += elapsed_ms
 
     def peek(self) -> dict:
         """Return current budget state for metrics/GUI (read-only estimate)."""
@@ -111,6 +126,7 @@ class RateLimitBudget:
             'total_waited_ms': self.total_waited_ms,
             'waits_count': self.waits_count,
             'requests_count': self.requests_count,
+            'per_operation': dict(self._per_op),
         }
 
 
@@ -146,9 +162,9 @@ OPERATION_WEIGHTS: dict[tuple[str, str], int] = {
     ('hyperliquid', 'fetch_balance'):       2,      # clearinghouseState
     ('hyperliquid', 'fetch_positions'):     2,      # clearinghouseState / userState
     ('hyperliquid', 'fetch_open_orders'):   20,     # openOrders (per-symbol!)
-    ('hyperliquid', 'fetch_history'):       120,    # userFunding + fetch_my_trades (paginated, ~6 API calls)
-    ('hyperliquid', 'fetch_executions'):    60,     # userFillsByTime (paginated, ~3 API calls)
-    ('hyperliquid', 'candle_snapshot'):     160,    # meta resolve (~20) + candleSnapshot per missing day (~80 each, typically 1-2 days)
+    ('hyperliquid', 'fetch_history'):       40,     # userFunding + fetch_my_trades (1 page each in normal incremental polling)
+    ('hyperliquid', 'fetch_executions'):    20,     # userFillsByTime (1 page in normal incremental polling)
+    ('hyperliquid', 'candle_snapshot'):     44,     # one candleSnapshot call: 20 base + ceil(1440/60)=24 for a full day of 1m candles
     ('hyperliquid', 'all_mids'):            2,      # allMids
     ('hyperliquid', 'meta'):                20,     # meta
 }

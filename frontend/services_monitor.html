@@ -81,7 +81,7 @@
     .svc-card {
       background: #131b2b; border: 1px solid #1e2736; border-radius: 10px;
       padding: 1rem; display: flex; flex-direction: column; gap: 0.6rem; cursor: pointer;
-      transition: border-color 0.12s; align-self: start;
+      transition: border-color 0.12s;
     }
     .svc-card:hover { border-color: #2d3748; }
     .svc-card.running { border-color: rgba(33,195,84,0.45); }
@@ -157,10 +157,11 @@
     .fetch-summary { padding: 1rem 1.5rem; overflow-y: auto; flex: 1; }
     .fs-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:0.9rem; }
     .fs-title { color:#e2e8f0; font-size:var(--fs-md); font-weight:600; }
-    .fs-refresh-btn { background:#1e2736; border:1px solid #2d3748; border-radius:6px; color:#94a3b8; cursor:pointer; padding:0.25rem 0.55rem; font-size:var(--fs-md); line-height:1; }
-    .fs-refresh-btn:hover { background:#2d3748; color:#e2e8f0; }
+
     .fs-summary-row { display:flex; gap:0.65rem; flex-wrap:wrap; margin-bottom:1rem; }
     .fs-group { background:#131b2b; border:1px solid #1e2736; border-radius:8px; padding:0.45rem 0.9rem; }
+    .fs-group-clickable { cursor:pointer; }
+    .fs-group-clickable:hover { border-color:#4ade80; background:#131b2b; }
     .fs-group-title { font-size:var(--fs-xs); color:#64748b; margin-bottom:0.25rem; }
     .fs-group-body { display:flex; gap:0.9rem; }
     .fs-cnt { display:flex; align-items:center; gap:0.25rem; }
@@ -178,6 +179,32 @@
     .fs-ws   { color:#4ade80; }
     .fs-rest { color:#f59e0b; }
     .fs-never { color:#4a5568; }
+
+    /* ── Prices overlay ── */
+    #prices-overlay {
+      display: none; position: fixed; z-index: 9000;
+      top: 12vh; left: 50%; transform: translateX(-50%);
+      width: 540px; min-width: 280px; min-height: 180px; max-height: 80vh;
+      background: #0d1520; border: 1px solid #2d3748; border-radius: 10px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+      flex-direction: column; resize: both; overflow: hidden;
+    }
+    #prices-overlay.active { display: flex; }
+    #prices-overlay-title {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 0.55rem 0.85rem; background: #131b2b; border-radius: 10px 10px 0 0;
+      border-bottom: 1px solid #1e2736; cursor: move; user-select: none; flex-shrink: 0;
+    }
+    #prices-overlay-title span { font-size: var(--fs-sm); font-weight: 600; color: #e2e8f0; }
+    .po-btn { background:#1e2736; border:1px solid #2d3748; border-radius:5px; color:#94a3b8; cursor:pointer; padding:0.2rem 0.5rem; font-size:var(--fs-sm); line-height:1.4; }
+    .po-btn:hover { background:#2d3748; color:#e2e8f0; }
+    #prices-overlay-body { flex: 1; overflow-y: auto; min-height: 0; }
+    .po-table { width:100%; border-collapse:collapse; font-size:var(--fs-xs); }
+    .po-table th { position:sticky; top:0; background:#0d1520; color:#64748b; padding:0.35rem 0.75rem; border-bottom:1px solid #1e2736; white-space:nowrap; }
+    .po-table td { padding:0.25rem 0.75rem; border-bottom:1px solid #0f1722; white-space:nowrap; color:#cbd5e1; }
+    .po-table tr:hover td { background:#131b2b; }
+    .po-search { width:100%; box-sizing:border-box; background:#0f1722; border:1px solid #1e2736; border-radius:6px; color:#e2e8f0; font-size:var(--fs-xs); padding:0.3rem 0.6rem; outline:none; }
+    .po-search:focus { border-color:#4ade80; }
 
     /* ── Poller metrics ── */
     .poller-metrics { padding: 0.5rem 1.5rem 1rem; }
@@ -216,10 +243,118 @@
       .sb-btn { font-size: 11px; padding: 0.3rem 0.4rem; }
       .overview-grid { grid-template-columns: 1fr; }
     }
+
+    /* ── Help overlay ── */
+    #help-ovl {
+      display: none; position: fixed; top: 50%; left: 50%;
+      transform: translate(-50%, -50%); z-index: 3000;
+      width: min(900px, 95vw); height: min(700px, 90vh);
+      min-width: 480px; min-height: 300px;
+      background: #131b2b; border: 1px solid #2d3748;
+      border-radius: 12px; box-shadow: 0 20px 70px rgba(0,0,0,0.9);
+      flex-direction: column; overflow: hidden; resize: both;
+    }
+    #help-ovl.visible { display: flex; }
+    #help-drag-handle { position: absolute; top: 0; left: 0; right: 48px; height: 46px; cursor: move; z-index: 2; }
+    #help-ovl > .ovl-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+    .ovl-header { display: flex; align-items: center; justify-content: space-between; padding: 0.85rem 1.1rem 0.85rem 1.25rem; border-bottom: 1px solid #1e2736; flex-shrink: 0; background: #111827; }
+    .ovl-header-title { font-size: 13px; font-weight: 700; color: #e2e8f0; display: flex; align-items: center; gap: 0.5rem; }
+    .ovl-header-actions { display: flex; align-items: center; gap: 0.5rem; position: relative; z-index: 3; }
+    .ovl-close { background: transparent; border: none; color: #64748b; font-size: 15px; cursor: pointer; padding: 0.2rem 0.35rem; border-radius: 5px; line-height: 1; transition: color 0.12s, background 0.12s; }
+    .ovl-close:hover { color: #e2e8f0; background: rgba(255,255,255,0.06); }
+    .lang-pill { display: flex; border: 1px solid #2d3748; border-radius: 6px; overflow: hidden; flex-shrink: 0; }
+    .lang-pill button { background: transparent; border: none; color: #64748b; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; padding: 0.2rem 0.55rem; cursor: pointer; transition: all 0.12s; }
+    .lang-pill button.active { background: #1e3a5f; color: #63b3ed; }
+    .lang-pill button:hover:not(.active) { background: rgba(255,255,255,0.04); color: #e2e8f0; }
+    #help-body { display: flex; flex: 1; overflow: hidden; }
+    #help-toc { width: 230px; min-width: 170px; flex-shrink: 0; border-right: 1px solid #1e2736; overflow-y: auto; padding: 0.5rem 0; background: #0e1117; }
+    #help-toc-filter { width: calc(100% - 1.2rem); margin: 0 0.6rem 0.4rem; background: #1a202c; color: #e2e8f0; border: 1px solid #2d3748; border-radius: 5px; padding: 0.35rem 0.5rem; font-size: 13px; outline: none; }
+    #help-toc-filter:focus { border-color: #4a5568; }
+    .toc-item { display: block; padding: 0.42rem 0.9rem; color: #94a3b8; font-size: 13px; cursor: pointer; border-left: 3px solid transparent; transition: all 0.1s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .toc-item:hover { background: #1a2030; color: #e2e8f0; }
+    .toc-item.active { border-left-color: #63b3ed; color: #63b3ed; background: rgba(99,179,237,0.07); font-weight: 600; }
+    #help-content { flex: 1; overflow-y: auto; padding: 1.5rem 1.8rem; line-height: 1.7; color: #cbd5e0; font-size: 14px; }
+    #help-content h1 { font-size: 24px; color: #e2e8f0; margin: 0 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #1e2736; }
+    #help-content h2 { font-size: 18px; color: #e2e8f0; margin: 1.5rem 0 0.5rem; }
+    #help-content h3 { font-size: 15px; color: #cbd5e0; margin: 1.1rem 0 0.35rem; }
+    #help-content p  { margin: 0.5rem 0; }
+    #help-content a  { color: #63b3ed; }
+    #help-content strong { color: #e2e8f0; }
+    #help-content code { background: #1a202c; color: #f6ad55; padding: 0.1em 0.35em; border-radius: 3px; font-size: 11px; font-family: 'Fira Code','Consolas',monospace; }
+    #help-content pre { background: #0e1117; border: 1px solid #2d3748; border-radius: 6px; padding: 0.9rem 1rem; overflow-x: auto; margin: 0.75rem 0; }
+    #help-content pre code { background: none; padding: 0; color: #a0aec0; font-size: 13px; }
+    #help-content ul, #help-content ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+    #help-content li { margin: 0.2rem 0; }
+    #help-content blockquote { border-left: 3px solid #63b3ed; margin: 0.75rem 0; padding: 0.4rem 0.9rem; background: rgba(99,179,237,0.05); border-radius: 0 5px 5px 0; color: #94a3b8; }
+    #help-content table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; }
+    #help-content th, #help-content td { border: 1px solid #2d3748; padding: 0.4rem 0.7rem; text-align: left; font-size: 13px; }
+    #help-content th { background: #1a202c; color: #e2e8f0; font-weight: 600; }
+    #help-content hr { border: none; border-top: 1px solid #1e2736; margin: 1rem 0; }
+    .help-loading { color: #4a5568; font-style: italic; padding: 2rem; text-align: center; }
+    #help-search-wrap { display: flex; align-items: center; gap: 3px; }
+    #help-search { background: #1a202c; color: #e2e8f0; border: 1px solid #2d3748; border-radius: 5px; padding: 0.28rem 0.5rem; font-size: 13px; outline: none; width: 170px; }
+    #help-search:focus { border-color: #4a5568; }
+    .help-snav-btn { background: #1a202c; border: 1px solid #2d3748; border-radius: 3px; color: #94a3b8; cursor: pointer; font-size: 11px; padding: 2px 5px; line-height: 1.4; transition: color 0.1s, border-color 0.1s; }
+    .help-snav-btn:hover { color: #e2e8f0; border-color: #4a5568; }
+    #help-search-count { font-size: 11px; color: #64748b; white-space: nowrap; min-width: 44px; }
+    #help-content mark { background: rgba(255,200,0,0.2); color: #fcd34d; border-radius: 2px; }
+    #help-content mark.current { background: rgba(251,146,60,0.45); color: #fef08a; outline: 1px solid #f59e0b; }
+    #help-search-global-lbl { display:flex; align-items:center; gap:3px; color:#94a3b8; font-size:11px; cursor:pointer; white-space:nowrap; user-select:none; }
+    #help-search-global-lbl input[type=checkbox] { accent-color:#4da6ff; cursor:pointer; margin:0; }
+    .gs-results { display:flex; flex-direction:column; gap:8px; padding:4px 0; }
+    .gs-item { background:#1a202c; border:1px solid #2d3748; border-radius:6px; padding:10px 14px; cursor:pointer; transition:border-color 0.15s; }
+    .gs-item:hover { border-color:#4a5568; }
+    .gs-topic { color:#93c5fd; font-weight:600; font-size:13px; margin-bottom:5px; }
+    .gs-snip { color:#94a3b8; font-size:11px; line-height:1.55; }
   </style>
   <script src="/app/js/log_viewer_panel.js"></script>
 </head>
 <body>
+<!-- ── Prices overlay ── -->
+<div id="prices-overlay">
+  <div id="prices-overlay-title">
+    <span>&#128202; Price Snapshot</span>
+    <div style="display:flex;gap:0.4rem;align-items:center;">
+      <button class="po-btn" onclick="loadPricesOverlay()" title="Refresh">&#8635;</button>
+      <button class="po-btn" onclick="closePricesOverlay()" title="Close">&#10005;</button>
+    </div>
+  </div>
+  <div style="padding:0.4rem 0.75rem;border-bottom:1px solid #1e2736;flex-shrink:0;">
+    <input type="text" class="po-search" id="po-search" placeholder="Filter symbols…" oninput="filterPricesOverlay(this.value)">
+  </div>
+  <div id="prices-overlay-body"></div>
+</div>
+<!-- Help overlay -->
+<div id="help-ovl">
+  <div class="ovl-panel">
+    <div id="help-drag-handle"></div>
+    <div class="ovl-header">
+      <div class="ovl-header-title">&#128218; Guide &amp; Help</div>
+      <div class="ovl-header-actions">
+        <div id="help-search-wrap">
+          <input id="help-search" type="text" placeholder="Search in topic…" autocomplete="off">
+          <button class="help-snav-btn" id="help-search-up" title="Previous match">&#9650;</button>
+          <button class="help-snav-btn" id="help-search-dn" title="Next match">&#9660;</button>
+          <span id="help-search-count"></span>
+          <label id="help-search-global-lbl" title="Search across all topics"><input type="checkbox" id="help-search-global"> All</label>
+        </div>
+        <div style="width:1px;height:16px;background:#2d3748;flex-shrink:0;"></div>
+        <div class="lang-pill">
+          <button id="help-lang-en" class="active">EN</button>
+          <button id="help-lang-de">DE</button>
+        </div>
+        <button class="ovl-close" id="help-close">&#x2715;</button>
+      </div>
+    </div>
+    <div id="help-body">
+      <div id="help-toc">
+        <input id="help-toc-filter" type="text" placeholder="Filter topics…" autocomplete="off">
+        <div id="help-toc-list"></div>
+      </div>
+      <div id="help-content"><div class="help-loading">Select a topic from the left.</div></div>
+    </div>
+  </div>
+</div>
 <nav id="topnav"></nav>
 <div id="page-body">
 
@@ -270,8 +405,7 @@
           <div class="status-dot" id="cs-pbrun"></div>
           <span class="status-label" id="sl-pbrun">checking…</span>
         </div>
-        <button class="ctrl-btn start" onclick="svcAction('pbrun','start')">&#9654; Start</button>
-        <button class="ctrl-btn stop"  onclick="svcAction('pbrun','stop')">&#9632; Stop</button>
+        <span id="ctrl-btns-pbrun"></span>
       </div>
       <div class="log-wrap"><div id="log-pbrun" style="height:100%;"></div></div>
     </div>
@@ -284,8 +418,7 @@
           <div class="status-dot" id="cs-pbremote"></div>
           <span class="status-label" id="sl-pbremote">checking…</span>
         </div>
-        <button class="ctrl-btn start" onclick="svcAction('pbremote','start')">&#9654; Start</button>
-        <button class="ctrl-btn stop"  onclick="svcAction('pbremote','stop')">&#9632; Stop</button>
+        <span id="ctrl-btns-pbremote"></span>
       </div>
       <div class="tab-bar">
         <button class="tab-btn active" data-svc="pbremote" data-tab="log" onclick="switchTab(this)">&#128203; Log</button>
@@ -315,8 +448,7 @@
           <div class="status-dot" id="cs-pbmon"></div>
           <span class="status-label" id="sl-pbmon">checking…</span>
         </div>
-        <button class="ctrl-btn start" onclick="svcAction('pbmon','start')">&#9654; Start</button>
-        <button class="ctrl-btn stop"  onclick="svcAction('pbmon','stop')">&#9632; Stop</button>
+        <span id="ctrl-btns-pbmon"></span>
       </div>
       <div class="tab-bar">
         <button class="tab-btn active" data-svc="pbmon" data-tab="log" onclick="switchTab(this)">&#128203; Log</button>
@@ -355,8 +487,7 @@
           <div class="status-dot" id="cs-pbstat"></div>
           <span class="status-label" id="sl-pbstat">checking…</span>
         </div>
-        <button class="ctrl-btn start" onclick="svcAction('pbstat','start')">&#9654; Start</button>
-        <button class="ctrl-btn stop"  onclick="svcAction('pbstat','stop')">&#9632; Stop</button>
+        <span id="ctrl-btns-pbstat"></span>
       </div>
       <div class="log-wrap"><div id="log-pbstat" style="height:100%;"></div></div>
     </div>
@@ -369,8 +500,7 @@
           <div class="status-dot" id="cs-pbdata"></div>
           <span class="status-label" id="sl-pbdata">checking…</span>
         </div>
-        <button class="ctrl-btn start" onclick="svcAction('pbdata','start')">&#9654; Start</button>
-        <button class="ctrl-btn stop"  onclick="svcAction('pbdata','stop')">&#9632; Stop</button>
+        <span id="ctrl-btns-pbdata"></span>
       </div>
       <div class="tab-bar">
         <button class="tab-btn active" data-svc="pbdata" data-tab="log" onclick="switchTab(this)">&#128203; Log</button>
@@ -403,8 +533,7 @@
           <div class="status-dot" id="cs-pbcoindata"></div>
           <span class="status-label" id="sl-pbcoindata">checking…</span>
         </div>
-        <button class="ctrl-btn start" onclick="svcAction('pbcoindata','start')">&#9654; Start</button>
-        <button class="ctrl-btn stop"  onclick="svcAction('pbcoindata','stop')">&#9632; Stop</button>
+        <span id="ctrl-btns-pbcoindata"></span>
       </div>
       <div class="cmc-status-bar loading" id="cmc-status-bar">
         <button class="cmc-refresh-btn" onclick="loadCmcKeyStatus()" title="Refresh">&#8635;</button>
@@ -463,7 +592,7 @@
           <div class="status-dot" id="cs-api-server"></div>
           <span class="status-label" id="sl-api-server">checking…</span>
         </div>
-        <button class="ctrl-btn restart" onclick="restartApiServer()">&#8635; Restart</button>
+        <span id="ctrl-btns-api-server"></span>
       </div>
       <div class="tab-bar">
         <button class="tab-btn active" data-svc="api-server" data-tab="log" onclick="switchTab(this)">&#128203; Log</button>
@@ -515,6 +644,7 @@
   var WS_BASE       = "%%WS_BASE%%";   /* ws://host:port                */
   var ST_BASE       = "%%ST_BASE%%";
   var PBGUI_VERSION = "%%VERSION%%";
+  var PBGUI_SERIAL  = "%%SERIAL%%";
 </script>
 <script>
 window.PBGUI_NAV_CONFIG = {
@@ -522,17 +652,226 @@ window.PBGUI_NAV_CONFIG = {
   current:  'system_services',
   token:    TOKEN,
   stBase:   ST_BASE,
-  version:  PBGUI_VERSION
+  version:  PBGUI_VERSION,
+  serial:   PBGUI_SERIAL
 };
 </script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <!-- Guide button override — must run AFTER pbgui_nav.js DOMContentLoaded handler -->
 <script>
-document.addEventListener('DOMContentLoaded', function () {
-  /* No help overlay on this page yet — just strip the Streamlit guide handler */
-  var btn = document.getElementById('pbgui-guide-btn');
-  if (btn) { var fresh = btn.cloneNode(true); btn.parentNode.replaceChild(fresh, btn); }
-});
+/* ── Help overlay ── */
+(function () {
+  var helpOvl        = document.getElementById('help-ovl');
+  var helpContent    = document.getElementById('help-content');
+  var helpTocList    = document.getElementById('help-toc-list');
+  var helpFilter     = document.getElementById('help-toc-filter');
+  var helpLangEN     = document.getElementById('help-lang-en');
+  var helpLangDE     = document.getElementById('help-lang-de');
+  var helpDragHandle = document.getElementById('help-drag-handle');
+  var helpSearch       = document.getElementById('help-search');
+  var helpSearchUp     = document.getElementById('help-search-up');
+  var helpSearchDn     = document.getElementById('help-search-dn');
+  var helpSearchCount  = document.getElementById('help-search-count');
+  var helpSearchGlobal = document.getElementById('help-search-global');
+
+  var helpLang = 'EN';
+  var helpTopics = [];
+  var helpSel = 0;
+  var _sMarks = [], _sIdx = -1, _sTimer = null, _rawHtml = null;
+  var _topicCache = {}, _globalMode = false;
+
+  /* Docs base: strip /services from API_BASE → /api */
+  var docsBase = API_BASE.replace(/\/services$/, '');
+
+  function mdToHtml(md) {
+    var lines = md.split('\n'), html = '', inPre = false, preBuf = '', inUl = false, inOl = false;
+    function flushList() { if (inUl) { html += '</ul>'; inUl = false; } if (inOl) { html += '</ol>'; inOl = false; } }
+    function inlineFormat(t) {
+      t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+      t = t.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">');
+      t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      t = t.replace(/__(.+?)__/g, '<strong>$1</strong>');
+      t = t.replace(/\*(.+?)\*/g, '<em>$1</em>');
+      return t;
+    }
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      if (l.match(/^```/)) { if (!inPre) { flushList(); inPre = true; preBuf = ''; } else { html += '<pre><code>' + preBuf.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</code></pre>'; inPre = false; } continue; }
+      if (inPre) { preBuf += (preBuf ? '\n' : '') + l; continue; }
+      if (l.match(/^---+$/)) { flushList(); html += '<hr>'; continue; }
+      var hm = l.match(/^(#{1,6})\s+(.*)/); if (hm) { flushList(); html += '<h' + hm[1].length + '>' + inlineFormat(hm[2]) + '</h' + hm[1].length + '>'; continue; }
+      if (l.match(/^>\s?/)) { flushList(); html += '<blockquote>' + inlineFormat(l.replace(/^>\s?/, '')) + '</blockquote>'; continue; }
+      var ulm = l.match(/^[\-\*]\s+(.*)/); if (ulm) { if (!inUl) { if (inOl) { html += '</ol>'; inOl = false; } html += '<ul>'; inUl = true; } html += '<li>' + inlineFormat(ulm[1]) + '</li>'; continue; }
+      var olm = l.match(/^\d+\.\s+(.*)/); if (olm) { if (!inOl) { if (inUl) { html += '</ul>'; inUl = false; } html += '<ol>'; inOl = true; } html += '<li>' + inlineFormat(olm[1]) + '</li>'; continue; }
+      if (l.trim() === '') { flushList(); html += '<p></p>'; continue; }
+      flushList(); html += '<p>' + inlineFormat(l) + '</p>';
+    }
+    flushList(); return html;
+  }
+
+  function _clearSearch() { if (_rawHtml !== null) helpContent.innerHTML = _rawHtml; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = ''; }
+  function _applySearch(term) {
+    if (_rawHtml === null || !term) { _clearSearch(); return; }
+    var re; try { re = new RegExp('(' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'); } catch(e) { return; }
+    helpContent.innerHTML = _rawHtml.replace(/(<[^>]+>)|([^<]+)/g, function(_, tag, text) {
+      if (tag) return tag;
+      return text.replace(re, function(_, m) { return '<mark>' + m + '</mark>'; });
+    });
+    _sMarks = Array.from(helpContent.querySelectorAll('mark'));
+    if (_sMarks.length > 0) _gotoMark(0); else _updateSCount();
+  }
+  function _updateSCount() { helpSearchCount.textContent = _sMarks.length ? (_sIdx + 1) + '/' + _sMarks.length : (helpSearch.value.trim() ? '0 found' : ''); }
+  function _gotoMark(idx) {
+    if (!_sMarks.length) return;
+    if (_sIdx >= 0 && _sIdx < _sMarks.length) _sMarks[_sIdx].classList.remove('current');
+    _sIdx = ((idx % _sMarks.length) + _sMarks.length) % _sMarks.length;
+    _sMarks[_sIdx].classList.add('current');
+    _sMarks[_sIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    _updateSCount();
+  }
+  function _ensureTopicCached(idx, cb) {
+    if (_topicCache[idx] !== undefined) { cb(_topicCache[idx]); return; }
+    var t = helpTopics[idx]; if (!t) { cb(''); return; }
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+      .then(function(r) { return r.json(); })
+      .then(function(d) { _topicCache[idx] = mdToHtml(d.content || ''); cb(_topicCache[idx]); })
+      .catch(function() { _topicCache[idx] = ''; cb(''); });
+  }
+  function _showGlobalResults(term) {
+    if (!term) { helpContent.innerHTML = '<p style="color:#64748b;padding:8px 0;">Type a search term to find across all topics.</p>'; helpSearchCount.textContent = ''; return; }
+    var re; try { re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'); } catch(e) { return; }
+    helpContent.innerHTML = '<div class="help-loading">Searching\u2026</div>';
+    var pending = helpTopics.length;
+    if (pending === 0) { helpContent.innerHTML = ''; helpSearchCount.textContent = '0 found'; return; }
+    var allResults = [];
+    helpTopics.forEach(function(t, idx) {
+      _ensureTopicCached(idx, function(html) {
+        var text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+        var matchIdxs = [], m; re.lastIndex = 0;
+        while ((m = re.exec(text)) !== null) { matchIdxs.push(m.index); if (matchIdxs.length >= 3) break; }
+        if (matchIdxs.length > 0) {
+          var snippets = matchIdxs.map(function(mi) { return text.slice(Math.max(0, mi - 55), Math.min(text.length, mi + 80)); });
+          allResults.push({ idx: idx, title: t.title, snippets: snippets });
+        }
+        if (--pending === 0) _renderGlobalResults(term, allResults);
+      });
+    });
+  }
+  function _renderGlobalResults(term, results) {
+    var re; try { re = new RegExp('(' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'); } catch(e) { return; }
+    helpSearchCount.textContent = results.length + (results.length === 1 ? ' topic' : ' topics');
+    if (results.length === 0) { helpContent.innerHTML = '<p style="color:#64748b;padding:8px 0;">No results found.</p>'; return; }
+    var html = '<div class="gs-results">';
+    results.forEach(function(r) {
+      html += '<div class="gs-item" data-idx="' + r.idx + '"><div class="gs-topic">' + r.title + '</div>';
+      r.snippets.forEach(function(s) { html += '<div class="gs-snip">\u2026' + s.replace(re, function(_, m) { return '<mark>' + m + '</mark>'; }) + '\u2026</div>'; });
+      html += '</div>';
+    });
+    helpContent.innerHTML = html + '</div>';
+    helpContent.querySelectorAll('.gs-item').forEach(function(el) {
+      el.addEventListener('click', function() { var idx = parseInt(el.getAttribute('data-idx'), 10); helpSearchGlobal.checked = false; _globalMode = false; helpSearch.placeholder = 'Search in topic\u2026'; loadTopic(idx); });
+    });
+  }
+  helpSearch.addEventListener('input', function() { if (_sTimer) clearTimeout(_sTimer); _sTimer = setTimeout(function() { var term = helpSearch.value.trim(); if (_globalMode) _showGlobalResults(term); else _applySearch(term); }, 260); });
+  helpSearch.addEventListener('keydown', function(e) { if (e.key === 'Enter' && !_globalMode) { e.preventDefault(); _gotoMark(_sIdx + (e.shiftKey ? -1 : 1)); } if (e.key === 'Escape') { helpSearch.value = ''; if (_globalMode) _showGlobalResults(''); else _clearSearch(); } });
+  helpSearchUp.addEventListener('click', function() { _gotoMark(_sIdx - 1); });
+  helpSearchDn.addEventListener('click', function() { _gotoMark(_sIdx + 1); });
+  helpSearchGlobal.addEventListener('change', function() {
+    _globalMode = helpSearchGlobal.checked;
+    helpSearch.placeholder = _globalMode ? 'Search all topics\u2026' : 'Search in topic\u2026';
+    var term = helpSearch.value.trim();
+    if (_globalMode) { _showGlobalResults(term); } else { if (_rawHtml !== null) { helpContent.innerHTML = _rawHtml; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = ''; } if (term) _applySearch(term); }
+  });
+
+  function renderToc() {
+    var flt = helpFilter.value.trim().toLowerCase();
+    helpTocList.innerHTML = '';
+    helpTopics.forEach(function(t, idx) {
+      if (flt && t.title.toLowerCase().indexOf(flt) === -1) return;
+      var el = document.createElement('div');
+      el.className = 'toc-item' + (idx === helpSel ? ' active' : '');
+      el.textContent = t.title;
+      el.addEventListener('click', function() { loadTopic(idx); });
+      helpTocList.appendChild(el);
+    });
+  }
+  function loadTopic(idx) {
+    helpSel = idx; renderToc();
+    var t = helpTopics[idx]; if (!t) return;
+    _rawHtml = null; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = '';
+    helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+      .then(function(r) { return r.json(); })
+      .then(function(d) { _rawHtml = mdToHtml(d.content || ''); _topicCache[idx] = _rawHtml; helpContent.innerHTML = _rawHtml; helpContent.scrollTop = 0; var st = helpSearch.value.trim(); if (st) _applySearch(st); })
+      .catch(function() { helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>'; });
+  }
+  function loadHelpIndex(keyword) {
+    helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
+    fetch(docsBase + '/docs/index?lang=' + helpLang + '&token=' + TOKEN)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        helpTopics = data || []; renderToc();
+        if (helpTopics.length > 0) {
+          var startIdx = 0;
+          if (keyword) { var kw = keyword.toLowerCase(); for (var i = 0; i < helpTopics.length; i++) { if (helpTopics[i].title.toLowerCase().indexOf(kw) !== -1 || (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(kw) !== -1)) { startIdx = i; break; } } }
+          loadTopic(startIdx);
+        }
+      })
+      .catch(function() { helpTocList.innerHTML = '<div class="help-loading">Failed to load topics.</div>'; });
+  }
+  helpFilter.addEventListener('input', renderToc);
+  helpLangEN.addEventListener('click', function() {
+    if (helpLang === 'EN') return;
+    helpLang = 'EN'; helpLangEN.classList.add('active'); helpLangDE.classList.remove('active');
+    _topicCache = {}; helpSel = 0;
+    loadHelpIndex(window._servicesGuideKeyword || 'services_overview');
+  });
+  helpLangDE.addEventListener('click', function() {
+    if (helpLang === 'DE') return;
+    helpLang = 'DE'; helpLangDE.classList.add('active'); helpLangEN.classList.remove('active');
+    _topicCache = {}; helpSel = 0;
+    loadHelpIndex(window._servicesGuideKeyword || 'services_overview');
+  });
+  document.getElementById('help-close').addEventListener('click', function() { helpOvl.classList.remove('visible'); });
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape') helpOvl.classList.remove('visible'); });
+  (function() {
+    var startX, startY, boxL, boxT;
+    helpDragHandle.addEventListener('mousedown', function(e) {
+      e.preventDefault(); var r = helpOvl.getBoundingClientRect(); helpOvl.style.transform = 'none';
+      helpOvl.style.left = r.left + 'px'; helpOvl.style.top = r.top + 'px'; startX = e.clientX; startY = e.clientY; boxL = r.left; boxT = r.top;
+      function onMove(ev) { helpOvl.style.left = (boxL + ev.clientX - startX) + 'px'; helpOvl.style.top = (boxT + ev.clientY - startY) + 'px'; }
+      function onUp() { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); }
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    });
+  }());
+
+  /* Public opener — called by guide button; uses current panel's keyword */
+  window._openServicesHelp = function() {
+    var kw = window._servicesGuideKeyword || 'services_overview';
+    helpOvl.classList.add('visible');
+    if (helpTopics.length === 0) { loadHelpIndex(kw); return; }
+    var kl = kw.toLowerCase();
+    for (var i = 0; i < helpTopics.length; i++) {
+      if (helpTopics[i].title.toLowerCase().indexOf(kl) !== -1 ||
+          (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(kl) !== -1)) {
+        loadTopic(i); return;
+      }
+    }
+    loadTopic(0);
+  };
+
+  document.addEventListener('DOMContentLoaded', function() {
+    var btn = document.getElementById('pbgui-guide-btn');
+    if (btn) {
+      var fresh = btn.cloneNode(true);
+      btn.parentNode.replaceChild(fresh, btn);
+      fresh.addEventListener('click', function() {
+        if (typeof window._openServicesHelp === 'function') window._openServicesHelp();
+      });
+    }
+  });
+}());
 </script>
 <!-- Main logic -->
 <script>
@@ -541,14 +880,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
   /* ── Service registry ─────────────────────────────────── */
   var SERVICES = [
-    { id: 'pbrun',      label: 'PBRun',       logFile: 'PBRun.log',       isApiServer: false },
-    { id: 'pbremote',   label: 'PBRemote',    logFile: 'PBRemote.log',    isApiServer: false },
-    { id: 'pbmon',      label: 'PBMon',       logFile: 'PBMon.log',       isApiServer: false },
-    { id: 'pbstat',     label: 'PBStat',      logFile: 'PBStat.log',      isApiServer: false },
-    { id: 'pbdata',     label: 'PBData',      logFile: 'PBData.log',      isApiServer: false },
-    { id: 'pbcoindata', label: 'PBCoinData',  logFile: 'PBCoinData.log',  isApiServer: false },
-    { id: 'api-server', label: 'PBAPIServer', logFile: 'PBApiServer.log', isApiServer: true  },
+    { id: 'pbrun',      label: 'PBRun',       logFile: 'PBRun.log',       isApiServer: false, guideKeyword: 'pbrun_service'      },
+    { id: 'pbremote',   label: 'PBRemote',    logFile: 'PBRemote.log',    isApiServer: false, guideKeyword: 'pbremote_service'   },
+    { id: 'pbmon',      label: 'PBMon',       logFile: 'PBMon.log',       isApiServer: false, guideKeyword: 'pbmon_service'      },
+    { id: 'pbstat',     label: 'PBStat',      logFile: 'PBStat.log',      isApiServer: false, guideKeyword: 'pbstat_service'     },
+    { id: 'pbdata',     label: 'PBData',      logFile: 'PBData.log',      isApiServer: false, guideKeyword: 'pbdata'             },
+    { id: 'pbcoindata', label: 'PBCoinData',  logFile: 'PBCoinData.log',  isApiServer: false, guideKeyword: 'pbcoindata_service' },
+    { id: 'api-server', label: 'PBAPIServer', logFile: 'PBApiServer.log', isApiServer: true,  guideKeyword: 'pbapiserver'        },
   ];
+
+  /* Current panel's guide keyword — read by help overlay IIFE */
+  window._servicesGuideKeyword = 'services_overview';
 
   var _status = {};
   var _logViewers = {};
@@ -579,6 +921,20 @@ document.addEventListener('DOMContentLoaded', function () {
       if (dotSb) dotSb.className = 'sb-dot ' + (running ? 'running' : 'stopped');
       if (dotCs) dotCs.className = 'status-dot ' + (running ? 'running' : 'stopped');
       if (lbl)   lbl.textContent = running ? 'Running' : 'Stopped';
+      /* ctrl-strip buttons */
+      var ctrlSlot = document.getElementById('ctrl-btns-' + svc.id);
+      if (ctrlSlot) {
+        if (svc.isApiServer) {
+          ctrlSlot.innerHTML = running
+            ? '<button class="ctrl-btn restart" onclick="restartApiServer()">&#8635; Restart</button>'
+            : '';
+        } else {
+          ctrlSlot.innerHTML = running
+            ? '<button class="ctrl-btn stop" onclick="svcAction(\'' + svc.id + '\',\'stop\')">&#9632; Stop</button>'
+              + '<button class="ctrl-btn restart" onclick="svcAction(\'' + svc.id + '\',\'stop\');setTimeout(function(){svcAction(\'' + svc.id + '\',\'start\');},1500)">&#8635; Restart</button>'
+            : '<button class="ctrl-btn start" onclick="svcAction(\'' + svc.id + '\',\'start\')">&#9654; Start</button>';
+        }
+      }
     });
     renderOverviewCards();
   }
@@ -591,15 +947,18 @@ document.addEventListener('DOMContentLoaded', function () {
     SERVICES.forEach(function (svc) {
       var running = (_status[svc.id] || {}).running;
       var cls = running ? 'running' : 'stopped';
-      var btn = svc.isApiServer
-        ? '<button class="card-btn restart" onclick="restartApiServer();event.stopPropagation()">&#8635; Restart</button>'
+      var btns = svc.isApiServer
+        ? (running
+            ? '<button class="card-btn restart" onclick="restartApiServer();event.stopPropagation()">&#8635; Restart</button>'
+            : '<button class="card-btn start" onclick="svcAction(\'' + svc.id + '\',\'start\');event.stopPropagation()">&#9654; Start</button>')
         : (running
-            ? '<button class="card-btn stop"  onclick="svcAction(\'' + svc.id + '\',\'stop\');event.stopPropagation()">&#9632; Stop</button>'
+            ? '<button class="card-btn stop" onclick="svcAction(\'' + svc.id + '\',\'stop\');event.stopPropagation()">&#9632; Stop</button>'
+              + '<button class="card-btn restart" onclick="svcAction(\'' + svc.id + '\',\'stop\');setTimeout(function(){svcAction(\'' + svc.id + '\',\'start\');},1500);event.stopPropagation()">&#8635; Restart</button>'
             : '<button class="card-btn start" onclick="svcAction(\'' + svc.id + '\',\'start\');event.stopPropagation()">&#9654; Start</button>');
       html += '<div class="svc-card ' + cls + '" onclick="selectPanel(\'' + svc.id + '\')">'
            +  '<div class="card-name">' + svc.label + '</div>'
            +  '<div class="card-status-row"><span class="card-dot ' + cls + '"></span>' + (running ? 'Running' : 'Stopped') + '</div>'
-           +  btn
+           +  '<div style="display:flex;gap:4px;flex-wrap:wrap;">' + btns + '</div>'
            +  '</div>';
     });
     grid.innerHTML = html;
@@ -619,6 +978,9 @@ document.addEventListener('DOMContentLoaded', function () {
     clearInterval(_fetchSummaryTimer); _fetchSummaryTimer = null;
     clearInterval(_pollerMetricsTimer); _pollerMetricsTimer = null;
     if (panelId === 'pbcoindata') loadCmcKeyStatus();
+    /* update guide keyword for the active panel */
+    var svc = SERVICES.find(function (s) { return s.id === panelId; });
+    window._servicesGuideKeyword = svc ? svc.guideKeyword : 'services_overview';
     /* persist position in URL hash */
     var hash = panelId;
     if (tab) hash += '/' + tab;
@@ -798,10 +1160,15 @@ document.addEventListener('DOMContentLoaded', function () {
     html += _numFld('pbdata-ws-max',         'Max private WS',         data.ws_max,                           0,    999,   1);
     html += _numFld('pbdata-pollers-delay',   'Startup delay (s)',      data.pollers_delay_seconds,            0,   3600,   5);
     html += _numFld('pbdata-combined',        'Combined interval (s)',  data.poll_interval_combined_seconds,  10,   3600,  10);
-    html += _numFld('pbdata-history',         'History interval (s)',   data.poll_interval_history_seconds,   10,   3600,  10);
+    html += _numFld('pbdata-balance',         'Balance interval (s)',   data.poll_interval_balance_seconds,   10,   3600,  10);
     html += '</div><div class="form-row">';
+    html += _numFld('pbdata-positions',       'Positions interval (s)', data.poll_interval_positions_seconds, 10,   3600,  10);
+    html += _numFld('pbdata-orders',          'Orders interval (s)',    data.poll_interval_orders_seconds,    10,   3600,  10);
+    html += _numFld('pbdata-history',         'History interval (s)',   data.poll_interval_history_seconds,   10,   3600,  10);
     html += _numFld('pbdata-executions',      'Executions interval (s)',data.poll_interval_executions_seconds,60, 86400,  60);
     html += _numFld('pbdata-rest-pause',      'REST pause/user (s)',    data.shared_rest_user_pause_seconds,   0,     10, 0.05, true);
+    html += '</div><div class="form-row">';
+    html += _numFld('pbdata-1m-coin-pause',   'Market data coin pause (s)', data.latest_1m_coin_pause_seconds, 0,     30, 0.5,  true);
     html += '</div>';
 
     /* ── Shared REST pause per exchange (collapsible) ── */
@@ -1290,16 +1657,25 @@ document.addEventListener('DOMContentLoaded', function () {
         var sid = 'pbri-srv-' + s.name.replace(/[^a-zA-Z0-9]/g,'_');
         var onlineCol = s.online ? '#4ade80' : '#ff4b4b';
         var onlineLbl = s.online ? 'Online' : 'Offline';
+        var ageStr = '';
+        if (s.last_seen_s != null) {
+          ageStr = s.last_seen_s < 60 ? '(' + Math.round(s.last_seen_s) + 's)' : '(' + Math.round(s.last_seen_s / 60) + 'm)';
+        }
+        var verStr = (s.pbgui_version && s.pbgui_version !== 'N/A') ? 'PBGui: ' + s.pbgui_version : '';
 
         /* ── server name row (clickable toggle) ── */
         html += '<tr class="pbri-sep" data-sid="' + _esc(sid) + '" onclick="pbriToggle(this)" style="background:#0d1320;cursor:pointer;">' +
           '<td colspan="13" style="padding:0.3rem 0.6rem;border-top:2px solid #1e2736;user-select:none;">' +
-          '<span id="' + sid + '-ico" style="font-size:var(--fs-xs);color:#64748b;margin-right:4px;">\u25bc</span>' +
-          '<span class="card-dot ' + (s.online ? 'running' : 'stopped') + '" style="display:inline-block;vertical-align:middle;"></span>' +
-          '<span style="font-size:var(--fs-sm);color:#e2e8f0;font-weight:600;margin-left:4px;">' + _esc(s.name) + '</span>' +
-          (s.role ? '<span style="font-size:var(--fs-xs);color:#64748b;margin-left:6px;">' + _esc(s.role) + '</span>' : '') +
-          '<span style="font-size:var(--fs-xs);color:' + onlineCol + ';margin-left:8px;">' + onlineLbl + '</span>' +
-          (serverInst.length ? '<span style="font-size:var(--fs-xs);color:#64748b;margin-left:8px;">' + serverInst.length + ' instance' + (serverInst.length !== 1 ? 's' : '') + '</span>' : '') +
+          '<div style="display:flex;align-items:center;">' +
+          '<span id="' + sid + '-ico" style="flex-shrink:0;width:14px;font-size:var(--fs-xs);color:#64748b;">\u25bc</span>' +
+          '<span class="card-dot ' + (s.online ? 'running' : 'stopped') + '" style="display:inline-block;flex-shrink:0;vertical-align:middle;"></span>' +
+          '<span style="font-size:var(--fs-sm);color:#e2e8f0;font-weight:600;margin-left:4px;min-width:9rem;">' + _esc(s.name) + '</span>' +
+          '<span style="font-size:var(--fs-xs);color:#64748b;width:3.5rem;text-align:right;font-variant-numeric:tabular-nums;flex-shrink:0;">' + ageStr + '</span>' +
+          '<span style="font-size:var(--fs-xs);color:#64748b;width:4rem;margin-left:0.75rem;flex-shrink:0;">' + _esc(s.role || '') + '</span>' +
+          '<span style="font-size:var(--fs-xs);color:#93c5fd;width:7rem;margin-left:0.75rem;flex-shrink:0;">' + _esc(verStr) + '</span>' +
+          '<span style="font-size:var(--fs-xs);color:' + onlineCol + ';width:4rem;margin-left:0.75rem;flex-shrink:0;">' + onlineLbl + '</span>' +
+          (serverInst.length ? '<span style="font-size:var(--fs-xs);color:#64748b;margin-left:0.75rem;">' + serverInst.length + ' instance' + (serverInst.length !== 1 ? 's' : '') + '</span>' : '') +
+          '</div>' +
           '</td></tr>';
 
         /* ── system metrics row (always visible, 4-column grid) ── */
@@ -1432,7 +1808,7 @@ document.addEventListener('DOMContentLoaded', function () {
     /* header */
     var html = '<div class="fs-header">';
     html += '<span class="fs-title">Fetch Summary' + tsNote + '</span>';
-    html += '<button class="fs-refresh-btn" onclick="loadFetchSummary()" title="Refresh now">\u21bb</button>';
+
     html += '</div>';
 
     /* summary counters */
@@ -1454,7 +1830,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (pricesObj[ex].active) activeCount++;
         totalSymbols += (pricesObj[ex].symbols || 0);
       });
-      return '<div class="fs-group"><div class="fs-group-title">' + label + '</div><div class="fs-group-body">' +
+      return '<div class="fs-group fs-group-clickable" onclick="openPricesOverlay()" title="Click to view symbols & prices"><div class="fs-group-title">' + label + '</div><div class="fs-group-body">' +
         '<div class="fs-cnt"><span class="fs-dot-ws">&#9679;</span><span class="fs-cnt-lbl">WS</span><span class="fs-cnt-val">&nbsp;' + activeCount + '/' + exchanges.length + '</span></div>' +
         '<div class="fs-cnt"><span class="fs-cnt-lbl">Sym</span><span class="fs-cnt-val">&nbsp;' + totalSymbols + '</span></div>' +
         '</div></div>';
@@ -1610,6 +1986,13 @@ document.addEventListener('DOMContentLoaded', function () {
       if (ms < 1000) return ms + 'ms';
       return (ms / 1000).toFixed(1) + 's';
     }
+    function fmtDuration(s) {
+      if (!s && s !== 0) return '<span class="pm-muted">-</span>';
+      s = Math.round(s);
+      if (s < 60) return s + 's';
+      if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+      return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+    }
     function fmtBackoff(m) {
       var bo = m.backoff_remaining_s || 0;
       var hbo = m.history_backoff_remaining_s || 0;
@@ -1670,7 +2053,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (mdKeys.length) {
       html += '<div class="pm-section"><div class="pm-section-title">Market Data Loops</div>';
       html += '<div style="overflow-x:auto;"><table class="pm-table"><thead><tr>';
-      html += '<th>Loop</th><th>Exchange</th><th>Status</th><th>Progress</th><th>Last Run</th><th>Current</th>';
+      html += '<th>Loop</th><th>Exchange</th><th>Status</th><th>Progress</th><th>Last Run</th><th>Duration</th><th>Current</th>';
       html += '</tr></thead><tbody>';
       mdKeys.forEach(function (key) {
         var e = md[key];
@@ -1684,6 +2067,7 @@ document.addEventListener('DOMContentLoaded', function () {
         html += '<td>' + badge + '</td>';
         html += '<td>' + prog + '</td>';
         html += '<td>' + fmtAge(e.last_run_ts) + '</td>';
+        html += '<td>' + fmtDuration(e.last_run_duration_s) + '</td>';
         html += '<td>' + (e.current_coin || '<span class="pm-muted">-</span>') + '</td>';
         html += '</tr>';
       });
@@ -1715,6 +2099,21 @@ document.addEventListener('DOMContentLoaded', function () {
         html += '<td>' + cntCell(b.waits_count, 'pm-warn') + '</td>';
         html += '<td>' + waitStr + '</td>';
         html += '</tr>';
+        /* per-operation breakdown rows */
+        var perOp = b.per_operation || {};
+        var opKeys = Object.keys(perOp).sort(function(a, b2) { return (perOp[b2].consumed || 0) - (perOp[a].consumed || 0); });
+        opKeys.forEach(function (op) {
+          var od = perOp[op];
+          var opWaitStr = od.wait_ms > 0 ? ((od.wait_ms / 1000).toFixed(1) + 's') : '<span class="pm-muted">0</span>';
+          html += '<tr style="font-size:0.85em;opacity:0.8;">';
+          html += '<td style="padding-left:1.6em;" class="pm-muted">\u21b3 ' + op + '</td>';
+          html += '<td></td><td></td><td></td><td></td>';
+          html += '<td>' + (od.consumed || 0) + '</td>';
+          html += '<td>' + (od.requests || 0) + '</td>';
+          html += '<td>' + cntCell(od.waits || 0, 'pm-warn') + '</td>';
+          html += '<td>' + opWaitStr + '</td>';
+          html += '</tr>';
+        });
       });
       html += '</tbody></table></div></div>';
     }
@@ -1810,10 +2209,14 @@ document.addEventListener('DOMContentLoaded', function () {
       ws_max:       parseInt(_val('pbdata-ws-max') || '10', 10),
       pollers_delay_seconds:              parseInt(_val('pbdata-pollers-delay')  || '60',   10),
       poll_interval_combined_seconds:     parseInt(_val('pbdata-combined')       || '90',   10),
-      poll_interval_history_seconds:      parseInt(_val('pbdata-history')        || '90',   10),
+      poll_interval_balance_seconds:      parseInt(_val('pbdata-balance')        || '300',  10),
+      poll_interval_positions_seconds:    parseInt(_val('pbdata-positions')      || '300',  10),
+      poll_interval_orders_seconds:       parseInt(_val('pbdata-orders')         || '60',   10),
+      poll_interval_history_seconds:      parseInt(_val('pbdata-history')        || '300',  10),
       poll_interval_executions_seconds:   parseInt(_val('pbdata-executions')     || '1800', 10),
       shared_rest_user_pause_seconds:     parseFloat(_val('pbdata-rest-pause')   || '0.75'),
       shared_rest_pause_by_exchange:      exPauses,
+      latest_1m_coin_pause_seconds:       parseFloat(_val('pbdata-1m-coin-pause') || '2.0'),
     }, 'pbdata-save-msg');
   };
 
@@ -1849,6 +2252,115 @@ document.addEventListener('DOMContentLoaded', function () {
     clearTimeout(el._t);
     el._t = setTimeout(function () { el.className = 'inline-msg'; }, 3000);
   }
+
+
+  /* ── Prices Overlay ─────────────────────────────────────── */
+  (function () {
+    var _isDragging = false, _dragOX = 0, _dragOY = 0;
+    var _allRows = [];
+
+    function fmtPrice(p) {
+      if (p == null) return '\u2014';
+      if (p >= 1000)  return p.toLocaleString('en-US', {maximumFractionDigits: 2});
+      if (p >= 1)     return p.toLocaleString('en-US', {maximumFractionDigits: 4});
+      if (p >= 0.001) return p.toFixed(6);
+      return p.toPrecision(4);
+    }
+    function fmtAge(ts) {
+      if (!ts) return '\u2014';
+      var s = Math.floor(Date.now() / 1000) - ts;
+      if (s < 0) s = 0;
+      return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : Math.floor(s / 3600) + 'h';
+    }
+    function ageCol(ts) {
+      if (!ts) return '#4a5568';
+      var s = Math.floor(Date.now() / 1000) - ts;
+      return s < 60 ? '#4ade80' : s < 300 ? '#f59e0b' : '#ff4b4b';
+    }
+
+    function renderTable(rows) {
+      var body = document.getElementById('prices-overlay-body');
+      if (!body) return;
+      if (!rows.length) {
+        body.innerHTML = '<div style="color:#4a5568;padding:1rem;">No price data available yet.</div>';
+        return;
+      }
+      var html = '<table class="po-table"><thead><tr>'
+        + '<th>#</th>'
+        + '<th>Symbol</th>'
+        + '<th>Exchange</th>'
+        + '<th style="text-align:right;">Price</th>'
+        + '<th style="text-align:right;">Age</th>'
+        + '</tr></thead><tbody>';
+      rows.forEach(function (r, i) {
+        html += '<tr>'
+          + '<td style="color:#4a5568;">' + (i + 1) + '</td>'
+          + '<td>' + _esc(r.symbol) + '</td>'
+          + '<td style="color:#64748b;">' + _esc(r.exchange || '') + '</td>'
+          + '<td style="text-align:right;color:#93c5fd;font-variant-numeric:tabular-nums;">' + fmtPrice(r.price) + '</td>'
+          + '<td style="text-align:right;color:' + ageCol(r.ts) + ';font-variant-numeric:tabular-nums;">' + fmtAge(r.ts) + '</td>'
+          + '</tr>';
+      });
+      html += '</tbody></table>';
+      body.innerHTML = html;
+    }
+
+    window.openPricesOverlay = function () {
+      var ov = document.getElementById('prices-overlay');
+      ov.classList.add('active');
+      var si = document.getElementById('po-search');
+      if (si) si.value = '';
+      loadPricesOverlay();
+    };
+    window.closePricesOverlay = function () {
+      document.getElementById('prices-overlay').classList.remove('active');
+    };
+    window.loadPricesOverlay = function () {
+      var body = document.getElementById('prices-overlay-body');
+      if (body) body.innerHTML = '<div style="color:#64748b;padding:1rem;">Loading\u2026</div>';
+      fetch(API_BASE + '/prices-snapshot?token=' + TOKEN)
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          _allRows = d.rows || [];
+          var si = document.getElementById('po-search');
+          var q = si ? si.value.trim().toLowerCase() : '';
+          renderTable(q ? _allRows.filter(function (r) { return r.symbol.toLowerCase().indexOf(q) !== -1; }) : _allRows);
+        })
+        .catch(function () {
+          var body = document.getElementById('prices-overlay-body');
+          if (body) body.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Failed to load prices.</div>';
+        });
+    };
+    window.filterPricesOverlay = function (q) {
+      var lq = q.trim().toLowerCase();
+      renderTable(lq ? _allRows.filter(function (r) { return r.symbol.toLowerCase().indexOf(lq) !== -1 || (r.exchange || '').toLowerCase().indexOf(lq) !== -1; }) : _allRows);
+    };
+
+    /* drag logic */
+    document.addEventListener('DOMContentLoaded', function () {
+      var titleEl = document.getElementById('prices-overlay-title');
+      if (!titleEl) return;
+      titleEl.addEventListener('mousedown', function (e) {
+        if (e.target.tagName === 'BUTTON') return;
+        var ov = document.getElementById('prices-overlay');
+        var rect = ov.getBoundingClientRect();
+        ov.style.transform = '';
+        ov.style.left = rect.left + 'px';
+        ov.style.top  = rect.top  + 'px';
+        _isDragging = true;
+        _dragOX = e.clientX - rect.left;
+        _dragOY = e.clientY - rect.top;
+        e.preventDefault();
+      });
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!_isDragging) return;
+      var ov = document.getElementById('prices-overlay');
+      ov.style.left = (e.clientX - _dragOX) + 'px';
+      ov.style.top  = (e.clientY - _dragOY) + 'px';
+    });
+    document.addEventListener('mouseup', function () { _isDragging = false; });
+  }());
 
   /* ── Sidebar resize ────────────────────────────────────── */
   (function () {

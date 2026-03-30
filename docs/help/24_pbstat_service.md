@@ -6,17 +6,19 @@ PBStat is a legacy background service that collects live trade statistics (PnL, 
 
 ## What PBStat does
 
-- Connects to active v6 single bot instances
-- Collects and aggregates trade statistics (PnL, fills)
+PBStat runs a 60-second daemon loop. Every 5th cycle it performs a full fetch, other cycles do a lighter status-only check.
+
+- Fetches position, balance, price, and open orders from the exchange for each active spot instance
+- Fetches trade history since the last known trade and appends new trades to the instance's `trades.json`
+- After each cycle, reloads all instances from disk to pick up added/removed instances
 - Writes service logs to `data/logs/PBStat.log`
 
-## PBStat Details page
+## PBStat detail panel
 
-On the `System → Services → PBStat → Show Details` page you can:
+Click the PBStat card on the Services overview (or use the sidebar) to open the detail panel:
 
-- Check current PBStat service status (running/stopped)
-- Toggle the service on/off
-- Use the integrated filtered PBStat log viewer
+- The control strip shows the current status (running/stopped) and Start/Stop/Restart buttons
+- The Log tab shows a live filtered PBStat log viewer
 
 ## Troubleshooting
 

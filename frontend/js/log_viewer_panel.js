@@ -289,6 +289,7 @@ class LogViewerPanel {
       <button class="lvp-sb-toggle" id="${p}sb-toggle">
         <span class="lvp-sb-arrow">&#9658;</span> Files
       </button>
+      <span class="lvp-fname-badge" id="${p}fname-badge">${esc(this._file)}</span>
       <div style="width:1px;height:18px;background:#334155;flex-shrink:0;"></div>
       <div style="display:flex;gap:3px;">
         <button class="lvp-lvl-btn on" data-lvl="DEBUG"    id="${p}lvl-DEBUG">DBG</button>
@@ -372,9 +373,11 @@ class LogViewerPanel {
         this._sidebarOpen = !this._sidebarOpen;
         const sidebar      = this._q('sidebar');
         const tbToggle     = this._q('sb-toggle');   // toolbar button
+        const fnameBadge   = this._q('fname-badge');
         if (this._sidebarOpen) {
             sidebar.classList.remove('lvp-collapsed');
             tbToggle.style.display = 'none';          // hide toolbar button when open
+            if (fnameBadge) fnameBadge.style.display = 'none';  // filename shown in sidebar
             // refresh file list on open
             if (this._ws && this._ws.readyState === WebSocket.OPEN) {
                 this._ws.send(JSON.stringify({ cmd: 'list_local_logs' }));
@@ -382,6 +385,7 @@ class LogViewerPanel {
         } else {
             sidebar.classList.add('lvp-collapsed');
             tbToggle.style.display = '';              // show toolbar button when collapsed
+            if (fnameBadge) fnameBadge.style.display = '';      // show filename badge
         }
     }
 
@@ -409,6 +413,8 @@ class LogViewerPanel {
                 btn.classList.toggle('lvp-file-active', btn.textContent === f);
             }
         }
+        const fnameBadge = this._q('fname-badge');
+        if (fnameBadge) fnameBadge.textContent = f;
         this._clear();
         this._resubscribe();
     }
