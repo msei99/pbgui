@@ -625,14 +625,16 @@ class Database():
 
         return {'fetched': n, 'prepared': len(rows), 'inserted': inserted}
     
-    def update_positions(self, user: User):
+    def update_positions(self, user: User, _exchange=None):
         positions_db = self.fetch_positions(user)
-        exchange = Exchange(user.exchange, user)
+        _owns_exchange = _exchange is None
+        exchange = _exchange or Exchange(user.exchange, user)
         
         try:
             positions = exchange.fetch_positions()
         finally:
-            exchange.close()  # Release aiohttp resources
+            if _owns_exchange:
+                exchange.close()  # Release aiohttp resources
 
         # Live positions as set of (symbol, side) for correct membership checks
         symbols = set()
@@ -710,10 +712,11 @@ class Database():
             except sqlite3.Error as e:
                 _human_log('Database', f"DB update_positions error for {user.name}: {e}", level='ERROR', user=user.name)
     
-    def update_orders(self, user: User):
+    def update_orders(self, user: User, _exchange=None):
         positions_db = self.fetch_positions(user)
         orders_db = self.fetch_orders(user)
-        exchange = Exchange(user.exchange, user)
+        _owns_exchange = _exchange is None
+        exchange = _exchange or Exchange(user.exchange, user)
         all_orders = []
         try:
             for position in positions_db:
@@ -729,7 +732,8 @@ class Database():
                     _human_log('Database', f"DB update_orders fetch_all_open_orders failed for {user.name} pos={position[1]}: {e}", level='WARNING', user=user.name)
                     continue
         finally:
-            exchange.close()  # Release aiohttp resources
+            if _owns_exchange:
+                exchange.close()  # Release aiohttp resources
         # Existing order IDs in DB (uniqueid column); use a set to avoid
         # inserting duplicates even if the DB uniqueness constraint is
         # missing or was added after the table was first created.
@@ -826,18 +830,20 @@ class Database():
             except sqlite3.Error as e:
                 _human_log('Database', f"DB update_prices error for {user.name}: {e}", level='ERROR', user=user.name)
 
-    def update_balances(self, user: User):
-        exchange = Exchange(user.exchange, user)
+    def update_balances(self, user: User, _exchange=None):
+        _owns_exchange = _exchange is None
+        exchange = _exchange or Exchange(user.exchange, user)
         market_type = "swap"
         try:
             balance = exchange.fetch_balance(market_type)
         except Exception as e:
-            exchange.close()  # Release aiohttp resources
-            # Exchange fetch failed (rate limit or other). Log and skip writing.
+            if _owns_exchange:
+                exchange.close()
             _human_log('Database', f"DB update_balances fetch_balance failed for {user.name}: {e}", level='WARNING', user=user.name)
             return
         finally:
-            exchange.close()  # Release aiohttp resources
+            if _owns_exchange:
+                exchange.close()  # Release aiohttp resources
         with self._write_lock:
             try:
                 with self._connect() as conn:

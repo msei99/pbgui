@@ -6,17 +6,19 @@ PBStat ist ein Legacy-Hintergrunddienst, der Live-Handelsstatistiken (PnL, Fills
 
 ## Was PBStat macht
 
-- Verbindet sich mit aktiven v6 Single Bot-Instanzen
-- Sammelt und aggregiert Handelsstatistiken (PnL, Fills)
+PBStat führt eine Daemon-Schleife alle 60 Sekunden aus. Jeder 5. Zyklus führt einen vollständigen Fetch durch, andere Zyklen nur eine leichtere Status-Prüfung.
+
+- Lädt Position, Balance, Preis und offene Orders von der Exchange für jede aktive Spot-Instanz
+- Lädt Trade-History seit dem letzten bekannten Trade und hängt neue Trades an die `trades.json` der Instanz an
+- Nach jedem Zyklus werden alle Instanzen von der Festplatte neu geladen, um hinzugefügte/entfernte Instanzen zu erkennen
 - Schreibt Service-Logs nach `data/logs/PBStat.log`
 
-## PBStat-Detailseite
+## PBStat-Detail-Panel
 
-Auf `System → Services → PBStat → Show Details` kannst du:
+Klicke auf die PBStat-Kachel in der Services-Übersicht (oder nutze die Sidebar), um das Detail-Panel zu öffnen:
 
-- Den aktuellen PBStat-Status prüfen (läuft/gestoppt)
-- Den Service ein-/ausschalten
-- Den integrierten gefilterten PBStat-Log-Viewer nutzen
+- Der Control-Strip zeigt den aktuellen Status (läuft/gestoppt) und Start/Stop/Restart-Buttons
+- Der Log-Tab zeigt einen Live-gefilterten PBStat-Log-Viewer
 
 ## Schnelle Fehlersuche
 

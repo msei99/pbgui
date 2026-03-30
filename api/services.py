@@ -167,10 +167,13 @@ def get_pbremote_info(session: SessionToken = Depends(require_auth)) -> Dict[str
             return {"error": obj.error, "configured": False}
         servers = []
         for s in obj.remote_servers:
+            online = bool(s.is_online())
             servers.append({
                 "name": s.name,
                 "role": s.role or "unknown",
-                "online": bool(s.is_online()),
+                "online": online,
+                "last_seen_s": s.rtd,
+                "pbgui_version": s.pbgui_version,
             })
         return {
             "configured": True,
@@ -639,10 +642,14 @@ def get_pbdata_settings(session: SessionToken = Depends(require_auth)) -> Dict[s
         "ws_max": _read_ini_int("pbdata", "ws_max", MAX_PRIVATE_WS_GLOBAL),
         "pollers_delay_seconds": _read_ini_int("pbdata", "pollers_delay_seconds", 60),
         "poll_interval_combined_seconds": _read_ini_int("pbdata", "poll_interval_combined_seconds", 90),
-        "poll_interval_history_seconds": _read_ini_int("pbdata", "poll_interval_history_seconds", 90),
+        "poll_interval_balance_seconds": _read_ini_int("pbdata", "poll_interval_balance_seconds", 300),
+        "poll_interval_positions_seconds": _read_ini_int("pbdata", "poll_interval_positions_seconds", 300),
+        "poll_interval_orders_seconds": _read_ini_int("pbdata", "poll_interval_orders_seconds", 60),
+        "poll_interval_history_seconds": _read_ini_int("pbdata", "poll_interval_history_seconds", 300),
         "poll_interval_executions_seconds": _read_ini_int("pbdata", "poll_interval_executions_seconds", 1800),
         "shared_rest_user_pause_seconds": _read_ini_float("pbdata", "shared_rest_user_pause_seconds", 0.75),
         "shared_rest_pause_by_exchange": default_by_ex,
+        "latest_1m_coin_pause_seconds": _read_ini_float("pbdata", "latest_1m_coin_pause_seconds", 2.0),
     }
 
 
@@ -653,10 +660,14 @@ class PBDataSettings(BaseModel):
     ws_max: int = 10
     pollers_delay_seconds: int = 60
     poll_interval_combined_seconds: int = 90
-    poll_interval_history_seconds: int = 90
+    poll_interval_balance_seconds: int = 300
+    poll_interval_positions_seconds: int = 300
+    poll_interval_orders_seconds: int = 60
+    poll_interval_history_seconds: int = 300
     poll_interval_executions_seconds: int = 1800
     shared_rest_user_pause_seconds: float = 0.75
     shared_rest_pause_by_exchange: Dict[str, float] = {}
+    latest_1m_coin_pause_seconds: float = 2.0
 
 
 @router.post("/settings/pbdata")
@@ -683,9 +694,13 @@ def save_pbdata_settings(
         save_ini("pbdata", "ws_max", str(body.ws_max))
         save_ini("pbdata", "pollers_delay_seconds", str(body.pollers_delay_seconds))
         save_ini("pbdata", "poll_interval_combined_seconds", str(body.poll_interval_combined_seconds))
+        save_ini("pbdata", "poll_interval_balance_seconds", str(body.poll_interval_balance_seconds))
+        save_ini("pbdata", "poll_interval_positions_seconds", str(body.poll_interval_positions_seconds))
+        save_ini("pbdata", "poll_interval_orders_seconds", str(body.poll_interval_orders_seconds))
         save_ini("pbdata", "poll_interval_history_seconds", str(body.poll_interval_history_seconds))
         save_ini("pbdata", "poll_interval_executions_seconds", str(body.poll_interval_executions_seconds))
         save_ini("pbdata", "shared_rest_user_pause_seconds", str(body.shared_rest_user_pause_seconds))
+        save_ini("pbdata", "latest_1m_coin_pause_seconds", str(body.latest_1m_coin_pause_seconds))
         # Only store exchanges that differ from the global pause (overrides only)
         global_pause = body.shared_rest_user_pause_seconds
         overrides = {
@@ -709,6 +724,99 @@ def get_fetch_summary(session: SessionToken = Depends(require_auth)) -> Dict[str
             return json.loads(p.read_text())
         return {}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/prices-snapshot")
+def get_prices_snapshot(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    """Return latest price per (symbol, exchange) from the prices DB table, filtered to active symbols."""
+    import sqlite3 as _sqlite3
+    try:
+        # Build user→exchange map from api-keys
+        user_exchange: Dict[str, str] = {}
+        try:
+            from User import Users as _Users
+            _u = _Users()
+            _u.load()
+            for _usr in _u:
+                if _usr.name and _usr.exchange:
+                    user_exchange[_usr.name] = _usr.exchange
+        except Exception:
+            pass
+
+        # Load active symbol list from fetch_summary.
+        # 1. symbol_list present → filter by (symbol, exchange) pairs
+        # 2. symbols>0 but no symbol_list (old PBData) → top-N most-recently-updated
+        # 3. fetch_summary absent or symbols=0 → return empty
+        active_symbols: Optional[List[str]] = None
+        allowed_pairs: Optional[set] = None          # set of (symbol, exchange)
+        top_n: Optional[int] = None
+        fs_path = Path(f"{PBGDIR}/data/logs/fetch_summary.json")
+        if fs_path.exists():
+            try:
+                fs = json.loads(fs_path.read_text())
+                prices = fs.get("prices", {})
+                total_active_count = sum(exd.get("symbols", 0) for exd in prices.values())
+                sym_set: set = set()
+                pair_set: set = set()
+                has_symbol_list = False
+                for exch_name, exch_data in prices.items():
+                    if "symbol_list" in exch_data and exch_data["symbol_list"]:
+                        has_symbol_list = True
+                        for s in exch_data["symbol_list"]:
+                            sym_set.add(s)
+                            pair_set.add((s, exch_name))
+                if has_symbol_list:
+                    active_symbols = sorted(sym_set)
+                    allowed_pairs = pair_set
+                elif total_active_count == 0:
+                    return {"rows": []}
+                else:
+                    top_n = total_active_count
+            except Exception:
+                pass
+        else:
+            return {"rows": []}
+
+        db_path = Path(f"{PBGDIR}/data/pbgui.db")
+        if not db_path.exists():
+            return {"rows": []}
+        with _sqlite3.connect(str(db_path), timeout=5) as conn:
+            conn.row_factory = _sqlite3.Row
+            cur = conn.cursor()
+            if active_symbols:
+                placeholders = ",".join("?" * len(active_symbols))
+                cur.execute(
+                    f"SELECT symbol, user, price, MAX(timestamp) AS ts FROM prices WHERE symbol IN ({placeholders}) GROUP BY symbol, user ORDER BY symbol, user",
+                    active_symbols,
+                )
+            elif top_n:
+                cur.execute(
+                    "SELECT symbol, user, price, MAX(timestamp) AS ts FROM prices GROUP BY symbol, user ORDER BY ts DESC LIMIT ?",
+                    (top_n,),
+                )
+            else:
+                cur.execute(
+                    "SELECT symbol, user, price, MAX(timestamp) AS ts FROM prices GROUP BY symbol, user ORDER BY symbol, user"
+                )
+            raw = [{"symbol": r["symbol"], "user": r["user"], "price": r["price"], "ts": r["ts"]} for r in cur.fetchall()]
+
+        # Collapse to best price per (symbol, exchange) — keep MAX(ts)
+        best: Dict[str, Dict] = {}
+        for row in raw:
+            exch = user_exchange.get(row["user"], "")
+            key = row["symbol"] + "\x00" + exch
+            if key not in best or row["ts"] > best[key]["ts"]:
+                best[key] = {"symbol": row["symbol"], "exchange": exch, "price": row["price"], "ts": row["ts"]}
+
+        # Filter to allowed (symbol, exchange) pairs if available
+        if allowed_pairs:
+            best = {k: v for k, v in best.items() if (v["symbol"], v["exchange"]) in allowed_pairs}
+
+        rows = sorted(best.values(), key=lambda x: (x["symbol"], x["exchange"]))
+        return {"rows": rows}
+    except Exception as e:
+        _log(SERVICE, f"prices-snapshot failed: {e}", level="WARNING")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -753,8 +861,11 @@ def get_main_page(
     html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
 
     from pbgui_func import PBGUI_VERSION  # local import to avoid circular
+    from pbgui_purefunc import PBGUI_SERIAL
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
+    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
 
     nav_js = Path(__file__).parent.parent / "frontend" / "pbgui_nav.js"
     nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION

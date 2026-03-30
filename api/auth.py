@@ -134,6 +134,36 @@ def cleanup_expired_tokens() -> int:
     return deleted
 
 
+def refresh_token(token: str, extends_seconds: int = 86400) -> Optional[SessionToken]:
+    """Extend an existing token's expiry by the given duration.
+
+    Returns the updated SessionToken, or None if the token is invalid/expired.
+    """
+    if not token or not token.strip():
+        return None
+
+    token_file = get_tokens_dir() / f"{token.strip()}.json"
+    if not token_file.exists():
+        return None
+
+    try:
+        data = json.loads(token_file.read_text(encoding="utf-8"))
+        session = SessionToken(**data)
+
+        if session.expires_at < time.time():
+            token_file.unlink(missing_ok=True)
+            return None
+
+        session.expires_at = time.time() + extends_seconds
+        token_file.write_text(
+            json.dumps(session.model_dump(), indent=2),
+            encoding="utf-8",
+        )
+        return session
+    except Exception:
+        return None
+
+
 # ── FastAPI Dependencies ──
 
 def get_token_from_request(

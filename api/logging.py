@@ -178,8 +178,11 @@ def get_main_page(
     html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
 
     from pbgui_func import PBGUI_VERSION  # local import to avoid circular
+    from pbgui_purefunc import PBGUI_SERIAL
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
+    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
 
     nav_js = Path(__file__).parent.parent / "frontend" / "pbgui_nav.js"
     nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION

@@ -816,8 +816,11 @@ def get_main_page(
     html = html.replace("%%DASHBOARDS_JSON%%", _json.dumps(dashboards))
 
     from pbgui_func import PBGUI_VERSION
+    from pbgui_purefunc import PBGUI_SERIAL
     html = html.replace('"%%VERSION%%"', _json.dumps(PBGUI_VERSION))
     html = html.replace('%%VERSION%%', PBGUI_VERSION)
+    html = html.replace('"%%SERIAL%%"', _json.dumps(PBGUI_SERIAL))
+    html = html.replace('%%SERIAL%%', PBGUI_SERIAL)
 
     # Cache-bust pbgui_nav.js with file mtime so browser always loads latest
     nav_js = _P(__file__).parent.parent / "frontend" / "pbgui_nav.js"

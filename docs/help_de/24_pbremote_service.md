@@ -4,30 +4,32 @@ PBRemote ist ein Hintergrunddienst, der Ihre PBGui-Instanzen und Konfigurationen
 
 ## Was macht PBRemote?
 
-- **Instanz-Synchronisation:** Synchronisiert Ihre konfigurierten Bot-Instanzen (deren Einstellungen, Status und API-Schlüssel) mit einem zentralen Bucket.
-- **Multi-Server-Verwaltung:** Ermöglicht die Verwaltung von Bots, die auf verschiedenen VPS oder lokalen Maschinen laufen, über eine einzige PBGui-Oberfläche.
-- **Befehlsweiterleitung:** Wenn Sie eine Instanz auf einem Remote-Server über Ihre lokale PBGui starten, stoppen oder bearbeiten, sendet PBRemote diese Befehle über den Bucket an den Zielserver.
-- **Status-Updates:** Ruft den aktuellen Status (laufend, gestoppt, Fehler) von Remote-Instanzen ab, damit Sie diese lokal überwachen können.
+- **Instanz-Synchronisation:** Synchronisiert Ihre konfigurierten Bot-Instanzen (V7, PB6 Multi, PB6 Single) und deren Konfigurationen mit einem zentralen S3-Bucket via `rclone`.
+- **Multi-Server-Verwaltung:** Ermöglicht die Verwaltung von Bots auf verschiedenen VPS oder lokalen Maschinen über eine einzige PBGui-Oberfläche. Unterstützt Master/Slave-Architektur (einstellbar in `pbgui.ini`).
+- **Alive-Heartbeat:** Alle 60 Sekunden veröffentlicht jeder Server eine komprimierte Heartbeat-Datei im Bucket mit System-Metriken (Speicher, Swap, Disk, CPU), Software-Versionen (PBGui, PB6, PB7) und Monitor-Daten pro Instanz. Stündlich werden auch OS-Upgrades und Reboot-Status geprüft.
+- **API-Key-Sync:** Jeder Server bettet den MD5-Hash seiner `api-keys.json` in den Heartbeat ein. Unterscheiden sich die Hashes zwischen Servern, verteilt PBRemote automatisch die aktualisierten Keys (mit Zeitstempel-Backups der alten Keys).
+- **Befehlsweiterleitung:** Wenn Sie eine Instanz auf einem Remote-Server starten, stoppen oder bearbeiten, sendet PBRemote diese Befehle über den Bucket an den Zielserver. PBRun nimmt die Befehle aus `data/cmd/` entgegen.
+- **Status-Updates:** Lädt Peer-Status-Dateien herunter und leitet sie an PBRun weiter, der Instanzen nach Bedarf installiert, aktualisiert oder entfernt.
 
 ## Konfiguration
 
 Um PBRemote zu nutzen, müssen Sie einen S3-kompatiblen Bucket konfigurieren. PBGui verwendet im Hintergrund `rclone`, um die Synchronisation durchzuführen.
 
 1. **rclone installieren:** Falls noch nicht installiert, gehen Sie zum **VPS Manager**, wählen Sie Ihr lokales System aus und installieren Sie `rclone`.
-2. **Bucket hinzufügen:** Klicken Sie auf der PBRemote-Detailseite auf die Schaltfläche **Add bucket**.
+2. **Bucket hinzufügen:** Öffne den PBRemote **Settings**-Tab und klicke auf **+ Add**.
 3. **Bucket-Details:**
    - **Bucket name:** Der Name Ihres Buckets (z. B. `my-pbgui-sync-bucket`).
    - **Region:** Die Region Ihres Buckets (z. B. `eu-central-1`).
    - **Endpoint:** Die S3-Endpunkt-URL (z. B. `https://eu-central-1.s3.synologyc2.net`).
    - **Access Key ID:** Ihr S3-Zugangsschlüssel.
    - **Secret Access Key:** Ihr geheimer S3-Schlüssel.
-4. **Verbindung testen:** Klicken Sie auf **Test Connection**, um Ihre Einstellungen zu überprüfen.
-5. **Speichern:** Klicken Sie auf das Speichern-Symbol in der Seitenleiste, um die Konfiguration zu speichern.
+4. **Verbindung testen:** Klicke auf **🔌 Test**, um die Einstellungen zu überprüfen.
+5. **Speichern:** Klicke auf **💾 Save**, um die Bucket-Konfiguration zu speichern.
 
 ## Nutzung
 
-Sobald konfiguriert und gestartet, synchronisiert PBRemote die Daten automatisch im Hintergrund. Sie können den Status der Remote-Server und deren Instanzen direkt auf der PBRemote-Detailseite einsehen.
+Sobald konfiguriert und gestartet, synchronisiert PBRemote die Daten automatisch im Hintergrund. Klicke auf die PBRemote-Kachel in der Services-Übersicht, um das Detail-Panel mit drei Tabs zu öffnen:
 
-- **API-Sync-Status:** Die Seite warnt Sie, wenn API-Schlüssel nicht mit den Remote-Servern synchronisiert sind.
-- **Remote-Server:** Wählen Sie einen Remote-Server aus der Seitenleiste aus, um dessen Instanzen und deren aktuellen Status anzuzeigen.
-- **Logs:** Verwenden Sie den gefilterten Log-Viewer am Ende der Seite, um eventuelle Synchronisationsprobleme zu beheben.
+- **Log**: Live PBRemote-Log-Viewer zur Fehlersuche bei Synchronisationsproblemen
+- **Info**: Remote-Server-Status, API-Sync-Status und Instanz-Übersicht pro Server (mit Systemressourcen-Balken für Speicher, Swap, Disk, CPU)
+- **Settings**: Bucket-Konfiguration und Monitor-Einstellungen (Warn-/Fehlerschwellen für Server, V7, Multi und Single-Instanzen)

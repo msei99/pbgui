@@ -2,7 +2,6 @@ import streamlit as st
 import streamlit.components.v1 as _st_components
 import json
 
-PBGUI_VERSION = "v1.69"
 import hjson
 import pprint
 import uuid
@@ -10,7 +9,7 @@ import requests
 import os
 from time import sleep
 from pathlib import Path
-from pbgui_purefunc import load_ini, save_ini, load_symbols_from_ini as _load_symbols_from_mapping
+from pbgui_purefunc import load_ini, save_ini, load_symbols_from_ini as _load_symbols_from_mapping, PBGUI_VERSION, PBGDIR
 # LogHandler removed: centralized debuglog removed per user request
 from PBRemote import PBRemote
 from MonitorConfig import MonitorConfig
@@ -180,7 +179,7 @@ def set_page_config(page : str = "Start"):
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': f"Passivbot GUI {PBGUI_VERSION} [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
+            'About': f"Passivbot GUI {PBGUI_VERSION} | API Serial {(PBGDIR / 'api' / 'serial.txt').read_text().strip()} [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
         }
     )
     # Global layout CSS — applied on every page

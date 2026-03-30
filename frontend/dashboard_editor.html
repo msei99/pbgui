@@ -946,6 +946,122 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
   /* generation counter: prevents stale WS-refresh responses from replacing newer content */
   var _buildGen = {};
 
+  /* ── Live-Session SSE (Layer 2) ─────────────────────────────────────────────
+     Per-widget SSE connections for live position/balance updates via private
+     ccxtpro WS. Only activated when ≤10 specific users are selected.
+     Server-side watcher tasks are ref-counted: stop when last subscriber goes. */
+  var _liveState   = {};  // 'pos_R_C' / 'bal_R_C' → { es, timer, lastTs, posCache }
+  var _liveBal     = {};  // 'bal_R_C' → { userName → { balance, upnl } }
+  var _lastRestBal = {};  // 'bal_R_C' → last REST { rows, totals }
+  var MAX_LIVE     = 10;
+
+  function _setBadge(container, cls, lastTs) {
+    var s = container.querySelector(cls);
+    if (!s || !container.isConnected) return;
+    var secs = lastTs === 0 ? -1 : Math.round((Date.now() - lastTs) / 1000);
+    s.textContent = '\u25cf Live \u00b7 ' + (secs < 0 ? 'connecting\u2026' : secs === 0 ? 'now' : secs + 's ago');
+    s.style.color = '#22c55e';
+  }
+
+  function _clearBadge(container, cls) {
+    var s = container.querySelector(cls);
+    if (s) s.style.color = '';
+  }
+
+  function _disconnectLive(lKey) {
+    var st = _liveState[lKey];
+    if (!st) return;
+    if (st.timer) { clearInterval(st.timer); }
+    if (st.es)    { try { st.es.close(); } catch (_) {} }
+    delete _liveState[lKey];
+  }
+
+  function _connectLivePos(container, pos, users) {
+    var lKey = 'pos_' + pos;
+    /* Reuse existing connection if alive and users unchanged (widget rebuild after WS event) */
+    var _ex = _liveState[lKey];
+    if (_ex && _ex.es && _ex.es.readyState !== EventSource.CLOSED &&
+        (_ex.users || []).join(',') === (users || []).join(',')) return;
+    _disconnectLive(lKey);
+    if (!users || users.indexOf('ALL') >= 0 || users.length === 0 || users.length > MAX_LIVE) return;
+    var url = API_BASE + '/live/stream?users=' + encodeURIComponent(users.join(',')) + '&token=' + encodeURIComponent(TOKEN);
+    var es  = new EventSource(url);
+    var st  = { es: es, timer: null, lastTs: 0, posCache: {}, users: users.slice() };
+    _liveState[lKey] = st;
+    es.onopen = function () {
+      if (!container.isConnected) { _disconnectLive(lKey); return; }
+      st.lastTs = 0;
+      _setBadge(container, '.dt-status', st.lastTs);
+      if (!st.timer) st.timer = setInterval(function () {
+        if (!container.isConnected) { _disconnectLive(lKey); return; }
+        _setBadge(container, '.dt-status', st.lastTs);
+      }, 1000);
+    };
+    es.onmessage = function (evt) {
+      if (!container.isConnected) { _disconnectLive(lKey); return; }
+      try {
+        var m = JSON.parse(evt.data);
+        if (m.type === 'position_update' && m.user && users.indexOf(m.user) >= 0) {
+          st.posCache[m.user] = m.data.positions;
+          if (typeof container._dpUpdate === 'function') {
+            var merged = [];
+            users.forEach(function (u) { if (st.posCache[u]) merged = merged.concat(st.posCache[u]); });
+            merged.sort(function (a, b) { return a.symbol < b.symbol ? -1 : 1; });
+            container._dpUpdate(merged);
+          }
+          st.lastTs = Date.now();
+          _setBadge(container, '.dt-status', st.lastTs);
+        }
+      } catch (_) {}
+    };
+    es.onerror = function () { _disconnectLive(lKey); _clearBadge(container, '.dt-status'); };
+  }
+
+  function _connectLiveBal(container, pos, users) {
+    var lKey = 'bal_' + pos;
+    /* Reuse existing connection if alive and users unchanged (widget rebuild after WS event) */
+    var _ex = _liveState[lKey];
+    if (_ex && _ex.es && _ex.es.readyState !== EventSource.CLOSED &&
+        (_ex.users || []).join(',') === (users || []).join(',')) return;
+    _disconnectLive(lKey);
+    if (!users || users.indexOf('ALL') >= 0 || users.length === 0 || users.length > MAX_LIVE) return;
+    var url = API_BASE + '/live/stream?users=' + encodeURIComponent(users.join(',')) + '&token=' + encodeURIComponent(TOKEN);
+    _liveBal[lKey] = {};
+    var es  = new EventSource(url);
+    var st  = { es: es, timer: null, lastTs: 0, users: users.slice() };
+    _liveState[lKey] = st;
+    es.onopen = function () {
+      if (!container.isConnected) { _disconnectLive(lKey); return; }
+      st.lastTs = 0;
+      _setBadge(container, '.db-status', st.lastTs);
+      if (!st.timer) st.timer = setInterval(function () {
+        if (!container.isConnected) { _disconnectLive(lKey); return; }
+        _setBadge(container, '.db-status', st.lastTs);
+      }, 1000);
+    };
+    es.onmessage = function (evt) {
+      if (!container.isConnected) { _disconnectLive(lKey); return; }
+      try {
+        var m = JSON.parse(evt.data);
+        if (m.type === 'balance_update' && m.user && users.indexOf(m.user) >= 0) {
+          _liveBal[lKey][m.user] = { balance: m.data.balance, upnl: m.data.upnl || 0 };
+          var lastData = _lastRestBal[lKey] || { rows: [], totals: {} };
+          var merged = lastData.rows.map(function (row) {
+            var live = _liveBal[lKey][row.user];
+            if (!live) return row;
+            return { user: row.user, date: new Date().toISOString(), balance: live.balance, upnl: live.upnl !== 0 ? live.upnl : row.upnl, we: row.we };
+          });
+          var tot = { balance: 0, upnl: 0, we: (lastData.totals || {}).we || 0 };
+          merged.forEach(function (row) { tot.balance += row.balance || 0; tot.upnl += row.upnl || 0; });
+          DashRender.buildBalance(container, { rows: merged, totals: tot }, {});
+          st.lastTs = Date.now();
+          _setBadge(container, '.db-status', st.lastTs);
+        }
+      } catch (_) {}
+    };
+    es.onerror = function () { _disconnectLive(lKey); _clearBadge(container, '.db-status'); };
+  }
+
   /* ── inline BALANCE preview — delegates to DashRender.buildBalance ── */
   function buildBalanceInline(container, r, c) {
     var pos  = r + '_' + c;
@@ -967,6 +1083,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (d) {
         if (_buildGen[_gKey] !== _gen) return;
+        _lastRestBal['bal_' + pos] = d;
         _ensureRenderScript(function () {
           /* build the interactive users dropdown to embed directly in the preview header */
           var usersCtrl = makeUsersDropdown(state[uKey], function (v) {
@@ -978,6 +1095,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             icon: _widgetIcon('BALANCE'), onDelete: _makeDeleteCb(r, c)
           });
           _attachViewDrag(container, r, c);
+          _connectLiveBal(container, pos, users);
           /* shrink cell to content when no explicit height has been stored */
           var _balCell = container.closest('.editor-cell');
           var _balHKey = 'dashboard_height_' + r + '_' + c;
@@ -1735,6 +1853,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             icon: _widgetIcon('POSITIONS'), onDelete: _makeDeleteCb(r, c)
           });
           _attachViewDrag(container, r, c);
+          _connectLivePos(container, pos, users);
           /* shrink cell to content when no explicit height has been stored */
           var _posCell = container.closest('.editor-cell');
           var _posHKey = 'dashboard_height_' + r + '_' + c;
