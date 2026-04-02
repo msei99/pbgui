@@ -145,12 +145,17 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
 
     # Build lookup: name → best match across all hosts
     # "best" = the host where enabled_on matches, or any running host
-    vps_info = {}  # name → {running_on: [...], running_version: int, config_version_remote: int}
+    # has_data: True if we received collect data from at least one VPS host
+    # for this instance (even if running=False). Used to distinguish
+    # "confirmed not running" from "no data yet" — the latter must not
+    # show "disabled" when the bot might still be running.
+    vps_info = {}  # name → {running_on: [...], rv, cv_remote, has_data}
     for host, items in v7_data.items():
         for item in items:
             name = item.get("name", "")
             if name not in vps_info:
-                vps_info[name] = {"running_on": [], "rv": 0, "cv_remote": 0}
+                vps_info[name] = {"running_on": [], "rv": 0, "cv_remote": 0, "has_data": False}
+            vps_info[name]["has_data"] = True
             if item.get("running"):
                 vps_info[name]["running_on"].append(host)
                 vps_info[name]["rv"] = item.get("rv", 0)
@@ -163,7 +168,8 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
     local_running = _load_local_running_v7()
     for name, info in local_running.items():
         if name not in vps_info:
-            vps_info[name] = {"running_on": [], "rv": 0, "cv_remote": 0}
+            vps_info[name] = {"running_on": [], "rv": 0, "cv_remote": 0, "has_data": False}
+        vps_info[name]["has_data"] = True
         if master_host not in vps_info[name]["running_on"]:
             vps_info[name]["running_on"].append(master_host)
         vps_info[name]["rv"] = max(vps_info[name]["rv"], info["rv"])
@@ -188,12 +194,17 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
         running_on = inst["running_on"]
         version = inst["version"]
         rv = inst["running_version"]
+        has_data = info.get("has_data", False) if info else False
 
         if enabled == "disabled":
             if running_on:
                 inst["status"] = "stop_needed"
-            else:
+            elif has_data:
+                # We have confirmed VPS data and the bot is not running
                 inst["status"] = "disabled"
+            else:
+                # No VPS data yet — cannot confirm bot stopped; be conservative
+                inst["status"] = "stop_needed"
         elif enabled in running_on and version == rv:
             inst["status"] = "synced"
         elif running_on:
@@ -403,7 +414,7 @@ def get_main_page(
     port = request.url.port
     origin = f"{scheme}://{host}" + (f":{port}" if port else "")
     api_base = origin + "/api/v7"
-    ws_base = f"ws://{host}" + (f":{port}" if port else "")
+    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
 
     html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))

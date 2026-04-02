@@ -196,7 +196,8 @@
             throw new Error('Missing token');
         }
         
-        const WS_URL = `ws://${window.location.host}/ws/jobs?token=${API_TOKEN}`;
+        const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const WS_URL = `${wsProto}//${window.location.host}/ws/jobs?token=${API_TOKEN}`;
         
         let ws = null;
         let currentTab = 'running';

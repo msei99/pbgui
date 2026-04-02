@@ -850,7 +850,7 @@ def get_main_page(
     port = request.url.port
     origin = f"{scheme}://{host}" + (f":{port}" if port else "")
     api_services_base = origin + "/api/services"
-    ws_base = f"ws://{host}" + (f":{port}" if port else "")
+    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
 
     html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_services_base))
