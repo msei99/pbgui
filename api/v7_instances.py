@@ -2,10 +2,11 @@
 FastAPI router for v7 instance list + SSH activate.
 
 Endpoints:
-    GET  /instances          → list all v7 instances with sync status
-    POST /activate/{name}    → SSH-push config + activate_cmd to all VPS
-    POST /activate-all       → SSH-push all instances that need activation
-    GET  /main_page          → serve the standalone HTML page
+    GET    /instances          → list all v7 instances with sync status
+    POST   /activate/{name}    → SSH-push config + activate_cmd to all VPS
+    POST   /activate-all       → SSH-push all instances that need activation
+    DELETE /instances/{name}    → delete instance (if not running)
+    GET    /main_page          → serve the standalone HTML page
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import asyncio
 import configparser
 import json
 import platform
+import shutil
 import time
 import traceback
 import uuid
@@ -397,6 +399,37 @@ async def activate_all(session: SessionToken = Depends(require_auth)):
 
     ok = sum(1 for r in results if r.get("ok", 0) > 0)
     return {"activated": len(to_activate), "ok": ok, "results": results}
+
+
+@router.delete("/instances/{name}")
+async def delete_instance(
+    name: str,
+    session: SessionToken = Depends(require_auth),
+):
+    """Delete a v7 instance after checking it is not running anywhere."""
+    instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
+    if not instance_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"Instance '{name}' not found")
+
+    # Check if running on any VPS or locally
+    instances = _load_local_instances()
+    instances = _enrich_with_vps_data(instances)
+    inst = next((i for i in instances if i["name"] == name), None)
+    if inst and inst.get("running_on"):
+        hosts = ", ".join(inst["running_on"])
+        raise HTTPException(
+            status_code=409,
+            detail=f"Instance '{name}' is running on {hosts} — stop it first",
+        )
+
+    # Delete the instance directory
+    try:
+        shutil.rmtree(instance_dir)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete: {e}")
+
+    _log(SERVICE, f"Deleted instance '{name}'")
+    return {"ok": True, "name": name}
 
 
 @router.get("/main_page", response_class=HTMLResponse)
