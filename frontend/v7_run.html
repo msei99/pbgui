@@ -216,6 +216,50 @@ tr.row-inactive td  { opacity: 0.45; }
   cursor: pointer;
 }
 .btn-edit:hover { background: var(--bg3); }
+.btn-del {
+  height: 24px; width: 28px;
+  padding: 0;
+  font-size: var(--fs-sm);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg2);
+  color: var(--red);
+  cursor: pointer;
+}
+.btn-del:hover { background: var(--bg3); }
+
+/* Confirmation modal */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+}
+.modal-box {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--sp-lg) 28px;
+  min-width: 340px;
+  max-width: 460px;
+  text-align: center;
+}
+.modal-box h3 { margin-bottom: var(--sp-md); font-size: var(--fs-lg); }
+.modal-box p { margin-bottom: var(--sp-lg); color: var(--text-dim); font-size: var(--fs-base); }
+.modal-box .warn { color: var(--orange); font-weight: 600; }
+.modal-btns { display: flex; gap: var(--sp-sm); justify-content: center; }
+.modal-btns button {
+  padding: var(--sp-sm) var(--sp-lg);
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+.modal-btn-cancel { background: var(--bg3); color: var(--text); }
+.modal-btn-cancel:hover { background: var(--border); }
+.modal-btn-delete { background: var(--red); color: #fff; border-color: var(--red); }
+.modal-btn-delete:hover { opacity: 0.85; }
 
 /* Toast */
 #toast {
@@ -268,6 +312,7 @@ tr.row-inactive td  { opacity: 0.45; }
         </select>
         <hr class="sb-sep">
         <button class="sb-btn" onclick="loadInstances()">&#x21bb; Refresh</button>
+        <button class="sb-btn" onclick="addInstance()">&#x2795; Add Instance</button>
         <button class="sb-btn primary" id="btn-activate-all" onclick="activateAll()">SSH Activate All</button>
       </div>
     </div>
@@ -287,6 +332,7 @@ tr.row-inactive td  { opacity: 0.45; }
 </div><!-- /page-body -->
 
 <div id="toast"></div>
+<div id="modal-root"></div>
 
 <script>
 /* ─── Config (var so nav.js can access them) ──────────────── */
@@ -383,6 +429,7 @@ var COLS = [
   { key: 'running_on',      label: 'Running On' },
   { key: 'note',            label: 'Note' },
   { key: '_actions',         label: '' },
+  { key: '_delete',          label: '' },
 ];
 
 var STATUS_LABELS = {
@@ -411,6 +458,7 @@ function buildCells(r) {
     esc(runOn),
     esc(r.note || ''),
     '<button class="btn-act" data-activate="' + esc(r.name) + '">Activate</button>',
+    '<button class="btn-del" data-delete="' + esc(r.name) + '" title="Delete instance">\u2716</button>',
   ];
 }
 
@@ -441,7 +489,7 @@ function renderHeader() {
   }
   var thead = document.getElementById('thead');
   thead.innerHTML = '<tr>' + COLS.map(function(c) {
-    if (c.key === '_actions' || c.key === '_edit') return '<th></th>';
+    if (c.key === '_actions' || c.key === '_edit' || c.key === '_delete') return '<th></th>';
     return '<th data-sort="' + c.key + '">' + c.label + '<span class="sort-arrow"></span></th>';
   }).join('') + '</tr>';
   thead.querySelectorAll('th[data-sort]').forEach(function(th) {
@@ -590,6 +638,69 @@ function activateAll() {
   });
 }
 
+/* ─── Add Instance (navigate to Streamlit) ────────────────── */
+function addInstance() {
+  var url = ST_BASE + '/?target=V7_RUN&add_instance=1&token=' + encodeURIComponent(TOKEN);
+  window.location.href = url;
+}
+
+/* ─── Delete Instance (modal confirm → API DELETE) ────────── */
+function confirmDelete(name) {
+  var inst = instances.find(function(r) { return r.name === name; });
+  if (inst && inst.running_on && inst.running_on.length > 0) {
+    toast('Cannot delete ' + name + ' — running on ' + inst.running_on.join(', ') + '. Stop it first.', 'err');
+    return;
+  }
+  var root = document.getElementById('modal-root');
+  root.innerHTML =
+    '<div class="modal-overlay" id="modal-overlay">' +
+      '<div class="modal-box">' +
+        '<h3>Delete Instance?</h3>' +
+        '<p class="warn">\u26A0 ' + esc(name) + '</p>' +
+        '<p>This will permanently delete the instance directory and all its files.</p>' +
+        '<div class="modal-btns">' +
+          '<button class="modal-btn-cancel" id="modal-cancel">Cancel</button>' +
+          '<button class="modal-btn-delete" id="modal-confirm">Delete</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.getElementById('modal-cancel').onclick = closeModal;
+  document.getElementById('modal-overlay').onclick = function(e) {
+    if (e.target === this) closeModal();
+  };
+  document.getElementById('modal-confirm').onclick = function() {
+    executeDelete(name);
+  };
+}
+
+function executeDelete(name) {
+  var confirmBtn = document.getElementById('modal-confirm');
+  if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Deleting\u2026'; }
+  apiFetch('/instances/' + encodeURIComponent(name), { method: 'DELETE' }).then(function(res) {
+    if (res.status === 409) {
+      return res.json().then(function(d) { throw new Error(d.detail || 'Instance is running'); });
+    }
+    if (!res.ok) {
+      return res.json().then(function(d) { throw new Error(d.detail || 'HTTP ' + res.status); });
+    }
+    return res.json();
+  }).then(function() {
+    closeModal();
+    toast(name + ' deleted', 'ok');
+    /* Remove from local state immediately */
+    instances = instances.filter(function(r) { return r.name !== name; });
+    if (rowMap[name]) { rowMap[name].tr.remove(); delete rowMap[name]; }
+    render();
+  }).catch(function(e) {
+    closeModal();
+    toast('Delete failed: ' + e.message, 'err');
+  });
+}
+
+function closeModal() {
+  document.getElementById('modal-root').innerHTML = '';
+}
+
 /* ─── Toast ───────────────────────────────────────────────── */
 var toastTimer = null;
 function toast(msg, type) {
@@ -602,7 +713,7 @@ function toast(msg, type) {
   toastTimer = setTimeout(function() {
     el.style.opacity = '0';
     setTimeout(function() { el.style.display = 'none'; }, 300);
-  }, 4000);
+  }, 8000);
 }
 
 /* ─── Banner ──────────────────────────────────────────────── */
@@ -629,6 +740,8 @@ document.getElementById('tbody').addEventListener('click', function(e) {
   if (btn) { editInstance(btn.dataset.edit); return; }
   btn = e.target.closest('[data-activate]');
   if (btn) { activateOne(btn.dataset.activate); return; }
+  btn = e.target.closest('[data-delete]');
+  if (btn) { confirmDelete(btn.dataset.delete); return; }
 });
 
 /* ─── Auto-refresh via WebSocket ──────────────────────────── */

@@ -223,7 +223,12 @@ if st.session_state.pbcoindata.api_error:
 if 'edit_v7_instance' in st.session_state:
     edit_v7_instance()
 else:
-    # Handle deep-link from FastAPI v7_run page (edit_instance query param or relay)
+    # Handle deep-link from FastAPI v7_run page (add_instance or edit_instance)
+    _add = st.query_params.get("add_instance", "")
+    if _add == "1":
+        st.query_params.pop("add_instance", None)
+        st.session_state.edit_v7_instance = V7Instance()
+        st.rerun()
     _edit_name = st.query_params.get("edit_instance", "") or st.session_state.pop("_relay_edit_instance", "")
     if _edit_name and 'v7_instances' in st.session_state:
         for _inst in st.session_state.v7_instances.instances:
