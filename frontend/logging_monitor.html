@@ -599,9 +599,8 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'Logging', current: 'system_logging', toke
 
 /* ── Helper: derive WS URL from current page location ───── */
 function wsUrl() {
-  var h = window.location.hostname || '127.0.0.1';
-  var p = window.location.port || '80';
-  return 'ws://' + h + ':' + p + '/ws/vps?token=' + TOKEN;
+  var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return proto + '//' + window.location.host + '/ws/vps?token=' + TOKEN;
 }
 
 /* ── HTTP helpers ────────────────────────────────────────── */

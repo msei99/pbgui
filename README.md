@@ -324,7 +324,10 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.71 (unreleased)
+- Fixed: WebSocket connections now use `wss://` when the page is served over HTTPS — previously hardcoded `ws://` caused "insecure WebSocket" errors for users behind an HTTPS reverse proxy (affected Services, PBRun, and Logging pages)
 - Fixed: PBRun now writes `0` to `running_version.txt` when stopping a v7 bot — triggers inotify watcher for immediate stop feedback in UI (previously no file write on stop, causing ~30s delay until next poll)
+- Fixed: `RunV7.stop()` now writes `0` to `running_version.txt` unconditionally — previously the write was inside the `if process:` block, so when a bot had already crashed (no process to kill), `running_version.txt` kept the old version number and the UI never showed "stopped"
+- Fixed: Status `disabled` was shown prematurely when no VPS collect data was available yet — now correctly shows `stop_needed` when data is missing (conservative: assumes bot may still be running)
 - Fixed: SSH Activate no longer restarts inotify watchers — persistent streaming watchers already detect config+running_version changes; the restart killed the watcher for ~14s causing `running_version.txt` events to be missed; added 8s delayed collect as fallback for edge cases
 - Improved: inotify watchers (V7ConfigSync + FileSyncWorker) converted from one-shot to persistent streaming — script no longer exits after each event; events are streamed continuously over a single SSH process, eliminating the 10-14s restart gap that caused `running_version.txt` changes to be missed after Activate
 - Fixed: inotify watcher scripts leaked orphan processes on VPS — when SSH reconnected, old Python processes kept running with inotify FDs open, exhausting the 128-instance limit (`errno=24 Too many open files`); scripts now use `select()` on stdin to detect SSH disconnect and exit cleanly
