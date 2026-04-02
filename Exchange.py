@@ -363,16 +363,22 @@ class Exchange:
                 import asyncio
                 import inspect
                 if inspect.iscoroutinefunction(self.instance.close):
-                    # If we're in an event loop, create task; else run_until_complete
+                    # Determine context: coroutine (has running loop) vs. thread (no running loop here)
                     try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            asyncio.create_task(self.instance.close())
-                        else:
-                            loop.run_until_complete(self.instance.close())
+                        running_loop = asyncio.get_running_loop()
+                        # Called from within a coroutine — schedule as task
+                        running_loop.create_task(self.instance.close())
                     except RuntimeError:
-                        # No event loop available
-                        asyncio.run(self.instance.close())
+                        # Not in a coroutine (e.g. called from asyncio.to_thread).
+                        # Schedule on the main event loop via thread-safe call.
+                        try:
+                            loop = asyncio.get_event_loop_policy().get_event_loop()
+                            if loop is not None and loop.is_running():
+                                asyncio.run_coroutine_threadsafe(self.instance.close(), loop)
+                            else:
+                                asyncio.run(self.instance.close())
+                        except Exception:
+                            pass
                 else:
                     self.instance.close()
             except Exception as e:
@@ -1275,77 +1281,58 @@ class Exchange:
             while True:
                 try:
                     start_page_ts = time.time()
-                    trades = self.instance.fetch_my_trades(since=since, limit=limit, params = {"endTime": end})
+                    # Direct HTTP POST — avoids 11s load_markets() that fetch_my_trades() triggers on first call
+                    raw_fills = self.instance.fetch(
+                        "https://api.hyperliquid.xyz/info",
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                        body=json.dumps({"type": "userFillsByTime", "user": self.user.wallet_address, "startTime": since, "endTime": end}),
+                    )
+                    # Normalize raw fills into ccxt-compatible dicts
+                    trades = []
+                    for f in (raw_fills or []):
+                        try:
+                            trades.append({'timestamp': int(f['time']), 'info': f})
+                        except Exception:
+                            continue
                     page_dur = time.time() - start_page_ts
-                    try:
-                        num = len(trades) if trades is not None else 0
-                    except Exception:
-                        num = 0
-                    _human_log('Exchange', f"hyperliquid trades page: user={getattr(self.user,'name',None)} since={since} end={end} span_ms={page_span} duration_s={page_dur:.3f} items={num}", level='DEBUG', user=self.user)
+                    _human_log('Exchange', f"hyperliquid trades page: user={getattr(self.user,'name',None)} since={since} end={end} span_ms={page_span} duration_s={page_dur:.3f} items={len(trades)}", level='DEBUG', user=self.user)
                 except Exception as e:
                     import traceback as _tb
                     tb = _tb.format_exc()
                     _human_log(
                         'Exchange',
-                        f"fetch_my_trades ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end} limit={limit}: {e}",
+                        f"userFillsByTime ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end}: {e}",
                         level='ERROR',
                         user=self.user,
                     )
-                    # Log traceback and any ccxt last-response attributes available for debugging
                     _human_log('Exchange', f"Traceback:\n{tb}", level='DEBUG', user=self.user)
-                    for attr in ('last_http_response', 'last_response', 'last_response_text', 'last_json_response', 'last_response_headers'):
-                        try:
-                            val = getattr(self.instance, attr, None)
-                            if val is not None:
-                                summary = str(val)
-                                if len(summary) > 1000:
-                                    summary = summary[:1000] + '...'
-                                _human_log('Exchange', f"{attr}: {summary}", level='DEBUG', user=self.user)
-                        except Exception:
-                            pass
-                    # Re-raise so caller can handle/log as before
                     raise
-                # print(trades)
                 if trades:
-                    first_trade = trades[0]
-                    last_trade = trades[-1]
                     all_histories = trades + all_histories
-                if len(trades) == limit:
-                    _human_log(
-                        'Exchange',
-                        f"Fetched {len(trades)} trades from "
-                        f"{self.instance.iso8601(first_trade['timestamp'])} till "
-                        f"{self.instance.iso8601(last_trade['timestamp'])}",
-                        level='INFO',
-                        user=self.user,
-                    )
-                    since = trades[-1]['timestamp']
+                # userFillsByTime returns all fills in range — always advance window
+                _human_log(
+                    'Exchange',
+                    f"Fetched {len(trades)} trades from "
+                    f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
+                    level='INFO',
+                    user=self.user,
+                )
+                if not trades:
+                    old_span = page_span
+                    page_span = min(page_span * 2, max_span)
+                    if page_span != old_span:
+                        _human_log('Exchange', f"Empty trades page — doubling page span from {old_span} to {page_span} ms for user={getattr(self.user,'name',None)}", level='DEBUG', user=self.user)
                 else:
-                    _human_log(
-                        'Exchange',
-                        f"Fetched {len(trades)} trades from "
-                        f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
-                        level='INFO',
-                        user=self.user,
-                    )
-                    # If the page is empty, increase the page span (double) up to max_span
-                    if not trades:
-                        old_span = page_span
-                        page_span = min(page_span * 2, max_span)
-                        if page_span != old_span:
-                            _human_log('Exchange', f"Empty trades page — doubling page span from {old_span} to {page_span} ms for user={getattr(self.user,'name',None)}", level='DEBUG', user=self.user)
-                    else:
-                        # reset to initial span after receiving results
-                        page_span = initial_span
-                    since = end
-                    end = since + page_span
-                    if since > now:
-                        _human_log('Exchange', 'Done', level='INFO', user=self.user)
-                        break
+                    # reset to initial span after receiving results
+                    page_span = initial_span
+                since = end
+                end = since + page_span
+                if since > now:
+                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
+                    break
                 sleep(0.5)
-            # print(all_histories)
             for history in all_histories:
-                # if history["side"] == "sell":
                 income = {}
                 income["symbol"] = history["info"]["coin"] + "USDC"
                 income["timestamp"] = history["timestamp"]
@@ -1667,7 +1654,6 @@ class Exchange:
             if not since:
                 since = now - max_age
 
-            limit = 200
             initial_span = week
             max_span = week * 4
             page_span = initial_span
@@ -1675,38 +1661,50 @@ class Exchange:
 
             all_histories = []
             while True:
-                trades = self.instance.fetch_my_trades(since=since, limit=limit, params={"endTime": end})
+                try:
+                    # Direct HTTP POST — avoids 11s load_markets() that fetch_my_trades() triggers on first call
+                    raw_fills = self.instance.fetch(
+                        "https://api.hyperliquid.xyz/info",
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                        body=json.dumps({"type": "userFillsByTime", "user": self.user.wallet_address, "startTime": since, "endTime": end}),
+                    )
+                    # Normalize raw fills into ccxt-compatible dicts
+                    trades = []
+                    for f in (raw_fills or []):
+                        try:
+                            trades.append({'timestamp': int(f['time']), 'info': f})
+                        except Exception:
+                            continue
+                except Exception as e:
+                    import traceback as _tb
+                    _human_log(
+                        'Exchange',
+                        f"userFillsByTime ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end}: {e}",
+                        level='ERROR',
+                        user=self.user,
+                    )
+                    _human_log('Exchange', f"Traceback:\n{_tb.format_exc()}", level='DEBUG', user=self.user)
+                    raise
                 if trades:
-                    first_trade = trades[0]
-                    last_trade = trades[-1]
                     all_histories = trades + all_histories
-                if len(trades) == limit:
-                    _human_log(
-                        'Exchange',
-                        f"Fetched {len(trades)} trades from "
-                        f"{self.instance.iso8601(first_trade['timestamp'])} till "
-                        f"{self.instance.iso8601(last_trade['timestamp'])}",
-                        level='INFO',
-                        user=self.user,
-                    )
-                    since = trades[-1]['timestamp']
+                # userFillsByTime returns all fills in range — always advance window
+                _human_log(
+                    'Exchange',
+                    f"Fetched {len(trades)} trades from "
+                    f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
+                    level='INFO',
+                    user=self.user,
+                )
+                if not trades:
+                    page_span = min(page_span * 2, max_span)
                 else:
-                    _human_log(
-                        'Exchange',
-                        f"Fetched {len(trades)} trades from "
-                        f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
-                        level='INFO',
-                        user=self.user,
-                    )
-                    if not trades:
-                        page_span = min(page_span * 2, max_span)
-                    else:
-                        page_span = initial_span
-                    since = end
-                    end = since + page_span
-                    if since > now:
-                        _human_log('Exchange', 'Done', level='INFO', user=self.user)
-                        break
+                    page_span = initial_span
+                since = end
+                end = since + page_span
+                if since > now:
+                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
+                    break
                 sleep(0.5)
 
             def _to_float(val):

@@ -86,6 +86,7 @@ class VPSStore:
         # Per-host data
         self.system: dict[str, SystemMetrics] = {}
         self.instances: dict[str, list[dict]] = {}
+        self.v7_instances: dict[str, list[dict]] = {}  # v7 config details per host
         self.services: dict[str, dict] = {}
         self.streams: dict[str, dict] = {}  # stream diagnostics per host
 
@@ -107,6 +108,11 @@ class VPSStore:
         self.instances[hostname] = data
         self.changed.set()
 
+    def update_v7_instances(self, hostname: str, data: list[dict]):
+        """Update v7 instance details (config_version, running_version, enabled_on)."""
+        self.v7_instances[hostname] = data
+        self.changed.set()
+
     def update_services(self, results: dict):
         """Update service check results (all hosts at once)."""
         self.services = results
@@ -121,6 +127,7 @@ class VPSStore:
         """Remove all data for a host."""
         self.system.pop(hostname, None)
         self.instances.pop(hostname, None)
+        self.v7_instances.pop(hostname, None)
         self.streams.pop(hostname, None)
         # Don't clear services — they're host-keyed inside the dict
         self.services.pop(hostname, None)
@@ -162,6 +169,7 @@ class VPSStore:
                 h: m.to_dict() for h, m in self.system.items()
             },
             "instances": self.instances,
+            "v7_instances": self.v7_instances,
             "streams": self.streams,
             "services": self.services,
             "local_logs": local_logs,

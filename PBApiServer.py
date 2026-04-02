@@ -44,6 +44,7 @@ from api.heatmap import router as heatmap_router
 from api.vps import router as vps_router
 from api.services import router as services_router
 from api.live import router as live_router
+from api.v7_instances import router as v7_router
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, PBGUI_VERSION
 
@@ -177,8 +178,10 @@ async def _lifespan(app: FastAPI):
     from master.async_monitor import VPSMonitor
     from master.async_logs import AsyncLogStreamer
     from master.file_sync import FileSyncWorker
+    from master.v7_config_sync import V7ConfigSyncWorker
     from api.vps import init as vps_init
     from api.api_keys import init_file_sync
+    from api.v7_instances import init as v7_init
 
     global _startup_serial
     _startup_serial = _read_serial()
@@ -199,39 +202,48 @@ async def _lifespan(app: FastAPI):
 
     file_sync = FileSyncWorker(monitor.pool, monitor.store, monitor)
     init_file_sync(file_sync)
+    v7_sync = V7ConfigSyncWorker(monitor.pool, monitor.store, monitor)
+    v7_init(monitor, v7_sync)
 
-    # Register on-connect callback so inotifywait watchers start automatically
+    # Register on-connect callbacks so inotify watchers start automatically
     # whenever a VPS connects or reconnects (including after network outages).
-    monitor.pool.set_on_connect_callback(file_sync.start_watchers_single)
+    monitor.pool.add_on_connect_callback(file_sync.start_watchers_single)
+    monitor.pool.add_on_connect_callback(v7_sync.start_watchers_single)
 
     _vps_monitor = monitor
-    await monitor.start()
 
-    # Start watchers for hosts that are already connected after startup
-    connected_now = monitor.pool.connected_hosts()
-    if connected_now:
-        await file_sync.start_watchers(connected_now)
-    file_sync.start_watchdog()
+    # Start SSH connections + watchers in background so the server
+    # can accept requests immediately (connections take ~2 min).
+    async def _deferred_startup():
+        await monitor.start()
+        connected_now = monitor.pool.connected_hosts()
+        if connected_now:
+            await file_sync.start_watchers(connected_now)
+            await v7_sync.start_watchers(connected_now)
+        file_sync.start_watchdog()
+        v7_sync.start_watchdog()
+        _log(SERVICE, "[lifespan] deferred startup complete", level="INFO")
 
+    deferred_task = asyncio.create_task(_deferred_startup(), name="deferred-startup")
     watchdog_task = asyncio.create_task(_worker_watchdog_loop(), name="worker-watchdog")
     serial_task = asyncio.create_task(_serial_watcher_loop(), name="serial-watcher")
 
     yield  # app runs here
 
+    deferred_task.cancel()
     watchdog_task.cancel()
     serial_task.cancel()
-    try:
-        await watchdog_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await serial_task
-    except asyncio.CancelledError:
-        pass
+    for t in (deferred_task, watchdog_task, serial_task):
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
     if _vps_monitor:
         await _vps_monitor.stop()
     file_sync.stop_watchdog()
     await file_sync.stop_watchers()
+    v7_sync.stop_watchdog()
+    await v7_sync.stop_watchers()
 
 
 # ── FastAPI app ───────────────────────────────────────────────
@@ -299,6 +311,7 @@ app.include_router(heatmap_router, prefix="/api/heatmap", tags=["heatmap"])
 app.include_router(vps_router, tags=["vps"])
 app.include_router(services_router, prefix="/api/services", tags=["services"])
 app.include_router(live_router, prefix="/api/live", tags=["live"])
+app.include_router(v7_router, prefix="/api/v7", tags=["v7"])
 
 frontend_dir = Path(__file__).parent / "frontend"
 if frontend_dir.exists():
@@ -1051,4 +1064,5 @@ if __name__ == "__main__":
         port=port,
         log_level="info",
         log_config=None,
+        timeout_graceful_shutdown=10,
     )

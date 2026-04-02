@@ -37,14 +37,20 @@ REMOTE_PBGUI_DIR = "software/pbgui"
 # Watches DIRECTORIES (not files) to avoid inode-change issues:
 # SFTP writes can replace a file's inode, causing a file-level watch
 # to go stale (IN_IGNORED).  Directory inodes never change.
+# Uses select() to also monitor stdin — when the SSH session drops, stdin
+# returns EOF and the script exits cleanly (prevents orphan processes that
+# leak inotify instances).
 _INOTIFY_WATCHER_SCRIPT = """
-import ctypes, struct, os, sys
+import ctypes, struct, os, sys, select
 libc = ctypes.CDLL('libc.so.6', use_errno=True)
 IN_CLOSE_WRITE = 0x8
 fd = libc.inotify_init()
 if fd < 0:
+    errno = ctypes.get_errno()
+    print(f"inotify_init failed: errno={errno} ({os.strerror(errno)})", file=sys.stderr, flush=True)
     sys.exit(1)
 watches = {}
+failed = 0
 for p in sys.argv[1:]:
     d = os.path.dirname(p)
     f = os.path.basename(p)
@@ -54,20 +60,29 @@ for p in sys.argv[1:]:
             watches[wd][1].add(f)
         else:
             watches[wd] = (d, {f})
+    else:
+        failed += 1
 if not watches:
+    print(f"no watches added (tried {len(sys.argv)-1} paths, {failed} failed)", file=sys.stderr, flush=True)
     sys.exit(2)
+stdin_fd = sys.stdin.fileno()
 while True:
-    buf = os.read(fd, 4096)
-    o = 0
-    while o + 16 <= len(buf):
-        wid, mask, cookie, nlen = struct.unpack_from('iIII', buf, o)
-        name = buf[o+16:o+16+nlen].rstrip(b'\\x00').decode(errors='replace')
-        o += 16 + nlen
-        if mask & IN_CLOSE_WRITE and wid in watches:
-            d, targets = watches[wid]
-            if name in targets:
-                print(os.path.join(d, name), flush=True)
-                sys.exit(0)
+    ready, _, _ = select.select([fd, stdin_fd], [], [])
+    if stdin_fd in ready:
+        if not os.read(stdin_fd, 1):
+            sys.exit(0)
+    if fd in ready:
+        buf = os.read(fd, 4096)
+        o = 0
+        while o + 16 <= len(buf):
+            wid, mask, cookie, nlen = struct.unpack_from('iIII', buf, o)
+            name = buf[o+16:o+16+nlen].rstrip(b'\\x00').decode(errors='replace')
+            o += 16 + nlen
+            if mask & IN_CLOSE_WRITE and wid in watches:
+                d, targets = watches[wid]
+                if name in targets:
+                    print(os.path.join(d, name), flush=True)
+                    sys.exit(0)
 """.strip()
 
 # Persist last-push state across API restarts
@@ -841,15 +856,12 @@ class FileSyncWorker:
             pass  # Non-critical — watcher will update on next file change
 
     async def _watcher_loop(self, hostname: str, remote_paths: list[str]):
-        """Watch api-keys.json on a VPS for changes via Python ctypes inotify.
+        """Watch api-keys.json on a VPS for changes via persistent inotify
+        stream.
 
-        Runs a one-shot Python script via pool.run() in a continuous loop.
-        Each script invocation blocks until one IN_CLOSE_WRITE event fires,
-        prints the affected path to stdout, then exits.  pool.run() returns
-        the completed result, we call _watcher_callback, then restart.
-
-        Using pool.run() (instead of streaming stdout) avoids asyncssh
-        channel-buffer issues that can stall long-running process readers.
+        Uses pool.start_process() to launch a long-running inotify script
+        that prints every matched event to stdout.  Events are processed
+        as they arrive — no restart needed between events.
         Uses plain python3 — script only needs stdlib, no venv required.
         """
         try:
@@ -883,28 +895,54 @@ class FileSyncWorker:
                 f"{paths_str}"
             )
 
-            _log(SERVICE, f"[watcher] {hostname}: inotify watcher active "
-                 f"({len(valid_paths)} path(s))", level="DEBUG")
-
+            consecutive_failures = 0
             while True:
-                # Blocks on the remote until one close_write event fires.
-                # timeout=None = wait indefinitely (no timeout).
-                # Returns None if connection is lost.
-                result = await self.pool.run(hostname, cmd, timeout=None)
-                if result is None:
+                proc = await self.pool.start_process(hostname, cmd)
+                if proc is None:
                     _log(SERVICE, f"[watcher] {hostname}: connection lost — "
                          "watcher stopped", level="WARNING")
                     return
-                # Guard against tight loop if script crashes immediately
-                if result.exit_status not in (0, None):
-                    _log(SERVICE, f"[watcher] {hostname}: script exited "
-                         f"with code {result.exit_status} — backing off",
-                         level="WARNING")
-                    await asyncio.sleep(30)
+
+                _log(SERVICE, f"[watcher] {hostname}: inotify streaming "
+                     f"({len(valid_paths)} path(s))", level="DEBUG")
+
+                try:
+                    async for line in proc.stdout:
+                        consecutive_failures = 0
+                        changed = line.strip()
+                        if changed:
+                            await self._watcher_callback(hostname, changed)
+                except asyncio.CancelledError:
+                    proc.close()
+                    raise
+
+                # Process ended — check exit status
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    proc.close()
+                exit_status = proc.exit_status
+
+                if exit_status in (0, None):
+                    _log(SERVICE, f"[watcher] {hostname}: stream ended, "
+                         "restarting", level="DEBUG")
                     continue
-                changed = result.stdout.strip() if result.stdout else ""
-                if changed:
-                    await self._watcher_callback(hostname, changed)
+
+                # Error exit — backoff
+                consecutive_failures += 1
+                stderr_msg = ""
+                try:
+                    stderr_msg = ((await proc.stderr.read()) or "").strip()
+                except Exception:
+                    pass
+                backoff = min(5 * (2 ** (consecutive_failures - 1)), 300)
+                _log(SERVICE, f"[watcher] {hostname}: script exited "
+                     f"with code {exit_status} "
+                     f"(attempt {consecutive_failures}, "
+                     f"backoff {backoff}s)"
+                     + (f" — {stderr_msg}" if stderr_msg else ""),
+                     level="WARNING")
+                await asyncio.sleep(backoff)
         except asyncio.CancelledError:
             return
         except Exception as e:

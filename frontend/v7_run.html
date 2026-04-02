@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PBv7 Run</title>
+<style>
+/* ─── Reset & Base ─────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+:root {
+  --bg:       #0e1117;
+  --bg2:      #1a1d24;
+  --bg3:      #262730;
+  --border:   #333640;
+  --text:     #fafafa;
+  --text-dim: #a0a4ab;
+  --green:    #21c354;
+  --orange:   #ff8c00;
+  --red:      #ff4b4b;
+  --blue:     #1f77ff;
+  --accent:   #4da6ff;
+  --font:     'Source Sans Pro', -apple-system, BlinkMacSystemFont, sans-serif;
+  --fs-xs:    11px;
+  --fs-sm:    13px;
+  --fs-base:  14px;
+  --fs-md:    15px;
+  --fs-lg:    18px;
+  --sp-xs:    4px;
+  --sp-sm:    8px;
+  --sp-md:    12px;
+  --sp-lg:    20px;
+  --input-h:  32px;
+  --btn-h:    32px;
+}
+body {
+  font-family: var(--font);
+  font-size: var(--fs-base);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Connection Banner ────────────────────────────────────── */
+#conn-banner {
+  padding: var(--sp-sm) 16px;
+  text-align: center;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  transition: all 0.3s;
+}
+.conn-ok      { background: var(--green); color: #000; display: none; }
+.conn-lost    { background: var(--red);   color: #fff; }
+.conn-waiting { background: var(--orange); color: #000; }
+
+/* ─── Page layout (sidebar + main content) ─────────────────── */
+#page-body {
+  display: flex;
+  height: calc(100vh - 52px);
+  overflow: hidden;
+}
+
+/* ─── Sidebar ──────────────────────────────────────────────── */
+#sidebar {
+  width: 200px;
+  min-width: 160px;
+  max-width: 300px;
+  flex-shrink: 0;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+#sidebar-resize {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 4px;
+  cursor: col-resize; background: transparent;
+}
+#sidebar-resize:hover, #sidebar-resize.active { background: rgba(77,166,255,0.4); }
+#sidebar-sticky { flex-shrink: 0; padding: 0.5rem 0.5rem 0; }
+#sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.3rem 0.25rem 0.4rem;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.sb-title {
+  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.09em;
+  color: #64748b; font-weight: 700;
+}
+.sb-count {
+  font-size: var(--fs-xs);
+  background: #1a202c;
+  border: 1px solid #2d3748;
+  border-radius: 10px;
+  padding: 0.1rem 0.5rem;
+  color: #94a3b8;
+  font-weight: 600;
+}
+#sidebar-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.3rem 0.1rem 0.45rem;
+  border-bottom: 1px solid var(--border);
+}
+.sb-input {
+  height: var(--input-h);
+  padding: 0 var(--sp-sm);
+  background: var(--bg2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: var(--fs-sm);
+  font-family: var(--font);
+  width: 100%;
+}
+.sb-label {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  margin-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.sb-sep { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
+.sb-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.6rem;
+  border-radius: 5px;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font);
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  width: 100%;
+  text-align: left;
+}
+.sb-btn:hover { background: var(--bg3); color: var(--text); border-color: var(--border); }
+.sb-btn.primary { background: #26a69a; border-color: #26a69a; color: #fff; }
+.sb-btn.primary:hover { background: #2bbbad; }
+
+/* ─── Main content ─────────────────────────────────────────── */
+#main-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-lg);
+  min-width: 0;
+}
+
+/* ─── Table ────────────────────────────────────────────────── */
+.tbl-wrap {
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-base);
+}
+th, td {
+  padding: var(--sp-xs) var(--sp-sm);
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+th {
+  background: var(--bg2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  position: sticky;
+  top: 0;
+  cursor: pointer;
+  user-select: none;
+}
+th:hover { color: var(--text); }
+tr:hover td { background: var(--bg3); }
+.sort-arrow { font-size: 10px; margin-left: 2px; }
+
+/* Status classes */
+.st-synced          { color: var(--green); font-weight: 600; }
+.st-outdated        { color: var(--orange); font-weight: 600; }
+.st-activate_needed { color: var(--orange); }
+.st-stop_needed     { color: var(--red); }
+.st-disabled        { color: var(--text-dim); }
+tr.row-inactive td  { opacity: 0.45; }
+
+/* Inline buttons */
+.btn-act {
+  height: 24px;
+  padding: 0 var(--sp-sm);
+  font-size: var(--fs-xs);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg2);
+  color: var(--accent);
+  cursor: pointer;
+}
+.btn-act:hover { background: var(--bg3); }
+.btn-act:disabled { opacity: 0.3; cursor: not-allowed; }
+.btn-edit {
+  height: 24px; width: 28px;
+  padding: 0;
+  font-size: var(--fs-sm);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg2);
+  color: var(--accent);
+  cursor: pointer;
+}
+.btn-edit:hover { background: var(--bg3); }
+
+/* Toast */
+#toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  padding: var(--sp-sm) var(--sp-lg);
+  border-radius: 6px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  z-index: 9999;
+  display: none;
+  transition: opacity 0.3s;
+}
+.toast-ok   { background: var(--green); color: #000; }
+.toast-err  { background: var(--red); color: #fff; }
+.toast-info { background: var(--blue); color: #fff; }
+</style>
+</head>
+<body>
+
+<!-- Navigation bar (filled by pbgui_nav.js) -->
+<nav id="topnav"></nav>
+
+<!-- Connection banner -->
+<div id="conn-banner" class="conn-waiting">Connecting…</div>
+
+<!-- Page body: sidebar + main content -->
+<div id="page-body">
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div id="sidebar-sticky">
+      <div id="sidebar-header">
+        <span class="sb-title">Instances</span>
+        <span class="sb-count" id="instance-count">0</span>
+      </div>
+      <div id="sidebar-toolbar">
+        <div class="sb-label">Search</div>
+        <input type="text" id="f-search" class="sb-input" placeholder="Name, note, host…">
+        <div class="sb-label" style="margin-top:4px">Status</div>
+        <select id="f-status" class="sb-input">
+          <option value="All" selected>All</option>
+          <option value="active">Active</option>
+          <option value="synced">Synced</option>
+          <option value="outdated">Outdated</option>
+          <option value="activate_needed">Needs Activate</option>
+          <option value="stop_needed">Stop Needed</option>
+          <option value="disabled">Disabled</option>
+        </select>
+        <hr class="sb-sep">
+        <button class="sb-btn" onclick="loadInstances()">&#x21bb; Refresh</button>
+        <button class="sb-btn primary" id="btn-activate-all" onclick="activateAll()">SSH Activate All</button>
+      </div>
+    </div>
+    <div id="sidebar-resize"></div>
+  </div>
+
+  <!-- Main content -->
+  <div id="main-content">
+    <div class="tbl-wrap">
+      <table>
+        <thead id="thead"></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /page-body -->
+
+<div id="toast"></div>
+
+<script>
+/* ─── Config (var so nav.js can access them) ──────────────── */
+var TOKEN          = "%%TOKEN%%";
+var API_BASE       = "%%API_BASE%%";
+var WS_BASE        = "%%WS_BASE%%";
+var ST_BASE        = "%%ST_BASE%%";
+var PBGUI_VERSION  = "%%VERSION%%";
+var PBGUI_SERIAL   = "%%SERIAL%%";
+
+/* ─── State ───────────────────────────────────────────────── */
+var instances = [];
+var sort = { col: 'name', asc: true };
+var filterSearch = '';
+var filterStatus = 'All';
+
+/* ─── API helpers ─────────────────────────────────────────── */
+function apiFetch(path, opts) {
+  opts = opts || {};
+  var url = API_BASE + path;
+  opts.headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, opts.headers || {});
+  return fetch(url, opts);
+}
+
+/* ─── Load instances ──────────────────────────────────────── */
+function loadInstances() {
+  apiFetch('/instances').then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function(data) {
+    instances = data.instances || [];
+    render();
+    setBanner('ok');
+  }).catch(function(e) {
+    console.error('Load failed:', e);
+    setBanner('lost');
+  });
+}
+
+/* ─── WebSocket for real-time updates ─────────────────────── */
+var ws = null;
+var wsReconnectTimer = null;
+var wsReconnectDelay = 1000;
+
+function connectWS() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  var url = WS_BASE + '/api/v7/ws/v7?token=' + encodeURIComponent(TOKEN);
+  ws = new WebSocket(url);
+
+  ws.onopen = function() {
+    wsReconnectDelay = 1000;
+    setBanner('ok');
+  };
+
+  ws.onmessage = function(ev) {
+    try {
+      var msg = JSON.parse(ev.data);
+      if (msg.type === 'instances' && Array.isArray(msg.data)) {
+        instances = msg.data;
+        render();
+        setBanner('ok');
+      }
+    } catch(e) { console.error('WS parse error:', e); }
+  };
+
+  ws.onclose = function() {
+    setBanner('lost');
+    scheduleReconnect();
+  };
+
+  ws.onerror = function() {
+    setBanner('lost');
+  };
+}
+
+function scheduleReconnect() {
+  if (wsReconnectTimer) return;
+  wsReconnectTimer = setTimeout(function() {
+    wsReconnectTimer = null;
+    connectWS();
+    wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000);
+  }, wsReconnectDelay);
+}
+
+/* ─── Render ──────────────────────────────────────────────── */
+var COLS = [
+  { key: '_edit',           label: '' },
+  { key: 'name',            label: 'Name' },
+  { key: 'enabled_on',      label: 'Enabled On' },
+  { key: 'status',          label: 'Status' },
+  { key: 'version',         label: 'Cfg Ver' },
+  { key: 'running_version', label: 'Run Ver' },
+  { key: 'twe',             label: 'TWE' },
+  { key: 'running_on',      label: 'Running On' },
+  { key: 'note',            label: 'Note' },
+  { key: '_actions',         label: '' },
+];
+
+var STATUS_LABELS = {
+  synced:          'synced',
+  outdated:        'outdated',
+  activate_needed: 'activate needed',
+  stop_needed:     'stop needed',
+  disabled:        'disabled',
+};
+
+function render() {
+  var filtered = instances.slice();
+
+  // Search filter
+  if (filterSearch) {
+    var q = filterSearch.toLowerCase();
+    filtered = filtered.filter(function(r) {
+      return r.name.toLowerCase().indexOf(q) >= 0 ||
+        (r.note || '').toLowerCase().indexOf(q) >= 0 ||
+        (r.enabled_on || '').toLowerCase().indexOf(q) >= 0;
+    });
+  }
+
+  // Status filter
+  if (filterStatus !== 'All') {
+    if (filterStatus === 'active') {
+      filtered = filtered.filter(function(r) { return r.status !== 'disabled'; });
+    } else {
+      filtered = filtered.filter(function(r) { return r.status === filterStatus; });
+    }
+  }
+
+  // Sort: active first, then by selected column
+  filtered.sort(function(a, b) {
+    var actA = a.status === 'disabled' ? 1 : 0;
+    var actB = b.status === 'disabled' ? 1 : 0;
+    if (actA !== actB) return actA - actB;
+
+    var va = a[sort.col], vb = b[sort.col];
+    if (Array.isArray(va)) va = va.join(',');
+    if (Array.isArray(vb)) vb = vb.join(',');
+    if (va == null) va = '';
+    if (vb == null) vb = '';
+    if (typeof va === 'string') { va = va.toLowerCase(); vb = ('' + vb).toLowerCase(); }
+    var cmp = va < vb ? -1 : (va > vb ? 1 : 0);
+    if (cmp !== 0) return sort.asc ? cmp : -cmp;
+    return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1;
+  });
+
+  document.getElementById('instance-count').textContent =
+    filtered.length + '/' + instances.length;
+
+  // Header
+  var thead = document.getElementById('thead');
+  thead.innerHTML = '<tr>' + COLS.map(function(c) {
+    if (c.key === '_actions' || c.key === '_edit') return '<th></th>';
+    var arrow = sort.col === c.key ? (sort.asc ? ' \u25B2' : ' \u25BC') : '';
+    return '<th data-sort="' + c.key + '">' + c.label + '<span class="sort-arrow">' + arrow + '</span></th>';
+  }).join('') + '</tr>';
+
+  thead.querySelectorAll('th[data-sort]').forEach(function(th) {
+    th.onclick = function() {
+      var key = th.dataset.sort;
+      if (sort.col === key) sort.asc = !sort.asc;
+      else { sort.col = key; sort.asc = true; }
+      render();
+    };
+  });
+
+  // Body
+  var tbody = document.getElementById('tbody');
+  tbody.innerHTML = filtered.map(function(r) {
+    var inactive = r.status === 'disabled' ? ' row-inactive' : '';
+    var stClass = 'st-' + (r.status || 'disabled');
+    var stLabel = STATUS_LABELS[r.status] || r.status || '\u2013';
+    var runOn = (r.running_on || []).join(', ') || '\u2013';
+    return '<tr class="' + inactive + '">'
+      + '<td><button class="btn-edit" onclick="editInstance(\'' + esc(r.name) + '\')" title="Edit config">\u270F</button></td>'
+      + '<td>' + esc(r.name) + '</td>'
+      + '<td>' + esc(r.enabled_on || '\u2013') + '</td>'
+      + '<td class="' + stClass + '">' + stLabel + '</td>'
+      + '<td>' + (r.version != null ? r.version : '\u2013') + '</td>'
+      + '<td>' + (r.running_version != null ? r.running_version : '\u2013') + '</td>'
+      + '<td>' + esc(r.twe || '\u2013') + '</td>'
+      + '<td>' + esc(runOn) + '</td>'
+      + '<td>' + esc(r.note || '') + '</td>'
+      + '<td><button class="btn-act" onclick="activateOne(\'' + esc(r.name) + '\')">Activate</button></td>'
+      + '</tr>';
+  }).join('');
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+/* ─── Edit (navigate to Streamlit) ────────────────────────── */
+function editInstance(name) {
+  var url = ST_BASE + '/?target=V7_RUN&edit_instance=' + encodeURIComponent(name) + '&token=' + encodeURIComponent(TOKEN);
+  window.location.href = url;
+}
+
+/* ─── Activate ────────────────────────────────────────────── */
+function activateOne(name) {
+  toast('Activating ' + name + '\u2026', 'info');
+  apiFetch('/activate/' + encodeURIComponent(name), { method: 'POST' }).then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function(data) {
+    if (data.ok > 0) {
+      toast(name + ': ' + data.ok + '/' + (data.ok + (data.failed||0)) + ' hosts OK', 'ok');
+    } else {
+      toast(name + ': activation failed', 'err');
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) setTimeout(loadInstances, 2000);
+  }).catch(function(e) {
+    toast('Activate failed: ' + e.message, 'err');
+  });
+}
+
+function activateAll() {
+  var btn = document.getElementById('btn-activate-all');
+  btn.disabled = true;
+  btn.textContent = 'Activating\u2026';
+  toast('Activating all\u2026', 'info');
+  apiFetch('/activate-all', { method: 'POST' }).then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function(data) {
+    toast('Activated ' + data.activated + ' instances (' + data.ok + ' OK)', data.ok > 0 ? 'ok' : 'info');
+    if (!ws || ws.readyState !== WebSocket.OPEN) setTimeout(loadInstances, 2000);
+  }).catch(function(e) {
+    toast('Activate All failed: ' + e.message, 'err');
+  }).finally(function() {
+    btn.disabled = false;
+    btn.textContent = 'SSH Activate All';
+  });
+}
+
+/* ─── Toast ───────────────────────────────────────────────── */
+var toastTimer = null;
+function toast(msg, type) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast-' + (type || 'info');
+  el.style.display = 'block';
+  el.style.opacity = '1';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function() {
+    el.style.opacity = '0';
+    setTimeout(function() { el.style.display = 'none'; }, 300);
+  }, 4000);
+}
+
+/* ─── Banner ──────────────────────────────────────────────── */
+function setBanner(state) {
+  var el = document.getElementById('conn-banner');
+  el.className = 'conn-' + state;
+  if (state === 'ok') el.style.display = 'none';
+  else el.style.display = 'block';
+}
+
+/* ─── Event binding ───────────────────────────────────────── */
+document.getElementById('f-search').oninput = function(e) {
+  filterSearch = e.target.value;
+  render();
+};
+document.getElementById('f-status').onchange = function(e) {
+  filterStatus = e.target.value;
+  render();
+};
+
+/* ─── Auto-refresh via WebSocket ──────────────────────────── */
+loadInstances();  /* initial REST fetch for immediate data */
+connectWS();      /* then switch to real-time WebSocket */
+
+/* ─── Sidebar resize ─────────────────────────────────────── */
+(function () {
+  var resizeEl = document.getElementById('sidebar-resize');
+  var sidebar  = document.getElementById('sidebar');
+  var active   = false;
+  resizeEl.addEventListener('mousedown', function (e) {
+    e.preventDefault(); active = true; resizeEl.classList.add('active');
+  });
+  document.addEventListener('mousemove', function (e) {
+    if (!active) return;
+    var newW = e.clientX;
+    if (newW < 140) newW = 140;
+    if (newW > 300) newW = 300;
+    sidebar.style.width = newW + 'px';
+  });
+  document.addEventListener('mouseup', function () {
+    if (active) { active = false; resizeEl.classList.remove('active'); }
+  });
+}());
+</script>
+
+<!-- ── Shared nav bar (must come after var TOKEN/ST_BASE etc.) ── -->
+<script>
+window.PBGUI_NAV_CONFIG = {
+  subtitle: 'PBv7 RUN',
+  current:  'v7_run',
+  token:    TOKEN,
+  stBase:   ST_BASE,
+  apiBase:  API_BASE,
+  version:  PBGUI_VERSION,
+  serial:   PBGUI_SERIAL
+};
+</script>
+<script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+</body>
+</html>
