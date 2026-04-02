@@ -324,6 +324,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.71 (unreleased)
+- Fixed: PBv7 Run page no longer flickers on WebSocket updates — table uses diff-based DOM patching (only changed cells are updated) instead of replacing the entire table body; click events are no longer lost during updates
 - Fixed: WebSocket connections now use `wss://` when the page is served over HTTPS — previously hardcoded `ws://` caused "insecure WebSocket" errors for users behind an HTTPS reverse proxy (affected Services, PBRun, and Logging pages)
 - Fixed: PBRun now writes `0` to `running_version.txt` when stopping a v7 bot — triggers inotify watcher for immediate stop feedback in UI (previously no file write on stop, causing ~30s delay until next poll)
 - Fixed: `RunV7.stop()` now writes `0` to `running_version.txt` unconditionally — previously the write was inside the `if process:` block, so when a bot had already crashed (no process to kill), `running_version.txt` kept the old version number and the UI never showed "stopped"

@@ -371,7 +371,7 @@ function scheduleReconnect() {
   }, wsReconnectDelay);
 }
 
-/* ─── Render ──────────────────────────────────────────────── */
+/* ─── Render (diff-based: only update changed cells) ──────── */
 var COLS = [
   { key: '_edit',           label: '' },
   { key: 'name',            label: 'Name' },
@@ -392,6 +392,69 @@ var STATUS_LABELS = {
   stop_needed:     'stop needed',
   disabled:        'disabled',
 };
+
+var headerRendered = false;
+var rowMap = {};  /* name -> { tr, cells: string[] } */
+
+function buildCells(r) {
+  var stClass = 'st-' + (r.status || 'disabled');
+  var stLabel = STATUS_LABELS[r.status] || r.status || '\u2013';
+  var runOn = (r.running_on || []).join(', ') || '\u2013';
+  return [
+    '<button class="btn-edit" data-edit="' + esc(r.name) + '" title="Edit config">\u270F</button>',
+    esc(r.name),
+    esc(r.enabled_on || '\u2013'),
+    '<span class="' + stClass + '">' + stLabel + '</span>',
+    (r.version != null ? String(r.version) : '\u2013'),
+    (r.running_version != null ? String(r.running_version) : '\u2013'),
+    esc(r.twe || '\u2013'),
+    esc(runOn),
+    esc(r.note || ''),
+    '<button class="btn-act" data-activate="' + esc(r.name) + '">Activate</button>',
+  ];
+}
+
+function createTr(r, cells) {
+  var tr = document.createElement('tr');
+  tr.dataset.key = r.name;
+  if (r.status === 'disabled') tr.className = 'row-inactive';
+  cells.forEach(function(html) {
+    var td = document.createElement('td');
+    td.innerHTML = html;
+    tr.appendChild(td);
+  });
+  return tr;
+}
+
+function renderHeader() {
+  if (headerRendered) {
+    /* Just update sort arrows */
+    var ths = document.getElementById('thead').querySelectorAll('th[data-sort]');
+    ths.forEach(function(th) {
+      var arrow = th.querySelector('.sort-arrow');
+      if (arrow) {
+        arrow.textContent = sort.col === th.dataset.sort
+          ? (sort.asc ? ' \u25B2' : ' \u25BC') : '';
+      }
+    });
+    return;
+  }
+  var thead = document.getElementById('thead');
+  thead.innerHTML = '<tr>' + COLS.map(function(c) {
+    if (c.key === '_actions' || c.key === '_edit') return '<th></th>';
+    return '<th data-sort="' + c.key + '">' + c.label + '<span class="sort-arrow"></span></th>';
+  }).join('') + '</tr>';
+  thead.querySelectorAll('th[data-sort]').forEach(function(th) {
+    th.onclick = function() {
+      var key = th.dataset.sort;
+      if (sort.col === key) sort.asc = !sort.asc;
+      else { sort.col = key; sort.asc = true; }
+      render();
+    };
+  });
+  headerRendered = true;
+  renderHeader();  /* set initial arrows */
+}
 
 function render() {
   var filtered = instances.slice();
@@ -435,43 +498,48 @@ function render() {
   document.getElementById('instance-count').textContent =
     filtered.length + '/' + instances.length;
 
-  // Header
-  var thead = document.getElementById('thead');
-  thead.innerHTML = '<tr>' + COLS.map(function(c) {
-    if (c.key === '_actions' || c.key === '_edit') return '<th></th>';
-    var arrow = sort.col === c.key ? (sort.asc ? ' \u25B2' : ' \u25BC') : '';
-    return '<th data-sort="' + c.key + '">' + c.label + '<span class="sort-arrow">' + arrow + '</span></th>';
-  }).join('') + '</tr>';
+  renderHeader();
 
-  thead.querySelectorAll('th[data-sort]').forEach(function(th) {
-    th.onclick = function() {
-      var key = th.dataset.sort;
-      if (sort.col === key) sort.asc = !sort.asc;
-      else { sort.col = key; sort.asc = true; }
-      render();
-    };
+  // Body: diff-based update
+  var tbody = document.getElementById('tbody');
+  var usedKeys = {};
+
+  filtered.forEach(function(r, idx) {
+    usedKeys[r.name] = true;
+    var cells = buildCells(r);
+    var entry = rowMap[r.name];
+    var inactive = r.status === 'disabled';
+
+    if (entry) {
+      /* Update only changed cells */
+      var tds = entry.tr.children;
+      for (var i = 0; i < cells.length; i++) {
+        if (entry.cells[i] !== cells[i]) {
+          tds[i].innerHTML = cells[i];
+        }
+      }
+      entry.cells = cells;
+      /* Update row class */
+      entry.tr.className = inactive ? 'row-inactive' : '';
+      /* Move to correct position if needed */
+      if (tbody.children[idx] !== entry.tr) {
+        tbody.insertBefore(entry.tr, tbody.children[idx] || null);
+      }
+    } else {
+      /* New row */
+      var tr = createTr(r, cells);
+      rowMap[r.name] = { tr: tr, cells: cells };
+      tbody.insertBefore(tr, tbody.children[idx] || null);
+    }
   });
 
-  // Body
-  var tbody = document.getElementById('tbody');
-  tbody.innerHTML = filtered.map(function(r) {
-    var inactive = r.status === 'disabled' ? ' row-inactive' : '';
-    var stClass = 'st-' + (r.status || 'disabled');
-    var stLabel = STATUS_LABELS[r.status] || r.status || '\u2013';
-    var runOn = (r.running_on || []).join(', ') || '\u2013';
-    return '<tr class="' + inactive + '">'
-      + '<td><button class="btn-edit" onclick="editInstance(\'' + esc(r.name) + '\')" title="Edit config">\u270F</button></td>'
-      + '<td>' + esc(r.name) + '</td>'
-      + '<td>' + esc(r.enabled_on || '\u2013') + '</td>'
-      + '<td class="' + stClass + '">' + stLabel + '</td>'
-      + '<td>' + (r.version != null ? r.version : '\u2013') + '</td>'
-      + '<td>' + (r.running_version != null ? r.running_version : '\u2013') + '</td>'
-      + '<td>' + esc(r.twe || '\u2013') + '</td>'
-      + '<td>' + esc(runOn) + '</td>'
-      + '<td>' + esc(r.note || '') + '</td>'
-      + '<td><button class="btn-act" onclick="activateOne(\'' + esc(r.name) + '\')">Activate</button></td>'
-      + '</tr>';
-  }).join('');
+  /* Remove deleted rows */
+  Object.keys(rowMap).forEach(function(name) {
+    if (!usedKeys[name]) {
+      rowMap[name].tr.remove();
+      delete rowMap[name];
+    }
+  });
 }
 
 function esc(s) {
@@ -554,6 +622,14 @@ document.getElementById('f-status').onchange = function(e) {
   filterStatus = e.target.value;
   render();
 };
+
+/* Event delegation for table buttons (survives DOM diff) */
+document.getElementById('tbody').addEventListener('click', function(e) {
+  var btn = e.target.closest('[data-edit]');
+  if (btn) { editInstance(btn.dataset.edit); return; }
+  btn = e.target.closest('[data-activate]');
+  if (btn) { activateOne(btn.dataset.activate); return; }
+});
 
 /* ─── Auto-refresh via WebSocket ──────────────────────────── */
 loadInstances();  /* initial REST fetch for immediate data */
