@@ -327,6 +327,13 @@ tr:hover td { background: var(--bg3); }
 .err-none { color: var(--green); }
 .err-low  { color: var(--orange); }
 .err-high { color: var(--red); }
+.sync-synced  { color: var(--green); font-weight: 600; }
+.sync-outdated { color: var(--orange); font-weight: 600; }
+.sync-pending  { color: var(--orange); }
+.sync-stopped  { color: var(--fg2); }
+.sync-disabled { color: var(--red); }
+.sync-unknown  { color: var(--fg2); }
+tr.row-inactive td { opacity: 0.45; }
 
 /* ─── Services ─────────────────────────────────────────────── */
 .svc-grid {
@@ -729,7 +736,7 @@ var PBGUI_VERSION = "%%VERSION%%";
 var PBGUI_SERIAL  = "%%SERIAL%%";
 
 // Instance tab state
-let instSort = { col: 'Name', asc: true };
+let instSort = { col: 'name', asc: true };
 let compactMode = false;
 let compactInitialized = false;  // true after first state message applied
 let compactToggled = {};  // hosts manually toggled open/closed in compact mode
@@ -738,6 +745,7 @@ let hideIP = false;
 let instFilterServer = 'All';
 let instFilterVersion = 'All';
 let instFilterErrors = false;
+let instFilterOthers = false;
 
 // Logs tab state
 let logHost = '';
@@ -1112,9 +1120,19 @@ function toggleCard(header) {
 function renderInstances() {
   if (!state) return;
   const allInst = state.instances || {};
+  const allV7 = state.v7_instances || {};
 
-  // Build flat list
+  // Build v7 lookup: "host|name" → {cv, rv, eo, running}
+  const v7map = {};
+  for (const [host, list] of Object.entries(allV7)) {
+    for (const v of list) {
+      v7map[host + '|' + v.name] = v;
+    }
+  }
+
+  // Build flat list from running instances (monitors)
   const rows = [];
+  const seen = new Set();  // track "host|name" to avoid duplicates
   for (const [host, instances] of Object.entries(allInst)) {
     for (const inst of instances) {
       const vmap = {'7': 'V7', '6': 'Multi', 's': 'Single'};
@@ -1124,8 +1142,22 @@ function renderInstances() {
       const startTs = inst.st || 0;
       const startStr = startTs ? new Date(startTs * 1000).toISOString().slice(0,16).replace('T',' ') : '?';
 
+      const name = inst.u || '?';
+      const key = host + '|' + name;
+      seen.add(key);
+      const v7 = v7map[key];
+      const configVer = v7 ? v7.cv : null;
+      const runningVer = v7 ? v7.rv : null;
+      const enabledOn = v7 ? v7.eo : null;
+      let syncStatus = '';
+      if (v7) {
+        if (v7.cv === v7.rv && v7.running) syncStatus = 'synced';
+        else if (v7.running && v7.cv !== v7.rv) syncStatus = 'outdated';
+        else syncStatus = 'pending';
+      }
+
       rows.push({
-        host, version, name: inst.u || '?', start: startStr,
+        host, version, name, start: startStr,
         pbVersion: inst.p || '?',
         memMB: parseFloat(memMB), cpu: inst.c || 0,
         pnlToday: inst.pt || 0, fillsToday: inst.ct || 0,
@@ -1133,6 +1165,28 @@ function renderInstances() {
         errorsToday: inst.et || 0, errorsYesd: inst.ey || 0,
         tbsToday: inst.tt || 0, tbsYesd: inst.ty || 0,
         lastError: inst.e || '', lastTB: inst.t || '', lastInfo: inst.i || '',
+        configVer, runningVer, enabledOn, syncStatus,
+      });
+    }
+  }
+
+  // Add non-running v7 instances (stopped bots still deployed)
+  for (const [host, list] of Object.entries(allV7)) {
+    for (const v of list) {
+      const key = host + '|' + v.name;
+      if (seen.has(key)) continue;
+      let syncStatus = 'stopped';
+      if (v.eo === 'disabled') syncStatus = 'disabled';
+      rows.push({
+        host, version: 'V7', name: v.name, start: '–',
+        pbVersion: '7',
+        memMB: 0, cpu: 0,
+        pnlToday: 0, fillsToday: 0,
+        pnlYesterday: 0, fillsYesterday: 0,
+        errorsToday: 0, errorsYesd: 0,
+        tbsToday: 0, tbsYesd: 0,
+        lastError: '', lastTB: '', lastInfo: '',
+        configVer: v.cv, runningVer: v.rv, enabledOn: v.eo, syncStatus,
       });
     }
   }
@@ -1148,11 +1202,13 @@ function renderInstances() {
       <label>Server: <select id="f-server">${servers.map(s => `<option${s===instFilterServer?' selected':''}>${s}</option>`).join('')}</select></label>
       <label>Version: <select id="f-version">${versions.map(v => `<option${v===instFilterVersion?' selected':''}>${v}</option>`).join('')}</select></label>
       <label><input type="checkbox" id="f-errors" ${instFilterErrors?'checked':''}> Only with errors</label>
+      <label><input type="checkbox" id="f-others" ${instFilterOthers?'checked':''}> Show other</label>
     `;
     filtersEl.dataset.built = '1';
-    document.getElementById('f-server').onchange = (e) => { instFilterServer = e.target.value; renderInstances(); };
+    document.getElementById('f-server').onchange = (e) => { instFilterServer = e.target.value; filtersEl.dataset.built = ''; renderInstances(); };
     document.getElementById('f-version').onchange = (e) => { instFilterVersion = e.target.value; renderInstances(); };
     document.getElementById('f-errors').onchange = (e) => { instFilterErrors = e.target.checked; renderInstances(); };
+    document.getElementById('f-others').onchange = (e) => { instFilterOthers = e.target.checked; renderInstances(); };
   }
 
   // Apply filters
@@ -1160,14 +1216,25 @@ function renderInstances() {
   if (instFilterServer !== 'All') filtered = filtered.filter(r => r.host === instFilterServer);
   if (instFilterVersion !== 'All') filtered = filtered.filter(r => r.version === instFilterVersion);
   if (instFilterErrors) filtered = filtered.filter(r => r.errorsToday > 0 || r.tbsToday > 0);
+  if (!instFilterOthers) {
+    filtered = filtered.filter(r => r.syncStatus === 'synced' || r.syncStatus === 'outdated' || r.syncStatus === 'pending' || r.syncStatus === '');
+  }
 
-  // Sort
+  // Sort: running on selected server first, then alphabetical by name
   const col = instSort.col;
   filtered.sort((a, b) => {
+    // Primary: running instances first (syncStatus synced/outdated before stopped/disabled)
+    const runA = (a.syncStatus === 'synced' || a.syncStatus === 'outdated') ? 0 : 1;
+    const runB = (b.syncStatus === 'synced' || b.syncStatus === 'outdated') ? 0 : 1;
+    if (runA !== runB) return runA - runB;
+    // Secondary: user-chosen column
     let va = a[col], vb = b[col];
     if (typeof va === 'string') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
     let cmp = va < vb ? -1 : va > vb ? 1 : 0;
-    return instSort.asc ? cmp : -cmp;
+    if (cmp !== 0) return instSort.asc ? cmp : -cmp;
+    // Tertiary: alphabetical by name
+    const na = a.name.toLowerCase(), nb = b.name.toLowerCase();
+    return na < nb ? -1 : na > nb ? 1 : 0;
   });
 
   document.getElementById('inst-count').textContent = `${filtered.length} of ${rows.length} instances`;
@@ -1175,6 +1242,8 @@ function renderInstances() {
   // Table header
   const cols = [
     {key:'host',label:'Server'},{key:'version',label:'Version'},{key:'name',label:'Name'},
+    {key:'syncStatus',label:'Sync'},{key:'enabledOn',label:'Enabled On'},
+    {key:'configVer',label:'Cfg Ver'},{key:'runningVer',label:'Run Ver'},
     {key:'start',label:'Start'},{key:'memMB',label:'Mem (MB)'},{key:'cpu',label:'CPU %'},
     {key:'pnlToday',label:'PnL Today'},{key:'fillsToday',label:'Fills'},
     {key:'pnlYesterday',label:'PnL Yesd'},{key:'fillsYesterday',label:'Fills Y'},
@@ -1202,10 +1271,14 @@ function renderInstances() {
   // Table body
   const tbody = document.getElementById('inst-tbody');
   tbody.innerHTML = filtered.map((r, i) => `
-    <tr>
+    <tr class="${(r.syncStatus === 'stopped' || r.syncStatus === 'disabled') ? 'row-inactive' : ''}">
       <td>${esc(r.host)}</td>
       <td>${esc(r.version)}</td>
       <td>${esc(r.name)}</td>
+      <td class="sync-${r.syncStatus || 'unknown'}">${syncLabel(r.syncStatus)}</td>
+      <td>${esc(r.enabledOn || '–')}</td>
+      <td>${r.configVer !== null ? r.configVer : '–'}</td>
+      <td>${r.runningVer !== null ? r.runningVer : '–'}</td>
       <td>${esc(r.start)}</td>
       <td>${r.memMB.toFixed(1)}</td>
       <td>${r.cpu.toFixed(1)}</td>
@@ -1276,6 +1349,10 @@ function killInstance(host, name, pbVersion, el) {
 
 function pnlClass(v) { return v > 0 ? 'pnl-pos' : v < 0 ? 'pnl-neg' : 'pnl-zero'; }
 function errClass(v) { return v === 0 ? 'err-none' : v < 10 ? 'err-low' : 'err-high'; }
+function syncLabel(s) {
+  const map = {synced:'synced',outdated:'outdated',pending:'pending',stopped:'stopped',disabled:'disabled'};
+  return map[s] || '–';
+}
 function esc(s) {
   if (!s) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');

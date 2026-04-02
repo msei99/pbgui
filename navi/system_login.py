@@ -338,6 +338,10 @@ if _relay_target and _relay_token:
             if _vt(_relay_token):
                 st.session_state["password_correct"] = True
                 _relay_mini_init()
+                # Forward extra query params (e.g. edit_instance) to session_state
+                for _rk, _rv in st.query_params.items():
+                    if _rk not in ("target", "token"):
+                        st.session_state[f"_relay_{_rk}"] = _rv
                 # Only switch_page when the target is not this page itself
                 if _relay_target != "SYSTEM_LOGIN":
                     st.switch_page(_page_path)

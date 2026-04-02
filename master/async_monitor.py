@@ -109,23 +109,41 @@ try:
                     running_dirs.add(os.path.dirname(part))
 except Exception:
     pass
-result = []
-patterns = [
+monitors = []
+for pat in [
     os.path.join(PBGDIR, 'data/run_v7/*/monitor.json'),
     os.path.join(PBGDIR, 'data/multi/*/monitor.json'),
     os.path.join(PBGDIR, 'data/instances/*/monitor.json'),
-]
-for pat in patterns:
+]:
     for mf in glob.glob(pat):
-        inst_dir = os.path.dirname(mf)
-        if inst_dir not in running_dirs:
-            continue
-        try:
-            with open(mf) as f:
-                result.append(json.load(f))
-        except Exception:
-            pass
-print(json.dumps(result))
+        if os.path.dirname(mf) in running_dirs:
+            try:
+                with open(mf) as f:
+                    monitors.append(json.load(f))
+            except Exception:
+                pass
+v7 = []
+for cf in glob.glob(os.path.join(PBGDIR, 'data/run_v7/*/config.json')):
+    d = os.path.dirname(cf)
+    name = os.path.basename(d)
+    running = d in running_dirs
+    e = {'name': name, 'running': running}
+    try:
+        with open(cf) as f:
+            pbgui = json.load(f).get('pbgui', {})
+        e['cv'] = pbgui.get('version', 0)
+        e['eo'] = pbgui.get('enabled_on', 'disabled')
+    except Exception:
+        e['cv'] = 0
+        e['eo'] = 'unknown'
+    rv = os.path.join(d, 'running_version.txt')
+    try:
+        with open(rv) as f:
+            e['rv'] = int(f.read().strip())
+    except Exception:
+        e['rv'] = 0
+    v7.append(e)
+print(json.dumps([monitors, v7]))
 "'''
 
 
@@ -506,6 +524,26 @@ class VPSMonitor:
 
     # ── Instance collection ─────────────────────────────────
 
+    async def collect_instances_now(self, hostname: str):
+        """Public: immediately collect instances from a single VPS.
+
+        Unlike _collect_instances_all() this bypasses the interval gate
+        so callers (e.g. V7ConfigSyncWorker) can trigger a refresh right
+        after an activation signal.
+        """
+        entry = self.pool.get_connection(hostname)
+        if not entry:
+            _log(SERVICE, f"[instances] collect_instances_now: "
+                 f"{hostname} not connected", level="WARNING")
+            return
+        try:
+            await self._collect_instances(hostname)
+            _log(SERVICE, f"[instances] Immediate collect for {hostname}",
+                 level="DEBUG")
+        except Exception as e:
+            _log(SERVICE, f"[instances] Immediate collect error on "
+                 f"{hostname}: {e}", level="WARNING")
+
     async def _collect_instances_all(self):
         """Collect bot instance data from all connected VPS."""
         now = time.time()
@@ -536,11 +574,25 @@ class VPSMonitor:
                                      timeout=15)
         if result and result.exit_status == 0 and result.stdout:
             try:
-                instances = json.loads(result.stdout.strip())
-                self.store.update_instances(hostname, instances)
-                if self.debug_logging:
-                    _log(SERVICE, f"[instances] Collected {len(instances)} from "
-                         f"{hostname}", level="DEBUG")
+                parsed = json.loads(result.stdout.strip())
+                # New format: [monitors, v7_instances]
+                if (isinstance(parsed, list) and len(parsed) == 2
+                        and isinstance(parsed[0], list)
+                        and isinstance(parsed[1], list)):
+                    self.store.update_instances(hostname, parsed[0])
+                    self.store.update_v7_instances(hostname, parsed[1])
+                    if self.debug_logging:
+                        _log(SERVICE, f"[instances] Collected "
+                             f"{len(parsed[0])} monitors, "
+                             f"{len(parsed[1])} v7 instances from "
+                             f"{hostname}", level="DEBUG")
+                else:
+                    # Old format (plain list of monitors) — backwards compat
+                    self.store.update_instances(hostname, parsed)
+                    if self.debug_logging:
+                        _log(SERVICE, f"[instances] Collected "
+                             f"{len(parsed)} from {hostname} (old format)",
+                             level="DEBUG")
             except json.JSONDecodeError:
                 pass
 

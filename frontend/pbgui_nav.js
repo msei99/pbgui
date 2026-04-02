@@ -280,7 +280,8 @@
     'system_api_keys':   '/api/api-keys/main_page',
     'system_logging':     '/api/logging/main_page',
     'system_vps_monitor': '/api/vps/main_page',
-    'system_services':    '/api/services/main_page'
+    'system_services':    '/api/services/main_page',
+    'v7_run':             '/api/v7/main_page'
   };
 
   /* ════════════════════════════════════

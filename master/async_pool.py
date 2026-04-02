@@ -68,6 +68,16 @@ KEEPALIVE_INTERVAL = 10     # seconds — lower = faster dead-connection detecti
 RECONNECT_COOLDOWN = 30     # seconds
 MAX_RECONNECT_ATTEMPTS = 5
 BACKOFF_MULTIPLIER = 60     # seconds
+SFTP_RETRY_ATTEMPTS = 2    # total attempts for transient SFTP errors
+SFTP_RETRY_DELAY = 0.5     # seconds between retries
+
+
+def _is_transient_error(e: Exception) -> bool:
+    """Check if an error is transient (worth retrying)."""
+    return isinstance(e, (
+        ConnectionError, TimeoutError, OSError, BrokenPipeError,
+        asyncssh.ConnectionLost, asyncssh.DisconnectError,
+    ))
 
 
 class AsyncSSHPool:
@@ -85,18 +95,18 @@ class AsyncSSHPool:
 
     def __init__(self):
         self._connections: dict[str, VPSConnection] = {}
-        # Optional async callback fired after every successful connect/reconnect.
+        # Async callbacks fired after every successful connect/reconnect.
         # Signature: async callback(hostname: str) -> None
-        self._on_connect_callback: Optional[callable] = None
+        self._on_connect_callbacks: list[callable] = []
 
-    def set_on_connect_callback(self, callback) -> None:
+    def add_on_connect_callback(self, callback) -> None:
         """Register a callback invoked after every successful SSH connect.
 
         The callback receives the hostname as its only argument.
         It is called as a fire-and-forget asyncio task so it never blocks
-        the connect() call itself.
+        the connect() call itself.  Multiple callbacks can be registered.
         """
-        self._on_connect_callback = callback
+        self._on_connect_callbacks.append(callback)
 
     # ── Config loading ──────────────────────────────────────
 
@@ -187,11 +197,11 @@ class AsyncSSHPool:
             # Auto-read remote pbgui.ini and cache paths
             await self._cache_remote_ini(entry)
             _log(SERVICE, f"SSH connected to {hostname} ({cfg.ip})")
-            # Fire on-connect callback (e.g. start inotifywait watchers)
-            if self._on_connect_callback:
+            # Fire on-connect callbacks (e.g. start inotifywait watchers)
+            for _i, _cb in enumerate(self._on_connect_callbacks):
                 asyncio.create_task(
-                    self._on_connect_callback(hostname),
-                    name=f"on-connect-{hostname}",
+                    _cb(hostname),
+                    name=f"on-connect-{_i}-{hostname}",
                 )
             return True
 
@@ -426,58 +436,82 @@ class AsyncSSHPool:
 
     async def push_file(self, hostname: str, local_path: Path,
                         remote_path: str) -> bool:
-        """Push a local file to a remote path via SFTP."""
-        sftp = await self._open_sftp(hostname)
-        if not sftp:
-            return False
-        try:
-            await sftp.put(str(local_path), remote_path)
-            _log(SERVICE, f"[sftp] Pushed {local_path.name} → "
-                 f"{hostname}:{remote_path}", level="DEBUG")
-            return True
-        except Exception as e:
-            _log(SERVICE, f"[sftp] Push to {hostname}:{remote_path} failed: {e}",
-                 level="ERROR")
-            return False
-        finally:
-            sftp.exit()
+        """Push a local file to a remote path via SFTP (with retry)."""
+        for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
+            sftp = await self._open_sftp(hostname)
+            if not sftp:
+                return False
+            try:
+                await sftp.put(str(local_path), remote_path)
+                _log(SERVICE, f"[sftp] Pushed {local_path.name} → "
+                     f"{hostname}:{remote_path}", level="DEBUG")
+                return True
+            except Exception as e:
+                if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
+                    _log(SERVICE, f"[sftp] Push to {hostname}:{remote_path} "
+                         f"failed (attempt {attempt}): {e} — retrying",
+                         level="WARNING")
+                    await asyncio.sleep(SFTP_RETRY_DELAY)
+                    continue
+                _log(SERVICE, f"[sftp] Push to {hostname}:{remote_path} "
+                     f"failed: {e}", level="ERROR")
+                return False
+            finally:
+                sftp.exit()
+        return False
 
     async def pull_file(self, hostname: str, remote_path: str,
                         local_path: Path) -> bool:
-        """Pull a remote file to a local path via SFTP."""
-        sftp = await self._open_sftp(hostname)
-        if not sftp:
-            return False
-        try:
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            await sftp.get(remote_path, str(local_path))
-            _log(SERVICE, f"[sftp] Pulled {hostname}:{remote_path} → "
-                 f"{local_path}", level="DEBUG")
-            return True
-        except Exception as e:
-            _log(SERVICE, f"[sftp] Pull from {hostname}:{remote_path} "
-                 f"failed: {e}", level="ERROR")
-            return False
-        finally:
-            sftp.exit()
+        """Pull a remote file to a local path via SFTP (with retry)."""
+        for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
+            sftp = await self._open_sftp(hostname)
+            if not sftp:
+                return False
+            try:
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                await sftp.get(remote_path, str(local_path))
+                _log(SERVICE, f"[sftp] Pulled {hostname}:{remote_path} → "
+                     f"{local_path}", level="DEBUG")
+                return True
+            except Exception as e:
+                if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
+                    _log(SERVICE, f"[sftp] Pull from {hostname}:{remote_path} "
+                         f"failed (attempt {attempt}): {e} — retrying",
+                         level="WARNING")
+                    await asyncio.sleep(SFTP_RETRY_DELAY)
+                    continue
+                _log(SERVICE, f"[sftp] Pull from {hostname}:{remote_path} "
+                     f"failed: {e}", level="ERROR")
+                return False
+            finally:
+                sftp.exit()
+        return False
 
     async def read_remote_file(self, hostname: str,
                                remote_path: str) -> Optional[bytes]:
-        """Read a remote file's contents into memory."""
-        sftp = await self._open_sftp(hostname)
-        if not sftp:
-            return None
-        try:
-            async with sftp.open(remote_path, 'rb') as f:
-                return await f.read()
-        except asyncssh.SFTPNoSuchFile:
-            return None
-        except Exception as e:
-            _log(SERVICE, f"[sftp] Read {hostname}:{remote_path} failed: "
-                 f"{type(e).__name__}: {e}", level="ERROR")
-            return None
-        finally:
-            sftp.exit()
+        """Read a remote file's contents into memory (with retry)."""
+        for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
+            sftp = await self._open_sftp(hostname)
+            if not sftp:
+                return None
+            try:
+                async with sftp.open(remote_path, 'rb') as f:
+                    return await f.read()
+            except asyncssh.SFTPNoSuchFile:
+                return None
+            except Exception as e:
+                if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
+                    _log(SERVICE, f"[sftp] Read {hostname}:{remote_path} "
+                         f"failed (attempt {attempt}): {e} — retrying",
+                         level="WARNING")
+                    await asyncio.sleep(SFTP_RETRY_DELAY)
+                    continue
+                _log(SERVICE, f"[sftp] Read {hostname}:{remote_path} failed: "
+                     f"{type(e).__name__}: {e}", level="ERROR")
+                return None
+            finally:
+                sftp.exit()
+        return None
 
     async def list_remote_dir(self, hostname: str,
                               remote_path: str) -> list[str]:

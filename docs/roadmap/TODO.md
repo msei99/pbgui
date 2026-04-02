@@ -242,16 +242,17 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 
 **Design: Drei-Schichten-Modell**
 
-*Layer 1 – Background (immer aktiv, nur REST):*
-- History, Executions, Balances per REST-Polling → schreibt in SQLite DB.
-- KEIN privater WebSocket mehr im Hintergrund.
-- Schrittweise Migration: Orders-WS → Balance-WS → Positions-WS entfernen.
+*Layer 1 – Background (immer aktiv, nur REST):* ✅ umgesetzt
+- History, Executions, Balances, Positions, Orders per REST-Polling → schreibt in SQLite DB.
+- KEIN privater WebSocket im Hintergrund.
+- Alle WS-Loop-Methoden (`_order_poll_loop`, `_balance_poll_loop`, `_position_poll_loop`) sind Dead Code — nie gestartet.
 
 *Layer 2 – Live-Session (nur wenn Dashboard offen, ≤10 User):*
-- FastAPI öffnet Exchange-REST-Polling oder WS auf Anfrage.
+- FastAPI öffnet private WS-Verbindungen pro User auf Anfrage.
 - Lifecycle: open bei Dashboard-open, close nach 30s Inaktivität → RAM sofort frei.
 - Shared Preis-WS pro Exchange (kein Auth, ref-counted): offen solange min. 1 Session aktiv.
-- Nur HL-Positions wirklich via WS (Push-Events), alle anderen via REST alle 5–10s.
+- Positions + Balances via privatem WS (alle Exchanges unterstützen echtes Push): HL direkt, Bybit Topic `position`, Binance via `userDataStream` (listenKey alle 60s erneuern).
+- Orders via REST alle 5–10s (WS-Push für Orders lohnt sich nicht: seltene Änderungen, kein Latenz-Vorteil).
 - Daten leben im RAM, nicht in DB geschrieben.
 - Streamt via SSE an Browser.
 
@@ -262,22 +263,22 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 - ≤10 Selected Users: Live-Session starten.
 
 **Was WS wirklich braucht vs. nicht:**
-| Daten-Typ | WS sinnvoll? |
-|---|---|
-| Positionen (HL) | Ja – Push-Events |
-| Positionen (Binance/Bybit) | Nein – REST alle 5s genug |
-| Balances | Nein – REST alle 60s genug |
-| Orders | Nein – REST alle 10s genug |
-| Preise/Ticker | Ja – shared, kein Auth, hohe Frequenz |
-| History/PnL/Executions | Nein – immer aus DB |
+| Daten-Typ | WS sinnvoll? | Anmerkung |
+|---|---|---|
+| Positionen (HL) | Ja – Push-Events | `webData2` / user events |
+| Positionen (Bybit) | Ja – Push-Events | Private WS, Topic `position` |
+| Positionen (Binance) | Ja – Push-Events | `userDataStream` (listenKey, 60s-Keepalive) |
+| Balances | Ja – Push-Events | Alle Exchanges via privatem WS |
+| Orders | Nein – REST alle 5–10s | Seltene Änderungen, kein Latenz-Vorteil |
+| Preise/Ticker | Ja – shared, kein Auth, hohe Frequenz | Läuft bereits |
+| History/PnL/Executions | Nein – immer aus DB | |
 
 **Migrationsweg (schrittweise):**
-1. Orders-WS entfernen → REST-Combined-Poller übernimmt → sofort ~18 WS weniger
-2. Balance-WS entfernen → REST alle 60s → weitere ~18 WS weniger
-3. Positions-WS entfernen (nicht-HL) → REST alle 10s
+1. ~~Orders-WS entfernen → REST-Combined-Poller übernimmt~~ ✅ erledigt (Dead Code)
+2. ~~Balance-WS entfernen → REST Combined Poller~~ ✅ erledigt (Dead Code)
+3. ~~Positions-WS entfernen~~ ✅ erledigt (Dead Code, alle Exchanges via REST Combined)
 4. FastAPI Live-Session API + SSE-Stream bauen
-5. HL-Positions-WS in Live-Session integrieren
-6. Background komplett WS-frei
+5. Positions + Balances via privatem WS in Live-Session (alle Exchanges)
 
 **Done wenn**
 - PBData RAM unter 250 MB im normalen Betrieb.

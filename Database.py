@@ -195,6 +195,12 @@ class Database():
                     timestamp INTEGER NOT NULL,
                     balance REAL NOT NULL,
                     user TEXT NOT NULL UNIQUE
+            );""",
+            """CREATE TABLE IF NOT EXISTS history_scan_meta (
+                    user TEXT NOT NULL,
+                    exchange TEXT NOT NULL,
+                    last_scan_ts INTEGER NOT NULL,
+                    PRIMARY KEY (user, exchange)
             );"""
             ]
         # create a database connection
@@ -1093,14 +1099,61 @@ class Database():
             else:
                 _human_log('Database', f"DB update_balance error {e} data={balance}", level='ERROR')
 
+    # History scan lookback: when we already scanned up to `now` previously,
+    # the next cycle only needs to go back this far instead of starting from
+    # the oldest DB entry (which can be months ago for inactive bots).
+    _HISTORY_SCAN_LOOKBACK_MS = 6 * 60 * 60 * 1000  # 6 hours
+
+    def get_last_scan_ts(self, user_name: str, exchange: str):
+        """Return epoch ms up to which we last scanned history, or None."""
+        sql = 'SELECT last_scan_ts FROM history_scan_meta WHERE user = ? AND exchange = ?'
+        try:
+            with self._connect() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, (user_name, exchange))
+                row = cur.fetchone()
+                return int(row[0]) if row else None
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB get_last_scan_ts error {e} user={user_name}", level='ERROR', user=user_name)
+            return None
+
+    def set_last_scan_ts(self, user_name: str, exchange: str, ts_ms: int):
+        """Upsert the last scan timestamp for a user/exchange pair."""
+        sql = '''INSERT INTO history_scan_meta (user, exchange, last_scan_ts)
+                 VALUES (?, ?, ?)
+                 ON CONFLICT(user, exchange) DO UPDATE SET last_scan_ts = excluded.last_scan_ts'''
+        try:
+            with self._connect() as conn:
+                conn.execute(sql, (user_name, exchange, int(ts_ms)))
+                conn.commit()
+        except sqlite3.Error as e:
+            _human_log('Database', f"DB set_last_scan_ts error {e} user={user_name}", level='ERROR', user=user_name)
+
     def fetch_history(self, user: User):
-        """Fetch history from the exchange starting at the DB's last timestamp."""
+        """Fetch history from the exchange.
+
+        Uses history_scan_meta to avoid re-scanning months of empty history
+        for inactive bots.  On first run (no meta entry) falls back to the
+        last DB entry so the initial import is complete.
+        """
         exchange = Exchange(user.exchange, user)
         try:
-            since = self.find_last_timestamp(user) or 0
+            last_scan = self.get_last_scan_ts(user.name, user.exchange)
+            if last_scan is not None:
+                # We already scanned up to last_scan previously — only look back 6h
+                since = max(0, last_scan - self._HISTORY_SCAN_LOOKBACK_MS)
+            else:
+                # First scan for this user/exchange — start from last DB entry
+                try:
+                    since = self.find_last_timestamp(user) or 0
+                except Exception:
+                    since = 0
         except Exception:
-            since = 0
-        _human_log('Database', f"fetch_history: user={user.name} exchange={user.exchange} since={since} (type={type(since)})", level='INFO', user=user.name)
+            try:
+                since = self.find_last_timestamp(user) or 0
+            except Exception:
+                since = 0
+        _human_log('Database', f"fetch_history: user={user.name} exchange={user.exchange} since={since} last_scan={'cached' if last_scan is not None else 'initial'}", level='INFO', user=user.name)
         # Time the exchange.fetch_history call to help diagnose slow history polls.
         try:
             start_ts = time.time()
@@ -1111,10 +1164,14 @@ class Database():
             except Exception:
                 length = 0
             _human_log('Database', f"fetch_history DONE: user={user.name} exchange={user.exchange} duration_s={dur:.3f} items={length}", level='INFO', user=user.name)
+            # On success: record that we scanned up to now
+            now_ms = int(time.time() * 1000)
+            self.set_last_scan_ts(user.name, user.exchange, now_ms)
             return history
         except Exception as e:
             # Do not swallow exceptions here — re-raise so callers (and tests)
             # can inspect the full traceback and we can debug exchange.fetch_history.
+            # On error: do NOT update last_scan_ts so next cycle retries from same point.
             _human_log('Database', f"fetch_history ERROR for user={user.name} exchange={user.exchange}: {e}", level='ERROR', user=user.name)
             raise
         finally:

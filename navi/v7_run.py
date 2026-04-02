@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted, get_navi_paths, render_header_with_guide
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted, get_navi_paths, render_header_with_guide, redirect_to_fastapi_v7_run
 from RunV7 import V7Instances , V7Instance
 from BacktestV7 import BacktestV7Item
 from Config import BalanceCalculator
@@ -79,9 +79,7 @@ def edit_v7_instance():
     with st.sidebar:
         if st.button(":material/home:"):
             del st.session_state.edit_v7_instance
-            del st.session_state.v7_instances
-            st.session_state.v7_instances = V7Instances()
-            st.rerun()
+            redirect_to_fastapi_v7_run()
         if st.button(":material/save:"):
             v7_instance.save()
         if st.button("Import"):
@@ -225,4 +223,13 @@ if st.session_state.pbcoindata.api_error:
 if 'edit_v7_instance' in st.session_state:
     edit_v7_instance()
 else:
-    select_instance()
+    # Handle deep-link from FastAPI v7_run page (edit_instance query param or relay)
+    _edit_name = st.query_params.get("edit_instance", "") or st.session_state.pop("_relay_edit_instance", "")
+    if _edit_name and 'v7_instances' in st.session_state:
+        for _inst in st.session_state.v7_instances.instances:
+            if _inst.user == _edit_name:
+                st.session_state.edit_v7_instance = _inst
+                st.query_params.pop("edit_instance", None)
+                st.rerun()
+    # No edit mode — redirect to FastAPI list page
+    redirect_to_fastapi_v7_run()
