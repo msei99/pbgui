@@ -324,6 +324,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.71 (unreleased)
+- Fixed: After API server restart, all v7 instances showed wrong status (stop_needed/activate_needed) because no VPS data was available yet — new "collecting…" status shown until first VPS host reports; disabled instances now show "disabled" immediately instead of false "stop_needed"
 - New: PBv7 Run page "Add Instance" button in sidebar — navigates to Streamlit editor to create a new instance
 - New: PBv7 Run page "Delete" button per row — confirmation modal with running-on guard (cannot delete running instances); API endpoint `DELETE /instances/{name}`
 - Improved: Toast notifications now stay visible for 8 seconds instead of 4
