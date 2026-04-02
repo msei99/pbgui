@@ -998,6 +998,9 @@ class RunV7():
         if process:
             _log("PBRun", f"Stop: passivbot v7 {self.path}/config_run.json")
             _kill_process(process, f"v7 {self.path}")
+            # Write 0 to trigger inotify watcher → fast stop feedback in UI
+            version_file = Path(f'{self.path}/running_version.txt')
+            _atomic_write_text(version_file, "0")
 
     def start(self):
         if not self.is_running():
