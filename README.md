@@ -323,6 +323,29 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
+## v1.71 (unreleased)
+- Fixed: PBRun now writes `0` to `running_version.txt` when stopping a v7 bot — triggers inotify watcher for immediate stop feedback in UI (previously no file write on stop, causing ~30s delay until next poll)
+- Fixed: SSH Activate no longer restarts inotify watchers — persistent streaming watchers already detect config+running_version changes; the restart killed the watcher for ~14s causing `running_version.txt` events to be missed; added 8s delayed collect as fallback for edge cases
+- Improved: inotify watchers (V7ConfigSync + FileSyncWorker) converted from one-shot to persistent streaming — script no longer exits after each event; events are streamed continuously over a single SSH process, eliminating the 10-14s restart gap that caused `running_version.txt` changes to be missed after Activate
+- Fixed: inotify watcher scripts leaked orphan processes on VPS — when SSH reconnected, old Python processes kept running with inotify FDs open, exhausting the 128-instance limit (`errno=24 Too many open files`); scripts now use `select()` on stdin to detect SSH disconnect and exit cleanly
+- Improved: inotify watcher script now prints diagnostic stderr (errno, failed watch count) on failure — previously `sys.exit(1)` was silent, making it impossible to diagnose VPS-side issues
+- Improved: Watcher crash loop uses exponential backoff (5s → 10s → … → 5min cap) instead of fixed 30s retry — reduces log spam and SSH load when a host has a persistent inotify issue
+- Fixed: PBv7 Run page now shows correct status for locally running bots — enrichment reads PBRun's `status_v7.json` + `running_version.txt` so local instances appear as synced/outdated/stop_needed instead of always activate_needed
+- Fixed: SSH Activate now also writes a local `activate_*.cmd` for PBRun — previously only pushed to VPS, so local bots (enabled_on = master hostname) were never started/stopped from the FastAPI page
+- Improved: History polling for inactive bots now uses a `history_scan_meta` table to remember last scan time — subsequent polls only look back 6 hours instead of re-scanning months of empty history (reduces HL poll cycle from ~560s to ~84s for 28 users)
+- Improved: HL trade history and executions now use direct `userFillsByTime` HTTP POST instead of `fetch_my_trades` — eliminates 11s `load_markets()` call (669 HL markets including HIP-3) per user per cycle; expected per-user time: ~0.3s vs ~13s
+- Fixed: API server restart from web UI took ~2 min (blocking SSH connections during startup) — VPS monitor now starts in background so the server accepts requests immediately
+- Fixed: `Exchange.close()` failed silently when called from `asyncio.to_thread` — replaced invalid `asyncio.create_task()` call (requires coroutine context) with `asyncio.run_coroutine_threadsafe()` so async ccxt instances are properly closed from worker threads
+- New: Multi-master v7 config sync via inotify — when a config is pushed to VPS via SSH Activate, inotify watchers detect the change and pull higher-version configs to other connected Masters automatically (same pattern as api-keys sync)
+- New: Fast activation feedback — V7ConfigSyncWorker also watches `running_version.txt` via inotify; when PBRun writes it after bot start, an immediate `ps aux` instance collection is triggered (bypasses 30 s poll interval)
+- Improved: SFTP retry for transient errors — `push_file`, `pull_file`, `read_remote_file` and SSH Activate now retry once (500 ms delay) on connection-lost/timeout/socket errors before reporting failure
+- Improved: PBv7 Run page now uses WebSocket (`/ws/v7`) for real-time instance updates (~1 s latency) instead of 30 s REST polling; auto-reconnect with exponential backoff; REST fallback when WS is down
+- Fixed: SSH Activate failed with `'bytes' object has no attribute 'encode'` — SFTP files now opened in binary mode (`wb`)
+- New: VPSMonitor instance collection now reports all v7 instances (including stopped ones) with config_version, running_version, and enabled_on — foundation for SSH-based config sync
+- New: VPSMonitor instances table shows Sync status, Enabled On, Cfg Ver, and Run Ver columns for v7 instances; non-running v7 instances displayed as separate rows
+- New: PBv7 Run page migrated to FastAPI — sortable instance list with name/status/version/TWE/running-on, search and status filter, SSH Activate per instance and Activate All button; auto-refresh every 30s
+- Improved: PBv7 Run FastAPI page — proper navbar and resizable sidebar (matching other FastAPI pages); Edit button navigates to Streamlit config editor with token relay; Home button in editor returns to FastAPI list
+
 ## v1.70 (30-03-2026)
 - New: Services page — fully migrated to FastAPI; start/stop/restart all 7 PBGui daemons; per-service log viewer and settings panels; context-aware Guide overlay (📖) opens the matching service guide directly
 - New: Services page — PBData Status tab: per-user fetch table (Balances/Positions/Orders/History/Executions with fetch age and REST/WS colour coding) and Poller Metrics panel (HL rate-limit budget, Combined/History poller status, Market Data loop progress + run duration)
