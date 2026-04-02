@@ -190,6 +190,7 @@ tr:hover td { background: var(--bg3); }
 .st-activate_needed { color: var(--orange); }
 .st-stop_needed     { color: var(--red); }
 .st-disabled        { color: var(--text-dim); }
+.st-collecting      { color: var(--text-dim); font-style: italic; }
 tr.row-inactive td  { opacity: 0.45; }
 
 /* Inline buttons */
@@ -309,6 +310,7 @@ tr.row-inactive td  { opacity: 0.45; }
           <option value="activate_needed">Needs Activate</option>
           <option value="stop_needed">Stop Needed</option>
           <option value="disabled">Disabled</option>
+          <option value="collecting">Collecting</option>
         </select>
         <hr class="sb-sep">
         <button class="sb-btn" onclick="loadInstances()">&#x21bb; Refresh</button>
@@ -438,6 +440,7 @@ var STATUS_LABELS = {
   activate_needed: 'activate needed',
   stop_needed:     'stop needed',
   disabled:        'disabled',
+  collecting:      'collecting…',
 };
 
 var headerRendered = false;

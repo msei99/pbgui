@@ -144,6 +144,8 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
     """Merge VPSMonitor v7_instances data + local PBRun status."""
     store = _monitor.store if _monitor else None
     v7_data = store.v7_instances if store else {}  # {hostname: [{name, running, cv, rv, eo}, ...]}
+    # If no VPS host has reported yet, we're still in initial collection phase
+    any_vps_data = bool(v7_data)
 
     # Build lookup: name → best match across all hosts
     # "best" = the host where enabled_on matches, or any running host
@@ -201,12 +203,11 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
         if enabled == "disabled":
             if running_on:
                 inst["status"] = "stop_needed"
-            elif has_data:
-                # We have confirmed VPS data and the bot is not running
-                inst["status"] = "disabled"
             else:
-                # No VPS data yet — cannot confirm bot stopped; be conservative
-                inst["status"] = "stop_needed"
+                inst["status"] = "disabled"
+        elif not any_vps_data and not running_on:
+            # No VPS host has reported yet (server just restarted) — don't guess
+            inst["status"] = "collecting"
         elif enabled in running_on and version == rv:
             inst["status"] = "synced"
         elif running_on:
