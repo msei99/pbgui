@@ -18,6 +18,7 @@ import configparser
 import json
 import platform
 import shutil
+import time
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -99,6 +100,9 @@ WATCHER_MAX_BACKOFF = 300      # 5 minutes
 
 # Watchdog interval in seconds
 WATCHDOG_INTERVAL = 120
+
+# delete_*.cmd older than this (seconds) are cleaned up by any master
+DELETE_CMD_TTL = 3600  # 1 hour
 
 
 class V7ConfigSyncWorker:
@@ -414,6 +418,8 @@ class V7ConfigSyncWorker:
         action = cmd.get("action")
         instance_name = cmd.get("instance", "")
         deleted_by = cmd.get("deleted_by", "")
+        cmd_ts = cmd.get("ts", 0)
+        cmd_age = time.time() - cmd_ts if cmd_ts else float("inf")
 
         if action != "delete" or not instance_name:
             _log(SERVICE, f"[delete] {hostname}: ignoring malformed cmd "
@@ -427,11 +433,17 @@ class V7ConfigSyncWorker:
                  f"{instance_name!r} — skipping", level="ERROR")
             return
 
-        # 2) Self-skip: if we issued the delete, we already handled it
+        # 2) Self-skip: if we issued the delete, we already handled it.
+        #    Do NOT remove the cmd file — other masters still need to read it.
+        #    Clean up only after TTL so cmd files don't accumulate forever.
         if deleted_by == self._master_hostname:
-            _log(SERVICE, f"[delete] {hostname}/{instance_name}: "
-                 "skipping own delete command", level="DEBUG")
-            await self._remove_remote_cmd(hostname, remote_path)
+            if cmd_age > DELETE_CMD_TTL:
+                _log(SERVICE, f"[delete] {hostname}/{instance_name}: "
+                     "cleaning up stale own cmd file", level="DEBUG")
+                await self._remove_remote_cmd(hostname, remote_path)
+            else:
+                _log(SERVICE, f"[delete] {hostname}/{instance_name}: "
+                     "skipping own delete command", level="DEBUG")
             return
 
         # 3) Check if instance exists locally
