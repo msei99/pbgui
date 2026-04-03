@@ -880,6 +880,60 @@ def improve_best_binance_1m_for_coin(
                         "minutes_written": minutes_written,
                     })
 
+                # Binance monthly ZIPs sometimes omit the last few days of the month
+                # (archive created before month-end data was available).
+                # Fill any expected days missing from month_data via daily ZIPs.
+                if not _stop():
+                    num_days_in_month = calendar.monthrange(year, month)[1]
+                    month_start_d = date(year, month, 1)
+                    partial_missing: list[str] = []
+                    for _mi in range(num_days_in_month):
+                        _md = month_start_d + timedelta(days=_mi)
+                        if _md < d_start or _md > d_end:
+                            continue
+                        _md_s = _md.strftime("%Y-%m-%d")
+                        if _md_s not in month_data:
+                            partial_missing.append(_md_s)
+                    if partial_missing:
+                        append_exchange_download_log(
+                            STORAGE_EXCHANGE,
+                            f"[binance_best_1m] monthly_archive_incomplete={mk} coin={coin_u}"
+                            f" missing={len(partial_missing)} days; fetching via daily ZIPs",
+                            level="INFO",
+                        )
+                        pm_urls = {d: _archive_url_daily(symbol_code, d) for d in partial_missing}
+                        pm_bytes: dict[str, bytes | None] = asyncio.run(
+                            _async_download_bytes_bulk(list(pm_urls.values()))
+                        )
+                        for pm_day_s in partial_missing:
+                            if _stop():
+                                break
+                            _emit({"stage": "monthly_partial_fill", "month_key": mk, "day": pm_day_s, "done": days_checked})
+                            pm_raw = pm_bytes.get(pm_urls[pm_day_s])
+                            pm_candles: dict[int, dict[str, Any]] | None = None
+                            if pm_raw is not None:
+                                try:
+                                    pm_candles = _parse_zip_csv(pm_raw)
+                                except Exception as _e:
+                                    append_exchange_download_log(
+                                        STORAGE_EXCHANGE,
+                                        f"[binance_best_1m] monthly_partial_fill_parse_error"
+                                        f" {symbol_code} {pm_day_s} err={_e}",
+                                        level="WARNING",
+                                    )
+                            if pm_candles:
+                                w = _write_candles_for_day(coin_u, pm_day_s, pm_candles, overwrite=refetch)
+                                minutes_written += w
+                                archive_daily_downloaded += 1
+                            days_checked += 1
+                            _emit({
+                                "stage": "monthly_partial_fill",
+                                "month_key": mk,
+                                "day": pm_day_s,
+                                "done": days_checked,
+                                "minutes_written": minutes_written,
+                            })
+
     if _stop():
         return ImproveBest1mBinanceResult(
             coin=coin_u, end_date=d_end.strftime("%Y-%m-%d"),

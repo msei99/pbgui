@@ -65,8 +65,41 @@ def _hours_from_npz(path: Path) -> set[str]:
 
 def get_market_data_root_dir() -> Path:
     """Root directory for PBGui-managed market data."""
+    root = (Path(__file__).resolve().parent / "data" / "ohlcv").resolve()
+    _ensure_exchange_aliases(root)
+    return root
 
-    return (Path(__file__).resolve().parent / "data" / "ohlcv").resolve()
+
+# PB7 strips the "usdm"/"futures" suffix when looking up ohlcv_source_dir.
+# Maintain symlinks so both names resolve to the same data.
+_EXCHANGE_ALIASES: dict[str, str] = {
+    "binance": "binanceusdm",
+}
+_aliases_created: set[str] = set()
+
+
+def _ensure_exchange_aliases(root: Path) -> None:
+    """Create missing exchange-alias symlinks under *root* (e.g. binance -> binanceusdm).
+
+    PB7 normalises exchange names by stripping 'usdm'/'futures' suffixes, so it
+    looks for 'binance/' while PBGui stores data under 'binanceusdm/'. A symlink
+    lets both tools share the same files without moving data.
+    """
+    for alias, target_name in _EXCHANGE_ALIASES.items():
+        if alias in _aliases_created:
+            continue
+        target = root / target_name
+        link = root / alias
+        if not target.exists():
+            continue
+        if link.exists() or link.is_symlink():
+            _aliases_created.add(alias)
+            continue
+        try:
+            link.symlink_to(target)
+            _aliases_created.add(alias)
+        except OSError:
+            pass
 
 
 def get_exchange_raw_root_dir(exchange: str) -> Path:

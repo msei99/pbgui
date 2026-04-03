@@ -2,11 +2,14 @@
 FastAPI router for v7 instance list + SSH activate.
 
 Endpoints:
-    GET    /instances          → list all v7 instances with sync status
-    POST   /activate/{name}    → SSH-push config + activate_cmd to all VPS
-    POST   /activate-all       → SSH-push all instances that need activation
-    DELETE /instances/{name}    → delete instance (if not running)
-    GET    /main_page          → serve the standalone HTML page
+    GET    /instances                   → list all v7 instances with sync status
+    POST   /activate/{name}             → SSH-push config + activate_cmd to all VPS
+    POST   /activate-all                → SSH-push all instances that need activation
+    DELETE /instances/{name}             → backup + delete instance locally + on VPS
+    GET    /backups                      → list all instance backups
+    POST   /restore/{name}/{timestamp}   → restore instance from backup + SSH activate
+    DELETE /backups/{name}/{timestamp}    → delete a specific backup
+    GET    /main_page                    → serve the standalone HTML page
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import shutil
 import time
 import traceback
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -407,7 +411,11 @@ async def delete_instance(
     name: str,
     session: SessionToken = Depends(require_auth),
 ):
-    """Delete a v7 instance after checking it is not running anywhere."""
+    """Delete a v7 instance locally and on all connected VPS hosts."""
+    # Sanitise name — must be a plain directory name, no path traversal
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        raise HTTPException(status_code=400, detail="Invalid instance name")
+
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     if not instance_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"Instance '{name}' not found")
@@ -423,14 +431,218 @@ async def delete_instance(
             detail=f"Instance '{name}' is running on {hosts} — stop it first",
         )
 
-    # Delete the instance directory
+    # 1) Backup locally before delete
+    backup_ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    backup_dir = Path(PBGDIR) / "data" / "backup" / "v7" / name / backup_ts
+    try:
+        backup_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(instance_dir, backup_dir)
+        _log(SERVICE, f"Backed up '{name}' → {backup_dir}")
+    except OSError as e:
+        _log(SERVICE, f"Backup failed for '{name}': {e}", level="WARNING")
+        # Continue with delete even if backup fails — log the warning
+
+    # 2) Delete locally
     try:
         shutil.rmtree(instance_dir)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete locally: {e}")
 
-    _log(SERVICE, f"Deleted instance '{name}'")
-    return {"ok": True, "name": name}
+    _log(SERVICE, f"Deleted instance '{name}' locally")
+
+    # 3) Delete on all connected VPS hosts via SSH + write delete_*.cmd
+    vps_results = {}
+    if _monitor and _monitor.pool:
+        pool = _monitor.pool
+        connected = pool.connected_hosts()
+        remote_dir = f"{REMOTE_PBGUI_DIR}/data/run_v7/{name}"
+        master_name = _get_master_hostname()
+        delete_cmd_payload = json.dumps({
+            "action": "delete",
+            "instance": name,
+            "deleted_by": master_name,
+            "ts": time.time(),
+        })
+        cmd_filename = f"delete_{uuid.uuid4()}.cmd"
+
+        async def delete_on_host(hostname: str):
+            for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
+                try:
+                    # Remove instance directory
+                    result = await pool.run(
+                        hostname,
+                        f"rm -rf ~/{remote_dir}",
+                        timeout=15,
+                    )
+                    if result is None:
+                        return {"success": False, "error": "Not connected"}
+
+                    # Write delete_*.cmd so other masters pick it up
+                    sftp = await pool._open_sftp(hostname)
+                    if sftp:
+                        try:
+                            remote_cmd = f"{REMOTE_PBGUI_DIR}/data/cmd/{cmd_filename}"
+                            try:
+                                await sftp.makedirs(
+                                    f"{REMOTE_PBGUI_DIR}/data/cmd", exist_ok=True)
+                            except Exception:
+                                pass
+                            async with sftp.open(remote_cmd, "wb") as f:
+                                await f.write(delete_cmd_payload.encode("utf-8"))
+                        finally:
+                            sftp.exit()
+
+                    return {"success": True}
+                except Exception as e:
+                    if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
+                        _log(SERVICE, f"SSH delete {name} → {hostname} "
+                             f"attempt {attempt} failed: {e} — retrying",
+                             level="WARNING")
+                        await asyncio.sleep(SFTP_RETRY_DELAY)
+                        continue
+                    _log(SERVICE, f"SSH delete {name} → {hostname} failed: {e}",
+                         level="ERROR", meta={"traceback": traceback.format_exc()})
+                    return {"success": False, "error": str(e)}
+            return {"success": False, "error": "All retry attempts failed"}
+
+        tasks = {h: delete_on_host(h) for h in connected}
+        raw = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        for hostname, result in zip(tasks.keys(), raw):
+            if isinstance(result, Exception):
+                vps_results[hostname] = {"success": False, "error": str(result)}
+            else:
+                vps_results[hostname] = result
+
+        ok = sum(1 for r in vps_results.values() if r.get("success"))
+        fail = len(vps_results) - ok
+        _log(SERVICE, f"SSH delete '{name}': {ok}/{len(vps_results)} hosts OK"
+             + (f", {fail} failed" if fail else ""), level="INFO")
+
+        # 4) Delayed collect so UI refreshes
+        if ok > 0:
+            async def _delayed_collect():
+                await asyncio.sleep(3)
+                for h in connected:
+                    try:
+                        await _monitor.collect_instances_now(h)
+                    except Exception:
+                        pass
+            asyncio.create_task(
+                _delayed_collect(),
+                name=f"v7-delete-collect-{name}",
+            )
+
+    return {
+        "ok": True,
+        "name": name,
+        "hosts": vps_results,
+    }
+
+
+# ── Backup / Restore ────────────────────────────────────────
+
+def _validate_name(name: str) -> None:
+    """Raise 400 if name contains path traversal characters."""
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        raise HTTPException(status_code=400, detail="Invalid name")
+
+
+@router.get("/backups")
+def list_backups(session: SessionToken = Depends(require_auth)):
+    """List all v7 instance backups grouped by instance name."""
+    backup_root = Path(PBGDIR) / "data" / "backup" / "v7"
+    if not backup_root.is_dir():
+        return {"backups": []}
+    result = []
+    for inst_dir in sorted(backup_root.iterdir()):
+        if not inst_dir.is_dir():
+            continue
+        timestamps = sorted(
+            [d.name for d in inst_dir.iterdir() if d.is_dir()],
+            reverse=True,
+        )
+        if timestamps:
+            # Check if instance currently exists in run_v7
+            exists = (Path(PBGDIR) / "data" / "run_v7" / inst_dir.name).is_dir()
+            result.append({
+                "name": inst_dir.name,
+                "timestamps": timestamps,
+                "currently_exists": exists,
+            })
+    return {"backups": result}
+
+
+@router.post("/restore/{name}/{timestamp}")
+async def restore_instance(
+    name: str,
+    timestamp: str,
+    session: SessionToken = Depends(require_auth),
+):
+    """Restore a v7 instance from backup."""
+    _validate_name(name)
+    _validate_name(timestamp)
+
+    backup_dir = Path(PBGDIR) / "data" / "backup" / "v7" / name / timestamp
+    if not backup_dir.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Backup '{name}/{timestamp}' not found",
+        )
+
+    instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
+    if instance_dir.is_dir():
+        raise HTTPException(
+            status_code=409,
+            detail=f"Instance '{name}' already exists — delete it first or choose a different name",
+        )
+
+    # Copy backup to run_v7
+    try:
+        shutil.copytree(backup_dir, instance_dir)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Restore failed: {e}")
+
+    _log(SERVICE, f"Restored '{name}' from backup {timestamp}")
+
+    # Optionally push to VPS via SSH activate (same as normal activate)
+    result = await _ssh_activate_single(name)
+    return {
+        "ok": True,
+        "name": name,
+        "timestamp": timestamp,
+        "activate": result,
+    }
+
+
+@router.delete("/backups/{name}/{timestamp}")
+def delete_backup(
+    name: str,
+    timestamp: str,
+    session: SessionToken = Depends(require_auth),
+):
+    """Delete a specific backup."""
+    _validate_name(name)
+    _validate_name(timestamp)
+
+    backup_dir = Path(PBGDIR) / "data" / "backup" / "v7" / name / timestamp
+    if not backup_dir.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Backup '{name}/{timestamp}' not found",
+        )
+
+    try:
+        shutil.rmtree(backup_dir)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {e}")
+
+    # Clean up parent dir if empty
+    parent = backup_dir.parent
+    if parent.is_dir() and not any(parent.iterdir()):
+        parent.rmdir()
+
+    _log(SERVICE, f"Deleted backup '{name}/{timestamp}'")
+    return {"ok": True, "name": name, "timestamp": timestamp}
 
 
 @router.get("/main_page", response_class=HTMLResponse)
