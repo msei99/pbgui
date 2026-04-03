@@ -224,7 +224,7 @@ if 'edit_v7_instance' in st.session_state:
     edit_v7_instance()
 else:
     # Handle deep-link from FastAPI v7_run page (add_instance or edit_instance)
-    _add = st.query_params.get("add_instance", "")
+    _add = st.query_params.get("add_instance", "") or st.session_state.pop("_relay_add_instance", "")
     if _add == "1":
         st.query_params.pop("add_instance", None)
         st.session_state.edit_v7_instance = V7Instance()

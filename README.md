@@ -324,9 +324,16 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.71 (unreleased)
+- Fixed: PB7 backtest ignored `ohlcv_source_dir` for Binance and downloaded data from the exchange — PBGui stores data under `binanceusdm/` but PB7 looks for `binance/`; `get_market_data_root_dir()` now automatically creates a `binance -> binanceusdm` symlink on first use
+- Fixed: Binance monthly archive ZIPs sometimes miss the last few days of the month — downloader now detects incomplete months and fills missing days via individual daily ZIPs
+- Improved: Backup/Restore modal now uses native CSS `resize: both` + transparent drag handle overlay — same UX pattern as the Guide/Help dialog (draggable header, no custom JS resize grip); fixed double scrollbar (added `min-height: 0` on flex body, page scroll locked while panel is open)
+- Fixed: "Add Instance" button did not work — after navigating from FastAPI to Streamlit via relay, the `add_instance` query param was lost because `st.switch_page()` drops URL params; now reads from `_relay_add_instance` session state (same pattern as `edit_instance`)
 - Fixed: After API server restart, all v7 instances showed wrong status (stop_needed/activate_needed) because no VPS data was available yet — new "collecting…" status shown until first VPS host reports; disabled instances now show "disabled" immediately instead of false "stop_needed"
 - New: PBv7 Run page "Add Instance" button in sidebar — navigates to Streamlit editor to create a new instance
 - New: PBv7 Run page "Delete" button per row — confirmation modal with running-on guard (cannot delete running instances); API endpoint `DELETE /instances/{name}`
+- Improved: Delete instance now removes config on all connected VPS hosts via SSH (`rm -rf`) in parallel — no longer relies on PBRemote rclone sync cycle; toast shows per-host results; includes input validation and path traversal protection
+- New: Delete creates automatic backup before deletion — configs saved to `data/backup/v7/{name}/{timestamp}/`; writes `delete_*.cmd` on VPS so other masters can pick up the deletion
+- New: Backup & Restore UI — "Backups" button in sidebar opens modal listing all instance backups; restore copies config back to `run_v7/` and SSH-activates on all VPS; individual backups can be deleted; API endpoints `GET /backups`, `POST /restore/{name}/{ts}`, `DELETE /backups/{name}/{ts}`
 - Improved: Toast notifications now stay visible for 8 seconds instead of 4
 - Fixed: PBv7 Run page no longer flickers on WebSocket updates — table uses diff-based DOM patching (only changed cells are updated) instead of replacing the entire table body; click events are no longer lost during updates
 - Fixed: WebSocket connections now use `wss://` when the page is served over HTTPS — previously hardcoded `ws://` caused "insecure WebSocket" errors for users behind an HTTPS reverse proxy (affected Services, PBRun, and Logging pages)
@@ -336,6 +343,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Fixed: SSH Activate no longer restarts inotify watchers — persistent streaming watchers already detect config+running_version changes; the restart killed the watcher for ~14s causing `running_version.txt` events to be missed; added 8s delayed collect as fallback for edge cases
 - Improved: inotify watchers (V7ConfigSync + FileSyncWorker) converted from one-shot to persistent streaming — script no longer exits after each event; events are streamed continuously over a single SSH process, eliminating the 10-14s restart gap that caused `running_version.txt` changes to be missed after Activate
 - Fixed: inotify watcher scripts leaked orphan processes on VPS — when SSH reconnected, old Python processes kept running with inotify FDs open, exhausting the 128-instance limit (`errno=24 Too many open files`); scripts now use `select()` on stdin to detect SSH disconnect and exit cleanly
+- New: Multi-master delete propagation via inotify — V7ConfigSyncWorker now watches `data/cmd/delete_*.cmd` on VPS; when another master deletes an instance, the cmd file triggers instant local deletion with backup, running-instance guard, and self-skip (no polling delay)
 - Improved: inotify watcher script now prints diagnostic stderr (errno, failed watch count) on failure — previously `sys.exit(1)` was silent, making it impossible to diagnose VPS-side issues
 - Improved: Watcher crash loop uses exponential backoff (5s → 10s → … → 5min cap) instead of fixed 30s retry — reduces log spam and SSH load when a host has a persistent inotify issue
 - Fixed: PBv7 Run page now shows correct status for locally running bots — enrichment reads PBRun's `status_v7.json` + `running_version.txt` so local instances appear as synced/outdated/stop_needed instead of always activate_needed

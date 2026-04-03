@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import configparser
 import json
+import platform
+import shutil
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -37,7 +40,7 @@ LOCAL_RUN_V7 = Path(PBGDIR) / "data" / "run_v7"
 # returns EOF and the script exits cleanly (prevents orphan processes that
 # leak inotify instances).
 _INOTIFY_WATCHER_SCRIPT = """
-import ctypes, struct, os, sys, select
+import ctypes, struct, os, sys, select, fnmatch
 libc = ctypes.CDLL('libc.so.6', use_errno=True)
 IN_CLOSE_WRITE = 0x8
 fd = libc.inotify_init()
@@ -63,6 +66,14 @@ if not watches:
     sys.exit(2)
 if failed:
     print(f"partial: {len(watches)} watches OK, {failed} failed", file=sys.stderr, flush=True)
+def _matches(name, targets):
+    for t in targets:
+        if '*' in t or '?' in t:
+            if fnmatch.fnmatch(name, t):
+                return True
+        elif name == t:
+            return True
+    return False
 stdin_fd = sys.stdin.fileno()
 while True:
     ready, _, _ = select.select([fd, stdin_fd], [], [])
@@ -78,7 +89,7 @@ while True:
             o += 16 + nlen
             if mask & IN_CLOSE_WRITE and wid in watches:
                 d, targets = watches[wid]
-                if name in targets:
+                if _matches(name, targets):
                     print(os.path.join(d, name), flush=True)
 """.strip()
 
@@ -99,6 +110,16 @@ class V7ConfigSyncWorker:
         self.monitor = monitor
         self._watchers: dict[str, asyncio.Task] = {}
         self._watchdog: Optional[asyncio.Task] = None
+        self._master_hostname = self._read_master_hostname()
+
+    @staticmethod
+    def _read_master_hostname() -> str:
+        """Get the hostname of this master (from pbgui.ini or platform.node())."""
+        pb_config = configparser.ConfigParser()
+        pb_config.read(Path(PBGDIR) / "pbgui.ini")
+        if pb_config.has_option("main", "pbname"):
+            return pb_config.get("main", "pbname")
+        return platform.node()
 
     # ── Public API ───────────────────────────────────────────
 
@@ -167,12 +188,13 @@ class V7ConfigSyncWorker:
     # ── Discovery ────────────────────────────────────────────
 
     async def _discover_remote_configs(self, hostname: str) -> list[str]:
-        """List config.json + running_version.txt paths in run_v7/*/.
+        """List config.json + running_version.txt paths in run_v7/*/ and
+        delete_*.cmd in data/cmd/.
 
-        Both are watched via inotify:
-        - config.json changes  → pull newer config (multi-master sync)
-        - running_version.txt  → trigger immediate instance collection
-                                 (fast activation feedback)
+        Watched via inotify:
+        - config.json changes       → pull newer config (multi-master sync)
+        - running_version.txt        → trigger immediate instance collection
+        - delete_*.cmd in data/cmd/  → propagate instance deletion across masters
         """
         entries = await self.pool.list_remote_dir(hostname, REMOTE_RUN_V7)
         if not entries:
@@ -186,6 +208,11 @@ class V7ConfigSyncWorker:
             if await self.pool.stat_remote(hostname, dir_path):
                 paths.append(f"{dir_path}/config.json")
                 paths.append(f"{dir_path}/running_version.txt")
+        # Watch data/cmd/ for delete_*.cmd (glob pattern — inotify script
+        # uses fnmatch to match dynamic filenames like delete_{uuid}.cmd)
+        remote_cmd_dir = f"{REMOTE_PBGUI_DIR}/data/cmd"
+        if await self.pool.stat_remote(hostname, remote_cmd_dir):
+            paths.append(f"{remote_cmd_dir}/delete_*.cmd")
         return paths
 
     # ── Watcher loop ─────────────────────────────────────────
@@ -289,10 +316,18 @@ class V7ConfigSyncWorker:
                  meta={"traceback": traceback.format_exc()})
 
     async def _watcher_callback(self, hostname: str, changed_path: str):
-        """Handle an inotify event for config.json or running_version.txt."""
+        """Handle an inotify event for config.json, running_version.txt,
+        or delete_*.cmd."""
+        parts = changed_path.replace("\\", "/").split("/")
+        filename = parts[-1] if parts else ""
+
+        # ── delete_*.cmd → propagate instance deletion ───────
+        if "data/cmd" in changed_path and filename.startswith("delete_") and filename.endswith(".cmd"):
+            await self._process_delete_cmd(hostname, changed_path)
+            return
+
         # Extract instance name from path:
         # .../data/run_v7/{instance_name}/{filename}
-        parts = changed_path.replace("\\", "/").split("/")
         try:
             idx = parts.index("run_v7")
             instance_name = parts[idx + 1]
@@ -353,6 +388,108 @@ class V7ConfigSyncWorker:
         _log(SERVICE, f"[pull] {hostname}/{instance_name}: version "
              f"{local_version} → {remote_version}")
         await self._pull_config(instance_name, raw)
+
+    # ── Delete-cmd processing ────────────────────────────────
+
+    async def _process_delete_cmd(self, hostname: str, remote_path: str):
+        """Process a delete_*.cmd file from a VPS.
+
+        Reads the JSON payload, validates it, checks if the instance is
+        running locally, creates a backup, then deletes it.
+        """
+        # 1) Read command file from VPS
+        raw = await self.pool.read_remote_file(hostname, remote_path)
+        if raw is None:
+            _log(SERVICE, f"[delete] {hostname}: could not read {remote_path}",
+                 level="WARNING")
+            return
+
+        try:
+            cmd = json.loads(raw)
+        except json.JSONDecodeError as e:
+            _log(SERVICE, f"[delete] {hostname}: invalid JSON in "
+                 f"{remote_path}: {e}", level="ERROR")
+            return
+
+        action = cmd.get("action")
+        instance_name = cmd.get("instance", "")
+        deleted_by = cmd.get("deleted_by", "")
+
+        if action != "delete" or not instance_name:
+            _log(SERVICE, f"[delete] {hostname}: ignoring malformed cmd "
+                 f"(action={action!r}, instance={instance_name!r})",
+                 level="WARNING")
+            return
+
+        # Sanitise instance name — no path traversal
+        if "/" in instance_name or "\\" in instance_name or instance_name in (".", ".."):
+            _log(SERVICE, f"[delete] {hostname}: unsafe instance name "
+                 f"{instance_name!r} — skipping", level="ERROR")
+            return
+
+        # 2) Self-skip: if we issued the delete, we already handled it
+        if deleted_by == self._master_hostname:
+            _log(SERVICE, f"[delete] {hostname}/{instance_name}: "
+                 "skipping own delete command", level="DEBUG")
+            await self._remove_remote_cmd(hostname, remote_path)
+            return
+
+        # 3) Check if instance exists locally
+        instance_dir = LOCAL_RUN_V7 / instance_name
+        if not instance_dir.is_dir():
+            _log(SERVICE, f"[delete] {hostname}/{instance_name}: "
+                 "not present locally — nothing to delete", level="DEBUG")
+            await self._remove_remote_cmd(hostname, remote_path)
+            return
+
+        # 4) Check if instance is running locally
+        status_file = Path(PBGDIR) / "data" / "cmd" / "status_v7.json"
+        if status_file.is_file():
+            try:
+                status = json.loads(status_file.read_text(encoding="utf-8"))
+                inst_info = status.get("instances", {}).get(instance_name, {})
+                if inst_info.get("running"):
+                    _log(SERVICE, f"[delete] {hostname}/{instance_name}: "
+                         "instance is running locally — skipping delete",
+                         level="WARNING")
+                    return  # Don't remove cmd — retry on next watcher restart
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # 5) Backup before delete
+        from datetime import datetime
+        backup_ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        backup_dir = Path(PBGDIR) / "data" / "backup" / "v7" / instance_name / backup_ts
+        try:
+            backup_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(instance_dir, backup_dir)
+            _log(SERVICE, f"[delete] Backed up '{instance_name}' → {backup_dir}")
+        except OSError as e:
+            _log(SERVICE, f"[delete] Backup failed for '{instance_name}': {e}",
+                 level="WARNING")
+
+        # 6) Delete locally
+        try:
+            shutil.rmtree(instance_dir)
+            _log(SERVICE, f"[delete] Deleted instance '{instance_name}' "
+                 f"(propagated from {deleted_by} via {hostname})")
+        except OSError as e:
+            _log(SERVICE, f"[delete] Failed to delete '{instance_name}': {e}",
+                 level="ERROR")
+            return
+
+        # 7) Remove processed cmd file from VPS
+        await self._remove_remote_cmd(hostname, remote_path)
+
+    async def _remove_remote_cmd(self, hostname: str, remote_path: str):
+        """Remove a processed delete_*.cmd file from the VPS."""
+        try:
+            await self.pool.run(hostname, f"rm -f ~/{remote_path}", timeout=10)
+        except Exception as e:
+            _log(SERVICE, f"[delete] {hostname}: failed to remove "
+                 f"{remote_path}: {e}", level="WARNING")
+
+    # ── Config pull ──────────────────────────────────────────
 
     async def _pull_config(self, instance_name: str, content: bytes):
         """Write a config pulled from VPS to local data/run_v7/."""

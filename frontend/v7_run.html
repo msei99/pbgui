@@ -261,6 +261,92 @@ tr.row-inactive td  { opacity: 0.45; }
 .modal-btn-cancel:hover { background: var(--border); }
 .modal-btn-delete { background: var(--red); color: #fff; border-color: var(--red); }
 .modal-btn-delete:hover { opacity: 0.85; }
+.modal-btn-restore { background: var(--green); color: #fff; border-color: var(--green); }
+.modal-btn-restore:hover { opacity: 0.85; }
+
+/* Backup modal */
+.backup-list { text-align: left; }
+.backup-instance {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--sp-sm);
+  margin-bottom: var(--sp-sm);
+}
+.backup-instance:last-child { border-bottom: none; margin-bottom: 0; }
+.backup-instance-name {
+  font-weight: 700; font-size: var(--fs-base); color: var(--text);
+  margin-bottom: var(--sp-xs);
+  display: flex; align-items: center; gap: var(--sp-sm);
+}
+.backup-instance-name .badge-exists {
+  font-size: var(--fs-xs); background: var(--bg3); color: var(--text-dim);
+  border-radius: 3px; padding: 1px 6px;
+}
+.backup-ts-row {
+  display: flex; align-items: center; gap: var(--sp-sm);
+  padding: 4px var(--sp-sm); font-size: var(--fs-sm);
+  background: rgba(255,255,255,0.03);
+  border-radius: 4px;
+  margin: 2px 0;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 3px rgba(0,0,0,0.3);
+}
+.backup-ts-row .ts { color: var(--text-dim); flex: 1; }
+.backup-ts-row button {
+  padding: 2px var(--sp-sm); border-radius: 3px; border: 1px solid var(--border);
+  cursor: pointer; font-size: var(--fs-xs); font-weight: 600;
+}
+.backup-ts-row .btn-restore { background: var(--green); color: #fff; border-color: var(--green); }
+.backup-ts-row .btn-restore:hover { opacity: 0.85; }
+.backup-ts-row .btn-del-backup { background: transparent; color: var(--red); border-color: var(--red); }
+.backup-ts-row .btn-del-backup:hover { background: var(--red); color: #fff; }
+.backup-empty { color: var(--text-dim); font-size: var(--fs-sm); padding: var(--sp-md); text-align: center; }
+
+/* Backup modal — draggable panel */
+.backup-panel {
+  display: none;
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10001;
+  width: min(660px, 92vw);
+  height: min(580px, 88vh);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 20px 70px rgba(0,0,0,0.8);
+  flex-direction: column;
+}
+.backup-panel.visible { display: flex; }
+.backup-panel-drag {
+  position: absolute; top: 0; left: 0; right: 40px;
+  height: 44px; cursor: move; z-index: 2;
+}
+.backup-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--sp-sm) var(--sp-md);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--bg3);
+  border-radius: 8px 8px 0 0;
+  position: relative;
+}
+.backup-panel-header h3 { margin: 0; font-size: var(--fs-lg); }
+.backup-panel-close {
+  background: transparent; border: none; color: var(--text-dim);
+  font-size: 18px; cursor: pointer; padding: 2px 6px; line-height: 1;
+  border-radius: 4px; z-index: 3; position: relative;
+}
+.backup-panel-close:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.backup-panel-body {
+  flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-md);
+}
+.backup-panel-grip {
+  position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
+  cursor: nwse-resize; z-index: 4;
+  background: linear-gradient(135deg, transparent 30%, var(--text-dim) 30% 36%,
+    transparent 36% 56%, var(--text-dim) 56% 62%, transparent 62%);
+  opacity: 0.5; border-radius: 0 0 8px 0;
+}
+.backup-panel-grip:hover { opacity: 1; }
 
 /* Toast */
 #toast {
@@ -315,6 +401,7 @@ tr.row-inactive td  { opacity: 0.45; }
         <hr class="sb-sep">
         <button class="sb-btn" onclick="loadInstances()">&#x21bb; Refresh</button>
         <button class="sb-btn" onclick="addInstance()">&#x2795; Add Instance</button>
+        <button class="sb-btn" onclick="openBackups()">&#x1F4BE; Backups</button>
         <button class="sb-btn primary" id="btn-activate-all" onclick="activateAll()">SSH Activate All</button>
       </div>
     </div>
@@ -687,9 +774,19 @@ function executeDelete(name) {
       return res.json().then(function(d) { throw new Error(d.detail || 'HTTP ' + res.status); });
     }
     return res.json();
-  }).then(function() {
+  }).then(function(data) {
     closeModal();
-    toast(name + ' deleted', 'ok');
+    var hostInfo = '';
+    if (data.hosts) {
+      var ok = 0, fail = 0;
+      Object.keys(data.hosts).forEach(function(h) {
+        if (data.hosts[h].success) ok++; else fail++;
+      });
+      if (ok > 0 || fail > 0) {
+        hostInfo = ' (VPS: ' + ok + '/' + (ok + fail) + ' hosts OK' + (fail > 0 ? ', ' + fail + ' failed' : '') + ')';
+      }
+    }
+    toast(name + ' deleted' + hostInfo, 'ok');
     /* Remove from local state immediately */
     instances = instances.filter(function(r) { return r.name !== name; });
     if (rowMap[name]) { rowMap[name].tr.remove(); delete rowMap[name]; }
@@ -701,7 +798,160 @@ function executeDelete(name) {
 }
 
 function closeModal() {
+  document.body.style.overflow = '';
   document.getElementById('modal-root').innerHTML = '';
+}
+
+/* ─── Backup / Restore ────────────────────────────────────── */
+function openBackups() {
+  var root = document.getElementById('modal-root');
+  if (!document.getElementById('backup-panel')) {
+    root.innerHTML =
+      '\x3Cdiv class="backup-panel" id="backup-panel">' +
+        '\x3Cdiv class="backup-panel-drag" id="backup-drag">\x3C/div>' +
+        '\x3Cdiv class="backup-panel-header">' +
+          '\x3Ch3>Instance Backups\x3C/h3>' +
+          '\x3Cbutton class="backup-panel-close" id="backup-close">\u2715\x3C/button>' +
+        '\x3C/div>' +
+        '\x3Cdiv class="backup-panel-body">' +
+          '\x3Cdiv id="backup-content" class="backup-empty">Loading\u2026\x3C/div>' +
+        '\x3C/div>' +
+        '\x3Cdiv class="backup-panel-grip" id="backup-grip">\x3C/div>' +
+      '\x3C/div>';
+    document.getElementById('backup-close').onclick = closeModal;
+    (function() {
+      var panel = document.getElementById('backup-panel');
+      var handle = document.getElementById('backup-drag');
+      var startX, startY, boxL, boxT;
+      handle.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        var r = panel.getBoundingClientRect();
+        panel.style.transform = 'none';
+        panel.style.left = r.left + 'px'; panel.style.top = r.top + 'px';
+        startX = e.clientX; startY = e.clientY; boxL = r.left; boxT = r.top;
+        function onMove(ev) {
+          panel.style.left = (boxL + ev.clientX - startX) + 'px';
+          panel.style.top  = (boxT + ev.clientY - startY) + 'px';
+        }
+        function onUp() {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }());
+    /* resize grip */
+    (function() {
+      var panel = document.getElementById('backup-panel');
+      var grip = document.getElementById('backup-grip');
+      grip.addEventListener('mousedown', function(e) {
+        e.preventDefault(); e.stopPropagation();
+        var r = panel.getBoundingClientRect();
+        panel.style.transform = 'none';
+        panel.style.left = r.left + 'px'; panel.style.top = r.top + 'px';
+        var sX = e.clientX, sY = e.clientY, sW = r.width, sH = r.height;
+        var sL = r.left, sT = r.top;
+        function onMove(ev) {
+          var nW = Math.max(420, sW + ev.clientX - sX);
+          var nH = Math.max(260, sH + ev.clientY - sY);
+          panel.style.width  = nW + 'px';
+          panel.style.height = nH + 'px';
+          panel.style.left   = (sL - (nW - sW) / 2) + 'px';
+          panel.style.top    = (sT - (nH - sH) / 2) + 'px';
+        }
+        function onUp() {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }());
+  }
+  document.getElementById('backup-panel').classList.add('visible');
+  document.body.style.overflow = 'hidden';
+  fetchBackups();
+}
+
+function fetchBackups() {
+  apiFetch('/backups').then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function(data) {
+    var container = document.getElementById('backup-content');
+    if (!container) return;
+    var backups = data.backups || [];
+    if (backups.length === 0) {
+      container.className = 'backup-empty';
+      container.textContent = 'No backups available.';
+      return;
+    }
+    container.className = 'backup-list';
+    var html = '';
+    backups.forEach(function(b) {
+      html += '\x3Cdiv class="backup-instance">';
+      html += '\x3Cdiv class="backup-instance-name">' + esc(b.name);
+      if (b.currently_exists) html += ' \x3Cspan class="badge-exists">active\x3C/span>';
+      html += '\x3C/div>';
+      b.timestamps.forEach(function(ts) {
+        var canRestore = !b.currently_exists;
+        html += '\x3Cdiv class="backup-ts-row">';
+        html += '\x3Cspan class="ts">' + esc(ts) + '\x3C/span>';
+        if (canRestore) {
+          html += '\x3Cbutton class="btn-restore" data-restore-name="' + esc(b.name) + '" data-restore-ts="' + esc(ts) + '">Restore\x3C/button>';
+        }
+        html += '\x3Cbutton class="btn-del-backup" data-del-name="' + esc(b.name) + '" data-del-ts="' + esc(ts) + '">\u2716\x3C/button>';
+        html += '\x3C/div>';
+      });
+      html += '\x3C/div>';
+    });
+    container.innerHTML = html;
+    /* event delegation */
+    container.onclick = function(e) {
+      var btn = e.target.closest('[data-restore-name]');
+      if (btn) { doRestore(btn.dataset.restoreName, btn.dataset.restoreTs); return; }
+      btn = e.target.closest('[data-del-name]');
+      if (btn) { doDeleteBackup(btn.dataset.delName, btn.dataset.delTs); return; }
+    };
+  }).catch(function(e) {
+    var container = document.getElementById('backup-content');
+    if (container) { container.className = 'backup-empty'; container.textContent = 'Error: ' + e.message; }
+  });
+}
+
+function doRestore(name, ts) {
+  var url = '/restore/' + encodeURIComponent(name) + '/' + encodeURIComponent(ts);
+  apiFetch(url, { method: 'POST' }).then(function(res) {
+    if (res.status === 409) {
+      return res.json().then(function(d) { throw new Error(d.detail); });
+    }
+    if (!res.ok) {
+      return res.json().then(function(d) { throw new Error(d.detail || 'HTTP ' + res.status); });
+    }
+    return res.json();
+  }).then(function(data) {
+    toast(name + ' restored from ' + ts, 'ok');
+    closeModal();
+    loadInstances();
+  }).catch(function(e) {
+    toast('Restore failed: ' + e.message, 'err');
+  });
+}
+
+function doDeleteBackup(name, ts) {
+  var url = '/backups/' + encodeURIComponent(name) + '/' + encodeURIComponent(ts);
+  apiFetch(url, { method: 'DELETE' }).then(function(res) {
+    if (!res.ok) {
+      return res.json().then(function(d) { throw new Error(d.detail || 'HTTP ' + res.status); });
+    }
+    return res.json();
+  }).then(function() {
+    toast('Backup ' + name + '/' + ts + ' deleted', 'ok');
+    fetchBackups(); /* refresh list */
+  }).catch(function(e) {
+    toast('Delete backup failed: ' + e.message, 'err');
+  });
 }
 
 /* ─── Toast ───────────────────────────────────────────────── */
