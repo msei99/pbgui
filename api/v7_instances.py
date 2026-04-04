@@ -21,7 +21,6 @@ import platform
 import shutil
 import time
 import traceback
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -32,7 +31,9 @@ from fastapi.responses import HTMLResponse
 from api.auth import SessionToken, require_auth, validate_token
 from logging_helpers import human_log as _log
 from master.async_pool import SFTP_RETRY_ATTEMPTS, SFTP_RETRY_DELAY, _is_transient_error
-from pbgui_purefunc import PBGDIR
+from pbgui_purefunc import (PBGDIR, STATUS_V7_FILE, SYNC_EXCLUDE_FILES,
+                             update_status_v7 as _update_status_v7,
+                             get_syncable_files as _get_syncable_files)
 
 SERVICE = "V7Instances"
 
@@ -40,6 +41,14 @@ router = APIRouter()
 
 # Remote pbgui data dir (relative to home on VPS)
 REMOTE_PBGUI_DIR = "software/pbgui"
+
+# ── TEST GUARD — remove after testing ────────────────────────
+# Set to None to disable filtering (= sync all hosts/instances).
+# Set to a set of hostnames to limit SSH sync to those hosts.
+# Set to a set of instance names to limit which instances are synced.
+_TEST_HOSTS: set[str] | None = {"manibot72"}
+_TEST_INSTANCES: set[str] | None = {"bybit_SANDUSDT"}
+# ─────────────────────────────────────────────────────────────
 
 # ── Injected at startup ─────────────────────────────────────
 
@@ -222,93 +231,91 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
     return instances
 
 
-# ── SSH Activate ─────────────────────────────────────────────
+# ── SSH Sync ─────────────────────────────────────────────────
 
-async def _ssh_activate_single(name: str) -> dict:
-    """Write local activate cmd for PBRun + push config via SFTP to VPS."""
-    # Read local config
+async def _ssh_sync_instance(name: str) -> dict:
+    """Update status_v7.json + push config files via SFTP to all VPS.
+
+    This replaces the old activate_*.cmd mechanism. PBRun on VPS polls
+    status_v7.json for mtime changes and rescans accordingly.
+    """
+    # TEST GUARD — skip instances not in test set
+    if _TEST_INSTANCES is not None and name not in _TEST_INSTANCES:
+        _log(SERVICE, f"SSH sync '{name}' skipped (not in _TEST_INSTANCES)",
+             level="DEBUG")
+        return {"name": name, "skipped": True, "reason": "test_guard"}
+
     config_path = Path(f"{PBGDIR}/data/run_v7/{name}/config.json")
     if not config_path.is_file():
         return {"name": name, "error": f"Config not found: {name}"}
 
-    config_content = config_path.read_bytes()
+    # 1) Update local status_v7.json (bumps per-instance activate_ts)
+    _update_status_v7(name)
 
-    # Build activate cmd
-    activate_payload = json.dumps({
-        "instance": name,
-        "multi": False,
-        "version": "7",
-    })
+    # 2) Gather all syncable config files for this instance
+    sync_files = _get_syncable_files(name)
+    if not sync_files:
+        return {"name": name, "error": "No config files to sync"}
 
-    # Always write local activate cmd so PBRun picks it up
-    # (PBRun checks enabled_on itself and starts or stops accordingly)
-    local_activated = False
-    try:
-        local_cmd_dir = Path(PBGDIR) / "data" / "cmd"
-        local_cmd_dir.mkdir(parents=True, exist_ok=True)
-        local_cmd_file = local_cmd_dir / f"activate_{uuid.uuid4()}.cmd"
-        local_cmd_file.write_text(activate_payload, encoding="utf-8")
-        local_activated = True
-    except OSError as e:
-        _log(SERVICE, f"Failed to write local activate cmd for '{name}': {e}",
-             level="ERROR")
+    # 3) Read status_v7.json content for pushing
+    status_content = STATUS_V7_FILE.read_bytes() if STATUS_V7_FILE.is_file() else None
 
-    # Push to VPS via SSH
-    if not _monitor:
-        return {"name": name, "local": local_activated,
+    if not _monitor or not _monitor.pool:
+        return {"name": name, "local": True,
                 "hosts": {}, "ok": 0, "failed": 0}
 
     pool = _monitor.pool
     connected = pool.connected_hosts()
+    # TEST GUARD — filter to test hosts only
+    if _TEST_HOSTS is not None:
+        connected = [h for h in connected if h in _TEST_HOSTS]
     if not connected:
-        return {"name": name, "local": local_activated,
+        return {"name": name, "local": True,
                 "hosts": {}, "ok": 0, "failed": 0}
 
-    activate_cmd_bytes = activate_payload.encode("utf-8")
-    cmd_filename = f"activate_{uuid.uuid4()}.cmd"
     results = {}
 
     async def push_to_host(hostname: str):
         for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
-            entry = pool.get_connection(hostname)
-            if not entry:
-                return {"success": False, "error": "Not connected"}
-
             sftp = await pool._open_sftp(hostname)
             if not sftp:
                 return {"success": False, "error": "SFTP failed"}
 
             try:
-                remote_config = f"{REMOTE_PBGUI_DIR}/data/run_v7/{name}/config.json"
-                remote_cmd = f"{REMOTE_PBGUI_DIR}/data/cmd/{cmd_filename}"
+                remote_inst_dir = f"{REMOTE_PBGUI_DIR}/data/run_v7/{name}"
+                remote_cmd_dir = f"{REMOTE_PBGUI_DIR}/data/cmd"
 
                 # Ensure dirs exist
                 try:
-                    await sftp.makedirs(f"{REMOTE_PBGUI_DIR}/data/run_v7/{name}", exist_ok=True)
+                    await sftp.makedirs(remote_inst_dir, exist_ok=True)
                 except Exception:
                     pass
                 try:
-                    await sftp.makedirs(f"{REMOTE_PBGUI_DIR}/data/cmd", exist_ok=True)
+                    await sftp.makedirs(remote_cmd_dir, exist_ok=True)
                 except Exception:
                     pass
 
-                # Write config
-                async with sftp.open(remote_config, "wb") as f:
-                    await f.write(config_content)
+                # Write all config files
+                for filename, content in sync_files:
+                    async with sftp.open(
+                            f"{remote_inst_dir}/{filename}", "wb") as f:
+                        await f.write(content)
 
-                # Write activate cmd
-                async with sftp.open(remote_cmd, "wb") as f:
-                    await f.write(activate_cmd_bytes)
+                # Write status_v7.json
+                if status_content:
+                    async with sftp.open(
+                            f"{remote_cmd_dir}/status_v7.json", "wb") as f:
+                        await f.write(status_content)
 
                 return {"success": True}
             except Exception as e:
                 if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
-                    _log(SERVICE, f"SSH activate {name} → {hostname} "
+                    _log(SERVICE, f"SSH sync {name} → {hostname} "
                          f"failed (attempt {attempt}): {e} — retrying",
                          level="WARNING")
                     await asyncio.sleep(SFTP_RETRY_DELAY)
                     continue
-                _log(SERVICE, f"SSH activate {name} → {hostname} failed: {e}",
+                _log(SERVICE, f"SSH sync {name} → {hostname} failed: {e}",
                      level="ERROR", meta={"traceback": traceback.format_exc()})
                 return {"success": False, "error": str(e)}
             finally:
@@ -326,21 +333,13 @@ async def _ssh_activate_single(name: str) -> dict:
 
     ok = sum(1 for r in results.values() if r.get("success"))
     fail = len(results) - ok
-    _log(SERVICE, f"SSH activate '{name}': {ok}/{len(results)} hosts OK"
+    _log(SERVICE, f"SSH sync '{name}': {ok}/{len(results)} hosts OK"
          + (f", {fail} failed" if fail else ""), level="INFO")
 
-    # Note: no watcher restart needed — persistent streaming watchers
-    # already detect config.json + running_version.txt changes in
-    # existing instance dirs.  The watchdog handles discovery of
-    # entirely new instance directories every WATCHDOG_INTERVAL.
-
-    # Schedule a delayed collect on the enabled_on host as fallback —
-    # PBRun needs a few seconds to process the activate_cmd and write
-    # running_version.txt.  The inotify watcher should fire first, but
-    # this covers edge cases (watcher down, inotify race, etc.).
+    # Schedule a delayed collect on the enabled_on host as fallback
     if ok > 0 and _monitor:
         try:
-            cfg = json.loads(config_content)
+            cfg = json.loads(config_path.read_bytes())
             enabled_on = cfg.get("pbgui", {}).get("enabled_on", "")
         except (json.JSONDecodeError, ValueError):
             enabled_on = ""
@@ -356,7 +355,7 @@ async def _ssh_activate_single(name: str) -> dict:
                 name=f"v7-delayed-collect-{enabled_on}",
             )
 
-    return {"name": name, "local": local_activated,
+    return {"name": name, "local": True,
             "hosts": results, "ok": ok, "failed": fail}
 
 
@@ -375,11 +374,11 @@ async def activate_instance(
     name: str,
     session: SessionToken = Depends(require_auth),
 ):
-    """SSH-push config + activate command to all VPS for a single instance."""
+    """Sync config files + status_v7.json to all VPS for a single instance."""
     config_path = Path(f"{PBGDIR}/data/run_v7/{name}/config.json")
     if not config_path.is_file():
         raise HTTPException(status_code=404, detail=f"Instance '{name}' not found")
-    result = await _ssh_activate_single(name)
+    result = await _ssh_sync_instance(name)
     return result
 
 
@@ -399,7 +398,7 @@ async def activate_all(session: SessionToken = Depends(require_auth)):
 
     results = []
     for inst in to_activate:
-        r = await _ssh_activate_single(inst["name"])
+        r = await _ssh_sync_instance(inst["name"])
         results.append(r)
 
     ok = sum(1 for r in results if r.get("ok", 0) > 0)
@@ -450,20 +449,18 @@ async def delete_instance(
 
     _log(SERVICE, f"Deleted instance '{name}' locally")
 
-    # 3) Delete on all connected VPS hosts via SSH + write delete_*.cmd
+    # 3) Remove from status_v7.json and push to all VPS
+    _update_status_v7(name, remove=True)
+    status_content = STATUS_V7_FILE.read_bytes() if STATUS_V7_FILE.is_file() else None
+
     vps_results = {}
     if _monitor and _monitor.pool:
         pool = _monitor.pool
         connected = pool.connected_hosts()
+        # TEST GUARD — filter to test hosts only
+        if _TEST_HOSTS is not None:
+            connected = [h for h in connected if h in _TEST_HOSTS]
         remote_dir = f"{REMOTE_PBGUI_DIR}/data/run_v7/{name}"
-        master_name = _get_master_hostname()
-        delete_cmd_payload = json.dumps({
-            "action": "delete",
-            "instance": name,
-            "deleted_by": master_name,
-            "ts": time.time(),
-        })
-        cmd_filename = f"delete_{uuid.uuid4()}.cmd"
 
         async def delete_on_host(hostname: str):
             for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
@@ -477,20 +474,23 @@ async def delete_instance(
                     if result is None:
                         return {"success": False, "error": "Not connected"}
 
-                    # Write delete_*.cmd so other masters pick it up
-                    sftp = await pool._open_sftp(hostname)
-                    if sftp:
-                        try:
-                            remote_cmd = f"{REMOTE_PBGUI_DIR}/data/cmd/{cmd_filename}"
+                    # Push updated status_v7.json (instance removed)
+                    if status_content:
+                        sftp = await pool._open_sftp(hostname)
+                        if sftp:
                             try:
-                                await sftp.makedirs(
-                                    f"{REMOTE_PBGUI_DIR}/data/cmd", exist_ok=True)
-                            except Exception:
-                                pass
-                            async with sftp.open(remote_cmd, "wb") as f:
-                                await f.write(delete_cmd_payload.encode("utf-8"))
-                        finally:
-                            sftp.exit()
+                                remote_cmd_dir = f"{REMOTE_PBGUI_DIR}/data/cmd"
+                                try:
+                                    await sftp.makedirs(
+                                        remote_cmd_dir, exist_ok=True)
+                                except Exception:
+                                    pass
+                                async with sftp.open(
+                                        f"{remote_cmd_dir}/status_v7.json",
+                                        "wb") as f:
+                                    await f.write(status_content)
+                            finally:
+                                sftp.exit()
 
                     return {"success": True}
                 except Exception as e:
@@ -604,8 +604,8 @@ async def restore_instance(
 
     _log(SERVICE, f"Restored '{name}' from backup {timestamp}")
 
-    # Optionally push to VPS via SSH activate (same as normal activate)
-    result = await _ssh_activate_single(name)
+    # Push restored config to all VPS
+    result = await _ssh_sync_instance(name)
     return {
         "ok": True,
         "name": name,

@@ -1,5 +1,6 @@
 import streamlit as st
 from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted, get_navi_paths, render_header_with_guide, redirect_to_fastapi_v7_run
+from pbgui_purefunc import update_status_v7
 from RunV7 import V7Instances , V7Instance
 from BacktestV7 import BacktestV7Item
 from Config import BalanceCalculator
@@ -84,8 +85,6 @@ def edit_v7_instance():
             v7_instance.save()
         if st.button("Import"):
             v7_instance.import_instance()
-        if st.button("Activate"):
-            v7_instance.activate()
         if st.button("Backtest"):
             st.session_state.bt_v7 = BacktestV7Item(v7_instance.config.config_file)
             st.session_state.bt_v7.config.backtest.end_date = "now"
@@ -148,8 +147,8 @@ def select_instance():
         if st.button("Add"):
             st.session_state.edit_v7_instance = V7Instance()
             st.rerun()
-        if st.button("Activate ALL"):
-            v7_instances.activate_all()
+        if st.button("Sync ALL"):
+            v7_instances.sync_all()
             st.rerun()
     if not "ed_key" in st.session_state:
         st.session_state.ed_key = 0
@@ -230,11 +229,17 @@ else:
         st.session_state.edit_v7_instance = V7Instance()
         st.rerun()
     _edit_name = st.query_params.get("edit_instance", "") or st.session_state.pop("_relay_edit_instance", "")
-    if _edit_name and 'v7_instances' in st.session_state:
+    if _edit_name:
+        if 'v7_instances' not in st.session_state:
+            with st.spinner('Loading V7 Instances...'):
+                st.session_state.v7_instances = V7Instances()
         for _inst in st.session_state.v7_instances.instances:
             if _inst.user == _edit_name:
                 st.session_state.edit_v7_instance = _inst
                 st.query_params.pop("edit_instance", None)
                 st.rerun()
+        # Instance not found — show error instead of silently redirecting
+        st.error(f"Instance '{_edit_name}' not found.")
+        st.stop()
     # No edit mode — redirect to FastAPI list page
     redirect_to_fastapi_v7_run()

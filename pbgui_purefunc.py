@@ -2,6 +2,8 @@ import json
 import hjson
 import pprint
 import configparser
+import platform
+import time as _time
 from pathlib import Path
 import subprocess
 import re
@@ -138,6 +140,92 @@ PBGDIR = Path.cwd()
 PBGUI_VERSION = "v1.70"
 _serial_path = PBGDIR / 'api' / 'serial.txt'
 PBGUI_SERIAL = _serial_path.read_text().strip() if _serial_path.exists() else ''
+
+# ── status_v7.json constants ────────────────────────────────
+STATUS_V7_FILE = PBGDIR / "data" / "cmd" / "status_v7.json"
+SYNC_EXCLUDE_FILES = frozenset({
+    "ignored_coins.json", "approved_coins.json",
+    "config_run.json", "monitor.json", "running_version.txt",
+})
+
+
+def _get_pbname() -> str:
+    """Return this master's hostname from pbgui.ini or platform.node()."""
+    cfg = configparser.ConfigParser()
+    cfg.read(PBGDIR / "pbgui.ini")
+    if cfg.has_option("main", "pbname"):
+        return cfg.get("main", "pbname")
+    return platform.node()
+
+
+def update_status_v7(instance_name: str, *, remove: bool = False) -> None:
+    """Update status_v7.json: set per-instance activate_ts (or remove).
+
+    Pure function — no Streamlit / FastAPI dependencies.
+    PBRun polls this file for mtime changes.
+    """
+    master_name = _get_pbname()
+    now_ts = int(_time.time())
+
+    data = {"activate_ts": 0, "activate_pbname": master_name, "instances": {}}
+    if STATUS_V7_FILE.is_file():
+        try:
+            data = json.loads(STATUS_V7_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    if remove:
+        data["instances"].pop(instance_name, None)
+    else:
+        cfg_file = PBGDIR / "data" / "run_v7" / instance_name / "config.json"
+        version = 0
+        enabled_on = "disabled"
+        if cfg_file.is_file():
+            try:
+                cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+                version = cfg.get("pbgui", {}).get("version", 0)
+                enabled_on = cfg.get("pbgui", {}).get("enabled_on", "disabled")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        existing = data.get("instances", {}).get(instance_name, {})
+        data["instances"][instance_name] = {
+            "enabled_on": enabled_on,
+            "version": version,
+            "multi": None,
+            "running": existing.get("running", False),
+            "activate_ts": now_ts,
+        }
+
+    data["activate_ts"] = now_ts
+    data["activate_pbname"] = master_name
+
+    STATUS_V7_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = STATUS_V7_FILE.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(data, indent=4), encoding="utf-8")
+        tmp.replace(STATUS_V7_FILE)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+
+
+def get_syncable_files(instance_name: str) -> list[tuple[str, bytes]]:
+    """Return (filename, content) tuples for syncable config files.
+
+    Includes config.json + coin configs. Excludes runtime files.
+    """
+    inst_dir = PBGDIR / "data" / "run_v7" / instance_name
+    if not inst_dir.is_dir():
+        return []
+    files = []
+    for f in sorted(inst_dir.iterdir()):
+        if f.is_file() and f.suffix == ".json" and f.name not in SYNC_EXCLUDE_FILES:
+            try:
+                files.append((f.name, f.read_bytes()))
+            except OSError:
+                pass
+    return files
+
 
 def validateJSON(jsonData):
     try:

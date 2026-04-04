@@ -1914,8 +1914,8 @@ class PBRun():
         """Updates the v7 status based on the provided status file.
 
         Notes:
-            - Compares the new coming status timestamp with the current one.
-            - Installs new v7 versions or instances if some.
+            - Compares per-instance activate_ts for multi-master merge.
+            - Installs new v7 versions or instances if their activate_ts is newer.
             - Removes old *.json configuration files.
             - Removes instances not found in the new status.
 
@@ -1924,67 +1924,78 @@ class PBRun():
             rserver (str): Name of the remote server.
         """
         new_status = InstancesStatus(status_file)
-        if new_status.activate_ts > self.activate_v7_ts:
-            _log("PBRun", f"Activate v7: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=' ', timespec='seconds')}")
-            for instance in new_status:
-                status = self.instances_status_v7.find_name(instance.name)
-                if status is not None:
-                    if instance.version > status.version:
-                        # Backup old v7 config
-                        source = f'{self.v7_path}/{instance.name}'
-                        if Path(source).exists():
-                            destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{status.version}')
-                            if not destination.exists():
-                                destination.mkdir(parents=True)
-                            copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
-                        # Install new v7 version
-                        _log("PBRun", f"Install: New V7 Version {instance.name} Old: {status.version} New: {instance.version}")
-                        # Remove old *.json configs
-                        dest = f'{self.v7_path}/{instance.name}'
-                        p = str(Path(f'{dest}/*'))
-                        items = glob.glob(p)
-                        for item in items:
-                            if item.endswith('.json'):
-                                Path(item).unlink(missing_ok=True)
-                        src = f'{self.pbgdir}/data/remote/run_v7_{rserver}/{instance.name}'
-                        dest = f'{self.v7_path}/{instance.name}'
-                        if Path(src).exists():
-                            copytree(src, dest, dirs_exist_ok=True)
-                            self.watch_v7([f'{self.v7_path}/{instance.name}'])
-                else:
-                    # Install new v7 instance
-                    _log("PBRun", f"Install: New V7 Instance {instance.name} from {rserver} Version: {instance.version}")
+        _log("PBRun", f"Received v7 status from {new_status.activate_pbname}")
+        changed = False
+        for instance in new_status:
+            local = self.instances_status_v7.find_name(instance.name)
+            if local is not None:
+                # Per-instance activate_ts comparison for multi-master merge
+                if instance.activate_ts <= local.activate_ts:
+                    continue
+                if instance.version > local.version:
+                    # Backup old v7 config
+                    source = f'{self.v7_path}/{instance.name}'
+                    if Path(source).exists():
+                        destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{local.version}')
+                        if not destination.exists():
+                            destination.mkdir(parents=True)
+                        copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
+                    # Install new v7 version
+                    _log("PBRun", f"Install: New V7 Version {instance.name} Old: {local.version} New: {instance.version}")
+                    # Remove old *.json configs
+                    dest = f'{self.v7_path}/{instance.name}'
+                    p = str(Path(f'{dest}/*'))
+                    items = glob.glob(p)
+                    for item in items:
+                        if item.endswith('.json'):
+                            Path(item).unlink(missing_ok=True)
                     src = f'{self.pbgdir}/data/remote/run_v7_{rserver}/{instance.name}'
                     dest = f'{self.v7_path}/{instance.name}'
                     if Path(src).exists():
                         copytree(src, dest, dirs_exist_ok=True)
                         self.watch_v7([f'{self.v7_path}/{instance.name}'])
-            remove_instances = []
-            for instance in self.instances_status_v7:
-                status = new_status.find_name(instance.name)
-                if status is None:
-                    # Remove v7 instance
-                    _log("PBRun", f"Remove: V7 Instance {instance.name}")
-                    if instance.running:
-                        for v7 in self.run_v7:
-                            name = v7.path.split('/')[-1]
-                            if name == instance.name:
-                                v7.stop()
-                                self.remove_v7(v7)
-                    source = f'{self.v7_path}/{instance.name}'
-                    if Path(source).exists():
-                        # Backup v7 config
-                        date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                        destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{date}')
-                        if not destination.exists():
-                            destination.mkdir(parents=True)
-                        copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
-                        rmtree(source, ignore_errors=True)
-                        remove_instances.append(instance)
-            if remove_instances:
-                for instance in remove_instances:
-                    self.instances_status_v7.remove(instance)
-                self.instances_status_v7.save()
+                    changed = True
+                # Update local activate_ts even if version unchanged (enabled_on etc. may differ)
+                local.activate_ts = instance.activate_ts
+                local.enabled_on = instance.enabled_on
+                changed = True
+            else:
+                # Install new v7 instance
+                _log("PBRun", f"Install: New V7 Instance {instance.name} from {rserver} Version: {instance.version}")
+                src = f'{self.pbgdir}/data/remote/run_v7_{rserver}/{instance.name}'
+                dest = f'{self.v7_path}/{instance.name}'
+                if Path(src).exists():
+                    copytree(src, dest, dirs_exist_ok=True)
+                    self.watch_v7([f'{self.v7_path}/{instance.name}'])
+                changed = True
+        remove_instances = []
+        for instance in self.instances_status_v7:
+            status = new_status.find_name(instance.name)
+            if status is None:
+                # Remove v7 instance
+                _log("PBRun", f"Remove: V7 Instance {instance.name}")
+                if instance.running:
+                    for v7 in self.run_v7:
+                        name = v7.path.split('/')[-1]
+                        if name == instance.name:
+                            v7.stop()
+                            self.remove_v7(v7)
+                source = f'{self.v7_path}/{instance.name}'
+                if Path(source).exists():
+                    # Backup v7 config
+                    date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{date}')
+                    if not destination.exists():
+                        destination.mkdir(parents=True)
+                    copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
+                    rmtree(source, ignore_errors=True)
+                    remove_instances.append(instance)
+        if remove_instances:
+            for instance in remove_instances:
+                self.instances_status_v7.remove(instance)
+            changed = True
+        if changed:
+            self.instances_status_v7.save()
 
     def update_from_status_single(self, status_file : str, rserver : str):
         """Updates the single status based on the provided status file.
@@ -2131,6 +2142,9 @@ class PBRun():
                 self.instances_status.save()
 
     def activate(self, instance : str, multi : bool, version : int = None):
+        if version == "7":
+            _log("PBRun", f"activate() called for v7 instance {instance} — ignored, use update_status_v7() instead", level='WARNING')
+            return
         unique = str(uuid.uuid4())
         cfile = Path(f'{self.cmd_path}/activate_{unique}.cmd')
         cfg = ({
@@ -2142,7 +2156,8 @@ class PBRun():
     def has_activate(self):
         """Checks for activation file
 
-        This method scans for activation files (activate_*.cmd) in the cmd directory. If an activation file exists, it reads the new configuration to activate and start it as a single, multi or v7 config. Depending on the configuration, it either create a single, multi or v7 config using their respective watch function.
+        This method scans for activation files (activate_*.cmd) in the cmd directory.
+        For v6 multi/single configs only — v7 uses status_v7.json polling instead.
         """
         p = str(Path(f'{self.cmd_path}/activate_*.cmd'))
         activates = glob.glob(p)
@@ -2159,8 +2174,9 @@ class PBRun():
                     else:
                         version = None
                     if version == "7":
-                        self.update_activate_v7()
-                        self.watch_v7([f'{self.v7_path}/{instance}'])
+                        # v7 no longer uses activate_*.cmd — ignore and clean up
+                        cfile.unlink(missing_ok=True)
+                        continue
                     elif multi:
                         self.update_activate()
                         self.watch_multi([f'{self.multi_path}/{instance}'])
@@ -2171,6 +2187,12 @@ class PBRun():
                     self._bad_cmd_failures.pop(str(cfile), None)
                 except Exception as e:
                     self._handle_bad_cmd_file(cfile, "activate", e)
+
+    def has_status_v7_changed(self):
+        """Poll status_v7.json for mtime changes and rescan v7 instances."""
+        if self.instances_status_v7.has_new_status():
+            _log("PBRun", "status_v7.json changed — rescanning v7 instances")
+            self.watch_v7()
     
     def update_activate_v7(self):
         self._update_activate_timestamp("activate_v7_ts", "instances_status_v7")
@@ -2207,6 +2229,11 @@ class PBRun():
         Args:
             v7_instances (list, optional): List of v7-instance paths. Defaults to None.
         """
+        # Preserve per-instance activate_ts before clearing
+        old_ts = {}
+        for inst in self.instances_status_v7:
+            if inst.activate_ts:
+                old_ts[inst.name] = inst.activate_ts
         if not v7_instances:
             p = str(Path(f'{self.v7_path}/*'))
             v7_instances = glob.glob(p)
@@ -2242,6 +2269,8 @@ class PBRun():
                     run_v7.stop()
                 status.version = run_v7.version
                 status.enabled_on = run_v7.name
+                # Restore per-instance activate_ts
+                status.activate_ts = old_ts.get(status.name, 0)
                 self.instances_status_v7.add(status)
         # Remove non existing instances from status
         for instance in self.instances_status_v7:
@@ -2464,6 +2493,7 @@ def main():
             run.has_activate()
             run.has_update_status()
             if run.pb7dir:
+                run.has_status_v7_changed()
                 for run_v7 in run.run_v7:
                     run_v7.watch()
                     run_v7.watch_dynamic()

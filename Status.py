@@ -19,6 +19,7 @@ class InstanceStatus():
         self.multi = None
         self.enabled_on = None
         self.running = None
+        self.activate_ts = 0
 
 class InstancesStatus():
     """Stores every InstanceStatus into status.json, manages and loads them."""
@@ -133,10 +134,12 @@ class InstancesStatus():
                         for instance in instances["instances"]:
                             status = InstanceStatus()
                             status.name = instance
-                            status.version = instances["instances"][instance]["version"]
-                            status.multi = instances["instances"][instance]["multi"]
-                            status.enabled_on = instances["instances"][instance]["enabled_on"]
-                            status.running = instances["instances"][instance]["running"]
+                            idata = instances["instances"][instance]
+                            status.version = idata["version"]
+                            status.multi = idata["multi"]
+                            status.enabled_on = idata["enabled_on"]
+                            status.running = idata["running"]
+                            status.activate_ts = idata.get("activate_ts", 0)
                             self.add(status)
                 except json.JSONDecodeError as e:
                     _log('Status', f'Error loading status file: {e}', level='ERROR')
@@ -149,7 +152,8 @@ class InstancesStatus():
                 "enabled_on" : instance.enabled_on,
                 "version": instance.version,
                 "multi": instance.multi,
-                "running": instance.running
+                "running": instance.running,
+                "activate_ts": instance.activate_ts,
             })
         status = {
             "activate_ts": self.activate_ts,

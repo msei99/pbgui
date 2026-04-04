@@ -324,6 +324,14 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.71 (unreleased)
+- Redesign: V7 sync/activate system — `status_v7.json` is now the Single Source of Truth; removed `activate_*.cmd` and `delete_*.cmd` for v7; per-instance `activate_ts` with merge logic for multi-master sync; configs pushed to all VPS on Save (not just config.json — all coin configs too); PBRun polls `status_v7.json` mtime; other masters reconcile via inotify on VPS; shared helpers (`update_status_v7`, `get_syncable_files`) moved to `pbgui_purefunc.py`
+- Improved: PBRemote slave no longer syncs v7 data up — `sync_v7_up()` is master-only (configs + status_v7 + alive); slaves rely on `alive()` for heartbeat
+- Improved: Frontend "Activate" buttons renamed to "Sync" throughout PBv7 Run page (sidebar, per-row, status labels)
+- Removed: "SSH Sync All" and per-row "Sync" buttons from FastAPI v7 Run page — sync now happens automatically on save
+- Fixed: Clicking "Edit" on a v7 instance in FastAPI briefly opened Streamlit then bounced back — root cause: server-side interception in `build_navigation()` always redirected `v7_run` URL path to FastAPI, even when a relay param (`_relay_edit_instance` / `_relay_add_instance`) was active; relay is now checked before the redirect fires
+- Improved: `update_from_status_v7()` now uses per-instance `activate_ts` comparison instead of global — correct multi-master merge where each master can update different instances independently
+- Improved: `V7Instance.activate()`, `V7Instances.activate_all()`, and `restart_instance()` now use `update_status_v7()` instead of creating `activate_*.cmd` files
+- Improved: `PBRun.activate()` rejects version "7" with a warning log — prevents accidental creation of v7 `activate_*.cmd` files
 - Fixed: PB7 backtest ignored `ohlcv_source_dir` for Binance and downloaded data from the exchange — PBGui stores data under `binanceusdm/` but PB7 looks for `binance/`; `get_market_data_root_dir()` now automatically creates a `binance -> binanceusdm` symlink on first use
 - Fixed: Binance monthly archive ZIPs sometimes miss the last few days of the month — downloader now detects incomplete months and fills missing days via individual daily ZIPs
 - Improved: Backup/Restore modal now uses native CSS `resize: both` + transparent drag handle overlay — same UX pattern as the Guide/Help dialog (draggable header, no custom JS resize grip); fixed double scrollbar (added `min-height: 0` on flex body, page scroll locked while panel is open)

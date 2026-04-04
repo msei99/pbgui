@@ -391,23 +391,19 @@ def build_navigation():
             st.stop()
         redirect_to_fastapi_services()
 
-    # 1d. SERVER-SIDE interception for PBv7 Run.
-    if navi.url_path == "v7_run":
-        if not is_authenticted() or is_session_state_not_initialized():
-            st.switch_page(paths["SYSTEM_LOGIN"])
-            st.stop()
-        if _fa_ok and "api_token" in st.session_state:
-            _url = (f"http://{_bhost}:{_fa_port}/api/v7/main_page"
-                    f"?token={st.session_state['api_token']}"
-                    f"&st_base=http://{_bhost}:{_sport}")
-            st.html(f'<script>window.location.replace("{_url}");</script>',
-                    unsafe_allow_javascript=True)
-            st.stop()
-        redirect_to_fastapi_v7_run()
+    # 1d. PBv7 Run: NO server-side interception here.
+    # The page script (navi/v7_run.py) handles its own routing:
+    # - edit/add mode → stays in Streamlit
+    # - list mode → redirect_to_fastapi_v7_run() at end of script
+    # This avoids race conditions between interception and relay session state.
 
     # 2. CLIENT-SIDE history.pushState patch — injected into every other page so
-    #    clicking "Logging" in the Streamlit nav bar redirects directly to FastAPI
-    #    in the browser, without triggering a Streamlit page re-render at all.
+    #    clicking a nav-bar link for a FastAPI-only page is intercepted
+    #    synchronously in the browser — before Streamlit re-renders — giving a
+    #    true zero-flash direct navigation to FastAPI.
+    #    NOTE: v7_run is NOT included here because Streamlit still handles the
+    #    edit/add flows. The server-side interception (1d) handles the normal
+    #    nav-bar "Run" click; it's fast enough (just injects a redirect script).
     if _fa_ok and "api_token" in st.session_state:
         _token = st.session_state["api_token"]
         _log_url = (f"http://{_bhost}:{_fa_port}/api/logging/main_page"
@@ -416,14 +412,17 @@ def build_navigation():
                     f"?token={_token}&st_base=http://{_bhost}:{_sport}")
         _svc_url = (f"http://{_bhost}:{_fa_port}/api/services/main_page"
                     f"?token={_token}&st_base=http://{_bhost}:{_sport}")
-        _v7r_url = (f"http://{_bhost}:{_fa_port}/api/v7/main_page"
-                    f"?token={_token}&st_base=http://{_bhost}:{_sport}")
+        _fa_pages = (
+            f'"system_logging":"{_log_url}",'
+            f'"system_vps_monitor":"{_vps_url}",'
+            f'"system_services":"{_svc_url}"'
+        )
         # NOTE: no < or > inside this script — DOMPurify will not strip it.
         # _pbguiOk guard ensures pushState is only patched once per page load;
         # _pbguiFaPgs is updated every render so the token stays fresh.
         st.html(
             f'<script>'
-            f'window._pbguiFaPgs={{"system_logging":"{_log_url}","system_vps_monitor":"{_vps_url}","system_services":"{_svc_url}","v7_run":"{_v7r_url}"}};'
+            f'window._pbguiFaPgs={{{_fa_pages}}};'
             f'if(!history._pbguiOk){{'
             f'history._pbguiOk=true;'
             f'var _pp=history.pushState,_pr=history.replaceState;'
