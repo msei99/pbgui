@@ -2193,6 +2193,9 @@ class PBRun():
         if self.instances_status_v7.has_new_status():
             _log("PBRun", "status_v7.json changed — rescanning v7 instances")
             self.watch_v7()
+            # watch_v7() saves status_v7.json which changes its mtime.
+            # Update our cached mtime so we don't re-trigger on our own save.
+            self.instances_status_v7.update_status()
     
     def update_activate_v7(self):
         self._update_activate_timestamp("activate_v7_ts", "instances_status_v7")
