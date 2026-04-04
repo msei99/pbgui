@@ -2697,7 +2697,6 @@
         if (!md5_detail || Object.keys(md5_detail).length === 0) return "";
         var parts = [];
         if ("pb7" in md5_detail) parts.push("PB7: " + (md5_detail.pb7 === true ? "\u2705" : md5_detail.pb7 === false ? "\u274C mismatch" : "\u2753 unknown"));
-        if ("pb6" in md5_detail) parts.push("PB6: " + (md5_detail.pb6 === true ? "\u2705" : md5_detail.pb6 === false ? "\u274C mismatch" : "\u2753 unknown"));
         return parts.join(" | ");
     }
 
@@ -3020,7 +3019,7 @@
                     var dateStr = now.toLocaleString('de-DE', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
                     var detail = r.error ? ' (' + escapeHtml(r.error) + ')' :
                         r.dry_run ? ' (' + (r.bots_affected || 0) + ' bots)' :
-                        [r.pushed_v7 && 'V7\u2713', r.pushed_v6 && 'V6\u2713',
+                        [r.pushed_v7 && 'V7\u2713',
                          r.bots_killed > 0 && r.bots_killed + ' killed'].filter(Boolean).join(' ');
                     lpEl.innerHTML =
                         '<span style="color:' + clr + '; font-weight:700; font-size:var(--fs-xs);">' + lbl + '</span>' +
@@ -3032,8 +3031,7 @@
             if (dryRun) {
                 var rows = Object.keys(results).map(function(h) {
                     var r = results[h];
-                    var dirs = [r.pb7dir && 'V7: ' + escapeHtml(r.pb7dir),
-                                r.pb6dir && 'V6: ' + escapeHtml(r.pb6dir)].filter(Boolean).join('<br>');
+                    var dirs = [r.pb7dir && 'V7: ' + escapeHtml(r.pb7dir)].filter(Boolean).join('<br>');
                     return '<tr><td>' + escapeHtml(h) + '</td>' +
                         '<td style="color:#64748b;font-size:var(--fs-xs)">' + (dirs || '—') + '</td>' +
                         '<td style="text-align:right;color:#93c5fd">' + (r.serial || '—') + '</td>' +
@@ -3266,7 +3264,6 @@
             });
             function _backupLabel(fn) {
                 if (fn === '_current_pb7') return 'Current (live) pb7';
-                if (fn === '_current_pb6') return 'Current (live) pb6';
                 return fn;
             }
             document.getElementById("diffTitle").textContent =

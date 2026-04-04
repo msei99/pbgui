@@ -97,15 +97,6 @@ def migrate_ini_sections():
         with open(str(ini_path), "w") as f:
             cfg.write(f)
 
-def pbdir(): return load_ini("main", "pbdir")
-
-def pbvenv(): return load_ini("main", "pbvenv")
-
-def is_pb_installed():
-    if Path(f"{pbdir()}/passivbot.py").exists():
-        return True
-    return False
-
 def pb7dir(): return load_ini("main", "pb7dir")
 
 def pb7venv(): return load_ini("main", "pb7venv")

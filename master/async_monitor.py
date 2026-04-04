@@ -99,21 +99,11 @@ try:
             for part in line.split():
                 if part.endswith('/config_run.json'):
                     running_dirs.add(os.path.dirname(part))
-        elif 'passivbot.py' in line and 'config.json' in line:
-            for part in line.split():
-                if part.endswith('/config.json'):
-                    running_dirs.add(os.path.dirname(part))
-        elif 'passivbot_multi.py' in line and 'multi_run.hjson' in line:
-            for part in line.split():
-                if part.endswith('/multi_run.hjson'):
-                    running_dirs.add(os.path.dirname(part))
 except Exception:
     pass
 monitors = []
 for pat in [
     os.path.join(PBGDIR, 'data/run_v7/*/monitor.json'),
-    os.path.join(PBGDIR, 'data/multi/*/monitor.json'),
-    os.path.join(PBGDIR, 'data/instances/*/monitor.json'),
 ]:
     for mf in glob.glob(pat):
         if os.path.dirname(mf) in running_dirs:
@@ -817,16 +807,7 @@ class VPSMonitor:
     async def kill_instance(self, hostname: str, name: str,
                             pb_version: str = "") -> dict:
         """Kill a bot instance on a VPS."""
-        if pb_version == "7":
-            grep_pattern = f"main.py.*{name}"
-        elif pb_version == "6":
-            grep_pattern = f"passivbot_multi.py.*{name}"
-        elif pb_version == "s":
-            grep_pattern = f"passivbot.py.*{name}"
-        else:
-            grep_pattern = (
-                f"(main.py|passivbot_multi.py|passivbot.py).*{name}"
-            )
+        grep_pattern = f"main.py.*{name}"
 
         kill_cmd = (
             f"pid=$(ps aux | grep -E '{grep_pattern}' | grep -v grep "

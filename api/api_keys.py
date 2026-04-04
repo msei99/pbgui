@@ -131,7 +131,7 @@ class BackupEntry(BaseModel):
     filename: str
     ts: str          # ISO datetime (from file mtime)
     size_kb: float
-    target: str      # "pb7" or "pb6"
+    target: str      # "pb7"
 
 
 class DiffRequest(BaseModel):
@@ -167,32 +167,10 @@ def _is_user_in_use(user_name: str) -> bool:
 def _get_in_use_names() -> set[str]:
     """Collect all user names referenced by any instance (built once).
 
-    Multi and V7 instance directories are named after the user directly,
+    V7 instance directories are named after the user directly,
     so we scan the filesystem to stay Streamlit-session-state-free.
-    Instances (PB6) still use the Instance loader (directory names include
-    symbol, so we need the parsed 'user' field).
     """
     names: set[str] = set()
-
-    # PB6 single instances — directory name is {user}_{symbol}_{type}
-    try:
-        from Instance import Instances
-        for inst in Instances().instances:
-            if inst.user:
-                names.add(inst.user)
-    except Exception:
-        pass
-
-    # Multi instances — directory name IS the user name
-    try:
-        import glob as _glob
-        from pathlib import Path as _Path
-        for p in _glob.glob(str(_Path.cwd() / "data" / "multi" / "*")):
-            name = _Path(p).name
-            if name:
-                names.add(name)
-    except Exception:
-        pass
 
     # V7 instances — directory name IS the user name
     try:
@@ -751,11 +729,11 @@ def list_backups(
 ) -> list[BackupEntry]:
     """List all api-keys backup files from data/api-keys/, newest first.
 
-    The first entries are virtual '_current_pb7' / '_current_pb6' sentinels
-    pointing at the live api-keys.json files (no Restore, but diffable).
+    The first entry is a virtual '_current_pb7' sentinel
+    pointing at the live api-keys.json file (no Restore, but diffable).
     """
     from datetime import datetime
-    from pbgui_purefunc import is_pb7_installed, is_pb_installed, pb7dir, pbdir
+    from pbgui_purefunc import is_pb7_installed, pb7dir
 
     backup_dir = _Path(_PBGDIR) / "data" / "api-keys"
     backups: list[BackupEntry] = []
@@ -764,8 +742,6 @@ def list_backups(
             name = f.name
             if name.startswith("api-keys7_"):
                 target = "pb7"
-            elif name.startswith("api-keys_"):
-                target = "pb6"
             else:
                 continue
             stat = f.stat()
@@ -777,7 +753,6 @@ def list_backups(
     current: list[BackupEntry] = []
     for sentinel, is_inst_fn, get_dir_fn, tgt in [
         ("_current_pb7", is_pb7_installed, pb7dir, "pb7"),
-        ("_current_pb6", is_pb_installed, pbdir, "pb6"),
     ]:
         try:
             if is_inst_fn():
@@ -808,7 +783,7 @@ def restore_backup(
     # Security: prevent path traversal and unknown file patterns
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid backup filename")
-    if not (filename.startswith("api-keys7_") or filename.startswith("api-keys_")):
+    if not filename.startswith("api-keys7_"):
         raise HTTPException(status_code=400, detail="Invalid backup filename")
     if not filename.endswith(".json"):
         raise HTTPException(status_code=400, detail="Invalid backup filename")
@@ -822,7 +797,7 @@ def restore_backup(
     date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     restored_to = []
 
-    from pbgui_purefunc import is_pb7_installed, is_pb_installed, pb7dir, pbdir
+    from pbgui_purefunc import is_pb7_installed, pb7dir
 
     if is_pb7_backup:
         if not is_pb7_installed():
@@ -832,14 +807,6 @@ def restore_backup(
             shutil.copy(target_path, backup_dir / f"api-keys7_pre-restore_{date}.json")
         shutil.copy(backup_file, target_path)
         restored_to.append("pb7")
-    else:
-        if not is_pb_installed():
-            raise HTTPException(status_code=400, detail="pb6 is not installed/configured")
-        target_path = _Path(pbdir()) / "api-keys.json"
-        if target_path.exists():
-            shutil.copy(target_path, backup_dir / f"api-keys_pre-restore_{date}.json")
-        shutil.copy(backup_file, target_path)
-        restored_to.append("pb6")
 
     _log(SERVICE, f"Restored api-keys.json ({restored_to[0]}) from backup: {filename}")
     return {"restored_to": restored_to, "filename": filename}
@@ -852,20 +819,20 @@ def diff_backups(
 ) -> dict:
     """Return SequenceMatcher opcodes + line arrays for two backup files.
 
-    filename1/filename2 may be '_current_pb7' or '_current_pb6' to compare
+    filename1/filename2 may be '_current_pb7' to compare
     against the live api-keys.json.
     """
     import difflib as _difflib
     import json as _json_
 
-    _CURRENT_SENTINELS = {"_current_pb7", "_current_pb6"}
+    _CURRENT_SENTINELS = {"_current_pb7"}
 
     for fn in [req.filename1, req.filename2]:
         if fn in _CURRENT_SENTINELS:
             continue
         if "/" in fn or "\\" in fn or ".." in fn:
             raise HTTPException(status_code=400, detail="Invalid backup filename")
-        if not (fn.startswith("api-keys7_") or fn.startswith("api-keys_")):
+        if not fn.startswith("api-keys7_"):
             raise HTTPException(status_code=400, detail="Invalid backup filename")
         if not fn.endswith(".json"):
             raise HTTPException(status_code=400, detail="Invalid backup filename")
@@ -874,8 +841,8 @@ def diff_backups(
 
     def read_lines(filename: str) -> list:
         if filename in _CURRENT_SENTINELS:
-            from pbgui_purefunc import pb7dir, pbdir
-            live = _Path(pb7dir() if filename == "_current_pb7" else pbdir()) / "api-keys.json"
+            from pbgui_purefunc import pb7dir
+            live = _Path(pb7dir()) / "api-keys.json"
             if not live.exists():
                 raise HTTPException(status_code=404, detail=f"Live api-keys.json not found for {filename}")
             try:

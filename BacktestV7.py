@@ -16,9 +16,8 @@ from pbgui_purefunc import config_pretty_str, pb7_suite_preflight_errors
 from pbgui_purefunc import load_ini, save_ini
 from PBCoinData import CoinData, normalize_symbol
 import uuid
-from Base import Base
 from Exchange import Exchange, V7
-from Config import Config, ConfigV7, BalanceCalculator, Logging, ConfigV7Editor
+from Config import ConfigV7, BalanceCalculator, Logging, ConfigV7Editor
 from pathlib import Path, PurePath
 from shutil import rmtree, copytree
 import shutil

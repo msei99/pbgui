@@ -31,7 +31,6 @@ SERVICES: dict[str, ServiceSpec] = {
     "PBRun": ServiceSpec("PBRun", "PBRun.py", "pbrun.pid", "pbrun.py"),
     "PBRemote": ServiceSpec("PBRemote", "PBRemote.py", "pbremote.pid", "pbremote.py"),
     "PBMon": ServiceSpec("PBMon", "PBMon.py", "pbmon.pid", "pbmon.py"),
-    "PBStat": ServiceSpec("PBStat", "PBStat.py", "pbstat.pid", "pbstat.py"),
     "PBData": ServiceSpec("PBData", "PBData.py", "pbdata.pid", "pbdata.py"),
     "PBCoinData": ServiceSpec("PBCoinData", "PBCoinData.py", "pbcoindata.pid", "pbcoindata.py"),
 }

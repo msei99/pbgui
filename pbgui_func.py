@@ -94,15 +94,6 @@ def select_file(parameter):
         if st.button(":red[Cancel]"):
             st.rerun()
 
-def pbdir(): return load_ini("main", "pbdir")
-
-def pbvenv(): return load_ini("main", "pbvenv")
-
-def is_pb_installed():
-    if Path(f"{pbdir()}/passivbot.py").exists():
-        return True
-    return False
-
 def pb7dir(): return load_ini("main", "pb7dir")
 
 def pb7venv(): return load_ini("main", "pb7venv")
@@ -226,15 +217,6 @@ def get_navi_paths():
         "INFO_COIN_DATA":      os.path.join(NAVI_BASE_DIR, "info_coin_data.py"),
         "INFO_MARKET_DATA":    os.path.join(NAVI_BASE_DIR, "info_market_data.py"),
 
-        "V6_SINGLE_RUN":       os.path.join(NAVI_BASE_DIR, "v6_single_run.py"),
-        "V6_SINGLE_BACKTEST":  os.path.join(NAVI_BASE_DIR, "v6_single_backtest.py"),
-        "V6_SINGLE_OPTIMIZE":  os.path.join(NAVI_BASE_DIR, "v6_single_optimize.py"),
-        "V6_SPOT_VIEW":        os.path.join(NAVI_BASE_DIR, "v6_spot_view.py"),
-
-        "V6_MULTI_RUN":        os.path.join(NAVI_BASE_DIR, "v6_multi_run.py"),
-        "V6_MULTI_BACKTEST":   os.path.join(NAVI_BASE_DIR, "v6_multi_backtest.py"),
-        "V6_MULTI_OPTIMIZE":   os.path.join(NAVI_BASE_DIR, "v6_multi_optimize.py"),
-
         "V7_RUN":              os.path.join(NAVI_BASE_DIR, "v7_run.py"),
         "V7_BACKTEST":         os.path.join(NAVI_BASE_DIR, "v7_backtest.py"),
         "V7_OPTIMIZE":         os.path.join(NAVI_BASE_DIR, "v7_optimize.py"),
@@ -262,15 +244,6 @@ def build_navigation():
     pSe3 = st.Page(paths["INFO_MARKET_DATA"], title="Market Data", icon=":material/storage:")
     pH1 = st.Page(paths["HELP"], title="Help", icon=":material/help:", url_path="help")
 
-    pS1 = st.Page(paths["V6_SINGLE_RUN"], title="Run", icon=":material/play_arrow:")
-    pS2 = st.Page(paths["V6_SINGLE_BACKTEST"], title="Backtest", icon=":material/history:")
-    pS3 = st.Page(paths["V6_SINGLE_OPTIMIZE"], title="Optimize", icon=":material/tune:")
-    pS4 = st.Page(paths["V6_SPOT_VIEW"], title="Spot View", icon=":material/remove_red_eye:")
-
-    p61 = st.Page(paths["V6_MULTI_RUN"], title="Run", icon=":material/play_arrow:")
-    p62 = st.Page(paths["V6_MULTI_BACKTEST"], title="Backtest", icon=":material/history:")
-    p63 = st.Page(paths["V6_MULTI_OPTIMIZE"], title="Optimize", icon=":material/tune:")
-
     p71 = st.Page(paths["V7_RUN"], title="Run", icon=":material/play_arrow:")
     p72 = st.Page(paths["V7_BACKTEST"], title="Backtest", icon=":material/history:")
     p73 = st.Page(paths["V7_OPTIMIZE"], title="Optimize", icon=":material/tune:")
@@ -286,8 +259,6 @@ def build_navigation():
                 
     InfotmationPages = [pSe1, pSe2, pSe3, pH1]
     v7Pages = [p71, p72, p77, p73, p74, p75, p76]
-    v6Pages = [p61, p62, p63]
-    SinglePages = [pS1, pS2, pS3, pS4]
 
     # Navigation
     navi = st.navigation(
@@ -295,8 +266,6 @@ def build_navigation():
             "System": SystemPages,
             "Information": InfotmationPages,
             "PBv7": v7Pages,
-            "PBv6 Multi": v6Pages,
-            "PBv6 Single": SinglePages,
         },position="top"
     )
     st.session_state.navigation = navi
@@ -461,10 +430,7 @@ def build_navigation():
 def is_session_state_not_initialized():
     # Init Services
     if (
-        'pbdir' not in st.session_state or
         'services' not in st.session_state or
-        'pbgui_instances' not in st.session_state or
-        'multi_instances' not in st.session_state or
         'users' not in st.session_state or
         'pbcoindata' not in st.session_state
     ):

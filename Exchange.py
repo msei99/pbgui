@@ -8,7 +8,6 @@ import time
 from time import sleep
 from datetime import datetime
 from pbgui_purefunc import PBGDIR
-from logging_helpers import human_log as _human_log
 from logging_helpers import human_log as _log
 
 from ccxt.base.errors import (
@@ -382,7 +381,7 @@ class Exchange:
                 else:
                     self.instance.close()
             except Exception as e:
-                _human_log('Exchange', f'Error closing exchange {self.id}: {e}', level='debug')
+                _log('Exchange', f'Error closing exchange {self.id}: {e}', level='debug')
 
     def create_ws_client(self):
         """Create and return a ccxt.pro client configured for this exchange and user.
@@ -488,7 +487,7 @@ class Exchange:
                     try:
                         tmp = cls(id, user)
                         # INFO for initial attempt, WARNING when retrying
-                        _human_log(
+                        _log(
                             'Exchange',
                             f"get_shared_ws_client calling load_markets for {id} retry={retries}",
                             level=('WARNING' if retries else 'INFO'),
@@ -506,7 +505,7 @@ class Exchange:
                     cls._shared_ws_clients[key] = ex
                     cls._shared_ws_markets_loaded.add(key)
                     try:
-                        _human_log(
+                        _log(
                             'Exchange',
                             f"get_shared_ws_client load_markets succeeded for {id} key={key} user={uname}",
                             level='INFO',
@@ -529,7 +528,7 @@ class Exchange:
                         retries += 1
                         delay = min(5 * retries, 30)
                         try:
-                            _human_log(
+                            _log(
                                 'Exchange',
                                 f"get_shared_ws_client load_markets rate-limited for {id} user={uname}; retry {retries} in {delay}s: {msg}",
                                 level='WARNING',
@@ -541,7 +540,7 @@ class Exchange:
                         continue
                     # If load_markets ultimately fails we don't cache the client; log reason
                     try:
-                        _human_log(
+                        _log(
                             'Exchange',
                             f"get_shared_ws_client load_markets failed for {id} user={uname} after {retries} retries: {msg}",
                             level='ERROR',
@@ -622,7 +621,7 @@ class Exchange:
                             msg = f"get_private_ws_client: reached GLOBAL cap ({total_private}/{global_cap}); returning None to allow REST fallback for user={user.name}"
                             if caller:
                                 msg = msg + f" caller={caller}"
-                            _human_log('Exchange', msg, level='WARNING', user=user)
+                            _log('Exchange', msg, level='WARNING', user=user)
                         except Exception:
                             pass
                         return None
@@ -639,7 +638,7 @@ class Exchange:
                             msg = f"get_private_ws_client: reached cap for {base_key} ({current + inflight_for_exch}/{cap}); returning None to allow REST fallback for user={user.name}"
                             if caller:
                                 msg = msg + f" caller={caller}"
-                            _human_log('Exchange', msg, level='WARNING', user=user)
+                            _log('Exchange', msg, level='WARNING', user=user)
                         except Exception:
                             pass
                         return None
@@ -994,7 +993,7 @@ class Exchange:
                     # Otherwise wait with exponential backoff and retry
                     delay = min(2 ** retries, 10)
                     try:
-                        _human_log(
+                        _log(
                             'Exchange',
                             f"fetch_positions timed out for {self.id}; retry {retries}/{max_retries} in {delay}s: {e}",
                             level='WARNING',
@@ -1135,13 +1134,13 @@ class Exchange:
                                 else:
                                     transactions = self.instance.privateGetV5AccountContractTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
                             except Exception as e:
-                                _human_log(
+                                _log(
                                     'Exchange',
                                     f"{e}",
                                     level='WARNING',
                                     user=self.user,
                                 )
-                                _human_log(
+                                _log(
                                     'Exchange',
                                     f'Fetching transactions failed. Retry in 5 seconds',
                                     level='WARNING',
@@ -1157,7 +1156,7 @@ class Exchange:
                     last_position = positions[-1]
                     all_histories = positions + all_histories
                 if cursor:
-                    _human_log(
+                    _log(
                         'Exchange',
                         f"Fetched {len(positions)} transactions from "
                         f"{self.instance.iso8601(int(first_position['transactionTime']))} till "
@@ -1166,7 +1165,7 @@ class Exchange:
                         user=self.user,
                     )
                 else:
-                    _human_log(
+                    _log(
                         'Exchange',
                         f"Fetched {len(positions)} transactions from "
                         f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
@@ -1176,7 +1175,7 @@ class Exchange:
                     since = since + week
                     end = since + week
                 if since > now:
-                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log('Exchange', 'Done', level='INFO', user=self.user)
                     break
             # print(all_histories)
             for history in all_histories:
@@ -1222,19 +1221,19 @@ class Exchange:
                         num = len(fundings) if fundings is not None else 0
                     except Exception:
                         num = 0
-                    _human_log('Exchange', f"hyperliquid fundings page: user={getattr(self.user,'name',None)} since={since} end={end} span_ms={page_span} duration_s={page_dur:.3f} items={num}", level='DEBUG', user=self.user)
+                    _log('Exchange', f"hyperliquid fundings page: user={getattr(self.user,'name',None)} since={since} end={end} span_ms={page_span} duration_s={page_dur:.3f} items={num}", level='DEBUG', user=self.user)
                 except Exception as e:
                     import traceback as _tb
                     tb = _tb.format_exc()
-                    _human_log('Exchange', f"fetch fundings ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end}: {e}", level='ERROR', user=self.user)
-                    _human_log('Exchange', f"Traceback:\n{tb}", level='DEBUG', user=self.user)
+                    _log('Exchange', f"fetch fundings ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end}: {e}", level='ERROR', user=self.user)
+                    _log('Exchange', f"Traceback:\n{tb}", level='DEBUG', user=self.user)
                     raise
                 if fundings:
                     first_funding = fundings[0]
                     last_funding = fundings[-1]
                     all_histories = fundings + all_histories
                 if len(fundings) == limit:
-                    _human_log(
+                    _log(
                         'Exchange',
                         f"Fetched {len(fundings)} fundings from "
                         f"{self.instance.iso8601(int(first_funding['time']))} till "
@@ -1244,7 +1243,7 @@ class Exchange:
                     )
                     since = int(fundings[-1]['time'])
                 else:
-                    _human_log(
+                    _log(
                         'Exchange',
                         f"Fetched {len(fundings)} fundings from "
                         f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
@@ -1256,14 +1255,14 @@ class Exchange:
                         old_span = page_span
                         page_span = min(page_span * 2, max_span)
                         if page_span != old_span:
-                            _human_log('Exchange', f"Empty fundings page — doubling page span from {old_span} to {page_span} ms for user={getattr(self.user,'name',None)}", level='DEBUG', user=self.user)
+                            _log('Exchange', f"Empty fundings page — doubling page span from {old_span} to {page_span} ms for user={getattr(self.user,'name',None)}", level='DEBUG', user=self.user)
                     else:
                         # reset to initial span after receiving results
                         page_span = initial_span
                     since = end
                     end = since + page_span
                 if since > now:
-                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log('Exchange', 'Done', level='INFO', user=self.user)
                     break
                 sleep(0.5)
             for history in all_histories:
@@ -1296,22 +1295,22 @@ class Exchange:
                         except Exception:
                             continue
                     page_dur = time.time() - start_page_ts
-                    _human_log('Exchange', f"hyperliquid trades page: user={getattr(self.user,'name',None)} since={since} end={end} span_ms={page_span} duration_s={page_dur:.3f} items={len(trades)}", level='DEBUG', user=self.user)
+                    _log('Exchange', f"hyperliquid trades page: user={getattr(self.user,'name',None)} since={since} end={end} span_ms={page_span} duration_s={page_dur:.3f} items={len(trades)}", level='DEBUG', user=self.user)
                 except Exception as e:
                     import traceback as _tb
                     tb = _tb.format_exc()
-                    _human_log(
+                    _log(
                         'Exchange',
                         f"userFillsByTime ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end}: {e}",
                         level='ERROR',
                         user=self.user,
                     )
-                    _human_log('Exchange', f"Traceback:\n{tb}", level='DEBUG', user=self.user)
+                    _log('Exchange', f"Traceback:\n{tb}", level='DEBUG', user=self.user)
                     raise
                 if trades:
                     all_histories = trades + all_histories
                 # userFillsByTime returns all fills in range — always advance window
-                _human_log(
+                _log(
                     'Exchange',
                     f"Fetched {len(trades)} trades from "
                     f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
@@ -1322,14 +1321,14 @@ class Exchange:
                     old_span = page_span
                     page_span = min(page_span * 2, max_span)
                     if page_span != old_span:
-                        _human_log('Exchange', f"Empty trades page — doubling page span from {old_span} to {page_span} ms for user={getattr(self.user,'name',None)}", level='DEBUG', user=self.user)
+                        _log('Exchange', f"Empty trades page — doubling page span from {old_span} to {page_span} ms for user={getattr(self.user,'name',None)}", level='DEBUG', user=self.user)
                 else:
                     # reset to initial span after receiving results
                     page_span = initial_span
                 since = end
                 end = since + page_span
                 if since > now:
-                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log('Exchange', 'Done', level='INFO', user=self.user)
                     break
                 sleep(0.5)
             for history in all_histories:
@@ -1356,7 +1355,7 @@ class Exchange:
                     last_position = positions[-1]
                     all_histories = positions + all_histories
                 if len(positions) == limit:
-                    _human_log(
+                    _log(
                         'Exchange',
                         f"Fetched {len(positions)} income from "
                         f"{self.instance.iso8601(first_position['time'])} till "
@@ -1366,7 +1365,7 @@ class Exchange:
                     )
                     end = positions[-1]['time']
                 else:
-                    _human_log(
+                    _log(
                         'Exchange',
                         f"Fetched {len(positions)} income from "
                         f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
@@ -1376,7 +1375,7 @@ class Exchange:
                     since = since + day
                     end = since + day
                 if since > now:
-                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log('Exchange', 'Done', level='INFO', user=self.user)
                     break
             for history in all_histories:
                 if history["type"] == "RealisedPNL":
@@ -1404,7 +1403,7 @@ class Exchange:
                     last_ledger = ledgers[-1]
                     all_histories = ledgers + all_histories
                 if len(ledgers) == limit:
-                    _human_log(
+                    _log(
                         'Exchange',
                         f"Fetched {len(ledgers)} ledgers from "
                         f"{self.instance.iso8601(first_ledger['timestamp'])} till "
@@ -1414,7 +1413,7 @@ class Exchange:
                     )
                     end = ledgers[0]['timestamp']
                 else:
-                    _human_log(
+                    _log(
                         'Exchange',
                         f"Fetched {len(ledgers)} ledgers from "
                         f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
@@ -1424,7 +1423,7 @@ class Exchange:
                     since = since + week
                     end = since + week
                 if since > now:
-                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log('Exchange', 'Done', level='INFO', user=self.user)
                     break
                 sleep(0.5)
             for history in all_histories:
@@ -1464,7 +1463,7 @@ class Exchange:
                         if not _ccxt_should_retry(self.instance, e):
                             raise
                         last_err = e
-                        _human_log(
+                        _log(
                             'Exchange',
                             f"bitget fetch_ledger error user={self.user.name} since={since} end={end} attempt={attempt+1}/3: {e}",
                             level='WARNING',
@@ -1479,7 +1478,7 @@ class Exchange:
                     last_ledger = ledgers[-1]
                     all_histories = ledgers + all_histories
                 if len(ledgers) == limit:
-                    _human_log('Exchange',
+                    _log('Exchange',
                         f"Fetched {len(ledgers)} ledgers from "
                         f"{self.instance.iso8601(first_ledger['timestamp'])} till "
                         f"{self.instance.iso8601(last_ledger['timestamp'])}",
@@ -1487,7 +1486,7 @@ class Exchange:
                     )
                     end = ledgers[0]['timestamp']
                 else:
-                    _human_log('Exchange',
+                    _log('Exchange',
                         f"Fetched {len(ledgers)} ledgers from "
                         f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
                         user=self.user,
@@ -1495,7 +1494,7 @@ class Exchange:
                     since = since + week
                     end = since + week
                 if since > now:
-                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log('Exchange', 'Done', level='INFO', user=self.user)
                     break
             for history in all_histories:
                 # if history["info"]["symbol"] and history["info"]["amount"] != "0":
@@ -1527,7 +1526,7 @@ class Exchange:
                     last_ledger = ledgers[-1]
                     all_histories = ledgers + all_histories
                 if len(ledgers) == limit:
-                    _human_log('Exchange',
+                    _log('Exchange',
                         f"Fetched {len(ledgers)} ledgers from "
                         f"{self.instance.iso8601(first_ledger['timestamp'])} till "
                         f"{self.instance.iso8601(last_ledger['timestamp'])}",
@@ -1535,7 +1534,7 @@ class Exchange:
                     )
                     end = int(ledgers[0]['timestamp']/1000)
                 else:
-                    _human_log('Exchange',
+                    _log('Exchange',
                         f"Fetched {len(ledgers)} ledgers from "
                         f"{self.instance.iso8601(since*1000)} till {self.instance.iso8601(end*1000)}",
                         user=self.user,
@@ -1543,7 +1542,7 @@ class Exchange:
                     since = since + week
                     end = since + week
                 if since > now:
-                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log('Exchange', 'Done', level='INFO', user=self.user)
                     break
             for history in all_histories:
                 if history["info"]["contract"] and history["amount"] != "0":
@@ -1588,7 +1587,7 @@ class Exchange:
                         if not _ccxt_should_retry(self.instance, e):
                             raise
                         last_err = e
-                        _human_log(
+                        _log(
                             'Exchange',
                             f"binance fapiPrivateGetIncome error user={self.user.name} since={since} end={end} attempt={attempt+1}/3: {e}",
                             level='WARNING',
@@ -1602,7 +1601,7 @@ class Exchange:
                     last_imcome = imcomes[-1]
                     all_histories = imcomes + all_histories
                 if len(imcomes) == limit:
-                    _human_log('Exchange',
+                    _log('Exchange',
                         f"Fetched {len(imcomes)} incomes from "
                         f"{self.instance.iso8601(int(first_imcome['time']))} till "
                         f"{self.instance.iso8601(int(last_imcome['time']))}",
@@ -1610,7 +1609,7 @@ class Exchange:
                     )
                     since = int(imcomes[-1]['time'])
                 else:
-                    _human_log('Exchange',
+                    _log('Exchange',
                         f"Fetched {len(imcomes)} incomes from "
                         f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
                         user=self.user,
@@ -1618,7 +1617,7 @@ class Exchange:
                     since = end
                     end = since + week
                 if since > now:
-                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log('Exchange', 'Done', level='INFO', user=self.user)
                     break
             for history in all_histories:
                 if history["incomeType"] in ["REALIZED_PNL", "COMMISSION", "FUNDING_FEE"]:
@@ -1678,18 +1677,18 @@ class Exchange:
                             continue
                 except Exception as e:
                     import traceback as _tb
-                    _human_log(
+                    _log(
                         'Exchange',
                         f"userFillsByTime ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end}: {e}",
                         level='ERROR',
                         user=self.user,
                     )
-                    _human_log('Exchange', f"Traceback:\n{_tb.format_exc()}", level='DEBUG', user=self.user)
+                    _log('Exchange', f"Traceback:\n{_tb.format_exc()}", level='DEBUG', user=self.user)
                     raise
                 if trades:
                     all_histories = trades + all_histories
                 # userFillsByTime returns all fills in range — always advance window
-                _human_log(
+                _log(
                     'Exchange',
                     f"Fetched {len(trades)} trades from "
                     f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
@@ -1703,7 +1702,7 @@ class Exchange:
                 since = end
                 end = since + page_span
                 if since > now:
-                    _human_log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log('Exchange', 'Done', level='INFO', user=self.user)
                     break
                 sleep(0.5)
 
@@ -1817,7 +1816,7 @@ class Exchange:
                                 if not _ccxt_should_retry(self.instance, e):
                                     raise
                                 last_err = e
-                                _human_log(
+                                _log(
                                     'Exchange',
                                     f"binance fetch_my_trades error symbol={ccxt_symbol} attempt={attempt+1}/3: {e}",
                                     level='WARNING',
@@ -1965,7 +1964,7 @@ class Exchange:
                         if not _ccxt_should_retry(self.instance, e):
                             raise
                         last_err = e
-                        _human_log(
+                        _log(
                             'Exchange',
                             f"bybit fetch_my_trades error (global) attempt={attempt+1}/3: {e}",
                             level='WARNING',
@@ -2004,7 +2003,7 @@ class Exchange:
                                 if not _ccxt_should_retry(self.instance, e):
                                     raise
                                 page_err = e
-                                _human_log(
+                                _log(
                                     'Exchange',
                                     f"bybit fetch_my_trades page error (global) attempt={attempt+1}/3: {e}",
                                     level='WARNING',
@@ -2149,7 +2148,7 @@ class Exchange:
                             if not _ccxt_should_retry(self.instance, e):
                                 raise
                             last_err = e
-                            _human_log(
+                            _log(
                                 'Exchange',
                                 f"okx fetch_my_trades error (global) attempt={attempt+1}/3: {e}",
                                 level='WARNING',
@@ -2303,7 +2302,7 @@ class Exchange:
                         if not _ccxt_should_retry(self.instance, e):
                             raise
                         last_err = e
-                        _human_log(
+                        _log(
                             'Exchange',
                             f"gateio fetch_my_trades error (global) attempt={attempt+1}/6: {e}",
                             level='WARNING',
@@ -2478,7 +2477,7 @@ class Exchange:
                                 if not _ccxt_should_retry(self.instance, e):
                                     raise
                                 last_err = e
-                                _human_log(
+                                _log(
                                     'Exchange',
                                     f"bitget fetch_my_trades error symbol={ccxt_symbol} attempt={attempt+1}/3: {e}",
                                     level='WARNING',
@@ -2586,7 +2585,7 @@ class Exchange:
                     if first_trade:
                         since = first_trade[0]["timestamp"]
                 while since < now:
-                    _human_log('Exchange', f'Symbol:{symbol} Fetching trades from {self.instance.iso8601(since)}', level='INFO', user=self.user)
+                    _log('Exchange', f'Symbol:{symbol} Fetching trades from {self.instance.iso8601(since)}', level='INFO', user=self.user)
                     end_time = since + week
                     if end_time > now:
                         end_time = now
@@ -2612,7 +2611,7 @@ class Exchange:
                     if first_trade:
                         since = first_trade[0]["timestamp"]
                 while since < now:
-                    _human_log('Exchange', f'Symbol:{symbol} Fetching trades from {self.instance.iso8601(since)}', level='INFO', user=self.user)
+                    _log('Exchange', f'Symbol:{symbol} Fetching trades from {self.instance.iso8601(since)}', level='INFO', user=self.user)
                     end_time = since + week
                     if end_time > now:
                         end_time = now
@@ -2622,7 +2621,7 @@ class Exchange:
                         if "nextPageCursor" in last_trade["info"]:
                             cursor = last_trade["info"]["nextPageCursor"]
                             while True:
-                                _human_log('Exchange', f'Symbol:{symbol} Fetching trades from {cursor}', level='INFO', user=self.user)
+                                _log('Exchange', f'Symbol:{symbol} Fetching trades from {cursor}', level='INFO', user=self.user)
                                 all_trades = all_trades + trades
                                 trades = self.instance.fetch_my_trades(symbol, since, 100, params = {'type': market_type, 'cursor': cursor, 'endTime': end_time })
                                 if len(trades):
@@ -2648,15 +2647,15 @@ class Exchange:
                         first_trade = trades[0]
                         last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', level='INFO', user=self.user)
+                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', level='INFO', user=self.user)
                     if len(trades) == limit:
                         end = trades[0]['timestamp']
                     else:
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
+                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
                         since += week
                         end = since + week
                     if since > now:
-                        _human_log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
+                        _log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
                         break
             elif self.id == "okx":
                 week = 7 * 24 * 60 * 60 * 1000
@@ -2672,15 +2671,15 @@ class Exchange:
                         first_trade = trades[0]
                         last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', level='INFO', user=self.user)
+                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', level='INFO', user=self.user)
                     if len(trades) == limit:
                         end = trades[0]['timestamp']
                     else:
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
+                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
                         since += week
                         end = since + week
                     if since > now:
-                        _human_log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
+                        _log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
                         break
             elif self.id == "bingx":
                 week = 7 * 24 * 60 * 60 * 1000
@@ -2699,15 +2698,15 @@ class Exchange:
                         first_trade = trades[0]
                         last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["time"]} till {last_trade["time"]}', level='INFO', user=self.user)
+                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["time"]} till {last_trade["time"]}', level='INFO', user=self.user)
                     if len(trades) == limit:
                         since = int(trades[-1]['time'])
                     else:
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
+                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
                         since += week
                         end = since + week
                     if since > now:
-                        _human_log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
+                        _log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
                         break
                 bingx_trades = []
                 for trade in all_trades:
@@ -2731,15 +2730,15 @@ class Exchange:
                         first_trade = trades[0]
                         last_trade = trades[-1]
                         all_trades = trades + all_trades
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', level='INFO', user=self.user)
+                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', level='INFO', user=self.user)
                     if len(trades) == limit:
                         end = trades[0]['timestamp']
                     else:
-                        _human_log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
+                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
                         since += max
                         end = since + max
                     if since > now:
-                        _human_log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
+                        _log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
                         break
         if all_trades:
             sort_trades = sorted(all_trades, key=lambda d: d['timestamp'])
@@ -2855,7 +2854,7 @@ class Exchange:
                                 cpSymbols.append(symbol["symbol"])
                             break
                     except Exception as e:
-                        _human_log('Exchange', f'User:{self.user.name} Error: {e}', level='ERROR', user=self.user)
+                        _log('Exchange', f'User:{self.user.name} Error: {e}', level='ERROR', user=self.user)
         elif self.id == 'bybit':
             # print(self.instance.__dir__())
             symbols = self.instance.publicGetContractV3PublicCopytradingSymbolList()

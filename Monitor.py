@@ -96,10 +96,7 @@ class Monitor():
             for server in self.servers:
                 if server.monitor:
                     for monitor in server.monitor:
-                        if monitor["p"] == "7":
-                            version = server.pb7_version
-                        else:
-                            version = server.pb6_version
+                        version = server.pb7_version
                         if len(monitor["m"]) == 10:
                             swap_value = monitor["m"][9]
                         else:

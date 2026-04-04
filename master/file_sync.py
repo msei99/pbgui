@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from logging_helpers import human_log as _log
-from pbgui_purefunc import PBGDIR, pb7dir as _pb7dir, pbdir as _pb6dir
+from pbgui_purefunc import PBGDIR, pb7dir as _pb7dir
 
 SERVICE = "FileSync"
 
@@ -92,17 +92,11 @@ _LAST_PUSH_FILE = Path(PBGDIR) / "data" / "ssh_sync_status.json"
 DEFAULT_RETENTION_DAYS = 180
 DEFAULT_MIN_VERSIONS = 10
 
-# Local api-keys.json path (pb7dir preferred, pb6dir fallback)
+# Local api-keys.json path (pb7dir)
 def _local_api_keys() -> Path:
     """Return the local api-keys.json path based on pbgui.ini."""
     try:
         d = _pb7dir()
-        if d:
-            return Path(d) / "api-keys.json"
-    except Exception:
-        pass
-    try:
-        d = _pb6dir()
         if d:
             return Path(d) / "api-keys.json"
     except Exception:
@@ -132,7 +126,7 @@ class FileSyncWorker:
         self._last_push: dict[str, dict] = _state.get("last_push", {})
         # Cache: hostname → last-seen _api_serial from VPS (updated by watcher + push)
         self._remote_serials: dict[str, int] = _state.get("remote_serials", {})
-        # Cache: hostname → {"pb7": md5|None, "pb6": md5|None}
+        # Cache: hostname → {"pb7": md5|None}
         self._remote_md5s: dict[str, dict] = _state.get("remote_md5s", {})
         # Cache: hostname → raw bytes of pb7 api-keys.json as last seen
         # (populated by _fetch_remote_state / watcher, consumed by _push_single_vps
@@ -217,12 +211,10 @@ class FileSyncWorker:
             for h in targets:
                 entry = self.pool.get_connection(h)
                 pb7dir = entry.data.get("pb7dir") if entry else None
-                pb6dir = entry.data.get("pb6dir") if entry else None
                 instances = self.store.instances.get(h, [])
                 results[h] = {
                     "dry_run": True,
                     "pb7dir": pb7dir,
-                    "pb6dir": pb6dir,
                     "bots_affected": len(instances),
                     "serial": api_data.get("_api_serial"),
                     "md5": local_md5,
@@ -269,21 +261,17 @@ class FileSyncWorker:
                     self._remote_serials[h] = pushed_serial
                     entry = self.pool.get_connection(h)
                     pb7dir = entry.data.get("pb7dir") if entry else None
-                    pb6dir = entry.data.get("pb6dir") if entry else None
                     self._remote_md5s[h] = {
                         "pb7": local_md5 if pb7dir else None,
-                        "pb6": local_md5 if pb6dir else None,
                     }
                     self._broadcast_serial_full(
                         h, pushed_serial, local_serial, True,
                         self._last_push[h])
                 else:
                     # Partial push: update only dirs that succeeded
-                    md5s = self._remote_md5s.get(h, {"pb7": None, "pb6": None})
+                    md5s = self._remote_md5s.get(h, {"pb7": None})
                     if r.get("pushed_v7"):
                         md5s["pb7"] = local_md5
-                    if r.get("pushed_v6"):
-                        md5s["pb6"] = local_md5
                     self._remote_md5s[h] = md5s
                     in_sync = self._check_in_sync(h, local_md5)
                     self._broadcast_serial_full(
@@ -300,16 +288,13 @@ class FileSyncWorker:
             return {"success": False, "error": "Not connected"}
 
         pb7dir = entry.data.get("pb7dir")
-        pb6dir = entry.data.get("pb6dir")
-        if not pb7dir and not pb6dir:
-            return {"success": False, "error": "No pb6dir/pb7dir configured"}
+        if not pb7dir:
+            return {"success": False, "error": "No pb7dir configured"}
 
         result = {
             "success": False,
             "backup_v7": False,
-            "backup_v6": False,
             "pushed_v7": False,
-            "pushed_v6": False,
             "verified": False,
             "bots_killed": 0,
             "retention_cleaned": False,
@@ -322,12 +307,8 @@ class FileSyncWorker:
             result["backup_v7"] = await self._backup_remote(
                 hostname, f"{pb7dir}/api-keys.json",
                 f"{REMOTE_PBGUI_DIR}/data/backup/api-keys_v7/{ts}")
-        if pb6dir:
-            result["backup_v6"] = await self._backup_remote(
-                hostname, f"{pb6dir}/api-keys.json",
-                f"{REMOTE_PBGUI_DIR}/data/backup/api-keys/{ts}")
 
-        # b) Push file to target dirs — single SFTP session for both
+        # b) Push file to target dir
         sftp = await self.pool._open_sftp(hostname)
         if not sftp:
             _log(SERVICE, f"Push to {hostname}: cannot open SFTP",
@@ -337,23 +318,16 @@ class FileSyncWorker:
         # to determine which users changed — zero extra SFTP round-trip.
         old_remote_raw: bytes | None = self._remote_content.get(hostname)
         try:
-            if pb7dir:
-                result["pushed_v7"] = await self._push_and_verify(
-                    hostname, content, f"{pb7dir}/api-keys.json",
-                    expected_md5, sftp)
-            if pb6dir:
-                result["pushed_v6"] = await self._push_and_verify(
-                    hostname, content, f"{pb6dir}/api-keys.json",
-                    expected_md5, sftp)
+            result["pushed_v7"] = await self._push_and_verify(
+                hostname, content, f"{pb7dir}/api-keys.json",
+                expected_md5, sftp)
         finally:
             sftp.exit()
 
-        # c) Verify all configured dirs were pushed successfully
-        v7_ok = result["pushed_v7"] if pb7dir else True
-        v6_ok = result["pushed_v6"] if pb6dir else True
-        result["verified"] = v7_ok and v6_ok
+        # c) Verify push was successful
+        result["verified"] = result["pushed_v7"]
 
-        if not (result["pushed_v7"] or result["pushed_v6"]):
+        if not result["pushed_v7"]:
             _log(SERVICE, f"Push to {hostname}: no target dir was written "
                  "successfully — skipping kill", level="ERROR")
             return result
@@ -364,8 +338,7 @@ class FileSyncWorker:
         # e) Kill affected bots (only bots whose credentials actually changed)
         # Update cache to reflect the freshly pushed content so the next push
         # (or the watchdog's state refresh) sees correct pre-push data.
-        if pb7dir and result["pushed_v7"]:
-            self._remote_content[hostname] = content
+        self._remote_content[hostname] = content
         try:
             new_data = json.loads(content.decode("utf-8"))
         except Exception:
@@ -380,16 +353,14 @@ class FileSyncWorker:
         result["bots_killed"] = await self._kill_affected_bots(
             hostname, changed_users)
 
-        # success = ALL configured dirs pushed OK
-        result["success"] = v7_ok and v6_ok
+        result["success"] = result["pushed_v7"]
 
         if result["success"]:
             _log(SERVICE, f"Push to {hostname} OK "
-                 f"(v7={result['pushed_v7']}, v6={result['pushed_v6']}, "
-                 f"killed={result['bots_killed']})")
+                 f"(killed={result['bots_killed']})")
         else:
             _log(SERVICE, f"Push to {hostname} PARTIAL "
-                 f"(v7={result['pushed_v7']}, v6={result['pushed_v6']}, "
+                 f"(v7={result['pushed_v7']}, "
                  f"killed={result['bots_killed']})", level="WARNING")
         return result
 
@@ -614,64 +585,14 @@ class FileSyncWorker:
         tmp.write_bytes(raw)
         tmp.replace(LOCAL_API_KEYS)
 
-        # Also write pb6 if configured
-        pb6dir_local = _pb6dir()
-        if pb6dir_local:
-            local_pb6 = Path(pb6dir_local) / "api-keys.json"
-            if local_pb6.exists():
-                backup_dir6 = Path(f"{PBGDIR}/data/backup/api-keys/{ts}")
-                backup_dir6.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(local_pb6, backup_dir6 / "api-keys.json")
-            tmp6 = local_pb6.with_suffix(".tmp")
-            tmp6.write_bytes(raw)
-            tmp6.replace(local_pb6)
-
         _log(SERVICE, f"[pull] Updated local api-keys.json from {hostname} "
              f"(serial {local_serial} → {remote_serial})")
         return True
 
     # ── Watchers (inotifywait) ───────────────────────────────
 
-    def _sync_local_pb6_from_pb7(self) -> None:
-        """Ensure local pb6/api-keys.json is in sync with pb7 at startup.
-
-        If pb7 has a higher (or defined) _api_serial than pb6, copy pb7 → pb6
-        atomically. This repairs cases where a previous pull only wrote pb7.
-        """
-        pb6dir_local = _pb6dir()
-        if not pb6dir_local:
-            return
-        local_pb6 = Path(pb6dir_local) / "api-keys.json"
-        if not LOCAL_API_KEYS.exists():
-            return
-        try:
-            pb7_data = json.loads(LOCAL_API_KEYS.read_bytes())
-        except (json.JSONDecodeError, OSError):
-            return
-        pb7_serial = pb7_data.get("_api_serial", 0)
-        pb6_serial = 0
-        if local_pb6.exists():
-            try:
-                pb6_data = json.loads(local_pb6.read_bytes())
-                pb6_serial = pb6_data.get("_api_serial", 0)
-            except (json.JSONDecodeError, OSError):
-                pass
-        if pb7_serial > pb6_serial:
-            raw = LOCAL_API_KEYS.read_bytes()
-            ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            if local_pb6.exists():
-                backup_dir = Path(f"{PBGDIR}/data/backup/api-keys/{ts}")
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(local_pb6, backup_dir / "api-keys.json")
-            tmp = local_pb6.with_suffix(".tmp")
-            tmp.write_bytes(raw)
-            tmp.replace(local_pb6)
-            _log(SERVICE, f"[startup] Synced pb6 api-keys.json from pb7 "
-                 f"(pb6 serial {pb6_serial} → {pb7_serial})")
-
     async def start_watchers(self, hostnames: list[str] | None = None):
         """Start inotifywait watchers on connected VPS(es)."""
-        self._sync_local_pb6_from_pb7()
         targets = hostnames or self.pool.connected_hosts()
         for h in targets:
             if h in self._watchers and not self._watchers[h].done():
@@ -680,12 +601,9 @@ class FileSyncWorker:
             if not entry:
                 continue
             pb7dir = entry.data.get("pb7dir")
-            pb6dir = entry.data.get("pb6dir")
             paths = []
             if pb7dir:
                 paths.append(f"{pb7dir}/api-keys.json")
-            if pb6dir:
-                paths.append(f"{pb6dir}/api-keys.json")
             if not paths:
                 continue
             task = asyncio.create_task(
@@ -777,11 +695,11 @@ class FileSyncWorker:
                      meta={"traceback": traceback.format_exc()})
 
     async def _fetch_remote_state(self, hostname: str) -> None:
-        """Read remote api-keys.json files to seed MD5 and serial caches.
+        """Read remote api-keys.json to seed MD5 and serial caches.
 
         Called as a fire-and-forget task when a watcher starts so the sync
         status is populated immediately without waiting for a file change.
-        Reads both pb7 and pb6 copies, computes MD5 for each, and compares
+        Reads the pb7 copy, computes MD5, and compares
         with the local file to determine in_sync status.
         """
         try:
@@ -789,42 +707,34 @@ class FileSyncWorker:
             if not entry:
                 return
             pb7dir = entry.data.get("pb7dir")
-            pb6dir = entry.data.get("pb6dir")
-            if not pb7dir and not pb6dir:
+            if not pb7dir:
                 return
 
             local_md5 = self._compute_local_md5()
-            md5s = {"pb7": None, "pb6": None}
+            md5s = {"pb7": None}
             remote_serial = None
             pb7_data = None
 
-            if pb7dir:
-                raw = await self.pool.read_remote_file(
-                    hostname, f"{pb7dir}/api-keys.json")
-                if raw:
-                    md5s["pb7"] = hashlib.md5(raw).hexdigest()
-                    # Cache raw bytes so _push_single_vps can diff without
-                    # an extra SFTP round-trip during the push.
-                    self._remote_content[hostname] = raw
-                    try:
-                        pb7_data = json.loads(raw)
-                        remote_serial = pb7_data.get("_api_serial", 0)
-                        # Seed last_push from remote metadata
-                        sync_ts = pb7_data.get("_api_ts")
-                        if sync_ts and hostname not in self._last_push:
-                            self._last_push[hostname] = {
-                                "ts": sync_ts,
-                                "serial": remote_serial,
-                                "success": True,
-                            }
-                    except json.JSONDecodeError:
-                        pass
-
-            if pb6dir:
-                raw = await self.pool.read_remote_file(
-                    hostname, f"{pb6dir}/api-keys.json")
-                if raw:
-                    md5s["pb6"] = hashlib.md5(raw).hexdigest()
+            raw = await self.pool.read_remote_file(
+                hostname, f"{pb7dir}/api-keys.json")
+            if raw:
+                md5s["pb7"] = hashlib.md5(raw).hexdigest()
+                # Cache raw bytes so _push_single_vps can diff without
+                # an extra SFTP round-trip during the push.
+                self._remote_content[hostname] = raw
+                try:
+                    pb7_data = json.loads(raw)
+                    remote_serial = pb7_data.get("_api_serial", 0)
+                    # Seed last_push from remote metadata
+                    sync_ts = pb7_data.get("_api_ts")
+                    if sync_ts and hostname not in self._last_push:
+                        self._last_push[hostname] = {
+                            "ts": sync_ts,
+                            "serial": remote_serial,
+                            "success": True,
+                        }
+                except json.JSONDecodeError:
+                    pass
 
             self._remote_md5s[hostname] = md5s
             if remote_serial is not None:
@@ -840,7 +750,7 @@ class FileSyncWorker:
                 local_serial, in_sync, lp)
             self._save_last_push()
             _log(SERVICE, f"[state-init] {hostname}: serial={remote_serial}, "
-                 f"pb7_md5={md5s['pb7']}, pb6_md5={md5s['pb6']}, "
+                 f"pb7_md5={md5s['pb7']}, "
                  f"in_sync={in_sync}", level="DEBUG")
 
             # If remote has a higher serial → pull (same logic as _watcher_callback)
@@ -952,7 +862,7 @@ class FileSyncWorker:
     async def _watcher_callback(self, hostname: str, data: str):
         """Handle a file-change event from inotifywait.
 
-        Reads both pb7 and pb6 remote files, computes MD5 for each,
+        Reads the pb7 remote file, computes MD5,
         compares with the local file, and broadcasts in_sync status.
         If the remote serial is higher, triggers a pull.
         """
@@ -963,9 +873,8 @@ class FileSyncWorker:
         if not entry:
             return
         pb7dir = entry.data.get("pb7dir")
-        pb6dir = entry.data.get("pb6dir")
         local_md5 = self._compute_local_md5()
-        md5s = {"pb7": None, "pb6": None}
+        md5s = {"pb7": None}
         remote_serial = None
         pb7_data = None
 
@@ -979,12 +888,6 @@ class FileSyncWorker:
                     remote_serial = pb7_data.get("_api_serial", 0)
                 except json.JSONDecodeError:
                     pass
-
-        if pb6dir:
-            raw = await self.pool.read_remote_file(
-                hostname, f"{pb6dir}/api-keys.json")
-            if raw:
-                md5s["pb6"] = hashlib.md5(raw).hexdigest()
 
         self._remote_md5s[hostname] = md5s
         if remote_serial is not None:
@@ -1081,10 +984,8 @@ class FileSyncWorker:
         if not entry:
             return None
         pb7dir = entry.data.get("pb7dir")
-        pb6dir = entry.data.get("pb6dir")
         pb7_ok = (md5s.get("pb7") == local_md5) if pb7dir else True
-        pb6_ok = (md5s.get("pb6") == local_md5) if pb6dir else True
-        return pb7_ok and pb6_ok
+        return pb7_ok
 
     # ── Status ───────────────────────────────────────────────
 
@@ -1109,15 +1010,11 @@ class FileSyncWorker:
                 # Per-path detail for UI tooltip
                 md5s = self._remote_md5s.get(h, {})
                 pb7dir = entry.data.get("pb7dir")
-                pb6dir = entry.data.get("pb6dir")
                 md5_detail = {}
                 if pb7dir:
                     md5_detail["pb7"] = (md5s.get("pb7") == local_md5) if md5s.get("pb7") else None
-                if pb6dir:
-                    md5_detail["pb6"] = (md5s.get("pb6") == local_md5) if md5s.get("pb6") else None
                 hosts[h] = {
                     "pb7dir": pb7dir,
-                    "pb6dir": pb6dir,
                     "pbname": entry.data.get("pbname"),
                     "watcher_active": watcher_ok,
                     "remote_serial": remote_serial,
@@ -1168,8 +1065,6 @@ class FileSyncWorker:
         if entry:
             if entry.data.get("pb7dir"):
                 md5_detail["pb7"] = (md5s.get("pb7") == local_md5) if md5s.get("pb7") else None
-            if entry.data.get("pb6dir"):
-                md5_detail["pb6"] = (md5s.get("pb6") == local_md5) if md5s.get("pb6") else None
 
         msg: dict = {
             "hostname": hostname,

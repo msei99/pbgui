@@ -1,12 +1,10 @@
 import streamlit as st
 import platform
-from pbgui_func import check_password, set_page_config, change_ini, is_pb7_installed, is_pb_installed, is_authenticted, get_navi_paths
+from pbgui_func import check_password, set_page_config, change_ini, is_pb7_installed, is_authenticted, get_navi_paths
 from pbgui_purefunc import load_ini, save_ini
 import pbgui_help
 from Services import Services
-from Instance import Instances
 from RunV7 import V7Instances
-from Multi import MultiInstances
 from User import Users
 from PBCoinData import CoinData
 import toml
@@ -22,16 +20,6 @@ def _relay_mini_init():
     is_session_state_not_initialized() checks, then lets st.switch_page()
     route to the real target page.
     """
-    st.session_state.pbdir = load_ini("main", "pbdir")
-    if ".." in st.session_state.pbdir:
-        st.session_state.pbdir = os.path.abspath(st.session_state.pbdir)
-        save_ini("main", "pbdir", st.session_state.pbdir)
-
-    st.session_state.pbvenv = load_ini("main", "pbvenv")
-    if ".." in st.session_state.pbvenv:
-        st.session_state.pbvenv = os.path.abspath(st.session_state.pbvenv)
-        save_ini("main", "pbvenv", st.session_state.pbvenv)
-
     st.session_state.pb7dir = load_ini("main", "pb7dir")
     if ".." in st.session_state.pb7dir:
         st.session_state.pb7dir = os.path.abspath(st.session_state.pb7dir)
@@ -53,10 +41,6 @@ def _relay_mini_init():
 
     if "users" not in st.session_state:
         st.session_state.users = Users()
-    if "pbgui_instances" not in st.session_state:
-        st.session_state.pbgui_instances = Instances()
-    if "multi_instances" not in st.session_state:
-        st.session_state.multi_instances = MultiInstances()
     if "v7_instances" not in st.session_state:
         st.session_state.v7_instances = V7Instances()
     if "services" not in st.session_state:
@@ -125,36 +109,6 @@ def do_init():
     if "password_missing" in st.session_state:
         st.warning('You are using PBGUI without a password! Please set a password using "Change Password" below.', icon="⚠️")
     
-    # Load pb6 path from pbgui.ini
-    if "input_pbdir" in st.session_state:
-        if st.session_state.input_pbdir != st.session_state.pbdir:
-            st.session_state.pbdir = st.session_state.input_pbdir
-            save_ini("main", "pbdir", st.session_state.pbdir)
-            if "users" in st.session_state:
-                del st.session_state.users
-    st.session_state.pbdir = load_ini("main", "pbdir")
-    if ".." in st.session_state.pbdir:
-        st.session_state.pbdir = os.path.abspath(st.session_state.pbdir)
-        save_ini("main", "pbdir", st.session_state.pbdir)
-    if Path(f"{st.session_state.pbdir}/passivbot.py").exists():
-        pbdir_ok = "✅"
-    else:
-        pbdir_ok = "❌"
-
-    # Load pb6 venv from pbgui.ini
-    if "input_pbvenv" in st.session_state:
-        if st.session_state.input_pbvenv != st.session_state.pbvenv:
-            st.session_state.pbvenv = st.session_state.input_pbvenv
-            save_ini("main", "pbvenv", st.session_state.pbvenv)
-    st.session_state.pbvenv = load_ini("main", "pbvenv")
-    if ".." in st.session_state.pbvenv:
-        st.session_state.pbvenv = os.path.abspath(st.session_state.pbvenv)
-        save_ini("main", "pbvenv", st.session_state.pbvenv)
-    if Path(st.session_state.pbvenv).is_file() and PurePath(st.session_state.pbvenv).name.startswith("python"):
-        pbvenv_ok = "✅"
-    else:
-        pbvenv_ok = "❌"
-
     # Load pb7 path from pbgui.ini
     if "input_pb7dir" in st.session_state:
         if st.session_state.input_pb7dir != st.session_state.pb7dir:
@@ -201,24 +155,6 @@ def do_init():
 
     col1, col2 = st.columns([5,1], vertical_alignment="bottom")
     with col1:
-        st.text_input("Passivbot V6 path " + pbdir_ok, value=st.session_state.pbdir, key='input_pbdir')
-    with col2:
-        if st.button("Browse", key='button_change_pbdir'):
-            del st.session_state.input_pbdir
-            change_ini("main", "pbdir")
-            if "users" in st.session_state:
-                del st.session_state.users
-
-    col1, col2 = st.columns([5,1], vertical_alignment="bottom")
-    with col1:
-        st.text_input("Passivbot V6 python interpreter (venv/bin/python) " + pbvenv_ok, value=st.session_state.pbvenv, key='input_pbvenv')
-    with col2:
-        if st.button("Browse", key='button_change_pbvenv'):
-            del st.session_state.input_pbvenv
-            change_ini("main", "pbvenv")
-
-    col1, col2 = st.columns([5,1], vertical_alignment="bottom")
-    with col1:
         st.text_input("Passivbot V7 path " + pb7dir_ok, value=st.session_state.pb7dir, key='input_pb7dir')
     with col2:
         if st.button("Browse", key='button_change_pb7dir'):
@@ -258,13 +194,9 @@ def do_init():
                     st.session_state.role = "slave"
         st.checkbox("Master", value=st.session_state.master, key="input_master", help=pbgui_help.role)
 
-    # Check if any passivbot is installed
-    if not any([is_pb7_installed(), is_pb_installed()]):
-        st.warning('No Passivbot installed', icon="⚠️")
-        st.stop()
-    # Check if any pb6 venv is configured
-    if is_pb_installed() and not st.session_state.pbvenv:
-        st.warning('Passivbot V6 venv is not configured', icon="⚠️")
+    # Check if passivbot v7 is installed
+    if not is_pb7_installed():
+        st.warning('No Passivbot V7 installed', icon="⚠️")
         st.stop()
     # Check if any pb7 venv is configured
     if is_pb7_installed() and not st.session_state.pb7venv:
@@ -284,14 +216,6 @@ def do_init():
                 with st.expander("Details"):
                     st.code(traceback.format_exc())
                 st.stop()
-    # Init Instances
-    if 'pbgui_instances' not in st.session_state:
-        with st.spinner('Initializing Instances...'):
-            st.session_state.pbgui_instances = Instances()
-    # Init Multi Instances
-    if 'multi_instances' not in st.session_state:
-        with st.spinner('Initializing Multi Instances...'):
-            st.session_state.multi_instances = MultiInstances()
     # Init V7 Instances
     if 'v7_instances' not in st.session_state:
         with st.spinner('Initializing v7 Instances...'):

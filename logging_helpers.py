@@ -23,16 +23,10 @@ _global_min_level = 0
 # instead of getting their own individual {service}.log file.
 LOG_GROUPS: dict[str, str] = {
     'VPSManager':      'PBGui',
-    'Instance':        'PBGui',
     'Config':          'PBGui',
-    'Multi':           'PBGui',
     'ParetoDataLoader':'PBGui',
     'Status':          'PBGui',
     'HyperliquidAWS':  'PBGui',
-    'Backtest':        'PBGui',
-    'BacktestMulti':   'PBGui',
-    'Optimize':        'PBGui',
-    'OptimizeMulti':   'PBGui',
     'BacktestV7':      'PBGui',
     'OptimizeV7':      'PBGui',
 }

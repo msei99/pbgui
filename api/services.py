@@ -21,7 +21,7 @@ SERVICE = "Services"
 
 router = APIRouter()
 
-_SERVICES = ["pbrun", "pbremote", "pbmon", "pbstat", "pbdata", "pbcoindata", "api-server"]
+_SERVICES = ["pbrun", "pbremote", "pbmon", "pbdata", "pbcoindata", "api-server"]
 
 
 def _get_service(name: str):
@@ -35,9 +35,6 @@ def _get_service(name: str):
     if name == "pbmon":
         from PBMon import PBMon
         return PBMon()
-    if name == "pbstat":
-        from PBStat import PBStat
-        return PBStat()
     if name == "pbdata":
         from PBData import PBData
         obj = PBData.__new__(PBData)
