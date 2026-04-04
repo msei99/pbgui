@@ -1,10 +1,53 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted, get_navi_paths, render_header_with_guide, redirect_to_fastapi_v7_run
+import requests as _requests
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, is_pb7_installed, is_authenticted, get_navi_paths, render_header_with_guide, redirect_to_fastapi_v7_run, _start_fastapi_server_if_needed
 from pbgui_purefunc import update_status_v7
 from RunV7 import V7Instances , V7Instance
 from BacktestV7 import BacktestV7Item
 from Config import BalanceCalculator
 from pathlib import Path
+from logging_helpers import human_log as _log
+
+
+def _trigger_ssh_sync(instance_name: str) -> bool:
+    """Call FastAPI /api/v7/activate/{name} to push config+status via SSH."""
+    try:
+        api_host, api_port, ok = _start_fastapi_server_if_needed()
+        if not ok:
+            st.warning("API server not running — SSH sync skipped.")
+            return False
+        # Ensure we have a token
+        if "api_token" not in st.session_state:
+            from api.auth import generate_token
+            user_id = (
+                st.session_state.get("user", {}).get("id")
+                or st.session_state.get("user")
+                or "anonymous"
+            )
+            st.session_state["api_token"] = generate_token(
+                str(user_id), expires_in_seconds=86400
+            ).token
+        token = st.session_state["api_token"]
+        url = f"http://127.0.0.1:{api_port}/api/v7/activate/{instance_name}"
+        resp = _requests.post(url, params={"token": token}, timeout=30)
+        if resp.ok:
+            data = resp.json()
+            ok_hosts = data.get("ok", 0)
+            failed = data.get("failed", 0)
+            if ok_hosts > 0:
+                st.success(f"SSH sync: {ok_hosts} host(s) OK")
+            elif failed > 0:
+                st.warning(f"SSH sync: {failed} host(s) failed")
+            else:
+                st.info("Saved (no remote hosts connected)")
+            return True
+        else:
+            st.warning(f"SSH sync failed: {resp.status_code}")
+            return False
+    except Exception as e:
+        _log("v7_run", f"SSH sync trigger failed: {e}", level="WARNING")
+        st.warning(f"SSH sync error: {e}")
+        return False
 
 
 def _docs_index(lang: str) -> list[tuple[str, str]]:
@@ -83,6 +126,7 @@ def edit_v7_instance():
             redirect_to_fastapi_v7_run()
         if st.button(":material/save:"):
             v7_instance.save()
+            _trigger_ssh_sync(v7_instance.user)
         if st.button("Import"):
             v7_instance.import_instance()
         if st.button("Backtest"):
