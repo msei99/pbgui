@@ -374,9 +374,6 @@
       <button class="sb-btn" data-panel="pbmon">
         <span class="sb-dot" id="dot-pbmon"></span>PBMon
       </button>
-      <button class="sb-btn" data-panel="pbstat">
-        <span class="sb-dot" id="dot-pbstat"></span>PBStat
-      </button>
       <button class="sb-btn" data-panel="pbdata">
         <span class="sb-dot" id="dot-pbdata"></span>PBData
       </button>
@@ -477,19 +474,6 @@
           <span class="inline-msg" id="pbmon-save-msg"></span>
         </div>
       </div>
-    </div>
-
-    <!-- PBStat panel -->
-    <div id="panel-pbstat" class="svc-panel">
-      <div class="ctrl-strip">
-        <span class="ctrl-title">PBStat</span>
-        <div class="ctrl-status">
-          <div class="status-dot" id="cs-pbstat"></div>
-          <span class="status-label" id="sl-pbstat">checking…</span>
-        </div>
-        <span id="ctrl-btns-pbstat"></span>
-      </div>
-      <div class="log-wrap"><div id="log-pbstat" style="height:100%;"></div></div>
     </div>
 
     <!-- PBData panel -->
@@ -883,7 +867,6 @@ window.PBGUI_NAV_CONFIG = {
     { id: 'pbrun',      label: 'PBRun',       logFile: 'PBRun.log',       isApiServer: false, guideKeyword: 'pbrun_service'      },
     { id: 'pbremote',   label: 'PBRemote',    logFile: 'PBRemote.log',    isApiServer: false, guideKeyword: 'pbremote_service'   },
     { id: 'pbmon',      label: 'PBMon',       logFile: 'PBMon.log',       isApiServer: false, guideKeyword: 'pbmon_service'      },
-    { id: 'pbstat',     label: 'PBStat',      logFile: 'PBStat.log',      isApiServer: false, guideKeyword: 'pbstat_service'     },
     { id: 'pbdata',     label: 'PBData',      logFile: 'PBData.log',      isApiServer: false, guideKeyword: 'pbdata'             },
     { id: 'pbcoindata', label: 'PBCoinData',  logFile: 'PBCoinData.log',  isApiServer: false, guideKeyword: 'pbcoindata_service' },
     { id: 'api-server', label: 'PBAPIServer', logFile: 'PBApiServer.log', isApiServer: true,  guideKeyword: 'pbapiserver'        },

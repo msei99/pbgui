@@ -40,7 +40,6 @@ class RemoteServer():
         self._path = path
         self._unique = []
         self._api_md5 = None
-        self._pbdir = None
         self._pb7dir = None
         self._bucket = None
         # self._instances = []
@@ -58,8 +57,6 @@ class RemoteServer():
         self._pbgui_commit = None
         self._pbgui_branch = "unknown"
         self._pbgui_python = "N/A"
-        self._pb6_version = "N/A"
-        self._pb6_commit = None
         self._pb7_version = "N/A"
         self._pb7_commit = None
         self._pb7_branch = "unknown"
@@ -82,8 +79,6 @@ class RemoteServer():
     def path(self): return self._path
     @property
     def api_md5(self): return self._api_md5
-    @property
-    def pbdir(self): return self._pbdir
     @property
     def pb7dir(self): return self._pb7dir
     @property
@@ -117,10 +112,6 @@ class RemoteServer():
     @property
     def pbgui_python(self): return self._pbgui_python
     @property
-    def pb6_version(self): return self._pb6_version
-    @property
-    def pb6_commit(self): return self._pb6_commit
-    @property
     def pb7_version(self): return self._pb7_version
     @property
     def pb7_commit(self): return self._pb7_commit
@@ -149,10 +140,6 @@ class RemoteServer():
     def path(self, new_path):
         if self._path != new_path:
             self._path = new_path
-    @pbdir.setter
-    def pbdir(self, new_pbdir):
-        if self._pbdir != new_pbdir:
-            self._pbdir = new_pbdir
     @pb7dir.setter
     def pb7dir(self, new_pb7dir):
         if self._pb7dir != new_pb7dir:
@@ -247,10 +234,6 @@ class RemoteServer():
                         self._pbgui_python = cfg["pbgpy"]
                     else:
                         self._pbgui_python = "N/A"
-                    if "pb6v" in cfg:
-                        self._pb6_version = cfg["pb6v"]
-                    if "pb6c" in cfg:
-                        self._pb6_commit = cfg["pb6c"]
                     if "pb7v" in cfg:
                         self._pb7_version = cfg["pb7v"]
                     if "pb7c" in cfg:
@@ -296,14 +279,11 @@ class RemoteServer():
         """
         api_file = Path(f'{self._path}/api-keys.json')
         if api_file.exists():
-            if self.pbdir:
-                api_keys = Path(f'{self._pbdir}/api-keys.json')
-                self.update_api(api_file, api_keys, "v6")
             if self.pb7dir:
                 api_keys = Path(f'{self._pb7dir}/api-keys.json')
-                self.update_api(api_file, api_keys, "v7")
+                self.update_api(api_file, api_keys)
 
-    def update_api(self, api_file: Path, api_keys: Path, version : str):
+    def update_api(self, api_file: Path, api_keys: Path):
         """
         Checks if the api-keys.json from pbgui (self._path) is different from api-keys.json from passivbot.
         If different, It creates a backup of the passivbot api-keys.json to pbgui/data/backup, and then copy the new api-keys.json file to the passivbot directory.
@@ -313,10 +293,7 @@ class RemoteServer():
             # Backup api-keys
             date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             pbgdir = Path.cwd()
-            if version == "v6":
-                destination = Path(f'{pbgdir}/data/backup/api-keys/{date}')
-            elif version == "v7":
-                destination = Path(f'{pbgdir}/data/backup/api-keys_v7/{date}')
+            destination = Path(f'{pbgdir}/data/backup/api-keys_v7/{date}')
             if not destination.exists():
                 destination.mkdir(parents=True)
             if api_keys.exists():
@@ -382,22 +359,14 @@ class PBRemote():
             self.role = pb_config.get("main", "role")
         else:
             self.role = "slave"
-        # Init pbdirs
-        self.pbdir = None
+        # Init pb7dir
         self.pb7dir = None
-        if pb_config.has_option("main", "pbdir"):
-            self.pbdir = pb_config.get("main", "pbdir")
         if pb_config.has_option("main", "pb7dir"):
             self.pb7dir = pb_config.get("main", "pb7dir")
-        if not any([self.pbdir, self.pb7dir]):
-            _log('PBRemote', 'Error: No passivbot directory configured in pbgui.ini', level='ERROR')
-            self.error = "No passivbot directory configured in pbgui.ini"
-            return
-        # Print Warning if only pbdir or pb7dir configured
-        if not self.pbdir:
-            _log('PBRemote', 'Warning: No passivbot directory configured in pbgui.ini', level='WARNING')
         if not self.pb7dir:
-            _log('PBRemote', 'Warning: No passivbot v7 directory configured in pbgui.ini', level='WARNING')
+            _log('PBRemote', 'Error: No passivbot v7 directory configured in pbgui.ini', level='ERROR')
+            self.error = "No passivbot v7 directory configured in pbgui.ini"
+            return
         self.cmd_path = f'{pbgdir}/data/cmd'
         self.remote_path = f'{pbgdir}/data/remote'
         if not Path(self.cmd_path).exists():
@@ -471,14 +440,8 @@ class PBRemote():
             self.local_run.update_pb7_python_version()
         return getattr(self.local_run, 'pb7_python', 'N/A')
     @property
-    def pb6_version(self):
-        return self.local_run.pb6_version
-    @property
     def pb7_commit(self):
         return self.local_run.pb7_commit
-    @property
-    def pb6_commit(self):
-        return self.local_run.pb6_commit
     #unsynced api
     @property
     def unsynced_api(self):
@@ -715,11 +678,7 @@ class PBRemote():
         """Takes the api-keys.json from passivbot folder to sync it to other remotes by putting it in data/cmd/api-keys.json."""
         pbgdir = Path.cwd()
         api_file = Path(f'{pbgdir}/data/cmd/api-keys.json')
-        source = None
-        if self.pb7dir:
-            source = Path(f'{self.pb7dir}/api-keys.json')
-        elif self.pbdir:
-            source = Path(f'{self.pbdir}/api-keys.json')
+        source = Path(f'{self.pb7dir}/api-keys.json') if self.pb7dir else None
         if source and source.exists():
             _log('PBRemote', 'Sync api-keys.json to all remote servers', level='INFO')
             shutil.copy(source, api_file)
@@ -794,8 +753,6 @@ class PBRemote():
             "pbgc": self.local_run.pbgui_commit,
             "pbgb": getattr(self.local_run, 'pbgui_branch', 'unknown'),
             "pbgpy": getattr(self.local_run, 'pbgui_python', 'N/A'),
-            "pb6v": self.local_run.pb6_version,
-            "pb6c": self.local_run.pb6_commit,
             "pb7v": self.local_run.pb7_version,
             "pb7c": self.local_run.pb7_commit,
             "pb7b": getattr(self.local_run, 'pb7_branch', 'unknown'),
@@ -816,12 +773,8 @@ class PBRemote():
             local.unlink(missing_ok=True)
 
     def calculate_api_md5(self):
-        """Makes a md5 hash from the api-keys.json in passivbot folder."""
-        file = None
-        if self.pb7dir:
-            file = Path(f'{self.pb7dir}/api-keys.json')
-        elif self.pbdir:
-            file = Path(f'{self.pbdir}/api-keys.json')
+        """Makes a md5 hash from the api-keys.json in passivbot v7 folder."""
+        file = Path(f'{self.pb7dir}/api-keys.json') if self.pb7dir else None
         if file and file.exists():
             with open(file, 'rb') as file_obj:
                 file_contents = file_obj.read()
@@ -839,7 +792,6 @@ class PBRemote():
         found_remote = glob.glob(p)
         for remote in found_remote:
             rserver = RemoteServer(remote)
-            rserver.pbdir = self.pbdir
             rserver.pb7dir = self.pb7dir
             rserver.bucket = self.bucket_dir
             rserver.pbname = self.name
@@ -857,7 +809,6 @@ class PBRemote():
         found_remote = glob.glob(p)
         for remote in found_remote:
             rserver = RemoteServer(remote)
-            rserver.pbdir = self.pbdir
             rserver.pb7dir = self.pb7dir
             rserver.bucket = self.bucket_dir
             rserver.pbname = self.name

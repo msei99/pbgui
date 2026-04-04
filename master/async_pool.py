@@ -596,17 +596,14 @@ class AsyncSSHPool:
         try:
             ini = await self._read_ini_internal(entry)
             entry.data['ini'] = ini
-            entry.data['pb6dir'] = ini.get('main', 'pbdir', fallback=None)
             entry.data['pb7dir'] = ini.get('main', 'pb7dir', fallback=None)
             entry.data['pbname'] = ini.get('main', 'pbname', fallback=hostname)
             _log(SERVICE, f"[ini] Cached remote config for {hostname} "
-                 f"(pb7dir={entry.data['pb7dir']}, "
-                 f"pb6dir={entry.data['pb6dir']})", level="DEBUG")
+                 f"(pb7dir={entry.data['pb7dir']})", level="DEBUG")
         except Exception as e:
             _log(SERVICE, f"[ini] Failed to read remote ini for {hostname}: "
                  f"{e}", level="WARNING")
             entry.data['ini'] = None
-            entry.data['pb6dir'] = None
             entry.data['pb7dir'] = None
             entry.data['pbname'] = hostname
 
@@ -687,7 +684,6 @@ class AsyncSSHPool:
             success = await self.write_remote_ini(hostname, ini)
             if success:
                 # Also update convenience keys if relevant
-                entry.data['pb6dir'] = ini.get('main', 'pbdir', fallback=None)
                 entry.data['pb7dir'] = ini.get('main', 'pb7dir', fallback=None)
             return success
         except Exception as e:

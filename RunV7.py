@@ -1,12 +1,12 @@
 import streamlit as st
 import streamlit_scrollable_textbox as stx
 import pbgui_help
-from pbgui_func import pbdir, PBGDIR, load_symbols_from_ini, validateHJSON, st_file_selector, info_popup, error_popup
+from pbgui_func import PBGDIR, load_symbols_from_ini, validateHJSON, st_file_selector, info_popup, error_popup
 from pbgui_purefunc import update_status_v7
 from PBCoinData import CoinData, normalize_symbol
 from PBRemote import PBRemote
 from User import Users
-from Config import Config, ConfigV7, Logging
+from Config import ConfigV7, Logging
 from Exchange import Exchange
 from pathlib import Path
 import glob

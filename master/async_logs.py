@@ -40,12 +40,6 @@ def _resolve_log_path(service_or_path: str) -> str:
 
 def resolve_bot_log_path(instance_name: str, pb_version: str) -> str:
     """Resolve a bot instance to its relative log file path."""
-    if pb_version == "7":
-        return f"data/run_v7/{instance_name}/passivbot.log"
-    elif pb_version == "6":
-        return f"data/multi/{instance_name}/passivbot.log"
-    elif pb_version == "s":
-        return f"data/instances/{instance_name}/passivbot.log"
     return f"data/run_v7/{instance_name}/passivbot.log"
 
 
@@ -143,19 +137,9 @@ class AsyncLogStreamer:
                 f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log",
                 f"~/{REMOTE_PBGUI_DIR}/data/logs/{instance_name}.log",
             ]
-        elif pb_version == "6":
-            paths = [
-                f"~/{REMOTE_PBGUI_DIR}/data/multi/{instance_name}/passivbot.log",
-            ]
-        elif pb_version == "s":
-            paths = [
-                f"~/{REMOTE_PBGUI_DIR}/data/instances/{instance_name}/passivbot.log",
-            ]
         else:
             paths = [
                 f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log",
-                f"~/{REMOTE_PBGUI_DIR}/data/multi/{instance_name}/passivbot.log",
-                f"~/{REMOTE_PBGUI_DIR}/data/instances/{instance_name}/passivbot.log",
                 f"~/{REMOTE_PBGUI_DIR}/data/logs/{instance_name}.log",
             ]
 

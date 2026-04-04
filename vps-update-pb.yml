@@ -113,16 +113,6 @@
         state: absent
       when: pb6_dir.stat.exists or pb6_venv.stat.exists
 
-    - name: Remove python3.10-venv package
-      apt:
-        pkg:
-          - python3.10-venv
-        state: absent
-        autoremove: yes
-        clean: yes
-      become: yes
-      when: pb6_dir.stat.exists or pb6_venv.stat.exists
-
     - name: Get current pb7 branch
       command: git rev-parse --abbrev-ref HEAD
       args:

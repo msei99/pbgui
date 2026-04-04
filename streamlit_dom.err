@@ -1,5 +1,0 @@
-[3936641:3936822:0306/220651.993175:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: PHONE_REGISTRATION_ERROR
-[3936641:3936822:0306/220652.012185:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: PHONE_REGISTRATION_ERROR
-[3936641:3936822:0306/220652.036029:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: PHONE_REGISTRATION_ERROR
-[3936641:3936822:0306/220652.072754:ERROR:google_apis/gcm/engine/mcs_client.cc:700]   Error code: 401  Error message: Authentication Failed: wrong_secret
-[3936641:3936822:0306/220652.076922:ERROR:google_apis/gcm/engine/mcs_client.cc:702] Failed to log in to GCM, resetting connection.

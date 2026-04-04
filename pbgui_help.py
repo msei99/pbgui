@@ -1505,8 +1505,7 @@ dynamic_ignore = """
     added to the ignored_coins list. Coins in ignored_symbols_long or
     ignored_symbols_short will also be added to the ignored_coins list.
     Update interval is configured in PBCoinData.
-    On passivbot6 PBRun will restart the bot if needed.
-    On passivbot7 PBRun creat the ignored_coins.json file and pb7 will use this list as filter.
+    PBRun creates the ignored_coins.json file and pb7 will use this list as filter.
     ```"""
 
 notices_ignore = """
@@ -1827,8 +1826,6 @@ What it does:
 
 Note:
 - PBGui services will be restarted during this update (short downtime).
-- If PB6 is not installed on the VPS, Python 3.10 components may be removed to save disk space.
-
 Warning:
 - This replaces your existing venv_pbgui on the VPS.
 

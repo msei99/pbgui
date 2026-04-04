@@ -601,8 +601,8 @@ class RunV7():
         self._v7_config = {}
         self.name = None
         self.version = None
-        self.pbdir = None
-        self.pbvenv = None
+        self.pb7dir = None
+        self.pb7venv = None
         self.pbgdir = None
         self.dynamic_ignore = None
         self._dynamic_wait_log_ts = 0
@@ -658,18 +658,18 @@ class RunV7():
                 return
             self._dynamic_wait_log_ts = 0
             old_os_path = os.environ.get('PATH', '')
-            new_os_path = os.path.dirname(self.pbvenv) + os.pathsep + old_os_path
+            new_os_path = os.path.dirname(self.pb7venv) + os.pathsep + old_os_path
             os.environ['PATH'] = new_os_path
             try:
-                cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/src/main.py'), PurePath(f'{self.path}/config_run.json')]
+                cmd = [self.pb7venv, '-u', PurePath(f'{self.pb7dir}/src/main.py'), PurePath(f'{self.path}/config_run.json')]
                 logfile = Path(f'{self.path}/passivbot.log')
                 with open(logfile, "ab") as log:
                     if platform.system() == "Windows":
                         creationflags = subprocess.DETACHED_PROCESS
                         creationflags |= subprocess.CREATE_NO_WINDOW
-                        subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
+                        subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pb7dir, text=True, creationflags=creationflags)
                     else:
-                        subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
+                        subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pb7dir, text=True, start_new_session=True)
             finally:
                 os.environ['PATH'] = old_os_path
             _log("PBRun", f"Start: passivbot_v7 {self.path}/config_run.json")
@@ -767,7 +767,7 @@ class RunV7():
                             # with open(file_run, "w", encoding='utf-8') as f:
                             #     json.dump(self._v7_config, f, indent=4)
                             # Find Exchange from User
-                            api_path = f'{self.pbdir}/api-keys.json'
+                            api_path = f'{self.pb7dir}/api-keys.json'
                             if Path(api_path).exists():
                                 with open(api_path, "r", encoding='utf-8') as f:
                                     api_keys = json.load(f)
@@ -799,14 +799,10 @@ class PBRun():
         self.coindata = CoinData()
         self.pbgui_version = "N/A"
         self.pbgui_version_origin = "N/A"
-        self.pb6_version = "N/A"
-        self.pb6_version_origin = "N/A"
         self.pb7_version = "N/A"
         self.pb7_version_origin = "N/A"
         self.pbgui_commit = "N/A"
         self.pbgui_commit_origin = "N/A"
-        self.pb6_commit = "N/A"
-        self.pb6_commit_origin = "N/A"
         self.pb7_commit = "N/A"
         self.pb7_commit_origin = "N/A"
         self.pbgui_python = f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -836,13 +832,10 @@ class PBRun():
         self.instances_status_v7.pbname = self.name
         self.instances_status_v7.activate_ts = self.activate_v7_ts
         # Init pbdirs
-        self.pbdir = None
         self.pb7dir = None
-        if pb_config.has_option("main", "pbdir"):
-            self.pbdir = pb_config.get("main", "pbdir")
         if pb_config.has_option("main", "pb7dir"):
             self.pb7dir = pb_config.get("main", "pb7dir")
-        if not any([self.pbdir, self.pb7dir]):
+        if not self.pb7dir:
             if __name__ == '__main__':
                 _log("PBRun", "No passivbot directory configured in pbgui.ini", level="ERROR")
                 sys.exit(1)
@@ -850,28 +843,16 @@ class PBRun():
                 _log("PBRun", "No passivbot directory configured in pbgui.ini", level="ERROR")
                 return
         # Init pbvenvs
-        self.pbvenv = None
         self.pb7venv = None
-        if pb_config.has_option("main", "pbvenv"):
-            self.pbvenv = pb_config.get("main", "pbvenv")
         if pb_config.has_option("main", "pb7venv"):
             self.pb7venv = pb_config.get("main", "pb7venv")
-        if not any([self.pbvenv, self.pb7venv]):
+        if not self.pb7venv:
             if __name__ == '__main__':
                 _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini", level="ERROR")
                 sys.exit(1)
             else:
                 _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini", level="ERROR")
                 return
-        # Print warnings only for actual per-version mismatches.
-        if self.pbdir and not self.pbvenv:
-            _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini for pbdir", level="WARNING")
-        if self.pbvenv and not self.pbdir:
-            _log("PBRun", "No passivbot directory configured in pbgui.ini for pbvenv", level="WARNING")
-        if self.pb7dir and not self.pb7venv:
-            _log("PBRun", "No passivbot v7 venv python interpreter configured in pbgui.ini for pb7dir", level="WARNING")
-        if self.pb7venv and not self.pb7dir:
-            _log("PBRun", "No passivbot v7 directory configured in pbgui.ini for pb7venv", level="WARNING")
         # Init paths
         self.v7_path = f'{self.pbgdir}/data/run_v7'
         self.cmd_path = f'{self.pbgdir}/data/cmd'
@@ -967,14 +948,6 @@ class PBRun():
             pbgui_commit = _run_subprocess(["git", "--git-dir", f'{pbgui_git}', "log", "-n", "1", "--pretty=format:%H", "origin/main"], timeout=15)
             if pbgui_commit and pbgui_commit.returncode == 0:
                 self.pbgui_commit_origin = pbgui_commit.stdout
-        if self.pbdir:
-            pb6_git = Path(f'{self.pbdir}/.git')
-            if pb6_git.exists():
-                pb6_git = Path(f'{self.pbdir}/.git')
-                _run_subprocess(["git", "--git-dir", f'{pb6_git}', "fetch", "origin"], timeout=30)
-                pb6_commit = _run_subprocess(["git", "--git-dir", f'{pb6_git}', "log", "-n", "1", "--pretty=format:%H", "origin/v6.1.4b_latest_v6"], timeout=15)
-                if pb6_commit and pb6_commit.returncode == 0:
-                    self.pb6_commit_origin = pb6_commit.stdout
         if self.pb7dir:
             pb7_git = Path(f'{self.pb7dir}/.git')
             if pb7_git.exists():
@@ -997,13 +970,6 @@ class PBRun():
             pbgui_branch = _run_subprocess(["git", "--git-dir", f'{pbgui_git}', "rev-parse", "--abbrev-ref", "HEAD"], timeout=15)
             if pbgui_branch and pbgui_branch.returncode == 0:
                 self.pbgui_branch = pbgui_branch.stdout.strip()
-        if self.pbdir:
-            pb6_git = Path(f'{self.pbdir}/.git')
-            if pb6_git.exists():
-                pb6_git = Path(f'{self.pbdir}/.git')
-                pb6_commit = _run_subprocess(["git", "--git-dir", f'{pb6_git}', "log", "-n", "1", "--pretty=format:%H"], timeout=15)
-                if pb6_commit and pb6_commit.returncode == 0:
-                    self.pb6_commit = pb6_commit.stdout
         if self.pb7dir:
             pb7_git = Path(f'{self.pb7dir}/.git')
             if pb7_git.exists():
@@ -1381,15 +1347,6 @@ class PBRun():
                 if version:
                     self.pbgui_version_origin = version.group(0)
                     break
-        if Path(f'{self.pbdir}/.git').exists():
-            pb6_readme_origin = _run_subprocess(["git", "--git-dir", f'{self.pbdir}/.git', "show", "origin/v6.1.4b_latest_v6:README.md"], timeout=20)
-            lines = pb6_readme_origin.stdout.splitlines() if pb6_readme_origin and pb6_readme_origin.returncode == 0 else []
-            for line in lines:
-                #find regex regex_search('^#? ?v[0-9.]+'
-                version = re.search('v[0-9.]+', line)
-                if version:
-                    self.pb6_version_origin = version.group(0)
-                    break
         if Path(f'{self.pb7dir}/.git').exists():
             pb7_readme_origin = _run_subprocess(["git", "--git-dir", f'{self.pb7dir}/.git', "show", "origin/master:README.md"], timeout=20)
             lines = pb7_readme_origin.stdout.splitlines() if pb7_readme_origin and pb7_readme_origin.returncode == 0 else []
@@ -1413,18 +1370,6 @@ class PBRun():
                 if version:
                     self.pbgui_version = version.group(0)
                     break
-        if self.pbdir:
-            pb6_readme = Path(f'{self.pbdir}/README.md')
-            if pb6_readme.exists():
-                # read only first 20 lines
-                with open(pb6_readme, "r", encoding='utf-8') as f:
-                    lines = f.readlines()[:20]
-                for line in lines:
-                    #find regex regex_search('^#? ?v[0-9.]+'
-                    version = re.search('v[0-9.]+', line)
-                    if version:
-                        self.pb6_version = version.group(0)
-                        break
         if self.pb7dir:
             pb7_readme = Path(f'{self.pb7dir}/README.md')
             if pb7_readme.exists():
@@ -1629,8 +1574,8 @@ class PBRun():
                 run_v7.user = v7_instance.split('/')[-1]
                 status.name = run_v7.user
                 run_v7.name = self.name
-                run_v7.pbdir = self.pb7dir
-                run_v7.pbvenv = self.pb7venv
+                run_v7.pb7dir = self.pb7dir
+                run_v7.pb7venv = self.pb7venv
                 run_v7.pbgdir = self.pbgdir
                 if run_v7.load():
                     if run_v7.is_running():

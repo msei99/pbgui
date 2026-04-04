@@ -59,17 +59,6 @@
       { page: 'v7_strategy_explorer', icon: '&#128065;', label: 'Strategy Explorer' },
       { page: 'v7_balance_calc',      icon: '&#128176;', label: 'Balance Calculator'},
       { page: 'v7_pareto_explorer',   icon: '&#127919;', label: 'Pareto Explorer'   }
-    ]},
-    { id: 'pbv6m', label: 'PBv6 Multi', items: [
-      { page: 'v6_multi_run',         icon: '&#9654;',   label: 'Run'               },
-      { page: 'v6_multi_backtest',    icon: '&#9194;',   label: 'Backtest'          },
-      { page: 'v6_multi_optimize',    icon: '&#9881;',   label: 'Optimize'          }
-    ]},
-    { id: 'pbv6s', label: 'PBv6 Single', items: [
-      { page: 'v6_single_run',        icon: '&#9654;',   label: 'Run'               },
-      { page: 'v6_single_backtest',   icon: '&#9194;',   label: 'Backtest'          },
-      { page: 'v6_single_optimize',   icon: '&#9881;',   label: 'Optimize'          },
-      { page: 'v6_spot_view',         icon: '&#128065;', label: 'Spot View'         }
     ]}
   ];
 

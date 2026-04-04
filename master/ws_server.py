@@ -560,18 +560,8 @@ class WSServer:
             }))
             return
 
-        # Build kill command based on version
-        # V7: main.py with instance name in config path
-        # V6 Multi: passivbot_multi.py with instance name
-        # V6 Single: passivbot.py with instance name
-        if pb_version == "7":
-            grep_pattern = f"main.py.*{name}"
-        elif pb_version == "6":
-            grep_pattern = f"passivbot_multi.py.*{name}"
-        elif pb_version == "s":
-            grep_pattern = f"passivbot.py.*{name}"
-        else:
-            grep_pattern = f"(main.py|passivbot_multi.py|passivbot.py).*{name}"
+        # Build kill command — V7: main.py with instance name in config path
+        grep_pattern = f"main.py.*{name}"
 
         # Find and kill the process
         kill_cmd = (

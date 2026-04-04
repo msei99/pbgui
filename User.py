@@ -2,7 +2,7 @@ import json
 import socket
 from pathlib import Path, PurePath
 from datetime import datetime, timezone
-from pbgui_purefunc import pbdir, pb7dir, PBGDIR, is_pb_installed, is_pb7_installed
+from pbgui_purefunc import pb7dir, PBGDIR, is_pb7_installed
 import shutil
 
 class User:
@@ -83,7 +83,6 @@ class Users:
     def __init__(self):
         self.users = []
         self.index = 0
-        self.api_path = f'{pbdir()}/api-keys.json'
         self.api7_path = f'{pb7dir()}/api-keys.json'
         self.api_backup = Path(f'{PBGDIR}/data/api-keys')
         self._top_level_extras = {}
@@ -110,10 +109,6 @@ class Users:
             "api_by":     self._top_level_extras.get("_api_by"),
         }
     
-    def list_single(self):
-        from Exchange import Single
-        return list(map(lambda c: c.name, filter(lambda c: c.exchange in Single.list(), self.users)))
-
     def list_v7(self):
         from Exchange import V7
         return list(map(lambda c: c.name, filter(lambda c: c.exchange in V7.list(), self.users)))
@@ -198,19 +193,6 @@ class Users:
         self.users = []
         users: dict = {}
         self._top_level_extras = {}
-        load_errors: list[str] = []
-        try:
-            if Path(self.api_path).exists():
-                with Path(self.api_path).open(encoding="UTF-8") as f:
-                    loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        users = loaded
-                    else:
-                        raise ValueError(
-                            f"{self.api_path} has invalid format: expected JSON object at top-level"
-                        )
-        except Exception as e:
-            load_errors.append(f"{self.api_path}: {e}")
         try:
             if Path(self.api7_path).exists():
                 with Path(self.api7_path).open(encoding="UTF-8") as f:
@@ -219,12 +201,9 @@ class Users:
                         raise ValueError(
                             f"{self.api7_path} has invalid format: expected JSON object at top-level"
                         )
-                    users.update(loaded)
+                    users = loaded
         except Exception as e:
-            load_errors.append(f"{self.api7_path}: {e}")
-
-        if load_errors:
-            raise ValueError("Failed to load api-keys: " + "; ".join(load_errors))
+            raise ValueError(f"Failed to load api-keys: {self.api7_path}: {e}")
 
         if not isinstance(users, dict):
             raise ValueError("api-keys data has invalid format: expected JSON object")
@@ -340,12 +319,7 @@ class Users:
         date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         if not self.api_backup.exists():
             self.api_backup.mkdir(parents=True)
-        if is_pb_installed():
-            destination = Path(f'{self.api_backup}/api-keys_{date}.json')
-            if Path(self.api_path).exists():
-                shutil.copy(PurePath(self.api_path), destination)
-            with Path(f'{self.api_path}').open("w", encoding="UTF-8") as f:
-                json.dump(save_users, f, indent=4)
+
         # Backup api-keys7 and save new version
         if is_pb7_installed():
             destination = Path(f'{self.api_backup}/api-keys7_{date}.json')
