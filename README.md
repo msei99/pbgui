@@ -325,6 +325,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.71 (unreleased)
 - Redesign: V7 sync/activate system — `status_v7.json` is now the Single Source of Truth; removed `activate_*.cmd` and `delete_*.cmd` for v7; per-instance `activate_ts` with merge logic for multi-master sync; configs pushed to all VPS on Save (not just config.json — all coin configs too); PBRun polls `status_v7.json` mtime; other masters reconcile via inotify on VPS; shared helpers (`update_status_v7`, `get_syncable_files`) moved to `pbgui_purefunc.py`
+- Fixed: PBRun `has_status_v7_changed()` caused infinite sync loop — `watch_v7()` always saves `status_v7.json` which changes its mtime, re-triggering `has_new_status()` on every poll cycle; PBRemote then pushed to cloud on each iteration, flooding all VPS; fix: update cached mtime after `watch_v7()` save
 - Improved: PBRemote slave no longer syncs v7 data up — `sync_v7_up()` is master-only (configs + status_v7 + alive); slaves rely on `alive()` for heartbeat
 - Improved: Frontend "Activate" buttons renamed to "Sync" throughout PBv7 Run page (sidebar, per-row, status labels)
 - Removed: "SSH Sync All" and per-row "Sync" buttons from FastAPI v7 Run page — sync now happens automatically on save
