@@ -328,6 +328,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Improved: PBRemote slave no longer syncs v7 data up — `sync_v7_up()` is master-only (configs + status_v7 + alive); slaves rely on `alive()` for heartbeat
 - Improved: Frontend "Activate" buttons renamed to "Sync" throughout PBv7 Run page (sidebar, per-row, status labels)
 - Removed: "SSH Sync All" and per-row "Sync" buttons from FastAPI v7 Run page — sync now happens automatically on save
+- Fixed: Saving a v7 instance in Streamlit editor only updated local `status_v7.json` but did not SSH-push to VPS — now triggers `POST /api/v7/activate/{name}` after save to push config + status via SFTP
 - Fixed: Clicking "Edit" on a v7 instance in FastAPI briefly opened Streamlit then bounced back — root cause: server-side interception in `build_navigation()` always redirected `v7_run` URL path to FastAPI, even when a relay param (`_relay_edit_instance` / `_relay_add_instance`) was active; relay is now checked before the redirect fires
 - Improved: `update_from_status_v7()` now uses per-instance `activate_ts` comparison instead of global — correct multi-master merge where each master can update different instances independently
 - Improved: `V7Instance.activate()`, `V7Instances.activate_all()`, and `restart_instance()` now use `update_status_v7()` instead of creating `activate_*.cmd` files
