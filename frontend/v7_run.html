@@ -194,18 +194,6 @@ tr:hover td { background: var(--bg3); }
 tr.row-inactive td  { opacity: 0.45; }
 
 /* Inline buttons */
-.btn-act {
-  height: 24px;
-  padding: 0 var(--sp-sm);
-  font-size: var(--fs-xs);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--bg2);
-  color: var(--accent);
-  cursor: pointer;
-}
-.btn-act:hover { background: var(--bg3); }
-.btn-act:disabled { opacity: 0.3; cursor: not-allowed; }
 .btn-edit {
   height: 24px; width: 28px;
   padding: 0;
@@ -393,7 +381,7 @@ tr.row-inactive td  { opacity: 0.45; }
           <option value="active">Active</option>
           <option value="synced">Synced</option>
           <option value="outdated">Outdated</option>
-          <option value="activate_needed">Needs Activate</option>
+          <option value="activate_needed">Needs Sync</option>
           <option value="stop_needed">Stop Needed</option>
           <option value="disabled">Disabled</option>
           <option value="collecting">Collecting</option>
@@ -402,7 +390,6 @@ tr.row-inactive td  { opacity: 0.45; }
         <button class="sb-btn" onclick="loadInstances()">&#x21bb; Refresh</button>
         <button class="sb-btn" onclick="addInstance()">&#x2795; Add Instance</button>
         <button class="sb-btn" onclick="openBackups()">&#x1F4BE; Backups</button>
-        <button class="sb-btn primary" id="btn-activate-all" onclick="activateAll()">SSH Activate All</button>
       </div>
     </div>
     <div id="sidebar-resize"></div>
@@ -517,14 +504,13 @@ var COLS = [
   { key: 'twe',             label: 'TWE' },
   { key: 'running_on',      label: 'Running On' },
   { key: 'note',            label: 'Note' },
-  { key: '_actions',         label: '' },
   { key: '_delete',          label: '' },
 ];
 
 var STATUS_LABELS = {
   synced:          'synced',
   outdated:        'outdated',
-  activate_needed: 'activate needed',
+  activate_needed: 'sync needed',
   stop_needed:     'stop needed',
   disabled:        'disabled',
   collecting:      'collecting…',
@@ -547,7 +533,6 @@ function buildCells(r) {
     esc(r.twe || '\u2013'),
     esc(runOn),
     esc(r.note || ''),
-    '<button class="btn-act" data-activate="' + esc(r.name) + '">Activate</button>',
     '<button class="btn-del" data-delete="' + esc(r.name) + '" title="Delete instance">\u2716</button>',
   ];
 }
@@ -579,7 +564,7 @@ function renderHeader() {
   }
   var thead = document.getElementById('thead');
   thead.innerHTML = '<tr>' + COLS.map(function(c) {
-    if (c.key === '_actions' || c.key === '_edit' || c.key === '_delete') return '<th></th>';
+    if (c.key === '_edit' || c.key === '_delete') return '<th></th>';
     return '<th data-sort="' + c.key + '">' + c.label + '<span class="sort-arrow"></span></th>';
   }).join('') + '</tr>';
   thead.querySelectorAll('th[data-sort]').forEach(function(th) {
@@ -689,43 +674,6 @@ function esc(s) {
 function editInstance(name) {
   var url = ST_BASE + '/?target=V7_RUN&edit_instance=' + encodeURIComponent(name) + '&token=' + encodeURIComponent(TOKEN);
   window.location.href = url;
-}
-
-/* ─── Activate ────────────────────────────────────────────── */
-function activateOne(name) {
-  toast('Activating ' + name + '\u2026', 'info');
-  apiFetch('/activate/' + encodeURIComponent(name), { method: 'POST' }).then(function(res) {
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    return res.json();
-  }).then(function(data) {
-    if (data.ok > 0) {
-      toast(name + ': ' + data.ok + '/' + (data.ok + (data.failed||0)) + ' hosts OK', 'ok');
-    } else {
-      toast(name + ': activation failed', 'err');
-    }
-    if (!ws || ws.readyState !== WebSocket.OPEN) setTimeout(loadInstances, 2000);
-  }).catch(function(e) {
-    toast('Activate failed: ' + e.message, 'err');
-  });
-}
-
-function activateAll() {
-  var btn = document.getElementById('btn-activate-all');
-  btn.disabled = true;
-  btn.textContent = 'Activating\u2026';
-  toast('Activating all\u2026', 'info');
-  apiFetch('/activate-all', { method: 'POST' }).then(function(res) {
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    return res.json();
-  }).then(function(data) {
-    toast('Activated ' + data.activated + ' instances (' + data.ok + ' OK)', data.ok > 0 ? 'ok' : 'info');
-    if (!ws || ws.readyState !== WebSocket.OPEN) setTimeout(loadInstances, 2000);
-  }).catch(function(e) {
-    toast('Activate All failed: ' + e.message, 'err');
-  }).finally(function() {
-    btn.disabled = false;
-    btn.textContent = 'SSH Activate All';
-  });
 }
 
 /* ─── Add Instance (navigate to Streamlit) ────────────────── */
@@ -991,8 +939,6 @@ document.getElementById('f-status').onchange = function(e) {
 document.getElementById('tbody').addEventListener('click', function(e) {
   var btn = e.target.closest('[data-edit]');
   if (btn) { editInstance(btn.dataset.edit); return; }
-  btn = e.target.closest('[data-activate]');
-  if (btn) { activateOne(btn.dataset.activate); return; }
   btn = e.target.closest('[data-delete]');
   if (btn) { confirmDelete(btn.dataset.delete); return; }
 });

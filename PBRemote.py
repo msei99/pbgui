@@ -277,13 +277,12 @@ class RemoteServer():
                     _log('PBRemote', f'{str(remote)} is corrupted {e}', level='ERROR')
 
     def sync_v7_down(self, role: str):
-        """Sync the v7 configurations from the remote storage to the local machine."""
+        """Sync v7 configs + alive from remote storage to local machine."""
         if self.instances_status_v7.has_new_status():
             _log('PBRemote', f'New status_v7.json from: {self.name}', level='INFO')
             _log('PBRemote', f'Sync v7 from: {self.name}', level='INFO')
             pbgdir = Path.cwd()
             if role == "master":
-                # cmd = ['rclone', 'sync', '-v', '--include', f'{{cmd_**/alive_*.cmd*,run_v7_{self.name}/**/*.json}}', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
                 cmd = ['rclone', 'sync', '-v', '--filter', f'- cmd_{self.pbname}/*', '--filter', '+ cmd_**/alive_*.cmd*', '--filter', f'+ run_v7_{self.name}/**/*.json', '--filter', '- *', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
             else:
                 cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', f'{self.bucket}/run_v7_{self.name}', PurePath(f'{pbgdir}/data/remote/run_v7_{self.name}')]
@@ -861,6 +860,9 @@ class PBRemote():
             self.sync('down', 'slave')
 
     def sync_v7_up(self):
+        if self.role != "master":
+            # Slave: nothing to do — alive is handled by remote.alive()
+            return
         if self.local_run.instances_status_v7.has_new_status():
             _log('PBRemote', f'New status_v7.json from: {self.name}', level='INFO')
             status_ts = self.local_run.instances_status_v7.status_ts

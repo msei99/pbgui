@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit_scrollable_textbox as stx
 import pbgui_help
 from pbgui_func import pbdir, PBGDIR, load_symbols_from_ini, validateHJSON, st_file_selector, info_popup, error_popup
+from pbgui_purefunc import update_status_v7
 from PBCoinData import CoinData, normalize_symbol
 from PBRemote import PBRemote
 from User import Users
@@ -113,6 +114,7 @@ class V7Instance():
         self.instance_path = Path(f'{PBGDIR}/data/run_v7/{self.user}')
         self.config.config_file = Path(f'{self.instance_path}/config.json') 
         self.config.save_config()
+        update_status_v7(self.user)
         if "edit_run_v7_version" in st.session_state:
             del st.session_state.edit_run_v7_version
 
@@ -909,7 +911,7 @@ class V7Instance():
                 st.session_state.pop(k, None)
 
     def activate(self):
-        self.remote.local_run.activate(self.user, False, "7")
+        update_status_v7(self.user)
 
 class V7Instances:
     def __init__(self):
@@ -938,18 +940,23 @@ class V7Instances:
         for instance in self.instances:
             running_on = instance.is_running_on()
             if instance.enabled_on == 'disabled' and running_on:
-                instance.remote.local_run.activate(instance.user, True, "7")
+                update_status_v7(instance.user)
             elif instance.enabled_on not in running_on:
-                instance.remote.local_run.activate(instance.user, True, "7")
+                update_status_v7(instance.user)
             elif instance.is_running() and (instance.version != instance.running_version):
-                instance.remote.local_run.activate(instance.user, True, "7")
+                update_status_v7(instance.user)
+
+    def sync_all(self):
+        """Update status_v7.json for all instances that need syncing."""
+        for instance in self.instances:
+            update_status_v7(instance.user)
 
     def restart_instance(self, user: str):
         for instance in self.instances:
             if user == instance.user:
                 # Restart
                 instance.save()
-                instance.remote.local_run.activate(user, True, "7")
+                update_status_v7(user)
     
     def fetch_instance_version(self, user: str):
         for instance in self.instances:
