@@ -397,6 +397,19 @@ def build_navigation():
     # - list mode → redirect_to_fastapi_v7_run() at end of script
     # This avoids race conditions between interception and relay session state.
 
+    # 1e. SERVER-SIDE interception for Balance Calculator.
+    if navi.url_path == "v7_balance_calc":
+        if not is_authenticted() or is_session_state_not_initialized():
+            st.switch_page(paths["SYSTEM_LOGIN"])
+            st.stop()
+        if _fa_ok and "api_token" in st.session_state:
+            _url = (f"http://{_bhost}:{_fa_port}/api/balance-calc/main_page"
+                    f"?token={st.session_state['api_token']}"
+                    f"&st_base=http://{_bhost}:{_sport}")
+            st.html(f'<script>window.location.replace("{_url}");</script>',
+                    unsafe_allow_javascript=True)
+            st.stop()
+
     # 2. CLIENT-SIDE history.pushState patch — injected into every other page so
     #    clicking a nav-bar link for a FastAPI-only page is intercepted
     #    synchronously in the browser — before Streamlit re-renders — giving a
@@ -412,10 +425,13 @@ def build_navigation():
                     f"?token={_token}&st_base=http://{_bhost}:{_sport}")
         _svc_url = (f"http://{_bhost}:{_fa_port}/api/services/main_page"
                     f"?token={_token}&st_base=http://{_bhost}:{_sport}")
+        _bc_url = (f"http://{_bhost}:{_fa_port}/api/balance-calc/main_page"
+                   f"?token={_token}&st_base=http://{_bhost}:{_sport}")
         _fa_pages = (
             f'"system_logging":"{_log_url}",'
             f'"system_vps_monitor":"{_vps_url}",'
-            f'"system_services":"{_svc_url}"'
+            f'"system_services":"{_svc_url}",'
+            f'"v7_balance_calc":"{_bc_url}"'
         )
         # NOTE: no < or > inside this script — DOMPurify will not strip it.
         # _pbguiOk guard ensures pushState is only patched once per page load;

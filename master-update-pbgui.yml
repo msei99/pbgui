@@ -41,6 +41,55 @@
         var: pbgui_repo
       tags: debug,never
 
+    # --- PB6 cleanup: remove pb6 if still installed ---
+    - name: Set software base directory
+      set_fact:
+        software_dir: "{{ pbgdir | dirname }}"
+
+    - name: Check if pb6 directory exists
+      stat:
+        path: "{{ software_dir }}/pb6"
+      register: pb6_dir
+
+    - name: Check if pb6 venv exists
+      stat:
+        path: "{{ software_dir }}/venv_pb6"
+      register: pb6_venv
+
+    - name: Kill all running pb6 processes
+      shell: |
+        pids="$(ps -ef | grep "{{ software_dir }}/pb6/passivbot" | grep -v grep | awk '{print $2}')"
+        if [ -n "$pids" ]; then
+          echo "Killing pb6 processes: $pids"
+          kill $pids
+        else
+          echo "No pb6 processes running"
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      ignore_errors: yes
+      when: pb6_dir.stat.exists
+
+    - name: Remove pb6 directory
+      file:
+        path: "{{ software_dir }}/pb6"
+        state: absent
+      when: pb6_dir.stat.exists
+
+    - name: Remove pb6 venv
+      file:
+        path: "{{ software_dir }}/venv_pb6"
+        state: absent
+      when: pb6_venv.stat.exists
+
+    - name: Remove pb6 entries from pbgui.ini
+      lineinfile:
+        path: "{{ pbgdir }}/pbgui.ini"
+        regexp: 'pb6'
+        state: absent
+      when: pb6_dir.stat.exists or pb6_venv.stat.exists
+
   handlers:
     - name: Install pbgui requirements
       pip:

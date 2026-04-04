@@ -397,7 +397,6 @@ def list_vps():
                             break
                         vps.bucket = pbremote.bucket
                         info = vps.fetch_vps_info()
-                        vps.install_pb6 = info["pb6"]
                         vps.coinmarketcap_api_key = info["coinmarketcap"]
                         vps.swap = info["swap"]
                         vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
@@ -409,7 +408,6 @@ def list_vps():
                             st.write(f"- IP: :blue[{vps.ip}]")
                             st.write(f"- Bucket: :blue[{vps.bucket}]")
                             st.write(f"- CoinMarketCap API Key: :blue[{vps.coinmarketcap_api_key}]")
-                            st.write(f"- PB6 installed: :blue[{vps.install_pb6}]")
                             st.write(f"- Swap enabled: :blue[{vps.swap}]")
                             st.write(f"- Firewall enabled: :blue[{vps.firewall}]")
                             st.write(f"- Firewall SSH IPs: :blue[{vps.firewall_ssh_ips}]")
@@ -1409,7 +1407,6 @@ def manage_vps():
             st.session_state.manage_vps = vpsmanager.find_vps_by_hostname(st.session_state.manage_vps_select_vps)
             del st.session_state.vps_user_pw
             del st.session_state.vps_coindata_api_key
-            del st.session_state.vps_install_pb6
             del st.session_state.vps_swap
             del st.session_state.vps_firewall
             del st.session_state.vps_firewall_ssh_port
@@ -1496,11 +1493,6 @@ def manage_vps():
             vps_coindata.api_key = st.session_state.vps_coindata_api_key
     else:
         st.session_state.vps_coindata_api_key = vps.coinmarketcap_api_key
-    if "vps_install_pb6" in st.session_state:
-        if st.session_state.vps_install_pb6 != vps.install_pb6:
-            vps.install_pb6 = st.session_state.vps_install_pb6
-    else:
-        st.session_state.vps_install_pb6 = vps.install_pb6
     if "vps_firewall" in st.session_state:
         if st.session_state.vps_firewall != vps.firewall:
             vps.firewall = st.session_state.vps_firewall
@@ -1592,7 +1584,6 @@ def manage_vps():
                 st.stop()
             vps.bucket = pbremote.bucket
             info = vps.fetch_vps_info()
-            vps.install_pb6 = info["pb6"]
             vps.coinmarketcap_api_key = info["coinmarketcap"]
             # make sure swap value is valid
             vps.swap = info.get("swap", "0") if info.get("swap") in ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"] else "0"
@@ -1602,7 +1593,6 @@ def manage_vps():
             # sync back to controls
             st.session_state.vps_swap = vps.swap
             st.session_state.vps_coindata_api_key = vps.coinmarketcap_api_key
-            st.session_state.vps_install_pb6 = vps.install_pb6
             st.session_state.vps_firewall = vps.firewall
             st.session_state.vps_firewall_ssh_ips = vps.firewall_ssh_ips
             info_popup("VPS settings refreshed.")
@@ -1747,7 +1737,6 @@ def manage_vps():
                 st.write(":red[Please configure PBCoinData]")
         col1, col2, col3 = st.columns([1,1,2], vertical_alignment='bottom')
         with col1:
-            st.checkbox("Install pb6", value=vps.install_pb6, key="vps_install_pb6", help=pbgui_help.vps_install_pb6)
             st.checkbox("Enable Linux Firewall (ufw)", value=vps.firewall, key="vps_firewall", help=pbgui_help.vps_firewall)
         with col2:
             st.number_input("SSH port", value=vps.firewall_ssh_port, format="%d", key="vps_firewall_ssh_port", help=pbgui_help.vps_firewall_ssh_port)

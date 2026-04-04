@@ -1711,12 +1711,6 @@ vps_user_pw = """
     Will be used for sudo when run setup.
     ```"""
 
-vps_install_pb6 = """
-    ```
-    Enable to install passivbot6 on your vps
-    If disabled, only passivbot7 will be installed.
-    ```"""
-
 vps_firewall = """
     ```
     Enable to install and configure ufw firewall on your vps
@@ -2099,12 +2093,6 @@ mimic_backtest_1m_delay = """
     ```
     If true, the bot will only update and evaluate open orders once per full minute, synchronized to the clock (e.g., 12:01:00, 12:02:00, etc.).
     This mimics the backtester's timestep logic and avoids intraminute updates. Useful for achieving higher fidelity between backtest and live performance.
-    ```"""
-
-vps_install_pb6 = """
-    ````
-    Enable to install passivbot6 on your vps
-    If disabled, only passivbot7 will be installed.
     ```"""
 
    

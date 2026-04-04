@@ -1,9 +1,7 @@
 """
-PBRun is the main bit of PBGui, being split in 3 main parts, PBRun and RunSingle/RunMulti, the two last doing the same things respective to their config.
+PBRun manages v7 passivbot instances.
 
-PBRun checks for status and activate files, updating the old ones to the newest, and starting functions from RunSingle or RunMulti if there are any needed.
-
-RunMulti and Single do start and stop passivbot programs.
+It checks for status and activate files, starts and stops v7 bots accordingly.
 """
 import psutil
 import subprocess
@@ -594,363 +592,6 @@ class DynamicIgnore():
         self._atomic_write_json(ignored_path, ignored_coins)
         self._atomic_write_json(approved_path, approved_coins)
     
-class RunSingle():
-    def __init__(self):
-        self.monitor = Monitor()
-        self.user = None
-        self.path = None
-        self._single_config = {}
-        self.parameters = None
-        self.name = None
-        self.multi = False
-        self.version = None
-        self.pbdir = None
-        self.pbvenv = None
-        self.pbgdir = None
-    
-    def watch(self):
-        if not self.is_running():
-            _log("PBRun", f"Start Single from watch: {self.user} {self.symbol}")
-            self.start()
-
-    def is_running(self):
-        if self.pid():
-            return True
-        return False
-
-    def pid(self):
-        expected_config = Path(self.path) / "config.json"
-        for process in psutil.process_iter():
-            try:
-                cmdline = process.cmdline()
-            except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
-                continue
-            if (
-                any("passivbot.py" in sub for sub in cmdline)
-                and any(_arg_matches_path(sub, expected_config) for sub in cmdline)
-            ):
-                _attach_process_stats(process, self.monitor)
-                return process
-
-    def stop(self):
-        process = self.pid()
-        if process:
-            _log("PBRun", f"Stop: {self.user} {self.symbol}")
-            _kill_process(process, f"single {self.user} {self.symbol}")
-
-    def start(self):
-        if not self.is_running():
-            self.create_parameters()
-            config = PurePath(f'{self.path}/config.json')
-            cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/passivbot.py')]
-            cmd_end = f'{self.parameters} {self.user} {self.symbol} '.lstrip(' ')
-            cmd.extend(shlex.split(cmd_end))
-            cmd.extend([config])
-            logfile = Path(f'{self.path}/passivbot.log')
-            with open(logfile, "ab") as log:
-                if platform.system() == "Windows":
-                    creationflags = subprocess.DETACHED_PROCESS
-                    creationflags |= subprocess.CREATE_NO_WINDOW
-                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
-                else:
-                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
-            _log("PBRun", f"Start Single: {cmd_end}")
-        # wait until passivbot is running
-        for i in range(10):
-            if self.is_running():
-                break
-            sleep(1)
-
-    def clean_log(self):
-        logfile = Path(f'{self.path}/passivbot.log')
-        if logfile.exists():
-            if logfile.stat().st_size >= 10485760:
-                logfile_old = Path(f'{str(logfile)}.old')
-                copy(logfile,logfile_old)
-                with open(logfile,'r+') as file:
-                    file.truncate()
-
-    def create_parameters(self):
-        """Create the list of parameters used when running passivbot single instance.
-
-        Parameters :
-            - "_long_mode": Determines long mode parameters ("-lm gs", "-lm p", or "-lm t").
-            - "_short_mode": Determines short mode parameters ("-sm gs", "-sm p", or "-sm t").
-            - "_market_type": If not "swap", adds "-m spot" to parameters.
-            - "_ohlcv": If False, adds "-oh n" to parameters.
-            - "_co": Adds "-co {value}" if "_co" is present and not equal to -1.
-            - "_leverage": Adds "-lev {value}" if "_leverage" is present and not equal to 7.
-            - "_assigned_balance": Adds "-ab {value}" if "_assigned_balance" is present and not equal to 0.
-            - "_price_distance_threshold": Adds "-pt {value}" if "_price_distance_threshold" is present and not equal to 0.5.
-            - "_price_precision": Adds "-pp {value}" if "_price_precision" is present and not equal to 0.0.
-            - "_price_step": Adds "-ps {value}" if "_price_step" is present and not equal to 0.0.
-        """
-        # Write running Version to file
-        if "_version" in self._single_config:
-            version = str(self._single_config["_version"])
-        else:
-            version = 0
-        version_file = Path(f'{self.path}/running_version.txt')
-        _atomic_write_text(version_file, str(version))
-        # Generate parameters
-        self.parameters = ""
-        if "_long_mode" in self._single_config:
-            if self._single_config["_long_mode"] == "graceful_stop":
-                self.parameters = (self.parameters + f' -lm gs').lstrip(' ')
-            if self._single_config["_long_mode"] == "panic":
-                self.parameters = (self.parameters + f' -lm p').lstrip(' ')
-            if self._single_config["_long_mode"] == "tp_only":
-                self.parameters = (self.parameters + f' -lm t').lstrip(' ')
-        if "_short_mode" in self._single_config:
-            if self._single_config["_short_mode"] == "graceful_stop":
-                self.parameters = (self.parameters + f' -sm gs').lstrip(' ')
-            if self._single_config["_short_mode"] == "panic":
-                self.parameters = (self.parameters + f' -sm p').lstrip(' ')
-            if self._single_config["_short_mode"] == "tp_only":
-                self.parameters = (self.parameters + f' -sm t').lstrip(' ')
-        if "_market_type" in self._single_config:
-            if self._single_config["_market_type"] != "swap":
-                self.parameters = (self.parameters + f' -m spot').lstrip(' ')
-        if "_ohlcv" in self._single_config:
-            if not self._single_config["_ohlcv"]:
-                self.parameters = (self.parameters + f' -oh n').lstrip(' ')
-        if "_co" in self._single_config:
-            if self._single_config["_co"] != -1:
-                self.parameters = (self.parameters + f' -co {self._single_config["_co"]}').lstrip(' ')
-        if "_leverage" in self._single_config:
-            if self._single_config["_leverage"] != 7:
-                self.parameters = (self.parameters + f' -lev {self._single_config["_leverage"]}').lstrip(' ')
-        if "_assigned_balance" in self._single_config:
-            if self._single_config["_assigned_balance"] != 0:
-                self.parameters = (self.parameters + f' -ab {self._single_config["_assigned_balance"]}').lstrip(' ')
-        if "_price_distance_threshold" in self._single_config:
-            if self._single_config["_price_distance_threshold"] != 0.5:
-                self.parameters = (self.parameters + f' -pt {self._single_config["_price_distance_threshold"]}').lstrip(' ')
-        if "_price_precision" in self._single_config:
-            if self._single_config["_price_precision"] != 0.0:
-                self.parameters = (self.parameters + f' -pp {self._single_config["_price_precision"]}').lstrip(' ')
-        if "_price_step" in self._single_config:
-            if self._single_config["_price_step"] != 0.0:
-                self.parameters = (self.parameters + f' -ps {self._single_config["_price_step"]}').lstrip(' ')
-
-    def load(self):
-        file = Path(f'{self.path}/instance.cfg')
-        self.monitor.path = self.path
-        self.monitor.pb_version = "s"
-        if file.exists():
-            try:
-                with open(file, "r", encoding='utf-8') as f:
-                    single_config = f.read()
-                self._single_config = json.loads(single_config)
-                if "_version" in self._single_config:
-                    self.version = self._single_config["_version"]
-                else:
-                    self.version = 0
-                self.monitor.version = self.version
-                # Load user from config
-                if "_user" in self._single_config:
-                    self.user = self._single_config["_user"]
-                    path = PurePath(self.path).stem
-                    self.monitor.user = path
-                # Load symbol from config
-                if "_symbol" in self._single_config:
-                    self.symbol = self._single_config["_symbol"]
-                if "_multi" in self._single_config:
-                    self.multi = self._single_config["_multi"]
-                if "_enabled_on" in self._single_config:
-                    if self.name == self._single_config["_enabled_on"]:
-                        if self.multi:
-                            return False
-                        else:
-                            return True
-                    else:                        
-                        self.name = self._single_config["_enabled_on"]
-                else:
-                    self.name = "disabled"
-                return False
-            except Exception as e:
-                _log("PBRun", f"Something went wrong, but continue {e}", level="ERROR")
-                _log("PBRun", "RunSingle.load traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
-
-class RunMulti():
-    def __init__(self):
-        self.monitor = Monitor()
-        self.user = None
-        self.path = None
-        self._multi_config = {}
-        self.name = None
-        self.version = None
-        self.pbdir = None
-        self.pbvenv = None
-        self.pbgdir = None
-        self.dynamic_ignore = None
-        self._dynamic_wait_log_ts = 0
-    
-    def watch(self):
-        if not self.is_running():
-            self.start()
-
-    def watch_dynamic(self):
-        if self.dynamic_ignore is not None:
-            if self.dynamic_ignore.watch():
-                self.stop()
-                self.create_multi_hjson()
-                self.start()
-
-    def is_running(self):
-        if self.pid():
-            return True
-        return False
-
-    def pid(self):
-        expected_config = Path(self.path) / "multi_run.hjson"
-        for process in psutil.process_iter():
-            try:
-                cmdline = process.cmdline()
-            except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
-                continue
-            if (
-                any("passivbot_multi.py" in sub for sub in cmdline)
-                and any(_arg_matches_path(sub, expected_config) for sub in cmdline)
-            ):
-                _attach_process_stats(process, self.monitor)
-                return process
-
-    def stop(self):
-        process = self.pid()
-        if process:
-            _log("PBRun", f"Stop: passivbot_multi.py {self.path}/multi_run.hjson")
-            _kill_process(process, f"multi {self.path}")
-
-    def start(self):
-        if not self.is_running():
-            if self.dynamic_ignore is not None and not _ensure_dynamic_ignore_ready(self.dynamic_ignore):
-                now_ts = int(datetime.now().timestamp())
-                if now_ts - self._dynamic_wait_log_ts >= 60:
-                    _log(
-                        "PBRun",
-                        f"Delay start: passivbot_multi.py {self.path}/multi_run.hjson waiting for dynamic ignore lists",
-                        level="WARNING",
-                    )
-                    self._dynamic_wait_log_ts = now_ts
-                return
-            self._dynamic_wait_log_ts = 0
-            cmd = [self.pbvenv, '-u', PurePath(f'{self.pbdir}/passivbot_multi.py'), PurePath(f'{self.path}/multi_run.hjson')]
-            logfile = Path(f'{self.path}/passivbot.log')
-            with open(logfile, "ab") as log:
-                if platform.system() == "Windows":
-                    creationflags = subprocess.DETACHED_PROCESS
-                    creationflags |= subprocess.CREATE_NO_WINDOW
-                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, creationflags=creationflags)
-                else:
-                    subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pbdir, text=True, start_new_session=True)
-            _log("PBRun", f"Start: passivbot_multi.py {self.path}/multi_run.hjson")
-        # wait until passivbot is running
-        for i in range(10):
-            if self.is_running():
-                break
-            sleep(1)
-
-    def clean_log(self):
-        logfile = Path(f'{self.path}/passivbot.log')
-        if logfile.exists():
-            if logfile.stat().st_size >= 10485760:
-                logfile_old = Path(f'{str(logfile)}.old')
-                copy(logfile,logfile_old)
-                with open(logfile,'r+') as file:
-                    file.truncate()
-
-    def create_multi_hjson(self):
-        run_config_data = copy_module.deepcopy(self._multi_config)
-        # Write running Version to file
-        version = str(run_config_data["version"])
-        version_file = Path(f'{self.path}/running_version.txt')
-        _atomic_write_text(version_file, version)
-        # Generate clean multi_run.hjson file
-        if "enabled_on" in run_config_data:
-            del run_config_data["enabled_on"]
-        if "version" in run_config_data:
-            del run_config_data["version"]
-        if "note" in run_config_data:
-            del run_config_data["note"]
-        if "market_cap" in run_config_data:
-            del run_config_data["market_cap"]
-        if "vol_mcap" in run_config_data:
-            del run_config_data["vol_mcap"]
-        if "dynamic_ignore" in run_config_data:
-            del run_config_data["dynamic_ignore"]
-        if "only_cpt" in run_config_data:
-            del run_config_data["only_cpt"]
-        if "notices_ignore" in run_config_data:
-            del run_config_data["notices_ignore"]
-        run_config_data["live_configs_dir"] = self.path
-        if "default_config_path" in run_config_data:
-            if run_config_data["default_config_path"] != "":
-                run_config_data["default_config_path"] = f'{self.path}/default.json'
-        if self.dynamic_ignore is not None:
-            ignored_symbols = [str(symbol).strip().upper() for symbol in self.dynamic_ignore.ignored_coins if str(symbol).strip()]
-            run_config_data["ignored_symbols"] = sorted(set(ignored_symbols))
-            approved_symbols = run_config_data.get("approved_symbols")
-            if not isinstance(approved_symbols, dict):
-                approved_symbols = {}
-                run_config_data["approved_symbols"] = approved_symbols
-            if self.dynamic_ignore.approved_coins:
-                for coin in self.dynamic_ignore.approved_coins:
-                    coin_key = str(coin).strip().upper()
-                    if coin_key:
-                        approved_symbols[coin_key] = ''
-            ignored_set = set(run_config_data["ignored_symbols"])
-            if ignored_set and "approved_symbols" in run_config_data:
-                for coin in list(run_config_data["approved_symbols"].keys()):
-                    if coin in ignored_set:
-                        del run_config_data["approved_symbols"][coin]
-        run_config = hjson.dumps(run_config_data)
-        config_file = Path(f'{self.path}/multi_run.hjson')
-        _atomic_write_text(config_file, run_config)
-
-    def load(self):
-        """Load config for PB multi."""
-        file = Path(f'{self.path}/multi.hjson')
-        self.monitor.path = self.path
-        self.monitor.user = self.user
-        self.monitor.pb_version = "6"
-        if file.exists():
-            try:
-                with open(file, "r", encoding='utf-8') as f:
-                    multi_config = f.read()
-                self._multi_config = hjson.loads(multi_config)
-                if "version" in self._multi_config:
-                    self.version = self._multi_config["version"]
-                    self.monitor.version = self.version
-                if "enabled_on" in self._multi_config:
-                    if self.name == self._multi_config["enabled_on"]:
-                        if "dynamic_ignore" in self._multi_config:
-                            if self._multi_config["dynamic_ignore"]:
-                                self.dynamic_ignore = DynamicIgnore()
-                                self.dynamic_ignore.path = self.path
-                                self.dynamic_ignore.coindata.market_cap = self._multi_config["market_cap"]
-                                self.dynamic_ignore.coindata.vol_mcap = self._multi_config["vol_mcap"]
-                                if "only_cpt" in self._multi_config:
-                                    self.dynamic_ignore.coindata.only_cpt = self._multi_config["only_cpt"]
-                                if "notices_ignore" in self._multi_config:
-                                    self.dynamic_ignore.coindata.notices_ignore = self._multi_config["notices_ignore"]
-                                # Find Exchange from User
-                                api_path = f'{self.pbdir}/api-keys.json'
-                                if Path(api_path).exists():
-                                    with open(api_path, "r", encoding='utf-8') as f:
-                                        api_keys = json.load(f)
-                                    if self.user in api_keys:
-                                        self.dynamic_ignore.coindata.exchange = api_keys[self.user]["exchange"]
-                                        self.dynamic_ignore.watch()
-                        return True
-                    else:                        
-                        self.name = self._multi_config["enabled_on"]
-                else:
-                    self.name = "disabled"
-                return False
-            except Exception as e:
-                _log("PBRun", f"Something went wrong, but continue {e}", level="ERROR")
-                _log("PBRun", "RunMulti.load traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
 
 class RunV7():
     def __init__(self):
@@ -1145,9 +786,9 @@ class RunV7():
                 _log("PBRun", "RunV7.load traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
 
 class PBRun():
-    """PBRun links together PBRemote, PBGui and Passivbot, while being independant and can maintain passivbot working by itself.
+    """PBRun manages v7 passivbot instances, linking PBRemote, PBGui and Passivbot.
 
-    It does so with update_status_*.cmd, and activate_*.cmd. These files are created while using PBGui, and when PBRun receives activate_*.cmd, it creates the single of multi instances for passivbot, when it receives update_status_*.cmd, it inform on the status of this instances, so the bot specified in the status can start instances of passivbot.
+    It processes update_status_*.cmd and activate_*.cmd files to install, start and stop v7 bots.
 
     Robustness notes:
     - Command files are written atomically and malformed files are quarantined after repeated failures.
@@ -1173,8 +814,6 @@ class PBRun():
         self._pb7_python_ts = 0
         self.upgrades = 0
         self.reboot = False
-        self.run_multi = []
-        self.run_single = []
         self.run_v7 = []
         self.index = 0
         self.pbgui_branch = "unknown"
@@ -1189,24 +828,10 @@ class PBRun():
             self.name = pb_config.get("main", "pbname")
         else:
             self.name = platform.node()
-        if pb_config.has_option("main", "activate_ts"):
-            self.activate_ts = int(pb_config.get("main", "activate_ts"))
-        else:
-            self.activate_ts = 0
-        if pb_config.has_option("main", "activate_single_ts"):
-            self.activate_single_ts = int(pb_config.get("main", "activate_single_ts"))
-        else:
-            self.activate_single_ts = 0
         if pb_config.has_option("main", "activate_v7_ts"):
             self.activate_v7_ts = int(pb_config.get("main", "activate_v7_ts"))
         else:
             self.activate_v7_ts = 0
-        self.instances_status = InstancesStatus(f'{self.pbgdir}/data/cmd/status.json')
-        self.instances_status.pbname = self.name
-        self.instances_status.activate_ts = self.activate_ts
-        self.instances_status_single = InstancesStatus(f'{self.pbgdir}/data/cmd/status_single.json')
-        self.instances_status_single.pbname = self.name
-        self.instances_status_single.activate_ts = self.activate_single_ts
         self.instances_status_v7 = InstancesStatus(f'{self.pbgdir}/data/cmd/status_v7.json')
         self.instances_status_v7.pbname = self.name
         self.instances_status_v7.activate_ts = self.activate_v7_ts
@@ -1248,8 +873,6 @@ class PBRun():
         if self.pb7venv and not self.pb7dir:
             _log("PBRun", "No passivbot v7 directory configured in pbgui.ini for pb7venv", level="WARNING")
         # Init paths
-        self.multi_path = f'{self.pbgdir}/data/multi'
-        self.single_path = f'{self.pbgdir}/data/instances'
         self.v7_path = f'{self.pbgdir}/data/run_v7'
         self.cmd_path = f'{self.pbgdir}/data/cmd'
         if not Path(self.cmd_path).exists():
@@ -1835,38 +1458,6 @@ class PBRun():
                     self.run_v7.remove(v7)
                     return
 
-    def add_multi(self, run_multi: RunMulti):
-        if run_multi:
-            for multi in self.run_multi:
-                if multi.path == run_multi.path:
-                    self.run_multi.remove(multi)
-                    self.run_multi.append(run_multi)
-                    # multi.version = run_multi.version
-                    return
-            self.run_multi.append(run_multi)
-
-    def remove_multi(self, run_multi: RunMulti):
-        if run_multi:
-            for multi in self.run_multi:
-                if multi.path == run_multi.path:
-                    self.run_multi.remove(multi)
-                    return
-
-    def add_single(self, run_single: RunSingle):
-        if run_single:
-            for single in self.run_single:
-                if single.path == run_single.path:
-                    single.version = run_single.version
-                    return
-            self.run_single.append(run_single)
-
-    def remove_single(self, run_single: RunSingle):
-        if run_single:
-            for single in self.run_single:
-                if single.path == run_single.path:
-                    self.run_single.remove(single)
-                    return
-
     def find_running_version(self, path: str):
         version = 0
         version_file = Path(f'{path}/running_version.txt')
@@ -1885,10 +1476,7 @@ class PBRun():
         _atomic_write_json(cfile, cfg)
 
     def has_update_status(self):
-        """Checks for new status, and update the status files accordingly.
-        
-        Checks for any file called update_status.cmd, and adds it to the status.json file already existant, required to run PB single and multi.
-        """
+        """Checks for update_status_*.cmd files and applies v7 status updates."""
         p = str(Path(f'{self.cmd_path}/update_status_*.cmd'))
         status_files = glob.glob(p)
         for cfile in status_files:
@@ -1899,11 +1487,7 @@ class PBRun():
                         cfg = json.load(f)
                     rserver = cfg["rserver"]
                     status_file = cfg["status_file"]
-                    if status_file.split('/')[-1] == 'status.json':
-                        self.update_from_status(status_file, rserver)
-                    elif status_file.split('/')[-1] == 'status_single.json':
-                        self.update_from_status_single(status_file, rserver)
-                    elif status_file.split('/')[-1] == 'status_v7.json':
+                    if status_file.split('/')[-1] == 'status_v7.json':
                         self.update_from_status_v7(status_file, rserver)
                     cfile.unlink(missing_ok=True)
                     self._bad_cmd_failures.pop(str(cfile), None)
@@ -1914,7 +1498,7 @@ class PBRun():
         """Updates the v7 status based on the provided status file.
 
         Notes:
-            - Compares per-instance activate_ts for multi-master merge.
+            - Compares per-instance activate_ts to detect changes.
             - Installs new v7 versions or instances if their activate_ts is newer.
             - Removes old *.json configuration files.
             - Removes instances not found in the new status.
@@ -1929,7 +1513,7 @@ class PBRun():
         for instance in new_status:
             local = self.instances_status_v7.find_name(instance.name)
             if local is not None:
-                # Per-instance activate_ts comparison for multi-master merge
+                # Per-instance activate_ts comparison
                 if instance.activate_ts <= local.activate_ts:
                     continue
                 if instance.version > local.version:
@@ -1994,225 +1578,19 @@ class PBRun():
             for instance in remove_instances:
                 self.instances_status_v7.remove(instance)
             changed = True
-        if changed:
-            self.instances_status_v7.save()
-
-    def update_from_status_single(self, status_file : str, rserver : str):
-        """Updates the single status based on the provided status file.
-
-        Notes:
-            - Compares the new coming status timestamp with the current one.
-            - Installs new single versions or instances if some.
-            - Removes old *.json configuration files.
-            - Removes instances not found in the new status.
-
-        Args:
-            status_file (str): Path to the status file.
-            rserver (str): Name of the remote server.
-        """
-        new_status = InstancesStatus(status_file)
-        if new_status.activate_ts > self.activate_single_ts:
-            _log("PBRun", f"Activate single: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=' ', timespec='seconds')}")
-            for instance in new_status:
-                status = self.instances_status_single.find_name(instance.name)
-                if status is not None:
-                    if instance.version > status.version:
-                        # Backup old single config
-                        source = f'{self.single_path}/{instance.name}'
-                        if Path(source).exists():
-                            destination = Path(f'{self.pbgdir}/data/backup/single/{instance.name}/{status.version}')
-                            if not destination.exists():
-                                destination.mkdir(parents=True)
-                            copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
-                        # Install new single version
-                        _log("PBRun", f"Install: New Single Version {instance.name} Old: {status.version} New: {instance.version}")
-                        src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
-                        dest = f'{self.single_path}/{instance.name}'
-                        if Path(src).exists():
-                            copytree(src, dest, dirs_exist_ok=True)
-                            self.watch_single([f'{self.single_path}/{instance.name}'])
-                else:
-                    # Install new single instance
-                    _log("PBRun", f"Install: New Single Instance {instance.name} from {rserver} Version: {instance.version}")
-                    src = f'{self.pbgdir}/data/remote/instances_{rserver}/{instance.name}'
-                    dest = f'{self.single_path}/{instance.name}'
-                    if Path(src).exists():
-                        copytree(src, dest, dirs_exist_ok=True)
-                        self.watch_single([f'{self.single_path}/{instance.name}'])
-            remove_instances = []
-            for instance in self.instances_status_single:
-                status = new_status.find_name(instance.name)
-                if status is None:
-                    # Remove single instance
-                    _log("PBRun", f"Remove: Single Instance {instance.name}")
-                    if instance.running:
-                        for single in self.run_single:
-                            name = single.path.split('/')[-1]
-                            if name == instance.name:
-                                single.stop()
-                                self.remove_single(single)
-                    source = f'{self.single_path}/{instance.name}'
-                    if Path(source).exists():
-                        # Backup single config
-                        date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                        destination = Path(f'{self.pbgdir}/data/backup/single/{instance.name}/{date}')
-                        if not destination.exists():
-                            destination.mkdir(parents=True)
-                        copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
-                        rmtree(source, ignore_errors=True)
-                        remove_instances.append(instance)
-            if remove_instances:
-                for instance in remove_instances:
-                    self.instances_status_single.remove(instance)
-                self.instances_status_single.save()
-
-    def update_from_status(self, status_file : str, rserver : str):
-        """Updates the multi status based on the provided status file.
-
-        Notes:
-            - Compares the new coming status timestamp with the current one.
-            - Installs new multi versions or instances if some.
-            - Removes old *.json configuration files.
-            - Removes instances not found in the new status.
-
-        Args:
-            status_file (str): Path to the status file.
-            rserver (str): Name of the remote server.
-        """
-        new_status = InstancesStatus(status_file)
-        if new_status.activate_ts > self.activate_ts:
-            _log("PBRun", f"Activate multi: from {new_status.activate_pbname} Date: {datetime.fromtimestamp(new_status.activate_ts).isoformat(sep=' ', timespec='seconds')}")
-            for instance in new_status:
-                status = self.instances_status.find_name(instance.name)
-                if status is not None:
-                    if instance.version > status.version:
-                        # Backup old multi config
-                        source = f'{self.multi_path}/{instance.name}'
-                        if Path(source).exists():
-                            destination = Path(f'{self.pbgdir}/data/backup/multi/{instance.name}/{status.version}')
-                            if not destination.exists():
-                                destination.mkdir(parents=True)
-                            copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
-                        # Install new multi version
-                        _log("PBRun", f"Install: New Multi Version {instance.name} Old: {status.version} New: {instance.version}")
-                        # Remove old *.json configs
-                        dest = f'{self.multi_path}/{instance.name}'
-                        p = str(Path(f'{dest}/*'))
-                        items = glob.glob(p)
-                        for item in items:
-                            if item.endswith('.json'):
-                                Path(item).unlink(missing_ok=True)
-                        src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
-                        dest = f'{self.multi_path}/{instance.name}'
-                        if Path(src).exists():
-                            copytree(src, dest, dirs_exist_ok=True)
-                            self.watch_multi([f'{self.multi_path}/{instance.name}'])
-                else:
-                    # Install new multi instance
-                    _log("PBRun", f"Install: New Multi Instance {instance.name} from {rserver} Version: {instance.version}")
-                    src = f'{self.pbgdir}/data/remote/multi_{rserver}/{instance.name}'
-                    dest = f'{self.multi_path}/{instance.name}'
-                    if Path(src).exists():
-                        copytree(src, dest, dirs_exist_ok=True)
-                        self.watch_multi([f'{self.multi_path}/{instance.name}'])
-            remove_instances = []
-            for instance in self.instances_status:
-                status = new_status.find_name(instance.name)
-                if status is None:
-                    # Remove multi instance
-                    _log("PBRun", f"Remove: Multi Instance {instance.name}")
-                    if instance.running:
-                        for multi in self.run_multi:
-                            if multi.user == instance.name:
-                                multi.stop()
-                                self.remove_multi(multi)
-                    source = f'{self.multi_path}/{instance.name}'
-                    if Path(source).exists():
-                        # Backup multi config
-                        date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                        destination = Path(f'{self.pbgdir}/data/backup/multi/{instance.name}/{date}')
-                        if not destination.exists():
-                            destination.mkdir(parents=True)
-                        copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
-                        rmtree(source, ignore_errors=True)
-                        remove_instances.append(instance)
-            if remove_instances:
-                for instance in remove_instances:
-                    self.instances_status.remove(instance)
-                self.instances_status.save()
-
-    def activate(self, instance : str, multi : bool, version : int = None):
-        if version == "7":
-            _log("PBRun", f"activate() called for v7 instance {instance} — ignored, use update_status_v7() instead", level='WARNING')
-            return
-        unique = str(uuid.uuid4())
-        cfile = Path(f'{self.cmd_path}/activate_{unique}.cmd')
-        cfg = ({
-            "instance": instance,
-            "multi": multi,
-            "version": version})
-        _atomic_write_json(cfile, cfg)
-
-    def has_activate(self):
-        """Checks for activation file
-
-        This method scans for activation files (activate_*.cmd) in the cmd directory.
-        For v6 multi/single configs only — v7 uses status_v7.json polling instead.
-        """
-        p = str(Path(f'{self.cmd_path}/activate_*.cmd'))
-        activates = glob.glob(p)
-        for cfile in activates:
-            cfile = Path(cfile)
-            if cfile.exists():
-                try:
-                    with open(cfile, "r", encoding='utf-8') as f:
-                        cfg = json.load(f)
-                    instance = cfg["instance"]
-                    multi = cfg["multi"]
-                    if "version" in cfg:
-                        version = cfg["version"]
-                    else:
-                        version = None
-                    if version == "7":
-                        # v7 no longer uses activate_*.cmd — ignore and clean up
-                        cfile.unlink(missing_ok=True)
-                        continue
-                    elif multi:
-                        self.update_activate()
-                        self.watch_multi([f'{self.multi_path}/{instance}'])
-                    else:
-                        self.update_activate_single()
-                        self.watch_single([f'{self.single_path}/{instance}'])
-                    cfile.unlink(missing_ok=True)
-                    self._bad_cmd_failures.pop(str(cfile), None)
-                except Exception as e:
-                    self._handle_bad_cmd_file(cfile, "activate", e)
 
     def has_status_v7_changed(self):
         """Poll status_v7.json for mtime changes and rescan v7 instances."""
         if self.instances_status_v7.has_new_status():
             _log("PBRun", "status_v7.json changed — rescanning v7 instances")
             self.watch_v7()
-            # watch_v7() saves status_v7.json which changes its mtime.
-            # Update our cached mtime so we don't re-trigger on our own save.
-            self.instances_status_v7.update_status()
     
     def update_activate_v7(self):
         self._update_activate_timestamp("activate_v7_ts", "instances_status_v7")
 
-    def update_activate(self):
-        self._update_activate_timestamp("activate_ts", "instances_status")
-
-    def update_activate_single(self):
-        self._update_activate_timestamp("activate_single_ts", "instances_status_single")
-
     def _update_activate_timestamp(self, key: str, status_attr: str):
         now_ts = int(datetime.now().timestamp())
-        if key == "activate_ts":
-            self.activate_ts = now_ts
-        elif key == "activate_single_ts":
-            self.activate_single_ts = now_ts
-        elif key == "activate_v7_ts":
+        if key == "activate_v7_ts":
             self.activate_v7_ts = now_ts
 
         status = getattr(self, status_attr, None)
@@ -2280,104 +1658,6 @@ class PBRun():
             instance_path = f'{self.pbgdir}/data/run_v7/{instance.name}'
             if not Path(instance_path).exists():
                 self.instances_status_v7.remove(instance)
-        self.instances_status_v7.save()
-
-    def watch_single(self, single_instances : list = None):
-        """Create or delete single instances and activate them or not depending on their status.
-
-        Args:
-            single_instances (list, optional): List of single-instance paths. Defaults to None.
-        """
-        if not single_instances:
-            p = str(Path(f'{self.single_path}/*'))
-            single_instances = glob.glob(p)
-            # Remove all existing instances from status
-            self.instances_status_single.instances = []
-        for single_instance in single_instances:
-            file = Path(f'{single_instance}/instance.cfg')
-            if file.exists():
-                run_single = RunSingle()
-                status = InstanceStatus()
-                run_single.path = single_instance
-                run_single.name = self.name
-                run_single.pbdir = self.pbdir
-                run_single.pbvenv = self.pbvenv
-                run_single.pbgdir = self.pbgdir
-                if run_single.load():
-                    if run_single.is_running():
-                        running_version = self.find_running_version(single_instance)
-                        if running_version < run_single.version:
-                            run_single.stop()
-                            # run_single.create_parameters()
-                            run_single.start()
-                    else:
-                        # run_single.create_parameters()
-                        run_single.start()
-                    self.add_single(run_single)
-                    status.running = True
-                else:
-                    self.remove_single(run_single)
-                    status.running = False
-                    run_single.stop()
-                status.name = single_instance.split('/')[-1]
-                status.multi = run_single.multi
-                status.version = run_single.version
-                status.enabled_on = run_single.name
-                self.instances_status_single.add(status)
-        # Remove non existing instances from status
-        for instance in self.instances_status_single:
-            instance_path = f'{self.pbgdir}/data/instances/{instance.name}'
-            if not Path(instance_path).exists():
-                self.instances_status_single.remove(instance)
-        self.instances_status_single.save()
-
-    def watch_multi(self, multi_instances : list = None):
-        """Create or delete multi instances and activate them or not depending on their status.
-
-        Args:
-            multi_instance (list, optional): List of muilti-instance paths. Defaults to None.
-        """
-        if not multi_instances:
-            p = str(Path(f'{self.multi_path}/*'))
-            multi_instances = glob.glob(p)
-        for multi_instance in multi_instances:
-            file = Path(f'{multi_instance}/multi.hjson')
-            if file.exists():
-                run_multi = RunMulti()
-                status = InstanceStatus()
-                status.multi = True
-                run_multi.path = multi_instance
-                run_multi.user = multi_instance.split('/')[-1]
-                status.name = run_multi.user
-                run_multi.name = self.name
-                run_multi.pbdir = self.pbdir
-                run_multi.pbvenv = self.pbvenv
-                run_multi.pbgdir = self.pbgdir
-                if run_multi.load():
-                    if run_multi.is_running():
-                        running_version = self.find_running_version(multi_instance)
-                        if running_version < run_multi.version:
-                            run_multi.stop()
-                            run_multi.create_multi_hjson()
-                            run_multi.start()
-                    else:
-                        run_multi.create_multi_hjson()
-                        run_multi.start()
-                    self.add_multi(run_multi)
-                    status.running = True
-                else:
-                    self.remove_multi(run_multi)
-                    status.running = False
-                    run_multi.stop()
-                status.version = run_multi.version
-                status.enabled_on = run_multi.name
-                self.instances_status.add(status)
-        # Remove non existing instances from status
-        for instance in self.instances_status:
-            instance_path = f'{self.pbgdir}/data/multi/{instance.name}'
-            if not Path(instance_path).exists():
-                self.instances_status.remove(instance)
-        self.instances_status.save()
 
     def find_high_memory_bot(self):
         """Finds the bot with the highest memory usage."""
@@ -2388,16 +1668,6 @@ class PBRun():
             if mem > high_mem:
                 high_mem = mem
                 high_bot = v7
-        for multi in self.run_multi:
-            mem = _memory_usage_bytes(multi.monitor.memory)
-            if mem > high_mem:
-                high_mem = mem
-                high_bot = multi
-        for single in self.run_single:
-            mem = _memory_usage_bytes(single.monitor.memory)
-            if mem > high_mem:
-                high_mem = mem
-                high_bot = single
         return high_bot
     
     def watch_memory(self):
@@ -2471,12 +1741,7 @@ class PBRun():
 
 def main():
     """
-    Main function of PBRun, responsible for starting and logging passivbot instances.
-
-    ### Usage : 
-    - Run PBRun and save its process ID to pbrun.pid.
-    - Logs in pbgui/data/logs/PBRun.log and creates a .old if the file is too heavy.
-    - Create and monitor single, multi and instances of passivbot. (Instances will be deleted in future versions)
+    Main function of PBRun, responsible for starting and monitoring v7 passivbot instances.
     """
     run = PBRun()
     if run.is_running():
@@ -2486,14 +1751,10 @@ def main():
     run.save_pid()
     if run.pb7dir:
         run.watch_v7()
-    if run.pbdir:
-        run.watch_multi()
-        run.watch_single()
     count = 0
     while True:
         try:
             run.watch_memory()
-            run.has_activate()
             run.has_update_status()
             if run.pb7dir:
                 run.has_status_v7_changed()
@@ -2501,23 +1762,10 @@ def main():
                     run_v7.watch()
                     run_v7.watch_dynamic()
                     run_v7.monitor.watch_log()
-            if run.pbdir:
-                for run_multi in run.run_multi:
-                    run_multi.watch()
-                    run_multi.watch_dynamic()
-                    run_multi.monitor.watch_log()
-                for run_single in run.run_single:
-                    run_single.watch()
-                    run_single.monitor.watch_log()
             if count%2 == 0:
                 if run.pb7dir:
                     for run_v7 in run.run_v7:
                         run_v7.clean_log()
-                if run.pbdir:
-                    for run_multi in run.run_multi:
-                        run_multi.clean_log()
-                    for run_single in run.run_single:
-                        run_single.clean_log()
             sleep(5)
             count += 1
         except Exception as e:

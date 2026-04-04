@@ -1,9 +1,8 @@
 """
-Remotes establish a connection between the local server and the remote storage, enabling to send files and commands to other servers to run new passivbot intances.
+PBRemote manages cloud storage synchronization for v7 passivbot instances.
 
-RemoteServer() creates a profile for the local server to interact with the remote storage, it imports the information from remote to local, and will update the status after doing so.
-
-PBRemote() will synchronise from the local server to the remote storage, exporting files, more informations with PBRemote.sync() function.
+RemoteServer() imports v7 configs and alive data from remote storage.
+PBRemote() exports v7 configs, status and alive data to remote storage.
 """
 import psutil
 import subprocess
@@ -28,10 +27,7 @@ from logging_helpers import human_log as _log
 class RemoteServer():
     def __init__(self, path: str):
         """
-        Initialize a RemoteServer instance to manage PB configurations.
-        
-        It exports both multi and single configurations to the remote storage. 
-        It lists the instances that will be used in PBRun (_instances) and verifies that the API keys in PB directory are up to date.
+        Initialize a RemoteServer instance to manage v7 PB configurations.
 
         Args:
             path (str): Path to the remote server configuration.
@@ -69,10 +65,6 @@ class RemoteServer():
         self._pb7_branch = "unknown"
         self._pb7_python = "N/A"
         self.pbname = None
-        self.instances_status = InstancesStatus(f'{self.path}/status.json')
-        self.instances_status.load()
-        self.instances_status_single = InstancesStatus(f'{self.path}/status_single.json')
-        self.instances_status_single.load()
         self.instances_status_v7 = InstancesStatus(f'{self.path}/status_v7.json')
         self.instances_status_v7.load()
 
@@ -298,44 +290,6 @@ class RemoteServer():
             self.instances_status_v7.update_status()
             _log('PBRemote', f'Update status_v7 ts: {self.name} old: {status_ts} new: {self.instances_status_v7.status_ts}', level='INFO')
 
-    def sync_multi_down(self):
-        """Sync the multi configurations from the remote storage to the local machine."""
-        if self.instances_status.has_new_status():
-            _log('PBRemote', f'New status.json from: {self.name}', level='INFO')
-            _log('PBRemote', f'Sync multi from: {self.name}', level='INFO')
-            pbgdir = Path.cwd()
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', f'{self.bucket}/multi_{self.name}', PurePath(f'{pbgdir}/data/remote/multi_{self.name}')]
-            logfile = Path(f'{pbgdir}/data/logs/sync.log')
-            with open(logfile, "ab") as log:
-                if platform.system() == "Windows":
-                    creationflags = subprocess.CREATE_NO_WINDOW
-                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
-                else:
-                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
-            PBRun().update_status(self.instances_status.status_file, self.name)
-            status_ts = self.instances_status.status_ts
-            self.instances_status.update_status()
-            _log('PBRemote', f'Update status ts: {self.name} old: {status_ts} new: {self.instances_status.status_ts}', level='INFO')
-
-    def sync_single_down(self):
-        """Sync the single configurations from the local machine to the remote storage."""
-        if self.instances_status_single.has_new_status():
-            _log('PBRemote', f'New status_single.json from: {self.name}', level='INFO')
-            _log('PBRemote', f'Sync single from: {self.name}', level='INFO')
-            pbgdir = Path.cwd()
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', f'{self.bucket}/instances_{self.name}', PurePath(f'{pbgdir}/data/remote/instances_{self.name}')]
-            logfile = Path(f'{pbgdir}/data/logs/sync.log')
-            with open(logfile, "ab") as log:
-                if platform.system() == "Windows":
-                    creationflags = subprocess.CREATE_NO_WINDOW
-                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
-                else:
-                    subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
-            PBRun().update_status(self.instances_status_single.status_file, self.name)
-            status_ts = self.instances_status_single.status_ts
-            self.instances_status_single.update_status()
-            _log('PBRemote', f'Update status_single ts: {self.name} old: {status_ts} new: {self.instances_status_single.status_ts}', level='INFO')
-
     def sync_api(self):
         """
         Sync the API keys from the remote storage to the local machine.
@@ -396,8 +350,6 @@ class RemoteServer():
                 subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
         # delete local files
         shutil.rmtree(f'{pbgdir}/data/remote/cmd_{self.name}', ignore_errors=True)
-        shutil.rmtree(f'{pbgdir}/data/remote/instances_{self.name}', ignore_errors=True)
-        shutil.rmtree(f'{pbgdir}/data/remote/multi_{self.name}', ignore_errors=True)
         shutil.rmtree(f'{pbgdir}/data/remote/run_v7_{self.name}', ignore_errors=True)
 
 class PBRemote():
@@ -675,102 +627,6 @@ class PBRemote():
                                 "traceback": f':{color_traceback}[{monitor["tt"]}]'
                             })
                             errors.append(error)
-                    elif monitor["p"] == "6":
-                        if (
-                            monitor["m"][0]/1024/1024 > monitor_config.mem_error_multi or
-                            swap_value > monitor_config.swap_error_multi or
-                            monitor["c"] > monitor_config.cpu_error_multi or
-                            monitor["et"] > monitor_config.error_error_multi or
-                            monitor["tt"] > monitor_config.traceback_error_multi
-                        ):
-                            if monitor["m"][0]/1024/1024 > monitor_config.mem_error_multi:
-                                color_mem = "red"
-                            elif monitor["m"][0]/1024/1024 > monitor_config.mem_warning_multi:
-                                color_mem = "orange"
-                            else:
-                                color_mem = "green"
-                            if swap_value > monitor_config.swap_error_multi:
-                                color_swap = "red"
-                            elif swap_value > monitor_config.swap_warning_multi:
-                                color_swap = "orange"
-                            else:
-                                color_swap = "green"
-                            if monitor["c"] > monitor_config.cpu_error_multi:
-                                color_cpu = "red"
-                            elif monitor["c"] > monitor_config.cpu_warning_multi:
-                                color_cpu = "orange"
-                            else:
-                                color_cpu = "green"
-                            if monitor["et"] > monitor_config.error_error_multi:
-                                color_error = "red"
-                            elif monitor["et"] > monitor_config.error_warning_multi:
-                                color_error = "orange"
-                            else:
-                                color_error = "green"
-                            if monitor["tt"] > monitor_config.traceback_error_multi:
-                                color_traceback = "red"
-                            elif monitor["tt"] > monitor_config.traceback_warning_multi:
-                                color_traceback = "orange"
-                            else:
-                                color_traceback = "green"
-                            error = ({
-                                "server": f':blue[{server.name}]',
-                                "name": f':blue[{monitor["u"]}]',
-                                "mem": f':{color_mem}[{round(monitor["m"][0]/1024/1024, 1)}]',
-                                "swap": f':{color_swap}[{swap_value}]',
-                                "cpu": f':{color_cpu}[{monitor["c"]}]',
-                                "error": f':{color_error}[{monitor["et"]}]',
-                                "traceback": f':{color_traceback}[{monitor["tt"]}]'
-                            })
-                            errors.append(error)
-                    elif monitor["p"] == "s":
-                        if (
-                            monitor["m"][0]/1024/1024 > monitor_config.mem_error_single or
-                            swap_value > monitor_config.swap_error_single or
-                            monitor["c"] > monitor_config.cpu_error_single or
-                            monitor["et"] > monitor_config.error_error_single or
-                            monitor["tt"] > monitor_config.traceback_error_single
-                        ):
-                            if monitor["m"][0]/1024/1024 > monitor_config.mem_error_single:
-                                color_mem = "red"
-                            elif monitor["m"][0]/1024/1024 > monitor_config.mem_warning_single:
-                                color_mem = "orange"
-                            else:
-                                color_mem = "green"
-                            if swap_value > monitor_config.swap_error_single:
-                                color_swap = "red"
-                            elif swap_value > monitor_config.swap_warning_single:
-                                color_swap = "orange"
-                            else:
-                                color_swap = "green"
-                            if monitor["c"] > monitor_config.cpu_error_single:
-                                color_cpu = "red"
-                            elif monitor["c"] > monitor_config.cpu_warning_single:
-                                color_cpu = "orange"
-                            else:
-                                color_cpu = "green"
-                            if monitor["et"] > monitor_config.error_error_single:
-                                color_error = "red"
-                            elif monitor["et"] > monitor_config.error_warning_single:
-                                color_error = "orange"
-                            else:
-                                color_error = "green"
-                            if monitor["tt"] > monitor_config.traceback_error_single:
-                                color_traceback = "red"
-                            elif monitor["tt"] > monitor_config.traceback_warning_single:
-                                color_traceback = "orange"
-                            else:
-                                color_traceback = "green"
-                            error = ({
-                                "server": f':blue[{server.name}]',
-                                "name": f':blue[{monitor["u"]}]',
-                                "mem": f':{color_mem}[{round(monitor["m"][0]/1024/1024, 1)}]',
-                                "swap": f':{color_swap}[{swap_value}]',
-                                "cpu": f':{color_cpu}[{monitor["c"]}]',
-                                "error": f':{color_error}[{monitor["et"]}]',
-                                "traceback": f':{color_traceback}[{monitor["tt"]}]'
-                            })
-                            errors.append(error)
         return errors
 
     def is_sync_running(self):
@@ -795,45 +651,27 @@ class PBRemote():
 
     def sync(self, direction: str, spath: str):
         """
-        Synchronise from the local server to the remote storage server.
+        Synchronise between local server and remote storage.
         
-        Files it sends from local to remote : 
-            For cmd files:
-                - alive_*.cmd
-                - api-keys.json
-            For instances: 
-                - instance.cfg
-                - config.json
-            For status: 
-                - status.json
-                - alive_*.cmd
-            For status_single: 
-                - status_single.json
-                - alive_*.cmd
-            For multi :
-                - multi.hjson
-                - *.json
-            
+        Supported sync paths:
+            up/cmd: alive_*.cmd, api-keys.json
+            up/status_v7: status_v7.json, alive_*.cmd
+            up/run_v7: *.json (v7 configs)
+            down/master: all except own cmd, instances, multi, run_v7
+            down/slave: same but also excludes alive files from other servers
+        
         Args:
-            direction (str): Either "up" (sync from local to remote) or "down" (sync from remote to local).
-            spath (str): The specific path to synchronize (e.g., "cmd", "instances", "status").
+            direction (str): Either "up" (local to remote) or "down" (remote to local).
+            spath (str): The specific path to synchronize.
         """
         pbgdir = Path.cwd()
         cmd = None
         if direction == 'up' and spath == 'cmd':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd*,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
-        elif direction == 'up' and spath == 'instances':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{instance.cfg,config.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
-        elif direction == 'up' and spath == 'status':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd*,status.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
-        elif direction == 'up' and spath == 'status_single':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd*,status_single.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'status_v7':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd*,status_v7.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'run_v7':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
-        elif direction == 'up' and spath == 'multi':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{multi.hjson,*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'master':
             cmd = ['rclone', 'sync', '-v', '--exclude', f'{{cmd_{self.name}/*,instances_**,multi_**,run_v7_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
         elif direction == 'down' and spath == 'slave':
@@ -873,28 +711,6 @@ class PBRemote():
             _log('PBRemote', f'Sync status_v7.json up: {self.name}', level='INFO')
             self.sync('up', 'status_v7')
 
-    def sync_multi_up(self):
-        if self.local_run.instances_status.has_new_status():
-            _log('PBRemote', f'New status.json from: {self.name}', level='INFO')
-            status_ts = self.local_run.instances_status.status_ts
-            self.local_run.instances_status.update_status()
-            _log('PBRemote', f'Update status ts: {self.name} old: {status_ts} new: {self.local_run.instances_status.status_ts}', level='INFO')
-            _log('PBRemote', f'Sync multi up: {self.name}', level='INFO')
-            self.sync('up', 'multi')
-            _log('PBRemote', f'Sync status.json up: {self.name}', level='INFO')
-            self.sync('up', 'status')
-    
-    def sync_single_up(self):
-        if self.local_run.instances_status_single.has_new_status():
-            _log('PBRemote', f'New status_single.json from: {self.name}', level='INFO')
-            status_ts = self.local_run.instances_status_single.status_ts
-            self.local_run.instances_status_single.update_status()
-            _log('PBRemote', f'Update status_single ts: {self.name} old: {status_ts} new: {self.local_run.instances_status_single.status_ts}', level='INFO')
-            _log('PBRemote', f'Sync single up: {self.name}', level='INFO')
-            self.sync('up', 'instances')
-            _log('PBRemote', f'Sync status_single.json up: {self.name}', level='INFO')
-            self.sync('up', 'status_single')
-
     def sync_api_up(self):
         """Takes the api-keys.json from passivbot folder to sync it to other remotes by putting it in data/cmd/api-keys.json."""
         pbgdir = Path.cwd()
@@ -924,26 +740,6 @@ class PBRemote():
         monitor = []
         pbgdir = Path.cwd()
         path_v7 = PurePath(f'{pbgdir}/data/run_v7/')
-        path_multi = PurePath(f'{pbgdir}/data/multi/')
-        path_single = PurePath(f'{pbgdir}/data/instances/')
-        for instance in self.local_run.instances_status.instances:
-            if instance.running:
-                monitor_file = Path(f'{path_multi}/{instance.name}/monitor.json')
-                if Path(monitor_file).exists():
-                    try:
-                        with open(monitor_file, "r", encoding='utf-8') as f:
-                            monitor.append(json.load(f))
-                    except Exception as e:
-                        _log('PBRemote', f'load_monitor: skipping corrupt {monitor_file}: {e}', level='WARNING')
-        for instance in self.local_run.instances_status_single.instances:
-            if instance.running:
-                monitor_file = Path(f'{path_single}/{instance.name}/monitor.json')
-                if Path(monitor_file).exists():
-                    try:
-                        with open(monitor_file, "r", encoding='utf-8') as f:
-                            monitor.append(json.load(f))
-                    except Exception as e:
-                        _log('PBRemote', f'load_monitor: skipping corrupt {monitor_file}: {e}', level='WARNING')
         for instance in self.local_run.instances_status_v7.instances:
             if instance.running:
                 monitor_file = Path(f'{path_v7}/{instance.name}/monitor.json')
@@ -1282,8 +1078,6 @@ def main():
     while True:
         try:
             remote.sync_v7_up()
-            remote.sync_multi_up()
-            remote.sync_single_up()
             remote.check_if_api_synced()
             remote.sync_status_down()
             remote.update_remote_servers()
@@ -1292,8 +1086,6 @@ def main():
                 for s in remote.remote_servers:
                     s.load()
                 server.sync_v7_down(remote.role)
-                server.sync_multi_down()
-                server.sync_single_down()
                 server.sync_api()
         except Exception as e:
             _log('PBRemote', f'Something went wrong, but continue: {e}', level='ERROR')

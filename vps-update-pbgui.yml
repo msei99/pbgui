@@ -1,8 +1,9 @@
 ---
-# Update pbgui, pb6 and pb7
+# Update pbgui on VPS
 # Steps:
 # 1. Clone pbgui repository
 # 2. Restart PBRun, PBRemote and PBCoinData if pbgui repository was updated
+# 3. If pb6 is still installed, cleanly remove it
 
 - hosts: "{{ hostname }}"
   gather_facts: yes
@@ -44,6 +45,61 @@
       debug:
         var: pbgui_repo
       tags: debug,never
+
+    # --- PB6 cleanup: remove pb6 if still installed ---
+    - name: Check if pb6 directory exists
+      stat:
+        path: "{{ install_dir }}/pb6"
+      register: pb6_dir
+
+    - name: Check if pb6 venv exists
+      stat:
+        path: "{{ install_dir }}/venv_pb6"
+      register: pb6_venv
+
+    - name: Kill all running pb6 processes
+      shell: |
+        pids="$(ps -ef | grep "{{ install_dir }}/pb6/passivbot" | grep -v grep | awk '{print $2}')"
+        if [ -n "$pids" ]; then
+          echo "Killing pb6 processes: $pids"
+          kill $pids
+        else
+          echo "No pb6 processes running"
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      ignore_errors: yes
+      when: pb6_dir.stat.exists
+
+    - name: Remove pb6 directory
+      file:
+        path: "{{ install_dir }}/pb6"
+        state: absent
+      when: pb6_dir.stat.exists
+
+    - name: Remove pb6 venv
+      file:
+        path: "{{ install_dir }}/venv_pb6"
+        state: absent
+      when: pb6_venv.stat.exists
+
+    - name: Remove pb6 entries from pbgui.ini
+      lineinfile:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        regexp: 'pb6'
+        state: absent
+      when: pb6_dir.stat.exists or pb6_venv.stat.exists
+
+    - name: Remove python3.10-venv package
+      apt:
+        pkg:
+          - python3.10-venv
+        state: absent
+        autoremove: yes
+        clean: yes
+      become: yes
+      when: pb6_dir.stat.exists or pb6_venv.stat.exists
 
   handlers:
     - name: Install pbgui requirements

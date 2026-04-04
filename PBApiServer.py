@@ -45,6 +45,7 @@ from api.vps import router as vps_router
 from api.services import router as services_router
 from api.live import router as live_router
 from api.v7_instances import router as v7_router
+from api.balance_calc import router as balance_calc_router
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, PBGUI_VERSION
 
@@ -312,6 +313,7 @@ app.include_router(vps_router, tags=["vps"])
 app.include_router(services_router, prefix="/api/services", tags=["services"])
 app.include_router(live_router, prefix="/api/live", tags=["live"])
 app.include_router(v7_router, prefix="/api/v7", tags=["v7"])
+app.include_router(balance_calc_router, prefix="/api/balance-calc", tags=["balance-calc"])
 
 frontend_dir = Path(__file__).parent / "frontend"
 if frontend_dir.exists():

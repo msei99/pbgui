@@ -15,13 +15,11 @@ import paramiko
 import subprocess
 import re
 import shlex
-from pbgui_purefunc import pbdir, pbvenv, pb7dir, pb7venv, load_ini
+from pbgui_purefunc import pb7dir, pb7venv, load_ini
 from logging_helpers import human_log as _log
 
 PBGDIR = Path.cwd()
-PBDIR = pbdir()
 PB7DIR = pb7dir()
-PBVENV = pbvenv()
 PB7VENV = pb7venv()
 
 class VPS:
@@ -61,7 +59,6 @@ class VPS:
         self.logfilename = None
         self.logfile = None
         self.logsize = 50
-        self.install_pb6 = True
 
     @property
     def hostname(self):
@@ -108,8 +105,6 @@ class VPS:
                 self.command = config["command"]
             if "command_text" in config:
                 self.command_text = config["command_text"]
-            if "install_pb6" in config:
-                self.install_pb6 = config["install_pb6"]
 
     def is_vps_in_hosts(self):
         # open /etc/hosts and check if the ip and hostname is in there
@@ -287,17 +282,15 @@ class VPS:
         """
         Fetch information from the VPS, including:
         - CoinMarketCap API key
-        - Whether PB6 is installed (pbdir exists in [main] section)
         - Swap size in human-readable form (e.g., 512M, 2G)
 
         Returns:
             dict: {
-                "pb6": bool,
                 "coinmarketcap": str | None,
                 "swap": str
             }
         """
-        result = {"pb6": False, "coinmarketcap": None, "swap": "0"}
+        result = {"coinmarketcap": None, "swap": "0"}
 
         if not self.ip or not self.user:
             _log('VPSManager', 'Missing VPS IP or username.', level='WARNING')
@@ -353,15 +346,6 @@ class VPS:
                 _log('VPSManager', f'Successfully fetched API key from {self.hostname}', level='INFO')
             else:
                 _log('VPSManager', f"'api_key' not found in [coinmarketcap] section on VPS {self.hostname}", level='WARNING')
-
-            # Check if PB6 is installed
-            if config_data.has_section("main") and config_data.has_option("main", "pbdir"):
-                pbdir = config_data.get("main", "pbdir").strip()
-                if pbdir:
-                    result["pb6"] = True
-                    _log('VPSManager', f'PB6 detected on VPS {self.hostname}', level='INFO')
-            else:
-                _log('VPSManager', f'PB6 not detected on VPS {self.hostname}', level='INFO')
 
         except Exception as e:
             _log('VPSManager', f'Error connecting to VPS {self.hostname} ({self.ip}): {e}', level='ERROR')
@@ -634,8 +618,7 @@ class VPS:
                 "firewall_ssh_port": self.firewall_ssh_port,
                 "firewall_ssh_ips": self.firewall_ssh_ips,
                 "command": self.command,
-                "command_text": self.command_text,
-                "install_pb6": self.install_pb6
+                "command_text": self.command_text
             }
             with open(file, "w", encoding='utf-8') as f:
                 json.dump(config, f, indent=4)
@@ -769,7 +752,6 @@ class VPSManager:
             'swap_size': vps.swap,
             'bucket': vps.bucket,
             'coinmarketcap_api_key': vps.coinmarketcap_api_key,
-            'install_pb6': vps.install_pb6,
             'firewall': vps.firewall,
             'firewall_ssh_port': vps.firewall_ssh_port,
             'firewall_ssh_ips': vps.firewall_ssh_ips.split(','),
@@ -872,7 +854,6 @@ class VPSManager:
         # Build extravars - start with defaults
         ansible_extravars = {
             'pbgdir': str(PBGDIR),
-            'pb6dir': str(PBDIR),
             'pb7dir': str(PB7DIR),
             'pb7venv': str(PurePath(PB7VENV).parents[1]),
             'user_pw': sudo_pw,
