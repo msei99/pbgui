@@ -281,7 +281,8 @@
     'system_logging':     '/api/logging/main_page',
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',
-    'v7_run':             '/api/v7/main_page'
+    'v7_run':             '/api/v7/main_page',
+    'v7_balance_calc':    '/api/balance-calc/main_page'
   };
 
   /* ════════════════════════════════════

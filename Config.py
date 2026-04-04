@@ -7832,8 +7832,9 @@ class BalanceCalculator:
             exchanges = []
 
         if len(exchanges) == 1:
-            self.exchange = Exchange(exchanges[0], None)
-            st.session_state.bc_exchange_id = exchanges[0]
+            if "bc_exchange_id" not in st.session_state:
+                self.exchange = Exchange(exchanges[0], None)
+                st.session_state.bc_exchange_id = exchanges[0]
             if "bc_missing_exchange_context" in st.session_state:
                 del st.session_state.bc_missing_exchange_context
             if "bc_require_exchange_choice" in st.session_state:
@@ -7887,7 +7888,10 @@ class BalanceCalculator:
             st.markdown("### Balance Calculator")
             st.markdown("This tool allows you to calculate the balance for a given configuration.")
             st.markdown("You can edit the configuration in the left text area and click on 'Calculate' to see the results.")
-            st.selectbox("Exchange", V7.list(), key="bc_exchange_id")
+            exchanges = V7.list()
+            ex_id = st.session_state.get("bc_exchange_id", self.exchange.id)
+            ex_idx = exchanges.index(ex_id) if ex_id in exchanges else 0
+            st.selectbox("Exchange", exchanges, index=ex_idx, key="bc_exchange_id")
             if st.button("Calculate"):
                 # Normalize XYZ coins: PB7 uses "xyz:AAPL", mapping uses "XYZ-AAPL"
                 def _norm_coin(c: str) -> str:

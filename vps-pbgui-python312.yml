@@ -72,17 +72,7 @@
         clean: yes
       become: yes
 
-    - name: Check if PB6 is installed (repo)
-      stat:
-        path: "{{ install_dir }}/pb6"
-      register: pb6_repo
-
-    - name: Check if PB6 is installed (venv)
-      stat:
-        path: "{{ install_dir }}/venv_pb6"
-      register: pb6_venv
-
-    - name: Remove python3.10-venv if PB6 is not installed
+    - name: Remove python3.10-venv
       apt:
         pkg:
           - python3.10-venv
@@ -90,7 +80,6 @@
         autoremove: yes
         clean: yes
       become: yes
-      when: not pb6_repo.stat.exists and not pb6_venv.stat.exists
 
     - name: Remove old PBGui venv
       file:

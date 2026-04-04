@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PBv7 Balance Calculator</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+:root {
+  --bg:       #0e1117;
+  --bg2:      #1a1d24;
+  --bg3:      #262730;
+  --border:   #333640;
+  --text:     #fafafa;
+  --text-dim: #a0a4ab;
+  --green:    #21c354;
+  --orange:   #ff8c00;
+  --red:      #ff4b4b;
+  --blue:     #1f77ff;
+  --accent:   #4da6ff;
+  --font:     'Source Sans Pro', -apple-system, BlinkMacSystemFont, sans-serif;
+  --fs-xs:    11px;
+  --fs-sm:    13px;
+  --fs-base:  14px;
+  --fs-md:    15px;
+  --fs-lg:    18px;
+  --fs-xl:    24px;
+  --sp-xs:    4px;
+  --sp-sm:    8px;
+  --sp-md:    12px;
+  --sp-lg:    20px;
+  --input-h:  32px;
+  --btn-h:    32px;
+}
+body {
+  font-family: var(--font);
+  font-size: var(--fs-base);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Page content ─────────────────────────────────────────── */
+#page-content {
+  height: calc(100vh - 52px);
+  overflow-y: auto;
+  padding: var(--sp-lg);
+}
+
+/* ─── Tool bar ─────────────────────────────────────────────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-md);
+  padding-bottom: var(--sp-md);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--sp-lg);
+  flex-wrap: wrap;
+}
+.toolbar label {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.toolbar select, .toolbar button {
+  height: var(--input-h);
+  font-size: var(--fs-base);
+  font-family: var(--font);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--text);
+  padding: 0 var(--sp-sm);
+  cursor: pointer;
+}
+.toolbar select:focus, .toolbar button:focus { outline: none; border-color: var(--accent); }
+.toolbar select { min-width: 140px; }
+#btn-calc {
+  background: var(--accent);
+  color: #000;
+  font-weight: 700;
+  border: none;
+  padding: 0 var(--sp-lg);
+  transition: background .15s;
+}
+#btn-calc:hover { background: #6bbfff; }
+#btn-calc:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ─── Two-column layout ───────────────────────────────────── */
+.main-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-lg);
+}
+@media (max-width: 900px) {
+  .main-grid { grid-template-columns: 1fr; }
+}
+
+/* ─── Config editor ────────────────────────────────────────── */
+#config-editor {
+  width: 100%;
+  min-height: 420px;
+  background: var(--bg2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: var(--fs-sm);
+  padding: var(--sp-sm);
+  resize: vertical;
+  line-height: 1.5;
+  tab-size: 4;
+}
+#config-editor:focus { outline: none; border-color: var(--accent); }
+
+/* ─── Results Panel ────────────────────────────────────────── */
+.results-panel { display: flex; flex-direction: column; gap: var(--sp-md); }
+
+.result-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--sp-md);
+}
+.result-card h3 {
+  font-size: var(--fs-md);
+  margin-bottom: var(--sp-sm);
+  color: var(--accent);
+}
+.result-card .value {
+  font-size: var(--fs-xl);
+  font-weight: 800;
+  color: var(--green);
+}
+.result-card .formula {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  margin-top: var(--sp-xs);
+  font-family: 'Fira Code', monospace;
+}
+.result-card .param-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: var(--fs-sm);
+}
+.result-card .param-label { color: var(--text-dim); }
+.result-card .param-value { font-weight: 600; }
+
+/* ─── Tables ───────────────────────────────────────────────── */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.data-table th {
+  text-align: left;
+  padding: var(--sp-xs) var(--sp-sm);
+  border-bottom: 2px solid var(--border);
+  color: var(--text-dim);
+  font-weight: 700;
+  position: sticky;
+  top: 0;
+  background: var(--bg2);
+}
+.data-table td {
+  padding: var(--sp-xs) var(--sp-sm);
+  border-bottom: 1px solid var(--border);
+}
+.data-table tr:hover td { background: rgba(77,166,255,.05); }
+.table-wrap {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* ─── Status messages ──────────────────────────────────────── */
+.msg-error {
+  background: rgba(255,75,75,.1);
+  border: 1px solid var(--red);
+  color: var(--red);
+  border-radius: 6px;
+  padding: var(--sp-sm) var(--sp-md);
+  font-size: var(--fs-sm);
+}
+.msg-info {
+  background: rgba(77,166,255,.08);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 6px;
+  padding: var(--sp-sm) var(--sp-md);
+  font-size: var(--fs-sm);
+}
+
+/* ─── Spinner ──────────────────────────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 16px; height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+  vertical-align: middle;
+  margin-right: var(--sp-xs);
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- Navigation bar (injected by pbgui_nav.js) -->
+<nav id="topnav"></nav>
+
+<!-- Page content -->
+<div id="page-content">
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <label for="sel-instance">Instance:</label>
+    <select id="sel-instance"><option value="">— load from instance —</option></select>
+
+    <label for="sel-exchange">Exchange:</label>
+    <select id="sel-exchange"></select>
+
+    <button id="btn-calc">Calculate</button>
+    <span id="calc-status"></span>
+  </div>
+
+  <!-- Two-column layout -->
+  <div class="main-grid">
+    <!-- Left: Config editor -->
+    <div>
+      <textarea id="config-editor" spellcheck="false"></textarea>
+    </div>
+
+    <!-- Right: Results -->
+    <div class="results-panel" id="results-panel">
+      <div class="msg-info">Select an instance or paste a config, choose an exchange, and click <b>Calculate</b>.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Globals injected server-side -->
+<script>
+  var TOKEN        = "%%TOKEN%%";
+  var API_BASE     = "%%API_BASE%%";
+  var ST_BASE      = "%%ST_BASE%%";
+  var PBGUI_VERSION= "%%VERSION%%";
+  var PBGUI_SERIAL = "%%SERIAL%%";
+  var INIT_INSTANCE= "%%INSTANCE%%";
+  var EXCHANGES    = "%%EXCHANGES%%";
+</script>
+
+<!-- Nav bar -->
+<script>
+  window.PBGUI_NAV_CONFIG = { subtitle: 'Balance Calculator', current: 'v7_balance_calc' };
+</script>
+<script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+
+<!-- Main logic -->
+<script>
+(function() {
+  'use strict';
+
+  var selInstance = document.getElementById('sel-instance');
+  var selExchange = document.getElementById('sel-exchange');
+  var btnCalc    = document.getElementById('btn-calc');
+  var configEditor = document.getElementById('config-editor');
+  var resultsPanel = document.getElementById('results-panel');
+  var calcStatus   = document.getElementById('calc-status');
+
+  // ── Populate exchanges ──────────────────────────────────
+  EXCHANGES.forEach(function(ex) {
+    var opt = document.createElement('option');
+    opt.value = ex;
+    opt.textContent = ex;
+    selExchange.appendChild(opt);
+  });
+
+  // ── Auth helper ─────────────────────────────────────────
+  function authHeaders() {
+    return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN };
+  }
+
+  // ── Load instances ──────────────────────────────────────
+  function loadInstances() {
+    fetch(API_BASE + '/instances?token=' + encodeURIComponent(TOKEN))
+      .then(function(r) { return r.json(); })
+      .then(function(list) {
+        list.forEach(function(inst) {
+          var opt = document.createElement('option');
+          opt.value = JSON.stringify(inst);
+          opt.textContent = inst.name;
+          selInstance.appendChild(opt);
+        });
+        // Auto-select if INIT_INSTANCE is set
+        if (INIT_INSTANCE) {
+          for (var i = 0; i < selInstance.options.length; i++) {
+            try {
+              var d = JSON.parse(selInstance.options[i].value);
+              if (d.name === INIT_INSTANCE) {
+                selInstance.selectedIndex = i;
+                loadInstanceConfig(d);
+                break;
+              }
+            } catch(e) {}
+          }
+        }
+      })
+      .catch(function(e) { console.error('Failed to load instances:', e); });
+  }
+
+  // ── Load instance config ────────────────────────────────
+  function loadInstanceConfig(inst) {
+    if (!inst || !inst.config_file) return;
+    fetch(API_BASE + '/calculate', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ config_file: inst.config_file, exchange: inst.exchange || 'binance', dry_run: true })
+    });
+    // Just read the file content and display it
+    // We use a trick: POST calculate with the file, but we just need the config in the textarea.
+    // Actually, let's just fetch the config file content via a small endpoint — or read it from calculate.
+    // Simpler: read the file via loading the instance config file content.
+    // The cleanest way: fetch via a simple GET. But we don't have one.
+    // Let's just directly read the config_file path — the server will read it for us in calculate.
+    // For now, load by fetching the config and displaying.
+
+    // We'll use the approach: send calculate request and also parse out the config
+    // Better: just make a simple XHR to load the json from the backend.
+    // We already have the config_file path, we can use calculate with dry mode.
+    // Simplest: fetch the config from the instances endpoint.
+    fetchConfigFile(inst.config_file, inst.exchange);
+  }
+
+  function fetchConfigFile(configFile, exchange) {
+    // Use the calculate endpoint with the config_file — it returns results
+    // But we want the raw JSON for the editor. Let's create a custom endpoint.
+    // Actually, let's be pragmatic: just use XHR to the calculate endpoint but
+    // we really need the raw config text. Let me use a direct config load.
+    // Since we don't have a dedicated endpoint, I'll use: POST /calculate with
+    // just config_file, and separately we can read the file.
+    // The simplest approach: read config from the data dir.
+
+    // Use the backend to read the file — add config_file to calculate body
+    // and treat the returned error as "not yet calculated". The frontend just
+    // needs to load config.json from the instance directory.
+
+    // Let's use the config_file path and a simple POST.
+    fetch(API_BASE + '/load-config', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ config_file: configFile })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.error) {
+        configEditor.value = '// Error: ' + data.error;
+        return;
+      }
+      configEditor.value = JSON.stringify(data.config, null, 4);
+      if (exchange) {
+        selExchange.value = exchange;
+      }
+    })
+    .catch(function(e) {
+      configEditor.value = '// Failed to load config: ' + e;
+    });
+  }
+
+  // ── Instance selection change ───────────────────────────
+  selInstance.addEventListener('change', function() {
+    var val = selInstance.value;
+    if (!val) return;
+    try {
+      var inst = JSON.parse(val);
+      loadInstanceConfig(inst);
+    } catch(e) {}
+  });
+
+  // ── Calculate ───────────────────────────────────────────
+  btnCalc.addEventListener('click', function() {
+    var configText = configEditor.value.trim();
+    if (!configText) {
+      showError('Please enter or load a config first.');
+      return;
+    }
+    var config;
+    try {
+      config = JSON.parse(configText);
+    } catch(e) {
+      showError('Invalid JSON in config editor: ' + e.message);
+      return;
+    }
+    var exchange = selExchange.value;
+    if (!exchange) {
+      showError('Please select an exchange.');
+      return;
+    }
+
+    btnCalc.disabled = true;
+    calcStatus.innerHTML = '<span class="spinner"></span> Calculating...';
+
+    fetch(API_BASE + '/calculate', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ config: config, exchange: exchange })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      btnCalc.disabled = false;
+      calcStatus.textContent = '';
+      if (data.error) {
+        showError(data.error);
+        return;
+      }
+      renderResults(data);
+    })
+    .catch(function(e) {
+      btnCalc.disabled = false;
+      calcStatus.textContent = '';
+      showError('Request failed: ' + e);
+    });
+  });
+
+  // ── Render results ──────────────────────────────────────
+  function renderResults(data) {
+    var html = '';
+
+    // Recommendation card
+    if (data.recommendation) {
+      var rec = data.recommendation;
+      html += '<div class="result-card">';
+      html += '<h3>Recommended Balance for ' + esc(rec.symbol) + ' (' + esc(rec.side) + ')</h3>';
+      html += '<div class="value">' + rec.recommended_balance + ' USDT</div>';
+      html += '<div style="margin-top:8px">';
+      html += paramRow('Min Order Price', rec.min_order_price.toFixed(2));
+      html += paramRow('TWE Limit', rec.total_wallet_exposure_limit.toFixed(2));
+      html += paramRow('N Positions', rec.n_positions);
+      html += paramRow('Entry Initial Qty %', rec.entry_initial_qty_pct.toFixed(4));
+      html += paramRow('Calculated', rec.calculated_balance.toFixed(2) + ' USDT');
+      html += paramRow('Recommended (+10%)', rec.recommended_balance + ' USDT');
+      html += '</div>';
+      html += '<div class="formula">min_order_price / ((twe_limit / n_positions) * entry_initial_qty_pct)</div>';
+      html += '<div class="formula">' + rec.min_order_price.toFixed(2) + ' / ((' + rec.total_wallet_exposure_limit.toFixed(2) + ' / ' + rec.n_positions + ') * ' + rec.entry_initial_qty_pct.toFixed(4) + ') = ' + rec.calculated_balance.toFixed(2) + '</div>';
+      html += '</div>';
+    }
+
+    // Balance Long table
+    if (data.balance_long && data.balance_long.length > 0) {
+      html += '<div class="result-card">';
+      html += '<h3>Balance per Coin (Long)</h3>';
+      html += '<div class="table-wrap"><table class="data-table"><thead><tr><th>Coin</th><th>Required Balance</th></tr></thead><tbody>';
+      data.balance_long.forEach(function(r) {
+        html += '<tr><td>' + esc(r.coin) + '</td><td>' + r.balance.toFixed(2) + '</td></tr>';
+      });
+      html += '</tbody></table></div></div>';
+    }
+
+    // Balance Short table
+    if (data.balance_short && data.balance_short.length > 0) {
+      html += '<div class="result-card">';
+      html += '<h3>Balance per Coin (Short)</h3>';
+      html += '<div class="table-wrap"><table class="data-table"><thead><tr><th>Coin</th><th>Required Balance</th></tr></thead><tbody>';
+      data.balance_short.forEach(function(r) {
+        html += '<tr><td>' + esc(r.coin) + '</td><td>' + r.balance.toFixed(2) + '</td></tr>';
+      });
+      html += '</tbody></table></div></div>';
+    }
+
+    // Coin Info table
+    if (data.coin_infos && data.coin_infos.length > 0) {
+      html += '<div class="result-card">';
+      html += '<h3>Coin Information</h3>';
+      html += '<div class="table-wrap"><table class="data-table"><thead><tr>';
+      html += '<th>Coin</th><th>Price</th><th>Contract</th><th>Min Amount</th><th>Min Cost</th><th>Min Order Price</th><th>Max Lev</th>';
+      html += '</tr></thead><tbody>';
+      data.coin_infos.forEach(function(c) {
+        html += '<tr>';
+        html += '<td>' + esc(c.coin) + '</td>';
+        html += '<td>' + fmtPrice(c.currentPrice) + '</td>';
+        html += '<td>' + c.contractSize + '</td>';
+        html += '<td>' + c.min_amount + '</td>';
+        html += '<td>' + c.min_cost + '</td>';
+        html += '<td>' + c.min_order_price + '</td>';
+        html += '<td>' + (c.max_lev || '—') + '</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table></div></div>';
+    }
+
+    if (!html) {
+      html = '<div class="msg-info">No results. Check that your config has approved coins.</div>';
+    }
+
+    resultsPanel.innerHTML = html;
+  }
+
+  function paramRow(label, value) {
+    return '<div class="param-row"><span class="param-label">' + esc(label) + '</span><span class="param-value">' + esc(String(value)) + '</span></div>';
+  }
+
+  function showError(msg) {
+    resultsPanel.innerHTML = '<div class="msg-error">' + esc(msg) + '</div>';
+  }
+
+  function esc(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function fmtPrice(p) {
+    if (p >= 1) return p.toFixed(2);
+    if (p >= 0.01) return p.toFixed(4);
+    return p.toFixed(8);
+  }
+
+  // ── Init ────────────────────────────────────────────────
+  loadInstances();
+})();
+</script>
+
+</body>
+</html>

@@ -33,7 +33,6 @@
     firewall: "{{ firewall }}"
     firewall_ssh_port: "{{ firewall_ssh_port }}"
     firewall_ssh_ips: "{{ firewall_ssh_ips }}"
-    install_pb6: "{{ install_pb6 }}"
 
   tasks:
     - name: display facts
@@ -234,24 +233,6 @@
         clean: yes
       become: yes
 
-    - name: Install python3.10-venv for PB6
-      apt:
-        pkg:
-          - python3.10-venv
-        clean: yes
-      become: yes
-      when: install_pb6
-
-    - name: Remove python3.10-venv if PB6 is not installed
-      apt:
-        pkg:
-          - python3.10-venv
-        state: absent
-        autoremove: yes
-        clean: yes
-      become: yes
-      when: not install_pb6
-
     - name: Install rustup
       apt:
         pkg:
@@ -273,20 +254,6 @@
         version: main
         update: yes
 
-    - name: clone passivbot repository for pb6
-      git:
-        repo: https://github.com/enarjord/passivbot.git
-        dest: "{{ install_dir }}/pb6"
-        version: v6.1.4b_latest_v6
-        update: yes
-      when: install_pb6
-    
-    - name: remove pb6 repository when not installing pb6
-      file:
-        path: "{{ install_dir }}/pb6"
-        state: absent
-      when: not install_pb6
-
     - name: clone passivbot repository for pb7
       git:
         repo: https://github.com/enarjord/passivbot.git
@@ -300,20 +267,6 @@
         virtualenv: "{{ install_dir }}/venv_pbgui"
         requirements: "{{ install_dir }}/pbgui/requirements_vps.txt"
         extra_args: --upgrade pip
-
-    - name: create python3.10 venv for pb6
-      pip:
-        virtualenv_command: python3.10 -m venv
-        virtualenv: "{{ install_dir }}/venv_pb6"
-        requirements: "{{ install_dir }}/pb6/requirements_liveonly.txt"
-        extra_args: --upgrade pip
-      when: install_pb6
-    
-    - name: remove pb6 venv when not installing pb6
-      file:
-        path: "{{ install_dir }}/venv_pb6"
-        state: absent
-      when: not install_pb6
 
     - name: create python3.12 venv for pb7
       pip:
@@ -376,7 +329,6 @@
         path: "{{ install_dir }}/pbgui/pbgui.ini"
         regexp: 'pb6'
         state: absent
-      when: not install_pb6
     
     - name: copy rclone config from local to remote
       copy:
