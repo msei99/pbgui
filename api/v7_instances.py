@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, require_auth, validate_token
@@ -42,13 +42,7 @@ router = APIRouter()
 # Remote pbgui data dir (relative to home on VPS)
 REMOTE_PBGUI_DIR = "software/pbgui"
 
-# ── TEST GUARD — remove after testing ────────────────────────
-# Set to None to disable filtering (= sync all hosts/instances).
-# Set to a set of hostnames to limit SSH sync to those hosts.
-# Set to a set of instance names to limit which instances are synced.
-_TEST_HOSTS: set[str] | None = {"manibot72"}
-_TEST_INSTANCES: set[str] | None = {"bybit_SANDUSDT"}
-# ─────────────────────────────────────────────────────────────
+
 
 # ── Injected at startup ─────────────────────────────────────
 
@@ -239,12 +233,6 @@ async def _ssh_sync_instance(name: str) -> dict:
     This replaces the old activate_*.cmd mechanism. PBRun on VPS polls
     status_v7.json for mtime changes and rescans accordingly.
     """
-    # TEST GUARD — skip instances not in test set
-    if _TEST_INSTANCES is not None and name not in _TEST_INSTANCES:
-        _log(SERVICE, f"SSH sync '{name}' skipped (not in _TEST_INSTANCES)",
-             level="DEBUG")
-        return {"name": name, "skipped": True, "reason": "test_guard"}
-
     config_path = Path(f"{PBGDIR}/data/run_v7/{name}/config.json")
     if not config_path.is_file():
         return {"name": name, "error": f"Config not found: {name}"}
@@ -266,9 +254,6 @@ async def _ssh_sync_instance(name: str) -> dict:
 
     pool = _monitor.pool
     connected = pool.connected_hosts()
-    # TEST GUARD — filter to test hosts only
-    if _TEST_HOSTS is not None:
-        connected = [h for h in connected if h in _TEST_HOSTS]
     if not connected:
         return {"name": name, "local": True,
                 "hosts": {}, "ok": 0, "failed": 0}
@@ -457,9 +442,6 @@ async def delete_instance(
     if _monitor and _monitor.pool:
         pool = _monitor.pool
         connected = pool.connected_hosts()
-        # TEST GUARD — filter to test hosts only
-        if _TEST_HOSTS is not None:
-            connected = [h for h in connected if h in _TEST_HOSTS]
         remote_dir = f"{REMOTE_PBGUI_DIR}/data/run_v7/{name}"
 
         async def delete_on_host(hostname: str):
@@ -645,6 +627,375 @@ def delete_backup(
     return {"ok": True, "name": name, "timestamp": timestamp}
 
 
+# ── Instance Config (Edit) ──────────────────────────────────
+
+@router.get("/instances/{name}/config")
+def get_instance_config(
+    name: str,
+    session: SessionToken = Depends(require_auth),
+):
+    """Load the full config.json for a v7 instance via ConfigV7.
+
+    Using ConfigV7.load_config() ensures all setters run (including
+    normalize_symbol in ApprovedCoins/IgnoredCoins) — identical to Streamlit.
+    """
+    from Config import ConfigV7
+    _validate_name(name)
+    config_path = Path(PBGDIR) / "data" / "run_v7" / name / "config.json"
+    if not config_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Instance '{name}' not found")
+    cv7 = ConfigV7(file_name=config_path)
+    cv7.load_config()
+    return {"name": name, "config": cv7.config}
+
+
+@router.put("/instances/{name}/config")
+async def save_instance_config(
+    name: str,
+    request: Request,
+    session: SessionToken = Depends(require_auth),
+):
+    """Save config.json for a v7 instance via ConfigV7.
+
+    Applies the same logic as RunV7.save():
+      - Passes config through ConfigV7 setters (normalization, conversions)
+      - Increments pbgui.version
+      - Sets backtest.exchange from user→exchange mapping
+      - Updates status_v7.json
+      - Triggers SSH sync to all VPS
+    """
+    from Config import ConfigV7
+    _validate_name(name)
+    body = await request.json()
+    cfg = body.get("config")
+    if not isinstance(cfg, dict):
+        raise HTTPException(status_code=400, detail="Missing or invalid 'config' in body")
+
+    # Pass through ConfigV7 so all setters (including normalization) run
+    instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
+    instance_dir.mkdir(parents=True, exist_ok=True)
+    config_path = instance_dir / "config.json"
+
+    cv7 = ConfigV7(file_name=config_path)
+    cv7.config = cfg
+
+    # Increment version
+    cv7.pbgui.version = cv7.pbgui.version + 1
+
+    # Set backtest.exchange from user→exchange mapping
+    live_user = cv7.live.user
+    from User import Users
+    users = Users()
+    exchange = users.find_exchange(live_user)
+    if exchange:
+        bt_exchange = exchange
+        if bt_exchange in ("bitget", "okx", "hyperliquid"):
+            bt_exchange = "binance"
+        cv7.backtest.backtest["exchange"] = bt_exchange
+    cv7.backtest.backtest["base_dir"] = f"backtests/pbgui/{live_user}"
+
+    cv7.save_config()
+
+    version = cv7.pbgui.version
+
+    # Update status_v7.json
+    _update_status_v7(name)
+
+    # Trigger SSH sync
+    sync_result = await _ssh_sync_instance(name)
+
+    _log(SERVICE, f"Saved config for '{name}' (v{version})")
+    return {
+        "ok": True,
+        "name": name,
+        "version": version,
+        "sync": sync_result,
+    }
+
+
+@router.get("/users")
+def get_users(session: SessionToken = Depends(require_auth)):
+    """List all v7-compatible users with their exchanges."""
+    from User import Users
+    users = Users()
+    result = []
+    for name in users.list_v7():
+        exchange = users.find_exchange(name)
+        result.append({"name": name, "exchange": exchange or ""})
+    return {"users": result}
+
+
+@router.get("/hosts")
+def get_hosts(session: SessionToken = Depends(require_auth)):
+    """List available hosts for the 'enabled_on' dropdown."""
+    master = _get_master_hostname()
+    hosts = ["disabled", master]
+    if _monitor and _monitor.pool:
+        for h in sorted(_monitor.enabled_hosts):
+            if h != master and h not in hosts:
+                hosts.append(h)
+    return {"hosts": hosts}
+
+
+@router.get("/symbols")
+def get_symbols(
+    exchange: str = Query(..., description="Exchange ID (e.g. 'binance')"),
+    session: SessionToken = Depends(require_auth),
+):
+    """Return normalized base coin names for a given exchange (active USDT linear perps).
+
+    Uses the same CoinData.filter_mapping() call as the Streamlit UI so that
+    normalization logic (multiplier prefixes, quote suffixes) stays in one place
+    and cannot diverge between the two frontends.
+    """
+    from PBCoinData import CoinData
+    cd = CoinData()
+    approved, ignored = cd.filter_mapping(
+        exchange=exchange,
+        market_cap_min_m=0,
+        vol_mcap_max=float("inf"),
+        only_cpt=False,
+        notices_ignore=False,
+        tags=[],
+        quote_filter=None,
+        active_only=True,
+        use_cache=True,
+    )
+    # Return all active coins (approved + ignored by filter, but present on exchange)
+    symbols = sorted(set(approved) | set(ignored))
+    return {"symbols": symbols}
+
+
+@router.get("/tags")
+def get_tags(
+    exchange: str = Query(..., description="Exchange ID"),
+    session: SessionToken = Depends(require_auth),
+):
+    """Return available filter tags for a given exchange."""
+    from PBCoinData import CoinData
+    cd = CoinData()
+    tags = cd.get_mapping_tags(exchange=exchange, use_cache=True)
+    return {"tags": tags}
+
+
+@router.get("/coins/filter")
+def filter_coins(
+    exchange: str = Query(...),
+    market_cap: int = Query(0),
+    vol_mcap: float = Query(10.0),
+    only_cpt: bool = Query(False),
+    notices_ignore: bool = Query(False),
+    tags: str = Query("", description="Comma-separated tags"),
+    session: SessionToken = Depends(require_auth),
+):
+    """Preview dynamic-ignore filter results."""
+    from PBCoinData import CoinData
+    cd = CoinData()
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    approved, ignored = cd.filter_mapping(
+        exchange=exchange,
+        market_cap_min_m=market_cap,
+        vol_mcap_max=vol_mcap,
+        only_cpt=only_cpt,
+        notices_ignore=notices_ignore,
+        tags=tag_list,
+        quote_filter=None,
+        use_cache=True,
+    )
+    return {"approved": approved, "ignored": ignored}
+
+
+@router.get("/log/{name}")
+def get_instance_log(
+    name: str,
+    lines: int = Query(500, ge=1, le=10000),
+    session: SessionToken = Depends(require_auth),
+):
+    """Read the passivbot.log for an instance (tail N lines)."""
+    _validate_name(name)
+    log_path = Path(PBGDIR) / "data" / "run_v7" / name / "passivbot.log"
+    if not log_path.is_file():
+        return {"name": name, "log": ""}
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            all_lines = f.readlines()
+        tail = all_lines[-lines:] if len(all_lines) > lines else all_lines
+        return {"name": name, "log": "".join(reversed(tail))}
+    except OSError:
+        return {"name": name, "log": ""}
+
+
+@router.get("/last-active-host/{name}")
+def get_last_active_host(
+    name: str,
+    session: SessionToken = Depends(require_auth),
+):
+    """Find the last VPS host where a bot was active by scanning backups.
+
+    Scans data/backup/v7/{name}/*/config.json in reverse order (newest first)
+    looking for enabled_on != 'disabled'.
+    Returns {name, host, version} or {name, host: ''} if none found.
+    """
+    _validate_name(name)
+    master = _get_master_hostname()
+    backup_root = Path(PBGDIR) / "data" / "backup" / "v7" / name
+    if not backup_root.is_dir():
+        return {"name": name, "host": "", "master": master}
+    # Sort backup dirs by mtime descending (newest first)
+    dirs = sorted(
+        [d for d in backup_root.iterdir() if d.is_dir()],
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    )
+    for d in dirs:
+        cfg_file = d / "config.json"
+        if not cfg_file.is_file():
+            continue
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            host = cfg.get("pbgui", {}).get("enabled_on", "disabled") or "disabled"
+            if host != "disabled":
+                return {"name": name, "host": host, "version": d.name, "master": master}
+        except (json.JSONDecodeError, OSError):
+            continue
+    return {"name": name, "host": "", "master": master}
+
+
+@router.get("/log-smart/{name}")
+def get_instance_log_smart(
+    name: str,
+    lines: int = Query(500, ge=1, le=10000),
+    session: SessionToken = Depends(require_auth),
+):
+    """Return passivbot.log with smart fallback.
+
+    - enabled_on != 'disabled': read live log from data/run_v7/{name}/passivbot.log
+    - disabled: find most recent backup in data/backup/v7/{name}/ that contains passivbot.log
+    Returns {name, log, source, source_label} where source is 'live' or 'backup:{timestamp}'.
+    """
+    _validate_name(name)
+
+    # Determine enabled_on from saved config
+    cfg_path = Path(PBGDIR) / "data" / "run_v7" / name / "config.json"
+    enabled_on = "disabled"
+    if cfg_path.is_file():
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg_data = json.load(f)
+            enabled_on = cfg_data.get("pbgui", {}).get("enabled_on", "disabled") or "disabled"
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    def _read_log(log_path: Path) -> str:
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                all_lines = f.readlines()
+            tail = all_lines[-lines:] if len(all_lines) > lines else all_lines
+            return "".join(reversed(tail))
+        except OSError:
+            return ""
+
+    # Try live log first (always preferred if the file exists and bot is not disabled)
+    live_log_path = Path(PBGDIR) / "data" / "run_v7" / name / "passivbot.log"
+    if enabled_on != "disabled" and live_log_path.is_file():
+        return {
+            "name": name,
+            "log": _read_log(live_log_path),
+            "source": "live",
+            "source_label": f"live ({enabled_on})",
+        }
+
+    # Fallback: most recent backup with passivbot.log
+    backup_root = Path(PBGDIR) / "data" / "backup" / "v7" / name
+    if backup_root.is_dir():
+        timestamps = sorted(
+            [d.name for d in backup_root.iterdir() if d.is_dir()],
+            reverse=True,
+        )
+        for ts in timestamps:
+            backup_log = backup_root / ts / "passivbot.log"
+            if backup_log.is_file():
+                return {
+                    "name": name,
+                    "log": _read_log(backup_log),
+                    "source": f"backup:{ts}",
+                    "source_label": f"last active (backup {ts})",
+                }
+
+    # No log found at all — try live path as last resort even if disabled
+    if live_log_path.is_file():
+        return {
+            "name": name,
+            "log": _read_log(live_log_path),
+            "source": "live",
+            "source_label": "local log",
+        }
+
+    return {"name": name, "log": "", "source": "none", "source_label": "no log found"}
+
+
+@router.get("/instances/{name}/coin-config/{symbol}")
+def get_coin_config(
+    name: str,
+    symbol: str,
+    session: SessionToken = Depends(require_auth),
+):
+    """Load per-coin override config (bot section) from {symbol}.json."""
+    _validate_name(name)
+    config_dir = Path(PBGDIR) / "data" / "run_v7" / name
+    config_file = config_dir / f"{symbol}.json"
+    if config_file.is_file():
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {"bot": data.get("bot", {})}
+        except (json.JSONDecodeError, OSError):
+            return {"bot": {}}
+    return {"bot": {}}
+
+
+@router.put("/instances/{name}/coin-config/{symbol}")
+def save_coin_config(
+    name: str,
+    symbol: str,
+    body: dict = Body(...),
+    session: SessionToken = Depends(require_auth),
+):
+    """Save per-coin override config (bot section) to {symbol}.json."""
+    _validate_name(name)
+    config_dir = Path(PBGDIR) / "data" / "run_v7" / name
+    config_file = config_dir / f"{symbol}.json"
+    # Load existing to preserve non-bot sections
+    full = {}
+    if config_file.is_file():
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                full = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            full = {}
+    full["bot"] = body.get("bot", {})
+    tmp = config_file.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(full, f, indent=4)
+    tmp.rename(config_file)
+    return {"ok": True}
+
+
+@router.delete("/instances/{name}/coin-config/{symbol}")
+def delete_coin_config(
+    name: str,
+    symbol: str,
+    session: SessionToken = Depends(require_auth),
+):
+    """Delete per-coin override config file."""
+    _validate_name(name)
+    config_dir = Path(PBGDIR) / "data" / "run_v7" / name
+    config_file = config_dir / f"{symbol}.json"
+    config_file.unlink(missing_ok=True)
+    return {"ok": True}
+
+
 @router.get("/main_page", response_class=HTMLResponse)
 def get_main_page(
     request: Request,
@@ -669,6 +1020,51 @@ def get_main_page(
     if not st_base:
         st_base = f"http://{host}:8501"
     html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
+
+    from pbgui_func import PBGUI_VERSION
+    from pbgui_purefunc import PBGUI_SERIAL
+    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace("%%VERSION%%", PBGUI_VERSION)
+    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
+
+    nav_js = Path(__file__).parent.parent / "frontend" / "pbgui_nav.js"
+    nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION
+    html = html.replace("%%NAV_HASH%%", nav_hash)
+
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/edit_page", response_class=HTMLResponse)
+def get_edit_page(
+    request: Request,
+    name: str = Query(default="", description="Instance name to edit"),
+    new: str = Query(default="", description="Set to '1' for new instance"),
+    st_base: str = Query(default="", description="Streamlit base URL"),
+    session: SessionToken = Depends(require_auth),
+) -> HTMLResponse:
+    """Serve the standalone v7 Edit page."""
+    html_path = Path(__file__).parent.parent / "frontend" / "v7_edit.html"
+    html = html_path.read_text(encoding="utf-8")
+
+    scheme = request.url.scheme
+    host = request.url.hostname or "127.0.0.1"
+    port = request.url.port
+    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
+    api_base = origin + "/api/v7"
+    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
+
+    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
+    html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
+    html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
+
+    if not st_base:
+        st_base = f"http://{host}:8501"
+    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
+
+    is_new = "true" if new == "1" else "false"
+    html = html.replace('"%%INSTANCE%%"', json.dumps(name))
+    html = html.replace('"%%IS_NEW%%"', json.dumps(is_new))
 
     from pbgui_func import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL

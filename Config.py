@@ -1,6 +1,8 @@
 import streamlit as st
 from pathlib import Path
 import json
+import shutil
+import os
 from pbgui_func import validateJSON, error_popup
 from pbgui_purefunc import config_pretty_str, pb7_suite_preflight_errors
 import pbgui_help
@@ -2149,11 +2151,25 @@ class ApprovedCoins:
     def short(self): return self._short
     @long.setter
     def long(self, new_long):
-        self._long = [str(coin).strip() for coin in new_long if str(coin).strip()]
+        seen = set()
+        result = []
+        for coin in new_long:
+            n = normalize_symbol(str(coin).strip())
+            if n and n not in seen:
+                seen.add(n)
+                result.append(n)
+        self._long = result
         self._approved_coins["long"] = self._long
     @short.setter
     def short(self, new_short):
-        self._short = [str(coin).strip() for coin in new_short if str(coin).strip()]
+        seen = set()
+        result = []
+        for coin in new_short:
+            n = normalize_symbol(str(coin).strip())
+            if n and n not in seen:
+                seen.add(n)
+                result.append(n)
+        self._short = result
         self._approved_coins["short"] = self._short
 
 class IgnoredCoins:
@@ -2187,11 +2203,25 @@ class IgnoredCoins:
     def short(self): return self._short
     @long.setter
     def long(self, new_long):
-        self._long = new_long
+        seen = set()
+        result = []
+        for coin in new_long:
+            n = normalize_symbol(str(coin).strip())
+            if n and n not in seen:
+                seen.add(n)
+                result.append(n)
+        self._long = result
         self._ignored_coins["long"] = self._long
     @short.setter
     def short(self, new_short):
-        self._short = new_short
+        seen = set()
+        result = []
+        for coin in new_short:
+            n = normalize_symbol(str(coin).strip())
+            if n and n not in seen:
+                seen.add(n)
+                result.append(n)
+        self._short = result
         self._ignored_coins["short"] = self._short
 
 class Live:
@@ -6890,8 +6920,88 @@ class ConfigV7():
         if self._config != None and self._config_file != None:
             file = Path(f'{self._config_file}')
             file.parent.mkdir(parents=True, exist_ok=True)
-            with open(file, "w", encoding='utf-8') as f:
-                json.dump(self.config, f, indent=4)
+            # Backup existing config before overwriting
+            self._backup_before_save(file)
+            # Atomic write: write to temp file, then rename
+            tmp_file = file.with_suffix('.json.tmp')
+            try:
+                with open(tmp_file, "w", encoding='utf-8') as f:
+                    json.dump(self.config, f, indent=4)
+                os.replace(str(tmp_file), str(file))
+            except Exception:
+                # Clean up temp file on failure
+                if tmp_file.exists():
+                    tmp_file.unlink(missing_ok=True)
+                raise
+
+    def _backup_before_save(self, config_path: Path):
+        """Create a versioned backup of the current config before overwriting."""
+        try:
+            if not config_path.exists():
+                return
+            # Determine instance name from path (data/run_v7/{name}/config.json)
+            instance_dir = config_path.parent
+            instance_name = instance_dir.name
+            # Read current version from existing config
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    old_cfg = json.load(f)
+                old_version = old_cfg.get("pbgui", {}).get("version", 0)
+            except (json.JSONDecodeError, OSError):
+                return
+            # Determine backup root: data/backup/v7/{name}/
+            # Navigate up from data/run_v7/{name}/ to data/ then to data/backup/v7/{name}/
+            data_dir = instance_dir.parent.parent  # data/
+            backup_dir = data_dir / "backup" / "v7" / instance_name / str(old_version)
+            if backup_dir.exists():
+                return  # Already backed up this version
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            # Copy config.json and all coin override *.json files (excluding logs, temp files)
+            for item in instance_dir.iterdir():
+                if item.suffix == '.json' and item.name not in (
+                    'config.json.tmp', 'ignored_coins.json', 'approved_coins.json',
+                    'config_run.json', 'monitor.json'
+                ):
+                    shutil.copy2(str(item), str(backup_dir / item.name))
+            # Apply retention policy
+            self._prune_backups(data_dir / "backup" / "v7" / instance_name)
+        except Exception as e:
+            _log('Config', f'Backup before save failed: {e}', level='WARNING',
+                 meta={'traceback': traceback.format_exc()})
+
+    @staticmethod
+    def _get_backup_retention_limit(backup_v7_root: Path) -> int:
+        """Read max_versions from data/backup/v7/_settings.json, default 50."""
+        settings_file = backup_v7_root / "_settings.json"
+        if settings_file.exists():
+            try:
+                with open(settings_file, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+                val = int(settings.get("max_versions", 50))
+                return max(val, 1)
+            except (json.JSONDecodeError, OSError, ValueError):
+                pass
+        return 50
+
+    def _prune_backups(self, instance_backup_dir: Path):
+        """Remove oldest backups beyond the retention limit."""
+        try:
+            backup_v7_root = instance_backup_dir.parent  # data/backup/v7/
+            max_versions = self._get_backup_retention_limit(backup_v7_root)
+            # List all version directories (numeric or timestamp)
+            versions = sorted(
+                [d for d in instance_backup_dir.iterdir() if d.is_dir()],
+                key=lambda d: d.stat().st_mtime,
+                reverse=True,
+            )
+            if len(versions) <= max_versions:
+                return
+            for old_dir in versions[max_versions:]:
+                shutil.rmtree(str(old_dir), ignore_errors=True)
+            _log('Config', f'Pruned {len(versions) - max_versions} old backup(s) for {instance_backup_dir.name}')
+        except Exception as e:
+            _log('Config', f'Backup pruning failed: {e}', level='WARNING',
+                 meta={'traceback': traceback.format_exc()})
 
     def view_coin_overrides(self):
         if self.config["coin_overrides"]:

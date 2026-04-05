@@ -50,13 +50,14 @@ Sidebar actions:
 
 | Button | Action |
 |--------|--------|
-| `:material/home:` | Return to the instance list |
-| `:material/save:` | Save changes locally |
-| **Import** | Import an existing Passivbot config file |
-| **Activate** | Push the saved config to the VPS and restart the bot |
-| **Backtest** | Open this instance's config in the Backtest page |
-| **Calculate Balance** | Open the Balance Calculator for this instance |
-| **Strategy Explorer** | Open the Strategy Explorer pre-loaded with this config |
+| 🏠 Home | Return to the instance list |
+| 💾 Save | Save changes and sync config to VPS |
+| 📥 Import | Import an existing Passivbot config file |
+| 📊 Backtest | Open this instance's config in the Backtest page |
+| 🔍 Strategy Explorer | Open the Strategy Explorer pre-loaded with this config |
+| 💰 Balance Calculator | Open the standalone Balance Calculator for this instance |
+| ⚡ Calc Balance | Calculate the recommended balance inline (shown as a popup) |
+| 📖 Guide | Open this guide |
 
 Key settings in the edit form:
 
@@ -66,7 +67,9 @@ Key settings in the edit form:
 | **Enabled On** | Target VPS for deployment |
 | **Note** | Optional label shown in the list |
 | **Long / Short** | Bot parameters — positions, TWE, entry/close ranges |
-| **coin filter** | CoinMarketCap-based symbol filter for this instance |
+| **Filters** | CoinMarketCap-based symbol filter for this instance |
+| **Coin Overrides** | Per-coin parameter overrides (bot params, live mode, separate config files) |
+| **Dynamic Ignore** | Preview of symbols automatically ignored based on filter settings |
 
 ---
 
@@ -74,19 +77,23 @@ Key settings in the edit form:
 
 ### Start a new live instance
 1. **Add** → select **User** and **Enabled On** (target VPS)
-2. Configure **Long / Short** parameters and coin filter → `:material/save:`
-3. Click **Activate** → the config is pushed to the VPS and the bot starts
+2. Configure **Long / Short** parameters and coin filters → **💾 Save**
+3. Status column will show 🔄 until the VPS confirms activation
 
 ### Update a running bot
-1. Open the instance with **Edit** → adjust parameters → `:material/save:`
-2. Click **Activate** to push the new config and restart the bot
-3. Status column will show 🔄 until the VPS confirms the new version
+1. Open the instance with **Edit** → adjust parameters → **💾 Save**
+2. The config is automatically pushed to the VPS; status shows 🔄 until confirmed
 
 ### Validate parameters before going live
 1. Open the instance with **Edit**
-2. Click **Backtest** → run a backtest with the same config
-3. Click **Strategy Explorer** → explore Pareto metrics interactively
+2. Click **📊 Backtest** → run a backtest with the same config
+3. Click **🔍 Strategy Explorer** → explore Pareto metrics interactively
+
+### Check if you have enough balance
+1. Open the instance with **Edit**
+2. Click **⚡ Calc Balance** to see the recommended balance needed for your current config
+3. Or click **💰 Balance Calculator** to open the full standalone calculator
 
 ### Disable a bot
-1. Open the instance with **Edit** → set **Enabled On** to `disabled` → `:material/save:`
-2. Click **Activate** to stop the bot on the VPS
+1. Open the instance with **Edit** → set **Enabled On** to `disabled` → **💾 Save**
+2. The bot is stopped on the VPS automatically

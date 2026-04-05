@@ -670,15 +670,17 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-/* ─── Edit (navigate to Streamlit) ────────────────────────── */
+/* ─── Edit (navigate to FastAPI edit page) ────────────────── */
 function editInstance(name) {
-  var url = ST_BASE + '/?target=V7_RUN&edit_instance=' + encodeURIComponent(name) + '&token=' + encodeURIComponent(TOKEN);
+  var url = API_BASE + '/edit_page?name=' + encodeURIComponent(name) + '&token=' + encodeURIComponent(TOKEN) +
+    '&st_base=' + encodeURIComponent(ST_BASE);
   window.location.href = url;
 }
 
-/* ─── Add Instance (navigate to Streamlit) ────────────────── */
+/* ─── Add Instance (navigate to FastAPI edit page) ────────── */
 function addInstance() {
-  var url = ST_BASE + '/?target=V7_RUN&add_instance=1&token=' + encodeURIComponent(TOKEN);
+  var url = API_BASE + '/edit_page?new=1&token=' + encodeURIComponent(TOKEN) +
+    '&st_base=' + encodeURIComponent(ST_BASE);
   window.location.href = url;
 }
 
