@@ -382,86 +382,6 @@ tr.row-inactive td { opacity: 0.45; }
 .svc-host-body.collapsed { display: none; }
 .svc-host-arrow { font-size: 16px; margin-left: auto; }
 
-/* ─── Live Logs ────────────────────────────────────────────── */
-.log-controls {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 12px;
-  align-items: center;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-}
-.log-controls select, .log-controls button {
-  padding: 6px 12px;
-  background: var(--bg3);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  font-family: var(--font);
-  font-size: 13px;
-  cursor: pointer;
-}
-.log-controls button:hover { background: var(--accent); color: #000; }
-.log-controls button.active { background: var(--green); color: #000; border-color: var(--green); }
-.log-terminal {
-  background: #000;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 12px;
-  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-  font-size: 12px;
-  line-height: 1.4;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: #b0b0b0;
-}
-.log-terminal.show-line-nums > div { padding-left: 52px; position: relative; }
-.log-terminal.show-line-nums > div::before {
-  content: attr(data-ln);
-  position: absolute; left: 0; top: 0; width: 44px;
-  text-align: right; color: #555; font-size: 11px;
-  user-select: none; pointer-events: none;
-}
-.log-terminal.show-line-nums > div.log-separator::before { content: ''; }
-.log-search {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
-  align-items: center;
-  flex-shrink: 0;
-}
-.log-search input[type="text"] {
-  padding: 5px 10px;
-  background: var(--bg3);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  font-family: var(--font);
-  font-size: 13px;
-  width: 220px;
-}
-.log-search label { font-size: 12px; color: var(--text-dim); cursor: pointer; white-space: nowrap; }
-.log-search .log-match-count { font-size: 11px; color: #888; min-width: 60px; }
-.log-terminal .log-error { color: var(--red); }
-.log-terminal .log-warning { color: var(--orange); }
-.log-terminal .log-info { color: var(--green); }
-.log-terminal .log-hidden { display: none; }
-.log-terminal .log-highlight { background: rgba(255,200,0,0.25); }
-.log-terminal .log-highlight mark { background: #e8a620; color: #000; border-radius: 2px; padding: 0 1px; }
-.log-terminal .log-highlight.log-current-match { background: rgba(255,160,0,0.45); outline: 1px solid #e8a620; }
-.log-nav-btn { background: var(--bg3); border: 1px solid var(--border); border-radius: 3px; color: var(--text-dim); cursor: pointer; font-size: 12px; padding: 2px 6px; line-height: 1; }
-.log-nav-btn:hover { color: var(--text); border-color: var(--text-dim); }
-.log-terminal .log-context { opacity: 0.5; }
-.log-terminal .log-separator { text-align: center; color: var(--text-dim); font-size: 11px; padding: 2px 0; user-select: none; border-top: 1px dotted var(--border); border-bottom: 1px dotted var(--border); margin: 2px 0; }
-.log-terminal .log-group-first { cursor: pointer; padding-left: 20px; position: relative; }
-.log-terminal .log-group-first .grp-arrow { position: absolute; left: 2px; top: 0; color: #fff; font-size: 11px; text-shadow: 0 0 2px rgba(0,0,0,0.8); pointer-events: none; }
-.log-terminal.show-line-nums .log-group-first { padding-left: 72px; }
-.log-terminal.show-line-nums .log-group-first .grp-arrow { left: 52px; }
-.log-group-first .grp-count { font-size: 10px; color: var(--text-dim); margin-left: 8px; }
-
 /* ─── Summary bar ──────────────────────────────────────────── */
 .summary-bar {
   display: flex;
@@ -681,45 +601,13 @@ tr.row-inactive td { opacity: 0.45; }
 
 <!-- Live Logs Tab -->
 <div id="tab-logs" class="tab-content" style="overflow:hidden">
-  <div class="log-controls" id="log-controls"></div>
-  <div class="log-search" id="log-search">
-    <select id="log-preset" onchange="onLogPresetChange()" style="padding:5px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px">
-      <option value="">— Preset —</option>
-      <option value="error|traceback|exception">Errors</option>
-      <option value="warning|warn">Warnings</option>
-      <option value="error|warning|traceback">Errors + Warnings</option>
-      <option value="order|fill|entry|close">Orders / Fills</option>
-      <option value="balance|pnl|profit|loss|equity">Balance / PnL</option>
-      <option value="position|pos_size|wallet">Positions</option>
-      <option value="start|running|initialized|listening">Startup</option>
-      <option value="connect|disconnect|timeout|reconnect">Connection</option>
-      <option value="restart|kill|stop|shutdown">Restart / Stop</option>
-      <option value="traceback|exception|raise">Traceback</option>
-    </select>
-    <input id="log-search-input" type="text" placeholder="Search logs..." oninput="onLogSearchInput()" onkeydown="onLogSearchKeydown(event)">
-    <label style="display:inline-flex;align-items:center;gap:4px;color:#fafafa;font-size:12px;cursor:pointer;white-space:nowrap;margin:0"><input type="checkbox" id="log-filter-toggle" onchange="onLogFilterToggle()" checked><span>Filter</span></label>
-    <select id="log-context-lines" onchange="onLogContextChange()" style="padding:3px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;display:none">
-      <option value="3">±3 lines</option>
-      <option value="5" selected>±5 lines</option>
-      <option value="10">±10 lines</option>
-      <option value="20">±20 lines</option>
-    </select>
-    <span id="log-group-actions" style="display:none;font-size:11px">
-      <a href="#" onclick="toggleAllGroups(true);return false" style="color:var(--text-dim);text-decoration:underline">Expand all</a>
-      <a href="#" onclick="toggleAllGroups(false);return false" style="color:var(--text-dim);text-decoration:underline;margin-left:6px">Collapse all</a>
-    </span>
-    <span id="log-nav-buttons" style="display:none">
-      <button class="log-nav-btn" onclick="logSearchNav(-1)" title="Previous match (Shift+Enter)">&#9650;</button>
-      <button class="log-nav-btn" onclick="logSearchNav(1)" title="Next match (Enter)">&#9660;</button>
-    </span>
-    <span class="log-match-count" id="log-match-count"></span>
-  </div>
-  <div class="log-terminal" id="log-terminal"></div>
+    <div id="log-viewer-vps" style="height:100%"></div>
 </div>
 
 </div><!-- /#main-content -->
 </div><!-- /#page-body -->
 
+<script src="/app/js/log_viewer_panel.js?v=2"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
    VPS Monitor — WebSocket-powered real-time dashboard
@@ -741,6 +629,8 @@ let compactMode = false;
 let compactInitialized = false;  // true after first state message applied
 let compactToggled = {};  // hosts manually toggled open/closed in compact mode
 let svcCompactToggled = {};  // services tab: hosts toggled open/closed in compact mode
+let debugLogging = false;
+let debugLoggingInitialized = false;
 let hideIP = false;
 let instFilterServer = 'All';
 let instFilterVersion = 'All';
@@ -748,31 +638,7 @@ let instFilterErrors = false;
 let instFilterOthers = false;
 
 // Logs tab state
-let logHost = '';
-let logService = '';
-let logStreaming = false;
-let logLines = [];
-let logPendingLines = [];  // Buffer for incremental append
-let logRafPending = false; // requestAnimationFrame guard
-let logFileSize = null;    // File size in bytes
-let logHistoryLines = 200; // Configurable history lines (0=all)
-let logSearchTerm = '';    // Current search text
-let logSearchIsRegex = false; // true when preset is active (term has | alternation)
-let logFilterMode = true; // true = hide non-matching lines (default: on)
-let logSearchAbortId = 0;   // Incremented to cancel in-progress chunked search
-let logSearchDebounce = null; // Timer id for search input debounce
-let logContextLines = 5;   // Context lines before/after matches in filter+group mode
-let logBlocksCollapsed = true; // true when "Collapse all" was last used (default: collapsed)
-let logSearchMatchEls = [];  // Cached .log-highlight elements for nav
-let logSearchMatchIdx = -1;  // Current match index (-1 = none)
-let logRenderAbortId = 0;    // Incremented to cancel in-progress chunked render
-let logLineBase = 0;         // Offset for real line numbering (lines trimmed from front)
-let logSessionId = 0;        // Incremented on every fetch/subscribe to ignore stale responses
-let debugLogging = false;    // VPSMonitor debug logging enabled
-let debugLoggingInitialized = false;
-const MAX_LOG_LINES = 5000;
-const SEARCH_CHUNK_SIZE = 400; // DOM nodes processed per animation frame
-const RENDER_CHUNK_SIZE = 500; // DOM nodes created per animation frame during render
+let vpsLogViewer = null;
 
 // ── WebSocket ──────────────────────────────────────────────
 function connect() {
@@ -850,27 +716,6 @@ function handleMessage(msg) {
       }
       renderActiveTab();
       break;
-    case 'logs':
-      if (msg.sid !== undefined && msg.sid !== logSessionId) break; // stale response
-      logLines = msg.lines || [];
-      logLineBase = 0;
-      if (msg.streaming) logStreaming = true;
-      renderLogs();
-      break;
-    case 'log_lines':
-      if (msg.sid !== undefined && msg.sid !== logSessionId) break; // stale response
-      logLines.push(...(msg.lines || []));
-      if (logLines.length > MAX_LOG_LINES) {
-        const trimmed = logLines.length - MAX_LOG_LINES;
-        logLines = logLines.slice(-MAX_LOG_LINES);
-        logLineBase += trimmed;
-      }
-      appendLogLines(msg.lines || []);
-      break;
-    case 'log_info':
-      logFileSize = msg.size;
-      updateLogFileSize();
-      break;
     case 'result':
       handleResult(msg);
       break;
@@ -881,7 +726,6 @@ function handleMessage(msg) {
 }
 
 function handleResult(msg) {
-  const logBtn = document.getElementById('log-restart-btn');
   if (msg.cmd === 'restart_service') {
     // Update service button state
     const btn = document.querySelector(`[data-restart="${msg.host}:${msg.service}"]`);
@@ -891,22 +735,10 @@ function handleResult(msg) {
       btn.textContent = msg.success ? '✅ Restarted' : '❌ Failed';
       setTimeout(() => { btn.textContent = 'Restart'; }, 3000);
     }
-    // Update log restart button if it matches
-    if (logBtn && msg.host === logHost && msg.service === logService) {
-      logBtn.disabled = false;
-      logBtn.textContent = msg.success ? '✅ Restarted' : '❌ Failed';
-      setTimeout(() => { logBtn.textContent = '🔄 Restart'; }, 3000);
-    }
   }
   if (msg.cmd === 'kill_instance') {
     if (!msg.success) {
       console.warn('kill_instance failed for', msg.name, 'on', msg.host);
-    }
-    // Update log restart button if it matches
-    if (logBtn && msg.host === logHost && logService.startsWith('Bot:') && logService.substring(4).startsWith(msg.name + ':')) {
-      logBtn.disabled = false;
-      logBtn.textContent = msg.success ? '✅ Killed' : '❌ Failed';
-      setTimeout(() => { logBtn.textContent = '🔄 Restart'; }, 3000);
     }
   }
 }
@@ -964,7 +796,7 @@ function renderActiveTab() {
     case 'dashboard': renderDashboard(); break;
     case 'instances': renderInstances(); break;
     case 'services':  renderServices(); break;
-    case 'logs':      renderLogControls(); break;
+    case 'logs':      initVpsLogViewer(); break;
   }
 }
 
@@ -1304,38 +1136,12 @@ function selectInstance(idx) {
 
 // ── Instance Log & Restart ─────────────────────────────────
 function viewInstanceLog(host, name, pbVersion) {
-  // Switch to Live Logs tab
   switchTab('logs');
-
-  // Stop any existing stream
-  if (logStreaming) {
-    send({ cmd: 'unsubscribe_logs' });
-    logStreaming = false;
+  initVpsLogViewer();
+  if (vpsLogViewer) {
+    vpsLogViewer.setHost(host);
+    vpsLogViewer.setService('Bot:' + name + ':' + pbVersion);
   }
-
-  // Build service identifier for bot log
-  const botService = 'Bot:' + name + ':' + pbVersion;
-  logHost = host;
-  logService = botService;
-  logLines = [];
-  logLineBase = 0;
-
-  // Force rebuild of log controls to include this bot service entry
-  const ctrl = document.getElementById('log-controls');
-  ctrl.dataset.built = '';
-  renderLogControls();
-
-  // Set dropdowns to correct values
-  const hostSel = document.getElementById('log-host');
-  if (hostSel) hostSel.value = host;
-  const svcSel = document.getElementById('log-svc');
-  if (svcSel) svcSel.value = botService;
-
-  // Start streaming immediately
-  const sid = ++logSessionId;
-  send({ cmd: 'subscribe_logs', host: host, service: botService, sid: sid });
-  logStreaming = true;
-  renderLogControls();
 }
 
 function killInstance(host, name, pbVersion, el) {
@@ -1459,744 +1265,21 @@ function toggleSvcCard(header) {
   if (card) svcCompactToggled[card.dataset.svcHost] = !isNowCollapsed;
 }
 
-// ── Live Logs ──────────────────────────────────────────────
-function getLogServices() {
-  // Base system services
-  const services = ['PBRun', 'PBRemote', 'PBCoinData'];
-  // Add bot instances for the selected host
-  if (state && logHost) {
-    const instances = state.instances || {};
-    const hostInstances = instances[logHost] || [];
-    for (const inst of hostInstances) {
-      const name = inst.u || '?';
-      const pv = inst.p || '7';
-      services.push('Bot:' + name + ':' + pv);
-    }
-  }
-  return services;
-}
-
-function svcLabel(s) {
-  if (s.startsWith('Bot:')) {
-    const parts = s.substring(4).split(':');
-    return '🤖 ' + parts[0];
-  }
-  return s;
-}
-
-function renderLogControls() {
-  if (!state) return;
-  const conns = state.connections?.connections || {};
-  const connected = Object.entries(conns)
-    .filter(([h, c]) => c.status === 'connected')
-    .map(([h]) => h)
-    .sort();
-
-  const services = getLogServices();
-  const ctrl = document.getElementById('log-controls');
-
-  if (!ctrl.dataset.built) {
-    const histOpts = [{v:100,l:'100'},{v:200,l:'200'},{v:500,l:'500'},{v:1000,l:'1000'},{v:5000,l:'5000'},{v:0,l:'All'}];
-    ctrl.innerHTML = `
-      <label>Host: <select id="log-host" onchange="onLogHostChange()">${connected.map(h => `<option value="${h}"${h===logHost?' selected':''}>${h}</option>`).join('')}</select></label>
-      <label>Service: <select id="log-svc" onchange="onLogServiceChange()">${services.map(s => `<option value="${s}"${s===logService?' selected':''}>${svcLabel(s)}</option>`).join('')}</select></label>
-      <label>Lines: <select id="log-history" onchange="onLogHistoryChange()">${histOpts.map(o => `<option value="${o.v}"${o.v===logHistoryLines?' selected':''}>${o.l}</option>`).join('')}</select></label>
-      <span id="log-file-size" style="font-size:11px;color:#888;min-width:70px"></span>
-      <button id="log-fetch" onclick="fetchLogs()">Fetch</button>
-      <button id="log-stream-btn" onclick="toggleLogStream()">▶ Stream</button>
-      <button onclick="clearLogs()">Clear</button>
-      <button id="log-download-btn" onclick="downloadLog()" title="Download log content">💾 Download</button>
-      <button id="log-restart-btn" onclick="restartLogService()" title="Restart the selected service/bot">🔄 Restart</button>
-      <button id="log-linenum-btn" onclick="toggleLineNums()" title="Toggle line numbers">#</button>
-    `;
-    ctrl.dataset.built = '1';
-    if (!logHost && connected.length) logHost = connected[0];
-    if (!logService) logService = 'PBRun';
-    requestLogInfo();
-  }
-
-  // Update host select options
-  const hostSel = document.getElementById('log-host');
-  if (hostSel) {
-    const currentOpts = Array.from(hostSel.options).map(o => o.value);
-    if (JSON.stringify(currentOpts) !== JSON.stringify(connected)) {
-      hostSel.innerHTML = connected.map(h => `<option value="${h}"${h===logHost?' selected':''}>${h}</option>`).join('');
-    }
-  }
-
-  // Update service select options (includes bot instances for selected host)
-  const svcSel = document.getElementById('log-svc');
-  if (svcSel) {
-    const currentSvcOpts = Array.from(svcSel.options).map(o => o.value);
-    if (JSON.stringify(currentSvcOpts) !== JSON.stringify(services)) {
-      svcSel.innerHTML = services.map(s => `<option value="${s}"${s===logService?' selected':''}>${svcLabel(s)}</option>`).join('');
-    }
-  }
-
-  // Update stream button state
-  const streamBtn = document.getElementById('log-stream-btn');
-  if (streamBtn) {
-    streamBtn.textContent = logStreaming ? '⏹ Stop' : '▶ Stream';
-    streamBtn.className = logStreaming ? 'svc-btn active' : '';
-  }
-}
-
-function fetchLogs() {
-  logHost = document.getElementById('log-host')?.value || '';
-  logService = document.getElementById('log-svc')?.value || '';
-  if (!logHost || !logService) return;
-  logLines = [];
-  logLineBase = 0;
-  ++logRenderAbortId; // cancel any in-progress chunked render
-  const sid = ++logSessionId;
-  send({ cmd: 'get_logs', host: logHost, service: logService, lines: logHistoryLines, sid: sid });
-}
-
-function onLogHistoryChange() {
-  logHistoryLines = parseInt(document.getElementById('log-history')?.value || '200', 10);
-  fetchLogs();
-}
-
-function updateLogFileSize() {
-  const el = document.getElementById('log-file-size');
-  if (!el) return;
-  if (logFileSize === null || logFileSize === undefined) {
-    el.textContent = '';
-  } else {
-    el.textContent = formatFileSize(logFileSize);
-  }
-}
-
-function formatFileSize(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-}
-
-function requestLogInfo() {
-  if (logHost && logService) {
-    send({ cmd: 'get_log_info', host: logHost, service: logService });
-  }
-}
-
-function downloadLog() {
-  if (!logLines.length) return;
-  const text = logLines.join('\n');
-  const blob = new Blob([text], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  const svcName = logService.startsWith('Bot:') ? logService.substring(4).split(':')[0] : logService;
-  a.href = url;
-  a.download = `${logHost}_${svcName}.log`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-function toggleLogStream() {
-  if (logStreaming) {
-    send({ cmd: 'unsubscribe_logs' });
-    logStreaming = false;
-  } else {
-    logHost = document.getElementById('log-host')?.value || '';
-    logService = document.getElementById('log-svc')?.value || '';
-    if (!logHost || !logService) return;
-    logLines = [];
-    logLineBase = 0;
-    const sid = ++logSessionId;
-    send({ cmd: 'subscribe_logs', host: logHost, service: logService, sid: sid });
-  }
-  renderLogControls();
-}
-
-function clearLogs() {
-  logLines = [];
-  logLineBase = 0;
-  logPendingLines = [];
-  logRafPending = false;
-  ++logRenderAbortId; // cancel any in-progress chunked render
-  const terminal = document.getElementById('log-terminal');
-  if (terminal) terminal.innerHTML = '';
-  const ctxSel = document.getElementById('log-context-lines');
-  const grpActions = document.getElementById('log-group-actions');
-  if (ctxSel) ctxSel.style.display = 'none';
-  if (grpActions) grpActions.style.display = 'none';
-}
-
-function toggleLineNums() {
-  const terminal = document.getElementById('log-terminal');
-  if (!terminal) return;
-  const btn = document.getElementById('log-linenum-btn');
-  // Hide terminal during toggle to avoid incremental relayout per element
-  terminal.style.display = 'none';
-  terminal.classList.toggle('show-line-nums');
-  // Force single reflow then show
-  terminal.offsetHeight; // trigger reflow while hidden
-  terminal.style.display = '';
-  if (btn) btn.className = terminal.classList.contains('show-line-nums') ? 'svc-btn active' : '';
-}
-
-function restartLogService() {
-  if (!logHost || !logService) return;
-  const btn = document.getElementById('log-restart-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Restarting...'; }
-
-  if (logService.startsWith('Bot:')) {
-    // Bot instance: kill it (PBRun auto-restarts)
-    const parts = logService.substring(4).split(':');
-    const name = parts[0];
-    const pbVersion = parts[1] || '7';
-    send({ cmd: 'kill_instance', host: logHost, name: name, pb_version: pbVersion });
-  } else {
-    // System service: restart via service_monitor
-    send({ cmd: 'restart_service', host: logHost, service: logService });
-  }
-  // Reset button after 4s (result handler also resets)
-  setTimeout(() => {
-    if (btn) { btn.disabled = false; btn.textContent = '🔄 Restart'; }
-  }, 4000);
-}
-
-function onLogHostChange() {
-  logHost = document.getElementById('log-host')?.value || '';
-  // Rebuild service dropdown for new host (includes its bot instances)
-  const svcSel = document.getElementById('log-svc');
-  if (svcSel) {
-    const services = getLogServices();
-    svcSel.innerHTML = services.map(s => `<option value="${s}">${svcLabel(s)}</option>`).join('');
-    logService = svcSel.value;
-  }
-  requestLogInfo();
-  if (logStreaming) {
-    send({ cmd: 'unsubscribe_logs' });
-    logLines = [];
-    logLineBase = 0;
-    const sid = ++logSessionId;
-    send({ cmd: 'subscribe_logs', host: logHost, service: logService, sid: sid });
-    renderLogs();
-  } else {
-    fetchLogs();
-  }
-}
-
-function onLogServiceChange() {
-  logService = document.getElementById('log-svc')?.value || '';
-  requestLogInfo();
-  if (logStreaming) {
-    send({ cmd: 'unsubscribe_logs' });
-    logLines = [];
-    logLineBase = 0;
-    const sid = ++logSessionId;
-    send({ cmd: 'subscribe_logs', host: logHost, service: logService, sid: sid });
-    renderLogs();
-  } else {
-    fetchLogs();
-  }
-}
-
-function classifyLine(line) {
-  const lower = line.toLowerCase();
-  if (lower.includes('error') || lower.includes('traceback')) return 'log-error';
-  if (lower.includes('warning')) return 'log-warning';
-  if (lower.includes('start') || lower.includes('success')) return 'log-info';
-  return 'log-line';
-}
-
-function getSearchRegex() {
-  if (!logSearchTerm) return null;
-  try {
-    if (logSearchIsRegex) {
-      return new RegExp('(' + logSearchTerm + ')', 'gi');
-    } else {
-      return new RegExp('(' + logSearchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
-    }
-  } catch (e) { return null; }
-}
-
-function testSearchMatch(text) {
-  const re = getSearchRegex();
-  if (!re) return false;
-  return re.test(text);
-}
-
-function buildLogDiv(line, lineNum) {
-  const div = document.createElement('div');
-  if (lineNum != null) div.dataset.ln = lineNum;
-  div.dataset.text = line; // preserve original text for search re-apply
-  let cls = classifyLine(line);
-  const term = logSearchTerm;
-  const matches = term && testSearchMatch(line);
-  if (term) {
-    if (matches) {
-      cls += ' log-highlight';
-      const re = getSearchRegex();
-      div.innerHTML = re ? esc(line).replace(re, '<mark>$1</mark>') : esc(line);
-    } else {
-      div.textContent = line;
-      if (logFilterMode) cls += ' log-hidden';
-    }
-  } else {
-    div.textContent = line;
-  }
-  div.className = cls;
-  return div;
-}
-
-function renderLogs() {
-  const terminal = document.getElementById('log-terminal');
-  logPendingLines = [];
-  logRafPending = false;
-  terminal.innerHTML = '';
-
-  const total = logLines.length;
-  if (total === 0) return;
-
-  // Small log: render synchronously
-  if (total <= RENDER_CHUNK_SIZE) {
-    const frag = document.createDocumentFragment();
-    for (let i = 0; i < total; i++) frag.appendChild(buildLogDiv(logLines[i], logLineBase + i + 1));
-    terminal.appendChild(frag);
-    terminal.scrollTop = terminal.scrollHeight;
-    if (logFilterMode && logSearchTerm) {
-      setTimeout(applyLogSearch, 0);
-    } else if (logSearchTerm) {
-      setTimeout(applyLogSearch, 0);
-    } else {
-      updateMatchCount(0);
-    }
-    return;
-  }
-
-  // Large log: chunked rendering with progress
-  const renderId = ++logRenderAbortId;
-  let idx = 0;
-  const statusDiv = document.createElement('div');
-  statusDiv.style.cssText = 'color:#888;padding:8px;font-size:12px';
-  statusDiv.textContent = 'Rendering\u2026 0%';
-  terminal.appendChild(statusDiv);
-
-  function renderChunk() {
-    if (renderId !== logRenderAbortId) return;
-    const end = Math.min(idx + RENDER_CHUNK_SIZE, total);
-    const frag = document.createDocumentFragment();
-    for (; idx < end; idx++) {
-      frag.appendChild(buildLogDiv(logLines[idx], logLineBase + idx + 1));
-    }
-    // Remove status on first chunk, insert before it otherwise
-    if (idx >= total) {
-      statusDiv.remove();
-      terminal.appendChild(frag);
-      terminal.scrollTop = terminal.scrollHeight;
-      if ((logFilterMode || !logFilterMode) && logSearchTerm) {
-        setTimeout(applyLogSearch, 0);
-      } else {
-        updateMatchCount(0);
-      }
-    } else {
-      terminal.insertBefore(frag, statusDiv);
-      const pct = Math.round((idx / total) * 100);
-      statusDiv.textContent = 'Rendering\u2026 ' + pct + '% (' + idx + '/' + total + ' lines)';
-      requestAnimationFrame(renderChunk);
-    }
-  }
-  requestAnimationFrame(renderChunk);
-}
-
-function appendLogLines(newLines) {
-  if (!newLines.length) return;
-  // Compute real line numbers for appended lines
-  const startNum = logLineBase + logLines.length - newLines.length + 1;
-  for (let i = 0; i < newLines.length; i++) {
-    logPendingLines.push({ line: newLines[i], num: startNum + i });
-  }
-  if (logRafPending) return;
-  logRafPending = true;
-  requestAnimationFrame(() => {
-    const terminal = document.getElementById('log-terminal');
-    const wasAtBottom = terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 20;
-    const frag = document.createDocumentFragment();
-    for (const item of logPendingLines) {
-      frag.appendChild(buildLogDiv(item.line, item.num));
-    }
-    logPendingLines = [];
-    logRafPending = false;
-    terminal.appendChild(frag);
-    // Trim excess DOM nodes if over limit
-    while (terminal.childElementCount > MAX_LOG_LINES) {
-      terminal.removeChild(terminal.firstChild);
-    }
-    if (wasAtBottom) terminal.scrollTop = terminal.scrollHeight;
-    updateMatchCount();
+// ── Live Logs (LogViewerPanel) ──────────────────────────────
+function initVpsLogViewer() {
+  if (vpsLogViewer) return;
+  vpsLogViewer = new LogViewerPanel({
+    containerId:    'log-viewer-vps',
+    wsBase:         WS_BASE,
+    token:          TOKEN,
+    defaultHost:    'local',
+    defaultService: 'PBRun',
+    presets:        'trading',
+    showRestart:    true,
+    height:         '100%',
   });
+  vpsLogViewer.open();
 }
-
-function onLogPresetChange() {
-  const sel = document.getElementById('log-preset');
-  const val = sel?.value || '';
-  const input = document.getElementById('log-search-input');
-  if (val) {
-    logSearchTerm = val;
-    logSearchIsRegex = true;
-    if (input) input.value = val;
-  } else {
-    logSearchTerm = '';
-    logSearchIsRegex = false;
-    if (input) input.value = '';
-  }
-  // Defer search so dropdown visually updates first
-  setTimeout(applyLogSearch, 0);
-}
-
-function onLogSearchInput() {
-  logSearchTerm = (document.getElementById('log-search-input')?.value || '').trim();
-  logSearchIsRegex = false;
-  // Reset preset dropdown since user typed manually
-  const sel = document.getElementById('log-preset');
-  if (sel) sel.value = '';
-  // Debounce: wait 300ms after last keystroke before searching
-  if (logSearchDebounce) clearTimeout(logSearchDebounce);
-  logSearchDebounce = setTimeout(applyLogSearch, 300);
-}
-
-function onLogFilterToggle() {
-  logFilterMode = document.getElementById('log-filter-toggle')?.checked || false;
-  // Defer search so checkbox visually updates first
-  setTimeout(applyLogSearch, 0);
-}
-
-function onLogSearchKeydown(e) {
-  if (e.key !== 'Enter') return;
-  e.preventDefault();
-  logSearchNav(e.shiftKey ? -1 : 1);
-}
-
-function logSearchNav(dir) {
-  if (logFilterMode || logSearchMatchEls.length === 0) return;
-  // Remove current-match highlight from previous
-  if (logSearchMatchIdx >= 0 && logSearchMatchIdx < logSearchMatchEls.length) {
-    logSearchMatchEls[logSearchMatchIdx].classList.remove('log-current-match');
-  }
-  // Advance index
-  logSearchMatchIdx += dir;
-  if (logSearchMatchIdx >= logSearchMatchEls.length) logSearchMatchIdx = 0;
-  if (logSearchMatchIdx < 0) logSearchMatchIdx = logSearchMatchEls.length - 1;
-  // Highlight + scroll within terminal only
-  const el = logSearchMatchEls[logSearchMatchIdx];
-  el.classList.add('log-current-match');
-  const terminal = document.getElementById('log-terminal');
-  const elTop = el.offsetTop - terminal.offsetTop;
-  const elH = el.offsetHeight;
-  const tH = terminal.clientHeight;
-  terminal.scrollTop = elTop - (tH / 2) + (elH / 2);
-  // Update counter
-  updateMatchCount(0);
-}
-
-function onLogContextChange() {
-  logContextLines = parseInt(document.getElementById('log-context-lines')?.value || '5');
-  setTimeout(applyLogSearch, 0);
-}
-
-// ── Block-based grouping ────────────────────────────────────
-// A "block" is a contiguous range of visible lines (matches + their ±N context).
-// When matches are close together, their context merges into one block.
-// Each block has ONE toggle on its first match → expands/collapses the block.
-
-function cleanupGroups(terminal) {
-  terminal.querySelectorAll('.log-separator').forEach(s => s.remove());
-  for (const div of terminal.children) {
-    div.className = div.className.replace(/ log-context| log-group-first| log-grp-detail| collapsed| log-current-match/g, '');
-    if (div.dataset.text !== undefined) div.textContent = div.dataset.text;
-    delete div.dataset.blk;
-    div.style.display = '';
-  }
-}
-
-function computeBlocks(isMatch, total, contextLines) {
-  // Mark visible lines (match or within ±N of a match)
-  const isVisible = new Uint8Array(total);
-  for (let i = 0; i < total; i++) {
-    if (isMatch[i]) {
-      isVisible[i] = 1;
-      for (let d = 1; d <= contextLines; d++) {
-        if (i - d >= 0) isVisible[i - d] = 1;
-        if (i + d < total) isVisible[i + d] = 1;
-      }
-    }
-  }
-
-  // Find contiguous blocks of visible lines
-  const blocks = []; // [{start, end, firstMatch, matchCount}]
-  let bs = -1, fm = -1, mc = 0;
-  for (let i = 0; i < total; i++) {
-    if (isVisible[i]) {
-      if (bs === -1) { bs = i; fm = -1; mc = 0; }
-      if (isMatch[i]) { if (fm === -1) fm = i; mc++; }
-    } else {
-      if (bs !== -1) { blocks.push({start: bs, end: i - 1, firstMatch: fm, matchCount: mc}); bs = -1; }
-    }
-  }
-  if (bs !== -1) blocks.push({start: bs, end: total - 1, firstMatch: fm, matchCount: mc});
-
-  // Assign block index to each visible line
-  const blockOf = new Int16Array(total).fill(-1);
-  for (let b = 0; b < blocks.length; b++) {
-    for (let i = blocks[b].start; i <= blocks[b].end; i++) blockOf[i] = b;
-  }
-
-  return { blocks, blockOf, isVisible };
-}
-
-function insertBlockSeparators(terminal, children, blocks) {
-  for (let b = 0; b < blocks.length - 1; b++) {
-    const endDiv = children[blocks[b].end];
-    if (endDiv) {
-      // Find the next DOM sibling (skip any existing separators)
-      let next = endDiv.nextSibling;
-      if (next) {
-        const sep = document.createElement('div');
-        sep.className = 'log-separator';
-        sep.textContent = '\u00b7\u00b7\u00b7';
-        terminal.insertBefore(sep, next);
-      }
-    }
-  }
-}
-
-function toggleAllGroups(expand) {
-  logBlocksCollapsed = !expand;
-  const terminal = document.getElementById('log-terminal');
-  terminal.querySelectorAll('.log-group-first').forEach(el => {
-    if (expand) el.classList.remove('collapsed');
-    else el.classList.add('collapsed');
-    const arrow = el.querySelector('.grp-arrow');
-    if (arrow) arrow.textContent = expand ? '\u25bc ' : '\u25b6 ';
-  });
-  terminal.querySelectorAll('.log-grp-detail').forEach(el => {
-    el.style.display = expand ? '' : 'none';
-  });
-  terminal.querySelectorAll('.log-separator').forEach(sep => {
-    sep.style.display = expand ? '' : 'none';
-  });
-}
-
-// ── Main search/filter engine ───────────────────────────────
-
-function applyLogSearch() {
-  const terminal = document.getElementById('log-terminal');
-  const el = document.getElementById('log-match-count');
-  const term = logSearchTerm;
-  const ctxSel = document.getElementById('log-context-lines');
-  const grpActions = document.getElementById('log-group-actions');
-
-  cleanupGroups(terminal);
-
-  const children = Array.from(terminal.children);
-  const total = children.length;
-
-  const navBtns = document.getElementById('log-nav-buttons');
-
-  if (!term) {
-    for (const div of children) {
-      if (div.dataset.text !== undefined) div.textContent = div.dataset.text;
-      div.className = div.className.replace(/ log-highlight| log-hidden| log-current-match/g, '');
-    }
-    if (el) el.textContent = '';
-    if (ctxSel) ctxSel.style.display = 'none';
-    if (grpActions) grpActions.style.display = 'none';
-    if (navBtns) navBtns.style.display = 'none';
-    logSearchMatchEls = []; logSearchMatchIdx = -1;
-    return;
-  }
-
-  const isMatch = new Uint8Array(total);
-  for (let i = 0; i < total; i++) {
-    isMatch[i] = testSearchMatch(children[i].dataset.text || children[i].textContent || '') ? 1 : 0;
-  }
-
-  const re = getSearchRegex();
-
-  if (!logFilterMode) {
-    if (ctxSel) ctxSel.style.display = 'none';
-    if (grpActions) grpActions.style.display = 'none';
-    applyHighlightsOnly(children, isMatch, total, el, re);
-    return;
-  }
-
-  // Filter + context mode
-  if (ctxSel) ctxSel.style.display = '';
-  if (grpActions) grpActions.style.display = '';
-
-  const { blocks, blockOf, isVisible } = computeBlocks(isMatch, total, logContextLines);
-  const searchId = ++logSearchAbortId;
-
-  if (total <= SEARCH_CHUNK_SIZE) {
-    for (let i = 0; i < total; i++) {
-      applyBlockDiv(children[i], i, isMatch, isVisible, blockOf, blocks, re);
-    }
-    insertBlockSeparators(terminal, children, blocks);
-    if (logBlocksCollapsed) toggleAllGroups(false);
-    updateMatchCount(blocks.length);
-    return;
-  }
-
-  // Hide all lines before chunked processing so user doesn't see ungrouped mess
-  for (let i = 0; i < total; i++) children[i].style.display = 'none';
-
-  let idx = 0;
-  if (el) el.textContent = 'Filtering\u2026';
-
-  function processChunk() {
-    if (searchId !== logSearchAbortId) return;
-    const end = Math.min(idx + SEARCH_CHUNK_SIZE, total);
-    for (; idx < end; idx++) {
-      applyBlockDiv(children[idx], idx, isMatch, isVisible, blockOf, blocks, re);
-    }
-    if (idx < total) {
-      const pct = Math.round((idx / total) * 100);
-      if (el) el.textContent = 'Filtering\u2026 ' + pct + '%';
-      requestAnimationFrame(processChunk);
-    } else {
-      insertBlockSeparators(terminal, children, blocks);
-      if (logBlocksCollapsed) toggleAllGroups(false);
-      updateMatchCount(blocks.length);
-    }
-  }
-  requestAnimationFrame(processChunk);
-}
-
-function cacheNavMatches() {
-  logSearchMatchEls = Array.from(document.getElementById('log-terminal').querySelectorAll('.log-highlight'));
-  logSearchMatchIdx = -1;
-  const navBtns = document.getElementById('log-nav-buttons');
-  if (navBtns) navBtns.style.display = (!logFilterMode && logSearchMatchEls.length > 0) ? '' : 'none';
-}
-
-function applyHighlightsOnly(children, isMatch, total, el, re) {
-  const searchId = ++logSearchAbortId;
-
-  if (total <= SEARCH_CHUNK_SIZE) {
-    for (let i = 0; i < total; i++) applyHighlightDiv(children[i], isMatch[i], re);
-    cacheNavMatches();
-    updateMatchCount(0);
-    return;
-  }
-
-  let idx = 0;
-  if (el) el.textContent = 'Filtering\u2026';
-
-  function processChunk() {
-    if (searchId !== logSearchAbortId) return;
-    const end = Math.min(idx + SEARCH_CHUNK_SIZE, total);
-    for (; idx < end; idx++) applyHighlightDiv(children[idx], isMatch[idx], re);
-    if (idx < total) {
-      const pct = Math.round((idx / total) * 100);
-      if (el) el.textContent = 'Filtering\u2026 ' + pct + '%';
-      requestAnimationFrame(processChunk);
-    } else {
-      cacheNavMatches();
-      updateMatchCount(0);
-    }
-  }
-  requestAnimationFrame(processChunk);
-}
-
-function applyHighlightDiv(div, match, re) {
-  const text = div.dataset.text || div.textContent || '';
-  let cls = div.className.replace(/ log-highlight| log-hidden| log-current-match/g, '');
-  if (match) {
-    cls += ' log-highlight';
-    div.innerHTML = re ? esc(text).replace(re, '<mark>$1</mark>') : esc(text);
-  } else {
-    div.textContent = text;
-  }
-  div.className = cls;
-}
-
-function applyBlockDiv(div, idx, isMatch, isVisible, blockOf, blocks, re) {
-  const text = div.dataset.text || div.textContent || '';
-  let cls = div.className.replace(/ log-highlight| log-hidden| log-context| log-group-first| log-grp-detail| log-current-match/g, '');
-  div.style.display = '';
-
-  if (!isVisible[idx]) {
-    cls += ' log-hidden';
-    div.textContent = text;
-    div.className = cls;
-    return;
-  }
-
-  const b = blockOf[idx];
-  div.dataset.blk = b;
-
-  if (isMatch[idx] && idx === blocks[b].firstMatch) {
-    // First match of the block = collapsible header
-    cls += ' log-highlight log-group-first';
-    // Insert arrow span
-    const arrow = document.createElement('span');
-    arrow.className = 'grp-arrow';
-    arrow.textContent = '▼ ';
-    div.innerHTML = re ? esc(text).replace(re, '<mark>$1</mark>') : esc(text);
-    div.insertBefore(arrow, div.firstChild);
-    const detailLines = (blocks[b].end - blocks[b].start); // lines besides header
-    if (detailLines > 0) {
-      const span = document.createElement('span');
-      span.className = 'grp-count';
-      span.textContent = ' (+' + detailLines + ' lines)';
-      div.appendChild(span);
-    }
-  } else if (isMatch[idx]) {
-    // Other matches in block = highlighted detail
-    cls += ' log-highlight log-grp-detail';
-    div.innerHTML = re ? esc(text).replace(re, '<mark>$1</mark>') : esc(text);
-  } else {
-    // Context line = dimmed detail
-    cls += ' log-context log-grp-detail';
-    div.textContent = text;
-  }
-
-  div.className = cls;
-}
-
-// ── Match count ─────────────────────────────────────────────
-
-function updateMatchCount(blockCount) {
-  const el = document.getElementById('log-match-count');
-  if (!el) return;
-  if (!logSearchTerm) { el.textContent = ''; return; }
-  const terminal = document.getElementById('log-terminal');
-  const count = terminal.querySelectorAll('.log-highlight').length;
-  if (logFilterMode && blockCount > 0) {
-    el.textContent = count + ' matches in ' + blockCount + ' blocks';
-  } else if (!logFilterMode && logSearchMatchIdx >= 0) {
-    el.textContent = (logSearchMatchIdx + 1) + ' / ' + count;
-  } else {
-    el.textContent = count + ' / ' + terminal.childElementCount;
-  }
-}
-
-// ── Dynamic height ─────────────────────────────────────────
-// No-op: height is controlled by parent CSS (100vh-based)
-
-// ── Block toggle event delegation ───────────────────────────
-document.getElementById('log-terminal').addEventListener('click', function(e) {
-  const first = e.target.closest('.log-group-first');
-  if (!first) return;
-  e.preventDefault();
-  const blk = first.dataset.blk;
-  if (blk === undefined) return;
-
-  first.classList.toggle('collapsed');
-  const show = !first.classList.contains('collapsed');
-  // Update arrow text
-  const arrow = first.querySelector('.grp-arrow');
-  if (arrow) arrow.textContent = show ? '▼ ' : '▶ ';
-
-  // Toggle ALL detail lines in this block
-  this.querySelectorAll('.log-grp-detail[data-blk="' + blk + '"]').forEach(d => {
-    d.style.display = show ? '' : 'none';
-  });
-});
 
 // ── Init ───────────────────────────────────────────────────
 connect();

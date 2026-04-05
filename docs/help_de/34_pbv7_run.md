@@ -50,23 +50,26 @@ Sidebar-Aktionen:
 
 | Schaltfläche | Aktion |
 |--------|--------|
-| `:material/home:` | Zurück zur Instanzliste |
-| `:material/save:` | Änderungen lokal speichern |
-| **Import** | Bestehende Passivbot-Config-Datei importieren |
-| **Activate** | Gespeicherte Config auf den VPS schieben und Bot neu starten |
-| **Backtest** | Config dieser Instanz auf der Backtest-Seite öffnen |
-| **Calculate Balance** | Balance Calculator für diese Instanz öffnen |
-| **Strategy Explorer** | Strategy Explorer mit dieser Config vorladen |
+| 🏠 Home | Zurück zur Instanzliste |
+| 💾 Save | Änderungen speichern und Config zum VPS synchronisieren |
+| 📥 Import | Bestehende Passivbot-Config-Datei importieren |
+| 📊 Backtest | Config dieser Instanz auf der Backtest-Seite öffnen |
+| 🔍 Strategy Explorer | Strategy Explorer mit dieser Config vorladen |
+| 💰 Balance Calculator | Eigenständigen Balance Calculator für diese Instanz öffnen |
+| ⚡ Calc Balance | Empfohlene Balance direkt berechnen (wird als Popup angezeigt) |
+| 📖 Guide | Diesen Guide öffnen |
 
 Wichtige Einstellungen im Bearbeitungsformular:
 
 | Bereich | Beschreibung |
-|---------|--------------|
+|---------|------|
 | **User** | API-Key-Benutzer (Exchange-Konto) auswählen |
 | **Enabled On** | Ziel-VPS für den Einsatz |
 | **Note** | Optionales Label, das in der Liste angezeigt wird |
 | **Long / Short** | Bot-Parameter — Positionen, TWE, Entry/Close-Bereiche |
-| **coin filter** | CoinMarketCap-basierter Symbol-Filter für diese Instanz |
+| **Filters** | CoinMarketCap-basierter Symbol-Filter für diese Instanz |
+| **Coin Overrides** | Coin-spezifische Parameterüberschreibungen (Bot-Parameter, Live-Modus, separate Config-Dateien) |
+| **Dynamic Ignore** | Vorschau der automatisch ignorierten Symbole basierend auf den Filter-Einstellungen |
 
 ---
 
@@ -74,19 +77,23 @@ Wichtige Einstellungen im Bearbeitungsformular:
 
 ### Neue Live-Instanz starten
 1. **Add** → **User** und **Enabled On** (Ziel-VPS) auswählen
-2. **Long / Short** Parameter und Coin-Filter konfigurieren → `:material/save:`
-3. **Activate** klicken → Config wird auf den VPS übertragen und Bot startet
+2. **Long / Short** Parameter und Coin-Filter konfigurieren → **💾 Save**
+3. Status-Spalte zeigt 🔄, bis der VPS die Aktivierung bestätigt
 
 ### Laufenden Bot aktualisieren
-1. Instanz mit **Edit** öffnen → Parameter anpassen → `:material/save:`
-2. **Activate** klicken, um neue Config zu übertragen und Bot neu zu starten
-3. Status-Spalte zeigt 🔄, bis der VPS die neue Version bestätigt
+1. Instanz mit **Edit** öffnen → Parameter anpassen → **💾 Save**
+2. Die Config wird automatisch zum VPS übertragen; Status zeigt 🔄, bis bestätigt
 
 ### Parameter vor dem Live-Betrieb validieren
 1. Instanz mit **Edit** öffnen
-2. **Backtest** klicken → Backtest mit derselben Config starten
-3. **Strategy Explorer** klicken → Pareto-Metriken interaktiv erkunden
+2. **📊 Backtest** klicken → Backtest mit derselben Config starten
+3. **🔍 Strategy Explorer** klicken → Pareto-Metriken interaktiv erkunden
+
+### Benötigte Balance prüfen
+1. Instanz mit **Edit** öffnen
+2. **⚡ Calc Balance** klicken → empfohlene Balance für die aktuelle Config anzeigen
+3. Oder **💰 Balance Calculator** für den vollständigen Rechner öffnen
 
 ### Bot deaktivieren
-1. Instanz mit **Edit** öffnen → **Enabled On** auf `disabled` setzen → `:material/save:`
-2. **Activate** klicken, um den Bot auf dem VPS zu stoppen
+1. Instanz mit **Edit** öffnen → **Enabled On** auf `disabled` setzen → **💾 Save**
+2. Der Bot wird automatisch auf dem VPS gestoppt

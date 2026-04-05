@@ -28,227 +28,68 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
 
 /* ─── Sidebar ────────────────────────────────────────────── */
 #sidebar {
-  width: 200px;
+  width: 180px;
   min-width: 140px;
-  max-width: 280px;
-  background: #1a1d24;
+  flex-shrink: 0;
+  background: #0e1117;
   border-right: 1px solid #333640;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  flex-shrink: 0;
-  position: relative;
 }
-#sidebar-resize {
-  position: absolute; top: 0; right: 0; bottom: 0; width: 4px;
-  cursor: col-resize; background: transparent;
-}
-#sidebar-resize:hover, #sidebar-resize.active { background: rgba(77,166,255,.4); }
 #sidebar-header {
-  padding: 10px 12px 6px;
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: #a0a4ab;
-  border-bottom: 1px solid #333640;
-  flex-shrink: 0;
+  padding: 0.5rem 0.6rem 0.3rem;
+}
+.sb-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em;
+  color: #64748b; font-weight: 700;
+}
+#sidebar-toolbar {
   display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.3rem 0.4rem 0.45rem;
+  border-bottom: 1px solid #333640;
+}
+.sb-btn {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-#sidebar-header span { flex: 1; min-width: 0; }
-.sidebar-action-btn {
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  color: #a0a4ab;
+  padding: 0.35rem 0.6rem;
+  border-radius: 5px;
+  font-size: 13px;
   cursor: pointer;
-  font-size: var(--fs-sm);
-  padding: 2px 6px;
-  transition: all 0.15s;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.sidebar-action-btn:hover { color: #4da6ff; border-color: rgba(77,166,255,.4); }
-.sidebar-action-btn.active { color: #4da6ff; border-color: rgba(77,166,255,.6); background: rgba(77,166,255,.08); }
-#file-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 6px 0;
-}
-.file-item {
-  display: block;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #a0a4ab;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
   width: 100%;
   text-align: left;
-  padding: 6px 12px;
-  background: none;
-  border: none;
-  color: #fafafa;
-  font-family: inherit;
-  font-size: var(--fs-xs);
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: background 0.15s;
-  border-left: 3px solid transparent;
 }
-.file-item:hover { background: #262730; }
-.file-item.active { background: #262730; border-left-color: #4da6ff; color: #4da6ff; font-weight: 600; }
-#sidebar-empty { padding: 16px 12px; font-size: var(--fs-sm); color: #a0a4ab; }
+.sb-btn:hover { background: #262730; color: #fafafa; border-color: #333640; }
+.sb-btn.active { background: rgba(77,166,255,0.12); border-color: rgba(77,166,255,0.5); color: #4da6ff; }
+
+
 
 /* ─── Main viewer area ───────────────────────────────────── */
-#viewer-area {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
+
 
 /* ─── Log view ───────────────────────────────────────────── */
-#log-view {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  padding: 10px 14px 14px;
-  gap: 8px;
-  overflow: hidden;
-}
 
-/* ─── Toolbar ────────────────────────────────────────────── */
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-}
-.ctrl-btn {
-  padding: 4px 10px;
-  background: #262730;
-  border: 1px solid #333640;
-  border-radius: 4px;
-  color: #fafafa;
-  font-family: inherit;
-  font-size: var(--fs-sm);
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-.ctrl-btn:hover { background: #4da6ff; color: #000; border-color: #4da6ff; }
-.ctrl-btn.active { background: #21c354; color: #000; border-color: #21c354; }
-.ctrl-btn.stream-on { background: #21c354; color: #000; border-color: #21c354; }
-.ctrl-btn.danger:hover { background: #ff4b4b; border-color: #ff4b4b; color: #fff; }
 
-/* Level filter */
-.level-btns { display: flex; gap: 4px; }
-.lvl-btn {
-  padding: 3px 8px;
-  border-radius: 3px;
-  border: 1px solid #333640;
-  background: #262730;
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  cursor: pointer;
-  font-family: monospace;
-  transition: all 0.15s;
-  opacity: 0.45;
-}
-.lvl-btn.on { opacity: 1.0; }
-.lvl-btn[data-lvl="DEBUG"]    { color: #a0a4ab; }
-.lvl-btn[data-lvl="DEBUG"].on { background: #3a3f4b; border-color: #555; color: #fafafa; }
-.lvl-btn[data-lvl="INFO"].on  { background: #0d3b20; border-color: #21c354; color: #21c354; }
-.lvl-btn[data-lvl="WARNING"].on { background: #3b2700; border-color: #ff8c00; color: #ff8c00; }
-.lvl-btn[data-lvl="ERROR"].on   { background: #3b0d0d; border-color: #ff4b4b; color: #ff4b4b; }
-.lvl-btn[data-lvl="CRITICAL"].on { background: #2d0040; border-color: #b39ddb; color: #b39ddb; }
 
-.toolbar-sep { width: 1px; height: 20px; background: #333640; margin: 0 2px; }
-#log-file-info { font-size: var(--fs-xs); color: #a0a4ab; white-space: nowrap; }
-#stream-status { font-size: var(--fs-xs); color: #a0a4ab; white-space: nowrap; }
-.lines-label {
-  display: flex; align-items: center; gap: 4px;
-  font-size: var(--fs-sm); color: #a0a4ab; white-space: nowrap;
-}
-#lines-select {
-  background: #262730; border: 1px solid #333640;
-  border-radius: 4px; color: #fafafa; font-size: var(--fs-sm);
-  padding: 2px 4px; cursor: pointer;
-}
-.file-size-info { font-size: var(--fs-sm); color: #a0a4ab; white-space: nowrap; }
 
-/* ─── Search bar ─────────────────────────────────────────── */
-.search-bar {
-  display: flex; gap: 8px; align-items: center; flex-shrink: 0;
-}
-.search-bar select {
-  padding: 4px 8px; background: #262730; border: 1px solid #333640;
-  border-radius: 4px; color: #fafafa; font-size: var(--fs-sm);
-}
-.search-bar input[type="text"] {
-  padding: 4px 10px; background: #262730; border: 1px solid #333640;
-  border-radius: 4px; color: #fafafa; font-family: inherit; font-size: var(--fs-md); width: 240px;
-}
-.search-bar label {
-  font-size: var(--fs-sm); color: #a0a4ab; cursor: pointer; white-space: nowrap;
-  display: inline-flex; align-items: center; gap: 4px;
-}
-.match-count { font-size: var(--fs-xs); color: #888; min-width: 80px; }
-.log-nav-btn {
-  background: #262730; border: 1px solid #333640; border-radius: 3px;
-  color: #a0a4ab; cursor: pointer; font-size: var(--fs-sm); padding: 2px 6px; line-height: 1;
-}
-.log-nav-btn:hover { color: #fafafa; border-color: #a0a4ab; }
 
-/* ─── Log terminal ───────────────────────────────────────── */
-.log-terminal {
-  background: #000;
-  border: 1px solid #333640;
-  border-radius: 6px;
-  padding: 10px 12px;
-  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-  font-size: var(--fs-sm);
-  line-height: 1.45;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: #b0b0b0;
-}
-.log-terminal.show-line-nums > div { padding-left: 52px; position: relative; }
-.log-terminal.show-line-nums > div::before {
-  content: attr(data-ln);
-  position: absolute; left: 0; top: 0; width: 44px;
-  text-align: right; color: #555; font-size: var(--fs-xs);
-  user-select: none; pointer-events: none;
-}
-.log-debug    { color: #808080; }
-.log-info     { color: #b0b0b0; }
-.log-warning  { color: #ff8c00; }
-.log-error    { color: #ff4b4b; }
-.log-critical { color: #b39ddb; font-weight: 600; }
-.log-hidden { display: none; }
-.log-level-hidden { display: none; }
-.log-highlight { background: rgba(255,200,0,.18); }
-.log-highlight mark { background: #e8a620; color: #000; border-radius: 2px; padding: 0 1px; }
-.log-highlight.log-current-match { background: rgba(255,160,0,.40); outline: 1px solid #e8a620; }
 
-#no-file-msg {
-  flex: 1; display: flex; align-items: center; justify-content: center;
-  color: #a0a4ab; font-size: var(--fs-base);
-}
 
-/* ─── Connection banner ──────────────────────────────────── */
-#conn-banner {
-  padding: 6px 16px; text-align: center; font-size: var(--fs-sm);
-  font-weight: 600; flex-shrink: 0; display: none;
-}
-#conn-banner.conn-lost    { display: block; background: #ff4b4b; color: #fff; }
-#conn-banner.conn-waiting { display: block; background: #ff8c00; color: #000; }
+
+
+
+
+
+
+
+
 
 /* ─── Settings panel ─────────────────────────────────────── */
 #settings-panel {
@@ -446,96 +287,37 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
   </div>
 </div>
 
-<!-- Connection Banner -->
-<div id="conn-banner" class="conn-waiting">Connecting to API Server…</div>
-
 <!-- Page body -->
 <div id="page-body">
 
-  <!-- Sidebar: Log file list + Settings toggle -->
+  <!-- Sidebar -->
   <div id="sidebar">
     <div id="sidebar-header">
-      <span id="sidebar-label">Log Files</span>
-      <button class="sidebar-action-btn" id="settings-toggle-btn" onclick="toggleSettingsPanel()" title="Log rotation settings">⚙ Settings</button>
+      <span class="sb-title">Logging</span>
     </div>
-    <div id="file-list">
-      <div id="sidebar-empty">Loading…</div>
+    <div id="sidebar-toolbar">
+      <button class="sb-btn active" id="btn-logs" onclick="showView('logs')">&#128203; Log Viewer</button>
+      <button class="sb-btn" id="btn-settings" onclick="showView('settings')">&#9881;&#65039; Settings</button>
     </div>
-    <div id="sidebar-resize"></div>
   </div>
 
   <!-- Main area: log viewer OR settings panel -->
-  <div id="viewer-area">
+  <div id="viewer-area" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden">
 
-    <!-- ─── Log Viewer ─────────────────────────────────── -->
-    <div id="log-view">
-
-      <!-- Toolbar -->
-      <div class="toolbar" id="toolbar">
-        <div class="level-btns" id="level-btns">
-          <button class="lvl-btn on" data-lvl="DEBUG"    onclick="toggleLevel('DEBUG')"   >DBG</button>
-          <button class="lvl-btn on" data-lvl="INFO"     onclick="toggleLevel('INFO')"    >INF</button>
-          <button class="lvl-btn on" data-lvl="WARNING"  onclick="toggleLevel('WARNING')" >WRN</button>
-          <button class="lvl-btn on" data-lvl="ERROR"    onclick="toggleLevel('ERROR')"   >ERR</button>
-          <button class="lvl-btn on" data-lvl="CRITICAL" onclick="toggleLevel('CRITICAL')">CRT</button>
-        </div>
-        <div class="toolbar-sep"></div>
-        <label class="lines-label">Lines:
-          <select id="lines-select" onchange="onLinesChange()">
-            <option value="200" selected>200</option>
-            <option value="500">500</option>
-            <option value="1000">1000</option>
-            <option value="2000">2000</option>
-            <option value="5000">5000</option>
-            <option value="10000">10000</option>
-            <option value="25000">25000</option>
-            <option value="-1">All</option>
-          </select>
-        </label>
-        <span id="file-size-info" class="file-size-info"></span>
-        <label class="lines-label" id="rotation-label" style="display:none">Version:
-          <select id="rotation-select" onchange="onRotationChange()">
+    <!-- Log Viewer (unified LogViewerPanel) -->
+    <div id="log-view" style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;padding:0">
+      <!-- Page-level controls: rotation & purge -->
+      <div id="page-toolbar" style="display:none;padding:6px 14px 0;flex-shrink:0;gap:8px;align-items:center">
+        <label id="rotation-label" style="display:none;font-size:12px;color:#a0a4ab;align-items:center;gap:4px">Version:
+          <select id="rotation-select" onchange="onRotationChange()" style="padding:3px 6px;background:#262730;border:1px solid #333640;border-radius:4px;color:#fafafa;font-size:12px">
             <option value="current">Current</option>
           </select>
         </label>
-        <div class="toolbar-sep"></div>
-        <button id="stream-btn" class="ctrl-btn stream-on" onclick="toggleStream()">⏸ Pause</button>
-        <button class="ctrl-btn" onclick="clearLog()">🗑 Clear</button>
-        <button class="ctrl-btn" onclick="downloadLog()">⬇ Download</button>
-        <button id="purge-btn" class="ctrl-btn danger" onclick="purgeCurrentFile()" title="Purge current log file" style="display:none">🗑 Purge</button>
-        <button id="linenum-btn" class="ctrl-btn" onclick="toggleLineNums()">## Lines</button>
-        <div class="toolbar-sep"></div>
-        <span id="log-file-info"></span>
-        <span id="stream-status"></span>
+        <button id="purge-btn" style="display:none;padding:4px 10px;background:#262730;border:1px solid #333640;border-radius:4px;color:#fafafa;font-size:13px;cursor:pointer" onclick="purgeCurrentFile()" title="Purge current log file">&#128465; Purge</button>
       </div>
+      <div id="log-viewer-target" style="flex:1;min-height:0;overflow:hidden"></div>
+    </div>
 
-      <!-- Search bar -->
-      <div class="search-bar">
-        <select id="log-preset" onchange="onPresetChange()">
-          <option value="">— Preset —</option>
-          <option value="error|traceback|exception">Errors</option>
-          <option value="warning|warn">Warnings</option>
-          <option value="error|warning|traceback">Errors + Warnings</option>
-          <option value="start|running|initialized">Startup</option>
-          <option value="connect|disconnect|timeout|reconnect">Connection</option>
-          <option value="restart|kill|stop|shutdown">Restart / Stop</option>
-          <option value="traceback|exception|raise">Traceback</option>
-        </select>
-        <input id="search-input" type="text" placeholder="Search logs…"
-               oninput="onSearchInput()" onkeydown="onSearchKeydown(event)">
-        <label><input type="checkbox" id="filter-toggle" checked onchange="onFilterToggle()"> Filter</label>
-        <span id="log-nav-btns" style="display:none">
-          <button class="log-nav-btn" onclick="searchNav(-1)" title="Prev (Shift+Enter)">&#9650;</button>
-          <button class="log-nav-btn" onclick="searchNav(1)"  title="Next (Enter)">&#9660;</button>
-        </span>
-        <span class="match-count" id="match-count"></span>
-      </div>
-
-      <!-- Log terminal -->
-      <div id="no-file-msg">&#8592; Select a log file to view</div>
-      <div class="log-terminal" id="log-terminal" style="display:none"></div>
-
-    </div><!-- /log-view -->
 
     <!-- ─── Settings Panel ─────────────────────────────── -->
     <div id="settings-panel">
@@ -588,6 +370,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
   var PBGUI_VERSION  = "%%VERSION%%";
   var PBGUI_SERIAL   = "%%SERIAL%%";
 </script>
+<script src="/app/js/log_viewer_panel.js?v=2"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- ═══════════════════════════════════════════════════════════
@@ -597,11 +380,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
 /* ── Nav config ─────────────────────────────────────────── */
 window.PBGUI_NAV_CONFIG = { subtitle: 'Logging', current: 'system_logging', token: TOKEN, stBase: ST_BASE, apiBase: API_BASE, version: PBGUI_VERSION, serial: PBGUI_SERIAL };
 
-/* ── Helper: derive WS URL from current page location ───── */
-function wsUrl() {
-  var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return proto + '//' + window.location.host + '/ws/vps?token=' + TOKEN;
-}
 
 /* ── HTTP helpers ────────────────────────────────────────── */
 function apiGet(path) {
@@ -618,162 +396,35 @@ function apiPost(path, body) {
 }
 
 /* ── State ──────────────────────────────────────────────── */
-var ws = null;
-var reconnectTimer = null;
+var viewer = null;
 var currentFile = '';
-var logStreaming = false;
-var logLines = [];
-var logPendingLines = [];
-var logRafPending = false;
-var logLineBase = 0;
-var logSessionId = 0;
-var availableFiles = [];
-var fileSizes = {};
 var rotatedFiles = {};
-var logSearchTerm = '';
-var logSearchIsRegex = false;
-var logFilterMode = true;
-var logSearchDebounce = null;
-var logSearchMatchEls = [];
-var logSearchMatchIdx = -1;
-var logSearchAbortId = 0;
-var logRenderAbortId = 0;
-var autoScroll = true;
-var visibleLevels = new Set(['DEBUG','INFO','WARNING','ERROR','CRITICAL']);
-
-var MAX_LOG_LINES     = 5000;
-var RENDER_CHUNK_SIZE = 500;
-var SEARCH_CHUNK_SIZE = 400;
-
 var settingsVisible = false;
 
-/* ── WebSocket ──────────────────────────────────────────── */
-function connect() {
-  ws = new WebSocket(wsUrl());
-  ws.onopen = function() {
-    setBanner('ok');
-    if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
-    ws.send(JSON.stringify({ cmd: 'list_local_logs' }));
-    if (currentFile) subscribeFile(currentFile);
-  };
-  ws.onmessage = function(evt) {
-    try { handleMessage(JSON.parse(evt.data)); } catch(e) { console.error(e); }
-  };
-  ws.onclose = function() { setBanner('lost'); scheduleReconnect(); };
-  ws.onerror = function() { setBanner('lost'); };
-}
 
-function scheduleReconnect() {
-  if (reconnectTimer) return;
-  reconnectTimer = setInterval(function() {
-    if (!ws || ws.readyState === WebSocket.CLOSED) connect();
-  }, 3000);
-}
-
-function send(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
-}
-
-function setBanner(status) {
-  var b = document.getElementById('conn-banner');
-  b.className = '';
-  if (status === 'ok') { b.style.display = 'none'; return; }
-  b.style.display = 'block';
-  if (status === 'lost') {
-    b.className = 'conn-lost';
-    b.textContent = 'Connection lost — reconnecting…';
-  } else {
-    b.className = 'conn-waiting';
-    b.textContent = 'Connecting to API Server…';
-  }
-}
-
-/* ── Message handling ───────────────────────────────────── */
-function handleMessage(msg) {
-  if (msg.type === 'state') {
-    updateFileList(msg.data && msg.data.local_logs ? msg.data.local_logs : []);
-  } else if (msg.type === 'local_logs_list') {
-    updateFileList(msg.files || []);
-  } else if (msg.type === 'local_logs') {
-    if (msg.sid !== undefined && msg.sid !== logSessionId) return;
-    logLines = msg.lines || [];
-    logLineBase = 0;
-    if (msg.streaming) logStreaming = true;
-    if (msg.file_size !== undefined) updateFileSize(msg.file_size);
-    updateStreamBtn();
-    renderLogs();
-  } else if (msg.type === 'local_log_lines') {
-    if (msg.sid !== undefined && msg.sid !== logSessionId) return;
-    logLines.push.apply(logLines, msg.lines || []);
-    if (logLines.length > MAX_LOG_LINES) {
-      var trimmed = logLines.length - MAX_LOG_LINES;
-      logLines = logLines.slice(-MAX_LOG_LINES);
-      logLineBase += trimmed;
-    }
-    appendLogLines(msg.lines || []);
-  }
-}
-
-/* ── Sidebar / file list ─────────────────────────────────── */
-function loadFileList() {
+/* ── Page-level: rotation, purge, init ────────────────── */
+function loadRotationData() {
   apiGet('/').then(function(data) {
-    availableFiles = data.files || [];
-    fileSizes      = data.sizes || {};
-    rotatedFiles   = data.rotated || {};
-    updateFileList(availableFiles);
-  }).catch(function() {
-    document.getElementById('sidebar-empty').textContent = 'Failed to load files.';
-  });
+    rotatedFiles = data.rotated || {};
+    onViewerFileChange(currentFile);
+  }).catch(function() {});
 }
 
-function updateFileList(files) {
-  availableFiles = files;
-  var list = document.getElementById('file-list');
-  var empty = document.getElementById('sidebar-empty');
-  if (!files || !files.length) {
-    list.innerHTML = '';
-    list.appendChild(empty);
-    empty.style.display = '';
-    empty.textContent = 'No log files found.';
+function onViewerFileChange(filename) {
+  currentFile = filename;
+  var toolbar = document.getElementById('page-toolbar');
+  var rotLabel = document.getElementById('rotation-label');
+  var rotSel = document.getElementById('rotation-select');
+  var purgeBtn = document.getElementById('purge-btn');
+  if (!filename) {
+    if (toolbar) toolbar.style.display = 'none';
     return;
   }
-  empty.style.display = 'none';
-  list.innerHTML = '';
-  for (var i = 0; i < files.length; i++) {
-    (function(f) {
-      var btn = document.createElement('button');
-      btn.className = 'file-item' + (f === currentFile ? ' active' : '');
-      btn.textContent = f;
-      btn.title = f;
-      btn.onclick = function() {
-        if (settingsVisible) toggleSettingsPanel();
-        selectFile(f);
-      };
-      list.appendChild(btn);
-    })(files[i]);
-  }
-}
-
-function selectFile(filename) {
-  if (filename === currentFile && logStreaming) return;
-  currentFile = filename;
-
-  document.querySelectorAll('.file-item').forEach(function(b) {
-    b.classList.toggle('active', b.textContent === filename);
-  });
-
-  document.getElementById('no-file-msg').style.display = 'none';
-  document.getElementById('log-terminal').style.display = '';
-  document.getElementById('purge-btn').style.display = '';
-
-  document.getElementById('log-file-info').textContent = filename;
-
-  if (fileSizes[filename] !== undefined) updateFileSize(fileSizes[filename]);
-  else updateFileSize(0);
-
-  var rotLabel = document.getElementById('rotation-label');
-  var rotSel   = document.getElementById('rotation-select');
   var variants = rotatedFiles[filename] || [];
+  if (variants.length || true) {
+    toolbar.style.display = 'flex';
+    purgeBtn.style.display = '';
+  }
   if (variants.length) {
     rotSel.innerHTML = '<option value="current">Current</option>';
     for (var i = 0; i < variants.length; i++) {
@@ -785,148 +436,30 @@ function selectFile(filename) {
       rotSel.appendChild(opt);
     }
     rotSel.value = 'current';
-    rotLabel.style.display = '';
+    rotLabel.style.display = 'flex';
   } else {
     rotLabel.style.display = 'none';
   }
-
-  subscribeFile(filename);
-}
-
-function subscribeFile(filename) {
-  logLines = []; logLineBase = 0;
-  logPendingLines = []; logRafPending = false;
-  ++logRenderAbortId;
-  var terminal = document.getElementById('log-terminal');
-  if (terminal) terminal.innerHTML = '';
-
-  var sid = ++logSessionId;
-  send({ cmd: 'subscribe_local_logs', file: filename, lines: getSelectedLines(), sid: sid });
-  logStreaming = true;
-  updateStreamBtn();
-  setStreamStatus('Streaming…');
-}
-
-/* ── Lines selector ─────────────────────────────────────── */
-function getSelectedLines() {
-  var sel = document.getElementById('lines-select');
-  return sel ? parseInt(sel.value, 10) : 200;
-}
-
-function onLinesChange() {
-  if (!currentFile) return;
-  var rotSel = document.getElementById('rotation-select');
-  var rotVal = rotSel ? rotSel.value : 'current';
-  if (rotVal === 'current') subscribeFile(currentFile);
-  else fetchRotatedFile(rotVal);
 }
 
 function onRotationChange() {
   var rotSel = document.getElementById('rotation-select');
-  if (!rotSel || !currentFile) return;
+  if (!rotSel || !viewer) return;
   if (rotSel.value === 'current') {
-    if (fileSizes[currentFile] !== undefined) updateFileSize(fileSizes[currentFile]);
-    else updateFileSize(0);
-    subscribeFile(currentFile);
+    viewer.setFile(currentFile);
   } else {
-    fetchRotatedFile(rotSel.value);
+    viewer.fetchFile(rotSel.value);
   }
 }
 
-function fetchRotatedFile(filename) {
-  if (logStreaming) { send({ cmd: 'unsubscribe_local_logs' }); logStreaming = false; }
-  updateStreamBtn();
-  setStreamStatus('Archive');
-  logLines = []; logLineBase = 0;
-  logPendingLines = []; logRafPending = false;
-  ++logRenderAbortId;
-  document.getElementById('log-terminal').innerHTML = '';
-  if (fileSizes[filename] !== undefined) updateFileSize(fileSizes[filename]);
-  var sid = ++logSessionId;
-  send({ cmd: 'get_local_logs', file: filename, lines: getSelectedLines(), sid: sid });
-}
-
-function updateFileSize(bytes) {
-  var el = document.getElementById('file-size-info');
-  if (!el) return;
-  if (!bytes) { el.textContent = ''; return; }
-  var units = ['B','KB','MB','GB'];
-  var v = bytes, i = 0;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  el.textContent = v.toFixed(1) + ' ' + units[i];
-}
-
-/* ── Stream controls ─────────────────────────────────────── */
-function toggleStream() {
-  if (logStreaming) {
-    send({ cmd: 'unsubscribe_local_logs' });
-    logStreaming = false;
-    setStreamStatus('Paused');
-  } else {
-    if (currentFile) subscribeFile(currentFile);
-  }
-  updateStreamBtn();
-}
-
-function updateStreamBtn() {
-  var btn = document.getElementById('stream-btn');
-  if (!btn) return;
-  var rotSel = document.getElementById('rotation-select');
-  var isArchive = rotSel && rotSel.value !== 'current';
-  if (isArchive) {
-    btn.textContent = '📦 Archive'; btn.className = 'ctrl-btn';
-    btn.disabled = true; btn.style.opacity = '0.5';
-  } else {
-    btn.disabled = false; btn.style.opacity = '';
-    if (logStreaming) { btn.textContent = '⏸ Pause'; btn.className = 'ctrl-btn stream-on'; }
-    else              { btn.textContent = '▶ Stream'; btn.className = 'ctrl-btn'; }
-  }
-}
-
-function setStreamStatus(msg) {
-  var el = document.getElementById('stream-status');
-  if (el) el.textContent = msg;
-}
-
-function clearLog() {
-  logLines = []; logLineBase = 0;
-  logPendingLines = []; logRafPending = false;
-  ++logRenderAbortId;
-  document.getElementById('log-terminal').innerHTML = '';
-  updateMatchCount(0);
-}
-
-function downloadLog() {
-  if (!logLines.length) return;
-  var blob = new Blob([logLines.join('\n')], { type: 'text/plain' });
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url; a.download = currentFile || 'log.log';
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a); URL.revokeObjectURL(url);
-}
-
-function toggleLineNums() {
-  var terminal = document.getElementById('log-terminal');
-  var btn = document.getElementById('linenum-btn');
-  terminal.style.display = 'none';
-  terminal.classList.toggle('show-line-nums');
-  terminal.offsetHeight;
-  terminal.style.display = '';
-  btn.className = terminal.classList.contains('show-line-nums') ? 'ctrl-btn active' : 'ctrl-btn';
-}
-
-/* ── Purge ───────────────────────────────────────────────── */
 function purgeCurrentFile() {
   if (!currentFile) return;
   if (!confirm('Purge "' + currentFile + '"?\n\nThe file will be rotated (saved as .1) and a new empty file created.')) return;
   apiPost('/purge/' + encodeURIComponent(currentFile), {})
     .then(function(data) {
       if (data.success) {
-        setStreamStatus('Purged');
-        // Refresh file sizes
-        loadFileList();
-        if (currentFile) subscribeFile(currentFile);
+        loadRotationData();
+        if (viewer) viewer.setFile(currentFile);
       } else {
         alert('Purge failed: ' + (data.detail || JSON.stringify(data)));
       }
@@ -934,269 +467,25 @@ function purgeCurrentFile() {
     .catch(function(err) { alert('Purge error: ' + err); });
 }
 
-/* ── Level filter ────────────────────────────────────────── */
-function extractLevel(line) {
-  var m = line.match(/\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]/i);
-  if (m) return m[1].toUpperCase();
-  var m2 = line.match(/\b(DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL)\b/i);
-  if (m2) { var l = m2[1].toUpperCase(); return l === 'WARN' ? 'WARNING' : l; }
-  return 'INFO';
-}
-
-function levelClass(level) {
-  var map = { DEBUG: 'log-debug', INFO: 'log-info', WARNING: 'log-warning', ERROR: 'log-error', CRITICAL: 'log-critical' };
-  return map[level] || 'log-info';
-}
-
-function toggleLevel(lvl) {
-  var btn = document.querySelector('.lvl-btn[data-lvl="' + lvl + '"]');
-  if (visibleLevels.has(lvl)) {
-    visibleLevels.delete(lvl);
-    if (btn) btn.classList.remove('on');
-  } else {
-    visibleLevels.add(lvl);
-    if (btn) btn.classList.add('on');
-  }
-  var terminal = document.getElementById('log-terminal');
-  Array.from(terminal.children).forEach(function(div) {
-    var lv = div.dataset.level || 'INFO';
-    if (!visibleLevels.has(lv)) div.classList.add('log-level-hidden');
-    else div.classList.remove('log-level-hidden');
-  });
-  updateMatchCount(0);
-}
-
-/* ── Log rendering ───────────────────────────────────────── */
-function esc(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function getSearchRegex() {
-  if (!logSearchTerm) return null;
-  try {
-    var pat = logSearchIsRegex
-      ? logSearchTerm
-      : logSearchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp('(' + pat + ')', 'gi');
-  } catch(e) { return null; }
-}
-
-function testSearchMatch(text) {
-  var re = getSearchRegex();
-  return re ? re.test(text) : false;
-}
-
-function buildLogDiv(line, lineNum) {
-  var div = document.createElement('div');
-  if (lineNum != null) div.dataset.ln = lineNum;
-  var level = extractLevel(line);
-  div.dataset.level = level;
-  div.dataset.text  = line;
-  var cls = levelClass(level);
-  if (!visibleLevels.has(level)) cls += ' log-level-hidden';
-  var term = logSearchTerm;
-  var matches = term && testSearchMatch(line);
-  if (term) {
-    if (matches) {
-      cls += ' log-highlight';
-      var re = getSearchRegex();
-      div.innerHTML = re ? esc(line).replace(re, '<mark>$1</mark>') : esc(line);
-    } else {
-      div.textContent = line;
-      if (logFilterMode) cls += ' log-hidden';
-    }
-  } else {
-    div.textContent = line;
-  }
-  div.className = cls;
-  return div;
-}
-
-function renderLogs() {
-  var terminal = document.getElementById('log-terminal');
-  logPendingLines = []; logRafPending = false;
-  terminal.innerHTML = '';
-  var total = logLines.length;
-  if (!total) { updateMatchCount(0); return; }
-  if (total <= RENDER_CHUNK_SIZE) {
-    var frag = document.createDocumentFragment();
-    for (var i = 0; i < total; i++) frag.appendChild(buildLogDiv(logLines[i], logLineBase + i + 1));
-    terminal.appendChild(frag);
-    if (autoScroll) terminal.scrollTop = terminal.scrollHeight;
-    if (logSearchTerm) setTimeout(applySearch, 0); else updateMatchCount(0);
-    return;
-  }
-  var renderId = ++logRenderAbortId;
-  var idx = 0;
-  var statusDiv = document.createElement('div');
-  statusDiv.style.cssText = 'color:#888;padding:8px;font-size:var(--fs-sm)';
-  statusDiv.textContent = 'Rendering… 0%';
-  terminal.appendChild(statusDiv);
-  function renderChunk() {
-    if (renderId !== logRenderAbortId) return;
-    var end = Math.min(idx + RENDER_CHUNK_SIZE, total);
-    var frag = document.createDocumentFragment();
-    for (; idx < end; idx++) frag.appendChild(buildLogDiv(logLines[idx], logLineBase + idx + 1));
-    if (idx >= total) {
-      statusDiv.remove(); terminal.appendChild(frag);
-      if (autoScroll) terminal.scrollTop = terminal.scrollHeight;
-      if (logSearchTerm) setTimeout(applySearch, 0); else updateMatchCount(0);
-    } else {
-      terminal.insertBefore(frag, statusDiv);
-      statusDiv.textContent = 'Rendering… ' + Math.round((idx / total) * 100) + '%';
-      requestAnimationFrame(renderChunk);
-    }
-  }
-  requestAnimationFrame(renderChunk);
-}
-
-function appendLogLines(newLines) {
-  if (!newLines.length) return;
-  var startNum = logLineBase + logLines.length - newLines.length + 1;
-  for (var i = 0; i < newLines.length; i++) {
-    logPendingLines.push({ line: newLines[i], num: startNum + i });
-  }
-  if (logRafPending) return;
-  logRafPending = true;
-  requestAnimationFrame(function() {
-    var terminal = document.getElementById('log-terminal');
-    var wasAtBottom = autoScroll || (terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 40);
-    var frag = document.createDocumentFragment();
-    for (var j = 0; j < logPendingLines.length; j++) {
-      var item = logPendingLines[j];
-      frag.appendChild(buildLogDiv(item.line, item.num));
-    }
-    logPendingLines = []; logRafPending = false;
-    terminal.appendChild(frag);
-    while (terminal.childElementCount > MAX_LOG_LINES) terminal.removeChild(terminal.firstChild);
-    if (wasAtBottom) terminal.scrollTop = terminal.scrollHeight;
-    updateMatchCount();
-  });
-}
-
-/* ── Search ──────────────────────────────────────────────── */
-function onPresetChange() {
-  var val = document.getElementById('log-preset').value;
-  if (val) {
-    logSearchTerm = val; logSearchIsRegex = true;
-    document.getElementById('search-input').value = val;
-  } else {
-    logSearchTerm = ''; logSearchIsRegex = false;
-    document.getElementById('search-input').value = '';
-  }
-  setTimeout(applySearch, 0);
-}
-
-function onSearchInput() {
-  logSearchTerm = (document.getElementById('search-input').value || '').trim();
-  logSearchIsRegex = false;
-  document.getElementById('log-preset').value = '';
-  if (logSearchDebounce) clearTimeout(logSearchDebounce);
-  logSearchDebounce = setTimeout(applySearch, 300);
-}
-
-function onFilterToggle() {
-  logFilterMode = document.getElementById('filter-toggle').checked;
-  setTimeout(applySearch, 0);
-}
-
-function onSearchKeydown(e) {
-  if (e.key !== 'Enter') return;
-  e.preventDefault();
-  searchNav(e.shiftKey ? -1 : 1);
-}
-
-function searchNav(dir) {
-  if (logFilterMode || !logSearchMatchEls.length) return;
-  if (logSearchMatchIdx >= 0 && logSearchMatchIdx < logSearchMatchEls.length)
-    logSearchMatchEls[logSearchMatchIdx].classList.remove('log-current-match');
-  logSearchMatchIdx += dir;
-  if (logSearchMatchIdx >= logSearchMatchEls.length) logSearchMatchIdx = 0;
-  if (logSearchMatchIdx < 0) logSearchMatchIdx = logSearchMatchEls.length - 1;
-  var el = logSearchMatchEls[logSearchMatchIdx];
-  el.classList.add('log-current-match');
-  var terminal = document.getElementById('log-terminal');
-  terminal.scrollTop = el.offsetTop - terminal.offsetTop - terminal.clientHeight / 2 + el.offsetHeight / 2;
-  updateMatchCount(0);
-}
-
-function applySearch() {
-  var terminal = document.getElementById('log-terminal');
-  var el = document.getElementById('match-count');
-  var navBtns = document.getElementById('log-nav-btns');
-  var re = getSearchRegex();
-  var children = Array.from(terminal.children);
-  logSearchMatchEls = []; logSearchMatchIdx = -1;
-
-  if (!logSearchTerm) {
-    children.forEach(function(div) {
-      var text = div.dataset.text || div.textContent;
-      div.textContent = text;
-      div.className = div.className.replace(/ log-highlight| log-hidden| log-level-hidden| log-current-match/g, '');
-      if (!visibleLevels.has(div.dataset.level || 'INFO')) div.classList.add('log-level-hidden');
-    });
-    if (el) el.textContent = '';
-    if (navBtns) navBtns.style.display = 'none';
-    return;
-  }
-
-  var searchId = ++logSearchAbortId;
-  var total = children.length;
-  var idx = 0;
-  function processChunk() {
-    if (searchId !== logSearchAbortId) return;
-    var end = Math.min(idx + SEARCH_CHUNK_SIZE, total);
-    for (; idx < end; idx++) {
-      var div = children[idx];
-      var text = div.dataset.text || div.textContent;
-      var cls = div.className.replace(/ log-highlight| log-hidden| log-level-hidden| log-current-match/g, '');
-      var lv = div.dataset.level || 'INFO';
-      if (!visibleLevels.has(lv)) { div.className = cls + ' log-level-hidden'; continue; }
-      if (testSearchMatch(text)) {
-        cls += ' log-highlight';
-        div.innerHTML = re ? esc(text).replace(re, '<mark>$1</mark>') : esc(text);
-        logSearchMatchEls.push(div);
-      } else {
-        div.textContent = text;
-        if (logFilterMode) cls += ' log-hidden';
-      }
-      div.className = cls;
-    }
-    if (idx < total) {
-      if (el) el.textContent = 'Searching…';
-      requestAnimationFrame(processChunk);
-    } else {
-      if (navBtns) navBtns.style.display = (!logFilterMode && logSearchMatchEls.length) ? '' : 'none';
-      updateMatchCount(0);
-    }
-  }
-  requestAnimationFrame(processChunk);
-}
-
-function updateMatchCount() {
-  var el = document.getElementById('match-count');
-  if (!el || !logSearchTerm) { if (el) el.textContent = ''; return; }
-  var count = document.getElementById('log-terminal').querySelectorAll('.log-highlight').length;
-  if (!logFilterMode && logSearchMatchIdx >= 0) el.textContent = (logSearchMatchIdx + 1) + ' / ' + count;
-  else el.textContent = count + ' matches';
-}
-
 /* ── Settings panel ──────────────────────────────────────── */
-function toggleSettingsPanel() {
-  settingsVisible = !settingsVisible;
+function showView(view) {
   var panel = document.getElementById('settings-panel');
   var logView = document.getElementById('log-view');
-  var btn = document.getElementById('settings-toggle-btn');
-  if (settingsVisible) {
+  var btnLogs = document.getElementById('btn-logs');
+  var btnSettings = document.getElementById('btn-settings');
+  if (view === 'settings') {
+    settingsVisible = true;
     panel.classList.add('visible');
     logView.style.display = 'none';
-    btn.classList.add('active');
-    document.getElementById('sidebar-label').textContent = 'Log Files';
+    btnLogs.classList.remove('active');
+    btnSettings.classList.add('active');
     loadRotationSettings();
   } else {
+    settingsVisible = false;
     panel.classList.remove('visible');
     logView.style.display = '';
-    btn.classList.remove('active');
+    btnLogs.classList.add('active');
+    btnSettings.classList.remove('active');
   }
 }
 
@@ -1264,28 +553,23 @@ function saveService(svc) {
     });
 }
 
-/* ── Sidebar resize ──────────────────────────────────────── */
-(function() {
-  var handle = document.getElementById('sidebar-resize');
-  var sidebar = document.getElementById('sidebar');
-  var dragging = false, startX = 0, startW = 0;
-  handle.addEventListener('mousedown', function(e) {
-    dragging = true; startX = e.clientX; startW = sidebar.offsetWidth;
-    handle.classList.add('active'); e.preventDefault();
-  });
-  window.addEventListener('mousemove', function(e) {
-    if (!dragging) return;
-    var newW = Math.max(140, Math.min(400, startW + e.clientX - startX));
-    sidebar.style.width = newW + 'px';
-  });
-  window.addEventListener('mouseup', function() {
-    dragging = false; handle.classList.remove('active');
-  });
-})();
-
 /* ── Init ────────────────────────────────────────────────── */
-loadFileList();
-connect();
+function wsBase() {
+  var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return proto + '//' + window.location.host;
+}
+
+viewer = new LogViewerPanel({
+  containerId: 'log-viewer-target',
+  wsBase: wsBase(),
+  token: TOKEN,
+  defaultHost: 'local',
+  presets: 'system',
+  height: '100%',
+  onFileChange: onViewerFileChange
+});
+viewer.open();
+loadRotationData();
 </script>
 
 <!-- ── Help overlay JS ── -->
