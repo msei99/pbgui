@@ -1597,9 +1597,12 @@ class OptimizeV7Item(ConfigV7Editor):
 
             normalized = []
             for item in items:
-                if not isinstance(item, str):
+                if isinstance(item, str):
+                    normalized.append(canonicalize_metric_name(item))
+                elif isinstance(item, dict) and "metric" in item:
+                    normalized.append(canonicalize_metric_name(item["metric"]))
+                else:
                     continue
-                normalized.append(canonicalize_metric_name(item))
 
             # de-dup, preserve order
             out = []

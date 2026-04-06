@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, require_auth
 from logging_helpers import human_log as _log
+from User import Users
 
 SERVICE = "BalanceCalc"
 router = APIRouter()
@@ -198,6 +199,7 @@ def _calculate(config: dict, exchange: str) -> dict:
 
     # Determine which side dominates
     result = {
+        "exchange": exchange,
         "coin_infos": coin_infos,
         "balance_long": balance_long,
         "balance_short": balance_short,
@@ -262,6 +264,12 @@ def load_config(
 @router.get("/instances")
 def get_instances(session: SessionToken = Depends(require_auth)):
     """List v7 instance names with their exchange."""
+    # Load users once for exchange lookup
+    try:
+        users = Users()
+    except Exception:
+        users = None
+
     instances = []
     if RUN_V7_DIR.is_dir():
         for d in sorted(RUN_V7_DIR.iterdir()):
@@ -271,12 +279,21 @@ def get_instances(session: SessionToken = Depends(require_auth)):
             if not cfg_file.exists():
                 continue
             name = d.name
-            # Derive exchange from directory name prefix
             exchange = ""
-            for ex in EXCHANGES:
-                if name.lower().startswith(ex + "_"):
-                    exchange = ex
-                    break
+            # Primary: derive exchange from live.user via api-keys
+            cfg = _read_json(cfg_file)
+            if cfg and isinstance(cfg, dict):
+                user = cfg.get("live", {}).get("user", "")
+                if user and users:
+                    ex = users.find_exchange(user)
+                    if ex:
+                        exchange = ex.lower()
+            # Fallback: directory name prefix
+            if not exchange:
+                for ex in EXCHANGES:
+                    if name.lower().startswith(ex + "_"):
+                        exchange = ex
+                        break
             instances.append({"name": name, "exchange": exchange, "config_file": str(cfg_file)})
     return instances
 

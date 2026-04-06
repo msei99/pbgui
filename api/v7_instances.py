@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import configparser
 import json
+import os
 import platform
 import shutil
 import time
@@ -41,6 +42,12 @@ router = APIRouter()
 
 # Remote pbgui data dir (relative to home on VPS)
 REMOTE_PBGUI_DIR = "software/pbgui"
+
+# ── Draft config store (in-memory, TTL-limited) ─────────────
+import secrets as _secrets
+
+_draft_configs: dict[str, tuple[float, dict]] = {}  # id → (created_ts, config)
+_DRAFT_TTL = 300  # 5 minutes
 
 
 
@@ -69,37 +76,60 @@ def _get_master_hostname() -> str:
 
 
 def _load_local_running_v7() -> dict[str, dict]:
-    """Read PBRun's status_v7.json for locally running instances.
+    """Detect locally running v7 instances by checking actual processes.
+
+    Uses the same logic as the SSH INSTANCE_COLLECT_SCRIPT: scan `ps aux`
+    for passivbot processes, then match against run_v7 instance dirs.
 
     Returns: {name: {running: bool, rv: int, cv: int, eo: str}}
     """
-    status_file = Path(PBGDIR) / "data" / "cmd" / "status_v7.json"
-    if not status_file.is_file():
-        return {}
-    try:
-        with open(status_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    import subprocess as _sp
+
+    run_dir = Path(PBGDIR) / "data" / "run_v7"
+    if not run_dir.is_dir():
         return {}
 
+    # Find running passivbot directories from process list
+    running_dirs: set[str] = set()
+    try:
+        out = _sp.check_output(["ps", "aux"], text=True, timeout=5)
+        for line in out.splitlines():
+            if "main.py" in line and "config_run.json" in line:
+                for part in line.split():
+                    if part.endswith("/config_run.json"):
+                        running_dirs.add(os.path.dirname(part))
+    except Exception:
+        pass
+
     result = {}
-    for name, info in data.get("instances", {}).items():
-        if not info.get("running"):
+    for d in run_dir.iterdir():
+        if not d.is_dir():
             continue
-        # Read running_version.txt for actual running version
-        rv_file = Path(PBGDIR) / "data" / "run_v7" / name / "running_version.txt"
+        name = d.name
+        running = str(d) in running_dirs
+        if not running:
+            continue
+        # Read running_version.txt
         rv = 0
+        rv_file = d / "running_version.txt"
         if rv_file.is_file():
             try:
                 rv = int(rv_file.read_text().strip())
             except (ValueError, OSError):
                 pass
-        result[name] = {
-            "running": True,
-            "rv": rv,
-            "cv": info.get("version", 0),
-            "eo": info.get("enabled_on", ""),
-        }
+        # Read config version + enabled_on
+        cv = 0
+        eo = ""
+        cfg_file = d / "config.json"
+        if cfg_file.is_file():
+            try:
+                cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+                pbgui = cfg.get("pbgui", {})
+                cv = pbgui.get("version", 0)
+                eo = pbgui.get("enabled_on", "")
+            except (json.JSONDecodeError, OSError):
+                pass
+        result[name] = {"running": True, "rv": rv, "cv": cv, "eo": eo}
     return result
 
 
@@ -345,6 +375,47 @@ async def _ssh_sync_instance(name: str) -> dict:
 
 
 # ── Endpoints ────────────────────────────────────────────────
+
+
+def _clean_drafts():
+    """Remove expired drafts."""
+    now = time.time()
+    expired = [k for k, (ts, _) in _draft_configs.items() if now - ts > _DRAFT_TTL]
+    for k in expired:
+        _draft_configs.pop(k, None)
+
+
+@router.post("/draft")
+def create_draft(
+    request_body: dict,
+    session: SessionToken = Depends(require_auth),
+):
+    """Store a config temporarily and return a draft_id.
+
+    Body: { "config": <dict> }
+    Returns: { "draft_id": "abc123" }
+    """
+    _clean_drafts()
+    config = request_body.get("config")
+    if not isinstance(config, dict):
+        raise HTTPException(400, "config must be a JSON object")
+    draft_id = _secrets.token_urlsafe(16)
+    _draft_configs[draft_id] = (time.time(), config)
+    return {"draft_id": draft_id}
+
+
+@router.get("/draft/{draft_id}")
+def get_draft(
+    draft_id: str,
+    session: SessionToken = Depends(require_auth),
+):
+    """Retrieve and consume a draft config."""
+    _clean_drafts()
+    entry = _draft_configs.pop(draft_id, None)
+    if not entry:
+        raise HTTPException(404, "Draft not found or expired")
+    return {"config": entry[1]}
+
 
 @router.get("/instances")
 def get_instances(session: SessionToken = Depends(require_auth)):
@@ -594,6 +665,53 @@ async def restore_instance(
         "timestamp": timestamp,
         "activate": result,
     }
+
+
+@router.get("/backup-settings")
+def get_backup_settings(session: SessionToken = Depends(require_auth)):
+    """Return current backup retention settings."""
+    settings_file = Path(PBGDIR) / "data" / "backup" / "v7" / "_settings.json"
+    max_versions = 50
+    if settings_file.exists():
+        try:
+            with open(settings_file, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+            max_versions = max(int(settings.get("max_versions", 50)), 1)
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+    return {"max_versions": max_versions}
+
+
+@router.put("/backup-settings")
+def put_backup_settings(
+    body: dict = Body(...),
+    session: SessionToken = Depends(require_auth),
+):
+    """Update backup retention settings."""
+    raw = body.get("max_versions")
+    if raw is None:
+        raise HTTPException(status_code=400, detail="max_versions required")
+    try:
+        val = max(int(raw), 1)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="max_versions must be an integer")
+    settings_file = Path(PBGDIR) / "data" / "backup" / "v7" / "_settings.json"
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+    # Read existing settings to preserve other fields
+    settings = {}
+    if settings_file.exists():
+        try:
+            with open(settings_file, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    settings["max_versions"] = val
+    tmp = settings_file.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=4)
+    tmp.rename(settings_file)
+    _log(SERVICE, f"Backup retention updated to {val}")
+    return {"ok": True, "max_versions": val}
 
 
 @router.delete("/backups/{name}/{timestamp}")
@@ -1040,6 +1158,7 @@ def get_edit_page(
     request: Request,
     name: str = Query(default="", description="Instance name to edit"),
     new: str = Query(default="", description="Set to '1' for new instance"),
+    draft_id: str = Query(default="", description="Draft config ID to pre-load"),
     st_base: str = Query(default="", description="Streamlit base URL"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
@@ -1065,6 +1184,7 @@ def get_edit_page(
     is_new = "true" if new == "1" else "false"
     html = html.replace('"%%INSTANCE%%"', json.dumps(name))
     html = html.replace('"%%IS_NEW%%"', json.dumps(is_new))
+    html = html.replace('"%%DRAFT_ID%%"', json.dumps(draft_id))
 
     from pbgui_func import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL

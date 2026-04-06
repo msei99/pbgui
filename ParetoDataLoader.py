@@ -76,6 +76,26 @@ class ConfigMetrics:
     bot_params_loaded: bool = True
 
 
+def _extract_scoring_metric_names(scoring_list: list) -> List[str]:
+    """Extract metric name strings from scoring entries.
+
+    PB7 < v7.9 stores scoring as ``["adg_w_usd", ...]``.
+    PB7 >= v7.9 stores scoring as ``[{"metric": "adg_w_usd", "goal": "max"}, ...]``.
+    This helper normalises both formats to a plain list of metric-name strings.
+    """
+    names: List[str] = []
+    for entry in scoring_list:
+        if isinstance(entry, str):
+            names.append(entry)
+        elif isinstance(entry, dict):
+            m = entry.get('metric') or entry.get(b'metric')
+            if m:
+                names.append(m if isinstance(m, str) else m.decode('utf-8', errors='replace'))
+        elif isinstance(entry, bytes):
+            names.append(entry.decode('utf-8', errors='replace'))
+    return names
+
+
 class ParetoDataLoader:
     """Loads and analyzes all_results.bin from optimize runs"""
     
@@ -279,6 +299,7 @@ class ParetoDataLoader:
             load_strategy = ['performance']  # Default: Passivbot official
         
         if not os.path.exists(self.all_results_path):
+            self.last_error = f"File not found: {self.all_results_path}"
             return False
         
         t_total0 = time.perf_counter()
@@ -307,7 +328,7 @@ class ParetoDataLoader:
                 # populate scoring_metrics, optimize bounds/limits, scenarios, scenario_labels
                 try:
                     optimize_config = first_obj.get('optimize', {}) or {}
-                    self.scoring_metrics = optimize_config.get('scoring', []) or []
+                    self.scoring_metrics = _extract_scoring_metric_names(optimize_config.get('scoring', []) or [])
                     self.optimize_bounds = self._normalize_optimize_bounds(optimize_config.get('bounds', {}) or {})
                     self.optimize_limits = optimize_config.get('limits', []) or []
                 except Exception:
@@ -339,7 +360,7 @@ class ParetoDataLoader:
             arrays = scan_cache.get("arrays")
             try:
                 # Restore globals from cache
-                self.scoring_metrics = meta.get("scoring_metrics") or []
+                self.scoring_metrics = _extract_scoring_metric_names(meta.get("scoring_metrics") or [])
                 self.scenario_labels = meta.get("scenario_labels") or []
                 self.optimize_bounds = self._normalize_optimize_bounds(meta.get("optimize_bounds") or {})
                 self.optimize_limits = meta.get("optimize_limits") or []
@@ -582,7 +603,7 @@ class ParetoDataLoader:
             if 'optimize' in config_data:
                 optimize_config = config_data.get('optimize', {}) or {}
                 if not self.scoring_metrics:
-                    self.scoring_metrics = optimize_config.get('scoring', []) or []
+                    self.scoring_metrics = _extract_scoring_metric_names(optimize_config.get('scoring', []) or [])
                 if not self.optimize_bounds:
                     self.optimize_bounds = self._normalize_optimize_bounds(optimize_config.get('bounds', {}) or {})
                 if not self.optimize_limits:
@@ -1325,6 +1346,7 @@ class ParetoDataLoader:
             return False
 
         if not os.path.exists(self.pareto_dir):
+            self.last_error = f"Pareto directory not found: {self.pareto_dir}"
             return False
         
         t_total0 = time.perf_counter()
@@ -1338,6 +1360,7 @@ class ParetoDataLoader:
         json_files = sorted(glob.glob(json_pattern))
         
         if not json_files:
+            self.last_error = f"No JSON files found in {self.pareto_dir}"
             return False
         
         # Parse each JSON file
@@ -1719,7 +1742,7 @@ class ParetoDataLoader:
             if isinstance(scoring, list):
                 scoring = [(x.decode('utf-8', errors='ignore') if isinstance(x, bytes) else x) for x in scoring]
             optimize_settings = {
-                'scoring': scoring or [],
+                'scoring': _extract_scoring_metric_names(scoring) if scoring else [],
                 'limits': opt.get(b'limits', []) or [],
                 'iters': opt.get(b'iters', 0) or 0,
                 'population_size': opt.get(b'population_size', 0) or 0,
@@ -1883,7 +1906,7 @@ class ParetoDataLoader:
 
         if not self.scoring_metrics and 'optimize' in config_data:
             optimize_config = config_data.get('optimize', {}) or {}
-            self.scoring_metrics = optimize_config.get('scoring', []) or []
+            self.scoring_metrics = _extract_scoring_metric_names(optimize_config.get('scoring', []) or [])
             if not self.optimize_bounds:
                 self.optimize_bounds = self._normalize_optimize_bounds(optimize_config.get('bounds', {}) or {})
                 self.optimize_limits = optimize_config.get('limits', []) or []
@@ -1947,7 +1970,7 @@ class ParetoDataLoader:
         if 'optimize' in config_data:
             opt = config_data.get('optimize', {}) or {}
             optimize_settings = {
-                'scoring': opt.get('scoring', []) or [],
+                'scoring': _extract_scoring_metric_names(opt.get('scoring', []) or []),
                 'limits': opt.get('limits', []) or [],
                 'iters': opt.get('iters', 0) or 0,
                 'population_size': opt.get('population_size', 0) or 0,
@@ -2075,7 +2098,7 @@ class ParetoDataLoader:
         # Extract scoring metrics from optimize config (first time only)
         if not self.scoring_metrics and 'optimize' in config_data:
             optimize_config = config_data['optimize']
-            self.scoring_metrics = optimize_config.get('scoring', [])
+            self.scoring_metrics = _extract_scoring_metric_names(optimize_config.get('scoring', []))
             
             # Extract global optimize settings (first time only)
             if not self.optimize_bounds:
@@ -2099,7 +2122,10 @@ class ParetoDataLoader:
             if isinstance(metric_data, dict):
                 # Try to get aggregated value, fallback to mean if not present
                 aggregated = metric_data.get('aggregated', metric_data.get('mean', 0.0))
-                suite_metrics[metric_name] = aggregated
+                try:
+                    suite_metrics[metric_name] = float(aggregated or 0.0)
+                except Exception:
+                    suite_metrics[metric_name] = 0.0
                 
                 # Stats - either from nested 'stats' dict or direct dict values
                 if 'stats' in metric_data:
@@ -2153,7 +2179,7 @@ class ParetoDataLoader:
         if 'optimize' in config_data:
             opt = config_data['optimize']
             optimize_settings = {
-                'scoring': opt.get('scoring', []),
+                'scoring': _extract_scoring_metric_names(opt.get('scoring', [])),
                 'limits': opt.get('limits', []),
                 'iters': opt.get('iters', 0),
                 'population_size': opt.get('population_size', 0),
@@ -2217,7 +2243,7 @@ class ParetoDataLoader:
             # Extract scoring metrics (first time only)
             if not self.scoring_metrics and 'optimize' in config_data:
                 optimize_config = config_data['optimize']
-                self.scoring_metrics = optimize_config.get('scoring', [])
+                self.scoring_metrics = _extract_scoring_metric_names(optimize_config.get('scoring', []))
                 
                 # Extract global optimize settings
                 if not self.optimize_bounds:
@@ -2240,7 +2266,10 @@ class ParetoDataLoader:
             for metric_name, metric_data in metrics_dict.items():
                 if isinstance(metric_data, dict):
                     aggregated = metric_data.get('aggregated', metric_data.get('mean', 0.0))
-                    suite_metrics[metric_name] = aggregated
+                    try:
+                        suite_metrics[metric_name] = float(aggregated or 0.0)
+                    except Exception:
+                        suite_metrics[metric_name] = 0.0
                     
                     # Stats
                     if 'stats' in metric_data:
@@ -2280,7 +2309,10 @@ class ParetoDataLoader:
                         scenario_metrics[scenario_name][metric_name] = scenario_value
                 else:
                     # Simple value
-                    suite_metrics[metric_name] = metric_data
+                    try:
+                        suite_metrics[metric_name] = float(metric_data or 0.0)
+                    except Exception:
+                        suite_metrics[metric_name] = 0.0
             
             # Extract bot parameters
             bot_params = {}
@@ -2297,7 +2329,7 @@ class ParetoDataLoader:
             if 'optimize' in config_data:
                 opt = config_data['optimize']
                 optimize_settings = {
-                    'scoring': opt.get('scoring', []),
+                    'scoring': _extract_scoring_metric_names(opt.get('scoring', [])),
                     'limits': opt.get('limits', []),
                     'iters': opt.get('iters', 0),
                     'population_size': opt.get('population_size', 0),
@@ -2390,10 +2422,15 @@ class ParetoDataLoader:
             for metric, score in config.robustness_scores.items():
                 row[f'robust_{metric}'] = score
             
-            # Add bot parameters
+            # Add bot parameters (flatten nested dicts like forager_score_weights)
             if not config.bot_params_loaded or not config.bot_params:
                 self.ensure_bot_params(config)
-            row.update(config.bot_params)
+            for k, v in config.bot_params.items():
+                if isinstance(v, dict):
+                    for sub_k, sub_v in v.items():
+                        row[f'{k}_{sub_k}'] = sub_v
+                else:
+                    row[k] = v
             
             # Add scenario-specific metrics (optional)
             for scenario, metrics in config.scenario_metrics.items():
@@ -2497,6 +2534,8 @@ class ParetoDataLoader:
             for param in param_subset:
                 ref_val = reference_config.bot_params.get(param, 0.0)
                 cfg_val = config.bot_params.get(param, 0.0)
+                if not isinstance(ref_val, (int, float)) or not isinstance(cfg_val, (int, float)):
+                    continue
                 dist += (ref_val - cfg_val) ** 2
             
             dist = np.sqrt(dist)
@@ -2608,7 +2647,7 @@ class ParetoDataLoader:
             threshold_upper = upper - (param_range * tolerance)
             
             # Check TOP configs only
-            values = [c.bot_params.get(param_name, 0) for c in top_configs if param_name in c.bot_params]
+            values = [v for c in top_configs for v in [c.bot_params.get(param_name)] if isinstance(v, (int, float))]
             
             if not values:
                 continue

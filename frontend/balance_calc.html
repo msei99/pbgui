@@ -431,6 +431,13 @@ body {
   function renderResults(data) {
     var html = '';
 
+    // Exchange header
+    if (data.exchange) {
+      html += '<div class="result-card" style="padding:8px 16px;margin-bottom:8px">';
+      html += '<strong>Exchange:</strong> ' + esc(data.exchange);
+      html += '</div>';
+    }
+
     // Recommendation card
     if (data.recommendation) {
       var rec = data.recommendation;

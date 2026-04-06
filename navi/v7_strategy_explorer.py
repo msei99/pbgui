@@ -2614,12 +2614,12 @@ def _run_compare_from_pb7_backtest_dir(
     # Bot params from config.json (if available)
     try:
         bot_cfg = cfg.get("bot") or {}
-        bp_long = BotParams(**(bot_cfg.get("long") or {}))
+        bp_long = BotParams.from_dict(bot_cfg.get("long") or {})
     except Exception:
         bp_long = BotParams()
     try:
         bot_cfg = cfg.get("bot") or {}
-        bp_short = BotParams(**(bot_cfg.get("short") or {}))
+        bp_short = BotParams.from_dict(bot_cfg.get("short") or {})
     except Exception:
         bp_short = BotParams()
 
@@ -7531,8 +7531,8 @@ class GVData:
         short_data = bot_data.get("short", {})
 
         return cls(
-            normal_bot_params_long=BotParams(**long_data),
-            normal_bot_params_short=BotParams(**short_data)
+            normal_bot_params_long=BotParams.from_dict(long_data),
+            normal_bot_params_short=BotParams.from_dict(short_data)
         )
 
 def clear_v7_tuning_keys():
@@ -14011,8 +14011,8 @@ def generate_animation_v7_modeb(
                     pass
                 try:
                     bot_cfg = cfg.get("bot") or {}
-                    bp_long_full = BotParams(**(bot_cfg.get("long") or {}))
-                    bp_short_full = BotParams(**(bot_cfg.get("short") or {}))
+                    bp_long_full = BotParams.from_dict(bot_cfg.get("long") or {})
+                    bp_short_full = BotParams.from_dict(bot_cfg.get("short") or {})
                 except Exception:
                     bp_long_full = data_template.normal_bot_params_long
                     bp_short_full = data_template.normal_bot_params_short
@@ -15364,8 +15364,8 @@ def generate_animation_v7_modec(
                     pass
                 try:
                     bot_cfg = cfg.get("bot") or {}
-                    bp_long_full = BotParams(**(bot_cfg.get("long") or {}))
-                    bp_short_full = BotParams(**(bot_cfg.get("short") or {}))
+                    bp_long_full = BotParams.from_dict(bot_cfg.get("long") or {})
+                    bp_short_full = BotParams.from_dict(bot_cfg.get("short") or {})
                 except Exception:
                     bp_long_full = data_template.normal_bot_params_long
                     bp_short_full = data_template.normal_bot_params_short

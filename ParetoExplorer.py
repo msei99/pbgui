@@ -23,7 +23,7 @@ from typing import List, Dict, Optional, Any, Tuple
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from ParetoDataLoader import ParetoDataLoader, ConfigMetrics
+from ParetoDataLoader import ParetoDataLoader, ConfigMetrics, _extract_scoring_metric_names
 from ParetoVisualizations import ParetoVisualizations
 import pbgui_purefunc as pbfunc
 from Config import CURRENCY_METRICS, SHARED_METRICS
@@ -137,6 +137,8 @@ class ParetoExplorer:
         with timer.section("load_data"):
             load_result = ParetoExplorer._load_data(self.results_path, load_strategy_tuple, max_configs, all_results_loaded)
         if load_result.get("error"):
+            # Clear the cache so next attempt re-runs the load (don't cache errors)
+            ParetoExplorer._load_data.clear()
             err = load_result.get("error")
             if err:
                 st.error(f"❌ {err}")
@@ -751,6 +753,11 @@ class ParetoExplorer:
                     base_limits = None
             if not isinstance(base_scoring, list) or not base_scoring:
                 base_scoring = ["loss_profit_ratio", "mdg_w", "sharpe_ratio"]
+            else:
+                # PB7 v7.9: scoring entries may be dicts {"metric": "...", "goal": "..."}
+                base_scoring = _extract_scoring_metric_names(base_scoring)
+                if not base_scoring:
+                    base_scoring = ["loss_profit_ratio", "mdg_w", "sharpe_ratio"]
             if base_limits is None:
                 base_limits = []
 
@@ -808,7 +815,7 @@ class ParetoExplorer:
                     return name_base
                 return name_base
 
-            scheme = _detect_metric_scheme([str(x) for x in base_scoring])
+            scheme = _detect_metric_scheme(base_scoring)
 
             def _limit(metric: str, penalize_if: str, value: Any) -> Dict[str, Any]:
                 return {"metric": metric, "penalize_if": penalize_if, "value": value}
@@ -1041,7 +1048,7 @@ class ParetoExplorer:
                     limits_out = _upsert_limit(limits_out, entry)
 
             # Final safety cap
-            scoring_out = _cap_objectives(_unique_keep_order([str(x) for x in scoring_out]), 4)
+            scoring_out = _cap_objectives(_unique_keep_order(scoring_out), 4)
 
             # Small, user-visible preview (no typing)
             st.write("**Planned optimize defaults**")
@@ -1902,10 +1909,15 @@ class ParetoExplorer:
         # Get Pareto configs and sort by composite score (performance × robustness)
         pareto_configs = self.loader.get_pareto_configs()
         
+        if not pareto_configs:
+            st.info("No Pareto-optimal configs found. This can happen when optimize results use a format not yet supported by the Explorer.")
+            return
+        
         # Calculate composite scores
         configs_with_scores = []
         for config in pareto_configs:
-            performance = config.suite_metrics.get(primary_metric, 0.0)
+            metrics = getattr(config, 'suite_metrics', None) or {}
+            performance = metrics.get(primary_metric, 0.0)
             robustness = self.loader.compute_overall_robustness(config)
             composite_score = performance * robustness  # Balanced score
             configs_with_scores.append((config, performance, robustness, composite_score))

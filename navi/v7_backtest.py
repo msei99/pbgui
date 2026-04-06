@@ -320,6 +320,42 @@ if st.session_state.pbcoindata.api_error:
     st.warning('Coin Data API is not configured / Go to Coin Data and configure your API-Key', icon="⚠️")
     st.stop()
 
+# ── Relay: open edit with instance config ────────────────
+if "_relay_draft_id" in st.session_state:
+    _draft_id = st.session_state.pop("_relay_draft_id")
+    _draft_name = st.session_state.pop("_relay_draft_name", "draft")
+    try:
+        import requests as _req
+        from pbgui_func import _start_fastapi_server_if_needed
+        _api_host, _api_port, _api_ok = _start_fastapi_server_if_needed()
+        if _api_ok and st.session_state.get("api_token"):
+            _resp = _req.get(
+                f"http://{_api_host}:{_api_port}/api/v7/draft/{_draft_id}",
+                headers={"Authorization": f"Bearer {st.session_state['api_token']}"},
+                timeout=5,
+            )
+            if _resp.status_code == 200:
+                _cfg = _resp.json().get("config", {})
+                if _cfg:
+                    _bt = BacktestV7Item()
+                    _bt.config.config = _cfg
+                    _bt.name = _draft_name
+                    st.session_state.bt_v7 = _bt
+                    st.session_state.bt_v7_main_view = "Configs"
+    except Exception:
+        pass
+
+if "_relay_config_file" in st.session_state:
+    _relay_instance = st.session_state.pop("_relay_config_file")
+    _instance_cfg = Path(f'{PBGDIR}/data/run_v7/{_relay_instance}/config.json')
+    if _instance_cfg.is_file():
+        _bt = BacktestV7Item()
+        _bt.config.config_file = str(_instance_cfg)
+        _bt.config.load_config()
+        _bt.name = _relay_instance
+        st.session_state.bt_v7 = _bt
+        st.session_state.bt_v7_main_view = "Configs"
+
 # ── Main tab navigation ──────────────────────────────────
 _MAIN_TABS = ["Configs", "Queue", "Log", "Results", "Archive"]
 # Apply pending tab switch (must happen before widget is instantiated)
@@ -341,7 +377,7 @@ elif "bt_v7_main_view" not in st.session_state:
 if "bt_v7" in st.session_state:
     st.session_state.bt_v7_main_view = "Configs"
 _active = st.segmented_control(
-    "", options=_MAIN_TABS, default="Configs", key="bt_v7_main_view"
+    "Navigation", options=_MAIN_TABS, default="Configs", key="bt_v7_main_view", label_visibility="collapsed"
 )
 if _active == "Queue":
     if "bt_v7_queue" not in st.session_state:
