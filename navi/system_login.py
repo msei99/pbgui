@@ -261,6 +261,7 @@ if _relay_target and _relay_token:
             from api.auth import validate_token as _vt
             if _vt(_relay_token):
                 st.session_state["password_correct"] = True
+                st.session_state["api_token"] = _relay_token
                 _relay_mini_init()
                 # Forward extra query params (e.g. edit_instance) to session_state
                 for _rk, _rv in st.query_params.items():

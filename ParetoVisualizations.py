@@ -550,12 +550,14 @@ class ParetoVisualizations:
         if df.empty:
             return go.Figure().add_annotation(text="No data available", showarrow=False)
         
-        # Get parameter columns
+        # Get parameter columns (numeric only)
         param_cols = [col for col in df.columns if col.startswith('long_') or col.startswith('short_')]
+        df_params_numeric = df[param_cols].apply(pd.to_numeric, errors='coerce')
+        param_cols = [c for c in param_cols if df_params_numeric[c].notna().any()]
         
         # Select most variable parameters if not specified
         if params is None:
-            param_variance = df[param_cols].var().sort_values(ascending=False)
+            param_variance = df_params_numeric[param_cols].var().sort_values(ascending=False)
             params = param_variance.head(top_n).index.tolist()
         
         # Use scoring metrics if not specified
@@ -1287,8 +1289,12 @@ class ParetoVisualizations:
             lower, upper = self.loader.optimize_bounds[param]
             param_range = upper - lower
             
-            # Get values from Pareto configs
-            values = [c.bot_params.get(param, 0) for c in pareto_configs if param in c.bot_params]
+            # Get values from Pareto configs (skip non-numeric: nested dicts, strings)
+            values = []
+            for c in pareto_configs:
+                v = c.bot_params.get(param)
+                if isinstance(v, (int, float)):
+                    values.append(v)
             
             if not values:
                 continue

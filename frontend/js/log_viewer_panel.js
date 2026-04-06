@@ -706,19 +706,12 @@ class LogViewerPanel {
     _getServices() {
         var svcs = ['PBRun', 'PBRemote', 'PBCoinData'];
         if (this._vpState && this._host !== 'local') {
-            /* PB6 instances (monitor.json): {u: name, p: version} */
-            var instances = this._vpState.instances || {};
-            var hostInsts = instances[this._host] || [];
-            for (var i = 0; i < hostInsts.length; i++) {
-                var inst = hostInsts[i];
-                if (inst.u) svcs.push('Bot:' + inst.u + ':' + (inst.p || '6'));
-            }
             /* PB7 instances (config-status): {name, running, cv, eo, rv} */
             var v7 = this._vpState.v7_instances || {};
             var v7Insts = v7[this._host] || [];
             for (var j = 0; j < v7Insts.length; j++) {
                 var v7i = v7Insts[j];
-                if (v7i.name) svcs.push('Bot:' + v7i.name + ':7');
+                if (v7i.name && v7i.running) svcs.push('Bot:' + v7i.name + ':7');
             }
         }
         return svcs;

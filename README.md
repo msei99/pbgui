@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.70
+# v1.71
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -323,102 +323,49 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
-## v1.71 (unreleased)
-- Removed: SSH sync test guard — config sync now pushes to all connected VPS hosts (was limited to manibot70/72/91)
-- Fixed: VPS Monitor — missing `debugLogging` / `debugLoggingInitialized` variable declarations caused ReferenceError on every state message, breaking page rendering and host dropdown population
-- Fixed: LogViewerPanel — `setService()` / `setFile()` pre-set the internal field before calling `_selectItem()`, causing the duplicate-check to always return early when already streaming; instance log clicks now correctly switch to the requested bot log
-- Fixed: LogViewerPanel — service sidebar now includes PB7 instances (`v7_instances` with `{name, running, cv, eo, rv}`) in addition to PB6 instances; previously only PB6 `instances` format (`{u, p}`) was used
-- Fixed: System Logging page — stray `</div>` closed `#page-body` prematurely, pushing the log viewer outside the flex layout and breaking the page
-- Improved: System Logging page — replaced minimal gear-icon sidebar with a proper sidebar matching VPS Monitor style ("Log Viewer" / "Settings" buttons, title header)
-- Refactored: Unified log viewer — all 5 log viewer implementations (VPS Monitor, V7 Edit, Logging Monitor, Services Monitor, API Keys Editor) now share a single `LogViewerPanel` component (~880 lines) instead of ~2800 lines of duplicated inline code; consistent UI everywhere with host dropdown, file/service sidebar, level filters (DBG/INF/WRN/ERR/CRT), search with filter/highlight/context lines/block grouping, presets, stream/pause/fetch/clear/download, and line numbers
-- Improved: V7 Edit log panel — added host and service dropdowns (matching VPS Monitor style); can now browse logs from any VPS host and switch between services (PBRun, PBRemote, PBCoinData, bot instances); fixed z-index so nav bar stays clickable when log panel is open; log panel left edge now tracks sidebar width dynamically
-- Fixed: V7 Edit log panel — disabled bots now scan backups for last `enabled_on` host: if it was a VPS → WebSocket log stream; if it was the local master → REST local log; badge shows host + version (e.g. "manibot72 (v42)")
-- Improved: V7 Edit log panel — now uses full screen width (sidebar to right edge) instead of narrow 700px side panel
-- Removed: SSH sync instance guard — all instances are now synced; host guard expanded from `manibot72` only to `manibot70`, `manibot72`, `manibot91`
-- Added: Automatic backup-on-save — every `save_config()` now creates a versioned backup in `data/backup/v7/{name}/{version}/` before overwriting; includes config.json and all coin override files; configurable retention limit via `data/backup/v7/_settings.json` (`max_versions`, default 50); old backups pruned automatically
-- Improved: `save_config()` now uses atomic write (write to `.tmp`, then `os.replace`) to prevent config corruption on crash
-- Improved: V7 Edit log panel — disabled bots now automatically find and connect to the last active VPS host by scanning backup configs; shows host with version badge (e.g. "manibot01 (last v42)"); new API endpoint `GET /api/v7/last-active-host/{name}`
-- Improved: V7 Edit — log panel now uses the same WebSocket-based log viewer as VPS Monitor (full-featured: search with filter/highlight/blocks, presets, line numbers, fetch/stream/download); connects to `/ws/vps` and subscribes to `Bot:{name}:7` on the VPS from `enabled_on`; shows disabled message when bot has no active host
-- Improved: V7 Edit — passivbot log moved from bottom expander to floating live-log panel accessible via sidebar "📋 Log" button; auto-polls every 5s; smart source routing: shows live log when bot is active (`enabled_on` != disabled), falls back to most recent backup `passivbot.log` when disabled; source badge shows "live (hostname)" (green) or "last active (backup {timestamp})" (orange); pause/resume and configurable line count (200/500/1000/2000)
-- Improved: V7 Edit — approved/ignored coin multiselects now have an "all" button that selects all available symbols (excluding those already in the opposing list)
-- Improved: V7 Edit — approved/ignored coin multiselects now show mutual conflicts in orange with ⇄ marker; selecting a conflicting coin immediately removes it from the opposing list (no longer wait until save)
-- Refactored: FastAPI `GET/PUT /instances/{name}/config` endpoints now use `ConfigV7.load_config()` / `cv7.config = ...` / `save_config()` instead of raw JSON — all normalization and conversions flow through Config.py setters, identical to Streamlit
-- Fixed: V7 Edit — if the same coin is selected in both approved and ignored, ignored now wins (coin is silently removed from approved on save)
-- Added: V7 Edit Advanced Settings — `candle_lock_timeout_seconds` is now configurable (default 10; increase when multiple bots share the same cache directory)
-- Fixed: V7 Edit save — `pbgui.starting_config` was lost on every save (not included in collectConfig); it is now preserved from the loaded config
-- Improved: V7 Edit — ALL number fields now have −/+ stepper buttons and mousewheel support (auto-wired via JS, no per-field HTML changes); Guide button removed from sidebar
-- Fixed: Coin Overrides bot parameter value input — up/down arrows now use meaningful steps per parameter (from Bounds class: e.g. 0.001 for pct params, 1.0 for ema spans, 0.05 for double-down factors) instead of the previous 1e-8 default
-- Added: Guide overlay to V7 Edit FastAPI page — 📖 Guide sidebar button + nav-bar guide hook; full-featured panel with EN/DE language toggle, topic TOC with filter, on-demand markdown rendering; updated `docs/help/34_pbv7_run.md` and `docs/help_de/34_pbv7_run.md` to reflect the FastAPI edit page sidebar buttons and new sections (Coin Overrides, Dynamic Ignore, Balance buttons)
-- Improved: V7 Edit page sidebar — replaced inline ⚡ Calc button on balance_override with two dedicated sidebar buttons: "💰 Balance Calculator" (navigates to the standalone Balance Calculator page pre-loaded with the current instance) and "⚡ Calc Balance" (shows recommended balance inline in a modal with one-click Apply)
-- Improved: V7 Edit page — dynamic ignore preview auto-refreshes (debounced 600ms) when market_cap, vol/mcap, tags, only_cpt or notices_ignore change; no manual checkbox toggle needed
-- Improved: V7 Edit page UX — TWE and n_positions combined on one row; JSON config editors enlarged; dynamic ignore label corrected to "ignored_symbols"; clear-all ✕ button on all coin multiselects
-- Improved: Coin Overrides in FastAPI edit page — replaced raw JSON textarea with full structured GUI (overview table, per-coin editor with add/delete for bot and live parameters, Config checkbox for per-coin bot config files with long/short JSON editors, OK/Cancel/Remove workflow); new API endpoints for per-coin config CRUD
-- Migrated: V7 Run Edit page from Streamlit to FastAPI — full instance editor (all form fields, advanced settings, filters, coin multiselects, bot long/short JSON, coin overrides, dynamic ignore preview, import dialog, log viewer) now runs as a standalone FastAPI page; new API endpoints: GET/PUT instance config, users, hosts, symbols, tags, coin filter preview, instance log
-- Cleaned: Full PB6 code audit and removal — removed PBStat from service registry, orphaned LOG_GROUPS (Instance, Multi, Backtest, BacktestMulti, Optimize, OptimizeMulti), PB6 VPS process detection (async_monitor, async_logs, ws_server), PB6 help texts, dead Base.py module, dual import in Exchange.py; renamed confusing RunV7.pbdir/pbvenv to pb7dir/pb7venv; removed pbdir/pbvenv keys from pbgui.ini; cleaned test_pbrun.py (removed RunMulti tests, PB6 stubs, fixed assertions); deleted 14 leftover artifact files
-- Redesign: V7 sync/activate system — `status_v7.json` is now the Single Source of Truth; removed `activate_*.cmd` and `delete_*.cmd` for v7; per-instance `activate_ts` with merge logic for multi-master sync; configs pushed to all VPS on Save (not just config.json — all coin configs too); PBRun polls `status_v7.json` mtime; other masters reconcile via inotify on VPS; shared helpers (`update_status_v7`, `get_syncable_files`) moved to `pbgui_purefunc.py`
-- Fixed: PBRun `has_status_v7_changed()` caused infinite sync loop — `watch_v7()` always saves `status_v7.json` which changes its mtime, re-triggering `has_new_status()` on every poll cycle; PBRemote then pushed to cloud on each iteration, flooding all VPS; fix: update cached mtime after `watch_v7()` save
-- Improved: PBRemote slave no longer syncs v7 data up — `sync_v7_up()` is master-only (configs + status_v7 + alive); slaves rely on `alive()` for heartbeat
-- Improved: Frontend "Activate" buttons renamed to "Sync" throughout PBv7 Run page (sidebar, per-row, status labels)
-- Removed: "SSH Sync All" and per-row "Sync" buttons from FastAPI v7 Run page — sync now happens automatically on save
-- Fixed: Saving a v7 instance in Streamlit editor only updated local `status_v7.json` but did not SSH-push to VPS — now triggers `POST /api/v7/activate/{name}` after save to push config + status via SFTP
-- Fixed: Clicking "Edit" on a v7 instance in FastAPI briefly opened Streamlit then bounced back — root cause: server-side interception in `build_navigation()` always redirected `v7_run` URL path to FastAPI, even when a relay param (`_relay_edit_instance` / `_relay_add_instance`) was active; relay is now checked before the redirect fires
-- Improved: `update_from_status_v7()` now uses per-instance `activate_ts` comparison instead of global — correct multi-master merge where each master can update different instances independently
-- Improved: `V7Instance.activate()`, `V7Instances.activate_all()`, and `restart_instance()` now use `update_status_v7()` instead of creating `activate_*.cmd` files
-- Improved: `PBRun.activate()` rejects version "7" with a warning log — prevents accidental creation of v7 `activate_*.cmd` files
-- Fixed: PB7 backtest ignored `ohlcv_source_dir` for Binance and downloaded data from the exchange — PBGui stores data under `binanceusdm/` but PB7 looks for `binance/`; `get_market_data_root_dir()` now automatically creates a `binance -> binanceusdm` symlink on first use
-- Fixed: Binance monthly archive ZIPs sometimes miss the last few days of the month — downloader now detects incomplete months and fills missing days via individual daily ZIPs
-- Improved: Backup/Restore modal now uses native CSS `resize: both` + transparent drag handle overlay — same UX pattern as the Guide/Help dialog (draggable header, no custom JS resize grip); fixed double scrollbar (added `min-height: 0` on flex body, page scroll locked while panel is open)
-- Fixed: "Add Instance" button did not work — after navigating from FastAPI to Streamlit via relay, the `add_instance` query param was lost because `st.switch_page()` drops URL params; now reads from `_relay_add_instance` session state (same pattern as `edit_instance`)
-- Removed: All v6 multi/single bot support from PBRun and PBRemote — RunSingle/RunMulti classes deleted, multi/single sync/status/monitor code removed; PBRun is now v7-only
-- Fixed: VPS PBRun no longer writes `status_v7.json` — GUI is Single Source of Truth; removes the infinite sync loop root cause (`watch_v7()` and `update_from_status_v7()` no longer save the status file)
-- Removed: "Install pb6" option from VPS Manager — pb6 is no longer supported; all ansible scripts updated to remove pb6 installation; update scripts now detect and cleanly remove existing pb6 installations (kills processes, removes pb6 directory, venv, pbgui.ini entries, python3.10-venv package)
-- Fixed: After API server restart, all v7 instances showed wrong status (stop_needed/activate_needed) because no VPS data was available yet — new "collecting…" status shown until first VPS host reports; disabled instances now show "disabled" immediately instead of false "stop_needed"
-- New: PBv7 Run page "Add Instance" button in sidebar — navigates to Streamlit editor to create a new instance
-- New: PBv7 Run page "Delete" button per row — confirmation modal with running-on guard (cannot delete running instances); API endpoint `DELETE /instances/{name}`
-- Improved: Delete instance now removes config on all connected VPS hosts via SSH (`rm -rf`) in parallel — no longer relies on PBRemote rclone sync cycle; toast shows per-host results; includes input validation and path traversal protection
-- New: Delete creates automatic backup before deletion — configs saved to `data/backup/v7/{name}/{timestamp}/`; writes `delete_*.cmd` on VPS so other masters can pick up the deletion
-- New: Backup & Restore UI — "Backups" button in sidebar opens modal listing all instance backups; restore copies config back to `run_v7/` and SSH-activates on all VPS; individual backups can be deleted; API endpoints `GET /backups`, `POST /restore/{name}/{ts}`, `DELETE /backups/{name}/{ts}`
-- Improved: Toast notifications now stay visible for 8 seconds instead of 4
-- Fixed: Balance Calculator Exchange dropdown always reset to first entry — missing `index=` parameter on selectbox caused Streamlit to overwrite the selected value on every rerun
-- Migrated: Balance Calculator from Streamlit to FastAPI — standalone page at `/api/balance-calc/main_page` with server-side calculation; instance selector loads configs directly; no more Streamlit session state issues with exchange dropdown
-- Fixed: PBv7 Run page no longer flickers on WebSocket updates — table uses diff-based DOM patching (only changed cells are updated) instead of replacing the entire table body; click events are no longer lost during updates
-- Fixed: WebSocket connections now use `wss://` when the page is served over HTTPS — previously hardcoded `ws://` caused "insecure WebSocket" errors for users behind an HTTPS reverse proxy (affected Services, PBRun, and Logging pages)
-- Fixed: PBRun now writes `0` to `running_version.txt` when stopping a v7 bot — triggers inotify watcher for immediate stop feedback in UI (previously no file write on stop, causing ~30s delay until next poll)
-- Fixed: `RunV7.stop()` now writes `0` to `running_version.txt` unconditionally — previously the write was inside the `if process:` block, so when a bot had already crashed (no process to kill), `running_version.txt` kept the old version number and the UI never showed "stopped"
-- Fixed: Status `disabled` was shown prematurely when no VPS collect data was available yet — now correctly shows `stop_needed` when data is missing (conservative: assumes bot may still be running)
-- Fixed: SSH Activate no longer restarts inotify watchers — persistent streaming watchers already detect config+running_version changes; the restart killed the watcher for ~14s causing `running_version.txt` events to be missed; added 8s delayed collect as fallback for edge cases
-- Improved: inotify watchers (V7ConfigSync + FileSyncWorker) converted from one-shot to persistent streaming — script no longer exits after each event; events are streamed continuously over a single SSH process, eliminating the 10-14s restart gap that caused `running_version.txt` changes to be missed after Activate
-- Fixed: inotify watcher scripts leaked orphan processes on VPS — when SSH reconnected, old Python processes kept running with inotify FDs open, exhausting the 128-instance limit (`errno=24 Too many open files`); scripts now use `select()` on stdin to detect SSH disconnect and exit cleanly
-- Fixed: VPS PB7 Branch Management not shown when VPS is offline (PBRemote heartbeat stale) but reachable via SSH — gate now accepts either `server.is_online()` or `vps.is_vps_ssh_open()`
-- Fixed: pb6 cleanup in ansible update playbooks failed with "Missing sudo password" — moved `apt remove python3.10-venv` to `vps-setup.yml` (which has sudo); update playbooks now only remove pb6 dir/venv/ini entries (no sudo needed); added full pb6 cleanup block to setup playbook
-- New: Multi-master delete propagation via inotify — V7ConfigSyncWorker now watches `data/cmd/delete_*.cmd` on VPS; when another master deletes an instance, the cmd file triggers instant local deletion with backup, running-instance guard, and self-skip (no polling delay)
-- Fixed: Multi-master delete not propagated — originating master's self-skip immediately removed `delete_*.cmd` from VPS before other masters could read it; cmd files are now preserved for other masters and only cleaned up after 1h TTL
-- Fixed: VPS PBGui branch switch sent explicit commit hash instead of using origin HEAD — when VPS reported stale branch info, the GUI pre-selected the old commit and passed it to Ansible, pinning the VPS to an old commit instead of updating to latest
-- Removed: All PB6 navigation menu entries (PBv6 Multi, PBv6 Single) and 14 PB6-only Python files — Backtest.py, BacktestMulti.py, Optimize.py, OptimizeMulti.py, Multi.py, Instance.py, PBStat.py, and all navi/v6_*.py pages; cleaned up PB6 cross-dependencies in system_login.py, Services.py, api/api_keys.py, User.py
-- Improved: inotify watcher script now prints diagnostic stderr (errno, failed watch count) on failure — previously `sys.exit(1)` was silent, making it impossible to diagnose VPS-side issues
-- Improved: Watcher crash loop uses exponential backoff (5s → 10s → … → 5min cap) instead of fixed 30s retry — reduces log spam and SSH load when a host has a persistent inotify issue
-- Fixed: PBv7 Run page now shows correct status for locally running bots — enrichment reads PBRun's `status_v7.json` + `running_version.txt` so local instances appear as synced/outdated/stop_needed instead of always activate_needed
-- Fixed: SSH Activate now also writes a local `activate_*.cmd` for PBRun — previously only pushed to VPS, so local bots (enabled_on = master hostname) were never started/stopped from the FastAPI page
-- Improved: History polling for inactive bots now uses a `history_scan_meta` table to remember last scan time — subsequent polls only look back 6 hours instead of re-scanning months of empty history (reduces HL poll cycle from ~560s to ~84s for 28 users)
-- Improved: HL trade history and executions now use direct `userFillsByTime` HTTP POST instead of `fetch_my_trades` — eliminates 11s `load_markets()` call (669 HL markets including HIP-3) per user per cycle; expected per-user time: ~0.3s vs ~13s
-- Fixed: API server restart from web UI took ~2 min (blocking SSH connections during startup) — VPS monitor now starts in background so the server accepts requests immediately
-- Fixed: `Exchange.close()` failed silently when called from `asyncio.to_thread` — replaced invalid `asyncio.create_task()` call (requires coroutine context) with `asyncio.run_coroutine_threadsafe()` so async ccxt instances are properly closed from worker threads
-- New: Multi-master v7 config sync via inotify — when a config is pushed to VPS via SSH Activate, inotify watchers detect the change and pull higher-version configs to other connected Masters automatically (same pattern as api-keys sync)
-- New: Fast activation feedback — V7ConfigSyncWorker also watches `running_version.txt` via inotify; when PBRun writes it after bot start, an immediate `ps aux` instance collection is triggered (bypasses 30 s poll interval)
-- Improved: SFTP retry for transient errors — `push_file`, `pull_file`, `read_remote_file` and SSH Activate now retry once (500 ms delay) on connection-lost/timeout/socket errors before reporting failure
-- Improved: PBv7 Run page now uses WebSocket (`/ws/v7`) for real-time instance updates (~1 s latency) instead of 30 s REST polling; auto-reconnect with exponential backoff; REST fallback when WS is down
-- Fixed: SSH Activate failed with `'bytes' object has no attribute 'encode'` — SFTP files now opened in binary mode (`wb`)
-- New: VPSMonitor instance collection now reports all v7 instances (including stopped ones) with config_version, running_version, and enabled_on — foundation for SSH-based config sync
-- New: VPSMonitor instances table shows Sync status, Enabled On, Cfg Ver, and Run Ver columns for v7 instances; non-running v7 instances displayed as separate rows
-- New: PBv7 Run page migrated to FastAPI — sortable instance list with name/status/version/TWE/running-on, search and status filter, SSH Activate per instance and Activate All button; auto-refresh every 30s
-- Improved: PBv7 Run FastAPI page — proper navbar and resizable sidebar (matching other FastAPI pages); Edit button navigates to Streamlit config editor with token relay; Home button in editor returns to FastAPI list
-
-- Removed: All remaining PB6 code from API Editor, file sync, and login — removed pb6dir from file_sync.py (~50 references: backup, push, watcher, state checks, SSE broadcasts), async_pool.py (remote ini cache), api_keys_editor.html (md5 detail, push results, dry-run modal); removed `_current_pb6` sentinel and pb6 backup/restore/diff from api/api_keys.py; removed `pbdir()`, `pbvenv()`, `is_pb_installed()` from pbgui_func.py and pbgui_purefunc.py; removed PB6 path/venv settings from login page UI and session init; fixed broken `Users.__init__()` (called removed `pbdir()`); fixed `is_session_state_not_initialized()` checking for deleted PB6 session keys; simplified `User.load()` to pb7-only; cleaned PBRun.PBData init to pb7-only
-- Fixed: `Base.py` user dropdown used `list_single()` (PB6 exchanges) — changed to `list_v7()` for V7 backtesting
-- Removed: PBv6 Multi and PBv6 Single menus from FastAPI navbar; removed PBStat service from FastAPI Services page (sidebar button, panel, service registry)
-- Removed: All pbdir/pb6 code from PBRemote.py — removed `_pbdir` field, property, setter, pb6 API sync branch, v6 backup path, `pb6v`/`pb6c` from alive JSON; simplified `sync_api`/`update_api`/`calculate_api_md5`/`sync_api_up` to pb7-only; removed `pb6_version`/`pb6_commit` properties from both `RemoteServer` and `PBRemote`; cleaned all PB6 version comparison blocks, table columns, and button labels from VPS Manager
-- Removed: All pb6 version/commit fields and git operations from PBRun — removed `pb6_version`, `pb6_version_origin`, `pb6_commit`, `pb6_commit_origin` init fields; removed pb6 git fetch/log/show blocks from `load_git_origin()`, `load_git_commits()`, `load_versions_origin()`, `load_versions()`; removed pb6 version branch from Monitor.py
-- Removed: PB6 `class Config` from Config.py (~625 lines) — recursive_grid/neat_grid/clock config parser and PB6→V7 conversion; cleaned unused `Config` import from RunV7.py and BacktestV7.py
+## v1.71 (06-04-2026)
+- Fixed: VPS Manager showed "N/A" for PB7 version after passivbot moved version from README.md to `src/passivbot_version.py`
+- Fixed: Log Viewer service list showed all configs instead of only running bots on remote VPS hosts
+- Migrated: V7 Run Edit page to FastAPI — full editor with all settings, coin overrides GUI, dynamic ignore preview, import dialog, live log panel, stepper buttons on all number fields
+- Migrated: Balance Calculator to FastAPI — standalone page with server-side calculation
+- Migrated: PBv7 Run list page to FastAPI — sortable instance table with real-time WebSocket updates (~1s latency, diff-based DOM patching), search and status filter, Add/Delete/Backup/Restore buttons
+- Unified: Log viewer — single shared `LogViewerPanel` component across all 5 pages (VPS Monitor, V7 Edit, Logging, Services, API Keys); host/service dropdowns, level filters, search with highlight/blocks, presets, stream/download
+- Redesigned: V7 sync system — `status_v7.json` as Single Source of Truth; auto-sync on save to all VPS; multi-master config sync and delete propagation via inotify; fast activation feedback via `running_version.txt` watch
+- Added: Instance delete with confirmation modal, running-instance guard, automatic backup, and VPS cleanup via SSH
+- Added: Backup & Restore UI with versioned backups; automatic backup-on-save with configurable retention limit (default 50, +/− stepper in Backup modal)
+- Added: Backtest "Add to Run" opens FastAPI editor with config pre-loaded via draft mechanism (no disk write until save)
+- Added: "Backtest" button from V7 Edit sends current editor state as draft — works without saving first
+- Added: Guide overlay on V7 Edit page (EN/DE toggle, topic TOC, markdown rendering)
+- Added: Coin Overrides structured GUI — overview table, per-coin editor, per-coin config files
+- Added: `candle_lock_timeout_seconds` setting in Advanced Settings
+- Improved: Coin multiselects — "all" button, conflict detection (orange ⇄ marker), auto-removal from opposing list, clear-all ✕
+- Improved: Dynamic ignore preview auto-refreshes on parameter change; TWE + n_positions on one row
+- Improved: V7 Edit log panel — full-width, host/service dropdowns, restart button, disabled bots auto-connect to last active VPS host
+- Improved: Balance Calculator exchange detection via `Users.find_exchange()` instead of directory name prefix
+- Improved: inotify watchers — persistent streaming, clean SSH disconnect handling, exponential backoff on crash, diagnostic stderr
+- Improved: SFTP operations retry once on transient connection errors
+- Improved: HL trade history — direct `userFillsByTime` HTTP POST, eliminates 11s `load_markets()` per user per cycle
+- Improved: History polling uses `history_scan_meta` table — subsequent polls scan 6h instead of full history
+- Improved: WebSocket connections auto-detect `wss://` for HTTPS reverse proxy setups
+- Improved: Atomic config writes (`os.replace`) to prevent corruption on crash
+- Removed: All PB6 code — navigation entries, 14+ Python modules, PBRun/PBRemote v6 support, VPS ansible pb6 installation, PB6 Config class (~625 lines)
+- Removed: "SSH Sync All" button — sync is now automatic on save
+- Fixed: PB7 backtest ignored `ohlcv_source_dir` for Binance — auto-creates `binance -> binanceusdm` symlink
+- Fixed: Binance monthly archive ZIPs missing last days — fills gaps via daily ZIPs
+- Fixed: `Exchange.close()` in worker threads — uses `run_coroutine_threadsafe()` instead of `create_task()`
+- Fixed: VPS PB7 Branch Management hidden when VPS offline but SSH reachable
+- Fixed: VPS branch switch pinned to stale commit instead of origin HEAD
+- Fixed: `start.sh.example` — added missing `PBApiServer.py` startup
+- Fixed: Pareto Explorer crash when no Pareto-optimal configs found (e.g. PB7 v7.9 new metrics format) — shows info message instead of `UnboundLocalError`
+- Fixed: Pareto Explorer crash with PB7 v7.9 scoring format — `optimize.scoring` changed from `["metric"]` to `[{"metric": "...", "goal": "..."}]`; normalizer now handles both formats
+- Fixed: Pareto Explorer Deep Intelligence crash with PB7 v7.9 — nested dict params (`forager_score_weights`, `hsl_tier_ratios`) are now flattened in DataFrame; `var()` coerces to numeric before computation
+- Fixed: Pareto Explorer load errors were permanently cached — failed loads now clear the `@st.cache_resource` so retrying works
+- Fixed: Pareto Explorer Optimize Preset Generator crash with PB7 v7.9 — dict-format scoring entries normalized to strings before dedup/set operations
+- Fixed: Pareto Explorer `find_similar_configs` crash on non-numeric bot params (dict/string) — skips non-numeric values in distance calculation
+- Fixed: Pareto Explorer `get_parameters_at_bounds` crash on non-numeric bot params — filters out dict/string values before min/max computation
+- Fixed: Pareto Explorer suite_metrics float coercion — prevents downstream type errors when metric values are strings or None
+- Fixed: Optimizer scoring normalizer dropped PB7 v7.9 dict-format scoring entries — now extracts `metric` key from `{"metric": "...", "goal": "..."}` format
+- Fixed: Strategy Explorer `BotParams` rejected unknown v7.9 params (`forager_score_weights`, `hsl_tier_ratios`, `tp_only_with_active_entry_cancellation`) — `BotParams.from_dict()` now filters to known numeric fields instead of crashing
 
 ## v1.70 (30-03-2026)
 - New: Services page — fully migrated to FastAPI; start/stop/restart all 7 PBGui daemons; per-service log viewer and settings panels; context-aware Guide overlay (📖) opens the matching service guide directly

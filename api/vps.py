@@ -391,6 +391,7 @@ async def _cmd_subscribe_logs(ws: WebSocket,
     """Start remote log stream + send initial chunk. Returns (stream_id, sid)."""
     host = request.get("host", "")
     service = request.get("service", "")
+    lines_n = request.get("lines", 200)
     sid = request.get("sid")
     if not host or not service or not _streamer:
         await ws.send_json({"type": "error",
@@ -420,9 +421,9 @@ async def _cmd_subscribe_logs(ws: WebSocket,
         parts = service[4:].strip().split(":")
         bot_name = parts[0]
         pb_version = parts[1] if len(parts) > 1 else None
-        content = await _streamer.get_bot_log(host, bot_name, 100, pb_version)
+        content = await _streamer.get_bot_log(host, bot_name, lines_n, pb_version)
     else:
-        content = await _streamer.get_recent_logs(host, service, 100)
+        content = await _streamer.get_recent_logs(host, service, lines_n)
 
     resp: dict = {
         "type": "logs", "host": host, "service": service,

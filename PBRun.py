@@ -1348,14 +1348,11 @@ class PBRun():
                     self.pbgui_version_origin = version.group(0)
                     break
         if Path(f'{self.pb7dir}/.git').exists():
-            pb7_readme_origin = _run_subprocess(["git", "--git-dir", f'{self.pb7dir}/.git', "show", "origin/master:README.md"], timeout=20)
-            lines = pb7_readme_origin.stdout.splitlines() if pb7_readme_origin and pb7_readme_origin.returncode == 0 else []
-            for line in lines:
-                #find regex regex_search('^#? ?v[0-9.]+'
-                version = re.search('v[0-9.]+', line)
-                if version:
-                    self.pb7_version_origin = version.group(0)
-                    break
+            pb7_vfile_origin = _run_subprocess(["git", "--git-dir", f'{self.pb7dir}/.git', "show", "origin/master:src/passivbot_version.py"], timeout=20)
+            if pb7_vfile_origin and pb7_vfile_origin.returncode == 0:
+                m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', pb7_vfile_origin.stdout)
+                if m:
+                    self.pb7_version_origin = f'v{m.group(1)}'
 
     def load_versions(self):
         """Load the versions of pbgui, pb6 and pb7 from README.md"""
@@ -1371,17 +1368,13 @@ class PBRun():
                     self.pbgui_version = version.group(0)
                     break
         if self.pb7dir:
-            pb7_readme = Path(f'{self.pb7dir}/README.md')
-            if pb7_readme.exists():
-                # read only first 20 lines
-                with open(pb7_readme, "r", encoding='utf-8') as f:
-                    lines = f.readlines()[:20]
-                for line in lines:
-                    #find regex regex_search('^#? ?v[0-9.]+'
-                    version = re.search('v[0-9.]+', line)
-                    if version:
-                        self.pb7_version = version.group(0)
-                        break
+            pb7_vfile = Path(f'{self.pb7dir}/src/passivbot_version.py')
+            if pb7_vfile.exists():
+                with open(pb7_vfile, "r", encoding='utf-8') as f:
+                    content = f.read()
+                m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+                if m:
+                    self.pb7_version = f'v{m.group(1)}'
 
     def fetch_cmc_credits(self):
         self.coindata.fetch_api_status()        

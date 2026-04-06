@@ -1,0 +1,37 @@
+__pycache__/*
+.gitignore
+data/*
+caches/
+.cache/
+pbgui.ini
+start.sh
+.streamlit/secrets.toml
+binance_markets.json
+todo.txt
+pbgui.log
+PBRun_test.py
+Dashboard.py
+pbgui.code-workspace
+Dashboard.py
+*.pyc
+test_results/
+.vscode/
+scripts/
+pytest.ini
+
+# Local-only benchmarking helpers (do not commit)
+tools/bench_msgpack_decode.py
+
+# Local tools/scripts (do not commit)
+tools/
+
+# Copilot instructions (keep local edits out of commits)
+.github/copilot-instructions.md
+navi/v7_strategy_explorer.py.backup
+
+# Local-only diagnose script (do not commit)
+live_bt_diagnose.py
+
+# Local scratch/work directory (do not commit)
+.local-work/
+backup/

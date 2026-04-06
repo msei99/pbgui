@@ -11,7 +11,7 @@ import configparser
 import time
 import multiprocessing
 import pandas as pd
-from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars, render_log_viewer
+from pbgui_func import PBGDIR, pb7dir, pb7venv, validateJSON, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars, render_log_viewer, redirect_to_fastapi_v7_edit_draft
 from pbgui_purefunc import config_pretty_str, pb7_suite_preflight_errors
 from pbgui_purefunc import load_ini, save_ini
 from PBCoinData import CoinData, normalize_symbol
@@ -2687,11 +2687,9 @@ class BacktestV7Results:
         for row in ed["edited_rows"]:
             if "Select" in ed["edited_rows"][row]:
                 if ed["edited_rows"][row]["Select"]:
-                    st.session_state.edit_v7_instance = V7Instance()
                     self.results_d[row]["index"].ensure_config_loaded()
-                    st.session_state.edit_v7_instance.config = self.results_d[row]["index"].config
-                    st.session_state.edit_v7_instance.user = st.session_state.edit_v7_instance.config.live.user
-                    st.switch_page(get_navi_paths()["V7_RUN"])
+                    config_dict = self.results_d[row]["index"].config.config
+                    redirect_to_fastapi_v7_edit_draft(config_dict)
 
     def add_to_config_archive(self):
         ed_key = st.session_state.ed_key

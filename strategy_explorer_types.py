@@ -4,7 +4,7 @@ except ModuleNotFoundError:  # pragma: no cover
     st = None  # type: ignore
 from enum import Enum
 from math import floor, ceil
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields as dataclass_fields, replace
 from enum import Enum
 import math
 
@@ -134,6 +134,19 @@ class BotParams:
 
     risk_wel_enforcer_threshold: float = 1.0
     risk_twel_enforcer_threshold: float = 1.0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "BotParams":
+        """Create BotParams from a dict, ignoring unknown keys (e.g. v7.9 dict/string params)."""
+        known = {f.name for f in dataclass_fields(cls)}
+        filtered = {}
+        for k, v in d.items():
+            if k in known:
+                try:
+                    filtered[k] = float(v)
+                except (TypeError, ValueError):
+                    pass  # skip non-numeric values
+        return cls(**filtered)
 
     def clone(self):
         return BotParams(

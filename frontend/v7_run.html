@@ -324,6 +324,39 @@ tr.row-inactive td  { opacity: 0.45; }
   border-radius: 4px; z-index: 3; position: relative;
 }
 .backup-panel-close:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.backup-settings-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px var(--sp-md);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: var(--fs-sm);
+}
+.backup-settings-row label { color: var(--text-dim); white-space: nowrap; }
+.backup-settings-row .num-stepper { display: flex; align-items: center; }
+.backup-settings-row .num-stepper input {
+  width: 56px; text-align: center; border-radius: 0 !important;
+  background: var(--bg2); color: #4caf50; border: 1px solid var(--border);
+  padding: 2px 4px; font-size: var(--fs-sm); height: 26px;
+  -moz-appearance: textfield;
+}
+.backup-settings-row .num-stepper input::-webkit-inner-spin-button,
+.backup-settings-row .num-stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.backup-settings-row .stepper-btn {
+  width: 24px; height: 26px; flex-shrink: 0;
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text); font-size: 14px; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  user-select: none; padding: 0;
+}
+.backup-settings-row .stepper-btn:first-child { border-radius: 4px 0 0 4px; border-right: none; }
+.backup-settings-row .stepper-btn:last-child  { border-radius: 0 4px 4px 0; border-left: none; }
+.backup-settings-row .stepper-btn:hover { background: var(--accent); color: #000; border-color: var(--accent); }
+.btn-save-retention {
+  background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: 4px; cursor: pointer; padding: 2px 8px; font-size: 14px;
+  display: flex; align-items: center; height: 26px;
+}
+.btn-save-retention:hover { background: rgba(76,175,80,0.15); color: #4caf50; }
 .backup-panel-body {
   flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-md);
 }
@@ -763,12 +796,29 @@ function openBackups() {
           '\x3Ch3>Instance Backups\x3C/h3>' +
           '\x3Cbutton class="backup-panel-close" id="backup-close">\u2715\x3C/button>' +
         '\x3C/div>' +
+        '\x3Cdiv class="backup-settings-row">' +
+          '\x3Clabel>Retention limit: \x3C/label>' +
+          '\x3Cdiv class="num-stepper">' +
+            '\x3Cbutton type="button" class="stepper-btn" id="ret-minus">\u2212\x3C/button>' +
+            '\x3Cinput type="number" id="backup-retention" min="1" step="1" />' +
+            '\x3Cbutton type="button" class="stepper-btn" id="ret-plus">+\x3C/button>' +
+          '\x3C/div>' +
+          '\x3Cbutton id="backup-retention-save" class="btn-save-retention" title="Save retention limit">\uD83D\uDCBE\x3C/button>' +
+          '\x3Cspan id="backup-retention-msg" style="margin-left:6px;font-size:0.85em;">\x3C/span>' +
+        '\x3C/div>' +
         '\x3Cdiv class="backup-panel-body">' +
           '\x3Cdiv id="backup-content" class="backup-empty">Loading\u2026\x3C/div>' +
         '\x3C/div>' +
         '\x3Cdiv class="backup-panel-grip" id="backup-grip">\x3C/div>' +
       '\x3C/div>';
     document.getElementById('backup-close').onclick = closeModal;
+    document.getElementById('backup-retention-save').onclick = saveRetention;
+    document.getElementById('ret-minus').onclick = function() { stepRetention(-1); };
+    document.getElementById('ret-plus').onclick = function() { stepRetention(1); };
+    document.getElementById('backup-retention').addEventListener('wheel', function(e) {
+      e.preventDefault(); stepRetention(e.deltaY < 0 ? 1 : -1);
+    }, { passive: false });
+    document.getElementById('backup-retention').addEventListener('input', function() { markRetentionDirty(); });
     (function() {
       var panel = document.getElementById('backup-panel');
       var handle = document.getElementById('backup-drag');
@@ -821,7 +871,66 @@ function openBackups() {
   }
   document.getElementById('backup-panel').classList.add('visible');
   document.body.style.overflow = 'hidden';
+  fetchRetention();
   fetchBackups();
+}
+
+var _retSavedVal = 50;
+
+function fetchRetention() {
+  apiFetch('/backup-settings').then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function(data) {
+    var inp = document.getElementById('backup-retention');
+    var v = data.max_versions || 50;
+    _retSavedVal = v;
+    if (inp) { inp.value = v; inp.style.color = '#4caf50'; }
+  }).catch(function() {
+    var inp = document.getElementById('backup-retention');
+    _retSavedVal = 50;
+    if (inp) { inp.value = 50; inp.style.color = '#4caf50'; }
+  });
+}
+
+function stepRetention(dir) {
+  var inp = document.getElementById('backup-retention');
+  if (!inp) return;
+  var val = parseInt(inp.value, 10) || 1;
+  val = Math.max(1, val + dir);
+  inp.value = val;
+  markRetentionDirty();
+}
+
+function markRetentionDirty() {
+  var inp = document.getElementById('backup-retention');
+  if (!inp) return;
+  var cur = parseInt(inp.value, 10);
+  inp.style.color = (cur === _retSavedVal) ? '#4caf50' : '#ff9800';
+}
+
+function saveRetention() {
+  var inp = document.getElementById('backup-retention');
+  var msg = document.getElementById('backup-retention-msg');
+  if (!inp) return;
+  var val = parseInt(inp.value, 10);
+  if (isNaN(val) || val < 1) { inp.value = 1; val = 1; }
+  apiFetch('/backup-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ max_versions: val })
+  }).then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function(data) {
+    _retSavedVal = data.max_versions;
+    inp.value = data.max_versions;
+    inp.style.color = '#4caf50';
+    if (msg) { msg.textContent = 'Saved'; msg.style.color = '#4caf50'; }
+    setTimeout(function() { if (msg) msg.textContent = ''; }, 2000);
+  }).catch(function(e) {
+    if (msg) { msg.textContent = 'Error: ' + e.message; msg.style.color = '#f44336'; }
+  });
 }
 
 function fetchBackups() {
