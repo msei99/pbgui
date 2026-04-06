@@ -323,8 +323,12 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
-## v1.71 (06-04-2026)
+## v1.72 (unreleased)
+- Added: V7 Backtest FastAPI backend — REST API (30 endpoints) + WebSocket for real-time queue status, asyncio-based worker replacing the old polling daemon, config/queue/results/archive management
+- Fixed: Remote log stream initial chunk was hardcoded to 100 lines — now respects the "# Lines" dropdown selection
 - Fixed: VPS Manager showed "N/A" for PB7 version after passivbot moved version from README.md to `src/passivbot_version.py`
+
+## v1.71 (06-04-2026)
 - Fixed: Log Viewer service list showed all configs instead of only running bots on remote VPS hosts
 - Migrated: V7 Run Edit page to FastAPI — full editor with all settings, coin overrides GUI, dynamic ignore preview, import dialog, live log panel, stepper buttons on all number fields
 - Migrated: Balance Calculator to FastAPI — standalone page with server-side calculation
