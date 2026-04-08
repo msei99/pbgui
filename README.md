@@ -324,7 +324,71 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.72 (unreleased)
+- Improved: V7 Backtest Config Editor — ohlcv_source_dir, maker/taker_fee_override and checkboxes merged into a single 8-column row (2+2+2+1+1 layout)
+- Fixed: V7 Backtest Config API now reads/writes configs via `ConfigV7` instead of raw JSON, ensuring proper schema validation and normalization
+- Fixed: Config.py Backtest class — added missing `taker_fee_override` field (property, setter, serialization)
+- Improved: V7 Backtest Config Editor — added taker_fee_override field; ohlcv_source_dir row now has a “PBGui Data” button to pre-fill the PBGui market data path; backtest options row expanded to 5 columns
+- Improved: V7 Backtest Config Editor — removed title heading; Exchanges moved to row 1 alongside Config Name / Start / End / BTC caps (2:1:1:1:1:1 layout)
+- Fixed: V7 Backtest editor sidebar — buttons now display with correct height and spacing (shared CSS class names aligned with v7_edit)
+- Improved: Sidebar CSS extracted into shared `frontend/css/sidebar.css`; v7_edit, v7_run, and v7_backtest all import the single file instead of duplicating styles
+- Fixed: V7 Backtest Config Editor — editor sidebar Import button moved directly under Save & Queue (no separator); separator margin matches v7_edit exactly (0.15rem)
+- Fixed: V7 Backtest — "Import JSON" button removed from main configs sidebar; it now only appears in the editor sidebar
+- Improved: V7 Backtest Config Editor — editor sidebar now matches V7 Run Edit layout
+- Improved: V7 Backtest Config Editor — Exchanges field is now a tag-input multiselect (replaces native select list); changing exchanges reloads available symbols; editor sidebar with action buttons (matches V7 Run Edit layout); Save buttons moved from header bar to sidebar
+- Improved: V7 Backtest Config Editor — complete overhaul to match Streamlit layout 1:1: all fields visible (no Advanced expander), 6/7-column row layout, maker_fee_override (checkbox+number), coin_sources and market_settings_sources table editors, tags multiselect with Apply Filters button, config path fixes (max_warmup_minutes and filter_by_min_effective_cost now saved under backtest. instead of live.), btc_collateral_ltv_cap null-when-zero, Bot Configuration moved after Coins section
+- Improved: V7 Backtest Configs — double-click on a config row opens the editor directly
+- Fixed: V7 Backtest — "Add to Run" user conflict dialog: empty option is now truly blank and allows proceeding without a user (opens editor with empty user field)
+- Improved: V7 Backtest Configs — added Select All / Deselect buttons (consistent with Results panel)
+- Fixed: V7 Backtest — drag-multiselect no longer shows hand/drag cursor; rows are no longer skipped when dragging quickly (range-based selection)
+- Improved: V7 Backtest — "Add to Run" now warns when the config's user already has an active instance; shows a user selector with already-used users clearly labelled, allowing a different user to be chosen before proceeding
+- Improved: V7 Backtest Configs — replaced checkbox selection with click/drag row selection (consistent with Results panel)
+- Improved: V7 Backtest Results — "Add to Run" now opens the Run V7 config editor directly (new instance, config pre-loaded) instead of the instance list
+- Improved: V7 Backtest Results — removed redundant Compare/Backtest/Add to Run/Delete buttons from toolbar (sidebar is the single source)
+- Improved: V7 Backtest Results — sidebar button order is now Backtest / Add to Run / Compare / Delete; Refresh removed
+- Fixed: V7 Backtest — "Select backtest parameters" dialog can now be resized down to 160px (modal-body and content div get min-width:0)
+- Fixed: V7 Backtest — "Select backtest parameters" dialog min-width reduced to 300px; can now be resized to any width
+- Fixed: V7 Backtest — backtest log files no longer appear in the LogViewerPanel file list on any page (excluded in backend `list_local_logs`)
+- Fixed: V7 Backtest — log panel now resizable to smaller widths (min-width reduced to 240px)
+- Fixed: V7 Backtest — backtest log files now correctly hidden from LogViewerPanel file list (was not applied due to browser cache; bumped to v=6)
+- Fixed: V7 Backtest — "Select backtest parameters" popup exchanges list now grows when the dialog is resized
+- Improved: V7 Backtest — log panel is now draggable (via header) and resizable
+- Improved: V7 Backtest — backtest log files hidden from LogViewerPanel file list (only relevant system logs shown)
+- Improved: V7 Backtest Queue — log viewer now uses the shared LogViewerPanel (consistent with Run V7; supports file browsing)
+- Improved: V7 Backtest — sidebar buttons now match Run V7 style (transparent background, hover highlight)
+- Improved: V7 Backtest — CPU and Autostart settings are only visible in the Queue panel
+- Improved: V7 Backtest — `list_local_logs` now includes `backtests/` and `optimizes/` subdirectory logs for LogViewerPanel
+- Improved: V7 Backtest — "Select backtest parameters" popup is now larger, draggable, resizable, has X close button, and does not close on outside click
+- Improved: V7 Backtest Results — “Re-backtest” renamed to “Backtest”; with 1 result selected it opens the config editor pre-loaded; with 2+ selected it shows a parameter popup (start\_date, end\_date, Starting Balance, Exchanges) and queues all directly
+- Improved: V7 Backtest Queue — column headers are now clickable to sort (Status, Name, Exchange, Created); default sort: newest first
+- Fixed: V7 Backtest Results — Config/Analysis JSON panels now retain their expanded state
+- Fixed: V7 Backtest Results — deleting results now automatically closes all open charts, JSON panels, and image sections for the deleted entries
+- Fixed: V7 Backtest Results — sticky table properly implemented: table is outside the scroll container; only the charts area scrolls (`#results-scroll-area`), so charts can never scroll behind the table
+- Improved: V7 Backtest Results — pin button now toggles between pinned flex-layout (charts-only scroll) and unpinned free-scroll mode
+- Fixed: V7 Backtest Results — all ✕ close buttons moved to top-right (was top-left) on charts and image sections
+- Fixed: V7 Backtest Results — Config/Analysis JSON panel ✕ button now deactivates the icon button in the table (raised z-index to 1000, isolated chart containers via CSS `isolation: isolate`)
+- Improved: V7 Backtest Results — Config (📄) and Analysis (🔬) JSON panels now have a drag-resize handle at the bottom (like charts), replacing the native browser resize corner
+- Improved: V7 Backtest Results — Plot (🖼) and Fills (📋) image sections now have a ✕ close button; clicking it dismisses the section and deactivates the icon button
+- Fixed: V7 Backtest Results — sticky table header was semi-transparent, letting scrolled charts bleed through; fixed with solid background, bottom border and drop shadow
+- Improved: V7 Backtest Results — added 📌 pin button in toolbar to toggle sticky table on/off (default: on)
+- Improved: V7 Backtest Results table — removed "Sort by" dropdown; column headers are now directly clickable to sort (click again to reverse)
+- Improved: V7 Backtest Results — toolbar + table are now sticky at the top of the panel; only the charts area scrolls out of view
+- Improved: V7 Backtest Results — Compare chart appears directly below the table (before icon-triggered charts)
+- Improved: V7 Backtest Results — closing ✕ on any of the 4 view charts (Balance/Equity, PnL, Drawdown, WE) closes all 4 at once and deactivates the 👁 icon button for that result
+- Improved: V7 Backtest Results — Config (📄) and Analysis (🔬) JSON panels now have a Copy button (copies to clipboard) and Expand/Collapse button; the `<pre>` element is resizable vertically
+- Improved: V7 Backtest Results — Compare button now toggles: second click hides the compare chart
+- Improved: V7 Backtest Results — every chart has a ✕ close button top-left to dismiss it individually without deactivating the action icon
+- Improved: V7 Backtest Results — Config and Analysis JSON are now separate toggleable action buttons (📄 / 🔬) instead of always being shown with the 👁 view charts
+- Improved: V7 Backtest Results — WE (Wallet Exposure) chart is no longer a separate action button; it is always shown together with the other view charts (order: Balance/Equity → PnL per Symbol → Drawdown → WE)
+- Fixed: V7 Backtest Results — row click select/deselect was broken (mousedown and onclick double-toggled; replaced with movement-threshold approach: mousedown records start, drag activates after 5px movement, mouseup toggles on simple click)
+- Fixed: V7 Backtest results table — action icon buttons scrolled visually over the sticky column header (added `z-index: 2` to `th`)
+- Improved: V7 Backtest charts — removed separate fullscreen toolbar div above each Plotly chart; fullscreen button is now a custom icon (⛶) in Plotly's own modebar, consistent with Streamlit behaviour
 - Added: V7 Backtest FastAPI backend — REST API (30 endpoints) + WebSocket for real-time queue status, asyncio-based worker replacing the old polling daemon, config/queue/results/archive management
+- Added: V7 Backtest FastAPI frontend — complete single-page UI with 4 sidebar-navigated views (Configs, Queue, Results, Archive), config editor, real-time queue status via WebSocket, equity/compare charts (Plotly.js), result metrics grid, git archive management
+- Fixed: V7 Backtest WebSocket push loop was busy-spinning at 100% CPU — `asyncio.Event.clear()` was called before `refresh_from_disk()` which immediately re-set it, causing zero-delay polling
+- Improved: V7 Backtest Results view — replaced Streamlit checkbox workaround with icon-based UI: row-click selection for bulk actions (Delete, Compare, Re-backtest, Add to Run), icon toggle buttons (👁 View, 📊 WE, 🖼 Plot, 📋 Fills) in compact Actions column. Balance & Equity chart, Drawdown, BTC, PnL per Symbol, Analysis+Config JSON, Plot/Fills PNGs, Compare overlay; results list height defaults to 25vh and is drag-resizable; config name dropdown filter added next to text filter
+- Added: V7 Backtest TWE (Total Wallet Exposure) chart — client-side computation from fills CSV data: per-coin WE (1/balance × psize × pprice), separate long/short pivot, configurable resolution (1–1440 min), Long/Short TWE + per-coin traces; timestamp resolution mirrors Streamlit load_fills() column priority (time → minute → timestamp)
+- Added: Log Viewer "All" option in Lines dropdown — loads the entire log file instead of being capped at 5000 lines
+- Added: Log Viewer restart button now available on System/Logging and Services pages — works for both local services (PBRun, PBData, PBCoinData, PBRemote, PBMon) and remote VPS services; button auto-hides when viewing non-restartable logs
 - Fixed: Remote log stream initial chunk was hardcoded to 100 lines — now respects the "# Lines" dropdown selection
 - Fixed: VPS Manager showed "N/A" for PB7 version after passivbot moved version from README.md to `src/passivbot_version.py`
 

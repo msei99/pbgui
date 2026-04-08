@@ -338,13 +338,90 @@ async def _send_full_state(ws: WebSocket):
 async def _cmd_restart_service(request: dict) -> dict:
     host = request.get("host", "")
     service = request.get("service", "")
-    if not host or not service or not _monitor:
+    if not host or not service:
         return {"type": "error", "error": "host and service required"}
+
+    # ── Local restart via services API ──
+    if host == "local":
+        return await _local_restart_service(service)
+
+    if not _monitor:
+        return {"type": "error", "error": "monitor not available"}
     success = await _monitor._restart_service(host, service)
     return {
         "type": "result", "cmd": "restart_service",
         "host": host, "service": service, "success": success,
     }
+
+
+# ── Service name mapping: LogViewer name → services API id ──
+_SVC_NAME_MAP = {
+    "PBRun": "pbrun", "PBRemote": "pbremote", "PBCoinData": "pbcoindata",
+    "PBData": "pbdata", "PBMon": "pbmon",
+    "pbrun": "pbrun", "pbremote": "pbremote", "pbcoindata": "pbcoindata",
+    "pbdata": "pbdata", "pbmon": "pbmon",
+}
+
+
+async def _local_restart_service(service: str) -> dict:
+    """Restart a local service using the same stop/start mechanism as api/services.py."""
+    from api.services import _get_service, _SERVICES
+    svc_id = _SVC_NAME_MAP.get(service)
+    if not svc_id or svc_id not in _SERVICES:
+        return {"type": "result", "cmd": "restart_service",
+                "host": "local", "service": service, "success": False,
+                "error": f"Unknown local service: {service}"}
+    try:
+        obj = _get_service(svc_id)
+        if obj.is_running():
+            obj.stop()
+        # Brief pause to let the process exit
+        await asyncio.sleep(1.5)
+        obj = _get_service(svc_id)
+        obj.run()
+        _log(SERVICE, f"[local] Restarted service {service} ({svc_id})")
+        return {"type": "result", "cmd": "restart_service",
+                "host": "local", "service": service, "success": True}
+    except Exception as e:
+        _log(SERVICE, f"[local] Failed to restart {service}: {e}",
+             level="ERROR", meta={"traceback": traceback.format_exc()})
+        return {"type": "result", "cmd": "restart_service",
+                "host": "local", "service": service, "success": False,
+                "error": str(e)}
+
+
+async def _local_kill_instance(name: str, pb_version: str) -> dict:
+    """Kill a local bot instance via PBRun."""
+    try:
+        from PBRun import PBRun
+        pbrun = PBRun()
+        pid = pbrun.stop_instance(name) if hasattr(pbrun, 'stop_instance') else None
+        if pid is None:
+            # Fallback: find and kill process by PID file
+            from pathlib import Path
+            from pbgui_purefunc import PBGDIR
+            pidfile = Path(f"{PBGDIR}/data/run_v7/{name}/pid.txt")
+            if pidfile.exists():
+                import signal, os
+                pid = int(pidfile.read_text().strip())
+                os.kill(pid, signal.SIGTERM)
+                _log(SERVICE, f"[local] Killed bot {name} (pid={pid})")
+                return {"type": "result", "cmd": "kill_instance",
+                        "host": "local", "name": name,
+                        "success": True, "pid": pid}
+            return {"type": "result", "cmd": "kill_instance",
+                    "host": "local", "name": name,
+                    "success": False, "pid": None}
+        _log(SERVICE, f"[local] Killed bot {name} (pid={pid})")
+        return {"type": "result", "cmd": "kill_instance",
+                "host": "local", "name": name,
+                "success": True, "pid": pid}
+    except Exception as e:
+        _log(SERVICE, f"[local] Failed to kill {name}: {e}",
+             level="ERROR", meta={"traceback": traceback.format_exc()})
+        return {"type": "result", "cmd": "kill_instance",
+                "host": "local", "name": name,
+                "success": False, "pid": None}
 
 
 async def _cmd_get_logs(request: dict) -> dict:
@@ -391,7 +468,6 @@ async def _cmd_subscribe_logs(ws: WebSocket,
     """Start remote log stream + send initial chunk. Returns (stream_id, sid)."""
     host = request.get("host", "")
     service = request.get("service", "")
-    lines_n = request.get("lines", 200)
     sid = request.get("sid")
     if not host or not service or not _streamer:
         await ws.send_json({"type": "error",
@@ -417,6 +493,7 @@ async def _cmd_subscribe_logs(ws: WebSocket,
         return None, None
 
     # Send initial chunk
+    lines_n = int(request.get("lines", 200))
     if service.startswith("Bot:"):
         parts = service[4:].strip().split(":")
         bot_name = parts[0]
@@ -446,8 +523,15 @@ async def _cmd_kill_instance(request: dict) -> dict:
     host = request.get("host", "")
     name = request.get("name", "")
     pb_version = request.get("pb_version", "")
-    if not host or not name or not _monitor:
+    if not host or not name:
         return {"type": "error", "error": "host and name required"}
+
+    # ── Local kill ──
+    if host == "local":
+        return await _local_kill_instance(name, pb_version)
+
+    if not _monitor:
+        return {"type": "error", "error": "monitor not available"}
     result = await _monitor.kill_instance(host, name, pb_version)
     return {
         "type": "result", "cmd": "kill_instance",

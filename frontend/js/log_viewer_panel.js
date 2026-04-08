@@ -267,6 +267,7 @@ class LogViewerPanel {
         this._MAX    = 5000;
         this._CHUNK  = 500;
         this._SCHUNK = 400;
+        this._MAXLINES = 5000;  /* tracks dropdown; 0 = unlimited */
 
         LogViewerPanel._injectStyles();
         this._build();
@@ -334,6 +335,7 @@ class LogViewerPanel {
           '<option value="1000">1000</option>' +
           '<option value="2000">2000</option>' +
           '<option value="5000">5000</option>' +
+          '<option value="0">All</option>' +
         '</select>' +
       '</label>' +
       '<span class="lvp-file-size" id="' + p + 'file-size"></span>' +
@@ -388,7 +390,7 @@ class LogViewerPanel {
             })(levels[i]);
 
         this._q('host-sel').addEventListener('change',   function() { me._onHostChange(); });
-        this._q('lines-sel').addEventListener('change',  function() { me._subscribe(); });
+        this._q('lines-sel').addEventListener('change',  function() { var v = parseInt(me._q('lines-sel').value, 10); me._MAXLINES = v; me._MAX = v > 0 ? v : Infinity; me._subscribe(); });
         this._q('stream-btn').addEventListener('click',  function() { me._toggleStream(); });
         this._q('fetch-btn').addEventListener('click',   function() { me._fetchOnce(); });
         this._q('clear-btn').addEventListener('click',   function() { me._clear(); });
@@ -593,7 +595,7 @@ class LogViewerPanel {
 
     _ingestLines(newLines) {
         this._lines.push.apply(this._lines, newLines);
-        if (this._lines.length > this._MAX) {
+        if (this._MAX !== Infinity && this._lines.length > this._MAX) {
             var trim = this._lines.length - this._MAX;
             this._lines = this._lines.slice(-this._MAX);
             this._lineBase += trim;
@@ -626,6 +628,7 @@ class LogViewerPanel {
         else this._buildServiceList();
 
         this._updateBadge();
+        this._updateRestartBtn();
         this._subscribe();
     }
 
@@ -741,8 +744,15 @@ class LogViewerPanel {
                 btns[i].classList.toggle('lvp-active', btns[i].title === item);
         }
         this._updateBadge();
+        this._updateRestartBtn();
         this._subscribe();
         if (this._isLocal() && this._onFileChange) this._onFileChange(this._file);
+    }
+
+    _updateRestartBtn() {
+        var rb = this._q('restart-btn');
+        if (!rb) return;
+        rb.style.display = this._restartableService() ? '' : 'none';
     }
 
     _updateBadge() {
@@ -789,7 +799,7 @@ class LogViewerPanel {
             this._send({ cmd: 'subscribe_local_logs', file: this._file, lines: this._getLines(), sid: sid });
         } else {
             if (!this._host || !this._service) return;
-            this._send({ cmd: 'subscribe_logs', host: this._host, service: this._service, sid: sid });
+            this._send({ cmd: 'subscribe_logs', host: this._host, service: this._service, lines: this._getLines(), sid: sid });
             this._send({ cmd: 'get_log_info', host: this._host, service: this._service });
         }
         this._streaming = true;
@@ -890,16 +900,41 @@ class LogViewerPanel {
         if (btn) btn.className = this._showLineNums ? 'lvp-ctrl-btn lvp-active' : 'lvp-ctrl-btn';
     }
 
+    /* Map local log filename → service name for restart */
+    static _LOCAL_SVC_MAP = {
+        'PBRun.log': 'PBRun', 'PBRemote.log': 'PBRemote',
+        'PBCoinData.log': 'PBCoinData', 'PBData.log': 'PBData',
+        'PBMon.log': 'PBMon',
+    };
+
+    _restartableService() {
+        if (this._isLocal()) {
+            /* Derive service from log filename */
+            if (!this._file) return null;
+            var svc = LogViewerPanel._LOCAL_SVC_MAP[this._file];
+            if (svc) return svc;
+            /* Bot instance logs: {name}.log in run_v7 dirs */
+            if (this._file.endsWith('.log') && this._file.indexOf('/') < 0) {
+                var name = this._file.replace('.log', '');
+                return 'Bot:' + name + ':7';
+            }
+            return null;
+        }
+        return this._service || null;
+    }
+
     _restart() {
-        if (!this._host || this._isLocal() || !this._service) return;
+        var svc = this._restartableService();
+        if (!svc) return;
+        var host = this._host || 'local';
         var rb = this._q('restart-btn');
         if (rb) { rb.disabled = true; rb.textContent = '\u231b Restarting\u2026'; }
 
-        if (this._service.indexOf('Bot:') === 0) {
-            var parts = this._service.substring(4).split(':');
-            this._send({ cmd: 'kill_instance', host: this._host, name: parts[0], pb_version: parts[1] || '7' });
+        if (svc.indexOf('Bot:') === 0) {
+            var parts = svc.substring(4).split(':');
+            this._send({ cmd: 'kill_instance', host: host, name: parts[0], pb_version: parts[1] || '7' });
         } else {
-            this._send({ cmd: 'restart_service', host: this._host, service: this._service });
+            this._send({ cmd: 'restart_service', host: host, service: svc });
         }
         var me = this;
         setTimeout(function() {
@@ -1065,7 +1100,7 @@ class LogViewerPanel {
             me._pending    = [];
             me._rafPending = false;
             term.appendChild(frag);
-            while (term.childElementCount > me._MAX) term.removeChild(term.firstChild);
+            while (me._MAX !== Infinity && term.childElementCount > me._MAX) term.removeChild(term.firstChild);
             if (atBottom) term.scrollTop = term.scrollHeight;
             me._updateMatchCount(0);
         });

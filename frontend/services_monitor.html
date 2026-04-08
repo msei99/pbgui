@@ -307,7 +307,7 @@
     .gs-topic { color:#93c5fd; font-weight:600; font-size:13px; margin-bottom:5px; }
     .gs-snip { color:#94a3b8; font-size:11px; line-height:1.55; }
   </style>
-  <script src="/app/js/log_viewer_panel.js?v=4"></script>
+  <script src="/app/js/log_viewer_panel.js?v=6"></script>
 </head>
 <body>
 <!-- ── Prices overlay ── -->
@@ -1032,6 +1032,7 @@ window.PBGUI_NAV_CONFIG = {
         wsBase:      WS_BASE,
         token:       TOKEN,
         defaultFile: svc.logFile,
+        showRestart: true,
         height:      'calc(100vh - 200px)',
       });
       viewer.open();
