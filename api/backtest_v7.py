@@ -26,10 +26,11 @@ from shutil import copytree, rmtree
 from typing import Optional
 
 import psutil
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from api.auth import SessionToken, require_auth, validate_token
+from Config import ConfigV7
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, pb7dir, pb7venv
 
@@ -312,9 +313,9 @@ async def _ws_push_loop(ws: WebSocket):
     """Push queue state to a single WebSocket client on changes."""
     try:
         while True:
-            _store.changed.clear()
             try:
                 await _store.refresh_from_disk()
+                _store.changed.clear()   # clear AFTER refresh (refresh sets the event)
                 msg = {
                     "type": "queue_update",
                     "items": list(_store.items.values()),
@@ -380,22 +381,51 @@ def shutdown():
 # ── REST: Main page ───────────────────────────────────────────
 
 @router.get("/main_page", response_class=HTMLResponse)
-def main_page(session: SessionToken = Depends(require_auth)):
+def main_page(
+    request: Request,
+    st_base: str = Query(default="", description="Streamlit base URL"),
+    session: SessionToken = Depends(require_auth),
+) -> HTMLResponse:
     html_path = Path(__file__).resolve().parent.parent / "frontend" / "v7_backtest.html"
     if not html_path.exists():
         raise HTTPException(404, "v7_backtest.html not found")
-    content = html_path.read_text(encoding="utf-8")
-    from pbgui_purefunc import PBGUI_VERSION
-    st_base = load_ini("streamlit", "base_url") or "http://localhost:8501"
-    content = (
-        content
-        .replace("{{TOKEN}}", session.token)
-        .replace("{{API_BASE}}", "/api/backtest-v7")
-        .replace("{{WS_BASE}}", "")
-        .replace("{{ST_BASE}}", st_base)
-        .replace("{{VERSION}}", PBGUI_VERSION)
-    )
-    return HTMLResponse(content)
+    html = html_path.read_text(encoding="utf-8")
+
+    scheme = request.url.scheme
+    host = request.url.hostname or "127.0.0.1"
+    port = request.url.port
+    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
+    api_base = origin + "/api/backtest-v7"
+    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
+
+    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
+    html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
+    html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
+
+    if not st_base:
+        st_base = f"http://{host}:8501"
+    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
+
+    from pbgui_purefunc import PBGUI_VERSION, PBGUI_SERIAL
+    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace("%%VERSION%%", PBGUI_VERSION)
+    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
+
+    nav_js = Path(__file__).resolve().parent.parent / "frontend" / "pbgui_nav.js"
+    nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION
+    html = html.replace("%%NAV_HASH%%", nav_hash)
+
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
+
+
+# ── REST: PBGui data path ─────────────────────────────────────
+
+@router.get("/pbgui_data_path")
+def get_pbgui_data_path(session: SessionToken = Depends(require_auth)):
+    """Return the PBGui-managed market data root directory."""
+    from market_data import get_market_data_root_dir
+    return {"path": str(get_market_data_root_dir())}
 
 
 # ── REST: Settings ────────────────────────────────────────────
@@ -473,8 +503,9 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)):
     cfg_file = _bt_configs_dir() / name / "backtest.json"
     if not cfg_file.exists():
         raise HTTPException(404, f"Config '{name}' not found")
-    with open(cfg_file, "r", encoding="utf-8") as f:
-        return json.load(f)
+    cfg = ConfigV7(str(cfg_file))
+    cfg.load_config()
+    return cfg.config
 
 
 @router.put("/configs/{name}")
@@ -483,14 +514,11 @@ def save_config(name: str, body: dict, session: SessionToken = Depends(require_a
     cfg_dir = _bt_configs_dir() / name
     cfg_dir.mkdir(parents=True, exist_ok=True)
     cfg_file = cfg_dir / "backtest.json"
-    tmp_file = cfg_file.with_suffix(".json.tmp")
-    try:
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(body, f, indent=4)
-        os.replace(str(tmp_file), str(cfg_file))
-    except Exception:
-        tmp_file.unlink(missing_ok=True)
-        raise
+    cfg = ConfigV7(str(cfg_file))
+    if cfg_file.exists():
+        cfg.load_config()
+    cfg.config = body
+    cfg.save_config()
     return {"ok": True, "name": name}
 
 
@@ -733,16 +761,18 @@ def list_results(name: str = None, session: SessionToken = Depends(require_auth)
                     "path": str(result_dir),
                     "config_name": config_dir.name,
                     "result_name": result_dir.name,
+                    "exchange_dir": result_dir.parent.name,
                     "adg": adg,
                     "drawdown_worst": drawdown,
                     "sharpe_ratio": sharpe,
                     "equity_balance_diff_neg_max": eqbal_diff,
                     "gain": gain,
                     "starting_balance": starting_balance,
-                    "final_balance": starting_balance * (1 + gain) if starting_balance else 0,
+                    "final_balance": starting_balance * gain if starting_balance else 0,
                     "exchanges": bt.get("exchanges", []),
                     "start_date": bt.get("start_date", ""),
                     "end_date": bt.get("end_date", ""),
+                    "btc_collateral_cap": float(bt.get("btc_collateral_cap") or 0),
                     "twe_long": bot.get("long", {}).get("total_wallet_exposure_limit", 0),
                     "twe_short": bot.get("short", {}).get("total_wallet_exposure_limit", 0),
                     "pos_long": bot.get("long", {}).get("n_positions", 0),
@@ -794,7 +824,7 @@ def get_result_config(path: str, session: SessionToken = Depends(require_auth)):
 
 @router.get("/results/equity")
 def get_result_equity(path: str, session: SessionToken = Depends(require_auth)):
-    """Get balance_and_equity data for charting."""
+    """Stream balance_and_equity CSV file directly for client-side parsing."""
     result_dir = Path(path)
     base = Path(_bt_results_base()).resolve()
     if not result_dir.resolve().is_relative_to(base):
@@ -802,30 +832,23 @@ def get_result_equity(path: str, session: SessionToken = Depends(require_auth)):
         if not result_dir.resolve().is_relative_to(archives):
             raise HTTPException(400, "Invalid result path")
 
-    # Try .csv then .csv.gz
     csv_file = result_dir / "balance_and_equity.csv"
     gz_file = result_dir / "balance_and_equity.csv.gz"
 
-    rows = []
     if csv_file.exists():
-        with open(csv_file, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                rows.append(row)
+        return FileResponse(str(csv_file), media_type="text/csv",
+                            headers={"Cache-Control": "max-age=3600"})
     elif gz_file.exists():
-        with gzip.open(gz_file, "rt", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                rows.append(row)
+        return FileResponse(str(gz_file), media_type="text/csv",
+                            headers={"Content-Encoding": "gzip",
+                                     "Cache-Control": "max-age=3600"})
     else:
         raise HTTPException(404, "balance_and_equity data not found")
-
-    return {"data": rows}
 
 
 @router.get("/results/fills")
 def get_result_fills(path: str, session: SessionToken = Depends(require_auth)):
-    """Get fills data for charting."""
+    """Stream fills CSV file directly for client-side parsing."""
     result_dir = Path(path)
     base = Path(_bt_results_base()).resolve()
     if not result_dir.resolve().is_relative_to(base):
@@ -836,21 +859,56 @@ def get_result_fills(path: str, session: SessionToken = Depends(require_auth)):
     csv_file = result_dir / "fills.csv"
     gz_file = result_dir / "fills.csv.gz"
 
-    rows = []
     if csv_file.exists():
-        with open(csv_file, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                rows.append(row)
+        return FileResponse(str(csv_file), media_type="text/csv",
+                            headers={"Cache-Control": "max-age=3600"})
     elif gz_file.exists():
-        with gzip.open(gz_file, "rt", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                rows.append(row)
+        return FileResponse(str(gz_file), media_type="text/csv",
+                            headers={"Content-Encoding": "gzip",
+                                     "Cache-Control": "max-age=3600"})
     else:
         raise HTTPException(404, "fills data not found")
 
-    return {"data": rows}
+
+@router.get("/results/files")
+def list_result_files(path: str, session: SessionToken = Depends(require_auth)):
+    """List all files in a result directory (for UI to know what's available)."""
+    result_dir = Path(path)
+    base = Path(_bt_results_base()).resolve()
+    if not result_dir.resolve().is_relative_to(base):
+        archives = _archives_dir().resolve()
+        if not result_dir.resolve().is_relative_to(archives):
+            raise HTTPException(400, "Invalid result path")
+    if not result_dir.exists():
+        raise HTTPException(404, "Result not found")
+    files = []
+    for f in sorted(result_dir.rglob("*")):
+        if f.is_file():
+            files.append(str(f.relative_to(result_dir)))
+    return {"files": files}
+
+
+@router.get("/results/image")
+def get_result_image(path: str, filename: str,
+                     session: SessionToken = Depends(require_auth)):
+    """Serve a PNG image from a result directory."""
+    result_dir = Path(path)
+    base = Path(_bt_results_base()).resolve()
+    if not result_dir.resolve().is_relative_to(base):
+        archives = _archives_dir().resolve()
+        if not result_dir.resolve().is_relative_to(archives):
+            raise HTTPException(400, "Invalid result path")
+    # Security: prevent path traversal
+    if ".." in filename:
+        raise HTTPException(400, "Invalid filename")
+    img_path = (result_dir / filename).resolve()
+    if not img_path.is_relative_to(result_dir.resolve()):
+        raise HTTPException(400, "Invalid filename")
+    if not img_path.exists() or not img_path.is_file():
+        raise HTTPException(404, "Image not found")
+    media = "image/png" if img_path.suffix == ".png" else "application/octet-stream"
+    return FileResponse(str(img_path), media_type=media,
+                        headers={"Cache-Control": "max-age=3600"})
 
 
 @router.delete("/results")

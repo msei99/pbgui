@@ -863,6 +863,7 @@ class Backtest:
         self._gap_tolerance_ohlcvs_minutes = 120.0
         # PB7 backtest defaults (see pb7/src/config_utils.py)
         self._maker_fee_override = None
+        self._taker_fee_override = None
         self._start_date = "2020-01-01"
         self._starting_balance = 1000.0
         self._btc_collateral_cap = 0.0
@@ -884,6 +885,7 @@ class Backtest:
             "filter_by_min_effective_cost": self._filter_by_min_effective_cost,
             "gap_tolerance_ohlcvs_minutes": self._gap_tolerance_ohlcvs_minutes,
             "maker_fee_override": self._maker_fee_override,
+            "taker_fee_override": self._taker_fee_override,
             "start_date": self._start_date,
             "starting_balance": self._starting_balance,
             "btc_collateral_cap": self._btc_collateral_cap,
@@ -926,6 +928,8 @@ class Backtest:
             self.gap_tolerance_ohlcvs_minutes = new_backtest["gap_tolerance_ohlcvs_minutes"]
         if "maker_fee_override" in new_backtest:
             self.maker_fee_override = new_backtest["maker_fee_override"]
+        if "taker_fee_override" in new_backtest:
+            self.taker_fee_override = new_backtest["taker_fee_override"]
         if "start_date" in new_backtest:
             self.start_date = new_backtest["start_date"]
         if "starting_balance" in new_backtest:
@@ -976,6 +980,8 @@ class Backtest:
     def gap_tolerance_ohlcvs_minutes(self): return self._gap_tolerance_ohlcvs_minutes
     @property
     def maker_fee_override(self): return self._maker_fee_override
+    @property
+    def taker_fee_override(self): return self._taker_fee_override
     @property
     def start_date(self): return self._start_date
     @property
@@ -1036,6 +1042,13 @@ class Backtest:
         else:
             self._maker_fee_override = float(new_maker_fee_override)
         self._backtest["maker_fee_override"] = self._maker_fee_override
+    @taker_fee_override.setter
+    def taker_fee_override(self, new_taker_fee_override):
+        if new_taker_fee_override in (None, ""):
+            self._taker_fee_override = None
+        else:
+            self._taker_fee_override = float(new_taker_fee_override)
+        self._backtest["taker_fee_override"] = self._taker_fee_override
     @start_date.setter
     def start_date(self, new_start_date):
         self._start_date = new_start_date

@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PBv7 Run</title>
+<link rel="stylesheet" href="/app/css/sidebar.css?v=1">
 <style>
 /* ─── Reset & Base ─────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -61,91 +62,6 @@ body {
   height: calc(100vh - 52px);
   overflow: hidden;
 }
-
-/* ─── Sidebar ──────────────────────────────────────────────── */
-#sidebar {
-  width: 200px;
-  min-width: 160px;
-  max-width: 300px;
-  flex-shrink: 0;
-  background: var(--bg);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
-}
-#sidebar-resize {
-  position: absolute; top: 0; right: 0; bottom: 0; width: 4px;
-  cursor: col-resize; background: transparent;
-}
-#sidebar-resize:hover, #sidebar-resize.active { background: rgba(77,166,255,0.4); }
-#sidebar-sticky { flex-shrink: 0; padding: 0.5rem 0.5rem 0; }
-#sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.3rem 0.25rem 0.4rem;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.sb-title {
-  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.09em;
-  color: #64748b; font-weight: 700;
-}
-.sb-count {
-  font-size: var(--fs-xs);
-  background: #1a202c;
-  border: 1px solid #2d3748;
-  border-radius: 10px;
-  padding: 0.1rem 0.5rem;
-  color: #94a3b8;
-  font-weight: 600;
-}
-#sidebar-toolbar {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  padding: 0.3rem 0.1rem 0.45rem;
-  border-bottom: 1px solid var(--border);
-}
-.sb-input {
-  height: var(--input-h);
-  padding: 0 var(--sp-sm);
-  background: var(--bg2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: var(--fs-sm);
-  font-family: var(--font);
-  width: 100%;
-}
-.sb-label {
-  font-size: var(--fs-xs);
-  color: var(--text-dim);
-  margin-bottom: 2px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.sb-sep { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
-.sb-btn {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.35rem 0.6rem;
-  border-radius: 5px;
-  font-size: var(--fs-sm);
-  cursor: pointer;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-dim);
-  font-family: var(--font);
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
-  width: 100%;
-  text-align: left;
-}
-.sb-btn:hover { background: var(--bg3); color: var(--text); border-color: var(--border); }
-.sb-btn.primary { background: #26a69a; border-color: #26a69a; color: #fff; }
-.sb-btn.primary:hover { background: #2bbbad; }
 
 /* ─── Main content ─────────────────────────────────────────── */
 #main-content {

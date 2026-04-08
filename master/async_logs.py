@@ -353,7 +353,7 @@ class AsyncLogStreamer:
 
     @staticmethod
     def list_local_logs() -> list[str]:
-        """Return sorted list of *.log filenames in data/logs/."""
+        """Return sorted list of *.log filenames in data/logs/ (top-level only)."""
         d = local_logs_dir()
         if not d.exists():
             return []
