@@ -5,16 +5,20 @@ Endpoints:
     GET  /main_page         → serve the standalone HTML page
     GET  /instances          → list v7 instance names
     POST /calculate          → run balance calculation
+    POST /draft              → store config temporarily, returns draft_id
+    GET  /draft/{draft_id}   → retrieve stored draft config
 """
 
 from __future__ import annotations
 
 import json
 import math
+import secrets as _secrets
+import time
 import traceback
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, require_auth
@@ -24,7 +28,19 @@ from User import Users
 SERVICE = "BalanceCalc"
 router = APIRouter()
 
-# ── Helpers ──────────────────────────────────────────────────
+# ── Draft store ───────────────────────────────────────────────
+_draft_store: dict[str, tuple[float, dict]] = {}
+_DRAFT_TTL = 600  # 10 minutes
+
+
+def _clean_drafts() -> None:
+    now = time.time()
+    expired = [k for k, (ts, _) in _draft_store.items() if now - ts > _DRAFT_TTL]
+    for k in expired:
+        _draft_store.pop(k, None)
+
+
+# ── Helpers ───────────────────────────────────────────────────
 
 PBGDIR = Path(__file__).resolve().parent.parent
 RUN_V7_DIR = PBGDIR / "data" / "run_v7"
@@ -337,11 +353,34 @@ def calculate_balance(
         return {"error": f"Calculation failed: {e}"}
 
 
+@router.post("/draft")
+def create_draft(body: dict, session: SessionToken = Depends(require_auth)):
+    """Store a config dict temporarily and return a draft_id (TTL 10 min)."""
+    config = body.get("config")
+    if not isinstance(config, dict):
+        raise HTTPException(400, "config must be a JSON object")
+    _clean_drafts()
+    draft_id = _secrets.token_urlsafe(16)
+    _draft_store[draft_id] = (time.time(), config)
+    return {"draft_id": draft_id}
+
+
+@router.get("/draft/{draft_id}")
+def get_draft(draft_id: str, session: SessionToken = Depends(require_auth)):
+    """Retrieve a stored draft config."""
+    entry = _draft_store.get(draft_id)
+    if not entry:
+        raise HTTPException(404, "Draft not found or expired")
+    return {"config": entry[1]}
+
+
 @router.get("/main_page", response_class=HTMLResponse)
 def get_main_page(
     request: Request,
     st_base: str = Query(default="", description="Browser-visible Streamlit base URL"),
     instance: str = Query(default="", description="Pre-select instance name"),
+    draft_id: str = Query(default="", description="Draft config id to pre-load"),
+    exchange: str = Query(default="", description="Pre-select exchange"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     """Serve the standalone Balance Calculator page."""
@@ -357,6 +396,8 @@ def get_main_page(
     html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%INSTANCE%%"', json.dumps(instance))
+    html = html.replace('"%%DRAFT_ID%%"', json.dumps(draft_id))
+    html = html.replace('"%%INIT_EXCHANGE%%"', json.dumps(exchange))
     html = html.replace('"%%EXCHANGES%%"', json.dumps(EXCHANGES))
 
     if not st_base:

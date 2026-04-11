@@ -270,6 +270,7 @@ if _relay_target and _relay_token:
                 # Only switch_page when the target is not this page itself
                 if _relay_target != "SYSTEM_LOGIN":
                     st.switch_page(_page_path)
+                    st.stop()  # prevent fall-through that renders login UI without password prompt
                 # else: fall through and render the normal Welcome page
         except Exception:
             pass  # fall through to normal login UI

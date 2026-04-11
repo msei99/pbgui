@@ -1,156 +1,243 @@
 # PBv7 Backtest
 
 The **PBv7 Backtest** page lets you create, run and evaluate Passivbot v7 backtests.
-It is organised into five tabs at the top of the page:
+It is a standalone FastAPI page — no page reload is needed. Real-time queue updates arrive via WebSocket.
 
-| Tab | Purpose |
-|-----|---------|
+The page is organised into four panels selected from the left sidebar:
+
+| Panel | Purpose |
+|-------|---------|
 | **Configs** | Create and edit backtest configurations |
 | **Queue** | Monitor and control the backtest runner |
-| **Log** | Stream the live log output of a running backtest |
 | **Results** | Browse and analyse completed backtest results |
-| **Archive** | Access shared community config archives |
+| **Archive** | Access community and personal config archives |
+
+The **top navigation bar** contains:
+
+| Button | Action |
+|--------|--------|
+| 🔔 | Open the notification log (floating panel showing `PBV7UI.log`) |
+| 📖 Guide | Open this help page |
+| ℹ️ About | Show PBGui version info |
 
 ---
 
-## Configs tab
+## Configs panel
 
 ### List view
-The sidebar provides the following actions:
+
+The table shows all saved backtest configurations with columns:
+**Name**, **Exchange**, **Start Date**, **End Date**, **Created**, **Modified**, **Actions**.
+
+**Selection:** Click a row to toggle selection. Hold and drag to select a range.
+Use the **Select All** / **Deselect** buttons above the table.
+
+**Sidebar actions:**
 
 | Button | Action |
 |--------|--------|
-| `:material/refresh:` | Reload the config list |
-| `:material/add:` | Create a new backtest config |
-| `:material/chart_data:` | Open the results of the selected config |
-| `:material/edit:` | Edit the selected config |
-| `:material/delete:` | Delete the selected config (tick *Results* to also remove results) |
+| **+ New Config** | Create a new backtest configuration |
+| **🗑 Delete Selected** | Delete the selected configs (confirmation dialog with option to also delete results) |
+
+Double-click a row to open it in the editor.
 
 ### Edit view
-When you create or open a config the edit form opens in the Configs tab.
-Sidebar actions:
+
+Editing opens inline in the main area. Fields:
+
+| Field | Description |
+|-------|-------------|
+| **Name** | Config name (used for results and queue display) |
+| **Exchange(s)** | One or more exchanges to run the backtest on |
+| **start_date / end_date** | Date range for the backtest |
+| **starting_balance** | Initial balance in USD |
+| **approved_coins / ignored_coins** | Explicit coin lists; populated automatically by **Apply Filters** |
+| **Coin sources** | Where coin lists come from (PBGui coin database, manual, etc.) |
+| **Market settings sources** | Source for market-specific settings |
+| **Bot parameters** | Strategy parameters (long/short side, TWE, etc.) |
+
+**Editor action buttons:**
 
 | Button | Action |
 |--------|--------|
-| `:material/home:` | Return to the config list |
-| `:material/save:` | Save the current config |
-| **Import** | Import a config from clipboard / file |
-| **Results** | Jump straight to this config's results (Results tab) |
-| **Calculate Balance** | Open the Balance Calculator for this config |
-| **Add to Backtest Queue** | Save and enqueue the config → switches to Queue tab |
+| **💾 Save** | Save the configuration to disk |
+| **← Back** | Return to the config list without saving |
+| **Add to Queue** | Save and enqueue → switches to Queue panel |
+| **Apply Filters** | Populate approved/ignored coin lists from the current filter settings |
+| **📊 View Results** | Jump to this config's results in the Results panel |
+| **⚖ Calculate Balance** | Open the Balance Calculator for this config |
+| **Import JSON** | Import config from clipboard or JSON file |
+
+### Coins & Filters
+
+These fields control which coins are included via PBGui's coin database.
+After adjusting them click **Apply Filters** to update the approved/ignored lists.
+
+| Field | Description |
+|-------|-------------|
+| **market_cap (min M$)** | Minimum market cap in millions USD. Set to `0` to disable. |
+| **vol/mcap** | Max 24h volume-to-market-cap ratio. Very high ratios often indicate low-quality coins. |
+| **tags** | CoinMarketCap category tags. Only coins with at least one matching tag are included. Empty = all. |
+| **only_cpt** | Include only copy-trading eligible coins. Requires fresh copy-trading data (Coin Data page). |
+| **notices_ignore** | Exclude coins with active CoinMarketCap notices (e.g. investigation, insolvency). |
 
 ---
 
-## Queue tab
+## Queue panel
 
-Shows all pending, running and finished backtest jobs.
+Shows all pending, running and finished backtest jobs with live status updates.
 
-The table has the following columns:
+### Table columns
 
 | Column | Description |
 |--------|-------------|
-| **Start/Stop** | Toggle to start or stop a job |
-| **View Results** | Open the results for that job (switches to Results tab) |
-| **View Logfile** | Check the box to stream the log on the **Log** tab |
-| **Finished** | Indicates a completed job |
+| **Status** | `queued` / `running` / `backtesting` / `complete` / `error` |
+| **Name** | Config name |
+| **Exchange** | Exchange(s) used |
+| **Created** | Timestamp when the job was enqueued |
+| **Actions** | Context-sensitive action buttons |
 
-Sidebar actions:
+**Selection:** Click a row to toggle, drag to multi-select.
+Use the **Select All** / **Deselect** toolbar above the table.
+
+### Per-row action buttons
+
+| Button | Condition | Action |
+|--------|-----------|--------|
+| ▶ (yellow) | `error` | Restart — immediately relaunch the failed backtest |
+| ▶ (default) | `queued` | Start — launch this job immediately |
+| ⬛ (red) | `running` / `backtesting` | Stop — kill the running process |
+| 📊 (green) | `complete` | View Results — switch to Results panel filtered to this config |
+| 📜 | always | Log — open a floating log panel for this job's log file |
+| 🗑 | always | Remove — delete this queue entry (stops if running) |
+
+### Sidebar actions
 
 | Button | Action |
 |--------|--------|
-| `:material/refresh:` | Reload the queue |
-| **Max CPU** | Maximum parallel backtest processes |
-| **Autostart** | Automatically start queued jobs |
-| `:material/delete: selected` | Remove selected jobs |
-| `:material/delete: finished` | Remove all finished jobs |
-| `:material/delete: all` | Remove all jobs |
+| **✓ Clear Finished** | Remove all `complete` and `error` jobs |
+| **⬛ Stop All** | Kill all running backtest processes |
+| **🗑 Delete Selected** | Remove selected queue entries |
+| **⚙ Settings** | Open the Settings modal |
+
+### Settings modal
+
+| Setting | Description |
+|---------|-------------|
+| **CPU** | Number of parallel backtest processes (max = CPU core count) |
+| **Autostart** | When enabled the worker automatically picks up `queued` jobs |
+| **HLCVS Cache Cleanup — Enabled** | Periodically delete old `pb7/caches/hlcvs_data` directories |
+| **Retention (days)** | Delete directories older than this many days (default: 7) |
+| **Check interval (h)** | How often the cleanup runs in hours (default: 24) |
+| **🧹 Clean Now** | Run the cleanup immediately using the current retention value; reports how many directories were removed and how much disk space was freed |
 
 ---
 
-## Log tab
-
-Streams the live log output of a running (or recently finished) backtest.
-
-**How to open the log for a specific job:**
-1. Go to the **Queue** tab.
-2. Tick the **View Logfile** checkbox in the row of the job you want to watch.
-3. PBGui switches automatically to the **Log** tab and begins streaming.
-
-If the backtest has not started yet, the log viewer waits and begins streaming as soon as the log file appears on disk.
-
-Use the **Lines** selector to control how many historical lines are loaded on connect.
-
----
-
-## Results tab
+## Results panel
 
 Browse all completed backtest results.
 
-Sidebar actions:
+### Filters & sort
+
+- **Config** dropdown — filter by config name (exact match)
+- **Search** text field — free-text filter on any column
+- Click any column header to sort; click again to reverse
+
+### Toolbar actions
 
 | Button | Action |
 |--------|--------|
-| `:material/refresh:` | Reload results |
-| **All Results** | Reset to the global results view |
-| **BT selected** | Re-run the selected result as a new backtest |
-| **Strategy Explorer** | Open the Strategy Explorer for the selected result |
-| **Calculate Balance** | Open the Balance Calculator |
-| **Add to Compare** | Add result to the Live-vs-Backtest comparison |
-| **Add to Run** | Create a live run from the selected config |
-| **Optimize from Result** | Start an optimisation based on the selected result |
-| **Add to Config Archive** | Save the config to your personal archive |
-| **Go to Config Archives** | Jump to the Archive tab |
-| `:material/delete: selected` | Delete selected results |
-| `:material/delete: all` | Delete all results |
+| **🔄 Backtest** | Re-run selected results as new backtests (opens date/balance/exchange modal) |
+| **▶ Add to Run** | Create a live run from the selected config |
+| **📈 Compare** | Add selected results to the comparison view |
+| **🗑 Delete Selected** | Delete selected results from disk |
 
-Sort the table by **Result Time** or other columns. Use the **Filter by Backtest Name** field to narrow down large result sets.
+### Per-row actions
+
+| Icon | Action |
+|------|--------|
+| 📊 | Open the result charts (equity curve, TWE, etc.) |
+| 🗑 | Delete this single result |
+
+### Result charts
+
+Clicking a row opens a full-featured chart panel with:
+- **Equity curve** (log scale toggle)
+- **PnL** over time  
+- **TWE** (total wallet exposure) chart  
+- **Hedged PnL** if available  
+- Full **analysis metrics** table  
+- **Config JSON** viewer  
+
+Use **📌 Pin** to keep the chart visible while browsing other results.
+Use **📈 Compare** to overlay multiple results on one chart.
+
+### Re-backtest modal
+
+Available from the **🔄 Backtest** toolbar button. Options:
+
+| Option | Description |
+|--------|-------------|
+| **start_date / end_date** | Override the date range for the re-run |
+| **starting_balance** | Override the starting balance |
+| **Exchange(s)** | Override which exchange(s) to use |
+| **📂 Use PBGui Market Data** | When checked, sets `ohlcv_source_dir` to the PBGui-managed data path |
 
 ---
 
-## Archive tab
+## Archive panel
 
-Community and personal config archives.
+Community and personal config archives stored as Git repositories.
 
 ### Archive list view
-Sidebar actions:
 
 | Button | Action |
 |--------|--------|
-| `:material/refresh:` | Reload archives |
-| `:material/settings:` | Configure archive settings |
-| **Sync Github** | Pull the latest community archives from GitHub |
-| **Push own Archive** | Push your personal archive changes to GitHub |
+| **⬇ Pull All** | Pull the latest commits from all configured archives |
+| **⬆ Git Push** | Push your personal archive changes to its remote |
+| **+ Add Archive** | Configure a new archive (URL, local path) |
+| **⚙ Setup** | Edit archive settings |
+| **📋 Log** | Open the archive sync log in a floating panel |
 
-### Config archive detail view
-Clicking into an archive shows its results. Sidebar actions:
+Click an archive row to open it and browse its results.
+
+### Archive results view
 
 | Button | Action |
 |--------|--------|
-| `:material/refresh:` | Reload results |
-| `:material/arrow_upward_alt:` | Back to the archive list |
-| **BT selected** | Enqueue the selected config as a new backtest → switches to Queue tab |
-| **Calculate Balance** | Open the Balance Calculator → returns to Archive tab |
-| **Add to Compare** | Add to Live-vs-Backtest comparison |
-| `:material/delete: selected` | Delete selected results |
+| **🏠 Archives** | Return to the archive list |
+| **🔄 Backtest** | Re-run selected configs as new backtests → switches to Queue |
+| **▶ Add to Run** | Create a live run |
+| **📈 Compare** | Add to comparison view |
+| **🗑 Delete Selected** | Remove selected archive results |
 
+---
 
 ## Typical workflows
 
 ### Run a new backtest
-1. **Configs** → `:material/add:` → configure the backtest → **Add to Backtest Queue**
-2. **Queue** → set *Max CPU*, enable *Autostart*
-3. Tick *View Logfile* → watch progress on **Log** tab
-4. When finished → tick *View Results* or go to **Results**
+1. **Configs** → **+ New Config** → fill in the config → **Add to Queue**
+2. **Queue** → **⚙ Settings** → set CPU, enable **Autostart** → **Save**
+3. Watch the status badge change from `queued` → `running` / `backtesting` → `complete`
+4. Click 📜 on the job row to watch the live log in a floating panel
+5. Click 📊 (green) when complete → jumps to Results
 
 ### Re-run / tune a result
-1. **Results** → select a result → **BT selected** → adjust dates/balance → **OK**
-2. **Queue** → monitor
+1. **Results** → select a result → **🔄 Backtest** → adjust dates/balance → **OK**
+2. **Queue** → monitor progress
 
 ### Use a community config
-1. **Archive** → **Sync Github** → open an archive → select configs → **BT selected**
-2. Returns to **Queue** automatically
-3. After completion → go back to **Archive** to compare results
+1. **Archive** → **⬇ Pull All** → click into an archive → select configs → **🔄 Backtest**
+2. **Queue** → monitor; or enable Autostart
+3. After completion → **Results** to analyse
 
-### Compare live vs backtest
-1. **Results** → select a result → **Add to Compare**
-2. Navigate to *Information → Live vs Backtest*
+### Compare multiple results
+1. **Results** → select results → **📈 Compare**
+2. The comparison chart opens showing all selected equity curves overlaid
+
+### Free up disk space (HLCVS cache)
+1. **Queue** → **⚙ Settings**
+2. Enable **HLCVS Cache Cleanup**, set **Retention** and **Check interval**
+3. Click **🧹 Clean Now** for an immediate cleanup — the toast message reports freed MB
+4. **Save** to persist the automatic schedule
+

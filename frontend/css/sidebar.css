@@ -80,6 +80,28 @@
 .sb-input:focus { border-color: var(--accent); outline: none; }
 .sb-toggle { display: flex; align-items: center; gap: var(--sp-sm); font-size: var(--fs-sm); cursor: pointer; }
 .sb-toggle input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
+
+/* ── Stepper (CPU ± control) ────────────────────────────────── */
+.sb-stepper {
+  display: flex; align-items: center; gap: 0; margin-top: var(--sp-xs);
+}
+.sb-stepper .sb-stepper-label {
+  font-size: var(--fs-sm); color: var(--text-dim); min-width: 34px; flex-shrink: 0;
+}
+.sb-stepper button {
+  width: 28px; height: 28px; padding: 0; border: 1px solid var(--border);
+  background: var(--bg3); color: var(--text); font-size: var(--fs-base);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+}
+.sb-stepper button:first-of-type { border-radius: 4px 0 0 4px; border-right: none; }
+.sb-stepper button:last-of-type  { border-radius: 0 4px 4px 0; border-left: none; }
+.sb-stepper button:hover { background: var(--accent); color: #000; border-color: var(--accent); }
+.sb-stepper input {
+  width: 36px; height: 28px; text-align: center; border: 1px solid var(--border);
+  background: var(--bg2); color: var(--text); font-size: var(--fs-sm);
+  font-family: var(--font); border-radius: 0; padding: 0;
+}
 .sb-count {
   font-size: var(--fs-xs); background: #1a202c; border: 1px solid #2d3748;
   border-radius: 10px; padding: 0.1rem 0.5rem; color: #94a3b8; font-weight: 600;

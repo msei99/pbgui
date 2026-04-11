@@ -185,6 +185,21 @@
       when: pb7dir != "" and pb7venv != ""
       register: maturin_result
 
+    - name: Write rust source stamp after maturin build
+      shell: |
+        source "{{ pb7venv }}/bin/activate"
+        python -c "
+import sys
+sys.path.insert(0, 'src')
+from rust_utils import stamp_compiled_extensions, source_fingerprint
+stamp_compiled_extensions(source_fingerprint())
+print('Rust source stamp updated.')
+"
+      args:
+        chdir: "{{ pb7dir }}"
+        executable: /bin/bash
+      when: pb7dir != "" and pb7venv != ""
+
     - name: print maturin result
       debug:
         var: maturin_result

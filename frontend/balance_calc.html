@@ -252,6 +252,8 @@ body {
   var PBGUI_VERSION= "%%VERSION%%";
   var PBGUI_SERIAL = "%%SERIAL%%";
   var INIT_INSTANCE= "%%INSTANCE%%";
+  var DRAFT_ID     = "%%DRAFT_ID%%";
+  var INIT_EXCHANGE= "%%INIT_EXCHANGE%%";
   var EXCHANGES    = "%%EXCHANGES%%";
 </script>
 
@@ -529,6 +531,27 @@ body {
 
   // ── Init ────────────────────────────────────────────────
   loadInstances();
+
+  // Pre-select exchange if provided (e.g. from backtest result)
+  if (INIT_EXCHANGE) {
+    selExchange.value = INIT_EXCHANGE;
+  }
+
+  // Auto-load draft config if provided (e.g. from backtest result or optimizer)
+  if (DRAFT_ID) {
+    fetch(API_BASE + '/draft/' + encodeURIComponent(DRAFT_ID), {
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.config) {
+        configEditor.value = JSON.stringify(d.config, null, 4);
+        // Auto-calculate immediately
+        btnCalc.click();
+      }
+    })
+    .catch(function(e) { console.error('Failed to load draft:', e); });
+  }
 })();
 </script>
 
