@@ -18,7 +18,10 @@ import json
 import multiprocessing
 import os
 import platform
+import secrets
 import subprocess
+import sys
+import time
 import traceback
 import uuid
 from pathlib import Path, PurePath
@@ -30,11 +33,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from api.auth import SessionToken, require_auth, validate_token
-from Config import ConfigV7
 from logging_helpers import human_log as _log
+from pb7_config import load_pb7_config, save_pb7_config
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, pb7dir, pb7venv
 
 SERVICE = "BacktestV7API"
+ARCHIVE_SERVICE = "ArchiveSync"
+CLEANUP_SERVICE = "HLCVSCleanup"
+
+# ── Optimize-from-result draft store ─────────────────────────────────────────
+_opt_draft_store: dict[str, tuple[float, dict]] = {}
+_OPT_DRAFT_TTL = 600  # 10 minutes
+
+def _clean_opt_drafts() -> None:
+    now = time.time()
+    for k in [k for k, v in _opt_draft_store.items() if now - v[0] > _OPT_DRAFT_TTL]:
+        del _opt_draft_store[k]
 
 router = APIRouter()
 
@@ -304,9 +318,219 @@ class BacktestWorker:
 _worker = BacktestWorker(_store)
 
 
+# ── ArchiveSyncWorker — auto-pull all archives ─────────────────
+
+def _log_archive(msg: str, level: str = "INFO"):
+    """Write to ArchiveSync.log, then also route via _log for normal log infrastructure."""
+    _log(ARCHIVE_SERVICE, msg, level=level)
+
+
+def _read_auto_pull_interval() -> int:
+    """Return auto-pull interval in minutes (0 = disabled)."""
+    val = load_ini("config_archive", "auto_pull_interval") or "0"
+    try:
+        return max(0, int(val))
+    except (ValueError, TypeError):
+        return 0
+
+
+def _pull_all_archives_sync() -> list[dict]:
+    """Pull all cloned archives; returns list of {name, output, error} dicts."""
+    base = _archives_dir()
+    results = []
+    if not base.exists():
+        return results
+    for d in sorted(base.iterdir()):
+        if not (d / ".git" / "config").exists():
+            continue
+        name = d.name
+        try:
+            result = subprocess.run(
+                ["git", "pull"], cwd=str(d),
+                capture_output=True, text=True, timeout=60
+            )
+            output = (result.stdout + result.stderr).strip()
+            _log_archive(f"[{name}] git pull: {output or 'ok'}")
+            results.append({"name": name, "output": output, "error": ""})
+        except subprocess.TimeoutExpired:
+            _log_archive(f"[{name}] git pull timed out", level="ERROR")
+            results.append({"name": name, "output": "", "error": "timed out"})
+        except Exception as exc:
+            _log_archive(f"[{name}] git pull failed: {exc}", level="ERROR")
+            results.append({"name": name, "output": "", "error": str(exc)})
+    return results
+
+
+class ArchiveSyncWorker:
+    """Background asyncio task: periodically pulls all archives."""
+
+    def __init__(self):
+        self._task: Optional[asyncio.Task] = None
+        self._running = False
+
+    def start(self):
+        if self._task is None or self._task.done():
+            self._running = True
+            self._task = asyncio.create_task(self._loop(), name="archive-sync-worker")
+
+    def stop(self):
+        self._running = False
+        if self._task and not self._task.done():
+            self._task.cancel()
+
+    async def _loop(self):
+        try:
+            while self._running:
+                interval = _read_auto_pull_interval()
+                if interval <= 0:
+                    await asyncio.sleep(60)
+                    continue
+                _log_archive(f"Auto-pulling all archives (interval={interval}min)…")
+                await asyncio.get_event_loop().run_in_executor(None, _pull_all_archives_sync)
+                # Sleep interval minutes, checking for stop/config changes every 30s
+                remaining = interval * 60
+                while remaining > 0 and self._running:
+                    await asyncio.sleep(min(30, remaining))
+                    remaining -= 30
+                    new_interval = _read_auto_pull_interval()
+                    if new_interval != interval:
+                        break
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            _log_archive(f"ArchiveSyncWorker error: {exc}", level="ERROR")
+
+
+_archive_sync_worker = ArchiveSyncWorker()
+
+
 # ── WebSocket ─────────────────────────────────────────────────
 
 _ws_clients: set[WebSocket] = set()
+
+# ── Archive inotify watcher ────────────────────────────────────
+# Uses raw Linux inotify via ctypes (same approach as master/v7_config_sync.py).
+# Watches the archives directory tree for IN_CREATE / IN_MOVED_TO / IN_DELETE
+# events and signals connected WS clients so they can refresh without polling.
+
+import ctypes
+import ctypes.util
+import struct
+
+_libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+
+# inotify event flags
+_IN_CREATE   = 0x00000100
+_IN_DELETE   = 0x00000200
+_IN_MOVED_TO = 0x00000080
+_IN_MOVE_SELF= 0x00000800
+_INOTIFY_MASK = _IN_CREATE | _IN_DELETE | _IN_MOVED_TO | _IN_MOVE_SELF
+_INOTIFY_EVENT_STRUCT = struct.Struct("iIII")  # wd, mask, cookie, len
+
+_archive_watcher_task: asyncio.Task | None = None
+
+
+async def _archive_watcher_loop() -> None:
+    """inotify-based watcher for the local archives directory.
+
+    Adds watches on the archives root and all immediate subdirectories
+    (one level = one archive, each containing per-config subdirs).
+    When files are created/deleted/moved in the tree, sets
+    ``_archive_changed`` so the WS push loop can broadcast an
+    ``archive_update`` message to all connected clients.
+    """
+    loop = asyncio.get_running_loop()
+    fd: int = -1
+    try:
+        fd = _libc.inotify_init1(0o00004000)  # IN_NONBLOCK = O_NONBLOCK
+        if fd < 0:
+            _log(SERVICE, "inotify_init1 failed — archive watcher disabled", level="WARNING")
+            return
+
+        def _add_watch(path: str) -> int:
+            return _libc.inotify_add_watch(fd, path.encode(), _INOTIFY_MASK)
+
+        # Watch root + all existing subdirs (recursion depth 1 is enough:
+        # archives/<name>/<config>/<timestamp>/analysis.json)
+        watched: dict[int, str] = {}  # wd → path
+
+        def _setup_watches() -> None:
+            watched.clear()
+            root = _archives_dir()
+            root.mkdir(parents=True, exist_ok=True)
+            wd = _add_watch(str(root))
+            if wd >= 0:
+                watched[wd] = str(root)
+            # Watch each archive dir and each config dir inside it
+            for archive_dir in root.iterdir():
+                if not archive_dir.is_dir():
+                    continue
+                wd = _add_watch(str(archive_dir))
+                if wd >= 0:
+                    watched[wd] = str(archive_dir)
+                for cfg_dir in archive_dir.iterdir():
+                    if not cfg_dir.is_dir():
+                        continue
+                    wd = _add_watch(str(cfg_dir))
+                    if wd >= 0:
+                        watched[wd] = str(cfg_dir)
+
+        _setup_watches()
+
+        _log(SERVICE, f"Archive inotify watcher started ({len(watched)} watches)", level="DEBUG")
+
+        reader_fd = os.fdopen(fd, "rb", buffering=0, closefd=False)
+        ev_size = _INOTIFY_EVENT_STRUCT.size
+
+        def _readable() -> bytes:
+            return reader_fd.read(4096)
+
+        while True:
+            # Wait for data on fd using asyncio's add_reader
+            data_ready = asyncio.Event()
+            loop.add_reader(fd, data_ready.set)
+            try:
+                await data_ready.wait()
+            finally:
+                loop.remove_reader(fd)
+
+            try:
+                raw = _readable()
+            except BlockingIOError:
+                continue
+
+            pos = 0
+            needs_rewwatch = False
+            while pos + ev_size <= len(raw):
+                wd, mask, _cookie, name_len = _INOTIFY_EVENT_STRUCT.unpack_from(raw, pos)
+                pos += ev_size + name_len
+                if mask & (_IN_CREATE | _IN_MOVED_TO | _IN_DELETE | _IN_MOVE_SELF):
+                    # Broadcast archive_update directly to all connected WS clients
+                    for _client in list(_ws_clients):
+                        try:
+                            await _client.send_json({"type": "archive_update"})
+                        except Exception:
+                            pass
+                    # New subdirectory created → add watch for it
+                    if mask & (_IN_CREATE | _IN_MOVED_TO):
+                        needs_rewwatch = True
+
+            if needs_rewwatch:
+                # Re-scan watches after short delay (dir may not be fully created yet)
+                await asyncio.sleep(0.2)
+                _setup_watches()
+
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        _log(SERVICE, f"Archive watcher error: {e}", level="WARNING")
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        _log(SERVICE, "Archive inotify watcher stopped", level="DEBUG")
 
 
 async def _ws_push_loop(ws: WebSocket):
@@ -366,16 +590,96 @@ async def ws_backtest(websocket: WebSocket):
             pass
 
 
+# ── HLCVS Cache Cleanup Worker ────────────────────────────────
+
+class HLCVSCleanupWorker:
+    """Periodically removes old hlcvs_data directories to free disk space."""
+
+    def __init__(self):
+        self._task: Optional[asyncio.Task] = None
+        self._running = False
+
+    def start(self):
+        if self._task is None or self._task.done():
+            self._running = True
+            self._task = asyncio.create_task(self._loop(), name="hlcvs-cleanup")
+            _log(CLEANUP_SERVICE, "HLCVS cleanup worker started", level="INFO")
+
+    def stop(self):
+        self._running = False
+        if self._task and not self._task.done():
+            self._task.cancel()
+
+    async def _loop(self):
+        try:
+            while self._running:
+                try:
+                    settings = _read_ini_section()
+                    enabled = settings.get("hlcvs_cleanup_enabled", "False").lower() == "true"
+                    interval_h = max(1, int(settings.get("hlcvs_cleanup_interval_h", "24")))
+                    if enabled:
+                        days = max(1, int(settings.get("hlcvs_cleanup_days", "7")))
+                        await asyncio.to_thread(self._do_cleanup, days)
+                    await asyncio.sleep(interval_h * 3600)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    _log(CLEANUP_SERVICE, f"Error in cleanup loop: {e}",
+                         level="ERROR", meta={"traceback": traceback.format_exc()})
+                    await asyncio.sleep(300)
+        except asyncio.CancelledError:
+            pass
+
+    @staticmethod
+    def _do_cleanup(retention_days: int):
+        hlcvs_dir = Path(pb7dir()) / "caches" / "hlcvs_data"
+        if not hlcvs_dir.is_dir():
+            return
+        cutoff = datetime.datetime.now().timestamp() - (retention_days * 86400)
+        removed = 0
+        errors = 0
+        for entry in hlcvs_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            try:
+                mtime = entry.stat().st_mtime
+                if mtime < cutoff:
+                    rmtree(entry)
+                    removed += 1
+            except Exception as e:
+                errors += 1
+                _log(CLEANUP_SERVICE, f"Failed to remove {entry.name}: {e}", level="WARNING")
+        if removed > 0:
+            _log(CLEANUP_SERVICE,
+                 f"Cleaned {removed} hlcvs_data dirs older than {retention_days}d"
+                 + (f" ({errors} errors)" if errors else ""),
+                 level="INFO")
+
+
+_hlcvs_cleanup_worker = HLCVSCleanupWorker()
+
+
 # ── Lifespan hook ─────────────────────────────────────────────
 
 def startup():
     """Called from PBApiServer lifespan to start the worker."""
+    global _archive_watcher_task
     _worker.start()
+    _archive_sync_worker.start()
+    _hlcvs_cleanup_worker.start()
+    _archive_watcher_task = asyncio.create_task(
+        _archive_watcher_loop(), name="archive-inotify-watcher"
+    )
 
 
 def shutdown():
     """Called from PBApiServer lifespan to stop the worker."""
+    global _archive_watcher_task
     _worker.stop()
+    _archive_sync_worker.stop()
+    _hlcvs_cleanup_worker.stop()
+    if _archive_watcher_task and not _archive_watcher_task.done():
+        _archive_watcher_task.cancel()
 
 
 # ── REST: Main page ───────────────────────────────────────────
@@ -419,6 +723,29 @@ def main_page(
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
 
+# ── REST: Optimize draft (optimize-from-result) ──────────────
+
+@router.post("/optimize-draft")
+def create_optimize_draft(body: dict, session: SessionToken = Depends(require_auth)):
+    """Store a config dict as a short-lived draft for the Optimize editor."""
+    _clean_opt_drafts()
+    config = body.get("config")
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=422, detail="config must be a dict")
+    draft_id = secrets.token_urlsafe(16)
+    _opt_draft_store[draft_id] = (time.time(), config)
+    return {"draft_id": draft_id}
+
+
+@router.get("/optimize-draft/{draft_id}")
+def get_optimize_draft(draft_id: str, session: SessionToken = Depends(require_auth)):
+    """Retrieve a previously stored optimize draft."""
+    entry = _opt_draft_store.get(draft_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Draft not found or expired")
+    return {"config": entry[1]}
+
+
 # ── REST: PBGui data path ─────────────────────────────────────
 
 @router.get("/pbgui_data_path")
@@ -438,6 +765,9 @@ def get_settings(session: SessionToken = Depends(require_auth)):
         "autostart": settings.get("autostart", "False").lower() == "true",
         "cpu": min(int(settings.get("cpu", "1")), cpu_max),
         "cpu_max": cpu_max,
+        "hlcvs_cleanup_enabled": settings.get("hlcvs_cleanup_enabled", "False").lower() == "true",
+        "hlcvs_cleanup_days": int(settings.get("hlcvs_cleanup_days", "7")),
+        "hlcvs_cleanup_interval_h": int(settings.get("hlcvs_cleanup_interval_h", "24")),
     }
 
 
@@ -448,7 +778,168 @@ def update_settings(body: dict, session: SessionToken = Depends(require_auth)):
     if "cpu" in body:
         cpu = max(1, min(int(body["cpu"]), multiprocessing.cpu_count()))
         _write_ini("cpu", str(cpu))
+    if "hlcvs_cleanup_enabled" in body:
+        _write_ini("hlcvs_cleanup_enabled", str(bool(body["hlcvs_cleanup_enabled"])))
+    if "hlcvs_cleanup_days" in body:
+        days = max(1, min(int(body["hlcvs_cleanup_days"]), 365))
+        _write_ini("hlcvs_cleanup_days", str(days))
+    if "hlcvs_cleanup_interval_h" in body:
+        interval = max(1, min(int(body["hlcvs_cleanup_interval_h"]), 168))
+        _write_ini("hlcvs_cleanup_interval_h", str(interval))
     _store.notify()
+    return {"ok": True}
+
+
+@router.post("/settings/hlcvs-cleanup-now")
+async def hlcvs_cleanup_now(body: dict, session: SessionToken = Depends(require_auth)):
+    """Trigger an immediate HLCVS cache cleanup."""
+    days = max(1, min(int(body.get("days", 7)), 365))
+    result = await asyncio.to_thread(_hlcvs_cleanup_now_sync, days)
+    return result
+
+
+def _hlcvs_cleanup_now_sync(retention_days: int) -> dict:
+    hlcvs_dir = Path(pb7dir()) / "caches" / "hlcvs_data"
+    if not hlcvs_dir.is_dir():
+        return {"removed": 0, "freed_mb": 0}
+    import time
+    cutoff = time.time() - (retention_days * 86400)
+    removed = 0
+    freed = 0
+    for entry in hlcvs_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            if entry.stat().st_mtime < cutoff:
+                size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+                rmtree(entry)
+                removed += 1
+                freed += size
+        except Exception as e:
+            _log(CLEANUP_SERVICE, f"Failed to remove {entry.name}: {e}", level="WARNING")
+    if removed > 0:
+        _log(CLEANUP_SERVICE,
+             f"Manual cleanup: removed {removed} dirs older than {retention_days}d, freed {freed // (1024*1024)} MB",
+             level="INFO")
+    return {"removed": removed, "freed_mb": round(freed / (1024 * 1024))}
+
+
+# ── REST: Bot params (from passivbot schema) ─────────────────
+
+@router.get("/bot-params")
+def get_bot_params(session: SessionToken = Depends(require_auth)):
+    """Return list of bot.long parameter names from passivbot schema."""
+    try:
+        import sys
+        pb7 = pb7dir()
+        src = os.path.join(pb7, "src")
+        if src not in sys.path:
+            sys.path.insert(0, src)
+        from config.schema import get_template_config
+        tmpl = get_template_config()
+        bot_long = tmpl.get("bot", {}).get("long", {})
+        params = []
+        for k, v in sorted(bot_long.items()):
+            if isinstance(v, dict):
+                continue  # skip nested dicts like forager_score_weights, hsl_tier_ratios
+            params.append({"key": k})
+        return {"params": params}
+    except Exception as exc:
+        _log(SERVICE, f"Failed to load bot params: {exc}", level="warning")
+        return {"params": []}
+
+
+@router.get("/override-params")
+def get_override_params(session: SessionToken = Depends(require_auth)):
+    """Return allowed coin_overrides parameters from passivbot."""
+    try:
+        import sys
+        pb7 = pb7dir()
+        src = os.path.join(pb7, "src")
+        if src not in sys.path:
+            sys.path.insert(0, src)
+        from config.overrides import get_allowed_modifications
+        allowed = get_allowed_modifications()
+        return {"params": allowed}
+    except Exception as exc:
+        _log(SERVICE, f"Failed to load override params: {exc}", level="warning")
+        return {"params": {}}
+
+
+@router.get("/override-config/{config_name}/{filename}")
+def get_override_config(config_name: str, filename: str,
+                        session: SessionToken = Depends(require_auth)):
+    """Read an override config file (e.g. 1000BONKUSDT.json) from a config directory."""
+    _validate_name(config_name)
+    # Sanitize filename — only allow simple filenames, no path traversal
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(400, "Invalid filename")
+    cfg_dir = _bt_configs_dir() / config_name
+    override_file = cfg_dir / filename
+    if not override_file.exists():
+        # Fallback: find pre-normalization file (e.g. BONK.json → 1000BONKUSDT.json)
+        stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+        norm = _normalize_coin_name(stem)
+        for f in cfg_dir.iterdir():
+            if f.suffix == ".json" and f.name != "backtest.json":
+                if _normalize_coin_name(f.stem) == norm:
+                    override_file = f
+                    break
+    if not override_file.exists():
+        raise HTTPException(404, f"Override config '{filename}' not found in '{config_name}'")
+    try:
+        with open(override_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Run through passivbot's prepare_config for normalization/migration.
+        # Override files are sparse diffs; prepare_config needs at least
+        # ``live`` key to detect the "live_only" flavor.
+        cfg = dict(data)
+        if "live" not in cfg:
+            cfg["live"] = {}
+        pb7 = pb7dir()
+        src = os.path.join(pb7, "src")
+        if src not in sys.path:
+            sys.path.insert(0, src)
+        from config.load import prepare_config
+        from config_utils import strip_config_metadata
+        prepared = prepare_config(cfg, verbose=False)
+        prepared = strip_config_metadata(prepared)
+        return {"config": prepared}
+    except Exception as exc:
+        raise HTTPException(500, f"Error reading override config: {exc}")
+
+
+@router.put("/override-config/{config_name}/{filename}")
+def save_override_config(config_name: str, filename: str, body: dict,
+                         session: SessionToken = Depends(require_auth)):
+    """Save an override config file (e.g. HYPE.json) to a config directory.
+
+    The request body contains only the override params
+    ({bot: {long: {...}, short: {...}}, live: {...}}).
+    Written as-is — override files are sparse diffs, not full configs.
+    """
+    _validate_name(config_name)
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(400, "Invalid filename")
+    if not filename.endswith(".json"):
+        raise HTTPException(400, "Filename must end with .json")
+    cfg_dir = _bt_configs_dir() / config_name
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    override_file = cfg_dir / filename
+    # Ensure ``live`` key exists so passivbot's load_prepared_config can
+    # detect the "live_only" flavor when loading the file at backtest time.
+    if "live" not in body:
+        body["live"] = {}
+    tmp = override_file.with_suffix(".json.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(body, f, indent=4)
+            f.write("\n")
+        os.replace(str(tmp), str(override_file))
+    except Exception:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+        raise
     return {"ok": True}
 
 
@@ -503,23 +994,105 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)):
     cfg_file = _bt_configs_dir() / name / "backtest.json"
     if not cfg_file.exists():
         raise HTTPException(404, f"Config '{name}' not found")
-    cfg = ConfigV7(str(cfg_file))
-    cfg.load_config()
-    return cfg.config
+    return load_pb7_config(cfg_file, neutralize_added=True)
+
+
+def _normalize_coin_name(symbol: str) -> str:
+    """Normalize exchange symbol to short coin name (mirrors JS _covNormalizeCoin).
+    E.g. HYPEUSDT → HYPE, 1000BONKUSDT → BONK, kSHIB → SHIB."""
+    import re
+    s = symbol.upper()
+    for q in ('USDT', 'USDC', 'BUSD', 'USD'):
+        if len(s) > len(q) and s.endswith(q):
+            s = s[:-len(q)]
+            break
+    m = re.match(r'^(10+)([A-Z].*)', s)
+    if m:
+        s = m.group(2)
+    if len(s) > 1 and s[0] == 'K' and s[1] != 'K':
+        tail = s[1:]
+        if re.match(r'^[A-Z]+$', tail):
+            s = tail
+    return s
+
+
+def _copy_override_files(cfg: dict, src_dir: Path, dst_dir: Path) -> None:
+    """Copy override_config_path files referenced in coin_overrides.
+    Handles normalized filenames: if HYPE.json is referenced but only
+    HYPEUSDT.json exists in src, copies it with the new name."""
+    import shutil
+    overrides = cfg.get("coin_overrides", {})
+    # Build reverse map: normalized coin name → source file on disk
+    src_file_map = {}
+    if src_dir.is_dir():
+        for f in src_dir.iterdir():
+            if f.suffix == ".json" and f.name != "backtest.json":
+                norm = _normalize_coin_name(f.stem)
+                src_file_map[norm] = f
+    for coin, ov in overrides.items():
+        fname = ov.get("override_config_path", "")
+        if not fname:
+            continue
+        safe = Path(fname).name  # prevent path traversal
+        src_file = src_dir / safe
+        if not src_file.is_file():
+            # Fallback: find source file via normalization
+            norm = _normalize_coin_name(coin)
+            src_file = src_file_map.get(norm)
+        if src_file and src_file.is_file():
+            shutil.copy2(str(src_file), str(dst_dir / safe))
 
 
 @router.put("/configs/{name}")
-def save_config(name: str, body: dict, session: SessionToken = Depends(require_auth)):
+def save_config(name: str, body: dict, source_name: str = None,
+               session: SessionToken = Depends(require_auth)):
     _validate_name(name)
     cfg_dir = _bt_configs_dir() / name
     cfg_dir.mkdir(parents=True, exist_ok=True)
+    # Copy override_config_path files from source when saving as new name
+    if source_name and source_name != name:
+        _validate_name(source_name)
+        _copy_override_files(body, _bt_configs_dir() / source_name, cfg_dir)
     cfg_file = cfg_dir / "backtest.json"
-    cfg = ConfigV7(str(cfg_file))
-    if cfg_file.exists():
-        cfg.load_config()
-    cfg.config = body
-    cfg.save_config()
+    save_pb7_config(body, cfg_file)
+    # Rename pre-normalization override files and delete truly orphaned ones
+    _cleanup_orphaned_overrides(body, cfg_dir)
     return {"ok": True, "name": name}
+
+
+def _cleanup_orphaned_overrides(cfg: dict, cfg_dir: Path) -> None:
+    """Rename pre-normalization override files (e.g. HYPEUSDT.json → HYPE.json),
+    ensure every referenced override file contains ``live`` key (required for
+    passivbot's flavor detection), and delete truly orphaned .json files."""
+    referenced = set()
+    for coin, ov in cfg.get("coin_overrides", {}).items():
+        fname = ov.get("override_config_path", "")
+        if fname:
+            referenced.add(Path(fname).name)
+    for f in list(cfg_dir.iterdir()):
+        if f.suffix != ".json" or f.name == "backtest.json":
+            continue
+        if f.name in referenced:
+            # Ensure ``live`` key exists for passivbot flavor detection
+            try:
+                with open(f, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                if "live" not in data:
+                    data["live"] = {}
+                    tmp = f.with_suffix(".json.tmp")
+                    with open(tmp, "w", encoding="utf-8") as fh:
+                        json.dump(data, fh, indent=4)
+                        fh.write("\n")
+                    os.replace(str(tmp), str(f))
+            except (OSError, json.JSONDecodeError):
+                pass
+            continue  # keep referenced file
+        # Check if this is a pre-normalization file that should be renamed
+        norm_fname = _normalize_coin_name(f.stem) + ".json"
+        if norm_fname in referenced and not (cfg_dir / norm_fname).exists():
+            f.rename(cfg_dir / norm_fname)
+        else:
+            f.unlink(missing_ok=True)
 
 
 @router.delete("/configs/{name}")
@@ -542,15 +1115,14 @@ def duplicate_config(name: str, body: dict, session: SessionToken = Depends(requ
     _validate_name(name)
     new_name = body.get("new_name", "")
     _validate_name(new_name)
-    src = _bt_configs_dir() / name / "backtest.json"
-    if not src.exists():
+    src_dir = _bt_configs_dir() / name
+    if not (src_dir / "backtest.json").exists():
         raise HTTPException(404, f"Config '{name}' not found")
     dst_dir = _bt_configs_dir() / new_name
     if dst_dir.exists():
         raise HTTPException(409, f"Config '{new_name}' already exists")
-    dst_dir.mkdir(parents=True, exist_ok=True)
     import shutil
-    shutil.copy2(str(src), str(dst_dir / "backtest.json"))
+    shutil.copytree(str(src_dir), str(dst_dir))
     return {"ok": True, "name": new_name}
 
 
@@ -596,35 +1168,49 @@ def _load_queue_sync() -> list[dict]:
 def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)):
     """Add a backtest config to the queue.
 
-    Body: {name, config} where config is the full backtest JSON.
-    The config is saved to pb7/configs/backtest/ and queue metadata
-    is saved to data/bt_v7_queue/.
+    Body: {name} or {name, config}.
+    Without ``config``: uses the existing config at data/bt_v7/{name}/backtest.json
+    directly (override files sit next to it, same as Streamlit).
+    With ``config``: saves to data/bt_v7/{name}/backtest.json first (for re-backtest
+    from results with modified params).
     """
     name = body.get("name", "")
+    if not name:
+        raise HTTPException(400, "name is required")
+    _validate_name(name)
+
+    cfg_dir = _bt_configs_dir() / name
+    cfg_file = cfg_dir / "backtest.json"
+
+    # If config body provided, save it first (re-backtest scenario)
     config = body.get("config")
-    if not name or not config:
-        raise HTTPException(400, "name and config are required")
+    if config:
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        save_pb7_config(config, cfg_file)
+
+    if not cfg_file.exists():
+        raise HTTPException(404, f"Config '{name}' not found")
+
+    # Read config to extract exchange info for queue metadata
+    try:
+        with open(cfg_file, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as exc:
+        raise HTTPException(500, f"Error reading config: {exc}")
 
     filename = str(uuid.uuid4())
-    bt = config.get("backtest", {})
+    bt = cfg.get("backtest", {})
     exchanges = bt.get("exchanges", [])
     exchange_str = exchanges if isinstance(exchanges, list) else [exchanges]
 
-    # Save config to pb7/configs/backtest/
-    config_dir = Path(pb7dir()) / "configs" / "backtest"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_file = config_dir / f"{filename}.json"
-    with open(config_file, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=4)
-
-    # Save queue metadata
+    # Save queue metadata — json points to the original config file
     queue_dir = _bt_queue_dir()
     queue_dir.mkdir(parents=True, exist_ok=True)
     queue_file = queue_dir / f"{filename}.json"
     queue_data = {
         "name": name,
         "filename": filename,
-        "json": str(config_file),
+        "json": str(cfg_file),
         "exchange": exchange_str,
     }
     with open(queue_file, "w", encoding="utf-8") as f:
@@ -645,6 +1231,31 @@ def start_queue_item(filename: str, session: SessionToken = Depends(require_auth
     with open(queue_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
+    item = {
+        "filename": filename,
+        "name": data.get("name", filename),
+        "json": data.get("json", ""),
+        "exchange": data.get("exchange", ""),
+    }
+    _worker._launch_backtest(item)
+    _store.notify()
+    return {"ok": True}
+
+
+@router.post("/queue/{filename}/restart")
+def restart_queue_item(filename: str, session: SessionToken = Depends(require_auth)):
+    """Reset an errored queue item and launch it immediately."""
+    _validate_name(filename)
+    queue_file = _bt_queue_dir() / f"{filename}.json"
+    if not queue_file.exists():
+        raise HTTPException(404, "Queue item not found")
+    with open(queue_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    data["status"] = "queued"
+    data.pop("error", None)
+    with open(queue_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    # Launch directly — don't rely on autostart being enabled
     item = {
         "filename": filename,
         "name": data.get("name", filename),
@@ -756,9 +1367,23 @@ def list_results(name: str = None, session: SessionToken = Depends(require_auth)
                 )
                 gain = analysis.get("gain_usd", analysis.get("gain", 0))
                 starting_balance = bt.get("starting_balance", 0)
+                final_balance = starting_balance * gain if starting_balance else 0
+
+                # Liquidation detection: use passivbot's flag if available,
+                # fall back to heuristic for older results
+                liq_threshold = bt.get("liquidation_threshold", 0.05)
+                if "liquidated" in analysis:
+                    liquidated = bool(analysis["liquidated"])
+                else:
+                    liquidated = (
+                        drawdown >= 0.95
+                        or eqbal_diff >= 0.95
+                        or (starting_balance > 0 and final_balance < starting_balance * liq_threshold)
+                    )
 
                 results.append({
                     "path": str(result_dir),
+                    "display_name": str(result_dir.relative_to(base)),
                     "config_name": config_dir.name,
                     "result_name": result_dir.name,
                     "exchange_dir": result_dir.parent.name,
@@ -768,7 +1393,8 @@ def list_results(name: str = None, session: SessionToken = Depends(require_auth)
                     "equity_balance_diff_neg_max": eqbal_diff,
                     "gain": gain,
                     "starting_balance": starting_balance,
-                    "final_balance": starting_balance * gain if starting_balance else 0,
+                    "final_balance": final_balance,
+                    "liquidated": liquidated,
                     "exchanges": bt.get("exchanges", []),
                     "start_date": bt.get("start_date", ""),
                     "end_date": bt.get("end_date", ""),
@@ -808,7 +1434,7 @@ def get_result_analysis(path: str, session: SessionToken = Depends(require_auth)
 
 @router.get("/results/config")
 def get_result_config(path: str, session: SessionToken = Depends(require_auth)):
-    """Get config.json for a result."""
+    """Get config.json for a result, with missing params neutralized."""
     result_dir = Path(path)
     base = Path(_bt_results_base()).resolve()
     if not result_dir.resolve().is_relative_to(base):
@@ -818,8 +1444,7 @@ def get_result_config(path: str, session: SessionToken = Depends(require_auth)):
     config_file = result_dir / "config.json"
     if not config_file.exists():
         raise HTTPException(404, "config.json not found")
-    with open(config_file, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return load_pb7_config(config_file, neutralize_added=True)
 
 
 @router.get("/results/equity")
@@ -977,18 +1602,60 @@ def list_archive_results(name: str, session: SessionToken = Depends(require_auth
             bt = config_data.get("backtest", {})
             bot = config_data.get("bot", {})
             adg = analysis.get("adg_usd", analysis.get("adg", 0))
+            drawdown = analysis.get("drawdown_worst_usd", analysis.get("drawdown_worst", 0))
+            sharpe = analysis.get("sharpe_ratio_usd", analysis.get("sharpe_ratio", 0))
+            eqbal_diff = analysis.get(
+                "equity_balance_diff_neg_max_usd",
+                analysis.get("equity_balance_diff_neg_max", 0)
+            )
             gain = analysis.get("gain_usd", analysis.get("gain", 0))
             starting_balance = bt.get("starting_balance", 0)
+            final_balance = starting_balance * gain if starting_balance else 0
+            liq_threshold = bt.get("liquidation_threshold", 0.05)
+            if "liquidated" in analysis:
+                liquidated = bool(analysis["liquidated"])
+            else:
+                liquidated = (
+                    drawdown >= 0.95
+                    or eqbal_diff >= 0.95
+                    or (starting_balance > 0 and final_balance < starting_balance * liq_threshold)
+                )
+
+            # config_name: last part of backtest.base_dir (e.g. "RENDER_adg_sharpe_omega...")
+            # Falls back to directory-based heuristic if base_dir is missing.
+            base_dir_val = bt.get("base_dir", "")
+            if base_dir_val:
+                arc_config_name = Path(base_dir_val).name
+            else:
+                rel_parts = result_dir.relative_to(archive_dir).parts
+                if len(rel_parts) >= 3:
+                    arc_config_name = rel_parts[-3]  # part before exchange/timestamp
+                elif len(rel_parts) >= 2:
+                    arc_config_name = rel_parts[0]
+                else:
+                    arc_config_name = result_dir.parent.name
 
             results.append({
                 "path": str(result_dir),
-                "config_name": result_dir.parent.name,
+                "display_name": str(result_dir.relative_to(archive_dir)),
+                "config_name": arc_config_name,
                 "result_name": result_dir.name,
                 "adg": adg,
+                "drawdown_worst": drawdown,
+                "sharpe_ratio": sharpe,
+                "equity_balance_diff_neg_max": eqbal_diff,
                 "gain": gain,
                 "starting_balance": starting_balance,
-                "final_balance": starting_balance * (1 + gain) if starting_balance else 0,
+                "final_balance": final_balance,
+                "liquidated": liquidated,
                 "exchanges": bt.get("exchanges", []),
+                "start_date": bt.get("start_date", ""),
+                "end_date": bt.get("end_date", ""),
+                "btc_collateral_cap": float(bt.get("btc_collateral_cap") or 0),
+                "twe_long": bot.get("long", {}).get("total_wallet_exposure_limit", 0),
+                "twe_short": bot.get("short", {}).get("total_wallet_exposure_limit", 0),
+                "pos_long": bot.get("long", {}).get("n_positions", 0),
+                "pos_short": bot.get("short", {}).get("n_positions", 0),
                 "modified": datetime.datetime.fromtimestamp(
                     analysis_file.stat().st_mtime
                 ).isoformat(),
@@ -1037,8 +1704,28 @@ def delete_archive(name: str, session: SessionToken = Depends(require_auth)):
     return {"ok": True}
 
 
-@router.post("/archives/{name}/pull")
+@router.delete("/archives/{name}/results")
+def delete_archive_result(name: str, path: str, session: SessionToken = Depends(require_auth)):
+    """Delete a single result directory from an archive."""
+    _validate_name(name)
+    result_dir = Path(path).resolve()
+    archive_base = (_archives_dir() / name).resolve()
+    if not result_dir.is_relative_to(archive_base):
+        raise HTTPException(400, "Invalid result path")
+    if not result_dir.exists():
+        raise HTTPException(404, "Result not found")
+    rmtree(str(result_dir), ignore_errors=True)
+    # Remove empty parent directories up to (but not including) the archive root
+    parent = result_dir.parent
+    while parent != archive_base and parent.is_dir():
+        try:
+            parent.rmdir()  # only succeeds if directory is empty
+        except OSError:
+            break  # not empty — stop climbing
+        parent = parent.parent
+    return {"ok": True}
 def git_pull(name: str, session: SessionToken = Depends(require_auth)):
+    """Pull a single archive."""
     _validate_name(name)
     dest = _archives_dir() / name
     if not dest.exists():
@@ -1048,14 +1735,27 @@ def git_pull(name: str, session: SessionToken = Depends(require_auth)):
             ["git", "pull"], cwd=str(dest),
             capture_output=True, text=True, timeout=60
         )
-        return {"ok": True, "output": result.stdout}
+        output = (result.stdout + result.stderr).strip()
+        _log_archive(f"[{name}] git pull: {output or 'ok'}")
+        return {"ok": True, "output": output}
     except subprocess.TimeoutExpired:
         raise HTTPException(500, "git pull timed out")
 
 
+@router.post("/archives/pull-all")
+def pull_all_archives(session: SessionToken = Depends(require_auth)):
+    """Pull all cloned archives (like Streamlit git_pull)."""
+    _log_archive("Manual pull-all triggered")
+    results = _pull_all_archives_sync()
+    return {"ok": True, "results": results}
+
+
 @router.post("/archives/{name}/push")
 def git_push(name: str, body: dict = None, session: SessionToken = Depends(require_auth)):
-    """Git add + commit + push for an archive."""
+    """Git pull + add + commit + push for own archive.
+    Accepts optional access_token to inject into the HTTPS remote URL for auth.
+    Pass dry_run=true to test credentials without actually pushing.
+    """
     _validate_name(name)
     dest = _archives_dir() / name
     if not dest.exists():
@@ -1064,7 +1764,12 @@ def git_push(name: str, body: dict = None, session: SessionToken = Depends(requi
     body = body or {}
     username = body.get("username", "")
     email = body.get("email", "")
-    message = body.get("message", "Update via PBGui")
+    access_token = body.get("access_token", "")
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    message = body.get("message", f"Update {name} at {timestamp}")
+    dry_run = bool(body.get("dry_run", False))
+
+    log_lines = []
 
     try:
         if username:
@@ -1074,18 +1779,62 @@ def git_push(name: str, body: dict = None, session: SessionToken = Depends(requi
             subprocess.run(["git", "config", "user.email", email], cwd=str(dest),
                            capture_output=True, timeout=10)
 
-        subprocess.run(["git", "add", "-A"], cwd=str(dest), capture_output=True, timeout=30)
-        subprocess.run(
-            ["git", "commit", "-m", message], cwd=str(dest),
-            capture_output=True, text=True, timeout=30
-        )
+        if not dry_run:
+            # Pull before push (like Streamlit)
+            pull_result = subprocess.run(
+                ["git", "pull"], cwd=str(dest),
+                capture_output=True, text=True, timeout=60
+            )
+            pull_out = (pull_result.stdout + pull_result.stderr).strip()
+            _log_archive(f"[{name}] git pull (pre-push): {pull_out or 'ok'}")
+            log_lines.append(f"Git pull:\n{pull_out}")
+            if pull_result.returncode != 0:
+                raise HTTPException(500, f"git pull failed: {pull_result.stderr}")
+
+            add_result = subprocess.run(["git", "add", "-A"], cwd=str(dest),
+                                        capture_output=True, text=True, timeout=30)
+            log_lines.append(f"Git add:\n{(add_result.stdout + add_result.stderr).strip()}")
+
+            commit_result = subprocess.run(
+                ["git", "commit", "-m", message], cwd=str(dest),
+                capture_output=True, text=True, timeout=30
+            )
+            commit_out = (commit_result.stdout + commit_result.stderr).strip()
+            _log_archive(f"[{name}] git commit: {commit_out}")
+            log_lines.append(f"Git commit:\n{commit_out}")
+
+        # Build push command — inject access token into HTTPS URL when provided
+        push_url = None
+        if access_token:
+            url_result = subprocess.run(
+                ["git", "remote", "get-url", "origin"], cwd=str(dest),
+                capture_output=True, text=True, timeout=10
+            )
+            remote_url = url_result.stdout.strip()
+            if remote_url.startswith("http://"):
+                push_url = remote_url.replace("http://", f"http://{access_token}@", 1)
+            elif remote_url.startswith("https://"):
+                push_url = remote_url.replace("https://", f"https://{access_token}@", 1)
+
+        push_cmd = ["git", "push"]
+        if dry_run:
+            push_cmd.append("--dry-run")
+        if push_url:
+            push_cmd.append(push_url)
+
         result = subprocess.run(
-            ["git", "push"], cwd=str(dest),
+            push_cmd, cwd=str(dest),
             capture_output=True, text=True, timeout=120
         )
+        push_out = (result.stdout + result.stderr).strip()
+        _log_archive(f"[{name}] git push{'(dry-run)' if dry_run else ''}: {push_out}")
+        log_lines.append(f"Git push:\n{push_out}")
+
         if result.returncode != 0:
             raise HTTPException(500, f"git push failed: {result.stderr}")
-        return {"ok": True, "output": result.stdout}
+        return {"ok": True, "output": "\n\n".join(log_lines)}
+    except HTTPException:
+        raise
     except subprocess.TimeoutExpired:
         raise HTTPException(500, "git operation timed out")
 
@@ -1099,6 +1848,11 @@ def add_config_to_archive(name: str, body: dict,
     dest_name = body.get("dest_name", "")
     if not source_path or not dest_name:
         raise HTTPException(400, "source_path and dest_name are required")
+
+    # Compute dest_name the same way Streamlit does: everything after the last /pbgui/ segment
+    if not dest_name:
+        parts = source_path.replace("\\", "/").split("/pbgui/")
+        dest_name = parts[-1].strip("/") if len(parts) > 1 else Path(source_path).name
 
     src = Path(source_path)
     if not src.exists():
@@ -1114,8 +1868,8 @@ def add_config_to_archive(name: str, body: dict,
     if not archive_dir.exists():
         raise HTTPException(404, f"Archive '{name}' not found")
 
-    # Read archive settings from ini to get my_archive_path
-    my_path = load_ini("config_v7_archives", "my_archive_path") or ""
+    # Read archive settings from ini to get my_archive_path (same section as Streamlit)
+    my_path = load_ini("config_archive", "my_archive_path") or ""
     dest_dir = archive_dir / my_path / dest_name if my_path else archive_dir / dest_name
     dest_dir.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1128,22 +1882,38 @@ def add_config_to_archive(name: str, body: dict,
 
 @router.get("/archives/settings")
 def get_archive_settings(session: SessionToken = Depends(require_auth)):
-    """Get archive configuration from INI."""
-    section = "config_v7_archives"
+    """Get archive configuration from INI (same section/keys as Streamlit BacktestV7.py)."""
+    section = "config_archive"
     return {
-        "my_archive": load_ini(section, "my_archive") or "",
-        "my_archive_path": load_ini(section, "my_archive_path") or "",
-        "username": load_ini(section, "username") or "",
-        "email": load_ini(section, "email") or "",
-        "access_token": load_ini(section, "access_token") or "",
+        "my_archive":        load_ini(section, "my_archive") or "",
+        "my_archive_path":   load_ini(section, "my_archive_path") or "",
+        "username":          load_ini(section, "my_archive_username") or "",
+        "email":             load_ini(section, "my_archive_email") or "",
+        "access_token":      load_ini(section, "my_archive_access_token") or "",
+        "auto_pull_interval": _read_auto_pull_interval(),
     }
 
 
 @router.post("/archives/settings")
 def save_archive_settings(body: dict, session: SessionToken = Depends(require_auth)):
-    """Save archive configuration to INI."""
-    section = "config_v7_archives"
-    for key in ("my_archive", "my_archive_path", "username", "email", "access_token"):
-        if key in body:
-            save_ini(section, key, str(body[key]))
+    """Save archive configuration to INI (same section/keys as Streamlit BacktestV7.py)."""
+    section = "config_archive"
+    mapping = {
+        "my_archive":      "my_archive",
+        "my_archive_path": "my_archive_path",
+        "username":        "my_archive_username",
+        "email":            "my_archive_email",
+        "access_token":    "my_archive_access_token",
+    }
+    for body_key, ini_key in mapping.items():
+        if body_key in body:
+            save_ini(section, ini_key, str(body[body_key]))
+    if "auto_pull_interval" in body:
+        try:
+            interval = max(0, int(body["auto_pull_interval"]))
+        except (ValueError, TypeError):
+            interval = 0
+        save_ini(section, "auto_pull_interval", str(interval))
     return {"ok": True}
+
+

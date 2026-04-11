@@ -1,4 +1,5 @@
 import streamlit as st
+import requests
 from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb7_installed, is_authenticted, get_navi_paths, render_header_with_guide
 from OptimizeV7 import OptimizeV7Item, OptimizesV7, OptimizeV7Queue, OptimizeV7Results
 from pathlib import Path
@@ -230,6 +231,37 @@ if not is_pb7_installed():
 if st.session_state.pbcoindata.api_error:
     st.warning('Coin Data API is not configured / Go to Coin Data and configure your API-Key', icon="⚠️")
     st.stop()
+
+# ── Draft-from-backtest: load starting_config via opt_draft_id query param ────
+_opt_draft_id = st.session_state.pop("_relay_opt_draft_id", "") or st.query_params.get("opt_draft_id", "")
+if _opt_draft_id and "opt_v7" not in st.session_state:
+    try:
+        from pbgui_func import _start_fastapi_server_if_needed
+        from api.auth import generate_token
+        _api_host, _api_port, _api_ok = _start_fastapi_server_if_needed()
+        if _api_ok:
+            if "api_token" not in st.session_state:
+                _uid = (
+                    st.session_state.get("user", {}).get("id")
+                    or st.session_state.get("user")
+                    or "anonymous"
+                )
+                st.session_state["api_token"] = generate_token(str(_uid), expires_in_seconds=86400).token
+            _resp = requests.get(
+                f"http://{_api_host}:{_api_port}/api/backtest-v7/optimize-draft/{_opt_draft_id}",
+                headers={"Authorization": f"Bearer {st.session_state['api_token']}"},
+                timeout=5,
+            )
+            if _resp.status_code == 200:
+                _draft_cfg = _resp.json().get("config", {})
+                st.session_state.opt_v7 = OptimizeV7Item()
+                st.session_state.opt_v7.config.config = _draft_cfg
+                st.session_state.opt_v7.config.pbgui.starting_config = True
+                _base_dir = _draft_cfg.get("backtest", {}).get("base_dir", "")
+                st.session_state.opt_v7.name = _base_dir.split("/")[-1] if _base_dir else ""
+                st.query_params.clear()
+    except Exception:
+        pass
 
 # ── Main tab navigation ──────────────────────────────────────────────────────
 

@@ -117,6 +117,30 @@
     '.nav-restart-dot{display:inline-block;width:7px;height:7px;border-radius:50%;',
     'background:#f59e0b;margin-right:2px;animation:nav-blink 1.4s ease-in-out infinite;}',
     '@keyframes nav-blink{0%,100%{opacity:1;}50%{opacity:.3;}}',
+    '.nav-action-btn.notify{color:#64748b;}',
+    '.nav-action-btn.notify:hover{color:#e2e8f0;}',
+
+    /* notification log panel */
+    '#pbgui-notify-panel{position:fixed;bottom:0;right:0;width:50%;height:40vh;min-width:240px;min-height:150px;',
+    'background:var(--bg2,#131b2b);border:2px solid var(--accent,#3182ce);',
+    'z-index:2500;display:none;flex-direction:column;overflow:hidden;border-radius:6px 6px 0 0;}',
+    '#pbgui-notify-panel.visible{display:flex;}',
+    '#pbgui-notify-hdr{display:flex;align-items:center;justify-content:space-between;',
+    'padding:6px 12px;background:var(--bg3,#1a2744);border-bottom:1px solid var(--border,#2d3748);',
+    'flex-shrink:0;cursor:move;user-select:none;}',
+    '#pbgui-notify-title{font-size:var(--fs-sm,0.82rem);font-weight:600;color:var(--text,#e2e8f0);}',
+    '#pbgui-notify-close{background:none;border:none;color:var(--text-dim,#64748b);cursor:pointer;font-size:var(--fs-lg,1.15rem);}',
+    '#pbgui-notify-close:hover{color:var(--text,#e2e8f0);}',
+    '#pbgui-notify-target{flex:1;min-height:0;overflow:hidden;}',
+    '.pnr{position:absolute;z-index:2;}',
+    '.pnr-n{top:-4px;left:6px;right:6px;height:8px;cursor:n-resize;}',
+    '.pnr-s{bottom:-4px;left:6px;right:6px;height:8px;cursor:s-resize;}',
+    '.pnr-w{left:-4px;top:6px;bottom:6px;width:8px;cursor:w-resize;}',
+    '.pnr-e{right:-4px;top:6px;bottom:6px;width:8px;cursor:e-resize;}',
+    '.pnr-nw{top:-4px;left:-4px;width:12px;height:12px;cursor:nw-resize;}',
+    '.pnr-ne{top:-4px;right:-4px;width:12px;height:12px;cursor:ne-resize;}',
+    '.pnr-sw{bottom:-4px;left:-4px;width:12px;height:12px;cursor:sw-resize;}',
+    '.pnr-se{bottom:-4px;right:-4px;width:12px;height:12px;cursor:se-resize;}',
 
     /* about overlay */
     '#pbgui-about-ovl{display:none;position:fixed;inset:0;',
@@ -216,11 +240,148 @@
     html += '<div id="nav-spacer"></div>';
     html += '<div id="nav-right">'
           + '<button class="nav-action-btn restart" id="pbgui-restart-btn"><span class="nav-restart-dot"></span>Restart</button>'
+          + '<button class="nav-action-btn notify" id="pbgui-notify-btn" title="Notification log">&#128276;</button>'
           + '<button class="nav-action-btn accent" id="pbgui-guide-btn">&#128218; Guide</button>'
           + '<button class="nav-action-btn" id="pbgui-about-btn">&#x2139;&#xFE0F; About</button>'
           + '</div>';
 
     nav.innerHTML = html;
+  }
+
+  /* ════════════════════════════════════
+     NOTIFICATION LOG PANEL
+     ════════════════════════════════════ */
+  var _notifyViewer = null;
+
+  function buildNotifyPanel() {
+    if (document.getElementById('pbgui-notify-panel')) return;
+    var d = document.createElement('div');
+    d.id = 'pbgui-notify-panel';
+    d.innerHTML =
+      '<div class="pnr pnr-n" data-dir="n"></div>' +
+      '<div class="pnr pnr-s" data-dir="s"></div>' +
+      '<div class="pnr pnr-w" data-dir="w"></div>' +
+      '<div class="pnr pnr-e" data-dir="e"></div>' +
+      '<div class="pnr pnr-nw" data-dir="nw"></div>' +
+      '<div class="pnr pnr-ne" data-dir="ne"></div>' +
+      '<div class="pnr pnr-sw" data-dir="sw"></div>' +
+      '<div class="pnr pnr-se" data-dir="se"></div>' +
+      '<div id="pbgui-notify-hdr">' +
+        '<span id="pbgui-notify-title">Notifications</span>' +
+        '<button id="pbgui-notify-close">\u2715</button>' +
+      '</div>' +
+      '<div id="pbgui-notify-target" style="flex:1;min-height:0;overflow:hidden"></div>';
+    document.body.appendChild(d);
+  }
+
+  function _ensureLogViewer(cb) {
+    if (typeof window.LogViewerPanel === 'function') { cb(); return; }
+    var s = document.createElement('script');
+    s.src = '/app/js/log_viewer_panel.js?v=6';
+    s.onload = cb;
+    s.onerror = function() { console.warn('Failed to load log_viewer_panel.js'); };
+    document.head.appendChild(s);
+  }
+
+  function _getWsBase() {
+    if (window.WS_BASE) return window.WS_BASE;
+    var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return proto + '//' + window.location.host;
+  }
+
+  function toggleNotifyPanel() {
+    var panel = document.getElementById('pbgui-notify-panel');
+    if (!panel) return;
+    if (panel.classList.contains('visible')) {
+      closeNotifyPanel();
+      return;
+    }
+    _ensureLogViewer(function() {
+      if (_notifyViewer) { _notifyViewer.close(); _notifyViewer = null; }
+      _notifyViewer = new LogViewerPanel({
+        containerId: 'pbgui-notify-target',
+        wsBase: _getWsBase(),
+        token: cfg().token,
+        defaultHost: 'local',
+        defaultFile: 'PBV7UI.log',
+        presets: 'system',
+        showRestart: false,
+        height: '100%'
+      });
+      _notifyViewer.open();
+      if (!panel.style.left) {
+        panel.style.right = '0'; panel.style.bottom = '0';
+        panel.style.left = ''; panel.style.top = '';
+      }
+      panel.classList.add('visible');
+      _bindNotifyDrag(panel);
+      _bindNotifyResize(panel);
+    });
+  }
+
+  function closeNotifyPanel() {
+    var panel = document.getElementById('pbgui-notify-panel');
+    if (panel) panel.classList.remove('visible');
+    if (_notifyViewer) { _notifyViewer.close(); _notifyViewer = null; }
+  }
+
+  function _bindNotifyDrag(panel) {
+    var hdr = document.getElementById('pbgui-notify-hdr');
+    if (!hdr || hdr._dragBound) return;
+    hdr._dragBound = true;
+    hdr.addEventListener('mousedown', function(e) {
+      if (e.target.id === 'pbgui-notify-close') return;
+      var rect = panel.getBoundingClientRect();
+      panel.style.left = rect.left + 'px'; panel.style.top = rect.top + 'px';
+      panel.style.right = 'auto'; panel.style.bottom = 'auto';
+      var sX = e.clientX, sY = e.clientY, sL = rect.left, sT = rect.top;
+      function onMove(e) {
+        panel.style.left = (sL + e.clientX - sX) + 'px';
+        panel.style.top  = (sT + e.clientY - sY) + 'px';
+      }
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      e.preventDefault();
+    });
+  }
+
+  function _bindNotifyResize(panel) {
+    if (panel._resizeBound) return;
+    panel._resizeBound = true;
+    panel.querySelectorAll('.pnr').forEach(function(handle) {
+      handle.addEventListener('mousedown', function(e) {
+        e.preventDefault(); e.stopPropagation();
+        var dir = handle.dataset.dir;
+        var rect = panel.getBoundingClientRect();
+        panel.style.left = rect.left + 'px'; panel.style.top = rect.top + 'px';
+        panel.style.right = 'auto'; panel.style.bottom = 'auto';
+        panel.style.width = rect.width + 'px'; panel.style.height = rect.height + 'px';
+        var sX = e.clientX, sY = e.clientY;
+        var sL = rect.left, sT = rect.top, sW = rect.width, sH = rect.height;
+        function onMove(e) {
+          var dx = e.clientX - sX, dy = e.clientY - sY;
+          var nL = sL, nT = sT, nW = sW, nH = sH;
+          if (dir.indexOf('w') >= 0) { nL = sL + dx; nW = sW - dx; }
+          if (dir.indexOf('e') >= 0) { nW = sW + dx; }
+          if (dir.indexOf('n') >= 0) { nT = sT + dy; nH = sH - dy; }
+          if (dir.indexOf('s') >= 0) { nH = sH + dy; }
+          if (nW < 240) { if (dir.indexOf('w') >= 0) nL = sL + sW - 240; nW = 240; }
+          if (nH < 150) { if (dir.indexOf('n') >= 0) nT = sT + sH - 150; nH = 150; }
+          panel.style.left = nL + 'px'; panel.style.top = nT + 'px';
+          panel.style.width = nW + 'px'; panel.style.height = nH + 'px';
+        }
+        function onUp() {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    });
   }
 
   function buildAbout() {
@@ -349,6 +510,12 @@
     /* Guide button → navigate to Streamlit Help page */
     var guideBtn = document.getElementById('pbgui-guide-btn');
     if (guideBtn) guideBtn.addEventListener('click', function () { navTo('help'); });
+
+    /* Notify button → open inline floating log panel */
+    var notifyBtn = document.getElementById('pbgui-notify-btn');
+    if (notifyBtn) notifyBtn.addEventListener('click', function () { toggleNotifyPanel(); });
+    var notifyClose = document.getElementById('pbgui-notify-close');
+    if (notifyClose) notifyClose.addEventListener('click', function () { closeNotifyPanel(); });
 
     /* About button → show overlay */
     var aboutBtn = document.getElementById('pbgui-about-btn');
@@ -512,6 +679,7 @@
   function init() {
     injectCSS();
     buildNav();
+    buildNotifyPanel();
     buildAbout();
     setupHandlers();
     startTokenRefresh();

@@ -321,6 +321,27 @@ app.include_router(v7_router, prefix="/api/v7", tags=["v7"])
 app.include_router(balance_calc_router, prefix="/api/balance-calc", tags=["balance-calc"])
 app.include_router(backtest_v7_router, prefix="/api/backtest-v7", tags=["backtest-v7"])
 
+
+# ── Central UI notification log ──────────────────────────────
+import datetime as _dt
+
+@app.post("/api/notify_log", tags=["ui"])
+async def append_notify_log(request: Request, session: SessionToken = Depends(require_auth)):
+    """Append a UI notification message to data/logs/PBV7UI.log."""
+    try:
+        body = await request.json()
+        msg   = str(body.get("msg", ""))[:500]
+        level = str(body.get("level", "info"))
+        log_path = Path(PBGDIR) / "data" / "logs" / "PBV7UI.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"{ts} [{level.upper():4}] {msg}\n")
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 frontend_dir = Path(__file__).parent / "frontend"
 if frontend_dir.exists():
     app.mount("/app", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")

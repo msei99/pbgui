@@ -1,5 +1,5 @@
 import streamlit as st
-from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb7_installed, is_authenticted, get_navi_paths, render_header_with_guide
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb7_installed, is_authenticted, get_navi_paths, render_header_with_guide, redirect_to_fastapi_v7_backtest
 from pbgui_func import PBGDIR, pb7dir
 from BacktestV7 import BacktestV7Item, BacktestsV7, BacktestV7Queue, BacktestV7Results, ConfigV7Archives
 from RunV7 import V7Instance
@@ -302,8 +302,9 @@ if not is_authenticted() or is_session_state_not_initialized():
     st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
     st.stop()
 
-# Page Setup
-set_page_config("PBv7 Backtest")
+# Redirect immediately to the FastAPI backtest page
+redirect_to_fastapi_v7_backtest()
+st.stop()
 render_header_with_guide(
     "PBv7 Backtest",
     guide_callback=lambda: _bt_v7_help_modal(),

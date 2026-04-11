@@ -773,10 +773,26 @@
                     legend: { bgcolor: 'rgba(0,0,0,0)', font: { size: 10, color: '#e2e8f0' } },
                     transition: { duration: 0, easing: 'linear' }
                 };
+                /* Preserve current zoom state across WS-triggered data updates */
+                if (_diChart.layout) {
+                    var _xa = _diChart.layout.xaxis || {}, _ya = _diChart.layout.yaxis || {};
+                    if (_xa.autorange === false && _xa.range) {
+                        _layout.xaxis.range = _xa.range.slice();
+                        _layout.xaxis.autorange = false;
+                    }
+                    if (_ya.autorange === false && _ya.range) {
+                        _layout.yaxis.range = _ya.range.slice();
+                        _layout.yaxis.autorange = false;
+                    }
+                }
                 if (typeof Plotly !== 'undefined') { Plotly.react(_diChart, _plotTraces, _layout, { responsive: true, displayModeBar: false }); }
                 return;
             }
         }
+        /* Save table scroll position before rebuilding DOM */
+        var _savedScroll = 0;
+        var _oldWrap = container.querySelector('.di-table-wrap');
+        if (_oldWrap) _savedScroll = _oldWrap.scrollTop;
         container.innerHTML = '';
 
         var root = document.createElement('div');
@@ -920,6 +936,12 @@
         }
 
         container.appendChild(root);
+
+        /* Restore table scroll position after DOM rebuild */
+        if (_savedScroll && mode === 'table') {
+            var _newWrap = container.querySelector('.di-table-wrap');
+            if (_newWrap) _newWrap.scrollTop = _savedScroll;
+        }
     }
 
     /* ── Income: Table mode ── */
@@ -1540,7 +1562,15 @@
         if (_fc && data && (data.bars || []).length > 0) {
             var _dr = container.querySelector('.dt-daterange');
             if (_dr) _dr.textContent = (data.from_date && data.to_date) ? 'From: ' + data.from_date + '  To: ' + data.to_date : '';
-            renderPnl(_fc, data, { noResize: true });
+            /* Preserve current zoom state across WS-triggered data updates */
+            var _z = opts.savedZoom || null;
+            if (!_z && _fc.layout) {
+                var _xa = _fc.layout.xaxis || {}, _ya = _fc.layout.yaxis || {};
+                var _xr = (_xa.autorange === false && _xa.range) ? _xa.range.slice() : null;
+                var _yr = (_ya.autorange === false && _ya.range) ? _ya.range.slice() : null;
+                if (_xr || _yr) _z = { xrange: _xr, yrange: _yr };
+            }
+            renderPnl(_fc, data, { noResize: true, savedZoom: _z });
             return;
         }
         container.innerHTML = '';
@@ -1816,7 +1846,15 @@
         if (_fc && data && (data.bars || []).length > 0) {
             var _dr = container.querySelector('.dt-daterange');
             if (_dr) _dr.textContent = (data.from_date && data.to_date) ? 'From: ' + data.from_date + '  To: ' + data.to_date : '';
-            renderPpl(_fc, data, { noResize: true });
+            /* Preserve current zoom state across WS-triggered data updates */
+            var _z = opts.savedZoom || null;
+            if (!_z && _fc.layout) {
+                var _xa = _fc.layout.xaxis || {}, _ya = _fc.layout.yaxis || {};
+                var _xr = (_xa.autorange === false && _xa.range) ? _xa.range.slice() : null;
+                var _yr = (_ya.autorange === false && _ya.range) ? _ya.range.slice() : null;
+                if (_xr || _yr) _z = { xrange: _xr, yrange: _yr };
+            }
+            renderPpl(_fc, data, { noResize: true, savedZoom: _z });
             return;
         }
         container.innerHTML = '';
@@ -2822,7 +2860,15 @@
         if (_fc && data && (data.bars || []).length > 0) {
             var _dr = container.querySelector('.dt-daterange');
             if (_dr) _dr.textContent = (data.from_date && data.to_date) ? 'From: ' + data.from_date + '  To: ' + data.to_date : '';
-            renderAdg(_fc, data, { noResize: true });
+            /* Preserve current zoom state across WS-triggered data updates */
+            var _z = opts.savedZoom || null;
+            if (!_z && _fc.layout) {
+                var _xa = _fc.layout.xaxis || {}, _ya = _fc.layout.yaxis || {};
+                var _xr = (_xa.autorange === false && _xa.range) ? _xa.range.slice() : null;
+                var _yr = (_ya.autorange === false && _ya.range) ? _ya.range.slice() : null;
+                if (_xr || _yr) _z = { xrange: _xr, yrange: _yr };
+            }
+            renderAdg(_fc, data, { noResize: true, savedZoom: _z });
             return;
         }
         container.innerHTML = '';
@@ -2973,7 +3019,7 @@
     /* ──────────────────────────── Export ───────────────────────────────── */
 
     global.DashRender = {
-        VERSION:            '20260322e',
+        VERSION:            '20260410a',
         injectCSS:          injectCSS,
         tweColor:           tweColor,
         upnlColor:          upnlColor,

@@ -953,6 +953,11 @@ function stepField(id, direction) {
 }
 
 function toast(msg, type) {
+  fetch('/api/notify_log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+    body: JSON.stringify({ msg: msg, level: type || 'info' })
+  }).catch(function() {});
   var el = document.getElementById('toast');
   el.textContent = msg;
   el.className = 'toast-' + (type || 'info');

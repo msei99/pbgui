@@ -127,6 +127,21 @@
       register: maturin_result
       listen: "restart pb7"
 
+    - name: Write rust source stamp after maturin build
+      shell: |
+        source "{{ pb7venv }}/bin/activate"
+        python -c "
+import sys
+sys.path.insert(0, 'src')
+from rust_utils import stamp_compiled_extensions, source_fingerprint
+stamp_compiled_extensions(source_fingerprint())
+print('Rust source stamp updated.')
+"
+      args:
+        chdir: "{{ pb7dir }}"
+        executable: /bin/bash
+      listen: "restart pb7"
+
     - name: kill all pb7 processes
       shell: |
         pids="$(ps -ef | grep "{{ pb7dir }}/src/main.py" | grep -v grep | awk '{print $2}')"

@@ -2123,6 +2123,12 @@
     }
 
     function showToast(message, type = "success") {
+        /* Log to PBV7UI.log */
+        fetch('/api/notify_log', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+            body: JSON.stringify({ msg: message, level: type === 'success' ? 'ok' : type })
+        }).catch(function() {});
         if (type === "error" || type === "warning") {
             const overlay = document.getElementById("alertModalOverlay");
             const box    = document.getElementById("alertModalBox");
