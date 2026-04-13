@@ -98,6 +98,7 @@ th {
 }
 th:hover { color: var(--text); }
 tr:hover td { background: var(--bg3); }
+tbody tr { cursor: pointer; }
 .sort-arrow { font-size: 10px; margin-left: 2px; }
 
 /* Status classes */
@@ -130,6 +131,7 @@ tr.row-inactive td  { opacity: 0.45; }
   background: var(--bg2);
   color: var(--red);
   cursor: pointer;
+  margin-left: 4px;
 }
 .btn-del:hover { background: var(--bg3); }
 
@@ -444,7 +446,6 @@ function scheduleReconnect() {
 
 /* ─── Render (diff-based: only update changed cells) ──────── */
 var COLS = [
-  { key: '_edit',           label: '' },
   { key: 'name',            label: 'Name' },
   { key: 'enabled_on',      label: 'Enabled On' },
   { key: 'status',          label: 'Status' },
@@ -453,7 +454,7 @@ var COLS = [
   { key: 'twe',             label: 'TWE' },
   { key: 'running_on',      label: 'Running On' },
   { key: 'note',            label: 'Note' },
-  { key: '_delete',          label: '' },
+  { key: '_actions',        label: '' },
 ];
 
 var STATUS_LABELS = {
@@ -473,7 +474,6 @@ function buildCells(r) {
   var stLabel = STATUS_LABELS[r.status] || r.status || '\u2013';
   var runOn = (r.running_on || []).join(', ') || '\u2013';
   return [
-    '<button class="btn-edit" data-edit="' + esc(r.name) + '" title="Edit config">\u270F</button>',
     esc(r.name),
     esc(r.enabled_on || '\u2013'),
     '<span class="' + stClass + '">' + stLabel + '</span>',
@@ -482,7 +482,8 @@ function buildCells(r) {
     esc(r.twe || '\u2013'),
     esc(runOn),
     esc(r.note || ''),
-    '<button class="btn-del" data-delete="' + esc(r.name) + '" title="Delete instance">\u2716</button>',
+    '<button class="btn-edit" data-edit="' + esc(r.name) + '" title="Edit">\u270E</button>' +
+    '<button class="btn-del" data-delete="' + esc(r.name) + '" title="Delete">\u2716</button>',
   ];
 }
 
@@ -513,7 +514,7 @@ function renderHeader() {
   }
   var thead = document.getElementById('thead');
   thead.innerHTML = '<tr>' + COLS.map(function(c) {
-    if (c.key === '_edit' || c.key === '_delete') return '<th></th>';
+    if (c.key === '_actions') return '<th></th>';
     return '<th data-sort="' + c.key + '">' + c.label + '<span class="sort-arrow"></span></th>';
   }).join('') + '</tr>';
   thead.querySelectorAll('th[data-sort]').forEach(function(th) {
@@ -973,6 +974,12 @@ document.getElementById('tbody').addEventListener('click', function(e) {
   if (btn) { editInstance(btn.dataset.edit); return; }
   btn = e.target.closest('[data-delete]');
   if (btn) { confirmDelete(btn.dataset.delete); return; }
+});
+
+document.getElementById('tbody').addEventListener('dblclick', function(e) {
+  if (e.target.closest('[data-edit],[data-delete]')) return;
+  var tr = e.target.closest('tr[data-key]');
+  if (tr) editInstance(tr.dataset.key);
 });
 
 /* ─── Auto-refresh via WebSocket ──────────────────────────── */

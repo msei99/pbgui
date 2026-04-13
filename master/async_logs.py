@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -45,9 +46,36 @@ def resolve_bot_log_path(instance_name: str, pb_version: str) -> str:
 
 # ── Local log helpers ─────────────────────────────────────────
 
+def _project_root() -> Path:
+    """Return the project root directory."""
+    return Path(__file__).resolve().parent.parent
+
+
 def local_logs_dir() -> Path:
     """Return the local data/logs directory."""
-    return Path(__file__).resolve().parent.parent / "data" / "logs"
+    return _project_root() / "data" / "logs"
+
+
+def resolve_local_log_path(filename: str) -> Optional[Path]:
+    """Resolve a local log identifier to its absolute path.
+
+    Handles both regular log files (e.g. 'PBRun.log') and
+    instance log entries (e.g. 'Bot:bybit_SANDUSDT').
+    Returns None if the resolved path escapes allowed directories.
+    """
+    root = _project_root()
+    if filename.startswith("Bot:"):
+        instance_name = filename[4:]
+        fp = root / "data" / "run_v7" / instance_name / "passivbot.log"
+        run_v7_root = (root / "data" / "run_v7").resolve()
+        if not fp.resolve().is_relative_to(run_v7_root):
+            return None
+        return fp
+    else:
+        fp = local_logs_dir() / filename
+        if not fp.resolve().is_relative_to(local_logs_dir().resolve()):
+            return None
+        return fp
 
 
 def tail_file(path: Path, n: int) -> list[str]:
@@ -353,11 +381,37 @@ class AsyncLogStreamer:
 
     @staticmethod
     def list_local_logs() -> list[str]:
-        """Return sorted list of *.log filenames in data/logs/ (top-level only)."""
+        """Return sorted list of log identifiers.
+
+        Includes daemon logs from data/logs/ and instance logs
+        from data/run_v7/*/passivbot.log — only for instances that are
+        actually running (checked via ps aux, same logic as v7_instances.py).
+        """
+        result: list[str] = []
         d = local_logs_dir()
-        if not d.exists():
-            return []
-        return sorted(p.name for p in d.glob("*.log") if p.is_file())
+        if d.exists():
+            result.extend(
+                sorted(p.name for p in d.glob("*.log") if p.is_file())
+            )
+        run_v7 = _project_root() / "data" / "run_v7"
+        if run_v7.exists():
+            # detect running instances via process list
+            running_dirs: set[str] = set()
+            try:
+                out = subprocess.check_output(["ps", "aux"], text=True, timeout=5)
+                for line in out.splitlines():
+                    if "main.py" in line and "config_run.json" in line:
+                        for part in line.split():
+                            if part.endswith("/config_run.json"):
+                                running_dirs.add(str(Path(part).parent))
+            except Exception:
+                pass
+            result.extend(sorted(
+                f"Bot:{p.parent.name}"
+                for p in run_v7.glob("*/passivbot.log")
+                if p.is_file() and str(p.parent) in running_dirs
+            ))
+        return result
 
     @staticmethod
     def get_local_logs(filename: str, lines: int = 200) -> tuple[list[str], int]:
@@ -366,9 +420,10 @@ class AsyncLogStreamer:
         Returns:
             (lines, file_size) tuple
         """
-        fp = local_logs_dir() / filename
-        logs_root = local_logs_dir().resolve()
-        if not filename or not fp.resolve().is_relative_to(logs_root):
+        if not filename:
+            return [], 0
+        fp = resolve_local_log_path(filename)
+        if fp is None:
             return [], 0
         content = tail_file(fp, lines) if fp.exists() else []
         try:

@@ -109,10 +109,21 @@ a:hover { text-decoration: underline; }
 .cols-6 { grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr; }
 .cols-ex6 { grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr; }
 .cols-7 { grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr 1fr; }
-.cols-8 { grid-template-columns: repeat(8, 1fr); }
-.form-group { display: flex; flex-direction: column; }
+.cols-8 { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.span-4 { grid-column: span 4; }
+@media (max-width: 1400px) { .cols-8 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width:  700px) { .cols-8 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .span-4 { grid-column: span 2; } }
+.form-group { display: flex; flex-direction: column; min-width: 0; }
 .form-group label { font-size: var(--fs-xs); color: var(--text-dim);
-  letter-spacing: .03em; margin-bottom: 2px; display: flex; align-items: center; gap: 4px; }
+  letter-spacing: .03em; margin-bottom: 2px; display: flex; align-items: center; gap: 4px;
+  flex-wrap: wrap; white-space: normal; overflow: visible; line-height: 1.2; min-width: 0;
+  min-height: 2.4em; align-content: flex-start; }
+.form-group label span,
+.chk-row label span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .form-group input, .form-group select, .form-group textarea {
   height: var(--input-h); padding: 0 var(--sp-sm);
   background: var(--bg2); color: var(--text); border: 1px solid var(--border);
@@ -120,17 +131,26 @@ a:hover { text-decoration: underline; }
 .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--accent); }
 .form-group textarea { height: auto; padding: var(--sp-sm); resize: vertical; font-family: monospace; }
 .form-group select[multiple] { height: auto; min-height: calc(var(--input-h)*3.5); padding: var(--sp-xs) 0; }
-.chk-row { display: flex; align-items: center; gap: 6px; height: var(--input-h); }
+.chk-row { display: flex; align-items: flex-start; gap: 6px; min-height: var(--input-h); height: auto; min-width: 0; }
 .chk-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
-.chk-row label { font-size: var(--fs-sm); color: var(--text); margin: 0; cursor: pointer; }
+.chk-row label { font-size: var(--fs-sm); color: var(--text); margin: 0; cursor: pointer; white-space: normal; overflow: visible; line-height: 1.2; min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; word-break: break-word; }
 /* ─── data-tip tooltip ───────────────────────────────────── */
-[data-tip] { position: relative; cursor: help; border-bottom: 1px dotted #64748b; }
-[data-tip]::after { content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 5px);
-  background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 5px;
-  font-size: var(--fs-xs); white-space: pre-wrap; width: max-content; min-width: 260px; max-width: 700px;
-  padding: 6px 10px; opacity: 0; transition: opacity .15s; z-index: 9999; pointer-events: none;
-  text-transform: none; letter-spacing: normal; }
-[data-tip]:hover::after { opacity: 1; }
+[data-tip] {
+  cursor: help;
+  border-bottom: none;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: #64748b;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+#data-tip-tooltip {
+  display: none; position: fixed; z-index: 9999;
+  background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
+  border-radius: 5px; font-size: var(--fs-xs); font-weight: normal;
+  padding: 6px 10px; white-space: pre-wrap; max-width: 480px;
+  line-height: 1.5; box-shadow: 0 4px 12px rgba(0,0,0,.5); pointer-events: none;
+}
 .section-title { font-size: var(--fs-md); font-weight: 600;
   margin: var(--sp-lg) 0 var(--sp-sm); padding-bottom: var(--sp-xs); border-bottom: 1px solid var(--border); }
 .expander { border: 1px solid var(--border); border-radius: 6px; margin: var(--sp-sm) 0 var(--sp-md); }
@@ -165,7 +185,7 @@ a:hover { text-decoration: underline; }
 .num-stepper input { flex: 1; border-radius: 0 !important; text-align: center; min-width: 0; }
 .num-stepper input[type=number]::-webkit-inner-spin-button,
 .num-stepper input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-.num-stepper input[type=number] { -moz-appearance: textfield; }
+.num-stepper input[type=number] { appearance: textfield; -moz-appearance: textfield; }
 .stepper-btn { width: 28px; height: var(--input-h); flex-shrink: 0; background: var(--bg3);
   border: 1px solid var(--border); color: var(--text); font-size: 16px; line-height: 1;
   cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
@@ -199,6 +219,9 @@ a:hover { text-decoration: underline; }
   background: var(--bg3); border: 1px solid var(--border); border-radius: 3px;
   padding: 1px 6px; font-size: var(--fs-xs); color: var(--text);
 }
+.ms-tag.ms-tag-invalid {
+  color: #ffb3b3; border-color: rgba(255,75,75,.6); background: rgba(255,75,75,.14);
+}
 .ms-tag.ms-tag-all {
   background: var(--green); color: #000; font-weight: 600; border-color: var(--green);
 }
@@ -208,6 +231,13 @@ a:hover { text-decoration: underline; }
   cursor: pointer; color: var(--text-dim); font-size: 11px; line-height: 1;
 }
 .ms-tag .ms-x:hover { color: var(--red); }
+.ms-status-summary {
+  display: none; margin-top: 4px; font-size: var(--fs-xs); color: var(--text-dim); align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.ms-status-summary .warn { color: var(--orange); }
+.ms-status-summary .err { color: var(--red); }
+.ms-status-summary .sep { color: var(--text-dim); }
+.ms-status-summary .ms-status-action { padding: 1px 6px; }
 .ms-opt-all { font-weight: 600; color: var(--green); border-bottom: 1px solid var(--border); }
 /* kv-chip for coin_sources / market_settings_sources */
 .kv-chips { display:flex; flex-wrap:wrap; gap:4px; min-height:24px; }
@@ -263,10 +293,19 @@ a:hover { text-decoration: underline; }
 #modal-root { display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.6);
               align-items: center; justify-content: center; }
 #modal-root.open { display: flex; }
+.modal-overlay { display: none; position: fixed; inset: 0; z-index: 1100; background: rgba(0,0,0,.6);
+                 align-items: center; justify-content: center; }
+.modal-overlay.open { display: flex; }
 .modal-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
              padding: var(--sp-lg); min-width: 160px; max-width: 760px; max-height: 85vh;
              overflow: hidden; resize: both; box-sizing: border-box;
              display: flex; flex-direction: column; }
+.import-modal-box {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+  padding: var(--sp-lg); width: min(760px, 92vw); max-height: 85vh;
+  display: flex; flex-direction: column;
+}
+.import-modal-box h3 { font-size: var(--fs-lg); }
 .modal-header { display: flex; align-items: center; justify-content: space-between;
                 margin-bottom: 0; padding-bottom: var(--sp-sm); border-bottom: 1px solid var(--border);
                 cursor: move; user-select: none; flex-shrink: 0; margin-bottom: var(--sp-md); }
@@ -283,6 +322,21 @@ a:hover { text-decoration: underline; }
 .modal-btn-primary:hover { background: #1a6ae0; }
 .modal-btn-danger { background: var(--red); border-color: var(--red); color: #fff; }
 .modal-btn-danger:hover { background: #d43d3d; }
+.btn { height: var(--btn-h); padding: 0 16px; border-radius: 4px; font-size: var(--fs-base);
+       cursor: pointer; border: 1px solid var(--border); background: var(--bg3); color: var(--text); }
+.btn:hover { background: rgba(255,255,255,.08); }
+.btn-ok { background: var(--blue); border-color: var(--blue); color: #fff; }
+.btn-ok:hover { background: #1a6ae0; }
+.btn-cancel { background: var(--bg3); border-color: var(--border); color: var(--text); }
+
+.json-editor {
+  width: 100%; min-height: 200px; max-height: 500px;
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  font-size: var(--fs-xs); line-height: 1.4;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; padding: var(--sp-sm); resize: vertical;
+  color: var(--text); tab-size: 4;
+}
 
 /* ── Spinner ────────────────────────────────────── */
 .spinner { display:inline-block;width:14px;height:14px;border:2px solid var(--border);
@@ -553,6 +607,7 @@ a:hover { text-decoration: underline; }
         <button class="sb-btn" onclick="importConfig()" title="Import JSON config">📥 Import</button>
         <hr class="sb-sep">
         <button class="sb-btn" id="sb-btn-results" onclick="goEditorResults()" title="Jump to results for this config" disabled>📊 Results</button>
+        <button class="sb-btn" id="sb-btn-add-to-run" onclick="addConfigToRunByName(editingConfig)" title="Open this config in Run V7 editor" disabled>▶ Add to Run</button>
         <button class="sb-btn" onclick="goStrategyExplorer()" title="Open Strategy Explorer">🔍 Strategy Explorer</button>
         <button class="sb-btn" onclick="goBalanceCalc()" title="Open Balance Calculator">💰 Balance Calculator</button>
         <button class="sb-btn" onclick="goCalcBalance()" title="Calculate balance">⚡ Calc Balance</button>
@@ -571,6 +626,7 @@ a:hover { text-decoration: underline; }
     <!-- CONFIGS panel -->
     <div id="panel-configs" class="view-panel active">
       <div id="configs-toolbar" style="display:flex;gap:var(--sp-sm);align-items:center;margin-bottom:var(--sp-sm)">
+        <input type="text" id="configs-filter" class="sb-input" style="max-width:240px" placeholder="Search name…" oninput="renderConfigs()">
         <span style="flex:1"></span>
         <button class="act-btn" onclick="selectAllConfigs()" title="Select all visible rows">Select All</button>
         <button class="act-btn" onclick="deselectAllConfigs()" title="Deselect all">Deselect</button>
@@ -598,7 +654,7 @@ a:hover { text-decoration: underline; }
           <select id="results-config-filter" class="sb-input" style="max-width:200px" onchange="renderResults()">
             <option value="">All configs</option>
           </select>
-          <input type="text" id="results-filter" class="sb-input" style="max-width:200px" placeholder="Filter…" oninput="renderResults()">
+          <input type="text" id="results-filter" class="sb-input" style="max-width:200px" placeholder="Search name…" oninput="renderResults()">
           <span style="flex:1"></span>
           <button class="act-btn" onclick="selectAllResults()" title="Select all visible rows">Select All</button>
           <button class="act-btn" onclick="deselectAllResults()" title="Deselect all">Deselect</button>
@@ -633,7 +689,7 @@ a:hover { text-decoration: underline; }
             <select id="arc-results-config-filter" class="sb-input" style="max-width:200px" onchange="renderArchiveResults(selectedArchiveName)">
               <option value="">All configs</option>
             </select>
-            <input type="text" id="arc-results-filter" class="sb-input" style="max-width:200px" placeholder="Filter…" oninput="renderArchiveResults(selectedArchiveName)">
+            <input type="text" id="arc-results-filter" class="sb-input" style="max-width:200px" placeholder="Search name…" oninput="renderArchiveResults(selectedArchiveName)">
             <span style="flex:1"></span>
             <button class="act-btn" onclick="selectAllArchiveResults()" title="Select all visible rows">Select All</button>
             <button class="act-btn" onclick="deselectAllArchiveResults()" title="Deselect all">Deselect</button>
@@ -676,7 +732,23 @@ a:hover { text-decoration: underline; }
 
 <div id="toast"></div>
 <div id="modal-root"><div class="modal-box" id="modal-box"></div></div>
+<div class="modal-overlay" id="import-modal">
+  <div class="import-modal-box">
+    <h3>Paste config</h3>
+    <div class="form-group">
+      <label>Config Name</label>
+      <input type="text" id="import-name" placeholder="my_backtest">
+    </div>
+    <textarea class="json-editor" id="import-json" rows="18" placeholder="Paste full JSON config here"></textarea>
+    <div id="import-error" style="color:var(--red); font-size:var(--fs-sm); display:none;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ok" onclick="doImport()">OK</button>
+      <button class="btn btn-cancel" onclick="closeImportModal()">Cancel</button>
+    </div>
+  </div>
+</div>
 <div id="cov-tooltip"></div>
+<div id="data-tip-tooltip"></div>
 
 <script>
 /* ════════════════════════════════════════════════
@@ -706,6 +778,9 @@ var sortCol     = 'modified';  // current sort column
 var sortAsc     = false;       // sort direction
 var editingConfig = null;      // name of config being edited, or null
 var _extraBtKeys  = [];        // unknown backtest keys found when loading a config
+var _rawEditorSyncTimer = null;
+var _rawEditorSyncing = false;
+var _rawEditorLastApplied = '';
 var ws = null;
 
 /* Set of backtest keys explicitly handled by the GUI editor.
@@ -869,7 +944,9 @@ function selectPanel(id) {
   });
   history.replaceState(null, '', '#' + id);
   // Lazy-load data when switching panels
-  if (id === 'configs' && configs.length === 0) loadConfigs();
+  if (id === 'configs') {
+    if (configs.length === 0) loadConfigs(); else renderConfigs();
+  }
   if (id === 'results') { if (results.length === 0) loadResults(); else renderResults(); }
   if (id === 'archive' && archives.length === 0) loadArchives();
   /* If returning to archive while results view is still open, restore DOM and
@@ -1018,9 +1095,22 @@ function renderConfigs() {
   if (editingConfig !== null) { el.style.display = 'none'; return; }
   el.style.display = '';
   document.getElementById('configs-editor').style.display = 'none';
+  // Focus search input whenever the configs list is rendered (panel switch or data load)
+  if (currentPanel === 'configs') {
+    var cf = document.getElementById('configs-filter');
+    if (cf) cf.focus();
+  }
+
+  var filter = ((document.getElementById('configs-filter') || {}).value || '').trim().toLowerCase();
 
   if (!configs.length) {
     el.innerHTML = '<div class="empty-state"><div class="empty-icon">📋</div>No saved configs yet.<br>Click <b>+ New Config</b> to create one.</div>';
+    return;
+  }
+  var sorted = configs.slice().sort(sortFn);
+  if (filter) sorted = sorted.filter(function(c) { return (c.name || '').toLowerCase().indexOf(filter) >= 0; });
+  if (!sorted.length) {
+    el.innerHTML = '<div class="empty-state">No configs match your search.</div>';
     return;
   }
   var html = '<table class="tbl"><thead><tr>' +
@@ -1029,7 +1119,6 @@ function renderConfigs() {
     thSort('Results', 'results') + thSort('Modified', 'modified') +
     '<th>Actions</th></tr></thead><tbody>';
 
-  var sorted = configs.slice().sort(sortFn);
   sorted.forEach(function(c) {
     html += '<tr data-name="' + esc(c.name) + '">' +
       '<td title="' + esc(c.name) + '">' + esc(c.name) + '</td>' +
@@ -1084,6 +1173,9 @@ function editConfig(name) {
 function showEditorSidebar() {
   // Enable Results button only if results exist for this config
   var btn = document.getElementById('sb-btn-results');
+  var btnRun = document.getElementById('sb-btn-add-to-run');
+  var isExisting = editingConfig && editingConfig !== '__new__';
+  if (btnRun) btnRun.disabled = !isExisting;
   if (btn) {
     var hasResults = editingConfig && editingConfig !== '__new__' &&
       results.some(function(r) { return r.config_name === editingConfig; });
@@ -1116,24 +1208,106 @@ function goStrategyExplorer() {
   window.location.href = ST_BASE + '/?target=V7_STRATEGY_EXPLORER&token=' + TOKEN;
 }
 
-function goBalanceCalc() {
-  /* Balance Calculator is a FastAPI direct page */
-  var apiOrigin = API_BASE.match(/^(https?:\/\/[^/]+)/);
-  apiOrigin = apiOrigin ? apiOrigin[1] : window.location.origin;
-  window.location.href = apiOrigin + '/api/balance-calc/main_page?token=' + encodeURIComponent(TOKEN) + '&st_base=' + encodeURIComponent(ST_BASE);
+function getConfigDefaultExchange(cfg) {
+  var exchanges = (cfg && cfg.backtest && Array.isArray(cfg.backtest.exchanges)) ? cfg.backtest.exchanges : [];
+  var exchange = exchanges.length ? exchanges[0] : 'binance';
+  return String(exchange || 'binance').toLowerCase();
 }
-var goCalcBalance = goBalanceCalc;
+
+function openBalanceCalculatorWithConfig(cfg, defaultExchange) {
+  var balcBase = API_BASE.replace('/backtest-v7', '/balance-calc');
+  fetch(balcBase + '/draft', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config: cfg })
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    var apiOrigin = API_BASE.match(/^(https?:\/\/[^/]+)/);
+    apiOrigin = apiOrigin ? apiOrigin[1] : window.location.origin;
+    window.location.href = apiOrigin + '/api/balance-calc/main_page'
+      + '?token=' + encodeURIComponent(TOKEN)
+      + '&st_base=' + encodeURIComponent(ST_BASE)
+      + '&draft_id=' + encodeURIComponent(d.draft_id)
+      + '&exchange=' + encodeURIComponent(defaultExchange || 'binance');
+  }).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
+}
+
+function goBalanceCalc() {
+  try {
+    var cfg = collectConfig();
+    openBalanceCalculatorWithConfig(cfg, getConfigDefaultExchange(cfg));
+  } catch (e) {
+    toast('Failed to prepare config: ' + e.message, 'err');
+  }
+}
+
+function goCalcBalance() {
+  try {
+    var cfg = collectConfig();
+    _showBalanceCalcModal(cfg, getConfigDefaultExchange(cfg));
+  } catch (e) {
+    toast('Failed to prepare config: ' + e.message, 'err');
+  }
+}
 
 function openLogPanel() {
   document.getElementById('log-panel').classList.add('visible');
 }
 
-function newConfig() {
+async function newConfig() {
   editingConfig = '__new__';
-  showConfigEditor('', {});
+  var tmpl = {};
+  try {
+    var data = await apiFetch('/configs/new-config');
+    if (data && data.config) tmpl = data.config;
+  } catch(e) {
+    console.warn('newConfig: failed to fetch template, using empty defaults', e);
+  }
+  showConfigEditor('', tmpl);
 }
 
-function showConfigEditor(name, cfg) {
+function buildExtraBtExpanderHtml(bt) {
+  var extraBtKeys = Object.keys(bt || {}).filter(function(k) { return !KNOWN_BT_PARAMS.has(k); }).sort();
+  var html = '';
+
+  if (extraBtKeys.length > 0) {
+    html += '<div class="expander" id="exp-extra-bt">' +
+      '<div class="expander-header" onclick="toggleExpander(\'exp-extra-bt\')">' +
+        '<span class="arrow">▶</span> Additional Parameters' +
+        '<span style="margin-left:auto;font-size:var(--fs-xs);color:var(--text-dim)">Parameters not yet in the GUI — edit and they will be preserved on save</span>' +
+      '</div>' +
+      '<div class="expander-body">' +
+        '<div class="form-row cols-3">';
+    extraBtKeys.forEach(function(k) {
+      var v = bt[k];
+      var t = typeof v;
+      var meta = EXTRA_BT_META[k] || {};
+      var lbl = meta.tip ? '<span data-tip="' + esc(meta.tip) + '">' + esc(k) + '</span>' : esc(k);
+      var hint = meta.fmt ? '<div style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">' + esc(meta.fmt) + '</div>' : '';
+      var fld = '';
+      if (t === 'boolean') {
+        fld = '<div class="form-group"><label>' + lbl + '</label>' +
+          '<div class="chk-row"><input type="checkbox" id="extra-bt-' + esc(k) + '" data-extra-bt-type="boolean"' + (v ? ' checked' : '') + '></div>' + hint + '</div>';
+      } else if (t === 'number') {
+        fld = '<div class="form-group"><label>' + lbl + '</label>' +
+          '<input type="number" id="extra-bt-' + esc(k) + '" data-extra-bt-type="number" class="form-input" value="' + esc(String(v)) + '">' + hint + '</div>';
+      } else if (t === 'object' || Array.isArray(v)) {
+        fld = '<div class="form-group" style="grid-column:span 3"><label>' + lbl + '</label>' +
+          '<textarea id="extra-bt-' + esc(k) + '" data-extra-bt-type="json" style="overflow:hidden;resize:vertical" oninput="autoResizeTa(this)">' + esc(JSON.stringify(v, null, 2)) + '</textarea>' + hint + '</div>';
+      } else {
+        fld = '<div class="form-group"><label>' + lbl + '</label>' +
+          '<input type="text" id="extra-bt-' + esc(k) + '" data-extra-bt-type="' + (v === null ? 'null' : 'string') + '" class="form-input" value="' + esc(v === null ? '' : String(v)) + '" placeholder="' + (v === null ? 'null' : '') + '">' + hint + '</div>';
+      }
+      html += fld;
+    });
+    html +=     '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  return { html: html, keys: extraBtKeys };
+}
+
+function showConfigEditor(name, cfg, rawOverride) {
   document.getElementById('configs-list').style.display = 'none';
   document.getElementById('configs-toolbar').style.display = 'none';
   var ed = document.getElementById('configs-editor');
@@ -1156,10 +1330,10 @@ function showConfigEditor(name, cfg) {
   var exAll = ['binance','bybit','bitget','okx','hyperliquid','combined'];
   var exSel = bt.exchanges || [];
   html += '<div class="form-row cols-8">';
-  html += '<div class="form-group" style="grid-column:span 4"><label><span data-tip="Exchanges from which to fetch 1m OHLCV data for backtesting.">exchanges</span> ' +
+  html += '<div class="form-group span-4"><label><span data-tip="Exchanges from which to fetch 1m OHLCV data for backtesting.">exchanges</span> ' +
     '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-exchanges\')" title="Clear all">\u00d7</span></label>' +
     '<div class="ms-wrap" id="ms-cfg-exchanges">' +
-      '<input class="ms-input" id="ms-cfg-exchanges-input" placeholder="Select exchanges...">' +
+      '<input class="ms-input" id="ms-cfg-exchanges-input" placeholder="Select exchanges..." autocomplete="off">' +
       '<div class="ms-dropdown" id="ms-cfg-exchanges-dd"></div>' +
     '</div></div>';
   html += fieldText2('cfg-name', 'config_name', name, true, null, 'Name of this backtest configuration.\nRenaming on save creates a new folder; the old folder is removed.', 2);
@@ -1167,15 +1341,29 @@ function showConfigEditor(name, cfg) {
   html += fieldDate2('cfg-end-date', 'end_date', (bt.end_date && bt.end_date !== 'now') ? bt.end_date : new Date().toISOString().slice(0,10), 'End date of backtest.', 1);
   html += '</div>';
 
-  /* ── Row 2: Balance & Collateral (cols-8: 2+2+2+2) ── */
+  /* ── Row 2: Balance, Collateral & Behavior (cols-8: 1×8) ── */
   html += '<div class="form-row cols-8">';
-  html += fieldNumber2('cfg-starting-balance', 'starting_balance', bt.starting_balance || 1000, 500, 'Starting balance in USD.', 2);
-  html += fieldNumber2('cfg-balance-divider', 'balance_sample_divider', bt.balance_sample_divider || 60, 1, 'Minutes per bucket for balance/equity sampling.\n1 = full per-minute resolution.', 2);
-  html += fieldNumber2('cfg-btc-cap', 'btc_collateral_cap', bt.btc_collateral_cap || 0, 0.1, 'Target share of equity in BTC collateral.\n0 = fully USD, 1.0 = fully BTC.', 2);
-  html += fieldNumber2('cfg-btc-ltv', 'btc_collateral_ltv_cap', bt.btc_collateral_ltv_cap || 0, 0.1, 'Loan-to-value ceiling for BTC collateral.\n0 = unlimited debt.', 2);
+  html += fieldNumber2('cfg-starting-balance', 'starting_balance', bt.starting_balance || 1000, 500, 'Starting balance in USD.', 1);
+  html += fieldNumber2('cfg-balance-divider', 'balance_sample_divider', bt.balance_sample_divider || 60, 1, 'Minutes per bucket for balance/equity sampling.\n1 = full per-minute resolution.', 1);
+  html += fieldNumber2('cfg-btc-cap', 'btc_collateral_cap', bt.btc_collateral_cap || 0, 0.1, 'Target share of equity in BTC collateral.\n0 = fully USD, 1.0 = fully BTC.', 1);
+  html += fieldNumber2('cfg-btc-ltv', 'btc_collateral_ltv_cap', bt.btc_collateral_ltv_cap || 0, 0.1, 'Loan-to-value ceiling for BTC collateral.\n0 = unlimited debt.', 1);
+  html += fieldNumber2('cfg-max-warmup', 'max_warmup_minutes', bt.max_warmup_minutes || live.max_warmup_minutes || 1440, 1440, 'Hard ceiling for historical warm-up window.\n0 = no cap.', 1);
+  html += fieldNumber2('cfg-min-coin-age', 'minimum_coin_age_days', live.minimum_coin_age_days !== undefined ? live.minimum_coin_age_days : 30, 1, 'Disallows coins younger than given days.', 1);
+  var liqThresh = bt.liquidation_threshold !== undefined ? bt.liquidation_threshold : 0.05;
+  html += '<div class="form-group"><label><span data-tip="Early-stop equity-floor guard.\nTerminates when equity \u2264 starting_balance \u00d7 threshold.\nRange [0.0, 1.0).">liquidation_threshold</span></label>' +
+    '<div class="num-stepper">' +
+      '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-liq-thresh\');i.value=+(Math.max(0,+i.value-0.01)).toFixed(2)">\u2212</button>' +
+      '<input type="number" id="cfg-liq-thresh" value="' + liqThresh + '" step="0.01" min="0" max="0.99">' +
+      '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-liq-thresh\');i.value=+(Math.min(0.99,+i.value+0.01)).toFixed(2)">+</button>' +
+    '</div></div>';
+  var dynWel = bt.dynamic_wel_by_tradability !== undefined ? bt.dynamic_wel_by_tradability : true;
+  html += '<div class="form-group" style="justify-content:flex-end">' +
+    '<div class="chk-row"><input type="checkbox" id="cfg-dyn-wel"' + (dynWel ? ' checked' : '') + '>' +
+    '<label for="cfg-dyn-wel"><span data-tip="true: WEL denominator = min(n_positions, n_tradable_max).\nfalse: fixed denominator, same as live.">dynamic_wel_by_tradability</span></label></div>' +
+    '</div>';
   html += '</div>';
 
-  /* ── Row 3: Fees & Overrides (cols-8: 2+2+2+1+1) ── */
+  /* ── Row 3: Fees & Controls (cols-8: 2+2+1+1+1) ── */
   html += '<div class="form-row cols-8" style="align-items:end">';
   var mfEnabled = bt.maker_fee_override !== null && bt.maker_fee_override !== undefined;
   var mfVal = mfEnabled ? bt.maker_fee_override : 0;
@@ -1200,7 +1388,7 @@ function showConfigEditor(name, cfg) {
       '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-taker-fee-val\');i.value=+(+i.value+0.00001).toFixed(5)">+</button>' +
     '</div></div>';
   var moSlippage = bt.market_order_slippage_pct !== undefined ? bt.market_order_slippage_pct : 0.0005;
-  html += '<div class="form-group" style="grid-column:span 2"><label><span data-tip="Slippage for simulated market-order execution.\nApplies to HSL panic closes and market_orders_allowed.\nDefault 0.0005 (5 bps).">market_order_slippage_pct</span></label>' +
+  html += '<div class="form-group"><label><span data-tip="Slippage for simulated market-order execution.\nApplies to HSL panic closes and market_orders_allowed.\nDefault 0.0005 (5 bps).">market_order_slippage_pct</span></label>' +
     '<div class="num-stepper">' +
       '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-mo-slippage\');i.value=+(Math.max(0,+i.value-0.0001)).toFixed(4)">\u2212</button>' +
       '<input type="number" id="cfg-mo-slippage" value="' + moSlippage + '" step="0.0001" min="0">' +
@@ -1215,27 +1403,9 @@ function showConfigEditor(name, cfg) {
     [cfg.logging && cfg.logging.level || 'INFO'], false, '0=warnings, 1=info, 2=debug, 3=trace');
   html += '</div>';
 
-  /* ── Row 4: Backtest Behavior (cols-8: 2+2+2+2) ── */
+  /* ── Row 4: Data Source (cols-8: 4+1+1+1+1) ── */
   html += '<div class="form-row cols-8" style="align-items:end">';
-  html += fieldNumber2('cfg-max-warmup', 'max_warmup_minutes', bt.max_warmup_minutes || live.max_warmup_minutes || 1440, 1440, 'Hard ceiling for historical warm-up window.\n0 = no cap.', 2);
-  html += fieldNumber2('cfg-min-coin-age', 'minimum_coin_age_days', live.minimum_coin_age_days !== undefined ? live.minimum_coin_age_days : 30, 1, 'Disallows coins younger than given days.', 2);
-  var liqThresh = bt.liquidation_threshold !== undefined ? bt.liquidation_threshold : 0.05;
-  html += '<div class="form-group" style="grid-column:span 2"><label><span data-tip="Early-stop equity-floor guard.\nTerminates when equity \u2264 starting_balance \u00d7 threshold.\nRange [0.0, 1.0).">liquidation_threshold</span></label>' +
-    '<div class="num-stepper">' +
-      '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-liq-thresh\');i.value=+(Math.max(0,+i.value-0.01)).toFixed(2)">\u2212</button>' +
-      '<input type="number" id="cfg-liq-thresh" value="' + liqThresh + '" step="0.01" min="0" max="0.99">' +
-      '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-liq-thresh\');i.value=+(Math.min(0.99,+i.value+0.01)).toFixed(2)">+</button>' +
-    '</div></div>';
-  var dynWel = bt.dynamic_wel_by_tradability !== undefined ? bt.dynamic_wel_by_tradability : true;
-  html += '<div class="form-group" style="grid-column:span 2;justify-content:flex-end">' +
-    '<div class="chk-row"><input type="checkbox" id="cfg-dyn-wel"' + (dynWel ? ' checked' : '') + '>' +
-    '<label for="cfg-dyn-wel"><span data-tip="true: WEL denominator = min(n_positions, n_tradable_max).\nfalse: fixed denominator, same as live.">dynamic_wel_by_tradability</span></label></div>' +
-    '</div>';
-  html += '</div>';
-
-  /* ── Row 5: Data Source (cols-8: 4+1+1+1+1) ── */
-  html += '<div class="form-row cols-8" style="align-items:end">';
-  html += '<div class="form-group" style="grid-column:span 4"><label><span data-tip="Optional path to pre-populated OHLCV directory.">ohlcv_source_dir</span></label>' +
+  html += '<div class="form-group span-4"><label><span data-tip="Optional path to pre-populated OHLCV directory.">ohlcv_source_dir</span></label>' +
     '<div style="display:flex;gap:var(--sp-xs)">' +
       '<input type="text" id="cfg-ohlcv-dir" class="form-input" value="' + esc(bt.ohlcv_source_dir || '') + '" placeholder="Leave empty for default">' +
       '<button type="button" class="act-btn" style="white-space:nowrap" onclick="fillPbguiDataPath()" title="Use PBGui market data directory">\uD83D\uDCC2 PBGui Data</button>' +
@@ -1307,12 +1477,12 @@ function showConfigEditor(name, cfg) {
   /* ── Coins & Filters ── */
   html += '<div class="section-title">Coins &amp; Filters</div>';
   html += '<div class="form-row cols-8" style="align-items:end">';
-  html += fieldNumber2('cfg-market-cap', 'market_cap (min M$)', pbgui.market_cap !== undefined ? pbgui.market_cap : 0, 50, 'Minimum market capitalisation in millions USD.\nCoins below this threshold are excluded.\n0 = no filter.', 1);
-  html += fieldNumber2('cfg-vol-mcap', 'vol/mcap', pbgui.vol_mcap !== undefined ? pbgui.vol_mcap : 10, 0.05, 'Maximum 24h volume-to-market-cap ratio.\nVery high ratios often indicate low-quality or manipulated coins.', 1);
-  /* tags multiselect - span 4 */
-  html += '<div class="form-group" style="grid-column:span 4"><label><span data-tip="Filter by CoinMarketCap category tags.\nOnly coins with at least one matching tag are shown.\nLeave empty to include all tags.">tags</span></label>' +
+  html += fieldNumber2('cfg-market-cap', 'market_cap (min M$)', pbgui.market_cap !== undefined ? pbgui.market_cap : 0, 50, 'Minimum market capitalisation in millions USD.\nCoins below this threshold are excluded.\n0 = no filter.', 2);
+  html += fieldNumber2('cfg-vol-mcap', 'vol/mcap', pbgui.vol_mcap !== undefined ? pbgui.vol_mcap : 10, 0.05, 'Maximum 24h volume-to-market-cap ratio.\nVery high ratios often indicate low-quality or manipulated coins.', 2);
+  /* tags multiselect - span 2 */
+  html += '<div class="form-group" style="grid-column:span 2"><label><span data-tip="Filter by CoinMarketCap category tags.\nOnly coins with at least one matching tag are shown.\nLeave empty to include all tags.">tags</span></label>' +
     '<div class="ms-wrap" id="ms-cfg-tags">' +
-      '<input class="ms-input" id="ms-cfg-tags-input" placeholder="Select tags...">' +
+      '<input class="ms-input" id="ms-cfg-tags-input" placeholder="Select tags..." autocomplete="off">' +
       '<div class="ms-dropdown" id="ms-cfg-tags-dd"></div>' +
     '</div></div>';
   html += '<div class="form-group" style="justify-content:flex-end">' +
@@ -1328,14 +1498,14 @@ function showConfigEditor(name, cfg) {
     '<span class="ms-all-btn" onclick="cfgSelectAllMs(\'ms-cfg-app-long\')" title="Select all">all</span> ' +
     '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-app-long\')" title="Clear all">\u00d7</span></label>' +
     '<div class="ms-wrap" id="ms-cfg-app-long">' +
-      '<input class="ms-input" id="ms-cfg-app-long-input" placeholder="Type to search...">' +
+      '<input class="ms-input" id="ms-cfg-app-long-input" placeholder="Type to search..." autocomplete="off">' +
       '<div class="ms-dropdown" id="ms-cfg-app-long-dd"></div>' +
     '</div></div>';
   html += '<div class="form-group"><label><span data-tip="Coins approved for trading.">approved_coins_short</span> ' +
     '<span class="ms-all-btn" onclick="cfgSelectAllMs(\'ms-cfg-app-short\')" title="Select all">all</span> ' +
     '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-app-short\')" title="Clear all">\u00d7</span></label>' +
     '<div class="ms-wrap" id="ms-cfg-app-short">' +
-      '<input class="ms-input" id="ms-cfg-app-short-input" placeholder="Type to search...">' +
+      '<input class="ms-input" id="ms-cfg-app-short-input" placeholder="Type to search..." autocomplete="off">' +
       '<div class="ms-dropdown" id="ms-cfg-app-short-dd"></div>' +
     '</div></div>';
   html += '</div>';
@@ -1345,14 +1515,14 @@ function showConfigEditor(name, cfg) {
     '<span class="ms-all-btn" onclick="cfgSelectAllMs(\'ms-cfg-ign-long\')" title="Select all">all</span> ' +
     '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-ign-long\')" title="Clear all">\u00d7</span></label>' +
     '<div class="ms-wrap" id="ms-cfg-ign-long">' +
-      '<input class="ms-input" id="ms-cfg-ign-long-input" placeholder="Type to search...">' +
+      '<input class="ms-input" id="ms-cfg-ign-long-input" placeholder="Type to search..." autocomplete="off">' +
       '<div class="ms-dropdown" id="ms-cfg-ign-long-dd"></div>' +
     '</div></div>';
   html += '<div class="form-group"><label><span data-tip="Coins the bot will not trade.">ignored_coins_short</span> ' +
     '<span class="ms-all-btn" onclick="cfgSelectAllMs(\'ms-cfg-ign-short\')" title="Select all">all</span> ' +
     '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-ign-short\')" title="Clear all">\u00d7</span></label>' +
     '<div class="ms-wrap" id="ms-cfg-ign-short">' +
-      '<input class="ms-input" id="ms-cfg-ign-short-input" placeholder="Type to search...">' +
+      '<input class="ms-input" id="ms-cfg-ign-short-input" placeholder="Type to search..." autocomplete="off">' +
       '<div class="ms-dropdown" id="ms-cfg-ign-short-dd"></div>' +
     '</div></div>';
   html += '</div>';
@@ -1423,42 +1593,9 @@ function showConfigEditor(name, cfg) {
   html += '</div>'; /* end cols-2 */
 
   /* ── Additional (unknown) backtest parameters expander ── */
-  _extraBtKeys = Object.keys(bt).filter(function(k) { return !KNOWN_BT_PARAMS.has(k); }).sort();
-  if (_extraBtKeys.length > 0) {
-    html += '<div class="expander" id="exp-extra-bt">' +
-      '<div class="expander-header" onclick="toggleExpander(\'exp-extra-bt\')">' +
-        '<span class="arrow">▶</span> Additional Parameters' +
-        '<span style="margin-left:auto;font-size:var(--fs-xs);color:var(--text-dim)">Parameters not yet in the GUI — edit and they will be preserved on save</span>' +
-      '</div>' +
-      '<div class="expander-body">' +
-        '<div class="form-row cols-3">';
-    _extraBtKeys.forEach(function(k) {
-      var v = bt[k];
-      var t = typeof v;
-      var meta = EXTRA_BT_META[k] || {};
-      var lbl = meta.tip ? '<span data-tip="' + esc(meta.tip) + '">' + esc(k) + '</span>' : esc(k);
-      var hint = meta.fmt ? '<div style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">' + esc(meta.fmt) + '</div>' : '';
-      var fld = '';
-      if (t === 'boolean') {
-        fld = '<div class="form-group"><label>' + lbl + '</label>' +
-          '<div class="chk-row"><input type="checkbox" id="extra-bt-' + esc(k) + '" data-extra-bt-type="boolean"' + (v ? ' checked' : '') + '></div>' + hint + '</div>';
-      } else if (t === 'number') {
-        fld = '<div class="form-group"><label>' + lbl + '</label>' +
-          '<input type="number" id="extra-bt-' + esc(k) + '" data-extra-bt-type="number" class="form-input" value="' + esc(String(v)) + '">' + hint + '</div>';
-      } else if (t === 'object' || Array.isArray(v)) {
-        fld = '<div class="form-group" style="grid-column:span 3"><label>' + lbl + '</label>' +
-          '<textarea id="extra-bt-' + esc(k) + '" data-extra-bt-type="json" style="overflow:hidden;resize:vertical" oninput="autoResizeTa(this)">' + esc(JSON.stringify(v, null, 2)) + '</textarea>' + hint + '</div>';
-      } else {
-        /* string or null */
-        fld = '<div class="form-group"><label>' + lbl + '</label>' +
-          '<input type="text" id="extra-bt-' + esc(k) + '" data-extra-bt-type="' + (v === null ? 'null' : 'string') + '" class="form-input" value="' + esc(v === null ? '' : String(v)) + '" placeholder="' + (v === null ? 'null' : '') + '">' + hint + '</div>';
-      }
-      html += fld;
-    });
-    html +=     '</div>' +
-      '</div>' +
-    '</div>';
-  }
+  var extraBtInfo = buildExtraBtExpanderHtml(bt);
+  _extraBtKeys = extraBtInfo.keys;
+  html += extraBtInfo.html;
 
   /* ── Raw JSON expander ── */
   html += '<div class="expander" id="exp-raw">' +
@@ -1467,7 +1604,7 @@ function showConfigEditor(name, cfg) {
     '</div>' +
     '<div class="expander-body">' +
       '<div class="form-group">' +
-        '<textarea id="cfg-raw-json" style="overflow:hidden;resize:vertical" oninput="autoResizeTa(this)">' + esc(JSON.stringify(cfg, null, 2)) + '</textarea>' +
+        '<textarea id="cfg-raw-json" style="overflow:hidden;resize:vertical" oninput="scheduleRawJsonEditorSync()">' + esc(rawOverride != null ? String(rawOverride) : JSON.stringify(cfg, null, 2)) + '</textarea>' +
       '</div>' +
     '</div>' +
   '</div>';
@@ -1495,10 +1632,274 @@ function showConfigEditor(name, cfg) {
   // Init and populate suite editor
   suiteInit('suite-container', { apiBase: API_BASE });
   suiteLoad(cfg);
+  cfgWireDateRange('cfg-start-date', 'cfg-end-date');
   // Init and populate coin overrides editor
   coinOvInit('coin-overrides-container', { apiBase: API_BASE });
   coinOvSetConfigName(name);
   coinOvLoad(cfg);
+
+  var rawEl = document.getElementById('cfg-raw-json');
+  if (rawEl) {
+    autoResizeTa(rawEl);
+    _rawEditorLastApplied = rawEl.value;
+  }
+
+  if (!ed.dataset.structuredSyncBound) {
+    ed.dataset.structuredSyncBound = '1';
+    ed.addEventListener('input', function(e) {
+      var target = e.target;
+      if (!target || target.id === 'cfg-raw-json') return;
+      scheduleStructuredEditorSync();
+    });
+    ed.addEventListener('change', function(e) {
+      var target = e.target;
+      if (!target || target.id === 'cfg-raw-json') return;
+      scheduleStructuredEditorSync();
+    });
+    ed.addEventListener('click', function(e) {
+      var target = e.target;
+      if (!target || !target.closest || !target.closest('.stepper-btn')) return;
+      setTimeout(scheduleStructuredEditorSync, 0);
+    });
+  }
+}
+
+function scheduleRawJsonEditorSync() {
+  if (_rawEditorSyncing) return;
+  clearTimeout(_rawEditorSyncTimer);
+  _rawEditorSyncTimer = setTimeout(applyRawJsonEditorSync, 250);
+}
+
+function scheduleStructuredEditorSync() {
+  if (_rawEditorSyncing || _structuredEditorSyncing) return;
+  clearTimeout(_structuredEditorSyncTimer);
+  _structuredEditorSyncTimer = setTimeout(applyStructuredEditorSync, 150);
+}
+
+function applyStructuredEditorSync() {
+  if (_rawEditorSyncing || _structuredEditorSyncing) return;
+  var rawEl = document.getElementById('cfg-raw-json');
+  if (!rawEl) return;
+  if (document.activeElement === rawEl) return;
+
+  var currentRaw = rawEl.value || '';
+  if (currentRaw.trim()) {
+    try {
+      JSON.parse(currentRaw);
+    } catch (e) {
+      return;
+    }
+  }
+
+  _structuredEditorSyncing = true;
+  try {
+    var nextRaw = JSON.stringify(collectConfig(), null, 2);
+    if (rawEl.value === nextRaw) {
+      _rawEditorLastApplied = nextRaw;
+      return;
+    }
+    var rawScrollTop = rawEl.scrollTop;
+    rawEl.value = nextRaw;
+    rawEl.scrollTop = Math.min(rawScrollTop, rawEl.scrollHeight);
+    _rawEditorLastApplied = nextRaw;
+  } finally {
+    _structuredEditorSyncing = false;
+  }
+}
+
+function cfgSetFieldValue(id, value) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var next = value === undefined || value === null ? '' : String(value);
+  if (el.value !== next) el.value = next;
+}
+
+function cfgSetCheckedValue(id, checked) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.checked = !!checked;
+}
+
+function cfgSyncTextareaJson(id, value) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var next = JSON.stringify(value || {}, null, 2);
+  if (el.value !== next) {
+    el.value = next;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  autoResizeTa(el);
+}
+
+function cfgCaptureRawAnchor() {
+  var rawEl = document.getElementById('cfg-raw-json');
+  if (!rawEl || document.activeElement !== rawEl) return null;
+  return {
+    top: rawEl.getBoundingClientRect().top,
+    scrollTop: rawEl.scrollTop,
+    selectionStart: rawEl.selectionStart,
+    selectionEnd: rawEl.selectionEnd,
+  };
+}
+
+function cfgRestoreRawAnchor(anchor) {
+  if (!anchor) return;
+  var rawEl = document.getElementById('cfg-raw-json');
+  if (!rawEl) return;
+  var delta = rawEl.getBoundingClientRect().top - anchor.top;
+  if (delta) window.scrollBy(0, delta);
+  rawEl.scrollTop = anchor.scrollTop;
+  try {
+    rawEl.setSelectionRange(anchor.selectionStart, anchor.selectionEnd);
+  } catch (e) {}
+}
+
+function cfgSyncExtraBtFields(bt) {
+  var extraBtInfo = buildExtraBtExpanderHtml(bt || {});
+  var nextKeys = extraBtInfo.keys;
+  var currentEl = document.getElementById('exp-extra-bt');
+  var rawEl = document.getElementById('exp-raw');
+  var wasOpen = currentEl && currentEl.classList.contains('open');
+  var sameKeys = JSON.stringify((_extraBtKeys || []).slice()) === JSON.stringify(nextKeys);
+
+  _extraBtKeys = nextKeys.slice();
+
+  if (!sameKeys) {
+    if (currentEl) currentEl.remove();
+    if (nextKeys.length && rawEl) {
+      rawEl.insertAdjacentHTML('beforebegin', extraBtInfo.html);
+      var nextEl = document.getElementById('exp-extra-bt');
+      if (nextEl && wasOpen) nextEl.classList.add('open');
+      nextKeys.forEach(function(k) {
+        var el = document.getElementById('extra-bt-' + k);
+        if (el && el.tagName === 'TEXTAREA') autoResizeTa(el);
+      });
+    }
+    return;
+  }
+
+  nextKeys.forEach(function(k) {
+    var el = document.getElementById('extra-bt-' + k);
+    if (!el) return;
+    var type = el.getAttribute('data-extra-bt-type');
+    var value = bt[k];
+    if (type === 'boolean') {
+      el.checked = !!value;
+    } else if (type === 'number') {
+      el.value = value === undefined || value === null ? '' : String(value);
+    } else if (type === 'json') {
+      el.value = JSON.stringify(value, null, 2);
+      autoResizeTa(el);
+    } else if (type === 'null') {
+      if (value === undefined || value === null) {
+        el.value = '';
+      } else if (typeof value === 'string') {
+        el.value = value;
+      } else {
+        el.value = JSON.stringify(value);
+      }
+    } else {
+      el.value = value === undefined || value === null ? '' : String(value);
+    }
+  });
+}
+
+function cfgSyncEditorFromParsed(name, cfg) {
+  var bt = (cfg && cfg.backtest) || {};
+  var bot = (cfg && cfg.bot) || {};
+  var live = (cfg && cfg.live) || {};
+  var pbgui = (cfg && cfg.pbgui) || {};
+  var logging = (cfg && cfg.logging) || {};
+  var exAll = ['binance','bybit','bitget','okx','hyperliquid','combined'];
+  var anchor = cfgCaptureRawAnchor();
+  var mfEnabled = bt.maker_fee_override !== null && bt.maker_fee_override !== undefined;
+  var tfEnabled = bt.taker_fee_override !== null && bt.taker_fee_override !== undefined;
+
+  cfgSetFieldValue('cfg-name', name || '');
+  cfgSetFieldValue('cfg-start-date', bt.start_date || '2020-01-01');
+  cfgSetFieldValue('cfg-end-date', (bt.end_date && bt.end_date !== 'now') ? bt.end_date : new Date().toISOString().slice(0,10));
+  cfgSetFieldValue('cfg-starting-balance', bt.starting_balance || 1000);
+  cfgSetFieldValue('cfg-balance-divider', bt.balance_sample_divider || 60);
+  cfgSetFieldValue('cfg-btc-cap', bt.btc_collateral_cap || 0);
+  cfgSetFieldValue('cfg-btc-ltv', bt.btc_collateral_ltv_cap || 0);
+  cfgSetFieldValue('cfg-max-warmup', bt.max_warmup_minutes || live.max_warmup_minutes || 1440);
+  cfgSetFieldValue('cfg-min-coin-age', live.minimum_coin_age_days !== undefined ? live.minimum_coin_age_days : 30);
+  cfgSetFieldValue('cfg-liq-thresh', bt.liquidation_threshold !== undefined ? bt.liquidation_threshold : 0.05);
+  cfgSetFieldValue('cfg-mo-slippage', bt.market_order_slippage_pct !== undefined ? bt.market_order_slippage_pct : 0.0005);
+  cfgSetFieldValue('cfg-ohlcv-dir', bt.ohlcv_source_dir || '');
+  cfgSetFieldValue('cfg-candle-interval', bt.candle_interval_minutes || 1);
+  cfgSetFieldValue('cfg-gap-tolerance', bt.gap_tolerance_ohlcvs_minutes || 5);
+  cfgSetFieldValue('cfg-logging', logging.level || 'INFO');
+  cfgSetFieldValue('cfg-market-cap', pbgui.market_cap !== undefined ? pbgui.market_cap : 0);
+  cfgSetFieldValue('cfg-vol-mcap', pbgui.vol_mcap !== undefined ? pbgui.vol_mcap : 10);
+  cfgSetCheckedValue('cfg-dyn-wel', bt.dynamic_wel_by_tradability !== undefined ? bt.dynamic_wel_by_tradability : true);
+  cfgSetCheckedValue('cfg-filter-cost', bt.filter_by_min_effective_cost !== undefined ? bt.filter_by_min_effective_cost : (live.filter_by_min_effective_cost !== false));
+  cfgSetCheckedValue('cfg-compress', !!bt.compress_cache);
+  cfgSetCheckedValue('cfg-vol-norm', !!bt.volume_normalization);
+  cfgSetCheckedValue('cfg-only-cpt', !!pbgui.only_cpt);
+  cfgSetCheckedValue('cfg-notices-ignore', !!pbgui.notices_ignore);
+  cfgSetCheckedValue('cfg-maker-fee-enabled', mfEnabled);
+  cfgSetFieldValue('cfg-maker-fee-val', mfEnabled ? bt.maker_fee_override : 0);
+  cfgSetCheckedValue('cfg-taker-fee-enabled', tfEnabled);
+  cfgSetFieldValue('cfg-taker-fee-val', tfEnabled ? bt.taker_fee_override : 0);
+  cfgSetFieldValue('cfg-twe-long', ((bot.long || {}).total_wallet_exposure_limit || 1));
+  cfgSetFieldValue('cfg-npos-long', ((bot.long || {}).n_positions || 1));
+  cfgSetFieldValue('cfg-twe-short', ((bot.short || {}).total_wallet_exposure_limit || 0));
+  cfgSetFieldValue('cfg-npos-short', ((bot.short || {}).n_positions || 0));
+
+  var startDateEl = document.getElementById('cfg-start-date');
+  if (startDateEl) startDateEl.dataset.prev = startDateEl.value;
+  var endDateEl = document.getElementById('cfg-end-date');
+  if (endDateEl) endDateEl.dataset.prev = endDateEl.value;
+  var makerFeeEl = document.getElementById('cfg-maker-fee-val');
+  if (makerFeeEl) makerFeeEl.disabled = !mfEnabled;
+  var takerFeeEl = document.getElementById('cfg-taker-fee-val');
+  if (takerFeeEl) takerFeeEl.disabled = !tfEnabled;
+
+  cfgSyncTextareaJson('cfg-bot-long', bot.long || {});
+  cfgSyncTextareaJson('cfg-bot-short', bot.short || {});
+
+  kvInit('kv-cs', bt.coin_sources || {});
+  kvUpdateExpanderCount('kv-cs');
+  kvLoadCoins('kv-cs');
+  kvInit('kv-mss', bt.market_settings_sources || {});
+  kvUpdateExpanderCount('kv-mss');
+  kvLoadCoins('kv-mss');
+
+  _cfgEditorCfg = cfg;
+  cfgRebuildMs('ms-cfg-exchanges', exAll, bt.exchanges || []);
+  suiteLoad(cfg, { preserveEdit: true });
+  coinOvSetConfigName(name);
+  coinOvLoad(cfg);
+  cfgSyncExtraBtFields(bt);
+  cfgRestoreRawAnchor(anchor);
+}
+
+function applyRawJsonEditorSync() {
+  if (_rawEditorSyncing) return;
+  var rawEl = document.getElementById('cfg-raw-json');
+  if (!rawEl) return;
+
+  var raw = rawEl.value;
+  if (!raw || raw === _rawEditorLastApplied) return;
+
+  var parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return;
+  }
+
+  var nameEl = document.getElementById('cfg-name');
+  var displayName = nameEl ? nameEl.value.trim() : '';
+
+  _rawEditorSyncing = true;
+  try {
+    cfgSyncEditorFromParsed(displayName, parsed);
+    _rawEditorLastApplied = raw;
+  } finally {
+    _rawEditorSyncing = false;
+  }
 }
 
 function toggleExpander(id) {
@@ -1511,17 +1912,26 @@ function toggleExpander(id) {
 }
 
 /* ─── Config editor multiselect component ─────────────────── */
-var _cfgMs = {};  // id → {options: [], selected: [], highlightIdx: -1}
+var _cfgMs = {};  // id → {options: [], selected: [], highlightIdx: -1, coinMeta: {}}
 var _cfgEditorCfg = null;  // store cfg reference for exchange-change reloads
+var _cfgSymbolsLoadSeq = 0;
+var _structuredEditorSyncTimer = null;
+var _structuredEditorSyncing = false;
 var _cfgMsCp = {
   'ms-cfg-app-long':  'ms-cfg-ign-long',
   'ms-cfg-ign-long':  'ms-cfg-app-long',
   'ms-cfg-app-short': 'ms-cfg-ign-short',
   'ms-cfg-ign-short': 'ms-cfg-app-short'
 };
+var _cfgCoinMsIds = {
+  'ms-cfg-app-long': true,
+  'ms-cfg-app-short': true,
+  'ms-cfg-ign-long': true,
+  'ms-cfg-ign-short': true
+};
 
 function cfgRebuildMs(id, options, selected) {
-  _cfgMs[id] = { options: options.slice(), selected: selected.slice(), highlightIdx: -1 };
+  _cfgMs[id] = { options: options.slice(), selected: selected.slice(), highlightIdx: -1, coinMeta: {} };
   cfgRenderMsTags(id);
   // Wire up input events (called after innerHTML rebuild each time editor opens)
   var wrap = document.getElementById(id);
@@ -1534,6 +1944,7 @@ function cfgRebuildMs(id, options, selected) {
     cfgShowMsDd(id, this.value);
   });
   input.addEventListener('blur', function() {
+    this.value = '';
     var dd = wrap.querySelector('.ms-dropdown');
     if (dd) setTimeout(function() { dd.classList.remove('open'); if (_cfgMs[id]) _cfgMs[id].highlightIdx = -1; }, 150);
   });
@@ -1580,10 +1991,198 @@ function cfgRebuildMs(id, options, selected) {
         }
         state.highlightIdx = -1;
         cfgRenderMsTags(id);
-        cfgShowMsDd(id, this.value);
+        this.value = '';
+        cfgShowMsDd(id, '');
       }
     }
   });
+}
+
+function cfgEnsureStatusEl(id) {
+  var wrap = document.getElementById(id);
+  if (!wrap) return null;
+  var group = wrap.closest('.form-group');
+  if (!group) return null;
+  var el = group.querySelector('.ms-status-summary[data-for="' + id + '"]');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'ms-status-summary';
+    el.setAttribute('data-for', id);
+    group.appendChild(el);
+  }
+  return el;
+}
+
+function cfgGetCoinMeta(id, value) {
+  var state = _cfgMs[id];
+  if (!state || !state.coinMeta) return null;
+  return state.coinMeta[value] || null;
+}
+
+function cfgClearCoinMeta(id) {
+  if (!_cfgMs[id]) return;
+  _cfgMs[id].coinMeta = {};
+  cfgUpdateMsStatusSummary(id);
+}
+
+function cfgApplyCoinStatus(id, statuses) {
+  var state = _cfgMs[id];
+  if (!state) return;
+
+  var nextSelected = [];
+  var nextMeta = {};
+  state.selected.forEach(function(value) {
+    var info = statuses ? statuses[value] : null;
+    var nextValue = value;
+    if (info && info.status !== 'invalid' && info.normalized) {
+      nextValue = info.normalized;
+    }
+    if (nextSelected.indexOf(nextValue) >= 0) return;
+    nextSelected.push(nextValue);
+    if (info) {
+      nextMeta[nextValue] = {
+        status: info.status,
+        normalized: info.normalized || nextValue,
+        raw: value,
+        changed: (info.normalized || nextValue) !== value,
+      };
+    }
+  });
+
+  state.selected = nextSelected;
+  state.coinMeta = nextMeta;
+  cfgRenderMsTags(id);
+}
+
+function cfgCoinTagLabel(value, meta) {
+  if (!meta) return value;
+  if (meta.status === 'invalid') return '? ' + (meta.raw || value);
+  return meta.normalized || value;
+}
+
+function cfgCoinTagTitle(value, meta) {
+  if (!meta) return '';
+  if (meta.status === 'invalid') {
+    return (meta.changed ? ('Normalized from ' + meta.raw + ' to ' + meta.normalized + '. ') : '') +
+      'CoinData could not resolve this entry to an active coin for the current exchange selection.';
+  }
+  if (meta.changed) {
+    return 'Normalized from ' + meta.raw + ' to ' + meta.normalized + '.';
+  }
+  return '';
+}
+
+function cfgRemoveAllInvalidCoins() {
+  var removed = 0;
+  Object.keys(_cfgCoinMsIds).forEach(function(id) {
+    var state = _cfgMs[id];
+    if (!state) return;
+
+    var nextSelected = [];
+    var nextMeta = {};
+    state.selected.forEach(function(value) {
+      var meta = cfgGetCoinMeta(id, value);
+      if (meta && meta.status === 'invalid') {
+        removed += 1;
+        return;
+      }
+      nextSelected.push(value);
+      if (meta) nextMeta[value] = meta;
+    });
+
+    state.selected = nextSelected;
+    state.coinMeta = nextMeta;
+    cfgRenderMsTags(id);
+  });
+
+  if (!removed) {
+    toast('No invalid coins to remove', 'warn');
+    return;
+  }
+  toast('Removed ' + removed + ' invalid coin' + (removed === 1 ? '' : 's'), 'ok');
+}
+
+function cfgUpdateMsStatusSummary(id) {
+  if (!_cfgCoinMsIds[id]) return;
+  var el = cfgEnsureStatusEl(id);
+  if (!el) return;
+  var state = _cfgMs[id];
+  if (!state || !state.selected.length) {
+    el.textContent = '';
+    el.style.display = 'none';
+    return;
+  }
+
+  var invalid = 0;
+  state.selected.forEach(function(value) {
+    var meta = cfgGetCoinMeta(id, value);
+    if (!meta) return;
+    if (meta.status === 'invalid') invalid += 1;
+  });
+
+  if (!invalid) {
+    el.textContent = '';
+    el.style.display = 'none';
+    return;
+  }
+
+  var parts = [];
+  if (invalid) parts.push('<span class="err">' + invalid + ' invalid</span>');
+  if (invalid) parts.push('<button type="button" class="act-btn ms-status-action" onclick="cfgRemoveAllInvalidCoins()">Remove all invalid</button>');
+  el.innerHTML = parts.join(' <span class="sep">&middot;</span> ');
+  el.style.display = 'flex';
+}
+
+async function cfgFetchV7Json(path, opts) {
+  opts = opts || {};
+  var v7Base = API_BASE.replace('/backtest-v7', '/v7');
+  opts.headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, opts.headers || {});
+  var resp = await fetch(v7Base + path, opts);
+  var data = await resp.json();
+  if (!resp.ok) throw new Error((data && data.detail) || resp.statusText || 'Request failed');
+  return data;
+}
+
+async function cfgRefreshCoinStatuses(exchanges) {
+  var ids = ['ms-cfg-app-long', 'ms-cfg-app-short', 'ms-cfg-ign-long', 'ms-cfg-ign-short'];
+  if (!exchanges || !exchanges.length) {
+    var emptyAnchor = cfgCaptureRawAnchor();
+    ids.forEach(function(id) { cfgClearCoinMeta(id); });
+    cfgRestoreRawAnchor(emptyAnchor);
+    return;
+  }
+
+  var coins = [];
+  ids.forEach(function(id) {
+    cfgGetMs(id).forEach(function(value) {
+      if (!value || value === 'all' || coins.indexOf(value) >= 0) return;
+      coins.push(value);
+    });
+  });
+  if (!coins.length) {
+    var noCoinAnchor = cfgCaptureRawAnchor();
+    ids.forEach(function(id) { cfgClearCoinMeta(id); });
+    cfgRestoreRawAnchor(noCoinAnchor);
+    return;
+  }
+
+  try {
+    var data = await cfgFetchV7Json('/coins/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ exchanges: exchanges, coins: coins })
+    });
+    var applyAnchor = cfgCaptureRawAnchor();
+    ids.forEach(function(id) {
+      cfgApplyCoinStatus(id, data.statuses || {});
+    });
+    cfgRestoreRawAnchor(applyAnchor);
+  } catch (e) {
+    console.error('cfgRefreshCoinStatuses failed:', e);
+    var errorAnchor = cfgCaptureRawAnchor();
+    ids.forEach(function(id) { cfgClearCoinMeta(id); });
+    cfgRestoreRawAnchor(errorAnchor);
+  }
 }
 
 function cfgClearMs(id) {
@@ -1620,9 +2219,18 @@ function cfgRenderMsTags(id) {
   var state = _cfgMs[id];
   if (!state) return;
   state.selected.forEach(function(val) {
+    var meta = cfgGetCoinMeta(id, val);
     var tag = document.createElement('span');
-    tag.className = val === 'all' ? 'ms-tag ms-tag-all' : 'ms-tag';
-    tag.innerHTML = (val === 'all' ? '\u2605 all' : val) + ' <span class="ms-x" data-val="' + val + '">\u00d7</span>';
+    tag.className = val === 'all'
+      ? 'ms-tag ms-tag-all'
+      : 'ms-tag' + (meta && meta.status === 'invalid' ? ' ms-tag-invalid' : '');
+    if (meta) tag.title = cfgCoinTagTitle(val, meta);
+    tag.appendChild(document.createTextNode(val === 'all' ? '\u2605 all ' : (cfgCoinTagLabel(val, meta) + ' ')));
+    var close = document.createElement('span');
+    close.className = 'ms-x';
+    close.setAttribute('data-val', val);
+    close.textContent = '×';
+    tag.appendChild(close);
     wrap.insertBefore(tag, inputEl);
   });
   wrap.querySelectorAll('.ms-x').forEach(function(x) {
@@ -1633,10 +2241,12 @@ function cfgRenderMsTags(id) {
       cfgRenderMsTags(id);
     });
   });
+  cfgUpdateMsStatusSummary(id);
   // When exchanges multiselect changes, reload symbols
   if (id === 'ms-cfg-exchanges' && _cfgEditorCfg) {
     loadCfgSymbols(_cfgEditorCfg);
   }
+  scheduleStructuredEditorSync();
 }
 
 function cfgShowMsDd(id, filter) {
@@ -1695,19 +2305,19 @@ function cfgShowMsDd(id, filter) {
       }
       cfgRenderMsTags(id);
       var inp = wrap.querySelector('.ms-input');
-      cfgShowMsDd(id, inp ? inp.value : '');
+      if (inp) inp.value = '';
+      cfgShowMsDd(id, '');
     });
   });
 }
 
 async function loadCfgSymbols(cfg) {
+  var requestSeq = ++_cfgSymbolsLoadSeq;
+
   // Determine exchange list from the exchanges multiselect
-  var exchanges = cfgGetMs('ms-cfg-exchanges');
-  // Use first non-combined exchange for symbol lookup
-  var exchange = '';
-  for (var j = 0; j < exchanges.length; j++) {
-    if (exchanges[j] !== 'combined') { exchange = exchanges[j]; break; }
-  }
+  var exchanges = cfgGetMs('ms-cfg-exchanges').filter(function(exchange) {
+    return exchange !== 'combined';
+  });
 
   var live2   = (cfg && cfg.live)   || {};
   var pbgui2  = (cfg && cfg.pbgui) || {};
@@ -1720,50 +2330,58 @@ async function loadCfgSymbols(cfg) {
   var ignLong2  = (live2.ignored_coins  && live2.ignored_coins.long)   || [];
   var ignShort2 = (live2.ignored_coins  && live2.ignored_coins.short)  || [];
   var cfgTags   = pbgui2.tags || [];
+  var seededCoins = appLong2.concat(appShort2).concat(ignLong2).concat(ignShort2)
+    .filter(function(v, i, a) { return v !== 'all' && a.indexOf(v) === i; }).sort();
+  var seededAnchor = cfgCaptureRawAnchor();
 
-  if (!exchange) {
-    // No exchange — seed multiselects with existing coin values only
-    var allCoins = appLong2.concat(appShort2).concat(ignLong2).concat(ignShort2)
-      .filter(function(v, i, a) { return v !== 'all' && a.indexOf(v) === i; }).sort();
-    cfgRebuildMs('ms-cfg-app-long',  ['all'].concat(allCoins), appLong2);
-    cfgRebuildMs('ms-cfg-app-short', ['all'].concat(allCoins), appShort2);
-    cfgRebuildMs('ms-cfg-ign-long',  allCoins, ignLong2);
-    cfgRebuildMs('ms-cfg-ign-short', allCoins, ignShort2);
-    cfgRebuildMs('ms-cfg-tags', cfgTags, cfgTags);
-    coinOvSetCoins(allCoins);
+  cfgRebuildMs('ms-cfg-app-long',  ['all'].concat(seededCoins), appLong2);
+  cfgRebuildMs('ms-cfg-app-short', ['all'].concat(seededCoins), appShort2);
+  cfgRebuildMs('ms-cfg-ign-long',  seededCoins, ignLong2);
+  cfgRebuildMs('ms-cfg-ign-short', seededCoins, ignShort2);
+  cfgRebuildMs('ms-cfg-tags', cfgTags, cfgTags);
+  coinOvSetCoins(seededCoins);
+  cfgRestoreRawAnchor(seededAnchor);
+
+  if (!exchanges.length) {
+    // No exchange — keep the seeded values only.
+    cfgRefreshCoinStatuses([]);
     return;
   }
 
-  // apiFetch prepends API_BASE and returns parsed JSON — use raw fetch for the v7 endpoint
-  var v7Base = API_BASE.replace('/backtest-v7', '/v7');
   try {
     var results = await Promise.all([
-      fetch(v7Base + '/symbols?exchange=' + encodeURIComponent(exchange), {
-        headers: { 'Authorization': 'Bearer ' + TOKEN }
-      }).then(function(r) { return r.json(); }),
-      fetch(v7Base + '/tags?exchange=' + encodeURIComponent(exchange), {
-        headers: { 'Authorization': 'Bearer ' + TOKEN }
-      }).then(function(r) { return r.json(); })
+      Promise.all(exchanges.map(function(exchange) {
+        return cfgFetchV7Json('/symbols?exchange=' + encodeURIComponent(exchange));
+      })),
+      Promise.all(exchanges.map(function(exchange) {
+        return cfgFetchV7Json('/tags?exchange=' + encodeURIComponent(exchange));
+      }))
     ]);
-    var symbols = (results[0].symbols || []).slice().sort();
-    var allTags = (results[1].tags || []).slice().sort();
+    var symbolSet = new Set();
+    var tagSet = new Set();
+    results[0].forEach(function(resp) {
+      (resp.symbols || []).forEach(function(symbol) { symbolSet.add(symbol); });
+    });
+    results[1].forEach(function(resp) {
+      (resp.tags || []).forEach(function(tag) { tagSet.add(tag); });
+    });
+    if (requestSeq !== _cfgSymbolsLoadSeq) return;
+    var symbols = Array.from(symbolSet).sort();
+    var allTags = Array.from(tagSet).sort();
+    var loadedAnchor = cfgCaptureRawAnchor();
     cfgRebuildMs('ms-cfg-app-long',  ['all'].concat(symbols), appLong2);
     cfgRebuildMs('ms-cfg-app-short', ['all'].concat(symbols), appShort2);
     cfgRebuildMs('ms-cfg-ign-long',  symbols, ignLong2);
     cfgRebuildMs('ms-cfg-ign-short', symbols, ignShort2);
     cfgRebuildMs('ms-cfg-tags', allTags, cfgTags);
     coinOvSetCoins(symbols);
+    cfgRestoreRawAnchor(loadedAnchor);
+    cfgRefreshCoinStatuses(exchanges);
   } catch (e) {
     console.error('loadCfgSymbols failed:', e);
-    // Fall back to seeding with existing values
-    var fallback = appLong2.concat(appShort2).concat(ignLong2).concat(ignShort2)
-      .filter(function(v, i, a) { return v !== 'all' && a.indexOf(v) === i; }).sort();
-    cfgRebuildMs('ms-cfg-app-long',  ['all'].concat(fallback), appLong2);
-    cfgRebuildMs('ms-cfg-app-short', ['all'].concat(fallback), appShort2);
-    cfgRebuildMs('ms-cfg-ign-long',  fallback, ignLong2);
-    cfgRebuildMs('ms-cfg-ign-short', fallback, ignShort2);
-    cfgRebuildMs('ms-cfg-tags', cfgTags, cfgTags);
-    coinOvSetCoins(fallback);
+    if (requestSeq !== _cfgSymbolsLoadSeq) return;
+    // Fall back to the seeded values already applied above.
+    cfgRefreshCoinStatuses([]);
   }
 }
 
@@ -1771,6 +2389,11 @@ async function loadCfgSymbols(cfg) {
 var _kvData = {};       // prefix → { coin: exchange, ... }
 var _kvSymCache = {};   // exchange → [symbols]
 var _kvHighlight = {};  // prefix → index (-1 = none)
+var _kvMeta = {
+  'kv-cs': { expId: 'exp-coin-sources', label: 'coin_sources' },
+  'kv-mss': { expId: 'exp-mss', label: 'market_settings_sources' },
+  'suite-kv-cs': { expId: 'suite-exp-csrc', label: 'coin_sources' },
+};
 
 function kvInit(prefix, data) {
   _kvData[prefix] = {};
@@ -1796,6 +2419,7 @@ function kvRemove(prefix, coin) {
   if (_kvData[prefix]) delete _kvData[prefix][coin];
   kvRenderChips(prefix);
   kvUpdateExpanderCount(prefix);
+  scheduleStructuredEditorSync();
 }
 
 function kvAdd(prefix, coin) {
@@ -1809,6 +2433,7 @@ function kvAdd(prefix, coin) {
   // Clear input
   var inp = document.getElementById(prefix + '-coin-input');
   if (inp) inp.value = '';
+  scheduleStructuredEditorSync();
 }
 
 function kvCollect(prefix) {
@@ -1816,15 +2441,15 @@ function kvCollect(prefix) {
 }
 
 function kvUpdateExpanderCount(prefix) {
-  var expId = prefix === 'kv-cs' ? 'exp-coin-sources' : 'exp-mss';
-  var label = prefix === 'kv-cs' ? 'coin_sources' : 'market_settings_sources';
-  var hdr = document.querySelector('#' + expId + ' .expander-header');
+  var meta = _kvMeta[prefix];
+  if (!meta) return;
+  var hdr = document.querySelector('#' + meta.expId + ' .expander-header');
   if (!hdr) return;
   var count = Object.keys(_kvData[prefix] || {}).length;
   var arrow = hdr.querySelector('.arrow');
   hdr.innerHTML = '';
   if (arrow) hdr.appendChild(arrow);
-  hdr.appendChild(document.createTextNode(' ' + label + ' (' + count + ' configured)'));
+  hdr.appendChild(document.createTextNode(' ' + meta.label + ' (' + count + ' configured)'));
 }
 
 async function kvLoadCoins(prefix) {
@@ -1946,6 +2571,7 @@ function kvClearAll(prefix) {
   _kvData[prefix] = {};
   kvRenderChips(prefix);
   kvUpdateExpanderCount(prefix);
+  scheduleStructuredEditorSync();
 }
 
 function kvHighlightItem(dd, items, idx) {
@@ -2021,7 +2647,7 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
 }
 /* ── Custom date-picker ─────────────────────────────────────────────────────────────────────── */
 !function() {
-  var _id = null, _y = 0, _m = 0;
+  var _id = null, _y = 0, _m = 0, _anchor = null, _menu = '';
   var MN = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   /* CSS injected once for hover effect on day cells */
   var _cssId = '__dp_css';
@@ -2029,11 +2655,23 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
     var s = document.createElement('style'); s.id = _cssId;
     s.textContent = '#__dp .dp-day:hover { background: rgba(255,255,255,.15) !important; }' +
       '#__dp .dp-day { transition: background .1s; }' +
+      '#__dp .dp-day.dp-disabled { background: transparent !important; color: rgba(255,255,255,.28) !important; cursor: not-allowed !important; }' +
+      '#__dp .dp-day.dp-disabled:hover { background: transparent !important; }' +
       '#__dp .dp-nav:hover { background: rgba(255,255,255,.15) !important; }' +
       '#__dp .dp-nav { transition: background .1s; border-radius: 4px; }' +
-      '#__dp select.dp-nav:hover { background: rgba(255,255,255,.08) !important; border-color: var(--accent,#4a90d9) !important; }' +
+      '#__dp .dp-nav:disabled { opacity: .35; cursor: not-allowed !important; background: transparent !important; }' +
+      '#__dp .dp-ctl { transition: background .1s, border-color .1s; border-radius: 4px; }' +
+      '#__dp .dp-ctl:hover { background: rgba(255,255,255,.08) !important; border-color: var(--accent,#4a90d9) !important; }' +
+      '#__dp .dp-dd { position:absolute; top:calc(100% + 4px); z-index:2; display:none; background:var(--bg3,#2a2d40); border:1px solid var(--border,#444); border-radius:6px; box-shadow:0 8px 18px rgba(0,0,0,.55); max-height:220px; overflow:auto; padding:4px; }' +
+      '#__dp .dp-dd.open { display:block; }' +
+      '#__dp .dp-dd-item { display:block; width:100%; text-align:left; background:transparent; border:none; color:var(--text,#ccc); font-size:var(--fs-xs); padding:6px 8px; border-radius:4px; cursor:pointer; }' +
+      '#__dp .dp-dd-item:hover { background: rgba(255,255,255,.10) !important; }' +
+      '#__dp .dp-dd-item.selected { background: var(--accent,#4a90d9); color:#fff; }' +
+      '#__dp .dp-dd-item.disabled { color: rgba(255,255,255,.28) !important; cursor:not-allowed !important; }' +
+      '#__dp .dp-dd-item.disabled:hover { background: transparent !important; }' +
       '#__dp .dp-foot:hover { background: rgba(255,255,255,.15) !important; }' +
-      '#__dp .dp-foot { transition: background .1s; border-radius: 4px; }';
+      '#__dp .dp-foot { transition: background .1s; border-radius: 4px; }' +
+      '#__dp .dp-foot:disabled { opacity: .35; cursor: not-allowed !important; background: transparent !important; }';
     document.head.appendChild(s);
   }
   function _el() {
@@ -2042,7 +2680,7 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
       e = document.createElement('div'); e.id = '__dp';
       e.style.cssText = 'display:none;position:fixed;z-index:99999;background:var(--bg2,#1e2030);' +
         'border:1px solid var(--border,#444);border-radius:8px;padding:10px 12px;' +
-        'box-shadow:0 6px 24px rgba(0,0,0,.7);user-select:none;min-width:220px';
+        'box-shadow:0 6px 24px rgba(0,0,0,.7);user-select:none;min-width:220px;color-scheme:dark';
       document.body.appendChild(e);
       document.addEventListener('pointerdown', function(ev) {
         if (!_id) return;
@@ -2050,21 +2688,84 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
         if (b && b.getAttribute('data-dp') === _id) return;
         if (!e.contains(ev.target)) _hide();
       }, true);
+      window.addEventListener('resize', _reposition, { passive: true });
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', _reposition, { passive: true });
+        window.visualViewport.addEventListener('scroll', _reposition, { passive: true });
+      }
     }
     return e;
   }
-  function _yearOpts() {
-    /* Year select: range 2010..currentYear+2 */
+  function _shiftMonth(y, m, delta) {
+    var nextY = y, nextM = m + delta;
+    while (nextM < 0) { nextM += 12; nextY--; }
+    while (nextM > 11) { nextM -= 12; nextY++; }
+    return { y: nextY, m: nextM };
+  }
+  function _range() {
+    var bounds = { minMs: null, maxMs: null };
+    if (!_id || typeof cfgDateValueToMs !== 'function') return bounds;
+    var otherId = null;
+    var mode = '';
+    if (_id === 'cfg-end-date' || _id === 'suite-sc-end') {
+      otherId = _id === 'cfg-end-date' ? 'cfg-start-date' : 'suite-sc-start';
+      mode = 'min';
+    } else if (_id === 'cfg-start-date' || _id === 'suite-sc-start') {
+      otherId = _id === 'cfg-start-date' ? 'cfg-end-date' : 'suite-sc-end';
+      mode = 'max';
+    }
+    if (!otherId) return bounds;
+    var otherEl = document.getElementById(otherId);
+    if (!otherEl) return bounds;
+    var otherMs = cfgDateValueToMs(otherEl.value);
+    if (otherMs === null) return bounds;
+    if (mode === 'min') bounds.minMs = otherMs;
+    if (mode === 'max') bounds.maxMs = otherMs;
+    return bounds;
+  }
+  function _monthHasSelectableDays(y, m, bounds) {
+    var monthStartMs = new Date(y, m, 1).getTime();
+    var monthEndMs = new Date(y, m + 1, 0).getTime();
+    if (bounds.minMs !== null && monthEndMs < bounds.minMs) return false;
+    if (bounds.maxMs !== null && monthStartMs > bounds.maxMs) return false;
+    return true;
+  }
+  function _dayDisabled(dayMs, bounds) {
+    if (bounds.minMs !== null && dayMs < bounds.minMs) return true;
+    if (bounds.maxMs !== null && dayMs > bounds.maxMs) return true;
+    return false;
+  }
+  function _snapMonthForYear(y, bounds) {
+    if (_monthHasSelectableDays(y, _m, bounds)) return _m;
+    for (var dist = 1; dist < 12; dist++) {
+      var left = _m - dist;
+      var right = _m + dist;
+      if (left >= 0 && _monthHasSelectableDays(y, left, bounds)) return left;
+      if (right < 12 && _monthHasSelectableDays(y, right, bounds)) return right;
+    }
+    for (var i = 0; i < 12; i++) {
+      if (_monthHasSelectableDays(y, i, bounds)) return i;
+    }
+    return _m;
+  }
+  function _yearMenu(bounds) {
     var cur = new Date().getFullYear(), html = '';
     for (var y = 2010; y <= cur + 2; y++) {
-      html += '<option value="' + y + '"' + (y === _y ? ' selected' : '') + '>' + y + '</option>';
+      var enabled = false;
+      for (var m = 0; m < 12; m++) {
+        if (_monthHasSelectableDays(y, m, bounds)) { enabled = true; break; }
+      }
+      html += '<button type="button" class="dp-dd-item' + (y === _y ? ' selected' : '') + (enabled ? '' : ' disabled') + '"' +
+        (enabled ? ' onclick="window.__dp.sy(' + y + ')"' : ' disabled') + '>' + y + '</button>';
     }
     return html;
   }
-  function _monthOpts() {
+  function _monthMenu(bounds) {
     var html = '';
     for (var i = 0; i < 12; i++) {
-      html += '<option value="' + i + '"' + (i === _m ? ' selected' : '') + '>' + MN[i] + '</option>';
+      var enabled = _monthHasSelectableDays(_y, i, bounds);
+      html += '<button type="button" class="dp-dd-item' + (i === _m ? ' selected' : '') + (enabled ? '' : ' disabled') + '"' +
+        (enabled ? ' onclick="window.__dp.sm(' + i + ')"' : ' disabled') + '>' + MN[i] + '</button>';
     }
     return html;
   }
@@ -2074,15 +2775,28 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
     var inp = _id ? document.getElementById(_id) : null, sv = inp ? inp.value : '';
     var sel = (sv && sv !== 'now') ? new Date(sv + 'T00:00:00') : null;
     var selOk = sel && !isNaN(sel);
+    var bounds = _range();
+    var prevMonth = _shiftMonth(_y, _m, -1);
+    var nextMonth = _shiftMonth(_y, _m, 1);
+    var canPrev = _monthHasSelectableDays(prevMonth.y, prevMonth.m, bounds);
+    var canNext = _monthHasSelectableDays(nextMonth.y, nextMonth.m, bounds);
+    var todayMs = new Date(td.getFullYear(), td.getMonth(), td.getDate()).getTime();
+    var canToday = !_dayDisabled(todayMs, bounds);
     /* Header: ‹  [month dropdown]  [year dropdown]  › */
     var btnS = 'background:none;border:none;color:var(--text,#ccc);cursor:pointer;font-size:1.3em;padding:0 6px;line-height:1';
-    var selS = 'background:var(--bg3,#2a2d40);border:1px solid var(--border,#444);color:var(--text,#ccc);' +
-               'border-radius:4px;padding:2px 4px;font-size:var(--fs-xs);cursor:pointer';
+    var ctlS = 'background:var(--bg3,#2a2d40);border:1px solid var(--border,#444);color:var(--text,#ccc);' +
+               'border-radius:4px;padding:2px 6px;font-size:var(--fs-xs);cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px';
     var h = '<div style="display:flex;align-items:center;gap:4px;margin-bottom:8px">' +
-      '<button type="button" class="dp-nav" onclick="window.__dp.pm()" style="' + btnS + '">&#8249;</button>' +
-      '<select class="dp-nav" style="' + selS + ';flex:1" onchange="window.__dp.sm(+this.value)">' + _monthOpts() + '</select>' +
-      '<select class="dp-nav" style="' + selS + ';width:62px" onchange="window.__dp.sy(+this.value)">' + _yearOpts() + '</select>' +
-      '<button type="button" class="dp-nav" onclick="window.__dp.nm()" style="' + btnS + '">&#8250;</button>' +
+      '<button type="button" class="dp-nav" onclick="window.__dp.pm()" style="' + btnS + '"' + (canPrev ? '' : ' disabled') + '>&#8249;</button>' +
+      '<div style="position:relative;flex:1">' +
+        '<button type="button" class="dp-ctl" onclick="window.__dp.tm()" style="' + ctlS + ';width:100%">' + MN[_m] + '<span style="font-size:10px;opacity:.8">▾</span></button>' +
+        '<div class="dp-dd' + (_menu === 'month' ? ' open' : '') + '" style="left:0;right:auto;min-width:140px">' + _monthMenu(bounds) + '</div>' +
+      '</div>' +
+      '<div style="position:relative;width:72px">' +
+        '<button type="button" class="dp-ctl" onclick="window.__dp.ty()" style="' + ctlS + ';width:100%">' + _y + '<span style="font-size:10px;opacity:.8">▾</span></button>' +
+        '<div class="dp-dd' + (_menu === 'year' ? ' open' : '') + '" style="right:0;left:auto;min-width:72px">' + _yearMenu(bounds) + '</div>' +
+      '</div>' +
+      '<button type="button" class="dp-nav" onclick="window.__dp.nm()" style="' + btnS + '"' + (canNext ? '' : ' disabled') + '>&#8250;</button>' +
       '</div>';
     /* Weekday headers */
     h += '<div style="display:grid;grid-template-columns:repeat(7,30px);gap:2px;text-align:center">';
@@ -2091,11 +2805,13 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
     });
     for (var i = 0; i < sdow; i++) h += '<div></div>';
     for (var day = 1; day <= dim; day++) {
+      var dayMs = new Date(_y, _m, day).getTime();
+      var disabled = _dayDisabled(dayMs, bounds);
       var isT = td.getFullYear()===_y && td.getMonth()===_m && td.getDate()===day;
       var isS = selOk && sel.getFullYear()===_y && sel.getMonth()===_m && sel.getDate()===day;
-      var bg = isS ? 'var(--accent,#4a90d9)' : isT ? 'rgba(255,255,255,.12)' : 'transparent';
-      var fw = (isS || isT) ? '600' : '400';
-      h += '<div class="dp-day" onclick="window.__dp.pick(' + day + ')" ' +
+      var bg = disabled ? 'transparent' : isS ? 'var(--accent,#4a90d9)' : isT ? 'rgba(255,255,255,.12)' : 'transparent';
+      var fw = (isS || isT) && !disabled ? '600' : '400';
+      h += '<div class="dp-day' + (disabled ? ' dp-disabled' : '') + '"' + (disabled ? '' : ' onclick="window.__dp.pick(' + day + ')"') + ' ' +
         'style="cursor:pointer;border-radius:4px;padding:4px 0;background:' + bg + ';' +
         'color:var(--text,#ccc);font-weight:' + fw + ';font-size:var(--fs-sm)">' + day + '</div>';
     }
@@ -2103,9 +2819,14 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
     /* Footer */
     h += '<div style="margin-top:8px;display:flex;justify-content:space-between">' +
       '<button type="button" class="dp-foot" onclick="window.__dp.hide()" style="background:none;border:none;color:var(--text-dim,#888);cursor:pointer;font-size:var(--fs-xs);padding:2px 6px;border-radius:4px">Close</button>' +
-      '<button type="button" class="dp-foot" onclick="window.__dp.today()" style="background:none;border:none;color:var(--accent,#4a90d9);cursor:pointer;font-size:var(--fs-xs);padding:2px 6px;border-radius:4px">Today</button>' +
+      '<button type="button" class="dp-foot" onclick="window.__dp.today()" style="background:none;border:none;color:var(--accent,#4a90d9);cursor:pointer;font-size:var(--fs-xs);padding:2px 6px;border-radius:4px"' + (canToday ? '' : ' disabled') + '>Today</button>' +
       '</div>';
     e.innerHTML = h;
+    _reposition();
+  }
+  function _reposition() {
+    if (!_id || !_anchor) return;
+    _pos(_anchor);
   }
   function _pos(anchor) {
     var e = _el(); e.style.display = 'block';
@@ -2116,11 +2837,14 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
     if (top + eh > sh - 8) top = r.top - eh - 4;
     e.style.left = left + 'px'; e.style.top = top + 'px';
   }
-  function _hide() { _el().style.display = 'none'; _id = null; }
+  function _hide() { _el().style.display = 'none'; _id = null; _anchor = null; _menu = ''; }
   function _pick(day) {
+    var bounds = _range();
+    var dayMs = new Date(_y, _m, day).getTime();
+    if (_dayDisabled(dayMs, bounds)) return;
     var val = _y + '-' + String(_m + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
     var inp = _id ? document.getElementById(_id) : null;
-    if (inp) { inp.value = val; inp.dataset.prev = val; inp.dispatchEvent(new Event('change')); }
+    if (inp) { inp.value = val; inp.dataset.prev = val; inp.dispatchEvent(new Event('change', { bubbles: true })); }
     _hide();
   }
   window.__dp = {
@@ -2128,6 +2852,8 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
       var e = _el();
       if (_id === id && e.style.display !== 'none') { _hide(); return; }
       _id = id;
+      _anchor = anchor || null;
+      _menu = '';
       var inp = document.getElementById(id), v = inp ? inp.value : '';
       var d = (v && v !== 'now') ? new Date(v + 'T00:00:00') : new Date();
       if (isNaN(d)) d = new Date();
@@ -2135,11 +2861,32 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
       _render(); _pos(anchor);
     },
     hide: _hide,
-    pm: function() { _m--; if (_m < 0) { _m = 11; _y--; } _render(); },
-    nm: function() { _m++; if (_m > 11) { _m = 0; _y++; } _render(); },
-    sm: function(m) { _m = m; _render(); },
-    sy: function(y) { _y = y; _render(); },
-    today: function() { var d = new Date(); _y = d.getFullYear(); _m = d.getMonth(); _pick(d.getDate()); },
+    pm: function() {
+      var prev = _shiftMonth(_y, _m, -1);
+      if (!_monthHasSelectableDays(prev.y, prev.m, _range())) return;
+      _y = prev.y; _m = prev.m; _render();
+    },
+    nm: function() {
+      var next = _shiftMonth(_y, _m, 1);
+      if (!_monthHasSelectableDays(next.y, next.m, _range())) return;
+      _y = next.y; _m = next.m; _menu = ''; _render();
+    },
+    sm: function(m) { if (_monthHasSelectableDays(_y, m, _range())) { _m = m; _menu = ''; _render(); } },
+    sy: function(y) {
+      var bounds = _range();
+      _y = y;
+      _m = _snapMonthForYear(y, bounds);
+      _menu = '';
+      _render();
+    },
+    tm: function() { _menu = _menu === 'month' ? '' : 'month'; _render(); },
+    ty: function() { _menu = _menu === 'year' ? '' : 'year'; _render(); },
+    today: function() {
+      var d = new Date();
+      var dayMs = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+      if (_dayDisabled(dayMs, _range())) return;
+      _y = d.getFullYear(); _m = d.getMonth(); _menu = ''; _pick(d.getDate());
+    },
     pick: _pick
   };
 }();
@@ -2155,6 +2902,77 @@ function fieldDate2(id, label, value, tip, span) {
     '</div>';
   return fmtGroupSpan(id, label, inputHtml, tip, span || 1);
 }
+
+function cfgDateValueToMs(value) {
+  var v = String(value || '').trim().toLowerCase();
+  if (!v) return null;
+  if (v === 'now') {
+    var now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  var d = new Date(v + 'T00:00:00');
+  if (isNaN(d)) return null;
+  return d.getTime();
+}
+
+function cfgEnsureDateOrder(startId, endId, changedSide, silent) {
+  var startEl = document.getElementById(startId);
+  var endEl = document.getElementById(endId);
+  if (!startEl || !endEl) return true;
+
+  var startVal = (startEl.value || '').trim();
+  var endVal = (endEl.value || '').trim();
+  var startMs = cfgDateValueToMs(startVal);
+  var endMs = cfgDateValueToMs(endVal);
+  if (startMs === null || endMs === null || endMs >= startMs) return true;
+
+  if (changedSide === 'start') {
+    endEl.value = startVal;
+    endEl.dataset.prev = startVal;
+  } else {
+    startEl.value = endVal;
+    startEl.dataset.prev = endVal;
+  }
+  if (!silent) toast('end_date cannot be before start_date', 'warn');
+  return false;
+}
+
+function cfgWireDateRange(startId, endId) {
+  var startEl = document.getElementById(startId);
+  var endEl = document.getElementById(endId);
+  if (!startEl || !endEl) return;
+
+  if (!startEl.dataset.dateRangeWired) {
+    startEl.dataset.dateRangeWired = '1';
+    startEl.addEventListener('change', function() { cfgEnsureDateOrder(startId, endId, 'start', false); });
+  }
+  if (!endEl.dataset.dateRangeWired) {
+    endEl.dataset.dateRangeWired = '1';
+    endEl.addEventListener('change', function() { cfgEnsureDateOrder(startId, endId, 'end', false); });
+  }
+}
+
+function cfgValidateDateRanges(cfg) {
+  var bt = (cfg && cfg.backtest) || {};
+  var startMs = cfgDateValueToMs(bt.start_date);
+  var endMs = cfgDateValueToMs(bt.end_date);
+  if (startMs !== null && endMs !== null && endMs < startMs) {
+    return 'Backtest end_date cannot be before start_date';
+  }
+  var scenarios = Array.isArray(bt.scenarios) ? bt.scenarios : [];
+  for (var i = 0; i < scenarios.length; i++) {
+    var sc = scenarios[i] || {};
+    var scStartMs = cfgDateValueToMs(sc.start_date);
+    var scEndMs = cfgDateValueToMs(sc.end_date);
+    if (scStartMs !== null && scEndMs !== null && scEndMs < scStartMs) {
+      var label = String(sc.label || ('scenario_' + (i + 1)));
+      return 'Suite scenario "' + label + '": end_date cannot be before start_date';
+    }
+  }
+  return '';
+}
+
 function fieldNumber(id, label, value, step, tip) {
   return fmtGroup(id, label,
     '<div class="num-stepper">' +
@@ -2187,8 +3005,21 @@ function fieldCheckbox(id, label, checked) {
 
 function autoResizeTa(el) {
   if (!el) return;
+  var isFocused = document.activeElement === el;
+  var top = isFocused ? el.getBoundingClientRect().top : 0;
+  var scrollTop = isFocused ? el.scrollTop : 0;
+  var selectionStart = isFocused ? el.selectionStart : 0;
+  var selectionEnd = isFocused ? el.selectionEnd : 0;
   el.style.height = 'auto';
   el.style.height = el.scrollHeight + 'px';
+  if (isFocused) {
+    var delta = el.getBoundingClientRect().top - top;
+    if (delta) window.scrollBy(0, delta);
+    el.scrollTop = scrollTop;
+    try {
+      el.setSelectionRange(selectionStart, selectionEnd);
+    } catch (e) {}
+  }
 }
 
 /* ── Inline JSON highlight overlay for bot-long / bot-short textareas ───────
@@ -2297,6 +3128,7 @@ function botSyncFromFields(side) {
     taEl.value = JSON.stringify(obj, null, 2);
     autoResizeTa(taEl);
   } catch(e) {}
+  scheduleStructuredEditorSync();
 }
 function botSyncFromJson(side) {
   var taEl = document.getElementById('cfg-bot-' + side);
@@ -2455,6 +3287,8 @@ function saveEditor() {
   if (!name) { toast('Config name is required', 'err'); return; }
   coinOvSetConfigName(name);  // ensure override files are saved to the correct directory
   var cfg = collectConfig();
+  var dateErr = cfgValidateDateRanges(cfg);
+  if (dateErr) { toast(dateErr, 'err'); return; }
   // Auto-set base_dir only if not explicitly overridden by the user in Additional Parameters
   var _baseDirEl = document.getElementById('extra-bt-base_dir');
   if (!_baseDirEl || _baseDirEl.value.trim() === '') {
@@ -2481,6 +3315,8 @@ function saveAndQueue() {
   if (!name) { toast('Config name is required', 'err'); return; }
   coinOvSetConfigName(name);  // ensure override files are saved to the correct directory
   var cfg = collectConfig();
+  var dateErr = cfgValidateDateRanges(cfg);
+  if (dateErr) { toast(dateErr, 'err'); return; }
   // Auto-set base_dir only if not explicitly overridden by the user in Additional Parameters
   var _baseDirEl2 = document.getElementById('extra-bt-base_dir');
   if (!_baseDirEl2 || _baseDirEl2.value.trim() === '') {
@@ -2560,28 +3396,65 @@ function viewConfigResults(name) {
 function fillPbguiDataPath() {
   apiFetch('/pbgui_data_path').then(function(d) {
     var el = document.getElementById('cfg-ohlcv-dir');
-    if (el) el.value = d.path || '';
+    if (el) {
+      el.value = d.path || '';
+      scheduleStructuredEditorSync();
+    }
   }).catch(function() { toast('Could not fetch PBGui data path', 'err'); });
 }
 
+function openImportModal() {
+  var modal = document.getElementById('import-modal');
+  var nameEl = document.getElementById('import-name');
+  var jsonEl = document.getElementById('import-json');
+  var errEl = document.getElementById('import-error');
+  if (!modal || !nameEl || !jsonEl || !errEl) return;
+  errEl.style.display = 'none';
+  errEl.textContent = '';
+  nameEl.value = editingConfig && editingConfig !== '__new__' ? editingConfig : '';
+  jsonEl.value = '';
+  modal.classList.add('open');
+  nameEl.focus();
+}
+
+function closeImportModal() {
+  var modal = document.getElementById('import-modal');
+  var errEl = document.getElementById('import-error');
+  if (errEl) {
+    errEl.style.display = 'none';
+    errEl.textContent = '';
+  }
+  if (modal) modal.classList.remove('open');
+}
+
+function doImport() {
+  var nameEl = document.getElementById('import-name');
+  var jsonEl = document.getElementById('import-json');
+  var errEl = document.getElementById('import-error');
+  if (!nameEl || !jsonEl || !errEl) return;
+  var name = nameEl.value.trim();
+  var raw = jsonEl.value.trim();
+  if (!name || !raw) {
+    errEl.textContent = 'Name and JSON are required.';
+    errEl.style.display = 'block';
+    return;
+  }
+  var cfg;
+  try {
+    cfg = JSON.parse(raw);
+  } catch (e) {
+    errEl.textContent = 'Invalid JSON: ' + e.message;
+    errEl.style.display = 'block';
+    return;
+  }
+  editingConfig = '__new__';
+  closeImportModal();
+  showConfigEditor(name, cfg, raw);
+  toast('Imported into editor. Review and save when ready.', 'ok');
+}
+
 function importConfig() {
-  showModal('Import Config', '<div class="sb-label">Config Name</div><input type="text" id="imp-name" class="sb-input" placeholder="my_backtest">' +
-    '<div class="sb-label" style="margin-top:var(--sp-sm)">Paste JSON</div>' +
-    '<textarea id="imp-json" rows="12" style="width:100%;font-family:monospace;font-size:var(--fs-xs);background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:var(--sp-sm);resize:vertical"></textarea>', [
-    { text: 'Cancel', cls: '' },
-    { text: 'Import', cls: 'modal-btn-primary', action: function() {
-      var name = document.getElementById('imp-name').value.trim();
-      var raw = document.getElementById('imp-json').value.trim();
-      if (!name || !raw) { toast('Name and JSON required', 'err'); return; }
-      var cfg; try { cfg = JSON.parse(raw); } catch(e) { toast('Invalid JSON', 'err'); return; }
-      apiFetch('/configs/' + encodeURIComponent(name), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cfg)
-      }).then(function() { toast('Imported', 'ok'); loadConfigs(); closeModal(); })
-        .catch(function(e) { toast('Failed: ' + e.message, 'err'); });
-    }}
-  ]);
+  openImportModal();
 }
 
 function deleteSelectedConfigs() {
@@ -2955,7 +3828,7 @@ function renderResults() {
   var filtered = results.filter(function(r) {
     if (cfgFilter && r.config_name !== cfgFilter) return false;
     if (!filter) return true;
-    var hay = (r.config_name + ' ' + r.result_name + ' ' + r.exchange_dir + ' ' + (r.exchanges || []).join(' ')).toLowerCase();
+    var hay = ((r.config_name || '') + ' ' + (r.result_name || '')).toLowerCase();
     return hay.indexOf(filter) >= 0;
   });
 
@@ -4431,6 +5304,72 @@ function rebacktestSelectedArchive() {
   }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
 }
 
+function addConfigToRunByName(name) {
+  if (!name || name === '__new__') { toast('Save the config first', 'err'); return; }
+  var v7Base = API_BASE.replace('/backtest-v7', '/v7');
+
+  function navigateWithConfig(cfg, finalUser) {
+    var cfgToSend = JSON.parse(JSON.stringify(cfg));
+    cfgToSend.live = cfgToSend.live || {};
+    cfgToSend.live.user = finalUser;
+    // Tag so the v7 save endpoint can copy coin override files on first save.
+    // Always reset enabled_on to 'disabled' — the source may reference a VPS
+    // that doesn't exist in the run editor's host list, which causes a blank select.
+    cfgToSend.pbgui = cfgToSend.pbgui || {};
+    cfgToSend.pbgui.from_backtest_config = name;
+    cfgToSend.pbgui.enabled_on = 'disabled';
+    return fetch(v7Base + '/draft', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: cfgToSend })
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      var editUrl = v7Base + '/edit_page?token=' + encodeURIComponent(TOKEN) +
+        '&new=1&draft_id=' + encodeURIComponent(d.draft_id) + '&st_base=' + encodeURIComponent(ST_BASE);
+      window.location.href = editUrl;
+    });
+  }
+
+  Promise.all([
+    apiFetch('/configs/' + encodeURIComponent(name)),
+    fetch(v7Base + '/instances', { headers: { 'Authorization': 'Bearer ' + TOKEN } }).then(function(r) { return r.json(); }),
+    fetch(v7Base + '/users',     { headers: { 'Authorization': 'Bearer ' + TOKEN } }).then(function(r) { return r.json(); })
+  ]).then(function(res) {
+    var cfg       = res[0];
+    var instances = res[1].instances || [];
+    var users     = res[2].users     || [];
+    var configUser = (cfg.live || {}).user || '';
+    var usedBy = {};
+    instances.forEach(function(inst) { if (inst.user) usedBy[inst.user] = inst.name; });
+
+    if (configUser && usedBy[configUser]) {
+      var userOptions = '<option value=""></option>' +
+        users.map(function(u) {
+          var isUsed = !!usedBy[u.name];
+          var label = esc(u.name);
+          if (isUsed) label += ' ⚠ (instance: ' + esc(usedBy[u.name]) + ')';
+          var color = isUsed ? ' style="color:#e07800"' : '';
+          return '<option value="' + esc(u.name) + '"' + (u.name === configUser ? ' selected' : '') + color + '>' + label + '</option>';
+        }).join('');
+      var bodyHtml =
+        '<p style="color:var(--warn);margin:0 0 12px">⚠ User <strong>' + esc(configUser) + '</strong> ' +
+        'already has an active instance: <em>' + esc(usedBy[configUser]) + '</em></p>' +
+        '<div class="sb-label">Select user for new instance</div>' +
+        '<select id="add-to-run-user-sel" class="sb-input" style="width:100%">' + userOptions + '</select>';
+      showModal('Add to Run — User Conflict', bodyHtml, [
+        { text: 'Cancel', cls: '' },
+        { text: 'Continue', cls: 'modal-btn-primary', action: function() {
+          var selEl = document.getElementById('add-to-run-user-sel');
+          var chosen = selEl ? selEl.value : configUser;
+          closeModal();
+          navigateWithConfig(cfg, chosen).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
+        }}
+      ]);
+    } else {
+      navigateWithConfig(cfg, configUser).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
+    }
+  }).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
+}
+
 function addToRun() {
   var sel = getSelectedResults();
   if (sel.length !== 1) { toast('Select exactly 1 result', 'err'); return; }
@@ -4598,20 +5537,7 @@ function goBalanceCalculatorFromResult() {
 
   toast('Loading\u2026', 'ok');
   apiFetch('/results/config?path=' + encodeURIComponent(path)).then(function(cfg) {
-    var balcBase = API_BASE.replace('/backtest-v7', '/balance-calc');
-    fetch(balcBase + '/draft', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: cfg })
-    }).then(function(r) { return r.json(); }).then(function(d) {
-      var apiOrigin = API_BASE.match(/^(https?:\/\/[^/]+)/);
-      apiOrigin = apiOrigin ? apiOrigin[1] : window.location.origin;
-      window.location.href = apiOrigin + '/api/balance-calc/main_page'
-        + '?token=' + encodeURIComponent(TOKEN)
-        + '&st_base=' + encodeURIComponent(ST_BASE)
-        + '&draft_id=' + encodeURIComponent(d.draft_id)
-        + '&exchange=' + encodeURIComponent(defaultExchange);
-    }).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
+    openBalanceCalculatorWithConfig(cfg, defaultExchange);
   }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
 }
 
@@ -4850,7 +5776,7 @@ function renderArchiveResults(name) {
   var filtered = archiveResults.filter(function(r) {
     if (cfgFilter && r.config_name !== cfgFilter) return false;
     if (!textFilter) return true;
-    var hay = (r.config_name + ' ' + r.result_name + ' ' + (r.exchanges || []).join(' ')).toLowerCase();
+    var hay = ((r.config_name || '') + ' ' + (r.result_name || '')).toLowerCase();
     return hay.indexOf(textFilter) >= 0;
   });
 
@@ -5169,7 +6095,7 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/suite_editor.js?v=1"></script>
+<script src="/app/js/suite_editor.js?v=3"></script>
 <script src="/app/js/coin_overrides_editor.js?v=6"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */
@@ -5198,8 +6124,35 @@ window.PBGUI_NAV_CONFIG = {
     if (badge) tip.style.display = 'none';
   });
 })();
+
+/* ── data-tip Fixed Tooltip ── */
+(function() {
+  var tip = document.getElementById('data-tip-tooltip');
+  if (!tip) return;
+  document.addEventListener('mouseover', function(e) {
+    var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+    if (!el) return;
+    var text = el.getAttribute('data-tip');
+    if (!text) return;
+    tip.textContent = text;
+    tip.style.display = 'block';
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (tip.style.display === 'none') return;
+    var x = e.clientX + 14, y = e.clientY + 14;
+    var tw = tip.offsetWidth, th = tip.offsetHeight;
+    if (x + tw > window.innerWidth - 8) x = e.clientX - tw - 10;
+    if (y + th > window.innerHeight - 8) y = e.clientY - th - 10;
+    tip.style.left = x + 'px';
+    tip.style.top  = y + 'px';
+  });
+  document.addEventListener('mouseout', function(e) {
+    var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+    if (el) tip.style.display = 'none';
+  });
+})();
 </script>
-<script src="/app/js/log_viewer_panel.js?v=6"></script>
+<script src="/app/js/log_viewer_panel.js?v=7"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- ── Sidebar resize ──────────────────────────── -->

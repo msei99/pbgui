@@ -31,6 +31,7 @@ from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, require_auth, validate_token
 from logging_helpers import human_log as _log
+from pb7_config import load_pb7_config, save_pb7_config, strip_pbgui_param_status
 from master.async_pool import SFTP_RETRY_ATTEMPTS, SFTP_RETRY_DELAY, _is_transient_error
 from pbgui_purefunc import (PBGDIR, STATUS_V7_FILE, SYNC_EXCLUDE_FILES,
                              update_status_v7 as _update_status_v7,
@@ -425,7 +426,42 @@ def get_instances(session: SessionToken = Depends(require_auth)):
     return {"instances": instances}
 
 
-@router.post("/activate/{name}")
+@router.get("/instances/new-config")
+def get_new_instance_config(session: SessionToken = Depends(require_auth)):
+    """Return a default config for a new instance, pulled from the passivbot schema.
+
+    Using get_template_config() keeps the defaults always in sync with the
+    installed passivbot version without any manual maintenance.
+    """
+    try:
+        from config.schema import get_template_config  # noqa: PLC0415
+        tmpl = get_template_config()
+    except Exception:
+        # Fallback: minimal safe defaults if pb7 import fails
+        tmpl = {
+            "live": {},
+            "bot": {"long": {"n_positions": 10, "total_wallet_exposure_limit": 1.25}, "short": {"n_positions": 10, "total_wallet_exposure_limit": 0}},
+            "logging": {"level": 1},
+            "backtest": {},
+            "optimize": {},
+        }
+    # Inject pbgui-specific metadata (not part of passivbot schema)
+    tmpl["pbgui"] = {
+        "version": 0,
+        "enabled_on": "disabled",
+        "note": "",
+        "market_cap": 0,
+        "vol_mcap": 10.0,
+        "tags": [],
+        "only_cpt": False,
+        "notices_ignore": False,
+        "dynamic_ignore": False,
+        "starting_config": False,
+    }
+    tmpl.setdefault("coin_overrides", {})
+    return {"config": tmpl}
+
+
 async def activate_instance(
     name: str,
     session: SessionToken = Depends(require_auth),
@@ -752,19 +788,20 @@ def get_instance_config(
     name: str,
     session: SessionToken = Depends(require_auth),
 ):
-    """Load the full config.json for a v7 instance via ConfigV7.
+    """Load the full config.json for a v7 instance via pb7_config pipeline.
 
-    Using ConfigV7.load_config() ensures all setters run (including
-    normalize_symbol in ApprovedCoins/IgnoredCoins) — identical to Streamlit.
+    Uses passivbot's own normalize/migrate/hydrate pipeline so renamed and
+    new parameters are properly handled.  Parameters that are newly added
+    by the pipeline (not present in the file) are neutralized to safe
+    feature-off values and flagged in _pbgui_param_status for UI display.
     """
-    from Config import ConfigV7
     _validate_name(name)
     config_path = Path(PBGDIR) / "data" / "run_v7" / name / "config.json"
     if not config_path.is_file():
         raise HTTPException(status_code=404, detail=f"Instance '{name}' not found")
-    cv7 = ConfigV7(file_name=config_path)
-    cv7.load_config()
-    return {"name": name, "config": cv7.config}
+    cfg = load_pb7_config(config_path, neutralize_added=True)
+    param_status = cfg.pop("_pbgui_param_status", {})
+    return {"name": name, "config": cfg, "param_status": param_status}
 
 
 @router.put("/instances/{name}/config")
@@ -773,35 +810,56 @@ async def save_instance_config(
     request: Request,
     session: SessionToken = Depends(require_auth),
 ):
-    """Save config.json for a v7 instance via ConfigV7.
+    """Save config.json for a v7 instance via pb7_config pipeline.
 
     Applies the same logic as RunV7.save():
-      - Passes config through ConfigV7 setters (normalization, conversions)
+      - Strips _pbgui_param_status before writing
       - Increments pbgui.version
       - Sets backtest.exchange from user→exchange mapping
+      - Creates versioned backup before overwriting
+      - Atomic write via temp-file rename
       - Updates status_v7.json
       - Triggers SSH sync to all VPS
     """
-    from Config import ConfigV7
     _validate_name(name)
     body = await request.json()
     cfg = body.get("config")
     if not isinstance(cfg, dict):
         raise HTTPException(status_code=400, detail="Missing or invalid 'config' in body")
 
-    # Pass through ConfigV7 so all setters (including normalization) run
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     instance_dir.mkdir(parents=True, exist_ok=True)
     config_path = instance_dir / "config.json"
 
-    cv7 = ConfigV7(file_name=config_path)
-    cv7.config = cfg
+    # Copy coin override files from source backtest config on first save of a new instance.
+    # The JS sets pbgui.from_backtest_config when navigating from "Add to Run".
+    # Only copy files that are actually referenced in coin_overrides to avoid stale USDT-named files.
+    from_bt_config = cfg.get("pbgui", {}).pop("from_backtest_config", None)
+    if from_bt_config and not config_path.is_file():
+        bt_src_dir = Path(PBGDIR) / "data" / "bt_v7" / from_bt_config
+        if bt_src_dir.is_dir():
+            referenced = {
+                Path(ov["override_config_path"]).name
+                for ov in cfg.get("coin_overrides", {}).values()
+                if ov.get("override_config_path")
+            }
+            copied = []
+            for fname in referenced:
+                src_file = bt_src_dir / fname
+                if src_file.is_file():
+                    shutil.copy2(str(src_file), str(instance_dir / fname))
+                    copied.append(fname)
+            if copied:
+                _log(SERVICE, f"Copied {len(copied)} coin override file(s) from backtest config '{from_bt_config}' to instance '{name}'")
+
+    # Strip UI-only metadata before processing
+    strip_pbgui_param_status(cfg)
 
     # Increment version
-    cv7.pbgui.version = cv7.pbgui.version + 1
+    cfg.setdefault("pbgui", {})["version"] = cfg["pbgui"].get("version", 0) + 1
 
     # Set backtest.exchange from user→exchange mapping
-    live_user = cv7.live.user
+    live_user = cfg.get("live", {}).get("user", "")
     from User import Users
     users = Users()
     exchange = users.find_exchange(live_user)
@@ -809,12 +867,31 @@ async def save_instance_config(
         bt_exchange = exchange
         if bt_exchange in ("bitget", "okx", "hyperliquid"):
             bt_exchange = "binance"
-        cv7.backtest.backtest["exchange"] = bt_exchange
-    cv7.backtest.backtest["base_dir"] = f"backtests/pbgui/{live_user}"
+        cfg.setdefault("backtest", {})["exchange"] = bt_exchange
+    cfg.setdefault("backtest", {})["base_dir"] = f"backtests/pbgui/{live_user}"
 
-    cv7.save_config()
+    # Versioned backup before overwriting (mirrors ConfigV7._backup_before_save)
+    if config_path.is_file():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                old_cfg = json.load(f)
+            old_version = old_cfg.get("pbgui", {}).get("version", 0)
+            data_dir = instance_dir.parent.parent
+            backup_dir = data_dir / "backup" / "v7" / name / str(old_version)
+            if not backup_dir.exists():
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                for item in instance_dir.iterdir():
+                    if item.suffix == ".json" and item.name not in (
+                        "config.json.tmp", "ignored_coins.json",
+                        "approved_coins.json", "config_run.json", "monitor.json"
+                    ):
+                        shutil.copy2(str(item), str(backup_dir / item.name))
+        except Exception:
+            pass  # backup failure must never block the save
 
-    version = cv7.pbgui.version
+    save_pb7_config(cfg, config_path)
+
+    version = cfg["pbgui"]["version"]
 
     # Update status_v7.json
     _update_status_v7(name)
@@ -853,6 +930,81 @@ def get_hosts(session: SessionToken = Depends(require_auth)):
             if h != master and h not in hosts:
                 hosts.append(h)
     return {"hosts": hosts}
+
+
+def _normalize_exchange_list(values) -> list[str]:
+    if isinstance(values, str):
+        items = values.split(",")
+    elif isinstance(values, list):
+        items = values
+    else:
+        items = []
+
+    exchanges: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        exchange = str(item or "").strip().lower()
+        if not exchange or exchange == "combined" or exchange in seen:
+            continue
+        seen.add(exchange)
+        exchanges.append(exchange)
+    return exchanges
+
+
+def _classify_coins_for_exchanges(exchanges: list[str], coins: list[str]) -> dict[str, dict]:
+    from PBCoinData import CoinData, build_symbol_mappings, normalize_symbol
+
+    if not exchanges or not coins:
+        return {}
+
+    cd = CoinData()
+    active_coins: set[str] = set()
+    symbol_mappings: dict[str, str] = {}
+
+    for exchange in exchanges:
+        try:
+            approved_active, ignored_active = cd.filter_mapping(
+                exchange=exchange,
+                market_cap_min_m=0,
+                vol_mcap_max=float("inf"),
+                only_cpt=False,
+                notices_ignore=False,
+                tags=[],
+                quote_filter=None,
+                active_only=True,
+                use_cache=True,
+            )
+            active_coins.update(approved_active)
+            active_coins.update(ignored_active)
+
+            mapping = cd.load_mapping(exchange=exchange, use_cache=True)
+            raw_symbols = [
+                str(record.get("symbol") or "").strip().upper()
+                for record in mapping
+                if str(record.get("symbol") or "").strip()
+            ]
+            symbol_mappings.update(build_symbol_mappings(raw_symbols))
+        except Exception as exc:
+            _log(SERVICE, f"Failed to classify coins for exchange {exchange}: {exc}", level="WARNING")
+
+    statuses: dict[str, dict] = {}
+    for raw_coin in coins:
+        value = str(raw_coin or "").strip()
+        if not value:
+            continue
+        if value.lower() == "all":
+            statuses[value] = {"input": value, "normalized": "all", "status": "valid"}
+            continue
+
+        normalized = str(normalize_symbol(value.upper(), symbol_mappings) or value).upper()
+        status = "valid" if normalized in active_coins else "invalid"
+
+        statuses[value] = {
+            "input": value,
+            "normalized": normalized,
+            "status": status,
+        }
+    return statuses
 
 
 @router.get("/symbols")
@@ -921,6 +1073,25 @@ def filter_coins(
         use_cache=True,
     )
     return {"approved": approved, "ignored": ignored}
+
+
+@router.post("/coins/status")
+def get_coin_statuses(
+    body: dict = Body(...),
+    session: SessionToken = Depends(require_auth),
+):
+    """Resolve selected coins to CoinData short names and active/invalid status."""
+    exchanges = _normalize_exchange_list(body.get("exchanges", []))
+    coins_raw = body.get("coins", [])
+    if isinstance(coins_raw, str):
+        coins = [c.strip() for c in coins_raw.split(",") if c.strip()]
+    elif isinstance(coins_raw, list):
+        coins = [str(c).strip() for c in coins_raw if str(c).strip()]
+    else:
+        coins = []
+
+    statuses = _classify_coins_for_exchanges(exchanges, coins)
+    return {"exchanges": exchanges, "statuses": statuses}
 
 
 @router.get("/log/{name}")
@@ -1051,6 +1222,89 @@ def get_instance_log_smart(
         }
 
     return {"name": name, "log": "", "source": "none", "source_label": "no log found"}
+
+
+@router.get("/override-params")
+def get_override_params(session: SessionToken = Depends(require_auth)):
+    """Return allowed coin_overrides parameters from passivbot (used by coin_overrides_editor.js)."""
+    try:
+        pb7 = pb7dir()
+        src = str(Path(pb7) / "src")
+        if src not in sys.path:
+            sys.path.insert(0, src)
+        from config.overrides import get_allowed_modifications
+        allowed = get_allowed_modifications()
+        return {"params": allowed}
+    except Exception as exc:
+        _log(SERVICE, f"Failed to load override params: {exc}", level="warning")
+        return {"params": {}}
+
+
+@router.get("/override-config/{name}/{filename}")
+def get_instance_override_config(
+    name: str,
+    filename: str,
+    session: SessionToken = Depends(require_auth),
+):
+    """Read a per-coin override config file — used by coin_overrides_editor.js.
+
+    Mirrors the backtest /override-config endpoint so the shared JS module
+    can be used without modification.  Returns ``{"config": {"bot": {...}}}``.
+    """
+    _validate_name(name)
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    coin_file = Path(PBGDIR) / "data" / "run_v7" / name / filename
+    if not coin_file.is_file():
+        raise HTTPException(status_code=404, detail=f"Override config '{filename}' not found")
+    try:
+        with open(coin_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {"config": {"bot": data.get("bot", {})}}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"Error reading override config: {exc}")
+
+
+@router.put("/override-config/{name}/{filename}")
+async def save_instance_override_config(
+    name: str,
+    filename: str,
+    request: Request,
+    session: SessionToken = Depends(require_auth),
+):
+    """Save a per-coin override config file — used by coin_overrides_editor.js.
+
+    Mirrors the backtest /override-config endpoint.  Body is
+    ``{"bot": {"long": {...}, "short": {...}}}``.
+    """
+    _validate_name(name)
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not filename.endswith(".json"):
+        raise HTTPException(status_code=400, detail="Filename must end with .json")
+    body = await request.json()
+    coin_dir = Path(PBGDIR) / "data" / "run_v7" / name
+    coin_dir.mkdir(parents=True, exist_ok=True)
+    coin_file = coin_dir / filename
+    full: dict = {}
+    if coin_file.is_file():
+        try:
+            with open(coin_file, "r", encoding="utf-8") as f:
+                full = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            full = {}
+    full["bot"] = body.get("bot", {})
+    tmp = coin_file.with_suffix(".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(full, f, indent=4)
+            f.write("\n")
+        os.replace(str(tmp), str(coin_file))
+    except Exception:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+        raise
+    return {"ok": True}
 
 
 @router.get("/instances/{name}/coin-config/{symbol}")

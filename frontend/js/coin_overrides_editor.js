@@ -23,6 +23,12 @@ var _covState = {
   overrideConfigs: {},  // cache: { COIN: { long: {...}, short: {...} } } loaded from override files
 };
 
+function _covNotifyStructuredSync() {
+  if (typeof scheduleStructuredEditorSync === 'function') {
+    scheduleStructuredEditorSync();
+  }
+}
+
 /* ── Init ───────────────────────────────────────────────────── */
 function coinOvInit(containerId, opts) {
   _covState.containerId = containerId;
@@ -310,6 +316,7 @@ function _covPickCoin(coin) {
   _covState.overrides[coin] = {};
   _covState.editCoin = coin;
   _covRender();
+  _covNotifyStructuredSync();
 }
 
 /* ── Param picker: searchable dropdowns per section ──────────── */
@@ -482,6 +489,7 @@ function coinOvRemove(coin) {
   delete _covState.overrides[coin];
   if (_covState.editCoin === coin) _covState.editCoin = null;
   _covRender();
+  _covNotifyStructuredSync();
 }
 
 /* ── Edit coin ───────────────────────────────────────────────── */
@@ -664,6 +672,7 @@ function covAddParam(coin, secKey) {
     target[param] = 0;
   }
   _covRender();
+  _covNotifyStructuredSync();
 }
 
 function covRemoveParam(coin, secKey, param) {
@@ -678,6 +687,7 @@ function covRemoveParam(coin, secKey, param) {
     _covCleanEmpty(data);
   }
   _covRender();
+  _covNotifyStructuredSync();
 }
 
 /* ── Save edit form values back to state ─────────────────────── */
@@ -716,6 +726,7 @@ function _covSaveEdit() {
   _covSaveConfigFile(coin);
 
   _covCleanEmpty(data);
+  _covNotifyStructuredSync();
 }
 
 /** Save the Config File textareas to COIN.json via the API. */
@@ -838,6 +849,7 @@ function covFilterCfgPaste(evt, side) {
   var ta = evt.target;
   ta.value = JSON.stringify(filtered, null, 4);
   covAutoResizeCfgTa(ta);
+  _covNotifyStructuredSync();
   var msg = flat !== parsed ? 'Extracted ' + side + ' side' : '';
   if (removed.length > 0) {
     msg += (msg ? ', filtered ' : 'Filtered ') + removed.length + ' non-override param(s)';

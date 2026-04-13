@@ -52,6 +52,19 @@ def _is_hyperliquid_hip3_base_symbol(name: str) -> bool:
     return prefix in _HYPERLIQUID_HIP3_DEX_PREFIXES
 
 
+def _normalize_hyperliquid_hip3_alias(symbol: str) -> str:
+    """Normalize supported Hyperliquid HIP-3 aliases to PBGui's XYZ-TICKER form."""
+    value = str(symbol or "").strip().upper()
+    if not value:
+        return ""
+    base = value.split("/", 1)[0].strip()
+    if base.startswith("XYZ:") and len(base) > 4:
+        return f"XYZ-{base[4:].strip()}"
+    if _is_hyperliquid_hip3_base_symbol(base):
+        return base
+    return ""
+
+
 def compute_coin_name(market_id, quote=""):
     """
     Compute PB7-compatible coin name from exchange market_id and quote currency.
@@ -167,7 +180,11 @@ def normalize_symbol(symbol, symbol_mappings=None):
         return ""
     
     # Remove quote currency suffixes
-    base = symbol
+    base = str(symbol).strip().upper()
+
+    hip3_alias = _normalize_hyperliquid_hip3_alias(base)
+    if hip3_alias:
+        return hip3_alias
     
     # Check for stablecoin/quote-like patterns that should NOT be stripped further
     # These are coins whose names resemble quotes (USDe, USDC as trading pair, etc.)

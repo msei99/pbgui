@@ -668,7 +668,13 @@ class LogViewerPanel {
 
     _updateFileList(files) {
         this._fileList = (files || []).slice().sort();
-        if (this._isLocal()) this._buildFileList();
+        if (this._isLocal()) {
+            this._buildFileList();
+            /* auto-subscribe to defaultFile if not yet streaming */
+            if (this._file && !this._streaming && this._fileList.indexOf(this._file) >= 0) {
+                this._subscribe();
+            }
+        }
     }
 
     _buildFileList() {
@@ -680,7 +686,9 @@ class LogViewerPanel {
             (function(f) {
                 var btn = document.createElement('button');
                 btn.className = 'lvp-item-btn' + (f === me._file ? ' lvp-active' : '');
-                btn.textContent = f;
+                var label = f;
+                if (f.indexOf('Bot:') === 0) label = '\ud83e\udd16 ' + f.substring(4);
+                btn.textContent = label;
                 btn.title = f;
                 btn.addEventListener('click', function() { me._selectItem(f); });
                 list.appendChild(btn);
@@ -911,6 +919,9 @@ class LogViewerPanel {
         if (this._isLocal()) {
             /* Derive service from log filename */
             if (!this._file) return null;
+            if (this._file.indexOf('Bot:') === 0) {
+                return this._file + ':7';
+            }
             var svc = LogViewerPanel._LOCAL_SVC_MAP[this._file];
             if (svc) return svc;
             /* Bot instance logs: {name}.log in run_v7 dirs */

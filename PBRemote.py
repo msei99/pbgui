@@ -1032,8 +1032,8 @@ def main():
             remote.check_if_api_synced()
             remote.sync_status_down()
             remote.update_remote_servers()
+            remote.alive()
             for server in remote.remote_servers:
-                remote.alive()
                 for s in remote.remote_servers:
                     s.load()
                 server.sync_v7_down(remote.role)

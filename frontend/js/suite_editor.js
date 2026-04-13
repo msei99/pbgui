@@ -66,6 +66,15 @@ var _suiteAggMetrics = [
   'sortino_ratio', 'profit_factor', 'total_pnl',
 ];
 
+var _suiteMsState = {};
+var _suiteMsCounterpart = {
+  'suite-sc-coins-ms': 'suite-sc-ign-ms',
+  'suite-sc-ign-ms': 'suite-sc-coins-ms',
+};
+var _suiteCoinSourcesPrefix = 'suite-kv-cs';
+var _suiteInlineInputStyle = 'height:24px;font-size:var(--fs-xs);background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0 var(--sp-xs);outline:none;font-family:var(--font)';
+var _suiteInlineSelectStyle = _suiteInlineInputStyle + ';appearance:none;-webkit-appearance:none;-moz-appearance:none;padding-right:22px';
+
 /* ── Init ───────────────────────────────────────────────────── */
 function suiteInit(containerId, opts) {
   _suiteState.containerId = containerId;
@@ -74,12 +83,33 @@ function suiteInit(containerId, opts) {
 }
 
 /* ── Load config into suite editor ──────────────────────────── */
-function suiteLoad(cfg) {
+function suiteLoad(cfg, opts) {
+  opts = opts || {};
   var bt = cfg.backtest || {};
+  var prevEditIdx = _suiteState.editIdx;
+  var prevLabel = '';
+  if (prevEditIdx >= 0 && _suiteState.scenarios[prevEditIdx]) {
+    prevLabel = String(_suiteState.scenarios[prevEditIdx].label || '');
+  }
+  var nextScenarios = Array.isArray(bt.scenarios) ? JSON.parse(JSON.stringify(bt.scenarios)) : [];
   _suiteState.enabled = !!bt.suite_enabled;
-  _suiteState.scenarios = Array.isArray(bt.scenarios) ? JSON.parse(JSON.stringify(bt.scenarios)) : [];
+  _suiteState.scenarios = nextScenarios;
   _suiteState.aggregate = bt.aggregate ? JSON.parse(JSON.stringify(bt.aggregate)) : { default: 'mean' };
-  _suiteState.editIdx = -1;
+  if (opts.preserveEdit && _suiteState.enabled && prevEditIdx >= 0) {
+    var nextEditIdx = -1;
+    if (prevLabel) {
+      for (var i = 0; i < nextScenarios.length; i++) {
+        if (String((nextScenarios[i] || {}).label || '') === prevLabel) {
+          nextEditIdx = i;
+          break;
+        }
+      }
+    }
+    if (nextEditIdx < 0 && prevEditIdx < nextScenarios.length) nextEditIdx = prevEditIdx;
+    _suiteState.editIdx = nextEditIdx;
+  } else {
+    _suiteState.editIdx = -1;
+  }
   _suiteRender();
 }
 
@@ -116,6 +146,241 @@ function _suiteLoadBotParams() {
   });
 }
 
+/* ── Structured editor sync hook ───────────────────────────── */
+function _suiteNotifyStructuredSync() {
+  if (typeof scheduleStructuredEditorSync === 'function') {
+    scheduleStructuredEditorSync();
+  }
+}
+
+function _suiteAvailableCoins() {
+  var seen = {};
+  if (typeof _cfgMs !== 'undefined') {
+    ['ms-cfg-app-long', 'ms-cfg-app-short', 'ms-cfg-ign-long', 'ms-cfg-ign-short'].forEach(function(id) {
+      var state = _cfgMs[id];
+      if (!state) return;
+      (state.options || []).forEach(function(value) {
+        if (value && value !== 'all') seen[value] = true;
+      });
+      (state.selected || []).forEach(function(value) {
+        if (value && value !== 'all') seen[value] = true;
+      });
+    });
+  }
+  return Object.keys(seen).sort();
+}
+
+function _suiteBuildCoinMsField(id, label, tip, placeholder) {
+  return '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="' + esc(tip) + '">' + label + '\x3C/span> ' +
+    '\x3Cspan class="ms-clear-btn" onclick="_suiteClearCoinMs(\'' + id + '\')" title="Clear all">\u00d7\x3C/span>\x3C/label>' +
+    '\x3Cdiv class="ms-wrap" id="' + id + '">' +
+      '\x3Cinput class="ms-input" id="' + id + '-input" placeholder="' + esc(placeholder) + '" autocomplete="off">' +
+      '\x3Cdiv class="ms-dropdown" id="' + id + '-dd">\x3C/div>' +
+    '\x3C/div>\x3C/div>';
+}
+
+function _suiteBuildDateField(id, label, value, tip, placeholder) {
+  var dateVal = value || '';
+  return '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="' + esc(tip) + '">' + label + '\x3C/span>\x3C/label>' +
+    '\x3Cdiv style="position:relative">' +
+      '\x3Cinput type="text" id="' + id + '" value="' + esc(dateVal) + '" data-prev="' + esc(dateVal) + '" placeholder="' + esc(placeholder || '') + '" ' +
+      'style="width:100%;box-sizing:border-box;padding-right:26px" onchange="this.dataset.prev=this.value">' +
+      '\x3Cbutton type="button" data-dp="' + id + '" onclick="window.__dp.show(\'' + id + '\',this)" ' +
+      'style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅\x3C/button>' +
+    '\x3C/div>\x3C/div>';
+}
+
+function _suiteBuildCoinSourcesEditor(data) {
+  var count = Object.keys(data || {}).length;
+  var exchangeOptions = '';
+  for (var i = 0; i < _suiteState.exchanges.length; i++) {
+    exchangeOptions += '\x3Coption value="' + _suiteState.exchanges[i] + '">' + _suiteState.exchanges[i] + '\x3C/option>';
+  }
+  return '\x3Cdiv class="expander" id="suite-exp-csrc">' +
+    '\x3Cdiv class="expander-header" onclick="toggleExpander(\'suite-exp-csrc\')">' +
+      '\x3Cspan class="arrow">▶\x3C/span> coin_sources (' + count + ' configured)' +
+    '\x3C/div>' +
+    '\x3Cdiv class="expander-body">' +
+      '\x3Cdiv style="display:flex;align-items:center;justify-content:flex-end;min-height:18px;margin-bottom:4px">' +
+        '\x3Cspan class="ms-clear-btn" onclick="kvClearAll(\'' + _suiteCoinSourcesPrefix + '\')" title="Clear all">\u00d7 all\x3C/span>' +
+      '\x3C/div>' +
+      '\x3Cdiv class="kv-chips" id="' + _suiteCoinSourcesPrefix + '">\x3C/div>' +
+      '\x3Cdiv style="display:flex;gap:var(--sp-sm);align-items:end;margin-top:var(--sp-xs)">' +
+        '\x3Cdiv class="form-group" style="width:140px">\x3Clabel>Exchange\x3C/label>' +
+          '\x3Cselect id="' + _suiteCoinSourcesPrefix + '-exchange" class="form-input" onchange="kvLoadCoins(\'' + _suiteCoinSourcesPrefix + '\')">' +
+            exchangeOptions +
+          '\x3C/select>\x3C/div>' +
+        '\x3Cdiv class="form-group" style="flex:1">\x3Clabel>Coin\x3C/label>' +
+          '\x3Cdiv class="ms-wrap" id="' + _suiteCoinSourcesPrefix + '-coin">' +
+            '\x3Cinput class="ms-input" id="' + _suiteCoinSourcesPrefix + '-coin-input" placeholder="Type to search..." autocomplete="off">' +
+            '\x3Cdiv class="ms-dropdown" id="' + _suiteCoinSourcesPrefix + '-coin-dd">\x3C/div>' +
+          '\x3C/div>\x3C/div>' +
+      '\x3C/div>' +
+    '\x3C/div>' +
+  '\x3C/div>';
+}
+
+function _suiteGetCoinMsSelected(id) {
+  return _suiteMsState[id] ? _suiteMsState[id].selected.slice() : [];
+}
+
+function _suiteClearCoinMs(id) {
+  if (!_suiteMsState[id]) return;
+  _suiteMsState[id].selected = [];
+  _suiteRenderCoinMs(id);
+  _suiteNotifyStructuredSync();
+}
+
+function _suiteEnsureCoinMsState(id, selected) {
+  var options = _suiteAvailableCoins();
+  var chosen = (selected || []).filter(Boolean).map(function(value) { return value.toUpperCase(); });
+  chosen.forEach(function(value) {
+    if (options.indexOf(value) < 0) options.push(value);
+  });
+  options.sort();
+  var prev = _suiteMsState[id] || {};
+  _suiteMsState[id] = {
+    options: options,
+    selected: chosen,
+    highlightIdx: prev.highlightIdx || -1,
+  };
+}
+
+function _suiteInitCoinMs(id, selected) {
+  _suiteEnsureCoinMsState(id, selected);
+  var wrap = document.getElementById(id);
+  if (!wrap) return;
+  var input = wrap.querySelector('.ms-input');
+  if (!input) return;
+  if (!input.dataset.wired) {
+    input.dataset.wired = '1';
+    input.addEventListener('focus', function() { _suiteShowCoinDd(id, this.value); });
+    input.addEventListener('input', function() {
+      if (_suiteMsState[id]) _suiteMsState[id].highlightIdx = -1;
+      _suiteShowCoinDd(id, this.value);
+    });
+    input.addEventListener('blur', function() {
+      var dd = wrap.querySelector('.ms-dropdown');
+      this.value = '';
+      if (dd) setTimeout(function() {
+        dd.classList.remove('open');
+        if (_suiteMsState[id]) _suiteMsState[id].highlightIdx = -1;
+      }, 150);
+    });
+    input.addEventListener('keydown', function(e) {
+      var dd = wrap.querySelector('.ms-dropdown');
+      if (!dd || !dd.classList.contains('open')) return;
+      var items = dd.querySelectorAll('.ms-option:not(.selected)');
+      var state = _suiteMsState[id];
+      if (!state) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!items.length) return;
+        if (e.key === 'ArrowDown') state.highlightIdx = state.highlightIdx < items.length - 1 ? state.highlightIdx + 1 : 0;
+        else state.highlightIdx = state.highlightIdx > 0 ? state.highlightIdx - 1 : items.length - 1;
+        items.forEach(function(el, idx) {
+          if (idx === state.highlightIdx) { el.classList.add('highlighted'); el.scrollIntoView({ block: 'nearest' }); }
+          else el.classList.remove('highlighted');
+        });
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        var value = null;
+        if (items.length === 1) value = items[0].getAttribute('data-val');
+        else if (state.highlightIdx >= 0 && state.highlightIdx < items.length) value = items[state.highlightIdx].getAttribute('data-val');
+        if (value) {
+          _suiteAddCoinMsValue(id, value);
+          this.value = '';
+          _suiteShowCoinDd(id, '');
+        }
+      }
+    });
+  }
+  _suiteRenderCoinMs(id);
+}
+
+function _suiteRenderCoinMs(id) {
+  var wrap = document.getElementById(id);
+  if (!wrap) return;
+  var input = wrap.querySelector('.ms-input');
+  if (!input) return;
+  wrap.querySelectorAll('.ms-tag').forEach(function(tag) { tag.remove(); });
+  var state = _suiteMsState[id];
+  if (!state) return;
+  state.selected.forEach(function(value) {
+    var tag = document.createElement('span');
+    tag.className = 'ms-tag';
+    tag.appendChild(document.createTextNode(value + ' '));
+    var close = document.createElement('span');
+    close.className = 'ms-x';
+    close.setAttribute('data-val', value);
+    close.textContent = '×';
+    tag.appendChild(close);
+    wrap.insertBefore(tag, input);
+  });
+  wrap.querySelectorAll('.ms-x').forEach(function(close) {
+    close.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var value = this.getAttribute('data-val');
+      state.selected = state.selected.filter(function(selectedValue) { return selectedValue !== value; });
+      _suiteRenderCoinMs(id);
+      _suiteNotifyStructuredSync();
+    });
+  });
+}
+
+function _suiteAddCoinMsValue(id, value) {
+  var state = _suiteMsState[id];
+  if (!state) return;
+  value = (value || '').toUpperCase();
+  if (!value) return;
+  if (state.selected.indexOf(value) < 0) state.selected.push(value);
+  var counterpartId = _suiteMsCounterpart[id];
+  if (counterpartId && _suiteMsState[counterpartId]) {
+    _suiteMsState[counterpartId].selected = _suiteMsState[counterpartId].selected.filter(function(selectedValue) {
+      return selectedValue !== value;
+    });
+    _suiteRenderCoinMs(counterpartId);
+  }
+  _suiteRenderCoinMs(id);
+  _suiteNotifyStructuredSync();
+}
+
+function _suiteShowCoinDd(id, filter) {
+  var wrap = document.getElementById(id);
+  if (!wrap) return;
+  var dd = wrap.querySelector('.ms-dropdown');
+  if (!dd) return;
+  var state = _suiteMsState[id];
+  if (!state) return;
+  _suiteEnsureCoinMsState(id, state.selected);
+  state = _suiteMsState[id];
+  var counterpartId = _suiteMsCounterpart[id];
+  var counterpartSelected = (counterpartId && _suiteMsState[counterpartId]) ? _suiteMsState[counterpartId].selected : [];
+  var query = (filter || '').toUpperCase();
+  var html = '';
+  var visibleIdx = 0;
+  state.options.forEach(function(option) {
+    if (query && option.toUpperCase().indexOf(query) < 0) return;
+    var selected = state.selected.indexOf(option) >= 0;
+    var inOther = counterpartSelected.indexOf(option) >= 0;
+    var highlighted = !selected && visibleIdx === state.highlightIdx;
+    html += '\x3Cdiv class="ms-option' + (selected ? ' selected' : '') + (inOther ? ' in-other' : '') + (highlighted ? ' highlighted' : '') + '" data-val="' + esc(option) + '">' +
+      esc(inOther ? (option + ' \u21c4') : option) + '\x3C/div>';
+    if (!selected) visibleIdx++;
+  });
+  dd.innerHTML = html;
+  dd.classList.add('open');
+  dd.querySelectorAll('.ms-option').forEach(function(optionEl) {
+    optionEl.addEventListener('mousedown', function(e) {
+      e.preventDefault();
+      _suiteAddCoinMsValue(id, this.getAttribute('data-val'));
+      var input = wrap.querySelector('.ms-input');
+      if (input) input.value = '';
+      _suiteShowCoinDd(id, '');
+    });
+  });
+}
+
 /* ── Main render ────────────────────────────────────────────── */
 function _suiteRender() {
   var el = document.getElementById(_suiteState.containerId);
@@ -132,7 +397,6 @@ function _suiteRender() {
   h += '\x3C/div>';
   h += '\x3Cdiv class="expander-body">';
 
-  /* Enable toggle */
   h += '\x3Cdiv style="display:flex;align-items:center;gap:var(--sp-md);margin-bottom:var(--sp-md)">';
   h += '\x3Cdiv class="chk-row">\x3Cinput type="checkbox" id="suite-enabled"' +
        (_suiteState.enabled ? ' checked' : '') +
@@ -141,7 +405,6 @@ function _suiteRender() {
   h += '\x3C/div>';
 
   if (_suiteState.enabled) {
-    /* Template buttons */
     h += '\x3Cdiv style="display:flex;gap:var(--sp-sm);flex-wrap:wrap;margin-bottom:var(--sp-md)">';
     h += '\x3Cspan style="font-size:var(--fs-xs);color:var(--text-dim);align-self:center">Templates:\x3C/span>';
     var tKeys = Object.keys(_suiteTemplates);
@@ -153,20 +416,24 @@ function _suiteRender() {
          'style="border-color:var(--orange);color:var(--orange)">Reset to Base\x3C/button>';
     h += '\x3C/div>';
 
-    /* Scenarios table */
     h += _suiteRenderScenariosTable();
 
-    /* Scenario editor (inline form) */
     if (_suiteState.editIdx >= 0) {
       h += _suiteRenderScenarioEditor();
     }
 
-    /* Aggregate settings */
     h += _suiteRenderAggregate();
   }
 
   h += '\x3C/div>\x3C/div>';
   el.innerHTML = h;
+  if (_suiteState.enabled && _suiteState.editIdx >= 0) {
+    var current = _suiteState.scenarios[_suiteState.editIdx] || {};
+    _suiteInitCoinMs('suite-sc-coins-ms', current.coins || []);
+    _suiteInitCoinMs('suite-sc-ign-ms', current.ignored_coins || []);
+    _suiteInitCoinSources(current);
+    if (typeof cfgWireDateRange === 'function') cfgWireDateRange('suite-sc-start', 'suite-sc-end');
+  }
 }
 
 /* ── Toggle enabled ─────────────────────────────────────────── */
@@ -176,6 +443,7 @@ function _suiteToggle(on) {
     _suiteState.scenarios.push({ label: 'base' });
   }
   _suiteRender();
+  _suiteNotifyStructuredSync();
 }
 
 /* ── Apply built-in template ────────────────────────────────── */
@@ -186,7 +454,6 @@ function _suiteApplyTemplate(name) {
   _suiteState.aggregate = JSON.parse(JSON.stringify(t.aggregate));
   _suiteState.editIdx = -1;
 
-  // Auto-merge scenario exchanges into base config exchanges
   if (typeof cfgGetMs === 'function' && typeof cfgSetMs === 'function') {
     var baseEx = cfgGetMs('ms-cfg-exchanges');
     var needed = {};
@@ -205,6 +472,7 @@ function _suiteApplyTemplate(name) {
   }
 
   _suiteRender();
+  _suiteNotifyStructuredSync();
   toast('Template "' + name + '" applied', 'ok');
 }
 
@@ -214,6 +482,7 @@ function _suiteResetToBase() {
   _suiteState.aggregate = { default: 'mean' };
   _suiteState.editIdx = -1;
   _suiteRender();
+  _suiteNotifyStructuredSync();
   toast('Reset to base scenario', 'ok');
 }
 
@@ -275,6 +544,7 @@ function _suiteAddScenario() {
   _suiteState.scenarios.push({ label: 'scenario_' + (_suiteState.scenarios.length + 1) });
   _suiteState.editIdx = _suiteState.scenarios.length - 1;
   _suiteRender();
+  _suiteNotifyStructuredSync();
 }
 
 function _suiteEditScenario(idx) {
@@ -284,6 +554,7 @@ function _suiteEditScenario(idx) {
   }
   _suiteState.editIdx = (_suiteState.editIdx === idx) ? -1 : idx;
   _suiteRender();
+  _suiteNotifyStructuredSync();
 }
 
 function _suiteRemoveScenario(idx) {
@@ -291,6 +562,7 @@ function _suiteRemoveScenario(idx) {
   if (_suiteState.editIdx === idx) _suiteState.editIdx = -1;
   else if (_suiteState.editIdx > idx) _suiteState.editIdx--;
   _suiteRender();
+  _suiteNotifyStructuredSync();
 }
 
 function _suiteMoveScenario(idx, dir) {
@@ -302,6 +574,7 @@ function _suiteMoveScenario(idx, dir) {
   if (_suiteState.editIdx === idx) _suiteState.editIdx = newIdx;
   else if (_suiteState.editIdx === newIdx) _suiteState.editIdx = idx;
   _suiteRender();
+  _suiteNotifyStructuredSync();
 }
 
 /* ── Scenario editor form ───────────────────────────────────── */
@@ -321,10 +594,8 @@ function _suiteRenderScenarioEditor() {
   h += '\x3Cinput type="text" id="suite-sc-label" value="' + esc(sc.label || '') + '">\x3C/div>';
 
   /* Start / End dates */
-  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Override start date for this scenario.\nLeave empty to use base config.">start_date\x3C/span>\x3C/label>';
-  h += '\x3Cinput type="text" id="suite-sc-start" value="' + esc(sc.start_date || '') + '" placeholder="e.g. 2023-01-01">\x3C/div>';
-  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Override end date for this scenario.\nLeave empty to use base config.">end_date\x3C/span>\x3C/label>';
-  h += '\x3Cinput type="text" id="suite-sc-end" value="' + esc(sc.end_date || '') + '" placeholder="e.g. now">\x3C/div>';
+  h += _suiteBuildDateField('suite-sc-start', 'start_date', sc.start_date || '', 'Override start date for this scenario.\nLeave empty to use base config.', 'e.g. 2023-01-01');
+  h += _suiteBuildDateField('suite-sc-end', 'end_date', sc.end_date || '', 'Override end date for this scenario.\nLeave empty to use base config.', 'e.g. now');
   h += '\x3C/div>';
 
   /* Exchanges checkboxes */
@@ -339,21 +610,14 @@ function _suiteRenderScenarioEditor() {
   }
   h += '\x3C/div>\x3C/div>';
 
-  /* Coins (comma-separated text) */
+  /* Coins */
   h += '\x3Cdiv class="form-row cols-2">';
-  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Override approved coins for this scenario.\nComma-separated list (e.g. BTC,ETH,SOL).\nLeave empty to use base config.">coins\x3C/span>\x3C/label>';
-  h += '\x3Cinput type="text" id="suite-sc-coins" value="' + esc((sc.coins || []).join(',')) + '" placeholder="BTC,ETH,SOL">\x3C/div>';
-  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Override ignored coins for this scenario.\nComma-separated list.\nLeave empty to use base config.">ignored_coins\x3C/span>\x3C/label>';
-  h += '\x3Cinput type="text" id="suite-sc-ign" value="' + esc((sc.ignored_coins || []).join(',')) + '" placeholder="DOGE,SHIB">\x3C/div>';
+  h += _suiteBuildCoinMsField('suite-sc-coins-ms', 'coins', 'Override approved coins for this scenario.\nSelect one or more coins from the currently loaded exchange universe.\nLeave empty to use base config.', 'Type to search...');
+  h += _suiteBuildCoinMsField('suite-sc-ign-ms', 'ignored_coins', 'Override ignored coins for this scenario.\nSelect one or more coins from the currently loaded exchange universe.\nLeave empty to use base config.', 'Type to search...');
   h += '\x3C/div>';
 
   /* coin_sources */
-  var scCs = sc.coin_sources || {};
-  var csStr = _suiteCoinSourcesToStr(scCs);
-  h += '\x3Cdiv class="form-group" style="margin-bottom:var(--sp-md)">';
-  h += '\x3Clabel>\x3Cspan data-tip="Override coin data sources for this scenario.\nFormat: COIN:exchange (comma-separated).\nExample: BTC:binance,ETH:bybit\nLeave empty to use base config.">coin_sources\x3C/span>\x3C/label>';
-  h += '\x3Cinput type="text" id="suite-sc-csrc" value="' + esc(csStr) + '" placeholder="BTC:binance,ETH:bybit">';
-  h += '\x3C/div>';
+  h += _suiteBuildCoinSourcesEditor(sc.coin_sources || {});
 
   /* Overrides */
   h += _suiteRenderOverrides(sc);
@@ -392,8 +656,8 @@ function _suiteRenderOverrides(sc) {
       h += '\x3Ctr>';
       h += '\x3Ctd>' + esc(side) + '\x3C/td>';
       h += '\x3Ctd>' + esc(param) + '\x3C/td>';
-      h += '\x3Ctd>\x3Cinput type="text" id="suite-ov-val-' + ki + '" value="' + esc(String(ov[k])) + '" ' +
-           'style="height:24px;font-size:var(--fs-xs);width:100px" ' +
+       h += '\x3Ctd>\x3Cinput type="text" id="suite-ov-val-' + ki + '" value="' + esc(String(ov[k])) + '" ' +
+         'style="' + _suiteInlineInputStyle + ';width:100px" ' +
            'onchange="_suiteUpdateOverrideVal(' + ki + ')">\x3C/td>';
       h += '\x3Ctd>\x3Cbutton type="button" class="act-btn act-btn-danger" onclick="_suiteRemoveOverride(\'' +
            k.replace(/'/g, "\\'") + '\')">\u00d7\x3C/button>\x3C/td>';
@@ -446,6 +710,7 @@ function _suiteConfirmOverride() {
   if (!sc.overrides) sc.overrides = {};
   sc.overrides[key] = parsed;
   _suiteRender();
+  _suiteNotifyStructuredSync();
 }
 
 function _suiteRemoveOverride(key) {
@@ -455,10 +720,12 @@ function _suiteRemoveOverride(key) {
   delete sc.overrides[key];
   if (Object.keys(sc.overrides).length === 0) delete sc.overrides;
   _suiteRender();
+  _suiteNotifyStructuredSync();
 }
 
 function _suiteUpdateOverrideVal(ki) {
   _suiteSaveEditingScenario();
+  _suiteNotifyStructuredSync();
 }
 
 /* ── Save editing scenario from form → state ─────────────── */
@@ -487,18 +754,15 @@ function _suiteSaveEditingScenario() {
   if (exArr.length > 0) sc.exchanges = exArr; else delete sc.exchanges;
 
   // Coins
-  var coinsStr = (document.getElementById('suite-sc-coins') || {}).value || '';
-  var coins = coinsStr.split(',').map(function(c) { return c.trim().toUpperCase(); }).filter(Boolean);
+  var coins = _suiteGetCoinMsSelected('suite-sc-coins-ms');
   if (coins.length > 0) sc.coins = coins; else delete sc.coins;
 
   // Ignored coins
-  var ignStr = (document.getElementById('suite-sc-ign') || {}).value || '';
-  var ign = ignStr.split(',').map(function(c) { return c.trim().toUpperCase(); }).filter(Boolean);
+  var ign = _suiteGetCoinMsSelected('suite-sc-ign-ms');
   if (ign.length > 0) sc.ignored_coins = ign; else delete sc.ignored_coins;
 
   // coin_sources
-  var csrcStr = (document.getElementById('suite-sc-csrc') || {}).value || '';
-  var csObj = _suiteStrToCoinSources(csrcStr);
+  var csObj = _suiteCollectCoinSources();
   if (Object.keys(csObj).length > 0) sc.coin_sources = csObj; else delete sc.coin_sources;
 
   // Overrides: re-read values from inputs
@@ -515,12 +779,14 @@ function _suiteSaveEditingScenario() {
       }
     }
   }
+  _suiteNotifyStructuredSync();
 }
 
 function _suiteSaveAndClose() {
   _suiteSaveEditingScenario();
   _suiteState.editIdx = -1;
   _suiteRender();
+  _suiteNotifyStructuredSync();
 }
 
 /* ── Aggregate settings ─────────────────────────────────────── */
@@ -554,7 +820,7 @@ function _suiteRenderAggregate() {
       var mk = metricKeys[mi];
       h += '\x3Cdiv style="display:flex;gap:var(--sp-sm);align-items:center;margin-bottom:2px">';
       h += '\x3Cspan style="font-size:var(--fs-xs);flex:1">' + esc(mk) + '\x3C/span>';
-      h += '\x3Cselect id="suite-agg-m-' + mi + '" style="width:80px;height:24px;font-size:var(--fs-xs)" onchange="_suiteUpdateAggMetric(\'' + mk.replace(/'/g, "\\'") + '\',' + mi + ')">';
+      h += '\x3Cselect id="suite-agg-m-' + mi + '" style="' + _suiteInlineSelectStyle + ';width:90px" onchange="_suiteUpdateAggMetric(\'' + mk.replace(/'/g, "\\'") + '\',' + mi + ')">';
       h += '\x3Coption value="mean"' + (agg[mk] === 'mean' ? ' selected' : '') + '>mean\x3C/option>';
       h += '\x3Coption value="max"' + (agg[mk] === 'max' ? ' selected' : '') + '>max\x3C/option>';
       h += '\x3C/select>';
@@ -585,11 +851,13 @@ function _suiteRenderAggregate() {
 function _suiteUpdateAggDefault() {
   var sel = document.getElementById('suite-agg-default');
   if (sel) _suiteState.aggregate.default = sel.value;
+  _suiteNotifyStructuredSync();
 }
 
 function _suiteUpdateAggMetric(key, idx) {
   var sel = document.getElementById('suite-agg-m-' + idx);
   if (sel) _suiteState.aggregate[key] = sel.value;
+  _suiteNotifyStructuredSync();
 }
 
 function _suiteAddAggMetric() {
@@ -603,36 +871,33 @@ function _suiteConfirmAggMetric() {
   if (!metric) return;
   _suiteState.aggregate[metric] = method;
   _suiteRender();
+  _suiteNotifyStructuredSync();
 }
 
 function _suiteRemoveAggMetric(key) {
   delete _suiteState.aggregate[key];
   _suiteRender();
+  _suiteNotifyStructuredSync();
 }
 
-/* ── coin_sources helpers: {COIN: "exchange"} ↔ "COIN:exchange,..." ── */
-function _suiteCoinSourcesToStr(obj) {
-  var parts = [];
-  var keys = Object.keys(obj).sort();
-  for (var i = 0; i < keys.length; i++) {
-    parts.push(keys[i] + ':' + obj[keys[i]]);
+/* ── coin_sources helpers ─────────────────────────────────── */
+function _suiteInitCoinSources(sc) {
+  if (typeof kvInit !== 'function') return;
+  var prefix = _suiteCoinSourcesPrefix;
+  kvInit(prefix, (sc && sc.coin_sources) || {});
+  var exchangeEl = document.getElementById(prefix + '-exchange');
+  if (exchangeEl) {
+    var scenarioEx = Array.isArray(sc && sc.exchanges) ? sc.exchanges : [];
+    var nextExchange = exchangeEl.value;
+    if (scenarioEx.length && _suiteState.exchanges.indexOf(scenarioEx[0]) >= 0) nextExchange = scenarioEx[0];
+    else if (!nextExchange || _suiteState.exchanges.indexOf(nextExchange) < 0) nextExchange = _suiteState.exchanges[0] || 'binance';
+    exchangeEl.value = nextExchange;
   }
-  return parts.join(',');
+  kvUpdateExpanderCount(prefix);
+  kvLoadCoins(prefix);
 }
 
-function _suiteStrToCoinSources(str) {
-  var result = {};
-  if (!str || !str.trim()) return result;
-  var parts = str.split(',');
-  for (var i = 0; i < parts.length; i++) {
-    var p = parts[i].trim();
-    if (!p) continue;
-    var ci = p.indexOf(':');
-    if (ci > 0) {
-      var coin = p.substring(0, ci).trim().toUpperCase();
-      var ex = p.substring(ci + 1).trim().toLowerCase();
-      if (coin && ex) result[coin] = ex;
-    }
-  }
-  return result;
+function _suiteCollectCoinSources() {
+  if (typeof kvCollect === 'function') return kvCollect(_suiteCoinSourcesPrefix);
+  return {};
 }

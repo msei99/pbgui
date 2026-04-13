@@ -826,6 +826,27 @@ def _hlcvs_cleanup_now_sync(retention_days: int) -> dict:
 
 # ── REST: Bot params (from passivbot schema) ─────────────────
 
+@router.get("/configs/new-config")
+def get_new_backtest_config(session: SessionToken = Depends(require_auth)):
+    """Return a default backtest config from the passivbot schema.
+
+    Using get_template_config() keeps the defaults always in sync with the
+    installed passivbot version without any manual maintenance.
+    """
+    try:
+        import sys
+        pb7 = pb7dir()
+        src = os.path.join(pb7, "src")
+        if src not in sys.path:
+            sys.path.insert(0, src)
+        from config.schema import get_template_config  # noqa: PLC0415
+        tmpl = get_template_config()
+    except Exception as exc:
+        _log(SERVICE, f"Failed to load template config: {exc}", level="warning")
+        tmpl = {"backtest": {}, "bot": {}, "live": {}, "optimize": {}}
+    return {"config": tmpl}
+
+
 @router.get("/bot-params")
 def get_bot_params(session: SessionToken = Depends(require_auth)):
     """Return list of bot.long parameter names from passivbot schema."""
@@ -994,7 +1015,19 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)):
     cfg_file = _bt_configs_dir() / name / "backtest.json"
     if not cfg_file.exists():
         raise HTTPException(404, f"Config '{name}' not found")
-    return load_pb7_config(cfg_file, neutralize_added=True)
+    try:
+        return load_pb7_config(cfg_file, neutralize_added=True)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        detail = str(exc).strip() or exc.__class__.__name__
+        _log(
+            SERVICE,
+            f"Failed to load backtest config '{name}': {detail}",
+            level="WARNING",
+            meta={"traceback": traceback.format_exc()},
+        )
+        raise HTTPException(status_code=422, detail=detail)
 
 
 def _normalize_coin_name(symbol: str) -> str:

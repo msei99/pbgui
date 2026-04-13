@@ -608,6 +608,18 @@ class RunV7():
         self._dynamic_wait_log_ts = 0
 
     def watch(self):
+        if self.is_running():
+            version_file = Path(f'{self.path}/running_version.txt')
+            current_version = 0
+            if version_file.exists():
+                try:
+                    current_version = int(version_file.read_text().strip())
+                except (ValueError, OSError):
+                    current_version = 0
+            if current_version != self.version:
+                _log("PBRun", f"Repair running_version for {self.user}: {current_version} -> {self.version}")
+                self.create_v7_running_version()
+            return
         if not self.is_running():
             self.start()
 
@@ -676,6 +688,7 @@ class RunV7():
         # wait until passivbot is running
         for i in range(10):
             if self.is_running():
+                self.create_v7_running_version()
                 break
             sleep(1)
 
