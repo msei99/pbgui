@@ -88,7 +88,14 @@ NEUTRAL_BOT_PARAMS: dict[str, Any] = {
     "risk_wel_enforcer_threshold":                  1.0,
     "risk_twel_enforcer_threshold":                 1.0,
     # ── Forager scoring ───────────────────────────────────────────────────────
-    "forager_score_weights": {"volatility": 0, "volume": 0, "ema_readiness": 0},
+    #
+    # forager_score_weights must be a *normalized* dict (total == 1.0) so that
+    # pb7's own forager_score_weights_are_normalized() check passes on reload.
+    # All-zeros ({vol:0, vol2:0, ema:0}) is NOT valid: normalize_forager_score_weights
+    # falls back to {volume:1.0, ...}, which then requires forager_volume_ema_span > 0.
+    # Neutral choice: ema_readiness=1.0 keeps scoring active but does not require
+    # either forager_volume_ema_span or forager_volatility_ema_span to be > 0.
+    "forager_score_weights": {"ema_readiness": 1.0, "volume": 0.0, "volatility": 0.0},
     "forager_volatility_ema_span":                  0,
     "forager_volume_drop_pct":                      0,
     "forager_volume_ema_span":                      0,

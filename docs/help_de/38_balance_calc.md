@@ -7,7 +7,9 @@ Der Balance Calculator schätzt das erforderliche Wallet-Guthaben für eine PBv7
 Der Balance Calculator benötigt Exchange-Kontext — öffne ihn über:
 
 - **PBv7 → Run**: **Balance Calculator**-Schaltfläche bei einer Instanz klicken
-- **PBv7 → Backtest**: nach Auswahl einer Konfiguration auf **Balance Calculator** klicken
+- **PBv7 → Backtest**: eine Config öffnen und in der Editor-Sidebar **💰 Balance Calculator** klicken
+
+Für einen schnellen Inline-Check ohne die eigenständige Seite zu öffnen, gibt es im Backtest-Editor zusätzlich **⚡ Calc Balance**.
 
 Direktes Öffnen über die Navigation ohne Kontext zeigt eine Fehlermeldung.
 

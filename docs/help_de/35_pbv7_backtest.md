@@ -65,8 +65,9 @@ Die Bearbeitung öffnet sich inline im Hauptbereich. Felder:
 | **Add to Queue** | Speichern und einreihen → wechselt in Queue-Panel |
 | **Apply Filters** | Approved/Ignored-Coin-Listen anhand der aktuellen Filter befüllen |
 | **📊 View Results** | Zu den Ergebnissen dieser Config im Results-Panel springen |
-| **⚖ Calculate Balance** | Balance Rechner für diese Config öffnen |
-| **Import JSON** | Config aus Zwischenablage oder JSON-Datei importieren |
+| **💰 Balance Calculator** | Die eigenständige Balance-Calculator-Seite mit der aktuellen Editor-Config als Draft öffnen |
+| **⚡ Calc Balance** | Dieselbe Balance-Berechnung inline in einem Modal ausführen, ohne die Backtest-Seite zu verlassen |
+| **📥 Import** | Den Run-ähnlichen Paste-JSON-Dialog öffnen und die importierte Config zur Prüfung in den Editor laden |
 
 ### Coins & Filter
 

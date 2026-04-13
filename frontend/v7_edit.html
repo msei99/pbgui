@@ -65,38 +65,57 @@ body {
 .cols-3 { grid-template-columns: 1fr 1fr 1fr; }
 .cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
 .cols-5 { grid-template-columns: 1fr 1fr 0.5fr 0.5fr 1fr; }
-.form-group { display: flex; flex-direction: column; }
+.cols-5-eq { grid-template-columns: repeat(5, 1fr); }
+.cols-6 { grid-template-columns: 1fr 1fr 0.5fr 0.5fr 1fr 1fr; }
+.cols-8 { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.span-4 { grid-column: span 4; }
+@media (max-width: 1400px) { .cols-8 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width:  700px) { .cols-8 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .span-4 { grid-column: span 2; } }
+.form-group { display: flex; flex-direction: column; min-width: 0; }
 .form-group label {
   font-size: var(--fs-xs); color: var(--text-dim); margin-bottom: 2px;
   display: flex; align-items: center; gap: 4px;
+  flex-wrap: wrap; white-space: normal; overflow: visible; line-height: 1.2; min-width: 0;
+  min-height: 2.4em; align-content: flex-start;
+}
+.form-group label,
+.chk-row label {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.form-group label span,
+.chk-row label span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 /* ─── data-tip tooltip ───────────────────────────────────── */
 [data-tip] {
-  position: relative;
   cursor: help;
-  border-bottom: 1px dotted #64748b;
+  border-bottom: none;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: #64748b;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
 }
-[data-tip]::after {
-  content: attr(data-tip);
-  position: absolute;
-  left: 0; top: calc(100% + 5px);
-  background: #1e293b; color: #e2e8f0;
+#data-tip-tooltip {
+  display: none;
+  position: fixed;
+  z-index: 9999;
+  background: #1e293b;
+  color: #e2e8f0;
   border: 1px solid #334155;
   border-radius: 5px;
   font-size: var(--fs-xs);
   font-weight: normal;
   padding: 6px 10px;
   white-space: pre-wrap;
-  min-width: 180px;
-  max-width: 340px;
+  max-width: 480px;
   line-height: 1.5;
   box-shadow: 0 4px 12px rgba(0,0,0,.5);
-  z-index: 9999;
   pointer-events: none;
-  opacity: 0;
-  transition: opacity .15s;
 }
-[data-tip]:hover::after { opacity: 1; }
 .form-group input, .form-group select, .form-group textarea {
   height: var(--input-h); padding: 0 var(--sp-sm);
   background: var(--bg2); color: var(--text); border: 1px solid var(--border);
@@ -112,7 +131,7 @@ body {
 .num-stepper input { flex: 1; border-radius: 0 !important; text-align: center; min-width: 0; }
 .num-stepper input[type=number]::-webkit-inner-spin-button,
 .num-stepper input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-.num-stepper input[type=number] { -moz-appearance: textfield; }
+.num-stepper input[type=number] { appearance: textfield; -moz-appearance: textfield; }
 .stepper-btn {
   width: 28px; height: var(--input-h); flex-shrink: 0;
   background: var(--bg3); border: 1px solid var(--border);
@@ -126,9 +145,12 @@ body {
 .stepper-btn:active { opacity: 0.8; }
 
 /* Checkbox row */
-.chk-row { display: flex; align-items: center; gap: 6px; height: var(--input-h); }
-.chk-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
-.chk-row label { font-size: var(--fs-sm); color: var(--text); margin: 0; cursor: pointer; }
+.chk-row { display: flex; align-items: flex-start; gap: 6px; min-height: var(--input-h); height: auto; min-width: 0; }
+.chk-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+.chk-row label {
+  font-size: var(--fs-sm); color: var(--text); margin: 0; cursor: pointer;
+  white-space: normal; overflow: visible; line-height: 1.2; min-width: 0; flex: 1 1 auto;
+}
 
 /* ─── Sections ─────────────────────────────────────────────── */
 .section-title {
@@ -137,19 +159,51 @@ body {
 }
 .expander {
   border: 1px solid var(--border); border-radius: 6px;
-  margin: var(--sp-md) 0; overflow: hidden;
+  margin: var(--sp-sm) 0 var(--sp-md);
 }
 .expander-header {
   display: flex; align-items: center; gap: 6px;
   padding: var(--sp-sm) var(--sp-md); cursor: pointer;
   background: var(--bg2); font-size: var(--fs-sm); font-weight: 600;
-  user-select: none;
+  user-select: none; border-radius: 6px;
 }
+.expander.open .expander-header { border-radius: 6px 6px 0 0; }
 .expander-header:hover { background: var(--bg3); }
 .expander-header .arrow { transition: transform 0.2s; font-size: 10px; }
 .expander.open .expander-header .arrow { transform: rotate(90deg); }
 .expander-body { display: none; padding: var(--sp-md); }
 .expander.open .expander-body { display: block; }
+
+/* ─── Table ────────────────────────────────────────────────── */
+.tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-base); user-select: none; }
+.tbl th { position: sticky; top: 0; z-index: 2; background: var(--bg2); font-size: var(--fs-sm);
+          text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim);
+          padding: 8px 10px; text-align: left; border-bottom: 2px solid var(--border);
+          cursor: default; user-select: none; white-space: nowrap; }
+.tbl th:hover { color: var(--text); }
+.tbl td { padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
+          overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
+.tbl tr:hover td { background: rgba(255,255,255,.03); }
+.tbl tr.selected td { background: rgba(77,166,255,.08); }
+
+/* ─── Action buttons & coin-override badge ──────────────────── */
+.act-btn { background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--text-dim);
+           cursor: pointer; padding: 3px 8px; font-size: var(--fs-xs); transition: all .15s; }
+.act-btn:hover { color: var(--text); border-color: var(--accent); }
+.act-btn-danger:hover { color: var(--red); border-color: var(--red); }
+.cov-badge { display: inline-block; padding: 2px 8px; border-radius: 10px;
+             background: var(--bg3); border: 1px solid var(--border);
+             font-size: var(--fs-xs); color: var(--text-dim); cursor: default; }
+.cov-badge:hover { border-color: var(--accent); color: var(--text); }
+#cov-tooltip { display: none; position: fixed; z-index: 9000;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 10px; min-width: 280px; max-width: 540px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  font-size: var(--fs-xs); color: var(--text); pointer-events: none; }
+.cov-tt-tbl { border-collapse: collapse; width: 100%; }
+.cov-tt-tbl td { padding: 2px 8px; border-bottom: 1px solid var(--border); vertical-align: top; word-break: break-all; }
+.cov-tt-tbl td:first-child { color: var(--text-dim); white-space: nowrap; padding-right: 16px; }
+.cov-tt-tbl tr.cov-tt-hdr td { font-weight: 600; color: var(--accent); background: var(--bg3); padding: 4px 8px; border-bottom: 1px solid var(--border); }
 
 /* ─── Multiselect (tag-input) ──────────────────────────────── */
 .ms-wrap {
@@ -159,6 +213,9 @@ body {
   cursor: text; position: relative;
 }
 .ms-wrap:focus-within { border-color: var(--accent); }
+.form-group .ms-wrap input.ms-input {
+  border: none; background: transparent; padding: 0; height: 24px; width: auto;
+}
 .ms-clear-btn {
   cursor: pointer; color: var(--text-dim); font-size: 11px; padding: 0 3px;
   border-radius: 3px; margin-left: 2px;
@@ -174,10 +231,19 @@ body {
   background: var(--bg3); border: 1px solid var(--border); border-radius: 3px;
   padding: 1px 6px; font-size: var(--fs-xs); color: var(--text);
 }
+.ms-tag.ms-tag-invalid {
+  color: #ffb3b3; border-color: rgba(255,75,75,.6); background: rgba(255,75,75,.14);
+}
 .ms-tag .ms-x {
   cursor: pointer; color: var(--text-dim); font-size: 11px; line-height: 1;
 }
 .ms-tag .ms-x:hover { color: var(--red); }
+.ms-status-summary {
+  display: none; margin-top: 4px; font-size: var(--fs-xs); color: var(--text-dim);
+}
+.ms-status-summary .warn { color: var(--orange); }
+.ms-status-summary .err { color: var(--red); }
+.ms-status-summary .sep { color: var(--text-dim); }
 .ms-input {
   border: none; background: transparent; color: var(--text);
   font-size: var(--fs-sm); outline: none; min-width: 60px; flex: 1;
@@ -193,36 +259,10 @@ body {
 .ms-option {
   padding: 4px 8px; font-size: var(--fs-sm); cursor: pointer;
 }
-.ms-option:hover, .ms-option.highlight { background: var(--bg3); }
+.ms-option:hover, .ms-option.highlight, .ms-option.highlighted { background: var(--bg3); }
 .ms-option.selected { color: var(--accent); }
 .ms-option.in-other { color: var(--orange); }
 .ms-option.in-other.selected { color: var(--accent); }
-
-/* ─── Coin Override Table ──────────────────────────────────── */
-.co-table {
-  width: 100%; border-collapse: collapse; font-size: var(--fs-sm);
-  margin-bottom: var(--sp-sm);
-}
-.co-table th, .co-table td {
-  padding: 4px 8px; text-align: left; border: 1px solid var(--border);
-}
-.co-table th {
-  background: var(--bg3); font-weight: 600; font-size: var(--fs-xs);
-  color: var(--text-dim);
-}
-.co-table td { background: var(--bg2); }
-.co-edit-btn {
-  text-align: center; cursor: pointer; width: 40px;
-}
-.co-edit-btn:hover { background: var(--bg3) !important; }
-.co-del-btn {
-  text-align: center; cursor: pointer; color: var(--red); width: 50px;
-}
-.co-del-btn:hover { background: #3a1a1a !important; }
-.co-params-preview {
-  font-size: var(--fs-xs); color: var(--text-dim); max-width: 300px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 
 /* ─── JSON editor ──────────────────────────────────────────── */
 .json-editor {
@@ -409,13 +449,14 @@ body {
 <!-- ─── Main Content ─────────────────────────────────────── -->
 <div id="main-content">
 
-<!-- Row 1: User, Enabled On, Config Version, Leverage, Logging -->
-<div class="form-row cols-5">
-  <div class="form-group">
-    <label>User</label>
+<!-- Rows 1–3: single 8-col grid -->
+<div class="form-row cols-8" style="margin-bottom:var(--sp-lg)">
+  <!-- Row 1: Configuration & Identity  2+2+1+1+1+1 = 8 -->
+  <div class="form-group" style="grid-column:span 2">
+    <label><span data-tip="Fetch API key/secret from api-keys.json.">User</span></label>
     <select id="f-user"></select>
   </div>
-  <div class="form-group">
+  <div class="form-group" style="grid-column:span 2">
     <label>Enabled on</label>
     <select id="f-enabled-on"></select>
   </div>
@@ -428,6 +469,20 @@ body {
     <input type="number" id="f-leverage" min="0" max="100" step="1" value="10">
   </div>
   <div class="form-group">
+    <label><span data-tip="Preferred margin mode when symbol supports both cross and isolated.
+auto/auto_cross: prefer cross
+auto_isolated: prefer isolated
+cross: require cross (isolated-only skipped)
+isolated: require isolated (cross-only skipped)">margin_mode_preference</span></label>
+    <select id="f-margin-mode">
+      <option value="auto">auto</option>
+      <option value="cross" selected>cross</option>
+      <option value="isolated">isolated</option>
+      <option value="auto_cross">auto_cross</option>
+      <option value="auto_isolated">auto_isolated</option>
+    </select>
+  </div>
+  <div class="form-group">
     <label><span data-tip="0=warnings, 1=info, 2=debug, 3=trace">Logging level</span></label>
     <select id="f-logging-level">
       <option value="0">warnings</option>
@@ -436,10 +491,7 @@ body {
       <option value="3">trace</option>
     </select>
   </div>
-</div>
-
-<!-- Row 2: minimum_coin_age_days, pnls_max_lookback_days, warmup_ratio, note -->
-<div class="form-row cols-4">
+  <!-- Row 2: Timing & Risk  1+1+1+1+4 = 8 -->
   <div class="form-group">
     <label><span data-tip="Disallows coins younger than given days">minimum_coin_age_days</span></label>
     <input type="number" id="f-min-coin-age" min="0" step="1" value="0">
@@ -453,13 +505,16 @@ body {
     <input type="number" id="f-warmup-ratio" min="0" max="1" step="0.1" value="0">
   </div>
   <div class="form-group">
+    <label><span data-tip="Global realized-loss gate for close orders anchored to peak realized balance.
+1.0 = disabled (default). &lt;=0.0 = block all lossy closes.
+Example: 0.05 blocks closes once balance would fall below 95% of peak.">max_realized_loss_pct</span></label>
+    <input type="number" id="f-max-loss-pct" min="0" max="2" step="0.01" value="1.0">
+  </div>
+  <div class="form-group span-4">
     <label><span data-tip="Personal note for organising instances">Note</span></label>
     <input type="text" id="f-note" placeholder="">
   </div>
-</div>
-
-<!-- Row 3: price_distance_threshold, execution_delay, checkboxes -->
-<div class="form-row cols-4">
+  <!-- Row 3: Execution & Flags  1+1+1+1+2+2 = 8 -->
   <div class="form-group">
     <label><span data-tip="Only create limit orders closer to price than threshold. Default 0.5 (50%)">price_distance_threshold</span></label>
     <input type="number" id="f-price-dist" min="0" max="1" step="0.001" value="0.5">
@@ -469,23 +524,28 @@ body {
     <input type="number" id="f-exec-delay" min="1" max="60" step="1" value="2">
   </div>
   <div class="form-group">
+    <label><span data-tip="Fractional distance from market price at which a limit order is promoted to market order (requires market_orders_allowed). Default 0.001.">market_order_near_touch_threshold</span></label>
+    <input type="number" id="f-market-order-threshold" min="0" max="0.1" step="0.0001" value="0.001">
+  </div>
+  <div class="form-group"></div>
+  <div class="form-group" style="grid-column:span 2; justify-content:flex-end">
     <div class="chk-row">
       <input type="checkbox" id="f-filter-min-cost">
-      <label for="f-filter-min-cost">filter_by_min_effective_cost</label>
+      <label for="f-filter-min-cost"><span data-tip="Skip coins where balance × WE_limit × entry_initial_qty_pct is below the exchange minimum effective cost.">filter_by_min_effective_cost</span></label>
     </div>
     <div class="chk-row">
       <input type="checkbox" id="f-market-orders" checked>
-      <label for="f-market-orders">market_orders_allowed</label>
+      <label for="f-market-orders"><span data-tip="Allow market orders when price is very close to market price. If false, only limit orders are placed.">market_orders_allowed</span></label>
     </div>
   </div>
-  <div class="form-group">
+  <div class="form-group" style="grid-column:span 2; justify-content:flex-end">
     <div class="chk-row">
       <input type="checkbox" id="f-hedge-mode">
-      <label for="f-hedge-mode">hedge_mode</label>
+      <label for="f-hedge-mode"><span data-tip="Requests simultaneous long and short positions on the same coin when the exchange supports it.">hedge_mode</span></label>
     </div>
     <div class="chk-row">
       <input type="checkbox" id="f-auto-gs">
-      <label for="f-auto-gs">auto_gs</label>
+      <label for="f-auto-gs"><span data-tip="Automatically enable graceful stop for positions on disapproved coins instead of manual mode.">auto_gs</span></label>
     </div>
   </div>
 </div>
@@ -496,164 +556,185 @@ body {
     <span class="arrow">▶</span> Advanced Settings
   </div>
   <div class="expander-body">
-    <div class="form-row cols-4">
-      <div class="form-group">
-        <label>max_n_cancellations_per_batch</label>
-        <input type="number" id="f-max-cancel" min="0" max="100" step="1" value="5">
-      </div>
-      <div class="form-group">
-        <label>max_n_creations_per_batch</label>
-        <input type="number" id="f-max-create" min="0" max="100" step="1" value="3">
-      </div>
-      <div class="form-group">
-        <label><span data-tip="Force all long positions to same mode.
+    <div class="form-row cols-8" style="margin-bottom:0">
+    <!-- Row 1: Modes & Policies  2+2+1+2+1 = 8 -->
+    <div class="form-group" style="grid-column:span 2">
+      <label><span data-tip="Force all long positions to same mode.
 n=normal  m=manual  gs=graceful_stop
 p=panic  t=take_profit_only">forced_mode_long</span></label>
-        <select id="f-forced-long">
-          <option value=""></option>
-          <option value="n">normal</option>
-          <option value="m">manual</option>
-          <option value="gs">graceful_stop</option>
-          <option value="p">panic</option>
-          <option value="t">take_profit_only</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>forced_mode_short</label>
-        <select id="f-forced-short">
-          <option value=""></option>
-          <option value="n">normal</option>
-          <option value="m">manual</option>
-          <option value="gs">graceful_stop</option>
-          <option value="p">panic</option>
-          <option value="t">take_profit_only</option>
-        </select>
+      <select id="f-forced-long">
+        <option value=""></option>
+        <option value="n">normal</option>
+        <option value="m">manual</option>
+        <option value="gs">graceful_stop</option>
+        <option value="p">panic</option>
+        <option value="t">take_profit_only</option>
+      </select>
+    </div>
+    <div class="form-group" style="grid-column:span 2">
+      <label><span data-tip="Force all short positions to the same mode.
+n=normal  m=manual  gs=graceful_stop
+p=panic  t=take_profit_only">forced_mode_short</span></label>
+      <select id="f-forced-short">
+        <option value=""></option>
+        <option value="n">normal</option>
+        <option value="m">manual</option>
+        <option value="gs">graceful_stop</option>
+        <option value="p">panic</option>
+        <option value="t">take_profit_only</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label><span data-tip="pside: each side tracks its own HSL drawdown independently.
+unified: both sides share one account-level combined signal.">hsl_signal_mode</span></label>
+      <select id="f-hsl-signal-mode">
+        <option value="unified">unified</option>
+        <option value="pside">pside</option>
+      </select>
+    </div>
+    <div class="form-group" style="grid-column:span 2">
+      <label><span data-tip="Policy for a position appearing on a halted pside during HSL RED cooldown.
+panic: close again and restart cooldown
+normal: treat as operator override once position appears
+manual: leave in manual mode while cooldown runs
+tp_only: allow only close management during cooldown
+graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position_during_cooldown_policy</span></label>
+      <select id="f-hsl-cooldown-policy">
+        <option value="panic">panic</option>
+        <option value="normal">normal</option>
+        <option value="manual">manual</option>
+        <option value="tp_only">tp_only</option>
+        <option value="graceful_stop">graceful_stop</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Default order time-in-force. good_till_cancelled keeps orders until filled or cancelled. post_only ensures orders are maker-only.">time_in_force</span></label>
+      <select id="f-time-in-force">
+        <option value="good_till_cancelled">good_till_cancelled</option>
+        <option value="post_only">post_only</option>
+      </select>
+    </div>
+    <!-- Row 2: Order Execution  1+1+1+1+1+1+1+1 = 8 -->
+    <div class="form-group">
+      <label><span data-tip="Cancels up to n open orders per execution cycle.">max_n_cancellations_per_batch</span></label>
+      <input type="number" id="f-max-cancel" min="0" max="100" step="1" value="5">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Creates up to n new orders per execution cycle.">max_n_creations_per_batch</span></label>
+      <input type="number" id="f-max-create" min="0" max="100" step="1" value="3">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="If the bot crashes, restart up to n times per day before stopping completely.">max_n_restarts_per_day</span></label>
+      <input type="number" id="f-max-restarts" min="0" max="100" step="1" value="10">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Millisecond tolerance for authenticated REST calls (default 5000). Increase if the exchange rejects requests with recv_window errors due to clock drift.">recv_window_ms</span></label>
+      <input type="number" id="f-recv-window" min="1000" max="60000" step="1000" value="5000">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Tolerance used to match near-identical cancel/create pairs to avoid order churn. When a new order is within this % of an existing open order, the existing order may be kept.">order_match_tolerance_pct</span></label>
+      <input type="number" id="f-order-match-tol" min="0" max="0.01" step="0.0001" value="0.0002">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Optional global live REST concurrency cap. Leave 0 to use exchange/default behaviour; set a positive integer to throttle authenticated and public request fan-out more aggressively.">max_concurrent_api_requests</span></label>
+      <input type="number" id="f-max-api-req" min="0" step="1" value="0">
+    </div>
+    <div class="form-group"></div>
+    <div class="form-group"></div>
+    <!-- Row 3: Balance, Warmup & Logging  1*7+1 = 8 -->
+    <div class="form-group">
+      <label><span data-tip="0 = disabled (uses exchange balance)">balance_override</span></label>
+      <input type="number" id="f-bal-override" min="0" step="100" value="0">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Hysteresis snap percentage applied to balance updates to reduce noise from small fluctuations. Set 0.0 to disable.">balance_hysteresis_snap_pct</span></label>
+      <input type="number" id="f-bal-hyst" min="0" max="0.5" step="0.01" value="0.02">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Hard ceiling for the historical warm-up window (minutes). Use 0 to disable the cap; values above 0 clamp the per-symbol warmup calculated from EMA spans.">max_warmup_minutes</span></label>
+      <input type="number" id="f-max-warmup-min" min="0" step="100" value="0">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Random startup delay spread (seconds) before warm-up begins. Helps multiple bots on the same machine avoid hitting the same files/APIs simultaneously.">warmup_jitter_seconds</span></label>
+      <input type="number" id="f-warmup-jitter" min="0" step="1" value="0">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Concurrency cap for live warm-up tasks. 0 = auto-select; positive values limit how many symbols warm up in parallel.">warmup_concurrency</span></label>
+      <input type="number" id="f-warmup-conc" min="0" step="1" value="0">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Interval (minutes) between memory telemetry log entries (RSS, cache footprint, asyncio task counts). Default 30.">memory_snapshot_interval_min</span></label>
+      <input type="number" id="f-mem-snapshot" min="1" step="5" value="30">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Minimum duration (seconds) a bulk volume-EMA refresh must take before it is promoted to an INFO log entry. Set 0 to log every refresh at INFO.">volume_refresh_info_threshold_s</span></label>
+      <input type="number" id="f-vol-refresh" min="0" step="5" value="30">
+    </div>
+    <div class="form-group"></div>
+    <!-- Row 4: Candle Data  1*6+1+1 = 8 -->
+    <div class="form-group">
+      <label><span data-tip="Maximum candles persisted on disk per symbol and timeframe. Oldest shards are pruned once this limit is hit. Default 2,000,000.">max_disk_candles_per_symbol_per_tf</span></label>
+      <input type="number" id="f-max-disk-candles" min="0" step="10000" value="1000000">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Maximum 1m candles retained in RAM per symbol. Older entries are trimmed once this cap is exceeded. Default 200,000.">max_memory_candles_per_symbol</span></label>
+      <input type="number" id="f-max-mem-candles" min="0" step="10000" value="5000">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="How long (minutes) 1m candles for inactive symbols may stay in RAM before the live bot refreshes them. Lower values keep symbols fresher at the cost of more network/disk activity.">inactive_coin_candle_ttl_minutes</span></label>
+      <input type="number" id="f-inactive-ttl" min="0" step="1" value="0">
+    </div>
+    <div class="form-group" style="grid-column:span 2; justify-content:flex-end">
+      <div class="chk-row">
+        <input type="checkbox" id="f-archive-fetch">
+        <label for="f-archive-fetch"><span data-tip="Enables the archive-candle fallback path in live mode. Keep disabled unless you want the live bot to supplement its local candle state from exchange archive endpoints.">enable_archive_candle_fetch</span></label>
       </div>
     </div>
-    <div class="form-row cols-4">
-      <div class="form-group">
-        <label>max_n_restarts_per_day</label>
-        <input type="number" id="f-max-restarts" min="0" max="100" step="1" value="10">
-      </div>
-      <div class="form-group">
-        <label>max_disk_candles_per_symbol_per_tf</label>
-        <input type="number" id="f-max-disk-candles" min="0" step="10000" value="1000000">
-      </div>
-      <div class="form-group">
-        <label>max_memory_candles_per_symbol</label>
-        <input type="number" id="f-max-mem-candles" min="0" step="10000" value="5000">
-      </div>
-      <div class="form-group">
-        <label>time_in_force</label>
-        <select id="f-time-in-force">
-          <option value="good_till_cancelled">good_till_cancelled</option>
-          <option value="post_only">post_only</option>
-        </select>
-      </div>
+    <div class="form-group">
+      <label><span data-tip="Live OHLCV/network budget for candle-backed indicators (forager ranking, warm-up). Set lower to reduce REST pressure; 0 = rely only on cached data.">max_ohlcv_fetches_per_minute</span></label>
+      <input type="number" id="f-max-ohlcv-fetches" min="1" step="1" value="3">
     </div>
-    <div class="form-row cols-4">
-      <div class="form-group">
-        <label>inactive_coin_candle_ttl_minutes</label>
-        <input type="number" id="f-inactive-ttl" min="0" step="1" value="0">
-      </div>
-      <div class="form-group">
-        <label>recv_window_ms</label>
-        <input type="number" id="f-recv-window" min="1000" max="60000" step="1000" value="5000">
-      </div>
-      <div class="form-group">
-        <label>order_match_tolerance_pct</label>
-        <input type="number" id="f-order-match-tol" min="0" max="0.01" step="0.0001" value="0.0002">
-      </div>
-      <div class="form-group">
-        <label>balance_hysteresis_snap_pct</label>
-        <input type="number" id="f-bal-hyst" min="0" max="0.5" step="0.01" value="0.02">
-      </div>
+    <div class="form-group">
+      <label><span data-tip="Seconds to wait for candle fetch lock when multiple bots share the same cache directory. Increase to avoid spurious timeouts.">candle_lock_timeout_seconds</span></label>
+      <input type="number" id="f-candle-lock" min="1" max="300" step="1" value="10">
     </div>
-    <div class="form-row cols-4">
-      <div class="form-group">
-        <label><span data-tip="0 = disabled (uses exchange balance)">balance_override</span></label>
-        <input type="number" id="f-bal-override" min="0" step="100" value="0">
-      </div>
-      <div class="form-group">
-        <label>max_warmup_minutes</label>
-        <input type="number" id="f-max-warmup-min" min="0" step="100" value="0">
-      </div>
-      <div class="form-group">
-        <label>memory_snapshot_interval_min</label>
-        <input type="number" id="f-mem-snapshot" min="1" step="5" value="30">
-      </div>
-      <div class="form-group">
-        <label>volume_refresh_info_threshold_s</label>
-        <input type="number" id="f-vol-refresh" min="0" step="5" value="30">
-      </div>
-    </div>
-    <div class="form-row cols-4">
-      <div class="form-group">
-        <label>warmup_jitter_seconds</label>
-        <input type="number" id="f-warmup-jitter" min="0" step="1" value="0">
-      </div>
-      <div class="form-group">
-        <label>warmup_concurrency</label>
-        <input type="number" id="f-warmup-conc" min="0" step="1" value="0">
-      </div>
-      <div class="form-group">
-        <div class="chk-row">
-          <input type="checkbox" id="f-archive-fetch">
-          <label for="f-archive-fetch">enable_archive_candle_fetch</label>
-        </div>
-      </div>
-      <div class="form-group">
-        <label>max_ohlcv_fetches_per_minute</label>
-        <input type="number" id="f-max-ohlcv-fetches" min="1" step="1" value="3">
-      </div>
-    </div>
-    <div class="form-row cols-4">
-      <div class="form-group">
-        <label>max_concurrent_api_requests</label>
-        <input type="number" id="f-max-api-req" min="0" step="1" value="0">
-      </div>
-      <div class="form-group">
-        <label><span data-tip="Seconds to wait for candle fetch lock when multiple bots share the same cache directory. Increase to avoid spurious timeouts.">candle_lock_timeout_seconds</span></label>
-        <input type="number" id="f-candle-lock" min="1" max="300" step="1" value="10">
-      </div>
-      <div class="form-group"></div>
-      <div class="form-group"></div>
+    <div class="form-group"></div>
     </div>
   </div>
 </div>
 
 <!-- Filters section -->
 <div class="section-title">Filters</div>
-<div class="form-row cols-5">
-  <div class="form-group">
-    <label>market_cap (min M$)</label>
+<div class="form-row cols-8">
+  <div class="form-group" style="grid-column:span 2">
+    <label><span data-tip="Minimum market capitalisation in million USD. Coins below this threshold are excluded.">market_cap (min M$)</span></label>
     <input type="number" id="f-market-cap" min="0" step="50" value="0">
   </div>
-  <div class="form-group">
-    <label>vol/mcap</label>
+  <div class="form-group" style="grid-column:span 2">
+    <label><span data-tip="Minimum volume-to-market-cap ratio. Filters out illiquid coins.">vol/mcap</span></label>
     <input type="number" id="f-vol-mcap" min="0" step="0.05" value="10">
   </div>
-  <div class="form-group" id="tags-container">
-    <label>Tags</label>
+  <div class="form-group" id="tags-container" style="grid-column:span 2">
+    <label><span data-tip="Filter by CoinMarketCap category tags (e.g. DeFi, Layer 1). Leave empty to include all.">Tags</span></label>
     <div class="ms-wrap" id="ms-tags">
-      <input class="ms-input" id="ms-tags-input" placeholder="Select tags...">
+      <input class="ms-input" id="ms-tags-input" placeholder="Select tags..." autocomplete="off">
       <div class="ms-dropdown" id="ms-tags-dd"></div>
     </div>
   </div>
-  <div class="form-group">
+  <div class="form-group" style="justify-content:flex-end">
     <div class="chk-row">
       <input type="checkbox" id="f-only-cpt">
-      <label for="f-only-cpt">only_cpt</label>
+      <label for="f-only-cpt"><span data-tip="Only include coins from the CPT (Coin Pool Table) approved list.">only_cpt</span></label>
     </div>
     <div class="chk-row">
       <input type="checkbox" id="f-notices-ignore">
-      <label for="f-notices-ignore">notices_ignore</label>
+      <label for="f-notices-ignore"><span data-tip="Automatically ignore coins flagged in the latest PBGui notices.">notices_ignore</span></label>
     </div>
   </div>
-  <div class="form-group">
+  <div class="form-group" style="justify-content:flex-end">
     <div class="chk-row">
       <input type="checkbox" id="f-apply-filters">
-      <label for="f-apply-filters">apply_filters</label>
+      <label for="f-apply-filters"><span data-tip="Enable PBGui coin filters. When unchecked all filters above are ignored.">apply_filters</span></label>
     </div>
   </div>
 </div>
@@ -663,14 +744,14 @@ p=panic  t=take_profit_only">forced_mode_long</span></label>
   <div class="form-group">
     <label>approved_coins_long <span class="ms-all-btn" onclick="selectAllMultiselect('ms-approved-long')" title="Select all">all</span> <span class="ms-clear-btn" onclick="clearMultiselect('ms-approved-long')" title="Clear all">✕</span></label>
     <div class="ms-wrap" id="ms-approved-long">
-      <input class="ms-input" id="ms-approved-long-input" placeholder="Type to search...">
+      <input class="ms-input" id="ms-approved-long-input" placeholder="Type to search..." autocomplete="off">
       <div class="ms-dropdown" id="ms-approved-long-dd"></div>
     </div>
   </div>
   <div class="form-group">
     <label>approved_coins_short <span class="ms-all-btn" onclick="selectAllMultiselect('ms-approved-short')" title="Select all">all</span> <span class="ms-clear-btn" onclick="clearMultiselect('ms-approved-short')" title="Clear all">✕</span></label>
     <div class="ms-wrap" id="ms-approved-short">
-      <input class="ms-input" id="ms-approved-short-input" placeholder="Type to search...">
+      <input class="ms-input" id="ms-approved-short-input" placeholder="Type to search..." autocomplete="off">
       <div class="ms-dropdown" id="ms-approved-short-dd"></div>
     </div>
   </div>
@@ -679,14 +760,14 @@ p=panic  t=take_profit_only">forced_mode_long</span></label>
   <div class="form-group">
     <label>ignored_coins_long <span class="ms-all-btn" onclick="selectAllMultiselect('ms-ignored-long')" title="Select all">all</span> <span class="ms-clear-btn" onclick="clearMultiselect('ms-ignored-long')" title="Clear all">✕</span></label>
     <div class="ms-wrap" id="ms-ignored-long">
-      <input class="ms-input" id="ms-ignored-long-input" placeholder="Type to search...">
+      <input class="ms-input" id="ms-ignored-long-input" placeholder="Type to search..." autocomplete="off">
       <div class="ms-dropdown" id="ms-ignored-long-dd"></div>
     </div>
   </div>
   <div class="form-group">
     <label>ignored_coins_short <span class="ms-all-btn" onclick="selectAllMultiselect('ms-ignored-short')" title="Select all">all</span> <span class="ms-clear-btn" onclick="clearMultiselect('ms-ignored-short')" title="Clear all">✕</span></label>
     <div class="ms-wrap" id="ms-ignored-short">
-      <input class="ms-input" id="ms-ignored-short-input" placeholder="Type to search...">
+      <input class="ms-input" id="ms-ignored-short-input" placeholder="Type to search..." autocomplete="off">
       <div class="ms-dropdown" id="ms-ignored-short-dd"></div>
     </div>
   </div>
@@ -716,118 +797,7 @@ p=panic  t=take_profit_only">forced_mode_long</span></label>
 </div>
 
 <!-- Coin Overrides -->
-<div class="expander" id="exp-overrides">
-  <div class="expander-header" onclick="toggleExpander('exp-overrides')">
-    <span class="arrow">▶</span> Coin Overrides
-  </div>
-  <div class="expander-body">
-    <!-- Overview mode -->
-    <div id="co-overview">
-      <table class="co-table" id="co-summary-table">
-        <thead><tr>
-          <th style="width:40px">edit</th>
-          <th>coin</th>
-          <th>override_config_path</th>
-          <th>config.bot.long parameters</th>
-          <th>config.bot.short parameters</th>
-          <th>config.live parameters</th>
-        </tr></thead>
-        <tbody id="co-summary-body"></tbody>
-      </table>
-      <div style="display:flex; align-items:end; gap:var(--sp-md); margin-top:var(--sp-md);">
-        <div class="form-group">
-          <label>Symbol</label>
-          <select id="co-add-symbol" style="width:180px;"></select>
-        </div>
-        <div class="form-group">
-          <button class="sb-btn" onclick="coAddCoin()">Add Coin Override</button>
-        </div>
-      </div>
-    </div>
-    <!-- Edit mode -->
-    <div id="co-edit" style="display:none;">
-      <div style="font-weight:600; font-size:var(--fs-md); margin-bottom:var(--sp-sm);" id="co-edit-title"></div>
-      <table class="co-table" id="co-params-table">
-        <thead><tr>
-          <th>section</th><th>parameter</th><th>side</th><th>value</th><th style="width:50px">delete</th>
-        </tr></thead>
-        <tbody id="co-params-body"></tbody>
-      </table>
-      <!-- Add live param -->
-      <div style="display:flex; align-items:end; gap:var(--sp-md); margin-top:var(--sp-md);">
-        <div class="form-group">
-          <label>config.live override parameter</label>
-          <select id="co-live-param" onchange="coLiveParamChanged()">
-            <option value="forced_mode_long">forced_mode_long</option>
-            <option value="forced_mode_short">forced_mode_short</option>
-            <option value="leverage">leverage</option>
-          </select>
-        </div>
-        <div class="form-group" id="co-live-mode-wrap">
-          <label>mode</label>
-          <select id="co-live-mode">
-            <option value="normal">normal</option>
-            <option value="manual">manual</option>
-            <option value="graceful_stop">graceful_stop</option>
-            <option value="panic">panic</option>
-            <option value="tp_only">tp_only</option>
-          </select>
-        </div>
-        <div class="form-group" id="co-live-value-wrap" style="display:none;">
-          <label>value</label>
-          <input type="number" id="co-live-value" min="0" max="100" step="1" value="10">
-        </div>
-        <div class="form-group">
-          <button class="sb-btn" onclick="coAddLiveParam()">Add</button>
-        </div>
-      </div>
-      <!-- Add bot param -->
-      <div style="display:flex; align-items:end; gap:var(--sp-md); margin-top:var(--sp-sm);">
-        <div class="form-group">
-          <label>config.bot override parameter</label>
-          <select id="co-bot-param"></select>
-        </div>
-        <div class="form-group">
-          <label>side</label>
-          <select id="co-bot-side">
-            <option value="long">long</option>
-            <option value="short">short</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>value</label>
-          <input type="number" id="co-bot-value" step="0.001" value="0">
-        </div>
-        <div class="form-group">
-          <button class="sb-btn" onclick="coAddBotParam()">Add</button>
-        </div>
-      </div>
-      <!-- Config checkbox -->
-      <div class="chk-row" style="margin:var(--sp-md) 0;">
-        <input type="checkbox" id="co-config-chk" onchange="coConfigChanged()">
-        <label for="co-config-chk"><span data-tip="Whole config for this coin — creates a separate config file with full bot settings.">Config</span></label>
-      </div>
-      <div id="co-config-editors" style="display:none;">
-        <div class="form-row cols-2">
-          <div class="form-group">
-            <label>long</label>
-            <textarea class="json-editor" id="co-config-long" rows="18"></textarea>
-          </div>
-          <div class="form-group">
-            <label>short</label>
-            <textarea class="json-editor" id="co-config-short" rows="18"></textarea>
-          </div>
-        </div>
-      </div>
-      <!-- Buttons -->
-      <div style="display:flex; gap:var(--sp-sm); margin-top:var(--sp-md);">
-        <button class="sb-btn primary" onclick="coSave()">OK</button>
-        <button class="sb-btn" onclick="coCancel()">Cancel</button>
-        <button class="sb-btn danger" onclick="coRemove()">Remove</button>
-      </div>
-    </div>
-  </div>
-</div>
+<div id="coin-overrides-container"></div>
 
 <!-- Bot Long / Short -->
 <div class="section-title">Bot Configuration</div>
@@ -851,12 +821,27 @@ p=panic  t=take_profit_only">forced_mode_long</span></label>
 </div>
 <div class="form-row cols-2">
   <div class="form-group">
-    <label>Long config (JSON)</label>
+    <label id="lbl-long-json">Long config (JSON)</label>
     <textarea class="json-editor" id="f-long-json" rows="24"></textarea>
   </div>
   <div class="form-group">
-    <label>Short config (JSON)</label>
+    <label id="lbl-short-json">Short config (JSON)</label>
     <textarea class="json-editor" id="f-short-json" rows="24"></textarea>
+  </div>
+</div>
+
+<!-- Additional Parameters (populated dynamically) -->
+<div id="extra-params-container"></div>
+
+<!-- Raw JSON -->
+<div class="expander" id="exp-raw">
+  <div class="expander-header" onclick="toggleExpander('exp-raw')">
+    <span class="arrow">&#x25B6;</span> Raw JSON
+  </div>
+  <div class="expander-body">
+    <div class="form-group">
+      <textarea id="cfg-raw-json" style="overflow:hidden;resize:vertical" oninput="scheduleRawJsonEditorSync()"></textarea>
+    </div>
   </div>
 </div>
 
@@ -908,6 +893,8 @@ p=panic  t=take_profit_only">forced_mode_long</span></label>
 </div>
 
 <div id="toast"></div>
+<div id="cov-tooltip"></div>
+<div id="data-tip-tooltip"></div>
 
 <script>
 /* ─── Injected Vars ────────────────────────────────────────── */
@@ -923,11 +910,37 @@ var DRAFT_ID       = "%%DRAFT_ID%%";
 
 /* ─── State ────────────────────────────────────────────────── */
 var cfg = {};            // full config object
+var _fromBacktestConfig = '';  // set when navigating from backtest "Add to Run"
+var paramStatus = {};    // { long: {param: 'neutralized'|'pb_default'}, short: {...} }
 var allSymbols = [];     // available symbols for current exchange
 var allTags = [];        // available tags for current exchange
 var allUsers = [];       // [{name, exchange}]
 var allHosts = [];       // [string]
 var dirty = false;
+var _extraLiveKeys = []; // unknown live.* keys not in the GUI form
+var _rawEditorSyncTimer = null;
+var _rawEditorSyncing = false;
+var _rawEditorLastApplied = '';
+var _structuredEditorSyncTimer = null;
+var _structuredEditorSyncing = false;
+var _symbolsAndTagsLoadSeq = 0;
+
+/* live.* keys explicitly handled by the GUI form — extras go to "Additional Parameters" */
+var KNOWN_LIVE_PARAMS = new Set([
+  'user', 'leverage', 'margin_mode_preference',
+  'minimum_coin_age_days', 'pnls_max_lookback_days', 'warmup_ratio', 'max_realized_loss_pct',
+  'price_distance_threshold', 'execution_delay_seconds', 'market_order_near_touch_threshold',
+  'filter_by_min_effective_cost', 'market_orders_allowed', 'auto_gs', 'hedge_mode',
+  'approved_coins', 'ignored_coins', 'empty_means_all_approved',
+  'max_n_cancellations_per_batch', 'max_n_creations_per_batch',
+  'forced_mode_long', 'forced_mode_short', 'hsl_signal_mode', 'hsl_position_during_cooldown_policy',
+  'max_n_restarts_per_day', 'max_disk_candles_per_symbol_per_tf', 'max_memory_candles_per_symbol',
+  'time_in_force', 'inactive_coin_candle_ttl_minutes', 'recv_window_ms',
+  'order_match_tolerance_pct', 'balance_override', 'balance_hysteresis_snap_pct',
+  'warmup_jitter_seconds', 'warmup_concurrency', 'max_warmup_minutes',
+  'max_concurrent_api_requests', 'candle_lock_timeout_seconds',
+  'enable_archive_candle_fetch', 'max_ohlcv_fetches_per_minute',
+]);
 
 /* ─── Helpers ──────────────────────────────────────────────── */
 
@@ -935,6 +948,11 @@ function apiFetch(path, opts) {
   opts = opts || {};
   opts.headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }, opts.headers || {});
   return fetch(API_BASE + path, opts);
+}
+
+function esc(s) {
+  if (s === null || s === undefined) return '';
+  var d = document.createElement('div'); d.textContent = String(s); return d.innerHTML;
 }
 
 var toastTimer = null;
@@ -971,7 +989,31 @@ function toast(msg, type) {
 }
 
 function toggleExpander(id) {
-  document.getElementById(id).classList.toggle('open');
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('open');
+  if (el.classList.contains('open')) {
+    el.querySelectorAll('textarea').forEach(function(ta) { autoResizeTa(ta); });
+  }
+}
+
+function autoResizeTa(el) {
+  if (!el) return;
+  var isFocused = document.activeElement === el;
+  var top = isFocused ? el.getBoundingClientRect().top : 0;
+  var scrollTop = isFocused ? el.scrollTop : 0;
+  var selectionStart = isFocused ? el.selectionStart : 0;
+  var selectionEnd = isFocused ? el.selectionEnd : 0;
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+  if (isFocused) {
+    var delta = el.getBoundingClientRect().top - top;
+    if (delta) window.scrollBy(0, delta);
+    el.scrollTop = scrollTop;
+    try {
+      el.setSelectionRange(selectionStart, selectionEnd);
+    } catch (e) {}
+  }
 }
 
 /* ─── Navigation ───────────────────────────────────────────── */
@@ -1055,20 +1097,26 @@ async function init() {
         });
         if (draftResp && draftResp.config) {
           cfg = draftResp.config;
+          _fromBacktestConfig = (cfg.pbgui || {}).from_backtest_config || '';
         } else {
-          cfg = buildDefaultConfig(allUsers.length > 0 ? allUsers[0].name : '');
+          cfg = await fetchTemplateConfig(allUsers.length > 0 ? allUsers[0].name : '');
           toast('Draft config not found or expired, using defaults', 'warn');
         }
       } else {
-        cfg = buildDefaultConfig(allUsers.length > 0 ? allUsers[0].name : '');
+        cfg = await fetchTemplateConfig(allUsers.length > 0 ? allUsers[0].name : '');
       }
+      coinOvInit('coin-overrides-container', { apiBase: API_BASE });
+      coinOvSetConfigName('');
       populateForm();
-      loadSymbolsAndTags();
+      loadSymbolsAndTags(cfg);
     } else {
       var cfgResp = await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/config').then(function(r) { return r.json(); });
       cfg = cfgResp.config || {};
+      paramStatus = cfgResp.param_status || {};
+      coinOvInit('coin-overrides-container', { apiBase: API_BASE });
+      coinOvSetConfigName(INSTANCE_NAME);
       populateForm();
-      loadSymbolsAndTags();
+      loadSymbolsAndTags(cfg);
     }
 
     // User change → reload symbols/tags
@@ -1085,12 +1133,35 @@ async function init() {
 function populateHosts() {
   var sel = document.getElementById('f-enabled-on');
   sel.innerHTML = '';
+  // Always include 'disabled' as first option
+  var disOpt = document.createElement('option');
+  disOpt.value = 'disabled';
+  disOpt.textContent = 'disabled';
+  sel.appendChild(disOpt);
   allHosts.forEach(function(h) {
     var opt = document.createElement('option');
     opt.value = h;
     opt.textContent = h;
     sel.appendChild(opt);
   });
+}
+
+async function fetchTemplateConfig(user) {
+  try {
+    var resp = await apiFetch('/instances/new-config');
+    if (resp.ok) {
+      var data = await resp.json();
+      var tmpl = data.config || {};
+      // Set user from dropdown selection
+      if (!tmpl.live) tmpl.live = {};
+      tmpl.live.user = user;
+      if (!tmpl.pbgui) tmpl.pbgui = {};
+      return tmpl;
+    }
+  } catch (e) {
+    console.warn('fetchTemplateConfig failed, using built-in defaults:', e);
+  }
+  return buildDefaultConfig(user);
 }
 
 function buildDefaultConfig(user) {
@@ -1146,31 +1217,60 @@ function buildDefaultConfig(user) {
   };
 }
 
-async function loadSymbolsAndTags() {
+async function loadSymbolsAndTags(sourceCfg) {
   var user = document.getElementById('f-user').value;
   var exchange = '';
   for (var i = 0; i < allUsers.length; i++) {
     if (allUsers[i].name === user) { exchange = allUsers[i].exchange; break; }
   }
-  if (!exchange) return;
 
+  var approvedLong = getCoinsForLoad(sourceCfg, 'approved_coins', 'long', 'ms-approved-long');
+  var approvedShort = getCoinsForLoad(sourceCfg, 'approved_coins', 'short', 'ms-approved-short');
+  var ignoredLong = getCoinsForLoad(sourceCfg, 'ignored_coins', 'long', 'ms-ignored-long');
+  var ignoredShort = getCoinsForLoad(sourceCfg, 'ignored_coins', 'short', 'ms-ignored-short');
+  var selectedTags = getTagsForLoad(sourceCfg);
+  var seededCoins = approvedLong.concat(approvedShort).concat(ignoredLong).concat(ignoredShort)
+    .filter(function(v, i, a) { return v && v !== 'all' && a.indexOf(v) === i; }).sort();
+  var seededAnchor = captureRawEditorAnchor();
+
+  rebuildMultiselect('ms-approved-long', seededCoins, approvedLong);
+  rebuildMultiselect('ms-approved-short', seededCoins, approvedShort);
+  rebuildMultiselect('ms-ignored-long', seededCoins, ignoredLong);
+  rebuildMultiselect('ms-ignored-short', seededCoins, ignoredShort);
+  rebuildMultiselect('ms-tags', selectedTags, selectedTags);
+  coinOvSetCoins(seededCoins);
+  restoreRawEditorAnchor(seededAnchor);
+
+  if (!exchange) {
+    allSymbols = seededCoins.slice();
+    allTags = selectedTags.slice();
+    await refreshCoinStatuses('');
+    return;
+  }
+
+  var requestSeq = ++_symbolsAndTagsLoadSeq;
   try {
-    var [symResp, tagResp] = await Promise.all([
+    var results = await Promise.all([
       apiFetch('/symbols?exchange=' + encodeURIComponent(exchange)).then(function(r) { return r.json(); }),
-      apiFetch('/tags?exchange=' + encodeURIComponent(exchange)).then(function(r) { return r.json(); }),
+      apiFetch('/tags?exchange=' + encodeURIComponent(exchange)).then(function(r) { return r.json(); })
     ]);
-    // API already returns normalized base coin names via CoinData.filter_mapping()
-    allSymbols = symResp.symbols || [];
-    allTags = tagResp.tags || [];
-    rebuildMultiselect('ms-approved-long', allSymbols, getCoins('approved_coins', 'long'));
-    rebuildMultiselect('ms-approved-short', allSymbols, getCoins('approved_coins', 'short'));
-    rebuildMultiselect('ms-ignored-long', allSymbols, getCoins('ignored_coins', 'long'));
-    rebuildMultiselect('ms-ignored-short', allSymbols, getCoins('ignored_coins', 'short'));
-    rebuildMultiselect('ms-tags', allTags, (cfg.pbgui || {}).tags || []);
-    // Populate coin override symbol dropdown
-    coPopulateSymbols();
+    if (requestSeq !== _symbolsAndTagsLoadSeq) return;
+
+    allSymbols = results[0].symbols || [];
+    allTags = results[1].tags || [];
+    var loadedAnchor = captureRawEditorAnchor();
+    rebuildMultiselect('ms-approved-long', allSymbols, approvedLong);
+    rebuildMultiselect('ms-approved-short', allSymbols, approvedShort);
+    rebuildMultiselect('ms-ignored-long', allSymbols, ignoredLong);
+    rebuildMultiselect('ms-ignored-short', allSymbols, ignoredShort);
+    rebuildMultiselect('ms-tags', allTags, selectedTags);
+    coinOvSetCoins(allSymbols);
+    restoreRawEditorAnchor(loadedAnchor);
+    await refreshCoinStatuses(exchange);
   } catch (e) {
+    if (requestSeq !== _symbolsAndTagsLoadSeq) return;
     console.error('Failed to load symbols/tags:', e);
+    await refreshCoinStatuses('');
   }
 }
 
@@ -1182,8 +1282,25 @@ function getCoins(key, side) {
   return [];
 }
 
+function getCoinsForLoad(sourceCfg, key, side, wrapId) {
+  var live = (sourceCfg && sourceCfg.live) || {};
+  var obj = live[key] || {};
+  if (Array.isArray(obj[side])) return obj[side].slice();
+  if (msState[wrapId]) return getMultiselectValues(wrapId);
+  return getCoins(key, side).slice();
+}
+
+function getTagsForLoad(sourceCfg) {
+  var pbgui = (sourceCfg && sourceCfg.pbgui) || {};
+  if (Array.isArray(pbgui.tags)) return pbgui.tags.slice();
+  if (msState['ms-tags']) return getMultiselectValues('ms-tags');
+  return ((cfg.pbgui || {}).tags || []).slice();
+}
+
 /* ─── Populate Form from Config ────────────────────────────── */
-function populateForm() {
+function populateForm(opts) {
+  opts = opts || {};
+  var skipRawUpdate = !!opts.skipRawUpdate;
   var live = cfg.live || {};
   var pbgui = cfg.pbgui || {};
   var logging = cfg.logging || {};
@@ -1194,17 +1311,20 @@ function populateForm() {
   setVal('f-enabled-on', pbgui.enabled_on || 'disabled');
   setVal('f-version', pbgui.version || 0);
   setVal('f-leverage', live.leverage || 10);
+  setVal('f-margin-mode', live.margin_mode_preference || 'cross');
   setVal('f-logging-level', logging.level != null ? logging.level : 1);
 
   // Row 2
   setVal('f-min-coin-age', live.minimum_coin_age_days || 0);
   setVal('f-pnls-lookback', live.pnls_max_lookback_days || 30);
   setVal('f-warmup-ratio', live.warmup_ratio || 0);
+  setVal('f-max-loss-pct', live.max_realized_loss_pct != null ? live.max_realized_loss_pct : 1.0);
   setVal('f-note', pbgui.note || '');
 
   // Row 3
   setVal('f-price-dist', live.price_distance_threshold != null ? live.price_distance_threshold : 0.5);
   setVal('f-exec-delay', live.execution_delay_seconds || 2);
+  setVal('f-market-order-threshold', live.market_order_near_touch_threshold != null ? live.market_order_near_touch_threshold : 0.001);
   setChk('f-filter-min-cost', live.filter_by_min_effective_cost);
   setChk('f-market-orders', live.market_orders_allowed !== false);
   setChk('f-hedge-mode', live.hedge_mode);
@@ -1215,6 +1335,8 @@ function populateForm() {
   setVal('f-max-create', live.max_n_creations_per_batch || 3);
   setVal('f-forced-long', live.forced_mode_long || '');
   setVal('f-forced-short', live.forced_mode_short || '');
+  setVal('f-hsl-signal-mode', live.hsl_signal_mode || 'unified');
+  setVal('f-hsl-cooldown-policy', live.hsl_position_during_cooldown_policy || 'panic');
   setVal('f-max-restarts', live.max_n_restarts_per_day || 10);
   setVal('f-max-disk-candles', live.max_disk_candles_per_symbol_per_tf || 1000000);
   setVal('f-max-mem-candles', live.max_memory_candles_per_symbol || 5000);
@@ -1244,7 +1366,7 @@ function populateForm() {
   setChk('f-empty-all-approved', live.empty_means_all_approved);
 
   // Coin overrides
-  coRenderSummary();
+  coinOvLoad(cfg);
 
   // Bot long/short
   var longCfg = bot.long || {};
@@ -1257,6 +1379,70 @@ function populateForm() {
   // Show full bot JSON (without TWE/npos since they have dedicated inputs)
   document.getElementById('f-long-json').value = JSON.stringify(longCfg, null, 2);
   document.getElementById('f-short-json').value = JSON.stringify(shortCfg, null, 2);
+
+  // Param-status highlight (amber=neutralized, red=pb_default) for newly injected params
+  var _psLegend = ' <span style="font-size:var(--fs-xs,11px);font-weight:400;opacity:.8">'
+    + '\u25a0 <span style="color:#f0a500">neutralized</span>'
+    + ' &nbsp;\u25a0 <span style="color:#e05252">review</span></span>';
+  var _lblLong = document.getElementById('lbl-long-json');
+  var _lblShort = document.getElementById('lbl-short-json');
+  if (_lblLong) _lblLong.innerHTML = 'Long config (JSON)'
+    + (paramStatus.long && Object.keys(paramStatus.long).length ? _psLegend : '');
+  if (_lblShort) _lblShort.innerHTML = 'Short config (JSON)'
+    + (paramStatus.short && Object.keys(paramStatus.short).length ? _psLegend : '');
+  _applyBotJsonHighlight(document.getElementById('f-long-json'), paramStatus.long);
+  _applyBotJsonHighlight(document.getElementById('f-short-json'), paramStatus.short);
+
+  // Additional Parameters: detect unknown live.* keys not handled by the form
+  var liveCfg = cfg.live || {};
+  _extraLiveKeys = Object.keys(liveCfg).filter(function(k) { return !KNOWN_LIVE_PARAMS.has(k); }).sort();
+  var extraContainer = document.getElementById('extra-params-container');
+  if (_extraLiveKeys.length > 0) {
+    var extraHtml = '<div class="expander" id="exp-extra-live">' +
+      '<div class="expander-header" onclick="toggleExpander(\'exp-extra-live\')">' +
+        '<span class="arrow">&#x25B6;</span> Additional Parameters' +
+        '<span style="margin-left:auto;font-size:var(--fs-xs);color:var(--text-dim)">Parameters not yet in the GUI \u2014 edit and they will be preserved on save</span>' +
+      '</div>' +
+      '<div class="expander-body">' +
+        '<div class="form-row cols-3">';
+    _extraLiveKeys.forEach(function(k) {
+      var v = liveCfg[k];
+      var t = typeof v;
+      var fld = '';
+      if (t === 'boolean') {
+        fld = '<div class="form-group"><label>' + esc(k) + '</label>' +
+          '<div class="chk-row"><input type="checkbox" id="extra-live-' + esc(k) + '" data-extra-live-type="boolean"' + (v ? ' checked' : '') + '></div></div>';
+      } else if (t === 'number') {
+        fld = '<div class="form-group"><label>' + esc(k) + '</label>' +
+          '<input type="number" id="extra-live-' + esc(k) + '" data-extra-live-type="number" class="form-input" value="' + esc(String(v)) + '"></div>';
+      } else if (t === 'object' || Array.isArray(v)) {
+        fld = '<div class="form-group" style="grid-column:span 3"><label>' + esc(k) + '</label>' +
+          '<textarea id="extra-live-' + esc(k) + '" data-extra-live-type="json" style="overflow:hidden;resize:vertical" oninput="autoResizeTa(this)">' + esc(JSON.stringify(v, null, 2)) + '</textarea></div>';
+      } else {
+        fld = '<div class="form-group"><label>' + esc(k) + '</label>' +
+          '<input type="text" id="extra-live-' + esc(k) + '" data-extra-live-type="' + (v === null ? 'null' : 'string') + '" class="form-input" value="' + esc(v === null ? '' : String(v)) + '" placeholder="' + (v === null ? 'null' : '') + '"></div>';
+      }
+      extraHtml += fld;
+    });
+    extraHtml += '</div></div></div>';
+    extraContainer.innerHTML = extraHtml;
+    _extraLiveKeys.forEach(function(k) {
+      var el = document.getElementById('extra-live-' + k);
+      if (el && el.tagName === 'TEXTAREA') autoResizeTa(el);
+    });
+  } else {
+    extraContainer.innerHTML = '';
+  }
+
+  // Raw JSON
+  if (!skipRawUpdate) {
+    var rawEl = document.getElementById('cfg-raw-json');
+    if (rawEl) {
+      rawEl.value = JSON.stringify(cfg, null, 2);
+      autoResizeTa(rawEl);
+      _rawEditorLastApplied = rawEl.value;
+    }
+  }
 
   // Dynamic ignore preview
   updateDynamicIgnorePreview();
@@ -1275,10 +1461,146 @@ function getNum(id) { return parseFloat(document.getElementById(id).value) || 0;
 function getInt(id) { return parseInt(document.getElementById(id).value, 10) || 0; }
 function getChk(id) { return document.getElementById(id).checked; }
 
+function captureRawEditorAnchor() {
+  var rawEl = document.getElementById('cfg-raw-json');
+  if (!rawEl || document.activeElement !== rawEl) return null;
+  return {
+    top: rawEl.getBoundingClientRect().top,
+    scrollTop: rawEl.scrollTop,
+    selectionStart: rawEl.selectionStart,
+    selectionEnd: rawEl.selectionEnd,
+  };
+}
+
+function restoreRawEditorAnchor(anchor) {
+  if (!anchor) return;
+  var rawEl = document.getElementById('cfg-raw-json');
+  if (!rawEl) return;
+  var delta = rawEl.getBoundingClientRect().top - anchor.top;
+  if (delta) window.scrollBy(0, delta);
+  rawEl.scrollTop = anchor.scrollTop;
+  try {
+    rawEl.setSelectionRange(anchor.selectionStart, anchor.selectionEnd);
+  } catch (e) {}
+}
+
+async function syncEditorFromParsed(parsed) {
+  var anchor = captureRawEditorAnchor();
+  cfg = parsed || {};
+  populateForm({ skipRawUpdate: true });
+  await loadSymbolsAndTags(cfg);
+  restoreRawEditorAnchor(anchor);
+}
+
+function scheduleRawJsonEditorSync() {
+  if (_rawEditorSyncing) return;
+  clearTimeout(_rawEditorSyncTimer);
+  _rawEditorSyncTimer = setTimeout(function() {
+    applyRawJsonEditorSync().catch(function(e) {
+      console.error('applyRawJsonEditorSync failed:', e);
+    });
+  }, 250);
+}
+
+function scheduleStructuredEditorSync() {
+  if (_rawEditorSyncing || _structuredEditorSyncing) return;
+  clearTimeout(_structuredEditorSyncTimer);
+  _structuredEditorSyncTimer = setTimeout(applyStructuredEditorSync, 150);
+}
+
+function applyStructuredEditorSync() {
+  if (_rawEditorSyncing || _structuredEditorSyncing) return;
+  var rawEl = document.getElementById('cfg-raw-json');
+  if (!rawEl) return;
+  if (document.activeElement === rawEl) return;
+
+  var currentRaw = rawEl.value || '';
+  if (currentRaw.trim()) {
+    try {
+      JSON.parse(currentRaw);
+    } catch (e) {
+      return;
+    }
+  }
+
+  _structuredEditorSyncing = true;
+  try {
+    var nextCfg = collectConfig();
+    var nextRaw = JSON.stringify(nextCfg, null, 2);
+    cfg = nextCfg;
+    if (rawEl.value === nextRaw) {
+      _rawEditorLastApplied = nextRaw;
+      return;
+    }
+    var rawScrollTop = rawEl.scrollTop;
+    rawEl.value = nextRaw;
+    rawEl.scrollTop = Math.min(rawScrollTop, rawEl.scrollHeight);
+    autoResizeTa(rawEl);
+    _rawEditorLastApplied = nextRaw;
+  } finally {
+    _structuredEditorSyncing = false;
+  }
+}
+
+async function applyRawJsonEditorSync() {
+  if (_rawEditorSyncing) return;
+  var rawEl = document.getElementById('cfg-raw-json');
+  if (!rawEl) return;
+
+  var raw = rawEl.value;
+  if (!raw || raw === _rawEditorLastApplied) return;
+
+  var parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return;
+  }
+
+  _rawEditorSyncing = true;
+  try {
+    await syncEditorFromParsed(parsed);
+    _rawEditorLastApplied = raw;
+  } finally {
+    _rawEditorSyncing = false;
+  }
+}
+
+function bindStructuredEditorSync() {
+  var root = document.getElementById('main-content');
+  if (!root || root.dataset.structuredSyncBound) return;
+  root.dataset.structuredSyncBound = '1';
+
+  function shouldIgnoreStructuredSyncTarget(target, phase) {
+    if (!target) return true;
+    if (target.id === 'cfg-raw-json') return true;
+    if (target.classList && target.classList.contains('ms-input')) return true;
+    if (phase === 'input' && target.tagName === 'TEXTAREA') {
+      if (target.id === 'f-long-json' || target.id === 'f-short-json') return true;
+      if (target.id === 'cov-cfg-long' || target.id === 'cov-cfg-short') return true;
+      if (target.dataset && target.dataset.extraLiveType === 'json') return true;
+    }
+    return false;
+  }
+
+  root.addEventListener('input', function(e) {
+    if (shouldIgnoreStructuredSyncTarget(e.target, 'input')) return;
+    scheduleStructuredEditorSync();
+  });
+  root.addEventListener('change', function(e) {
+    if (shouldIgnoreStructuredSyncTarget(e.target, 'change')) return;
+    scheduleStructuredEditorSync();
+  });
+}
+
 /* ─── Collect Form → Config ────────────────────────────────── */
 function collectConfig() {
-  var live = cfg.live || {};
-  var user = getVal('f-user');
+  // Start from Raw JSON as base (preserves any unknown top-level keys)
+  var rawEl = document.getElementById('cfg-raw-json');
+  var base = {};
+  if (rawEl && rawEl.value.trim()) {
+    try { base = JSON.parse(rawEl.value); } catch(e) { base = {}; }
+  }
 
   // Parse bot JSON (use text areas as source of truth, override TWE/npos from inputs)
   var longJson, shortJson;
@@ -1290,8 +1612,8 @@ function collectConfig() {
   shortJson.total_wallet_exposure_limit = getNum('f-short-twe');
   shortJson.n_positions = getNum('f-short-npos');
 
-  // Coin overrides (managed by coState in cfg.coin_overrides)
-  var coinOverrides = cfg.coin_overrides || {};
+  // Coin overrides (managed by coin_overrides_editor.js module)
+  var covData = coinOvCollect();
 
   // Collect coins from multiselects
   var approvedLong = getMultiselectValues('ms-approved-long');
@@ -1305,15 +1627,40 @@ function collectConfig() {
 
   var balOverride = getNum('f-bal-override');
 
+  // Collect extra live params from Additional Parameters expander
+  var extraLive = {};
+  _extraLiveKeys.forEach(function(k) {
+    var el = document.getElementById('extra-live-' + k);
+    if (!el) return;
+    var type = el.getAttribute('data-extra-live-type');
+    if (type === 'boolean') {
+      extraLive[k] = el.checked;
+    } else if (type === 'number') {
+      var n = parseFloat(el.value);
+      extraLive[k] = isNaN(n) ? el.value : n;
+    } else if (type === 'json') {
+      try { extraLive[k] = JSON.parse(el.value); } catch(e) { extraLive[k] = el.value; }
+    } else if (type === 'null') {
+      var raw = el.value.trim();
+      if (raw === '' || raw === 'null') { extraLive[k] = null; }
+      else { try { extraLive[k] = JSON.parse(raw); } catch(e) { extraLive[k] = raw; } }
+    } else {
+      extraLive[k] = el.value;
+    }
+  });
+
   var result = {
-    live: {
-      user: user,
+    live: Object.assign({}, extraLive, {
+      user: getVal('f-user'),
       leverage: getNum('f-leverage'),
+      margin_mode_preference: getVal('f-margin-mode'),
       minimum_coin_age_days: getNum('f-min-coin-age'),
       pnls_max_lookback_days: getNum('f-pnls-lookback'),
       warmup_ratio: getNum('f-warmup-ratio'),
+      max_realized_loss_pct: getNum('f-max-loss-pct'),
       price_distance_threshold: getNum('f-price-dist'),
       execution_delay_seconds: getNum('f-exec-delay'),
+      market_order_near_touch_threshold: getNum('f-market-order-threshold'),
       filter_by_min_effective_cost: getChk('f-filter-min-cost'),
       market_orders_allowed: getChk('f-market-orders'),
       auto_gs: getChk('f-auto-gs'),
@@ -1325,6 +1672,8 @@ function collectConfig() {
       max_n_creations_per_batch: getInt('f-max-create'),
       forced_mode_long: getVal('f-forced-long'),
       forced_mode_short: getVal('f-forced-short'),
+      hsl_signal_mode: getVal('f-hsl-signal-mode'),
+      hsl_position_during_cooldown_policy: getVal('f-hsl-cooldown-policy'),
       max_n_restarts_per_day: getInt('f-max-restarts'),
       max_disk_candles_per_symbol_per_tf: getInt('f-max-disk-candles'),
       max_memory_candles_per_symbol: getInt('f-max-mem-candles'),
@@ -1341,7 +1690,7 @@ function collectConfig() {
       candle_lock_timeout_seconds: getInt('f-candle-lock'),
       enable_archive_candle_fetch: getChk('f-archive-fetch'),
       max_ohlcv_fetches_per_minute: getInt('f-max-ohlcv-fetches'),
-    },
+    }),
     logging: {
       level: getInt('f-logging-level'),
       memory_snapshot_interval_minutes: getInt('f-mem-snapshot'),
@@ -1349,7 +1698,7 @@ function collectConfig() {
     },
     pbgui: {
       version: getInt('f-version'),
-      enabled_on: getVal('f-enabled-on'),
+      enabled_on: getVal('f-enabled-on') || 'disabled',
       note: getVal('f-note'),
       market_cap: getInt('f-market-cap'),
       vol_mcap: getNum('f-vol-mcap'),
@@ -1358,11 +1707,12 @@ function collectConfig() {
       notices_ignore: getChk('f-notices-ignore'),
       dynamic_ignore: getChk('f-dynamic-ignore'),
       starting_config: (cfg.pbgui || {}).starting_config || false,
+      from_backtest_config: _fromBacktestConfig || undefined,
     },
     bot: { long: longJson, short: shortJson },
-    coin_overrides: coinOverrides,
-    backtest: cfg.backtest || {},
-    optimize: cfg.optimize || {},
+    coin_overrides: covData.coin_overrides || {},
+    backtest: base.backtest || cfg.backtest || {},
+    optimize: base.optimize || cfg.optimize || {},
   };
   return result;
 }
@@ -1390,10 +1740,17 @@ async function saveConfig() {
     cfg = config;
     cfg.pbgui.version = data.version;
     setVal('f-version', data.version);
+    var rawEl = document.getElementById('cfg-raw-json');
+    if (rawEl) {
+      rawEl.value = JSON.stringify(cfg, null, 2);
+      autoResizeTa(rawEl);
+      _rawEditorLastApplied = rawEl.value;
+    }
 
     if (IS_NEW === 'true') {
       INSTANCE_NAME = name;
       IS_NEW = 'false';
+      coinOvSetConfigName(name);
     }
 
     var syncOk = (data.sync && data.sync.ok) || 0;
@@ -1447,7 +1804,7 @@ function doImport() {
 
   cfg = parsed;
   populateForm();
-  loadSymbolsAndTags();
+  loadSymbolsAndTags(cfg);
   closeImportModal();
   toast('Config imported', 'ok');
 }
@@ -1475,12 +1832,14 @@ function openLogPanel() {
 
   function _initViewer(host) {
     if (_v7LogViewer) { _v7LogViewer.close(); _v7LogViewer = null; }
+    var isLocal = (!host || host === 'local');
     _v7LogViewer = new LogViewerPanel({
       containerId: 'log-viewer-target',
       wsBase: WS_BASE,
       token: TOKEN,
-      defaultHost: host || 'local',
-      defaultService: svc,
+      defaultHost: isLocal ? 'local' : host,
+      defaultService: isLocal ? 'PBRun' : svc,
+      defaultFile: isLocal ? ('Bot:' + INSTANCE_NAME) : '',
       presets: 'trading',
       showRestart: true,
       height: '100%'
@@ -1488,35 +1847,41 @@ function openLogPanel() {
     _v7LogViewer.open();
   }
 
-  if (enabledOn && enabledOn !== 'disabled') {
-    // Bot is enabled on a known host
-    badge.textContent = enabledOn;
-    badge.className = 'connected';
-    _initViewer(enabledOn);
-  } else {
-    // Bot disabled — scan backups for last active host
-    badge.textContent = 'searching...';
-    badge.className = 'disabled';
-    apiFetch('/last-active-host/' + encodeURIComponent(INSTANCE_NAME))
-    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-    .then(function(data) {
-      if (!data.host) {
-        badge.textContent = 'local';
-        badge.className = 'disabled';
-        _initViewer('local');
-        return;
-      }
-      var isLocal = (data.host === data.master);
-      badge.textContent = data.host + ' (v' + (data.version || '?') + ')';
-      badge.className = isLocal ? 'disabled' : 'connected';
-      _initViewer(isLocal ? 'local' : data.host);
-    })
-    .catch(function() {
+  badge.textContent = 'searching...';
+  badge.className = 'disabled';
+  apiFetch('/last-active-host/' + encodeURIComponent(INSTANCE_NAME))
+  .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+  .then(function(data) {
+    var masterHost = data.master || '';
+    if (enabledOn && enabledOn !== 'disabled') {
+      var isCurrentLocal = !!masterHost && enabledOn === masterHost;
+      badge.textContent = enabledOn;
+      badge.className = isCurrentLocal ? 'disabled' : 'connected';
+      _initViewer(isCurrentLocal ? 'local' : enabledOn);
+      return;
+    }
+    if (!data.host) {
       badge.textContent = 'local';
       badge.className = 'disabled';
       _initViewer('local');
-    });
-  }
+      return;
+    }
+    var isLocal = (data.host === masterHost);
+    badge.textContent = data.host + ' (v' + (data.version || '?') + ')';
+    badge.className = isLocal ? 'disabled' : 'connected';
+    _initViewer(isLocal ? 'local' : data.host);
+  })
+  .catch(function() {
+    if (enabledOn && enabledOn !== 'disabled') {
+      badge.textContent = enabledOn;
+      badge.className = 'connected';
+      _initViewer(enabledOn);
+      return;
+    }
+    badge.textContent = 'local';
+    badge.className = 'disabled';
+    _initViewer('local');
+  });
 }
 
 function closeLogPanel() {
@@ -1642,418 +2007,269 @@ function syncBotInputToJson(side) {
   });
 });
 
-/* ─── Coin Overrides ───────────────────────────────────────── */
-var CO_ALLOWED_BOT = [
-  "close_grid_markup_end", "close_grid_markup_start", "close_grid_qty_pct",
-  "close_trailing_grid_ratio", "close_trailing_qty_pct",
-  "close_trailing_retracement_pct", "close_trailing_threshold_pct",
-  "ema_span_0", "ema_span_1",
-  "entry_grid_double_down_factor", "entry_grid_spacing_pct",
-  "entry_grid_spacing_we_weight", "entry_grid_spacing_volatility_weight",
-  "entry_volatility_ema_span_hours", "entry_initial_ema_dist", "entry_initial_qty_pct",
-  "entry_trailing_double_down_factor", "entry_trailing_grid_ratio",
-  "entry_trailing_retracement_pct", "entry_trailing_retracement_we_weight",
-  "entry_trailing_retracement_volatility_weight",
-  "entry_trailing_threshold_pct", "entry_trailing_threshold_we_weight",
-  "entry_trailing_threshold_volatility_weight",
-  "risk_we_excess_allowance_pct", "risk_wel_enforcer_threshold",
-  "unstuck_close_pct", "unstuck_ema_dist", "unstuck_threshold",
-  "wallet_exposure_limit"
-];
-var CO_MODES = ['normal', 'manual', 'graceful_stop', 'panic', 'tp_only'];
-var coEditCoin = null;
-var coEditBackup = null;
-var coPerCoinConfig = {};  // {symbol: {long:{...}, short:{...}}}
+/* ─── Bot JSON Param-Status Highlight ──────────────────────── */
+/* Creates a <pre> overlay behind bot JSON textareas, highlighting
+ * lines whose key appears in paramStatus (amber=neutralized, red=pb_default).
+ * Textarea stays fully editable; text is made transparent so only the
+ * pre is visible (but caret remains interactive). */
+function _applyBotJsonHighlight(ta, sideStatus) {
+  if (!ta || !sideStatus || !Object.keys(sideStatus).length) return;
 
-// Step/format config per bot override parameter (from Bounds class)
-var CO_BOT_PARAM_META = {
-  "close_grid_markup_end":                  { step: 0.001,   decimals: 3 },
-  "close_grid_markup_start":                { step: 0.001,   decimals: 3 },
-  "close_grid_qty_pct":                     { step: 0.05,    decimals: 2 },
-  "close_trailing_grid_ratio":              { step: 0.01,    decimals: 2 },
-  "close_trailing_qty_pct":                 { step: 0.001,   decimals: 3 },
-  "close_trailing_retracement_pct":         { step: 0.001,   decimals: 3 },
-  "close_trailing_threshold_pct":           { step: 0.0001,  decimals: 4 },
-  "ema_span_0":                             { step: 1.0,     decimals: 1 },
-  "ema_span_1":                             { step: 1.0,     decimals: 1 },
-  "entry_grid_double_down_factor":          { step: 0.05,    decimals: 2 },
-  "entry_grid_spacing_pct":                 { step: 0.001,   decimals: 3 },
-  "entry_grid_spacing_we_weight":           { step: 0.01,    decimals: 2 },
-  "entry_grid_spacing_volatility_weight":   { step: 1.0,     decimals: 1 },
-  "entry_volatility_ema_span_hours":        { step: 1.0,     decimals: 1 },
-  "entry_initial_ema_dist":                 { step: 0.0001,  decimals: 4 },
-  "entry_initial_qty_pct":                  { step: 0.001,   decimals: 3 },
-  "entry_trailing_double_down_factor":      { step: 0.05,    decimals: 2 },
-  "entry_trailing_grid_ratio":              { step: 0.01,    decimals: 2 },
-  "entry_trailing_retracement_pct":         { step: 0.001,   decimals: 3 },
-  "entry_trailing_retracement_we_weight":   { step: 0.1,     decimals: 1 },
-  "entry_trailing_retracement_volatility_weight": { step: 1.0, decimals: 1 },
-  "entry_trailing_threshold_pct":           { step: 0.0001,  decimals: 4 },
-  "entry_trailing_threshold_we_weight":     { step: 0.1,     decimals: 1 },
-  "entry_trailing_threshold_volatility_weight": { step: 1.0, decimals: 1 },
-  "risk_we_excess_allowance_pct":           { step: 0.01,    decimals: 2 },
-  "risk_wel_enforcer_threshold":            { step: 0.01,    decimals: 2 },
-  "unstuck_close_pct":                      { step: 0.001,   decimals: 3 },
-  "unstuck_ema_dist":                       { step: 0.001,   decimals: 3 },
-  "unstuck_threshold":                      { step: 0.01,    decimals: 2 },
-  "wallet_exposure_limit":                  { step: 0.1,     decimals: 1 }
-};
+  function buildHtml(text) {
+    var blockStatus = null;
+    var blockDepth = 0;
+    var depth = 0;
+    return text.split('\n').map(function(line) {
+      var opens  = (line.match(/\{/g) || []).length;
+      var closes = (line.match(/\}/g) || []).length;
+      var depthBefore = depth;
+      depth += opens - closes;
 
-function coBotParamChanged() {
-  var param = document.getElementById('co-bot-param').value;
-  var inp = document.getElementById('co-bot-value');
-  var meta = CO_BOT_PARAM_META[param] || { step: 0.001, decimals: 3 };
-  inp.step = meta.step;
-  // keep current value but re-display with correct precision
-  var cur = parseFloat(inp.value);
-  if (!isNaN(cur)) {
-    inp.value = cur.toFixed(meta.decimals);
-  }
-}
-
-// Populate the bot param dropdown
-(function() {
-  var sel = document.getElementById('co-bot-param');
-  CO_ALLOWED_BOT.forEach(function(p) {
-    var opt = document.createElement('option');
-    opt.value = p; opt.textContent = p;
-    sel.appendChild(opt);
-  });
-  sel.addEventListener('change', coBotParamChanged);
-  coBotParamChanged();  // init step for first selected param
-})();
-
-function coPopulateSymbols() {
-  var sel = document.getElementById('co-add-symbol');
-  sel.innerHTML = '';
-  allSymbols.forEach(function(s) {
-    var opt = document.createElement('option');
-    opt.value = s; opt.textContent = s;
-    sel.appendChild(opt);
-  });
-}
-
-function coFormatObj(obj) {
-  if (!obj || Object.keys(obj).length === 0) return '{}';
-  var parts = [];
-  for (var k in obj) { parts.push(k + ': ' + obj[k]); }
-  return '{' + parts.join(', ') + '}';
-}
-
-function coRenderSummary() {
-  var co = cfg.coin_overrides || {};
-  var tbody = document.getElementById('co-summary-body');
-  tbody.innerHTML = '';
-  var coins = Object.keys(co);
-  // Auto-expand if overrides exist
-  if (coins.length > 0) {
-    document.getElementById('exp-overrides').classList.add('open');
-  }
-  coins.forEach(function(coin) {
-    var entry = co[coin] || {};
-    var tr = document.createElement('tr');
-    // Edit button
-    var tdEdit = document.createElement('td');
-    tdEdit.className = 'co-edit-btn';
-    tdEdit.innerHTML = '☐';
-    tdEdit.onclick = function() { coEditStart(coin); };
-    tr.appendChild(tdEdit);
-    // Coin
-    var tdCoin = document.createElement('td');
-    tdCoin.textContent = coin;
-    tr.appendChild(tdCoin);
-    // override_config_path
-    var tdPath = document.createElement('td');
-    tdPath.textContent = entry.override_config_path || '';
-    tr.appendChild(tdPath);
-    // bot.long
-    var tdLong = document.createElement('td');
-    tdLong.className = 'co-params-preview';
-    tdLong.textContent = coFormatObj((entry.bot || {}).long);
-    tdLong.title = JSON.stringify((entry.bot || {}).long || {}, null, 2);
-    tr.appendChild(tdLong);
-    // bot.short
-    var tdShort = document.createElement('td');
-    tdShort.className = 'co-params-preview';
-    tdShort.textContent = coFormatObj((entry.bot || {}).short);
-    tdShort.title = JSON.stringify((entry.bot || {}).short || {}, null, 2);
-    tr.appendChild(tdShort);
-    // live
-    var tdLive = document.createElement('td');
-    tdLive.className = 'co-params-preview';
-    tdLive.textContent = coFormatObj(entry.live);
-    tdLive.title = JSON.stringify(entry.live || {}, null, 2);
-    tr.appendChild(tdLive);
-    tbody.appendChild(tr);
-  });
-  // Hide table header if no overrides
-  document.getElementById('co-summary-table').style.display = coins.length > 0 ? 'table' : 'none';
-}
-
-function coAddCoin() {
-  var sym = document.getElementById('co-add-symbol').value;
-  if (!sym) { toast('Select a symbol first', 'err'); return; }
-  if (!cfg.coin_overrides) cfg.coin_overrides = {};
-  if (!cfg.coin_overrides[sym]) cfg.coin_overrides[sym] = {};
-  coEditStart(sym);
-}
-
-function coEditStart(coin) {
-  coEditCoin = coin;
-  coEditBackup = JSON.parse(JSON.stringify(cfg.coin_overrides[coin] || {}));
-  coPerCoinConfig = {};
-  document.getElementById('co-overview').style.display = 'none';
-  document.getElementById('co-edit').style.display = 'block';
-  document.getElementById('co-edit-title').textContent = coin;
-  // Check if override_config_path exists → set Config checkbox
-  var entry = cfg.coin_overrides[coin] || {};
-  var hasConfig = !!entry.override_config_path;
-  document.getElementById('co-config-chk').checked = hasConfig;
-  document.getElementById('co-config-editors').style.display = hasConfig ? 'block' : 'none';
-  if (hasConfig) { coLoadPerCoinConfig(coin); }
-  coRenderParams();
-}
-
-function coRenderParams() {
-  var co = cfg.coin_overrides[coEditCoin] || {};
-  var tbody = document.getElementById('co-params-body');
-  tbody.innerHTML = '';
-  // bot.long
-  var botLong = (co.bot || {}).long || {};
-  for (var p in botLong) {
-    coAddParamRow(tbody, 'bot', p, 'long', botLong[p]);
-  }
-  // bot.short
-  var botShort = (co.bot || {}).short || {};
-  for (var p in botShort) {
-    coAddParamRow(tbody, 'bot', p, 'short', botShort[p]);
-  }
-  // live
-  var live = co.live || {};
-  for (var p in live) {
-    coAddParamRow(tbody, 'live', p, 'live', live[p]);
-  }
-  // Hide table if empty
-  document.getElementById('co-params-table').style.display =
-    (Object.keys(botLong).length + Object.keys(botShort).length + Object.keys(live).length) > 0 ? 'table' : 'none';
-}
-
-function coAddParamRow(tbody, section, param, side, value) {
-  var tr = document.createElement('tr');
-  var cells = [section, param, side, value];
-  cells.forEach(function(v) {
-    var td = document.createElement('td');
-    td.textContent = v;
-    tr.appendChild(td);
-  });
-  var tdDel = document.createElement('td');
-  tdDel.className = 'co-del-btn';
-  tdDel.innerHTML = '✕';
-  tdDel.onclick = function() { coDeleteParam(section, param, side); };
-  tr.appendChild(tdDel);
-  tbody.appendChild(tr);
-}
-
-function coDeleteParam(section, param, side) {
-  var co = cfg.coin_overrides[coEditCoin];
-  if (!co) return;
-  if (section === 'bot') {
-    if (co.bot && co.bot[side]) {
-      delete co.bot[side][param];
-      if (Object.keys(co.bot[side]).length === 0) delete co.bot[side];
-      if (co.bot && Object.keys(co.bot).length === 0) delete co.bot;
-    }
-  } else if (section === 'live') {
-    if (co.live) {
-      delete co.live[param];
-      if (Object.keys(co.live).length === 0) delete co.live;
-    }
-  }
-  coRenderParams();
-  dirty = true;
-}
-
-function coLiveParamChanged() {
-  var param = document.getElementById('co-live-param').value;
-  if (param === 'leverage') {
-    document.getElementById('co-live-mode-wrap').style.display = 'none';
-    document.getElementById('co-live-value-wrap').style.display = 'block';
-  } else {
-    document.getElementById('co-live-mode-wrap').style.display = 'block';
-    document.getElementById('co-live-value-wrap').style.display = 'none';
-  }
-}
-
-function coAddLiveParam() {
-  var param = document.getElementById('co-live-param').value;
-  var value;
-  if (param === 'leverage') {
-    value = parseFloat(document.getElementById('co-live-value').value) || 0;
-  } else {
-    value = document.getElementById('co-live-mode').value;
-  }
-  var co = cfg.coin_overrides[coEditCoin];
-  if (!co) { cfg.coin_overrides[coEditCoin] = {}; co = cfg.coin_overrides[coEditCoin]; }
-  if (!co.live) co.live = {};
-  co.live[param] = value;
-  coRenderParams();
-  dirty = true;
-}
-
-function coAddBotParam() {
-  var param = document.getElementById('co-bot-param').value;
-  var side = document.getElementById('co-bot-side').value;
-  var value = parseFloat(document.getElementById('co-bot-value').value) || 0;
-  var co = cfg.coin_overrides[coEditCoin];
-  if (!co) { cfg.coin_overrides[coEditCoin] = {}; co = cfg.coin_overrides[coEditCoin]; }
-  if (!co.bot) co.bot = {};
-  if (!co.bot[side]) co.bot[side] = {};
-  co.bot[side][param] = value;
-  coRenderParams();
-  dirty = true;
-}
-
-async function coConfigChanged() {
-  var checked = document.getElementById('co-config-chk').checked;
-  document.getElementById('co-config-editors').style.display = checked ? 'block' : 'none';
-  if (checked && Object.keys(coPerCoinConfig).length === 0) {
-    await coLoadPerCoinConfig(coEditCoin);
-  }
-}
-
-async function coLoadPerCoinConfig(coin) {
-  if (IS_NEW === 'true') {
-    // New instance: use main bot config as template
-    var bot = cfg.bot || {};
-    document.getElementById('co-config-long').value = JSON.stringify(bot.long || {}, null, 2);
-    document.getElementById('co-config-short').value = JSON.stringify(bot.short || {}, null, 2);
-    coPerCoinConfig = { long: bot.long || {}, short: bot.short || {} };
-    return;
-  }
-  try {
-    var resp = await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/coin-config/' + encodeURIComponent(coin));
-    var data = await resp.json();
-    var bot = data.bot || {};
-    var longCfg = bot.long || cfg.bot.long || {};
-    var shortCfg = bot.short || cfg.bot.short || {};
-    document.getElementById('co-config-long').value = JSON.stringify(longCfg, null, 2);
-    document.getElementById('co-config-short').value = JSON.stringify(shortCfg, null, 2);
-    coPerCoinConfig = { long: longCfg, short: shortCfg };
-  } catch (e) {
-    toast('Failed to load per-coin config: ' + e.message, 'err');
-    var bot = cfg.bot || {};
-    document.getElementById('co-config-long').value = JSON.stringify(bot.long || {}, null, 2);
-    document.getElementById('co-config-short').value = JSON.stringify(bot.short || {}, null, 2);
-    coPerCoinConfig = { long: bot.long || {}, short: bot.short || {} };
-  }
-}
-
-async function coSave() {
-  var co = cfg.coin_overrides[coEditCoin] || {};
-  var configChecked = document.getElementById('co-config-chk').checked;
-
-  if (configChecked) {
-    // Save per-coin config via API
-    var longJson, shortJson;
-    try { longJson = JSON.parse(document.getElementById('co-config-long').value); }
-    catch (e) { toast('Invalid long JSON in per-coin config', 'err'); return; }
-    try { shortJson = JSON.parse(document.getElementById('co-config-short').value); }
-    catch (e) { toast('Invalid short JSON in per-coin config', 'err'); return; }
-
-    co.override_config_path = coEditCoin + '.json';
-    cfg.coin_overrides[coEditCoin] = co;
-
-    if (IS_NEW !== 'true') {
-      try {
-        await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/coin-config/' + encodeURIComponent(coEditCoin), {
-          method: 'PUT',
-          body: JSON.stringify({ bot: { long: longJson, short: shortJson } }),
-        });
-      } catch (e) {
-        toast('Failed to save per-coin config: ' + e.message, 'err');
+      var status = null;
+      if (blockStatus && depthBefore > blockDepth) {
+        status = blockStatus;
+      } else {
+        var m = line.match(/^\s*"([^"]+)":/);
+        status = m ? (sideStatus[m[1]] || null) : null;
       }
-    }
-  } else {
-    // Remove override_config_path and delete file
-    if (co.override_config_path) {
-      delete co.override_config_path;
-      if (IS_NEW !== 'true') {
-        try {
-          await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/coin-config/' + encodeURIComponent(coEditCoin), {
-            method: 'DELETE',
-          });
-        } catch (e) { /* ignore */ }
+
+      if (status && opens > closes) { blockStatus = status; blockDepth = depthBefore; }
+      if (blockStatus && depth <= blockDepth) { blockStatus = null; }
+
+      var lineEsc = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      if (status === 'neutralized') {
+        return '<span style="display:block;background:color-mix(in srgb,#f0a500 16%,transparent);border-radius:2px">' + lineEsc + '</span>';
       }
-    }
+      if (status === 'pb_default') {
+        return '<span style="display:block;background:color-mix(in srgb,#e05252 16%,transparent);border-radius:2px">' + lineEsc + '</span>';
+      }
+      return '<span style="display:block">' + lineEsc + '</span>';
+    }).join('');
   }
 
-  // Clean up empty override
-  if (co && Object.keys(co).length === 0) {
-    delete cfg.coin_overrides[coEditCoin];
+  var wrapper = ta.parentNode;
+  if (!wrapper || !wrapper.classList || !wrapper.classList.contains('bot-json-highlight-wrap')) {
+    var parent = ta.parentNode;
+    var nextWrapper = document.createElement('div');
+    nextWrapper.className = 'bot-json-highlight-wrap';
+    nextWrapper.style.cssText = 'position:relative';
+    parent.insertBefore(nextWrapper, ta);
+    nextWrapper.appendChild(ta);
+    wrapper = nextWrapper;
   }
 
-  coEditCoin = null;
-  coEditBackup = null;
-  coPerCoinConfig = {};
-  document.getElementById('co-overview').style.display = 'block';
-  document.getElementById('co-edit').style.display = 'none';
-  coRenderSummary();
-  dirty = true;
-}
-
-function coCancel() {
-  if (coEditBackup !== null) {
-    if (Object.keys(coEditBackup).length === 0 &&
-        cfg.coin_overrides[coEditCoin] &&
-        Object.keys(cfg.coin_overrides[coEditCoin]).length === 0) {
-      // Was added fresh and is empty → remove
-      delete cfg.coin_overrides[coEditCoin];
-    } else if (Object.keys(coEditBackup).length === 0) {
-      delete cfg.coin_overrides[coEditCoin];
-    } else {
-      cfg.coin_overrides[coEditCoin] = coEditBackup;
-    }
+  var pre = ta._botHighlightPre || wrapper.querySelector('.bot-json-highlight-pre');
+  if (!pre) {
+    var cs = window.getComputedStyle(ta);
+    pre = document.createElement('pre');
+    pre.className = 'bot-json-highlight-pre';
+    pre.setAttribute('aria-hidden', 'true');
+    pre.style.cssText = [
+      'position:absolute', 'top:0', 'left:0', 'right:0', 'bottom:0',
+      'margin:0',
+      'padding:' + cs.padding,
+      'font-family:' + cs.fontFamily,
+      'font-size:' + cs.fontSize,
+      'line-height:' + cs.lineHeight,
+      'white-space:pre-wrap',
+      'word-wrap:break-word',
+      'overflow:hidden',
+      'pointer-events:none',
+      'background:transparent',
+      'border:1px solid transparent',
+      'box-sizing:border-box',
+      'color:' + cs.color,
+      'z-index:0'
+    ].join(';');
+    wrapper.insertBefore(pre, ta);
+    ta.style.cssText += ';position:relative;z-index:1;background:transparent;' +
+      'color:transparent;caret-color:' + cs.color;
+    ta.addEventListener('scroll', function() {
+      if (ta._botHighlightPre) ta._botHighlightPre.scrollTop = ta.scrollTop;
+    });
   }
-  coEditCoin = null;
-  coEditBackup = null;
-  coPerCoinConfig = {};
-  document.getElementById('co-overview').style.display = 'block';
-  document.getElementById('co-edit').style.display = 'none';
-  coRenderSummary();
-}
 
-async function coRemove() {
-  var coin = coEditCoin;
-  // Delete per-coin config file if exists
-  if (cfg.coin_overrides[coin] && cfg.coin_overrides[coin].override_config_path && IS_NEW !== 'true') {
-    try {
-      await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/coin-config/' + encodeURIComponent(coin), {
-        method: 'DELETE',
-      });
-    } catch (e) { /* ignore */ }
+  ta._botHighlightPre = pre;
+  if (!ta._botHighlightSync) {
+    ta._botHighlightSync = function() {
+      if (!ta._botHighlightPre) return;
+      ta._botHighlightPre.innerHTML = buildHtml(ta.value);
+      ta._botHighlightPre.style.height = ta.offsetHeight + 'px';
+      ta._botHighlightPre.scrollTop = ta.scrollTop;
+    };
+    ta.addEventListener('input', function() {
+      if (ta._botHighlightSync) ta._botHighlightSync();
+    });
   }
-  delete cfg.coin_overrides[coin];
-  coEditCoin = null;
-  coEditBackup = null;
-  coPerCoinConfig = {};
-  document.getElementById('co-overview').style.display = 'block';
-  document.getElementById('co-edit').style.display = 'none';
-  coRenderSummary();
-  dirty = true;
+
+  ta._botHighlightSync();
 }
 
 /* ─── Multiselect Component ────────────────────────────────── */
-var msState = {};  // id → {options: [], selected: [], highlightIdx: -1}
+var msState = {};  // id → {options: [], selected: [], highlightIdx: -1, coinMeta: {}}
 var msCounterpart = {
   'ms-approved-long':  'ms-ignored-long',
   'ms-ignored-long':   'ms-approved-long',
   'ms-approved-short': 'ms-ignored-short',
   'ms-ignored-short':  'ms-approved-short'
 };
+var msCoinIds = {
+  'ms-approved-long': true,
+  'ms-approved-short': true,
+  'ms-ignored-long': true,
+  'ms-ignored-short': true
+};
 
 function rebuildMultiselect(wrapId, options, selected) {
-  msState[wrapId] = { options: options.slice(), selected: selected.slice(), highlightIdx: -1 };
+  msState[wrapId] = { options: options.slice(), selected: selected.slice(), highlightIdx: -1, coinMeta: {} };
   renderMultiselectTags(wrapId);
+}
+
+function ensureMultiselectStatusEl(wrapId) {
+  var wrap = document.getElementById(wrapId);
+  if (!wrap) return null;
+  var group = wrap.closest('.form-group');
+  if (!group) return null;
+  var el = group.querySelector('.ms-status-summary[data-for="' + wrapId + '"]');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'ms-status-summary';
+    el.setAttribute('data-for', wrapId);
+    group.appendChild(el);
+  }
+  return el;
+}
+
+function getMultiselectCoinMeta(wrapId, value) {
+  var state = msState[wrapId];
+  if (!state || !state.coinMeta) return null;
+  return state.coinMeta[value] || null;
+}
+
+function clearMultiselectCoinMeta(wrapId) {
+  if (!msState[wrapId]) return;
+  msState[wrapId].coinMeta = {};
+  updateMultiselectStatusSummary(wrapId);
+}
+
+function applyMultiselectCoinStatus(wrapId, statuses) {
+  var state = msState[wrapId];
+  if (!state) return;
+
+  var nextSelected = [];
+  var nextMeta = {};
+  state.selected.forEach(function(value) {
+    var info = statuses ? statuses[value] : null;
+    var nextValue = value;
+    if (info && info.status !== 'invalid' && info.normalized) {
+      nextValue = info.normalized;
+    }
+    if (nextSelected.indexOf(nextValue) >= 0) return;
+    nextSelected.push(nextValue);
+    if (info) {
+      nextMeta[nextValue] = {
+        status: info.status,
+        normalized: info.normalized || nextValue,
+        raw: value,
+        changed: (info.normalized || nextValue) !== value,
+      };
+    }
+  });
+
+  state.selected = nextSelected;
+  state.coinMeta = nextMeta;
+  renderMultiselectTags(wrapId);
+}
+
+function getCoinTagLabel(value, meta) {
+  if (!meta) return value;
+  if (meta.status === 'invalid') return '? ' + (meta.raw || value);
+  return meta.normalized || value;
+}
+
+function getCoinTagTitle(value, meta) {
+  if (!meta) return '';
+  if (meta.status === 'invalid') {
+    return (meta.changed ? ('Normalized from ' + meta.raw + ' to ' + meta.normalized + '. ') : '') +
+      'CoinData could not resolve this entry to an active coin for the current exchange.';
+  }
+  if (meta.changed) {
+    return 'Normalized from ' + meta.raw + ' to ' + meta.normalized + '.';
+  }
+  return '';
+}
+
+function updateMultiselectStatusSummary(wrapId) {
+  if (!msCoinIds[wrapId]) return;
+  var el = ensureMultiselectStatusEl(wrapId);
+  if (!el) return;
+  var state = msState[wrapId];
+  if (!state || !state.selected.length) {
+    el.textContent = '';
+    el.style.display = 'none';
+    return;
+  }
+
+  var invalid = 0;
+  state.selected.forEach(function(value) {
+    var meta = getMultiselectCoinMeta(wrapId, value);
+    if (!meta) return;
+    if (meta.status === 'invalid') invalid += 1;
+  });
+
+  if (!invalid) {
+    el.textContent = '';
+    el.style.display = 'none';
+    return;
+  }
+
+  var parts = [];
+  if (invalid) parts.push('<span class="err">' + invalid + ' invalid</span>');
+  el.innerHTML = parts.join(' <span class="sep">&middot;</span> ');
+  el.style.display = 'block';
+}
+
+async function refreshCoinStatuses(exchange) {
+  var wrapIds = ['ms-approved-long', 'ms-approved-short', 'ms-ignored-long', 'ms-ignored-short'];
+  if (!exchange) {
+    var emptyAnchor = captureRawEditorAnchor();
+    wrapIds.forEach(function(wrapId) { clearMultiselectCoinMeta(wrapId); });
+    restoreRawEditorAnchor(emptyAnchor);
+    return;
+  }
+
+  var coins = [];
+  wrapIds.forEach(function(wrapId) {
+    getMultiselectValues(wrapId).forEach(function(value) {
+      if (!value || value === 'all' || coins.indexOf(value) >= 0) return;
+      coins.push(value);
+    });
+  });
+  if (!coins.length) {
+    var noCoinAnchor = captureRawEditorAnchor();
+    wrapIds.forEach(function(wrapId) { clearMultiselectCoinMeta(wrapId); });
+    restoreRawEditorAnchor(noCoinAnchor);
+    return;
+  }
+
+  try {
+    var resp = await apiFetch('/coins/status', {
+      method: 'POST',
+      body: JSON.stringify({ exchanges: [exchange], coins: coins })
+    });
+    var data = await resp.json();
+    if (!resp.ok) throw new Error((data && data.detail) || resp.statusText || 'Failed to resolve coin status');
+    var applyAnchor = captureRawEditorAnchor();
+    wrapIds.forEach(function(wrapId) {
+      applyMultiselectCoinStatus(wrapId, data.statuses || {});
+    });
+    restoreRawEditorAnchor(applyAnchor);
+  } catch (e) {
+    console.error('Failed to resolve coin statuses:', e);
+    var errorAnchor = captureRawEditorAnchor();
+    wrapIds.forEach(function(wrapId) { clearMultiselectCoinMeta(wrapId); });
+    restoreRawEditorAnchor(errorAnchor);
+  }
 }
 
 function setMultiselectValues(wrapId, values) {
@@ -2092,9 +2308,16 @@ function renderMultiselectTags(wrapId) {
   wrap.querySelectorAll('.ms-tag').forEach(function(t) { t.remove(); });
   var state = msState[wrapId];
   state.selected.forEach(function(val) {
+    var meta = getMultiselectCoinMeta(wrapId, val);
     var tag = document.createElement('span');
-    tag.className = 'ms-tag';
-    tag.innerHTML = val + ' <span class="ms-x" data-val="' + val + '">&times;</span>';
+    tag.className = 'ms-tag' + (meta && meta.status === 'invalid' ? ' ms-tag-invalid' : '');
+    if (meta) tag.title = getCoinTagTitle(val, meta);
+    tag.appendChild(document.createTextNode(getCoinTagLabel(val, meta) + ' '));
+    var close = document.createElement('span');
+    close.className = 'ms-x';
+    close.setAttribute('data-val', val);
+    close.textContent = '×';
+    tag.appendChild(close);
     wrap.insertBefore(tag, inputEl);
   });
   // Bind remove
@@ -2106,6 +2329,8 @@ function renderMultiselectTags(wrapId) {
       renderMultiselectTags(wrapId);
     });
   });
+  updateMultiselectStatusSummary(wrapId);
+  scheduleStructuredEditorSync();
 }
 
 function showMultiselectDropdown(wrapId, filter) {
@@ -2149,7 +2374,9 @@ function showMultiselectDropdown(wrapId, filter) {
         }
       }
       renderMultiselectTags(wrapId);
-      showMultiselectDropdown(wrapId, document.getElementById(wrapId).querySelector('.ms-input').value);
+      var inp = document.getElementById(wrapId).querySelector('.ms-input');
+      inp.value = '';
+      showMultiselectDropdown(wrapId, '');
     });
   });
 }
@@ -2159,10 +2386,56 @@ document.querySelectorAll('.ms-wrap').forEach(function(wrap) {
   var wrapId = wrap.id;
   var input = wrap.querySelector('.ms-input');
   input.addEventListener('focus', function() { showMultiselectDropdown(wrapId, this.value); });
-  input.addEventListener('input', function() { showMultiselectDropdown(wrapId, this.value); });
+  input.addEventListener('input', function() {
+    if (msState[wrapId]) msState[wrapId].highlightIdx = -1;
+    showMultiselectDropdown(wrapId, this.value);
+  });
   input.addEventListener('blur', function() {
+    this.value = '';
     var dd = wrap.querySelector('.ms-dropdown');
-    if (dd) setTimeout(function() { dd.classList.remove('open'); }, 150);
+    if (dd) setTimeout(function() { dd.classList.remove('open'); if (msState[wrapId]) msState[wrapId].highlightIdx = -1; }, 150);
+  });
+  input.addEventListener('keydown', function(e) {
+    var dd = wrap.querySelector('.ms-dropdown');
+    if (!dd || !dd.classList.contains('open')) return;
+    var items = dd.querySelectorAll('.ms-option:not(.selected)');
+    var state = msState[wrapId];
+    if (!state) return;
+    var cpId = msCounterpart[wrapId];
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!items.length) return;
+      if (e.key === 'ArrowDown') state.highlightIdx = state.highlightIdx < items.length - 1 ? state.highlightIdx + 1 : 0;
+      else state.highlightIdx = state.highlightIdx > 0 ? state.highlightIdx - 1 : items.length - 1;
+      items.forEach(function(el, i) {
+        if (i === state.highlightIdx) { el.classList.add('highlighted'); el.scrollIntoView({block:'nearest'}); }
+        else el.classList.remove('highlighted');
+      });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      var val = null;
+      if (items.length === 1) {
+        val = items[0].getAttribute('data-val');
+      } else if (state.highlightIdx >= 0 && state.highlightIdx < items.length) {
+        val = items[state.highlightIdx].getAttribute('data-val');
+      }
+      if (val) {
+        var idx = state.selected.indexOf(val);
+        if (idx >= 0) {
+          state.selected.splice(idx, 1);
+        } else {
+          state.selected.push(val);
+          if (cpId && msState[cpId]) {
+            var cpIdx = msState[cpId].selected.indexOf(val);
+            if (cpIdx >= 0) { msState[cpId].selected.splice(cpIdx, 1); renderMultiselectTags(cpId); }
+          }
+        }
+        state.highlightIdx = -1;
+        renderMultiselectTags(wrapId);
+        this.value = '';
+        showMultiselectDropdown(wrapId, '');
+      }
+    }
   });
 });
 
@@ -2173,6 +2446,7 @@ function bcApply() {
   if (_bcRecommended > 0) {
     setVal('f-bal-override', _bcRecommended);
     dirty = true;
+    scheduleStructuredEditorSync();
   }
   document.getElementById('bc-modal').classList.remove('open');
   toast('balance_override set to ' + _bcRecommended, 'ok');
@@ -2280,6 +2554,7 @@ async function calculateBalance() {
 })();
 
 /* ─── Init ─────────────────────────────────────────────────── */
+bindStructuredEditorSync();
 init();
 </script>
 
@@ -2295,7 +2570,63 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/log_viewer_panel.js?v=6"></script>
+<script src="/app/js/log_viewer_panel.js?v=7"></script>
+<script src="/app/js/coin_overrides_editor.js?v=8"></script>
+<script>
+/* ── Coin Override Badge Tooltip ── */
+(function() {
+  var tip = document.getElementById('cov-tooltip');
+  if (!tip) return;
+  document.addEventListener('mouseover', function(e) {
+    var badge = e.target.closest ? e.target.closest('.cov-badge') : null;
+    if (!badge) return;
+    var html = badge.getAttribute('data-tooltip');
+    if (!html) return;
+    tip.innerHTML = html;
+    tip.style.display = 'block';
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (tip.style.display === 'none') return;
+    var x = e.clientX + 14, y = e.clientY + 14;
+    var tw = tip.offsetWidth, th = tip.offsetHeight;
+    if (x + tw > window.innerWidth - 8) x = e.clientX - tw - 10;
+    if (y + th > window.innerHeight - 8) y = e.clientY - th - 10;
+    tip.style.left = x + 'px';
+    tip.style.top  = y + 'px';
+  });
+  document.addEventListener('mouseout', function(e) {
+    var badge = e.target.closest ? e.target.closest('.cov-badge') : null;
+    if (badge) tip.style.display = 'none';
+  });
+})();
+
+/* ── data-tip Fixed Tooltip ── */
+(function() {
+  var tip = document.getElementById('data-tip-tooltip');
+  if (!tip) return;
+  document.addEventListener('mouseover', function(e) {
+    var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+    if (!el) return;
+    var text = el.getAttribute('data-tip');
+    if (!text) return;
+    tip.textContent = text;
+    tip.style.display = 'block';
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (tip.style.display === 'none') return;
+    var x = e.clientX + 14, y = e.clientY + 14;
+    var tw = tip.offsetWidth, th = tip.offsetHeight;
+    if (x + tw > window.innerWidth - 8) x = e.clientX - tw - 10;
+    if (y + th > window.innerHeight - 8) y = e.clientY - th - 10;
+    tip.style.left = x + 'px';
+    tip.style.top  = y + 'px';
+  });
+  document.addEventListener('mouseout', function(e) {
+    var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+    if (el) tip.style.display = 'none';
+  });
+})();
+</script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- Guide overlay JS -->

@@ -7,7 +7,9 @@ The Balance Calculator estimates the wallet balance required to run a PBv7 confi
 The Balance Calculator requires exchange context — open it from:
 
 - **PBv7 → Run**: click the **Balance Calculator** button on an instance
-- **PBv7 → Backtest**: click **Balance Calculator** after selecting a config
+- **PBv7 → Backtest**: open a config and click **💰 Balance Calculator** in the editor sidebar
+
+For a quick inline check without opening the standalone page, Backtest also offers **⚡ Calc Balance** in the editor sidebar.
 
 Opening it directly from the navigation without context will show an error.
 

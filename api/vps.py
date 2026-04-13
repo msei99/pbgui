@@ -25,7 +25,7 @@ from logging_helpers import human_log as _log
 from master.async_monitor import VPSMonitor
 from master.async_logs import (
     AsyncLogStreamer, LocalLogSub, resolve_bot_log_path,
-    local_logs_dir, tail_file,
+    local_logs_dir, tail_file, resolve_local_log_path,
 )
 
 SERVICE = "VPSMonitor"
@@ -393,25 +393,37 @@ async def _local_restart_service(service: str) -> dict:
 async def _local_kill_instance(name: str, pb_version: str) -> dict:
     """Kill a local bot instance via PBRun."""
     try:
-        from PBRun import PBRun
+        from pathlib import Path
+
+        from PBRun import PBRun, RunV7
         pbrun = PBRun()
-        pid = pbrun.stop_instance(name) if hasattr(pbrun, 'stop_instance') else None
-        if pid is None:
-            # Fallback: find and kill process by PID file
-            from pathlib import Path
-            from pbgui_purefunc import PBGDIR
-            pidfile = Path(f"{PBGDIR}/data/run_v7/{name}/pid.txt")
-            if pidfile.exists():
-                import signal, os
-                pid = int(pidfile.read_text().strip())
-                os.kill(pid, signal.SIGTERM)
-                _log(SERVICE, f"[local] Killed bot {name} (pid={pid})")
-                return {"type": "result", "cmd": "kill_instance",
-                        "host": "local", "name": name,
-                        "success": True, "pid": pid}
+        run_v7 = RunV7()
+        run_v7.path = str(Path(pbrun.v7_path) / name)
+        run_v7.user = name
+        run_v7.name = pbrun.name
+        run_v7.pb7dir = pbrun.pb7dir
+        run_v7.pb7venv = pbrun.pb7venv
+        run_v7.pbgdir = pbrun.pbgdir
+
+        config_path = Path(run_v7.path) / "config.json"
+        if not config_path.exists():
             return {"type": "result", "cmd": "kill_instance",
                     "host": "local", "name": name,
                     "success": False, "pid": None}
+
+        if not run_v7.load():
+            return {"type": "result", "cmd": "kill_instance",
+                    "host": "local", "name": name,
+                    "success": False, "pid": None}
+
+        process = run_v7.pid()
+        if process is None:
+            return {"type": "result", "cmd": "kill_instance",
+                    "host": "local", "name": name,
+                    "success": False, "pid": None}
+
+        pid = process.pid
+        run_v7.stop()
         _log(SERVICE, f"[local] Killed bot {name} (pid={pid})")
         return {"type": "result", "cmd": "kill_instance",
                 "host": "local", "name": name,
@@ -580,10 +592,9 @@ async def _cmd_subscribe_local_logs(ws: WebSocket,
     filename = request.get("file", "")
     lines_n = int(request.get("lines", 200))
     sid = request.get("sid")
-    fp = local_logs_dir() / filename
-    logs_root = local_logs_dir().resolve()
+    fp = resolve_local_log_path(filename) if filename else None
 
-    if not filename or not fp.resolve().is_relative_to(logs_root):
+    if fp is None:
         await ws.send_json({
             "type": "error", "error": "Local log file not found",
         })
