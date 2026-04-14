@@ -324,6 +324,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.72 (unreleased)
+- Improved: Run/Backtest V7 now use the same shared Balance Calculator handoff for standalone draft navigation and inline `/calculate` requests, so both pages hand over the current editor config consistently
 - Fixed: Run V7 `Import` now opens with an empty JSON textarea like Backtest V7 instead of pre-filling the current config, so both editors start the import dialog from the same clean state
 - Fixed: Run/Backtest V7 `Import` buttons now load the updated shared editor helper via a bumped `editor_shared.js` cache-busting version, so the dialog opens again after the shared import-handoff refactor
 - Improved: Run/Backtest V7 now share the same editor import handoff helper for prepare-response normalization and inline import error rendering, reducing drift between both import flows
