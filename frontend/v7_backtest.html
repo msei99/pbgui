@@ -1252,9 +1252,9 @@ function sortFn(a, b) {
 }
 
 function editConfig(name) {
-  apiFetch('/configs/' + encodeURIComponent(name)).then(function(cfg) {
-    editingConfig = name;
-    showConfigEditor(name, cfg);
+  apiFetch('/configs/' + encodeURIComponent(name)).then(function(data) {
+    editingConfig = data && data.name ? data.name : name;
+    showConfigEditor(editingConfig, (data && data.config) || {}, null, (data && data.param_status) || {});
   }).catch(function(e) { toast('Load failed: ' + e.message, 'err'); });
 }
 
@@ -1344,13 +1344,15 @@ function openLogPanel() {
 async function newConfig() {
   editingConfig = '__new__';
   var tmpl = {};
+  var tmplParamStatus = {};
   try {
     var data = await apiFetch('/configs/new-config');
     if (data && data.config) tmpl = data.config;
+    if (data && data.param_status) tmplParamStatus = data.param_status;
   } catch(e) {
     console.warn('newConfig: failed to fetch template, using empty defaults', e);
   }
-  showConfigEditor('', tmpl);
+  showConfigEditor('', tmpl, null, tmplParamStatus);
 }
 
 function buildExtraBtExpanderHtml(bt) {
@@ -1396,7 +1398,15 @@ function buildExtraBtExpanderHtml(bt) {
   return { html: html, keys: extraBtKeys };
 }
 
-function showConfigEditor(name, cfg, rawOverride) {
+function setCfgBotParamStatus(paramStatus) {
+  var nextStatus = paramStatus || {};
+  _cfgBotParamStatus = {
+    long: nextStatus.long || {},
+    short: nextStatus.short || {}
+  };
+}
+
+function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   document.getElementById('configs-list').style.display = 'none';
   document.getElementById('configs-toolbar').style.display = 'none';
   var ed = document.getElementById('configs-editor');
@@ -1413,8 +1423,8 @@ function showConfigEditor(name, cfg, rawOverride) {
 
   /* ── Param-status panel (injected params from passivbot pipeline) ── */
   var html = '';
-  var paramStatus = cfg._pbgui_param_status || {};
-  _cfgBotParamStatus = { long: paramStatus.long || {}, short: paramStatus.short || {} };
+  var paramStatus = paramStatusOverride || cfg._pbgui_param_status || {};
+  setCfgBotParamStatus(paramStatus);
 
   /* ── Row 1: Identity & Time (cols-8: 4+2+1+1) ── */
   var exAll = ['binance','bybit','bitget','okx','hyperliquid','combined'];
@@ -2600,10 +2610,7 @@ function cfgSyncEditorFromParsed(name, cfg) {
   coinOvLoad(cfg);
   cfgSyncExtraBtFields(bt);
   cfgRestoreRawAnchor(anchor);
-  _cfgBotParamStatus = {
-    long: ((cfg._pbgui_param_status || {}).long) || {},
-    short: ((cfg._pbgui_param_status || {}).short) || {}
-  };
+  if (cfg._pbgui_param_status) setCfgBotParamStatus(cfg._pbgui_param_status);
   setRawJsonValidationError(null);
 }
 
@@ -4232,9 +4239,9 @@ async function doImport() {
   if (validation.error || !validation.parsed) {
     return;
   }
-  var cfg;
+  var prepared;
   try {
-    cfg = await prepareImportedBacktestConfig(validation.parsed);
+    prepared = await prepareImportedBacktestConfig(validation.parsed);
   } catch (e) {
     errEl.innerHTML = '<div class="field-status-main">Import failed</div>' +
       '<div class="field-status-meta">' + esc(e.message || 'Unable to prepare imported config') + '</div>';
@@ -4244,7 +4251,7 @@ async function doImport() {
   var raw = jsonEl.value;
   editingConfig = '__new__';
   closeImportModal();
-  showConfigEditor(name, cfg, raw);
+  showConfigEditor(name, (prepared && prepared.config) || validation.parsed, raw, (prepared && prepared.param_status) || {});
   toast('Imported into editor. Review and save when ready.', 'ok');
 }
 
@@ -6129,7 +6136,8 @@ function addConfigToRunByName(name) {
     fetch(v7Base + '/instances', { headers: { 'Authorization': 'Bearer ' + TOKEN } }).then(function(r) { return r.json(); }),
     fetch(v7Base + '/users',     { headers: { 'Authorization': 'Bearer ' + TOKEN } }).then(function(r) { return r.json(); })
   ]).then(function(res) {
-    var cfg       = res[0];
+    var cfgResp   = res[0] || {};
+    var cfg       = cfgResp.config || {};
     var instances = res[1].instances || [];
     var users     = res[2].users     || [];
     var configUser = (cfg.live || {}).user || '';
