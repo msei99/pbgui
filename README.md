@@ -324,6 +324,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.72 (unreleased)
+- Improved: Backtest V7 now returns the same editor config payload shape as Run V7 (`config` + separate `param_status`) for template, load, and import-prepare endpoints, reducing contract drift between the two editors
 - Fixed: Backtest V7 import now runs pasted configs through the same PB7 load/neutralization pipeline as normal config loads, so imported older configs arrive in the editor with supplemented parameters and correct `neutralized` / `review` long-short markers
 - Fixed: Run/Backtest V7 long-short JSON overlays now refresh their `neutralized`/`review` highlight map after imports and config switches instead of keeping the first loaded status set
 - Improved: Run V7 import now restores `neutralized` and `review` long/short JSON markers for older pasted configs too by normalizing imports through the same PB7 draft pipeline used by the editor

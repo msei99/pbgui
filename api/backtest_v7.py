@@ -60,6 +60,15 @@ def _validate_name(name: str):
         raise HTTPException(400, "Invalid name")
 
 
+def _editor_config_payload(cfg: dict, *, name: str | None = None) -> dict:
+    """Return a Run-style editor payload with separated param status metadata."""
+    param_status = cfg.pop("_pbgui_param_status", {}) if isinstance(cfg, dict) else {}
+    payload = {"config": cfg, "param_status": param_status}
+    if name is not None:
+        payload["name"] = name
+    return payload
+
+
 def _bt_queue_dir() -> Path:
     return Path(PBGDIR) / "data" / "bt_v7_queue"
 
@@ -844,7 +853,7 @@ def get_new_backtest_config(session: SessionToken = Depends(require_auth)):
     except Exception as exc:
         _log(SERVICE, f"Failed to load template config: {exc}", level="warning")
         tmpl = {"backtest": {}, "bot": {}, "live": {}, "optimize": {}}
-    return {"config": tmpl}
+    return _editor_config_payload(tmpl)
 
 
 @router.get("/bot-params")
@@ -1016,7 +1025,8 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)):
     if not cfg_file.exists():
         raise HTTPException(404, f"Config '{name}' not found")
     try:
-        return load_pb7_config(cfg_file, neutralize_added=True)
+        cfg = load_pb7_config(cfg_file, neutralize_added=True)
+        return _editor_config_payload(cfg, name=name)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1037,7 +1047,8 @@ def prepare_config_for_editor(body: dict, session: SessionToken = Depends(requir
     if not isinstance(cfg, dict):
         raise HTTPException(status_code=400, detail="Missing or invalid 'config' in body")
     try:
-        return prepare_pb7_config_dict(cfg, neutralize_added=True)
+        prepared = prepare_pb7_config_dict(cfg, neutralize_added=True)
+        return _editor_config_payload(prepared)
     except Exception as exc:
         detail = str(exc).strip() or exc.__class__.__name__
         _log(
