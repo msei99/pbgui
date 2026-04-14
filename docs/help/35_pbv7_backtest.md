@@ -67,7 +67,11 @@ Editing opens inline in the main area. Fields:
 | **📊 View Results** | Jump to this config's results in the Results panel |
 | **💰 Balance Calculator** | Open the standalone Balance Calculator page with the current editor config loaded as a draft |
 | **⚡ Calc Balance** | Run the same balance calculation inline in a modal without leaving the Backtest page |
-| **📥 Import** | Open the Run-style paste-JSON dialog and load the imported config into the editor for review |
+| **📥 Import** | Open the Run-style paste-JSON dialog and load the imported config into the editor for review; pasted configs are normalized through the same PB7 load pipeline as regular saved configs, so supplemented parameters and `neutralized` / `review` markers are preserved |
+
+The **Raw JSON** expander, the **Bot Configuration** `long` / `short` JSON editors, JSON-based **Additional Parameters**, and the **Import** dialog now use shared JSON validation. Invalid JSON is highlighted directly in the editor, the faulty line can be revealed with a button, the error hint appears in one shared fixed viewport location, and saving/importing is blocked until the JSON is valid again.
+
+The **Coin Overrides → Config File** `long` / `short` JSON editors use the same JSON validation pattern and the same shared fixed viewport error hint location as the main editor fields. Invalid JSON is highlighted directly in the editor, and closing the coin override editor is blocked until those JSON snippets are valid again.
 
 ### Coins & Filters
 

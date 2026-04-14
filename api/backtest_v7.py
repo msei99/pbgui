@@ -34,7 +34,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from api.auth import SessionToken, require_auth, validate_token
 from logging_helpers import human_log as _log
-from pb7_config import load_pb7_config, save_pb7_config
+from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, pb7dir, pb7venv
 
 SERVICE = "BacktestV7API"
@@ -1028,6 +1028,25 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)):
             meta={"traceback": traceback.format_exc()},
         )
         raise HTTPException(status_code=422, detail=detail)
+
+
+@router.post("/configs/prepare")
+def prepare_config_for_editor(body: dict, session: SessionToken = Depends(require_auth)):
+    """Normalize an in-memory config dict for Backtest editor import flows."""
+    cfg = body.get("config") if isinstance(body, dict) else None
+    if not isinstance(cfg, dict):
+        raise HTTPException(status_code=400, detail="Missing or invalid 'config' in body")
+    try:
+        return prepare_pb7_config_dict(cfg, neutralize_added=True)
+    except Exception as exc:
+        detail = str(exc).strip() or exc.__class__.__name__
+        _log(
+            SERVICE,
+            f"Failed to prepare imported backtest config: {detail}",
+            level="WARNING",
+            meta={"traceback": traceback.format_exc()},
+        )
+        raise HTTPException(status_code=422, detail=detail) from exc
 
 
 def _normalize_coin_name(symbol: str) -> str:

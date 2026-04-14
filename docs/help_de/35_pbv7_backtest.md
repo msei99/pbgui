@@ -67,7 +67,11 @@ Die Bearbeitung öffnet sich inline im Hauptbereich. Felder:
 | **📊 View Results** | Zu den Ergebnissen dieser Config im Results-Panel springen |
 | **💰 Balance Calculator** | Die eigenständige Balance-Calculator-Seite mit der aktuellen Editor-Config als Draft öffnen |
 | **⚡ Calc Balance** | Dieselbe Balance-Berechnung inline in einem Modal ausführen, ohne die Backtest-Seite zu verlassen |
-| **📥 Import** | Den Run-ähnlichen Paste-JSON-Dialog öffnen und die importierte Config zur Prüfung in den Editor laden |
+| **📥 Import** | Den Run-ähnlichen Paste-JSON-Dialog öffnen und die importierte Config zur Prüfung in den Editor laden; gepastete Configs laufen dabei durch dieselbe PB7-Ladepipeline wie normal geladene Backtest-Configs, sodass ergänzte Parameter sowie `neutralized`- / `review`-Markierungen erhalten bleiben |
+
+Der **Raw JSON**-Expander, die JSON-Editoren für **Bot Configuration** `long` / `short`, JSON-basierte **Additional Parameters** und der **Import**-Dialog nutzen jetzt ein gemeinsames JSON-Validierungsmuster. Ungültiges JSON wird direkt im Editor markiert, die fehlerhafte Zeile kann per Button angesprungen werden, der Fehlerhinweis erscheint an einer gemeinsamen festen Stelle im Viewport, und Speichern/Import bleibt blockiert, bis das JSON wieder gültig ist.
+
+Die **Coin Overrides → Config File**-Editoren für `long` / `short` nutzen dasselbe JSON-Validierungsmuster und dieselbe gemeinsame feste Position für den Fehlerhinweis wie die Haupteditor-Felder. Ungültiges JSON wird direkt im Editor markiert, und das Schließen des Coin-Override-Editors bleibt blockiert, bis diese JSON-Snippets wieder gültig sind.
 
 ### Coins & Filter
 

@@ -34,6 +34,7 @@ the config to passivbot for execution.
 import json
 import os
 import sys
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -174,6 +175,87 @@ def strip_pbgui_param_status(cfg: dict) -> dict:
     return cfg
 
 
+def _finalize_prepared_pb7_config(
+    prepared: dict,
+    *,
+    extras: dict[str, Any],
+    neutralize_added: bool,
+) -> dict:
+    """Finalize a prepared passivbot config for PBGui use.
+
+    Applies optional neutralization/status collection, strips passivbot
+    metadata, and re-attaches PBGui-only sections such as ``pbgui``.
+    """
+    if neutralize_added:
+        transform_log = []
+        for step in prepared.get("_transform_log", []):
+            transform_log.extend(step.get("details", {}).get("changes", []))
+        added = _collect_added_bot_params(transform_log)
+        cfg = strip_config_metadata(prepared)
+        status = _apply_neutralization(cfg, added)
+        if status:
+            cfg["_pbgui_param_status"] = status
+    else:
+        cfg = strip_config_metadata(prepared)
+
+    for key, value in extras.items():
+        cfg[key] = value
+
+    return cfg
+
+
+def prepare_pb7_config_dict(
+    config: dict,
+    *,
+    verbose: bool = False,
+    neutralize_added: bool = False,
+    base_config_path: str = "",
+) -> dict:
+    """Normalize an already-loaded config dict through passivbot's pipeline.
+
+    This is the in-memory counterpart to ``load_pb7_config`` and is intended
+    for draft/import flows where PBGui already has a config dict but still
+    needs passivbot migration/normalization and optional neutralization of
+    pipeline-added bot parameters.
+
+    Implementation detail: we intentionally round-trip through a temporary
+    JSON file and reuse ``load_pb7_config()`` instead of calling pb7's lower
+    level dict preparation directly. This preserves the exact numeric typing
+    and migration behaviour of the normal file-based editor load path.
+    """
+    if not isinstance(config, dict):
+        raise TypeError("config must be a dict")
+
+    source = strip_config_metadata(deepcopy(config))
+    source.pop("_pbgui_param_status", None)
+
+    tmp_dir = None
+    if base_config_path:
+        try:
+            tmp_dir = str(Path(base_config_path).resolve().parent)
+        except Exception:
+            tmp_dir = None
+
+    with tempfile.NamedTemporaryFile(
+        suffix=".json",
+        delete=False,
+        mode="w",
+        encoding="utf-8",
+        dir=tmp_dir,
+    ) as tmp:
+        json.dump(source, tmp, indent=4)
+        tmp.write("\n")
+        tmp_path = tmp.name
+
+    try:
+        return load_pb7_config(tmp_path, verbose=verbose, neutralize_added=neutralize_added)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
 def load_pb7_config(
     path: str | Path,
     *,
@@ -204,25 +286,12 @@ def load_pb7_config(
 
     # 2) Full passivbot pipeline: migrate, hydrate, validate
     #    Keep _transform_log alive until we have parsed it (if needed).
-    cfg = load_prepared_config(path, verbose=verbose)
-
-    if neutralize_added:
-        transform_log = []
-        for step in cfg.get("_transform_log", []):
-            transform_log.extend(step.get("details", {}).get("changes", []))
-        added = _collect_added_bot_params(transform_log)
-        cfg = strip_config_metadata(cfg)
-        status = _apply_neutralization(cfg, added)
-        if status:
-            cfg["_pbgui_param_status"] = status
-    else:
-        cfg = strip_config_metadata(cfg)
-
-    # 3) Re-attach PBGui extras
-    for key, value in extras.items():
-        cfg[key] = value
-
-    return cfg
+    prepared = load_prepared_config(path, verbose=verbose)
+    return _finalize_prepared_pb7_config(
+        prepared,
+        extras=extras,
+        neutralize_added=neutralize_added,
+    )
 
 
 def save_pb7_config(cfg: dict, path: str | Path) -> None:

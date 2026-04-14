@@ -67,6 +67,7 @@ Key settings in the edit form:
 | **Enabled On** | Target VPS for deployment |
 | **Note** | Optional label shown in the list |
 | **Long / Short** | Bot parameters — positions, TWE, entry/close ranges |
+| **JSON editors** | Raw JSON, Long JSON, Short JSON, Import JSON, and JSON-based Additional Parameters are validated while typing; invalid JSON shows the exact line/column and blocks Save until fixed. Older configs loaded into Run, including pasted imports and Backtest→Run drafts, also keep the `neutralized` / `review` markers in Long/Short JSON |
 | **Filters** | CoinMarketCap-based symbol filter for this instance |
 | **Coin Overrides** | Per-coin parameter overrides (bot params, live mode, separate config files) |
 | **Dynamic Ignore** | Preview of symbols automatically ignored based on filter settings |
