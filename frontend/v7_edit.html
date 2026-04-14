@@ -971,7 +971,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=4"></script>
+<script src="/app/js/editor_shared.js?v=5"></script>
 <script>
 /* ─── Injected Vars ────────────────────────────────────────── */
 var TOKEN          = "%%TOKEN%%";
@@ -2936,7 +2936,6 @@ function _applyBotJsonHighlight(ta, sideStatus) {
 }
 
 /* ─── Multiselect Component ────────────────────────────────── */
-var msState = {};  // id → {options: [], selected: [], highlightIdx: -1, coinMeta: {}}
 var msCounterpart = {
   'ms-approved-long':  'ms-ignored-long',
   'ms-ignored-long':   'ms-approved-long',
@@ -2949,66 +2948,47 @@ var msCoinIds = {
   'ms-ignored-long': true,
   'ms-ignored-short': true
 };
+var _runMsController = window.PBGuiEditorShared.createMultiselectController({
+  controllerName: 'run-v7-ms',
+  counterpartMap: msCounterpart,
+  coinIds: msCoinIds,
+  formatTagTitle: function(ctx) {
+    if (!ctx.meta) return '';
+    if (ctx.meta.status === 'invalid') {
+      return (ctx.meta.changed ? ('Normalized from ' + ctx.meta.raw + ' to ' + ctx.meta.normalized + '. ') : '') +
+        'CoinData could not resolve this entry to an active coin for the current exchange.';
+    }
+    if (ctx.meta.changed) {
+      return 'Normalized from ' + ctx.meta.raw + ' to ' + ctx.meta.normalized + '.';
+    }
+    return '';
+  },
+  statusSummaryBuilder: function(ctx) {
+    return {
+      html: '<span class="err">' + ctx.invalidCount + ' invalid</span>',
+      display: 'block'
+    };
+  },
+  onAfterRender: function() {
+    scheduleStructuredEditorSync();
+  }
+});
+var msState = _runMsController.state;
 
 function rebuildMultiselect(wrapId, options, selected) {
-  msState[wrapId] = { options: options.slice(), selected: selected.slice(), highlightIdx: -1, coinMeta: {} };
-  renderMultiselectTags(wrapId);
-}
-
-function ensureMultiselectStatusEl(wrapId) {
-  var wrap = document.getElementById(wrapId);
-  if (!wrap) return null;
-  var group = wrap.closest('.form-group');
-  if (!group) return null;
-  var el = group.querySelector('.ms-status-summary[data-for="' + wrapId + '"]');
-  if (!el) {
-    el = document.createElement('div');
-    el.className = 'ms-status-summary';
-    el.setAttribute('data-for', wrapId);
-    group.appendChild(el);
-  }
-  return el;
+  _runMsController.rebuild(wrapId, options, selected);
 }
 
 function getMultiselectCoinMeta(wrapId, value) {
-  var state = msState[wrapId];
-  if (!state || !state.coinMeta) return null;
-  return state.coinMeta[value] || null;
+  return _runMsController.getCoinMeta(wrapId, value);
 }
 
 function clearMultiselectCoinMeta(wrapId) {
-  if (!msState[wrapId]) return;
-  msState[wrapId].coinMeta = {};
-  updateMultiselectStatusSummary(wrapId);
+  _runMsController.clearCoinMeta(wrapId);
 }
 
 function applyMultiselectCoinStatus(wrapId, statuses) {
-  var state = msState[wrapId];
-  if (!state) return;
-
-  var nextSelected = [];
-  var nextMeta = {};
-  state.selected.forEach(function(value) {
-    var info = statuses ? statuses[value] : null;
-    var nextValue = value;
-    if (info && info.status !== 'invalid' && info.normalized) {
-      nextValue = info.normalized;
-    }
-    if (nextSelected.indexOf(nextValue) >= 0) return;
-    nextSelected.push(nextValue);
-    if (info) {
-      nextMeta[nextValue] = {
-        status: info.status,
-        normalized: info.normalized || nextValue,
-        raw: value,
-        changed: (info.normalized || nextValue) !== value,
-      };
-    }
-  });
-
-  state.selected = nextSelected;
-  state.coinMeta = nextMeta;
-  renderMultiselectTags(wrapId);
+  _runMsController.applyCoinStatus(wrapId, statuses);
 }
 
 function getCoinTagLabel(value, meta) {
@@ -3027,36 +3007,6 @@ function getCoinTagTitle(value, meta) {
     return 'Normalized from ' + meta.raw + ' to ' + meta.normalized + '.';
   }
   return '';
-}
-
-function updateMultiselectStatusSummary(wrapId) {
-  if (!msCoinIds[wrapId]) return;
-  var el = ensureMultiselectStatusEl(wrapId);
-  if (!el) return;
-  var state = msState[wrapId];
-  if (!state || !state.selected.length) {
-    el.textContent = '';
-    el.style.display = 'none';
-    return;
-  }
-
-  var invalid = 0;
-  state.selected.forEach(function(value) {
-    var meta = getMultiselectCoinMeta(wrapId, value);
-    if (!meta) return;
-    if (meta.status === 'invalid') invalid += 1;
-  });
-
-  if (!invalid) {
-    el.textContent = '';
-    el.style.display = 'none';
-    return;
-  }
-
-  var parts = [];
-  if (invalid) parts.push('<span class="err">' + invalid + ' invalid</span>');
-  el.innerHTML = parts.join(' <span class="sep">&middot;</span> ');
-  el.style.display = 'block';
 }
 
 async function refreshCoinStatuses(exchange) {
@@ -3103,170 +3053,34 @@ async function refreshCoinStatuses(exchange) {
 }
 
 function setMultiselectValues(wrapId, values) {
-  if (!msState[wrapId]) return;
-  msState[wrapId].selected = values.slice();
-  renderMultiselectTags(wrapId);
+  _runMsController.setValues(wrapId, values);
 }
 
 function getMultiselectValues(wrapId) {
-  return msState[wrapId] ? msState[wrapId].selected.slice() : [];
+  return _runMsController.getValues(wrapId);
 }
 
 function clearMultiselect(wrapId) {
-  if (!msState[wrapId]) return;
-  msState[wrapId].selected = [];
-  renderMultiselectTags(wrapId);
+  _runMsController.clear(wrapId);
 }
 
 function selectAllMultiselect(wrapId) {
-  if (!msState[wrapId]) return;
-  var cpId = msCounterpart[wrapId];
-  var cpSelected = (cpId && msState[cpId]) ? msState[cpId].selected : [];
-  // Add all options not already in the counterpart
-  var newSelected = msState[wrapId].options.filter(function(o) {
-    return cpSelected.indexOf(o) < 0;
-  });
-  msState[wrapId].selected = newSelected;
-  renderMultiselectTags(wrapId);
+  _runMsController.selectAll(wrapId);
 }
 
 function renderMultiselectTags(wrapId) {
-  var wrap = document.getElementById(wrapId);
-  if (!wrap) return;
-  var inputEl = wrap.querySelector('.ms-input');
-  // Remove old tags
-  wrap.querySelectorAll('.ms-tag').forEach(function(t) { t.remove(); });
-  var state = msState[wrapId];
-  state.selected.forEach(function(val) {
-    var meta = getMultiselectCoinMeta(wrapId, val);
-    var tag = document.createElement('span');
-    tag.className = 'ms-tag' + (meta && meta.status === 'invalid' ? ' ms-tag-invalid' : '');
-    if (meta) tag.title = getCoinTagTitle(val, meta);
-    tag.appendChild(document.createTextNode(getCoinTagLabel(val, meta) + ' '));
-    var close = document.createElement('span');
-    close.className = 'ms-x';
-    close.setAttribute('data-val', val);
-    close.textContent = '×';
-    tag.appendChild(close);
-    wrap.insertBefore(tag, inputEl);
-  });
-  // Bind remove
-  wrap.querySelectorAll('.ms-x').forEach(function(x) {
-    x.addEventListener('click', function(e) {
-      e.stopPropagation();
-      var v = this.getAttribute('data-val');
-      state.selected = state.selected.filter(function(s) { return s !== v; });
-      renderMultiselectTags(wrapId);
-    });
-  });
-  updateMultiselectStatusSummary(wrapId);
-  scheduleStructuredEditorSync();
+  _runMsController.renderTags(wrapId);
 }
 
 function showMultiselectDropdown(wrapId, filter) {
-  var dd = document.getElementById(wrapId + '-dd') || document.getElementById(wrapId).querySelector('.ms-dropdown');
-  if (!dd) return;
-  var state = msState[wrapId];
-  if (!state) return;
-  var cpId = msCounterpart[wrapId];
-  var cpSelected = (cpId && msState[cpId]) ? msState[cpId].selected : [];
-  var f = (filter || '').toUpperCase();
-  var html = '';
-  var count = 0;
-  state.options.forEach(function(opt) {
-    if (f && opt.toUpperCase().indexOf(f) < 0) return;
-    var sel = state.selected.indexOf(opt) >= 0;
-    var inOther = cpSelected.indexOf(opt) >= 0;
-    var cls = 'ms-option' + (sel ? ' selected' : '') + (inOther ? ' in-other' : '');
-    var label = inOther ? (opt + ' \u21c4') : opt;
-    html += '<div class="' + cls + '" data-val="' + opt + '">' + label + '</div>';
-    count++;
-    if (count > 200) return;
-  });
-  dd.innerHTML = html;
-  dd.classList.add('open');
-  dd.querySelectorAll('.ms-option').forEach(function(el) {
-    el.addEventListener('mousedown', function(e) {
-      e.preventDefault();
-      var v = this.getAttribute('data-val');
-      var idx = state.selected.indexOf(v);
-      if (idx >= 0) {
-        state.selected.splice(idx, 1);
-      } else {
-        state.selected.push(v);
-        // Auto-remove from counterpart when adding to this list
-        if (cpId && msState[cpId]) {
-          var cpIdx = msState[cpId].selected.indexOf(v);
-          if (cpIdx >= 0) {
-            msState[cpId].selected.splice(cpIdx, 1);
-            renderMultiselectTags(cpId);
-          }
-        }
-      }
-      renderMultiselectTags(wrapId);
-      var inp = document.getElementById(wrapId).querySelector('.ms-input');
-      inp.value = '';
-      showMultiselectDropdown(wrapId, '');
-    });
-  });
+  _runMsController.showDropdown(wrapId, filter);
 }
 
 // Wire up all multiselects
 document.querySelectorAll('.ms-wrap').forEach(function(wrap) {
-  var wrapId = wrap.id;
-  var input = wrap.querySelector('.ms-input');
-  input.addEventListener('focus', function() { showMultiselectDropdown(wrapId, this.value); });
-  input.addEventListener('input', function() {
-    if (msState[wrapId]) msState[wrapId].highlightIdx = -1;
-    showMultiselectDropdown(wrapId, this.value);
-  });
-  input.addEventListener('blur', function() {
-    this.value = '';
-    var dd = wrap.querySelector('.ms-dropdown');
-    if (dd) setTimeout(function() { dd.classList.remove('open'); if (msState[wrapId]) msState[wrapId].highlightIdx = -1; }, 150);
-  });
-  input.addEventListener('keydown', function(e) {
-    var dd = wrap.querySelector('.ms-dropdown');
-    if (!dd || !dd.classList.contains('open')) return;
-    var items = dd.querySelectorAll('.ms-option:not(.selected)');
-    var state = msState[wrapId];
-    if (!state) return;
-    var cpId = msCounterpart[wrapId];
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (!items.length) return;
-      if (e.key === 'ArrowDown') state.highlightIdx = state.highlightIdx < items.length - 1 ? state.highlightIdx + 1 : 0;
-      else state.highlightIdx = state.highlightIdx > 0 ? state.highlightIdx - 1 : items.length - 1;
-      items.forEach(function(el, i) {
-        if (i === state.highlightIdx) { el.classList.add('highlighted'); el.scrollIntoView({block:'nearest'}); }
-        else el.classList.remove('highlighted');
-      });
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      var val = null;
-      if (items.length === 1) {
-        val = items[0].getAttribute('data-val');
-      } else if (state.highlightIdx >= 0 && state.highlightIdx < items.length) {
-        val = items[state.highlightIdx].getAttribute('data-val');
-      }
-      if (val) {
-        var idx = state.selected.indexOf(val);
-        if (idx >= 0) {
-          state.selected.splice(idx, 1);
-        } else {
-          state.selected.push(val);
-          if (cpId && msState[cpId]) {
-            var cpIdx = msState[cpId].selected.indexOf(val);
-            if (cpIdx >= 0) { msState[cpId].selected.splice(cpIdx, 1); renderMultiselectTags(cpId); }
-          }
-        }
-        state.highlightIdx = -1;
-        renderMultiselectTags(wrapId);
-        this.value = '';
-        showMultiselectDropdown(wrapId, '');
-      }
-    }
-  });
+  if (wrap && wrap.id && wrap.id.indexOf('ms-') === 0) {
+    _runMsController.wire(wrap.id);
+  }
 });
 
 /* ─── Calculate Balance ────────────────────────────────────── */

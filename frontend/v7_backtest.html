@@ -834,7 +834,7 @@ textarea.json-invalid:focus {
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=4"></script>
+<script src="/app/js/editor_shared.js?v=5"></script>
 <script>
 /* ════════════════════════════════════════════════
    GLOBALS (injected by server)
@@ -2681,7 +2681,6 @@ function toggleExpander(id) {
 }
 
 /* ─── Config editor multiselect component ─────────────────── */
-var _cfgMs = {};  // id → {options: [], selected: [], highlightIdx: -1, coinMeta: {}}
 var _cfgEditorCfg = null;  // store cfg reference for exchange-change reloads
 var _cfgSymbolsLoadSeq = 0;
 var _structuredEditorSyncing = false;
@@ -2697,129 +2696,62 @@ var _cfgCoinMsIds = {
   'ms-cfg-ign-long': true,
   'ms-cfg-ign-short': true
 };
+var _cfgMsController = window.PBGuiEditorShared.createMultiselectController({
+  controllerName: 'bt-v7-ms',
+  counterpartMap: _cfgMsCp,
+  coinIds: _cfgCoinMsIds,
+  isExclusiveValue: function(id, value) {
+    return value === 'all';
+  },
+  formatTagLabel: function(ctx) {
+    if (ctx.value === 'all') return '★ all';
+    if (ctx.meta && ctx.meta.status === 'invalid') return '? ' + (ctx.meta.raw || ctx.value);
+    return (ctx.meta && ctx.meta.normalized) || ctx.value;
+  },
+  formatTagClass: function(ctx) {
+    if (ctx.value === 'all') return 'ms-tag ms-tag-all';
+    return 'ms-tag' + (ctx.meta && ctx.meta.status === 'invalid' ? ' ms-tag-invalid' : '');
+  },
+  formatTagTitle: function(ctx) {
+    if (!ctx.meta) return '';
+    if (ctx.meta.status === 'invalid') {
+      return (ctx.meta.changed ? ('Normalized from ' + ctx.meta.raw + ' to ' + ctx.meta.normalized + '. ') : '') +
+        'CoinData could not resolve this entry to an active coin for the current exchange selection.';
+    }
+    if (ctx.meta.changed) {
+      return 'Normalized from ' + ctx.meta.raw + ' to ' + ctx.meta.normalized + '.';
+    }
+    return '';
+  },
+  statusSummaryBuilder: function(ctx) {
+    return {
+      html: '<span class="err">' + ctx.invalidCount + ' invalid</span> <span class="sep">&middot;</span> <button type="button" class="act-btn ms-status-action" onclick="cfgRemoveAllInvalidCoins()">Remove all invalid</button>',
+      display: 'flex'
+    };
+  },
+  onAfterRender: function(id) {
+    if (id === 'ms-cfg-exchanges' && _cfgEditorCfg) {
+      loadCfgSymbols(_cfgEditorCfg);
+    }
+    scheduleStructuredEditorSync();
+  }
+});
+var _cfgMs = _cfgMsController.state;
 
 function cfgRebuildMs(id, options, selected) {
-  _cfgMs[id] = { options: options.slice(), selected: selected.slice(), highlightIdx: -1, coinMeta: {} };
-  cfgRenderMsTags(id);
-  // Wire up input events (called after innerHTML rebuild each time editor opens)
-  var wrap = document.getElementById(id);
-  if (!wrap) return;
-  var input = wrap.querySelector('.ms-input');
-  if (!input) return;
-  input.addEventListener('focus', function() { cfgShowMsDd(id, this.value); });
-  input.addEventListener('input', function() {
-    if (_cfgMs[id]) _cfgMs[id].highlightIdx = -1;
-    cfgShowMsDd(id, this.value);
-  });
-  input.addEventListener('blur', function() {
-    this.value = '';
-    var dd = wrap.querySelector('.ms-dropdown');
-    if (dd) setTimeout(function() { dd.classList.remove('open'); if (_cfgMs[id]) _cfgMs[id].highlightIdx = -1; }, 150);
-  });
-  input.addEventListener('keydown', function(e) {
-    var dd = wrap.querySelector('.ms-dropdown');
-    if (!dd || !dd.classList.contains('open')) return;
-    var items = dd.querySelectorAll('.ms-option:not(.selected)');
-    var state = _cfgMs[id];
-    if (!state) return;
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (!items.length) return;
-      if (e.key === 'ArrowDown') state.highlightIdx = state.highlightIdx < items.length - 1 ? state.highlightIdx + 1 : 0;
-      else state.highlightIdx = state.highlightIdx > 0 ? state.highlightIdx - 1 : items.length - 1;
-      items.forEach(function(el, i) {
-        if (i === state.highlightIdx) { el.classList.add('highlighted'); el.scrollIntoView({block:'nearest'}); }
-        else el.classList.remove('highlighted');
-      });
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      var val = null;
-      if (items.length === 1) {
-        val = items[0].getAttribute('data-val');
-      } else if (state.highlightIdx >= 0 && state.highlightIdx < items.length) {
-        val = items[state.highlightIdx].getAttribute('data-val');
-      }
-      if (val) {
-        var cpId = _cfgMsCp[id];
-        var sel = state.selected.indexOf(val);
-        if (val === 'all') {
-          state.selected = sel >= 0 ? [] : ['all'];
-        } else {
-          if (sel >= 0) {
-            state.selected.splice(sel, 1);
-          } else {
-            var allIdx = state.selected.indexOf('all');
-            if (allIdx >= 0) state.selected.splice(allIdx, 1);
-            state.selected.push(val);
-            if (cpId && _cfgMs[cpId]) {
-              var cpIdx = _cfgMs[cpId].selected.indexOf(val);
-              if (cpIdx >= 0) { _cfgMs[cpId].selected.splice(cpIdx, 1); cfgRenderMsTags(cpId); }
-            }
-          }
-        }
-        state.highlightIdx = -1;
-        cfgRenderMsTags(id);
-        this.value = '';
-        cfgShowMsDd(id, '');
-      }
-    }
-  });
-}
-
-function cfgEnsureStatusEl(id) {
-  var wrap = document.getElementById(id);
-  if (!wrap) return null;
-  var group = wrap.closest('.form-group');
-  if (!group) return null;
-  var el = group.querySelector('.ms-status-summary[data-for="' + id + '"]');
-  if (!el) {
-    el = document.createElement('div');
-    el.className = 'ms-status-summary';
-    el.setAttribute('data-for', id);
-    group.appendChild(el);
-  }
-  return el;
+  _cfgMsController.rebuild(id, options, selected);
 }
 
 function cfgGetCoinMeta(id, value) {
-  var state = _cfgMs[id];
-  if (!state || !state.coinMeta) return null;
-  return state.coinMeta[value] || null;
+  return _cfgMsController.getCoinMeta(id, value);
 }
 
 function cfgClearCoinMeta(id) {
-  if (!_cfgMs[id]) return;
-  _cfgMs[id].coinMeta = {};
-  cfgUpdateMsStatusSummary(id);
+  _cfgMsController.clearCoinMeta(id);
 }
 
 function cfgApplyCoinStatus(id, statuses) {
-  var state = _cfgMs[id];
-  if (!state) return;
-
-  var nextSelected = [];
-  var nextMeta = {};
-  state.selected.forEach(function(value) {
-    var info = statuses ? statuses[value] : null;
-    var nextValue = value;
-    if (info && info.status !== 'invalid' && info.normalized) {
-      nextValue = info.normalized;
-    }
-    if (nextSelected.indexOf(nextValue) >= 0) return;
-    nextSelected.push(nextValue);
-    if (info) {
-      nextMeta[nextValue] = {
-        status: info.status,
-        normalized: info.normalized || nextValue,
-        raw: value,
-        changed: (info.normalized || nextValue) !== value,
-      };
-    }
-  });
-
-  state.selected = nextSelected;
-  state.coinMeta = nextMeta;
-  cfgRenderMsTags(id);
+  _cfgMsController.applyCoinStatus(id, statuses);
 }
 
 function cfgCoinTagLabel(value, meta) {
@@ -2841,64 +2773,13 @@ function cfgCoinTagTitle(value, meta) {
 }
 
 function cfgRemoveAllInvalidCoins() {
-  var removed = 0;
-  Object.keys(_cfgCoinMsIds).forEach(function(id) {
-    var state = _cfgMs[id];
-    if (!state) return;
-
-    var nextSelected = [];
-    var nextMeta = {};
-    state.selected.forEach(function(value) {
-      var meta = cfgGetCoinMeta(id, value);
-      if (meta && meta.status === 'invalid') {
-        removed += 1;
-        return;
-      }
-      nextSelected.push(value);
-      if (meta) nextMeta[value] = meta;
-    });
-
-    state.selected = nextSelected;
-    state.coinMeta = nextMeta;
-    cfgRenderMsTags(id);
-  });
+  var removed = _cfgMsController.removeInvalid(Object.keys(_cfgCoinMsIds));
 
   if (!removed) {
     toast('No invalid coins to remove', 'warn');
     return;
   }
   toast('Removed ' + removed + ' invalid coin' + (removed === 1 ? '' : 's'), 'ok');
-}
-
-function cfgUpdateMsStatusSummary(id) {
-  if (!_cfgCoinMsIds[id]) return;
-  var el = cfgEnsureStatusEl(id);
-  if (!el) return;
-  var state = _cfgMs[id];
-  if (!state || !state.selected.length) {
-    el.textContent = '';
-    el.style.display = 'none';
-    return;
-  }
-
-  var invalid = 0;
-  state.selected.forEach(function(value) {
-    var meta = cfgGetCoinMeta(id, value);
-    if (!meta) return;
-    if (meta.status === 'invalid') invalid += 1;
-  });
-
-  if (!invalid) {
-    el.textContent = '';
-    el.style.display = 'none';
-    return;
-  }
-
-  var parts = [];
-  if (invalid) parts.push('<span class="err">' + invalid + ' invalid</span>');
-  if (invalid) parts.push('<button type="button" class="act-btn ms-status-action" onclick="cfgRemoveAllInvalidCoins()">Remove all invalid</button>');
-  el.innerHTML = parts.join(' <span class="sep">&middot;</span> ');
-  el.style.display = 'flex';
 }
 
 async function cfgFetchV7Json(path, opts) {
@@ -2954,129 +2835,27 @@ async function cfgRefreshCoinStatuses(exchanges) {
 }
 
 function cfgClearMs(id) {
-  if (!_cfgMs[id]) return;
-  _cfgMs[id].selected = [];
-  cfgRenderMsTags(id);
+  _cfgMsController.clear(id);
 }
 
 function cfgSelectAllMs(id) {
-  if (!_cfgMs[id]) return;
-  var cpId = _cfgMsCp[id];
-  var cpSelected = (cpId && _cfgMs[cpId]) ? _cfgMs[cpId].selected : [];
-  _cfgMs[id].selected = _cfgMs[id].options.filter(function(o) {
-    return o !== 'all' && cpSelected.indexOf(o) < 0;
-  });
-  cfgRenderMsTags(id);
+  _cfgMsController.selectAll(id);
 }
 
 function cfgGetMs(id) {
-  return _cfgMs[id] ? _cfgMs[id].selected.slice() : [];
+  return _cfgMsController.getValues(id);
 }
 
 function cfgSetMs(id, vals) {
-  if (!_cfgMs[id]) return;
-  _cfgMs[id].selected = vals.slice();
-  cfgRenderMsTags(id);
+  _cfgMsController.setValues(id, vals);
 }
 
 function cfgRenderMsTags(id) {
-  var wrap = document.getElementById(id);
-  if (!wrap) return;
-  var inputEl = wrap.querySelector('.ms-input');
-  wrap.querySelectorAll('.ms-tag').forEach(function(t) { t.remove(); });
-  var state = _cfgMs[id];
-  if (!state) return;
-  state.selected.forEach(function(val) {
-    var meta = cfgGetCoinMeta(id, val);
-    var tag = document.createElement('span');
-    tag.className = val === 'all'
-      ? 'ms-tag ms-tag-all'
-      : 'ms-tag' + (meta && meta.status === 'invalid' ? ' ms-tag-invalid' : '');
-    if (meta) tag.title = cfgCoinTagTitle(val, meta);
-    tag.appendChild(document.createTextNode(val === 'all' ? '\u2605 all ' : (cfgCoinTagLabel(val, meta) + ' ')));
-    var close = document.createElement('span');
-    close.className = 'ms-x';
-    close.setAttribute('data-val', val);
-    close.textContent = '×';
-    tag.appendChild(close);
-    wrap.insertBefore(tag, inputEl);
-  });
-  wrap.querySelectorAll('.ms-x').forEach(function(x) {
-    x.addEventListener('click', function(e) {
-      e.stopPropagation();
-      var v = this.getAttribute('data-val');
-      state.selected = state.selected.filter(function(s) { return s !== v; });
-      cfgRenderMsTags(id);
-    });
-  });
-  cfgUpdateMsStatusSummary(id);
-  // When exchanges multiselect changes, reload symbols
-  if (id === 'ms-cfg-exchanges' && _cfgEditorCfg) {
-    loadCfgSymbols(_cfgEditorCfg);
-  }
-  scheduleStructuredEditorSync();
+  _cfgMsController.renderTags(id);
 }
 
 function cfgShowMsDd(id, filter) {
-  var wrap = document.getElementById(id);
-  if (!wrap) return;
-  var dd = wrap.querySelector('.ms-dropdown');
-  if (!dd) return;
-  var state = _cfgMs[id];
-  if (!state) return;
-  var cpId = _cfgMsCp[id];
-  var cpSelected = (cpId && _cfgMs[cpId]) ? _cfgMs[cpId].selected : [];
-  var f = (filter || '').toUpperCase();
-  var html = '';
-  var count = 0;
-  var hiIdx = (state.highlightIdx !== undefined) ? state.highlightIdx : -1;
-  var visibleIdx = 0;
-  state.options.forEach(function(opt) {
-    if (f && opt.toUpperCase().indexOf(f) < 0) return;
-    var sel = state.selected.indexOf(opt) >= 0;
-    var isAll = opt === 'all';
-    var inOther = !isAll && cpSelected.indexOf(opt) >= 0;
-    var isHi = !sel && (visibleIdx === hiIdx);
-    var cls = 'ms-option' + (sel ? ' selected' : '') + (inOther ? ' in-other' : '') + (isHi ? ' highlighted' : '') + (isAll ? ' ms-opt-all' : '');
-    var label = inOther ? (opt + ' \u21c4') : opt;
-    html += '<div class="' + cls + '" data-val="' + opt + '">' + label + '</div>';
-    if (!sel) visibleIdx++;
-    count++;
-    if (count > 200) return;
-  });
-  dd.innerHTML = html;
-  dd.classList.add('open');
-  var hiEl = dd.querySelector('.highlighted');
-  if (hiEl) hiEl.scrollIntoView({block:'nearest'});
-  dd.querySelectorAll('.ms-option').forEach(function(el) {
-    el.addEventListener('mousedown', function(e) {
-      e.preventDefault();
-      var v = this.getAttribute('data-val');
-      var idx = state.selected.indexOf(v);
-      if (v === 'all') {
-        state.selected = idx >= 0 ? [] : ['all'];
-      } else {
-        if (idx >= 0) {
-          state.selected.splice(idx, 1);
-        } else {
-          var allIdx = state.selected.indexOf('all');
-          if (allIdx >= 0) state.selected.splice(allIdx, 1);
-          state.selected.push(v);
-          if (cpId && _cfgMs[cpId]) {
-            var cpIdx = _cfgMs[cpId].selected.indexOf(v);
-            if (cpIdx >= 0) {
-              _cfgMs[cpId].selected.splice(cpIdx, 1);
-              cfgRenderMsTags(cpId);
-            }
-          }
-        }
-      }
-      cfgRenderMsTags(id);
-      var inp = wrap.querySelector('.ms-input');
-      if (inp) inp.value = '';
-      cfgShowMsDd(id, '');
-    });
-  });
+  _cfgMsController.showDropdown(id, filter);
 }
 
 async function loadCfgSymbols(cfg) {

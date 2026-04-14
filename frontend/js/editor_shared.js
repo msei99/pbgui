@@ -231,6 +231,436 @@
     }));
   }
 
+  function createMultiselectController(opts) {
+    opts = opts || {};
+
+    var stateMap = {};
+    var counterpartMap = opts.counterpartMap || {};
+    var coinIds = opts.coinIds || {};
+    var controllerName = opts.controllerName || 'pb-ms';
+    var isExclusiveValue = typeof opts.isExclusiveValue === 'function'
+      ? opts.isExclusiveValue
+      : function() { return false; };
+    var onAfterRender = typeof opts.onAfterRender === 'function' ? opts.onAfterRender : null;
+    var statusSummaryBuilder = typeof opts.statusSummaryBuilder === 'function' ? opts.statusSummaryBuilder : null;
+    var formatTagLabel = typeof opts.formatTagLabel === 'function'
+      ? opts.formatTagLabel
+      : function(ctx) {
+        if (ctx.meta && ctx.meta.status === 'invalid') return '? ' + (ctx.meta.raw || ctx.value);
+        return (ctx.meta && ctx.meta.normalized) || ctx.value;
+      };
+    var formatTagClass = typeof opts.formatTagClass === 'function'
+      ? opts.formatTagClass
+      : function(ctx) {
+        return 'ms-tag' + (ctx.meta && ctx.meta.status === 'invalid' ? ' ms-tag-invalid' : '');
+      };
+    var formatTagTitle = typeof opts.formatTagTitle === 'function'
+      ? opts.formatTagTitle
+      : function(ctx) {
+        if (!ctx.meta) return '';
+        if (ctx.meta.status === 'invalid') {
+          return (ctx.meta.changed ? ('Normalized from ' + ctx.meta.raw + ' to ' + ctx.meta.normalized + '. ') : '') +
+            'CoinData could not resolve this entry to an active coin.';
+        }
+        if (ctx.meta.changed) {
+          return 'Normalized from ' + ctx.meta.raw + ' to ' + ctx.meta.normalized + '.';
+        }
+        return '';
+      };
+    var formatOptionLabel = typeof opts.formatOptionLabel === 'function'
+      ? opts.formatOptionLabel
+      : function(ctx) {
+        return ctx.inOther ? (ctx.value + ' ⇄') : ctx.value;
+      };
+    var bindAttr = 'data-pb-ms-bound';
+    var api = null;
+
+    function getState(id) {
+      return stateMap[id] || null;
+    }
+
+    function getCoinMeta(id, value) {
+      var state = getState(id);
+      if (!state || !state.coinMeta) return null;
+      return state.coinMeta[value] || null;
+    }
+
+    function ensureStatusEl(id) {
+      var wrap = resolveElement(id);
+      if (!wrap) return null;
+      var group = wrap.closest('.form-group');
+      if (!group) return null;
+      var el = group.querySelector('.ms-status-summary[data-for="' + id + '"]');
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'ms-status-summary';
+        el.setAttribute('data-for', id);
+        group.appendChild(el);
+      }
+      return el;
+    }
+
+    function updateStatusSummary(id) {
+      if (!coinIds[id]) return;
+      var el = ensureStatusEl(id);
+      if (!el) return;
+      var state = getState(id);
+      if (!state || !state.selected.length) {
+        el.textContent = '';
+        el.style.display = 'none';
+        return;
+      }
+
+      var invalidCount = 0;
+      state.selected.forEach(function(value) {
+        var meta = getCoinMeta(id, value);
+        if (meta && meta.status === 'invalid') invalidCount += 1;
+      });
+
+      if (!invalidCount) {
+        el.textContent = '';
+        el.style.display = 'none';
+        return;
+      }
+
+      var summary = statusSummaryBuilder
+        ? statusSummaryBuilder({ id: id, invalidCount: invalidCount, state: state, controller: api })
+        : { html: '<span class="err">' + invalidCount + ' invalid</span>', display: 'block' };
+      if (!summary || !summary.html) {
+        el.textContent = '';
+        el.style.display = 'none';
+        return;
+      }
+      el.innerHTML = summary.html;
+      el.style.display = summary.display || 'block';
+    }
+
+    function renderTags(id, renderOpts) {
+      var wrap = resolveElement(id);
+      if (!wrap) return;
+      var inputEl = wrap.querySelector('.ms-input');
+      if (!inputEl) return;
+      wrap.querySelectorAll('.ms-tag').forEach(function(tagEl) { tagEl.remove(); });
+
+      var state = getState(id);
+      if (!state) return;
+
+      state.selected.forEach(function(value) {
+        var meta = getCoinMeta(id, value);
+        var ctx = { id: id, value: value, meta: meta, state: state, controller: api };
+        var tag = document.createElement('span');
+        tag.className = formatTagClass(ctx);
+        var title = formatTagTitle(ctx);
+        if (title) tag.title = title;
+        tag.appendChild(document.createTextNode(formatTagLabel(ctx) + ' '));
+        var close = document.createElement('span');
+        close.className = 'ms-x';
+        close.setAttribute('data-val', value);
+        close.textContent = '×';
+        tag.appendChild(close);
+        wrap.insertBefore(tag, inputEl);
+      });
+
+      wrap.querySelectorAll('.ms-x').forEach(function(closeEl) {
+        closeEl.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var state = getState(id);
+          if (!state) return;
+          var value = this.getAttribute('data-val');
+          state.selected = state.selected.filter(function(selectedValue) { return selectedValue !== value; });
+          renderTags(id);
+        });
+      });
+
+      updateStatusSummary(id);
+      if (onAfterRender && !(renderOpts && renderOpts.silent)) {
+        onAfterRender(id, state, renderOpts || {});
+      }
+    }
+
+    function toggleValue(id, value) {
+      var state = getState(id);
+      if (!state) return;
+      var idx = state.selected.indexOf(value);
+      var exclusive = isExclusiveValue(id, value);
+      if (exclusive) {
+        state.selected = idx >= 0 ? [] : [value];
+      } else if (idx >= 0) {
+        state.selected.splice(idx, 1);
+      } else {
+        state.selected = state.selected.filter(function(selectedValue) {
+          return !isExclusiveValue(id, selectedValue);
+        });
+        state.selected.push(value);
+
+        var cpId = counterpartMap[id];
+        if (cpId && stateMap[cpId]) {
+          var cpIdx = stateMap[cpId].selected.indexOf(value);
+          if (cpIdx >= 0) {
+            stateMap[cpId].selected.splice(cpIdx, 1);
+            renderTags(cpId);
+          }
+        }
+      }
+      state.highlightIdx = -1;
+      renderTags(id);
+    }
+
+    function showDropdown(id, filter) {
+      var wrap = resolveElement(id);
+      if (!wrap) return;
+      var dd = wrap.querySelector('.ms-dropdown');
+      if (!dd) return;
+      var state = getState(id);
+      if (!state) return;
+
+      var cpId = counterpartMap[id];
+      var cpSelected = (cpId && stateMap[cpId]) ? stateMap[cpId].selected : [];
+      var upperFilter = String(filter || '').toUpperCase();
+      var html = '';
+      var count = 0;
+      var hiIdx = state.highlightIdx !== undefined ? state.highlightIdx : -1;
+      var visibleIdx = 0;
+
+      state.options.forEach(function(opt) {
+        if (upperFilter && String(opt).toUpperCase().indexOf(upperFilter) < 0) return;
+        var selected = state.selected.indexOf(opt) >= 0;
+        var exclusive = isExclusiveValue(id, opt);
+        var inOther = !exclusive && cpSelected.indexOf(opt) >= 0;
+        var highlighted = !selected && (visibleIdx === hiIdx);
+        var cls = 'ms-option' +
+          (selected ? ' selected' : '') +
+          (inOther ? ' in-other' : '') +
+          (highlighted ? ' highlighted' : '') +
+          (exclusive ? ' ms-opt-all' : '');
+        var label = formatOptionLabel({
+          id: id,
+          value: opt,
+          selected: selected,
+          inOther: inOther,
+          highlighted: highlighted,
+          exclusive: exclusive,
+          state: state,
+          controller: api,
+        });
+        html += '<div class="' + cls + '" data-val="' + escapeHtml(opt) + '">' + escapeHtml(label) + '</div>';
+        if (!selected) visibleIdx += 1;
+        count += 1;
+      });
+
+      if (!count) {
+        html = '<div style="padding:4px 8px;color:var(--text-dim);font-size:var(--fs-xs)">No matches</div>';
+      }
+
+      dd.innerHTML = html;
+      dd.classList.add('open');
+      var highlightedEl = dd.querySelector('.highlighted');
+      if (highlightedEl) highlightedEl.scrollIntoView({ block: 'nearest' });
+
+      dd.querySelectorAll('.ms-option').forEach(function(optionEl) {
+        optionEl.addEventListener('mousedown', function(e) {
+          e.preventDefault();
+          toggleValue(id, this.getAttribute('data-val'));
+          var inputEl = wrap.querySelector('.ms-input');
+          if (inputEl) inputEl.value = '';
+          showDropdown(id, '');
+        });
+      });
+    }
+
+    function wire(id) {
+      var wrap = resolveElement(id);
+      if (!wrap) return;
+      var input = wrap.querySelector('.ms-input');
+      if (!input) return;
+
+      var boundKey = controllerName + ':' + id;
+      if (input.getAttribute(bindAttr) === boundKey) return;
+      input.setAttribute(bindAttr, boundKey);
+
+      input.addEventListener('focus', function() {
+        showDropdown(id, this.value);
+      });
+      input.addEventListener('input', function() {
+        var state = getState(id);
+        if (state) state.highlightIdx = -1;
+        showDropdown(id, this.value);
+      });
+      input.addEventListener('blur', function() {
+        var dd = wrap.querySelector('.ms-dropdown');
+        this.value = '';
+        if (dd) {
+          setTimeout(function() {
+            dd.classList.remove('open');
+            var state = getState(id);
+            if (state) state.highlightIdx = -1;
+          }, 150);
+        }
+      });
+      input.addEventListener('keydown', function(e) {
+        var dd = wrap.querySelector('.ms-dropdown');
+        if (!dd || !dd.classList.contains('open')) return;
+        var items = dd.querySelectorAll('.ms-option:not(.selected)');
+        var state = getState(id);
+        if (!state) return;
+
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (!items.length) return;
+          if (e.key === 'ArrowDown') {
+            state.highlightIdx = state.highlightIdx < items.length - 1 ? state.highlightIdx + 1 : 0;
+          } else {
+            state.highlightIdx = state.highlightIdx > 0 ? state.highlightIdx - 1 : items.length - 1;
+          }
+          items.forEach(function(itemEl, index) {
+            if (index === state.highlightIdx) {
+              itemEl.classList.add('highlighted');
+              itemEl.scrollIntoView({ block: 'nearest' });
+            } else {
+              itemEl.classList.remove('highlighted');
+            }
+          });
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          var value = null;
+          if (items.length === 1) {
+            value = items[0].getAttribute('data-val');
+          } else if (state.highlightIdx >= 0 && state.highlightIdx < items.length) {
+            value = items[state.highlightIdx].getAttribute('data-val');
+          }
+          if (value) {
+            toggleValue(id, value);
+            this.value = '';
+            showDropdown(id, '');
+          }
+        }
+      });
+    }
+
+    function rebuild(id, options, selected, rebuildOpts) {
+      stateMap[id] = {
+        options: options.slice(),
+        selected: selected.slice(),
+        highlightIdx: -1,
+        coinMeta: {},
+      };
+      renderTags(id, rebuildOpts);
+      if (!rebuildOpts || rebuildOpts.wire !== false) wire(id);
+    }
+
+    function getValues(id) {
+      var state = getState(id);
+      return state ? state.selected.slice() : [];
+    }
+
+    function setValues(id, values, renderOpts) {
+      var state = getState(id);
+      if (!state) return;
+      state.selected = values.slice();
+      renderTags(id, renderOpts);
+    }
+
+    function clear(id, renderOpts) {
+      var state = getState(id);
+      if (!state) return;
+      state.selected = [];
+      renderTags(id, renderOpts);
+    }
+
+    function selectAll(id, renderOpts) {
+      var state = getState(id);
+      if (!state) return;
+      var cpId = counterpartMap[id];
+      var cpSelected = (cpId && stateMap[cpId]) ? stateMap[cpId].selected : [];
+      state.selected = state.options.filter(function(opt) {
+        return !isExclusiveValue(id, opt) && cpSelected.indexOf(opt) < 0;
+      });
+      renderTags(id, renderOpts);
+    }
+
+    function clearCoinMeta(id) {
+      var state = getState(id);
+      if (!state) return;
+      state.coinMeta = {};
+      renderTags(id, { silent: true });
+    }
+
+    function applyCoinStatus(id, statuses) {
+      var state = getState(id);
+      if (!state) return;
+
+      var nextSelected = [];
+      var nextMeta = {};
+      state.selected.forEach(function(value) {
+        var info = statuses ? statuses[value] : null;
+        var nextValue = value;
+        if (info && info.status !== 'invalid' && info.normalized) {
+          nextValue = info.normalized;
+        }
+        if (nextSelected.indexOf(nextValue) >= 0) return;
+        nextSelected.push(nextValue);
+        if (info) {
+          nextMeta[nextValue] = {
+            status: info.status,
+            normalized: info.normalized || nextValue,
+            raw: value,
+            changed: (info.normalized || nextValue) !== value,
+          };
+        }
+      });
+
+      state.selected = nextSelected;
+      state.coinMeta = nextMeta;
+      renderTags(id);
+    }
+
+    function removeInvalid(ids) {
+      var removed = 0;
+      var targetIds = Array.isArray(ids) ? ids.slice() : Object.keys(coinIds);
+      targetIds.forEach(function(id) {
+        var state = getState(id);
+        if (!state) return;
+
+        var nextSelected = [];
+        var nextMeta = {};
+        state.selected.forEach(function(value) {
+          var meta = getCoinMeta(id, value);
+          if (meta && meta.status === 'invalid') {
+            removed += 1;
+            return;
+          }
+          nextSelected.push(value);
+          if (meta) nextMeta[value] = meta;
+        });
+
+        state.selected = nextSelected;
+        state.coinMeta = nextMeta;
+        renderTags(id);
+      });
+      return removed;
+    }
+
+    api = {
+      state: stateMap,
+      counterpartMap: counterpartMap,
+      coinIds: coinIds,
+      rebuild: rebuild,
+      wire: wire,
+      showDropdown: showDropdown,
+      renderTags: renderTags,
+      getValues: getValues,
+      setValues: setValues,
+      clear: clear,
+      selectAll: selectAll,
+      getCoinMeta: getCoinMeta,
+      clearCoinMeta: clearCoinMeta,
+      applyCoinStatus: applyCoinStatus,
+      removeInvalid: removeInvalid,
+    };
+
+    return api;
+  }
+
   var fixedValidationEntries = {};
   var fixedValidationOrder = [];
 
@@ -346,6 +776,7 @@
     createBalanceCalcDraft: createBalanceCalcDraft,
     openBalanceCalcPage: openBalanceCalcPage,
     requestBalanceCalculation: requestBalanceCalculation,
+    createMultiselectController: createMultiselectController,
     setFixedValidationStatus: setFixedValidationStatus,
     clearFixedValidationStatus: clearFixedValidationStatus,
   };
