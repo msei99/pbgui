@@ -166,6 +166,71 @@
     return normalizeEditorConfigPayload(data, fallbackConfig);
   }
 
+  function getBalanceCalcApiBase(apiBase) {
+    var base = String(apiBase || '');
+    if (!base) throw new Error('Missing API base');
+    if (/\/api\/balance-calc$/.test(base)) return base;
+    return base
+      .replace(/\/api\/v7$/, '/api/balance-calc')
+      .replace(/\/api\/backtest-v7$/, '/api/balance-calc')
+      .replace(/\/v7$/, '/balance-calc')
+      .replace(/\/backtest-v7$/, '/balance-calc');
+  }
+
+  async function createBalanceCalcDraft(opts) {
+    if (!opts || !opts.config || typeof opts.config !== 'object' || Array.isArray(opts.config)) {
+      throw new Error('Config must be a JSON object');
+    }
+    var apiBase = getBalanceCalcApiBase(opts.apiBase);
+    var data = await resolveJsonResult(fetch(apiBase + '/draft', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + (opts.token || ''),
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ config: opts.config })
+    }));
+    if (!data || !data.draft_id) {
+      throw new Error('Balance Calculator draft creation failed');
+    }
+    return data.draft_id;
+  }
+
+  async function openBalanceCalcPage(opts) {
+    var exchange = String((opts && opts.exchange) || '').trim().toLowerCase();
+    if (!exchange) throw new Error('Missing exchange');
+    var apiBase = getBalanceCalcApiBase(opts && opts.apiBase);
+    var draftId = await createBalanceCalcDraft(opts);
+    var url = apiBase + '/main_page?token=' + encodeURIComponent((opts && opts.token) || '') +
+      '&st_base=' + encodeURIComponent((opts && opts.stBase) || '') +
+      '&draft_id=' + encodeURIComponent(draftId) +
+      '&exchange=' + encodeURIComponent(exchange);
+    if (!opts || opts.navigate !== false) {
+      window.location.href = url;
+    }
+    return { draft_id: draftId, url: url };
+  }
+
+  async function requestBalanceCalculation(opts) {
+    if (!opts || !opts.config || typeof opts.config !== 'object' || Array.isArray(opts.config)) {
+      throw new Error('Config must be a JSON object');
+    }
+    var exchange = String((opts && opts.exchange) || '').trim().toLowerCase();
+    if (!exchange) throw new Error('Missing exchange');
+    var apiBase = getBalanceCalcApiBase(opts.apiBase);
+    return resolveJsonResult(fetch(apiBase + '/calculate', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + (opts.token || ''),
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        config: opts.config,
+        exchange: exchange,
+      })
+    }));
+  }
+
   var fixedValidationEntries = {};
   var fixedValidationOrder = [];
 
@@ -277,6 +342,10 @@
     resolveJsonResult: resolveJsonResult,
     normalizeEditorConfigPayload: normalizeEditorConfigPayload,
     resolveEditorConfigPayload: resolveEditorConfigPayload,
+    getBalanceCalcApiBase: getBalanceCalcApiBase,
+    createBalanceCalcDraft: createBalanceCalcDraft,
+    openBalanceCalcPage: openBalanceCalcPage,
+    requestBalanceCalculation: requestBalanceCalculation,
     setFixedValidationStatus: setFixedValidationStatus,
     clearFixedValidationStatus: clearFixedValidationStatus,
   };

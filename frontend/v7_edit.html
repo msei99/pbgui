@@ -971,7 +971,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=3"></script>
+<script src="/app/js/editor_shared.js?v=4"></script>
 <script>
 /* ─── Injected Vars ────────────────────────────────────────── */
 var TOKEN          = "%%TOKEN%%";
@@ -1805,12 +1805,35 @@ function goStrategyExplorer() {
   window.location.href = url;
 }
 
-function goBalanceCalc() {
-  var bcBase = API_BASE.replace('/api/v7', '/api/balance-calc');
-  var url = bcBase + '/main_page?token=' + encodeURIComponent(TOKEN)
-    + '&instance=' + encodeURIComponent(INSTANCE_NAME)
-    + '&st_base=' + encodeURIComponent(ST_BASE);
-  window.location.href = url;
+function getSelectedUserExchange() {
+  var user = getVal('f-user');
+  for (var i = 0; i < allUsers.length; i++) {
+    if (allUsers[i].name === user) {
+      return String(allUsers[i].exchange || '').toLowerCase();
+    }
+  }
+  return '';
+}
+
+async function goBalanceCalc() {
+  if (!ensureRawJsonValidForSave()) return;
+  if (!ensureStructuredJsonFieldsValidForSave()) return;
+  var exchange = getSelectedUserExchange();
+  if (!exchange) {
+    toast('Cannot determine exchange — please select a user first.', 'err');
+    return;
+  }
+  try {
+    await window.PBGuiEditorShared.openBalanceCalcPage({
+      apiBase: API_BASE,
+      token: TOKEN,
+      stBase: ST_BASE,
+      config: collectConfig(),
+      exchange: exchange,
+    });
+  } catch (e) {
+    toast('Failed to open Balance Calculator: ' + e.message, 'err');
+  }
 }
 
 /* ─── Load Data ────────────────────────────────────────────── */
@@ -3272,12 +3295,7 @@ async function calculateBalance() {
   errorEl.style.display = 'none';
   modal.classList.add('open');
 
-  // Determine exchange from selected user
-  var user = getVal('f-user');
-  var exchange = '';
-  for (var i = 0; i < allUsers.length; i++) {
-    if (allUsers[i].name === user) { exchange = allUsers[i].exchange; break; }
-  }
+  var exchange = getSelectedUserExchange();
   if (!exchange) {
     loadingEl.style.display = 'none';
     errorEl.textContent = 'Cannot determine exchange — please select a user first.';
@@ -3286,14 +3304,13 @@ async function calculateBalance() {
   }
 
   var config = collectConfig();
-  var bcBase = API_BASE.replace('/api/v7', '/api/balance-calc');
   try {
-    var resp = await fetch(bcBase + '/calculate', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: config, exchange: exchange }),
+    var data = await window.PBGuiEditorShared.requestBalanceCalculation({
+      apiBase: API_BASE,
+      token: TOKEN,
+      config: config,
+      exchange: exchange,
     });
-    var data = await resp.json();
     loadingEl.style.display = 'none';
 
     if (data.error) {

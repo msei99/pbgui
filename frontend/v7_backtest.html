@@ -834,7 +834,7 @@ textarea.json-invalid:focus {
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=3"></script>
+<script src="/app/js/editor_shared.js?v=4"></script>
 <script>
 /* ════════════════════════════════════════════════
    GLOBALS (injected by server)
@@ -1303,32 +1303,29 @@ function getConfigDefaultExchange(cfg) {
 }
 
 function openBalanceCalculatorWithConfig(cfg, defaultExchange) {
-  var balcBase = API_BASE.replace('/backtest-v7', '/balance-calc');
-  fetch(balcBase + '/draft', {
-    method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ config: cfg })
-  }).then(function(r) { return r.json(); }).then(function(d) {
-    var apiOrigin = API_BASE.match(/^(https?:\/\/[^/]+)/);
-    apiOrigin = apiOrigin ? apiOrigin[1] : window.location.origin;
-    window.location.href = apiOrigin + '/api/balance-calc/main_page'
-      + '?token=' + encodeURIComponent(TOKEN)
-      + '&st_base=' + encodeURIComponent(ST_BASE)
-      + '&draft_id=' + encodeURIComponent(d.draft_id)
-      + '&exchange=' + encodeURIComponent(defaultExchange || 'binance');
-  }).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
+  return window.PBGuiEditorShared.openBalanceCalcPage({
+    apiBase: API_BASE,
+    token: TOKEN,
+    stBase: ST_BASE,
+    config: cfg,
+    exchange: defaultExchange || 'binance',
+  });
 }
 
-function goBalanceCalc() {
+async function goBalanceCalc() {
+  if (!ensureRawJsonValidForSave()) return;
+  if (!ensureStructuredJsonFieldsValidForSave()) return;
   try {
     var cfg = collectConfig();
-    openBalanceCalculatorWithConfig(cfg, getConfigDefaultExchange(cfg));
+    await openBalanceCalculatorWithConfig(cfg, getConfigDefaultExchange(cfg));
   } catch (e) {
-    toast('Failed to prepare config: ' + e.message, 'err');
+    toast('Failed to open Balance Calculator: ' + e.message, 'err');
   }
 }
 
 function goCalcBalance() {
+  if (!ensureRawJsonValidForSave()) return;
+  if (!ensureStructuredJsonFieldsValidForSave()) return;
   try {
     var cfg = collectConfig();
     _showBalanceCalcModal(cfg, getConfigDefaultExchange(cfg));
@@ -6383,12 +6380,12 @@ function runInlineCalcBalance() {
   if (!exchEl || !resEl) return;
   spinEl.style.display = '';
   resEl.innerHTML = '';
-  var balcBase = API_BASE.replace('/backtest-v7', '/balance-calc');
-  fetch(balcBase + '/calculate', {
-    method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ config: cfg, exchange: exchEl.value })
-  }).then(function(r) { return r.json(); }).then(function(data) {
+  window.PBGuiEditorShared.requestBalanceCalculation({
+    apiBase: API_BASE,
+    token: TOKEN,
+    config: cfg,
+    exchange: exchEl.value,
+  }).then(function(data) {
     spinEl.style.display = 'none';
     if (data.error) { resEl.innerHTML = '\x3Cspan style="color:var(--red)"\x3E' + esc(data.error) + '\x3C/span\x3E'; return; }
     var card = 'background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px';
