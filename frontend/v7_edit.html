@@ -971,7 +971,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=2"></script>
+<script src="/app/js/editor_shared.js?v=3"></script>
 <script>
 /* ─── Injected Vars ────────────────────────────────────────── */
 var TOKEN          = "%%TOKEN%%";
@@ -1093,32 +1093,16 @@ function autoResizeTa(el) {
 }
 
 async function fetchPreparedDraftConfig(draftId) {
-  var resp = await apiFetch('/draft/' + encodeURIComponent(draftId));
-  if (!resp.ok) {
-    var detail = 'HTTP ' + resp.status;
-    try {
-      var err = await resp.json();
-      if (err && err.detail) detail = err.detail;
-    } catch (e) {}
-    throw new Error(detail);
-  }
-  return resp.json();
+  return window.PBGuiEditorShared.resolveEditorConfigPayload(
+    apiFetch('/draft/' + encodeURIComponent(draftId))
+  );
 }
 
 async function prepareConfigForRunEditor(config) {
-  var resp = await apiFetch('/draft', {
+  var data = await window.PBGuiEditorShared.resolveJsonResult(apiFetch('/draft', {
     method: 'POST',
     body: JSON.stringify({ config: config })
-  });
-  if (!resp.ok) {
-    var detail = 'HTTP ' + resp.status;
-    try {
-      var err = await resp.json();
-      if (err && err.detail) detail = err.detail;
-    } catch (e) {}
-    throw new Error(detail);
-  }
-  var data = await resp.json();
+  }));
   if (!data || !data.draft_id) {
     throw new Error('Draft creation failed');
   }
@@ -2562,10 +2546,9 @@ async function saveConfig() {
 function openImportModal() {
   var jsonEl = document.getElementById('import-json');
   var errEl = document.getElementById('import-error');
-  jsonEl.value = JSON.stringify(cfg, null, 2);
+  jsonEl.value = '';
   document.getElementById('import-user').value = getVal('f-user');
-  errEl.className = 'field-status field-status-inline';
-  errEl.innerHTML = '';
+  window.PBGuiEditorShared.clearInlineStatus(errEl, 'field-status field-status-inline');
   autoResizeTa(jsonEl);
   setJsonFieldValidationState(jsonEl, null);
   window.PBGuiEditorShared.openModal('import-modal');
@@ -2573,10 +2556,7 @@ function openImportModal() {
 
 function closeImportModal() {
   var errEl = document.getElementById('import-error');
-  if (errEl) {
-    errEl.className = 'field-status field-status-inline';
-    errEl.innerHTML = '';
-  }
+  window.PBGuiEditorShared.clearInlineStatus(errEl, 'field-status field-status-inline');
   setJsonFieldValidationState(document.getElementById('import-json'), null);
   window.PBGuiEditorShared.closeModal('import-modal');
 }
@@ -2598,13 +2578,15 @@ async function doImport() {
   try {
     prepared = await prepareConfigForRunEditor(parsed);
   } catch (e) {
-    errEl.innerHTML = '<div class="field-status-main">Import failed</div>' +
-      '<div class="field-status-meta">' + esc(e.message || 'Unable to prepare imported config') + '</div>';
-    errEl.className = 'field-status field-status-inline error';
+    window.PBGuiEditorShared.setInlineStatusError(errEl, {
+      baseClassName: 'field-status field-status-inline',
+      summary: 'Import failed',
+      message: e.message || 'Unable to prepare imported config'
+    });
     return;
   }
 
-  cfg = prepared.config || parsed;
+  cfg = prepared.config;
   paramStatus = prepared.param_status || {};
   populateForm();
   loadSymbolsAndTags(cfg);

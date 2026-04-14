@@ -69,6 +69,103 @@
     return schedule;
   }
 
+  function escapeHtml(value) {
+    if (value === null || value === undefined) return '';
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function clearInlineStatus(target, baseClassName) {
+    var el = resolveElement(target);
+    if (!el) return null;
+    el.className = baseClassName || 'field-status';
+    el.innerHTML = '';
+    return el;
+  }
+
+  function setInlineStatusError(target, opts) {
+    var el = resolveElement(target);
+    if (!el) return null;
+    var baseClassName = opts && opts.baseClassName ? opts.baseClassName : 'field-status';
+    var summary = opts && opts.summary ? opts.summary : 'Error';
+    var message = opts && opts.message ? opts.message : '';
+    var html = '<div class="field-status-main">' + escapeHtml(summary) + '</div>';
+    if (message) {
+      html += '<div class="field-status-meta">' + escapeHtml(message) + '</div>';
+    }
+    el.className = baseClassName + ' error';
+    el.innerHTML = html;
+    return el;
+  }
+
+  async function resolveJsonResult(resultOrPromise) {
+    var result = await resultOrPromise;
+    if (result && typeof result.json === 'function') {
+      if (!result.ok) {
+        var detail = 'HTTP ' + result.status;
+        try {
+          var err = await result.json();
+          if (err && err.detail) detail = err.detail;
+        } catch (e) {
+          if (result.statusText) detail = result.statusText;
+        }
+        throw new Error(detail);
+      }
+      return result.json();
+    }
+    return result;
+  }
+
+  function normalizeEditorConfigPayload(data, fallbackConfig) {
+    var fallback = fallbackConfig && typeof fallbackConfig === 'object' && !Array.isArray(fallbackConfig)
+      ? fallbackConfig
+      : null;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      if (fallback) {
+        return { name: '', config: fallback, param_status: {} };
+      }
+      throw new Error('Invalid editor config payload');
+    }
+
+    var hasWrappedConfig = data.config && typeof data.config === 'object' && !Array.isArray(data.config);
+    var cfg = hasWrappedConfig ? data.config : data;
+    var paramStatus = data.param_status && typeof data.param_status === 'object' && !Array.isArray(data.param_status)
+      ? data.param_status
+      : {};
+
+    if ((!paramStatus || !Object.keys(paramStatus).length) && data._pbgui_param_status && typeof data._pbgui_param_status === 'object') {
+      paramStatus = data._pbgui_param_status;
+    }
+    if ((!paramStatus || !Object.keys(paramStatus).length) && cfg && cfg._pbgui_param_status && typeof cfg._pbgui_param_status === 'object') {
+      paramStatus = cfg._pbgui_param_status;
+    }
+
+    if (cfg && cfg._pbgui_param_status) {
+      cfg = Object.assign({}, cfg);
+      delete cfg._pbgui_param_status;
+    }
+
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
+      if (fallback) cfg = fallback;
+      else throw new Error('Prepared config missing');
+    }
+
+    return {
+      name: typeof data.name === 'string' ? data.name : '',
+      config: cfg,
+      param_status: paramStatus || {},
+    };
+  }
+
+  async function resolveEditorConfigPayload(resultOrPromise, fallbackConfig) {
+    var data = await resolveJsonResult(resultOrPromise);
+    return normalizeEditorConfigPayload(data, fallbackConfig);
+  }
+
   var fixedValidationEntries = {};
   var fixedValidationOrder = [];
 
@@ -175,6 +272,11 @@
     openModal: openModal,
     closeModal: closeModal,
     createDebouncedRunner: createDebouncedRunner,
+    clearInlineStatus: clearInlineStatus,
+    setInlineStatusError: setInlineStatusError,
+    resolveJsonResult: resolveJsonResult,
+    normalizeEditorConfigPayload: normalizeEditorConfigPayload,
+    resolveEditorConfigPayload: resolveEditorConfigPayload,
     setFixedValidationStatus: setFixedValidationStatus,
     clearFixedValidationStatus: clearFixedValidationStatus,
   };

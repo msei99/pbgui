@@ -834,7 +834,7 @@ textarea.json-invalid:focus {
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=2"></script>
+<script src="/app/js/editor_shared.js?v=3"></script>
 <script>
 /* ════════════════════════════════════════════════
    GLOBALS (injected by server)
@@ -4195,8 +4195,7 @@ function openImportModal() {
   var jsonEl = document.getElementById('import-json');
   var errEl = document.getElementById('import-error');
   if (!modal || !nameEl || !jsonEl || !errEl) return;
-  errEl.className = 'field-status field-status-inline';
-  errEl.innerHTML = '';
+  window.PBGuiEditorShared.clearInlineStatus(errEl, 'field-status field-status-inline');
   nameEl.value = editingConfig && editingConfig !== '__new__' ? editingConfig : '';
   jsonEl.value = '';
   autoResizeTa(jsonEl);
@@ -4206,20 +4205,17 @@ function openImportModal() {
 }
 
 function prepareImportedBacktestConfig(config) {
-  return apiFetch('/configs/prepare', {
+  return window.PBGuiEditorShared.resolveEditorConfigPayload(apiFetch('/configs/prepare', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ config: config })
-  });
+  }), config);
 }
 
 function closeImportModal() {
   var modal = document.getElementById('import-modal');
   var errEl = document.getElementById('import-error');
-  if (errEl) {
-    errEl.className = 'field-status field-status-inline';
-    errEl.innerHTML = '';
-  }
+  window.PBGuiEditorShared.clearInlineStatus(errEl, 'field-status field-status-inline');
   setJsonFieldValidationState(document.getElementById('import-json'), null);
   window.PBGuiEditorShared.closeModal(modal);
 }
@@ -4243,15 +4239,17 @@ async function doImport() {
   try {
     prepared = await prepareImportedBacktestConfig(validation.parsed);
   } catch (e) {
-    errEl.innerHTML = '<div class="field-status-main">Import failed</div>' +
-      '<div class="field-status-meta">' + esc(e.message || 'Unable to prepare imported config') + '</div>';
-    errEl.className = 'field-status field-status-inline error';
+    window.PBGuiEditorShared.setInlineStatusError(errEl, {
+      baseClassName: 'field-status field-status-inline',
+      summary: 'Import failed',
+      message: e.message || 'Unable to prepare imported config'
+    });
     return;
   }
   var raw = jsonEl.value;
   editingConfig = '__new__';
   closeImportModal();
-  showConfigEditor(name, (prepared && prepared.config) || validation.parsed, raw, (prepared && prepared.param_status) || {});
+  showConfigEditor(name, prepared.config, raw, prepared.param_status || {});
   toast('Imported into editor. Review and save when ready.', 'ok');
 }
 
