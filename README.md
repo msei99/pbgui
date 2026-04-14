@@ -324,6 +324,9 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.72 (unreleased)
+- Fixed: Run V7 `Import` now opens with an empty JSON textarea like Backtest V7 instead of pre-filling the current config, so both editors start the import dialog from the same clean state
+- Fixed: Run/Backtest V7 `Import` buttons now load the updated shared editor helper via a bumped `editor_shared.js` cache-busting version, so the dialog opens again after the shared import-handoff refactor
+- Improved: Run/Backtest V7 now share the same editor import handoff helper for prepare-response normalization and inline import error rendering, reducing drift between both import flows
 - Improved: Backtest V7 now returns the same editor config payload shape as Run V7 (`config` + separate `param_status`) for template, load, and import-prepare endpoints, reducing contract drift between the two editors
 - Fixed: Backtest V7 import now runs pasted configs through the same PB7 load/neutralization pipeline as normal config loads, so imported older configs arrive in the editor with supplemented parameters and correct `neutralized` / `review` long-short markers
 - Fixed: Run/Backtest V7 long-short JSON overlays now refresh their `neutralized`/`review` highlight map after imports and config switches instead of keeping the first loaded status set
