@@ -31,7 +31,7 @@ from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, require_auth, validate_token
 from logging_helpers import human_log as _log
-from pb7_config import load_pb7_config, save_pb7_config, strip_pbgui_param_status
+from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config, strip_pbgui_param_status
 from master.async_pool import SFTP_RETRY_ATTEMPTS, SFTP_RETRY_DELAY, _is_transient_error
 from pbgui_purefunc import (PBGDIR, STATUS_V7_FILE, SYNC_EXCLUDE_FILES,
                              update_status_v7 as _update_status_v7,
@@ -415,7 +415,12 @@ def get_draft(
     entry = _draft_configs.pop(draft_id, None)
     if not entry:
         raise HTTPException(404, "Draft not found or expired")
-    return {"config": entry[1]}
+    try:
+        cfg = prepare_pb7_config_dict(entry[1], neutralize_added=True)
+    except Exception as exc:
+        raise HTTPException(400, f"Invalid draft config: {exc}") from exc
+    param_status = cfg.pop("_pbgui_param_status", {})
+    return {"config": cfg, "param_status": param_status}
 
 
 @router.get("/instances")

@@ -29,10 +29,422 @@ function _covNotifyStructuredSync() {
   }
 }
 
+function _covEnsureValidationStyles() {
+  if (document.getElementById('cov-json-validation-style')) return;
+  var style = document.createElement('style');
+  style.id = 'cov-json-validation-style';
+  style.textContent = [
+    'textarea.cov-json-invalid,textarea.cov-json-invalid:focus{border-color:var(--red,#ff4b4b)!important;}',
+    '.cov-json-status{display:none;margin-top:4px;font-size:var(--fs-sm,13px);line-height:1.35;}',
+    '.cov-json-status.error{display:block;padding:6px 10px;border:1px solid rgba(255,75,75,.35);border-radius:4px;background:rgba(55,20,20,.84);color:var(--red,#ff4b4b);}',
+    '.cov-json-status-main{font-weight:600;}',
+    '.cov-json-status-meta{margin-top:2px;color:#ffb3b3;}',
+    '.cov-json-status-actions{margin-top:8px;}',
+    '.cov-json-status-btn{height:26px;padding:0 10px;border:1px solid rgba(255,75,75,.45);border-radius:4px;background:rgba(255,255,255,.04);color:#ffe7e7;cursor:pointer;font-size:var(--fs-sm,13px);}',
+    '.cov-json-status-btn:hover{background:rgba(255,255,255,.08);}',
+    '.cov-json-highlight-wrap{position:relative;width:100%;min-width:0;}',
+    '.cov-json-highlight-wrap textarea{display:block;width:100%;min-width:0;}',
+    '.cov-json-highlight-pre{display:none;}'
+  ].join('');
+  document.head.appendChild(style);
+}
+
+function _covFormatJsonParseMessage(message) {
+  if (!message) return 'Invalid JSON';
+  return String(message)
+    .replace(/\s+at position \d+(?:\s+\(line \d+ column \d+\))?/i, '')
+    .replace(/^JSON\.parse:\s*/i, '')
+    .trim();
+}
+
+function _covGetLineColumnFromPos(raw, pos) {
+  if (!Number.isFinite(pos) || pos < 0) return { line: null, column: null };
+  var line = 1;
+  var column = 1;
+  var limit = Math.min(pos, raw.length);
+  for (var i = 0; i < limit; i++) {
+    if (raw.charCodeAt(i) === 10) {
+      line += 1;
+      column = 1;
+    } else {
+      column += 1;
+    }
+  }
+  return { line: line, column: column };
+}
+
+function _covGetJsonErrorLocation(raw, error) {
+  var message = error && error.message ? error.message : String(error || '');
+  var lineColMatch = message.match(/line\s+(\d+)\s+column\s+(\d+)/i);
+  if (lineColMatch) {
+    return {
+      line: parseInt(lineColMatch[1], 10),
+      column: parseInt(lineColMatch[2], 10),
+    };
+  }
+  var posMatch = message.match(/position\s+(\d+)/i);
+  if (!posMatch) return { line: null, column: null };
+  return _covGetLineColumnFromPos(raw, parseInt(posMatch[1], 10));
+}
+
+function _covFindJsonSyntaxError(raw) {
+  var text = typeof raw === 'string' ? raw : '';
+  var idx = 0;
+  var len = text.length;
+
+  function fail(pos, message) { throw { pos: pos, message: message }; }
+  function skipWhitespace() {
+    while (idx < len) {
+      var ch = text.charCodeAt(idx);
+      if (ch === 9 || ch === 10 || ch === 13 || ch === 32) idx += 1;
+      else break;
+    }
+  }
+  function parseValue() {
+    skipWhitespace();
+    if (idx >= len) fail(idx, 'Unexpected end of JSON');
+    var ch = text[idx];
+    if (ch === '{') return parseObject();
+    if (ch === '[') return parseArray();
+    if (ch === '"') return parseString();
+    if (ch === '-' || (ch >= '0' && ch <= '9')) return parseNumber();
+    if (text.slice(idx, idx + 4) === 'true') { idx += 4; return; }
+    if (text.slice(idx, idx + 5) === 'false') { idx += 5; return; }
+    if (text.slice(idx, idx + 4) === 'null') { idx += 4; return; }
+    fail(idx, 'Unexpected token');
+  }
+  function parseString() {
+    idx += 1;
+    while (idx < len) {
+      var ch = text[idx];
+      if (ch === '"') { idx += 1; return; }
+      if (ch === '\\') {
+        idx += 1;
+        if (idx >= len) fail(idx, 'Unterminated escape sequence in string');
+        var escCh = text[idx];
+        if ('"\\/bfnrt'.indexOf(escCh) >= 0) { idx += 1; continue; }
+        if (escCh === 'u') {
+          idx += 1;
+          for (var i = 0; i < 4; i++) {
+            var code = text[idx + i];
+            if (!code || !/[0-9a-fA-F]/.test(code)) fail(idx + i, 'Invalid Unicode escape in string');
+          }
+          idx += 4;
+          continue;
+        }
+        fail(idx, 'Invalid escape sequence in string');
+      }
+      if (ch === '\n' || ch === '\r') fail(idx, 'Unterminated string literal');
+      idx += 1;
+    }
+    fail(idx, 'Unterminated string literal');
+  }
+  function parseNumber() {
+    if (text[idx] === '-') idx += 1;
+    if (idx >= len) fail(idx, 'Invalid number');
+    if (text[idx] === '0') idx += 1;
+    else if (text[idx] >= '1' && text[idx] <= '9') while (idx < len && text[idx] >= '0' && text[idx] <= '9') idx += 1;
+    else fail(idx, 'Invalid number');
+    if (text[idx] === '.') {
+      idx += 1;
+      if (idx >= len || text[idx] < '0' || text[idx] > '9') fail(idx, 'Invalid number');
+      while (idx < len && text[idx] >= '0' && text[idx] <= '9') idx += 1;
+    }
+    if (text[idx] === 'e' || text[idx] === 'E') {
+      idx += 1;
+      if (text[idx] === '+' || text[idx] === '-') idx += 1;
+      if (idx >= len || text[idx] < '0' || text[idx] > '9') fail(idx, 'Invalid number exponent');
+      while (idx < len && text[idx] >= '0' && text[idx] <= '9') idx += 1;
+    }
+  }
+  function parseArray() {
+    idx += 1;
+    skipWhitespace();
+    if (idx >= len) fail(idx, 'Unterminated array');
+    if (text[idx] === ']') { idx += 1; return; }
+    while (idx < len) {
+      parseValue();
+      skipWhitespace();
+      if (idx >= len) fail(idx, 'Unterminated array');
+      if (text[idx] === ',') {
+        idx += 1;
+        skipWhitespace();
+        if (idx >= len) fail(idx, 'Unexpected end of JSON after array comma');
+        if (text[idx] === ']') fail(idx, 'Expected value after array comma');
+        continue;
+      }
+      if (text[idx] === ']') { idx += 1; return; }
+      fail(idx, 'Expected comma or closing bracket after array element');
+    }
+    fail(idx, 'Unterminated array');
+  }
+  function parseObject() {
+    idx += 1;
+    skipWhitespace();
+    if (idx >= len) fail(idx, 'Unterminated object');
+    if (text[idx] === '}') { idx += 1; return; }
+    while (idx < len) {
+      skipWhitespace();
+      if (text[idx] !== '"') fail(idx, 'Expected double-quoted property name in JSON');
+      parseString();
+      skipWhitespace();
+      if (idx >= len || text[idx] !== ':') fail(idx, 'Expected colon after property name');
+      idx += 1;
+      parseValue();
+      skipWhitespace();
+      if (idx >= len) fail(idx, 'Unterminated object');
+      if (text[idx] === ',') {
+        idx += 1;
+        skipWhitespace();
+        if (idx >= len) fail(idx, 'Unexpected end of JSON after object comma');
+        if (text[idx] === '}') fail(idx, 'Expected property name after object comma');
+        continue;
+      }
+      if (text[idx] === '}') { idx += 1; return; }
+      fail(idx, 'Expected comma or closing brace after property value');
+    }
+    fail(idx, 'Unterminated object');
+  }
+
+  try {
+    skipWhitespace();
+    parseValue();
+    skipWhitespace();
+    if (idx < len) fail(idx, 'Unexpected token after end of JSON');
+    return null;
+  } catch (error) {
+    return error && Number.isFinite(error.pos) ? error : null;
+  }
+}
+
+function _covValidateJsonText(raw, opts) {
+  opts = opts || {};
+  var text = typeof raw === 'string' ? raw : '';
+  if (!text.trim()) {
+    return opts.allowEmpty ? { parsed: null, error: null } : {
+      parsed: null,
+      error: { line: 1, column: 1, message: opts.emptyMessage || 'JSON cannot be empty' }
+    };
+  }
+  try {
+    var parsed = JSON.parse(text);
+    if (opts.expectObject && (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))) {
+      return {
+        parsed: null,
+        error: { line: null, column: null, message: 'Top-level JSON value must be an object' }
+      };
+    }
+    return { parsed: parsed, error: null };
+  } catch (error) {
+    var location = _covGetJsonErrorLocation(text, error);
+    var fallbackError = (!location.line || !location.column) ? _covFindJsonSyntaxError(text) : null;
+    if (fallbackError) {
+      location = _covGetLineColumnFromPos(text, fallbackError.pos);
+    }
+    return {
+      parsed: null,
+      error: {
+        line: location.line,
+        column: location.column,
+        message: fallbackError && fallbackError.message ? fallbackError.message : _covFormatJsonParseMessage(error && error.message ? error.message : error),
+      }
+    };
+  }
+}
+
+function _covGetJsonLineDetail(raw, line, column) {
+  if (!raw || !line || line < 1) return null;
+  var lines = raw.split('\n');
+  if (line > lines.length) return null;
+  var lineText = lines[line - 1].replace(/\r$/, '');
+  var safeColumn = Math.max(1, Math.min(column || 1, lineText.length + 1));
+  var lineStart = 0;
+  for (var i = 0; i < line - 1; i++) lineStart += lines[i].length + 1;
+  var lineEnd = lineStart + lineText.length;
+  return {
+    line: line,
+    selectionStart: Math.max(lineStart, Math.min(lineEnd, lineStart + safeColumn - 1)),
+    selectionEnd: lineEnd,
+  };
+}
+
+function _covCfgTextarea(side) {
+  return document.getElementById('cov-cfg-' + side);
+}
+
+function _covCfgStatusEl(side) {
+  return document.getElementById('cov-cfg-' + side + '-status');
+}
+
+function _covEnsureCfgHighlightOverlay(textarea) {
+  if (!textarea) return null;
+  var anchor = window.PBGuiEditorShared && window.PBGuiEditorShared.captureTextareaAnchor
+    ? window.PBGuiEditorShared.captureTextareaAnchor(textarea)
+    : null;
+  var wrapper = textarea.parentNode;
+  if (!wrapper || !wrapper.classList || !wrapper.classList.contains('cov-json-highlight-wrap')) {
+    var parent = textarea.parentNode;
+    var nextWrapper = document.createElement('div');
+    nextWrapper.className = 'cov-json-highlight-wrap';
+    parent.insertBefore(nextWrapper, textarea);
+    nextWrapper.appendChild(textarea);
+    wrapper = nextWrapper;
+  }
+  var pre = textarea._covJsonHighlightPre || wrapper.querySelector('.cov-json-highlight-pre');
+  if (!pre) {
+    var cs = window.getComputedStyle(textarea);
+    pre = document.createElement('pre');
+    pre.className = 'cov-json-highlight-pre';
+    pre.setAttribute('aria-hidden', 'true');
+    pre.style.cssText = [
+      'position:absolute', 'top:0', 'left:0', 'right:0', 'bottom:0',
+      'margin:0',
+      'padding:' + cs.padding,
+      'font-family:' + cs.fontFamily,
+      'font-size:' + cs.fontSize,
+      'line-height:' + cs.lineHeight,
+      'white-space:pre-wrap',
+      'word-wrap:break-word',
+      'overflow:hidden',
+      'pointer-events:none',
+      'background:transparent',
+      'border:1px solid transparent',
+      'box-sizing:border-box',
+      'color:transparent',
+      'z-index:0'
+    ].join(';');
+    wrapper.insertBefore(pre, textarea);
+    textarea.style.cssText += ';position:relative;z-index:1;background:transparent;caret-color:' + cs.color;
+    textarea.addEventListener('scroll', function() {
+      if (textarea._covJsonHighlightPre) textarea._covJsonHighlightPre.scrollTop = textarea.scrollTop;
+    });
+  }
+  textarea._covJsonHighlightPre = pre;
+  if (window.PBGuiEditorShared && window.PBGuiEditorShared.restoreTextareaAnchor) {
+    window.PBGuiEditorShared.restoreTextareaAnchor(textarea, anchor);
+  }
+  return pre;
+}
+
+function _covRenderCfgHighlight(textarea) {
+  if (!textarea) return;
+  var pre = _covEnsureCfgHighlightOverlay(textarea);
+  if (!pre) return;
+  var errorLine = textarea._covJsonValidationError ? textarea._covJsonValidationError.line : null;
+  if (!errorLine) {
+    pre.innerHTML = '';
+    pre.style.display = 'none';
+    textarea.style.background = '';
+    textarea.style.color = '';
+    textarea.style.caretColor = '';
+    textarea.style.position = '';
+    textarea.style.zIndex = '';
+    return;
+  }
+  try {
+    var cs = window.getComputedStyle(textarea);
+    pre.innerHTML = (textarea.value || '').split('\n').map(function(line, index) {
+      var styles = ['display:block'];
+      if (errorLine === index + 1) {
+        styles.push('box-shadow:inset 3px 0 0 rgba(255,75,75,0.95)', 'background:rgba(255,75,75,0.16)', 'border-radius:2px');
+      }
+      return '<span style="' + styles.join(';') + '">' + (esc(line) || '&nbsp;') + '</span>';
+    }).join('');
+    textarea.style.position = 'relative';
+    textarea.style.zIndex = '1';
+    textarea.style.background = 'transparent';
+    textarea.style.color = cs.color;
+    textarea.style.caretColor = cs.color;
+    pre.style.display = 'block';
+    pre.style.height = textarea.offsetHeight + 'px';
+    pre.scrollTop = textarea.scrollTop;
+  } catch (e) {
+    pre.innerHTML = '';
+    pre.style.display = 'none';
+    textarea.style.color = '';
+    textarea.style.background = '';
+    textarea.style.caretColor = '';
+    textarea.style.position = '';
+    textarea.style.zIndex = '';
+  }
+}
+
+function _covSetCfgJsonValidationState(side, error) {
+  var textarea = _covCfgTextarea(side);
+  var statusEl = _covCfgStatusEl(side);
+  if (!textarea || !statusEl) return;
+  textarea.classList.toggle('cov-json-invalid', !!error);
+  textarea._covJsonValidationError = error || null;
+  if (!error) {
+    statusEl.innerHTML = '';
+    statusEl.className = 'cov-json-status';
+    window.PBGuiEditorShared.clearFixedValidationStatus('cov-cfg-' + side);
+  } else {
+    var summary = 'Coin Override ' + side + ' JSON is invalid';
+    if (error.line != null && error.column != null) {
+      summary += ' at line ' + error.line + ', column ' + error.column;
+    }
+    statusEl.innerHTML = '';
+    statusEl.className = 'cov-json-status';
+    window.PBGuiEditorShared.setFixedValidationStatus('cov-cfg-' + side, {
+      summary: summary,
+      message: error.message || '',
+      actionLabel: error.line != null ? 'Reveal line in editor' : '',
+      action: error.line != null ? function() { covRevealCfgJsonError(side); } : null,
+    });
+  }
+  _covRenderCfgHighlight(textarea);
+}
+
+function _covValidateCfgJsonField(side) {
+  var textarea = _covCfgTextarea(side);
+  if (!textarea) return { parsed: null, error: null };
+  var validation = _covValidateJsonText(textarea.value, {
+    expectObject: true,
+    allowEmpty: true,
+  });
+  _covSetCfgJsonValidationState(side, validation.error);
+  return validation;
+}
+
+function _covBindCfgJsonValidation() {
+  ['long', 'short'].forEach(function(side) {
+    var textarea = _covCfgTextarea(side);
+    if (!textarea || textarea.dataset.covJsonValidationBound) return;
+    textarea.dataset.covJsonValidationBound = '1';
+    textarea.addEventListener('input', function() {
+      covAutoResizeCfgTa(textarea);
+      _covValidateCfgJsonField(side);
+    });
+    textarea.addEventListener('blur', function() {
+      _covValidateCfgJsonField(side);
+    });
+    _covValidateCfgJsonField(side);
+  });
+}
+
+function covRevealCfgJsonError(side) {
+  var textarea = _covCfgTextarea(side);
+  if (!textarea || !textarea._covJsonValidationError) return;
+  var detail = _covGetJsonLineDetail(textarea.value || '', textarea._covJsonValidationError.line, textarea._covJsonValidationError.column);
+  textarea.focus();
+  if (!detail) return;
+  try {
+    textarea.setSelectionRange(detail.selectionStart, detail.selectionEnd);
+  } catch (e) {}
+  var style = window.getComputedStyle(textarea);
+  var lineHeight = parseFloat(style.lineHeight) || 20;
+  var paddingTop = parseFloat(style.paddingTop) || 0;
+  textarea.scrollTop = Math.max(0, (detail.line - 2) * lineHeight);
+  var targetTop = window.scrollY + textarea.getBoundingClientRect().top + paddingTop + Math.max(0, detail.line - 2) * lineHeight - 120;
+  window.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+}
+
 /* ── Init ───────────────────────────────────────────────────── */
 function coinOvInit(containerId, opts) {
   _covState.containerId = containerId;
   _covState.apiBase = (opts && opts.apiBase) || '';
+  _covEnsureValidationStyles();
   _fetchAllowedParams();
 }
 
@@ -240,6 +652,7 @@ function _covRender() {
     var ta = document.getElementById(id);
     if (ta && ta.offsetParent !== null) covAutoResizeCfgTa(ta);
   });
+  _covBindCfgJsonValidation();
 }
 
 /* ── Coin picker: searchable dropdown ────────────────────────── */
@@ -494,7 +907,7 @@ function coinOvRemove(coin) {
 
 /* ── Edit coin ───────────────────────────────────────────────── */
 function coinOvEdit(coin) {
-  if (_covState.editCoin && _covState.editCoin !== coin) _covSaveEdit();
+  if (_covState.editCoin && _covState.editCoin !== coin && _covSaveEdit() === false) return;
   if (_covState.editCoin === coin) {
     _covState.editCoin = null;
     _covRender();
@@ -605,6 +1018,7 @@ function _covEditHtml(coin) {
   h += '\x3Ctextarea id="cov-cfg-long" rows="12" ' +
        'style="font-family:monospace;font-size:var(--fs-xs);resize:vertical;overflow:hidden" ' +
        'oninput="covAutoResizeCfgTa(this)" onpaste="covFilterCfgPaste(event,\'long\')">' + esc(fileLongJson) + '\x3C/textarea>';
+    h += '\x3Cdiv id="cov-cfg-long-status" class="cov-json-status" aria-live="polite">\x3C/div>';
   h += '\x3C/div>';
   /* Short textarea */
   h += '\x3Cdiv class="form-group">';
@@ -612,6 +1026,7 @@ function _covEditHtml(coin) {
   h += '\x3Ctextarea id="cov-cfg-short" rows="12" ' +
        'style="font-family:monospace;font-size:var(--fs-xs);resize:vertical;overflow:hidden" ' +
        'oninput="covAutoResizeCfgTa(this)" onpaste="covFilterCfgPaste(event,\'short\')">' + esc(fileShortJson) + '\x3C/textarea>';
+    h += '\x3Cdiv id="cov-cfg-short-status" class="cov-json-status" aria-live="polite">\x3C/div>';
   h += '\x3C/div>';
   h += '\x3C/div>';
   h += '\x3Cspan style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px;display:block">' +
@@ -693,9 +1108,9 @@ function covRemoveParam(coin, secKey, param) {
 /* ── Save edit form values back to state ─────────────────────── */
 function _covSaveEdit() {
   var coin = _covState.editCoin;
-  if (!coin) return;
+  if (!coin) return true;
   var data = _covState.overrides[coin];
-  if (!data) return;
+  if (!data) return true;
 
   // Read all section values from inline inputs
   var sections = [
@@ -723,18 +1138,19 @@ function _covSaveEdit() {
   }
 
   // Config File textareas → save to COIN.json via API (NOT merged into inline overrides)
-  _covSaveConfigFile(coin);
+  if (_covSaveConfigFile(coin) === false) return false;
 
   _covCleanEmpty(data);
   _covNotifyStructuredSync();
+  return true;
 }
 
 /** Save the Config File textareas to COIN.json via the API. */
 function _covSaveConfigFile(coin) {
   var cfgArea = document.getElementById('cov-cfg-area');
-  if (!cfgArea) return;
+  if (!cfgArea) return true;
   var data = _covState.overrides[coin];
-  if (!data) return;
+  if (!data) return true;
 
   var fileContent = {};
   var hasContent = false;
@@ -746,8 +1162,13 @@ function _covSaveConfigFile(coin) {
     var raw = ta.value.trim();
     if (!raw || raw === '{}') continue;
     var parsed;
-    try { parsed = JSON.parse(raw); }
-    catch (e) { toast('Invalid JSON in ' + side + ': ' + e.message, 'err'); return; }
+    var validation = _covValidateCfgJsonField(side);
+    if (validation.error) {
+      covRevealCfgJsonError(side);
+      toast('Invalid JSON in ' + side + '. Fix it before closing.', 'err');
+      return false;
+    }
+    var parsed = validation.parsed;
     if (typeof parsed === 'object' && parsed !== null && Object.keys(parsed).length > 0) {
       if (!fileContent.bot) fileContent.bot = {};
       fileContent.bot[side] = parsed;
@@ -774,6 +1195,7 @@ function _covSaveConfigFile(coin) {
     delete data.override_config_path;
     delete _covState.overrideConfigs[coin];
   }
+  return true;
 }
 
 /* ── Config JSON toggle + auto-resize + save from textareas ── */
@@ -859,7 +1281,7 @@ function covFilterCfgPaste(evt, side) {
 
 /* ── Close edit ──────────────────────────────────────────────── */
 function coinOvCloseEdit() {
-  _covSaveEdit();
+  if (_covSaveEdit() === false) return;
   _covState.editCoin = null;
   _covRender();
 }

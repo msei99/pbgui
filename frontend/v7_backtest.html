@@ -337,6 +337,90 @@ a:hover { text-decoration: underline; }
   border-radius: 4px; padding: var(--sp-sm); resize: vertical;
   color: var(--text); tab-size: 4;
 }
+textarea.json-invalid,
+textarea.json-invalid:focus {
+  border-color: var(--red);
+}
+.field-status {
+  display: none;
+  font-size: var(--fs-sm);
+  line-height: 1.35;
+}
+.field-status.error {
+  display: block;
+  color: var(--red);
+}
+#cfg-raw-json-status.field-status.error {
+  position: fixed;
+  top: 64px;
+  right: 16px;
+  z-index: 220;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 80px);
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 75, 75, 0.45);
+  border-radius: 4px;
+  background: rgba(55, 20, 20, 0.96);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  box-sizing: border-box;
+  overflow: auto;
+}
+.field-status-main {
+  font-weight: 600;
+}
+.field-status-inline.error {
+  margin-top: var(--sp-xs);
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 75, 75, 0.35);
+  border-radius: 4px;
+  background: rgba(55, 20, 20, 0.84);
+}
+.field-status-meta {
+  margin-top: 2px;
+  color: #ffb3b3;
+}
+.field-status-actions {
+  margin-top: 8px;
+}
+.field-status-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 75, 75, 0.45);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #ffe7e7;
+  cursor: pointer;
+  font-size: var(--fs-sm);
+}
+.field-status-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.json-highlight-wrap {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+.json-highlight-wrap textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+.json-highlight-pre {
+  display: none;
+}
+.raw-json-wrap {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+.raw-json-wrap textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+.raw-json-highlight {
+  display: none;
+}
 
 /* ── Spinner ────────────────────────────────────── */
 .spinner { display:inline-block;width:14px;height:14px;border:2px solid var(--border);
@@ -740,7 +824,7 @@ a:hover { text-decoration: underline; }
       <input type="text" id="import-name" placeholder="my_backtest">
     </div>
     <textarea class="json-editor" id="import-json" rows="18" placeholder="Paste full JSON config here"></textarea>
-    <div id="import-error" style="color:var(--red); font-size:var(--fs-sm); display:none;"></div>
+    <div id="import-error" class="field-status field-status-inline" aria-live="polite"></div>
     <div class="modal-actions">
       <button class="btn btn-ok" onclick="doImport()">OK</button>
       <button class="btn btn-cancel" onclick="closeImportModal()">Cancel</button>
@@ -750,6 +834,7 @@ a:hover { text-decoration: underline; }
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
+<script src="/app/js/editor_shared.js?v=2"></script>
 <script>
 /* ════════════════════════════════════════════════
    GLOBALS (injected by server)
@@ -778,10 +863,12 @@ var sortCol     = 'modified';  // current sort column
 var sortAsc     = false;       // sort direction
 var editingConfig = null;      // name of config being edited, or null
 var _extraBtKeys  = [];        // unknown backtest keys found when loading a config
-var _rawEditorSyncTimer = null;
 var _rawEditorSyncing = false;
 var _rawEditorLastApplied = '';
+var _cfgBotParamStatus = { long: {}, short: {} };
 var ws = null;
+var _scheduleRawJsonEditorSync = window.PBGuiEditorShared.createDebouncedRunner(applyRawJsonEditorSync, 250);
+var _scheduleStructuredEditorSync = window.PBGuiEditorShared.createDebouncedRunner(applyStructuredEditorSync, 150);
 
 /* Set of backtest keys explicitly handled by the GUI editor.
    Any key in cfg.backtest NOT in this set will be auto-rendered
@@ -928,6 +1015,7 @@ function wsRefresh() {
    NAVIGATION
    ════════════════════════════════════════════════ */
 function selectPanel(id) {
+  window.PBGuiEditorShared.clearFixedValidationStatus();
   /* If leaving archive while results are open, hide archive-results sidebar */
   if (id !== 'archive') {
     document.getElementById('ctx-archive-results').style.display = 'none';
@@ -1292,7 +1380,8 @@ function buildExtraBtExpanderHtml(bt) {
           '<input type="number" id="extra-bt-' + esc(k) + '" data-extra-bt-type="number" class="form-input" value="' + esc(String(v)) + '">' + hint + '</div>';
       } else if (t === 'object' || Array.isArray(v)) {
         fld = '<div class="form-group" style="grid-column:span 3"><label>' + lbl + '</label>' +
-          '<textarea id="extra-bt-' + esc(k) + '" data-extra-bt-type="json" style="overflow:hidden;resize:vertical" oninput="autoResizeTa(this)">' + esc(JSON.stringify(v, null, 2)) + '</textarea>' + hint + '</div>';
+          '<textarea id="extra-bt-' + esc(k) + '" data-extra-bt-type="json" style="overflow:hidden;resize:vertical" oninput="autoResizeTa(this)">' + esc(JSON.stringify(v, null, 2)) + '</textarea>' +
+          '<div id="extra-bt-' + esc(k) + '-status" class="field-status field-status-inline" aria-live="polite"></div>' + hint + '</div>';
       } else {
         fld = '<div class="form-group"><label>' + lbl + '</label>' +
           '<input type="text" id="extra-bt-' + esc(k) + '" data-extra-bt-type="' + (v === null ? 'null' : 'string') + '" class="form-input" value="' + esc(v === null ? '' : String(v)) + '" placeholder="' + (v === null ? 'null' : '') + '">' + hint + '</div>';
@@ -1325,6 +1414,7 @@ function showConfigEditor(name, cfg, rawOverride) {
   /* ── Param-status panel (injected params from passivbot pipeline) ── */
   var html = '';
   var paramStatus = cfg._pbgui_param_status || {};
+  _cfgBotParamStatus = { long: paramStatus.long || {}, short: paramStatus.short || {} };
 
   /* ── Row 1: Identity & Time (cols-8: 4+2+1+1) ── */
   var exAll = ['binance','bybit','bitget','okx','hyperliquid','combined'];
@@ -1561,6 +1651,7 @@ function showConfigEditor(name, cfg, rawOverride) {
         : '') +
       '</label>' +
       '<textarea id="cfg-bot-long" style="overflow:hidden;resize:vertical" oninput="autoResizeTa(this);botSyncFromJson(\'long\')">' + esc(JSON.stringify(bot.long || {}, null, 2)) + '</textarea>' +
+      '<div id="cfg-bot-long-status" class="field-status field-status-inline" aria-live="polite"></div>' +
     '</div>' +
   '</div>';
   /* Short */
@@ -1588,6 +1679,7 @@ function showConfigEditor(name, cfg, rawOverride) {
         : '') +
       '</label>' +
       '<textarea id="cfg-bot-short" style="overflow:hidden;resize:vertical" oninput="autoResizeTa(this);botSyncFromJson(\'short\')">' + esc(JSON.stringify(bot.short || {}, null, 2)) + '</textarea>' +
+      '<div id="cfg-bot-short-status" class="field-status field-status-inline" aria-live="polite"></div>' +
     '</div>' +
   '</div>';
   html += '</div>'; /* end cols-2 */
@@ -1604,7 +1696,11 @@ function showConfigEditor(name, cfg, rawOverride) {
     '</div>' +
     '<div class="expander-body">' +
       '<div class="form-group">' +
-        '<textarea id="cfg-raw-json" style="overflow:hidden;resize:vertical" oninput="scheduleRawJsonEditorSync()">' + esc(rawOverride != null ? String(rawOverride) : JSON.stringify(cfg, null, 2)) + '</textarea>' +
+        '<div class="raw-json-wrap" id="cfg-raw-json-wrap">' +
+          '<div id="cfg-raw-json-status" class="field-status" aria-live="polite"></div>' +
+          '<pre id="cfg-raw-json-highlight" class="raw-json-highlight" aria-hidden="true"></pre>' +
+          '<textarea id="cfg-raw-json" style="overflow:hidden;resize:vertical" oninput="scheduleRawJsonEditorSync()">' + esc(rawOverride != null ? String(rawOverride) : JSON.stringify(cfg, null, 2)) + '</textarea>' +
+        '</div>' +
       '</div>' +
     '</div>' +
   '</div>';
@@ -1642,18 +1738,21 @@ function showConfigEditor(name, cfg, rawOverride) {
   if (rawEl) {
     autoResizeTa(rawEl);
     _rawEditorLastApplied = rawEl.value;
+    setRawJsonValidationError(null);
   }
+
+  bindStructuredJsonFieldValidation();
 
   if (!ed.dataset.structuredSyncBound) {
     ed.dataset.structuredSyncBound = '1';
     ed.addEventListener('input', function(e) {
       var target = e.target;
-      if (!target || target.id === 'cfg-raw-json') return;
+      if (cfgShouldIgnoreStructuredSyncTarget(target, 'input')) return;
       scheduleStructuredEditorSync();
     });
     ed.addEventListener('change', function(e) {
       var target = e.target;
-      if (!target || target.id === 'cfg-raw-json') return;
+      if (cfgShouldIgnoreStructuredSyncTarget(target, 'change')) return;
       scheduleStructuredEditorSync();
     });
     ed.addEventListener('click', function(e) {
@@ -1666,45 +1765,12 @@ function showConfigEditor(name, cfg, rawOverride) {
 
 function scheduleRawJsonEditorSync() {
   if (_rawEditorSyncing) return;
-  clearTimeout(_rawEditorSyncTimer);
-  _rawEditorSyncTimer = setTimeout(applyRawJsonEditorSync, 250);
+  _scheduleRawJsonEditorSync();
 }
 
 function scheduleStructuredEditorSync() {
   if (_rawEditorSyncing || _structuredEditorSyncing) return;
-  clearTimeout(_structuredEditorSyncTimer);
-  _structuredEditorSyncTimer = setTimeout(applyStructuredEditorSync, 150);
-}
-
-function applyStructuredEditorSync() {
-  if (_rawEditorSyncing || _structuredEditorSyncing) return;
-  var rawEl = document.getElementById('cfg-raw-json');
-  if (!rawEl) return;
-  if (document.activeElement === rawEl) return;
-
-  var currentRaw = rawEl.value || '';
-  if (currentRaw.trim()) {
-    try {
-      JSON.parse(currentRaw);
-    } catch (e) {
-      return;
-    }
-  }
-
-  _structuredEditorSyncing = true;
-  try {
-    var nextRaw = JSON.stringify(collectConfig(), null, 2);
-    if (rawEl.value === nextRaw) {
-      _rawEditorLastApplied = nextRaw;
-      return;
-    }
-    var rawScrollTop = rawEl.scrollTop;
-    rawEl.value = nextRaw;
-    rawEl.scrollTop = Math.min(rawScrollTop, rawEl.scrollHeight);
-    _rawEditorLastApplied = nextRaw;
-  } finally {
-    _structuredEditorSyncing = false;
-  }
+  _scheduleStructuredEditorSync();
 }
 
 function cfgSetFieldValue(id, value) {
@@ -1732,26 +1798,685 @@ function cfgSyncTextareaJson(id, value) {
 }
 
 function cfgCaptureRawAnchor() {
-  var rawEl = document.getElementById('cfg-raw-json');
-  if (!rawEl || document.activeElement !== rawEl) return null;
-  return {
-    top: rawEl.getBoundingClientRect().top,
-    scrollTop: rawEl.scrollTop,
-    selectionStart: rawEl.selectionStart,
-    selectionEnd: rawEl.selectionEnd,
-  };
+  return window.PBGuiEditorShared.captureTextareaAnchor('cfg-raw-json');
 }
 
 function cfgRestoreRawAnchor(anchor) {
-  if (!anchor) return;
-  var rawEl = document.getElementById('cfg-raw-json');
-  if (!rawEl) return;
-  var delta = rawEl.getBoundingClientRect().top - anchor.top;
-  if (delta) window.scrollBy(0, delta);
-  rawEl.scrollTop = anchor.scrollTop;
+  window.PBGuiEditorShared.restoreTextareaAnchor('cfg-raw-json', anchor);
+}
+
+function formatJsonParseMessage(message) {
+  if (!message) return 'Invalid JSON';
+  return String(message)
+    .replace(/\s+at position \d+(?:\s+\(line \d+ column \d+\))?/i, '')
+    .replace(/^JSON\.parse:\s*/i, '')
+    .trim();
+}
+
+function getJsonErrorLocation(raw, error) {
+  var message = error && error.message ? error.message : String(error || '');
+  var lineColMatch = message.match(/line\s+(\d+)\s+column\s+(\d+)/i);
+  if (lineColMatch) {
+    return {
+      line: parseInt(lineColMatch[1], 10),
+      column: parseInt(lineColMatch[2], 10),
+    };
+  }
+  var posMatch = message.match(/position\s+(\d+)/i);
+  if (!posMatch) return { line: null, column: null };
+  var pos = parseInt(posMatch[1], 10);
+  if (!Number.isFinite(pos) || pos < 0) return { line: null, column: null };
+  var line = 1;
+  var column = 1;
+  var limit = Math.min(pos, raw.length);
+  for (var i = 0; i < limit; i++) {
+    if (raw.charCodeAt(i) === 10) {
+      line += 1;
+      column = 1;
+    } else {
+      column += 1;
+    }
+  }
+  return { line: line, column: column };
+}
+
+function getLineColumnFromJsonPos(raw, pos) {
+  if (!Number.isFinite(pos) || pos < 0) return { line: null, column: null };
+  var line = 1;
+  var column = 1;
+  var limit = Math.min(pos, raw.length);
+  for (var i = 0; i < limit; i++) {
+    if (raw.charCodeAt(i) === 10) {
+      line += 1;
+      column = 1;
+    } else {
+      column += 1;
+    }
+  }
+  return { line: line, column: column };
+}
+
+function findJsonSyntaxError(raw) {
+  var text = typeof raw === 'string' ? raw : '';
+  var idx = 0;
+  var len = text.length;
+
+  function fail(pos, message) {
+    throw { pos: pos, message: message };
+  }
+
+  function skipWhitespace() {
+    while (idx < len) {
+      var ch = text.charCodeAt(idx);
+      if (ch === 9 || ch === 10 || ch === 13 || ch === 32) idx += 1;
+      else break;
+    }
+  }
+
+  function parseValue() {
+    skipWhitespace();
+    if (idx >= len) fail(idx, 'Unexpected end of JSON');
+    var ch = text[idx];
+    if (ch === '{') return parseObject();
+    if (ch === '[') return parseArray();
+    if (ch === '"') return parseString();
+    if (ch === '-' || (ch >= '0' && ch <= '9')) return parseNumber();
+    if (text.slice(idx, idx + 4) === 'true') { idx += 4; return; }
+    if (text.slice(idx, idx + 5) === 'false') { idx += 5; return; }
+    if (text.slice(idx, idx + 4) === 'null') { idx += 4; return; }
+    fail(idx, 'Unexpected token');
+  }
+
+  function parseString() {
+    idx += 1;
+    while (idx < len) {
+      var ch = text[idx];
+      if (ch === '"') {
+        idx += 1;
+        return;
+      }
+      if (ch === '\\') {
+        idx += 1;
+        if (idx >= len) fail(idx, 'Unterminated escape sequence in string');
+        var esc = text[idx];
+        if ('"\\/bfnrt'.indexOf(esc) >= 0) {
+          idx += 1;
+          continue;
+        }
+        if (esc === 'u') {
+          idx += 1;
+          for (var i = 0; i < 4; i++) {
+            var code = text[idx + i];
+            if (!code || !/[0-9a-fA-F]/.test(code)) fail(idx + i, 'Invalid Unicode escape in string');
+          }
+          idx += 4;
+          continue;
+        }
+        fail(idx, 'Invalid escape sequence in string');
+      }
+      if (ch === '\n' || ch === '\r') fail(idx, 'Unterminated string literal');
+      idx += 1;
+    }
+    fail(idx, 'Unterminated string literal');
+  }
+
+  function parseNumber() {
+    if (text[idx] === '-') idx += 1;
+    if (idx >= len) fail(idx, 'Invalid number');
+    if (text[idx] === '0') {
+      idx += 1;
+    } else if (text[idx] >= '1' && text[idx] <= '9') {
+      while (idx < len && text[idx] >= '0' && text[idx] <= '9') idx += 1;
+    } else {
+      fail(idx, 'Invalid number');
+    }
+    if (text[idx] === '.') {
+      idx += 1;
+      if (idx >= len || text[idx] < '0' || text[idx] > '9') fail(idx, 'Invalid number');
+      while (idx < len && text[idx] >= '0' && text[idx] <= '9') idx += 1;
+    }
+    if (text[idx] === 'e' || text[idx] === 'E') {
+      idx += 1;
+      if (text[idx] === '+' || text[idx] === '-') idx += 1;
+      if (idx >= len || text[idx] < '0' || text[idx] > '9') fail(idx, 'Invalid number exponent');
+      while (idx < len && text[idx] >= '0' && text[idx] <= '9') idx += 1;
+    }
+  }
+
+  function parseArray() {
+    idx += 1;
+    skipWhitespace();
+    if (idx >= len) fail(idx, 'Unterminated array');
+    if (text[idx] === ']') {
+      idx += 1;
+      return;
+    }
+    while (idx < len) {
+      parseValue();
+      skipWhitespace();
+      if (idx >= len) fail(idx, 'Unterminated array');
+      if (text[idx] === ',') {
+        idx += 1;
+        skipWhitespace();
+        if (idx >= len) fail(idx, 'Unexpected end of JSON after array comma');
+        if (text[idx] === ']') fail(idx, 'Expected value after array comma');
+        continue;
+      }
+      if (text[idx] === ']') {
+        idx += 1;
+        return;
+      }
+      fail(idx, 'Expected comma or closing bracket after array element');
+    }
+    fail(idx, 'Unterminated array');
+  }
+
+  function parseObject() {
+    idx += 1;
+    skipWhitespace();
+    if (idx >= len) fail(idx, 'Unterminated object');
+    if (text[idx] === '}') {
+      idx += 1;
+      return;
+    }
+    while (idx < len) {
+      skipWhitespace();
+      if (text[idx] !== '"') fail(idx, 'Expected double-quoted property name in JSON');
+      parseString();
+      skipWhitespace();
+      if (idx >= len || text[idx] !== ':') fail(idx, 'Expected colon after property name');
+      idx += 1;
+      parseValue();
+      skipWhitespace();
+      if (idx >= len) fail(idx, 'Unterminated object');
+      if (text[idx] === ',') {
+        idx += 1;
+        skipWhitespace();
+        if (idx >= len) fail(idx, 'Unexpected end of JSON after object comma');
+        if (text[idx] === '}') fail(idx, 'Expected property name after object comma');
+        continue;
+      }
+      if (text[idx] === '}') {
+        idx += 1;
+        return;
+      }
+      fail(idx, 'Expected comma or closing brace after property value');
+    }
+    fail(idx, 'Unterminated object');
+  }
+
   try {
-    rawEl.setSelectionRange(anchor.selectionStart, anchor.selectionEnd);
+    skipWhitespace();
+    parseValue();
+    skipWhitespace();
+    if (idx < len) fail(idx, 'Unexpected token after end of JSON');
+    return null;
+  } catch (error) {
+    return error && Number.isFinite(error.pos) ? error : null;
+  }
+}
+
+function getJsonLineDetail(raw, line, column) {
+  if (!raw || !line || line < 1) return null;
+  var lines = raw.split('\n');
+  if (line > lines.length) return null;
+  var lineText = lines[line - 1].replace(/\r$/, '');
+  var safeColumn = Math.max(1, Math.min(column || 1, lineText.length + 1));
+  var lineStart = 0;
+  for (var i = 0; i < line - 1; i++) lineStart += lines[i].length + 1;
+  var lineEnd = lineStart + lineText.length;
+  return {
+    lineText: lineText,
+    lineStart: lineStart,
+    lineEnd: lineEnd,
+    selectionStart: Math.max(lineStart, Math.min(lineEnd, lineStart + safeColumn - 1)),
+    selectionEnd: lineEnd,
+    column: safeColumn,
+    line: line,
+  };
+}
+
+function ensureRawJsonHighlightOverlay(rawEl) {
+  var overlay = document.getElementById('cfg-raw-json-highlight');
+  if (!rawEl || !overlay) return null;
+  var cs = window.getComputedStyle(rawEl);
+  overlay.style.cssText = [
+    'display:block',
+    'position:absolute', 'top:0', 'left:0', 'right:0', 'bottom:0',
+    'margin:0',
+    'padding:' + cs.padding,
+    'font-family:' + cs.fontFamily,
+    'font-size:' + cs.fontSize,
+    'line-height:' + cs.lineHeight,
+    'white-space:pre-wrap',
+    'word-wrap:break-word',
+    'overflow:hidden',
+    'pointer-events:none',
+    'background:transparent',
+    'border:1px solid transparent',
+    'box-sizing:border-box',
+    'color:transparent',
+    'tab-size:' + (cs.tabSize || '4'),
+    'z-index:2'
+  ].join(';');
+  if (!rawEl.dataset.rawJsonHighlightBound) {
+    rawEl.dataset.rawJsonHighlightBound = '1';
+    rawEl.addEventListener('scroll', function() {
+      if (overlay) overlay.scrollTop = rawEl.scrollTop;
+    });
+  }
+  overlay.scrollTop = rawEl.scrollTop;
+  return overlay;
+}
+
+function syncRawJsonHighlightOverlay(error, detail) {
+  var rawEl = document.getElementById('cfg-raw-json');
+  var overlay = ensureRawJsonHighlightOverlay(rawEl);
+  if (!rawEl || !overlay) return;
+  if (!error || !detail || !detail.line) {
+    overlay.innerHTML = '';
+    overlay.style.display = 'none';
+    return;
+  }
+  var errorLine = detail.line;
+  overlay.innerHTML = (rawEl.value || '').split('\n').map(function(line, index) {
+    var lineEsc = esc(line);
+    if (!lineEsc) lineEsc = '&nbsp;';
+    var style = 'display:block';
+    if (index + 1 === errorLine) {
+      style += ';background:rgba(255,75,75,0.16);box-shadow:inset 3px 0 0 rgba(255,75,75,0.95);border-radius:2px';
+    }
+    return '<span style="' + style + '">' + lineEsc + '</span>';
+  }).join('');
+  overlay.style.display = 'block';
+}
+
+function revealRawJsonError() {
+  var rawEl = document.getElementById('cfg-raw-json');
+  var statusEl = document.getElementById('cfg-raw-json-status');
+  if (!rawEl || !statusEl) return;
+  var line = parseInt(statusEl.dataset.errorLine || '', 10);
+  var selectionStart = parseInt(statusEl.dataset.selectionStart || '', 10);
+  var selectionEnd = parseInt(statusEl.dataset.selectionEnd || '', 10);
+  rawEl.focus();
+  if (Number.isFinite(selectionStart) && Number.isFinite(selectionEnd)) {
+    try {
+      rawEl.setSelectionRange(selectionStart, selectionEnd);
+    } catch (e) {}
+  }
+  if (!Number.isFinite(line) || line < 1) return;
+  var style = window.getComputedStyle(rawEl);
+  var lineHeight = parseFloat(style.lineHeight) || 20;
+  var paddingTop = parseFloat(style.paddingTop) || 0;
+  var targetTop = window.scrollY + rawEl.getBoundingClientRect().top + paddingTop + Math.max(0, line - 2) * lineHeight - 120;
+  window.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+}
+
+function setRawJsonValidationError(error) {
+  var rawEl = document.getElementById('cfg-raw-json');
+  var statusEl = document.getElementById('cfg-raw-json-status');
+  if (rawEl) rawEl.classList.toggle('json-invalid', !!error);
+  if (!statusEl) return;
+  if (!error) {
+    statusEl.innerHTML = '';
+    statusEl.className = 'field-status';
+    delete statusEl.dataset.errorLine;
+    delete statusEl.dataset.selectionStart;
+    delete statusEl.dataset.selectionEnd;
+    window.PBGuiEditorShared.clearFixedValidationStatus('cfg-raw-json');
+    syncRawJsonHighlightOverlay(null, null);
+    return;
+  }
+  var summary = 'Raw JSON is invalid';
+  if (error.line != null && error.column != null) {
+    summary += ' at line ' + error.line + ', column ' + error.column;
+  }
+  var detail = rawEl ? getJsonLineDetail(rawEl.value || '', error.line, error.column) : null;
+  if (detail) {
+    statusEl.dataset.errorLine = String(detail.line);
+    statusEl.dataset.selectionStart = String(detail.selectionStart);
+    statusEl.dataset.selectionEnd = String(detail.selectionEnd);
+  } else {
+    delete statusEl.dataset.errorLine;
+    delete statusEl.dataset.selectionStart;
+    delete statusEl.dataset.selectionEnd;
+  }
+  statusEl.innerHTML = '';
+  statusEl.className = 'field-status';
+  window.PBGuiEditorShared.setFixedValidationStatus('cfg-raw-json', {
+    summary: summary,
+    message: error.message || '',
+    actionLabel: detail ? 'Reveal line in editor' : '',
+    action: detail ? revealRawJsonError : null,
+  });
+  syncRawJsonHighlightOverlay(error, detail);
+}
+
+function validateRawJson(raw) {
+  return validateJsonText(raw, {
+    expectObject: true,
+    emptyMessage: 'Config cannot be empty'
+  });
+}
+
+function validateJsonText(raw, opts) {
+  opts = opts || {};
+  var text = typeof raw === 'string' ? raw : '';
+  if (!text.trim()) {
+    return {
+      parsed: null,
+      error: { line: 1, column: 1, message: opts.emptyMessage || 'JSON cannot be empty' }
+    };
+  }
+  try {
+    var parsed = JSON.parse(text);
+    if (opts.expectObject && (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))) {
+      return {
+        parsed: null,
+        error: { line: null, column: null, message: 'Top-level JSON value must be an object' }
+      };
+    }
+    return { parsed: parsed, error: null };
+  } catch (error) {
+    var location = getJsonErrorLocation(text, error);
+    var fallbackError = (!location.line || !location.column) ? findJsonSyntaxError(text) : null;
+    if (fallbackError) {
+      var fallbackLocation = getLineColumnFromJsonPos(text, fallbackError.pos);
+      location = {
+        line: fallbackLocation.line,
+        column: fallbackLocation.column,
+      };
+    }
+    return {
+      parsed: null,
+      error: {
+        line: location.line,
+        column: location.column,
+        message: fallbackError && fallbackError.message
+          ? fallbackError.message
+          : formatJsonParseMessage(error && error.message ? error.message : error),
+      }
+    };
+  }
+}
+
+function getJsonFieldStatusEl(textarea) {
+  if (!textarea) return null;
+  var statusId = textarea.dataset.jsonStatusId || (textarea.id ? textarea.id + '-status' : '');
+  if (!statusId) return null;
+  return document.getElementById(statusId);
+}
+
+function getJsonFieldLabel(textarea) {
+  if (!textarea) return 'JSON field';
+  return textarea.dataset.jsonLabel || textarea.id || 'JSON field';
+}
+
+function getJsonFieldValidationOptions(textarea) {
+  return {
+    expectObject: textarea && textarea.dataset ? textarea.dataset.jsonExpectObject === '1' : false,
+    emptyMessage: textarea && textarea.dataset && textarea.dataset.jsonEmptyMessage
+      ? textarea.dataset.jsonEmptyMessage
+      : 'JSON cannot be empty'
+  };
+}
+
+function ensureJsonFieldHighlightOverlay(textarea) {
+  if (!textarea || textarea.id === 'cfg-raw-json' || textarea.id === 'cfg-bot-long' || textarea.id === 'cfg-bot-short') return null;
+  var anchor = window.PBGuiEditorShared.captureTextareaAnchor(textarea);
+  var wrapper = textarea.parentNode;
+  if (!wrapper || !wrapper.classList || !wrapper.classList.contains('json-highlight-wrap')) {
+    var parent = textarea.parentNode;
+    var nextWrapper = document.createElement('div');
+    nextWrapper.className = 'json-highlight-wrap';
+    parent.insertBefore(nextWrapper, textarea);
+    nextWrapper.appendChild(textarea);
+    wrapper = nextWrapper;
+  }
+  var pre = textarea._jsonHighlightPre || wrapper.querySelector('.json-highlight-pre');
+  if (!pre) {
+    var cs = window.getComputedStyle(textarea);
+    pre = document.createElement('pre');
+    pre.className = 'json-highlight-pre';
+    pre.setAttribute('aria-hidden', 'true');
+    pre.style.cssText = [
+      'position:absolute', 'top:0', 'left:0', 'right:0', 'bottom:0',
+      'margin:0',
+      'padding:' + cs.padding,
+      'font-family:' + cs.fontFamily,
+      'font-size:' + cs.fontSize,
+      'line-height:' + cs.lineHeight,
+      'white-space:pre-wrap',
+      'word-wrap:break-word',
+      'overflow:hidden',
+      'pointer-events:none',
+      'background:transparent',
+      'border:1px solid transparent',
+      'box-sizing:border-box',
+      'color:transparent',
+      'z-index:0'
+    ].join(';');
+    wrapper.insertBefore(pre, textarea);
+    textarea.addEventListener('scroll', function() {
+      if (textarea._jsonHighlightPre) textarea._jsonHighlightPre.scrollTop = textarea.scrollTop;
+    });
+  }
+  textarea._jsonHighlightPre = pre;
+  window.PBGuiEditorShared.restoreTextareaAnchor(textarea, anchor);
+  return pre;
+}
+
+function syncJsonFieldHighlightOverlay(textarea) {
+  if (!textarea || textarea.id === 'cfg-raw-json' || textarea.id === 'cfg-bot-long' || textarea.id === 'cfg-bot-short') return;
+  var pre = ensureJsonFieldHighlightOverlay(textarea);
+  if (!pre) return;
+  var errorLine = textarea._jsonValidationError ? textarea._jsonValidationError.line : null;
+  if (!errorLine) {
+    pre.innerHTML = '';
+    pre.style.display = 'none';
+    textarea.style.background = '';
+    textarea.style.color = '';
+    textarea.style.caretColor = '';
+    textarea.style.position = '';
+    textarea.style.zIndex = '';
+    return;
+  }
+  try {
+    var cs = window.getComputedStyle(textarea);
+    pre.innerHTML = (textarea.value || '').split('\n').map(function(line, index) {
+      var styles = ['display:block'];
+      if (errorLine === index + 1) {
+        styles.push('box-shadow:inset 3px 0 0 rgba(255,75,75,0.95)', 'background:rgba(255,75,75,0.16)', 'border-radius:2px');
+      }
+      return '<span style="' + styles.join(';') + '">' + (esc(line) || '&nbsp;') + '</span>';
+    }).join('');
+    textarea.style.position = 'relative';
+    textarea.style.zIndex = '1';
+    textarea.style.background = 'transparent';
+    textarea.style.color = cs.color;
+    textarea.style.caretColor = cs.color;
+    pre.style.display = 'block';
+    pre.style.height = textarea.offsetHeight + 'px';
+    pre.scrollTop = textarea.scrollTop;
+  } catch (e) {
+    pre.innerHTML = '';
+    pre.style.display = 'none';
+    textarea.style.color = '';
+    textarea.style.background = '';
+    textarea.style.caretColor = '';
+    textarea.style.position = '';
+    textarea.style.zIndex = '';
+  }
+}
+
+function setJsonFieldValidationState(textarea, error) {
+  if (!textarea) return;
+  textarea.classList.toggle('json-invalid', !!error);
+  textarea._jsonValidationError = error || null;
+  if ((textarea.id === 'cfg-bot-long' || textarea.id === 'cfg-bot-short') && !textarea._botHighlightSync && error) {
+    _applyBotJsonHighlight(textarea, textarea.id === 'cfg-bot-long' ? _cfgBotParamStatus.long : _cfgBotParamStatus.short);
+  }
+  if (textarea._botHighlightSync) textarea._botHighlightSync();
+  else syncJsonFieldHighlightOverlay(textarea);
+
+  var statusEl = getJsonFieldStatusEl(textarea);
+  if (!error) {
+    if (statusEl) {
+      statusEl.innerHTML = '';
+      statusEl.className = 'field-status field-status-inline';
+    }
+    window.PBGuiEditorShared.clearFixedValidationStatus(textarea.id);
+    return;
+  }
+
+  var summary = getJsonFieldLabel(textarea) + ' is invalid';
+  if (error.line != null && error.column != null) {
+    summary += ' at line ' + error.line + ', column ' + error.column;
+  }
+  if (statusEl) {
+    statusEl.innerHTML = '';
+    statusEl.className = 'field-status field-status-inline';
+  }
+  window.PBGuiEditorShared.setFixedValidationStatus(textarea.id, {
+    summary: summary,
+    message: error.message || '',
+    actionLabel: error.line != null ? 'Reveal line in editor' : '',
+    action: error.line != null ? function() { revealJsonFieldError(textarea.id); } : null,
+  });
+}
+
+function validateJsonFieldTextarea(textarea) {
+  if (!textarea) return { parsed: null, error: null };
+  var validation = validateJsonText(textarea.value, getJsonFieldValidationOptions(textarea));
+  setJsonFieldValidationState(textarea, validation.error);
+  return validation;
+}
+
+function revealJsonFieldError(textareaId) {
+  var textarea = document.getElementById(textareaId);
+  if (!textarea || !textarea._jsonValidationError) return;
+  var detail = getJsonLineDetail(textarea.value || '', textarea._jsonValidationError.line, textarea._jsonValidationError.column);
+  textarea.focus();
+  if (!detail) return;
+  try {
+    textarea.setSelectionRange(detail.selectionStart, detail.selectionEnd);
   } catch (e) {}
+  var style = window.getComputedStyle(textarea);
+  var lineHeight = parseFloat(style.lineHeight) || 20;
+  var paddingTop = parseFloat(style.paddingTop) || 0;
+  var targetTop = window.scrollY + textarea.getBoundingClientRect().top + paddingTop + Math.max(0, detail.line - 2) * lineHeight - 120;
+  window.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+}
+
+function bindJsonFieldValidation(textareaId, opts) {
+  var textarea = document.getElementById(textareaId);
+  if (!textarea) return;
+  opts = opts || {};
+  textarea.dataset.jsonStatusId = opts.statusId || (textareaId + '-status');
+  textarea.dataset.jsonLabel = opts.label || textareaId;
+  textarea.dataset.jsonExpectObject = opts.expectObject ? '1' : '';
+  textarea.dataset.jsonEmptyMessage = opts.emptyMessage || 'JSON cannot be empty';
+  if (!textarea.dataset.jsonValidationBound) {
+    textarea.dataset.jsonValidationBound = '1';
+    textarea.addEventListener('input', function() {
+      validateJsonFieldTextarea(textarea);
+    });
+    textarea.addEventListener('blur', function() {
+      validateJsonFieldTextarea(textarea);
+    });
+  }
+  if (opts.skipInitialValidation && !(textarea.value || '').trim()) {
+    setJsonFieldValidationState(textarea, null);
+    return;
+  }
+  validateJsonFieldTextarea(textarea);
+}
+
+function bindStructuredJsonFieldValidation() {
+  bindJsonFieldValidation('cfg-bot-long', {
+    expectObject: true,
+    emptyMessage: 'Long config cannot be empty',
+    label: 'Long config JSON'
+  });
+  bindJsonFieldValidation('cfg-bot-short', {
+    expectObject: true,
+    emptyMessage: 'Short config cannot be empty',
+    label: 'Short config JSON'
+  });
+  bindJsonFieldValidation('import-json', {
+    expectObject: true,
+    emptyMessage: 'Config cannot be empty',
+    label: 'Import JSON',
+    statusId: 'import-error',
+    skipInitialValidation: true
+  });
+  _extraBtKeys.forEach(function(k) {
+    var textarea = document.getElementById('extra-bt-' + k);
+    if (!textarea || textarea.tagName !== 'TEXTAREA') return;
+    bindJsonFieldValidation(textarea.id, {
+      expectObject: false,
+      emptyMessage: 'JSON value cannot be empty',
+      label: k + ' JSON'
+    });
+  });
+}
+
+function ensureStructuredJsonFieldsValidForSave() {
+  var fields = [
+    document.getElementById('cfg-bot-long'),
+    document.getElementById('cfg-bot-short')
+  ];
+  _extraBtKeys.forEach(function(k) {
+    var textarea = document.getElementById('extra-bt-' + k);
+    if (textarea && textarea.tagName === 'TEXTAREA') fields.push(textarea);
+  });
+
+  var firstInvalid = null;
+  fields.forEach(function(textarea) {
+    if (!textarea) return;
+    var validation = validateJsonFieldTextarea(textarea);
+    if (!validation.error || firstInvalid) return;
+    firstInvalid = { textarea: textarea, validation: validation };
+  });
+  if (!firstInvalid) return true;
+
+  var expander = firstInvalid.textarea.closest('.expander');
+  if (expander) expander.classList.add('open');
+  revealJsonFieldError(firstInvalid.textarea.id);
+  var msg = getJsonFieldLabel(firstInvalid.textarea) + ' is invalid';
+  if (firstInvalid.validation.error.line != null && firstInvalid.validation.error.column != null) {
+    msg += ' at line ' + firstInvalid.validation.error.line + ', column ' + firstInvalid.validation.error.column;
+  }
+  toast(msg + '. Fix it before saving.', 'err');
+  return false;
+}
+
+function ensureRawJsonValidForSave() {
+  var rawEl = document.getElementById('cfg-raw-json');
+  var validation = validateRawJson(rawEl ? rawEl.value : '');
+  setRawJsonValidationError(validation.error);
+  if (!validation.error) return true;
+  var rawExpander = document.getElementById('exp-raw');
+  if (rawExpander) rawExpander.classList.add('open');
+  revealRawJsonError();
+  var msg = 'Raw JSON is invalid';
+  if (validation.error.line != null && validation.error.column != null) {
+    msg += ' at line ' + validation.error.line + ', column ' + validation.error.column;
+  }
+  toast(msg + '. Fix it before saving.', 'err');
+  return false;
+}
+
+function cfgShouldIgnoreStructuredSyncTarget(target, phase) {
+  if (!target) return true;
+  if (target.id === 'cfg-raw-json') return true;
+  if (target.classList && target.classList.contains('ms-input')) return true;
+  if (phase === 'input' && target.tagName === 'TEXTAREA') {
+    if (target.id === 'cfg-bot-long' || target.id === 'cfg-bot-short') return true;
+    if (target.id === 'cov-cfg-long' || target.id === 'cov-cfg-short') return true;
+    if (target.dataset && target.dataset.extraBtType === 'json') return true;
+  }
+  return false;
 }
 
 function cfgSyncExtraBtFields(bt) {
@@ -1775,6 +2500,7 @@ function cfgSyncExtraBtFields(bt) {
         if (el && el.tagName === 'TEXTAREA') autoResizeTa(el);
       });
     }
+    bindStructuredJsonFieldValidation();
     return;
   }
 
@@ -1802,6 +2528,7 @@ function cfgSyncExtraBtFields(bt) {
       el.value = value === undefined || value === null ? '' : String(value);
     }
   });
+  bindStructuredJsonFieldValidation();
 }
 
 function cfgSyncEditorFromParsed(name, cfg) {
@@ -1873,6 +2600,45 @@ function cfgSyncEditorFromParsed(name, cfg) {
   coinOvLoad(cfg);
   cfgSyncExtraBtFields(bt);
   cfgRestoreRawAnchor(anchor);
+  _cfgBotParamStatus = {
+    long: ((cfg._pbgui_param_status || {}).long) || {},
+    short: ((cfg._pbgui_param_status || {}).short) || {}
+  };
+  setRawJsonValidationError(null);
+}
+
+function applyStructuredEditorSync() {
+  if (_rawEditorSyncing || _structuredEditorSyncing) return;
+  var rawEl = document.getElementById('cfg-raw-json');
+  if (!rawEl) return;
+  if (document.activeElement === rawEl) return;
+
+  var currentRaw = rawEl.value || '';
+  if (currentRaw.trim()) {
+    var structuredValidation = validateRawJson(currentRaw);
+    if (structuredValidation.error) {
+      setRawJsonValidationError(structuredValidation.error);
+      return;
+    }
+  }
+
+  _structuredEditorSyncing = true;
+  try {
+    var nextCfg = collectConfig();
+    var nextRaw = JSON.stringify(nextCfg, null, 2);
+    if (rawEl.value === nextRaw) {
+      _rawEditorLastApplied = nextRaw;
+      return;
+    }
+    var rawScrollTop = rawEl.scrollTop;
+    rawEl.value = nextRaw;
+    rawEl.scrollTop = Math.min(rawScrollTop, rawEl.scrollHeight);
+    autoResizeTa(rawEl);
+    _rawEditorLastApplied = nextRaw;
+    setRawJsonValidationError(null);
+  } finally {
+    _structuredEditorSyncing = false;
+  }
 }
 
 function applyRawJsonEditorSync() {
@@ -1881,14 +2647,12 @@ function applyRawJsonEditorSync() {
   if (!rawEl) return;
 
   var raw = rawEl.value;
-  if (!raw || raw === _rawEditorLastApplied) return;
+  var rawValidation = validateRawJson(raw);
+  setRawJsonValidationError(rawValidation.error);
+  if (rawValidation.error || raw === _rawEditorLastApplied) return;
 
-  var parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    return;
-  }
+  var parsed = rawValidation.parsed;
+  if (!parsed) return;
 
   var nameEl = document.getElementById('cfg-name');
   var displayName = nameEl ? nameEl.value.trim() : '';
@@ -1897,6 +2661,7 @@ function applyRawJsonEditorSync() {
   try {
     cfgSyncEditorFromParsed(displayName, parsed);
     _rawEditorLastApplied = raw;
+    setRawJsonValidationError(null);
   } finally {
     _rawEditorSyncing = false;
   }
@@ -1915,7 +2680,6 @@ function toggleExpander(id) {
 var _cfgMs = {};  // id → {options: [], selected: [], highlightIdx: -1, coinMeta: {}}
 var _cfgEditorCfg = null;  // store cfg reference for exchange-change reloads
 var _cfgSymbolsLoadSeq = 0;
-var _structuredEditorSyncTimer = null;
 var _structuredEditorSyncing = false;
 var _cfgMsCp = {
   'ms-cfg-app-long':  'ms-cfg-ign-long',
@@ -3004,116 +3768,126 @@ function fieldCheckbox(id, label, checked) {
 }
 
 function autoResizeTa(el) {
-  if (!el) return;
-  var isFocused = document.activeElement === el;
-  var top = isFocused ? el.getBoundingClientRect().top : 0;
-  var scrollTop = isFocused ? el.scrollTop : 0;
-  var selectionStart = isFocused ? el.selectionStart : 0;
-  var selectionEnd = isFocused ? el.selectionEnd : 0;
-  el.style.height = 'auto';
-  el.style.height = el.scrollHeight + 'px';
-  if (isFocused) {
-    var delta = el.getBoundingClientRect().top - top;
-    if (delta) window.scrollBy(0, delta);
-    el.scrollTop = scrollTop;
-    try {
-      el.setSelectionRange(selectionStart, selectionEnd);
-    } catch (e) {}
-  }
+  window.PBGuiEditorShared.autoResizeTextarea(el);
 }
 
 /* ── Inline JSON highlight overlay for bot-long / bot-short textareas ───────
  * Creates a <pre> positioned behind the textarea that renders each JSON line
  * with an amber background (neutralized) or red background (pb_default).
- * The textarea stays fully editable; its text is made transparent so only the
- * pre is visible, but the cursor / caret remains interactive.
+ * The textarea text stays visible while the overlay only contributes the
+ * background highlight, so the caret remains easy to see.
  */
 function _applyBotJsonHighlight(ta, sideStatus) {
-  if (!ta || !sideStatus || !Object.keys(sideStatus).length) return;
+  if (!ta) return;
+  var anchor = window.PBGuiEditorShared.captureTextareaAnchor(ta);
+  ta._botHighlightStatusMap = sideStatus || {};
 
   function buildHtml(text) {
-    var blockStatus = null;  // inherited status while inside a nested {} block
-    var blockDepth = 0;      // depth at which the block was opened
+    var blockStatus = null;
+    var blockDepth = 0;
     var depth = 0;
-    return text.split('\n').map(function(line) {
+    var validationErrorLine = ta && ta._jsonValidationError ? ta._jsonValidationError.line : null;
+    var statusMap = ta._botHighlightStatusMap || {};
+    return text.split('\n').map(function(line, index) {
       var opens  = (line.match(/\{/g) || []).length;
       var closes = (line.match(/\}/g) || []).length;
       var depthBefore = depth;
       depth += opens - closes;
 
-      // Determine status: inherit from open block, or match own key
       var status = null;
       if (blockStatus && depthBefore > blockDepth) {
         status = blockStatus;
       } else {
         var m = line.match(/^\s*"([^"]+)":/);
-        status = m ? (sideStatus[m[1]] || null) : null;
+        status = m ? (statusMap[m[1]] || null) : null;
       }
 
-      // Start block when a highlighted key opens a nested object
       if (status && opens > closes) {
         blockStatus = status;
         blockDepth  = depthBefore;
       }
-      // End block when depth returns to or below the block-open level
       if (blockStatus && depth <= blockDepth) {
         blockStatus = null;
       }
 
-      var lineEsc = line.replace(/&/g, '&amp;').replace(/\x3C/g, '&lt;').replace(/\x3E/g, '&gt;');
+      var lineEsc = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      var styles = ['display:block'];
       if (status === 'neutralized') {
-        return '<span style="display:block;background:color-mix(in srgb,#f0a500 16%,transparent);border-radius:2px">' + lineEsc + '</span>';
+        styles.push('background:color-mix(in srgb,#f0a500 16%,transparent)', 'border-radius:2px');
+      } else if (status === 'pb_default') {
+        styles.push('background:color-mix(in srgb,#e05252 16%,transparent)', 'border-radius:2px');
       }
-      if (status === 'pb_default') {
-        return '<span style="display:block;background:color-mix(in srgb,#e05252 16%,transparent);border-radius:2px">' + lineEsc + '</span>';
+      if (validationErrorLine === index + 1) {
+        styles.push('box-shadow:inset 3px 0 0 rgba(255,75,75,0.95)', 'background:rgba(255,75,75,0.16)', 'border-radius:2px');
       }
-      return '<span style="display:block">' + lineEsc + '</span>';
+      return '<span style="' + styles.join(';') + '">' + lineEsc + '</span>';
     }).join('');
   }
 
-  /* Wrap textarea */
-  var parent = ta.parentNode;
-  var wrapper = document.createElement('div');
-  wrapper.style.cssText = 'position:relative';
-  parent.insertBefore(wrapper, ta);
-  wrapper.appendChild(ta);
-
-  /* Create highlight pre */
-  var cs = window.getComputedStyle(ta);
-  var pre = document.createElement('pre');
-  pre.setAttribute('aria-hidden', 'true');
-  pre.style.cssText = [
-    'position:absolute', 'top:0', 'left:0', 'right:0', 'bottom:0',
-    'margin:0',
-    'padding:' + cs.padding,
-    'font-family:' + cs.fontFamily,
-    'font-size:' + cs.fontSize,
-    'line-height:' + cs.lineHeight,
-    'white-space:pre-wrap',
-    'word-wrap:break-word',
-    'overflow:hidden',
-    'pointer-events:none',
-    'background:transparent',
-    'border:1px solid transparent',
-    'box-sizing:border-box',
-    'color:' + cs.color,
-    'z-index:0'
-  ].join(';');
-  wrapper.insertBefore(pre, ta);
-
-  /* Make textarea text transparent so only the pre shows; keep caret */
-  ta.style.cssText += ';position:relative;z-index:1;background:transparent;' +
-    'color:transparent;caret-color:' + cs.color;
-
-  function sync() {
-    pre.innerHTML = buildHtml(ta.value);
-    pre.style.height = ta.offsetHeight + 'px';
-    pre.scrollTop = ta.scrollTop;
+  var wrapper = ta.parentNode;
+  if (!wrapper || !wrapper.classList || !wrapper.classList.contains('bot-json-highlight-wrap')) {
+    var parent = ta.parentNode;
+    var nextWrapper = document.createElement('div');
+    nextWrapper.className = 'bot-json-highlight-wrap';
+    nextWrapper.style.cssText = 'position:relative';
+    parent.insertBefore(nextWrapper, ta);
+    nextWrapper.appendChild(ta);
+    wrapper = nextWrapper;
   }
 
-  sync();
-  ta.addEventListener('input', sync);
-  ta.addEventListener('scroll', function() { pre.scrollTop = ta.scrollTop; });
+  var pre = ta._botHighlightPre || wrapper.querySelector('.bot-json-highlight-pre');
+  if (!pre) {
+    var cs = window.getComputedStyle(ta);
+    pre = document.createElement('pre');
+    pre.className = 'bot-json-highlight-pre';
+    pre.setAttribute('aria-hidden', 'true');
+    pre.style.cssText = [
+      'position:absolute', 'top:0', 'left:0', 'right:0', 'bottom:0',
+      'margin:0',
+      'padding:' + cs.padding,
+      'font-family:' + cs.fontFamily,
+      'font-size:' + cs.fontSize,
+      'line-height:' + cs.lineHeight,
+      'white-space:pre-wrap',
+      'word-wrap:break-word',
+      'overflow:hidden',
+      'pointer-events:none',
+      'background:transparent',
+      'border:1px solid transparent',
+      'box-sizing:border-box',
+      'color:transparent',
+      'z-index:0'
+    ].join(';');
+    wrapper.insertBefore(pre, ta);
+    ta.style.cssText += ';position:relative;z-index:1;background:transparent;' +
+      'caret-color:' + cs.color;
+    ta.addEventListener('scroll', function() {
+      if (ta._botHighlightPre) ta._botHighlightPre.scrollTop = ta.scrollTop;
+    });
+  }
+
+  ta._botHighlightPre = pre;
+  if (!ta._botHighlightSync) {
+    ta._botHighlightSync = function() {
+      if (!ta._botHighlightPre) return;
+      try {
+        ta._botHighlightPre.innerHTML = buildHtml(ta.value);
+        ta._botHighlightPre.style.height = ta.offsetHeight + 'px';
+        ta._botHighlightPre.scrollTop = ta.scrollTop;
+      } catch (e) {
+        ta._botHighlightPre.innerHTML = '';
+        ta.style.color = '';
+        ta.style.background = '';
+        ta.style.caretColor = '';
+      }
+    };
+    ta.addEventListener('input', function() {
+      if (ta._botHighlightSync) ta._botHighlightSync();
+    });
+  }
+
+  ta._botHighlightSync();
+  window.PBGuiEditorShared.restoreTextareaAnchor(ta, anchor);
 }
 
 function botSyncFromFields(side) {
@@ -3285,6 +4059,8 @@ function collectConfig() {
 function saveEditor() {
   var name = document.getElementById('cfg-name').value.trim();
   if (!name) { toast('Config name is required', 'err'); return; }
+  if (!ensureRawJsonValidForSave()) return;
+  if (!ensureStructuredJsonFieldsValidForSave()) return;
   coinOvSetConfigName(name);  // ensure override files are saved to the correct directory
   var cfg = collectConfig();
   var dateErr = cfgValidateDateRanges(cfg);
@@ -3313,6 +4089,8 @@ function saveEditor() {
 function saveAndQueue() {
   var name = document.getElementById('cfg-name').value.trim();
   if (!name) { toast('Config name is required', 'err'); return; }
+  if (!ensureRawJsonValidForSave()) return;
+  if (!ensureStructuredJsonFieldsValidForSave()) return;
   coinOvSetConfigName(name);  // ensure override files are saved to the correct directory
   var cfg = collectConfig();
   var dateErr = cfgValidateDateRanges(cfg);
@@ -3348,6 +4126,7 @@ function saveAndQueue() {
 }
 
 function closeEditor() {
+  window.PBGuiEditorShared.clearFixedValidationStatus();
   editingConfig = null;
   _cfgEditorCfg = null;
   document.getElementById('configs-editor').style.display = 'none';
@@ -3409,44 +4188,60 @@ function openImportModal() {
   var jsonEl = document.getElementById('import-json');
   var errEl = document.getElementById('import-error');
   if (!modal || !nameEl || !jsonEl || !errEl) return;
-  errEl.style.display = 'none';
-  errEl.textContent = '';
+  errEl.className = 'field-status field-status-inline';
+  errEl.innerHTML = '';
   nameEl.value = editingConfig && editingConfig !== '__new__' ? editingConfig : '';
   jsonEl.value = '';
-  modal.classList.add('open');
+  autoResizeTa(jsonEl);
+  setJsonFieldValidationState(jsonEl, null);
+  window.PBGuiEditorShared.openModal(modal);
   nameEl.focus();
+}
+
+function prepareImportedBacktestConfig(config) {
+  return apiFetch('/configs/prepare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config: config })
+  });
 }
 
 function closeImportModal() {
   var modal = document.getElementById('import-modal');
   var errEl = document.getElementById('import-error');
   if (errEl) {
-    errEl.style.display = 'none';
-    errEl.textContent = '';
+    errEl.className = 'field-status field-status-inline';
+    errEl.innerHTML = '';
   }
-  if (modal) modal.classList.remove('open');
+  setJsonFieldValidationState(document.getElementById('import-json'), null);
+  window.PBGuiEditorShared.closeModal(modal);
 }
 
-function doImport() {
+async function doImport() {
   var nameEl = document.getElementById('import-name');
   var jsonEl = document.getElementById('import-json');
   var errEl = document.getElementById('import-error');
   if (!nameEl || !jsonEl || !errEl) return;
   var name = nameEl.value.trim();
-  var raw = jsonEl.value.trim();
-  if (!name || !raw) {
-    errEl.textContent = 'Name and JSON are required.';
-    errEl.style.display = 'block';
+  if (!name) {
+    errEl.innerHTML = '<div class="field-status-main">Config name is required</div>';
+    errEl.className = 'field-status field-status-inline error';
+    return;
+  }
+  var validation = validateJsonFieldTextarea(jsonEl);
+  if (validation.error || !validation.parsed) {
     return;
   }
   var cfg;
   try {
-    cfg = JSON.parse(raw);
+    cfg = await prepareImportedBacktestConfig(validation.parsed);
   } catch (e) {
-    errEl.textContent = 'Invalid JSON: ' + e.message;
-    errEl.style.display = 'block';
+    errEl.innerHTML = '<div class="field-status-main">Import failed</div>' +
+      '<div class="field-status-meta">' + esc(e.message || 'Unable to prepare imported config') + '</div>';
+    errEl.className = 'field-status field-status-inline error';
     return;
   }
+  var raw = jsonEl.value;
   editingConfig = '__new__';
   closeImportModal();
   showConfigEditor(name, cfg, raw);
@@ -6096,7 +6891,7 @@ window.PBGUI_NAV_CONFIG = {
 };
 </script>
 <script src="/app/js/suite_editor.js?v=3"></script>
-<script src="/app/js/coin_overrides_editor.js?v=6"></script>
+<script src="/app/js/coin_overrides_editor.js?v=12"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */
 (function() {

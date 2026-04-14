@@ -324,6 +324,12 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.72 (unreleased)
+- Fixed: Backtest V7 import now runs pasted configs through the same PB7 load/neutralization pipeline as normal config loads, so imported older configs arrive in the editor with supplemented parameters and correct `neutralized` / `review` long-short markers
+- Fixed: Run/Backtest V7 long-short JSON overlays now refresh their `neutralized`/`review` highlight map after imports and config switches instead of keeping the first loaded status set
+- Improved: Run V7 import now restores `neutralized` and `review` long/short JSON markers for older pasted configs too by normalizing imports through the same PB7 draft pipeline used by the editor
+- Fixed: Run V7 now restores `neutralized` and `review` long/short JSON markers for older configs that are loaded through the draft path (for example from Backtest → Add to Run), not just for already-saved run instances
+- Fixed: Run V7 editor JSON validation is restored for Raw JSON, Long/Short JSON, import JSON, and JSON-based Additional Parameters, including line-aware error highlighting and save blocking until invalid JSON is fixed
+- Fixed: Backtest V7 import JSON validation now stays readable because the error overlay renders above the modal backdrop instead of underneath it
 - Fixed: Backtest V7 editor now splits its two balance actions correctly again: `💰 Balance Calculator` opens the standalone calculator with the current editor config draft, `⚡ Calc Balance` runs the inline quick calculation from the same draft, and `📥 Import` now uses the same dedicated paste-JSON modal style as the Run V7 editor
 - Fixed: Run V7 Raw JSON typing now uses the same stable textarea behavior as Backtest V7, so editing large configs no longer auto-resizes the Raw JSON field on every keystroke or yanks the caret/page position while valid JSON reparses into the form
 - Fixed: Run V7 editor now matches Backtest V7 for responsive label wrapping, dotted help underlines, and bidirectional Raw JSON sync; Coin Overrides search dropdowns are no longer clipped behind the expander background, structured edits write back into Raw JSON, and valid Raw JSON edits repopulate the form without making the editor jump

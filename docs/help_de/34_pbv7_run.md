@@ -67,6 +67,7 @@ Wichtige Einstellungen im Bearbeitungsformular:
 | **Enabled On** | Ziel-VPS für den Einsatz |
 | **Note** | Optionales Label, das in der Liste angezeigt wird |
 | **Long / Short** | Bot-Parameter — Positionen, TWE, Entry/Close-Bereiche |
+| **JSON-Editoren** | Raw JSON, Long JSON, Short JSON, Import JSON und JSON-basierte Additional Parameters werden beim Tippen validiert; ungültiges JSON zeigt die genaue Zeile/Spalte und blockiert Speichern bis der Fehler behoben ist. Ältere in Run geladene Configs, einschließlich gepasteter Importe und Backtest→Run-Drafts, behalten außerdem die `neutralized`- / `review`-Markierungen im Long/Short-JSON |
 | **Filters** | CoinMarketCap-basierter Symbol-Filter für diese Instanz |
 | **Coin Overrides** | Coin-spezifische Parameterüberschreibungen (Bot-Parameter, Live-Modus, separate Config-Dateien) |
 | **Dynamic Ignore** | Vorschau der automatisch ignorierten Symbole basierend auf den Filter-Einstellungen |
