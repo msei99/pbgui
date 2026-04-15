@@ -324,6 +324,8 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.72 (unreleased)
+- Improved: Run/Backtest V7 now share the same JSON validation and line-highlighting helpers for Raw JSON, JSON textareas, and reveal-line actions, so both editors render parse failures consistently from the same shared code path
+- Improved: Run/Backtest V7 now share the same raw-versus-structured editor sync controller, so debounced form updates, raw JSON reparsing, and save-time validation stay aligned across both editors
 - Improved: Run/Backtest V7 now share the same multiselect controller for chip rendering, dropdown filtering, keyboard navigation, counterpart auto-removal, and invalid-coin status rendering, reducing the largest remaining editor UI duplication
 - Improved: Run/Backtest V7 now use the same shared Balance Calculator handoff for standalone draft navigation and inline `/calculate` requests, so both pages hand over the current editor config consistently
 - Fixed: Run V7 `Import` now opens with an empty JSON textarea like Backtest V7 instead of pre-filling the current config, so both editors start the import dialog from the same clean state

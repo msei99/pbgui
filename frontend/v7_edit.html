@@ -971,7 +971,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=5"></script>
+<script src="/app/js/editor_shared.js?v=6"></script>
 <script>
 /* ─── Injected Vars ────────────────────────────────────────── */
 var TOKEN          = "%%TOKEN%%";
@@ -994,11 +994,10 @@ var allUsers = [];       // [{name, exchange}]
 var allHosts = [];       // [string]
 var dirty = false;
 var _extraLiveKeys = []; // unknown live.* keys not in the GUI form
-var _rawEditorSyncTimer = null;
 var _rawEditorSyncing = false;
 var _rawEditorLastApplied = '';
-var _structuredEditorSyncTimer = null;
 var _structuredEditorSyncing = false;
+var _runJsonSync = null;
 var _symbolsAndTagsLoadSeq = 0;
 
 /* live.* keys explicitly handled by the GUI form — extras go to "Additional Parameters" */
@@ -1074,22 +1073,7 @@ function toggleExpander(id) {
 }
 
 function autoResizeTa(el) {
-  if (!el) return;
-  var isFocused = document.activeElement === el;
-  var top = isFocused ? el.getBoundingClientRect().top : 0;
-  var scrollTop = isFocused ? el.scrollTop : 0;
-  var selectionStart = isFocused ? el.selectionStart : 0;
-  var selectionEnd = isFocused ? el.selectionEnd : 0;
-  el.style.height = 'auto';
-  el.style.height = el.scrollHeight + 'px';
-  if (isFocused) {
-    var delta = el.getBoundingClientRect().top - top;
-    if (delta) window.scrollBy(0, delta);
-    el.scrollTop = scrollTop;
-    try {
-      el.setSelectionRange(selectionStart, selectionEnd);
-    } catch (e) {}
-  }
+  window.PBGuiEditorShared.autoResizeTextarea(el);
 }
 
 async function fetchPreparedDraftConfig(draftId) {
@@ -1110,310 +1094,46 @@ async function prepareConfigForRunEditor(config) {
 }
 
 function formatJsonParseMessage(message) {
-  if (!message) return 'Invalid JSON';
-  return String(message)
-    .replace(/\s+at position \d+(?:\s+\(line \d+ column \d+\))?/i, '')
-    .replace(/^JSON\.parse:\s*/i, '')
-    .trim();
+  return window.PBGuiEditorShared.formatJsonParseMessage(message);
 }
 
 function getJsonErrorLocation(raw, error) {
-  var message = error && error.message ? error.message : String(error || '');
-  var lineColMatch = message.match(/line\s+(\d+)\s+column\s+(\d+)/i);
-  if (lineColMatch) {
-    return {
-      line: parseInt(lineColMatch[1], 10),
-      column: parseInt(lineColMatch[2], 10),
-    };
-  }
-  var posMatch = message.match(/position\s+(\d+)/i);
-  if (!posMatch) return { line: null, column: null };
-  var pos = parseInt(posMatch[1], 10);
-  if (!Number.isFinite(pos) || pos < 0) return { line: null, column: null };
-  var line = 1;
-  var column = 1;
-  var limit = Math.min(pos, raw.length);
-  for (var i = 0; i < limit; i++) {
-    if (raw.charCodeAt(i) === 10) {
-      line += 1;
-      column = 1;
-    } else {
-      column += 1;
-    }
-  }
-  return { line: line, column: column };
+  return window.PBGuiEditorShared.getJsonErrorLocation(raw, error);
 }
 
 function getLineColumnFromJsonPos(raw, pos) {
-  if (!Number.isFinite(pos) || pos < 0) return { line: null, column: null };
-  var line = 1;
-  var column = 1;
-  var limit = Math.min(pos, raw.length);
-  for (var i = 0; i < limit; i++) {
-    if (raw.charCodeAt(i) === 10) {
-      line += 1;
-      column = 1;
-    } else {
-      column += 1;
-    }
-  }
-  return { line: line, column: column };
+  return window.PBGuiEditorShared.getLineColumnFromJsonPos(raw, pos);
 }
 
 function findJsonSyntaxError(raw) {
-  var text = typeof raw === 'string' ? raw : '';
-  var idx = 0;
-  var len = text.length;
-
-  function fail(pos, message) {
-    throw { pos: pos, message: message };
-  }
-
-  function skipWhitespace() {
-    while (idx < len) {
-      var ch = text.charCodeAt(idx);
-      if (ch === 9 || ch === 10 || ch === 13 || ch === 32) idx += 1;
-      else break;
-    }
-  }
-
-  function parseValue() {
-    skipWhitespace();
-    if (idx >= len) fail(idx, 'Unexpected end of JSON');
-    var ch = text[idx];
-    if (ch === '{') return parseObject();
-    if (ch === '[') return parseArray();
-    if (ch === '"') return parseString();
-    if (ch === '-' || (ch >= '0' && ch <= '9')) return parseNumber();
-    if (text.slice(idx, idx + 4) === 'true') { idx += 4; return; }
-    if (text.slice(idx, idx + 5) === 'false') { idx += 5; return; }
-    if (text.slice(idx, idx + 4) === 'null') { idx += 4; return; }
-    fail(idx, 'Unexpected token');
-  }
-
-  function parseString() {
-    idx += 1;
-    while (idx < len) {
-      var ch = text[idx];
-      if (ch === '"') {
-        idx += 1;
-        return;
-      }
-      if (ch === '\\') {
-        idx += 1;
-        if (idx >= len) fail(idx, 'Unterminated escape sequence in string');
-        var escCh = text[idx];
-        if ('"\\/bfnrt'.indexOf(escCh) >= 0) {
-          idx += 1;
-          continue;
-        }
-        if (escCh === 'u') {
-          idx += 1;
-          for (var i = 0; i < 4; i++) {
-            var code = text[idx + i];
-            if (!code || !/[0-9a-fA-F]/.test(code)) fail(idx + i, 'Invalid Unicode escape in string');
-          }
-          idx += 4;
-          continue;
-        }
-        fail(idx, 'Invalid escape sequence in string');
-      }
-      if (ch === '\n' || ch === '\r') fail(idx, 'Unterminated string literal');
-      idx += 1;
-    }
-    fail(idx, 'Unterminated string literal');
-  }
-
-  function parseNumber() {
-    if (text[idx] === '-') idx += 1;
-    if (idx >= len) fail(idx, 'Invalid number');
-    if (text[idx] === '0') {
-      idx += 1;
-    } else if (text[idx] >= '1' && text[idx] <= '9') {
-      while (idx < len && text[idx] >= '0' && text[idx] <= '9') idx += 1;
-    } else {
-      fail(idx, 'Invalid number');
-    }
-    if (text[idx] === '.') {
-      idx += 1;
-      if (idx >= len || text[idx] < '0' || text[idx] > '9') fail(idx, 'Invalid number');
-      while (idx < len && text[idx] >= '0' && text[idx] <= '9') idx += 1;
-    }
-    if (text[idx] === 'e' || text[idx] === 'E') {
-      idx += 1;
-      if (text[idx] === '+' || text[idx] === '-') idx += 1;
-      if (idx >= len || text[idx] < '0' || text[idx] > '9') fail(idx, 'Invalid number exponent');
-      while (idx < len && text[idx] >= '0' && text[idx] <= '9') idx += 1;
-    }
-  }
-
-  function parseArray() {
-    idx += 1;
-    skipWhitespace();
-    if (idx >= len) fail(idx, 'Unterminated array');
-    if (text[idx] === ']') {
-      idx += 1;
-      return;
-    }
-    while (idx < len) {
-      parseValue();
-      skipWhitespace();
-      if (idx >= len) fail(idx, 'Unterminated array');
-      if (text[idx] === ',') {
-        idx += 1;
-        skipWhitespace();
-        if (idx >= len) fail(idx, 'Unexpected end of JSON after array comma');
-        if (text[idx] === ']') fail(idx, 'Expected value after array comma');
-        continue;
-      }
-      if (text[idx] === ']') {
-        idx += 1;
-        return;
-      }
-      fail(idx, 'Expected comma or closing bracket after array element');
-    }
-    fail(idx, 'Unterminated array');
-  }
-
-  function parseObject() {
-    idx += 1;
-    skipWhitespace();
-    if (idx >= len) fail(idx, 'Unterminated object');
-    if (text[idx] === '}') {
-      idx += 1;
-      return;
-    }
-    while (idx < len) {
-      skipWhitespace();
-      if (text[idx] !== '"') fail(idx, 'Expected double-quoted property name in JSON');
-      parseString();
-      skipWhitespace();
-      if (idx >= len || text[idx] !== ':') fail(idx, 'Expected colon after property name');
-      idx += 1;
-      parseValue();
-      skipWhitespace();
-      if (idx >= len) fail(idx, 'Unterminated object');
-      if (text[idx] === ',') {
-        idx += 1;
-        skipWhitespace();
-        if (idx >= len) fail(idx, 'Unexpected end of JSON after object comma');
-        if (text[idx] === '}') fail(idx, 'Expected property name after object comma');
-        continue;
-      }
-      if (text[idx] === '}') {
-        idx += 1;
-        return;
-      }
-      fail(idx, 'Expected comma or closing brace after property value');
-    }
-    fail(idx, 'Unterminated object');
-  }
-
-  try {
-    skipWhitespace();
-    parseValue();
-    skipWhitespace();
-    if (idx < len) fail(idx, 'Unexpected token after end of JSON');
-    return null;
-  } catch (error) {
-    return error && Number.isFinite(error.pos) ? error : null;
-  }
+  return window.PBGuiEditorShared.findJsonSyntaxError(raw);
 }
 
 function getJsonLineDetail(raw, line, column) {
-  if (!raw || !line || line < 1) return null;
-  var lines = raw.split('\n');
-  if (line > lines.length) return null;
-  var lineText = lines[line - 1].replace(/\r$/, '');
-  var safeColumn = Math.max(1, Math.min(column || 1, lineText.length + 1));
-  var lineStart = 0;
-  for (var i = 0; i < line - 1; i++) lineStart += lines[i].length + 1;
-  var lineEnd = lineStart + lineText.length;
-  return {
-    lineText: lineText,
-    lineStart: lineStart,
-    lineEnd: lineEnd,
-    selectionStart: Math.max(lineStart, Math.min(lineEnd, lineStart + safeColumn - 1)),
-    selectionEnd: lineEnd,
-    column: safeColumn,
-    line: line,
-  };
+  return window.PBGuiEditorShared.getJsonLineDetail(raw, line, column);
 }
 
 function ensureRawJsonHighlightOverlay(rawEl) {
-  var overlay = document.getElementById('cfg-raw-json-highlight');
-  if (!rawEl || !overlay) return null;
-  var cs = window.getComputedStyle(rawEl);
-  overlay.style.cssText = [
-    'display:block',
-    'position:absolute', 'top:0', 'left:0', 'right:0', 'bottom:0',
-    'margin:0',
-    'padding:' + cs.padding,
-    'font-family:' + cs.fontFamily,
-    'font-size:' + cs.fontSize,
-    'line-height:' + cs.lineHeight,
-    'white-space:pre-wrap',
-    'word-wrap:break-word',
-    'overflow:hidden',
-    'pointer-events:none',
-    'background:transparent',
-    'border:1px solid transparent',
-    'box-sizing:border-box',
-    'color:transparent',
-    'tab-size:' + (cs.tabSize || '4'),
-    'z-index:2'
-  ].join(';');
-  if (!rawEl.dataset.rawJsonHighlightBound) {
-    rawEl.dataset.rawJsonHighlightBound = '1';
-    rawEl.addEventListener('scroll', function() {
-      if (overlay) overlay.scrollTop = rawEl.scrollTop;
-    });
-  }
-  overlay.scrollTop = rawEl.scrollTop;
-  return overlay;
+  return window.PBGuiEditorShared.ensureExistingHighlightOverlay(rawEl, 'cfg-raw-json-highlight');
 }
 
 function syncRawJsonHighlightOverlay(error, detail) {
-  var rawEl = document.getElementById('cfg-raw-json');
-  var overlay = ensureRawJsonHighlightOverlay(rawEl);
-  if (!rawEl || !overlay) return;
-  if (!error || !detail || !detail.line) {
-    overlay.innerHTML = '';
-    overlay.style.display = 'none';
-    return;
-  }
-  var errorLine = detail.line;
-  overlay.innerHTML = (rawEl.value || '').split('\n').map(function(line, index) {
-    var lineEsc = esc(line);
-    if (!lineEsc) lineEsc = '&nbsp;';
-    var style = 'display:block';
-    if (index + 1 === errorLine) {
-      style += ';background:rgba(255,75,75,0.16);box-shadow:inset 3px 0 0 rgba(255,75,75,0.95);border-radius:2px';
-    }
-    return '<span style="' + style + '">' + lineEsc + '</span>';
-  }).join('');
-  overlay.style.display = 'block';
+  window.PBGuiEditorShared.syncExistingHighlightOverlay({
+    textarea: 'cfg-raw-json',
+    overlay: 'cfg-raw-json-highlight',
+    errorLine: detail && detail.line
+  });
 }
 
 function revealRawJsonError() {
   var rawEl = document.getElementById('cfg-raw-json');
   var statusEl = document.getElementById('cfg-raw-json-status');
   if (!rawEl || !statusEl) return;
-  var line = parseInt(statusEl.dataset.errorLine || '', 10);
-  var selectionStart = parseInt(statusEl.dataset.selectionStart || '', 10);
-  var selectionEnd = parseInt(statusEl.dataset.selectionEnd || '', 10);
-  rawEl.focus();
-  if (Number.isFinite(selectionStart) && Number.isFinite(selectionEnd)) {
-    try {
-      rawEl.setSelectionRange(selectionStart, selectionEnd);
-    } catch (e) {}
-  }
-  if (!Number.isFinite(line) || line < 1) return;
-  var style = window.getComputedStyle(rawEl);
-  var lineHeight = parseFloat(style.lineHeight) || 20;
-  var paddingTop = parseFloat(style.paddingTop) || 0;
-  var targetTop = window.scrollY + rawEl.getBoundingClientRect().top + paddingTop + Math.max(0, line - 2) * lineHeight - 120;
-  window.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+  window.PBGuiEditorShared.focusJsonErrorLocation(rawEl, {
+    line: parseInt(statusEl.dataset.errorLine || '', 10),
+    selectionStart: parseInt(statusEl.dataset.selectionStart || '', 10),
+    selectionEnd: parseInt(statusEl.dataset.selectionEnd || '', 10)
+  });
 }
 
 function setRawJsonValidationError(error) {
@@ -1457,44 +1177,7 @@ function setRawJsonValidationError(error) {
 }
 
 function validateJsonText(raw, opts) {
-  opts = opts || {};
-  var text = typeof raw === 'string' ? raw : '';
-  if (!text.trim()) {
-    return {
-      parsed: null,
-      error: { line: 1, column: 1, message: opts.emptyMessage || 'JSON cannot be empty' }
-    };
-  }
-  try {
-    var parsed = JSON.parse(text);
-    if (opts.expectObject && (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))) {
-      return {
-        parsed: null,
-        error: { line: null, column: null, message: 'Top-level JSON value must be an object' }
-      };
-    }
-    return { parsed: parsed, error: null };
-  } catch (error) {
-    var location = getJsonErrorLocation(text, error);
-    var fallbackError = (!location.line || !location.column) ? findJsonSyntaxError(text) : null;
-    if (fallbackError) {
-      var fallbackLocation = getLineColumnFromJsonPos(text, fallbackError.pos);
-      location = {
-        line: fallbackLocation.line,
-        column: fallbackLocation.column,
-      };
-    }
-    return {
-      parsed: null,
-      error: {
-        line: location.line,
-        column: location.column,
-        message: fallbackError && fallbackError.message
-          ? fallbackError.message
-          : formatJsonParseMessage(error && error.message ? error.message : error),
-      }
-    };
-  }
+  return window.PBGuiEditorShared.validateJsonText(raw, opts);
 }
 
 function validateRawJson(raw) {
@@ -1527,90 +1210,19 @@ function getJsonFieldValidationOptions(textarea) {
 
 function ensureJsonFieldHighlightOverlay(textarea) {
   if (!textarea || textarea.id === 'cfg-raw-json' || textarea.id === 'f-long-json' || textarea.id === 'f-short-json') return null;
-  var anchor = window.PBGuiEditorShared.captureTextareaAnchor(textarea);
-  var wrapper = textarea.parentNode;
-  if (!wrapper || !wrapper.classList || !wrapper.classList.contains('json-highlight-wrap')) {
-    var parent = textarea.parentNode;
-    var nextWrapper = document.createElement('div');
-    nextWrapper.className = 'json-highlight-wrap';
-    parent.insertBefore(nextWrapper, textarea);
-    nextWrapper.appendChild(textarea);
-    wrapper = nextWrapper;
-  }
-  var pre = textarea._jsonHighlightPre || wrapper.querySelector('.json-highlight-pre');
-  if (!pre) {
-    var cs = window.getComputedStyle(textarea);
-    pre = document.createElement('pre');
-    pre.className = 'json-highlight-pre';
-    pre.setAttribute('aria-hidden', 'true');
-    pre.style.cssText = [
-      'position:absolute', 'top:0', 'left:0', 'right:0', 'bottom:0',
-      'margin:0',
-      'padding:' + cs.padding,
-      'font-family:' + cs.fontFamily,
-      'font-size:' + cs.fontSize,
-      'line-height:' + cs.lineHeight,
-      'white-space:pre-wrap',
-      'word-wrap:break-word',
-      'overflow:hidden',
-      'pointer-events:none',
-      'background:transparent',
-      'border:1px solid transparent',
-      'box-sizing:border-box',
-      'color:transparent',
-      'z-index:0'
-    ].join(';');
-    wrapper.insertBefore(pre, textarea);
-    textarea.addEventListener('scroll', function() {
-      if (textarea._jsonHighlightPre) textarea._jsonHighlightPre.scrollTop = textarea.scrollTop;
-    });
-  }
-  textarea._jsonHighlightPre = pre;
-  window.PBGuiEditorShared.restoreTextareaAnchor(textarea, anchor);
-  return pre;
+  return window.PBGuiEditorShared.ensureWrappedHighlightOverlay(textarea, {
+    wrapperClass: 'json-highlight-wrap',
+    preClass: 'json-highlight-pre'
+  });
 }
 
 function syncJsonFieldHighlightOverlay(textarea) {
   if (!textarea || textarea.id === 'cfg-raw-json' || textarea.id === 'f-long-json' || textarea.id === 'f-short-json') return;
-  var pre = ensureJsonFieldHighlightOverlay(textarea);
-  if (!pre) return;
-  var errorLine = textarea._jsonValidationError ? textarea._jsonValidationError.line : null;
-  if (!errorLine) {
-    pre.innerHTML = '';
-    pre.style.display = 'none';
-    textarea.style.background = '';
-    textarea.style.color = '';
-    textarea.style.caretColor = '';
-    textarea.style.position = '';
-    textarea.style.zIndex = '';
-    return;
-  }
-  try {
-    var cs = window.getComputedStyle(textarea);
-    pre.innerHTML = (textarea.value || '').split('\n').map(function(line, index) {
-      var styles = ['display:block'];
-      if (errorLine === index + 1) {
-        styles.push('box-shadow:inset 3px 0 0 rgba(255,75,75,0.95)', 'background:rgba(255,75,75,0.16)', 'border-radius:2px');
-      }
-      return '<span style="' + styles.join(';') + '">' + (esc(line) || '&nbsp;') + '</span>';
-    }).join('');
-    textarea.style.position = 'relative';
-    textarea.style.zIndex = '1';
-    textarea.style.background = 'transparent';
-    textarea.style.color = cs.color;
-    textarea.style.caretColor = cs.color;
-    pre.style.display = 'block';
-    pre.style.height = textarea.offsetHeight + 'px';
-    pre.scrollTop = textarea.scrollTop;
-  } catch (e) {
-    pre.innerHTML = '';
-    pre.style.display = 'none';
-    textarea.style.color = '';
-    textarea.style.background = '';
-    textarea.style.caretColor = '';
-    textarea.style.position = '';
-    textarea.style.zIndex = '';
-  }
+  window.PBGuiEditorShared.syncWrappedHighlightOverlay(textarea, {
+    wrapperClass: 'json-highlight-wrap',
+    preClass: 'json-highlight-pre',
+    errorLine: textarea._jsonValidationError ? textarea._jsonValidationError.line : null
+  });
 }
 
 function setJsonFieldValidationState(textarea, error) {
@@ -1660,16 +1272,7 @@ function revealJsonFieldError(textareaId) {
   var textarea = document.getElementById(textareaId);
   if (!textarea || !textarea._jsonValidationError) return;
   var detail = getJsonLineDetail(textarea.value || '', textarea._jsonValidationError.line, textarea._jsonValidationError.column);
-  textarea.focus();
-  if (!detail) return;
-  try {
-    textarea.setSelectionRange(detail.selectionStart, detail.selectionEnd);
-  } catch (e) {}
-  var style = window.getComputedStyle(textarea);
-  var lineHeight = parseFloat(style.lineHeight) || 20;
-  var paddingTop = parseFloat(style.paddingTop) || 0;
-  var targetTop = window.scrollY + textarea.getBoundingClientRect().top + paddingTop + Math.max(0, detail.line - 2) * lineHeight - 120;
-  window.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+  window.PBGuiEditorShared.focusJsonErrorLocation(textarea, detail);
 }
 
 function bindJsonFieldValidation(textareaId, opts) {
@@ -2255,26 +1858,11 @@ function getInt(id) { return parseInt(document.getElementById(id).value, 10) || 
 function getChk(id) { return document.getElementById(id).checked; }
 
 function captureRawEditorAnchor() {
-  var rawEl = document.getElementById('cfg-raw-json');
-  if (!rawEl || document.activeElement !== rawEl) return null;
-  return {
-    top: rawEl.getBoundingClientRect().top,
-    scrollTop: rawEl.scrollTop,
-    selectionStart: rawEl.selectionStart,
-    selectionEnd: rawEl.selectionEnd,
-  };
+  return window.PBGuiEditorShared.captureTextareaAnchor('cfg-raw-json');
 }
 
 function restoreRawEditorAnchor(anchor) {
-  if (!anchor) return;
-  var rawEl = document.getElementById('cfg-raw-json');
-  if (!rawEl) return;
-  var delta = rawEl.getBoundingClientRect().top - anchor.top;
-  if (delta) window.scrollBy(0, delta);
-  rawEl.scrollTop = anchor.scrollTop;
-  try {
-    rawEl.setSelectionRange(anchor.selectionStart, anchor.selectionEnd);
-  } catch (e) {}
+  window.PBGuiEditorShared.restoreTextareaAnchor('cfg-raw-json', anchor);
 }
 
 async function syncEditorFromParsed(parsed) {
@@ -2285,104 +1873,63 @@ async function syncEditorFromParsed(parsed) {
   restoreRawEditorAnchor(anchor);
 }
 
+_runJsonSync = window.PBGuiEditorShared.createJsonSyncController({
+  rawTextarea: 'cfg-raw-json',
+  rawDelay: 250,
+  structuredDelay: 150,
+  getRawLastApplied: function() { return _rawEditorLastApplied; },
+  setRawLastApplied: function(value) { _rawEditorLastApplied = value; },
+  isRawSyncing: function() { return _rawEditorSyncing; },
+  setRawSyncing: function(value) { _rawEditorSyncing = value; },
+  isStructuredSyncing: function() { return _structuredEditorSyncing; },
+  setStructuredSyncing: function(value) { _structuredEditorSyncing = value; },
+  validateRaw: validateRawJson,
+  setRawValidationError: setRawJsonValidationError,
+  collectConfig: function() {
+    var nextCfg = collectConfig();
+    cfg = nextCfg;
+    return nextCfg;
+  },
+  applyParsed: syncEditorFromParsed,
+  autoResizeRaw: autoResizeTa,
+  onRawSyncError: function(error) {
+    console.error('applyRawJsonEditorSync failed:', error);
+  }
+});
+
 function scheduleRawJsonEditorSync() {
-  if (_rawEditorSyncing) return;
-  clearTimeout(_rawEditorSyncTimer);
-  _rawEditorSyncTimer = setTimeout(function() {
-    applyRawJsonEditorSync().catch(function(e) {
-      console.error('applyRawJsonEditorSync failed:', e);
-    });
-  }, 250);
+  _runJsonSync.scheduleRaw();
 }
 
 function scheduleStructuredEditorSync() {
-  if (_rawEditorSyncing || _structuredEditorSyncing) return;
-  clearTimeout(_structuredEditorSyncTimer);
-  _structuredEditorSyncTimer = setTimeout(applyStructuredEditorSync, 150);
+  _runJsonSync.scheduleStructured();
 }
 
 function applyStructuredEditorSync() {
-  if (_rawEditorSyncing || _structuredEditorSyncing) return;
-  var rawEl = document.getElementById('cfg-raw-json');
-  if (!rawEl) return;
-  if (document.activeElement === rawEl) return;
-
-  var currentRaw = rawEl.value || '';
-  if (currentRaw.trim()) {
-    var structuredValidation = validateRawJson(currentRaw);
-    if (structuredValidation.error) {
-      setRawJsonValidationError(structuredValidation.error);
-      return;
-    }
-  }
-
-  _structuredEditorSyncing = true;
-  try {
-    var nextCfg = collectConfig();
-    var nextRaw = JSON.stringify(nextCfg, null, 2);
-    cfg = nextCfg;
-    if (rawEl.value === nextRaw) {
-      _rawEditorLastApplied = nextRaw;
-      return;
-    }
-    var rawScrollTop = rawEl.scrollTop;
-    rawEl.value = nextRaw;
-    rawEl.scrollTop = Math.min(rawScrollTop, rawEl.scrollHeight);
-    autoResizeTa(rawEl);
-    _rawEditorLastApplied = nextRaw;
-    setRawJsonValidationError(null);
-  } finally {
-    _structuredEditorSyncing = false;
-  }
+  return _runJsonSync.applyStructured();
 }
 
 async function applyRawJsonEditorSync() {
-  if (_rawEditorSyncing) return;
-  var rawEl = document.getElementById('cfg-raw-json');
-  if (!rawEl) return;
+  return _runJsonSync.applyRaw();
+}
 
-  var raw = rawEl.value;
-  var rawValidation = validateRawJson(raw);
-  setRawJsonValidationError(rawValidation.error);
-  if (rawValidation.error || !raw || raw === _rawEditorLastApplied) return;
-
-  var parsed = rawValidation.parsed;
-  if (!parsed) return;
-
-  _rawEditorSyncing = true;
-  try {
-    await syncEditorFromParsed(parsed);
-    _rawEditorLastApplied = raw;
-    setRawJsonValidationError(null);
-  } finally {
-    _rawEditorSyncing = false;
+function shouldIgnoreStructuredSyncTarget(target, phase) {
+  if (!target) return true;
+  if (target.id === 'cfg-raw-json') return true;
+  if (target.classList && target.classList.contains('ms-input')) return true;
+  if (phase === 'input' && target.tagName === 'TEXTAREA') {
+    if (target.id === 'f-long-json' || target.id === 'f-short-json') return true;
+    if (target.id === 'cov-cfg-long' || target.id === 'cov-cfg-short') return true;
+    if (target.dataset && target.dataset.extraLiveType === 'json') return true;
   }
+  return false;
 }
 
 function bindStructuredEditorSync() {
-  var root = document.getElementById('main-content');
-  if (!root || root.dataset.structuredSyncBound) return;
-  root.dataset.structuredSyncBound = '1';
-
-  function shouldIgnoreStructuredSyncTarget(target, phase) {
-    if (!target) return true;
-    if (target.id === 'cfg-raw-json') return true;
-    if (target.classList && target.classList.contains('ms-input')) return true;
-    if (phase === 'input' && target.tagName === 'TEXTAREA') {
-      if (target.id === 'f-long-json' || target.id === 'f-short-json') return true;
-      if (target.id === 'cov-cfg-long' || target.id === 'cov-cfg-short') return true;
-      if (target.dataset && target.dataset.extraLiveType === 'json') return true;
-    }
-    return false;
-  }
-
-  root.addEventListener('input', function(e) {
-    if (shouldIgnoreStructuredSyncTarget(e.target, 'input')) return;
-    scheduleStructuredEditorSync();
-  });
-  root.addEventListener('change', function(e) {
-    if (shouldIgnoreStructuredSyncTarget(e.target, 'change')) return;
-    scheduleStructuredEditorSync();
+  window.PBGuiEditorShared.bindStructuredSyncRoot('main-content', {
+    boundKey: 'run-v7-editor',
+    shouldIgnoreTarget: shouldIgnoreStructuredSyncTarget,
+    scheduleStructured: scheduleStructuredEditorSync
   });
 }
 
