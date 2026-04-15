@@ -132,8 +132,8 @@ Sidebar-Aktionen:
 |--------|--------|
 | `:material/refresh:` | Pareto-Daten neu laden |
 | `:material/arrow_upward_alt:` | Zurück zur Ergebnisliste |
-| **BT selected** | Ausgewählte Pareto-Config als Backtest einreihen → wechselt zur Backtest-Seite |
-| **BT all** | Alle Pareto-Configs als Backtests einreihen |
+| **BT selected** | Bei einer Auswahl: diese Pareto-Config direkt im Backtest-Editor öffnen. Bei mehreren Auswahlen: den Parameter-Dialog der Backtest-Seite öffnen und von dort queueen |
+| **BT all** | Den Parameter-Dialog der Backtest-Seite für alle Pareto-Configs öffnen und sie danach queueen |
 
 Mit den Selektoren **Scenario**, **Statistic** und **analyses** lässt sich steuern, welcher Pareto-Schnitt angezeigt wird.
 
@@ -155,7 +155,9 @@ Mit den Selektoren **Scenario**, **Statistic** und **analyses** lässt sich steu
 ### Ergebnisse auswerten
 1. **Results** → **View Paretos** aktivieren, um die Pareto-Front inline zu durchsuchen
 2. Oder **🎯 explorer** für den vollständigen interaktiven Pareto Explorer
-3. Vielversprechende Configs auswählen → **BT selected** → Backtests werden auf der Backtest-Seite eingereiht
+3. Eine vielversprechende Config auswählen → **BT selected** → direkt im Backtest-Editor zum Prüfen oder Anpassen öffnen
+4. Mehrere vielversprechende Configs auswählen → **BT selected** → gemeinsame Backtest-Parameter auf der Backtest-Seite festlegen und dort queueen
+5. **BT all** verwenden, wenn ein gemeinsamer Parametersatz auf alle Pareto-Configs angewendet und danach gequeued werden soll
 
 ### Bestehende Config verfeinern
 1. **Config** → Config auswählen → `:material/edit:` → Grenzen, Scoring oder Coin-Liste anpassen

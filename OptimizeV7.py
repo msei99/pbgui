@@ -11,7 +11,7 @@ import time
 import multiprocessing
 from Exchange import Exchange, V7
 from PBCoinData import CoinData
-from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars, render_log_viewer
+from pbgui_func import pb7dir, pb7venv, PBGDIR, load_symbols_from_ini, error_popup, info_popup, get_navi_paths, replace_special_chars, render_log_viewer, redirect_to_fastapi_v7_backtest_draft, redirect_to_fastapi_v7_backtest_queue_draft
 from pbgui_purefunc import pb7_suite_preflight_errors
 import uuid
 from pathlib import Path, PurePath
@@ -557,6 +557,23 @@ class OptimizeV7Results:
     
     def initialize(self):
         self.find_results()
+
+    @staticmethod
+    def _reset_pareto_selection_state():
+        current_key = st.session_state.get("ed_key", 0)
+        st.session_state.pop(f'select_paretos_{current_key}', None)
+        st.session_state.ed_key = current_key + 1
+
+    @staticmethod
+    def _dedupe_paths(paths: list[str]) -> list[str]:
+        unique_paths = []
+        seen = set()
+        for path in paths:
+            if not path or path in seen:
+                continue
+            unique_paths.append(path)
+            seen.add(path)
+        return unique_paths
     
     def find_results(self):
         if self.results_path.exists():
@@ -654,6 +671,7 @@ class OptimizeV7Results:
                 if "view" in ed["edited_rows"][row]:
                     if ed["edited_rows"][row]["view"]:
                         if self.results_d[row]["Result"]:
+                            self._reset_pareto_selection_state()
                             st.session_state.opt_v7_pareto = self.results_d[row]["index"]
                             st.session_state.opt_v7_pareto_name = self.results_d[row]["Name"]
                             st.session_state.opt_v7_pareto_directory = self.results_d[row]["Result"]
@@ -767,6 +785,7 @@ class OptimizeV7Results:
         def clear_paretos():
             if "d_paretos" in st.session_state:
                 del st.session_state.d_paretos
+            self._reset_pareto_selection_state()
         
         # New format: Show dropdowns based on whether suite is enabled
         if is_new_format:
@@ -947,6 +966,36 @@ class OptimizeV7Results:
         if "config_v7_config_archive" in st.session_state:
             del st.session_state.config_v7_config_archive
 
+    def _build_backtest_queue_draft_items(self, backtest_paths: list[str]) -> list[dict]:
+        items = []
+        for backtest_path in self._dedupe_paths(backtest_paths):
+            bt_v7 = BacktestV7.BacktestV7Item(backtest_path)
+            base_name = bt_v7.name or "rebacktest"
+            suffix = replace_special_chars(Path(backtest_path).stem)
+            if suffix and suffix != base_name:
+                queue_name = f"{base_name}_{suffix}"
+            else:
+                queue_name = base_name
+            items.append({"name": queue_name, "config": bt_v7.config.config})
+        return items
+
+    def _get_selected_pareto_paths(self, d_paretos: list[dict], ed: dict) -> list[str]:
+        selected_paths = []
+        edited_rows = (ed or {}).get("edited_rows", {})
+        for row, changes in edited_rows.items():
+            if not isinstance(changes, dict) or not changes.get("Select"):
+                continue
+            try:
+                row_index = int(row)
+            except (TypeError, ValueError):
+                continue
+            if row_index < 0 or row_index >= len(d_paretos):
+                continue
+            path = d_paretos[row_index].get("file")
+            if path:
+                selected_paths.append(path)
+        return self._dedupe_paths(selected_paths)
+
     def backtest_selected(self):
         if "d_paretos" in st.session_state:
             d_paretos = st.session_state.d_paretos
@@ -954,42 +1003,28 @@ class OptimizeV7Results:
             return
         ed_key = st.session_state.ed_key
         ed = st.session_state[f'select_paretos_{st.session_state.ed_key}']
-        # Get number of selected paretos
-        selected_count = sum(1 for row in ed["edited_rows"] if "Select" in ed["edited_rows"][row] and ed["edited_rows"][row]["Select"])
-        if selected_count == 0:
+        selected_paths = self._get_selected_pareto_paths(d_paretos, ed)
+        if not selected_paths:
             error_popup("No paretos selected")
             return
         self.cleanup_bt_session_state()
-        for row in ed["edited_rows"]:
-            if "Select" in ed["edited_rows"][row]:
-                if ed["edited_rows"][row]["Select"]:
-                    backtest_name = d_paretos[row]["file"]
-                    # run backtest on selected pareto
-                    if selected_count == 1:
-                        st.session_state.bt_v7 = BacktestV7.BacktestV7Item(backtest_name)
-                        st.switch_page(get_navi_paths()["V7_BACKTEST"])
-                    else:
-                        bt_v7 = BacktestV7.BacktestV7Item(backtest_name)
-                        bt_v7.save_queue()
-        st.session_state.bt_v7_queue = BacktestV7.BacktestV7Queue()
-        st.switch_page(get_navi_paths()["V7_BACKTEST"])
+        if len(selected_paths) == 1:
+            bt_v7 = BacktestV7.BacktestV7Item(selected_paths[0])
+            redirect_to_fastapi_v7_backtest_draft(bt_v7.config.config, bt_v7.name)
+            return
+        redirect_to_fastapi_v7_backtest_queue_draft(self._build_backtest_queue_draft_items(selected_paths))
     
     def backtest_all(self):
         if "d_paretos" in st.session_state:
             d_paretos = st.session_state.d_paretos
         else:
             return
-        for row in range(len(d_paretos)):
-            backtest_name = d_paretos[row]["file"]
-            # run backtest on selected pareto
-            bt_v7 = BacktestV7.BacktestV7Item(backtest_name)
-            bt_v7.save_queue()
-        if "bt_v7_results" in st.session_state:
-            del st.session_state.bt_v7_results
-        if "bt_v7_edit_symbol" in st.session_state:
-            del st.session_state.bt_v7_edit_symbol
-        st.session_state.bt_v7_queue = BacktestV7.BacktestV7Queue()
-        st.switch_page(get_navi_paths()["V7_BACKTEST"])
+        backtest_paths = self._dedupe_paths([row.get("file") for row in d_paretos])
+        if not backtest_paths:
+            error_popup("No paretos available")
+            return
+        self.cleanup_bt_session_state()
+        redirect_to_fastapi_v7_backtest_queue_draft(self._build_backtest_queue_draft_items(backtest_paths))
 
 
     def remove_selected_results(self):

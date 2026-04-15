@@ -67,7 +67,7 @@ PBGui uses:
 - You can override the starting balance used for the compare calculation.
 
 ### 7) Run Compare Backtest
-- Click **Run Compare Backtest** to enqueue a PB7 run.
+- Click **Run Compare Backtest** to save the prepared compare config and enqueue it through the FastAPI Backtest queue.
 - PBGui forces `combine_ohlcvs = false` for new compare runs.
 
 ---

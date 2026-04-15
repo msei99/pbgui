@@ -168,12 +168,14 @@ def opt_v7_pareto():
             opt_v7_results.paretos = []
             if "d_paretos" in st.session_state:
                 del st.session_state.d_paretos
+            opt_v7_results._reset_pareto_selection_state()
             st.rerun()
         if st.button(":material/arrow_upward_alt:", help="Back to Results list"):
             del st.session_state.opt_v7_pareto
             if "d_paretos" in st.session_state:
                 del st.session_state.d_paretos
             opt_v7_results.paretos = []
+            opt_v7_results._reset_pareto_selection_state()
             st.rerun()
         if st.button("BT selected"):
             opt_v7_results.backtest_selected()

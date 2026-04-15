@@ -67,7 +67,7 @@ PBGui verwendet:
 - Du kannst diese Starting Balance für den Compare überschreiben.
 
 ### 7) Compare Backtest starten
-- **Run Compare Backtest** enqueued einen PB7 Run.
+- **Run Compare Backtest** speichert zuerst die vorbereitete Compare-Config und reiht sie dann über die FastAPI-Backtest-Queue ein.
 - Für neue Compare Runs setzt PBGui `combine_ohlcvs = false`.
 
 ---
