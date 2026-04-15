@@ -1351,6 +1351,145 @@ async function newConfig() {
   showConfigEditor('', tmpl, null, tmplParamStatus);
 }
 
+function getInitialBacktestDraftName(cfg, params) {
+  var qpName = params ? (params.get('draft_name') || params.get('name') || '') : '';
+  if (qpName) return qpName;
+  var baseDir = String((((cfg || {}).backtest || {}).base_dir || '')).trim();
+  if (!baseDir) return '';
+  var parts = baseDir.split('/').filter(function(part) { return !!part; });
+  return parts.length ? parts[parts.length - 1] : '';
+}
+
+function clearInitialBacktestUrlParams(url, keys) {
+  keys.forEach(function(key) { url.searchParams.delete(key); });
+  var nextSearch = url.searchParams.toString();
+  window.history.replaceState({}, document.title, url.pathname + (nextSearch ? '?' + nextSearch : '') + url.hash);
+}
+
+async function openInitialBacktestDraftFromUrl() {
+  var url = new URL(window.location.href);
+  var draftId = url.searchParams.get('opt_draft_id');
+  if (!draftId) return false;
+  try {
+    var draft = await apiFetch('/optimize-draft/' + encodeURIComponent(draftId));
+    var cfg = (draft && draft.config) || {};
+    var prepared = await prepareImportedBacktestConfig(cfg);
+    var name = getInitialBacktestDraftName(cfg, url.searchParams);
+    var raw = JSON.stringify(cfg, null, 2);
+    editingConfig = '__new__';
+    selectPanel('configs');
+    showConfigEditor(name, prepared.config, raw, prepared.param_status || {});
+    clearInitialBacktestUrlParams(url, ['opt_draft_id', 'draft_name']);
+    return true;
+  } catch (e) {
+    toast('Failed to open optimizer draft: ' + e.message, 'err');
+    return true;
+  }
+}
+
+function showInitialBacktestQueueDraftModal(items) {
+  if (!Array.isArray(items) || !items.length) {
+    toast('No backtests available in draft', 'err');
+    return;
+  }
+
+  var firstCfg = (items[0] && items[0].config) || {};
+  var today = new Date().toISOString().slice(0, 10);
+  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'combined'];
+  var defExchanges = (firstCfg.backtest && firstCfg.backtest.exchanges) || ['bybit'];
+  var defStart = (firstCfg.backtest && firstCfg.backtest.start_date) || '2020-01-01';
+  var defBalance = (firstCfg.backtest && firstCfg.backtest.starting_balance) || 1000;
+
+  var exOpts = allExchanges.map(function(e) {
+    return '<option value="' + e + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + e + '</option>';
+  }).join('');
+
+  var body =
+    '<div style="display:flex;flex-direction:column;gap:var(--sp-md);height:100%;min-width:0">' +
+      '<div style="flex-shrink:0"><div class="sb-label">start_date</div>' +
+        '<input type="date" id="rbt-start" class="sb-input" style="width:100%" value="' + esc(defStart) + '"></div>' +
+      '<div style="flex-shrink:0"><div class="sb-label">end_date</div>' +
+        '<input type="date" id="rbt-end" class="sb-input" style="width:100%" value="' + esc(today) + '"></div>' +
+      '<div style="flex-shrink:0"><div class="sb-label">Starting Balance</div>' +
+        '<div style="display:flex;align-items:center;gap:var(--sp-xs)">' +
+          '<input id="rbt-balance" class="sb-input" style="flex:1;text-align:right" type="number" min="1" step="100" value="' + defBalance + '">' +
+          '<button class="act-btn" style="width:28px;padding:0" onclick="document.getElementById(\'rbt-balance\').value=Math.max(1,parseFloat(document.getElementById(\'rbt-balance\').value)-100)">−</button>' +
+          '<button class="act-btn" style="width:28px;padding:0" onclick="document.getElementById(\'rbt-balance\').value=parseFloat(document.getElementById(\'rbt-balance\').value)+100">+</button>' +
+        '</div></div>' +
+      '<div style="flex:1;display:flex;flex-direction:column;min-height:60px"><div class="sb-label">Exchanges</div>' +
+        '<select id="rbt-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '</select></div>' +
+      '<div style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
+        '<input type="checkbox" id="rbt-pbgui-data" style="width:auto;margin:0">' +
+        '<label for="rbt-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data</label>' +
+      '</div>' +
+    '</div>';
+
+  showModal('Select backtest parameters', body, [
+    { text: 'OK', cls: 'modal-btn-primary', action: function() {
+      var start = document.getElementById('rbt-start').value.trim();
+      var end = document.getElementById('rbt-end').value.trim();
+      var balance = parseFloat(document.getElementById('rbt-balance').value) || 1000;
+      var usePbguiData = document.getElementById('rbt-pbgui-data').checked;
+      var exSel = document.getElementById('rbt-exchanges');
+      var exchanges = [];
+      for (var i = 0; i < exSel.options.length; i++) {
+        if (exSel.options[i].selected) exchanges.push(exSel.options[i].value);
+      }
+      if (!exchanges.length) { toast('Select at least one exchange', 'err'); return; }
+      closeModal();
+      (usePbguiData ? apiFetch('/pbgui_data_path').then(function(d) { return d.path || ''; }) : Promise.resolve('')).then(function(pbguiPath) {
+        var promises = items.map(function(item) {
+          var cfg = JSON.parse(JSON.stringify((item && item.config) || {}));
+          if (!cfg.backtest) cfg.backtest = {};
+          cfg.backtest.start_date = start;
+          cfg.backtest.end_date = end;
+          cfg.backtest.starting_balance = balance;
+          cfg.backtest.exchanges = exchanges;
+          if (pbguiPath) cfg.backtest.ohlcv_source_dir = pbguiPath;
+          return apiFetch('/queue', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: String((item && item.name) || getInitialBacktestDraftName(cfg, null) || 'rebacktest'),
+              config: cfg
+            })
+          });
+        });
+        Promise.all(promises)
+          .then(function() {
+            toast('Queued ' + items.length + ' backtests', 'ok');
+            selectPanel('queue');
+            wsRefresh();
+          })
+          .catch(function(e) { toast('Failed: ' + e.message, 'err'); });
+      }).catch(function(e) { toast('Failed to get PBGui data path: ' + e.message, 'err'); });
+    }},
+    { text: 'Cancel', cls: '' }
+  ]);
+}
+
+async function openInitialBacktestQueueDraftFromUrl() {
+  var url = new URL(window.location.href);
+  var draftId = url.searchParams.get('queue_draft_id');
+  if (!draftId) return false;
+  try {
+    var draft = await apiFetch('/queue-draft/' + encodeURIComponent(draftId));
+    var items = (draft && draft.items) || [];
+    clearInitialBacktestUrlParams(url, ['queue_draft_id']);
+    selectPanel('configs');
+    showInitialBacktestQueueDraftModal(items);
+    return true;
+  } catch (e) {
+    toast('Failed to open backtest queue draft: ' + e.message, 'err');
+    return true;
+  }
+}
+
+async function initializeBacktestPageFromUrl() {
+  if (await openInitialBacktestDraftFromUrl()) return;
+  await openInitialBacktestQueueDraftFromUrl();
+}
+
 function buildExtraBtExpanderHtml(bt) {
   var extraBtKeys = Object.keys(bt || {}).filter(function(k) { return !KNOWN_BT_PARAMS.has(k); }).sort();
   var html = '';
@@ -6241,6 +6380,7 @@ connectWS();
 // Restore panel from URL hash
 var hash = location.hash.replace('#', '');
 if (['configs', 'queue', 'results', 'archive'].indexOf(hash) >= 0) selectPanel(hash);
+initializeBacktestPageFromUrl();
 </script>
 
 <!-- ── Nav bar ──────────────────────────────────── -->

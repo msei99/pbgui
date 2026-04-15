@@ -41,14 +41,16 @@ SERVICE = "BacktestV7API"
 ARCHIVE_SERVICE = "ArchiveSync"
 CLEANUP_SERVICE = "HLCVSCleanup"
 
-# ── Optimize-from-result draft store ─────────────────────────────────────────
+# ── Draft stores for cross-page handoffs ─────────────────────────────────────
 _opt_draft_store: dict[str, tuple[float, dict]] = {}
+_queue_draft_store: dict[str, tuple[float, list[dict]]] = {}
 _OPT_DRAFT_TTL = 600  # 10 minutes
 
 def _clean_opt_drafts() -> None:
     now = time.time()
-    for k in [k for k, v in _opt_draft_store.items() if now - v[0] > _OPT_DRAFT_TTL]:
-        del _opt_draft_store[k]
+    for store in (_opt_draft_store, _queue_draft_store):
+        for k in [k for k, v in store.items() if now - v[0] > _OPT_DRAFT_TTL]:
+            del store[k]
 
 router = APIRouter()
 
@@ -753,6 +755,38 @@ def get_optimize_draft(draft_id: str, session: SessionToken = Depends(require_au
     if not entry:
         raise HTTPException(status_code=404, detail="Draft not found or expired")
     return {"config": entry[1]}
+
+
+@router.post("/queue-draft")
+def create_queue_draft(body: dict, session: SessionToken = Depends(require_auth)):
+    """Store multiple backtest configs as a short-lived draft for queue parameter selection."""
+    _clean_opt_drafts()
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=422, detail="items must be a non-empty list")
+
+    normalized = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=422, detail="each item must be an object")
+        config = item.get("config")
+        if not isinstance(config, dict):
+            raise HTTPException(status_code=422, detail="each item.config must be a dict")
+        name = str(item.get("name") or "rebacktest")
+        normalized.append({"name": name, "config": config})
+
+    draft_id = secrets.token_urlsafe(16)
+    _queue_draft_store[draft_id] = (time.time(), normalized)
+    return {"draft_id": draft_id}
+
+
+@router.get("/queue-draft/{draft_id}")
+def get_queue_draft(draft_id: str, session: SessionToken = Depends(require_auth)):
+    """Retrieve a previously stored backtest queue draft."""
+    entry = _queue_draft_store.get(draft_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Draft not found or expired")
+    return {"items": entry[1]}
 
 
 # ── REST: PBGui data path ─────────────────────────────────────

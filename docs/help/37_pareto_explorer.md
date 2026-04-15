@@ -43,6 +43,7 @@ Once you have a shortlist:
 
 - Export config JSONs to test them in backtests.
 - Keep notes on which filters/metrics produced the best candidates.
+- Use **Run Backtest** on a selected config to open that exact config directly in the FastAPI Backtest editor.
 
 ## Tips
 

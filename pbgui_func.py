@@ -990,6 +990,132 @@ def redirect_to_fastapi_v7_backtest() -> None:
     st.stop()
 
 
+def redirect_to_fastapi_v7_backtest_draft(config_dict: dict, draft_name: str = "") -> None:
+    """POST a backtest config as draft and open the FastAPI Backtest editor."""
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    try:
+        resp = requests.post(
+            f"http://{api_host}:{api_port}/api/backtest-v7/optimize-draft",
+            json={"config": config_dict},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        draft_id = resp.json().get("draft_id", "")
+    except Exception as e:
+        st.error(f"Failed to create backtest draft: {e}")
+        return
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    draft_name_q = ""
+    if draft_name:
+        draft_name_q = f"&draft_name={requests.utils.quote(str(draft_name), safe='')}"
+    url = (
+        f"http://{browser_host}:{api_port}/api/backtest-v7/main_page"
+        f"?token={token}"
+        f"&st_base={st_base}"
+        f"&opt_draft_id={draft_id}"
+        f"{draft_name_q}"
+    )
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
+
+
+def redirect_to_fastapi_v7_backtest_queue_draft(items: list[dict]) -> None:
+    """POST multiple backtest configs as draft and open the FastAPI queue-parameter flow."""
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    try:
+        resp = requests.post(
+            f"http://{api_host}:{api_port}/api/backtest-v7/queue-draft",
+            json={"items": items},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        draft_id = resp.json().get("draft_id", "")
+    except Exception as e:
+        st.error(f"Failed to create backtest queue draft: {e}")
+        return
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    url = (
+        f"http://{browser_host}:{api_port}/api/backtest-v7/main_page"
+        f"?token={token}"
+        f"&st_base={st_base}"
+        f"&queue_draft_id={draft_id}"
+    )
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
+
+
 def redirect_to_fastapi_v7_run() -> None:
     """Redirect the browser to the standalone FastAPI PBv7 Run page."""
     from api.auth import generate_token

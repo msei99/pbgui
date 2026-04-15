@@ -132,8 +132,8 @@ Sidebar actions:
 |--------|--------|
 | `:material/refresh:` | Reload Pareto data |
 | `:material/arrow_upward_alt:` | Back to the results list |
-| **BT selected** | Enqueue the selected Pareto config as a backtest → switches to Backtest page |
-| **BT all** | Enqueue all Pareto configs as backtests |
+| **BT selected** | With one selection: open that Pareto config directly in the Backtest editor. With multiple selections: open the Backtest page's parameter prompt and queue them from there |
+| **BT all** | Open the Backtest page's parameter prompt for all Pareto configs, then queue them |
 
 Use the **Scenario**, **Statistic** and **analyses** selectors to change which Pareto slice is displayed.
 
@@ -155,7 +155,9 @@ Click **← Back to Optimize Results** in the sidebar to return to the Results t
 ### Explore results
 1. **Results** → tick **View Paretos** to browse the Pareto front inline
 2. Or tick **🎯 explorer** for the full interactive Pareto Explorer
-3. Select promising configs → **BT selected** → backtests are queued on the Backtest page
+3. Select one promising config → **BT selected** → open it directly in the Backtest editor for review or changes before saving/queueing
+4. Select multiple promising configs → **BT selected** → adjust shared backtest parameters on the Backtest page and queue them there
+5. Use **BT all** when you want to apply one shared parameter set to every Pareto config before queueing
 
 ### Tune an existing config
 1. **Config** → select → `:material/edit:` → adjust bounds, scoring or coin list

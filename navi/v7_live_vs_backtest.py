@@ -7,13 +7,15 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
+import requests as _requests
 import streamlit as st
 import pbgui_help
 
-from BacktestV7 import BacktestV7Item, BacktestV7Queue
+from BacktestV7 import BacktestV7Item
 from Database import Database
 from pbgui_func import (
     PBGDIR,
+    _start_fastapi_server_if_needed,
     error_popup,
     get_navi_paths,
     is_authenticted,
@@ -24,6 +26,44 @@ from pbgui_func import (
     set_page_config,
 )
 from pbgui_purefunc import coin_from_symbol_code, compute_pb7_entry_gating_ohlcv_df
+
+
+def _enqueue_saved_backtest_via_api(config_name: str) -> tuple[bool, str]:
+    try:
+        api_host, api_port, ok = _start_fastapi_server_if_needed()
+        if not ok:
+            return False, "API server not running"
+
+        if "api_token" not in st.session_state:
+            from api.auth import generate_token
+            user_id = (
+                st.session_state.get("user", {}).get("id")
+                or st.session_state.get("user")
+                or "anonymous"
+            )
+            st.session_state["api_token"] = generate_token(
+                str(user_id), expires_in_seconds=86400
+            ).token
+
+        token = st.session_state["api_token"]
+        resp = _requests.post(
+            f"http://{api_host}:{api_port}/api/backtest-v7/queue",
+            json={"name": str(config_name)},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        if resp.ok:
+            return True, ""
+
+        detail = resp.text
+        try:
+            payload = resp.json()
+            detail = payload.get("detail") or payload.get("message") or detail
+        except Exception:
+            pass
+        return False, str(detail or f"HTTP {resp.status_code}")
+    except Exception as exc:
+        return False, str(exc)
 
 
 def _pb7_markets_cache_path(exchange: str) -> Path:
@@ -1610,11 +1650,11 @@ def live_vs_backtest_page():
                 latest_balance_info = st.session_state.get(sb_calc_info_key)
 
                 bt.save()
-                bt.save_queue()
-                if "bt_v7_queue" not in st.session_state:
-                    st.session_state.bt_v7_queue = BacktestV7Queue()
-                st.session_state.bt_v7_queue.run()
-                st.success("Backtest enqueued.")
+                queued, queue_error = _enqueue_saved_backtest_via_api(bt.name)
+                if queued:
+                    st.success("Backtest enqueued.")
+                else:
+                    st.error(f"Failed to enqueue backtest: {queue_error}")
 
     # Discover available PB7 results for this user
     results_root = Path(f"{pb7dir()}/backtests/pbgui/{single_user}")
