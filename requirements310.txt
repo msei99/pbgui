@@ -9,6 +9,7 @@ contourpy>=1.2
 numpy==1.24.4
 numba==0.59.1
 hjson==3.1.0
+portalocker==3.2.0
 msgpack==1.0.8
 msgspec==0.20.0 ; python_version >= "3.11"
 ccxt==4.4.85
