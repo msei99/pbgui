@@ -14,6 +14,7 @@ numpy==1.24.4 ; python_version < "3.11"
 numba==0.63.1 ; python_version >= "3.11"
 numba==0.59.1 ; python_version < "3.11"
 hjson==3.1.0
+portalocker==3.2.0
 msgpack==1.1.2 ; python_version >= "3.11"
 msgpack==1.0.8 ; python_version < "3.11"
 msgspec==0.20.0 ; python_version >= "3.11"

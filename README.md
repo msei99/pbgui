@@ -323,6 +323,9 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
+## v1.73 (unreleased)
+- Fixed: Added the missing `portalocker` runtime dependency to the full PBGui requirement sets so PBGui environments that import `pb7_config` start cleanly.
+
 ## v1.72 (15-04-2026)
 - New: PBv7 Backtest is now available as a full FastAPI page with Configs, Queue, Results, Archive, a new asyncio backtest worker with CPU/Autostart settings, shared log panel, rewritten guides, automatic HLCVS cleanup, and live WebSocket updates.
 - Improved: Backtest Queue, Results, and Archive workflows now not only cover Streamlit parity but also go beyond it with config search, queue multi-select and restart actions, Add to Run, Add to Archive, Compare, Optimize from Result, live archive refresh, archive auto-pull interval support, liquidated-result highlighting, and more stable chart/result rendering.
