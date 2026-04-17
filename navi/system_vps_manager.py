@@ -598,7 +598,7 @@ def manage_master():
             st.session_state.view_update_master = True
             st.rerun()
         if st.button("Update PB7"):
-            vpsmanager.command = "master-update-pbonly"
+            vpsmanager.command = "master-update-pb7"
             vpsmanager.command_text = "Update PB7"
             vpsmanager.update_master(debug = st.session_state.setup_debug)
             del st.session_state.manage_master

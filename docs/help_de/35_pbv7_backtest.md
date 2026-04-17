@@ -3,7 +3,7 @@
 Die **PBv7 Backtest** Seite ermöglicht das Erstellen, Ausführen und Auswerten von Passivbot v7 Backtests.
 Es handelt sich um eine eigenständige FastAPI-Seite — kein Seitenneustart nötig. Queue-Updates kommen in Echtzeit per WebSocket.
 
-Die Seite ist in vier Panels gegliedert, die über die linke Sidebar gewechselt werden:
+Die Seite ist in fünf Panels gegliedert, die über die linke Sidebar gewechselt werden:
 
 | Panel | Zweck |
 |-------|-------|
@@ -11,6 +11,7 @@ Die Seite ist in vier Panels gegliedert, die über die linke Sidebar gewechselt 
 | **Queue** | Backtest-Runner überwachen und steuern |
 | **Results** | Abgeschlossene Backtest-Ergebnisse durchsuchen und analysieren |
 | **Archive** | Community- und eigene Config-Archive aufrufen |
+| **Legacy** | Alte Ergebnisordner unter `pb7/backtests` außerhalb des PBGui-verwalteten `pbgui`-Pfads durchsuchen |
 
 Die **obere Navigationsleiste** enthält:
 
@@ -215,6 +216,30 @@ Klick auf eine Archivzeile öffnet es und zeigt seine Ergebnisse.
 | **▶ Add to Run** | Live-Run erstellen |
 | **📈 Compare** | Zur Vergleichsansicht hinzufügen |
 | **🗑 Delete Selected** | Ausgewählte Archiv-Ergebnisse löschen |
+
+---
+
+## Panel: Legacy
+
+Das **Legacy**-Panel ist für alte oder falsch abgelegte Ergebnisordner gedacht, die unter `pb7/backtests/*` liegen, aber nicht unter dem normal von PBGui verwalteten Baum `pb7/backtests/pbgui/*`.
+
+Dieses Panel ist sinnvoll, wenn ein Backtest auf Disk fertig vorliegt, aber im normalen **Results**-Panel nicht erscheint, weil er in einen Legacy-Pfad wie `pb7/backtests/combined/...` geschrieben wurde.
+
+### Toolbar-Aktionen
+
+| Schaltfläche | Aktion |
+|--------|--------|
+| **↻ Refresh** | Legacy-Ergebnisordner erneut scannen |
+| **🔄 Backtest** | Ausgewählte Legacy-Configs als neue Backtests erneut einreihen |
+| **▶ Add to Run** | Live-Run aus der ausgewählten Legacy-Config erstellen |
+| **📈 Compare** | Ausgewählte Legacy-Ergebnisse in einem gemeinsamen Vergleichschart überlagern |
+| **🗑 Delete Selected** | Ausgewählte Legacy-Ergebnisordner von Disk löschen |
+
+### Hinweise
+
+- Die Tabelle unterstützt dasselbe Zeilen- und Drag-Selection-Verhalten wie **Results** und **Archive**.
+- Ergebnisnamen werden bei Bedarf aus dem Verzeichnispfad abgeleitet, wenn der ursprüngliche Config-Name in der Legacy-Config nicht mehr sauber vorhanden ist.
+- Mit **🔄 Backtest** lassen sich Legacy-Läufe wieder in den normal von PBGui verwalteten Workflow überführen.
 
 ---
 
