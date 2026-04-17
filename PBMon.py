@@ -8,6 +8,7 @@ from pathlib import Path, PurePath
 from time import sleep
 import platform
 import traceback
+from api_key_state import get_user_state
 from pbgui_func import PBGDIR
 from telegram import Bot
 from PBRemote import PBRemote
@@ -137,13 +138,13 @@ class PBMon():
     async def check_hl_expiry(self):
         """Check HL API key expiry and send Telegram warnings."""
         from datetime import datetime, timezone
+        warning_days = 7
         warning_days_str = load_ini("hl_expiry", "telegram_warning_days")
-        if not warning_days_str:
-            return
-        try:
-            warning_days = int(warning_days_str)
-        except ValueError:
-            return
+        if warning_days_str:
+            try:
+                warning_days = int(warning_days_str)
+            except ValueError:
+                warning_days = 7
         if warning_days < 1:
             return
 
@@ -160,8 +161,7 @@ class PBMon():
         for user in users:
             if user.exchange != "hyperliquid":
                 continue
-            extra = user.extra if isinstance(user.extra, dict) else {}
-            vu = extra.get("hl_valid_until")
+            vu = get_user_state(user.name).get("hl_valid_until")
             if vu is None:
                 continue
             try:

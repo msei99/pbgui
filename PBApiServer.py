@@ -69,16 +69,22 @@ def _read_serial() -> int:
         return 0
 
 
+def _refresh_restart_state() -> bool:
+    """Recompute whether the running API process needs a restart."""
+    global _needs_restart
+    _needs_restart = _read_serial() != _startup_serial
+    return _needs_restart
+
+
 async def _serial_watcher_loop() -> None:
     """Watch api/serial.txt via inotify; set _needs_restart and notify SSE clients."""
-    global _needs_restart
     from watchfiles import awatch
     _log(SERVICE, "[serial-watcher] started", level="INFO")
     try:
         async for _ in awatch(str(_SERIAL_FILE)):
             current = _read_serial()
-            if current != _startup_serial:
-                _needs_restart = True
+            previous = _needs_restart
+            if _refresh_restart_state() and not previous:
                 _log(SERVICE, f"[serial-watcher] serial changed {_startup_serial}→{current} — restart needed", level="WARNING")
                 for q in list(_sse_subscribers):
                     try:
@@ -815,13 +821,22 @@ async def server_status_stream(token: str = ""):
     async def event_gen():
         try:
             # Send initial state immediately
-            yield f"data: {json.dumps({'needs_restart': _needs_restart})}\n\n"
+            last_sent = _refresh_restart_state()
+            yield f"data: {json.dumps({'needs_restart': last_sent})}\n\n"
             while True:
+                force_send = False
                 try:
                     # wait for change notification (or 25s keepalive)
                     await asyncio.wait_for(queue.get(), timeout=25)
-                    yield f"data: {json.dumps({'needs_restart': _needs_restart})}\n\n"
+                    force_send = True
                 except asyncio.TimeoutError:
+                    pass
+
+                current_state = _refresh_restart_state()
+                if force_send or current_state != last_sent:
+                    last_sent = current_state
+                    yield f"data: {json.dumps({'needs_restart': current_state})}\n\n"
+                else:
                     # keepalive comment so proxies don't close the connection
                     yield ": keepalive\n\n"
         except (GeneratorExit, asyncio.CancelledError):
@@ -838,6 +853,17 @@ async def server_status_stream(token: str = ""):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/api/server-status")
+async def server_status(session: SessionToken = Depends(require_auth)):
+    """Return current restart-detector state for nav fallback checks."""
+    current_serial = _read_serial()
+    return {
+        "needs_restart": _refresh_restart_state(),
+        "startup_serial": _startup_serial,
+        "current_serial": current_serial,
+    }
 
 
 @app.post("/api/token-refresh")

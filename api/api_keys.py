@@ -2,7 +2,7 @@
 FastAPI router: API-Keys management endpoints.
 
 Provides CRUD operations for API key management, connection testing,
-Hyperliquid key expiry checking (with local persistence), and
+Hyperliquid/Bybit key expiry checking (with local state-file persistence), and
 top-level comment field management in api-keys.json.
 All endpoints require auth (Bearer token).
 """
@@ -22,6 +22,15 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from api.auth import SessionToken, require_auth
+from api_key_state import (
+    RUNTIME_STATE_KEYS,
+    clear_user_state,
+    delete_user_state,
+    get_user_state,
+    rename_user_state,
+    strip_runtime_extra,
+    update_user_state,
+)
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR as _PBGDIR
 
@@ -123,7 +132,7 @@ class BybitExpiryInfo(BaseModel):
     expires_at_iso: Optional[str] = None   # ISO date if not IP-bound; "no_expiry" if IP-bound
     days_remaining: Optional[int] = None
     status: str = "unknown"  # "ok" | "expiring_soon" | "critical" | "expired" | "no_expiry" | "error"
-    ips: list = []           # live only – never persisted to disk
+    ips: list[str] = Field(default_factory=list)
     error: Optional[str] = None
 
 
@@ -139,9 +148,9 @@ class DiffRequest(BaseModel):
     filename2: str
 
 
-# Keys stored by the backend in user.extra that users must not see or edit.
-# These are preserved automatically across saves.
-_SYSTEM_EXTRA_KEYS: frozenset[str] = frozenset({"hl_valid_until", "bybit_expires_at"})
+# Legacy runtime keys that may still exist in older api-keys.json files.
+# They are hidden from the editor and stripped automatically on the next save.
+_LEGACY_RUNTIME_EXTRA_KEYS: frozenset[str] = RUNTIME_STATE_KEYS
 
 # ── Helpers ───────────────────────────────────────────────────
 
@@ -186,8 +195,8 @@ def _get_in_use_names() -> set[str]:
     return names
 
 
-def _hl_expiry_from_extra(user) -> dict:
-    """Extract HL expiry info from the user's extra dict (locally stored)."""
+def _hl_expiry_from_state(user) -> dict:
+    """Extract HL expiry info from the local runtime state file."""
     from datetime import datetime, timezone
     result = {
         "hl_valid_until": None,
@@ -197,8 +206,8 @@ def _hl_expiry_from_extra(user) -> dict:
     }
     if user.exchange != "hyperliquid":
         return result
-    extra = user.extra if isinstance(user.extra, dict) else {}
-    vu = extra.get("hl_valid_until")
+    state = get_user_state(user.name)
+    vu = state.get("hl_valid_until")
     if vu is None:
         return result
     try:
@@ -221,8 +230,8 @@ def _hl_expiry_from_extra(user) -> dict:
     return result
 
 
-def _bybit_expiry_from_extra(user) -> dict:
-    """Extract Bybit expiry info from the user's extra dict (locally stored date only)."""
+def _bybit_expiry_from_state(user) -> dict:
+    """Extract Bybit expiry info from the local runtime state file."""
     from datetime import datetime, timezone
     result = {
         "bybit_expires_at_iso": None,
@@ -231,8 +240,8 @@ def _bybit_expiry_from_extra(user) -> dict:
     }
     if user.exchange != "bybit":
         return result
-    extra = user.extra if isinstance(user.extra, dict) else {}
-    eat = extra.get("bybit_expires_at")
+    state = get_user_state(user.name)
+    eat = state.get("bybit_expires_at")
     if eat is None:
         return result
     if eat == "no_expiry":
@@ -257,8 +266,8 @@ def _bybit_expiry_from_extra(user) -> dict:
 
 
 def _user_to_summary(user, in_use: bool) -> UserSummary:
-    hl = _hl_expiry_from_extra(user)
-    bybit = _bybit_expiry_from_extra(user)
+    hl = _hl_expiry_from_state(user)
+    bybit = _bybit_expiry_from_state(user)
     return UserSummary(
         name=user.name,
         exchange=user.exchange,
@@ -274,14 +283,9 @@ def _user_to_summary(user, in_use: bool) -> UserSummary:
 
 
 def _user_to_detail(user, in_use: bool) -> UserDetail:
-    hl = _hl_expiry_from_extra(user)
-    bybit = _bybit_expiry_from_extra(user)
-    # Strip system-managed keys from the user-editable extra dict so they are
-    # never shown in the frontend Extra textarea and cannot be accidentally wiped.
-    user_extra = (
-        {k: v for k, v in user.extra.items() if k not in _SYSTEM_EXTRA_KEYS}
-        if isinstance(user.extra, dict) else None
-    ) or None
+    hl = _hl_expiry_from_state(user)
+    bybit = _bybit_expiry_from_state(user)
+    user_extra = strip_runtime_extra(user.extra) or None
     return UserDetail(
         name=user.name,
         exchange=user.exchange,
@@ -333,7 +337,7 @@ def _get_agent_address(private_key: str) -> Optional[str]:
 
 
 def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
-    """Check expiry for a single Hyperliquid user via HL API and persist to extra."""
+    """Check expiry for a single Hyperliquid user and persist to the local state file."""
     from datetime import datetime, timezone
 
     info = HLExpiryInfo(name=user.name, is_vault=user.is_vault)
@@ -341,6 +345,7 @@ def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
     if not user.private_key:
         info.status = "no_expiry"
         info.error = "No private key configured"
+        clear_user_state(user.name, ("hl_valid_until",))
         return info
 
     agent_addr = _get_agent_address(user.private_key)
@@ -382,17 +387,14 @@ def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
                     break
 
         if not matched:
-            # Agent address not found in extraAgents — could be a legacy key
-            # (no expiry ever registered) OR a revoked key (replaced by a new one).
-            # We cannot distinguish the two cases, so we do NOT wipe the
-            # existing stored expiry date — that would corrupt the persisted
-            # data when the user checks before saving a replacement key.
             info.status = "no_expiry"
+            clear_user_state(user.name, ("hl_valid_until",))
             return info
 
         valid_until = matched.get("validUntil")
         if valid_until is None:
             info.status = "no_expiry"
+            clear_user_state(user.name, ("hl_valid_until",))
             return info
 
         info.valid_until = int(valid_until)
@@ -411,8 +413,7 @@ def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
         else:
             info.status = "ok"
 
-        # Persist to user.extra → api-keys.json
-        _persist_hl_expiry(user, int(valid_until), users_obj)
+        update_user_state(user.name, hl_valid_until=int(valid_until))
 
         return info
 
@@ -422,25 +423,8 @@ def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
         _log(SERVICE, f"HL expiry check failed for {user.name}: {e}",
              level="WARNING", meta={"traceback": traceback.format_exc()})
         return info
-
-
-def _persist_hl_expiry(user, valid_until_ms: Optional[int], users_obj=None):
-    """Save HL expiry to user.extra and persist to api-keys.json."""
-    if not isinstance(user.extra, dict):
-        user.extra = {}
-    if valid_until_ms is not None:
-        user.extra["hl_valid_until"] = valid_until_ms
-    else:
-        user.extra.pop("hl_valid_until", None)
-    if users_obj is not None:
-        try:
-            users_obj.save()
-        except Exception as e:
-            _log(SERVICE, f"Failed to persist HL expiry for {user.name}: {e}", level="WARNING")
-
-
 def _refresh_hl_expiry_cache(users_obj=None) -> dict[str, HLExpiryInfo]:
-    """Fetch HL expiry from exchange API for all HL users and persist."""
+    """Fetch HL expiry from exchange API for all HL users and persist to local state."""
     global _hl_expiry_cache, _hl_expiry_cache_ts
 
     now = time.time()
@@ -452,28 +436,10 @@ def _refresh_hl_expiry_cache(users_obj=None) -> dict[str, HLExpiryInfo]:
         users_obj = _get_users()
 
     result: dict[str, HLExpiryInfo] = {}
-    changed = False
     for user in users_obj:
         if user.exchange == "hyperliquid":
-            # Capture old value BEFORE _check_hl_expiry_single mutates user.extra in-place
-            old_vu = (user.extra or {}).get("hl_valid_until") if isinstance(user.extra, dict) else None
-            info = _check_hl_expiry_single(user, users_obj=None)  # don't save per-user
+            info = _check_hl_expiry_single(user, users_obj=None)
             result[user.name] = info
-            # Detect change by comparing against the pre-call value
-            new_vu = (user.extra or {}).get("hl_valid_until") if isinstance(user.extra, dict) else None
-            if new_vu != old_vu:
-                changed = True
-            elif info.status == "no_expiry":
-                if isinstance(user.extra, dict) and "hl_valid_until" in user.extra:
-                    user.extra.pop("hl_valid_until", None)
-                    changed = True
-
-    if changed:
-        try:
-            users_obj.save()
-            _log(SERVICE, "Persisted HL expiry data to api-keys.json")
-        except Exception as e:
-            _log(SERVICE, f"Failed to persist HL expiry data: {e}", level="WARNING")
 
     with _hl_expiry_cache_lock:
         _hl_expiry_cache = result
@@ -491,7 +457,7 @@ _BYBIT_EXPIRY_CACHE_TTL = 300  # 5 minutes
 
 
 def _check_bybit_expiry_single(user, users_obj=None) -> "BybitExpiryInfo":
-    """Check Bybit API key expiry via GET /v5/user/query-api and persist date to extra."""
+    """Check Bybit API key expiry and persist date/IPs to the local state file."""
     from datetime import datetime, timezone
     import ccxt as _ccxt
 
@@ -500,6 +466,7 @@ def _check_bybit_expiry_single(user, users_obj=None) -> "BybitExpiryInfo":
     if not user.key or not user.secret:
         info.status = "error"
         info.error = "No API key/secret configured"
+        clear_user_state(user.name, ("bybit_expires_at", "bybit_ips"))
         return info
 
     try:
@@ -514,7 +481,7 @@ def _check_bybit_expiry_single(user, users_obj=None) -> "BybitExpiryInfo":
         # IP-bound keys → expiredAt is epoch "1970-01-01T00:00:00Z" → treat as no_expiry
         if not expires_at or expires_at.startswith("1970-01-01"):
             info.status = "no_expiry"
-            _persist_bybit_expiry(user, "no_expiry", users_obj)
+            update_user_state(user.name, bybit_expires_at="no_expiry", bybit_ips=info.ips)
             return info
 
         info.expires_at_iso = expires_at
@@ -531,7 +498,7 @@ def _check_bybit_expiry_single(user, users_obj=None) -> "BybitExpiryInfo":
         else:
             info.status = "ok"
 
-        _persist_bybit_expiry(user, expires_at, users_obj)
+        update_user_state(user.name, bybit_expires_at=expires_at, bybit_ips=info.ips)
         return info
 
     except Exception as e:
@@ -546,25 +513,8 @@ def _check_bybit_expiry_single(user, users_obj=None) -> "BybitExpiryInfo":
             _log(SERVICE, f"Bybit expiry check failed for {user.name}: {e}",
                  level="WARNING", meta={"traceback": traceback.format_exc()})
         return info
-
-
-def _persist_bybit_expiry(user, expires_at_value: Optional[str], users_obj=None):
-    """Save Bybit expiry date to user.extra and optionally flush api-keys.json."""
-    if not isinstance(user.extra, dict):
-        user.extra = {}
-    if expires_at_value is not None:
-        user.extra["bybit_expires_at"] = expires_at_value
-    else:
-        user.extra.pop("bybit_expires_at", None)
-    if users_obj is not None:
-        try:
-            users_obj.save()
-        except Exception as e:
-            _log(SERVICE, f"Failed to persist Bybit expiry for {user.name}: {e}", level="WARNING")
-
-
 def _refresh_bybit_expiry_cache(users_obj=None) -> dict[str, "BybitExpiryInfo"]:
-    """Fetch Bybit expiry from exchange API for all Bybit users and persist."""
+    """Fetch Bybit expiry from exchange API for all Bybit users and persist to local state."""
     global _bybit_expiry_cache, _bybit_expiry_cache_ts
 
     now = time.time()
@@ -576,22 +526,10 @@ def _refresh_bybit_expiry_cache(users_obj=None) -> dict[str, "BybitExpiryInfo"]:
         users_obj = _get_users()
 
     result: dict[str, "BybitExpiryInfo"] = {}
-    changed = False
     for user in users_obj:
         if user.exchange == "bybit":
-            old_val = (user.extra or {}).get("bybit_expires_at") if isinstance(user.extra, dict) else None
             info = _check_bybit_expiry_single(user, users_obj=None)
             result[user.name] = info
-            new_val = (user.extra or {}).get("bybit_expires_at") if isinstance(user.extra, dict) else None
-            if new_val != old_val:
-                changed = True
-
-    if changed:
-        try:
-            users_obj.save()
-            _log(SERVICE, "Persisted Bybit expiry data to api-keys.json")
-        except Exception as e:
-            _log(SERVICE, f"Failed to persist Bybit expiry data: {e}", level="WARNING")
 
     with _bybit_expiry_cache_lock:
         _bybit_expiry_cache = result
@@ -708,7 +646,7 @@ def get_bybit_expiry_all(
 ) -> list[BybitExpiryInfo]:
     """Get Bybit API key expiry info for all Bybit users.
 
-    IPs are included in the response but never persisted to api-keys.json.
+    IPs are included in the response and cached in the local state file, never in api-keys.json.
     Pass force=true to bypass the 5-minute cache.
     """
     global _bybit_expiry_cache_ts
@@ -937,10 +875,11 @@ def create_user(
     user.is_vault = data.is_vault
     user.quote = data.quote
     user.options = data.options
-    user.extra = data.extra or {}
+    user.extra = strip_runtime_extra(data.extra)
 
     users.users.append(user)
     users.save()
+    delete_user_state(name)
 
     _log(SERVICE, f"Created API key user: {name} ({data.exchange})")
     return _user_to_detail(user, False)
@@ -954,6 +893,7 @@ def update_user(
 ) -> UserDetail:
     """Update an existing API key user."""
     from Exchange import Exchanges
+    global _hl_expiry_cache_ts, _bybit_expiry_cache_ts
 
     if data.exchange not in Exchanges.list():
         raise HTTPException(status_code=400, detail=f"Unknown exchange: {data.exchange}")
@@ -969,11 +909,17 @@ def update_user(
     if not user:
         raise HTTPException(status_code=404, detail=f"User '{name}' not found")
 
-    user.exchange = data.exchange
+    old_exchange = user.exchange
+    old_wallet_address = user.wallet_address
+    old_is_vault = user.is_vault
     # Detect actual credential changes BEFORE overwriting (compare new vs stored)
     key_changed = data.key is not None and data.key != user.key
     secret_changed = data.secret is not None and data.secret != user.secret
     private_key_changed = data.private_key is not None and data.private_key != user.private_key
+    wallet_changed = data.wallet_address != old_wallet_address
+    vault_changed = data.is_vault != old_is_vault
+    exchange_changed = data.exchange != old_exchange
+    user.exchange = data.exchange
     user.key = data.key
     # Masked fields: null means "leave unchanged" (frontend "••• leave blank to keep" UX)
     if data.secret is not None:
@@ -986,28 +932,24 @@ def update_user(
     user.is_vault = data.is_vault
     user.quote = data.quote
     user.options = data.options
-    # Merge user-supplied extra with the preserved system-managed keys.
-    # System keys (hl_valid_until, bybit_expires_at) must survive a save even if
-    # the user clears or never edits the Extra textarea.
-    existing_system = {
-        k: v for k, v in (user.extra or {}).items() if k in _SYSTEM_EXTRA_KEYS
-    }
-    # When credentials change, stale expiry data is no longer valid — clear it
-    # so the UI shows "—" instead of a wrong cached value until re-checked.
-    if private_key_changed and user.exchange == "hyperliquid":
-        existing_system.pop("hl_valid_until", None)
-    if (key_changed or secret_changed) and user.exchange == "bybit":
-        existing_system.pop("bybit_expires_at", None)
-    user.extra = {**(data.extra or {}), **existing_system}
+    user.extra = strip_runtime_extra(data.extra)
 
     users.save()
 
+    if exchange_changed:
+        clear_user_state(name)
+    else:
+        if user.exchange == "hyperliquid" and (private_key_changed or wallet_changed or vault_changed):
+            clear_user_state(name, ("hl_valid_until",))
+        if user.exchange == "bybit" and (key_changed or secret_changed):
+            clear_user_state(name, ("bybit_expires_at", "bybit_ips"))
+
     # Invalidate expiry caches when credentials changed
-    if private_key_changed and user.exchange == "hyperliquid":
+    if exchange_changed or old_exchange == "hyperliquid" or user.exchange == "hyperliquid":
         with _hl_expiry_cache_lock:
             _hl_expiry_cache.pop(name, None)
             _hl_expiry_cache_ts = 0.0
-    if (key_changed or secret_changed) and user.exchange == "bybit":
+    if exchange_changed or old_exchange == "bybit" or user.exchange == "bybit":
         with _bybit_expiry_cache_lock:
             _bybit_expiry_cache.pop(name, None)
             _bybit_expiry_cache_ts = 0.0
@@ -1028,6 +970,7 @@ def rename_user(
     session: SessionToken = Depends(require_auth),
 ) -> UserDetail:
     """Rename an API key user. Fails if the user is in use."""
+    global _hl_expiry_cache_ts, _bybit_expiry_cache_ts
     new_name = data.new_name.strip()
     if not new_name:
         raise HTTPException(status_code=400, detail="New name must not be empty")
@@ -1052,6 +995,15 @@ def rename_user(
 
     user.name = new_name
     users.save()
+    rename_user_state(name, new_name)
+    with _hl_expiry_cache_lock:
+        _hl_expiry_cache.pop(name, None)
+        _hl_expiry_cache.pop(new_name, None)
+        _hl_expiry_cache_ts = 0.0
+    with _bybit_expiry_cache_lock:
+        _bybit_expiry_cache.pop(name, None)
+        _bybit_expiry_cache.pop(new_name, None)
+        _bybit_expiry_cache_ts = 0.0
     _log(SERVICE, f"Renamed API key user: {name} → {new_name}")
     return _user_to_detail(user, False)
 
@@ -1062,6 +1014,7 @@ def delete_user(
     session: SessionToken = Depends(require_auth),
 ) -> dict:
     """Delete an API key user. Fails if the user is in use by any instance."""
+    global _hl_expiry_cache_ts, _bybit_expiry_cache_ts
     users = _get_users()
     user = users.find_user(name)
     if not user:
@@ -1074,6 +1027,13 @@ def delete_user(
         )
 
     users.remove_user(name)
+    delete_user_state(name)
+    with _hl_expiry_cache_lock:
+        _hl_expiry_cache.pop(name, None)
+        _hl_expiry_cache_ts = 0.0
+    with _bybit_expiry_cache_lock:
+        _bybit_expiry_cache.pop(name, None)
+        _bybit_expiry_cache_ts = 0.0
     _log(SERVICE, f"Deleted API key user: {name}")
     return {"deleted": name}
 
@@ -1352,34 +1312,42 @@ class HLExpiryConfig(BaseModel):
     telegram_warning_days: int = 7
 
 
+class HLExpiryConfigResponse(HLExpiryConfig):
+    configured: bool = False
+
+
 @router.get("/hl-expiry/config")
 def get_hl_expiry_config(
     session: SessionToken = Depends(require_auth),
-) -> HLExpiryConfig:
-    """Get HL expiry Telegram warning config."""
+) -> HLExpiryConfigResponse:
+    """Get HL expiry Telegram warning config and whether it is explicitly set."""
     from pbgui_purefunc import load_ini
     days_str = load_ini("hl_expiry", "telegram_warning_days")
     days = 7
+    configured = False
     if days_str:
         try:
-            days = int(days_str)
+            parsed_days = int(days_str)
+            if parsed_days >= 1:
+                days = parsed_days
+                configured = True
         except ValueError:
             pass
-    return HLExpiryConfig(telegram_warning_days=days)
+    return HLExpiryConfigResponse(telegram_warning_days=days, configured=configured)
 
 
 @router.put("/hl-expiry/config")
 def update_hl_expiry_config(
     config: HLExpiryConfig,
     session: SessionToken = Depends(require_auth),
-) -> dict:
+) -> HLExpiryConfigResponse:
     """Update HL expiry Telegram warning config."""
     from pbgui_purefunc import save_ini
     if config.telegram_warning_days < 1:
         raise HTTPException(status_code=400, detail="Warning days must be >= 1")
     save_ini("hl_expiry", "telegram_warning_days", str(config.telegram_warning_days))
     _log(SERVICE, f"Updated HL expiry warning days: {config.telegram_warning_days}")
-    return {"status": "saved", "telegram_warning_days": config.telegram_warning_days}
+    return HLExpiryConfigResponse(telegram_warning_days=config.telegram_warning_days, configured=True)
 
 
 # ── TradFi provider endpoints ────────────────────────────────

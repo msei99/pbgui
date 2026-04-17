@@ -6,9 +6,11 @@
 # 3. Install python3.12-venv
 # 4. Remove old venv_pb7
 # 5. Update pb7 repository (keep current branch)
-# 6. Create new python3.12 venv for pb7 + install requirements (upgrade pip)
-# 7. Build passivbot-rust with maturin
-# 8. Start PBRun + PBRemote
+# 6. Measure disk footprint before reinstall
+# 7. Create new python3.12 venv for pb7 + install requirements
+# 8. Build passivbot-rust with maturin
+# 9. Clean rustup downloads/tmp and print disk usage summary
+# 10. Start PBRun + PBRemote
 
 - hosts: "{{ hostname }}"
   gather_facts: true
@@ -16,8 +18,7 @@
   vars:
     ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"
-    pb7_requirements_file: "{{ ansible_user_dir }}/software/pb7/requirements-live.txt"
-    pb7_min_free_mb: 800
+    pb7_requirements_file: "{{ ansible_facts['env']['HOME'] }}/software/pb7/requirements-live.txt"
 
   tasks:
     - name: display facts
@@ -27,7 +28,7 @@
 
     - name: get install_dir
       set_fact:
-        install_dir: "{{ ansible_user_dir }}/software"
+        install_dir: "{{ ansible_facts['env']['HOME'] }}/software"
 
     - name: Stop PBRun + PBRemote
       shell: |
@@ -95,20 +96,24 @@
         var: pb7_repo
       tags: debug,never
 
-    - name: Check free space for pb7 venv install (before)
+    - name: Measure pb7 disk footprint before reinstall
       shell: |
-        df -Pm "{{ install_dir }}" | awk 'NR==2 {print $4}'
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        echo "free_mb=$(df -Pm '{{ install_dir }}' | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb '{{ install_dir }}/venv_pb7')"
+        echo "rust_target_mb=$(path_mb '{{ install_dir }}/pb7/passivbot-rust/target')"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
       args:
         executable: /bin/bash
-      register: pb7_free_mb_before
+      register: pb7_disk_before
       changed_when: false
-
-    - name: Fail early if not enough free space
-      fail:
-        msg: "Not enough free space on filesystem containing {{ install_dir }}: {{ pb7_free_mb_before.stdout | default('unknown') }} MB free, need >= {{ pb7_min_free_mb }} MB. Free disk space or override with -e pb7_min_free_mb=0."
-      when:
-        - pb7_min_free_mb | int > 0
-        - (pb7_free_mb_before.stdout | int) < (pb7_min_free_mb | int)
 
     - name: create python3.12 venv for pb7
       pip:
@@ -120,17 +125,36 @@
         PIP_NO_CACHE_DIR: "1"
         PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
-    - name: Check free space after pb7 requirements install
+    - name: remove pip cache directory
+      file:
+        path: "{{ ansible_facts['env']['HOME'] }}/.cache/pip"
+        state: absent
+
+    - name: clean apt package cache
+      apt:
+        autoremove: yes
+        autoclean: yes
+        clean: yes
+      become: yes
+
+    - name: Measure pb7 disk footprint after requirements install
       shell: |
-        df -Pm "{{ install_dir }}" | awk 'NR==2 {print $4}'
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        echo "free_mb=$(df -Pm '{{ install_dir }}' | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb '{{ install_dir }}/venv_pb7')"
+        echo "rust_target_mb=$(path_mb '{{ install_dir }}/pb7/passivbot-rust/target')"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
       args:
         executable: /bin/bash
-      register: pb7_free_mb_after_deps
+      register: pb7_disk_after_deps
       changed_when: false
-
-    - name: Print pb7 requirements disk usage
-      debug:
-        msg: "pb7 install usage (deps only): {{ (pb7_free_mb_before.stdout | int) - (pb7_free_mb_after_deps.stdout | int) }} MB"
 
     - name: Build passivbot-rust with maturin
       shell: |
@@ -147,25 +171,67 @@
         var: maturin_result
       tags: debug,never
 
-    - name: Check free space at end
+    - name: Measure pb7 disk footprint after Rust build
       shell: |
-        df -Pm "{{ install_dir }}" | awk 'NR==2 {print $4}'
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        echo "free_mb=$(df -Pm '{{ install_dir }}' | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb '{{ install_dir }}/venv_pb7')"
+        echo "rust_target_mb=$(path_mb '{{ install_dir }}/pb7/passivbot-rust/target')"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
       args:
         executable: /bin/bash
-      register: pb7_free_mb_end
+      register: pb7_disk_after_build
       changed_when: false
 
-    - name: Get pb7 venv size (MB)
+    - name: remove rustup downloads directory
+      file:
+        path: "{{ ansible_facts['env']['HOME'] }}/.rustup/downloads"
+        state: absent
+
+    - name: remove rustup tmp directory
+      file:
+        path: "{{ ansible_facts['env']['HOME'] }}/.rustup/tmp"
+        state: absent
+
+    - name: Measure pb7 disk footprint after cleanup
       shell: |
-        du -sm "{{ install_dir }}/venv_pb7" | awk '{print $1}'
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        echo "free_mb=$(df -Pm '{{ install_dir }}' | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb '{{ install_dir }}/venv_pb7')"
+        echo "rust_target_mb=$(path_mb '{{ install_dir }}/pb7/passivbot-rust/target')"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
       args:
         executable: /bin/bash
-      register: pb7_venv_size_mb
+      register: pb7_disk_after_cleanup
       changed_when: false
 
-    - name: Print pb7 total disk usage summary
+    - name: Print pb7 disk usage summary
       debug:
-        msg: "pb7 install summary: deps={{ (pb7_free_mb_before.stdout | int) - (pb7_free_mb_after_deps.stdout | int) }} MB, total={{ (pb7_free_mb_before.stdout | int) - (pb7_free_mb_end.stdout | int) }} MB, venv_size={{ pb7_venv_size_mb.stdout | default('unknown') }} MB"
+        msg:
+          - "before: {{ pb7_disk_before.stdout_lines | join(', ') }}"
+          - "after_deps: {{ pb7_disk_after_deps.stdout_lines | join(', ') }}"
+          - "after_build: {{ pb7_disk_after_build.stdout_lines | join(', ') }}"
+          - "after_cleanup: {{ pb7_disk_after_cleanup.stdout_lines | join(', ') }}"
+          - "usage_mb: deps={{ free_before_mb - free_after_deps_mb }}, build={{ free_after_deps_mb - free_after_build_mb }}, cleanup_reclaimed={{ free_after_cleanup_mb - free_after_build_mb }}, net={{ free_before_mb - free_after_cleanup_mb }}"
+      vars:
+        free_before_mb: "{{ (pb7_disk_before.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
+        free_after_deps_mb: "{{ (pb7_disk_after_deps.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
+        free_after_build_mb: "{{ (pb7_disk_after_build.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
+        free_after_cleanup_mb: "{{ (pb7_disk_after_cleanup.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
 
     - name: Start PBRun + PBRemote
       shell: |

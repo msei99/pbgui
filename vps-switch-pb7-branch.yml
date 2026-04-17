@@ -26,9 +26,9 @@
 
     - name: get install_dir
       set_fact:
-        install_dir: "{{ ansible_env.HOME + '/software' }}"
-        pbgdir: "{{ ansible_env.HOME + '/software/pbgui' }}"
-        pb7dir: "{{ ansible_env.HOME + '/software/pb7' }}"
+        install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
+        pbgdir: "{{ ansible_facts['env']['HOME'] + '/software/pbgui' }}"
+        pb7dir: "{{ ansible_facts['env']['HOME'] + '/software/pb7' }}"
 
     - name: Ensure custom remote exists (optional)
       shell: |
@@ -100,6 +100,26 @@
       notify: restart pb7
 
   handlers:
+    - name: Measure pb7 disk footprint before update
+      shell: |
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        echo "free_mb=$(df -Pm '{{ install_dir }}' | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb '{{ install_dir }}/venv_pb7')"
+        echo "rust_target_mb=$(path_mb '{{ install_dir }}/pb7/passivbot-rust/target')"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
+      args:
+        executable: /bin/bash
+      register: pb7_disk_before
+      changed_when: false
+      listen: "restart pb7"
+
     - name: Install pb7 requirements
       pip:
         virtualenv: "{{ install_dir }}/venv_pb7"
@@ -110,6 +130,32 @@
         PIP_DISABLE_PIP_VERSION_CHECK: "1"
       listen: "restart pb7"
 
+    - name: Remove pip cache directory
+      file:
+        path: "{{ install_dir | dirname }}/.cache/pip"
+        state: absent
+      listen: "restart pb7"
+
+    - name: Measure pb7 disk footprint after requirements install
+      shell: |
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        echo "free_mb=$(df -Pm '{{ install_dir }}' | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb '{{ install_dir }}/venv_pb7')"
+        echo "rust_target_mb=$(path_mb '{{ install_dir }}/pb7/passivbot-rust/target')"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
+      args:
+        executable: /bin/bash
+      register: pb7_disk_after_deps
+      changed_when: false
+      listen: "restart pb7"
+
     - name: Build passivbot-rust with maturin
       shell: |
         source ~/.profile || source ~/.bashrc || true
@@ -118,6 +164,73 @@
       args:
         chdir: "{{ install_dir }}/pb7/passivbot-rust"
         executable: /bin/bash
+      listen: "restart pb7"
+
+    - name: Measure pb7 disk footprint after Rust build
+      shell: |
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        echo "free_mb=$(df -Pm '{{ install_dir }}' | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb '{{ install_dir }}/venv_pb7')"
+        echo "rust_target_mb=$(path_mb '{{ install_dir }}/pb7/passivbot-rust/target')"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
+      args:
+        executable: /bin/bash
+      register: pb7_disk_after_build
+      changed_when: false
+      listen: "restart pb7"
+
+    - name: Remove rustup downloads directory
+      file:
+        path: "{{ install_dir | dirname }}/.rustup/downloads"
+        state: absent
+      listen: "restart pb7"
+
+    - name: Remove rustup tmp directory
+      file:
+        path: "{{ install_dir | dirname }}/.rustup/tmp"
+        state: absent
+      listen: "restart pb7"
+
+    - name: Measure pb7 disk footprint after cleanup
+      shell: |
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        echo "free_mb=$(df -Pm '{{ install_dir }}' | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb '{{ install_dir }}/venv_pb7')"
+        echo "rust_target_mb=$(path_mb '{{ install_dir }}/pb7/passivbot-rust/target')"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
+      args:
+        executable: /bin/bash
+      register: pb7_disk_after_cleanup
+      changed_when: false
+      listen: "restart pb7"
+
+    - name: Print pb7 disk usage summary
+      debug:
+        msg:
+          - "before: {{ pb7_disk_before.stdout_lines | join(', ') }}"
+          - "after_deps: {{ pb7_disk_after_deps.stdout_lines | join(', ') }}"
+          - "after_build: {{ pb7_disk_after_build.stdout_lines | join(', ') }}"
+          - "after_cleanup: {{ pb7_disk_after_cleanup.stdout_lines | join(', ') }}"
+          - "usage_mb: deps={{ free_before_mb - free_after_deps_mb }}, build={{ free_after_deps_mb - free_after_build_mb }}, cleanup_reclaimed={{ free_after_cleanup_mb - free_after_build_mb }}, net={{ free_before_mb - free_after_cleanup_mb }}"
+      vars:
+        free_before_mb: "{{ (pb7_disk_before.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
+        free_after_deps_mb: "{{ (pb7_disk_after_deps.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
+        free_after_build_mb: "{{ (pb7_disk_after_build.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
+        free_after_cleanup_mb: "{{ (pb7_disk_after_cleanup.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
       listen: "restart pb7"
 
     - name: kill all pb7 processes

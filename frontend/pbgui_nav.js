@@ -555,6 +555,10 @@
       });
     }
 
+    /* Restart button: fetch once immediately, then keep live via SSE */
+    fetchRestartStatus(TOKEN, apiOrigin);
+    setInterval(function () { fetchRestartStatus(TOKEN, apiOrigin); }, 30000);
+
     /* SSE: watch for needs_restart */
     setupRestartSSE(TOKEN, apiOrigin);
   }
@@ -598,6 +602,24 @@
     setTimeout(probe, 4000);
   }
 
+  function updateRestartBtnVisible(visible) {
+    var btn = document.getElementById('pbgui-restart-btn');
+    if (btn) btn.style.display = visible ? 'flex' : 'none';
+  }
+
+  function fetchRestartStatus(token, apiOrigin) {
+    if (!token || !apiOrigin) return;
+    fetch(apiOrigin + '/api/server-status?token=' + encodeURIComponent(token), { cache: 'no-store' })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error('server-status failed');
+        return resp.json();
+      })
+      .then(function (data) {
+        updateRestartBtnVisible(!!(data && data.needs_restart));
+      })
+      .catch(function () {});
+  }
+
   function setupRestartSSE(token, apiOrigin) {
     if (!token || !apiOrigin) return;
     var url = apiOrigin + '/api/server-status/stream?token=' + encodeURIComponent(token);
@@ -605,12 +627,12 @@
     es.onmessage = function (e) {
       try {
         var data = JSON.parse(e.data);
-        var btn = document.getElementById('pbgui-restart-btn');
-        if (btn) btn.style.display = data.needs_restart ? 'flex' : 'none';
+        updateRestartBtnVisible(!!data.needs_restart);
       } catch (_) {}
     };
     es.onerror = function () {
       es.close();
+      fetchRestartStatus(token, apiOrigin);
       /* retry after 15s */
       setTimeout(function() { setupRestartSSE(token, apiOrigin); }, 15000);
     };

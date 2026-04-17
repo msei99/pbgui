@@ -117,6 +117,8 @@ Verteilt `api-keys.json` per SSH/SFTP an alle VPS-Server.
 
 Ein Klick überträgt an alle verbundenen VPS — kein Panel nötig. Ein 🔴/🟢-Indikator neben dem Button zeigt den Live-Sync-Status (aktualisiert via SSE).
 
+Wenn der Quick-Button rot ist, zeigt ein Hover an, welche VPS nicht synchron sind und ob der Grund eine abweichende Serial oder ein MD5-Mismatch der übertragenen `api-keys.json` ist.
+
 ### Advanced-Sync-Panel
 
 Öffnen über **Advanced Sync** in der Sidebar. Zeigt eine vereinheitlichte VPS-Tabelle:
@@ -163,6 +165,16 @@ Die API-Keys-Seite liest `api-keys.json` live von der Festplatte. Nach dem autom
 
 **Propagation an sekundäre Master verhindern:**
 In Advanced Sync die Option **"Don't sync to other masters"** aktivieren, bevor Sync Keys geklickt wird. Dadurch wird ein `_sync_lock`-Flag in die gepushte Datei gesetzt — sekundäre Master überspringen diesen Push und pullen ihn nicht.
+
+---
+
+## HL Warning Config
+
+Öffnen über **HL Warning Config** in der Sidebar.
+
+- Wenn `hl_expiry.telegram_warning_days` bereits in `pbgui.ini` vorhanden ist, zeigt das Panel den Wert als **configured** an.
+- Wenn der INI-Eintrag noch fehlt, zeigt das Panel jetzt **Not configured** und weist explizit darauf hin, dass PBMon aktuell mit dem Default von **7 Tagen** arbeitet.
+- Ein Klick auf **Save** schreibt den gewählten Schwellenwert in `pbgui.ini` und der Panel-Status wechselt auf configured.
 
 ---
 
