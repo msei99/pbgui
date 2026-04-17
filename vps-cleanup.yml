@@ -3,7 +3,9 @@
 # Steps:
 # 1. Remove snap
 # 2. Clean up apt cache
-# 3. Clear systemd journal logs
+# 3. Clean up pip cache
+# 4. Clean up rustup downloads/tmp
+# 5. Clear systemd journal logs
 
 - hosts: "{{ hostname }}"
   gather_facts: "{{ debug }}"
@@ -44,6 +46,45 @@
     - name: print apt cleanup result
       debug:
         var: apt_cleanup_result
+
+    - name: remove pip cache directory
+      shell: |
+        if [ -d "$HOME/.cache/pip" ]; then
+          rm -rf "$HOME/.cache/pip"
+          echo removed
+        else
+          echo absent
+        fi
+      args:
+        executable: /bin/bash
+      register: pip_cache_cleanup_result
+      changed_when: "'removed' in pip_cache_cleanup_result.stdout"
+
+    - name: print pip cache cleanup result
+      debug:
+        var: pip_cache_cleanup_result
+
+    - name: remove rustup downloads and tmp directories
+      shell: |
+        removed=0
+        for path in "$HOME/.rustup/downloads" "$HOME/.rustup/tmp"; do
+          if [ -e "$path" ]; then
+            rm -rf "$path"
+            echo "removed $path"
+            removed=1
+          else
+            echo "absent $path"
+          fi
+        done
+        exit 0
+      args:
+        executable: /bin/bash
+      register: rustup_temp_cleanup_result
+      changed_when: "'removed ' in rustup_temp_cleanup_result.stdout"
+
+    - name: print rustup temp cleanup result
+      debug:
+        var: rustup_temp_cleanup_result
     
     - name: clear systemd journal logs
       command: journalctl --vacuum-time=1d

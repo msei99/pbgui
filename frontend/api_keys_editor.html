@@ -882,6 +882,7 @@
                 </div>
                 <button class="btn btn-sm btn-primary" onclick="saveHLExpiryConfig()">Save</button>
             </div>
+            <p id="hlWarningConfigStatus" style="font-size:var(--fs-sm); color:#94a3b8; margin-top:8px;"></p>
             <p style="font-size:var(--fs-sm); color:#94a3b8; margin-top:8px;">
                 Telegram warning when HL keys expire within this many days. Alerts repeat daily.
             </p>
@@ -1049,17 +1050,19 @@
 
     <script>
     // ── Config ──────────────────────────────────────────────
-    // TOKEN, API_BASE, ST_BASE and PBGUI_VERSION are injected server-side by /main_page.
+    // TOKEN, API_BASE, ST_BASE, PBGUI_VERSION and PBGUI_SERIAL are injected server-side by /main_page.
     // The server replaces "%%PLACEHOLDER%%" (with quotes) via html.replace(),
     // so guard strings must use a DIFFERENT form to avoid being replaced too.
     var TOKEN          = "%%TOKEN%%";
     var API_BASE       = "%%API_BASE%%";
     var ST_BASE        = "%%ST_BASE%%";
     var PBGUI_VERSION  = "%%VERSION%%";
+    var PBGUI_SERIAL   = "%%SERIAL%%";
     if (TOKEN          === "%%" + "TOKEN%%")    TOKEN          = new URLSearchParams(window.location.search).get("token") || "";
     if (API_BASE       === "%%" + "API_BASE%%") API_BASE       = "/api/api-keys";
     if (ST_BASE        === "%%" + "ST_BASE%%")  ST_BASE        = "";
     if (PBGUI_VERSION  === "%%" + "VERSION%%")  PBGUI_VERSION  = "";
+    if (PBGUI_SERIAL   === "%%" + "SERIAL%%")   PBGUI_SERIAL   = "";
     const HEADERS = {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + TOKEN,
@@ -2303,9 +2306,28 @@
     async function loadHLExpiryConfig() {
         try {
             const data = await apiFetch("/hl-expiry/config");
-            document.getElementById("hlWarningDays").value = data.telegram_warning_days || 7;
+            updateHLExpiryConfigStatus(data);
         } catch (e) {
             showToast("Failed to load HL config: " + e.message, "error");
+        }
+    }
+
+    function updateHLExpiryConfigStatus(data) {
+        const input = document.getElementById("hlWarningDays");
+        const status = document.getElementById("hlWarningConfigStatus");
+        const parsedDays = parseInt(data && data.telegram_warning_days, 10);
+        const days = Number.isFinite(parsedDays) && parsedDays >= 1 ? parsedDays : 7;
+        const configured = !!(data && data.configured);
+
+        input.value = days;
+        if (!status) return;
+
+        if (configured) {
+            status.textContent = "Configured in pbgui.ini. PBMon warns " + days + " day" + (days === 1 ? "" : "s") + " before expiry.";
+            status.style.color = "#26a69a";
+        } else {
+            status.textContent = "Not configured in pbgui.ini. PBMon currently uses the default 7-day warning window until you save a value here.";
+            status.style.color = "#ecc94b";
         }
     }
 
@@ -2316,10 +2338,11 @@
             return;
         }
         try {
-            await apiFetch("/hl-expiry/config", {
+            const data = await apiFetch("/hl-expiry/config", {
                 method: "PUT",
                 body: JSON.stringify({ telegram_warning_days: days }),
             });
+            updateHLExpiryConfigStatus(data);
             showToast("HL warning config saved", "success");
         } catch (e) {
             showToast("Failed: " + e.message, "error");
@@ -2667,6 +2690,27 @@
     let sshSyncVisible = false;
     var _sshStatusES = null;  // EventSource for live serial updates
     var _sshSyncState = {};    // hostname → true/false/null (in-sync tracking)
+    var _sshSyncInfo = {};     // hostname → {remote_serial, local_serial, in_sync, md5_detail}
+
+    function _sshHostLabel(hostname) {
+        var info = _sshHostMap[hostname] || {};
+        return info.pbname ? info.pbname + " (" + hostname + ")" : hostname;
+    }
+
+    function _describeSshSyncReason(hostname) {
+        var info = _sshSyncInfo[hostname] || {};
+        var parts = [_sshHostLabel(hostname)];
+        if (info.md5_detail && "pb7" in info.md5_detail) {
+            if (info.md5_detail.pb7 === false) parts.push("PB7 MD5 mismatch");
+            else if (info.md5_detail.pb7 == null) parts.push("PB7 status unknown");
+        }
+        if (info.remote_serial == null) {
+            parts.push("remote serial unavailable");
+        } else if (info.local_serial != null && info.remote_serial !== info.local_serial) {
+            parts.push("serial " + info.remote_serial + " != local " + info.local_serial);
+        }
+        return parts.join(" — ");
+    }
 
     async function checkSshSyncStatus() {
         try {
@@ -2674,7 +2718,14 @@
             var hosts = data.connected_hosts || [];
             hosts.forEach(function(h) {
                 var info = data.hosts[h] || {};
+                _sshHostMap[h] = Object.assign({}, _sshHostMap[h] || {}, info);
                 _sshSyncState[h] = info.in_sync != null ? info.in_sync : null;
+                _sshSyncInfo[h] = {
+                    remote_serial: info.remote_serial != null ? info.remote_serial : null,
+                    local_serial: data.local_serial != null ? data.local_serial : null,
+                    in_sync: info.in_sync != null ? info.in_sync : null,
+                    md5_detail: info.md5_detail || {},
+                };
             });
             _updateSshSyncButton();
         } catch (_) { /* ssh sync not configured or unreachable */ }
@@ -2684,18 +2735,26 @@
         var btn = document.getElementById("btnSSHQuick");
         if (!btn) return;
         var hosts = Object.keys(_sshSyncState);
-        if (hosts.length === 0) { btn.className = "sb-btn"; btn.textContent = "\u2601 SSH Sync"; return; }
+        if (hosts.length === 0) {
+            btn.className = "sb-btn";
+            btn.textContent = "\u2601 SSH Sync";
+            btn.title = "";
+            return;
+        }
         var outOfSync = hosts.filter(function(h) { return _sshSyncState[h] === false; });
         var unknown   = hosts.filter(function(h) { return _sshSyncState[h] == null; });
         if (outOfSync.length > 0) {
             btn.className = "sb-btn danger";
             btn.textContent = "\uD83D\uDD34 SSH " + outOfSync.length + "/" + hosts.length + " out of sync";
+            btn.title = outOfSync.map(_describeSshSyncReason).join("\n");
         } else if (unknown.length === hosts.length) {
             btn.className = "sb-btn";
             btn.textContent = "\u2601 SSH Sync";
+            btn.title = "SSH sync status not available yet.";
         } else {
             btn.className = "sb-btn";
             btn.textContent = "\uD83D\uDFE2 SSH all in sync";
+            btn.title = hosts.length + " host(s) in sync.";
         }
     }
 
@@ -2708,6 +2767,12 @@
 
     function _updateSerialCell(hostname, remote_serial, local_serial, in_sync, md5_detail) {
         var cell = document.getElementById("ssh-ser-" + hostname);
+        _sshSyncInfo[hostname] = {
+            remote_serial: remote_serial != null ? remote_serial : null,
+            local_serial: local_serial != null ? local_serial : null,
+            in_sync: in_sync != null ? in_sync : (remote_serial != null && local_serial != null ? remote_serial === local_serial : null),
+            md5_detail: md5_detail || {},
+        };
         if (remote_serial == null) {
             _sshSyncState[hostname] = null;
             if (cell) {
@@ -2808,7 +2873,8 @@
         } catch (e) {
             showToast("SSH Sync failed: " + e.message, "error");
         } finally {
-            if (btn) { btn.disabled = false; btn.textContent = "\u2601 SSH Sync"; }
+            if (btn) btn.disabled = false;
+            await checkSshSyncStatus();
         }
     }
 

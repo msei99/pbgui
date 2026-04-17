@@ -117,6 +117,8 @@ Distribute `api-keys.json` to all VPS servers via SSH/SFTP.
 
 Pushes to all connected VPS with one click — no panel needed. A 🔴/🟢 indicator next to the button shows live sync status (updated via SSE).
 
+When the quick button is red, hover it to see which VPS are out of sync and whether the mismatch comes from differing serials or an MD5 mismatch of the pushed `api-keys.json`.
+
 ### Advanced Sync panel
 
 Open via **Advanced Sync** in the sidebar. Provides a unified VPS table:
@@ -163,6 +165,16 @@ The API Keys page reads `api-keys.json` live from disk. After the automatic pull
 
 **Preventing propagation to secondary masters:**
 In Advanced Sync, check **"Don't sync to other masters"** before clicking Sync Keys. This sets a `_sync_lock` flag in the pushed file so secondary masters skip this particular push and do not pull it.
+
+---
+
+## HL Warning Config
+
+Open via **HL Warning Config** in the sidebar.
+
+- If `hl_expiry.telegram_warning_days` is already present in `pbgui.ini`, the panel shows it as **configured**.
+- If the INI entry is still missing, the panel now shows **Not configured** and makes it explicit that PBMon currently falls back to the default **7-day** warning window.
+- Clicking **Save** writes the chosen threshold to `pbgui.ini` and switches the panel state to configured.
 
 ---
 

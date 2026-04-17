@@ -2,6 +2,7 @@ import json
 import socket
 from pathlib import Path, PurePath
 from datetime import datetime, timezone
+from api_key_state import strip_runtime_extra
 from pbgui_purefunc import pb7dir, PBGDIR, is_pb7_installed
 import shutil
 
@@ -311,8 +312,9 @@ class Users:
                 save_users[user.name]["quote"] = user.quote
             if isinstance(user.options, dict) and user.options:
                 save_users[user.name]["options"] = user.options
-            if isinstance(user.extra, dict) and user.extra:
-                for k, v in user.extra.items():
+            clean_extra = strip_runtime_extra(user.extra)
+            if clean_extra:
+                for k, v in clean_extra.items():
                     if k not in save_users[user.name]:
                         save_users[user.name][k] = v
         # Backup api-keys and save new version

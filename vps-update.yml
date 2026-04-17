@@ -52,6 +52,13 @@
       become: yes
       register: update_result
 
+    - name: clean apt package cache
+      apt:
+        autoremove: yes
+        autoclean: yes
+        clean: yes
+      become: yes
+
     - name: print update result
       debug:
         var: update_result.stdout_lines

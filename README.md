@@ -324,7 +324,22 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.73 (unreleased)
+- Changed: Hyperliquid expiry, Bybit expiry, and Bybit IP metadata now live in a local runtime state file instead of `api-keys.json`, so expiry checks no longer create false SSH sync drift or bump the API-key serial.
+- Fixed: Raised the API serial again on request so the running FastAPI server advertises a pending restart and the shared nav can show the Restart button immediately.
+- Fixed: Bumped the API serial once more so older running API processes that still hold stale `needs_restart=false` state re-detect the pending restart and surface the Restart button again.
+- Fixed: The shared FastAPI nav now polls `/api/server-status` as a fallback, so the Restart button still appears when the SSE restart-status channel is blocked or delayed.
+- Fixed: Restart-button detection is now resilient when filesystem watch events on `api/serial.txt` are missed; the nav SSE stream re-checks the live serial and still surfaces the pending API restart.
+- Fixed: The API Keys page now initializes `PBGUI_SERIAL` before bootstrapping the shared nav, so the About dialog shows the API serial again and the nav config script no longer throws on load.
+- Fixed: Bumped the API serial again so the restart detector picks up the HL Warning Config API/UI update immediately.
+- Improved: HL Warning Config now shows whether the Telegram expiry threshold is explicitly configured in `pbgui.ini` or still running on the default 7-day fallback.
+- Fixed: PBMon now uses the same 7-day fallback for HL expiry Telegram warnings as the GUI when `hl_expiry.telegram_warning_days` is still missing from `pbgui.ini`.
+- Improved: The red SSH Sync quick button now shows the concrete out-of-sync reason on hover, including affected VPS plus serial or MD5 mismatch details.
 - Fixed: Added the missing `portalocker` runtime dependency to the full PBGui requirement sets so PBGui environments that import `pb7_config` start cleanly.
+- Improved: VPS Ansible playbooks now install PBGui requirements without pip cache, remove leftover pip caches during VPS maintenance flows, and run an explicit apt cache cleanup step to reduce disk pressure on small VPS hosts.
+- Improved: PB7 VPS update and rebuild playbooks now log before/after disk footprint snapshots for the venv, Rust target, and rustup temp directories, and they remove rustup `downloads`/`tmp` leftovers after the build so small VPS hosts expose the real net space cost of an update.
+- Fixed: The new PB7 rustup temp measurements now report actual `downloads` and `tmp` sizes; the first implementation always showed `0 MB` because of shell quoting in the Ansible measurement snippets.
+- Improved: The normal PB7 VPS update playbook now also measures disk usage before and after `rustup update`, so the summary covers the complete end-to-end space curve of a real update run instead of only the later handler phase.
+- Fixed: VPS Ansible playbooks now use `ansible_facts[...]` instead of deprecated top-level fact variables like `ansible_env` and `ansible_user_dir`, removing the current Ansible deprecation warnings during VPS maintenance runs.
 
 ## v1.72 (15-04-2026)
 - New: PBv7 Backtest is now available as a full FastAPI page with Configs, Queue, Results, Archive, a new asyncio backtest worker with CPU/Autostart settings, shared log panel, rewritten guides, automatic HLCVS cleanup, and live WebSocket updates.

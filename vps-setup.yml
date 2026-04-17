@@ -52,8 +52,8 @@
 
     - name: get remote_home and install_dir
       set_fact:
-        remote_home: "{{ ansible_env.HOME }}"
-        install_dir: "{{ ansible_env.HOME + '/software' }}"
+        remote_home: "{{ ansible_facts['env']['HOME'] }}"
+        install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
     
     - name: print install_dir
       debug:
@@ -266,7 +266,10 @@
         virtualenv_command: python3.12 -m venv
         virtualenv: "{{ install_dir }}/venv_pbgui"
         requirements: "{{ install_dir }}/pbgui/requirements_vps.txt"
-        extra_args: --upgrade pip
+        extra_args: --no-cache-dir --upgrade pip
+      environment:
+        PIP_NO_CACHE_DIR: "1"
+        PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
     - name: create python3.12 venv for pb7
       pip:
@@ -286,6 +289,18 @@
         chdir: "{{ install_dir }}/pb7/passivbot-rust"
         executable: /bin/bash
       register: maturin_result
+
+    - name: remove pip cache directory
+      file:
+        path: "{{ remote_home }}/.cache/pip"
+        state: absent
+
+    - name: clean apt package cache after setup
+      apt:
+        autoremove: yes
+        autoclean: yes
+        clean: yes
+      become: yes
 
     - name: print maturin result
       debug:
