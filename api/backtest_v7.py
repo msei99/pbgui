@@ -64,11 +64,50 @@ def _validate_name(name: str):
 
 def _editor_config_payload(cfg: dict, *, name: str | None = None) -> dict:
     """Return a Run-style editor payload with separated param status metadata."""
+    if isinstance(cfg, dict):
+        cfg = dict(cfg)
+        backtest = cfg.get("backtest")
+        if isinstance(backtest, dict):
+            backtest = dict(backtest)
+            backtest.pop("base_dir", None)
+            cfg["backtest"] = backtest
     param_status = cfg.pop("_pbgui_param_status", {}) if isinstance(cfg, dict) else {}
     payload = {"config": cfg, "param_status": param_status}
     if name is not None:
         payload["name"] = name
     return payload
+
+
+def _managed_backtest_base_dir(name: str) -> str:
+    return f"backtests/pbgui/{name}"
+
+
+def _normalize_backtest_base_dir(cfg: dict, name: str) -> dict:
+    if not isinstance(cfg, dict):
+        return cfg
+    backtest = cfg.get("backtest")
+    if not isinstance(backtest, dict):
+        backtest = {}
+        cfg["backtest"] = backtest
+    backtest["base_dir"] = _managed_backtest_base_dir(name)
+    return cfg
+
+
+def _load_and_repair_backtest_config(name: str, cfg_file: Path) -> dict:
+    try:
+        cfg = load_pb7_config(cfg_file)
+    except Exception as exc:
+        raise HTTPException(500, f"Error reading config: {exc}") from exc
+
+    expected_base_dir = _managed_backtest_base_dir(name)
+    current_base_dir = str((cfg.get("backtest", {}) or {}).get("base_dir") or "")
+    if current_base_dir != expected_base_dir:
+        _normalize_backtest_base_dir(cfg, name)
+        try:
+            save_pb7_config(cfg, cfg_file)
+        except Exception as exc:
+            raise HTTPException(500, f"Error repairing config: {exc}") from exc
+    return cfg
 
 
 def _bt_queue_dir() -> Path:
@@ -82,6 +121,46 @@ def _bt_configs_dir() -> Path:
 def _bt_results_base() -> str:
     """Base directory for backtest results (inside pb7)."""
     return str(Path(pb7dir()) / "backtests" / "pbgui")
+
+
+def _bt_results_root() -> Path:
+    return Path(pb7dir()) / "backtests"
+
+
+def _legacy_results_roots() -> list[Path]:
+    root = _bt_results_root()
+    if not root.exists():
+        return []
+    return [entry.resolve() for entry in sorted(root.iterdir()) if entry.is_dir() and entry.name != "pbgui"]
+
+
+def _resolve_result_dir(
+    path: str | Path,
+    *,
+    allow_pbgui: bool = True,
+    allow_legacy: bool = True,
+    allow_archives: bool = True,
+) -> Path:
+    result_dir = Path(path).resolve()
+    allowed_roots: list[Path] = []
+    if allow_pbgui:
+        allowed_roots.append(Path(_bt_results_base()).resolve())
+    if allow_legacy:
+        allowed_roots.extend(_legacy_results_roots())
+    if allow_archives:
+        allowed_roots.append(_archives_dir().resolve())
+    for root in allowed_roots:
+        if result_dir.is_relative_to(root):
+            return result_dir
+    raise HTTPException(400, "Invalid result path")
+
+
+def _find_legacy_result_root(result_dir: Path) -> Path:
+    resolved = result_dir.resolve()
+    for root in _legacy_results_roots():
+        if resolved.is_relative_to(root):
+            return root
+    raise HTTPException(400, "Invalid legacy result path")
 
 
 def _bt_log_dir() -> Path:
@@ -1144,16 +1223,17 @@ def _copy_override_files(cfg: dict, src_dir: Path, dst_dir: Path) -> None:
 def save_config(name: str, body: dict, source_name: str = None,
                session: SessionToken = Depends(require_auth)):
     _validate_name(name)
+    cfg = _normalize_backtest_base_dir(body, name)
     cfg_dir = _bt_configs_dir() / name
     cfg_dir.mkdir(parents=True, exist_ok=True)
     # Copy override_config_path files from source when saving as new name
     if source_name and source_name != name:
         _validate_name(source_name)
-        _copy_override_files(body, _bt_configs_dir() / source_name, cfg_dir)
+        _copy_override_files(cfg, _bt_configs_dir() / source_name, cfg_dir)
     cfg_file = cfg_dir / "backtest.json"
-    save_pb7_config(body, cfg_file)
+    save_pb7_config(cfg, cfg_file)
     # Rename pre-normalization override files and delete truly orphaned ones
-    _cleanup_orphaned_overrides(body, cfg_dir)
+    _cleanup_orphaned_overrides(cfg, cfg_dir)
     return {"ok": True, "name": name}
 
 
@@ -1220,6 +1300,14 @@ def duplicate_config(name: str, body: dict, session: SessionToken = Depends(requ
         raise HTTPException(409, f"Config '{new_name}' already exists")
     import shutil
     shutil.copytree(str(src_dir), str(dst_dir))
+    dst_cfg_file = dst_dir / "backtest.json"
+    try:
+        cfg = load_pb7_config(dst_cfg_file)
+        _normalize_backtest_base_dir(cfg, new_name)
+        save_pb7_config(cfg, dst_cfg_file)
+    except Exception as exc:
+        rmtree(str(dst_dir), ignore_errors=True)
+        raise HTTPException(500, f"Failed to duplicate config: {exc}") from exc
     return {"ok": True, "name": new_name}
 
 
@@ -1283,17 +1371,14 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)):
     config = body.get("config")
     if config:
         cfg_dir.mkdir(parents=True, exist_ok=True)
+        _normalize_backtest_base_dir(config, name)
         save_pb7_config(config, cfg_file)
 
     if not cfg_file.exists():
         raise HTTPException(404, f"Config '{name}' not found")
 
-    # Read config to extract exchange info for queue metadata
-    try:
-        with open(cfg_file, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-    except Exception as exc:
-        raise HTTPException(500, f"Error reading config: {exc}")
+    # Repair older configs created before base_dir normalization before queueing.
+    cfg = _load_and_repair_backtest_config(name, cfg_file)
 
     filename = str(uuid.uuid4())
     bt = cfg.get("backtest", {})
@@ -1511,17 +1596,98 @@ def list_results(name: str = None, session: SessionToken = Depends(require_auth)
     return {"results": results}
 
 
+@router.get("/legacy/results")
+def list_legacy_results(session: SessionToken = Depends(require_auth)):
+    """List legacy results found under pb7/backtests/* outside pbgui."""
+    root = _bt_results_root().resolve()
+    if not root.exists():
+        return {"results": []}
+
+    results = []
+    for source_dir in _legacy_results_roots():
+        source_name = source_dir.name
+        for analysis_file in source_dir.glob("**/analysis.json"):
+            result_dir = analysis_file.parent
+            try:
+                with open(analysis_file, "r", encoding="utf-8") as f:
+                    analysis = json.load(f)
+                config_file = result_dir / "config.json"
+                config_data = {}
+                if config_file.exists():
+                    with open(config_file, "r", encoding="utf-8") as f:
+                        config_data = json.load(f)
+
+                bt = config_data.get("backtest", {})
+                bot = config_data.get("bot", {})
+
+                adg = analysis.get("adg_usd", analysis.get("adg", 0))
+                drawdown = analysis.get("drawdown_worst_usd", analysis.get("drawdown_worst", 0))
+                sharpe = analysis.get("sharpe_ratio_usd", analysis.get("sharpe_ratio", 0))
+                eqbal_diff = analysis.get(
+                    "equity_balance_diff_neg_max_usd",
+                    analysis.get("equity_balance_diff_neg_max", 0)
+                )
+                gain = analysis.get("gain_usd", analysis.get("gain", 0))
+                starting_balance = bt.get("starting_balance", 0)
+                final_balance = starting_balance * gain if starting_balance else 0
+
+                liq_threshold = bt.get("liquidation_threshold", 0.05)
+                if "liquidated" in analysis:
+                    liquidated = bool(analysis["liquidated"])
+                else:
+                    liquidated = (
+                        drawdown >= 0.95
+                        or eqbal_diff >= 0.95
+                        or (starting_balance > 0 and final_balance < starting_balance * liq_threshold)
+                    )
+
+                base_dir_val = str(bt.get("base_dir") or "").strip()
+                base_dir_name = Path(base_dir_val).name if base_dir_val else ""
+                if base_dir_name and base_dir_name != "backtests":
+                    config_name = base_dir_name
+                    suggested_name = base_dir_name
+                else:
+                    config_name = f"Legacy {source_name}"
+                    suggested_name = f"legacy_{source_name}_{result_dir.name}"
+
+                results.append({
+                    "path": str(result_dir),
+                    "display_name": str(result_dir.relative_to(root)),
+                    "config_name": config_name,
+                    "result_name": result_dir.name,
+                    "exchange_dir": source_name,
+                    "suggested_name": suggested_name,
+                    "adg": adg,
+                    "drawdown_worst": drawdown,
+                    "sharpe_ratio": sharpe,
+                    "equity_balance_diff_neg_max": eqbal_diff,
+                    "gain": gain,
+                    "starting_balance": starting_balance,
+                    "final_balance": final_balance,
+                    "liquidated": liquidated,
+                    "exchanges": bt.get("exchanges", []),
+                    "start_date": bt.get("start_date", ""),
+                    "end_date": bt.get("end_date", ""),
+                    "btc_collateral_cap": float(bt.get("btc_collateral_cap") or 0),
+                    "twe_long": bot.get("long", {}).get("total_wallet_exposure_limit", 0),
+                    "twe_short": bot.get("short", {}).get("total_wallet_exposure_limit", 0),
+                    "pos_long": bot.get("long", {}).get("n_positions", 0),
+                    "pos_short": bot.get("short", {}).get("n_positions", 0),
+                    "modified": datetime.datetime.fromtimestamp(
+                        analysis_file.stat().st_mtime
+                    ).isoformat(),
+                    "analysis": analysis,
+                })
+            except Exception as e:
+                _log(SERVICE, f"Error reading legacy result {result_dir}: {e}", level="WARNING")
+
+    return {"results": results}
+
+
 @router.get("/results/analysis")
 def get_result_analysis(path: str, session: SessionToken = Depends(require_auth)):
     """Get full analysis.json for a result. Path is the result directory."""
-    result_dir = Path(path)
-    # Security: ensure path is under results base
-    base = Path(_bt_results_base()).resolve()
-    if not result_dir.resolve().is_relative_to(base):
-        # Also allow archive paths
-        archives = _archives_dir().resolve()
-        if not result_dir.resolve().is_relative_to(archives):
-            raise HTTPException(400, "Invalid result path")
+    result_dir = _resolve_result_dir(path)
     analysis_file = result_dir / "analysis.json"
     if not analysis_file.exists():
         raise HTTPException(404, "analysis.json not found")
@@ -1532,12 +1698,7 @@ def get_result_analysis(path: str, session: SessionToken = Depends(require_auth)
 @router.get("/results/config")
 def get_result_config(path: str, session: SessionToken = Depends(require_auth)):
     """Get config.json for a result, with missing params neutralized."""
-    result_dir = Path(path)
-    base = Path(_bt_results_base()).resolve()
-    if not result_dir.resolve().is_relative_to(base):
-        archives = _archives_dir().resolve()
-        if not result_dir.resolve().is_relative_to(archives):
-            raise HTTPException(400, "Invalid result path")
+    result_dir = _resolve_result_dir(path)
     config_file = result_dir / "config.json"
     if not config_file.exists():
         raise HTTPException(404, "config.json not found")
@@ -1547,12 +1708,7 @@ def get_result_config(path: str, session: SessionToken = Depends(require_auth)):
 @router.get("/results/equity")
 def get_result_equity(path: str, session: SessionToken = Depends(require_auth)):
     """Stream balance_and_equity CSV file directly for client-side parsing."""
-    result_dir = Path(path)
-    base = Path(_bt_results_base()).resolve()
-    if not result_dir.resolve().is_relative_to(base):
-        archives = _archives_dir().resolve()
-        if not result_dir.resolve().is_relative_to(archives):
-            raise HTTPException(400, "Invalid result path")
+    result_dir = _resolve_result_dir(path)
 
     csv_file = result_dir / "balance_and_equity.csv"
     gz_file = result_dir / "balance_and_equity.csv.gz"
@@ -1571,12 +1727,7 @@ def get_result_equity(path: str, session: SessionToken = Depends(require_auth)):
 @router.get("/results/fills")
 def get_result_fills(path: str, session: SessionToken = Depends(require_auth)):
     """Stream fills CSV file directly for client-side parsing."""
-    result_dir = Path(path)
-    base = Path(_bt_results_base()).resolve()
-    if not result_dir.resolve().is_relative_to(base):
-        archives = _archives_dir().resolve()
-        if not result_dir.resolve().is_relative_to(archives):
-            raise HTTPException(400, "Invalid result path")
+    result_dir = _resolve_result_dir(path)
 
     csv_file = result_dir / "fills.csv"
     gz_file = result_dir / "fills.csv.gz"
@@ -1595,12 +1746,7 @@ def get_result_fills(path: str, session: SessionToken = Depends(require_auth)):
 @router.get("/results/files")
 def list_result_files(path: str, session: SessionToken = Depends(require_auth)):
     """List all files in a result directory (for UI to know what's available)."""
-    result_dir = Path(path)
-    base = Path(_bt_results_base()).resolve()
-    if not result_dir.resolve().is_relative_to(base):
-        archives = _archives_dir().resolve()
-        if not result_dir.resolve().is_relative_to(archives):
-            raise HTTPException(400, "Invalid result path")
+    result_dir = _resolve_result_dir(path)
     if not result_dir.exists():
         raise HTTPException(404, "Result not found")
     files = []
@@ -1614,12 +1760,7 @@ def list_result_files(path: str, session: SessionToken = Depends(require_auth)):
 def get_result_image(path: str, filename: str,
                      session: SessionToken = Depends(require_auth)):
     """Serve a PNG image from a result directory."""
-    result_dir = Path(path)
-    base = Path(_bt_results_base()).resolve()
-    if not result_dir.resolve().is_relative_to(base):
-        archives = _archives_dir().resolve()
-        if not result_dir.resolve().is_relative_to(archives):
-            raise HTTPException(400, "Invalid result path")
+    result_dir = _resolve_result_dir(path)
     # Security: prevent path traversal
     if ".." in filename:
         raise HTTPException(400, "Invalid filename")
@@ -1636,13 +1777,28 @@ def get_result_image(path: str, filename: str,
 @router.delete("/results")
 def delete_result(path: str, session: SessionToken = Depends(require_auth)):
     """Delete a single result directory."""
-    result_dir = Path(path)
-    base = Path(_bt_results_base()).resolve()
-    if not result_dir.resolve().is_relative_to(base):
-        raise HTTPException(400, "Invalid result path")
+    result_dir = _resolve_result_dir(path, allow_legacy=False, allow_archives=False)
     if not result_dir.exists():
         raise HTTPException(404, "Result not found")
     rmtree(str(result_dir), ignore_errors=True)
+    return {"ok": True}
+
+
+@router.delete("/legacy/results")
+def delete_legacy_result(path: str, session: SessionToken = Depends(require_auth)):
+    """Delete a single legacy result directory."""
+    result_dir = _resolve_result_dir(path, allow_pbgui=False, allow_legacy=True, allow_archives=False)
+    if not result_dir.exists():
+        raise HTTPException(404, "Result not found")
+    legacy_root = _find_legacy_result_root(result_dir)
+    rmtree(str(result_dir), ignore_errors=True)
+    parent = result_dir.parent
+    while parent != legacy_root and parent.is_dir():
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent
     return {"ok": True}
 
 
@@ -1955,11 +2111,8 @@ def add_config_to_archive(name: str, body: dict,
     if not src.exists():
         raise HTTPException(404, "Source path not found")
 
-    # Security: validate source is under results base or archives
-    base = Path(_bt_results_base()).resolve()
-    archives = _archives_dir().resolve()
-    if not (src.resolve().is_relative_to(base) or src.resolve().is_relative_to(archives)):
-        raise HTTPException(400, "Invalid source path")
+    # Security: validate source is under current results, legacy results, or archives
+    src = _resolve_result_dir(src)
 
     archive_dir = _archives_dir() / name
     if not archive_dir.exists():

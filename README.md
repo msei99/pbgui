@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.72
+# v1.73
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -323,7 +323,13 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
-## v1.73 (unreleased)
+## v1.73 (17-04-2026)
+- Improved: PBv7 Backtest no longer shows the explanatory legacy-path note inline above the Legacy table; the Legacy behavior is now documented only in the Guide.
+- Added: PBv7 Backtest now has a separate Legacy panel for result folders found under `pb7/backtests/*` outside `pbgui`, with archive-style refresh, compare, re-backtest, add-to-run, and delete actions for older misplaced runs.
+- Improved: PBv7 Backtest now also shows the effective PBGui-managed `base_dir` inside Additional Parameters as a visible read-only field that tracks the config name, so the target result path stays transparent without reopening arbitrary result-directory overrides.
+- Fixed: PBv7 Backtest now treats `backtest.base_dir` as a PBGui-managed field again, so new, duplicated, queued, and re-saved configs always write results under `backtests/pbgui/<config-name>` instead of falling back to the raw PB7 default path.
+- Fixed: The Master-side `Update PB7` action now runs a dedicated PB7-only playbook instead of the legacy `master-update-pbonly` path, so local PB7 updates no longer enter leftover PB6 clone/install logic.
+- Fixed: The local PB7 master-update playbooks now use a valid heredoc for the post-maturin rust stamp step, fixing the current YAML parse failure in `master-update-pbonly.yml` and the same bug in the related PB7 branch/update playbooks.
 - Changed: Hyperliquid expiry, Bybit expiry, and Bybit IP metadata now live in a local runtime state file instead of `api-keys.json`, so expiry checks no longer create false SSH sync drift or bump the API-key serial.
 - Fixed: Raised the API serial again on request so the running FastAPI server advertises a pending restart and the shared nav can show the Restart button immediately.
 - Fixed: Bumped the API serial once more so older running API processes that still hold stale `needs_restart=false` state re-detect the pending restart and surface the Restart button again.

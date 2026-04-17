@@ -42,6 +42,8 @@ a:hover { text-decoration: underline; }
 #main-content:has(#panel-results.active.unpinned) { overflow-y: auto; }
 /* When archive results panel is unpinned: main-content scrolls everything */
 #main-content:has(#panel-archive.active.arc-unpinned) { overflow-y: auto; }
+/* When legacy results panel is unpinned: main-content scrolls everything */
+#main-content:has(#panel-legacy.active.leg-unpinned) { overflow-y: auto; }
 
 /* Panels */
 .view-panel { display: none; }
@@ -68,6 +70,14 @@ a:hover { text-decoration: underline; }
 #panel-archive.active.arc-unpinned { overflow: visible; flex: none; min-height: unset; height: auto; }
 #panel-archive.arc-unpinned #archive-results-view { overflow: visible; flex: none; min-height: unset; }
 #panel-archive.arc-unpinned #archive-results-scroll { flex: none; min-height: unset; overflow-y: visible; }
+/* ── Legacy results view: PINNED (default) ── */
+#panel-legacy.active:not(.leg-unpinned) { height: 100%; }
+#legacy-results-view { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+#legacy-results-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: var(--sp-lg); }
+/* ── Legacy results view: UNPINNED ── */
+#panel-legacy.active.leg-unpinned { overflow: visible; flex: none; min-height: unset; height: auto; }
+#panel-legacy.leg-unpinned #legacy-results-view { overflow: visible; flex: none; min-height: unset; }
+#panel-legacy.leg-unpinned #legacy-results-scroll { flex: none; min-height: unset; overflow-y: visible; }
 /* Scrollable list areas within panels */
 #configs-list, #queue-list { flex: 1; min-height: 0; overflow-y: auto; }
 /* Config editor replaces list — also needs flex scroll */
@@ -638,6 +648,9 @@ textarea.json-invalid:focus {
       <button class="sb-section" data-panel="archive" onclick="selectPanel('archive')">
         <span class="sb-icon">🗄️</span> Archive
       </button>
+      <button class="sb-section" data-panel="legacy" onclick="selectPanel('legacy')">
+        <span class="sb-icon">🧭</span> Legacy
+      </button>
 
       <!-- Context actions (dynamic) -->
       <hr class="sb-sep">
@@ -676,6 +689,13 @@ textarea.json-invalid:focus {
         <button class="sb-btn" onclick="addToRunFromArchive()">▶ Add to Run</button>
         <button class="sb-btn" onclick="compareSelectedArchive()">📈 Compare</button>
         <button class="sb-btn danger" onclick="deleteSelectedArchiveResults()">🗑 Delete Selected</button>
+      </div>
+      <div id="ctx-legacy" class="ctx-actions" style="display:none">
+        <button class="sb-btn" onclick="loadLegacyResults()">↻ Refresh</button>
+        <button class="sb-btn" onclick="rebacktestSelectedLegacy()">🔄 Backtest</button>
+        <button class="sb-btn" onclick="addToRunFromLegacy()">▶ Add to Run</button>
+        <button class="sb-btn" onclick="compareSelectedLegacy()">📈 Compare</button>
+        <button class="sb-btn danger" onclick="deleteSelectedLegacyResults()">🗑 Delete Selected</button>
       </div>
 
     </div>
@@ -794,6 +814,36 @@ textarea.json-invalid:focus {
       </div>
     </div>
 
+    <!-- LEGACY panel -->
+    <div id="panel-legacy" class="view-panel">
+      <div id="legacy-results-view">
+        <div id="legacy-results-fixed-top" style="background:var(--bg);padding-bottom:var(--sp-sm);border-bottom:2px solid var(--border);box-shadow:0 4px 12px rgba(0,0,0,.6);margin-bottom:var(--sp-md)">
+          <div id="legacy-results-toolbar" style="display:flex;gap:var(--sp-sm);align-items:center;margin-bottom:var(--sp-md);margin-top:var(--sp-sm);flex-wrap:wrap">
+            <label style="font-size:var(--fs-sm);color:var(--text-dim)">Config:</label>
+            <select id="legacy-results-config-filter" class="sb-input" style="max-width:200px" onchange="renderLegacyResults()">
+              <option value="">All configs</option>
+            </select>
+            <input type="text" id="legacy-results-filter" class="sb-input" style="max-width:200px" placeholder="Search name…" oninput="renderLegacyResults()">
+            <span style="flex:1"></span>
+            <button class="act-btn" onclick="selectAllLegacyResults()" title="Select all visible rows">Select All</button>
+            <button class="act-btn" onclick="deselectAllLegacyResults()" title="Deselect all">Deselect</button>
+            <button id="legacy-results-pin-btn" class="act-btn" onclick="toggleLegacyResultsSticky()" title="Pin table (sticky on/off)" style="font-size:15px;padding:0 6px">📌</button>
+          </div>
+          <div id="legacy-results-list-wrap" style="height:25vh;min-height:80px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;position:relative">
+            <div id="legacy-results-table"></div>
+          </div>
+          <div style="height:6px;cursor:row-resize;background:var(--border);border-radius:0 0 4px 4px;margin-bottom:0;display:flex;align-items:center;justify-content:center;user-select:none"
+               id="legacy-results-resize-handle" title="Drag to resize list">
+            <span style="width:32px;height:2px;background:var(--text-dim);border-radius:2px;opacity:.5"></span>
+          </div>
+        </div>
+        <div id="legacy-results-scroll">
+          <div id="legacy-compare-chart-area" style="display:none"></div>
+          <div id="legacy-charts" style="display:none"></div>
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -855,6 +905,7 @@ var _lastQueueHash = '';       // JSON hash of last queue state (skip re-render 
 var results     = [];          // backtest results
 var archives    = [];          // git archives
 var archiveResults = [];       // results in selected archive
+var legacyResults = [];        // results in legacy pb7/backtests paths
 var compareSet  = [];          // paths of results to compare
 var settings    = { autostart: false, cpu: 1, cpu_max: 1, hlcvs_cleanup_enabled: false, hlcvs_cleanup_days: 7, hlcvs_cleanup_interval_h: 24 };
 var currentPanel = 'configs';
@@ -1036,6 +1087,7 @@ function selectPanel(id) {
   }
   if (id === 'results') { if (results.length === 0) loadResults(); else renderResults(); }
   if (id === 'archive' && archives.length === 0) loadArchives();
+  if (id === 'legacy') { if (legacyResults.length === 0) loadLegacyResults(); else renderLegacyResults(); }
   /* If returning to archive while results view is still open, restore DOM and
      fetch fresh results (viewArchive is guarded by currentPanel === 'archive'). */
   if (id === 'archive' && selectedArchiveName) {
@@ -1490,11 +1542,24 @@ async function initializeBacktestPageFromUrl() {
   await openInitialBacktestQueueDraftFromUrl();
 }
 
-function buildExtraBtExpanderHtml(bt) {
+function getManagedBacktestBaseDir(name) {
+  var safeName = String(name || '').trim();
+  return safeName ? 'backtests/pbgui/' + safeName : 'backtests/pbgui/{config-name}';
+}
+
+function syncManagedBacktestBaseDirField() {
+  var el = document.getElementById('managed-bt-base_dir');
+  if (!el) return;
+  var nameEl = document.getElementById('cfg-name');
+  el.value = getManagedBacktestBaseDir(nameEl ? nameEl.value : '');
+}
+
+function buildExtraBtExpanderHtml(bt, configName) {
   var extraBtKeys = Object.keys(bt || {}).filter(function(k) { return !KNOWN_BT_PARAMS.has(k); }).sort();
   var html = '';
+  var managedBaseDir = getManagedBacktestBaseDir(configName);
 
-  if (extraBtKeys.length > 0) {
+  if (extraBtKeys.length > 0 || managedBaseDir) {
     html += '<div class="expander" id="exp-extra-bt">' +
       '<div class="expander-header" onclick="toggleExpander(\'exp-extra-bt\')">' +
         '<span class="arrow">▶</span> Additional Parameters' +
@@ -1502,6 +1567,9 @@ function buildExtraBtExpanderHtml(bt) {
       '</div>' +
       '<div class="expander-body">' +
         '<div class="form-row cols-3">';
+    html += '<div class="form-group" style="grid-column:span 3"><label><span data-tip="PBGui-managed result path for this config. The FastAPI Backtest views and result discovery expect results below this directory.">base_dir</span></label>' +
+      '<input type="text" id="managed-bt-base_dir" class="form-input" value="' + esc(managedBaseDir) + '" readonly>' +
+      '<div style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">Shown for visibility only. PBGui keeps this aligned to the config name and stores results below backtests/pbgui/&lt;config-name&gt;.</div></div>';
     extraBtKeys.forEach(function(k) {
       var v = bt[k];
       var t = typeof v;
@@ -1830,7 +1898,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   html += '</div>'; /* end cols-2 */
 
   /* ── Additional (unknown) backtest parameters expander ── */
-  var extraBtInfo = buildExtraBtExpanderHtml(bt);
+  var extraBtInfo = buildExtraBtExpanderHtml(bt, name);
   _extraBtKeys = extraBtInfo.keys;
   html += extraBtInfo.html;
 
@@ -1874,6 +1942,9 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   suiteInit('suite-container', { apiBase: API_BASE });
   suiteLoad(cfg);
   cfgWireDateRange('cfg-start-date', 'cfg-end-date');
+  var cfgNameEl = document.getElementById('cfg-name');
+  if (cfgNameEl) cfgNameEl.addEventListener('input', syncManagedBacktestBaseDirField);
+  syncManagedBacktestBaseDirField();
   // Init and populate coin overrides editor
   coinOvInit('coin-overrides-container', { apiBase: API_BASE });
   coinOvSetConfigName(name);
@@ -2224,7 +2295,7 @@ function cfgShouldIgnoreStructuredSyncTarget(target, phase) {
 }
 
 function cfgSyncExtraBtFields(bt) {
-  var extraBtInfo = buildExtraBtExpanderHtml(bt || {});
+  var extraBtInfo = buildExtraBtExpanderHtml(bt || {}, document.getElementById('cfg-name') ? document.getElementById('cfg-name').value : '');
   var nextKeys = extraBtInfo.keys;
   var currentEl = document.getElementById('exp-extra-bt');
   var rawEl = document.getElementById('exp-raw');
@@ -4070,6 +4141,19 @@ function _rthA(label, key) {
        + esc(label) + '\x3Cspan class="sort-arrow">' + arrow + '\x3C/span>\x3C/th>';
 }
 
+/* ── Legacy results sort state ── */
+var _legacyResSort = 'adg', _legacyResSortAsc = false;
+function setLegacyResSort(col) {
+  if (_legacyResSort === col) _legacyResSortAsc = !_legacyResSortAsc;
+  else { _legacyResSort = col; _legacyResSortAsc = false; }
+  renderLegacyResults();
+}
+function _rthL(label, key) {
+  var arrow = _legacyResSort === key ? (_legacyResSortAsc ? ' \u25b2' : ' \u25bc') : '';
+  return '\x3Cth style="cursor:pointer" onclick="setLegacyResSort(\'' + key + '\')" title="Sort by ' + label + '">'
+       + esc(label) + '\x3Cspan class="sort-arrow">' + arrow + '\x3C/span>\x3C/th>';
+}
+
 /* ── Shared results table renderer (used by both Results tab and Archive panel) ── */
 function _renderResultsTableInto(el, data, chartsEl, rthFn) {
   _activeResultsCtx = { data: data, chartsEl: chartsEl };
@@ -4397,6 +4481,60 @@ var _arcRowDragMode = null;
   });
 }());
 
+/* ── Legacy results row selection: click to toggle, drag to multi-select ── */
+var _legacyRowDragStart = null;
+var _legacyRowDragSelecting = false;
+var _legacyRowDragMode = null;
+(function() {
+  function rowsOfLegacy() {
+    return Array.from(document.querySelectorAll('#legacy-results-table .tbl tbody tr'));
+  }
+  function rowIdxAtY(rows, y) {
+    var idx = 0;
+    for (var i = 0; i < rows.length; i++) {
+      if (y >= rows[i].getBoundingClientRect().top) idx = i;
+    }
+    return idx;
+  }
+  document.addEventListener('mousedown', function(e) {
+    if (e.button !== 0) return;
+    var tr = e.target.closest('#legacy-results-table .tbl tbody tr');
+    if (!tr || e.target.closest('.actions-cell')) return;
+    e.preventDefault();
+    _legacyRowDragStart = { tr: tr, y: e.clientY };
+    _legacyRowDragSelecting = false;
+    _legacyRowDragMode = null;
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!_legacyRowDragStart) return;
+    if (!_legacyRowDragSelecting && Math.abs(e.clientY - _legacyRowDragStart.y) > 5) {
+      _legacyRowDragSelecting = true;
+      _legacyRowDragMode = _legacyRowDragStart.tr.classList.contains('selected') ? 'remove' : 'add';
+    }
+    if (_legacyRowDragSelecting) {
+      e.preventDefault();
+      var rows = rowsOfLegacy();
+      var anchor = rows.indexOf(_legacyRowDragStart.tr);
+      var cur = rowIdxAtY(rows, e.clientY);
+      var lo = Math.min(anchor, cur), hi = Math.max(anchor, cur);
+      rows.forEach(function(r, i) {
+        if (i >= lo && i <= hi) {
+          if (_legacyRowDragMode === 'add') r.classList.add('selected');
+          else r.classList.remove('selected');
+        }
+      });
+    }
+  });
+  document.addEventListener('mouseup', function() {
+    if (_legacyRowDragStart && !_legacyRowDragSelecting) {
+      _legacyRowDragStart.tr.classList.toggle('selected');
+    }
+    _legacyRowDragStart = null;
+    _legacyRowDragSelecting = false;
+    _legacyRowDragMode = null;
+  });
+}());
+
 function selectAllConfigs() {
   document.querySelectorAll('#configs-list .tbl tbody tr').forEach(function(tr) { tr.classList.add('selected'); });
 }
@@ -4433,6 +4571,20 @@ function getSelectedArchiveResults() {
   return sel;
 }
 
+function selectAllLegacyResults() {
+  document.querySelectorAll('#legacy-results-table .tbl tbody tr').forEach(function(tr) { tr.classList.add('selected'); });
+}
+
+function deselectAllLegacyResults() {
+  document.querySelectorAll('#legacy-results-table .tbl tbody tr').forEach(function(tr) { tr.classList.remove('selected'); });
+}
+
+function getSelectedLegacyResults() {
+  var sel = [];
+  document.querySelectorAll('#legacy-results-table .tbl tbody tr.selected').forEach(function(tr) { sel.push(tr.dataset.path); });
+  return sel;
+}
+
 function deleteSelectedArchiveResults() {
   var sel = getSelectedArchiveResults();
   if (!sel.length) { toast('Nothing selected', 'err'); return; }
@@ -4452,6 +4604,24 @@ function deleteSelectedArchiveResults() {
   ]);
 }
 
+function deleteSelectedLegacyResults() {
+  var sel = getSelectedLegacyResults();
+  if (!sel.length) { toast('Nothing selected', 'err'); return; }
+  showModal('Delete Legacy Results', '\x3Cp>Delete ' + sel.length + ' legacy result(s) from disk? This cannot be undone.\x3C/p>', [
+    { text: 'Cancel', cls: '' },
+    { text: 'Delete', cls: 'modal-btn-danger', action: function() {
+      var promises = sel.map(function(p) {
+        return apiFetch('/legacy/results?path=' + encodeURIComponent(p), { method: 'DELETE' });
+      });
+      Promise.all(promises).then(function() {
+        toast('Deleted', 'ok');
+        loadLegacyResults();
+        closeModal();
+      }).catch(function(e) { toast('Delete failed: ' + e.message, 'err'); });
+    }}
+  ]);
+}
+
 /* ── Pin / un-pin the archive results sticky table ── */
 var _archiveResultsSticky = true;
 function toggleArchiveResultsSticky() {
@@ -4464,6 +4634,22 @@ function toggleArchiveResultsSticky() {
     btn.title = 'Unpin table';
   } else {
     panel.classList.add('arc-unpinned');
+    btn.style.opacity = '0.4';
+    btn.title = 'Pin table';
+  }
+}
+
+var _legacyResultsSticky = true;
+function toggleLegacyResultsSticky() {
+  _legacyResultsSticky = !_legacyResultsSticky;
+  var panel = document.getElementById('panel-legacy');
+  var btn = document.getElementById('legacy-results-pin-btn');
+  if (_legacyResultsSticky) {
+    panel.classList.remove('leg-unpinned');
+    btn.style.opacity = '1';
+    btn.title = 'Unpin table';
+  } else {
+    panel.classList.add('leg-unpinned');
     btn.style.opacity = '0.4';
     btn.title = 'Pin table';
   }
@@ -5427,6 +5613,41 @@ function compareSelectedArchive() {
   });
 }
 
+function compareSelectedLegacy() {
+  var compareEl = document.getElementById('legacy-compare-chart-area');
+  if (compareEl.style.display !== 'none' && compareEl.innerHTML !== '') {
+    compareEl.style.display = 'none';
+    compareEl.innerHTML = '';
+    return;
+  }
+  var sel = getSelectedLegacyResults();
+  if (sel.length < 2) { toast('Select at least 2 results to compare', 'err'); return; }
+  compareEl.style.display = '';
+  compareEl.innerHTML = '\x3Cdiv style="text-align:center;padding:var(--sp-lg);color:var(--text-dim)">Loading equity data for comparison…\x3C/div>';
+  var promises = sel.map(function(path) {
+    if (_beCache[path]) return Promise.resolve({ path: path, be: _beCache[path] });
+    return fetchCSV(path, 'equity').then(function(csv) {
+      var r = legacyResults.find(function(rr) { return rr.path === path; }) || {};
+      var be = normalizeBE(csv, r);
+      _beCache[path] = be;
+      return { path: path, be: be };
+    }).catch(function() { return { path: path, be: { time: [], equity: [], balance: [] } }; });
+  });
+  Promise.all(promises).then(function(allData) {
+    var traces = [];
+    var colors = ['#4da6ff', '#21c354', '#ff8c00', '#ff4b4b', '#b366ff', '#ffcc00', '#00cccc', '#ff66b2'];
+    allData.forEach(function(item, i) {
+      if (!item.be.time.length) return;
+      var label = item.path.split('/').slice(-3).join('/');
+      traces.push({ x: item.be.time, y: item.be.equity, name: 'eq ' + label, line: { width: 0.75, color: colors[i % colors.length] } });
+      traces.push({ x: item.be.time, y: item.be.balance, name: 'bal ' + label, line: { width: 2.5, color: colors[i % colors.length], dash: 'dot' } });
+    });
+    var layout = _chartLayout('', 'Balance');
+    compareEl.innerHTML = chartWrap('legacy-compare-chart-div');
+    Plotly.newPlot('legacy-compare-chart-div', traces, layout, _plotlyConf());
+  });
+}
+
 function rebacktestSelected() {
   var sel = getSelectedResults();
   if (!sel.length) { toast('Nothing selected', 'err'); return; }
@@ -5602,6 +5823,93 @@ function rebacktestSelectedArchive() {
   }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
 }
 
+function _legacySuggestedName(path) {
+  var matched = legacyResults.find(function(r) { return r.path === path; });
+  if (matched) return matched.suggested_name || matched.config_name || matched.result_name || 'legacy_rebacktest';
+  return 'legacy_rebacktest';
+}
+
+function rebacktestSelectedLegacy() {
+  var sel = getSelectedLegacyResults();
+  if (!sel.length) { toast('Nothing selected', 'err'); return; }
+
+  if (sel.length === 1) {
+    apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
+      var name = _legacySuggestedName(sel[0]);
+      editingConfig = name;
+      selectPanel('configs');
+      showConfigEditor(name, cfg);
+    }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
+    return;
+  }
+
+  var today = new Date().toISOString().slice(0, 10);
+  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'combined'];
+  apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
+    var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
+    var defStart = (cfg.backtest && cfg.backtest.start_date) || '2020-01-01';
+    var defBalance = (cfg.backtest && cfg.backtest.starting_balance) || 1000;
+    var exOpts = allExchanges.map(function(e) {
+      return '\x3Coption value="' + e + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + e + '\x3C/option>';
+    }).join('');
+    var body =
+      '\x3Cdiv style="display:flex;flex-direction:column;gap:var(--sp-md);height:100%;min-width:0">' +
+        '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">start_date\x3C/div>' +
+          '\x3Cinput type="date" id="rbt-start" class="sb-input" style="width:100%" value="' + esc(defStart) + '">\x3C/div>' +
+        '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">end_date\x3C/div>' +
+          '\x3Cinput type="date" id="rbt-end" class="sb-input" style="width:100%" value="' + esc(today) + '">\x3C/div>' +
+        '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">Starting Balance\x3C/div>' +
+          '\x3Cdiv style="display:flex;align-items:center;gap:var(--sp-xs)">' +
+            '\x3Cinput id="rbt-balance" class="sb-input" style="flex:1;text-align:right" type="number" min="1" step="100" value="' + defBalance + '">' +
+            '\x3Cbutton class="act-btn" style="width:28px;padding:0" onclick="document.getElementById(\'rbt-balance\').value=Math.max(1,parseFloat(document.getElementById(\'rbt-balance\').value)-100)">−\x3C/button>' +
+            '\x3Cbutton class="act-btn" style="width:28px;padding:0" onclick="document.getElementById(\'rbt-balance\').value=parseFloat(document.getElementById(\'rbt-balance\').value)+100">+\x3C/button>' +
+          '\x3C/div>\x3C/div>' +
+        '\x3Cdiv style="flex:1;display:flex;flex-direction:column;min-height:60px">\x3Cdiv class="sb-label">Exchanges\x3C/div>' +
+          '\x3Cselect id="rbt-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '\x3C/select>\x3C/div>' +
+        '\x3Cdiv style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
+          '\x3Cinput type="checkbox" id="rbt-pbgui-data" style="width:auto;margin:0">' +
+          '\x3Clabel for="rbt-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data\x3C/label>' +
+        '\x3C/div>' +
+      '\x3C/div>';
+    showModal('Select backtest parameters', body, [
+      { text: 'OK', cls: 'modal-btn-primary', action: function() {
+        var start = document.getElementById('rbt-start').value.trim();
+        var end = document.getElementById('rbt-end').value.trim();
+        var balance = parseFloat(document.getElementById('rbt-balance').value) || 1000;
+        var usePbguiData = document.getElementById('rbt-pbgui-data').checked;
+        var exSel = document.getElementById('rbt-exchanges');
+        var exchanges = [];
+        for (var i = 0; i < exSel.options.length; i++) {
+          if (exSel.options[i].selected) exchanges.push(exSel.options[i].value);
+        }
+        if (!exchanges.length) { toast('Select at least one exchange', 'err'); return; }
+        closeModal();
+        (usePbguiData ? apiFetch('/pbgui_data_path').then(function(d) { return d.path || ''; }) : Promise.resolve('')).then(function(pbguiPath) {
+          var promises = sel.map(function(path) {
+            return apiFetch('/results/config?path=' + encodeURIComponent(path)).then(function(cfg) {
+              if (!cfg.backtest) cfg.backtest = {};
+              cfg.backtest.start_date = start;
+              cfg.backtest.end_date = end;
+              cfg.backtest.starting_balance = balance;
+              cfg.backtest.exchanges = exchanges;
+              if (pbguiPath) cfg.backtest.ohlcv_source_dir = pbguiPath;
+              return apiFetch('/queue', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: _legacySuggestedName(path), config: cfg })
+              });
+            });
+          });
+          Promise.all(promises)
+            .then(function() { toast('Queued ' + sel.length + ' backtests', 'ok'); wsRefresh(); })
+            .catch(function(e) { toast('Failed: ' + e.message, 'err'); });
+        }).catch(function(e) { toast('Failed to get PBGui data path: ' + e.message, 'err'); });
+      }},
+      { text: 'Cancel', cls: '' }
+    ]);
+  }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
+}
+
 function addConfigToRunByName(name) {
   if (!name || name === '__new__') { toast('Save the config first', 'err'); return; }
   var v7Base = API_BASE.replace('/backtest-v7', '/v7');
@@ -5737,6 +6045,60 @@ function addToRun() {
 
 function addToRunFromArchive() {
   var sel = getSelectedArchiveResults();
+  if (sel.length !== 1) { toast('Select exactly 1 result', 'err'); return; }
+  var v7Base = API_BASE.replace('/backtest-v7', '/v7');
+
+  function navigateWithConfig(cfg, finalUser) {
+    var cfgToSend = JSON.parse(JSON.stringify(cfg));
+    cfgToSend.live = cfgToSend.live || {};
+    cfgToSend.live.user = finalUser;
+    return fetch(v7Base + '/draft', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: cfgToSend })
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      var editUrl = v7Base + '/edit_page?token=' + encodeURIComponent(TOKEN) +
+        '&new=1&draft_id=' + encodeURIComponent(d.draft_id) + '&st_base=' + encodeURIComponent(ST_BASE);
+      window.location.href = editUrl;
+    });
+  }
+
+  Promise.all([
+    apiFetch('/results/config?path=' + encodeURIComponent(sel[0])),
+    fetch(v7Base + '/instances', { headers: { 'Authorization': 'Bearer ' + TOKEN } }).then(function(r) { return r.json(); }),
+    fetch(v7Base + '/users',     { headers: { 'Authorization': 'Bearer ' + TOKEN } }).then(function(r) { return r.json(); })
+  ]).then(function(res) {
+    var cfg       = res[0];
+    var instances = res[1].instances || [];
+    var users     = res[2].users     || [];
+    var configUser = (cfg.live && cfg.live.user) || (users[0] && users[0].name) || '';
+    var usedBy = {};
+    instances.forEach(function(inst) { if (inst.user) usedBy[inst.user] = inst.name; });
+    var userOptions = users.map(function(u) {
+      return '\x3Coption value="' + esc(u.name) + '">' + esc(u.name) + '\x3C/option>';
+    }).join('');
+    if (configUser && usedBy[configUser]) {
+      var bodyHtml = '\x3Cp>User <b>' + esc(configUser) + '\x3C/b> ' +
+        'already has an active instance: \x3Cem>' + esc(usedBy[configUser]) + '\x3C/em>\x3C/p>' +
+        '\x3Cdiv class="sb-label">Select user for new instance\x3C/div>' +
+        '\x3Cselect id="add-to-run-user-sel" class="sb-input" style="width:100%">' + userOptions + '\x3C/select>';
+      showModal('Add to Run \u2014 User Conflict', bodyHtml, [
+        { text: 'Cancel', cls: '' },
+        { text: 'Continue', cls: 'modal-btn-primary', action: function() {
+          var selEl = document.getElementById('add-to-run-user-sel');
+          var chosen = selEl ? selEl.value : configUser;
+          closeModal();
+          navigateWithConfig(cfg, chosen).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
+        }}
+      ]);
+    } else {
+      navigateWithConfig(cfg, configUser).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
+    }
+  }).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
+}
+
+function addToRunFromLegacy() {
+  var sel = getSelectedLegacyResults();
   if (sel.length !== 1) { toast('Select exactly 1 result', 'err'); return; }
   var v7Base = API_BASE.replace('/backtest-v7', '/v7');
 
@@ -6054,6 +6416,13 @@ function loadArchiveResults() {
   if (selectedArchiveName) viewArchive(selectedArchiveName);
 }
 
+function loadLegacyResults() {
+  apiFetch('/legacy/results').then(function(d) {
+    legacyResults = d.results || [];
+    if (currentPanel === 'legacy') renderLegacyResults();
+  }).catch(function(e) { if (currentPanel === 'legacy') toast('Load failed: ' + e.message, 'err'); });
+}
+
 function renderArchiveResults(name) {
   var tableEl = document.getElementById('archive-results-table');
   var chartsEl = document.getElementById('archive-charts');
@@ -6096,6 +6465,48 @@ function renderArchiveResults(name) {
   });
 
   _renderResultsTableInto(tableEl, sorted, chartsEl, _rthA);
+}
+
+function renderLegacyResults() {
+  var tableEl = document.getElementById('legacy-results-table');
+  var chartsEl = document.getElementById('legacy-charts');
+
+  var cfgSel = document.getElementById('legacy-results-config-filter');
+  if (cfgSel) {
+    var cfgVal = cfgSel.value;
+    var cfgNames = [];
+    legacyResults.forEach(function(r) { if (cfgNames.indexOf(r.config_name) < 0) cfgNames.push(r.config_name); });
+    cfgNames.sort();
+    cfgSel.innerHTML = '\x3Coption value="">All configs\x3C/option>' +
+      cfgNames.map(function(n) { return '\x3Coption value="' + esc(n) + '"' + (n === cfgVal ? ' selected' : '') + '>' + esc(n) + '\x3C/option>'; }).join('');
+  }
+
+  var cfgFilter = cfgSel ? cfgSel.value : '';
+  var textFilter = ((document.getElementById('legacy-results-filter') || {}).value || '').toLowerCase();
+  var filtered = legacyResults.filter(function(r) {
+    if (cfgFilter && r.config_name !== cfgFilter) return false;
+    if (!textFilter) return true;
+    var hay = ((r.display_name || '') + ' ' + (r.config_name || '') + ' ' + (r.result_name || '')).toLowerCase();
+    return hay.indexOf(textFilter) >= 0;
+  });
+
+  if (!filtered.length) {
+    tableEl.innerHTML = '\x3Cdiv class="empty-state">No legacy results found under pb7/backtests.\x3C/div>';
+    return;
+  }
+
+  var sorted = filtered.slice().sort(function(a, b) {
+    var va = a[_legacyResSort], vb = b[_legacyResSort];
+    if (va === undefined) va = '';
+    if (vb === undefined) vb = '';
+    if (typeof va === 'string') va = va.toLowerCase();
+    if (typeof vb === 'string') vb = vb.toLowerCase();
+    if (va < vb) return _legacyResSortAsc ? -1 : 1;
+    if (va > vb) return _legacyResSortAsc ? 1 : -1;
+    return 0;
+  });
+
+  _renderResultsTableInto(tableEl, sorted, chartsEl, _rthL);
 }
 
 function addArchive() {
@@ -6371,6 +6782,31 @@ function fmtDate(iso) {
 })();
 
 /* ════════════════════════════════════════════════
+   LEGACY RESULTS TABLE — resize handle
+   ════════════════════════════════════════════════ */
+(function() {
+  var handle = document.getElementById('legacy-results-resize-handle');
+  var wrap = document.getElementById('legacy-results-list-wrap');
+  if (!handle || !wrap) return;
+  var dragging = false, startY = 0, startH = 0;
+  handle.addEventListener('mousedown', function(e) {
+    dragging = true;
+    startY = e.clientY;
+    startH = wrap.offsetHeight;
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    var newH = Math.max(80, startH + (e.clientY - startY));
+    wrap.style.height = newH + 'px';
+  });
+  document.addEventListener('mouseup', function() {
+    if (dragging) { dragging = false; document.body.style.userSelect = ''; }
+  });
+})();
+
+/* ════════════════════════════════════════════════
    INIT
    ════════════════════════════════════════════════ */
 loadSettings();
@@ -6379,7 +6815,7 @@ connectWS();
 
 // Restore panel from URL hash
 var hash = location.hash.replace('#', '');
-if (['configs', 'queue', 'results', 'archive'].indexOf(hash) >= 0) selectPanel(hash);
+if (['configs', 'queue', 'results', 'archive', 'legacy'].indexOf(hash) >= 0) selectPanel(hash);
 initializeBacktestPageFromUrl();
 </script>
 

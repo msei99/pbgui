@@ -3,7 +3,7 @@
 The **PBv7 Backtest** page lets you create, run and evaluate Passivbot v7 backtests.
 It is a standalone FastAPI page — no page reload is needed. Real-time queue updates arrive via WebSocket.
 
-The page is organised into four panels selected from the left sidebar:
+The page is organised into five panels selected from the left sidebar:
 
 | Panel | Purpose |
 |-------|---------|
@@ -11,6 +11,7 @@ The page is organised into four panels selected from the left sidebar:
 | **Queue** | Monitor and control the backtest runner |
 | **Results** | Browse and analyse completed backtest results |
 | **Archive** | Access community and personal config archives |
+| **Legacy** | Browse old result folders found under `pb7/backtests` outside the PBGui-managed `pbgui` path |
 
 The **top navigation bar** contains:
 
@@ -215,6 +216,30 @@ Click an archive row to open it and browse its results.
 | **▶ Add to Run** | Create a live run |
 | **📈 Compare** | Add to comparison view |
 | **🗑 Delete Selected** | Remove selected archive results |
+
+---
+
+## Legacy panel
+
+The **Legacy** panel is meant for old or misplaced result folders that exist under `pb7/backtests/*` but not under the normal PBGui-managed `pb7/backtests/pbgui/*` tree.
+
+Use this panel when a backtest finished on disk but does not appear in the normal **Results** panel because it was written to a legacy location such as `pb7/backtests/combined/...`.
+
+### Toolbar actions
+
+| Button | Action |
+|--------|--------|
+| **↻ Refresh** | Re-scan legacy result folders |
+| **🔄 Backtest** | Re-run selected legacy configs as new queued backtests |
+| **▶ Add to Run** | Create a live run from the selected legacy config |
+| **📈 Compare** | Overlay selected legacy results in a shared comparison chart |
+| **🗑 Delete Selected** | Delete selected legacy result folders from disk |
+
+### Notes
+
+- The table supports the same row selection and drag-selection behavior as **Results** and **Archive**.
+- Result names may be inferred from the directory path when the original config name is no longer available inside the legacy config.
+- Use **🔄 Backtest** to move legacy runs back into the normal PBGui-managed workflow.
 
 ---
 

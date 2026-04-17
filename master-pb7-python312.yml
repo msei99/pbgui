@@ -188,13 +188,13 @@
     - name: Write rust source stamp after maturin build
       shell: |
         source "{{ pb7venv }}/bin/activate"
-        python -c "
-import sys
-sys.path.insert(0, 'src')
-from rust_utils import stamp_compiled_extensions, source_fingerprint
-stamp_compiled_extensions(source_fingerprint())
-print('Rust source stamp updated.')
-"
+        python - <<'PY'
+        import sys
+        sys.path.insert(0, 'src')
+        from rust_utils import stamp_compiled_extensions, source_fingerprint
+        stamp_compiled_extensions(source_fingerprint())
+        print('Rust source stamp updated.')
+        PY
       args:
         chdir: "{{ pb7dir }}"
         executable: /bin/bash
