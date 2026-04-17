@@ -324,28 +324,15 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.73 (17-04-2026)
-- Improved: PBv7 Backtest no longer shows the explanatory legacy-path note inline above the Legacy table; the Legacy behavior is now documented only in the Guide.
-- Added: PBv7 Backtest now has a separate Legacy panel for result folders found under `pb7/backtests/*` outside `pbgui`, with archive-style refresh, compare, re-backtest, add-to-run, and delete actions for older misplaced runs.
-- Improved: PBv7 Backtest now also shows the effective PBGui-managed `base_dir` inside Additional Parameters as a visible read-only field that tracks the config name, so the target result path stays transparent without reopening arbitrary result-directory overrides.
-- Fixed: PBv7 Backtest now treats `backtest.base_dir` as a PBGui-managed field again, so new, duplicated, queued, and re-saved configs always write results under `backtests/pbgui/<config-name>` instead of falling back to the raw PB7 default path.
-- Fixed: The Master-side `Update PB7` action now runs a dedicated PB7-only playbook instead of the legacy `master-update-pbonly` path, so local PB7 updates no longer enter leftover PB6 clone/install logic.
-- Fixed: The local PB7 master-update playbooks now use a valid heredoc for the post-maturin rust stamp step, fixing the current YAML parse failure in `master-update-pbonly.yml` and the same bug in the related PB7 branch/update playbooks.
-- Changed: Hyperliquid expiry, Bybit expiry, and Bybit IP metadata now live in a local runtime state file instead of `api-keys.json`, so expiry checks no longer create false SSH sync drift or bump the API-key serial.
-- Fixed: Raised the API serial again on request so the running FastAPI server advertises a pending restart and the shared nav can show the Restart button immediately.
-- Fixed: Bumped the API serial once more so older running API processes that still hold stale `needs_restart=false` state re-detect the pending restart and surface the Restart button again.
-- Fixed: The shared FastAPI nav now polls `/api/server-status` as a fallback, so the Restart button still appears when the SSE restart-status channel is blocked or delayed.
-- Fixed: Restart-button detection is now resilient when filesystem watch events on `api/serial.txt` are missed; the nav SSE stream re-checks the live serial and still surfaces the pending API restart.
-- Fixed: The API Keys page now initializes `PBGUI_SERIAL` before bootstrapping the shared nav, so the About dialog shows the API serial again and the nav config script no longer throws on load.
-- Fixed: Bumped the API serial again so the restart detector picks up the HL Warning Config API/UI update immediately.
-- Improved: HL Warning Config now shows whether the Telegram expiry threshold is explicitly configured in `pbgui.ini` or still running on the default 7-day fallback.
-- Fixed: PBMon now uses the same 7-day fallback for HL expiry Telegram warnings as the GUI when `hl_expiry.telegram_warning_days` is still missing from `pbgui.ini`.
+- Fixed: In the legacy Streamlit PBv7 Optimize editor, Hyperliquid `XYZ-...` approved coins now stay selected instead of being dropped immediately because the multiselect and saved config now use the same normalized symbol format.
+- Improved: PBv7 Backtest now keeps PBGui-managed results on a visible, enforced `backtests/pbgui/<config-name>` path and adds a dedicated Legacy panel for older result folders found elsewhere under `pb7/backtests/*`.
+- Fixed: Master-side PB7 updates now use the dedicated `master-update-pb7` path, and the related PB7 update/switch playbooks no longer fail on the post-maturin heredoc step.
+- Changed: Hyperliquid expiry, Bybit expiry, and Bybit IP metadata now live in a local runtime state file instead of `api-keys.json`, avoiding false SSH sync drift and unnecessary API-key serial bumps.
+- Improved: API restart detection is now more robust across the shared FastAPI nav and API Keys page, with better serial re-detection, SSE/live-serial checks, and `/api/server-status` fallback polling so the Restart button appears reliably.
+- Improved: HL expiry warning handling is clearer and consistent: the GUI shows whether the Telegram warning threshold comes from `pbgui.ini` or the default, and PBMon now uses the same 7-day fallback.
 - Improved: The red SSH Sync quick button now shows the concrete out-of-sync reason on hover, including affected VPS plus serial or MD5 mismatch details.
-- Fixed: Added the missing `portalocker` runtime dependency to the full PBGui requirement sets so PBGui environments that import `pb7_config` start cleanly.
-- Improved: VPS Ansible playbooks now install PBGui requirements without pip cache, remove leftover pip caches during VPS maintenance flows, and run an explicit apt cache cleanup step to reduce disk pressure on small VPS hosts.
-- Improved: PB7 VPS update and rebuild playbooks now log before/after disk footprint snapshots for the venv, Rust target, and rustup temp directories, and they remove rustup `downloads`/`tmp` leftovers after the build so small VPS hosts expose the real net space cost of an update.
-- Fixed: The new PB7 rustup temp measurements now report actual `downloads` and `tmp` sizes; the first implementation always showed `0 MB` because of shell quoting in the Ansible measurement snippets.
-- Improved: The normal PB7 VPS update playbook now also measures disk usage before and after `rustup update`, so the summary covers the complete end-to-end space curve of a real update run instead of only the later handler phase.
-- Fixed: VPS Ansible playbooks now use `ansible_facts[...]` instead of deprecated top-level fact variables like `ansible_env` and `ansible_user_dir`, removing the current Ansible deprecation warnings during VPS maintenance runs.
+- Fixed: Added the missing `portalocker` runtime dependency so PBGui environments importing `pb7_config` start cleanly.
+- Improved: PBGui/PB7 VPS maintenance now reduces disk pressure and reports space usage more accurately, including pip/apt cleanup, rustup temp cleanup, before/after disk measurements, and the switch to `ansible_facts[...]`.
 
 ## v1.72 (15-04-2026)
 - New: PBv7 Backtest is now available as a full FastAPI page with Configs, Queue, Results, Archive, a new asyncio backtest worker with CPU/Autostart settings, shared log panel, rewritten guides, automatic HLCVS cleanup, and live WebSocket updates.

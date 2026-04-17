@@ -1760,9 +1760,8 @@ class OptimizeV7Item(ConfigV7Editor):
             symbol = str(coin).strip()
             if not symbol:
                 return ""
-            lower = symbol.lower()
-            if lower.startswith("xyz:") or lower.startswith("xyz-"):
-                return f"xyz:{symbol[4:].strip().upper()}"
+            # Keep Streamlit option values aligned with Config.ApprovedCoins,
+            # which stores Hyperliquid stock perps in normalized XYZ-TICKER form.
             return normalize_symbol(symbol)
         def _normalize_list(items):
             normalized = []
@@ -1828,7 +1827,7 @@ class OptimizeV7Item(ConfigV7Editor):
         preserved_stock_perps = {
             _canonical_coin_symbol(c)
             for c in (self.config.live.approved_coins.long + self.config.live.approved_coins.short)
-            if _canonical_coin_symbol(c).startswith("xyz:")
+            if _canonical_coin_symbol(c).startswith("XYZ-")
         }
         symbols.update(preserved_stock_perps)
         symbols = sorted(symbols)
