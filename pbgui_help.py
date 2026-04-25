@@ -1014,10 +1014,24 @@ limits_penalize_if = """
     > or greater_than   Penalize if metric value > threshold
                         Use for metrics to minimize (drawdown, loss_profit_ratio)
                         Default stat: max
+
+    >= or greater_than_or_equal
+                        Penalize if metric value >= threshold
+                        Default stat: max
     
     < or less_than      Penalize if metric value < threshold
                         Use for metrics to maximize (adg, sharpe_ratio)
                         Default stat: min
+
+    <= or less_than_or_equal
+                        Penalize if metric value <= threshold
+                        Default stat: min
+
+    == or equal_to      Penalize if metric value == threshold
+                        Default stat: mean
+
+    != or not_equal     Penalize if metric value != threshold
+                        Default stat: mean
     
     outside_range       Penalize if value < low OR value > high
                         Use to keep a metric within [low, high]
@@ -1041,11 +1055,7 @@ limits_stat = """
     min     Use the minimum value (default for less_than)
     max     Use the maximum value (default for greater_than)
     std     Use the standard deviation
-    
-    Leave empty to use the default based on penalize_if mode.
-    min     Use the minimum value (default for less_than)
-    max     Use the maximum value (default for greater_than)
-    std     Use the standard deviation
+    median  Use the median value
     
     Leave empty to use the default based on penalize_if mode.
     ```"""

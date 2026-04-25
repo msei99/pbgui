@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb7_installed, is_authenticted, get_navi_paths, render_header_with_guide
+from pbgui_func import set_page_config, is_session_state_not_initialized, error_popup, info_popup, is_pb7_installed, is_authenticted, get_navi_paths, render_header_with_guide, redirect_to_fastapi_v7_optimize
 from OptimizeV7 import OptimizeV7Item, OptimizesV7, OptimizeV7Queue, OptimizeV7Results
 from pathlib import Path
 
@@ -233,6 +233,18 @@ if not is_pb7_installed():
 if st.session_state.pbcoindata.api_error:
     st.warning('Coin Data API is not configured / Go to Coin Data and configure your API-Key', icon="⚠️")
     st.stop()
+
+_relay_legacy = st.session_state.pop("_relay_legacy", "")
+if isinstance(_relay_legacy, list):
+    _relay_legacy = _relay_legacy[0] if _relay_legacy else ""
+_legacy_requested = _relay_legacy or st.query_params.get("legacy", "")
+if _legacy_requested != "":
+    st.session_state["_legacy_optimize_active"] = str(_legacy_requested).strip().lower() in {
+        "1", "true", "yes"
+    }
+_legacy_optimize = bool(st.session_state.get("_legacy_optimize_active", False))
+if not _legacy_optimize:
+    redirect_to_fastapi_v7_optimize()
 
 # ── Draft-from-backtest: load starting_config via opt_draft_id query param ────
 _opt_draft_id = st.session_state.pop("_relay_opt_draft_id", "") or st.query_params.get("opt_draft_id", "")

@@ -61,6 +61,20 @@ set_page_config("Pareto Explorer")
 if is_session_state_not_initialized() or not is_authenticted():
     st.switch_page("navi/system_login.py")
 
+query_result_path = str(st.query_params.get("result_path") or "").strip()
+relay_result_path = st.session_state.pop("_relay_result_path", "")
+if isinstance(relay_result_path, list):
+    relay_result_path = relay_result_path[0] if relay_result_path else ""
+if relay_result_path and not query_result_path:
+    query_result_path = str(relay_result_path).strip()
+if query_result_path:
+    try:
+        candidate_result_dir = Path(query_result_path).expanduser().resolve()
+    except Exception:
+        candidate_result_dir = None
+    if candidate_result_dir and candidate_result_dir.exists() and (candidate_result_dir / "all_results.bin").exists():
+        st.session_state.pareto_explorer_path = str(candidate_result_dir)
+
 # Check if we have a path to analyze
 if "pareto_explorer_path" not in st.session_state:
     st.error("❌ No optimization result selected")

@@ -20,7 +20,6 @@ import os
 import platform
 import secrets
 import subprocess
-import sys
 import time
 import traceback
 import uuid
@@ -33,6 +32,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from api.auth import SessionToken, require_auth, validate_token
+from api.pb7_bridge import (
+    get_allowed_override_params,
+    get_bot_param_keys,
+    get_hsl_signal_modes,
+    get_template_config,
+    prepare_override_config,
+)
 from logging_helpers import human_log as _log
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, pb7dir, pb7venv
@@ -887,6 +893,7 @@ def get_settings(session: SessionToken = Depends(require_auth)):
         "autostart": settings.get("autostart", "False").lower() == "true",
         "cpu": min(int(settings.get("cpu", "1")), cpu_max),
         "cpu_max": cpu_max,
+        "hsl_signal_modes": get_hsl_signal_modes(),
         "hlcvs_cleanup_enabled": settings.get("hlcvs_cleanup_enabled", "False").lower() == "true",
         "hlcvs_cleanup_days": int(settings.get("hlcvs_cleanup_days", "7")),
         "hlcvs_cleanup_interval_h": int(settings.get("hlcvs_cleanup_interval_h", "24")),
@@ -956,12 +963,6 @@ def get_new_backtest_config(session: SessionToken = Depends(require_auth)):
     installed passivbot version without any manual maintenance.
     """
     try:
-        import sys
-        pb7 = pb7dir()
-        src = os.path.join(pb7, "src")
-        if src not in sys.path:
-            sys.path.insert(0, src)
-        from config.schema import get_template_config  # noqa: PLC0415
         tmpl = get_template_config()
     except Exception as exc:
         _log(SERVICE, f"Failed to load template config: {exc}", level="warning")
@@ -973,20 +974,7 @@ def get_new_backtest_config(session: SessionToken = Depends(require_auth)):
 def get_bot_params(session: SessionToken = Depends(require_auth)):
     """Return list of bot.long parameter names from passivbot schema."""
     try:
-        import sys
-        pb7 = pb7dir()
-        src = os.path.join(pb7, "src")
-        if src not in sys.path:
-            sys.path.insert(0, src)
-        from config.schema import get_template_config
-        tmpl = get_template_config()
-        bot_long = tmpl.get("bot", {}).get("long", {})
-        params = []
-        for k, v in sorted(bot_long.items()):
-            if isinstance(v, dict):
-                continue  # skip nested dicts like forager_score_weights, hsl_tier_ratios
-            params.append({"key": k})
-        return {"params": params}
+        return {"params": [{"key": key} for key in get_bot_param_keys()]}
     except Exception as exc:
         _log(SERVICE, f"Failed to load bot params: {exc}", level="warning")
         return {"params": []}
@@ -996,14 +984,7 @@ def get_bot_params(session: SessionToken = Depends(require_auth)):
 def get_override_params(session: SessionToken = Depends(require_auth)):
     """Return allowed coin_overrides parameters from passivbot."""
     try:
-        import sys
-        pb7 = pb7dir()
-        src = os.path.join(pb7, "src")
-        if src not in sys.path:
-            sys.path.insert(0, src)
-        from config.overrides import get_allowed_modifications
-        allowed = get_allowed_modifications()
-        return {"params": allowed}
+        return {"params": get_allowed_override_params()}
     except Exception as exc:
         _log(SERVICE, f"Failed to load override params: {exc}", level="warning")
         return {"params": {}}
@@ -1033,21 +1014,7 @@ def get_override_config(config_name: str, filename: str,
     try:
         with open(override_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # Run through passivbot's prepare_config for normalization/migration.
-        # Override files are sparse diffs; prepare_config needs at least
-        # ``live`` key to detect the "live_only" flavor.
-        cfg = dict(data)
-        if "live" not in cfg:
-            cfg["live"] = {}
-        pb7 = pb7dir()
-        src = os.path.join(pb7, "src")
-        if src not in sys.path:
-            sys.path.insert(0, src)
-        from config.load import prepare_config
-        from config_utils import strip_config_metadata
-        prepared = prepare_config(cfg, verbose=False)
-        prepared = strip_config_metadata(prepared)
-        return {"config": prepared}
+        return {"config": prepare_override_config(data, verbose=False)}
     except Exception as exc:
         raise HTTPException(500, f"Error reading override config: {exc}")
 

@@ -733,6 +733,14 @@
     }
 
     function showToast(message, type) {
+        fetch('/api/notify_log', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + API_TOKEN
+            },
+            body: JSON.stringify({ msg: String(message == null ? '' : message), level: type || 'info' })
+        }).catch(function() {});
         var toast = document.createElement('div');
         toast.className = 'mds-toast';
         toast.style.background = type === 'success' ? 'var(--mds-accent-success)' :

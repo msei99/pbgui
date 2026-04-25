@@ -1,0 +1,26 @@
+:root {
+  /* Shared modal sizing tokens (FastAPI pages) */
+  --pbg-modal-wide-width: min(1100px, calc(100vw - 32px));
+  --pbg-modal-settings-max-width: min(760px, calc(100vw - 32px));
+  --pbg-modal-max-h: calc(100vh - 80px);
+}
+
+/* ── V7 Optimize modal system (.modal) ─────────────────────── */
+.modal {
+  width: var(--pbg-modal-wide-width);
+  max-height: var(--pbg-modal-max-h);
+}
+
+#settings-modal.modal {
+  width: fit-content;
+  max-width: var(--pbg-modal-settings-max-width);
+  min-width: 420px;
+}
+
+/* ── V7 Backtest modal system (.modal-box) ─────────────────── */
+.modal-box {
+  width: fit-content;
+  min-width: 420px;
+  max-width: var(--pbg-modal-settings-max-width);
+}
+

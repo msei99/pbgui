@@ -100,6 +100,8 @@ Dieser Bereich dient zur Überwachung von Fetch-Loops, Inventar und Background-J
 
 Der Status-Expander aktualisiert sich automatisch alle 5 Sekunden.
 
+Kurze Toast-Meldungen aus dem Market-Data-Status-Panel und der Gap-Heatmap werden jetzt zusätzlich in PBGuis globales Notification-Log geschrieben. Dadurch lassen sie sich später auch über die Glocke oben rechts erneut öffnen, statt nur kurz im Panel sichtbar zu sein.
+
 ### Steuer-Buttons
 
 - **⏩ Run now** — überspringt die verbleibende Wartezeit und startet den nächsten Refresh-Zyklus sofort

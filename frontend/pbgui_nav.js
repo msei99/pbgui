@@ -196,10 +196,17 @@
     if (!nav) return;
     var c = cfg();
     var CURRENT = c.current;
+    var navGroups = NAV_GROUPS.map(function (group) {
+      return {
+        id: group.id,
+        label: group.label,
+        items: group.items.slice()
+      };
+    });
 
     /* find which group contains the current page */
     var activeGroup = '';
-    NAV_GROUPS.forEach(function (g) {
+    navGroups.forEach(function (g) {
       g.items.forEach(function (item) {
         if (item.page === CURRENT) activeGroup = g.id;
       });
@@ -219,7 +226,7 @@
           + '</svg></a>';
 
     /* groups */
-    NAV_GROUPS.forEach(function (group) {
+    navGroups.forEach(function (group) {
       var isActive = (group.id === activeGroup);
       html += '<div class="nav-group">';
       html += '<button class="nav-group-btn' + (isActive ? ' active' : '') + '" data-group="' + group.id + '">';
@@ -277,7 +284,7 @@
   function _ensureLogViewer(cb) {
     if (typeof window.LogViewerPanel === 'function') { cb(); return; }
     var s = document.createElement('script');
-    s.src = '/app/js/log_viewer_panel.js?v=6';
+    s.src = '/app/js/log_viewer_panel.js?v=8';
     s.onload = cb;
     s.onerror = function() { console.warn('Failed to load log_viewer_panel.js'); };
     document.head.appendChild(s);
@@ -433,6 +440,7 @@
     'system_services':    '/api/services/main_page',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
+    'v7_optimize':        '/api/optimize-v7/main_page',
     'v7_balance_calc':    '/api/balance-calc/main_page'
   };
 

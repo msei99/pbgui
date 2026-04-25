@@ -552,9 +552,9 @@ isolated: require isolated (cross-only skipped)">margin_mode_preference</span></
     </select>
   </div>
   <div class="form-group">
-    <label><span data-tip="0=warnings, 1=info, 2=debug, 3=trace">Logging level</span></label>
+    <label><span data-tip="0=warning, 1=info, 2=debug, 3=trace">Logging level</span></label>
     <select id="f-logging-level">
-      <option value="0">warnings</option>
+      <option value="0">warning</option>
       <option value="1" selected>info</option>
       <option value="2">debug</option>
       <option value="3">trace</option>
@@ -811,14 +811,14 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <!-- Coin multiselects -->
 <div class="form-row cols-2">
   <div class="form-group">
-    <label>approved_coins_long <span class="ms-all-btn" onclick="selectAllMultiselect('ms-approved-long')" title="Select all">all</span> <span class="ms-clear-btn" onclick="clearMultiselect('ms-approved-long')" title="Clear all">✕</span></label>
+    <label>approved_coins_long <span class="ms-all-btn" onclick="setApprovedCoinsAll('ms-approved-long')" title="Use canonical all">all</span> <span class="ms-clear-btn" onclick="clearMultiselect('ms-approved-long')" title="Clear all">✕</span></label>
     <div class="ms-wrap" id="ms-approved-long">
       <input class="ms-input" id="ms-approved-long-input" placeholder="Type to search..." autocomplete="off">
       <div class="ms-dropdown" id="ms-approved-long-dd"></div>
     </div>
   </div>
   <div class="form-group">
-    <label>approved_coins_short <span class="ms-all-btn" onclick="selectAllMultiselect('ms-approved-short')" title="Select all">all</span> <span class="ms-clear-btn" onclick="clearMultiselect('ms-approved-short')" title="Clear all">✕</span></label>
+    <label>approved_coins_short <span class="ms-all-btn" onclick="setApprovedCoinsAll('ms-approved-short')" title="Use canonical all">all</span> <span class="ms-clear-btn" onclick="clearMultiselect('ms-approved-short')" title="Clear all">✕</span></label>
     <div class="ms-wrap" id="ms-approved-short">
       <input class="ms-input" id="ms-approved-short-input" placeholder="Type to search..." autocomplete="off">
       <div class="ms-dropdown" id="ms-approved-short-dd"></div>
@@ -850,12 +850,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
       <label for="f-dynamic-ignore">dynamic_ignore</label>
     </div>
   </div>
-  <div class="form-group">
-    <div class="chk-row">
-      <input type="checkbox" id="f-empty-all-approved">
-      <label for="f-empty-all-approved">empty_means_all_approved</label>
-    </div>
-  </div>
+  <div class="form-group"></div>
   <div class="form-group"></div>
   <div class="form-group"></div>
 </div>
@@ -1000,7 +995,7 @@ var _structuredEditorSyncing = false;
 var _runJsonSync = null;
 var _symbolsAndTagsLoadSeq = 0;
 
-/* live.* keys explicitly handled by the GUI form — extras go to "Additional Parameters" */
+/* live.* keys handled by the GUI form or intentionally hidden/deprecated. */
 var KNOWN_LIVE_PARAMS = new Set([
   'user', 'leverage', 'margin_mode_preference',
   'minimum_coin_age_days', 'pnls_max_lookback_days', 'warmup_ratio', 'max_realized_loss_pct',
@@ -1394,9 +1389,10 @@ function goBacktest() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }).then(function(data) {
-    var url = ST_BASE + '/?target=V7_BACKTEST&draft_id=' + encodeURIComponent(data.draft_id)
-      + '&draft_name=' + encodeURIComponent(INSTANCE_NAME || config.live.user || 'draft')
-      + '&token=' + encodeURIComponent(TOKEN);
+    var url = window.location.origin + '/api/backtest-v7/main_page?token=' + encodeURIComponent(TOKEN)
+      + '&st_base=' + encodeURIComponent(ST_BASE)
+      + '&draft_id=' + encodeURIComponent(data.draft_id)
+      + '&draft_name=' + encodeURIComponent(INSTANCE_NAME || config.live.user || 'draft');
     window.location.href = url;
   }).catch(function(e) {
     toast('Failed to create draft: ' + e.message, 'err');
@@ -1571,7 +1567,6 @@ function buildDefaultConfig(user) {
       hedge_mode: false,
       approved_coins: { long: [], short: [] },
       ignored_coins: { long: [], short: [] },
-      empty_means_all_approved: false,
       max_n_cancellations_per_batch: 5,
       max_n_creations_per_batch: 3,
       forced_mode_long: '',
@@ -1624,8 +1619,8 @@ async function loadSymbolsAndTags(sourceCfg) {
     .filter(function(v, i, a) { return v && v !== 'all' && a.indexOf(v) === i; }).sort();
   var seededAnchor = captureRawEditorAnchor();
 
-  rebuildMultiselect('ms-approved-long', seededCoins, approvedLong);
-  rebuildMultiselect('ms-approved-short', seededCoins, approvedShort);
+  rebuildMultiselect('ms-approved-long', ['all'].concat(seededCoins), approvedLong);
+  rebuildMultiselect('ms-approved-short', ['all'].concat(seededCoins), approvedShort);
   rebuildMultiselect('ms-ignored-long', seededCoins, ignoredLong);
   rebuildMultiselect('ms-ignored-short', seededCoins, ignoredShort);
   rebuildMultiselect('ms-tags', selectedTags, selectedTags);
@@ -1650,8 +1645,8 @@ async function loadSymbolsAndTags(sourceCfg) {
     allSymbols = results[0].symbols || [];
     allTags = results[1].tags || [];
     var loadedAnchor = captureRawEditorAnchor();
-    rebuildMultiselect('ms-approved-long', allSymbols, approvedLong);
-    rebuildMultiselect('ms-approved-short', allSymbols, approvedShort);
+    rebuildMultiselect('ms-approved-long', ['all'].concat(allSymbols), approvedLong);
+    rebuildMultiselect('ms-approved-short', ['all'].concat(allSymbols), approvedShort);
     rebuildMultiselect('ms-ignored-long', allSymbols, ignoredLong);
     rebuildMultiselect('ms-ignored-short', allSymbols, ignoredShort);
     rebuildMultiselect('ms-tags', allTags, selectedTags);
@@ -1666,19 +1661,38 @@ async function loadSymbolsAndTags(sourceCfg) {
 }
 
 function getCoins(key, side) {
-  var live = cfg.live || {};
-  var obj = live[key] || {};
-  var val = obj[side];
-  if (Array.isArray(val)) return val;
+  return getCoinSelectionValue((cfg.live || {})[key], side, key === 'approved_coins');
+}
+
+function getCoinSelectionValue(rawValue, side, allowAll) {
+  if (allowAll && rawValue === 'all') return ['all'];
+  if (Array.isArray(rawValue)) return rawValue.slice();
+  if (rawValue && typeof rawValue === 'object') {
+    var sideValue = rawValue[side];
+    if (allowAll && sideValue === 'all') return ['all'];
+    if (Array.isArray(sideValue)) return sideValue.slice();
+  }
   return [];
 }
 
 function getCoinsForLoad(sourceCfg, key, side, wrapId) {
   var live = (sourceCfg && sourceCfg.live) || {};
-  var obj = live[key] || {};
-  if (Array.isArray(obj[side])) return obj[side].slice();
+  var selected = getCoinSelectionValue(live[key], side, key === 'approved_coins');
+  if (selected.length) return selected;
   if (msState[wrapId]) return getMultiselectValues(wrapId);
   return getCoins(key, side).slice();
+}
+
+function collectApprovedCoinsValue(longValues, shortValues) {
+  var longAll = longValues.indexOf('all') >= 0;
+  var shortAll = shortValues.indexOf('all') >= 0;
+  var longSelected = longValues.filter(function(value) { return value !== 'all'; });
+  var shortSelected = shortValues.filter(function(value) { return value !== 'all'; });
+  if (longAll && shortAll && !longSelected.length && !shortSelected.length) return 'all';
+  return {
+    long: longAll ? 'all' : longSelected,
+    short: shortAll ? 'all' : shortSelected
+  };
 }
 
 function getTagsForLoad(sourceCfg) {
@@ -1754,7 +1768,6 @@ function populateForm(opts) {
   setChk('f-notices-ignore', pbgui.notices_ignore);
   setChk('f-apply-filters', false);
   setChk('f-dynamic-ignore', pbgui.dynamic_ignore);
-  setChk('f-empty-all-approved', live.empty_means_all_approved);
 
   // Coin overrides
   coinOvLoad(cfg);
@@ -1964,6 +1977,7 @@ function collectConfig() {
   // Ignored wins: remove any coin from approved that also appears in ignored
   approvedLong = approvedLong.filter(function(c) { return ignoredLong.indexOf(c) < 0; });
   approvedShort = approvedShort.filter(function(c) { return ignoredShort.indexOf(c) < 0; });
+  var approvedCoins = collectApprovedCoinsValue(approvedLong, approvedShort);
 
   var balOverride = getNum('f-bal-override');
 
@@ -1989,8 +2003,15 @@ function collectConfig() {
     }
   });
 
-  var result = {
-    live: Object.assign({}, extraLive, {
+  var baseLive = base.live && typeof base.live === 'object' && !Array.isArray(base.live) ? base.live : {};
+  var baseLogging = base.logging && typeof base.logging === 'object' && !Array.isArray(base.logging) ? base.logging : {};
+  var basePbgui = base.pbgui && typeof base.pbgui === 'object' && !Array.isArray(base.pbgui) ? base.pbgui : {};
+  var baseBot = base.bot && typeof base.bot === 'object' && !Array.isArray(base.bot) ? base.bot : {};
+  var baseBacktest = base.backtest && typeof base.backtest === 'object' && !Array.isArray(base.backtest) ? base.backtest : (cfg.backtest || {});
+  var baseOptimize = base.optimize && typeof base.optimize === 'object' && !Array.isArray(base.optimize) ? base.optimize : (cfg.optimize || {});
+
+  var result = Object.assign({}, base, {
+    live: Object.assign({}, baseLive, extraLive, {
       user: getVal('f-user'),
       leverage: getNum('f-leverage'),
       margin_mode_preference: getVal('f-margin-mode'),
@@ -2005,9 +2026,8 @@ function collectConfig() {
       market_orders_allowed: getChk('f-market-orders'),
       auto_gs: getChk('f-auto-gs'),
       hedge_mode: getChk('f-hedge-mode'),
-      approved_coins: { long: approvedLong, short: approvedShort },
+      approved_coins: approvedCoins,
       ignored_coins: { long: ignoredLong, short: ignoredShort },
-      empty_means_all_approved: getChk('f-empty-all-approved'),
       max_n_cancellations_per_batch: getInt('f-max-cancel'),
       max_n_creations_per_batch: getInt('f-max-create'),
       forced_mode_long: getVal('f-forced-long'),
@@ -2031,12 +2051,12 @@ function collectConfig() {
       enable_archive_candle_fetch: getChk('f-archive-fetch'),
       max_ohlcv_fetches_per_minute: getInt('f-max-ohlcv-fetches'),
     }),
-    logging: {
+    logging: Object.assign({}, baseLogging, {
       level: getInt('f-logging-level'),
       memory_snapshot_interval_minutes: getInt('f-mem-snapshot'),
       volume_refresh_info_threshold_seconds: getInt('f-vol-refresh'),
-    },
-    pbgui: {
+    }),
+    pbgui: Object.assign({}, basePbgui, {
       version: getInt('f-version'),
       enabled_on: getVal('f-enabled-on') || 'disabled',
       note: getVal('f-note'),
@@ -2048,12 +2068,13 @@ function collectConfig() {
       dynamic_ignore: getChk('f-dynamic-ignore'),
       starting_config: (cfg.pbgui || {}).starting_config || false,
       from_backtest_config: _fromBacktestConfig || undefined,
-    },
-    bot: { long: longJson, short: shortJson },
+    }),
+    bot: Object.assign({}, baseBot, { long: longJson, short: shortJson }),
     coin_overrides: covData.coin_overrides || {},
-    backtest: base.backtest || cfg.backtest || {},
-    optimize: base.optimize || cfg.optimize || {},
-  };
+    backtest: baseBacktest,
+    optimize: baseOptimize,
+  });
+  if (result.live && typeof result.live === 'object') delete result.live.empty_means_all_approved;
   return result;
 }
 
@@ -2611,6 +2632,10 @@ function clearMultiselect(wrapId) {
   _runMsController.clear(wrapId);
 }
 
+function setApprovedCoinsAll(wrapId) {
+  _runMsController.setValues(wrapId, ['all']);
+}
+
 function selectAllMultiselect(wrapId) {
   _runMsController.selectAll(wrapId);
 }
@@ -2757,7 +2782,7 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/log_viewer_panel.js?v=7"></script>
+<script src="/app/js/log_viewer_panel.js?v=8"></script>
 <script src="/app/js/coin_overrides_editor.js?v=8"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */

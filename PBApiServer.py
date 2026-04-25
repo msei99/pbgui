@@ -48,6 +48,8 @@ from api.v7_instances import router as v7_router
 from api.balance_calc import router as balance_calc_router
 from api.backtest_v7 import router as backtest_v7_router
 from api.backtest_v7 import startup as bt7_startup, shutdown as bt7_shutdown
+from api.optimize_v7 import router as optimize_v7_router
+from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, PBGUI_VERSION
 
@@ -234,6 +236,7 @@ async def _lifespan(app: FastAPI):
         _log(SERVICE, "[lifespan] deferred startup complete", level="INFO")
 
     bt7_startup()
+    opt7_startup()
 
     deferred_task = asyncio.create_task(_deferred_startup(), name="deferred-startup")
     watchdog_task = asyncio.create_task(_worker_watchdog_loop(), name="worker-watchdog")
@@ -250,6 +253,7 @@ async def _lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     bt7_shutdown()
+    opt7_shutdown()
     if _vps_monitor:
         await _vps_monitor.stop()
     file_sync.stop_watchdog()
@@ -326,6 +330,7 @@ app.include_router(live_router, prefix="/api/live", tags=["live"])
 app.include_router(v7_router, prefix="/api/v7", tags=["v7"])
 app.include_router(balance_calc_router, prefix="/api/balance-calc", tags=["balance-calc"])
 app.include_router(backtest_v7_router, prefix="/api/backtest-v7", tags=["backtest-v7"])
+app.include_router(optimize_v7_router, prefix="/api/optimize-v7", tags=["optimize-v7"])
 
 
 # ── Central UI notification log ──────────────────────────────

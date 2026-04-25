@@ -2,6 +2,7 @@
 
 The **PBv7 Backtest** page lets you create, run and evaluate Passivbot v7 backtests.
 It is a standalone FastAPI page — no page reload is needed. Real-time queue updates arrive via WebSocket.
+Draft handoffs from the FastAPI **Run** and **Optimize** pages now open here directly as FastAPI drafts as well, so switching between those PBv7 pages no longer needs the legacy Streamlit relay.
 
 The page is organised into five panels selected from the left sidebar:
 
@@ -52,6 +53,8 @@ Editing opens inline in the main area. Fields:
 | **Exchange(s)** | One or more exchanges to run the backtest on |
 | **start_date / end_date** | Date range for the backtest |
 | **starting_balance** | Initial balance in USD |
+| **hsl_signal_mode** | PB7-derived selector for account-level HSL behaviour: `pside` keeps long/short drawdown signals separate, `unified` shares one combined signal |
+| **logging_level** | Run-style selector for `warning`, `info`, `debug`, and `trace` verbosity |
 | **approved_coins / ignored_coins** | Explicit coin lists; populated automatically by **Apply Filters** |
 | **Coin sources** | Where coin lists come from (PBGui coin database, manual, etc.) |
 | **Market settings sources** | Source for market-specific settings |
@@ -156,6 +159,7 @@ Browse all completed backtest results.
 | **🔄 Backtest** | Re-run selected results as new backtests (opens date/balance/exchange modal) |
 | **▶ Add to Run** | Create a live run from the selected config |
 | **📈 Compare** | Add selected results to the comparison view |
+| **🧬 Optimize from Result** | Open the Optimize editor directly with the selected result as draft and `Starting Seeds = self` |
 | **🗑 Delete Selected** | Delete selected results from disk |
 
 ### Per-row actions
@@ -255,6 +259,11 @@ Use this panel when a backtest finished on disk but does not appear in the norma
 ### Re-run / tune a result
 1. **Results** → select a result → **🔄 Backtest** → adjust dates/balance → **OK**
 2. **Queue** → monitor progress
+
+### Turn a backtest result into an optimize draft
+1. **Results** → select one result → **🧬 Optimize from Result**
+2. PBGui opens the FastAPI Optimize editor directly, not the config list
+3. The imported draft is preloaded with **Starting Seeds = self**, so the optimize run starts from that config itself
 
 ### Use a community config
 1. **Archive** → **⬇ Pull All** → click into an archive → select configs → **🔄 Backtest**

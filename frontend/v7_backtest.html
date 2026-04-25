@@ -6,6 +6,7 @@
 <title>PBGui — V7 Backtest</title>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <link rel="stylesheet" href="/app/css/sidebar.css?v=1">
+<link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <style>
 /* ── Design Tokens ─────────────────────────────── */
 :root {
@@ -312,7 +313,7 @@ a:hover { text-decoration: underline; }
              display: flex; flex-direction: column; }
 .import-modal-box {
   background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
-  padding: var(--sp-lg); width: min(760px, 92vw); max-height: 85vh;
+  padding: var(--sp-lg); width: var(--pbg-modal-settings-width, min(760px, 92vw)); max-height: 85vh;
   display: flex; flex-direction: column;
 }
 .import-modal-box h3 { font-size: var(--fs-lg); }
@@ -907,7 +908,7 @@ var archives    = [];          // git archives
 var archiveResults = [];       // results in selected archive
 var legacyResults = [];        // results in legacy pb7/backtests paths
 var compareSet  = [];          // paths of results to compare
-var settings    = { autostart: false, cpu: 1, cpu_max: 1, hlcvs_cleanup_enabled: false, hlcvs_cleanup_days: 7, hlcvs_cleanup_interval_h: 24 };
+var settings    = { autostart: false, cpu: 1, cpu_max: 1, hsl_signal_modes: [], hlcvs_cleanup_enabled: false, hlcvs_cleanup_days: 7, hlcvs_cleanup_interval_h: 24 };
 var currentPanel = 'configs';
 var _pendingResultFilter = '';  /* config name to pre-filter when next loadResults runs */
 var sortCol     = 'modified';  // current sort column
@@ -1418,23 +1419,47 @@ function clearInitialBacktestUrlParams(url, keys) {
   window.history.replaceState({}, document.title, url.pathname + (nextSearch ? '?' + nextSearch : '') + url.hash);
 }
 
+async function fetchRunBacktestDraft(draftId) {
+  var response = await fetch(window.location.origin + '/api/v7/draft/' + encodeURIComponent(draftId), {
+    headers: { 'Authorization': 'Bearer ' + TOKEN }
+  });
+  if (!response.ok) {
+    var message = '';
+    try {
+      var payload = await response.json();
+      message = payload && (payload.detail || payload.message) ? String(payload.detail || payload.message) : '';
+    } catch (_) {
+      try {
+        message = await response.text();
+      } catch (_) {
+        message = '';
+      }
+    }
+    throw new Error(message || ('HTTP ' + response.status));
+  }
+  return response.json();
+}
+
 async function openInitialBacktestDraftFromUrl() {
   var url = new URL(window.location.href);
-  var draftId = url.searchParams.get('opt_draft_id');
-  if (!draftId) return false;
+  var runDraftId = url.searchParams.get('draft_id');
+  var optimizeDraftId = url.searchParams.get('opt_draft_id');
+  if (!runDraftId && !optimizeDraftId) return false;
   try {
-    var draft = await apiFetch('/optimize-draft/' + encodeURIComponent(draftId));
+    var draft = runDraftId
+      ? await fetchRunBacktestDraft(runDraftId)
+      : await apiFetch('/optimize-draft/' + encodeURIComponent(optimizeDraftId));
     var cfg = (draft && draft.config) || {};
     var prepared = await prepareImportedBacktestConfig(cfg);
     var name = getInitialBacktestDraftName(cfg, url.searchParams);
-    var raw = JSON.stringify(cfg, null, 2);
+    var raw = JSON.stringify((prepared && prepared.config) || {}, null, 2);
     editingConfig = '__new__';
     selectPanel('configs');
-    showConfigEditor(name, prepared.config, raw, prepared.param_status || {});
-    clearInitialBacktestUrlParams(url, ['opt_draft_id', 'draft_name']);
+    showConfigEditor(name, prepared.config, raw, prepared.param_status || draft.param_status || {});
+    clearInitialBacktestUrlParams(url, runDraftId ? ['draft_id', 'draft_name'] : ['opt_draft_id', 'draft_name']);
     return true;
   } catch (e) {
-    toast('Failed to open optimizer draft: ' + e.message, 'err');
+    toast((runDraftId ? 'Failed to open run draft: ' : 'Failed to open optimizer draft: ') + e.message, 'err');
     return true;
   }
 }
@@ -1527,7 +1552,6 @@ async function openInitialBacktestQueueDraftFromUrl() {
   try {
     var draft = await apiFetch('/queue-draft/' + encodeURIComponent(draftId));
     var items = (draft && draft.items) || [];
-    clearInitialBacktestUrlParams(url, ['queue_draft_id']);
     selectPanel('configs');
     showInitialBacktestQueueDraftModal(items);
     return true;
@@ -1702,8 +1726,12 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
     '<div class="chk-row"><input type="checkbox" id="cfg-filter-cost"' + (filterChecked ? ' checked' : '') + '>' +
     '<label for="cfg-filter-cost"><span data-tip="Skip coins whose projected initial entry\nfalls below exchange min cost.">filter_by_min_effective_cost</span></label></div>' +
     '</div>';
-  html += fieldSelect('cfg-logging', 'logging_level', ['INFO','DEBUG','WARNING'],
-    [cfg.logging && cfg.logging.level || 'INFO'], false, '0=warnings, 1=info, 2=debug, 3=trace');
+  var hslSignalMode = normalizeBacktestHslSignalModeValue(live.hsl_signal_mode);
+  html += fieldSelect('cfg-hsl-signal-mode', 'hsl_signal_mode',
+    getBacktestHslSignalModeOptions(hslSignalMode), hslSignalMode, false,
+    'pside: each side tracks its own HSL drawdown independently.\nunified: both sides share one account-level combined signal.');
+  html += fieldSelect('cfg-logging', 'logging_level', LOG_LEVEL_OPTIONS,
+    normalizeLogLevelValue(cfg.logging && cfg.logging.level, 1), false, 'Controls global verbosity for Passivbot and tooling.');
   html += '</div>';
 
   /* ── Row 4: Data Source (cols-8: 4+1+1+1+1) ── */
@@ -2366,12 +2394,13 @@ function cfgSyncEditorFromParsed(name, cfg) {
   cfgSetFieldValue('cfg-btc-ltv', bt.btc_collateral_ltv_cap || 0);
   cfgSetFieldValue('cfg-max-warmup', bt.max_warmup_minutes || live.max_warmup_minutes || 1440);
   cfgSetFieldValue('cfg-min-coin-age', live.minimum_coin_age_days !== undefined ? live.minimum_coin_age_days : 30);
+  cfgSetFieldValue('cfg-hsl-signal-mode', normalizeBacktestHslSignalModeValue(live.hsl_signal_mode));
   cfgSetFieldValue('cfg-liq-thresh', bt.liquidation_threshold !== undefined ? bt.liquidation_threshold : 0.05);
   cfgSetFieldValue('cfg-mo-slippage', bt.market_order_slippage_pct !== undefined ? bt.market_order_slippage_pct : 0.0005);
   cfgSetFieldValue('cfg-ohlcv-dir', bt.ohlcv_source_dir || '');
   cfgSetFieldValue('cfg-candle-interval', bt.candle_interval_minutes || 1);
   cfgSetFieldValue('cfg-gap-tolerance', bt.gap_tolerance_ohlcvs_minutes || 5);
-  cfgSetFieldValue('cfg-logging', logging.level || 'INFO');
+  cfgSetFieldValue('cfg-logging', normalizeLogLevelValue(logging.level, 1));
   cfgSetFieldValue('cfg-market-cap', pbgui.market_cap !== undefined ? pbgui.market_cap : 0);
   cfgSetFieldValue('cfg-vol-mcap', pbgui.vol_mcap !== undefined ? pbgui.vol_mcap : 10);
   cfgSetCheckedValue('cfg-dyn-wel', bt.dynamic_wel_by_tradability !== undefined ? bt.dynamic_wel_by_tradability : true);
@@ -3330,13 +3359,53 @@ function fieldNumber2(id, label, value, step, tip, span) {
     '</div>', tip, span || 1);
 }
 function fieldSelect(id, label, options, selected, multi, tip) {
+  var selectedValues = Array.isArray(selected)
+    ? selected.map(function(value) { return String(value); })
+    : (selected == null ? [] : [String(selected)]);
   var inner = '<select id="' + id + '"' + (multi ? ' multiple' : '') + '>';
   options.forEach(function(o) {
-    var sel = (Array.isArray(selected) ? selected.indexOf(o) >= 0 : selected === o) ? ' selected' : '';
-    inner += '<option value="' + esc(o) + '"' + sel + '>' + esc(o) + '</option>';
+    var optionValue = o && typeof o === 'object' ? String(o.value) : String(o);
+    var optionLabel = o && typeof o === 'object' ? String(o.label) : String(o);
+    var sel = selectedValues.indexOf(optionValue) >= 0 ? ' selected' : '';
+    inner += '<option value="' + esc(optionValue) + '"' + sel + '>' + esc(optionLabel) + '</option>';
   });
   return fmtGroup(id, label, inner + '</select>', tip);
 }
+
+var LOG_LEVEL_OPTIONS = [
+  { value: '0', label: 'warning' },
+  { value: '1', label: 'info' },
+  { value: '2', label: 'debug' },
+  { value: '3', label: 'trace' }
+];
+
+function normalizeLogLevelValue(value, fallback) {
+  var parsed = parseInt(value, 10);
+  if (isNaN(parsed)) parsed = fallback;
+  if (parsed < 0) parsed = 0;
+  if (parsed > 3) parsed = 3;
+  return String(parsed);
+}
+
+function getBacktestHslSignalModeOptions(selectedValue) {
+  var configured = settings && Array.isArray(settings.hsl_signal_modes) ? settings.hsl_signal_modes : [];
+  var options = configured
+    .map(function(value) { return String(value == null ? '' : value).trim(); })
+    .filter(function(value, index, array) { return value && array.indexOf(value) === index; });
+  var selected = String(selectedValue == null ? '' : selectedValue).trim();
+  if (selected && options.indexOf(selected) < 0) options.unshift(selected);
+  return options.map(function(value) {
+    return { value: value, label: value };
+  });
+}
+
+function normalizeBacktestHslSignalModeValue(value) {
+  var selected = String(value == null ? '' : value).trim();
+  var options = getBacktestHslSignalModeOptions(selected);
+  if (selected) return selected;
+  return options.length ? String(options[0].value) : '';
+}
+
 function fieldCheckbox(id, label, checked) {
   return '<div class="form-group"><label>&nbsp;</label><div class="chk-row">' +
     '<input type="checkbox" id="' + id + '"' + (checked ? ' checked' : '') + '>' +
@@ -3548,10 +3617,11 @@ function collectConfig() {
   else { delete cfg.backtest.market_settings_sources; }
 
   if (!cfg.logging) cfg.logging = {};
-  cfg.logging.level = document.getElementById('cfg-logging').value;
+  cfg.logging.level = parseInt(normalizeLogLevelValue(document.getElementById('cfg-logging').value, 1), 10);
 
   if (!cfg.live) cfg.live = {};
   cfg.live.minimum_coin_age_days = parseFloat(document.getElementById('cfg-min-coin-age').value) || 30;
+  cfg.live.hsl_signal_mode = normalizeBacktestHslSignalModeValue(document.getElementById('cfg-hsl-signal-mode').value);
 
   // Coins — approved_coins supports "all" (string) per side or globally
   if (!cfg.live.ignored_coins)  cfg.live.ignored_coins  = {};
@@ -3632,20 +3702,32 @@ function collectConfig() {
   return cfg;
 }
 
+function finalizeBacktestConfigForSave(name, cfg) {
+  if (!cfg || typeof cfg !== 'object') {
+    throw new Error('Could not collect backtest config');
+  }
+  if (!cfg.backtest || typeof cfg.backtest !== 'object') {
+    cfg.backtest = {};
+  }
+  cfg.backtest.base_dir = 'backtests/pbgui/' + name;
+  return cfg;
+}
+
 function saveEditor() {
   var name = document.getElementById('cfg-name').value.trim();
   if (!name) { toast('Config name is required', 'err'); return; }
   if (!ensureRawJsonValidForSave()) return;
   if (!ensureStructuredJsonFieldsValidForSave()) return;
-  coinOvSetConfigName(name);  // ensure override files are saved to the correct directory
-  var cfg = collectConfig();
+  var cfg;
+  try {
+    coinOvSetConfigName(name);  // ensure override files are saved to the correct directory
+    cfg = finalizeBacktestConfigForSave(name, collectConfig());
+  } catch (e) {
+    toast('Save failed: ' + ((e && e.message) || e), 'err');
+    return;
+  }
   var dateErr = cfgValidateDateRanges(cfg);
   if (dateErr) { toast(dateErr, 'err'); return; }
-  // Auto-set base_dir only if not explicitly overridden by the user in Additional Parameters
-  var _baseDirEl = document.getElementById('extra-bt-base_dir');
-  if (!_baseDirEl || _baseDirEl.value.trim() === '') {
-    cfg.backtest.base_dir = 'backtests/pbgui/' + name;
-  }
   var oldName = (editingConfig && editingConfig !== '__new__') ? editingConfig : null;
   var isNewName = oldName && oldName !== name;
   var url = '/configs/' + encodeURIComponent(name);
@@ -3667,15 +3749,16 @@ function saveAndQueue() {
   if (!name) { toast('Config name is required', 'err'); return; }
   if (!ensureRawJsonValidForSave()) return;
   if (!ensureStructuredJsonFieldsValidForSave()) return;
-  coinOvSetConfigName(name);  // ensure override files are saved to the correct directory
-  var cfg = collectConfig();
+  var cfg;
+  try {
+    coinOvSetConfigName(name);  // ensure override files are saved to the correct directory
+    cfg = finalizeBacktestConfigForSave(name, collectConfig());
+  } catch (e) {
+    toast('Failed: ' + ((e && e.message) || e), 'err');
+    return;
+  }
   var dateErr = cfgValidateDateRanges(cfg);
   if (dateErr) { toast(dateErr, 'err'); return; }
-  // Auto-set base_dir only if not explicitly overridden by the user in Additional Parameters
-  var _baseDirEl2 = document.getElementById('extra-bt-base_dir');
-  if (!_baseDirEl2 || _baseDirEl2.value.trim() === '') {
-    cfg.backtest.base_dir = 'backtests/pbgui/' + name;
-  }
   var oldName = (editingConfig && editingConfig !== '__new__') ? editingConfig : null;
   var isNewName = oldName && oldName !== name;
   // Save first (always as new config if name changed, never delete original)
@@ -6291,10 +6374,24 @@ function optimizeFromResult() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: cfg })
+    }).then(function(d) {
+      return { cfg: cfg, draft: d };
     });
-  }).then(function(d) {
-    window.location.href = ST_BASE + '/?target=V7_OPTIMIZE&token=' + encodeURIComponent(TOKEN)
-      + '&opt_draft_id=' + encodeURIComponent(d.draft_id);
+  }).then(function(payload) {
+    var cfg = payload.cfg || {};
+    var draft = payload.draft || {};
+    var baseDir = String((((cfg || {}).backtest || {}).base_dir || '')).trim();
+    var draftName = '';
+    if (baseDir) {
+      var parts = baseDir.split('/').filter(function(part) { return !!part; });
+      if (parts.length) draftName = parts[parts.length - 1];
+    }
+    var targetUrl = window.location.origin + '/api/optimize-v7/main_page'
+      + '?token=' + encodeURIComponent(TOKEN)
+      + '&st_base=' + encodeURIComponent(ST_BASE)
+      + '&opt_draft_id=' + encodeURIComponent(draft.draft_id || '');
+    if (draftName) targetUrl += '&draft_name=' + encodeURIComponent(draftName);
+    window.location.href = targetUrl;
   }).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
 }
 
@@ -6888,7 +6985,7 @@ window.PBGUI_NAV_CONFIG = {
   });
 })();
 </script>
-<script src="/app/js/log_viewer_panel.js?v=7"></script>
+<script src="/app/js/log_viewer_panel.js?v=8"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- ── Sidebar resize ──────────────────────────── -->

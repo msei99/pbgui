@@ -102,6 +102,8 @@ Use this section to monitor latest fetch loops, inventory, and background job he
 
 The status expander auto-refreshes every 5 seconds while open.
 
+Short toast messages from the Market Data Status panel and the Gap Heatmap are also written to PBGui's global notification log now, so you can reopen them later from the top-right notification bell instead of relying on the brief in-page popup only.
+
 ### Control Buttons
 
 - **⏩ Run now** — skips the remaining wait and triggers the next refresh cycle immediately

@@ -54,6 +54,19 @@ from config_utils import strip_config_metadata  # noqa: E402
 # normalization.  We extract them before the pipeline and re-attach after.
 _PBGUI_EXTRA_KEYS = ("pbgui",)
 
+# PB7 still migrates legacy bot fields, but these optimize.bounds keys no longer
+# map to canonical bot.long/short scalar parameters and must be dropped.
+_LEGACY_UNSUPPORTED_OPTIMIZE_BOUNDS = frozenset(
+    {
+        "long_close_grid_markup_range",
+        "short_close_grid_markup_range",
+        "long_filter_relative_volume_clip_pct",
+        "short_filter_relative_volume_clip_pct",
+        "long_filter_rolling_window",
+        "short_filter_rolling_window",
+    }
+)
+
 # ── Neutral values for known passivbot bot-params ─────────────────────────────
 #
 # These are values that *disable* the feature in the Rust engine.  Derived from
@@ -204,6 +217,77 @@ def _finalize_prepared_pb7_config(
     return cfg
 
 
+def _strip_legacy_unsupported_optimize_bounds(config: dict) -> list[str]:
+    """Remove obsolete optimize.bounds keys that PB7 no longer accepts."""
+    optimize = config.get("optimize") if isinstance(config, dict) else None
+    if not isinstance(optimize, dict):
+        return []
+
+    bounds = optimize.get("bounds")
+    if not isinstance(bounds, dict):
+        return []
+
+    removed: list[str] = []
+    for key in tuple(bounds):
+        if key in _LEGACY_UNSUPPORTED_OPTIMIZE_BOUNDS:
+            bounds.pop(key, None)
+            removed.append(key)
+    return removed
+
+
+def _restore_raw_backtest_end_date(config: dict, raw_config: dict | None) -> dict:
+    """Preserve semantic backtest end_date tokens PB7 materializes during load."""
+    if not isinstance(config, dict) or not isinstance(raw_config, dict):
+        return config
+
+    raw_backtest = raw_config.get("backtest")
+    if not isinstance(raw_backtest, dict):
+        return config
+
+    raw_end_date = raw_backtest.get("end_date")
+    if isinstance(raw_end_date, str) and raw_end_date.strip().lower() == "now":
+        config.setdefault("backtest", {})["end_date"] = "now"
+    return config
+
+
+def _load_prepared_config_from_dict(
+    config: dict,
+    *,
+    verbose: bool = False,
+    base_config_path: str = "",
+) -> dict:
+    """Run PB7's file-based config pipeline against an in-memory config dict."""
+    tmp_dir = None
+    if base_config_path:
+        try:
+            tmp_dir = str(Path(base_config_path).resolve().parent)
+        except Exception:
+            tmp_dir = None
+
+    with tempfile.NamedTemporaryFile(
+        suffix=".json",
+        delete=False,
+        mode="w",
+        encoding="utf-8",
+        dir=tmp_dir,
+    ) as tmp:
+        json.dump(config, tmp, indent=4)
+        tmp.write("\n")
+        tmp_path = tmp.name
+
+    try:
+        prepared = load_prepared_config(tmp_path, verbose=verbose)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    if base_config_path and isinstance(prepared.get("live"), dict):
+        prepared["live"]["base_config_path"] = str(base_config_path)
+    return prepared
+
+
 def prepare_pb7_config_dict(
     config: dict,
     *,
@@ -229,31 +313,24 @@ def prepare_pb7_config_dict(
     source = strip_config_metadata(deepcopy(config))
     source.pop("_pbgui_param_status", None)
 
-    tmp_dir = None
-    if base_config_path:
-        try:
-            tmp_dir = str(Path(base_config_path).resolve().parent)
-        except Exception:
-            tmp_dir = None
+    extras = {}
+    for key in _PBGUI_EXTRA_KEYS:
+        if key in source:
+            extras[key] = deepcopy(source[key])
 
-    with tempfile.NamedTemporaryFile(
-        suffix=".json",
-        delete=False,
-        mode="w",
-        encoding="utf-8",
-        dir=tmp_dir,
-    ) as tmp:
-        json.dump(source, tmp, indent=4)
-        tmp.write("\n")
-        tmp_path = tmp.name
+    _strip_legacy_unsupported_optimize_bounds(source)
 
-    try:
-        return load_pb7_config(tmp_path, verbose=verbose, neutralize_added=neutralize_added)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    prepared = _load_prepared_config_from_dict(
+        source,
+        verbose=verbose,
+        base_config_path=base_config_path,
+    )
+    finalized = _finalize_prepared_pb7_config(
+        prepared,
+        extras=extras,
+        neutralize_added=neutralize_added,
+    )
+    return _restore_raw_backtest_end_date(finalized, source)
 
 
 def load_pb7_config(
@@ -275,23 +352,38 @@ def load_pb7_config(
 
     # 1) Quick raw read to grab pbgui (and any future PBGui-only keys)
     extras = {}
+    raw = None
+    sanitized_raw = None
     try:
         with open(path, "r", encoding="utf-8") as f:
             raw = json.load(f)
         for key in _PBGUI_EXTRA_KEYS:
             if key in raw:
                 extras[key] = deepcopy(raw[key])
+        if isinstance(raw, dict):
+            sanitized_raw = deepcopy(raw)
+            removed_bounds = _strip_legacy_unsupported_optimize_bounds(sanitized_raw)
+            if not removed_bounds:
+                sanitized_raw = None
     except (OSError, json.JSONDecodeError):
         pass
 
     # 2) Full passivbot pipeline: migrate, hydrate, validate
     #    Keep _transform_log alive until we have parsed it (if needed).
-    prepared = load_prepared_config(path, verbose=verbose)
-    return _finalize_prepared_pb7_config(
+    if sanitized_raw is not None:
+        prepared = _load_prepared_config_from_dict(
+            sanitized_raw,
+            verbose=verbose,
+            base_config_path=path,
+        )
+    else:
+        prepared = load_prepared_config(path, verbose=verbose)
+    finalized = _finalize_prepared_pb7_config(
         prepared,
         extras=extras,
         neutralize_added=neutralize_added,
     )
+    return _restore_raw_backtest_end_date(finalized, raw)
 
 
 def save_pb7_config(cfg: dict, path: str | Path) -> None:
@@ -306,7 +398,8 @@ def save_pb7_config(cfg: dict, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
-    to_write = {k: v for k, v in cfg.items() if k != "_pbgui_param_status"}
+    to_write = deepcopy({k: v for k, v in cfg.items() if k != "_pbgui_param_status"})
+    _strip_legacy_unsupported_optimize_bounds(to_write)
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(to_write, f, indent=4)

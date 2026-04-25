@@ -697,6 +697,14 @@
 
     // ---------------------------------------------------------------- toast helper
     function showToast(msg, cls) {
+        fetch('/api/notify_log', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + TOKEN
+            },
+            body: JSON.stringify({ msg: String(msg == null ? '' : msg), level: cls || 'info' })
+        }).catch(function() {});
         var t = document.createElement('span');
         t.className = 'hm-toast ' + (cls || 'success');
         t.textContent = msg;

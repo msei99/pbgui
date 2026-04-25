@@ -2,6 +2,7 @@
 
 Die **PBv7 Backtest** Seite ermöglicht das Erstellen, Ausführen und Auswerten von Passivbot v7 Backtests.
 Es handelt sich um eine eigenständige FastAPI-Seite — kein Seitenneustart nötig. Queue-Updates kommen in Echtzeit per WebSocket.
+Draft-Übergaben aus den FastAPI-Seiten **Run** und **Optimize** landen jetzt ebenfalls direkt hier als FastAPI-Drafts, sodass der Wechsel zwischen diesen PBv7-Seiten keinen Legacy-Streamlit-Relay mehr benötigt.
 
 Die Seite ist in fünf Panels gegliedert, die über die linke Sidebar gewechselt werden:
 
@@ -52,6 +53,8 @@ Die Bearbeitung öffnet sich inline im Hauptbereich. Felder:
 | **Exchange(s)** | Eine oder mehrere Exchanges für den Backtest |
 | **start_date / end_date** | Datumsbereich des Backtests |
 | **starting_balance** | Startguthaben in USD |
+| **hsl_signal_mode** | Aus PB7 abgeleiteter Selektor für das HSL-Verhalten auf Kontoebene: `pside` trennt Long/Short-Drawdown-Signale, `unified` verwendet ein gemeinsames Signal |
+| **logging_level** | Run-ähnlicher Selektor für die Verbosität `warning`, `info`, `debug` und `trace` |
 | **approved_coins / ignored_coins** | Explizite Coin-Listen; automatisch befüllbar über **Apply Filters** |
 | **Coin sources** | Quelle der Coin-Listen (PBGui Coin-Datenbank, manuell, etc.) |
 | **Market settings sources** | Quelle für marktspezifische Einstellungen |
@@ -156,6 +159,7 @@ Alle abgeschlossenen Backtest-Ergebnisse durchsuchen.
 | **🔄 Backtest** | Ausgewählte Ergebnisse als neue Backtests neu ausführen (öffnet Datums-/Balance-/Exchange-Modal) |
 | **▶ Add to Run** | Live-Run aus der ausgewählten Config erstellen |
 | **📈 Compare** | Ausgewählte Ergebnisse zur Vergleichsansicht hinzufügen |
+| **🧬 Optimize from Result** | Den Optimize-Editor direkt mit dem ausgewählten Ergebnis als Draft und `Starting Seeds = self` öffnen |
 | **🗑 Delete Selected** | Ausgewählte Ergebnisse von Disk löschen |
 
 ### Aktionsschaltflächen pro Zeile
@@ -255,6 +259,11 @@ Dieses Panel ist sinnvoll, wenn ein Backtest auf Disk fertig vorliegt, aber im n
 ### Ergebnis erneut ausführen / verfeinern
 1. **Results** → Ergebnis auswählen → **🔄 Backtest** → Datum/Balance anpassen → **OK**
 2. **Queue** → Fortschritt überwachen
+
+### Backtest-Ergebnis als Optimize-Draft verwenden
+1. **Results** → genau ein Ergebnis auswählen → **🧬 Optimize from Result**
+2. PBGui öffnet direkt den FastAPI-Optimize-Editor und nicht erst die Config-Liste
+3. Der importierte Draft wird mit **Starting Seeds = self** vorbelegt, sodass der Optimize-Run mit genau dieser Config startet
 
 ### Community-Config verwenden
 1. **Archive** → **⬇ Pull All** → Archiv öffnen → Configs auswählen → **🔄 Backtest**
