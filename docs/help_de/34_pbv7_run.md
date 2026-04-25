@@ -53,7 +53,7 @@ Sidebar-Aktionen:
 | 🏠 Home | Zurück zur Instanzliste |
 | 💾 Save | Änderungen speichern und Config zum VPS synchronisieren |
 | 📥 Import | Bestehende Passivbot-Config-Datei importieren |
-| 📊 Backtest | Config dieser Instanz auf der Backtest-Seite öffnen |
+| 📊 Backtest | Diese Instanz-Config direkt als Draft auf der FastAPI-Backtest-Seite öffnen |
 | 🔍 Strategy Explorer | Strategy Explorer mit dieser Config vorladen |
 | 💰 Balance Calculator | Eigenständigen Balance Calculator für diese Instanz öffnen |
 | ⚡ Calc Balance | Empfohlene Balance direkt berechnen (wird als Popup angezeigt) |
@@ -66,9 +66,11 @@ Wichtige Einstellungen im Bearbeitungsformular:
 | **User** | API-Key-Benutzer (Exchange-Konto) auswählen |
 | **Enabled On** | Ziel-VPS für den Einsatz |
 | **Note** | Optionales Label, das in der Liste angezeigt wird |
+| **Logging level** | Passivbot-Selektor für die Log-Verbosity mit `warning`, `info`, `debug` und `trace` |
 | **Long / Short** | Bot-Parameter — Positionen, TWE, Entry/Close-Bereiche |
 | **JSON-Editoren** | Raw JSON, Long JSON, Short JSON, Import JSON und JSON-basierte Additional Parameters werden beim Tippen validiert; ungültiges JSON zeigt die genaue Zeile/Spalte und blockiert Speichern bis der Fehler behoben ist. Ältere in Run geladene Configs, einschließlich gepasteter Importe und Backtest→Run-Drafts, behalten außerdem die `neutralized`- / `review`-Markierungen im Long/Short-JSON |
 | **Filters** | CoinMarketCap-basierter Symbol-Filter für diese Instanz |
+| **Approved / Ignored coins** | Die Approved-Coin-Picker verwenden jetzt direkt Passivbots kanonisches `all`-Verhalten. Der alte Schalter `empty_means_all_approved` wird nicht mehr angezeigt und beim Speichern auch nicht mehr zurückgeschrieben |
 | **Coin Overrides** | Coin-spezifische Parameterüberschreibungen (Bot-Parameter, Live-Modus, separate Config-Dateien) |
 | **Dynamic Ignore** | Vorschau der automatisch ignorierten Symbole basierend auf den Filter-Einstellungen |
 

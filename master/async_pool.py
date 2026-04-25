@@ -68,12 +68,20 @@ KEEPALIVE_INTERVAL = 10     # seconds — lower = faster dead-connection detecti
 RECONNECT_COOLDOWN = 30     # seconds
 MAX_RECONNECT_ATTEMPTS = 5
 BACKOFF_MULTIPLIER = 60     # seconds
-SFTP_RETRY_ATTEMPTS = 2    # total attempts for transient SFTP errors
+SFTP_RETRY_ATTEMPTS = 2    # total attempts for transient SSH channel/SFTP errors
 SFTP_RETRY_DELAY = 0.5     # seconds between retries
 
 
 def _is_transient_error(e: Exception) -> bool:
     """Check if an error is transient (worth retrying)."""
+    channel_open_error = getattr(asyncssh, 'ChannelOpenError', None)
+    if channel_open_error and isinstance(e, channel_open_error):
+        return True
+
+    message = str(e).lower()
+    if 'open failed' in message or 'server not responding to keepalive' in message:
+        return True
+
     return isinstance(e, (
         ConnectionError, TimeoutError, OSError, BrokenPipeError,
         asyncssh.ConnectionLost, asyncssh.DisconnectError,
@@ -95,6 +103,7 @@ class AsyncSSHPool:
 
     def __init__(self):
         self._connections: dict[str, VPSConnection] = {}
+        self._connect_locks: dict[str, asyncio.Lock] = {}
         # Async callbacks fired after every successful connect/reconnect.
         # Signature: async callback(hostname: str) -> None
         self._on_connect_callbacks: list[callable] = []
@@ -107,6 +116,14 @@ class AsyncSSHPool:
         the connect() call itself.  Multiple callbacks can be registered.
         """
         self._on_connect_callbacks.append(callback)
+
+    def _get_connect_lock(self, hostname: str) -> asyncio.Lock:
+        """Return the per-host lock used to serialize reconnects."""
+        lock = self._connect_locks.get(hostname)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._connect_locks[hostname] = lock
+        return lock
 
     # ── Config loading ──────────────────────────────────────
 
@@ -169,57 +186,63 @@ class AsyncSSHPool:
             _log(SERVICE, f"Unknown VPS: {hostname}", level="ERROR")
             return False
 
-        if entry.status == ConnectionStatus.CONNECTED and self._is_alive(entry):
-            return True
+        lock = self._get_connect_lock(hostname)
+        async with lock:
+            entry = self._connections.get(hostname)
+            if not entry:
+                _log(SERVICE, f"Unknown VPS: {hostname}", level="ERROR")
+                return False
 
-        entry.status = ConnectionStatus.CONNECTING
-        cfg = entry.config
-        try:
-            conn = await asyncio.wait_for(
-                asyncssh.connect(
-                    host=cfg.ip,
-                    port=cfg.ssh_port,
-                    username=cfg.user,
-                    known_hosts=None,  # Accept any host key (same as Paramiko AutoAddPolicy)
-                    keepalive_interval=KEEPALIVE_INTERVAL,
-                ),
-                timeout=CONNECT_TIMEOUT,
-            )
-            # Close previous connection if lingering
-            if entry.conn:
-                entry.conn.close()
+            if entry.status == ConnectionStatus.CONNECTED and self._is_alive(entry):
+                return True
 
-            entry.conn = conn
-            entry.status = ConnectionStatus.CONNECTED
-            entry.last_connected = datetime.now()
-            entry.last_error = None
-            entry.reconnect_attempts = 0
-            # Auto-read remote pbgui.ini and cache paths
-            await self._cache_remote_ini(entry)
-            _log(SERVICE, f"SSH connected to {hostname} ({cfg.ip})")
-            # Fire on-connect callbacks (e.g. start inotifywait watchers)
-            for _i, _cb in enumerate(self._on_connect_callbacks):
-                asyncio.create_task(
-                    _cb(hostname),
-                    name=f"on-connect-{_i}-{hostname}",
+            entry.status = ConnectionStatus.CONNECTING
+            cfg = entry.config
+            try:
+                conn = await asyncio.wait_for(
+                    asyncssh.connect(
+                        host=cfg.ip,
+                        port=cfg.ssh_port,
+                        username=cfg.user,
+                        known_hosts=None,  # Accept any host key (same as Paramiko AutoAddPolicy)
+                        keepalive_interval=KEEPALIVE_INTERVAL,
+                    ),
+                    timeout=CONNECT_TIMEOUT,
                 )
-            return True
+                previous_conn = entry.conn
+                entry.conn = conn
+                entry.status = ConnectionStatus.CONNECTED
+                entry.last_connected = datetime.now()
+                entry.last_error = None
+                entry.reconnect_attempts = 0
+                # Auto-read remote pbgui.ini and cache paths on the fresh connection.
+                await self._cache_remote_ini(entry, conn)
+                if previous_conn and previous_conn is not conn:
+                    previous_conn.close()
+                _log(SERVICE, f"SSH connected to {hostname} ({cfg.ip})")
+                # Fire on-connect callbacks (e.g. start inotifywait watchers)
+                for _i, _cb in enumerate(self._on_connect_callbacks):
+                    asyncio.create_task(
+                        _cb(hostname),
+                        name=f"on-connect-{_i}-{hostname}",
+                    )
+                return True
 
-        except asyncssh.PermissionDenied as e:
-            entry.status = ConnectionStatus.AUTH_FAILED
-            entry.last_error = f"Authentication failed: {e}"
-            entry.reconnect_attempts += 1
-            _log(SERVICE, f"SSH auth failed for {hostname}: {e}", level="ERROR")
-            return False
+            except asyncssh.PermissionDenied as e:
+                entry.status = ConnectionStatus.AUTH_FAILED
+                entry.last_error = f"Authentication failed: {e}"
+                entry.reconnect_attempts += 1
+                _log(SERVICE, f"SSH auth failed for {hostname}: {e}", level="ERROR")
+                return False
 
-        except Exception as e:
-            entry.status = ConnectionStatus.DISCONNECTED
-            entry.last_error = str(e)
-            entry.last_disconnect = datetime.now()
-            entry.reconnect_attempts += 1
-            _log(SERVICE, f"SSH connect failed for {hostname}: {e}",
-                 level="ERROR")
-            return False
+            except Exception as e:
+                entry.status = ConnectionStatus.DISCONNECTED
+                entry.last_error = str(e)
+                entry.last_disconnect = datetime.now()
+                entry.reconnect_attempts += 1
+                _log(SERVICE, f"SSH connect failed for {hostname}: {e}",
+                     level="ERROR")
+                return False
 
     async def connect_enabled(self, enabled_hosts: set[str]) -> dict[str, bool]:
         """Connect to all enabled hosts concurrently.
@@ -243,11 +266,17 @@ class AsyncSSHPool:
         entry = self._connections.get(hostname)
         if not entry:
             return
-        if entry.conn:
-            entry.conn.close()
+        lock = self._get_connect_lock(hostname)
+        async with lock:
+            entry = self._connections.get(hostname)
+            if not entry:
+                return
+            conn = entry.conn
             entry.conn = None
-        entry.status = ConnectionStatus.DISCONNECTED
-        entry.last_disconnect = datetime.now()
+            entry.status = ConnectionStatus.DISCONNECTED
+            entry.last_disconnect = datetime.now()
+            if conn:
+                conn.close()
         _log(SERVICE, f"SSH disconnected from {hostname}")
 
     async def disconnect_all(self):
@@ -258,8 +287,22 @@ class AsyncSSHPool:
     def remove_host(self, hostname: str):
         """Remove a host from the pool entirely."""
         entry = self._connections.pop(hostname, None)
+        self._connect_locks.pop(hostname, None)
         if entry and entry.conn:
             entry.conn.close()
+
+    async def _ensure_live_connection(self, hostname: str
+                                      ) -> Optional[VPSConnection]:
+        """Return a live connection entry, reconnecting if needed."""
+        entry = self._connections.get(hostname)
+        if not entry:
+            return None
+        if entry.conn and self._is_alive(entry):
+            return entry
+        ok = await self.connect(hostname)
+        if not ok:
+            return None
+        return self._connections.get(hostname)
 
     # ── Command execution ───────────────────────────────────
 
@@ -272,24 +315,36 @@ class AsyncSSHPool:
         If check=True, raises ProcessError on nonzero exit.
         timeout=None means no timeout (wait indefinitely).
         """
-        entry = self._connections.get(hostname)
-        if not entry or not entry.conn:
-            _log(SERVICE, f"[cmd] Cannot run on {hostname}: no connection",
-                 level="WARNING")
-            return None
-        try:
-            coro = entry.conn.run(command, check=check)
-            if timeout is not None:
-                result = await asyncio.wait_for(coro, timeout=timeout)
-            else:
-                result = await coro
-            return result
-        except asyncssh.ProcessError:
-            raise  # Let caller handle
-        except Exception as e:
-            _log(SERVICE, f"[cmd] {hostname}: '{command}' failed: {e}",
-                 level="ERROR")
-            return None
+        for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
+            entry = await self._ensure_live_connection(hostname)
+            if not entry or not entry.conn:
+                if attempt < SFTP_RETRY_ATTEMPTS:
+                    await asyncio.sleep(SFTP_RETRY_DELAY)
+                    continue
+                _log(SERVICE, f"[cmd] Cannot run on {hostname}: no connection",
+                     level="WARNING")
+                return None
+            try:
+                coro = entry.conn.run(command, check=check)
+                if timeout is not None:
+                    result = await asyncio.wait_for(coro, timeout=timeout)
+                else:
+                    result = await coro
+                return result
+            except asyncssh.ProcessError:
+                raise  # Let caller handle
+            except Exception as e:
+                if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
+                    _log(SERVICE, f"[cmd] {hostname}: '{command}' failed "
+                         f"(attempt {attempt}): {e} — reconnecting",
+                         level="WARNING")
+                    await self.disconnect(hostname)
+                    await asyncio.sleep(SFTP_RETRY_DELAY)
+                    continue
+                _log(SERVICE, f"[cmd] {hostname}: '{command}' failed: {e}",
+                     level="ERROR")
+                return None
+        return None
 
     async def start_process(self, hostname: str, command: str
                             ) -> Optional[asyncssh.SSHClientProcess]:
@@ -297,15 +352,27 @@ class AsyncSSHPool:
 
         Caller is responsible for reading stdout and closing.
         """
-        entry = self._connections.get(hostname)
-        if not entry or not entry.conn:
-            return None
-        try:
-            return await entry.conn.create_process(command)
-        except Exception as e:
-            _log(SERVICE, f"[cmd] {hostname}: start_process failed: {e}",
-                 level="ERROR")
-            return None
+        for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
+            entry = await self._ensure_live_connection(hostname)
+            if not entry or not entry.conn:
+                if attempt < SFTP_RETRY_ATTEMPTS:
+                    await asyncio.sleep(SFTP_RETRY_DELAY)
+                    continue
+                return None
+            try:
+                return await entry.conn.create_process(command)
+            except Exception as e:
+                if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
+                    _log(SERVICE, f"[cmd] {hostname}: start_process failed "
+                         f"(attempt {attempt}): {e} — reconnecting",
+                         level="WARNING")
+                    await self.disconnect(hostname)
+                    await asyncio.sleep(SFTP_RETRY_DELAY)
+                    continue
+                _log(SERVICE, f"[cmd] {hostname}: start_process failed: {e}",
+                     level="ERROR")
+                return None
+        return None
 
     # ── Health checks ───────────────────────────────────────
 
@@ -422,17 +489,29 @@ class AsyncSSHPool:
 
     async def _open_sftp(self, hostname: str) -> Optional[asyncssh.SFTPClient]:
         """Get an SFTP client for a connected host."""
-        entry = self._connections.get(hostname)
-        if not entry or not entry.conn:
-            _log(SERVICE, f"[sftp] Cannot open SFTP to {hostname}: no connection",
-                 level="WARNING")
-            return None
-        try:
-            return await entry.conn.start_sftp_client()
-        except Exception as e:
-            _log(SERVICE, f"[sftp] Failed to open SFTP to {hostname}: {e}",
-                 level="ERROR")
-            return None
+        for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
+            entry = await self._ensure_live_connection(hostname)
+            if not entry or not entry.conn:
+                if attempt < SFTP_RETRY_ATTEMPTS:
+                    await asyncio.sleep(SFTP_RETRY_DELAY)
+                    continue
+                _log(SERVICE, f"[sftp] Cannot open SFTP to {hostname}: no connection",
+                     level="WARNING")
+                return None
+            try:
+                return await entry.conn.start_sftp_client()
+            except Exception as e:
+                if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
+                    _log(SERVICE, f"[sftp] Failed to open SFTP to {hostname} "
+                         f"(attempt {attempt}): {e} — reconnecting",
+                         level="WARNING")
+                    await self.disconnect(hostname)
+                    await asyncio.sleep(SFTP_RETRY_DELAY)
+                    continue
+                _log(SERVICE, f"[sftp] Failed to open SFTP to {hostname}: {e}",
+                     level="ERROR")
+                return None
+        return None
 
     async def push_file(self, hostname: str, local_path: Path,
                         remote_path: str) -> bool:
@@ -590,11 +669,12 @@ class AsyncSSHPool:
 
     # ── Remote pbgui.ini access ─────────────────────────────
 
-    async def _cache_remote_ini(self, entry: VPSConnection):
+    async def _cache_remote_ini(self, entry: VPSConnection,
+                                conn: Optional[asyncssh.SSHClientConnection] = None):
         """Read remote pbgui.ini on connect and cache paths in entry.data."""
         hostname = entry.config.hostname
         try:
-            ini = await self._read_ini_internal(entry)
+            ini = await self._read_ini_internal(entry, conn)
             entry.data['ini'] = ini
             entry.data['pb7dir'] = ini.get('main', 'pb7dir', fallback=None)
             entry.data['pbname'] = ini.get('main', 'pbname', fallback=hostname)
@@ -608,13 +688,20 @@ class AsyncSSHPool:
             entry.data['pbname'] = hostname
 
     async def _read_ini_internal(self,
-                                 entry: VPSConnection
+                                 entry: VPSConnection,
+                                 conn: Optional[asyncssh.SSHClientConnection] = None
                                  ) -> configparser.ConfigParser:
         """Read and parse remote pbgui.ini via SFTP (uses entry.conn directly)."""
         remote_path = f"{REMOTE_PBGUI_DIR}/pbgui.ini"
-        sftp = await entry.conn.start_sftp_client()
-        async with sftp.open(remote_path, 'r') as f:
-            content = await f.read()
+        ssh_conn = conn or entry.conn
+        if ssh_conn is None:
+            raise ConnectionError("SSH connection closed")
+        sftp = await ssh_conn.start_sftp_client()
+        try:
+            async with sftp.open(remote_path, 'r') as f:
+                content = await f.read()
+        finally:
+            sftp.exit()
         cfg = configparser.ConfigParser()
         cfg.read_string(content if isinstance(content, str)
                         else content.decode('utf-8'))

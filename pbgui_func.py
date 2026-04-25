@@ -990,6 +990,72 @@ def redirect_to_fastapi_v7_backtest() -> None:
     st.stop()
 
 
+def redirect_to_fastapi_v7_optimize() -> None:
+    """Redirect the browser to the standalone FastAPI PBv7 Optimize page."""
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    extra_params = []
+    try:
+        for key, value in st.query_params.items():
+            if key in ("token", "target"):
+                continue
+            if isinstance(value, list):
+                values = value
+            else:
+                values = [value]
+            for item in values:
+                if item in (None, ""):
+                    continue
+                extra_params.append(
+                    f"&{requests.utils.quote(str(key), safe='')}={requests.utils.quote(str(item), safe='')}"
+                )
+    except Exception:
+        pass
+
+    url = (
+        f"http://{browser_host}:{api_port}/api/optimize-v7/main_page"
+        f"?token={token}"
+        f"&st_base={st_base}"
+        f"{''.join(extra_params)}"
+    )
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
+
+
 def redirect_to_fastapi_v7_backtest_draft(config_dict: dict, draft_name: str = "") -> None:
     """POST a backtest config as draft and open the FastAPI Backtest editor."""
     from api.auth import generate_token

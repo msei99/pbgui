@@ -53,7 +53,7 @@ Sidebar actions:
 | 🏠 Home | Return to the instance list |
 | 💾 Save | Save changes and sync config to VPS |
 | 📥 Import | Import an existing Passivbot config file |
-| 📊 Backtest | Open this instance's config in the Backtest page |
+| 📊 Backtest | Open this instance's config directly in the FastAPI Backtest page as a draft |
 | 🔍 Strategy Explorer | Open the Strategy Explorer pre-loaded with this config |
 | 💰 Balance Calculator | Open the standalone Balance Calculator for this instance |
 | ⚡ Calc Balance | Calculate the recommended balance inline (shown as a popup) |
@@ -66,9 +66,11 @@ Key settings in the edit form:
 | **User** | Select the API-key user (exchange account) |
 | **Enabled On** | Target VPS for deployment |
 | **Note** | Optional label shown in the list |
+| **Logging level** | Passivbot logging verbosity selector with `warning`, `info`, `debug`, and `trace` |
 | **Long / Short** | Bot parameters — positions, TWE, entry/close ranges |
 | **JSON editors** | Raw JSON, Long JSON, Short JSON, Import JSON, and JSON-based Additional Parameters are validated while typing; invalid JSON shows the exact line/column and blocks Save until fixed. Older configs loaded into Run, including pasted imports and Backtest→Run drafts, also keep the `neutralized` / `review` markers in Long/Short JSON |
 | **Filters** | CoinMarketCap-based symbol filter for this instance |
+| **Approved / Ignored coins** | The approved coin pickers now use Passivbot's canonical `all` handling directly. The old `empty_means_all_approved` toggle is no longer shown or written back on save |
 | **Coin Overrides** | Per-coin parameter overrides (bot params, live mode, separate config files) |
 | **Dynamic Ignore** | Preview of symbols automatically ignored based on filter settings |
 

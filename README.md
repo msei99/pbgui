@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.73
+# v1.74
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -322,6 +322,17 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.74 (25-04-2026)
+- Added: PBv7 Optimize is now available as a standalone FastAPI page with configs, queue, results, paretos, live WebSocket updates, integrated log viewing, and API-managed queue execution.
+- Improved: The new Optimize editor now provides structured PB7-native controls for scoring, limits, bounds, runtime overrides, seeds, suite mode, backend-specific pymoo/DEAP settings, and live raw JSON sync.
+- Improved: Optimize queue handling now supports drag-and-drop ordering, multi-row selection, autostart settings with optional CPU override, safer requeue/repair flows, embedded config snapshots, and recovery of live optimize processes/logs.
+- Improved: Optimize results now support inline pareto browsing, suite-aware summaries, direct seeding from selected paretos or whole results, in-page Pareto Explorer / PB7 Pareto Dash / PB7 3D plot, and direct Backtest handoff.
+- Improved: PBv7 Run, Backtest, and Optimize now hand off directly between their FastAPI pages instead of routing those transitions back through legacy Streamlit.
+- Improved: Backtest and Optimize now use PB7-derived metadata more directly, including canonical logging labels, `hsl_signal_mode`, preserved `end_date = now`, CPU clamping to host limits, and better legacy config compatibility.
+- Improved: Run editor approved/ignored coin handling now follows PB7's canonical `all` semantics directly and no longer writes the deprecated `empty_means_all_approved` flag.
+- Improved: Shared FastAPI infrastructure now includes a common PB7 bridge for schema/meta lookups, persistent notification logging for more frontend toasts, and a more reliable shared log viewer.
+- Fixed: SSH/VPS reconnect handling is more robust, reducing stale-channel failures and reconnect races during API-key sync and VPS monitoring.
 
 ## v1.73 (17-04-2026)
 - Fixed: In the legacy Streamlit PBv7 Optimize editor, Hyperliquid `XYZ-...` approved coins now stay selected instead of being dropped immediately because the multiselect and saved config now use the same normalized symbol format.

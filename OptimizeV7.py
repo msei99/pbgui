@@ -25,6 +25,7 @@ from Config import (
     Logging,
     SHARED_METRICS,
     CURRENCY_METRICS,
+    DEFAULT_OPTIMIZE_SCORING,
     get_all_metrics_list,
     get_metrics_by_group,
     get_metric_groups,
@@ -33,7 +34,9 @@ from Config import (
     get_limits_metric_list_help_text,
     is_currency_metric,
     canonicalize_metric_name,
+    merge_optimize_scoring_selection,
     ALLOWED_OVERRIDES,
+    scoring_metric_names,
     get_aggregate_metrics,
     ConfigV7Editor,
 )
@@ -1437,12 +1440,42 @@ class OptimizeV7Item(ConfigV7Editor):
     # population_size
     @st.fragment
     def fragment_population_size(self):
-        if "edit_opt_v7_population_size" in st.session_state:
-            if st.session_state.edit_opt_v7_population_size != self.config.optimize.population_size:
-                self.config.optimize.population_size = st.session_state.edit_opt_v7_population_size
+        auto_key = "edit_opt_v7_population_size_auto"
+        size_key = "edit_opt_v7_population_size"
+        config_value = self.config.optimize.population_size
+
+        if auto_key not in st.session_state:
+            st.session_state[auto_key] = config_value is None
+        if size_key not in st.session_state or st.session_state[size_key] in (None, ""):
+            st.session_state[size_key] = config_value if config_value is not None else 330
+
+        if st.session_state.get(auto_key, False):
+            if self.config.optimize.population_size is not None:
+                self.config.optimize.population_size = None
         else:
-            st.session_state.edit_opt_v7_population_size = self.config.optimize.population_size
-        st.number_input("population_size", min_value=1, max_value=10000, step=1, format="%d", key="edit_opt_v7_population_size", help=pbgui_help.population_size)
+            new_value = int(st.session_state.get(size_key, 330))
+            if new_value != self.config.optimize.population_size:
+                self.config.optimize.population_size = new_value
+
+        col_auto, col_value = st.columns([0.35, 0.65], vertical_alignment="bottom")
+        with col_auto:
+            st.checkbox(
+                "auto",
+                key=auto_key,
+                help="Store optimize.population_size as null so Passivbot can auto-size the runtime population.",
+            )
+        with col_value:
+            st.number_input(
+                "population_size",
+                min_value=1,
+                max_value=10000,
+                step=1,
+                format="%d",
+                key=size_key,
+                help=pbgui_help.population_size,
+                disabled=st.session_state.get(auto_key, False),
+            )
+        st.caption("Auto stores optimize.population_size as null. PB7 then derives the runtime population from the active backend and algorithm.")
 
     # pareto_max_size
     @st.fragment
@@ -1626,36 +1659,28 @@ class OptimizeV7Item(ConfigV7Editor):
     # scoring
     @st.fragment
     def fragment_scoring(self):
-        def _normalize_scoring_list(items):
-            if not items:
-                return []
-
+        def _normalize_metric_selection(items):
             normalized = []
-            for item in items:
-                if isinstance(item, str):
-                    normalized.append(canonicalize_metric_name(item))
-                elif isinstance(item, dict) and "metric" in item:
-                    normalized.append(canonicalize_metric_name(item["metric"]))
-                else:
-                    continue
-
-            # de-dup, preserve order
-            out = []
             seen = set()
-            for x in normalized:
-                if x not in seen:
-                    out.append(x)
-                    seen.add(x)
-            return out
+            for item in items or []:
+                metric = item.get("metric") if isinstance(item, dict) else item
+                metric = canonicalize_metric_name(metric)
+                if not metric or metric in seen:
+                    continue
+                normalized.append(metric)
+                seen.add(metric)
+            return normalized
 
         if "edit_opt_v7_scoring" in st.session_state:
-            normalized = _normalize_scoring_list(st.session_state.edit_opt_v7_scoring)
+            normalized = _normalize_metric_selection(st.session_state.edit_opt_v7_scoring)
             if normalized != st.session_state.edit_opt_v7_scoring:
                 st.session_state.edit_opt_v7_scoring = normalized
-            if normalized != self.config.optimize.scoring:
-                self.config.optimize.scoring = normalized
+            merged_scoring = merge_optimize_scoring_selection(self.config.optimize.scoring, normalized)
+            if merged_scoring != self.config.optimize.scoring:
+                self.config.optimize.scoring = merged_scoring
         else:
-            st.session_state.edit_opt_v7_scoring = _normalize_scoring_list(self.config.optimize.scoring)
+            initial_scoring = self.config.optimize.scoring or DEFAULT_OPTIMIZE_SCORING
+            st.session_state.edit_opt_v7_scoring = scoring_metric_names(initial_scoring)
 
         # Use centralized metric definitions (avoids maintaining a second list here)
         options = set(get_all_metrics_list())
@@ -1726,9 +1751,12 @@ class OptimizeV7Item(ConfigV7Editor):
             )
             updated = list(st.session_state.edit_opt_v7_scoring or [])
             updated.append(metric_to_add)
-            updated = _normalize_scoring_list(updated)
+            updated = _normalize_metric_selection(updated)
             st.session_state.edit_opt_v7_scoring = updated
-            self.config.optimize.scoring = updated
+            self.config.optimize.scoring = merge_optimize_scoring_selection(
+                self.config.optimize.scoring,
+                updated,
+            )
             st.rerun()
 
         with col_scoring:
@@ -1738,6 +1766,7 @@ class OptimizeV7Item(ConfigV7Editor):
                 key="edit_opt_v7_scoring",
                 help=pbgui_help.scoring,
             )
+            st.caption("PB7 stores scoring as explicit metric/goal pairs. Existing goals are preserved; new metrics use Passivbot's default min/max goal.")
 
     # filters
     def fragment_filter_coins(self):
@@ -1760,8 +1789,9 @@ class OptimizeV7Item(ConfigV7Editor):
             symbol = str(coin).strip()
             if not symbol:
                 return ""
-            # Keep Streamlit option values aligned with Config.ApprovedCoins,
-            # which stores Hyperliquid stock perps in normalized XYZ-TICKER form.
+            lower = symbol.lower()
+            if lower.startswith("xyz:") or lower.startswith("xyz-"):
+                return f"xyz:{symbol[4:].strip().upper()}"
             return normalize_symbol(symbol)
         def _normalize_list(items):
             normalized = []
@@ -1827,7 +1857,7 @@ class OptimizeV7Item(ConfigV7Editor):
         preserved_stock_perps = {
             _canonical_coin_symbol(c)
             for c in (self.config.live.approved_coins.long + self.config.live.approved_coins.short)
-            if _canonical_coin_symbol(c).startswith("XYZ-")
+            if _canonical_coin_symbol(c).startswith("xyz:")
         }
         symbols.update(preserved_stock_perps)
         symbols = sorted(symbols)

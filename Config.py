@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 import shutil
 import os
+from copy import deepcopy
 from pbgui_func import validateJSON, error_popup
 from pbgui_purefunc import config_pretty_str, pb7_suite_preflight_errors
 import pbgui_help
@@ -87,6 +88,23 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
         weighted_variant="mdg_pnl_w",
         description="Median of daily realized PnL ratios (collateral-agnostic) and weighted variant.",
     ),
+    "gain_strategy_pnl_rebased": MetricDef(
+        group="Returns & Growth",
+        has_currency=False,
+        description="Terminal gain on the strategy-PnL rebased equity curve.",
+    ),
+    "adg_strategy_pnl_rebased": MetricDef(
+        group="Returns & Growth",
+        has_currency=False,
+        weighted_variant="adg_strategy_pnl_rebased_w",
+        description="Collateral-agnostic geometric growth on the strategy-PnL rebased equity curve and weighted variant.",
+    ),
+    "mdg_strategy_pnl_rebased": MetricDef(
+        group="Returns & Growth",
+        has_currency=False,
+        weighted_variant="mdg_strategy_pnl_rebased_w",
+        description="Median-day growth on the strategy-PnL rebased equity curve and weighted variant.",
+    ),
     "adg_per_exposure_long": MetricDef(
         group="Returns & Growth",
         has_currency=True,
@@ -138,6 +156,11 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
         has_currency=True,
         description="Average of worst 1% daily losses (CVaR).",
     ),
+    "expected_shortfall_1pct_strategy_pnl_rebased": MetricDef(
+        group="Risk Metrics",
+        has_currency=False,
+        description="CVaR on the strategy-PnL rebased equity curve.",
+    ),
     "equity_balance_diff_neg_max": MetricDef(
         group="Risk Metrics",
         has_currency=True,
@@ -157,6 +180,61 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
         group="Risk Metrics",
         has_currency=True,
         description="Average positive (equity-balance)/balance divergence.",
+    ),
+    "drawdown_worst_hsl": MetricDef(
+        group="Risk Metrics",
+        has_currency=False,
+        description="Worst account-level hard-stop-loss drawdown.",
+    ),
+    "drawdown_worst_ema_hsl": MetricDef(
+        group="Risk Metrics",
+        has_currency=False,
+        description="Worst EMA-smoothed hard-stop-loss drawdown.",
+    ),
+    "drawdown_worst_mean_1pct_hsl": MetricDef(
+        group="Risk Metrics",
+        has_currency=False,
+        description="Mean of the worst 1% hard-stop-loss drawdown samples.",
+    ),
+    "drawdown_worst_mean_1pct_ema_hsl": MetricDef(
+        group="Risk Metrics",
+        has_currency=False,
+        description="Mean of the worst 1% EMA-smoothed hard-stop-loss drawdown samples.",
+    ),
+    "trade_loss_max": MetricDef(
+        group="Risk Metrics",
+        has_currency=False,
+        description="Largest single losing trade.",
+    ),
+    "trade_loss_mean": MetricDef(
+        group="Risk Metrics",
+        has_currency=False,
+        description="Mean losing trade size.",
+    ),
+    "trade_loss_median": MetricDef(
+        group="Risk Metrics",
+        has_currency=False,
+        description="Median losing trade size.",
+    ),
+    "hard_stop_halt_to_restart_equity_loss_pct": MetricDef(
+        group="Risk Metrics",
+        has_currency=False,
+        description="Equity loss between hard-stop halt and restart.",
+    ),
+    "hard_stop_trigger_drawdown_mean": MetricDef(
+        group="Risk Metrics",
+        has_currency=False,
+        description="Mean drawdown at hard-stop trigger time.",
+    ),
+    "hard_stop_panic_close_loss_sum": MetricDef(
+        group="Risk Metrics",
+        has_currency=False,
+        description="Total realized loss from hard-stop panic closes.",
+    ),
+    "hard_stop_panic_close_loss_max": MetricDef(
+        group="Risk Metrics",
+        has_currency=False,
+        description="Largest realized loss from a hard-stop panic close.",
     ),
 
     # Ratios & Efficiency
@@ -208,6 +286,66 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
         weighted_variant="sortino_ratio_pnl_w",
         description="Sortino ratio computed on realized daily PnL ratios (plus weighted variant).",
     ),
+    "sharpe_ratio_strategy_pnl_rebased": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=False,
+        weighted_variant="sharpe_ratio_strategy_pnl_rebased_w",
+        description="Sharpe ratio on the strategy-PnL rebased equity curve and weighted variant.",
+    ),
+    "sortino_ratio_strategy_pnl_rebased": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=False,
+        weighted_variant="sortino_ratio_strategy_pnl_rebased_w",
+        description="Sortino ratio on the strategy-PnL rebased equity curve and weighted variant.",
+    ),
+    "omega_ratio_strategy_pnl_rebased": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=False,
+        weighted_variant="omega_ratio_strategy_pnl_rebased_w",
+        description="Omega ratio on the strategy-PnL rebased equity curve and weighted variant.",
+    ),
+    "sterling_ratio_strategy_pnl_rebased": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=False,
+        weighted_variant="sterling_ratio_strategy_pnl_rebased_w",
+        description="Sterling ratio on the strategy-PnL rebased equity curve and weighted variant.",
+    ),
+    "calmar_ratio_strategy_pnl_rebased": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=False,
+        weighted_variant="calmar_ratio_strategy_pnl_rebased_w",
+        description="Calmar ratio on the strategy-PnL rebased equity curve and weighted variant.",
+    ),
+    "paper_loss_ratio": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=True,
+        weighted_variant="paper_loss_ratio_w",
+        description="Paper-loss ratio and weighted variant.",
+    ),
+    "paper_loss_mean_ratio": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=True,
+        weighted_variant="paper_loss_mean_ratio_w",
+        description="Mean paper-loss ratio and weighted variant.",
+    ),
+    "exposure_ratio": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=True,
+        weighted_variant="exposure_ratio_w",
+        description="Exposure efficiency ratio and weighted variant.",
+    ),
+    "exposure_mean_ratio": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=True,
+        weighted_variant="exposure_mean_ratio_w",
+        description="Mean exposure efficiency ratio and weighted variant.",
+    ),
+    "win_rate": MetricDef(
+        group="Ratios & Efficiency",
+        has_currency=False,
+        weighted_variant="win_rate_w",
+        description="Fraction of profitable trades and weighted variant.",
+    ),
 
     # Position & Execution Metrics
     "positions_held_per_day": MetricDef(
@@ -251,6 +389,71 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
         group="Position & Execution Metrics",
         has_currency=False,
         description="Longest time until cumulative realized PnL makes a new peak (hours).",
+    ),
+    "peak_recovery_hours_hsl": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Longest time below the rebased hard-stop-loss peak before recovery (hours).",
+    ),
+    "backtest_completion_ratio": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Fraction of the requested backtest window completed before an early stop.",
+    ),
+    "hard_stop_triggers_per_year": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Annualized number of hard-stop triggers.",
+    ),
+    "hard_stop_restarts_per_year": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Annualized number of hard-stop restarts.",
+    ),
+    "hard_stop_restarts_per_year_long": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Annualized number of hard-stop restarts on the long side.",
+    ),
+    "hard_stop_restarts_per_year_short": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Annualized number of hard-stop restarts on the short side.",
+    ),
+    "hard_stop_time_in_yellow_pct": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Share of time spent in the hard-stop yellow tier.",
+    ),
+    "hard_stop_time_in_orange_pct": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Share of time spent in the hard-stop orange tier.",
+    ),
+    "hard_stop_time_in_red_pct": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Share of time spent in the hard-stop red tier.",
+    ),
+    "hard_stop_duration_minutes_mean": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Mean hard-stop halt duration in minutes.",
+    ),
+    "hard_stop_duration_minutes_max": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Maximum hard-stop halt duration in minutes.",
+    ),
+    "hard_stop_flatten_time_minutes_mean": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Mean minutes from hard-stop trigger to fully flat.",
+    ),
+    "hard_stop_post_restart_retrigger_pct": MetricDef(
+        group="Position & Execution Metrics",
+        has_currency=False,
+        description="Share of hard-stop restarts that retrigger soon after restart.",
     ),
 
     # Equity Curve Quality
@@ -548,6 +751,222 @@ def canonicalize_metric_name(metric: str) -> str:
         return f"{metric}_usd"
 
     return metric
+
+
+OPTIMIZE_BACKENDS = ("deap", "pymoo")
+OPTIMIZE_OBJECTIVE_GOALS = ("min", "max")
+
+# Mirrors pb7/src/config/scoring.py so PBGui can preserve canonical scoring
+# objects before the full FastAPI optimize editor is in place.
+DEFAULT_OBJECTIVE_GOALS: dict[str, str] = {
+    "positions_held_per_day": "min",
+    "positions_held_per_day_w": "min",
+    "position_held_hours_mean": "min",
+    "position_held_hours_max": "min",
+    "position_held_hours_median": "min",
+    "position_unchanged_hours_max": "min",
+    "high_exposure_hours_mean_long": "min",
+    "high_exposure_hours_max_long": "min",
+    "high_exposure_hours_mean_short": "min",
+    "high_exposure_hours_max_short": "min",
+    "adg_pnl": "max",
+    "adg_pnl_w": "max",
+    "gain_strategy_pnl_rebased": "max",
+    "adg_strategy_pnl_rebased": "max",
+    "mdg_strategy_pnl_rebased": "max",
+    "sharpe_ratio_strategy_pnl_rebased": "max",
+    "sortino_ratio_strategy_pnl_rebased": "max",
+    "omega_ratio_strategy_pnl_rebased": "max",
+    "expected_shortfall_1pct_strategy_pnl_rebased": "min",
+    "calmar_ratio_strategy_pnl_rebased": "max",
+    "sterling_ratio_strategy_pnl_rebased": "max",
+    "adg_strategy_pnl_rebased_w": "max",
+    "mdg_strategy_pnl_rebased_w": "max",
+    "sharpe_ratio_strategy_pnl_rebased_w": "max",
+    "sortino_ratio_strategy_pnl_rebased_w": "max",
+    "omega_ratio_strategy_pnl_rebased_w": "max",
+    "calmar_ratio_strategy_pnl_rebased_w": "max",
+    "sterling_ratio_strategy_pnl_rebased_w": "max",
+    "drawdown_worst_hsl": "min",
+    "drawdown_worst_mean_1pct_hsl": "min",
+    "peak_recovery_hours_hsl": "min",
+    "mdg_pnl": "max",
+    "mdg_pnl_w": "max",
+    "sharpe_ratio_pnl": "max",
+    "sharpe_ratio_pnl_w": "max",
+    "sortino_ratio_pnl": "max",
+    "sortino_ratio_pnl_w": "max",
+    "adg": "max",
+    "adg_per_exposure_long": "max",
+    "adg_per_exposure_short": "max",
+    "adg_w": "max",
+    "adg_w_per_exposure_long": "max",
+    "adg_w_per_exposure_short": "max",
+    "calmar_ratio": "max",
+    "calmar_ratio_w": "max",
+    "drawdown_worst": "min",
+    "drawdown_worst_mean_1pct": "min",
+    "equity_balance_diff_neg_max": "min",
+    "equity_balance_diff_neg_mean": "min",
+    "equity_balance_diff_pos_max": "min",
+    "equity_balance_diff_pos_mean": "min",
+    "paper_loss_ratio": "max",
+    "paper_loss_mean_ratio": "max",
+    "exposure_ratio": "max",
+    "exposure_mean_ratio": "max",
+    "equity_choppiness": "min",
+    "equity_choppiness_w": "min",
+    "equity_jerkiness": "min",
+    "equity_jerkiness_w": "min",
+    "peak_recovery_hours_equity": "min",
+    "expected_shortfall_1pct": "min",
+    "exponential_fit_error": "min",
+    "exponential_fit_error_w": "min",
+    "gain": "max",
+    "gain_per_exposure_long": "max",
+    "gain_per_exposure_short": "max",
+    "loss_profit_ratio": "min",
+    "loss_profit_ratio_w": "min",
+    "mdg": "max",
+    "mdg_per_exposure_long": "max",
+    "mdg_per_exposure_short": "max",
+    "mdg_w": "max",
+    "mdg_w_per_exposure_long": "max",
+    "mdg_w_per_exposure_short": "max",
+    "omega_ratio": "max",
+    "omega_ratio_w": "max",
+    "sharpe_ratio": "max",
+    "sharpe_ratio_w": "max",
+    "sortino_ratio": "max",
+    "sortino_ratio_w": "max",
+    "sterling_ratio": "max",
+    "sterling_ratio_w": "max",
+    "paper_loss_ratio_w": "max",
+    "paper_loss_mean_ratio_w": "max",
+    "exposure_ratio_w": "max",
+    "exposure_mean_ratio_w": "max",
+    "total_wallet_exposure_max": "min",
+    "total_wallet_exposure_mean": "min",
+    "total_wallet_exposure_median": "min",
+    "volume_pct_per_day_avg": "max",
+    "volume_pct_per_day_avg_w": "max",
+    "entry_initial_balance_pct_long": "max",
+    "entry_initial_balance_pct_short": "max",
+}
+
+DEFAULT_OPTIMIZE_FIXED_RUNTIME_OVERRIDES = {
+    "bot.long.hsl_no_restart_drawdown_threshold": 1,
+    "bot.short.hsl_no_restart_drawdown_threshold": 1,
+}
+
+DEFAULT_OPTIMIZE_SCORING = [
+    {"metric": "adg_strategy_pnl_rebased", "goal": "max"},
+    {"metric": "adg_strategy_pnl_rebased_w", "goal": "max"},
+    {"metric": "mdg_strategy_pnl_rebased", "goal": "max"},
+    {"metric": "mdg_strategy_pnl_rebased_w", "goal": "max"},
+    {"metric": "peak_recovery_hours_hsl", "goal": "min"},
+    {"metric": "position_held_hours_max", "goal": "min"},
+    {"metric": "drawdown_worst_hsl", "goal": "min"},
+    {"metric": "drawdown_worst_mean_1pct_hsl", "goal": "min"},
+]
+
+DEFAULT_OPTIMIZE_PYMOO = {
+    "algorithm": "auto",
+    "shared": {
+        "crossover_eta": 20,
+        "crossover_prob_var": 0.5,
+        "eliminate_duplicates": True,
+        "mutation_eta": 20,
+        "mutation_prob_var": "auto",
+    },
+    "algorithms": {
+        "nsga2": {},
+        "nsga3": {
+            "ref_dirs": {
+                "method": "das_dennis",
+                "n_partitions": "auto",
+            }
+        },
+    },
+}
+
+
+def default_objective_goal(metric: str) -> str | None:
+    canonical = canonicalize_metric_name(metric)
+    goal = DEFAULT_OBJECTIVE_GOALS.get(canonical) or DEFAULT_OBJECTIVE_GOALS.get(str(metric).strip())
+    if goal is not None:
+        return goal
+    if isinstance(canonical, str) and canonical.endswith(("_usd", "_btc")):
+        return DEFAULT_OBJECTIVE_GOALS.get(canonical.rsplit("_", 1)[0])
+    return None
+
+
+def normalize_optimize_scoring_entries(
+    scoring,
+    *,
+    dedupe: bool = True,
+    unknown_goal: str = "min",
+) -> list[dict[str, str]]:
+    if scoring is None:
+        return []
+    if not isinstance(scoring, (list, tuple)):
+        return []
+
+    fallback_goal = unknown_goal if unknown_goal in OPTIMIZE_OBJECTIVE_GOALS else "min"
+    normalized: list[dict[str, str]] = []
+    seen_metrics: set[str] = set()
+
+    for item in scoring:
+        metric = ""
+        goal = None
+
+        if isinstance(item, str):
+            metric = canonicalize_metric_name(item.strip())
+            goal = default_objective_goal(metric) or fallback_goal
+        elif isinstance(item, dict):
+            metric = canonicalize_metric_name(str(item.get("metric", "")).strip())
+            raw_goal = item.get("goal")
+            if raw_goal is None:
+                goal = default_objective_goal(metric) or fallback_goal
+            else:
+                goal = str(raw_goal).strip().lower()
+        else:
+            continue
+
+        if not metric:
+            continue
+        if goal not in OPTIMIZE_OBJECTIVE_GOALS:
+            goal = default_objective_goal(metric) or fallback_goal
+        if dedupe and metric in seen_metrics:
+            continue
+
+        normalized.append({"metric": metric, "goal": goal})
+        seen_metrics.add(metric)
+
+    return normalized
+
+
+def scoring_metric_names(scoring) -> list[str]:
+    return [entry["metric"] for entry in normalize_optimize_scoring_entries(scoring, dedupe=False)]
+
+
+def merge_optimize_scoring_selection(existing_scoring, selected_metrics) -> list[dict[str, str]]:
+    goal_by_metric = {
+        entry["metric"]: entry["goal"]
+        for entry in normalize_optimize_scoring_entries(existing_scoring, dedupe=False)
+    }
+    merged: list[dict[str, str]] = []
+    seen_metrics: set[str] = set()
+
+    for metric in selected_metrics or []:
+        canonical = canonicalize_metric_name(metric)
+        if not canonical or canonical in seen_metrics:
+            continue
+        goal = goal_by_metric.get(canonical) or default_objective_goal(canonical) or "min"
+        merged.append({"metric": canonical, "goal": goal})
+        seen_metrics.add(canonical)
+
+    return merged
 
 # ============================================================================
 # Bot Parameter Overrides
@@ -2606,92 +3025,373 @@ class Optimize:
         self._bounds = Bounds()
         self._limits = []  # New list format: [{"metric": "x", "penalize_if": "greater_than", "value": 0.5}, ...]
         # optimize
+        self._backend = "pymoo"
         self._compress_results_file = True
-        self._crossover_probability = 0.7
+        self._crossover_probability = 0.64
         self._crossover_eta = 20.0
         self._enable_overrides = []
-        self._iters = 100000
-        self._mutation_probability = 0.45
+        self._fixed_params = []
+        self._fixed_runtime_overrides = deepcopy(DEFAULT_OPTIMIZE_FIXED_RUNTIME_OVERRIDES)
+        self._iters = 500000
+        self._mutation_probability = 0.34
         self._mutation_eta = 20.0
-        self._mutation_indpb = 0.0
-        self._n_cpus = 5
+        self._mutation_indpb = 0.0135135135
+        self._max_pending_starting_evals_per_cpu = 1
+        self._n_cpus = min(6, multiprocessing.cpu_count())
         self._offspring_multiplier = 1.0
-        self._pareto_max_size = 250
-        self._population_size = 1000
-        self._round_to_n_significant_digits = 5
+        self._pareto_max_size = 1000
+        self._population_size = None
+        self._pymoo = deepcopy(DEFAULT_OPTIMIZE_PYMOO)
+        self._round_to_n_significant_digits = 3
         # scoring
-        self._scoring = ["loss_profit_ratio", "mdg_w", "sharpe_ratio"]
+        self._scoring = deepcopy(DEFAULT_OPTIMIZE_SCORING)
         self._write_all_results = True
 
+        self._optimize = {}
+        self._sync_optimize()
+
+    def __repr__(self):
+        return str(self._optimize)
+
+    @staticmethod
+    def _normalize_string_list(values) -> list[str]:
+        if not isinstance(values, (list, tuple)):
+            return []
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            text = str(value).strip()
+            if not text or text in seen:
+                continue
+            normalized.append(text)
+            seen.add(text)
+        return normalized
+
+    @staticmethod
+    def _normalize_backend(value) -> str:
+        backend = str(value or "pymoo").strip().lower()
+        if backend not in OPTIMIZE_BACKENDS:
+            return "pymoo"
+        return backend
+
+    @staticmethod
+    def _normalize_population_size(value):
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"", "none", "null", "auto"}:
+                return None
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                return None
+        elif value is None:
+            return None
+        else:
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                return None
+        return value if value > 0 else None
+
+    @staticmethod
+    def _normalize_positive_int(value, default: int, minimum: int = 1) -> int:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return default
+        if normalized < minimum:
+            return default
+        return normalized
+
+    @staticmethod
+    def _normalize_positive_float(value, default: float) -> float:
+        try:
+            normalized = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        if normalized <= 0.0:
+            return float(default)
+        return normalized
+
+    @staticmethod
+    def _normalize_probability(value, default: float) -> float:
+        try:
+            normalized = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        if not 0.0 <= normalized <= 1.0:
+            return float(default)
+        return normalized
+
+    @staticmethod
+    def _normalize_pymoo_algorithm(value) -> str:
+        algorithm = str(value or "auto").strip().lower()
+        if algorithm not in {"auto", "nsga2", "nsga3"}:
+            return "auto"
+        return algorithm
+
+    @staticmethod
+    def _normalize_pymoo_probability(value, *, default, allow_auto: bool = False):
+        if allow_auto and isinstance(value, str) and value.strip().lower() == "auto":
+            return "auto"
+        try:
+            normalized = float(value)
+        except (TypeError, ValueError):
+            return default
+        if not 0.0 <= normalized <= 1.0:
+            return default
+        return normalized
+
+    @staticmethod
+    def _normalize_pymoo_n_partitions(value):
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized == "auto":
+                return "auto"
+            try:
+                value = int(normalized)
+            except (TypeError, ValueError):
+                return "auto"
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return "auto"
+        if normalized < 1:
+            return "auto"
+        return normalized
+
+    @staticmethod
+    def _normalize_pymoo_ref_dir_method(value) -> str:
+        method = str(value or "das_dennis").strip().lower().replace("-", "_")
+        if method != "das_dennis":
+            return "das_dennis"
+        return method
+
+    @staticmethod
+    def _normalize_fixed_runtime_overrides(values) -> dict:
+        if not isinstance(values, dict):
+            return {}
+        normalized = {}
+        for key, value in values.items():
+            text = str(key).strip()
+            if not text:
+                continue
+            normalized[text] = value
+        return normalized
+
+    def _legacy_optimize_source(self) -> dict:
+        return {
+            "crossover_eta": self._crossover_eta,
+            "crossover_probability": self._crossover_probability,
+            "mutation_eta": self._mutation_eta,
+            "mutation_indpb": self._mutation_indpb,
+        }
+
+    def _normalize_pymoo(self, raw_pymoo=None, *, source_optimize=None) -> dict:
+        source = source_optimize if isinstance(source_optimize, dict) else self._legacy_optimize_source()
+        pymoo_cfg = deepcopy(raw_pymoo) if isinstance(raw_pymoo, dict) else {}
+        shared = deepcopy(pymoo_cfg.get("shared", {})) if isinstance(pymoo_cfg.get("shared"), dict) else {}
+        algorithms = (
+            deepcopy(pymoo_cfg.get("algorithms", {}))
+            if isinstance(pymoo_cfg.get("algorithms"), dict)
+            else {}
+        )
+        nsga3_cfg = (
+            deepcopy(algorithms.get("nsga3", {}))
+            if isinstance(algorithms.get("nsga3"), dict)
+            else {}
+        )
+        ref_dirs_cfg = (
+            deepcopy(nsga3_cfg.get("ref_dirs", {}))
+            if isinstance(nsga3_cfg.get("ref_dirs"), dict)
+            else {}
+        )
+
+        shared_defaults = DEFAULT_OPTIMIZE_PYMOO["shared"]
+        ref_dir_defaults = DEFAULT_OPTIMIZE_PYMOO["algorithms"]["nsga3"]["ref_dirs"]
+
+        legacy_mutation_indpb = source.get("mutation_indpb")
+        try:
+            legacy_mutation_indpb = float(legacy_mutation_indpb)
+        except (TypeError, ValueError):
+            legacy_mutation_indpb = None
+
+        mutation_prob_var = shared.get("mutation_prob_var")
+        if mutation_prob_var is None:
+            if legacy_mutation_indpb is not None and legacy_mutation_indpb > 0.0:
+                mutation_prob_var = legacy_mutation_indpb
+            else:
+                mutation_prob_var = shared_defaults["mutation_prob_var"]
+
+        return {
+            "algorithm": self._normalize_pymoo_algorithm(
+                pymoo_cfg.get("algorithm", DEFAULT_OPTIMIZE_PYMOO["algorithm"])
+            ),
+            "shared": {
+                "crossover_eta": self._normalize_positive_float(
+                    shared.get(
+                        "crossover_eta",
+                        source.get("crossover_eta", shared_defaults["crossover_eta"]),
+                    ),
+                    shared_defaults["crossover_eta"],
+                ),
+                "crossover_prob_var": self._normalize_pymoo_probability(
+                    shared.get(
+                        "crossover_prob_var",
+                        source.get("crossover_probability", shared_defaults["crossover_prob_var"]),
+                    ),
+                    default=shared_defaults["crossover_prob_var"],
+                ),
+                "mutation_eta": self._normalize_positive_float(
+                    shared.get(
+                        "mutation_eta",
+                        source.get("mutation_eta", shared_defaults["mutation_eta"]),
+                    ),
+                    shared_defaults["mutation_eta"],
+                ),
+                "mutation_prob_var": self._normalize_pymoo_probability(
+                    mutation_prob_var,
+                    default=shared_defaults["mutation_prob_var"],
+                    allow_auto=True,
+                ),
+                "eliminate_duplicates": bool(
+                    shared.get("eliminate_duplicates", shared_defaults["eliminate_duplicates"])
+                ),
+            },
+            "algorithms": {
+                "nsga2": {},
+                "nsga3": {
+                    "ref_dirs": {
+                        "method": self._normalize_pymoo_ref_dir_method(
+                            ref_dirs_cfg.get("method", ref_dir_defaults["method"])
+                        ),
+                        "n_partitions": self._normalize_pymoo_n_partitions(
+                            ref_dirs_cfg.get("n_partitions", ref_dir_defaults["n_partitions"])
+                        ),
+                    }
+                },
+            },
+        }
+
+    def _sync_optimize(self):
         self._optimize = {
             "bounds": self._bounds.bounds,
+            "backend": self._backend,
             "compress_results_file": self._compress_results_file,
             "crossover_probability": self._crossover_probability,
             "crossover_eta": self._crossover_eta,
-            "enable_overrides": self._enable_overrides,
+            "enable_overrides": list(self._enable_overrides),
+            "fixed_params": list(self._fixed_params),
+            "fixed_runtime_overrides": deepcopy(self._fixed_runtime_overrides),
             "iters": self._iters,
-            "limits": self._limits,
+            "limits": deepcopy(self._limits),
             "mutation_probability": self._mutation_probability,
             "mutation_eta": self._mutation_eta,
             "mutation_indpb": self._mutation_indpb,
+            "max_pending_starting_evals_per_cpu": self._max_pending_starting_evals_per_cpu,
             "n_cpus": self._n_cpus,
             "offspring_multiplier": self._offspring_multiplier,
             "pareto_max_size": self._pareto_max_size,
             "population_size": self._population_size,
+            "pymoo": deepcopy(self._pymoo),
             "round_to_n_significant_digits": self._round_to_n_significant_digits,
-            "scoring": self._scoring,
+            "scoring": deepcopy(self._scoring),
             "write_all_results": self._write_all_results
         }
-    
-    def __repr__(self):
-        return str(self._optimize)
 
     @property
     def optimize(self):
-        # Ensure bounds are always exported in PB7-compatible form.
-        # This avoids stale optimize["bounds"] when bounds were loaded as [lo, hi]
-        # and later edited in the UI to include a positive step.
-        self._optimize["bounds"] = self._bounds.bounds
+        self._sync_optimize()
         return self._optimize
     @optimize.setter
     def optimize(self, new_optimize):
+        if not isinstance(new_optimize, dict):
+            return
         if "bounds" in new_optimize:
             self.bounds = new_optimize["bounds"]
+        if "backend" in new_optimize:
+            self._backend = self._normalize_backend(new_optimize["backend"])
         if "compress_results_file" in new_optimize:
-            self.compress_results_file = new_optimize["compress_results_file"]
+            self._compress_results_file = bool(new_optimize["compress_results_file"])
         if "crossover_probability" in new_optimize:
-            self.crossover_probability = new_optimize["crossover_probability"]
+            self._crossover_probability = self._normalize_probability(
+                new_optimize["crossover_probability"],
+                self._crossover_probability,
+            )
         if "crossover_eta" in new_optimize:
-            self.crossover_eta = new_optimize["crossover_eta"]
+            self._crossover_eta = self._normalize_positive_float(
+                new_optimize["crossover_eta"],
+                self._crossover_eta,
+            )
         if "enable_overrides" in new_optimize:
-            self.enable_overrides = new_optimize["enable_overrides"]
+            self._enable_overrides = self._normalize_string_list(new_optimize["enable_overrides"])
+        if "fixed_params" in new_optimize:
+            self._fixed_params = self._normalize_string_list(new_optimize["fixed_params"])
+        if "fixed_runtime_overrides" in new_optimize:
+            self._fixed_runtime_overrides = self._normalize_fixed_runtime_overrides(
+                new_optimize["fixed_runtime_overrides"]
+            )
         if "iters" in new_optimize:
-            self.iters = new_optimize["iters"]
+            self._iters = self._normalize_positive_int(new_optimize["iters"], self._iters)
         if "limits" in new_optimize:
             self.limits = new_optimize["limits"]
         if "mutation_probability" in new_optimize:
-            self.mutation_probability = new_optimize["mutation_probability"]
+            self._mutation_probability = self._normalize_probability(
+                new_optimize["mutation_probability"],
+                self._mutation_probability,
+            )
         if "mutation_eta" in new_optimize:
-            self.mutation_eta = new_optimize["mutation_eta"]
+            self._mutation_eta = self._normalize_positive_float(
+                new_optimize["mutation_eta"],
+                self._mutation_eta,
+            )
         if "mutation_indpb" in new_optimize:
-            self.mutation_indpb = new_optimize["mutation_indpb"]
+            self._mutation_indpb = self._normalize_probability(
+                new_optimize["mutation_indpb"],
+                self._mutation_indpb,
+            )
+        if "max_pending_starting_evals_per_cpu" in new_optimize:
+            self._max_pending_starting_evals_per_cpu = self._normalize_positive_int(
+                new_optimize["max_pending_starting_evals_per_cpu"],
+                self._max_pending_starting_evals_per_cpu,
+            )
         if "n_cpus" in new_optimize:
             self.n_cpus = new_optimize["n_cpus"]
         if "offspring_multiplier" in new_optimize:
-            self.offspring_multiplier = new_optimize["offspring_multiplier"]
+            self._offspring_multiplier = self._normalize_positive_float(
+                new_optimize["offspring_multiplier"],
+                self._offspring_multiplier,
+            )
         if "pareto_max_size" in new_optimize:
-            self.pareto_max_size = new_optimize["pareto_max_size"]
+            self._pareto_max_size = self._normalize_positive_int(
+                new_optimize["pareto_max_size"],
+                self._pareto_max_size,
+            )
         if "population_size" in new_optimize:
-            self.population_size = new_optimize["population_size"]
+            self._population_size = self._normalize_population_size(new_optimize["population_size"])
         if "round_to_n_significant_digits" in new_optimize:
-            self.round_to_n_significant_digits = new_optimize["round_to_n_significant_digits"]
+            self._round_to_n_significant_digits = self._normalize_positive_int(
+                new_optimize["round_to_n_significant_digits"],
+                self._round_to_n_significant_digits,
+            )
         if "scoring" in new_optimize:
-            self.scoring = new_optimize["scoring"]
+            self._scoring = normalize_optimize_scoring_entries(new_optimize["scoring"])
+        if "pymoo" in new_optimize or any(
+            key in new_optimize
+            for key in ("crossover_eta", "crossover_probability", "mutation_eta", "mutation_indpb")
+        ):
+            self._pymoo = self._normalize_pymoo(
+                new_optimize.get("pymoo"),
+                source_optimize=new_optimize,
+            )
         if "write_all_results" in new_optimize:
-            self.write_all_results = new_optimize["write_all_results"]
+            self._write_all_results = bool(new_optimize["write_all_results"])
+        self._sync_optimize()
 
     @property
     def bounds(self): return self._bounds
+    @property
+    def backend(self): return self._backend
     @property
     def compress_results_file(self): return self._compress_results_file
     @property
@@ -2703,6 +3403,10 @@ class Optimize:
     @property
     def enable_overrides(self): return self._enable_overrides
     @property
+    def fixed_params(self): return self._fixed_params
+    @property
+    def fixed_runtime_overrides(self): return self._fixed_runtime_overrides
+    @property
     def iters(self): return self._iters
     @property
     def mutation_probability(self): return self._mutation_probability
@@ -2711,9 +3415,12 @@ class Optimize:
     @property
     def mutation_indpb(self): return self._mutation_indpb
     @property
+    def max_pending_starting_evals_per_cpu(self): return self._max_pending_starting_evals_per_cpu
+    @property
     def n_cpus(self):
         if self._n_cpus > multiprocessing.cpu_count():
-            self.n_cpus = multiprocessing.cpu_count()
+            self._n_cpus = multiprocessing.cpu_count()
+            self._sync_optimize()
         return self._n_cpus
     @property
     def offspring_multiplier(self): return self._offspring_multiplier
@@ -2721,6 +3428,8 @@ class Optimize:
     def pareto_max_size(self): return self._pareto_max_size
     @property
     def population_size(self): return self._population_size
+    @property
+    def pymoo(self): return self._pymoo
     @property
     def round_to_n_significant_digits(self): return self._round_to_n_significant_digits
     @property
@@ -2731,11 +3440,15 @@ class Optimize:
     @bounds.setter
     def bounds(self, new_bounds):
         self._bounds.bounds = new_bounds
-        self._optimize["bounds"] = self._bounds.bounds
+        self._sync_optimize()
+    @backend.setter
+    def backend(self, new_backend):
+        self._backend = self._normalize_backend(new_backend)
+        self._sync_optimize()
     @compress_results_file.setter
     def compress_results_file(self, new_compress_results_file):
-        self._compress_results_file = new_compress_results_file
-        self._optimize["compress_results_file"] = self._compress_results_file
+        self._compress_results_file = bool(new_compress_results_file)
+        self._sync_optimize()
     @limits.setter
     def limits(self, new_limits):
         # Convert legacy dict format to new list format
@@ -2754,7 +3467,7 @@ class Optimize:
             self._limits = normalized
         else:
             self._limits = []
-        self._optimize["limits"] = self._limits
+        self._sync_optimize()
 
     def _convert_legacy_limits(self, limits_dict: dict) -> list:
         """Convert legacy dict format to new list format.
@@ -2832,62 +3545,117 @@ class Optimize:
         return entries
     @crossover_probability.setter
     def crossover_probability(self, new_crossover_probability):
-        self._crossover_probability = new_crossover_probability
-        self._optimize["crossover_probability"] = self._crossover_probability
+        self._crossover_probability = self._normalize_probability(
+            new_crossover_probability,
+            self._crossover_probability,
+        )
+        self._pymoo["shared"]["crossover_prob_var"] = self._normalize_pymoo_probability(
+            self._crossover_probability,
+            default=DEFAULT_OPTIMIZE_PYMOO["shared"]["crossover_prob_var"],
+        )
+        self._sync_optimize()
     @crossover_eta.setter
     def crossover_eta(self, new_crossover_eta):
-        self._crossover_eta = new_crossover_eta
-        self._optimize["crossover_eta"] = self._crossover_eta
+        self._crossover_eta = self._normalize_positive_float(new_crossover_eta, self._crossover_eta)
+        self._pymoo["shared"]["crossover_eta"] = self._normalize_positive_float(
+            self._crossover_eta,
+            DEFAULT_OPTIMIZE_PYMOO["shared"]["crossover_eta"],
+        )
+        self._sync_optimize()
     @enable_overrides.setter
     def enable_overrides(self, new_enable_overrides):
-        self._enable_overrides = new_enable_overrides
-        self._optimize["enable_overrides"] = self._enable_overrides
+        self._enable_overrides = self._normalize_string_list(new_enable_overrides)
+        self._sync_optimize()
+    @fixed_params.setter
+    def fixed_params(self, new_fixed_params):
+        self._fixed_params = self._normalize_string_list(new_fixed_params)
+        self._sync_optimize()
+    @fixed_runtime_overrides.setter
+    def fixed_runtime_overrides(self, new_fixed_runtime_overrides):
+        self._fixed_runtime_overrides = self._normalize_fixed_runtime_overrides(
+            new_fixed_runtime_overrides
+        )
+        self._sync_optimize()
     @iters.setter
     def iters(self, new_iters):
-        self._iters = new_iters
-        self._optimize["iters"] = self._iters
+        self._iters = self._normalize_positive_int(new_iters, self._iters)
+        self._sync_optimize()
     @mutation_probability.setter
     def mutation_probability(self, new_mutation_probability):
-        self._mutation_probability = new_mutation_probability
-        self._optimize["mutation_probability"] = self._mutation_probability
+        self._mutation_probability = self._normalize_probability(
+            new_mutation_probability,
+            self._mutation_probability,
+        )
+        self._sync_optimize()
     @mutation_eta.setter
     def mutation_eta(self, new_mutation_eta):
-        self._mutation_eta = new_mutation_eta
-        self._optimize["mutation_eta"] = self._mutation_eta
+        self._mutation_eta = self._normalize_positive_float(new_mutation_eta, self._mutation_eta)
+        self._pymoo["shared"]["mutation_eta"] = self._normalize_positive_float(
+            self._mutation_eta,
+            DEFAULT_OPTIMIZE_PYMOO["shared"]["mutation_eta"],
+        )
+        self._sync_optimize()
     @mutation_indpb.setter
     def mutation_indpb(self, new_mutation_indpb):
-        self._mutation_indpb = new_mutation_indpb
-        self._optimize["mutation_indpb"] = self._mutation_indpb
+        self._mutation_indpb = self._normalize_probability(new_mutation_indpb, self._mutation_indpb)
+        self._pymoo["shared"]["mutation_prob_var"] = self._normalize_pymoo_probability(
+            self._mutation_indpb if self._mutation_indpb > 0.0 else "auto",
+            default=DEFAULT_OPTIMIZE_PYMOO["shared"]["mutation_prob_var"],
+            allow_auto=True,
+        )
+        self._sync_optimize()
+    @max_pending_starting_evals_per_cpu.setter
+    def max_pending_starting_evals_per_cpu(self, new_max_pending):
+        self._max_pending_starting_evals_per_cpu = self._normalize_positive_int(
+            new_max_pending,
+            self._max_pending_starting_evals_per_cpu,
+        )
+        self._sync_optimize()
     @n_cpus.setter
     def n_cpus(self, new_n_cpus):
-        self._n_cpus = new_n_cpus
-        self._optimize["n_cpus"] = self._n_cpus
-        if self._n_cpus > multiprocessing.cpu_count():
-            self.n_cpus = multiprocessing.cpu_count()
+        cpu_count = multiprocessing.cpu_count()
+        self._n_cpus = min(
+            self._normalize_positive_int(new_n_cpus, self._n_cpus),
+            cpu_count,
+        )
+        self._sync_optimize()
     @offspring_multiplier.setter
     def offspring_multiplier(self, new_offspring_multiplier):
-        self._offspring_multiplier = new_offspring_multiplier
-        self._optimize["offspring_multiplier"] = self._offspring_multiplier
+        self._offspring_multiplier = self._normalize_positive_float(
+            new_offspring_multiplier,
+            self._offspring_multiplier,
+        )
+        self._sync_optimize()
     @pareto_max_size.setter
     def pareto_max_size(self, new_pareto_max_size):
-        self._pareto_max_size = new_pareto_max_size
-        self._optimize["pareto_max_size"] = self._pareto_max_size
+        self._pareto_max_size = self._normalize_positive_int(
+            new_pareto_max_size,
+            self._pareto_max_size,
+        )
+        self._sync_optimize()
     @population_size.setter
     def population_size(self, new_population_size):
-        self._population_size = new_population_size
-        self._optimize["population_size"] = self._population_size
+        self._population_size = self._normalize_population_size(new_population_size)
+        self._sync_optimize()
+    @pymoo.setter
+    def pymoo(self, new_pymoo):
+        self._pymoo = self._normalize_pymoo(new_pymoo)
+        self._sync_optimize()
     @round_to_n_significant_digits.setter
     def round_to_n_significant_digits(self, new_round_to_n_significant_digits):
-        self._round_to_n_significant_digits = new_round_to_n_significant_digits
-        self._optimize["round_to_n_significant_digits"] = self._round_to_n_significant_digits
+        self._round_to_n_significant_digits = self._normalize_positive_int(
+            new_round_to_n_significant_digits,
+            self._round_to_n_significant_digits,
+        )
+        self._sync_optimize()
     @scoring.setter
     def scoring(self, new_scoring):
-        self._scoring = new_scoring
-        self._optimize["scoring"] = self._scoring
+        self._scoring = normalize_optimize_scoring_entries(new_scoring)
+        self._sync_optimize()
     @write_all_results.setter
     def write_all_results(self, new_write_all_results):
-        self._write_all_results = new_write_all_results
-        self._optimize["write_all_results"] = self._write_all_results
+        self._write_all_results = bool(new_write_all_results)
+        self._sync_optimize()
 
 class Bounds:
 

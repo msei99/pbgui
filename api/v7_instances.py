@@ -30,6 +30,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Web
 from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, require_auth, validate_token
+from api.pb7_bridge import get_allowed_override_params, get_template_config
 from logging_helpers import human_log as _log
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config, strip_pbgui_param_status
 from master.async_pool import SFTP_RETRY_ATTEMPTS, SFTP_RETRY_DELAY, _is_transient_error
@@ -439,7 +440,6 @@ def get_new_instance_config(session: SessionToken = Depends(require_auth)):
     installed passivbot version without any manual maintenance.
     """
     try:
-        from config.schema import get_template_config  # noqa: PLC0415
         tmpl = get_template_config()
     except Exception:
         # Fallback: minimal safe defaults if pb7 import fails
@@ -875,7 +875,7 @@ async def save_instance_config(
         cfg.setdefault("backtest", {})["exchange"] = bt_exchange
     cfg.setdefault("backtest", {})["base_dir"] = f"backtests/pbgui/{live_user}"
 
-    # Versioned backup before overwriting (mirrors ConfigV7._backup_before_save)
+    # Versioned backup before overwriting to preserve the previous config version.
     if config_path.is_file():
         try:
             with open(config_path, "r", encoding="utf-8") as f:
@@ -1233,13 +1233,7 @@ def get_instance_log_smart(
 def get_override_params(session: SessionToken = Depends(require_auth)):
     """Return allowed coin_overrides parameters from passivbot (used by coin_overrides_editor.js)."""
     try:
-        pb7 = pb7dir()
-        src = str(Path(pb7) / "src")
-        if src not in sys.path:
-            sys.path.insert(0, src)
-        from config.overrides import get_allowed_modifications
-        allowed = get_allowed_modifications()
-        return {"params": allowed}
+        return {"params": get_allowed_override_params()}
     except Exception as exc:
         _log(SERVICE, f"Failed to load override params: {exc}", level="warning")
         return {"params": {}}

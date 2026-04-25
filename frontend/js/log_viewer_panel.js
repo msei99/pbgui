@@ -551,7 +551,7 @@ class LogViewerPanel {
             if (msg.sid !== undefined && msg.sid !== this._sid) return;
             this._lines    = msg.lines || [];
             this._lineBase = 0;
-            this._streaming = true;
+            this._streaming = !!msg.streaming;
             if (msg.file_size !== undefined) this._showFileSize(msg.file_size);
             this._updateStreamBtn();
             this._renderFull();
@@ -670,10 +670,6 @@ class LogViewerPanel {
         this._fileList = (files || []).slice().sort();
         if (this._isLocal()) {
             this._buildFileList();
-            /* auto-subscribe to defaultFile if not yet streaming */
-            if (this._file && !this._streaming && this._fileList.indexOf(this._file) >= 0) {
-                this._subscribe();
-            }
         }
     }
 

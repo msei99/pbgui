@@ -236,6 +236,37 @@ class ParetoDataLoader:
             except Exception:
                 pass
 
+    def _merge_selected_with_pareto_indices(
+        self,
+        selected_order: List[int],
+        fill_order: List[int],
+        pareto_indices: List[int],
+        max_configs: int,
+    ) -> List[int]:
+        """Ensure known pareto entries survive max_configs down-selection."""
+        final_order: List[int] = []
+        seen: set = set()
+
+        for idx in sorted({int(i) for i in pareto_indices if int(i) >= 0}):
+            if idx in seen:
+                continue
+            seen.add(idx)
+            final_order.append(idx)
+            if len(final_order) >= max_configs:
+                return final_order
+
+        for source in (selected_order, fill_order):
+            for idx in source:
+                idx = int(idx)
+                if idx in seen:
+                    continue
+                seen.add(idx)
+                final_order.append(idx)
+                if len(final_order) >= max_configs:
+                    return final_order
+
+        return final_order
+
     def _is_legacy_results_format(self) -> bool:
         """Detect older optimize_results formats which this UI does not support.
 
@@ -396,6 +427,7 @@ class ParetoDataLoader:
                 offsets = arrays["offsets"]
                 constraint_v = arrays["constraint_violation"]
                 primary_v = arrays["primary"]
+                pareto_indices = arrays["pareto_indices"] if "pareto_indices" in available_fields else None
                 overall_rob_v = arrays["overall_robustness"] if "overall_robustness" in available_fields else None
                 sharpe_v = arrays["sharpe"] if "sharpe" in available_fields else None
                 drawdown_v = arrays["drawdown"] if "drawdown" in available_fields else None
@@ -404,6 +436,10 @@ class ParetoDataLoader:
                 omega_v = arrays["omega"] if "omega" in available_fields else None
                 volatility_v = arrays["volatility"] if "volatility" in available_fields else None
                 recovery_v = arrays["recovery"] if "recovery" in available_fields else None
+
+                if self.pareto_hashes and pareto_indices is None:
+                    scan_cache = None
+                    raise RuntimeError('scan cache missing pareto_indices')
 
                 total_parsed = int(len(offsets))
                 if total_parsed <= 0:
@@ -477,17 +513,12 @@ class ParetoDataLoader:
                             selected_set.add(int(cand))
                             selected_order.append(int(cand))
 
-                    if len(selected_order) < max_configs:
-                        for cand in perf_order.tolist():
-                            if len(selected_order) >= max_configs:
-                                break
-                            if cand in selected_set:
-                                continue
-                            selected_set.add(int(cand))
-                            selected_order.append(int(cand))
-
-                    if len(selected_order) > max_configs:
-                        selected_order = selected_order[:max_configs]
+                    selected_order = self._merge_selected_with_pareto_indices(
+                        selected_order,
+                        perf_order.tolist(),
+                        pareto_indices.tolist() if pareto_indices is not None else [],
+                        max_configs,
+                    )
 
                     # Parse selected configs by offsets
                     if progress_callback:
@@ -701,6 +732,7 @@ class ParetoDataLoader:
         store_overall_rob = cache_full or needs_robustness
 
         fast_perf_scan = bool(only_performance and not cache_full)
+        pareto_indices_all: Optional[List[int]] = [] if self.pareto_hashes else None
 
         sharpe_all: Optional[List[float]] = [] if store_sharpe else None
         drawdown_all: Optional[List[float]] = [] if store_drawdown else None
@@ -775,6 +807,13 @@ class ParetoDataLoader:
                 total_parsed += 1
 
                 offsets_all.append(int(offset))
+
+                if pareto_indices_all is not None:
+                    try:
+                        if self._compute_config_hash(config_data) in self.pareto_hashes:
+                            pareto_indices_all.append(int(idx))
+                    except Exception:
+                        pass
 
                 # raw=True scan extraction
                 metrics_dict = _metrics_dict_from_raw(config_data)
@@ -897,20 +936,13 @@ class ParetoDataLoader:
                 selected_set.add(cand_idx)
                 selected_order.append(cand_idx)
 
-        # Fill remaining with best-by-performance
-        if len(selected_order) < max_configs:
-            for _, cand_idx, _ in sorted(perf_fill_heap, key=lambda x: x[2]):
-                if len(selected_order) >= max_configs:
-                    break
-                if cand_idx in selected_set:
-                    continue
-                selected_set.add(cand_idx)
-                selected_order.append(cand_idx)
-
-        # Ensure hard cap
-        if len(selected_order) > max_configs:
-            selected_order = selected_order[:max_configs]
-            selected_set = set(selected_order)
+        selected_order = self._merge_selected_with_pareto_indices(
+            selected_order,
+            [int(cand_idx) for _, cand_idx, _ in sorted(perf_fill_heap, key=lambda x: x[2])],
+            pareto_indices_all or [],
+            max_configs,
+        )
+        selected_set = set(selected_order)
 
         t_select = time.perf_counter() - t_select0
 
@@ -989,7 +1021,7 @@ class ParetoDataLoader:
             try:
                 st_bin = os.stat(self.all_results_path)
                 cache_meta = {
-                    "version": 2,
+                    "version": 3,
                     "source": {"size": int(st_bin.st_size), "mtime": float(st_bin.st_mtime)},
                     "scoring_metrics": self.scoring_metrics,
                     "scenario_labels": self.scenario_labels,
@@ -1009,6 +1041,7 @@ class ParetoDataLoader:
                         *( ["volatility"] if volatility_all is not None else [] ),
                         *( ["recovery"] if recovery_all is not None else [] ),
                         *( ["overall_robustness"] if overall_rob_all is not None else [] ),
+                        *( ["pareto_indices"] if pareto_indices_all is not None else [] ),
                     ],
                 }
                 cache_arrays = {
@@ -1032,6 +1065,8 @@ class ParetoDataLoader:
                     cache_arrays["recovery"] = np.asarray(recovery_all, dtype=np.float32)
                 if overall_rob_all is not None:
                     cache_arrays["overall_robustness"] = np.asarray(overall_rob_all, dtype=np.float32)
+                if pareto_indices_all is not None:
+                    cache_arrays["pareto_indices"] = np.asarray(pareto_indices_all, dtype=np.int32)
                 self._write_scan_cache(cache_meta, cache_arrays)
             except Exception:
                 pass
@@ -1435,6 +1470,15 @@ class ParetoDataLoader:
         if not self.configs:
             return
 
+        # When official pareto/<hash>.json files exist, they are the authoritative source.
+        # Full all_results.bin mode may load only a selected window of configs, so recomputing
+        # a front on that subset would mislabel the persisted PB7 Pareto set.
+        known_pareto = [c for c in self.configs if getattr(c, 'config_hash', None) in self.pareto_hashes]
+        if known_pareto:
+            for c in known_pareto:
+                c.is_pareto = True
+            return
+
         eps_cv = 1e-12
         feasible = [c for c in self.configs if float(getattr(c, "constraint_violation", 0.0) or 0.0) <= eps_cv]
         candidates = feasible
@@ -1581,67 +1625,48 @@ class ParetoDataLoader:
     
     def _compute_config_hash(self, config_data: Dict) -> str:
         """
-        Compute config hash (simplified - uses results_filename if available)
-        In real implementation, would hash the bot parameters
+        Compute the PB7-compatible config hash used for pareto/<hash>.json filenames.
+
+        PB7 persists Pareto entries by hashing the full entry with:
+        json.dumps(entry, sort_keys=True) + sha256(...).hexdigest().
+        The loader must reproduce that exact hash for all_results.bin rows so
+        Pareto membership matches the JSON files on disk.
         """
-        def _get_field(name: str):
-            if not isinstance(config_data, dict):
-                return None
-            v = config_data.get(name)
-            if v is None:
-                v = config_data.get(name.encode('utf-8', errors='ignore'))
-            if isinstance(v, bytes):
+        def _to_hashable(obj: Any) -> Any:
+            if isinstance(obj, dict):
+                return {str(key): _to_hashable(value) for key, value in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [_to_hashable(value) for value in obj]
+            if isinstance(obj, bytes):
                 try:
-                    v = v.decode('utf-8', errors='ignore')
+                    return obj.decode('utf-8', errors='ignore')
                 except Exception:
-                    v = ''
-            return v
+                    return ''
+            try:
+                if hasattr(obj, 'item') and callable(obj.item):
+                    return _to_hashable(obj.item())
+            except Exception:
+                pass
+            if isinstance(obj, (str, int, float, bool)) or obj is None:
+                return obj
+            return str(obj)
 
-        # Prefer a stable, explicit identifier when present.
-        results_filename = _get_field('results_filename')
-        if isinstance(results_filename, str) and results_filename:
-            # Typically something like "<hash>.json" or "<hash>".
-            base = os.path.basename(results_filename)
-            return base[:-5] if base.endswith('.json') else base
-
-        results_dir = _get_field('results_dir')
-        if isinstance(results_dir, str) and results_dir:
-            return os.path.basename(results_dir)
-
-        # Fallback: stable hash of bot params.
-        # IMPORTANT: must be deterministic across raw msgpack (bytes keys) and decoded dicts.
-        bot = _get_field('bot')
         try:
-            bot_norm = self._deep_decode_bytes(bot)
-
-            def _to_jsonable(x: Any) -> Any:
-                if isinstance(x, dict):
-                    # sort keys for deterministic output
-                    out = {}
-                    for k in sorted(x.keys(), key=lambda kk: str(kk)):
-                        out[str(k)] = _to_jsonable(x[k])
-                    return out
-                if isinstance(x, (list, tuple)):
-                    return [_to_jsonable(v) for v in x]
-                if isinstance(x, bytes):
-                    try:
-                        return x.decode('utf-8', errors='ignore')
-                    except Exception:
-                        return ''
-                # normalize numpy scalars etc.
-                try:
-                    if hasattr(x, 'item') and callable(x.item):
-                        return _to_jsonable(x.item())
-                except Exception:
-                    pass
-                if isinstance(x, (str, int, float, bool)) or x is None:
-                    return x
-                return str(x)
-
-            payload_obj = _to_jsonable(bot_norm)
-            payload = json.dumps(payload_obj, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
-            return f"config_{hashlib.sha1(payload).hexdigest()[:12]}"
+            normalized = _to_hashable(self._deep_decode_bytes(config_data))
+            payload = json.dumps(normalized, sort_keys=True).encode('utf-8')
+            return hashlib.sha256(payload).hexdigest()
         except Exception:
+            if isinstance(config_data, dict):
+                results_filename = config_data.get('results_filename') or config_data.get(b'results_filename')
+                if isinstance(results_filename, bytes):
+                    try:
+                        results_filename = results_filename.decode('utf-8', errors='ignore')
+                    except Exception:
+                        results_filename = ''
+                if isinstance(results_filename, str) and results_filename:
+                    base = os.path.basename(results_filename)
+                    if base and base != 'all_results.bin':
+                        return base[:-5] if base.endswith('.json') else base
             return "config_unknown"
 
     def _deep_decode_bytes(self, obj: Any) -> Any:
