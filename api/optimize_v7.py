@@ -43,7 +43,12 @@ from api.pb7_bridge import (
     get_pymoo_ref_dir_method_options,
     get_template_config,
 )
-from api.pb7_ohlcv_tools import build_ohlcv_preflight, get_ohlcv_preload_job, start_ohlcv_preload_job
+from api.pb7_ohlcv_tools import (
+    build_ohlcv_preflight,
+    get_ohlcv_preload_job,
+    start_ohlcv_preload_job,
+    stop_ohlcv_preload_job,
+)
 from logging_helpers import human_log as _log
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
 from pbgui_purefunc import PBGDIR, pb7_suite_preflight_errors, pb7dir, pb7venv, save_ini
@@ -2138,6 +2143,14 @@ def start_editor_ohlcv_preload(body: dict, session: SessionToken = Depends(requi
 @router.get("/ohlcv-preload/{job_id}")
 def get_editor_ohlcv_preload(job_id: str, session: SessionToken = Depends(require_auth)):
     payload = get_ohlcv_preload_job(job_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="OHLCV preload job not found")
+    return payload
+
+
+@router.delete("/ohlcv-preload/{job_id}")
+def stop_editor_ohlcv_preload(job_id: str, session: SessionToken = Depends(require_auth)):
+    payload = stop_ohlcv_preload_job(job_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="OHLCV preload job not found")
     return payload

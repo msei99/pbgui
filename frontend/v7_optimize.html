@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui - V7 Optimize</title>
-<link rel="stylesheet" href="/app/css/sidebar.css?v=2">
+<link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <style>
 :root {
@@ -2324,7 +2324,10 @@ textarea.json-invalid:focus {
   <div class="fp-resize fp-resize-se" data-dir="se"></div>
   <div id="ohlcv-panel-header" class="floating-preview-header">
     <span class="floating-preview-title">OHLCV Readiness</span>
-    <button id="ohlcv-panel-close" class="floating-preview-close" title="Close">✕</button>
+    <div class="floating-preview-tools">
+      <button id="ohlcv-panel-maximize" class="floating-preview-tool" title="Fit to browser window" aria-pressed="false">⛶</button>
+      <button id="ohlcv-panel-close" class="floating-preview-close" title="Close">✕</button>
+    </div>
   </div>
   <div id="ohlcv-panel-body" class="floating-preview-body" aria-live="polite"></div>
 </div>
@@ -2332,7 +2335,7 @@ textarea.json-invalid:focus {
 <div id="toast-stack"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=7"></script>
+<script src="/app/js/editor_shared.js?v=10"></script>
 <script src="/app/js/suite_editor.js?v=4"></script>
 <script src="/app/js/log_viewer_panel.js?v=8"></script>
 <script>
@@ -7155,7 +7158,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
     + '</div>'
 
     + '<div class="form-row cols-8">'
-      + '<div class="form-group" style="grid-column:span 8"><label><span data-tip="Optional path to a pre-populated OHLCV source directory.">ohlcv_source_dir</span></label><div style="display:flex;gap:var(--sp-xs)"><input type="text" id="opted-ohlcv-source-dir" value="' + escapeHtml(backtest.ohlcv_source_dir || '') + '" placeholder="Leave empty for default"><button type="button" class="act-btn" style="white-space:nowrap" onclick="fillOptimizePbguiDataPath()" title="Use PBGui market data directory">📂 PBGui Data</button></div></div>'
+      + '<div class="form-group" style="grid-column:span 8"><label><span data-tip="Optional path to a pre-populated OHLCV source directory.">ohlcv_source_dir</span></label><div style="display:flex;gap:var(--sp-xs)"><input type="text" id="opted-ohlcv-source-dir" value="' + escapeHtml(backtest.ohlcv_source_dir || '') + '" placeholder="Leave empty for default"><button type="button" class="act-btn" style="white-space:nowrap" onclick="clearOptimizeOhlcvSourceDir()" title="Clear path">×</button><button type="button" class="act-btn" style="white-space:nowrap" onclick="fillOptimizePbguiDataPath()" title="Use PBGui market data directory">📂 PBGui Data</button></div></div>'
     + '</div>'
 
     + '<div class="form-row cols-8">'
@@ -8189,6 +8192,7 @@ function initOptimizeOhlcvPreflightController() {
   window.PBGuiEditorShared.bindFloatingPanel({
     panel: 'ohlcv-panel',
     header: 'ohlcv-panel-header',
+    fullscreenButton: 'ohlcv-panel-maximize',
     closeButton: 'ohlcv-panel-close',
     handlesSelector: '.fp-resize',
     minWidth: 360,
@@ -8263,6 +8267,17 @@ function fillOptimizePbguiDataPath() {
   }).catch(function() {
     toast('Could not fetch PBGui data path', 'err');
   });
+}
+
+function clearOptimizeOhlcvSourceDir() {
+  var node = document.getElementById('opted-ohlcv-source-dir');
+  if (node) {
+    node.value = '';
+    scheduleStructuredEditorSync();
+    if (_optOhlcvPreflightController && _optOhlcvPreflightController.isOpen()) {
+      _optOhlcvPreflightController.markStale();
+    }
+  }
 }
 
 function buildStreamlitTargetUrl(target, extraParams) {

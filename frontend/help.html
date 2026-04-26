@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PBGui — Help & Tutorials</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
+  <style>
+    :root {
+      --bg: #0f172a;
+      --bg-light: #1e293b;
+      --border: #475569;
+      --text: #e2e8f0;
+      --text-dim: #94a3b8;
+      --accent: #3b82f6;
+      --accent-hover: #60a5fa;
+      --fs-sm: 0.875rem;
+      --fs-base: 1rem;
+      --fs-lg: 1.125rem;
+      --sp-xs: 0.25rem;
+      --sp-sm: 0.5rem;
+      --sp-md: 1rem;
+      --sp-lg: 1.5rem;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: var(--fs-base);
+      line-height: 1.5;
+    }
+
+    .container {
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .sidebar {
+      width: 320px;
+      border-right: 1px solid rgba(148, 163, 184, 0.2);
+      background: rgba(15, 23, 42, 0.5);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      padding: var(--sp-lg);
+      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      flex-shrink: 0;
+    }
+
+    .sidebar-title {
+      margin: 0 0 var(--sp-md) 0;
+      font-size: var(--fs-lg);
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .sidebar-controls {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-sm);
+    }
+
+    .sidebar-control-row {
+      display: flex;
+      gap: var(--sp-sm);
+      align-items: center;
+    }
+
+    .sidebar-control-row label {
+      font-size: var(--fs-sm);
+      color: var(--text-dim);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .sidebar-control-row select,
+    .sidebar-control-row input {
+      padding: var(--sp-sm) var(--sp-md);
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 4px;
+      color: var(--text);
+      font-size: var(--fs-sm);
+      flex: 1;
+      font-family: inherit;
+    }
+
+    .sidebar-control-row select:focus,
+    .sidebar-control-row input:focus {
+      outline: none;
+      border-color: var(--accent);
+      background: rgba(30, 41, 59, 0.95);
+    }
+
+    .sidebar-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: var(--sp-md) 0;
+    }
+
+    .topics-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .topics-list li {
+      margin: 0;
+      padding: 0;
+    }
+
+    .topic-item {
+      display: block;
+      padding: var(--sp-md) var(--sp-lg);
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: var(--fs-sm);
+      text-align: left;
+      cursor: pointer;
+      width: 100%;
+      transition: all 0.2s ease;
+      border-left: 3px solid transparent;
+    }
+
+    .topic-item:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      border-left-color: var(--accent);
+    }
+
+    .topic-item.active {
+      background: rgba(59, 130, 246, 0.1);
+      color: var(--accent);
+      border-left-color: var(--accent);
+    }
+
+    .topic-category-title {
+      padding: var(--sp-md) var(--sp-lg);
+      font-size: var(--fs-sm);
+      font-weight: 700;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: rgba(0, 0, 0, 0.2);
+      margin-top: var(--sp-md);
+    }
+
+    .topic-category-title:first-child {
+      margin-top: 0;
+    }
+
+    .content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .content-header {
+      padding: var(--sp-lg);
+      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      background: rgba(15, 23, 42, 0.5);
+      flex-shrink: 0;
+    }
+
+    .content-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: var(--sp-lg);
+    }
+
+    .markdown-content {
+      max-width: 100%;
+      word-break: break-word;
+    }
+
+    .markdown-content h1,
+    .markdown-content h2,
+    .markdown-content h3,
+    .markdown-content h4,
+    .markdown-content h5,
+    .markdown-content h6 {
+      margin: var(--sp-lg) 0 var(--sp-md) 0;
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .markdown-content h1 {
+      font-size: 1.75rem;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      padding-bottom: var(--sp-md);
+    }
+
+    .markdown-content h2 {
+      font-size: 1.5rem;
+    }
+
+    .markdown-content h3 {
+      font-size: 1.25rem;
+    }
+
+    .markdown-content p {
+      margin: var(--sp-md) 0;
+      line-height: 1.6;
+    }
+
+    .markdown-content a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .markdown-content a:hover {
+      color: var(--accent-hover);
+      text-decoration: underline;
+    }
+
+    .markdown-content code {
+      background: rgba(30, 41, 59, 0.8);
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: "Courier New", monospace;
+      font-size: 0.9em;
+      color: #e0e7ff;
+    }
+
+    .markdown-content pre {
+      background: rgba(30, 41, 59, 0.95);
+      padding: var(--sp-md);
+      border-radius: 6px;
+      overflow-x: auto;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      margin: var(--sp-md) 0;
+      font-family: "Courier New", monospace;
+      font-size: 0.9em;
+      line-height: 1.4;
+    }
+
+    .markdown-content pre code {
+      background: none;
+      padding: 0;
+      border-radius: 0;
+      color: #e0e7ff;
+    }
+
+    .markdown-content ul,
+    .markdown-content ol {
+      margin: var(--sp-md) 0;
+      padding-left: 2em;
+    }
+
+    .markdown-content li {
+      margin: var(--sp-sm) 0;
+    }
+
+    .markdown-content blockquote {
+      border-left: 4px solid var(--accent);
+      padding-left: var(--sp-md);
+      margin: var(--sp-md) 0;
+      color: var(--text-dim);
+      font-style: italic;
+    }
+
+    .markdown-content table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: var(--sp-md) 0;
+    }
+
+    .markdown-content th,
+    .markdown-content td {
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      padding: var(--sp-sm) var(--sp-md);
+      text-align: left;
+    }
+
+    .markdown-content th {
+      background: rgba(59, 130, 246, 0.1);
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .markdown-content tr:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .empty-state {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--text-dim);
+      font-size: var(--fs-lg);
+      text-align: center;
+      padding: var(--sp-lg);
+    }
+
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--text-dim);
+      font-size: var(--fs-base);
+    }
+
+    @media (max-width: 768px) {
+      .sidebar {
+        width: 100%;
+        max-height: 40%;
+        border-right: none;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      }
+
+      .container {
+        flex-direction: column;
+      }
+
+      .content {
+        max-height: 60%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Sidebar / TOC -->
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <h2 class="sidebar-title">Help & Tutorials</h2>
+        <div class="sidebar-controls">
+          <div class="sidebar-control-row">
+            <label for="lang-select">Language:</label>
+            <select id="lang-select">
+              <option value="EN">English</option>
+              <option value="DE">Deutsch</option>
+            </select>
+          </div>
+          <div class="sidebar-control-row">
+            <input type="text" id="filter-input" placeholder="Filter topics...">
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-content">
+        <ul class="topics-list" id="topics-list"></ul>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+      <div class="content-header">
+        <h1 style="margin: 0; font-size: 1.5rem;" id="content-title">Select a topic</h1>
+      </div>
+      <div class="content-body">
+        <div id="content-area" class="empty-state">Select a help topic from the list to begin</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const TOKEN = new URLSearchParams(window.location.search).get('token') || '';
+    let allTopics = [];
+    let filteredTopics = [];
+    let currentLang = localStorage.getItem('help-lang') || 'EN';
+    let selectedFile = null;
+
+    // Utilities
+    function escapeHtml(text) {
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+      return String(text || '').replace(/[&<>"']/g, m => map[m]);
+    }
+
+    async function fetchTopics() {
+      try {
+        const res = await fetch(`/api/help/index?lang=${encodeURIComponent(currentLang)}&token=${encodeURIComponent(TOKEN)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+      } catch (err) {
+        console.error('Failed to fetch topics:', err);
+        return [];
+      }
+    }
+
+    async function fetchContent(file) {
+      try {
+        const res = await fetch(`/api/help/content?file=${encodeURIComponent(file)}&lang=${encodeURIComponent(currentLang)}&token=${encodeURIComponent(TOKEN)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        return data.content || '';
+      } catch (err) {
+        console.error('Failed to fetch content:', err);
+        return '## Error loading content\n\nFailed to load this help topic.';
+      }
+    }
+
+    function renderMarkdown(md) {
+      try {
+        const html = marked.parse(md);
+        return DOMPurify.sanitize(html);
+      } catch (err) {
+        console.error('Failed to parse markdown:', err);
+        return '<p>Error parsing content</p>';
+      }
+    }
+
+    function updateTopicsList() {
+      const list = document.getElementById('topics-list');
+      list.innerHTML = '';
+
+      let lastCategory = null;
+      filteredTopics.forEach((topic, idx) => {
+        // Add category header if changed
+        if (topic.category !== lastCategory) {
+          const categoryDiv = document.createElement('li');
+          categoryDiv.className = 'topic-category-title';
+          categoryDiv.textContent = topic.category || 'Help';
+          list.appendChild(categoryDiv);
+          lastCategory = topic.category;
+        }
+
+        // Add topic button
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'topic-item' + (topic.file === selectedFile ? ' active' : '');
+        btn.textContent = topic.title;
+        btn.onclick = () => selectTopic(topic.file);
+        list.appendChild(btn);
+      });
+
+      // Show empty state if no topics
+      if (filteredTopics.length === 0) {
+        const emptyLi = document.createElement('li');
+        emptyLi.style.padding = 'var(--sp-lg)';
+        emptyLi.style.color = 'var(--text-dim)';
+        emptyLi.style.textAlign = 'center';
+        emptyLi.textContent = 'No topics found';
+        list.appendChild(emptyLi);
+      }
+    }
+
+    function applyFilter() {
+      const filterText = (document.getElementById('filter-input').value || '').trim().toLowerCase();
+      filteredTopics = allTopics.filter(t =>
+        !filterText || 
+        t.title.toLowerCase().includes(filterText) ||
+        t.category.toLowerCase().includes(filterText)
+      );
+      updateTopicsList();
+    }
+
+    async function selectTopic(file) {
+      selectedFile = file;
+      
+      // Find the topic to get the title
+      const topic = allTopics.find(t => t.file === file);
+      const title = topic ? topic.title : 'Help';
+
+      document.getElementById('content-title').textContent = title;
+      const contentArea = document.getElementById('content-area');
+      contentArea.innerHTML = '<div class="loading">Loading...</div>';
+
+      const md = await fetchContent(file);
+      const html = renderMarkdown(md);
+      contentArea.innerHTML = `<div class="markdown-content">${html}</div>`;
+
+      // Update button active state
+      document.querySelectorAll('.topic-item').forEach(btn => {
+        btn.classList.remove('active');
+      });
+      document.querySelectorAll('.topic-item').forEach(btn => {
+        if (btn.textContent && btn.onclick && btn.dataset.file === file) {
+          btn.classList.add('active');
+        }
+      });
+      
+      // Better active state tracking
+      document.querySelectorAll('.topic-item').forEach((btn, idx) => {
+        if (filteredTopics[idx] && filteredTopics[idx].file === file) {
+          btn.classList.add('active');
+        } else {
+          btn.classList.remove('active');
+        }
+      });
+
+      // Scroll to top of content
+      contentArea.scrollTop = 0;
+    }
+
+    async function changeLang(newLang) {
+      currentLang = newLang;
+      localStorage.setItem('help-lang', newLang);
+      selectedFile = null;
+      document.getElementById('content-title').textContent = 'Select a topic';
+      document.getElementById('content-area').innerHTML = '<div class="empty-state">Select a help topic from the list to begin</div>';
+      
+      await loadTopics();
+    }
+
+    async function loadTopics() {
+      const contentArea = document.getElementById('content-area');
+      contentArea.innerHTML = '<div class="loading">Loading help topics...</div>';
+
+      allTopics = await fetchTopics();
+      applyFilter();
+
+      contentArea.innerHTML = '<div class="empty-state">Select a help topic from the list to begin</div>';
+    }
+
+    // Event listeners
+    document.getElementById('lang-select').addEventListener('change', (e) => {
+      changeLang(e.target.value);
+    });
+
+    document.getElementById('filter-input').addEventListener('input', applyFilter);
+
+    // Initialize
+    document.getElementById('lang-select').value = currentLang;
+    loadTopics();
+  </script>
+</body>
+</html>

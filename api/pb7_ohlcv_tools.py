@@ -10,12 +10,15 @@ from __future__ import annotations
 import asyncio
 import os
 import platform
+import re
+import signal
 import subprocess
 import threading
 import time
 import uuid
 from collections import deque
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +53,26 @@ _STATUS_RANK = {
 }
 
 _STATUS_KEYS = tuple(_STATUS_LABELS.keys())
+
+_LOG_LINE_RE = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s+(?P<level>[A-Z]+)\s+(?P<msg>.*)$")
+_ARCHIVE_START_RE = re.compile(
+    r"^\[(?P<exchange>[^\]]+)\] download archive start symbol=(?P<symbol>\S+) days=(?P<days>\d+) parallel=(?P<parallel>\d+) range=(?P<range>\S+)$"
+)
+_ARCHIVE_PROGRESS_RE = re.compile(
+    r"^\[(?P<exchange>[^\]]+)\] download archive progress symbol=(?P<symbol>\S+) (?P<completed>\d+)/(?P<total>\d+) \((?P<pct>\d+)%\) batch=(?P<batch>.+)$"
+)
+_ARCHIVE_DONE_RE = re.compile(
+    r"^\[(?P<exchange>[^\]]+)\] download archive done symbol=(?P<symbol>\S+) fetched=(?P<fetched>\d+) skipped=(?P<skipped>\d+) total=(?P<total>\d+) elapsed_s=(?P<elapsed_s>\S+)$"
+)
+_CCXT_START_RE = re.compile(
+    r"^\[(?P<exchange>[^\]]+)\] download ccxt start symbol=(?P<symbol>\S+) tf=(?P<tf>\S+) since=(?P<since>\S+) since_ms=(?P<since_ms>\d+) limit=(?P<limit>\d+) params=(?P<params>.+)$"
+)
+_CCXT_OK_RE = re.compile(
+    r"^\[(?P<exchange>[^\]]+)\] download ccxt ok symbol=(?P<symbol>\S+) tf=(?P<tf>\S+) rows=(?P<rows>\d+) first=(?P<first>\S+) last=(?P<last>\S+) elapsed_ms=(?P<elapsed_ms>\d+)"
+)
+_PCT_PROGRESS_RE = re.compile(
+    r"^(?P<pct>\d+)%\s*\|\s*(?P<context>.+?)\s+(?P<processed>\d+)/(?P<total>\d+)(?:\s+current=(?P<current>\S+))?(?:\s+ETA\s+(?P<eta>\d+)s)?$"
+)
 
 
 def _utc_ms() -> int:
@@ -96,6 +119,552 @@ def _tail_text_lines(path: Path, limit: int = 40) -> list[str]:
             return [line.rstrip("\n") for line in deque(handle, maxlen=max(1, int(limit)))]
     except Exception:
         return []
+
+
+def _parse_log_iso_to_ms(value: str | None) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if text.isdigit():
+            return int(text)
+        if len(text) == 10 and text[4] == "-" and text[7] == "-":
+            return int(datetime.strptime(text, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000)
+    except Exception:
+        return None
+
+
+def _ms_to_iso(value: int | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(value) / 1000.0, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return None
+
+
+def _safe_pct(value: float | int | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return max(0, min(100, int(round(float(value)))))
+    except Exception:
+        return None
+
+
+def _coerce_ts_ms(value: Any) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = int(float(text))
+    except Exception:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _extract_market_start_ts(market: dict[str, Any] | None) -> int | None:
+    if not isinstance(market, dict):
+        return None
+
+    candidates: list[Any] = [market.get("created")]
+    info = market.get("info")
+    if isinstance(info, dict):
+        candidates.extend(
+            [
+                info.get("launchTime"),
+                info.get("onboardDate"),
+                info.get("launch_time"),
+                info.get("listingTime"),
+                info.get("createTime"),
+            ]
+        )
+
+    values = [ts_ms for ts_ms in (_coerce_ts_ms(candidate) for candidate in candidates) if ts_ms is not None]
+    return min(values) if values else None
+
+
+def _collect_coin_sides(approved: Any) -> dict[str, list[str]]:
+    coin_sides: dict[str, list[str]] = {}
+    if not isinstance(approved, dict):
+        return coin_sides
+    for side in ("long", "short"):
+        values = approved.get(side, [])
+        if isinstance(values, str):
+            values = [values]
+        for coin in values or []:
+            coin_name = str(coin or "").strip()
+            if not coin_name or coin_name == "all":
+                continue
+            sides = coin_sides.setdefault(coin_name, [])
+            if side not in sides:
+                sides.append(side)
+    return coin_sides
+
+
+async def _prune_preload_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    ensure_pb7_src_importable()
+    from config.access import require_config_value, require_live_value
+    from hlcv_preparation import HLCVManager
+    from procedures import date_to_ts, ts_to_date
+    from utils import format_approved_ignored_coins, format_end_date, to_ccxt_exchange_id
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    filtered = deepcopy(config)
+    backtest = filtered.get("backtest", {}) if isinstance(filtered, dict) else {}
+    live = filtered.get("live", {}) if isinstance(filtered, dict) else {}
+    exchanges = list(require_config_value(filtered, "backtest.exchanges") or [])
+    if not exchanges:
+        raise ValueError("backtest.exchanges is empty")
+
+    requested_start_date = str(require_config_value(filtered, "backtest.start_date"))
+    end_date = format_end_date(require_config_value(filtered, "backtest.end_date"))
+    requested_start_ts = int(date_to_ts(requested_start_date))
+    end_ts = int(date_to_ts(end_date))
+    warmup_minutes = max(0, int(compute_backtest_warmup_minutes(filtered)))
+    effective_start_ts = max(0, requested_start_ts - (warmup_minutes * 60_000))
+    effective_start_ts = (effective_start_ts // 60_000) * 60_000
+    backtest["start_date"] = ts_to_date(int(effective_start_ts))
+    minimum_coin_age_days = float(require_live_value(filtered, "minimum_coin_age_days"))
+    min_coin_age_ms = int(max(0.0, minimum_coin_age_days) * 24.0 * 60.0 * 60.0 * 1000.0)
+
+    await format_approved_ignored_coins(filtered, exchanges)
+    approved = require_live_value(filtered, "approved_coins")
+    coin_sides = _collect_coin_sides(approved)
+    coins = sorted(coin_sides)
+    if not coins:
+        return filtered, []
+
+    source_dir_value = str((backtest.get("ohlcv_source_dir") or "")).strip()
+    gap_tolerance = require_config_value(filtered, "backtest.gap_tolerance_ohlcvs_minutes")
+    cm_debug_level = int(backtest.get("cm_debug_level", 0) or 0)
+    cm_progress_interval = float(backtest.get("cm_progress_log_interval_seconds", 10.0) or 10.0)
+
+    viable_coins = set(coins)
+    skipped_reasons: dict[str, str] = {}
+    market_seen: dict[str, bool] = {coin: False for coin in coins}
+    serviceable_seen: dict[str, bool] = {coin: False for coin in coins}
+    unknown_seen: dict[str, bool] = {coin: False for coin in coins}
+
+    for raw_exchange in exchanges:
+        ccxt_exchange = to_ccxt_exchange_id(raw_exchange)
+        om = HLCVManager(
+            ccxt_exchange,
+            ts_to_date(int(effective_start_ts)),
+            end_date,
+            gap_tolerance_ohlcvs_minutes=gap_tolerance,
+            cm_debug_level=cm_debug_level,
+            cm_progress_log_interval_seconds=cm_progress_interval,
+            force_refetch_gaps=False,
+            ohlcv_source_dir=source_dir_value or None,
+        )
+        try:
+            await om.load_markets()
+            for coin in coins:
+                if not om.has_coin(coin):
+                    continue
+                market_seen[coin] = True
+                symbol = om.get_symbol(coin)
+                market = (om.markets or {}).get(symbol) if isinstance(om.markets, dict) else None
+                market_start_ts = _extract_market_start_ts(market)
+                if market_start_ts is None:
+                    unknown_seen[coin] = True
+                    serviceable_seen[coin] = True
+                    continue
+                usable_start_ts = int(market_start_ts) + min_coin_age_ms
+                if usable_start_ts <= end_ts:
+                    serviceable_seen[coin] = True
+                    continue
+                skipped_reasons[coin] = (
+                    f"{coin} starts trading at {_ms_to_iso(market_start_ts) or 'n/a'} on {raw_exchange}, after the requested preload window."
+                )
+        finally:
+            await om.aclose()
+            if om.cc:
+                await om.cc.close()
+
+    for coin in coins:
+        if serviceable_seen.get(coin) or unknown_seen.get(coin):
+            continue
+        if market_seen.get(coin):
+            viable_coins.discard(coin)
+        else:
+            skipped_reasons.setdefault(coin, f"{coin} is not listed on the selected exchanges.")
+            viable_coins.discard(coin)
+
+    if viable_coins == set(coins):
+        return filtered, []
+
+    filtered_live = filtered.setdefault("live", {})
+    filtered_approved = filtered_live.setdefault("approved_coins", {})
+    for side in ("long", "short"):
+        side_values = approved.get(side, []) if isinstance(approved, dict) else []
+        if isinstance(side_values, str):
+            side_values = [side_values]
+        filtered_approved[side] = [coin for coin in side_values if str(coin or "").strip() in viable_coins]
+
+    skipped_notes = [skipped_reasons[coin] for coin in coins if coin not in viable_coins and coin in skipped_reasons]
+    if not viable_coins:
+        raise ValueError(skipped_notes[0] if skipped_notes else "No approved coins remain preloadable for the requested window.")
+    return filtered, skipped_notes
+
+
+def _derive_target_end_ms_from_config(config: dict[str, Any]) -> int | None:
+    try:
+        ensure_pb7_src_importable()
+        from procedures import date_to_ts
+        from utils import format_end_date
+
+        return int(date_to_ts(format_end_date((config.get("backtest", {}) or {}).get("end_date"))))
+    except Exception:
+        return None
+
+
+def _extract_preload_config_path(log_lines: list[str]) -> Path | None:
+    for raw_line in log_lines[:8]:
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        if " loading config " in line:
+            config_path = line.split(" loading config ", 1)[1].strip()
+            if config_path:
+                return Path(config_path)
+        if line.startswith("$ "):
+            parts = line.split()
+            if parts:
+                candidate = parts[-1].strip()
+                if candidate.endswith(".json"):
+                    return Path(candidate)
+    return None
+
+
+def _derive_target_end_ms_from_log(log_lines: list[str]) -> int | None:
+    config_path = _extract_preload_config_path(log_lines)
+    if not config_path or not config_path.exists():
+        return None
+    try:
+        import json
+
+        with config_path.open("r", encoding="utf-8") as handle:
+            config = json.load(handle)
+        if not isinstance(config, dict):
+            return None
+        return _derive_target_end_ms_from_config(config)
+    except Exception:
+        return None
+
+
+def _parse_log_date_range(value: str | None) -> tuple[int | None, int | None]:
+    text = str(value or "").strip()
+    if not text or ".." not in text:
+        return None, None
+    start_text, end_text = text.split("..", 1)
+    return _parse_log_iso_to_ms(start_text), _parse_log_iso_to_ms(end_text)
+
+
+def _derive_archive_progress(
+    *,
+    total: int | None,
+    range_text: str | None,
+    batch_text: str | None,
+    completed: int | None,
+    pct: int | None,
+) -> tuple[int | None, int | None]:
+    safe_total = int(total) if total is not None else None
+    display_completed = completed
+    display_pct = pct
+    if not safe_total or safe_total <= 0:
+        return display_completed, display_pct
+
+    range_start_ms, _range_end_ms = _parse_log_date_range(range_text)
+    _batch_start_ms, batch_end_ms = _parse_log_date_range(batch_text)
+    if range_start_ms is None or batch_end_ms is None or batch_end_ms < range_start_ms:
+        return display_completed, display_pct
+
+    processed_days = int(((batch_end_ms - range_start_ms) / 86_400_000)) + 1
+    processed_days = max(0, min(safe_total, processed_days))
+    display_completed = max(int(display_completed or 0), processed_days)
+    derived_pct = _safe_pct((processed_days / safe_total) * 100.0)
+    if derived_pct is not None:
+        display_pct = max(int(display_pct or 0), derived_pct)
+    return display_completed, display_pct
+
+
+def _derive_ccxt_cursor_progress(
+    *,
+    first_request_ms: int | None,
+    cursor_ms: int | None,
+    target_end_ms: int | None,
+) -> int | None:
+    if first_request_ms is None or cursor_ms is None or target_end_ms is None:
+        return None
+    if target_end_ms <= first_request_ms:
+        return 99
+    clamped_cursor_ms = max(first_request_ms, min(target_end_ms, cursor_ms))
+    derived_pct = _safe_pct(((clamped_cursor_ms - first_request_ms) / (target_end_ms - first_request_ms)) * 100.0)
+    if derived_pct is None:
+        return None
+    # Keep running CCXT tasks below 100%. The job completion state is the real terminal signal.
+    return min(99, derived_pct)
+
+
+def _build_preload_progress(log_lines: list[str], *, target_end_ms: int | None = None) -> dict[str, Any]:
+    task_map: dict[tuple[str, str], dict[str, Any]] = {}
+    tracker_summary: dict[str, Any] | None = None
+
+    def get_task(exchange: str, symbol: str) -> dict[str, Any]:
+        key = (str(exchange or "").strip(), str(symbol or "").strip())
+        task = task_map.get(key)
+        if task is None:
+            task = {
+                "exchange": key[0],
+                "symbol": key[1],
+                "kind": None,
+                "status": "running",
+                "pct": None,
+                "completed": None,
+                "total": None,
+                "batch": None,
+                "range": None,
+                "detail": None,
+                "first_request_ms": None,
+                "cursor_ms": None,
+                "cursor_iso": None,
+                "since_ms": None,
+                "since_iso": None,
+                "response_first_ms": None,
+                "response_first_iso": None,
+                "response_ignored_cursor": False,
+                "last_ms": None,
+                "last_iso": None,
+                "limit": None,
+                "updated_at": None,
+            }
+            task_map[key] = task
+        return task
+
+    for raw_line in log_lines:
+        line = str(raw_line or "").rstrip("\n")
+        if not line:
+            continue
+        ts_match = _LOG_LINE_RE.match(line)
+        line_ts = None
+        message = line
+        if ts_match:
+            line_ts = _parse_log_iso_to_ms(ts_match.group("ts") + "Z")
+            message = ts_match.group("msg").strip()
+
+        tracker_match = _PCT_PROGRESS_RE.match(message.strip())
+        if tracker_match:
+            tracker_summary = {
+                "pct": _safe_pct(tracker_match.group("pct")),
+                "context": tracker_match.group("context"),
+                "processed": int(tracker_match.group("processed")),
+                "total": int(tracker_match.group("total")),
+                "current": tracker_match.group("current"),
+                "eta_seconds": int(tracker_match.group("eta")) if tracker_match.group("eta") else None,
+            }
+
+        match = _ARCHIVE_START_RE.match(message)
+        if match:
+            task = get_task(match.group("exchange"), match.group("symbol"))
+            task["kind"] = "archive"
+            task["status"] = "running"
+            task["completed"] = 0
+            task["total"] = int(match.group("days"))
+            task["pct"] = 0
+            task["range"] = match.group("range")
+            task["detail"] = f"Archive 0/{task['total']}"
+            task["updated_at"] = line_ts
+            continue
+
+        match = _ARCHIVE_PROGRESS_RE.match(message)
+        if match:
+            task = get_task(match.group("exchange"), match.group("symbol"))
+            completed = int(match.group("completed"))
+            total = int(match.group("total"))
+            pct = _safe_pct(match.group("pct"))
+            batch = match.group("batch")
+            completed, pct = _derive_archive_progress(
+                total=total,
+                range_text=task.get("range"),
+                batch_text=batch,
+                completed=completed,
+                pct=pct,
+            )
+            task["kind"] = "archive"
+            task["status"] = "running"
+            task["completed"] = completed
+            task["total"] = total
+            task["pct"] = pct
+            task["batch"] = batch
+            task["detail"] = f"Archive {completed}/{total}"
+            task["updated_at"] = line_ts
+            continue
+
+        match = _ARCHIVE_DONE_RE.match(message)
+        if match:
+            task = get_task(match.group("exchange"), match.group("symbol"))
+            fetched = int(match.group("fetched"))
+            skipped = int(match.group("skipped"))
+            total = int(match.group("total"))
+            task["kind"] = "archive"
+            task["status"] = "done"
+            task["completed"] = fetched + skipped
+            task["total"] = total
+            task["pct"] = 100
+            task["detail"] = f"Archive {fetched + skipped}/{total}"
+            task["updated_at"] = line_ts
+            continue
+
+        match = _CCXT_START_RE.match(message)
+        if match:
+            task = get_task(match.group("exchange"), match.group("symbol"))
+            since_ms = int(match.group("since_ms"))
+            task["kind"] = "ccxt"
+            task["status"] = "running"
+            task["since_ms"] = since_ms
+            task["since_iso"] = match.group("since")
+            task["cursor_ms"] = since_ms
+            task["cursor_iso"] = match.group("since")
+            if task.get("first_request_ms") is None:
+                task["first_request_ms"] = since_ms
+            else:
+                task["first_request_ms"] = min(int(task["first_request_ms"]), since_ms)
+            task["limit"] = int(match.group("limit"))
+            cursor_pct = _derive_ccxt_cursor_progress(
+                first_request_ms=task.get("first_request_ms"),
+                cursor_ms=task.get("cursor_ms"),
+                target_end_ms=target_end_ms,
+            )
+            if cursor_pct is not None:
+                task["pct"] = max(int(task.get("pct") or 0), cursor_pct)
+            task["detail"] = f"Cursor {task['cursor_iso']}"
+            task["updated_at"] = line_ts
+            continue
+
+        match = _CCXT_OK_RE.match(message)
+        if match:
+            task = get_task(match.group("exchange"), match.group("symbol"))
+            first_ms = _parse_log_iso_to_ms(match.group("first"))
+            last_ms = _parse_log_iso_to_ms(match.group("last"))
+            cursor_ms = task.get("cursor_ms")
+            response_ignored_cursor = bool(
+                first_ms is not None and cursor_ms is not None and first_ms > (cursor_ms + 60_000)
+            )
+            pct = task.get("pct")
+            if not response_ignored_cursor:
+                coverage_pct = _derive_ccxt_cursor_progress(
+                    first_request_ms=task.get("first_request_ms"),
+                    cursor_ms=last_ms,
+                    target_end_ms=target_end_ms,
+                )
+                if coverage_pct is not None:
+                    pct = max(int(pct or 0), coverage_pct)
+            task["kind"] = "ccxt"
+            task["response_first_ms"] = first_ms
+            task["response_first_iso"] = match.group("first")
+            task["response_ignored_cursor"] = response_ignored_cursor
+            task["last_ms"] = last_ms
+            task["last_iso"] = match.group("last")
+            task["pct"] = pct
+            if response_ignored_cursor:
+                task["detail"] = f"Cursor {task.get('cursor_iso') or task.get('since_iso') or 'n/a'}"
+            else:
+                task["detail"] = f"Fetched through {task['last_iso']}"
+            task["updated_at"] = line_ts
+            continue
+
+    tasks = list(task_map.values())
+    tasks.sort(key=lambda item: (item.get("status") != "running", -(item.get("updated_at") or 0)))
+    active_tasks = [task for task in tasks if task.get("status") == "running"]
+    finished_tasks = [task for task in tasks if task.get("status") == "done"]
+    current_task = active_tasks[0] if active_tasks else (tasks[0] if tasks else None)
+
+    return {
+        "tracker": tracker_summary,
+        "observed_tasks": len(tasks),
+        "active_tasks": len(active_tasks),
+        "finished_tasks": len(finished_tasks),
+        "current_task": current_task,
+        "tasks": tasks[:6],
+    }
+
+
+def _read_preload_log_state(path: Path, limit: int = 40, *, target_end_ms: int | None = None) -> dict[str, Any]:
+    empty_state = {
+        "tail": [],
+        "line_count": 0,
+        "last_line": None,
+        "updated_at": None,
+        "size_bytes": 0,
+        "progress": {
+            "tracker": None,
+            "observed_tasks": 0,
+            "active_tasks": 0,
+            "finished_tasks": 0,
+            "current_task": None,
+            "tasks": [],
+        },
+    }
+    if not path.exists():
+        return empty_state
+    try:
+        tail = deque(maxlen=max(1, int(limit)))
+        all_lines: list[str] = []
+        line_count = 0
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for raw_line in handle:
+                line = raw_line.rstrip("\n")
+                tail.append(line)
+                all_lines.append(line)
+                line_count += 1
+        if target_end_ms is None:
+            target_end_ms = _derive_target_end_ms_from_log(all_lines)
+        stat = path.stat()
+        last_line = next((line for line in reversed(tail) if str(line).strip()), None)
+        return {
+            "tail": list(tail),
+            "line_count": line_count,
+            "last_line": last_line,
+            "updated_at": int(stat.st_mtime * 1000),
+            "size_bytes": int(stat.st_size),
+            "progress": _build_preload_progress(all_lines, target_end_ms=target_end_ms),
+        }
+    except Exception:
+        return empty_state
+
+
+def _finalize_preload_progress(progress: dict[str, Any], job_status: str) -> dict[str, Any]:
+    if not isinstance(progress, dict) or job_status not in {"completed", "stopped", "error"}:
+        return progress
+    tasks = [dict(task) for task in (progress.get("tasks") or []) if isinstance(task, dict)]
+    if not tasks:
+        return progress
+
+    for task in tasks:
+        if task.get("status") != "running":
+            continue
+        if job_status == "completed":
+            task["status"] = "done"
+            task["pct"] = 100
+            if task.get("total") is not None and task.get("completed") is None:
+                task["completed"] = task.get("total")
+        else:
+            task["status"] = job_status
+
+    finalized = dict(progress)
+    finalized["tasks"] = tasks
+    finalized["active_tasks"] = sum(1 for task in tasks if task.get("status") == "running")
+    finalized["finished_tasks"] = sum(1 for task in tasks if task.get("status") == "done")
+    finalized["current_task"] = tasks[0] if tasks else None
+    return finalized
 
 
 def _compact_entry(entry: dict[str, Any]) -> dict[str, Any]:
@@ -159,6 +728,12 @@ def _build_summary(best_counts: dict[str, int], coin_count: int) -> dict[str, An
     elif ready == coin_count:
         overall_status = "ready"
         headline = "Local v2 data is ready"
+    elif too_young == coin_count:
+        overall_status = "too_young"
+        headline = "Selected coins start after the requested window"
+    elif missing_market == coin_count:
+        overall_status = "missing_market"
+        headline = "Approved coins are not on the selected exchanges"
     elif fetch > 0:
         overall_status = "preload"
         headline = "Some coins would fetch on start"
@@ -189,6 +764,8 @@ def _build_summary(best_counts: dict[str, int], coin_count: int) -> dict[str, An
 
 def _preload_job_payload(job: dict[str, Any]) -> dict[str, Any]:
     log_path = Path(job["log_path"])
+    log_state = _read_preload_log_state(log_path, limit=40, target_end_ms=job.get("target_end_ms"))
+    progress = _finalize_preload_progress(log_state["progress"], str(job.get("status") or ""))
     return {
         "job_id": job["job_id"],
         "status": job["status"],
@@ -200,7 +777,15 @@ def _preload_job_payload(job: dict[str, Any]) -> dict[str, Any]:
         "returncode": job.get("returncode"),
         "error": job.get("error"),
         "log_path": str(log_path),
-        "log_tail": _tail_text_lines(log_path, limit=40),
+        "target_end_ms": job.get("target_end_ms"),
+        "target_end_iso": _ms_to_iso(job.get("target_end_ms")),
+        "log_tail": log_state["tail"],
+        "log_line_count": log_state["line_count"],
+        "last_log_line": log_state["last_line"],
+        "log_updated_at": log_state["updated_at"],
+        "log_updated_at_iso": _iso_from_ms(log_state["updated_at"]),
+        "log_size_bytes": log_state["size_bytes"],
+        "progress": progress,
     }
 
 
@@ -247,6 +832,13 @@ def _spawn_preload_worker(job_id: str) -> None:
             job = _PRELOAD_JOBS.get(job_id)
         if not job:
             return
+        if job.get("stop_requested"):
+            with _PRELOAD_LOCK:
+                if job_id in _PRELOAD_JOBS:
+                    _PRELOAD_JOBS[job_id]["status"] = "stopped"
+                    _PRELOAD_JOBS[job_id]["finished_at"] = _utc_ms()
+                    _PRELOAD_JOBS[job_id]["returncode"] = -1
+            return
 
         cmd = list(job["command"])
         log_path = Path(job["log_path"])
@@ -265,6 +857,15 @@ def _spawn_preload_worker(job_id: str) -> None:
             with log_path.open("a", encoding="utf-8") as handle:
                 handle.write("$ " + " ".join(cmd) + "\n")
                 handle.flush()
+                with _PRELOAD_LOCK:
+                    current = _PRELOAD_JOBS.get(job_id)
+                    if not current:
+                        return
+                    if current.get("stop_requested"):
+                        _PRELOAD_JOBS[job_id]["status"] = "stopped"
+                        _PRELOAD_JOBS[job_id]["finished_at"] = _utc_ms()
+                        _PRELOAD_JOBS[job_id]["returncode"] = -1
+                        return
                 popen_kwargs["stdout"] = handle
                 popen_kwargs["stderr"] = subprocess.STDOUT
                 if platform.system() == "Windows":
@@ -281,12 +882,16 @@ def _spawn_preload_worker(job_id: str) -> None:
                 _log(SERVICE, f"Started OHLCV preload job {job_id} (pid={proc.pid})", level="INFO")
                 returncode = proc.wait()
                 finished_at = _utc_ms()
+                stop_requested = False
                 with _PRELOAD_LOCK:
                     if job_id in _PRELOAD_JOBS:
+                        stop_requested = bool(_PRELOAD_JOBS[job_id].get("stop_requested"))
                         _PRELOAD_JOBS[job_id]["returncode"] = returncode
                         _PRELOAD_JOBS[job_id]["finished_at"] = finished_at
-                        _PRELOAD_JOBS[job_id]["status"] = "completed" if returncode == 0 else "error"
-                if returncode == 0:
+                        _PRELOAD_JOBS[job_id]["status"] = "stopped" if stop_requested else ("completed" if returncode == 0 else "error")
+                if stop_requested:
+                    _log(SERVICE, f"Stopped OHLCV preload job {job_id}", level="INFO")
+                elif returncode == 0:
                     _log(SERVICE, f"Finished OHLCV preload job {job_id}", level="INFO")
                 else:
                     _log(
@@ -349,18 +954,7 @@ async def build_ohlcv_preflight(raw_config: dict[str, Any]) -> dict[str, Any]:
 
     await format_approved_ignored_coins(config, exchanges)
     approved = require_live_value(config, "approved_coins")
-    coin_sides: dict[str, list[str]] = {}
-    for side in ("long", "short"):
-        values = approved.get(side, [])
-        if isinstance(values, str):
-            values = [values]
-        for coin in values or []:
-            coin_name = str(coin or "").strip()
-            if not coin_name or coin_name == "all":
-                continue
-            sides = coin_sides.setdefault(coin_name, [])
-            if side not in sides:
-                sides.append(side)
+    coin_sides = _collect_coin_sides(approved)
     coins = sorted(coin_sides)
     if not coins:
         return {
@@ -433,18 +1027,35 @@ async def build_ohlcv_preflight(raw_config: dict[str, Any]) -> dict[str, Any]:
                     entry["status_label"] = _STATUS_LABELS["missing_market"]
                     entry["note"] = "Coin is not listed on this exchange."
                 else:
+                    symbol = om.get_symbol(coin)
+                    market = (om.markets or {}).get(symbol) if isinstance(om.markets, dict) else None
+                    market_start_ts = _extract_market_start_ts(market)
+                    if market_start_ts is not None:
+                        entry["market_start_date"] = ts_to_date(int(market_start_ts))
                     first_ts_guess = om.load_first_timestamp(coin)
                     adjusted_start_ts = int(effective_start_ts)
+                    age_anchor_ts = int(market_start_ts) if market_start_ts is not None else None
+                    if age_anchor_ts is None and first_ts_guess:
+                        age_anchor_ts = int(float(first_ts_guess))
                     if first_ts_guess:
-                        adjusted_start_ts = max(adjusted_start_ts, int(float(first_ts_guess)) + min_coin_age_ms)
                         entry["first_cached_date"] = ts_to_date(int(float(first_ts_guess)))
-                    symbol = om.get_symbol(coin)
+                    if age_anchor_ts is not None:
+                        adjusted_start_ts = max(adjusted_start_ts, age_anchor_ts + min_coin_age_ms)
                     entry["symbol"] = symbol
                     entry["effective_start_date"] = ts_to_date(int(adjusted_start_ts))
                     if adjusted_start_ts > end_ts:
                         entry["status"] = "coin_too_young"
                         entry["status_label"] = _STATUS_LABELS["coin_too_young"]
-                        entry["note"] = "Minimum coin age pushes the usable start beyond the end date."
+                        if market_start_ts is not None and int(market_start_ts) > end_ts:
+                            entry["note"] = (
+                                f"Market starts at {ts_to_date(int(market_start_ts))}, after the requested window."
+                            )
+                        elif market_start_ts is not None and min_coin_age_ms > 0:
+                            entry["note"] = (
+                                f"Market starts at {ts_to_date(int(market_start_ts))}; minimum coin age pushes the usable start beyond the end date."
+                            )
+                        else:
+                            entry["note"] = "Minimum coin age pushes the usable start beyond the end date."
                     else:
                         if catalog is None:
                             legacy_inspection = None
@@ -577,6 +1188,8 @@ async def build_ohlcv_preflight(raw_config: dict[str, Any]) -> dict[str, Any]:
 def start_ohlcv_preload_job(raw_config: dict[str, Any]) -> dict[str, Any]:
     _cleanup_preload_jobs()
     config = _prepare_runtime_config(raw_config)
+    config, skipped_notes = asyncio.run(_prune_preload_config(config))
+    target_end_ms = _derive_target_end_ms_from_config(config)
     job_id = uuid.uuid4().hex[:12]
     config_path = _write_preload_config(job_id, config)
     log_path = Path(PBGDIR) / "data" / "logs" / f"ohlcv_preload_{job_id}.log"
@@ -592,11 +1205,75 @@ def start_ohlcv_preload_job(raw_config: dict[str, Any]) -> dict[str, Any]:
         "cwd": str(Path(pb7dir())),
         "config_path": str(config_path),
         "log_path": str(log_path),
+        "target_end_ms": target_end_ms,
+        "skipped_notes": skipped_notes,
     }
     with _PRELOAD_LOCK:
         _PRELOAD_JOBS[job_id] = job
     _spawn_preload_worker(job_id)
     return _preload_job_payload(job)
+
+
+def stop_ohlcv_preload_job(job_id: str) -> dict[str, Any] | None:
+    _cleanup_preload_jobs()
+    with _PRELOAD_LOCK:
+        job = _PRELOAD_JOBS.get(job_id)
+        if not job:
+            return None
+        job["stop_requested"] = True
+        pid = job.get("pid")
+        status = str(job.get("status") or "")
+        if status == "queued" and not pid:
+            job["status"] = "stopped"
+            job["finished_at"] = _utc_ms()
+            job["returncode"] = -1
+            return _preload_job_payload(deepcopy(job))
+
+    if status not in ("queued", "running") or not pid:
+        return get_ohlcv_preload_job(job_id)
+
+    try:
+        if platform.system() == "Windows":
+            os.kill(pid, signal.SIGTERM)
+        else:
+            os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except Exception as exc:
+        _log(SERVICE, f"Error stopping OHLCV preload job {job_id}: {exc}", level="WARNING")
+
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        with _PRELOAD_LOCK:
+            current = _PRELOAD_JOBS.get(job_id)
+            if not current or current.get("status") == "stopped":
+                break
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            break
+        time.sleep(0.1)
+    else:
+        try:
+            if platform.system() == "Windows":
+                os.kill(pid, signal.SIGKILL)
+            else:
+                os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception as exc:
+            _log(SERVICE, f"Error force-stopping OHLCV preload job {job_id}: {exc}", level="WARNING")
+
+    with _PRELOAD_LOCK:
+        current = _PRELOAD_JOBS.get(job_id)
+        if not current:
+            return None
+        if current.get("status") in ("queued", "running"):
+            current["status"] = "stopped"
+            current["finished_at"] = current.get("finished_at") or _utc_ms()
+            current["returncode"] = -1
+        payload = _preload_job_payload(deepcopy(current))
+    return payload
 
 
 def get_ohlcv_preload_job(job_id: str) -> dict[str, Any] | None:

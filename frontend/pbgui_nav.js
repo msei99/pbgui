@@ -438,6 +438,7 @@
     'system_logging':     '/api/logging/main_page',
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',
+    'help':               '/app/help.html',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',
