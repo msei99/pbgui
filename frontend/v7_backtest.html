@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui — V7 Backtest</title>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-<link rel="stylesheet" href="/app/css/sidebar.css?v=2">
+<link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <style>
 /* ── Design Tokens ─────────────────────────────── */
@@ -877,7 +877,10 @@ textarea.json-invalid:focus {
   <div class="fp-resize fp-resize-se" data-dir="se"></div>
   <div id="ohlcv-panel-header" class="floating-preview-header">
     <span class="floating-preview-title">OHLCV Readiness</span>
-    <button id="ohlcv-panel-close" class="floating-preview-close" title="Close">✕</button>
+    <div class="floating-preview-tools">
+      <button id="ohlcv-panel-maximize" class="floating-preview-tool" title="Fit to browser window" aria-pressed="false">⛶</button>
+      <button id="ohlcv-panel-close" class="floating-preview-close" title="Close">✕</button>
+    </div>
   </div>
   <div id="ohlcv-panel-body" class="floating-preview-body" aria-live="polite"></div>
 </div>
@@ -902,7 +905,7 @@ textarea.json-invalid:focus {
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=7"></script>
+<script src="/app/js/editor_shared.js?v=10"></script>
 <script>
 /* ════════════════════════════════════════════════
    GLOBALS (injected by server)
@@ -1334,6 +1337,7 @@ function initBacktestOhlcvPreflightController() {
   window.PBGuiEditorShared.bindFloatingPanel({
     panel: 'ohlcv-panel',
     header: 'ohlcv-panel-header',
+    fullscreenButton: 'ohlcv-panel-maximize',
     closeButton: 'ohlcv-panel-close',
     handlesSelector: '.fp-resize',
     minWidth: 360,
@@ -3888,6 +3892,17 @@ function fillPbguiDataPath() {
       }
     }
   }).catch(function() { toast('Could not fetch PBGui data path', 'err'); });
+}
+
+function clearOhlcvSourceDir() {
+  var el = document.getElementById('cfg-ohlcv-dir');
+  if (el) {
+    el.value = '';
+    scheduleStructuredEditorSync();
+    if (_ohlcvPreflightController && _ohlcvPreflightController.isOpen()) {
+      _ohlcvPreflightController.markStale();
+    }
+  }
 }
 
 function openImportModal() {

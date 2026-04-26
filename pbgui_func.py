@@ -204,7 +204,7 @@ def set_page_config(page : str = "Start"):
 def get_navi_paths():
     NAVI_BASE_DIR = "navi/"
     paths = {
-        "HELP":              os.path.join(NAVI_BASE_DIR, "help.py"),
+        # Help page moved to FastAPI (/app/help.html)
         "SYSTEM_LOGIN":        os.path.join(NAVI_BASE_DIR, "system_login.py"),
         "SYSTEM_API_KEYS":     os.path.join(NAVI_BASE_DIR, "system_api_keys.py"),
         "SYSTEM_SERVICES":     os.path.join(NAVI_BASE_DIR, "system_services.py"),
@@ -242,7 +242,7 @@ def build_navigation():
     pSe1 = st.Page(paths["INFO_DASHBOARDS"], title="Dashboards", icon=":material/dashboard:")
     pSe2 = st.Page(paths["INFO_COIN_DATA"], title="Coin Data", icon=":material/monetization_on:")
     pSe3 = st.Page(paths["INFO_MARKET_DATA"], title="Market Data", icon=":material/storage:")
-    pH1 = st.Page(paths["HELP"], title="Help", icon=":material/help:", url_path="help")
+    # Help page moved to FastAPI: /app/help.html
 
     p71 = st.Page(paths["V7_RUN"], title="Run", icon=":material/play_arrow:")
     p72 = st.Page(paths["V7_BACKTEST"], title="Backtest", icon=":material/history:")
@@ -257,7 +257,7 @@ def build_navigation():
     
     # Do not include DEBUGLOG page; centralized debuglog removed
                 
-    InfotmationPages = [pSe1, pSe2, pSe3, pH1]
+    InfotmationPages = [pSe1, pSe2, pSe3]
     v7Pages = [p71, p72, p77, p73, p74, p75, p76]
 
     # Navigation

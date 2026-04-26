@@ -324,6 +324,13 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.75 (unreleased)
+- Migrated: The Help & Tutorials page is now a pure FastAPI/HTML page (`/app/help.html`) instead of being served through Streamlit; all documentation features (language selection, topic filtering, markdown rendering) are now handled via JavaScript frontend with REST API calls, eliminating the Streamlit dependency for this page.
+- Added: PBv7 Backtest and Optimize now show a clear button (×) for the `ohlcv_source_dir` field so users can quickly reset the path without needing to manually select and delete text.
+- Fixed: PBv7 OHLCV preload now downloads from the same warmup-adjusted effective start that the readiness check validates, so a finished preload no longer leaves the warmup days missing and immediately shows `would fetch on start` again after refresh.
+- Fixed: PBv7 OHLCV preload and readiness now stop treating pre-inception coins as fetchable ranges; coins whose market start is after the requested window are classified as too young and are pruned from preload jobs instead of triggering pointless remote fetch attempts.
+- Fixed: PBv7 OHLCV preload no longer flips CCXT progress between 0% and 100% on exchanges that answer old requests with much newer candles; the panel now follows the advancing request cursor and only marks completion when the preload job actually finishes.
+- Fixed: The PBv7 OHLCV preload panel now derives archive progress from the currently processed batch range when PB7's archive logs stay at coarse 0% steps, adds a fit-to-browser-window control in the floating header, and removes the old left-side status rail.
+- Improved: OHLCV preload jobs in the PBv7 Backtest/Optimize readiness window now show real log-derived progress from PB7 archive/ccxt download lines, alongside elapsed duration, log counters, and an explicit stop action.
 - Improved: PBv7 FastAPI Optimize/Backtest now align suite aggregation and metric grouping with Passivbot v7.10.0 canonical `*_strategy_eq` and day-duration metrics.
 - Changed: PBv7 FastAPI Backtest and Optimize now open `OHLCV Readiness` as a draggable, resizable floating window from the editor sidebar instead of rendering the output inline there; the window still uses the PB7 v2 planner and the background `Preload OHLCV Data` action.
 - Improved: OHLCV Readiness entries now show whether a coin comes from the `long` list, the `short` list, or both, because the PB7 preflight evaluates the union of both approved-coin sides.

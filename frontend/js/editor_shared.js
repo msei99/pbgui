@@ -1166,6 +1166,58 @@
     return html;
   }
 
+  function renderOhlcvPreloadProgress(progressInfo, job) {
+    var progress = progressInfo && typeof progressInfo === 'object' ? progressInfo : {};
+    var tracker = progress.tracker && typeof progress.tracker === 'object' ? progress.tracker : null;
+    var tasks = Array.isArray(progress.tasks)
+      ? progress.tasks.filter(function(task) { return task && task.pct != null; })
+      : [];
+    if (!tasks.length && !(tracker && tracker.total)) return '';
+
+    var html = '<div class="sb-preload-progress-list">';
+    tasks.forEach(function(task) {
+      var pct = Math.max(0, Math.min(100, Number(task.pct) || 0));
+      if (job && job.status === 'completed' && task.kind === 'ccxt') pct = 100;
+      var titleBits = [];
+      if (task.exchange) titleBits.push(String(task.exchange));
+      if (task.symbol) titleBits.push(String(task.symbol));
+      var metaBits = [];
+      if (task.kind === 'archive') {
+        if (task.completed != null && task.total != null) metaBits.push('Archive ' + task.completed + '/' + task.total);
+        if (task.batch) metaBits.push('Batch ' + String(task.batch));
+      } else if (task.kind === 'ccxt') {
+        if (task.cursor_iso) metaBits.push('Cursor ' + String(task.cursor_iso));
+        if (task.response_ignored_cursor && task.response_first_iso && task.last_iso) {
+          metaBits.push('Exchange returned ' + String(task.response_first_iso) + ' .. ' + String(task.last_iso));
+        } else if (task.last_iso) {
+          metaBits.push('Fetched through ' + String(task.last_iso));
+        } else if (task.since_iso) {
+          metaBits.push('Request started at ' + String(task.since_iso));
+        }
+        if (job && job.target_end_iso) metaBits.push('Target ' + String(job.target_end_iso));
+      }
+      if (!metaBits.length && task.detail) metaBits.push(String(task.detail));
+      html += '<div class="sb-preload-progress-row">';
+      html += '<div class="sb-preload-progress-head">';
+      html += '<div class="sb-preload-progress-title">' + escapeHtml(titleBits.join(' | ') || 'Download progress') + '</div>';
+      html += '<div class="sb-preload-progress-pct">' + escapeHtml(String(pct)) + '%</div>';
+      html += '</div>';
+      html += '<div class="sb-preload-progress-track"><div class="sb-preload-progress-fill" style="width:' + String(pct) + '%"></div></div>';
+      if (metaBits.length) {
+        html += '<div class="sb-preload-progress-meta">' + escapeHtml(metaBits.join(' | ')) + '</div>';
+      }
+      html += '</div>';
+    });
+    if (tracker && tracker.total) {
+      var trackerText = 'PB7 progress ' + tracker.processed + '/' + tracker.total;
+      if (tracker.current) trackerText += ' | current=' + tracker.current;
+      if (tracker.eta_seconds != null) trackerText += ' | ETA ' + tracker.eta_seconds + 's';
+      html += '<div class="sb-preview-note">' + escapeHtml(trackerText) + '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
   function renderOhlcvPreflightPanel(target, model) {
     var panel = resolveElement(target);
     if (!panel) return null;
@@ -1266,15 +1318,88 @@
     });
 
     if (job) {
-      html += '<div class="sb-preview-section" data-preload-job="1">';
-      html += '<div class="sb-preview-section-title">Preload Job</div>';
+      var progressInfo = job.progress && typeof job.progress === 'object' ? job.progress : {};
+      var currentTask = progressInfo.current_task && typeof progressInfo.current_task === 'object' ? progressInfo.current_task : null;
+      var jobStatus = String(job.status || 'unknown');
+      var isJobRunning = jobStatus === 'queued' || jobStatus === 'running';
+      var isJobStopped = jobStatus === 'stopped';
+      var isJobCompleted = jobStatus === 'completed';
+      var isJobError = jobStatus === 'error';
+      var jobStatusClass = ' sb-preload-job-queued';
+      var jobStatusLabel = 'Queued';
+      var jobStatusIcon = '○';
+      var jobActivity = 'Waiting for the PB7 OHLCV downloader to start.';
+      if (jobStatus === 'running') {
+        jobStatusClass = ' sb-preload-job-running';
+        jobStatusLabel = 'Running';
+        jobStatusIcon = '<span class="sb-preload-pulse" aria-hidden="true"></span>';
+        if (currentTask) {
+          var activityBits = [];
+          if (currentTask.exchange) activityBits.push(String(currentTask.exchange));
+          if (currentTask.symbol) activityBits.push(String(currentTask.symbol));
+          if (currentTask.detail) activityBits.push(String(currentTask.detail));
+          if (currentTask.batch) activityBits.push('batch ' + String(currentTask.batch));
+          jobActivity = activityBits.join(' | ') || (job.last_log_line || 'PB7 is downloading missing OHLCV ranges.');
+        } else {
+          jobActivity = job.last_log_line || 'PB7 is downloading missing OHLCV ranges.';
+        }
+      } else if (jobStatus === 'queued') {
+        jobStatusClass = ' sb-preload-job-queued';
+        jobStatusLabel = 'Queued';
+        jobStatusIcon = '<span class="sb-preload-pulse" aria-hidden="true"></span>';
+      } else if (isJobCompleted) {
+        jobStatusClass = ' sb-preload-job-completed';
+        jobStatusLabel = 'Completed';
+        jobStatusIcon = '✓';
+        jobActivity = job.last_log_line || 'Preload finished successfully.';
+      } else if (isJobStopped) {
+        jobStatusClass = ' sb-preload-job-stopped';
+        jobStatusLabel = 'Stopped';
+        jobStatusIcon = '◼';
+        jobActivity = 'Preload was stopped before completion.';
+      } else if (isJobError) {
+        jobStatusClass = ' sb-preload-job-error';
+        jobStatusLabel = 'Error';
+        jobStatusIcon = '!';
+        jobActivity = job.error || job.last_log_line || 'The preload job failed.';
+      }
+      var elapsedMs = 0;
+      if (job.started_at) {
+        var endMs = job.finished_at || Date.now();
+        elapsedMs = Math.max(0, endMs - job.started_at);
+      }
+      var elapsedStr = '0s';
+      if (elapsedMs > 0) {
+        var totalSec = Math.floor(elapsedMs / 1000);
+        var hours = Math.floor(totalSec / 3600);
+        var min = Math.floor((totalSec % 3600) / 60);
+        var sec = totalSec % 60;
+        if (hours > 0) elapsedStr = hours + 'h ' + min + 'm';
+        else if (min > 0) elapsedStr = min + 'm ' + sec + 's';
+        else elapsedStr = sec + 's';
+      }
+      html += '<div class="sb-preview-section sb-preload-job' + jobStatusClass + '" data-preload-job="1">';
+      html += '<div class="sb-preview-section-title">Preload Job <span class="sb-preload-status-text">' + jobStatusIcon + ' ' + escapeHtml(jobStatusLabel) + '</span></div>';
+      html += '<div class="sb-preview-note">' + escapeHtml(jobActivity) + '</div>';
+      html += renderOhlcvPreloadProgress(progressInfo, job);
       html += '<div class="sb-preview-grid">';
-      html += '<div class="sb-preview-label">Status</div><div class="sb-preview-value">' + escapeHtml(job.status || 'unknown') + '</div>';
+      html += '<div class="sb-preview-label">Duration</div><div class="sb-preview-value">' + escapeHtml(elapsedStr) + '</div>';
       html += '<div class="sb-preview-label">Started</div><div class="sb-preview-value">' + escapeHtml(job.started_at_iso || 'n/a') + '</div>';
       html += '<div class="sb-preview-label">Finished</div><div class="sb-preview-value">' + escapeHtml(job.finished_at_iso || '—') + '</div>';
+      html += '<div class="sb-preview-label">PID</div><div class="sb-preview-value">' + escapeHtml(job.pid == null ? '—' : String(job.pid)) + '</div>';
+      html += '<div class="sb-preview-label">Log lines</div><div class="sb-preview-value">' + escapeHtml(String(job.log_line_count || 0)) + '</div>';
+      html += '<div class="sb-preview-label">Observed tasks</div><div class="sb-preview-value">' + escapeHtml(String(progressInfo.observed_tasks || 0)) + '</div>';
+      html += '<div class="sb-preview-label">Active tasks</div><div class="sb-preview-value">' + escapeHtml(String(progressInfo.active_tasks || 0)) + '</div>';
+      html += '<div class="sb-preview-label">Finished tasks</div><div class="sb-preview-value">' + escapeHtml(String(progressInfo.finished_tasks || 0)) + '</div>';
+      html += '<div class="sb-preview-label">Last update</div><div class="sb-preview-value">' + escapeHtml(job.log_updated_at_iso || '—') + '</div>';
       html += '</div>';
       if (job.error) {
         html += '<div class="sb-preview-note error">' + escapeHtml(job.error) + '</div>';
+      }
+      if (isJobRunning) {
+        html += '<div class="sb-preview-actions" style="margin-top:var(--sp-sm)">';
+        html += '<button type="button" class="sb-btn danger" data-action="stop">⏹ Stop Preload</button>';
+        html += '</div>';
       }
       if (Array.isArray(job.log_tail) && job.log_tail.length) {
         html += '<pre class="sb-preview-log" data-preload-log="1">' + escapeHtml(job.log_tail.join('\n')) + '</pre>';
@@ -1299,15 +1424,75 @@
     var panel = resolveElement(opts.panel);
     var header = resolveElement(opts.header);
     var closeButton = resolveElement(opts.closeButton);
+    var fullscreenButton = resolveElement(opts.fullscreenButton);
     var handlesSelector = String(opts.handlesSelector || '.fp-resize');
     var minWidth = Math.max(160, Number(opts.minWidth) || 360);
     var minHeight = Math.max(120, Number(opts.minHeight) || 220);
     if (!panel || !header) return null;
 
+    var restoreBounds = null;
+
+    function isHeaderControlTarget(target) {
+      if (!target) return false;
+      if (closeButton && (target === closeButton || (closeButton.contains && closeButton.contains(target)))) {
+        return true;
+      }
+      if (fullscreenButton && (target === fullscreenButton || (fullscreenButton.contains && fullscreenButton.contains(target)))) {
+        return true;
+      }
+      return false;
+    }
+
+    function syncFullscreenButton() {
+      if (!fullscreenButton) return;
+      var isMaximized = panel.classList.contains('is-maximized');
+      fullscreenButton.setAttribute('aria-pressed', isMaximized ? 'true' : 'false');
+      fullscreenButton.setAttribute('title', isMaximized ? 'Restore window size' : 'Fit to browser window');
+      fullscreenButton.textContent = isMaximized ? '❐' : '⛶';
+    }
+
+    function setMaximized(nextValue) {
+      var shouldMaximize = !!nextValue;
+      var isMaximized = panel.classList.contains('is-maximized');
+      if (shouldMaximize === isMaximized) {
+        syncFullscreenButton();
+        return;
+      }
+      if (shouldMaximize) {
+        restoreBounds = {
+          left: panel.style.left || '',
+          top: panel.style.top || '',
+          right: panel.style.right || '',
+          bottom: panel.style.bottom || '',
+          width: panel.style.width || '',
+          height: panel.style.height || ''
+        };
+        panel.classList.add('is-maximized');
+        panel.style.left = '12px';
+        panel.style.top = '76px';
+        panel.style.right = '12px';
+        panel.style.bottom = '12px';
+        panel.style.width = 'auto';
+        panel.style.height = 'auto';
+      } else {
+        panel.classList.remove('is-maximized');
+        var saved = restoreBounds || {};
+        panel.style.left = saved.left || '';
+        panel.style.top = saved.top || '';
+        panel.style.right = saved.right || '';
+        panel.style.bottom = saved.bottom || '';
+        panel.style.width = saved.width || '';
+        panel.style.height = saved.height || '';
+      }
+      syncFullscreenButton();
+    }
+
+    syncFullscreenButton();
+
     if (!header.dataset.pbFloatingDragBound) {
       header.dataset.pbFloatingDragBound = '1';
       header.addEventListener('mousedown', function(event) {
-        if (closeButton && (event.target === closeButton || (closeButton.contains && closeButton.contains(event.target)))) {
+        if (panel.classList.contains('is-maximized') || isHeaderControlTarget(event.target)) {
           return;
         }
         var rect = panel.getBoundingClientRect();
@@ -1337,6 +1522,7 @@
       panel.dataset.pbFloatingResizeBound = '1';
       panel.querySelectorAll(handlesSelector).forEach(function(handle) {
         handle.addEventListener('mousedown', function(event) {
+          if (panel.classList.contains('is-maximized')) return;
           event.preventDefault();
           event.stopPropagation();
           var dir = handle.dataset.dir;
@@ -1390,6 +1576,14 @@
           document.addEventListener('mousemove', onMove);
           document.addEventListener('mouseup', onUp);
         });
+      });
+    }
+
+    if (fullscreenButton && !fullscreenButton.dataset.pbFloatingFullscreenBound) {
+      fullscreenButton.dataset.pbFloatingFullscreenBound = '1';
+      fullscreenButton.addEventListener('click', function(event) {
+        event.preventDefault();
+        setMaximized(!panel.classList.contains('is-maximized'));
       });
     }
 
@@ -1586,6 +1780,8 @@
           renderPanel();
           if (currentJob && (currentJob.status === 'queued' || currentJob.status === 'running')) {
             schedulePoll(1500);
+          } else if (refreshAfterDone !== false && currentJob && currentJob.status === 'stopped') {
+            schedulePoll(1200);
           }
           return currentJob;
         } catch (error) {
@@ -1610,6 +1806,20 @@
           return currentJob;
         } catch (error) {
           renderMessage('error', 'OHLCV Readiness', error && error.message ? error.message : String(error || 'Could not start OHLCV preload'));
+          return null;
+        }
+      },
+      stopPreload: async function() {
+        if (!currentJobId) return null;
+        try {
+          currentJob = await requestJson('/ohlcv-preload/' + encodeURIComponent(currentJobId), {
+            method: 'DELETE'
+          });
+          renderPanel();
+          schedulePoll(1200);
+          return currentJob;
+        } catch (error) {
+          renderMessage('error', 'OHLCV Readiness', error && error.message ? error.message : String(error || 'Could not stop OHLCV preload'));
           return null;
         }
       }
@@ -1646,6 +1856,9 @@
         } else if (action === 'preload' && !target.disabled) {
           event.preventDefault();
           api.startPreload().catch(function() {});
+        } else if (action === 'stop') {
+          event.preventDefault();
+          api.stopPreload().catch(function() {});
         }
       });
     }
