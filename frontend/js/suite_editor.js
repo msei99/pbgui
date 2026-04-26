@@ -46,7 +46,7 @@ var _suiteTemplates = {
       { label: 'twe_1.5', overrides: { 'bot.long.total_wallet_exposure_limit': 1.5, 'bot.short.total_wallet_exposure_limit': 1.5 } },
       { label: 'twe_2.0', overrides: { 'bot.long.total_wallet_exposure_limit': 2.0, 'bot.short.total_wallet_exposure_limit': 2.0 } },
     ],
-    aggregate: { default: 'mean', drawdown_worst_hsl: 'max' },
+    aggregate: { default: 'mean', drawdown_worst_strategy_eq: 'max' },
   },
   'n_positions Sensitivity': {
     scenarios: [
@@ -55,15 +55,16 @@ var _suiteTemplates = {
       { label: 'npos_15', overrides: { 'bot.long.n_positions': 15, 'bot.short.n_positions': 15 } },
       { label: 'npos_20', overrides: { 'bot.long.n_positions': 20, 'bot.short.n_positions': 20 } },
     ],
-    aggregate: { default: 'mean', drawdown_worst_hsl: 'max' },
+    aggregate: { default: 'mean', drawdown_worst_strategy_eq: 'max' },
   },
 };
 
 /* ── Aggregate metric names ─────────────────────────────────── */
 var _suiteAggMetrics = [
-  'adg_per_exposure', 'drawdown_worst_hsl', 'drawdown_worst_mean_1pct_hsl',
-  'peak_recovery_hours_hsl', 'position_held_hours_max', 'sharpe_ratio',
-  'sortino_ratio', 'profit_factor', 'total_pnl',
+  'adg_strategy_eq', 'drawdown_worst_strategy_eq', 'drawdown_worst_mean_1pct_strategy_eq',
+  'peak_recovery_days_strategy_eq', 'peak_recovery_hours_strategy_eq', 'position_held_days_max',
+  'position_held_hours_max', 'sharpe_ratio_strategy_eq', 'sortino_ratio_strategy_eq',
+  'backtest_completion_ratio',
 ];
 
 var _suiteMsState = {};

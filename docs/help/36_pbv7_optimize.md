@@ -41,6 +41,7 @@ Hover dotted field labels to see the inline help tooltip for that setting.
 | **Home** | Return to the config list |
 | **Save** | Save the config to `data/opt_v7/{name}.json` |
 | **Save and Queue** | Save the config and enqueue it immediately |
+| **🧭 OHLCV Readiness** | Open a draggable, resizable floating window and run a PB7-backed read-only preflight for the current optimize config, showing whether the approved coin set is locally ready, can import from legacy OHLCV data, would fetch on start, or is blocked by persistent gaps; the list evaluates the union of `approved_coins_long` and `approved_coins_short`, and each entry now shows whether it comes from `long`, `short`, or both. If PB7 would fetch missing ranges, the window also offers **Preload OHLCV Data** to warm the cache in the background before queueing, automatically jumps to the preload job log section when that preload starts, keeps that log tail running without jumping back to the top, and keeps the finished preload result visible until a fresh readiness check replaces it |
 
 The **Raw Config JSON** section now matches Backtest and Run: typing in raw JSON syncs automatically back into the structured fields, structured edits rebuild raw JSON automatically, and invalid JSON is highlighted live with line-based error reveal.
 

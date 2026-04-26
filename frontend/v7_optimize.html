@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui - V7 Optimize</title>
-<link rel="stylesheet" href="/app/css/sidebar.css?v=1">
+<link rel="stylesheet" href="/app/css/sidebar.css?v=2">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <style>
 :root {
@@ -2054,6 +2054,8 @@ textarea.json-invalid:focus {
         <button class="sb-btn" onclick="closeEditor()" title="Back to config list">🏠 Home</button>
         <button class="sb-btn primary" onclick="saveEditor()" title="Save config">💾 Save</button>
         <button class="sb-btn info" onclick="saveAndQueue()" title="Save config and queue it">▶ Save &amp; Queue</button>
+        <hr class="sb-sep">
+        <button class="sb-btn" id="opted-sidebar-ohlcv-preflight-btn" title="Check PB7 OHLCV readiness for the current config" aria-expanded="false">🧭 OHLCV Readiness</button>
       </div>
     </div>
     <div id="sidebar-resize"></div>
@@ -2311,11 +2313,27 @@ textarea.json-invalid:focus {
   <div id="log-viewer-target"></div>
 </div>
 
+<div id="ohlcv-panel" class="floating-preview-panel" aria-hidden="true">
+  <div class="fp-resize fp-resize-n" data-dir="n"></div>
+  <div class="fp-resize fp-resize-s" data-dir="s"></div>
+  <div class="fp-resize fp-resize-w" data-dir="w"></div>
+  <div class="fp-resize fp-resize-e" data-dir="e"></div>
+  <div class="fp-resize fp-resize-nw" data-dir="nw"></div>
+  <div class="fp-resize fp-resize-ne" data-dir="ne"></div>
+  <div class="fp-resize fp-resize-sw" data-dir="sw"></div>
+  <div class="fp-resize fp-resize-se" data-dir="se"></div>
+  <div id="ohlcv-panel-header" class="floating-preview-header">
+    <span class="floating-preview-title">OHLCV Readiness</span>
+    <button id="ohlcv-panel-close" class="floating-preview-close" title="Close">✕</button>
+  </div>
+  <div id="ohlcv-panel-body" class="floating-preview-body" aria-live="polite"></div>
+</div>
+
 <div id="toast-stack"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=6"></script>
-<script src="/app/js/suite_editor.js?v=3"></script>
+<script src="/app/js/editor_shared.js?v=7"></script>
+<script src="/app/js/suite_editor.js?v=4"></script>
 <script src="/app/js/log_viewer_panel.js?v=8"></script>
 <script>
 var TOKEN = "%%TOKEN%%";
@@ -8149,6 +8167,49 @@ function bindStructuredEditorSync() {
   });
 }
 
+var _optOhlcvPreflightController = null;
+
+function getOptimizeOhlcvPreflightPayload() {
+  var fallbackConfig = state.editorLastConfig ? deepClone(state.editorLastConfig) : {};
+  try {
+    return collectEditorConfig(fallbackConfig, { strict: false });
+  } catch (error) {
+    if (state.editorLastConfig) {
+      return {
+        config: deepClone(state.editorLastConfig),
+        note: 'Readiness check uses the last valid config because raw JSON is currently invalid.'
+      };
+    }
+    throw error;
+  }
+}
+
+function initOptimizeOhlcvPreflightController() {
+  if (_optOhlcvPreflightController || !window.PBGuiEditorShared) return;
+  window.PBGuiEditorShared.bindFloatingPanel({
+    panel: 'ohlcv-panel',
+    header: 'ohlcv-panel-header',
+    closeButton: 'ohlcv-panel-close',
+    handlesSelector: '.fp-resize',
+    minWidth: 360,
+    minHeight: 220
+  });
+  _optOhlcvPreflightController = window.PBGuiEditorShared.createOhlcvPreflightController({
+    button: 'opted-sidebar-ohlcv-preflight-btn',
+    panel: 'ohlcv-panel-body',
+    container: 'ohlcv-panel',
+    containerOpenClass: 'visible',
+    closeButton: 'ohlcv-panel-close',
+    syncRoot: 'configs-editor',
+    pageLabel: 'Optimize',
+    apiBase: API_BASE,
+    token: TOKEN,
+    loadConfig: function() {
+      return getOptimizeOhlcvPreflightPayload();
+    }
+  });
+}
+
 function showStructuredEditor(config, name, sourceName, paramStatusOverride, backendHint) {
   closeAllModals();
   state.editorSourceName = sourceName || '';
@@ -8173,6 +8234,7 @@ function showStructuredEditor(config, name, sourceName, paramStatusOverride, bac
 
 function closeEditor() {
   if (!editorVisible()) return;
+  if (_optOhlcvPreflightController) _optOhlcvPreflightController.close();
   window.PBGuiEditorShared.clearFixedValidationStatus();
   el('configs-editor').style.display = 'none';
   el('configs-editor').innerHTML = '';
@@ -8194,6 +8256,9 @@ function fillOptimizePbguiDataPath() {
     if (node) {
       node.value = data.path || '';
       scheduleStructuredEditorSync();
+      if (_optOhlcvPreflightController && _optOhlcvPreflightController.isOpen()) {
+        _optOhlcvPreflightController.markStale();
+      }
     }
   }).catch(function() {
     toast('Could not fetch PBGui data path', 'err');
@@ -10406,6 +10471,7 @@ async function init() {
   attachEventHandlers();
   initSelections();
   initSidebarResize();
+  initOptimizeOhlcvPreflightController();
   var initialPanel = location.hash.replace('#', '');
   if (PANEL_META[initialPanel]) setPanel(initialPanel);
   connectWS();
