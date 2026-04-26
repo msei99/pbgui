@@ -6,529 +6,1021 @@
   <title>PBGui — Help & Tutorials</title>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
-  <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
   <style>
     :root {
-      --bg: #0f172a;
-      --bg-light: #1e293b;
-      --border: #475569;
-      --text: #e2e8f0;
-      --text-dim: #94a3b8;
-      --accent: #3b82f6;
-      --accent-hover: #60a5fa;
-      --fs-sm: 0.875rem;
-      --fs-base: 1rem;
-      --fs-lg: 1.125rem;
-      --sp-xs: 0.25rem;
-      --sp-sm: 0.5rem;
-      --sp-md: 1rem;
-      --sp-lg: 1.5rem;
+      --fs-xs: 11px;
+      --fs-sm: 13px;
+      --fs-base: 14px;
+      --fs-md: 15px;
+      --fs-lg: 18px;
+      --fs-xl: 22px;
+      --sp-xs: 4px;
+      --sp-sm: 8px;
+      --sp-md: 12px;
+      --sp-lg: 20px;
+      --input-h: 32px;
+      --btn-h: 32px;
     }
 
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      margin: 0;
-      padding: 0;
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      font-size: var(--fs-base);
-      line-height: 1.5;
-    }
-
-    .container {
-      display: flex;
-      height: 100vh;
-      overflow: hidden;
-    }
-
-    .sidebar {
-      width: 320px;
-      border-right: 1px solid rgba(148, 163, 184, 0.2);
-      background: rgba(15, 23, 42, 0.5);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    .sidebar-header {
-      padding: var(--sp-lg);
-      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-      flex-shrink: 0;
-    }
-
-    .sidebar-title {
-      margin: 0 0 var(--sp-md) 0;
-      font-size: var(--fs-lg);
-      font-weight: 700;
-      color: var(--text);
-    }
-
-    .sidebar-controls {
-      display: flex;
-      flex-direction: column;
-      gap: var(--sp-sm);
-    }
-
-    .sidebar-control-row {
-      display: flex;
-      gap: var(--sp-sm);
-      align-items: center;
-    }
-
-    .sidebar-control-row label {
-      font-size: var(--fs-sm);
-      color: var(--text-dim);
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-
-    .sidebar-control-row select,
-    .sidebar-control-row input {
-      padding: var(--sp-sm) var(--sp-md);
-      background: rgba(30, 41, 59, 0.8);
-      border: 1px solid rgba(148, 163, 184, 0.25);
-      border-radius: 4px;
-      color: var(--text);
-      font-size: var(--fs-sm);
-      flex: 1;
-      font-family: inherit;
-    }
-
-    .sidebar-control-row select:focus,
-    .sidebar-control-row input:focus {
-      outline: none;
-      border-color: var(--accent);
-      background: rgba(30, 41, 59, 0.95);
-    }
-
-    .sidebar-content {
-      flex: 1;
-      overflow-y: auto;
-      padding: var(--sp-md) 0;
-    }
-
-    .topics-list {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-    }
-
-    .topics-list li {
-      margin: 0;
-      padding: 0;
-    }
-
-    .topic-item {
-      display: block;
-      padding: var(--sp-md) var(--sp-lg);
-      background: none;
-      border: none;
-      color: var(--text-dim);
-      font-size: var(--fs-sm);
-      text-align: left;
-      cursor: pointer;
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
       width: 100%;
-      transition: all 0.2s ease;
-      border-left: 3px solid transparent;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: var(--fs-base);
+      background: #0e1117;
+      color: #e2e8f0;
+      overflow: hidden;
     }
 
-    .topic-item:hover {
-      background: rgba(255, 255, 255, 0.05);
-      color: var(--text);
-      border-left-color: var(--accent);
+    #page-content {
+      height: calc(100vh - 52px);
+      overflow: hidden;
+      position: relative;
+      background:
+        radial-gradient(circle at top right, rgba(37, 99, 235, 0.12), transparent 28%),
+        radial-gradient(circle at bottom left, rgba(14, 165, 233, 0.08), transparent 22%),
+        #0e1117;
     }
 
-    .topic-item.active {
-      background: rgba(59, 130, 246, 0.1);
-      color: var(--accent);
-      border-left-color: var(--accent);
+    #help-backdrop {
+      display: none;
+      position: fixed;
+      inset: 52px 0 0 0;
+      z-index: 150;
+      background:
+        radial-gradient(circle at top right, rgba(37, 99, 235, 0.10), transparent 35%),
+        linear-gradient(180deg, rgba(2, 6, 23, 0.32), rgba(2, 6, 23, 0.66));
+      backdrop-filter: blur(3px);
     }
 
-    .topic-category-title {
-      padding: var(--sp-md) var(--sp-lg);
-      font-size: var(--fs-sm);
-      font-weight: 700;
-      color: var(--text-dim);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      background: rgba(0, 0, 0, 0.2);
-      margin-top: var(--sp-md);
+    #help-backdrop.visible { display: block; }
+
+    #help-ovl {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 3000;
+      width: min(900px, 95vw);
+      height: min(700px, 90vh);
+      min-width: 480px;
+      min-height: 300px;
+      background: #131b2b;
+      border: 1px solid #2d3748;
+      border-radius: 12px;
+      box-shadow: 0 20px 70px rgba(0, 0, 0, 0.9);
+      flex-direction: column;
+      overflow: hidden;
+      resize: both;
     }
 
-    .topic-category-title:first-child {
-      margin-top: 0;
+    #help-ovl.visible { display: flex; }
+
+    #help-ovl.is-maximized {
+      max-width: none;
+      max-height: none;
+      resize: none;
     }
 
-    .content {
+    #help-ovl.is-maximized #help-drag-handle {
+      cursor: default;
+    }
+
+    #help-drag-handle {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 48px;
+      height: 46px;
+      cursor: move;
+      z-index: 2;
+    }
+
+    #help-ovl > .ovl-panel {
       flex: 1;
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      position: relative;
     }
 
-    .content-header {
-      padding: var(--sp-lg);
-      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-      background: rgba(15, 23, 42, 0.5);
+    .ovl-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.85rem 1.1rem 0.85rem 1.25rem;
+      border-bottom: 1px solid #1e2736;
+      flex-shrink: 0;
+      background: #111827;
+    }
+
+    .ovl-header-title {
+      font-size: var(--fs-md);
+      font-weight: 700;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .ovl-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      position: relative;
+      z-index: 3;
+    }
+
+    .ovl-tool,
+    .ovl-close {
+      background: transparent;
+      border: 1px solid transparent;
+      color: #64748b;
+      font-size: var(--fs-md);
+      cursor: pointer;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border-radius: 4px;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.12s, background 0.12s;
+    }
+
+    .ovl-tool[aria-pressed="true"] {
+      color: #e2e8f0;
+      border-color: rgba(148, 163, 184, 0.2);
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .ovl-tool:hover,
+    .ovl-close:hover {
+      color: #e2e8f0;
+      border-color: rgba(148, 163, 184, 0.18);
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .lang-pill {
+      display: flex;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      overflow: hidden;
       flex-shrink: 0;
     }
 
-    .content-body {
+    .lang-pill button {
+      background: transparent;
+      border: none;
+      color: #64748b;
+      font-size: var(--fs-xs);
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      padding: 0.2rem 0.55rem;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+
+    .lang-pill button.active {
+      background: #1e3a5f;
+      color: #63b3ed;
+    }
+
+    .lang-pill button:hover:not(.active) {
+      background: rgba(255, 255, 255, 0.04);
+      color: #e2e8f0;
+    }
+
+    #help-body {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    #help-toc {
+      width: 230px;
+      min-width: 170px;
+      flex-shrink: 0;
+      border-right: 1px solid #1e2736;
+      overflow-y: auto;
+      padding: 0.5rem 0;
+      background: #0e1117;
+    }
+
+    #help-toc-filter {
+      width: calc(100% - 1.2rem);
+      margin: 0 0.6rem 0.4rem;
+      background: #1a202c;
+      color: #e2e8f0;
+      border: 1px solid #2d3748;
+      border-radius: 5px;
+      padding: 0.35rem 0.5rem;
+      font-size: var(--fs-sm);
+      outline: none;
+    }
+
+    #help-toc-filter:focus { border-color: #4a5568; }
+    #help-toc-filter::placeholder { color: #4a5568; }
+
+    .toc-item {
+      display: block;
+      padding: 0.42rem 0.9rem;
+      color: #94a3b8;
+      font-size: var(--fs-sm);
+      cursor: pointer;
+      border-left: 3px solid transparent;
+      transition: all 0.1s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .toc-item:hover {
+      background: #1a2030;
+      color: #e2e8f0;
+    }
+
+    .toc-item.active {
+      border-left-color: #63b3ed;
+      color: #63b3ed;
+      background: rgba(99, 179, 237, 0.07);
+      font-weight: 600;
+    }
+
+    #help-content {
       flex: 1;
       overflow-y: auto;
-      padding: var(--sp-lg);
+      padding: 1.5rem 1.8rem;
+      line-height: 1.7;
+      color: #cbd5e0;
+      font-size: var(--fs-base);
     }
 
-    .markdown-content {
-      max-width: 100%;
-      word-break: break-word;
+    #help-content h1 {
+      font-size: var(--fs-xl);
+      color: #e2e8f0;
+      margin: 0 0 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid #1e2736;
     }
 
-    .markdown-content h1,
-    .markdown-content h2,
-    .markdown-content h3,
-    .markdown-content h4,
-    .markdown-content h5,
-    .markdown-content h6 {
-      margin: var(--sp-lg) 0 var(--sp-md) 0;
-      color: var(--text);
-      font-weight: 700;
+    #help-content h2 {
+      font-size: var(--fs-lg);
+      color: #e2e8f0;
+      margin: 1.5rem 0 0.5rem;
     }
 
-    .markdown-content h1 {
-      font-size: 1.75rem;
-      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-      padding-bottom: var(--sp-md);
+    #help-content h3 {
+      font-size: var(--fs-md);
+      color: #cbd5e0;
+      margin: 1.1rem 0 0.35rem;
     }
 
-    .markdown-content h2 {
-      font-size: 1.5rem;
-    }
-
-    .markdown-content h3 {
-      font-size: 1.25rem;
-    }
-
-    .markdown-content p {
-      margin: var(--sp-md) 0;
-      line-height: 1.6;
-    }
-
-    .markdown-content a {
-      color: var(--accent);
-      text-decoration: none;
-    }
-
-    .markdown-content a:hover {
-      color: var(--accent-hover);
-      text-decoration: underline;
-    }
-
-    .markdown-content code {
-      background: rgba(30, 41, 59, 0.8);
-      padding: 2px 6px;
+    #help-content p { margin: 0.5rem 0; }
+    #help-content a { color: #63b3ed; text-decoration: none; }
+    #help-content a:hover { text-decoration: underline; }
+    #help-content strong { color: #e2e8f0; }
+    #help-content em { color: #94a3b8; font-style: italic; }
+    #help-content code {
+      background: #1a202c;
+      color: #f6ad55;
+      padding: 0.1em 0.35em;
       border-radius: 3px;
-      font-family: "Courier New", monospace;
-      font-size: 0.9em;
-      color: #e0e7ff;
+      font-size: var(--fs-xs);
+      font-family: 'Fira Code', 'Consolas', monospace;
     }
 
-    .markdown-content pre {
-      background: rgba(30, 41, 59, 0.95);
-      padding: var(--sp-md);
+    #help-content pre {
+      background: #0e1117;
+      border: 1px solid #2d3748;
       border-radius: 6px;
+      padding: 0.9rem 1rem;
       overflow-x: auto;
-      border: 1px solid rgba(148, 163, 184, 0.2);
-      margin: var(--sp-md) 0;
-      font-family: "Courier New", monospace;
-      font-size: 0.9em;
-      line-height: 1.4;
+      margin: 0.75rem 0;
     }
 
-    .markdown-content pre code {
+    #help-content pre code {
       background: none;
       padding: 0;
-      border-radius: 0;
-      color: #e0e7ff;
+      color: #a0aec0;
+      font-size: var(--fs-sm);
     }
 
-    .markdown-content ul,
-    .markdown-content ol {
-      margin: var(--sp-md) 0;
-      padding-left: 2em;
+    #help-content ul,
+    #help-content ol {
+      padding-left: 1.5rem;
+      margin: 0.5rem 0;
     }
 
-    .markdown-content li {
-      margin: var(--sp-sm) 0;
+    #help-content li { margin: 0.2rem 0; }
+
+    #help-content blockquote {
+      border-left: 3px solid #63b3ed;
+      margin: 0.75rem 0;
+      padding: 0.4rem 0.9rem;
+      background: rgba(99, 179, 237, 0.05);
+      border-radius: 0 5px 5px 0;
+      color: #94a3b8;
     }
 
-    .markdown-content blockquote {
-      border-left: 4px solid var(--accent);
-      padding-left: var(--sp-md);
-      margin: var(--sp-md) 0;
-      color: var(--text-dim);
-      font-style: italic;
-    }
-
-    .markdown-content table {
+    #help-content table {
       border-collapse: collapse;
       width: 100%;
-      margin: var(--sp-md) 0;
+      margin: 0.75rem 0;
     }
 
-    .markdown-content th,
-    .markdown-content td {
-      border: 1px solid rgba(148, 163, 184, 0.2);
-      padding: var(--sp-sm) var(--sp-md);
+    #help-content th,
+    #help-content td {
+      border: 1px solid #2d3748;
+      padding: 0.4rem 0.7rem;
+      text-align: left;
+      font-size: var(--fs-sm);
+      vertical-align: top;
+    }
+
+    #help-content th {
+      background: #1a202c;
+      color: #e2e8f0;
+      font-weight: 600;
+    }
+
+    #help-content hr {
+      border: none;
+      border-top: 1px solid #1e2736;
+      margin: 1rem 0;
+    }
+
+    #help-content img {
+      max-width: 100%;
+      border-radius: 6px;
+      margin: 0.5rem 0;
+    }
+
+    .help-loading {
+      color: #4a5568;
+      font-style: italic;
+      padding: 2rem;
+      text-align: center;
+    }
+
+    #help-search-wrap {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    #help-search {
+      background: #1a202c;
+      color: #e2e8f0;
+      border: 1px solid #2d3748;
+      border-radius: 5px;
+      padding: 0.28rem 0.5rem;
+      font-size: var(--fs-sm);
+      outline: none;
+      width: 170px;
+    }
+
+    #help-search:focus { border-color: #4a5568; }
+    #help-search::placeholder { color: #4a5568; }
+
+    .help-snav-btn {
+      background: #1a202c;
+      border: 1px solid #2d3748;
+      border-radius: 3px;
+      color: #94a3b8;
+      cursor: pointer;
+      font-size: var(--fs-xs);
+      padding: 2px 5px;
+      line-height: 1.4;
+      transition: color 0.1s, border-color 0.1s;
+    }
+
+    .help-snav-btn:hover {
+      color: #e2e8f0;
+      border-color: #4a5568;
+    }
+
+    #help-search-count {
+      font-size: var(--fs-xs);
+      color: #64748b;
+      white-space: nowrap;
+      min-width: 44px;
       text-align: left;
     }
 
-    .markdown-content th {
-      background: rgba(59, 130, 246, 0.1);
-      font-weight: 700;
-      color: var(--accent);
+    #help-content mark {
+      background: rgba(255, 200, 0, 0.2);
+      color: #fcd34d;
+      border-radius: 2px;
     }
 
-    .markdown-content tr:hover {
-      background: rgba(255, 255, 255, 0.03);
+    #help-content mark.current {
+      background: rgba(251, 146, 60, 0.45);
+      color: #fef08a;
+      outline: 1px solid #f59e0b;
     }
 
-    .empty-state {
+    #help-search-global-lbl {
       display: flex;
       align-items: center;
-      justify-content: center;
-      height: 100%;
-      color: var(--text-dim);
-      font-size: var(--fs-lg);
-      text-align: center;
-      padding: var(--sp-lg);
+      gap: 3px;
+      color: #94a3b8;
+      font-size: var(--fs-xs);
+      cursor: pointer;
+      white-space: nowrap;
+      user-select: none;
     }
 
-    .loading {
+    #help-search-global-lbl input[type="checkbox"] {
+      accent-color: #4da6ff;
+      cursor: pointer;
+      margin: 0;
+    }
+
+    .gs-results {
       display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-      color: var(--text-dim);
-      font-size: var(--fs-base);
+      flex-direction: column;
+      gap: 8px;
+      padding: 4px 0;
     }
 
-    @media (max-width: 768px) {
-      .sidebar {
+    .gs-item {
+      background: #1a202c;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      padding: 10px 14px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+
+    .gs-item:hover { border-color: #4a5568; }
+
+    .gs-topic {
+      color: #93c5fd;
+      font-weight: 600;
+      font-size: var(--fs-sm);
+      margin-bottom: 5px;
+    }
+
+    .gs-snip {
+      color: #94a3b8;
+      font-size: var(--fs-xs);
+      line-height: 1.55;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    @media (max-width: 720px) {
+      #help-ovl {
+        width: calc(100vw - 14px);
+        height: calc(100vh - 66px);
+        min-width: 0;
+        min-height: 0;
+        top: 59px;
+        left: 7px;
+        transform: none;
+        resize: none;
+      }
+      #help-body { flex-direction: column; }
+      #help-toc {
         width: 100%;
-        max-height: 40%;
+        min-width: 0;
+        max-height: 210px;
         border-right: none;
-        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+        border-bottom: 1px solid #1e2736;
       }
-
-      .container {
+      .ovl-header {
+        align-items: flex-start;
         flex-direction: column;
+        gap: 10px;
       }
-
-      .content {
-        max-height: 60%;
+      .ovl-header-actions {
+        flex-wrap: wrap;
+        width: 100%;
       }
+      #help-search { width: 140px; }
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <!-- Sidebar / TOC -->
-    <div class="sidebar">
-      <div class="sidebar-header">
-        <h2 class="sidebar-title">Help & Tutorials</h2>
-        <div class="sidebar-controls">
-          <div class="sidebar-control-row">
-            <label for="lang-select">Language:</label>
-            <select id="lang-select">
-              <option value="EN">English</option>
-              <option value="DE">Deutsch</option>
-            </select>
+  <nav id="topnav"></nav>
+
+  <div id="page-content" aria-hidden="true"></div>
+  <div id="help-backdrop"></div>
+
+  <div id="help-ovl">
+    <div class="ovl-panel">
+      <div id="help-drag-handle"></div>
+      <div class="ovl-header">
+        <div class="ovl-header-title">&#128218; Guide &amp; Help</div>
+        <div class="ovl-header-actions">
+          <div id="help-search-wrap">
+            <input id="help-search" type="text" placeholder="Search in topic..." autocomplete="off">
+            <button class="help-snav-btn" id="help-search-up" title="Previous match (Shift+Enter)">&#9650;</button>
+            <button class="help-snav-btn" id="help-search-dn" title="Next match (Enter)">&#9660;</button>
+            <span id="help-search-count"></span>
+            <label id="help-search-global-lbl" title="Search across all topics"><input type="checkbox" id="help-search-global"> All</label>
           </div>
-          <div class="sidebar-control-row">
-            <input type="text" id="filter-input" placeholder="Filter topics...">
+          <div style="width:1px;height:16px;background:#2d3748;flex-shrink:0;"></div>
+          <div class="lang-pill">
+            <button id="help-lang-en" class="active">EN</button>
+            <button id="help-lang-de">DE</button>
           </div>
+          <button class="ovl-tool" id="help-maximize" title="Fit to browser window" aria-pressed="false">⛶</button>
+          <button class="ovl-close" id="help-close">&#x2715;</button>
         </div>
       </div>
-      <div class="sidebar-content">
-        <ul class="topics-list" id="topics-list"></ul>
-      </div>
-    </div>
-
-    <!-- Content -->
-    <div class="content">
-      <div class="content-header">
-        <h1 style="margin: 0; font-size: 1.5rem;" id="content-title">Select a topic</h1>
-      </div>
-      <div class="content-body">
-        <div id="content-area" class="empty-state">Select a help topic from the list to begin</div>
+      <div id="help-body">
+        <div id="help-toc">
+          <input id="help-toc-filter" type="text" placeholder="Filter topics..." autocomplete="off">
+          <div id="help-toc-list"></div>
+        </div>
+        <div id="help-content"><div class="help-loading">Loading help topics...</div></div>
       </div>
     </div>
   </div>
 
   <script>
-    const TOKEN = new URLSearchParams(window.location.search).get('token') || '';
-    let allTopics = [];
-    let filteredTopics = [];
-    let currentLang = localStorage.getItem('help-lang') || 'EN';
-    let selectedFile = null;
+    var _query = new URLSearchParams(window.location.search);
+    var TOKEN = _query.get('token') || '%%TOKEN%%';
+    var API_BASE = '%%API_BASE%%';
+    var WS_BASE = '%%WS_BASE%%';
+    var ST_BASE = _query.get('st_base') || '%%ST_BASE%%';
+    var PBGUI_VERSION = '%%VERSION%%';
+    var PBGUI_SERIAL = '%%SERIAL%%';
 
-    // Utilities
-    function escapeHtml(text) {
-      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-      return String(text || '').replace(/[&<>"']/g, m => map[m]);
+    function hasInjectedPlaceholder(value) {
+      return typeof value === 'string' && value.indexOf('%%') !== -1;
     }
 
-    async function fetchTopics() {
-      try {
-        const res = await fetch(`/api/help/index?lang=${encodeURIComponent(currentLang)}&token=${encodeURIComponent(TOKEN)}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
-      } catch (err) {
-        console.error('Failed to fetch topics:', err);
-        return [];
+    function syncNavMeta() {
+      if (!window.PBGUI_NAV_CONFIG) return;
+      window.PBGUI_NAV_CONFIG.version = PBGUI_VERSION;
+      window.PBGUI_NAV_CONFIG.serial = PBGUI_SERIAL;
+    }
+
+    function syncAboutMeta() {
+      var aboutVer = document.getElementById('pbgui-about-ver');
+      if (aboutVer) {
+        aboutVer.textContent = 'PBGui ' + PBGUI_VERSION;
       }
-    }
 
-    async function fetchContent(file) {
-      try {
-        const res = await fetch(`/api/help/content?file=${encodeURIComponent(file)}&lang=${encodeURIComponent(currentLang)}&token=${encodeURIComponent(TOKEN)}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        return data.content || '';
-      } catch (err) {
-        console.error('Failed to fetch content:', err);
-        return '## Error loading content\n\nFailed to load this help topic.';
-      }
-    }
-
-    function renderMarkdown(md) {
-      try {
-        const html = marked.parse(md);
-        return DOMPurify.sanitize(html);
-      } catch (err) {
-        console.error('Failed to parse markdown:', err);
-        return '<p>Error parsing content</p>';
-      }
-    }
-
-    function updateTopicsList() {
-      const list = document.getElementById('topics-list');
-      list.innerHTML = '';
-
-      let lastCategory = null;
-      filteredTopics.forEach((topic, idx) => {
-        // Add category header if changed
-        if (topic.category !== lastCategory) {
-          const categoryDiv = document.createElement('li');
-          categoryDiv.className = 'topic-category-title';
-          categoryDiv.textContent = topic.category || 'Help';
-          list.appendChild(categoryDiv);
-          lastCategory = topic.category;
+      var aboutSerial = document.getElementById('pbgui-about-serial');
+      if (!PBGUI_SERIAL) {
+        if (aboutSerial && aboutSerial.parentNode) {
+          aboutSerial.parentNode.removeChild(aboutSerial);
         }
+        return;
+      }
 
-        // Add topic button
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'topic-item' + (topic.file === selectedFile ? ' active' : '');
-        btn.textContent = topic.title;
-        btn.onclick = () => selectTopic(topic.file);
-        list.appendChild(btn);
-      });
-
-      // Show empty state if no topics
-      if (filteredTopics.length === 0) {
-        const emptyLi = document.createElement('li');
-        emptyLi.style.padding = 'var(--sp-lg)';
-        emptyLi.style.color = 'var(--text-dim)';
-        emptyLi.style.textAlign = 'center';
-        emptyLi.textContent = 'No topics found';
-        list.appendChild(emptyLi);
+      if (!aboutSerial) {
+        var aboutTag = document.getElementById('pbgui-about-tag');
+        if (aboutTag && aboutTag.parentNode) {
+          aboutSerial = document.createElement('div');
+          aboutSerial.id = 'pbgui-about-serial';
+          aboutTag.parentNode.insertBefore(aboutSerial, aboutTag);
+        }
+      }
+      if (aboutSerial) {
+        aboutSerial.textContent = 'API Serial ' + PBGUI_SERIAL;
       }
     }
 
-    function applyFilter() {
-      const filterText = (document.getElementById('filter-input').value || '').trim().toLowerCase();
-      filteredTopics = allTopics.filter(t =>
-        !filterText || 
-        t.title.toLowerCase().includes(filterText) ||
-        t.category.toLowerCase().includes(filterText)
-      );
-      updateTopicsList();
+    async function ensurePageMeta() {
+      if (!hasInjectedPlaceholder(PBGUI_VERSION) && !hasInjectedPlaceholder(PBGUI_SERIAL)) return;
+      if (!TOKEN || hasInjectedPlaceholder(TOKEN)) return;
+
+      try {
+        var response = await fetch('/api/help/meta?token=' + encodeURIComponent(TOKEN), { cache: 'no-store' });
+        if (!response.ok) return;
+
+        var data = await response.json();
+        PBGUI_VERSION = String(data.version || '');
+        PBGUI_SERIAL = String(data.serial || '');
+        window.PBGUI_VERSION = PBGUI_VERSION;
+        window.PBGUI_SERIAL = PBGUI_SERIAL;
+        syncNavMeta();
+        syncAboutMeta();
+      } catch (error) {
+        console.warn('Failed to load Help page version metadata', error);
+      }
     }
 
-    async function selectTopic(file) {
-      selectedFile = file;
-      
-      // Find the topic to get the title
-      const topic = allTopics.find(t => t.file === file);
-      const title = topic ? topic.title : 'Help';
+    marked.setOptions({ gfm: true, breaks: true });
 
-      document.getElementById('content-title').textContent = title;
-      const contentArea = document.getElementById('content-area');
-      contentArea.innerHTML = '<div class="loading">Loading...</div>';
+    (function () {
+      var helpOvl = document.getElementById('help-ovl');
+      var helpBackdrop = document.getElementById('help-backdrop');
+      var helpContent = document.getElementById('help-content');
+      var helpTocList = document.getElementById('help-toc-list');
+      var helpFilter = document.getElementById('help-toc-filter');
+      var helpLangEN = document.getElementById('help-lang-en');
+      var helpLangDE = document.getElementById('help-lang-de');
+      var helpDragHandle = document.getElementById('help-drag-handle');
 
-      const md = await fetchContent(file);
-      const html = renderMarkdown(md);
-      contentArea.innerHTML = `<div class="markdown-content">${html}</div>`;
+      var helpLang = localStorage.getItem('help-lang') || 'EN';
+      var helpTopics = [];
+      var helpSel = 0;
+      var helpLoaded = false;
+      var topicCache = {};
 
-      // Update button active state
-      document.querySelectorAll('.topic-item').forEach(btn => {
-        btn.classList.remove('active');
+      var helpSearch = document.getElementById('help-search');
+      var helpSearchUp = document.getElementById('help-search-up');
+      var helpSearchDn = document.getElementById('help-search-dn');
+      var helpSearchCount = document.getElementById('help-search-count');
+      var helpSearchGlobal = document.getElementById('help-search-global');
+      var searchMarks = [];
+      var searchIndex = -1;
+      var searchTimer = null;
+      var rawHtml = null;
+      var globalMode = false;
+
+      function setLanguageButtons() {
+        helpLangEN.classList.toggle('active', helpLang === 'EN');
+        helpLangDE.classList.toggle('active', helpLang === 'DE');
+      }
+
+      function renderMarkdown(md) {
+        return DOMPurify.sanitize(marked.parse(String(md || '')));
+      }
+
+      function stripHtml(html) {
+        return String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+
+      function escapeRegExp(value) {
+        return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      }
+
+      function clearSearch() {
+        if (rawHtml !== null) helpContent.innerHTML = rawHtml;
+        searchMarks = [];
+        searchIndex = -1;
+        helpSearchCount.textContent = '';
+      }
+
+      function updateSearchCount() {
+        helpSearchCount.textContent = searchMarks.length
+          ? (searchIndex + 1) + '/' + searchMarks.length
+          : (helpSearch.value.trim() ? '0 found' : '');
+      }
+
+      function gotoMark(index) {
+        if (!searchMarks.length) return;
+        if (searchIndex >= 0 && searchIndex < searchMarks.length) {
+          searchMarks[searchIndex].classList.remove('current');
+        }
+        searchIndex = ((index % searchMarks.length) + searchMarks.length) % searchMarks.length;
+        searchMarks[searchIndex].classList.add('current');
+        searchMarks[searchIndex].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        updateSearchCount();
+      }
+
+      function applySearch(term) {
+        if (rawHtml === null) return;
+        if (!term) {
+          clearSearch();
+          return;
+        }
+        var expr;
+        try {
+          expr = new RegExp('(' + escapeRegExp(term) + ')', 'gi');
+        } catch (error) {
+          return;
+        }
+        helpContent.innerHTML = rawHtml.replace(/(<[^>]+>)|([^<]+)/g, function (_, tag, text) {
+          if (tag) return tag;
+          return text.replace(expr, function (match) {
+            return '<mark>' + match + '</mark>';
+          });
+        });
+        searchMarks = Array.from(helpContent.querySelectorAll('mark'));
+        updateSearchCount();
+        if (searchMarks.length) gotoMark(0);
+      }
+
+      function ensureTopicCached(index, callback) {
+        if (topicCache[index] !== undefined) {
+          callback(topicCache[index]);
+          return;
+        }
+        var topic = helpTopics[index];
+        if (!topic) {
+          callback('');
+          return;
+        }
+        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+          .then(function (response) {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.json();
+          })
+          .then(function (data) {
+            topicCache[index] = renderMarkdown(data.content || '');
+            callback(topicCache[index]);
+          })
+          .catch(function () {
+            topicCache[index] = '';
+            callback('');
+          });
+      }
+
+      function renderGlobalResults(term, results) {
+        var expr;
+        try {
+          expr = new RegExp('(' + escapeRegExp(term) + ')', 'gi');
+        } catch (error) {
+          return;
+        }
+        if (!results.length) {
+          helpContent.innerHTML = '<p style="color:#64748b;padding:8px 0;">No results found.</p>';
+          helpSearchCount.textContent = '0 found';
+          return;
+        }
+        helpSearchCount.textContent = results.length + (results.length === 1 ? ' topic' : ' topics');
+        var html = '<div class="gs-results">';
+        results.forEach(function (result) {
+          html += '<div class="gs-item" data-idx="' + result.idx + '">';
+          html += '<div class="gs-topic">' + result.title + '</div>';
+          result.snippets.forEach(function (snippet) {
+            html += '<div class="gs-snip">...' + snippet.replace(expr, '<mark>$1</mark>') + '...</div>';
+          });
+          html += '</div>';
+        });
+        html += '</div>';
+        helpContent.innerHTML = html;
+        helpContent.querySelectorAll('.gs-item').forEach(function (item) {
+          item.addEventListener('click', function () {
+            var idx = parseInt(item.getAttribute('data-idx'), 10);
+            helpSearchGlobal.checked = false;
+            globalMode = false;
+            helpSearch.placeholder = 'Search in topic...';
+            loadTopic(idx);
+          });
+        });
+      }
+
+      function showGlobalResults(term) {
+        if (!term) {
+          helpContent.innerHTML = '<p style="color:#64748b;padding:8px 0;">Type a search term to find across all topics.</p>';
+          helpSearchCount.textContent = '';
+          return;
+        }
+        var expr;
+        try {
+          expr = new RegExp(escapeRegExp(term), 'gi');
+        } catch (error) {
+          return;
+        }
+        helpContent.innerHTML = '<div class="help-loading">Searching...</div>';
+        var pending = helpTopics.length;
+        var results = [];
+        if (!pending) {
+          helpContent.innerHTML = '<p style="color:#64748b;padding:8px 0;">No results found.</p>';
+          return;
+        }
+        helpTopics.forEach(function (topic, index) {
+          ensureTopicCached(index, function (html) {
+            var text = stripHtml(html);
+            var matches = [];
+            var match;
+            expr.lastIndex = 0;
+            while ((match = expr.exec(text)) !== null) {
+              matches.push(match.index);
+              if (matches.length >= 3) break;
+            }
+            if (matches.length) {
+              results.push({
+                idx: index,
+                title: topic.title,
+                snippets: matches.map(function (position) {
+                  return text.slice(Math.max(0, position - 55), Math.min(text.length, position + 80));
+                })
+              });
+            }
+            pending -= 1;
+            if (!pending) renderGlobalResults(term, results);
+          });
+        });
+      }
+
+      function renderToc() {
+        var filter = helpFilter.value.trim().toLowerCase();
+        helpTocList.innerHTML = '';
+        helpTopics.forEach(function (topic, index) {
+          if (filter && topic.title.toLowerCase().indexOf(filter) === -1) return;
+          var item = document.createElement('div');
+          item.className = 'toc-item' + (index === helpSel ? ' active' : '');
+          item.textContent = topic.title;
+          item.addEventListener('click', function () {
+            loadTopic(index);
+          });
+          helpTocList.appendChild(item);
+        });
+      }
+
+      function loadTopic(index) {
+        helpSel = index;
+        renderToc();
+        var topic = helpTopics[index];
+        if (!topic) return;
+        rawHtml = null;
+        searchMarks = [];
+        searchIndex = -1;
+        helpSearchCount.textContent = '';
+        helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
+        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+          .then(function (response) {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.json();
+          })
+          .then(function (data) {
+            rawHtml = renderMarkdown(data.content || '');
+            topicCache[index] = rawHtml;
+            helpContent.innerHTML = rawHtml;
+            helpContent.scrollTop = 0;
+            if (helpSearch.value.trim() && !globalMode) applySearch(helpSearch.value.trim());
+          })
+          .catch(function () {
+            helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>';
+          });
+      }
+
+      function loadHelpIndex(keyword) {
+        helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
+        fetch('/api/help/index?lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+          .then(function (response) {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.json();
+          })
+          .then(function (data) {
+            helpTopics = data || [];
+            renderToc();
+            if (!helpTopics.length) {
+              helpContent.innerHTML = '<div class="help-loading">No help topics found.</div>';
+              return;
+            }
+            var startIndex = 0;
+            if (keyword) {
+              var kw = String(keyword).toLowerCase();
+              for (var i = 0; i < helpTopics.length; i += 1) {
+                var file = String(helpTopics[i].file || '').toLowerCase();
+                var title = String(helpTopics[i].title || '').toLowerCase();
+                if (title.indexOf(kw) !== -1 || file.indexOf(kw) !== -1) {
+                  startIndex = i;
+                  break;
+                }
+              }
+            }
+            loadTopic(startIndex);
+            helpLoaded = true;
+          })
+          .catch(function () {
+            helpTocList.innerHTML = '<div class="help-loading">Failed to load topics.</div>';
+            helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>';
+          });
+      }
+
+      function setOverlayVisible(visible) {
+        helpOvl.classList.toggle('visible', visible);
+        helpBackdrop.classList.toggle('visible', visible);
+      }
+
+      function openHelp(keyword) {
+        setOverlayVisible(true);
+        if (!helpLoaded) {
+          loadHelpIndex(keyword || 'overview');
+        } else if (keyword) {
+          loadHelpIndex(keyword);
+        }
+      }
+
+      helpSearch.addEventListener('input', function () {
+        if (searchTimer) clearTimeout(searchTimer);
+        searchTimer = setTimeout(function () {
+          var term = helpSearch.value.trim();
+          if (globalMode) showGlobalResults(term);
+          else applySearch(term);
+        }, 260);
       });
-      document.querySelectorAll('.topic-item').forEach(btn => {
-        if (btn.textContent && btn.onclick && btn.dataset.file === file) {
-          btn.classList.add('active');
+
+      helpSearch.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' && !globalMode) {
+          event.preventDefault();
+          gotoMark(searchIndex + (event.shiftKey ? -1 : 1));
+        }
+        if (event.key === 'Escape') {
+          helpSearch.value = '';
+          if (globalMode) showGlobalResults('');
+          else clearSearch();
         }
       });
-      
-      // Better active state tracking
-      document.querySelectorAll('.topic-item').forEach((btn, idx) => {
-        if (filteredTopics[idx] && filteredTopics[idx].file === file) {
-          btn.classList.add('active');
+
+      helpSearchUp.addEventListener('click', function () { gotoMark(searchIndex - 1); });
+      helpSearchDn.addEventListener('click', function () { gotoMark(searchIndex + 1); });
+
+      helpSearchGlobal.addEventListener('change', function () {
+        globalMode = helpSearchGlobal.checked;
+        helpSearch.placeholder = globalMode ? 'Search all topics...' : 'Search in topic...';
+        var term = helpSearch.value.trim();
+        if (globalMode) {
+          showGlobalResults(term);
         } else {
-          btn.classList.remove('active');
+          if (rawHtml !== null) {
+            helpContent.innerHTML = rawHtml;
+            searchMarks = [];
+            searchIndex = -1;
+            helpSearchCount.textContent = '';
+          }
+          if (term) applySearch(term);
         }
       });
 
-      // Scroll to top of content
-      contentArea.scrollTop = 0;
-    }
+      helpFilter.addEventListener('input', renderToc);
 
-    async function changeLang(newLang) {
-      currentLang = newLang;
-      localStorage.setItem('help-lang', newLang);
-      selectedFile = null;
-      document.getElementById('content-title').textContent = 'Select a topic';
-      document.getElementById('content-area').innerHTML = '<div class="empty-state">Select a help topic from the list to begin</div>';
-      
-      await loadTopics();
-    }
+      helpLangEN.addEventListener('click', function () {
+        if (helpLang === 'EN') return;
+        helpLang = 'EN';
+        localStorage.setItem('help-lang', helpLang);
+        topicCache = {};
+        setLanguageButtons();
+        helpSel = 0;
+        loadHelpIndex('overview');
+      });
 
-    async function loadTopics() {
-      const contentArea = document.getElementById('content-area');
-      contentArea.innerHTML = '<div class="loading">Loading help topics...</div>';
+      helpLangDE.addEventListener('click', function () {
+        if (helpLang === 'DE') return;
+        helpLang = 'DE';
+        localStorage.setItem('help-lang', helpLang);
+        topicCache = {};
+        setLanguageButtons();
+        helpSel = 0;
+        loadHelpIndex('overview');
+      });
 
-      allTopics = await fetchTopics();
-      applyFilter();
+      document.getElementById('help-close').addEventListener('click', function () {
+        setOverlayVisible(false);
+      });
 
-      contentArea.innerHTML = '<div class="empty-state">Select a help topic from the list to begin</div>';
-    }
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') setOverlayVisible(false);
+      });
 
-    // Event listeners
-    document.getElementById('lang-select').addEventListener('change', (e) => {
-      changeLang(e.target.value);
-    });
+      (function () {
+        var startX;
+        var startY;
+        var boxLeft;
+        var boxTop;
 
-    document.getElementById('filter-input').addEventListener('input', applyFilter);
+        helpDragHandle.addEventListener('mousedown', function (event) {
+          if (window.innerWidth <= 720 || helpOvl.classList.contains('is-maximized')) return;
+          event.preventDefault();
+          var rect = helpOvl.getBoundingClientRect();
+          helpOvl.style.transform = 'none';
+          helpOvl.style.left = rect.left + 'px';
+          helpOvl.style.top = rect.top + 'px';
+          startX = event.clientX;
+          startY = event.clientY;
+          boxLeft = rect.left;
+          boxTop = rect.top;
 
-    // Initialize
-    document.getElementById('lang-select').value = currentLang;
-    loadTopics();
+          function onMove(moveEvent) {
+            helpOvl.style.left = (boxLeft + moveEvent.clientX - startX) + 'px';
+            helpOvl.style.top = (boxTop + moveEvent.clientY - startY) + 'px';
+          }
+
+          function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          }
+
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+      }());
+
+      window.openHelpOverlay = openHelp;
+      window.PBGUI_HELP_OPENER = function () { openHelp(); };
+
+      setLanguageButtons();
+      ensurePageMeta();
+      openHelp();
+    }());
   </script>
+
+  <script>
+    window.PBGUI_NAV_CONFIG = {
+      subtitle: 'HELP',
+      current: 'help',
+      token: TOKEN,
+      stBase: ST_BASE,
+      apiBase: API_BASE,
+      version: PBGUI_VERSION,
+      serial: PBGUI_SERIAL
+    };
+  </script>
+  <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

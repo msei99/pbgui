@@ -1406,7 +1406,7 @@ html, body {
       });
     }());
 
-    /* Expose opener for Guide button override */
+    /* Expose opener for the shared Guide button handler */
     window._openDashboardHelp = function () {
       helpOvl.classList.add('visible');
       if (helpTopics.length === 0) {
@@ -1423,6 +1423,7 @@ html, body {
         loadTopic(0);
       }
     };
+    window.PBGUI_HELP_OPENER = window._openDashboardHelp;
   }());
 
 }());
@@ -1446,28 +1447,5 @@ html, body {
   };
 </script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
-<!-- Guide button override: DOMContentLoaded fires AFTER pbgui_nav.js DOMContentLoaded
-     (listeners fire in registration order), so the button exists and nav handler is set when ours runs -->\n<script>
-  document.addEventListener('DOMContentLoaded', function () {
-    var btn = document.getElementById('pbgui-guide-btn');
-    if (btn) {
-      var fresh = btn.cloneNode(true);
-      btn.parentNode.replaceChild(fresh, btn);
-      fresh.addEventListener('click', function () {
-        var helpOvl = document.getElementById('help-ovl');
-        if (!helpOvl) return;
-        helpOvl.classList.add('visible');
-        /* fire loadHelpIndex if topics not yet loaded — reuse the close btn's sibling scope
-           by dispatching a synthetic click on a hidden trigger, OR call exposed function */
-        if (typeof window._openDashboardHelp === 'function') {
-          window._openDashboardHelp();
-        } else {
-          /* fallback: just show overlay, help IIFE will load on first open */
-          helpOvl.dispatchEvent(new CustomEvent('open-help'));
-        }
-      });
-    }
-  });
-</script>
 </body>
 </html>

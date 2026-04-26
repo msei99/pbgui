@@ -379,6 +379,19 @@ def build_navigation():
                     unsafe_allow_javascript=True)
             st.stop()
 
+    # 1f. SERVER-SIDE interception for Help.
+    if navi.url_path == "help":
+        if not is_authenticted() or is_session_state_not_initialized():
+            st.switch_page(paths["SYSTEM_LOGIN"])
+            st.stop()
+        if _fa_ok and "api_token" in st.session_state:
+            _url = (f"http://{_bhost}:{_fa_port}/app/help.html"
+                    f"?token={st.session_state['api_token']}"
+                    f"&st_base=http://{_bhost}:{_sport}")
+            st.html(f'<script>window.location.replace("{_url}");</script>',
+                    unsafe_allow_javascript=True)
+            st.stop()
+
     # 2. CLIENT-SIDE history.pushState patch — injected into every other page so
     #    clicking a nav-bar link for a FastAPI-only page is intercepted
     #    synchronously in the browser — before Streamlit re-renders — giving a
@@ -396,11 +409,14 @@ def build_navigation():
                     f"?token={_token}&st_base=http://{_bhost}:{_sport}")
         _bc_url = (f"http://{_bhost}:{_fa_port}/api/balance-calc/main_page"
                    f"?token={_token}&st_base=http://{_bhost}:{_sport}")
+        _help_url = (f"http://{_bhost}:{_fa_port}/app/help.html"
+                     f"?token={_token}&st_base=http://{_bhost}:{_sport}")
         _fa_pages = (
             f'"system_logging":"{_log_url}",'
             f'"system_vps_monitor":"{_vps_url}",'
             f'"system_services":"{_svc_url}",'
-            f'"v7_balance_calc":"{_bc_url}"'
+            f'"v7_balance_calc":"{_bc_url}",'
+            f'"help":"{_help_url}"'
         )
         # NOTE: no < or > inside this script — DOMPurify will not strip it.
         # _pbguiOk guard ensures pushState is only patched once per page load;

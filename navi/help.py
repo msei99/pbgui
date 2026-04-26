@@ -1,30 +1,35 @@
-"""Help & Tutorials redirect page.
+"""Help & Tutorials redirect fallback.
 
-This is a thin redirect to the FastAPI-hosted Help page.
-The actual Help page is now served at /app/help.html via FastAPI.
+The normal navigation path is intercepted in ``build_navigation`` and routed
+directly to the FastAPI Help page. This file remains as a fallback if the
+interception cannot run.
 """
+
+from urllib.parse import urlencode
 
 import streamlit as st
 
+
 st.set_page_config(page_title="Help & Tutorials", layout="centered")
 
-# Redirect to FastAPI Help page
-help_url = "http://localhost:8501/app/help.html"
+host = "127.0.0.1:8501"
+try:
+    host = st.context.headers.get("Host", host) or host
+except Exception:
+    pass
 
-st.info("📚 Help & Tutorials are now hosted on the FastAPI backend for better performance.")
+query = {}
+if st.session_state.get("api_token"):
+    query["token"] = st.session_state["api_token"]
+query["st_base"] = f"http://{host}"
 
-col1, col2 = st.columns([1, 1], vertical_alignment="center")
-with col1:
-    if st.button("🔗 Open Help Page", use_container_width=True):
-        st.switch_page("page:" + help_url)
+help_url = f"http://{host}/app/help.html"
+if query:
+    help_url = f"{help_url}?{urlencode(query)}"
 
-with col2:
-    st.write("")  # Placeholder for alignment
-
+st.info("Help & Tutorials now open in the FastAPI UI shell.")
 st.markdown(
-    f"""
-    <meta http-equiv="refresh" content="3;url={help_url}" />
-    If the button doesn't work, you will be redirected automatically in 3 seconds...
-    """,
+    f'<script>window.location.replace({help_url!r});</script>',
     unsafe_allow_html=True,
 )
+st.markdown(f"If you are not redirected automatically, open [Help & Tutorials]({help_url}).")

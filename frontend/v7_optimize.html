@@ -10863,6 +10863,7 @@ init().catch(handleError);
     }
     loadTopic(0);
   };
+  window.PBGUI_HELP_OPENER = window._openOptimizeHelp;
 }());
 
 window.PBGUI_NAV_CONFIG = {
@@ -10876,17 +10877,5 @@ window.PBGUI_NAV_CONFIG = {
 };
 </script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-  var btn = document.getElementById('pbgui-guide-btn');
-  if (btn) {
-    var fresh = btn.cloneNode(true);
-    btn.parentNode.replaceChild(fresh, btn);
-    fresh.addEventListener('click', function () {
-      if (typeof window._openOptimizeHelp === 'function') window._openOptimizeHelp();
-    });
-  }
-});
-</script>
 </body>
 </html>

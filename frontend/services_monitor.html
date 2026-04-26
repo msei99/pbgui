@@ -641,7 +641,7 @@ window.PBGUI_NAV_CONFIG = {
 };
 </script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
-<!-- Guide button override — must run AFTER pbgui_nav.js DOMContentLoaded handler -->
+<!-- Shared nav bar + page-local Help opener -->
 <script>
 /* ── Help overlay ── */
 (function () {
@@ -844,17 +844,7 @@ window.PBGUI_NAV_CONFIG = {
     }
     loadTopic(0);
   };
-
-  document.addEventListener('DOMContentLoaded', function() {
-    var btn = document.getElementById('pbgui-guide-btn');
-    if (btn) {
-      var fresh = btn.cloneNode(true);
-      btn.parentNode.replaceChild(fresh, btn);
-      fresh.addEventListener('click', function() {
-        if (typeof window._openServicesHelp === 'function') window._openServicesHelp();
-      });
-    }
-  });
+  window.PBGUI_HELP_OPENER = window._openServicesHelp;
 }());
 </script>
 <!-- Main logic -->

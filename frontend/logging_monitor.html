@@ -758,10 +758,7 @@ loadRotationData();
     }
     loadTopic(0);
   };
-  document.addEventListener('DOMContentLoaded', function() {
-    var btn = document.getElementById('pbgui-guide-btn');
-    if (btn) { var fresh = btn.cloneNode(true); btn.parentNode.replaceChild(fresh, btn); fresh.addEventListener('click', function() { if (typeof window._openLoggingHelp === 'function') window._openLoggingHelp(); }); }
-  });
+  window.PBGUI_HELP_OPENER = window._openLoggingHelp;
 }());
 </script>
 </body>
