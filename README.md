@@ -324,7 +324,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.75 (unreleased)
-- Migrated: The Help & Tutorials page is now a pure FastAPI/HTML page (`/app/help.html`) instead of being served through Streamlit; all documentation features (language selection, topic filtering, markdown rendering) are now handled via JavaScript frontend with REST API calls, eliminating the Streamlit dependency for this page.
+- Migrated: The Help & Tutorials page is now a pure FastAPI/HTML page (`/app/help.html`) instead of being served through Streamlit; all documentation features (language selection, topic filtering, markdown rendering) are now handled via JavaScript frontend with REST API calls, eliminating the Streamlit dependency for this page. A lightweight redirect page in Streamlit (`navi/help.py`) links to the new FastAPI Help page from the Information menu.
 - Added: PBv7 Backtest and Optimize now show a clear button (×) for the `ohlcv_source_dir` field so users can quickly reset the path without needing to manually select and delete text.
 - Fixed: PBv7 OHLCV preload now downloads from the same warmup-adjusted effective start that the readiness check validates, so a finished preload no longer leaves the warmup days missing and immediately shows `would fetch on start` again after refresh.
 - Fixed: PBv7 OHLCV preload and readiness now stop treating pre-inception coins as fetchable ranges; coins whose market start is after the requested window are classified as too young and are pruned from preload jobs instead of triggering pointless remote fetch attempts.
