@@ -51,7 +51,7 @@ from api.backtest_v7 import startup as bt7_startup, shutdown as bt7_shutdown
 from api.optimize_v7 import router as optimize_v7_router
 from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
 from logging_helpers import human_log as _log
-from pbgui_purefunc import PBGDIR, load_ini, save_ini, PBGUI_VERSION
+from pbgui_purefunc import PBGDIR, load_ini, save_ini, PBGUI_SERIAL, PBGUI_VERSION
 
 SERVICE = "PBApiServer"
 
@@ -821,6 +821,16 @@ async def help_index(lang: str = "EN", token: str = ""):
                 pass
             result.append({"title": title, "file": p.name, "category": category})
     return result
+
+
+@app.get("/api/help/meta")
+async def help_meta(token: str = ""):
+    """Return PBGui version metadata for the shared Help page."""
+    from api.auth import validate_token
+    if not validate_token(token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    return {"version": PBGUI_VERSION, "serial": PBGUI_SERIAL}
 
 
 @app.get("/api/help/content")

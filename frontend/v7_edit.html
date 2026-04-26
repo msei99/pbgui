@@ -3026,11 +3026,6 @@ document.addEventListener('DOMContentLoaded', function () {
     })(inp.id);
   });
 
-  var btn = document.getElementById('pbgui-guide-btn');
-  if (btn) {
-    var fresh = btn.cloneNode(true);
-    btn.parentNode.replaceChild(fresh, btn);
-    fresh.addEventListener('click', function () { openHelp('pbv7 run'); });
-  }
+  window.PBGUI_HELP_OPENER = function () { openHelp('pbv7 run'); };
 });
 </script>

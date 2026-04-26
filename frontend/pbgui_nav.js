@@ -13,7 +13,8 @@
  * The 'current' value in PBGUI_NAV_CONFIG must match a 'page' key in NAV_GROUPS below.
  * The active nav group is highlighted automatically.
  *
- * Guide button: navigates to the Streamlit Help page.
+ * Guide button: opens a page-local help overlay when the page exposes
+ * `window.PBGUI_HELP_OPENER`; otherwise it navigates to the shared Help page.
  * About button: opens an in-page modal with version info and links.
  */
 (function () {
@@ -94,6 +95,9 @@
     'border-radius:0 0 8px 8px;box-shadow:0 8px 24px rgba(0,0,0,.5);',
     'flex-direction:column;padding:0.3rem 0;z-index:300;}',
     '.nav-group.open .nav-dropdown{display:flex;}',
+    'body.pbgui-help-open #topnav{z-index:3200;}',
+    'body.pbgui-help-open #topnav .nav-group.open{z-index:3300;}',
+    'body.pbgui-help-open #topnav .nav-dropdown{z-index:3301;}',
 
     '.nav-item{display:flex;align-items:center;gap:0.55rem;padding:0.42rem 1rem;',
     'color:#94a3b8;font-size:var(--fs-base);text-decoration:none;cursor:pointer;',
@@ -175,6 +179,15 @@
     '.pbgui-about-link.readme:hover{background:rgba(72,187,120,.15);border-color:#48bb78;}',
     '#pbgui-about-footer{padding:0.75rem 2rem;border-top:1px solid #1e2736;',
     'text-align:center;font-size:var(--fs-xs);color:#4a5568;background:#0e1117;}',
+
+    /* shared help overlay chrome */
+    '#help-ovl.is-maximized{max-width:none;max-height:none;resize:none;}',
+    '#help-ovl.is-maximized #help-drag-handle{cursor:default;pointer-events:none;}',
+    '.ovl-tool{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;',
+    'background:transparent;border:1px solid transparent;border-radius:4px;color:#64748b;',
+    'cursor:pointer;font-size:var(--fs-md);line-height:1;padding:0;transition:color .12s,background .12s,border-color .12s;}',
+    '.ovl-tool[aria-pressed="true"]{color:#e2e8f0;border-color:rgba(148,163,184,.2);background:rgba(255,255,255,.06);}',
+    '.ovl-tool:hover{color:#e2e8f0;border-color:rgba(148,163,184,.18);background:rgba(255,255,255,.06);}',
 
     /* page content wrapper — used when page wraps its content in #page-content */
     '#page-content{height:calc(100vh - 52px);overflow-y:auto;padding:20px;}'
@@ -445,6 +458,108 @@
     'v7_balance_calc':    '/api/balance-calc/main_page'
   };
 
+  function syncHelpOverlayState(helpOvl) {
+    document.body.classList.toggle('pbgui-help-open', !!(helpOvl && helpOvl.classList.contains('visible')));
+  }
+
+  function ensureSharedHelpOverlay() {
+    var helpOvl = document.getElementById('help-ovl');
+    if (!helpOvl) {
+      document.body.classList.remove('pbgui-help-open');
+      return null;
+    }
+
+    var actions = helpOvl.querySelector('.ovl-header-actions');
+    var closeBtn = document.getElementById('help-close') || helpOvl.querySelector('.ovl-close');
+    var maxBtn = document.getElementById('help-maximize') || helpOvl.querySelector('.ovl-tool[data-role="maximize"]');
+
+    if (actions && !maxBtn) {
+      maxBtn = document.createElement('button');
+      maxBtn.type = 'button';
+      maxBtn.id = 'help-maximize';
+      maxBtn.className = 'ovl-tool';
+      maxBtn.setAttribute('data-role', 'maximize');
+      maxBtn.setAttribute('aria-pressed', 'false');
+      maxBtn.setAttribute('title', 'Fit to browser window');
+      maxBtn.textContent = '⛶';
+      if (closeBtn && closeBtn.parentNode === actions) actions.insertBefore(maxBtn, closeBtn);
+      else actions.appendChild(maxBtn);
+    }
+
+    function syncMaximizeButton() {
+      if (!maxBtn) return;
+      var isMaximized = helpOvl.classList.contains('is-maximized');
+      maxBtn.setAttribute('aria-pressed', isMaximized ? 'true' : 'false');
+      maxBtn.setAttribute('title', isMaximized ? 'Restore window size' : 'Fit to browser window');
+      maxBtn.textContent = isMaximized ? '❐' : '⛶';
+    }
+
+    function setMaximized(nextValue) {
+      var shouldMaximize = !!nextValue;
+      var isMaximized = helpOvl.classList.contains('is-maximized');
+      if (shouldMaximize === isMaximized) {
+        syncMaximizeButton();
+        return;
+      }
+      if (shouldMaximize) {
+        helpOvl._pbguiHelpRestoreBounds = {
+          left: helpOvl.style.left || '',
+          top: helpOvl.style.top || '',
+          right: helpOvl.style.right || '',
+          bottom: helpOvl.style.bottom || '',
+          width: helpOvl.style.width || '',
+          height: helpOvl.style.height || '',
+          transform: helpOvl.style.transform || ''
+        };
+        helpOvl.classList.add('is-maximized');
+        if (window.innerWidth <= 720) {
+          helpOvl.style.left = '7px';
+          helpOvl.style.top = '59px';
+          helpOvl.style.right = '7px';
+          helpOvl.style.bottom = '7px';
+        } else {
+          helpOvl.style.left = '12px';
+          helpOvl.style.top = '64px';
+          helpOvl.style.right = '12px';
+          helpOvl.style.bottom = '12px';
+        }
+        helpOvl.style.width = 'auto';
+        helpOvl.style.height = 'auto';
+        helpOvl.style.transform = 'none';
+      } else {
+        helpOvl.classList.remove('is-maximized');
+        var saved = helpOvl._pbguiHelpRestoreBounds || {};
+        helpOvl.style.left = saved.left || '';
+        helpOvl.style.top = saved.top || '';
+        helpOvl.style.right = saved.right || '';
+        helpOvl.style.bottom = saved.bottom || '';
+        helpOvl.style.width = saved.width || '';
+        helpOvl.style.height = saved.height || '';
+        helpOvl.style.transform = saved.transform || '';
+      }
+      syncMaximizeButton();
+    }
+
+    if (maxBtn && !maxBtn.dataset.pbguiHelpMaxBound) {
+      maxBtn.dataset.pbguiHelpMaxBound = '1';
+      maxBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        setMaximized(!helpOvl.classList.contains('is-maximized'));
+      });
+    }
+
+    if (!helpOvl.dataset.pbguiHelpStateObserved) {
+      helpOvl.dataset.pbguiHelpStateObserved = '1';
+      new MutationObserver(function () {
+        syncHelpOverlayState(helpOvl);
+      }).observe(helpOvl, { attributes: true, attributeFilter: ['class'] });
+    }
+
+    syncMaximizeButton();
+    syncHelpOverlayState(helpOvl);
+    return helpOvl;
+  }
+
   /* ════════════════════════════════════
      EVENT HANDLERS
      ════════════════════════════════════ */
@@ -516,9 +631,20 @@
     var logo = document.getElementById('nav-logo');
     if (logo) logo.addEventListener('click', function (e) { e.preventDefault(); navTo('/'); });
 
-    /* Guide button → navigate to Streamlit Help page */
+    ensureSharedHelpOverlay();
+
+    /* Guide button → open page-local help when available, else navigate to Help page */
     var guideBtn = document.getElementById('pbgui-guide-btn');
-    if (guideBtn) guideBtn.addEventListener('click', function () { navTo('help'); });
+    if (guideBtn) guideBtn.addEventListener('click', function () {
+      var opener = window.PBGUI_HELP_OPENER;
+      if (typeof opener === 'function') {
+        ensureSharedHelpOverlay();
+        opener();
+        ensureSharedHelpOverlay();
+        return;
+      }
+      navTo('help');
+    });
 
     /* Notify button → open inline floating log panel */
     var notifyBtn = document.getElementById('pbgui-notify-btn');

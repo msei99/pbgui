@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.74
+# v1.75
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -323,19 +323,13 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
-## v1.75 (unreleased)
-- Migrated: The Help & Tutorials page is now a pure FastAPI/HTML page (`/app/help.html`) instead of being served through Streamlit; all documentation features (language selection, topic filtering, markdown rendering) are now handled via JavaScript frontend with REST API calls, eliminating the Streamlit dependency for this page. A lightweight redirect page in Streamlit (`navi/help.py`) links to the new FastAPI Help page from the Information menu.
+## v1.75 (26-04-2026)
+- Added: Help & Tutorials now runs as a pure FastAPI page at `/app/help.html`, while the Information menu and embedded Guide buttons open the shared Guide & Help overlay with consistent fullscreen and window behavior across FastAPI pages.
+- Fixed: The About dialog opened from the shared FastAPI Help page now shows the current PBGui version and API serial instead of unresolved template placeholders.
 - Added: PBv7 Backtest and Optimize now show a clear button (×) for the `ohlcv_source_dir` field so users can quickly reset the path without needing to manually select and delete text.
-- Fixed: PBv7 OHLCV preload now downloads from the same warmup-adjusted effective start that the readiness check validates, so a finished preload no longer leaves the warmup days missing and immediately shows `would fetch on start` again after refresh.
-- Fixed: PBv7 OHLCV preload and readiness now stop treating pre-inception coins as fetchable ranges; coins whose market start is after the requested window are classified as too young and are pruned from preload jobs instead of triggering pointless remote fetch attempts.
-- Fixed: PBv7 OHLCV preload no longer flips CCXT progress between 0% and 100% on exchanges that answer old requests with much newer candles; the panel now follows the advancing request cursor and only marks completion when the preload job actually finishes.
-- Fixed: The PBv7 OHLCV preload panel now derives archive progress from the currently processed batch range when PB7's archive logs stay at coarse 0% steps, adds a fit-to-browser-window control in the floating header, and removes the old left-side status rail.
-- Improved: OHLCV preload jobs in the PBv7 Backtest/Optimize readiness window now show real log-derived progress from PB7 archive/ccxt download lines, alongside elapsed duration, log counters, and an explicit stop action.
+- Improved: PBv7 OHLCV Readiness and preload now run in a draggable floating window with fit-to-window support, real log-derived progress, better autoscroll/scroll retention, and clearer long/short source visibility.
+- Fixed: PBv7 OHLCV preload planning now stays aligned with the validated effective start, handles pre-inception coins correctly, and reports archive/CCXT progress more reliably while jobs are still running.
 - Improved: PBv7 FastAPI Optimize/Backtest now align suite aggregation and metric grouping with Passivbot v7.10.0 canonical `*_strategy_eq` and day-duration metrics.
-- Changed: PBv7 FastAPI Backtest and Optimize now open `OHLCV Readiness` as a draggable, resizable floating window from the editor sidebar instead of rendering the output inline there; the window still uses the PB7 v2 planner and the background `Preload OHLCV Data` action.
-- Improved: OHLCV Readiness entries now show whether a coin comes from the `long` list, the `short` list, or both, because the PB7 preflight evaluates the union of both approved-coin sides.
-- Improved: Starting `Preload OHLCV Data` now auto-scrolls the OHLCV Readiness window down to the preload job log section instead of leaving the view at the top.
-- Improved: While a preload job is running, the OHLCV log now keeps its scroll position and follows the live tail cleanly instead of jumping back to the start on each refresh; the completed preload result and log remain visible until the next readiness check, and only that fresh check clears the previous preload job block.
 
 ## v1.74 (25-04-2026)
 - Added: PBv7 Optimize is now available as a standalone FastAPI page with configs, queue, results, paretos, live WebSocket updates, integrated log viewing, and API-managed queue execution.

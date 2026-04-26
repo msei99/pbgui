@@ -1490,6 +1490,7 @@ connect();
     }
     loadTopic(0);
   };
+  window.PBGUI_HELP_OPENER = window._openVpsHelp;
 }());
 </script>
 
@@ -1505,14 +1506,5 @@ window.PBGUI_NAV_CONFIG = {
 };
 </script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
-<!-- Guide button override: must run AFTER pbgui_nav.js DOMContentLoaded handler
-     (pbgui_nav.js registers its DOMContentLoaded listener first, then ours runs second,
-      so by the time ours fires the button already exists and nav.js handler is attached) -->
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-  var btn = document.getElementById('pbgui-guide-btn');
-  if (btn) { var fresh = btn.cloneNode(true); btn.parentNode.replaceChild(fresh, btn); fresh.addEventListener('click', function() { if (typeof window._openVpsHelp === 'function') window._openVpsHelp(); }); }
-});
-</script>
 </body>
 </html>
