@@ -323,6 +323,13 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
 
+## v1.75 (unreleased)
+- Improved: PBv7 FastAPI Optimize/Backtest now align suite aggregation and metric grouping with Passivbot v7.10.0 canonical `*_strategy_eq` and day-duration metrics.
+- Changed: PBv7 FastAPI Backtest and Optimize now open `OHLCV Readiness` as a draggable, resizable floating window from the editor sidebar instead of rendering the output inline there; the window still uses the PB7 v2 planner and the background `Preload OHLCV Data` action.
+- Improved: OHLCV Readiness entries now show whether a coin comes from the `long` list, the `short` list, or both, because the PB7 preflight evaluates the union of both approved-coin sides.
+- Improved: Starting `Preload OHLCV Data` now auto-scrolls the OHLCV Readiness window down to the preload job log section instead of leaving the view at the top.
+- Improved: While a preload job is running, the OHLCV log now keeps its scroll position and follows the live tail cleanly instead of jumping back to the start on each refresh; the completed preload result and log remain visible until the next readiness check, and only that fresh check clears the previous preload job block.
+
 ## v1.74 (25-04-2026)
 - Added: PBv7 Optimize is now available as a standalone FastAPI page with configs, queue, results, paretos, live WebSocket updates, integrated log viewing, and API-managed queue execution.
 - Improved: The new Optimize editor now provides structured PB7-native controls for scoring, limits, bounds, runtime overrides, seeds, suite mode, backend-specific pymoo/DEAP settings, and live raw JSON sync.

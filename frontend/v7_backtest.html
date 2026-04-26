@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui — V7 Backtest</title>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-<link rel="stylesheet" href="/app/css/sidebar.css?v=1">
+<link rel="stylesheet" href="/app/css/sidebar.css?v=2">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <style>
 /* ── Design Tokens ─────────────────────────────── */
@@ -716,6 +716,7 @@ textarea.json-invalid:focus {
         <button class="sb-btn" onclick="goStrategyExplorer()" title="Open Strategy Explorer">🔍 Strategy Explorer</button>
         <button class="sb-btn" onclick="goBalanceCalc()" title="Open Balance Calculator">💰 Balance Calculator</button>
         <button class="sb-btn" onclick="goCalcBalance()" title="Calculate balance">⚡ Calc Balance</button>
+        <button class="sb-btn" id="sb-btn-ohlcv-preflight" title="Check PB7 OHLCV readiness for the current config" aria-expanded="false">🧭 OHLCV Readiness</button>
         <hr class="sb-sep">
         <button class="sb-btn" onclick="openLogPanel()" title="Open log viewer">📋 Log</button>
         <hr class="sb-sep">
@@ -865,6 +866,22 @@ textarea.json-invalid:focus {
   <div id="log-viewer-target" style="flex:1;min-height:0;overflow:hidden"></div>
 </div>
 
+<div id="ohlcv-panel" class="floating-preview-panel" aria-hidden="true">
+  <div class="fp-resize fp-resize-n" data-dir="n"></div>
+  <div class="fp-resize fp-resize-s" data-dir="s"></div>
+  <div class="fp-resize fp-resize-w" data-dir="w"></div>
+  <div class="fp-resize fp-resize-e" data-dir="e"></div>
+  <div class="fp-resize fp-resize-nw" data-dir="nw"></div>
+  <div class="fp-resize fp-resize-ne" data-dir="ne"></div>
+  <div class="fp-resize fp-resize-sw" data-dir="sw"></div>
+  <div class="fp-resize fp-resize-se" data-dir="se"></div>
+  <div id="ohlcv-panel-header" class="floating-preview-header">
+    <span class="floating-preview-title">OHLCV Readiness</span>
+    <button id="ohlcv-panel-close" class="floating-preview-close" title="Close">✕</button>
+  </div>
+  <div id="ohlcv-panel-body" class="floating-preview-body" aria-live="polite"></div>
+</div>
+
 <div id="toast"></div>
 <div id="modal-root"><div class="modal-box" id="modal-box"></div></div>
 <div class="modal-overlay" id="import-modal">
@@ -885,7 +902,7 @@ textarea.json-invalid:focus {
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=6"></script>
+<script src="/app/js/editor_shared.js?v=7"></script>
 <script>
 /* ════════════════════════════════════════════════
    GLOBALS (injected by server)
@@ -1310,6 +1327,34 @@ function editConfig(name) {
   }).catch(function(e) { toast('Load failed: ' + e.message, 'err'); });
 }
 
+var _ohlcvPreflightController = null;
+
+function initBacktestOhlcvPreflightController() {
+  if (_ohlcvPreflightController || !window.PBGuiEditorShared) return;
+  window.PBGuiEditorShared.bindFloatingPanel({
+    panel: 'ohlcv-panel',
+    header: 'ohlcv-panel-header',
+    closeButton: 'ohlcv-panel-close',
+    handlesSelector: '.fp-resize',
+    minWidth: 360,
+    minHeight: 220
+  });
+  _ohlcvPreflightController = window.PBGuiEditorShared.createOhlcvPreflightController({
+    button: 'sb-btn-ohlcv-preflight',
+    panel: 'ohlcv-panel-body',
+    container: 'ohlcv-panel',
+    containerOpenClass: 'visible',
+    closeButton: 'ohlcv-panel-close',
+    syncRoot: 'configs-editor',
+    pageLabel: 'Backtest',
+    apiBase: API_BASE,
+    token: TOKEN,
+    loadConfig: function() {
+      return { config: collectConfig() };
+    }
+  });
+}
+
 function showEditorSidebar() {
   // Enable Results button only if results exist for this config
   var btn = document.getElementById('sb-btn-results');
@@ -1334,6 +1379,7 @@ function showEditorSidebar() {
 }
 
 function hideEditorSidebar() {
+  if (_ohlcvPreflightController) _ohlcvPreflightController.close();
   document.getElementById('sidebar-editor').style.display = 'none';
   document.getElementById('sidebar-inner').style.display = '';
 }
@@ -3837,6 +3883,9 @@ function fillPbguiDataPath() {
     if (el) {
       el.value = d.path || '';
       scheduleStructuredEditorSync();
+      if (_ohlcvPreflightController && _ohlcvPreflightController.isOpen()) {
+        _ohlcvPreflightController.markStale();
+      }
     }
   }).catch(function() { toast('Could not fetch PBGui data path', 'err'); });
 }
@@ -6907,6 +6956,7 @@ function fmtDate(iso) {
    INIT
    ════════════════════════════════════════════════ */
 loadSettings();
+initBacktestOhlcvPreflightController();
 loadConfigs();
 connectWS();
 
@@ -6928,7 +6978,7 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/suite_editor.js?v=3"></script>
+<script src="/app/js/suite_editor.js?v=4"></script>
 <script src="/app/js/coin_overrides_editor.js?v=12"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */

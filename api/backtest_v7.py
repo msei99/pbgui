@@ -39,6 +39,7 @@ from api.pb7_bridge import (
     get_template_config,
     prepare_override_config,
 )
+from api.pb7_ohlcv_tools import build_ohlcv_preflight, get_ohlcv_preload_job, start_ohlcv_preload_job
 from logging_helpers import human_log as _log
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, pb7dir, pb7venv
@@ -881,6 +882,52 @@ def get_pbgui_data_path(session: SessionToken = Depends(require_auth)):
     """Return the PBGui-managed market data root directory."""
     from market_data import get_market_data_root_dir
     return {"path": str(get_market_data_root_dir())}
+
+
+@router.post("/ohlcv-preflight")
+async def get_ohlcv_preflight(body: dict, session: SessionToken = Depends(require_auth)):
+    config = body.get("config") if isinstance(body, dict) else None
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail="Missing or invalid 'config' in body")
+    try:
+        return await build_ohlcv_preflight(config)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        detail = str(exc).strip() or exc.__class__.__name__
+        _log(
+            SERVICE,
+            f"Failed to build OHLCV preflight: {detail}",
+            level="WARNING",
+            meta={"traceback": traceback.format_exc()},
+        )
+        raise HTTPException(status_code=422, detail=detail) from exc
+
+
+@router.post("/ohlcv-preload")
+def start_editor_ohlcv_preload(body: dict, session: SessionToken = Depends(require_auth)):
+    config = body.get("config") if isinstance(body, dict) else None
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail="Missing or invalid 'config' in body")
+    try:
+        return start_ohlcv_preload_job(config)
+    except Exception as exc:
+        detail = str(exc).strip() or exc.__class__.__name__
+        _log(
+            SERVICE,
+            f"Failed to start OHLCV preload: {detail}",
+            level="WARNING",
+            meta={"traceback": traceback.format_exc()},
+        )
+        raise HTTPException(status_code=422, detail=detail) from exc
+
+
+@router.get("/ohlcv-preload/{job_id}")
+def get_editor_ohlcv_preload(job_id: str, session: SessionToken = Depends(require_auth)):
+    payload = get_ohlcv_preload_job(job_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="OHLCV preload job not found")
+    return payload
 
 
 # ── REST: Settings ────────────────────────────────────────────

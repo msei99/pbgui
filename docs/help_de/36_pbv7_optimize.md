@@ -41,6 +41,7 @@ Der Editor verwendet dasselbe responsive 8-Spalten-Feldraster, denselben Popup-D
 | **Home** | Zurück zur Config-Liste |
 | **Save** | Config nach `data/opt_v7/{name}.json` speichern |
 | **Save and Queue** | Config speichern und direkt einreihen |
+| **🧭 OHLCV Readiness** | Öffnet ein verschiebbares und resizebares Floating-Fenster und führt darin einen PB7-basierten Read-only-Preflight für die aktuelle Optimize-Config aus. Angezeigt wird, ob der aktuelle Approved-Coin-Satz lokal bereit ist, aus Legacy-OHLCV-Daten importiert werden kann, erst beim Start nachgeladen würde oder durch persistente Gaps blockiert ist; ausgewertet wird die Vereinigung aus `approved_coins_long` und `approved_coins_short`, und jeder Eintrag zeigt jetzt direkt, ob er aus `long`, `short` oder aus beiden Listen stammt. Wenn PB7 sonst fehlende Bereiche beim Start holen würde, bietet das Fenster zusätzlich **Preload OHLCV Data** zum Vorwärmen des Caches im Hintergrund an, springt beim Start dieses Preloads automatisch zum Job-Logbereich, hält dieses Log sauber am Live-Tail statt wieder nach oben zu springen und lässt das fertige Preload-Ergebnis sichtbar, bis ein frischer Readiness-Check es ersetzt |
 
 Der Bereich **Raw Config JSON** verhält sich jetzt wie in Backtest und Run: Änderungen im Raw-JSON werden automatisch in die strukturierten Felder übernommen, strukturierte Änderungen bauen das Raw-JSON automatisch neu auf, und ungültiges JSON wird live markiert und zeilenbasiert hervorgehoben.
 

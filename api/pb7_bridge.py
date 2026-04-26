@@ -24,10 +24,10 @@ _OPTIMIZE_METRIC_GROUP_ORDER = (
 )
 
 _OPTIMIZE_METRIC_GROUP_DESCRIPTIONS = {
-    "Returns & Growth": "Return and growth metrics such as gain, ADG/MDG, exposure-normalized variants, and strategy-PnL-rebased growth.",
-    "Risk Metrics": "Drawdown, shortfall, divergence, trade-loss, and HSL risk metrics.",
+    "Returns & Growth": "Return and growth metrics such as gain, ADG/MDG, exposure-normalized variants, and strategy-equity growth.",
+    "Risk Metrics": "Drawdown, shortfall, divergence, trade-loss, and hard-stop risk metrics.",
     "Ratios & Efficiency": "Risk-adjusted and efficiency ratios such as Sharpe, Sortino, Omega, Calmar, Sterling, exposure and win-rate metrics.",
-    "Position & Execution Metrics": "Holding-time, activity, recovery, high-exposure, hard-stop timeline, and completion metrics.",
+    "Position & Execution Metrics": "Holding-time, activity, recovery, high-exposure, hard-stop timeline, and completion metrics across hour/day variants.",
     "Equity Curve Quality": "Equity smoothness and fit-quality metrics.",
     "Other": "Miscellaneous metrics.",
 }
@@ -110,7 +110,7 @@ def _group_optimize_metric(metric: str) -> str:
         return "Other"
 
     if (
-        base in {"gain", "gain_strategy_pnl_rebased"}
+        base in {"gain", "gain_strategy_eq", "gain_strategy_pnl_rebased"}
         or base.startswith(("adg", "mdg"))
         or base.startswith(("gain_per_exposure_", "adg_per_exposure_", "mdg_per_exposure_"))
     ):
@@ -147,10 +147,14 @@ def _group_optimize_metric(metric: str) -> str:
     if base.startswith(
         (
             "positions_held_per_day",
+            "position_held_days_",
             "position_held_hours_",
+            "position_unchanged_days_",
             "position_unchanged_hours_",
             "volume_pct_per_day_avg",
+            "peak_recovery_days_",
             "peak_recovery_hours_",
+            "high_exposure_days_",
             "high_exposure_hours_",
             "hard_stop_triggers_per_year",
             "hard_stop_restarts_per_year",

@@ -662,6 +662,1004 @@
     }));
   }
 
+  function normalizePreviewPath(value) {
+    return String(value || '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
+  }
+
+  function uniqPreviewStrings(values) {
+    var out = [];
+    var seen = Object.create(null);
+    (values || []).forEach(function(value) {
+      var normalized = String(value || '').trim();
+      if (!normalized) return;
+      if (seen[normalized]) return;
+      seen[normalized] = true;
+      out.push(normalized);
+    });
+    return out;
+  }
+
+  function summarizePreviewList(values, limit) {
+    var items = uniqPreviewStrings(values || []);
+    if (!items.length) return 'None';
+    var maxItems = Math.max(1, limit || 3);
+    if (items.length <= maxItems) return items.join(', ');
+    return items.slice(0, maxItems).join(', ') + ' +' + (items.length - maxItems);
+  }
+
+  function parsePreviewDate(value) {
+    var raw = String(value || '').trim();
+    if (!raw) return null;
+    if (raw.toLowerCase() === 'now') {
+      var today = new Date();
+      return new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    }
+    var parsed = new Date(raw);
+    if (isNaN(parsed.getTime())) return null;
+    return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  }
+
+  function getPreviewDaySpan(startValue, endValue) {
+    var startDate = parsePreviewDate(startValue);
+    var endDate = parsePreviewDate(endValue);
+    if (!startDate || !endDate) return null;
+    var diff = endDate.getTime() - startDate.getTime();
+    if (diff < 0) return null;
+    return Math.floor(diff / 86400000) + 1;
+  }
+
+  function formatPreviewRange(startValue, endValue) {
+    var startText = String(startValue || '').trim() || 'unset';
+    var endRaw = String(endValue || '').trim();
+    var endText = endRaw || 'unset';
+    return startText + ' -> ' + endText;
+  }
+
+  function normalizePreviewCoinList(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map(function(item) {
+      return String(item || '').trim();
+    }).filter(function(item) {
+      return !!item;
+    });
+  }
+
+  function summarizeApprovedCoins(approvedCoins) {
+    var longAll = false;
+    var shortAll = false;
+    var longCoins = [];
+    var shortCoins = [];
+
+    if (typeof approvedCoins === 'string') {
+      if (approvedCoins.trim().toLowerCase() === 'all') {
+        longAll = true;
+        shortAll = true;
+      }
+    } else if (Array.isArray(approvedCoins)) {
+      longCoins = normalizePreviewCoinList(approvedCoins);
+    } else if (approvedCoins && typeof approvedCoins === 'object') {
+      if (typeof approvedCoins.long === 'string' && approvedCoins.long.trim().toLowerCase() === 'all') {
+        longAll = true;
+      } else {
+        longCoins = normalizePreviewCoinList(approvedCoins.long);
+      }
+      if (typeof approvedCoins.short === 'string' && approvedCoins.short.trim().toLowerCase() === 'all') {
+        shortAll = true;
+      } else {
+        shortCoins = normalizePreviewCoinList(approvedCoins.short);
+      }
+    }
+
+    var uniqueCoins = uniqPreviewStrings(longCoins.concat(shortCoins));
+    var label = 'Derived from filters/defaults';
+    if (longAll && shortAll) {
+      label = 'All approved coins';
+    } else if (longAll || shortAll) {
+      label = (longAll ? 'long: all approved' : 'long: ' + longCoins.length + ' explicit') +
+        ' | ' +
+        (shortAll ? 'short: all approved' : 'short: ' + shortCoins.length + ' explicit');
+    } else if (uniqueCoins.length) {
+      label = uniqueCoins.length + ' explicit approved coin' + (uniqueCoins.length === 1 ? '' : 's');
+    }
+
+    return {
+      label: label,
+      count: uniqueCoins.length,
+      longAll: longAll,
+      shortAll: shortAll,
+      longCount: longCoins.length,
+      shortCount: shortCoins.length,
+      explicitCoins: uniqueCoins,
+    };
+  }
+
+  function summarizeIgnoredCoins(ignoredCoins) {
+    if (!ignoredCoins || typeof ignoredCoins !== 'object') {
+      return { count: 0, coins: [], label: 'None' };
+    }
+    var longCoins = normalizePreviewCoinList(ignoredCoins.long);
+    var shortCoins = normalizePreviewCoinList(ignoredCoins.short);
+    var uniqueCoins = uniqPreviewStrings(longCoins.concat(shortCoins));
+    return {
+      count: uniqueCoins.length,
+      coins: uniqueCoins,
+      label: uniqueCoins.length ? uniqueCoins.length + ' ignored coin' + (uniqueCoins.length === 1 ? '' : 's') : 'None',
+    };
+  }
+
+  function summarizePreviewFilters(pbgui, live) {
+    var filters = [];
+    var marketCap = pbgui && pbgui.market_cap;
+    var volMcap = pbgui && pbgui.vol_mcap;
+    var tags = normalizePreviewCoinList(pbgui && pbgui.tags);
+    var minCoinAgeDays = live && live.minimum_coin_age_days;
+
+    if (marketCap != null && marketCap !== '' && Number(marketCap) > 0) {
+      filters.push('market cap >= ' + Number(marketCap) + 'M');
+    }
+    if (volMcap != null && volMcap !== '' && isFinite(Number(volMcap))) {
+      filters.push('vol/mcap <= ' + Number(volMcap));
+    }
+    if (tags.length) {
+      filters.push(tags.length + ' tag' + (tags.length === 1 ? '' : 's'));
+    }
+    if (pbgui && pbgui.only_cpt) {
+      filters.push('copy-trading only');
+    }
+    if (pbgui && pbgui.notices_ignore) {
+      filters.push('notices ignored');
+    }
+    if (minCoinAgeDays != null && minCoinAgeDays !== '' && Number(minCoinAgeDays) > 0) {
+      filters.push('min coin age ' + Number(minCoinAgeDays) + 'd');
+    }
+    return filters;
+  }
+
+  function buildOhlcvPreviewModel(config, opts) {
+    var cfg = config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+    var backtest = cfg.backtest && typeof cfg.backtest === 'object' ? cfg.backtest : {};
+    var live = cfg.live && typeof cfg.live === 'object' ? cfg.live : {};
+    var pbgui = cfg.pbgui && typeof cfg.pbgui === 'object' ? cfg.pbgui : {};
+    var pageLabel = String((opts && opts.pageLabel) || 'Config').trim();
+    var previewNote = String((opts && opts.note) || '').trim();
+    var configuredSource = String(backtest.ohlcv_source_dir || '').trim();
+    var pbguiDataPath = String((opts && opts.pbguiDataPath) || '').trim();
+    var configuredSourceNorm = normalizePreviewPath(configuredSource);
+    var pbguiDataPathNorm = normalizePreviewPath(pbguiDataPath);
+    var sourceKind = 'default';
+    var sourceLabel = 'PB7 Default';
+    var sourcePath = configuredSource || 'caches/ohlcv';
+
+    if (configuredSourceNorm) {
+      if (pbguiDataPathNorm && configuredSourceNorm === pbguiDataPathNorm) {
+        sourceKind = 'pbgui';
+        sourceLabel = 'PBGui Market Data';
+      } else {
+        sourceKind = 'custom';
+        sourceLabel = 'Custom Directory';
+      }
+    }
+
+    var exchanges = uniqPreviewStrings(
+      Array.isArray(backtest.exchanges)
+        ? backtest.exchanges
+        : (backtest.exchange ? [backtest.exchange] : [])
+    );
+    var approvedSummary = summarizeApprovedCoins(live.approved_coins);
+    var ignoredSummary = summarizeIgnoredCoins(live.ignored_coins);
+    var filters = summarizePreviewFilters(pbgui, live);
+    var coinSources = backtest.coin_sources && typeof backtest.coin_sources === 'object'
+      ? Object.keys(backtest.coin_sources)
+      : [];
+    var marketSettingsSources = backtest.market_settings_sources && typeof backtest.market_settings_sources === 'object'
+      ? Object.keys(backtest.market_settings_sources)
+      : [];
+    var daySpan = getPreviewDaySpan(backtest.start_date, backtest.end_date);
+    var suiteScenarios = Array.isArray(backtest.scenarios) ? backtest.scenarios.length : 0;
+
+    var notes = [];
+    if (!configuredSourceNorm) {
+      notes.push('No explicit ohlcv_source_dir is set; preview uses the default PB7 local source path.');
+    } else if (sourceKind === 'pbgui') {
+      notes.push('This config currently points at the PBGui market data root.');
+    }
+    if (!approvedSummary.count && !approvedSummary.longAll && !approvedSummary.shortAll) {
+      notes.push('Approved coins are not pinned explicitly; the final universe is resolved from filters and market data at run time.');
+    }
+    notes.push('Preview shows requested scope from the editor, not on-disk completeness.');
+    if (previewNote) notes.push(previewNote);
+
+    var sections = [
+      {
+        title: 'Source',
+        items: [
+          { label: 'Type', value: sourceLabel },
+          { label: 'Directory', value: sourcePath, multiline: true },
+        ]
+      },
+      {
+        title: 'Coverage',
+        items: [
+          { label: 'Range', value: formatPreviewRange(backtest.start_date, backtest.end_date) },
+          { label: 'Days', value: daySpan == null ? 'n/a' : String(daySpan) },
+          { label: 'Candle', value: String(backtest.candle_interval_minutes || 1) + ' min' },
+          { label: 'Warmup', value: backtest.max_warmup_minutes ? String(backtest.max_warmup_minutes) + ' min cap' : 'default' },
+          { label: 'Gap Tol.', value: backtest.gap_tolerance_ohlcvs_minutes ? String(backtest.gap_tolerance_ohlcvs_minutes) + ' min' : 'default' },
+        ]
+      },
+      {
+        title: 'Universe',
+        items: [
+          { label: 'Exchanges', value: summarizePreviewList(exchanges, 3) },
+          { label: 'Approved', value: approvedSummary.label },
+          { label: 'Ignored', value: ignoredSummary.label },
+          { label: 'coin_sources', value: coinSources.length ? String(coinSources.length) + ' override' + (coinSources.length === 1 ? '' : 's') : 'None' },
+          { label: 'market_settings', value: marketSettingsSources.length ? String(marketSettingsSources.length) + ' override' + (marketSettingsSources.length === 1 ? '' : 's') : 'None' },
+        ]
+      }
+    ];
+
+    if (filters.length) {
+      sections.push({
+        title: 'Filters',
+        list: filters
+      });
+    }
+    if (suiteScenarios > 0) {
+      sections.push({
+        title: 'Suite',
+        items: [
+          { label: 'Scenarios', value: String(suiteScenarios) },
+        ]
+      });
+    }
+
+    return {
+      title: 'OHLCV Preview',
+      subtitle: pageLabel + ' editor',
+      badge: sourceLabel,
+      badgeKind: sourceKind,
+      sections: sections,
+      notes: notes,
+    };
+  }
+
+  function renderOhlcvPreviewPanel(target, model) {
+    var panel = resolveElement(target);
+    if (!panel) return null;
+    if (!model) {
+      panel.innerHTML = '';
+      return panel;
+    }
+
+    var html = '';
+    html += '<div class="sb-preview-head">';
+    html += '<div>';
+    html += '<div class="sb-preview-title">' + escapeHtml(model.title || 'OHLCV Preview') + '</div>';
+    if (model.subtitle) {
+      html += '<div class="sb-preview-subtitle">' + escapeHtml(model.subtitle) + '</div>';
+    }
+    html += '</div>';
+    if (model.badge) {
+      html += '<span class="sb-preview-chip ' + (model.badgeKind ? ('kind-' + escapeHtml(model.badgeKind)) : '') + '">' + escapeHtml(model.badge) + '</span>';
+    }
+    html += '</div>';
+
+    (model.sections || []).forEach(function(section) {
+      html += '<div class="sb-preview-section">';
+      html += '<div class="sb-preview-section-title">' + escapeHtml(section.title || '') + '</div>';
+      if (Array.isArray(section.items) && section.items.length) {
+        html += '<div class="sb-preview-grid">';
+        section.items.forEach(function(item) {
+          html += '<div class="sb-preview-label">' + escapeHtml(item.label || '') + '</div>';
+          html += '<div class="sb-preview-value' + (item.multiline ? ' multiline' : '') + '">' + escapeHtml(item.value == null ? '' : item.value) + '</div>';
+        });
+        html += '</div>';
+      }
+      if (Array.isArray(section.list) && section.list.length) {
+        html += '<div class="sb-preview-list">';
+        section.list.forEach(function(line) {
+          html += '<div class="sb-preview-list-item">' + escapeHtml(line) + '</div>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+
+    if (Array.isArray(model.notes) && model.notes.length) {
+      html += '<div class="sb-preview-notes">';
+      model.notes.forEach(function(note) {
+        html += '<div class="sb-preview-note">' + escapeHtml(note) + '</div>';
+      });
+      html += '</div>';
+    }
+
+    panel.innerHTML = html;
+    return panel;
+  }
+
+  function createOhlcvPreviewController(opts) {
+    opts = opts || {};
+    var button = resolveElement(opts.button);
+    var panel = resolveElement(opts.panel);
+    var syncRoot = resolveElement(opts.syncRoot);
+    var loadConfig = typeof opts.loadConfig === 'function' ? opts.loadConfig : function() { return {}; };
+    var loadPbguiDataPath = typeof opts.loadPbguiDataPath === 'function' ? opts.loadPbguiDataPath : function() { return ''; };
+    var pageLabel = String(opts.pageLabel || 'Config').trim() || 'Config';
+    var isOpen = false;
+    var cachedPbguiDataPath;
+    var hasPbguiDataPath = false;
+
+    function setOpen(nextOpen) {
+      isOpen = !!nextOpen;
+      if (button) {
+        button.classList.toggle('active', isOpen);
+        button.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      }
+      if (panel) {
+        panel.style.display = isOpen ? 'block' : 'none';
+        panel.classList.toggle('open', isOpen);
+      }
+    }
+
+    function renderMessage(kind, title, message) {
+      if (!panel) return;
+      panel.innerHTML = '' +
+        '<div class="sb-preview-head">' +
+          '<div>' +
+            '<div class="sb-preview-title">' + escapeHtml(title) + '</div>' +
+            '<div class="sb-preview-subtitle">' + escapeHtml(pageLabel + ' editor') + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="sb-preview-note ' + escapeHtml(kind || '') + '">' + escapeHtml(message || '') + '</div>';
+    }
+
+    var scheduleRefresh = createDebouncedRunner(function() {
+      if (!isOpen) return;
+      api.refresh().catch(function() {});
+    }, opts.refreshDelay || 180);
+
+    async function getPbguiDataPath() {
+      if (hasPbguiDataPath) return cachedPbguiDataPath;
+      try {
+        cachedPbguiDataPath = await Promise.resolve(loadPbguiDataPath());
+      } catch (error) {
+        cachedPbguiDataPath = '';
+      }
+      hasPbguiDataPath = true;
+      return cachedPbguiDataPath;
+    }
+
+    var api = {
+      isOpen: function() {
+        return isOpen;
+      },
+      open: function() {
+        setOpen(true);
+        return api.refresh();
+      },
+      close: function() {
+        scheduleRefresh.cancel();
+        setOpen(false);
+      },
+      refresh: async function() {
+        if (!panel) return null;
+        renderMessage('loading', 'OHLCV Preview', 'Refreshing preview...');
+        try {
+          var loaded = await Promise.resolve(loadConfig());
+          var config = loaded;
+          var note = '';
+          if (loaded && typeof loaded === 'object' && !Array.isArray(loaded) && loaded.config && typeof loaded.config === 'object') {
+            config = loaded.config;
+            note = String(loaded.note || '').trim();
+          }
+          var model = buildOhlcvPreviewModel(config, {
+            pageLabel: pageLabel,
+            pbguiDataPath: await getPbguiDataPath(),
+            note: note,
+          });
+          renderOhlcvPreviewPanel(panel, model);
+          return model;
+        } catch (error) {
+          renderMessage('error', 'OHLCV Preview', error && error.message ? error.message : String(error || 'Preview failed'));
+          return null;
+        }
+      },
+      invalidatePbguiDataPath: function() {
+        hasPbguiDataPath = false;
+        cachedPbguiDataPath = '';
+      }
+    };
+
+    if (button && !button.dataset.pbOhlcvPreviewBound) {
+      button.dataset.pbOhlcvPreviewBound = '1';
+      button.addEventListener('click', function() {
+        if (isOpen) {
+          api.close();
+          return;
+        }
+        api.open().catch(function() {});
+      });
+    }
+
+    if (syncRoot && !syncRoot.dataset.pbOhlcvPreviewBound) {
+      syncRoot.dataset.pbOhlcvPreviewBound = '1';
+      syncRoot.addEventListener('input', scheduleRefresh);
+      syncRoot.addEventListener('change', scheduleRefresh);
+    }
+
+    setOpen(false);
+    return api;
+  }
+
+  var _ohlcvPreflightStatusOrder = [
+    'missing_local',
+    'legacy_importable',
+    'blocked_by_persistent_gap',
+    'store_complete',
+    'missing_market',
+    'coin_too_young'
+  ];
+
+  function getOhlcvPreflightChipKind(status) {
+    switch (String(status || '').trim()) {
+      case 'ready': return 'ready';
+      case 'preload': return 'preload';
+      case 'blocked': return 'blocked';
+      case 'legacy': return 'legacy';
+      case 'mixed': return 'mixed';
+      case 'empty': return 'default';
+      default: return 'default';
+    }
+  }
+
+  function getOhlcvPreflightTone(status) {
+    switch (String(status || '').trim()) {
+      case 'store_complete': return 'tone-ready';
+      case 'legacy_importable': return 'tone-legacy';
+      case 'missing_local': return 'tone-warn';
+      case 'blocked_by_persistent_gap': return 'tone-danger';
+      default: return 'tone-neutral';
+    }
+  }
+
+  function renderOhlcvPreflightCountPills(counts) {
+    var html = '';
+    var data = counts && typeof counts === 'object' ? counts : {};
+    _ohlcvPreflightStatusOrder.forEach(function(status) {
+      var count = Number(data[status] || 0);
+      if (!count) return;
+      html += '<span class="sb-preview-pill ' + getOhlcvPreflightTone(status) + '">' +
+        '<span class="sb-preview-pill-label">' + escapeHtml(status.replace(/_/g, ' ')) + '</span>' +
+        '<span class="sb-preview-pill-value">' + escapeHtml(String(count)) + '</span>' +
+      '</span>';
+    });
+    return html || '<span class="sb-preview-pill tone-neutral"><span class="sb-preview-pill-label">no data</span><span class="sb-preview-pill-value">0</span></span>';
+  }
+
+  function renderOhlcvPreflightEntries(entries) {
+    if (!Array.isArray(entries) || !entries.length) return '';
+    var html = '<div class="sb-preview-list">';
+    entries.forEach(function(entry) {
+      var sides = Array.isArray(entry.sides)
+        ? entry.sides.filter(function(side) { return !!side; })
+        : [];
+      var sideLabel = sides.length ? (' [' + sides.join('/') + ']') : '';
+      var title = escapeHtml((entry.coin || '?') + sideLabel + (entry.exchange ? (' on ' + entry.exchange) : ''));
+      var meta = [];
+      if (entry.symbol) meta.push(String(entry.symbol));
+      if (entry.effective_start_date) meta.push('start ' + entry.effective_start_date);
+      html += '<div class="sb-preview-list-item">';
+      html += '<div class="sb-preview-mini-title">' + title + '</div>';
+      html += '<div class="sb-preview-mini-body">' + escapeHtml(entry.note || entry.status_label || '') + '</div>';
+      if (meta.length) {
+        html += '<div class="sb-preview-mini-meta">' + escapeHtml(meta.join(' | ')) + '</div>';
+      }
+      if (entry.persistent_gap && entry.persistent_gap.reason) {
+        html += '<div class="sb-preview-mini-meta">' +
+          escapeHtml('gap ' + entry.persistent_gap.start + ' -> ' + entry.persistent_gap.end + ' (' + entry.persistent_gap.reason + ')') +
+        '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function renderOhlcvPreflightPanel(target, model) {
+    var panel = resolveElement(target);
+    if (!panel) return null;
+    if (!model || !model.payload) {
+      panel.innerHTML = '';
+      return panel;
+    }
+
+    var payload = model.payload;
+    var summary = payload.summary || {};
+    var request = payload.request || {};
+    var universe = payload.universe || {};
+    var bestSamples = payload.best_samples || {};
+    var exchanges = Array.isArray(payload.exchanges) ? payload.exchanges : [];
+    var notes = Array.isArray(payload.notes) ? payload.notes.slice() : [];
+    if (model.clientNote) notes.unshift(String(model.clientNote));
+    if (model.stale) notes.unshift('Editor values changed. Refresh the OHLCV check to re-run the PB7 planner.');
+
+    var job = model.job || null;
+    var jobRunning = job && (job.status === 'queued' || job.status === 'running');
+    var preloadDisabled = !summary.preload_supported || jobRunning;
+    var refreshBtnClass = model.stale ? 'sb-btn accent' : 'sb-btn';
+    var preloadBtnClass = jobRunning ? 'sb-btn info' : 'sb-btn info';
+    var sourceLabel = request.source_dir || 'PB7 default caches/ohlcv';
+    var chipKind = getOhlcvPreflightChipKind(summary.overall_status);
+
+    var html = '';
+    html += '<div class="sb-preview-head">';
+    html += '<div>';
+    html += '<div class="sb-preview-title">OHLCV Readiness</div>';
+    html += '<div class="sb-preview-subtitle">' + escapeHtml(String((model.pageLabel || 'Config')) + ' editor') + '</div>';
+    html += '</div>';
+    html += '<span class="sb-preview-chip kind-' + escapeHtml(chipKind) + '">' + escapeHtml(summary.headline || 'OHLCV check') + '</span>';
+    html += '</div>';
+
+    html += '<div class="sb-preview-section">';
+    html += '<div class="sb-preview-section-title">Summary</div>';
+    html += '<div class="sb-preview-note">' + escapeHtml(summary.detail || '') + '</div>';
+    html += '<div class="sb-preview-pill-row">' + renderOhlcvPreflightCountPills(summary.counts || {}) + '</div>';
+    html += '</div>';
+
+    html += '<div class="sb-preview-actions">';
+    html += '<button type="button" class="' + refreshBtnClass + '" data-action="refresh">↻ Refresh Check</button>';
+    html += '<button type="button" class="' + preloadBtnClass + '" data-action="preload"' + (preloadDisabled ? ' disabled' : '') + '>' +
+      escapeHtml(jobRunning ? '⏳ Preload running...' : (summary.preload_label || 'Preload OHLCV Data')) +
+    '</button>';
+    if (summary.preload_detail) {
+      html += '<div class="sb-preview-note">' + escapeHtml(summary.preload_detail) + '</div>';
+    }
+    html += '</div>';
+
+    html += '<div class="sb-preview-section">';
+    html += '<div class="sb-preview-section-title">Request</div>';
+    html += '<div class="sb-preview-grid">';
+    html += '<div class="sb-preview-label">Requested</div><div class="sb-preview-value">' + escapeHtml(request.requested_start_date || 'n/a') + ' → ' + escapeHtml(request.end_date || 'n/a') + '</div>';
+    html += '<div class="sb-preview-label">Effective</div><div class="sb-preview-value">' + escapeHtml(request.effective_start_date || 'n/a') + '</div>';
+    html += '<div class="sb-preview-label">Warmup</div><div class="sb-preview-value">' + escapeHtml(String(request.warmup_minutes == null ? 'n/a' : request.warmup_minutes)) + ' min</div>';
+    html += '<div class="sb-preview-label">Min age</div><div class="sb-preview-value">' + escapeHtml(String(request.minimum_coin_age_days == null ? 'n/a' : request.minimum_coin_age_days)) + ' d</div>';
+    html += '<div class="sb-preview-label">Source</div><div class="sb-preview-value multiline">' + escapeHtml(sourceLabel) + '</div>';
+    html += '<div class="sb-preview-label">Catalog</div><div class="sb-preview-value multiline">' + escapeHtml(request.catalog_present ? (request.catalog_path || 'present') : 'missing') + '</div>';
+    html += '</div>';
+    html += '</div>';
+
+    html += '<div class="sb-preview-section">';
+    html += '<div class="sb-preview-section-title">Universe</div>';
+    html += '<div class="sb-preview-grid">';
+    html += '<div class="sb-preview-label">Coins</div><div class="sb-preview-value">' + escapeHtml(String(universe.coin_count || 0)) + '</div>';
+    html += '<div class="sb-preview-label">Mode</div><div class="sb-preview-value">' + escapeHtml((universe.coins_mode || 'explicit').replace(/_/g, ' ')) + '</div>';
+    html += '<div class="sb-preview-label">Exchanges</div><div class="sb-preview-value">' + escapeHtml(String(universe.exchange_count || 0)) + '</div>';
+    html += '</div>';
+    html += '</div>';
+
+    _ohlcvPreflightStatusOrder.forEach(function(status) {
+      var entries = bestSamples[status];
+      if (!Array.isArray(entries) || !entries.length) return;
+      html += '<div class="sb-preview-section">';
+      html += '<div class="sb-preview-section-title">Best Per Coin: ' + escapeHtml((entries[0] && entries[0].status_label) || status.replace(/_/g, ' ')) + '</div>';
+      html += renderOhlcvPreflightEntries(entries);
+      html += '</div>';
+    });
+
+    exchanges.forEach(function(exchangePayload) {
+      var exchangeName = exchangePayload && (exchangePayload.input_exchange || exchangePayload.exchange);
+      if (!exchangeName) return;
+      html += '<div class="sb-preview-section">';
+      html += '<div class="sb-preview-section-title">Exchange: ' + escapeHtml(exchangeName) + '</div>';
+      html += '<div class="sb-preview-pill-row">' + renderOhlcvPreflightCountPills((exchangePayload && exchangePayload.counts) || {}) + '</div>';
+      var exchangeSamples = exchangePayload && exchangePayload.samples && typeof exchangePayload.samples === 'object'
+        ? exchangePayload.samples
+        : {};
+      ['missing_local', 'legacy_importable', 'blocked_by_persistent_gap'].forEach(function(status) {
+        var entries = exchangeSamples[status];
+        if (!Array.isArray(entries) || !entries.length) return;
+        html += '<div class="sb-preview-mini-title" style="margin-top:var(--sp-sm)">' + escapeHtml((entries[0] && entries[0].status_label) || status.replace(/_/g, ' ')) + '</div>';
+        html += renderOhlcvPreflightEntries(entries);
+      });
+      html += '</div>';
+    });
+
+    if (job) {
+      html += '<div class="sb-preview-section" data-preload-job="1">';
+      html += '<div class="sb-preview-section-title">Preload Job</div>';
+      html += '<div class="sb-preview-grid">';
+      html += '<div class="sb-preview-label">Status</div><div class="sb-preview-value">' + escapeHtml(job.status || 'unknown') + '</div>';
+      html += '<div class="sb-preview-label">Started</div><div class="sb-preview-value">' + escapeHtml(job.started_at_iso || 'n/a') + '</div>';
+      html += '<div class="sb-preview-label">Finished</div><div class="sb-preview-value">' + escapeHtml(job.finished_at_iso || '—') + '</div>';
+      html += '</div>';
+      if (job.error) {
+        html += '<div class="sb-preview-note error">' + escapeHtml(job.error) + '</div>';
+      }
+      if (Array.isArray(job.log_tail) && job.log_tail.length) {
+        html += '<pre class="sb-preview-log" data-preload-log="1">' + escapeHtml(job.log_tail.join('\n')) + '</pre>';
+      }
+      html += '</div>';
+    }
+
+    if (notes.length) {
+      html += '<div class="sb-preview-notes">';
+      notes.forEach(function(note) {
+        html += '<div class="sb-preview-note">' + escapeHtml(note) + '</div>';
+      });
+      html += '</div>';
+    }
+
+    panel.innerHTML = html;
+    return panel;
+  }
+
+  function bindFloatingPanel(opts) {
+    opts = opts || {};
+    var panel = resolveElement(opts.panel);
+    var header = resolveElement(opts.header);
+    var closeButton = resolveElement(opts.closeButton);
+    var handlesSelector = String(opts.handlesSelector || '.fp-resize');
+    var minWidth = Math.max(160, Number(opts.minWidth) || 360);
+    var minHeight = Math.max(120, Number(opts.minHeight) || 220);
+    if (!panel || !header) return null;
+
+    if (!header.dataset.pbFloatingDragBound) {
+      header.dataset.pbFloatingDragBound = '1';
+      header.addEventListener('mousedown', function(event) {
+        if (closeButton && (event.target === closeButton || (closeButton.contains && closeButton.contains(event.target)))) {
+          return;
+        }
+        var rect = panel.getBoundingClientRect();
+        panel.style.left = rect.left + 'px';
+        panel.style.top = rect.top + 'px';
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+        var startX = event.clientX;
+        var startY = event.clientY;
+        var startL = rect.left;
+        var startT = rect.top;
+        function onMove(moveEvent) {
+          panel.style.left = (startL + moveEvent.clientX - startX) + 'px';
+          panel.style.top = (startT + moveEvent.clientY - startY) + 'px';
+        }
+        function onUp() {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        event.preventDefault();
+      });
+    }
+
+    if (!panel.dataset.pbFloatingResizeBound) {
+      panel.dataset.pbFloatingResizeBound = '1';
+      panel.querySelectorAll(handlesSelector).forEach(function(handle) {
+        handle.addEventListener('mousedown', function(event) {
+          event.preventDefault();
+          event.stopPropagation();
+          var dir = handle.dataset.dir;
+          var rect = panel.getBoundingClientRect();
+          panel.style.left = rect.left + 'px';
+          panel.style.top = rect.top + 'px';
+          panel.style.right = 'auto';
+          panel.style.bottom = 'auto';
+          panel.style.width = rect.width + 'px';
+          panel.style.height = rect.height + 'px';
+          var startX = event.clientX;
+          var startY = event.clientY;
+          var startL = rect.left;
+          var startT = rect.top;
+          var startW = rect.width;
+          var startH = rect.height;
+          function onMove(moveEvent) {
+            var dx = moveEvent.clientX - startX;
+            var dy = moveEvent.clientY - startY;
+            var nextL = startL;
+            var nextT = startT;
+            var nextW = startW;
+            var nextH = startH;
+            if (dir.indexOf('w') >= 0) {
+              nextL = startL + dx;
+              nextW = startW - dx;
+            }
+            if (dir.indexOf('e') >= 0) nextW = startW + dx;
+            if (dir.indexOf('n') >= 0) {
+              nextT = startT + dy;
+              nextH = startH - dy;
+            }
+            if (dir.indexOf('s') >= 0) nextH = startH + dy;
+            if (nextW < minWidth) {
+              if (dir.indexOf('w') >= 0) nextL = startL + startW - minWidth;
+              nextW = minWidth;
+            }
+            if (nextH < minHeight) {
+              if (dir.indexOf('n') >= 0) nextT = startT + startH - minHeight;
+              nextH = minHeight;
+            }
+            panel.style.left = nextL + 'px';
+            panel.style.top = nextT + 'px';
+            panel.style.width = nextW + 'px';
+            panel.style.height = nextH + 'px';
+          }
+          function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          }
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+      });
+    }
+
+    return panel;
+  }
+
+  function createOhlcvPreflightController(opts) {
+    opts = opts || {};
+    var button = resolveElement(opts.button);
+    var panel = resolveElement(opts.panel);
+    var container = resolveElement(opts.container);
+    var closeButton = resolveElement(opts.closeButton);
+    var syncRoot = resolveElement(opts.syncRoot);
+    var loadConfig = typeof opts.loadConfig === 'function' ? opts.loadConfig : function() { return {}; };
+    var pageLabel = String(opts.pageLabel || 'Config').trim() || 'Config';
+    var apiBase = String(opts.apiBase || '').trim();
+    var token = String(opts.token || '').trim();
+    var containerOpenClass = String(opts.containerOpenClass || 'visible').trim() || 'visible';
+    var isOpen = false;
+    var isStale = false;
+    var cachedPayload = null;
+    var cachedClientNote = '';
+    var currentJob = null;
+    var currentJobId = '';
+    var pollTimerId = null;
+    var pendingScrollTarget = '';
+
+    function captureRenderState() {
+      if (!panel) return null;
+      var state = {
+        panelScrollTop: panel.scrollTop,
+      };
+      var log = panel.querySelector('[data-preload-log]');
+      if (log) {
+        state.log = {
+          scrollTop: log.scrollTop,
+          atBottom: (log.scrollHeight - log.clientHeight - log.scrollTop) <= 12,
+        };
+      }
+      return state;
+    }
+
+    function restoreRenderState(state) {
+      if (!panel || !state) return;
+      panel.scrollTop = Math.max(0, Number(state.panelScrollTop) || 0);
+      if (!state.log) return;
+      var log = panel.querySelector('[data-preload-log]');
+      if (!log) return;
+      if (state.log.atBottom) {
+        log.scrollTop = log.scrollHeight;
+      } else {
+        log.scrollTop = Math.max(0, Number(state.log.scrollTop) || 0);
+      }
+    }
+
+    function stopPolling() {
+      clearTimeout(pollTimerId);
+      pollTimerId = null;
+    }
+
+    function setOpen(nextOpen) {
+      isOpen = !!nextOpen;
+      if (button) {
+        button.classList.toggle('active', isOpen);
+        button.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      }
+      if (container) {
+        container.classList.toggle(containerOpenClass, isOpen);
+        container.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+      } else if (panel) {
+        panel.style.display = isOpen ? 'block' : 'none';
+        panel.classList.toggle('open', isOpen);
+      }
+      if (!isOpen) stopPolling();
+    }
+
+    function renderMessage(kind, title, message) {
+      if (!panel) return;
+      panel.innerHTML = '' +
+        '<div class="sb-preview-head">' +
+          '<div>' +
+            '<div class="sb-preview-title">' + escapeHtml(title) + '</div>' +
+            '<div class="sb-preview-subtitle">' + escapeHtml(pageLabel + ' editor') + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="sb-preview-note ' + escapeHtml(kind || '') + '">' + escapeHtml(message || '') + '</div>';
+    }
+
+    async function requestJson(path, init) {
+      if (!apiBase) throw new Error('Missing API base');
+      var options = init ? Object.assign({}, init) : {};
+      options.headers = Object.assign({ 'Authorization': 'Bearer ' + token }, options.headers || {});
+      return resolveJsonResult(fetch(apiBase + path, options));
+    }
+
+    function normalizeLoadedConfig(loaded) {
+      var config = loaded;
+      var note = '';
+      if (loaded && typeof loaded === 'object' && !Array.isArray(loaded) && loaded.config && typeof loaded.config === 'object') {
+        config = loaded.config;
+        note = String(loaded.note || '').trim();
+      }
+      if (!config || typeof config !== 'object' || Array.isArray(config)) {
+        throw new Error('Config must be a JSON object');
+      }
+      return { config: config, note: note };
+    }
+
+    function renderPanel() {
+      if (!panel) return;
+      var renderState = captureRenderState();
+      renderOhlcvPreflightPanel(panel, {
+        payload: cachedPayload,
+        job: currentJob,
+        pageLabel: pageLabel,
+        stale: isStale,
+        clientNote: cachedClientNote,
+      });
+      if (pendingScrollTarget === 'preload-log') {
+        pendingScrollTarget = '';
+        requestAnimationFrame(function() {
+          if (!panel) return;
+          var target = panel.querySelector('[data-preload-log]') || panel.querySelector('[data-preload-job]');
+          if (!target) return;
+          panel.scrollTop = Math.max(0, target.offsetTop - 8);
+          if (target.matches && target.matches('[data-preload-log]')) {
+            target.scrollTop = target.scrollHeight;
+            return;
+          }
+          var log = panel.querySelector('[data-preload-log]');
+          if (log) log.scrollTop = log.scrollHeight;
+        });
+        return;
+      }
+      requestAnimationFrame(function() {
+        restoreRenderState(renderState);
+      });
+    }
+
+    function schedulePoll(delayMs) {
+      stopPolling();
+      if (!isOpen || !currentJobId) return;
+      pollTimerId = setTimeout(function() {
+        api.refreshJob(true).catch(function() {});
+      }, Math.max(500, Number(delayMs) || 1500));
+    }
+
+    var api = {
+      isOpen: function() {
+        return isOpen;
+      },
+      open: function() {
+        setOpen(true);
+        return api.refresh();
+      },
+      close: function() {
+        setOpen(false);
+      },
+      markStale: function() {
+        if (!isOpen) return;
+        isStale = true;
+        renderPanel();
+      },
+      refresh: async function() {
+        if (!panel) return null;
+        stopPolling();
+        currentJob = null;
+        currentJobId = '';
+        pendingScrollTarget = '';
+        renderMessage('loading', 'OHLCV Readiness', 'Running PB7 OHLCV preflight...');
+        try {
+          var normalized = normalizeLoadedConfig(await Promise.resolve(loadConfig()));
+          isStale = false;
+          cachedClientNote = normalized.note;
+          cachedPayload = await requestJson('/ohlcv-preflight', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config: normalized.config })
+          });
+          renderPanel();
+          if (currentJobId) {
+            api.refreshJob(false).catch(function() {});
+          }
+          return cachedPayload;
+        } catch (error) {
+          renderMessage('error', 'OHLCV Readiness', error && error.message ? error.message : String(error || 'OHLCV preflight failed'));
+          return null;
+        }
+      },
+      refreshJob: async function(refreshAfterDone) {
+        if (!currentJobId) return null;
+        try {
+          currentJob = await requestJson('/ohlcv-preload/' + encodeURIComponent(currentJobId));
+          renderPanel();
+          if (currentJob && (currentJob.status === 'queued' || currentJob.status === 'running')) {
+            schedulePoll(1500);
+          }
+          return currentJob;
+        } catch (error) {
+          renderMessage('error', 'OHLCV Readiness', error && error.message ? error.message : String(error || 'Could not load preload job status'));
+          return null;
+        }
+      },
+      startPreload: async function() {
+        if (!panel) return null;
+        try {
+          var normalized = normalizeLoadedConfig(await Promise.resolve(loadConfig()));
+          cachedClientNote = normalized.note;
+          currentJob = await requestJson('/ohlcv-preload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config: normalized.config })
+          });
+          currentJobId = currentJob && currentJob.job_id ? String(currentJob.job_id) : '';
+          pendingScrollTarget = 'preload-log';
+          renderPanel();
+          if (currentJobId) schedulePoll(1000);
+          return currentJob;
+        } catch (error) {
+          renderMessage('error', 'OHLCV Readiness', error && error.message ? error.message : String(error || 'Could not start OHLCV preload'));
+          return null;
+        }
+      }
+    };
+
+    if (button && !button.dataset.pbOhlcvPreflightBound) {
+      button.dataset.pbOhlcvPreflightBound = '1';
+      button.addEventListener('click', function() {
+        if (isOpen) {
+          api.close();
+          return;
+        }
+        api.open().catch(function() {});
+      });
+    }
+
+    if (closeButton && !closeButton.dataset.pbOhlcvPreflightBound) {
+      closeButton.dataset.pbOhlcvPreflightBound = '1';
+      closeButton.addEventListener('click', function(event) {
+        event.preventDefault();
+        api.close();
+      });
+    }
+
+    if (panel && !panel.dataset.pbOhlcvPreflightBound) {
+      panel.dataset.pbOhlcvPreflightBound = '1';
+      panel.addEventListener('click', function(event) {
+        var target = event.target && event.target.closest ? event.target.closest('[data-action]') : null;
+        if (!target) return;
+        var action = target.getAttribute('data-action');
+        if (action === 'refresh') {
+          event.preventDefault();
+          api.refresh().catch(function() {});
+        } else if (action === 'preload' && !target.disabled) {
+          event.preventDefault();
+          api.startPreload().catch(function() {});
+        }
+      });
+    }
+
+    if (syncRoot && !syncRoot.dataset.pbOhlcvPreflightBound) {
+      syncRoot.dataset.pbOhlcvPreflightBound = '1';
+      syncRoot.addEventListener('input', function() { api.markStale(); });
+      syncRoot.addEventListener('change', function() { api.markStale(); });
+    }
+
+    setOpen(false);
+    return api;
+  }
+
   function createMultiselectController(opts) {
     opts = opts || {};
 
@@ -1398,6 +2396,12 @@
     createBalanceCalcDraft: createBalanceCalcDraft,
     openBalanceCalcPage: openBalanceCalcPage,
     requestBalanceCalculation: requestBalanceCalculation,
+    bindFloatingPanel: bindFloatingPanel,
+    buildOhlcvPreviewModel: buildOhlcvPreviewModel,
+    renderOhlcvPreviewPanel: renderOhlcvPreviewPanel,
+    createOhlcvPreviewController: createOhlcvPreviewController,
+    renderOhlcvPreflightPanel: renderOhlcvPreflightPanel,
+    createOhlcvPreflightController: createOhlcvPreflightController,
     createMultiselectController: createMultiselectController,
     setFixedValidationStatus: setFixedValidationStatus,
     clearFixedValidationStatus: clearFixedValidationStatus,
