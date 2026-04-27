@@ -5,7 +5,7 @@ Logs werden live per WebSocket gestreamt — kein Neuladen der Seite erforderlic
 
 ## Aufbau
 
-- **Sidebar (links)**: Liste aller verfügbaren Log-Dateien in `data/logs/`
+- **Sidebar (links)**: Liste aller verfügbaren Log-Dateien in `data/logs/`, mit anpassbarer Breite auf dem Desktop
 - **Toolbar**: Level-Filter, Zeilenanzahl, Versionsauswahl, Stream-Steuerung
 - **Log-Bereich**: scrollbares Terminal-Ausgabefeld mit Suche und Hervorhebung
 

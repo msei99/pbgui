@@ -4,9 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Logging - PBGui</title>
+<link rel="stylesheet" href="/app/css/sidebar.css?v=4">
+<script src="/app/js/sidebar_resize.js?v=1"></script>
 <style>
 /* ─── Design tokens ──────────────────────────────────────── */
 :root {
+  --bg: #0e1117;
+  --bg2: #1a1d24;
+  --bg3: #262730;
+  --border: #333640;
+  --text: #fafafa;
+  --text-dim: #a0a4ab;
+  --accent: #4da6ff;
+  --blue: #1f77ff;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   --fs-xs: 11px; --fs-sm: 13px; --fs-base: 14px;
   --fs-md: 15px; --fs-lg: 18px; --fs-xl: 24px;
   --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 20px;
@@ -28,8 +39,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
 
 /* ─── Sidebar ────────────────────────────────────────────── */
 #sidebar {
-  width: 180px;
-  min-width: 140px;
   flex-shrink: 0;
   background: #0e1117;
   border-right: 1px solid #333640;
@@ -248,6 +257,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
 .gs-item:hover { border-color:#4a5568; }
 .gs-topic { color:#93c5fd; font-weight:600; font-size:13px; margin-bottom:5px; }
 .gs-snip { color:#94a3b8; font-size:11px; line-height:1.55; }
+
+@media (max-width: 980px) {
+  #page-body { flex-direction: column; }
+  #sidebar {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    border-right: none;
+    border-bottom: 1px solid #333640;
+  }
+  #sidebar-resize { display: none; }
+}
 </style>
 </head>
 <body>
@@ -299,6 +320,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
       <button class="sb-btn active" id="btn-logs" onclick="showView('logs')">&#128203; Log Viewer</button>
       <button class="sb-btn" id="btn-settings" onclick="showView('settings')">&#9881;&#65039; Settings</button>
     </div>
+    <div id="sidebar-resize"></div>
   </div>
 
   <!-- Main area: log viewer OR settings panel -->
@@ -571,6 +593,7 @@ viewer = new LogViewerPanel({
 });
 viewer.open();
 loadRotationData();
+window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
 </script>
 
 <!-- ── Help overlay JS ── -->

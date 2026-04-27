@@ -1,0 +1,3197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Coin Data - PBGui</title>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
+  <script src="/app/js/sidebar_resize.js?v=1"></script>
+  <style>
+    :root {
+      --bg: #0e1117;
+      --bg2: #1a202c;
+      --bg3: #252d3d;
+      --border: #2d3748;
+      --text: #e2e8f0;
+      --text-dim: #94a3b8;
+      --accent: #63b3ed;
+      --blue: #1d4ed8;
+      --font: 'Segoe UI', system-ui, sans-serif;
+      --fs-xs: 11px;
+      --fs-sm: 13px;
+      --fs-base: 14px;
+      --fs-md: 15px;
+      --fs-lg: 18px;
+      --fs-xl: 22px;
+      --sp-xs: 4px;
+      --sp-sm: 8px;
+      --sp-md: 12px;
+      --sp-lg: 20px;
+      --input-h: 32px;
+      --btn-h: 32px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #0e1117;
+      color: #e2e8f0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: var(--fs-base);
+    }
+
+    #page-body {
+      display: flex;
+      height: calc(100vh - 52px);
+      overflow: hidden;
+    }
+
+    #sidebar {
+      flex-shrink: 0;
+      background: #0e1117;
+      border-right: 1px solid #1e2736;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #sidebar-sticky {
+      padding: 0.5rem 0.5rem 0;
+      flex-shrink: 0;
+    }
+
+    #sidebar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.3rem 0.25rem 0.5rem;
+      gap: var(--sp-xs);
+      flex-wrap: wrap;
+    }
+
+    .sb-title {
+      font-size: var(--fs-sm);
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      color: #64748b;
+      font-weight: 700;
+    }
+
+    .sb-count {
+      font-size: var(--fs-sm);
+      background: #1a202c;
+      border: 1px solid #2d3748;
+      border-radius: 999px;
+      padding: 0.1rem 0.5rem;
+      color: #94a3b8;
+      font-weight: 600;
+    }
+
+    #sidebar-toolbar {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      padding: 0.2rem 0.1rem 0.6rem;
+      border-bottom: 1px solid #1e2736;
+    }
+
+    .sb-sep {
+      border: none;
+      border-top: 1px solid #1e2736;
+      margin: 4px 0;
+    }
+
+    .sb-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-sm);
+      width: 100%;
+      padding: 0.42rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid #2d3748;
+      background: #1a202c;
+      color: #94a3b8;
+      font-size: var(--fs-base);
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+      text-align: left;
+    }
+
+    .sb-btn:hover {
+      background: #252d3d;
+      color: #e2e8f0;
+      border-color: #4a5568;
+    }
+
+    .sb-btn.primary {
+      background: #1d4ed8;
+      border-color: #1d4ed8;
+      color: #fff;
+    }
+
+    .sb-btn.primary:hover { background: #2563eb; }
+    .sb-btn.info { color: #63b3ed; border-color: rgba(99, 179, 237, 0.28); }
+    .sb-btn.info:hover { background: rgba(99, 179, 237, 0.1); }
+    .sb-btn.active {
+      background: rgba(38, 166, 154, 0.12);
+      border-color: #26a69a;
+      color: #26a69a;
+    }
+    .sb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    #sidebar-meta {
+      padding: 0.7rem 0.6rem 0.9rem;
+      display: grid;
+      gap: 0.55rem;
+    }
+
+    .meta-card {
+      background: #121826;
+      border: 1px solid #1f2a3a;
+      border-radius: 10px;
+      padding: 0.75rem 0.8rem;
+    }
+
+    .meta-label {
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #64748b;
+      margin-bottom: 0.25rem;
+    }
+
+    .meta-value {
+      font-size: var(--fs-md);
+      color: #e2e8f0;
+      font-weight: 600;
+    }
+
+    .meta-subtle {
+      font-size: var(--fs-sm);
+      color: #94a3b8;
+    }
+
+    #action-status {
+      min-height: 40px;
+      font-size: var(--fs-sm);
+      color: #94a3b8;
+      line-height: 1.5;
+    }
+
+    #main-content {
+      flex: 1;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      padding: var(--sp-lg);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-md);
+    }
+
+    .page-summary {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    #main-summary {
+      justify-content: flex-start;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.28rem 0.6rem;
+      border-radius: 999px;
+      background: #1a202c;
+      border: 1px solid #2d3748;
+      color: #cbd5e0;
+      font-size: var(--fs-sm);
+      white-space: nowrap;
+    }
+
+    .warning-box {
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      background: rgba(245, 158, 11, 0.08);
+      color: #fbbf24;
+      border-radius: 10px;
+      padding: 0.8rem 0.95rem;
+      font-size: var(--fs-sm);
+      line-height: 1.6;
+    }
+
+    .panel {
+      border: 1px solid #1f2a3a;
+      border-radius: 12px;
+      background: #111827;
+      overflow: hidden;
+    }
+
+    #main-panel,
+    #unmatched-panel,
+    #hip3-panel {
+      min-height: 0;
+    }
+
+    #hip3-panel.active-panel,
+    #hip3-panel.active-panel[open] {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      min-height: 0;
+      height: 0;
+    }
+
+    #hip3-panel > .panel-body {
+      overflow: hidden;
+    }
+
+    #hip3-panel.active-panel > .panel-body {
+      padding: 0;
+    }
+
+    #hip3-panel .table-wrap {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-x: auto;
+      overflow-y: scroll;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable both-edges;
+    }
+
+    #hip3-panel.active-panel .table-wrap {
+      padding: 0 1rem 1rem;
+    }
+
+    #main-panel {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+    }
+
+    #filters-panel {
+      flex: 0 0 auto;
+      overflow: visible;
+    }
+
+    #filters-panel .panel-body { overflow: visible; }
+
+    details.panel[open] {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+    }
+
+    details.panel > .panel-body {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-sm);
+      padding: var(--sp-sm) var(--sp-md);
+      border-bottom: 1px solid #2d3748;
+      background: #131b2b;
+    }
+
+    .panel-title {
+      font-size: var(--fs-md);
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+
+    .panel-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+
+    .panel-meta {
+      font-size: var(--fs-sm);
+      color: #94a3b8;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: min(52vw, 760px);
+    }
+
+    .panel-body { padding: 1rem; }
+
+    .filters-grid {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) minmax(130px, 0.7fr) minmax(130px, 0.7fr) minmax(240px, 1.45fr) auto auto;
+      gap: var(--sp-sm);
+      align-items: end;
+    }
+
+    .field {
+      display: grid;
+      gap: 0.35rem;
+      min-width: 0;
+    }
+
+    .field-label {
+      font-size: var(--fs-sm);
+      color: #94a3b8;
+      font-weight: 600;
+    }
+
+    input[type="number"],
+    .stepper-input,
+    select,
+    .multi-summary {
+      width: 100%;
+      height: var(--input-h);
+      padding: 0 0.75rem;
+      border-radius: 8px;
+      border: 1px solid #2d3748;
+      background: #1a202c;
+      color: #e2e8f0;
+      font-size: var(--fs-base);
+      outline: none;
+    }
+
+    input[type="number"]:focus,
+    .stepper-input:focus,
+    select:focus,
+    .multi-summary:focus {
+      border-color: #4a5568;
+    }
+
+    .num-stepper {
+      display: flex;
+      align-items: center;
+    }
+
+    .num-stepper input {
+      flex: 1;
+      min-width: 0;
+      border-radius: 0 !important;
+      text-align: center;
+    }
+
+    .num-stepper input[type="number"]::-webkit-inner-spin-button,
+    .num-stepper input[type="number"]::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    .num-stepper input[type="number"] {
+      appearance: textfield;
+      -moz-appearance: textfield;
+    }
+
+    .stepper-btn {
+      width: 28px;
+      height: var(--input-h);
+      flex-shrink: 0;
+      background: #252d3d;
+      border: 1px solid #2d3748;
+      color: #e2e8f0;
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      padding: 0;
+    }
+
+    .stepper-btn:first-child {
+      border-radius: 8px 0 0 8px;
+      border-right: none;
+    }
+
+    .stepper-btn:last-child {
+      border-radius: 0 8px 8px 0;
+      border-left: none;
+    }
+
+    .stepper-btn:hover {
+      background: #63b3ed;
+      color: #0b1220;
+      border-color: #63b3ed;
+    }
+
+    .stepper-btn:active {
+      opacity: 0.8;
+    }
+
+    .filters-status {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--sp-sm);
+      min-width: 0;
+    }
+
+    .filters-status .pill {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .filters-reset {
+      display: flex;
+      align-items: end;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      height: var(--btn-h);
+      padding: 0 0.9rem;
+      border: 1px solid #2d3748;
+      border-radius: 8px;
+      background: #1a202c;
+      color: #cbd5e0;
+      font-size: var(--fs-base);
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+
+    .btn:hover {
+      background: #252d3d;
+      border-color: #4a5568;
+      color: #fff;
+    }
+
+    .btn.secondary {
+      color: #63b3ed;
+      border-color: rgba(99, 179, 237, 0.25);
+    }
+
+    .ms-wrap {
+      border: 1px solid #2d3748;
+      border-radius: 8px;
+      background: #111827;
+      min-height: var(--input-h);
+      padding: 2px 4px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+      align-items: center;
+      cursor: text;
+      position: relative;
+    }
+
+    .ms-wrap:focus-within {
+      border-color: #4a5568;
+    }
+
+    .field .ms-wrap input.ms-input {
+      border: none;
+      background: transparent;
+      padding: 0;
+      height: 24px;
+      width: auto;
+      color: #e2e8f0;
+      font-size: var(--fs-base);
+      outline: none;
+      min-width: 80px;
+      flex: 1;
+      font-family: inherit;
+    }
+
+    .field .ms-wrap input.ms-input::placeholder {
+      color: #64748b;
+    }
+
+    .ms-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: #1a202c;
+      border: 1px solid #2d3748;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: var(--fs-xs);
+      color: #cbd5e0;
+    }
+
+    .ms-tag .ms-x {
+      cursor: pointer;
+      color: #94a3b8;
+      font-size: var(--fs-xs);
+      line-height: 1;
+    }
+
+    .ms-tag .ms-x:hover {
+      color: #f87171;
+    }
+
+    .ms-dropdown {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      right: 0;
+      background: #111827;
+      border: 1px solid #2d3748;
+      border-radius: 10px;
+      max-height: 280px;
+      overflow-y: auto;
+      z-index: 120;
+      display: none;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+    }
+
+    .ms-dropdown.open { display: block; }
+
+    .ms-option {
+      padding: 6px 8px;
+      font-size: var(--fs-sm);
+      color: #cbd5e0;
+      cursor: pointer;
+    }
+
+    .ms-option:hover,
+    .ms-option.highlighted {
+      background: #1a202c;
+    }
+
+    .ms-option.selected {
+      color: #63b3ed;
+    }
+
+    .details-card {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: min(640px, calc(100vw - 2rem));
+      height: min(440px, calc(100vh - 110px));
+      min-width: 520px;
+      min-height: 280px;
+      max-width: calc(100vw - 2rem);
+      max-height: calc(100vh - 88px);
+      border: 1px solid rgba(99, 179, 237, 0.2);
+      background: rgba(15, 23, 42, 0.7);
+      border-radius: 12px;
+      overflow: hidden;
+      flex-direction: column;
+      z-index: 125;
+      box-shadow: 0 24px 56px rgba(0, 0, 0, 0.38);
+      backdrop-filter: blur(12px);
+    }
+
+    .details-card.visible { display: flex; }
+
+    .details-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-sm);
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid rgba(99, 179, 237, 0.16);
+      flex-shrink: 0;
+      cursor: move;
+      user-select: none;
+    }
+
+    .details-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      position: relative;
+      z-index: 1;
+    }
+
+    .details-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: var(--btn-h);
+      padding: 0 var(--sp-md);
+      border-radius: 6px;
+      border: 1px solid rgba(99, 179, 237, 0.28);
+      background: rgba(99, 179, 237, 0.08);
+      color: #63b3ed;
+      font-size: var(--fs-base);
+      font-weight: 600;
+      text-decoration: none;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+
+    .details-link:hover {
+      background: rgba(99, 179, 237, 0.16);
+      border-color: rgba(99, 179, 237, 0.45);
+      color: #bfdbfe;
+    }
+
+    .details-title {
+      font-size: var(--fs-md);
+      font-weight: 700;
+      color: #e2e8f0;
+    }
+
+    .details-close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border-radius: 6px;
+      border: 1px solid #2d3748;
+      background: #1a202c;
+      color: #94a3b8;
+      font-size: var(--fs-md);
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+
+    .details-close:hover {
+      background: #252d3d;
+      border-color: #4a5568;
+      color: #e2e8f0;
+    }
+
+    .details-grid {
+      padding: 0.95rem 1rem 1rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: var(--sp-md);
+      overflow: auto;
+      flex: 1 1 auto;
+      min-height: 0;
+      align-content: start;
+    }
+
+    .kv {
+      display: grid;
+      gap: 0.2rem;
+      min-width: 0;
+    }
+
+    .kv.wide {
+      grid-column: 1 / -1;
+    }
+
+    .kv-label {
+      font-size: var(--fs-xs);
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .kv-value {
+      font-size: var(--fs-base);
+      color: #e2e8f0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .kv-value.wrap {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+      word-break: break-word;
+      line-height: 1.55;
+    }
+
+    .details-resize-handle {
+      position: absolute;
+      z-index: 3;
+    }
+
+    .details-resize-handle.side-top,
+    .details-resize-handle.side-bottom {
+      left: 12px;
+      right: 12px;
+      height: 10px;
+    }
+
+    .details-resize-handle.side-left,
+    .details-resize-handle.side-right {
+      top: 12px;
+      bottom: 12px;
+      width: 10px;
+    }
+
+    .details-resize-handle.side-top {
+      top: 0;
+      cursor: ns-resize;
+    }
+
+    .details-resize-handle.side-right {
+      right: 0;
+      cursor: ew-resize;
+    }
+
+    .details-resize-handle.side-bottom {
+      bottom: 0;
+      cursor: ns-resize;
+    }
+
+    .details-resize-handle.side-left {
+      left: 0;
+      cursor: ew-resize;
+    }
+
+    .details-resize-handle.corner {
+      width: 18px;
+      height: 18px;
+    }
+
+    .details-resize-handle.corner-top-left {
+      top: 0;
+      left: 0;
+      cursor: nwse-resize;
+    }
+
+    .details-resize-handle.corner-top-right {
+      top: 0;
+      right: 0;
+      cursor: nesw-resize;
+    }
+
+    .details-resize-handle.corner-bottom-right {
+      right: 0;
+      bottom: 0;
+      cursor: nwse-resize;
+    }
+
+    .details-resize-handle.corner-bottom-left {
+      left: 0;
+      bottom: 0;
+      cursor: nesw-resize;
+    }
+
+    .notice-box {
+      grid-column: 1 / -1;
+      border: 1px solid rgba(245, 158, 11, 0.28);
+      background: rgba(245, 158, 11, 0.08);
+      border-radius: 10px;
+      padding: 0.75rem 0.9rem;
+      color: #fcd34d;
+      font-size: var(--fs-sm);
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    details.panel > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: var(--sp-sm) var(--sp-md);
+      font-size: var(--fs-sm);
+      font-weight: 600;
+      color: #e2e8f0;
+      background: #131b2b;
+      border-bottom: 1px solid transparent;
+      user-select: none;
+    }
+
+    details.panel > summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-md);
+    }
+
+    details.panel > summary::-webkit-details-marker { display: none; }
+    details.panel > summary::before {
+      content: ">";
+      display: inline-block;
+      margin-right: 6px;
+      font-size: 10px;
+      transition: transform 0.12s;
+    }
+    details.panel[open] > summary::before { transform: rotate(90deg); }
+    details.panel[open] > summary { border-bottom-color: #2d3748; }
+
+    .summary-title {
+      display: inline-flex;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .summary-title-text {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .summary-inline-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      margin-left: auto;
+      min-width: 0;
+    }
+
+    .summary-field {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      min-width: 0;
+      cursor: default;
+    }
+
+    .summary-field-label {
+      font-size: var(--fs-sm);
+      color: #94a3b8;
+      white-space: nowrap;
+    }
+
+    .summary-field select {
+      min-width: 160px;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      flex: 1 1 auto;
+      min-height: 0;
+      scrollbar-width: thin;
+      scrollbar-color: #475569 #111827;
+    }
+
+    .table-wrap::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    .table-wrap::-webkit-scrollbar-track {
+      background: #111827;
+    }
+
+    .table-wrap::-webkit-scrollbar-thumb {
+      background: #475569;
+      border-radius: 999px;
+      border: 2px solid #111827;
+    }
+
+    .table-wrap::-webkit-scrollbar-thumb:hover {
+      background: #64748b;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #0f172a;
+      color: #94a3b8;
+      font-size: var(--fs-base);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-weight: 700;
+      text-align: left;
+      padding: 0.48rem 0.6rem;
+      line-height: 1.05;
+      border-bottom: 1px solid #1f2a3a;
+      white-space: nowrap;
+    }
+
+    th.sortable { cursor: pointer; }
+    th.sortable:hover { color: #e2e8f0; }
+
+    td {
+      padding: 0.28rem 0.6rem;
+      border-bottom: 1px solid #1f2a3a;
+      color: #dbe4ee;
+      font-size: var(--fs-md);
+      line-height: 1.08;
+      vertical-align: middle;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    tr.data-row:hover { background: rgba(255, 255, 255, 0.03); }
+    tr.data-row.selected { background: rgba(59, 130, 246, 0.12); }
+    tr.data-row { cursor: pointer; }
+
+    .mono {
+      font-family: 'Fira Code', 'Consolas', monospace;
+      font-size: var(--fs-sm);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 22px;
+      padding: 0.03rem 0.35rem;
+      border-radius: 999px;
+      font-size: var(--fs-xs);
+      line-height: 1;
+      font-weight: 700;
+      border: 1px solid transparent;
+    }
+
+    .badge.ok {
+      background: rgba(38, 166, 154, 0.15);
+      border-color: rgba(38, 166, 154, 0.3);
+      color: #5eead4;
+    }
+
+    .badge.dim {
+      background: rgba(148, 163, 184, 0.12);
+      border-color: rgba(148, 163, 184, 0.2);
+      color: #cbd5e0;
+    }
+
+    .badge.warn {
+      background: rgba(245, 158, 11, 0.14);
+      border-color: rgba(245, 158, 11, 0.28);
+      color: #fcd34d;
+    }
+
+    .tags-cell {
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: var(--sp-xs);
+      white-space: nowrap;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .tag-chip {
+      display: inline-flex;
+      align-items: center;
+      flex: 0 0 auto;
+      max-width: 82px;
+      padding: 0.02rem 0.34rem;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.12);
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      color: #cbd5e0;
+      font-size: var(--fs-xs);
+      line-height: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .empty-state {
+      padding: 2rem 1rem;
+      text-align: center;
+      color: #64748b;
+      font-size: var(--fs-md);
+    }
+
+    .hidden { display: none !important; }
+
+    #busy-overlay {
+      position: fixed;
+      inset: 52px 0 0 0;
+      background: rgba(2, 6, 23, 0.45);
+      backdrop-filter: blur(2px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 2600;
+    }
+
+    #busy-overlay.visible { display: flex; }
+
+    .busy-card {
+      min-width: 280px;
+      padding: 1rem 1.1rem;
+      border-radius: 12px;
+      border: 1px solid #2d3748;
+      background: #111827;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+      display: grid;
+      gap: var(--sp-sm);
+      text-align: center;
+    }
+
+    .busy-progress {
+      position: relative;
+      overflow: hidden;
+      flex: 1;
+      width: 100%;
+      height: 10px;
+      border-radius: 999px;
+      background: #1a2232;
+      border: 1px solid #2d3748;
+      box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.45);
+    }
+
+    .busy-progress-row {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+    }
+
+    .busy-progress-fill {
+      position: absolute;
+      inset: 1px auto 1px 1px;
+      width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #2c5282, #63b3ed 55%, #90cdf4);
+      box-shadow: 0 0 18px rgba(99, 179, 237, 0.35);
+      transition: width 0.18s ease;
+    }
+
+    .busy-progress-label {
+      min-width: 3.3rem;
+      text-align: right;
+      font-size: var(--fs-sm);
+      font-weight: 700;
+      color: #63b3ed;
+    }
+
+    .busy-title {
+      font-size: var(--fs-md);
+      font-weight: 700;
+      color: #e2e8f0;
+    }
+
+    .busy-subtle {
+      font-size: var(--fs-sm);
+      color: #94a3b8;
+    }
+
+    #help-ovl {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 3000;
+      width: min(900px, 95vw);
+      height: min(700px, 90vh);
+      min-width: 480px;
+      min-height: 300px;
+      background: #131b2b;
+      border: 1px solid #2d3748;
+      border-radius: 12px;
+      box-shadow: 0 20px 70px rgba(0, 0, 0, 0.9);
+      flex-direction: column;
+      overflow: hidden;
+      resize: both;
+    }
+
+    #help-ovl.visible { display: flex; }
+
+    #help-drag-handle {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 48px;
+      height: 46px;
+      cursor: move;
+      z-index: 2;
+    }
+
+    #help-ovl > .ovl-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .ovl-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.85rem 1.1rem 0.85rem 1.25rem;
+      border-bottom: 1px solid #1e2736;
+      flex-shrink: 0;
+      background: #111827;
+    }
+
+    .ovl-header-title {
+      font-size: var(--fs-md);
+      font-weight: 700;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .ovl-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      position: relative;
+      z-index: 3;
+    }
+
+    .ovl-close {
+      background: transparent;
+      border: none;
+      color: #64748b;
+      font-size: var(--fs-lg);
+      cursor: pointer;
+      padding: 0.2rem 0.35rem;
+      border-radius: 5px;
+      line-height: 1;
+      transition: color 0.12s, background 0.12s;
+    }
+
+    .ovl-close:hover {
+      color: #e2e8f0;
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .lang-pill {
+      display: flex;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .lang-pill button {
+      background: transparent;
+      border: none;
+      color: #64748b;
+      font-size: var(--fs-xs);
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      padding: 0.2rem 0.55rem;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+
+    .lang-pill button.active {
+      background: #1e3a5f;
+      color: #63b3ed;
+    }
+
+    .lang-pill button:hover:not(.active) {
+      background: rgba(255, 255, 255, 0.04);
+      color: #e2e8f0;
+    }
+
+    #help-body {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    #help-toc {
+      width: 230px;
+      min-width: 170px;
+      flex-shrink: 0;
+      border-right: 1px solid #1e2736;
+      overflow-y: auto;
+      padding: 0.5rem 0;
+      background: #0e1117;
+    }
+
+    #help-toc-filter {
+      width: calc(100% - 1.2rem);
+      margin: 0 0.6rem 0.4rem;
+      background: #1a202c;
+      color: #e2e8f0;
+      border: 1px solid #2d3748;
+      border-radius: 5px;
+      padding: 0.35rem 0.5rem;
+      font-size: var(--fs-sm);
+      outline: none;
+    }
+
+    #help-toc-filter:focus { border-color: #4a5568; }
+    #help-toc-filter::placeholder { color: #4a5568; }
+
+    .toc-item {
+      display: block;
+      padding: 0.42rem 0.9rem;
+      color: #94a3b8;
+      font-size: var(--fs-sm);
+      cursor: pointer;
+      border-left: 3px solid transparent;
+      transition: all 0.1s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .toc-item:hover {
+      background: #1a2030;
+      color: #e2e8f0;
+    }
+
+    .toc-item.active {
+      border-left-color: #63b3ed;
+      color: #63b3ed;
+      background: rgba(99, 179, 237, 0.07);
+      font-weight: 600;
+    }
+
+    #help-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem 1.8rem;
+      line-height: 1.7;
+      color: #cbd5e0;
+      font-size: var(--fs-base);
+    }
+
+    #help-content h1 {
+      font-size: var(--fs-xl);
+      color: #e2e8f0;
+      margin: 0 0 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid #1e2736;
+    }
+
+    #help-content h2 {
+      font-size: var(--fs-lg);
+      color: #e2e8f0;
+      margin: 1.5rem 0 0.5rem;
+    }
+
+    #help-content h3 {
+      font-size: var(--fs-md);
+      color: #cbd5e0;
+      margin: 1.1rem 0 0.35rem;
+    }
+
+    #help-content p { margin: 0.5rem 0; }
+
+    #help-content a {
+      color: #63b3ed;
+      text-decoration: none;
+    }
+
+    #help-content a:hover { text-decoration: underline; }
+    #help-content strong { color: #e2e8f0; }
+    #help-content em { color: #94a3b8; font-style: italic; }
+
+    #help-content code {
+      background: #1a202c;
+      color: #f6ad55;
+      padding: 0.1em 0.35em;
+      border-radius: 3px;
+      font-size: 0.85em;
+      font-family: 'Fira Code', 'Consolas', monospace;
+    }
+
+    #help-content pre {
+      background: #0e1117;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      padding: 0.9rem 1rem;
+      overflow-x: auto;
+      margin: 0.75rem 0;
+    }
+
+    #help-content pre code {
+      background: none;
+      padding: 0;
+      color: #a0aec0;
+    }
+
+    #help-content ul,
+    #help-content ol {
+      padding-left: 1.5rem;
+      margin: 0.5rem 0;
+    }
+
+    #help-content li { margin: 0.2rem 0; }
+
+    #help-content blockquote {
+      border-left: 3px solid #63b3ed;
+      margin: 0.75rem 0;
+      padding: 0.4rem 0.9rem;
+      background: rgba(99, 179, 237, 0.05);
+      border-radius: 0 5px 5px 0;
+      color: #94a3b8;
+    }
+
+    #help-content table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 0.75rem 0;
+    }
+
+    #help-content th,
+    #help-content td {
+      border: 1px solid #2d3748;
+      padding: 0.4rem 0.7rem;
+      text-align: left;
+      font-size: var(--fs-sm);
+    }
+
+    #help-content th {
+      background: #1a202c;
+      color: #e2e8f0;
+      font-weight: 600;
+    }
+
+    #help-content hr {
+      border: none;
+      border-top: 1px solid #1e2736;
+      margin: 1rem 0;
+    }
+
+    #help-content img {
+      max-width: 100%;
+      border-radius: 6px;
+      margin: 0.5rem 0;
+    }
+
+    .help-loading {
+      color: #4a5568;
+      font-style: italic;
+      padding: 2rem;
+      text-align: center;
+    }
+
+    @media (max-width: 1280px) {
+      .filters-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 980px) {
+      #page-body { flex-direction: column; }
+      #main-content { overflow-y: auto; }
+      #sidebar {
+        width: auto;
+        min-width: 0;
+        max-width: none;
+        border-right: none;
+        border-bottom: 1px solid #1e2736;
+      }
+      #sidebar-resize {
+        display: none;
+      }
+      #main-panel,
+      details.panel[open] {
+        flex: 0 0 auto;
+      }
+      .filters-grid,
+      .details-grid {
+        grid-template-columns: 1fr;
+      }
+      details.panel > summary {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .summary-inline-actions {
+        margin-left: 0;
+        width: 100%;
+      }
+      .summary-field {
+        width: 100%;
+      }
+      .summary-field select {
+        min-width: 0;
+        width: 100%;
+      }
+      .filters-status,
+      .filters-reset {
+        justify-content: flex-start;
+      }
+      .details-card {
+        top: 72px;
+        left: 1rem;
+        right: 1rem;
+        transform: none;
+        width: auto;
+        height: auto;
+        min-width: 0;
+        max-height: calc(100vh - 88px);
+      }
+
+      .details-resize-handle {
+        display: none;
+      }
+      .table-wrap {
+        flex: 0 0 auto;
+        max-height: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav id="topnav"></nav>
+
+  <div id="help-ovl">
+    <div class="ovl-panel">
+      <div id="help-drag-handle"></div>
+      <div class="ovl-header">
+        <div class="ovl-header-title">&#128218; Guide &amp; Help</div>
+        <div class="ovl-header-actions">
+          <div class="lang-pill">
+            <button id="help-lang-en" class="active">EN</button>
+            <button id="help-lang-de">DE</button>
+          </div>
+          <button class="ovl-close" id="help-close">&#x2715;</button>
+        </div>
+      </div>
+      <div id="help-body">
+        <div id="help-toc">
+          <input id="help-toc-filter" type="text" placeholder="Filter topics..." autocomplete="off">
+          <div id="help-toc-list"></div>
+        </div>
+        <div id="help-content"><div class="help-loading">Select a topic from the left.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="page-body">
+    <aside id="sidebar">
+      <div id="sidebar-sticky">
+        <div id="sidebar-header">
+          <span class="sb-title">Coin Data</span>
+          <span class="sb-count" id="sb-count">0 rows</span>
+        </div>
+
+        <div id="sidebar-toolbar">
+          <button class="sb-btn primary" id="btn-refresh-exchange">Refresh Selected Exchange</button>
+          <button class="sb-btn info" id="btn-refresh-all">Refresh All Exchanges</button>
+          <button class="sb-btn info" id="btn-refresh-cmc">Refresh CMC + Selected Exchange</button>
+          <button class="sb-btn info" id="btn-refresh-cmc-all">Refresh CMC + All Exchanges</button>
+          <hr class="sb-sep">
+          <button class="sb-btn" id="btn-view-main">Matched Symbols</button>
+          <button class="sb-btn" id="btn-view-unmatched">CMC Unmatched</button>
+          <button class="sb-btn" id="btn-view-hip3">HIP-3 Symbols</button>
+          <button class="sb-btn" id="btn-only-cpt">Only Copy Trading</button>
+        </div>
+      </div>
+      <div id="sidebar-resize"></div>
+    </aside>
+
+    <main id="main-content">
+      <div id="warning-box" class="warning-box hidden"></div>
+
+      <section class="panel" id="filters-panel">
+        <div class="panel-body">
+          <div class="filters-grid">
+            <label class="field">
+              <span class="field-label">Exchange</span>
+              <select id="filter-exchange"></select>
+            </label>
+            <label class="field">
+              <span class="field-label">market_cap</span>
+              <input id="filter-market-cap" type="number" min="0" step="250">
+            </label>
+            <label class="field">
+              <span class="field-label">vol/mcap</span>
+              <input id="filter-vol-mcap" class="stepper-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="field">
+              <span class="field-label">Tags</span>
+              <div class="ms-wrap" id="tag-filter-wrap">
+                <input class="ms-input" id="tag-filter-input" placeholder="Select tags..." autocomplete="off">
+                <div class="ms-dropdown" id="tag-options"></div>
+              </div>
+            </div>
+            <div class="filters-status">
+              <span class="pill" id="quotes-pill">Quotes: -</span>
+            </div>
+            <div class="filters-reset">
+              <button class="btn" id="btn-reset-filters">Reset</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="selected-card" class="details-card">
+        <div class="details-resize-handle side-top" data-resize="top"></div>
+        <div class="details-resize-handle side-right" data-resize="right"></div>
+        <div class="details-resize-handle side-bottom" data-resize="bottom"></div>
+        <div class="details-resize-handle side-left" data-resize="left"></div>
+        <div class="details-resize-handle corner corner-top-left" data-resize="top-left"></div>
+        <div class="details-resize-handle corner corner-top-right" data-resize="top-right"></div>
+        <div class="details-resize-handle corner corner-bottom-right" data-resize="bottom-right"></div>
+        <div class="details-resize-handle corner corner-bottom-left" data-resize="bottom-left"></div>
+        <div class="details-head">
+          <div class="details-title" id="selected-title">Selected symbol</div>
+          <div class="details-actions">
+            <a class="details-link" id="selected-cmc-link" href="#" target="_blank" rel="noopener noreferrer" title="Open on CoinMarketCap" hidden>Open CMC</a>
+            <button class="details-close" id="btn-close-details" type="button" title="Close details">&#x2715;</button>
+          </div>
+        </div>
+        <div class="details-grid" id="selected-grid"></div>
+      </section>
+
+      <details class="panel" id="unmatched-panel" open>
+        <summary id="unmatched-summary">CMC unmatched</summary>
+        <div class="panel-body">
+          <div class="table-wrap">
+            <table class="coin-unmatched-table">
+              <colgroup>
+                <col style="width: 18%">
+                <col style="width: 18%">
+                <col style="width: 16%">
+                <col style="width: 12%">
+                <col style="width: 36%">
+              </colgroup>
+              <thead>
+                <tr>
+                  <th class="sortable" data-table="unmatched" data-key="coin">Coin</th>
+                  <th class="sortable" data-table="unmatched" data-key="symbol">Symbol</th>
+                  <th class="sortable" data-table="unmatched" data-key="base">Base</th>
+                  <th class="sortable" data-table="unmatched" data-key="quote">Quote</th>
+                  <th class="sortable" data-table="unmatched" data-key="ccxt_symbol">CCXT Symbol</th>
+                </tr>
+              </thead>
+              <tbody id="unmatched-body"></tbody>
+            </table>
+          </div>
+          <div class="empty-state hidden" id="unmatched-empty">No unmatched CMC symbols for the selected exchange.</div>
+        </div>
+      </details>
+
+      <section class="panel" id="main-panel">
+        <div class="panel-head">
+          <div class="panel-title-wrap">
+            <div class="panel-title" id="main-panel-title">Filtered symbols</div>
+            <span class="panel-meta" id="main-panel-meta">Loading exchange status...</span>
+          </div>
+          <span class="pill" id="main-sort-pill">Sorted by market cap</span>
+        </div>
+        <div class="table-wrap">
+          <table class="coin-main-table">
+            <colgroup>
+              <col style="width: 6%">
+              <col style="width: 12%">
+              <col style="width: 6%">
+              <col style="width: 6%">
+              <col style="width: 5%">
+              <col style="width: 5%">
+              <col style="width: 8%">
+              <col style="width: 9%">
+              <col style="width: 9%">
+              <col style="width: 8%">
+              <col style="width: 18%">
+              <col style="width: 8%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th class="sortable" data-table="main" data-key="coin">Coin</th>
+                <th class="sortable" data-table="main" data-key="ccxt_symbol">CCXT Symbol</th>
+                <th class="sortable" data-table="main" data-key="base">Base</th>
+                <th class="sortable" data-table="main" data-key="quote">Quote</th>
+                <th class="sortable" data-table="main" data-key="copy_trading">CPT</th>
+                <th class="sortable" data-table="main" data-key="cmc_rank">Rank</th>
+                <th class="sortable" data-table="main" data-key="price">Price</th>
+                <th class="sortable" data-table="main" data-key="market_cap">Market Cap</th>
+                <th class="sortable" data-table="main" data-key="volume_24h">Volume 24h</th>
+                <th class="sortable" data-table="main" data-key="vol_mcap">vol/mcap</th>
+                <th>Tags</th>
+                <th>Notice</th>
+              </tr>
+            </thead>
+            <tbody id="main-body"></tbody>
+          </table>
+        </div>
+        <div class="empty-state hidden" id="main-empty">No symbols match the current filters.</div>
+      </section>
+
+      <details class="panel" id="hip3-panel">
+        <summary id="hip3-summary">
+          <span class="summary-title">
+            <span class="summary-title-text" id="hip3-summary-title">HIP-3 symbols</span>
+          </span>
+          <span class="summary-inline-actions">
+            <label class="summary-field hidden" id="field-hip3-dex">
+              <span class="summary-field-label">DEX</span>
+              <select id="filter-hip3-dex">
+                <option value="">All DEXes</option>
+              </select>
+            </label>
+          </span>
+        </summary>
+        <div class="panel-body">
+          <div class="table-wrap">
+            <table class="coin-hip3-table">
+              <colgroup>
+                <col style="width: 10%">
+                <col style="width: 12%">
+                <col style="width: 18%">
+                <col style="width: 10%">
+                <col style="width: 12%">
+                <col style="width: 14%">
+                <col style="width: 8%">
+                <col style="width: 16%">
+              </colgroup>
+              <thead>
+                <tr>
+                  <th class="sortable" data-table="hip3" data-key="dex">DEX</th>
+                  <th class="sortable" data-table="hip3" data-key="coin">Coin</th>
+                  <th class="sortable" data-table="hip3" data-key="ccxt_symbol">CCXT Symbol</th>
+                  <th class="sortable" data-table="hip3" data-key="quote">Quote</th>
+                  <th class="sortable" data-table="hip3" data-key="price">Price</th>
+                  <th class="sortable" data-table="hip3" data-key="volume_24h">Volume 24h</th>
+                  <th class="sortable" data-table="hip3" data-key="copy_trading">CPT</th>
+                  <th>Notice</th>
+                </tr>
+              </thead>
+              <tbody id="hip3-body"></tbody>
+            </table>
+          </div>
+          <div class="empty-state hidden" id="hip3-empty">No HIP-3 symbols match the current state.</div>
+        </div>
+      </details>
+    </main>
+  </div>
+
+  <div id="busy-overlay">
+    <div class="busy-card">
+      <div class="busy-title" id="busy-title">Working...</div>
+      <div class="busy-progress-row">
+        <div class="busy-progress" aria-hidden="true">
+          <div class="busy-progress-fill" id="busy-progress-fill"></div>
+        </div>
+        <div class="busy-progress-label" id="busy-progress-label">0%</div>
+      </div>
+      <div class="busy-subtle" id="busy-subtle">Please wait.</div>
+    </div>
+  </div>
+
+  <script src="/app/js/editor_shared.js?v=10"></script>
+  <script>
+    var TOKEN = "%%TOKEN%%";
+    var API_BASE = "%%API_BASE%%";
+    var ST_BASE = "%%ST_BASE%%";
+    var PBGUI_VERSION = "%%VERSION%%";
+    var PBGUI_SERIAL = "%%SERIAL%%";
+
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function formatCompact(value) {
+      var num = Number(value);
+      if (!isFinite(num)) return '-';
+      var abs = Math.abs(num);
+      if (abs >= 1e12) return (num / 1e12).toFixed(abs >= 1e13 ? 0 : 2) + 'T';
+      if (abs >= 1e9) return (num / 1e9).toFixed(abs >= 1e10 ? 0 : 2) + 'B';
+      if (abs >= 1e6) return (num / 1e6).toFixed(abs >= 1e7 ? 0 : 2) + 'M';
+      if (abs >= 1e3) return (num / 1e3).toFixed(abs >= 1e4 ? 0 : 2) + 'K';
+      return num.toFixed(num >= 100 ? 0 : 2);
+    }
+
+    function formatPrice(value) {
+      var num = Number(value);
+      if (!isFinite(num)) return '-';
+      if (num === 0) return '$0';
+      if (Math.abs(num) >= 1000) return '$' + formatCompact(num);
+      if (Math.abs(num) >= 1) return '$' + num.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+      return '$' + num.toPrecision(4);
+    }
+
+    function formatRatio(value) {
+      var num = Number(value);
+      if (!isFinite(num)) return '-';
+      return num.toFixed(4) + 'x';
+    }
+
+    function rowKey(row, tableName) {
+      return tableName + '::' + String(row.ccxt_symbol || row.symbol || row.coin || '');
+    }
+
+    var uiState = {
+      activeView: 'main',
+      selectedKey: '',
+      selectedTable: 'main'
+    };
+
+    var filters = {
+      exchange: '',
+      hip3_dex: '',
+      market_cap: 0,
+      vol_mcap: 10,
+      tags: [],
+      only_cpt: false
+    };
+    var filterDrafts = {
+      market_cap: null,
+      vol_mcap: null
+    };
+
+    var serverState = null;
+    var tagMsController = null;
+    var filterInputDebounceTimer = 0;
+    var loadStateRequestSeq = 0;
+    var busyJobPollTimer = 0;
+    var busyJobId = '';
+    var sortState = {
+      main: { key: 'market_cap', dir: 'desc' },
+      unmatched: { key: 'coin', dir: 'asc' },
+      hip3: { key: 'volume_24h', dir: 'desc' }
+    };
+    var helpLang = 'EN';
+    var helpTopics = [];
+    var helpSel = 0;
+    var helpDefaultTopic = 'coin data';
+
+    function mdToHtml(md) {
+      var lines = md.split('\n');
+      var html = '';
+      var inPre = false;
+      var preBuf = '';
+      var inUl = false;
+      var inOl = false;
+
+      function flushList() {
+        if (inUl) { html += '</ul>'; inUl = false; }
+        if (inOl) { html += '</ol>'; inOl = false; }
+      }
+
+      function inlineFormat(text) {
+        text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+        text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">');
+        text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+        text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        text = text.replace(/__(.+?)__/g, '<strong>$1</strong>');
+        text = text.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        text = text.replace(/_(.+?)_/g, '<em>$1</em>');
+        return text;
+      }
+
+      for (var i = 0; i < lines.length; i += 1) {
+        var line = lines[i];
+        if (line.match(/^```/)) {
+          if (!inPre) {
+            flushList();
+            inPre = true;
+            preBuf = '';
+          } else {
+            html += '<pre><code>' + preBuf.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</code></pre>';
+            inPre = false;
+          }
+          continue;
+        }
+        if (inPre) {
+          preBuf += (preBuf ? '\n' : '') + line;
+          continue;
+        }
+        if (line.match(/^---+$/) || line.match(/^\*\*\*+$/)) {
+          flushList();
+          html += '<hr>';
+          continue;
+        }
+        var heading = line.match(/^(#{1,6})\s+(.*)/);
+        if (heading) {
+          flushList();
+          var level = heading[1].length;
+          html += '<h' + level + '>' + inlineFormat(heading[2]) + '</h' + level + '>';
+          continue;
+        }
+        if (line.match(/^>\s?/)) {
+          flushList();
+          html += '<blockquote>' + inlineFormat(line.replace(/^>\s?/, '')) + '</blockquote>';
+          continue;
+        }
+        var ulMatch = line.match(/^[\-*]\s+(.*)/);
+        if (ulMatch) {
+          if (!inUl) {
+            if (inOl) { html += '</ol>'; inOl = false; }
+            html += '<ul>';
+            inUl = true;
+          }
+          html += '<li>' + inlineFormat(ulMatch[1]) + '</li>';
+          continue;
+        }
+        var olMatch = line.match(/^\d+\.\s+(.*)/);
+        if (olMatch) {
+          if (!inOl) {
+            if (inUl) { html += '</ul>'; inUl = false; }
+            html += '<ol>';
+            inOl = true;
+          }
+          html += '<li>' + inlineFormat(olMatch[1]) + '</li>';
+          continue;
+        }
+        if (line.trim() === '') {
+          flushList();
+          html += '<p></p>';
+          continue;
+        }
+        flushList();
+        html += '<p>' + inlineFormat(line) + '</p>';
+      }
+      flushList();
+      return html;
+    }
+
+    function renderHelpToc() {
+      var helpFilter = document.getElementById('help-toc-filter');
+      var helpTocList = document.getElementById('help-toc-list');
+      var filterValue = helpFilter.value.trim().toLowerCase();
+      helpTocList.innerHTML = '';
+      helpTopics.forEach(function (topic, index) {
+        if (filterValue && topic.title.toLowerCase().indexOf(filterValue) === -1) return;
+        var item = document.createElement('div');
+        item.className = 'toc-item' + (index === helpSel ? ' active' : '');
+        item.textContent = topic.title;
+        item.addEventListener('click', function () {
+          loadHelpTopic(index);
+        });
+        helpTocList.appendChild(item);
+      });
+    }
+
+    function loadHelpTopic(index) {
+      var helpContent = document.getElementById('help-content');
+      helpSel = index;
+      renderHelpToc();
+      var topic = helpTopics[index];
+      if (!topic) return;
+      helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
+      fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+        .then(function (response) { return response.json(); })
+        .then(function (payload) {
+          helpContent.innerHTML = mdToHtml(payload.content || '');
+          helpContent.scrollTop = 0;
+        })
+        .catch(function () {
+          helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>';
+        });
+    }
+
+    function loadHelpIndex(keyword) {
+      var helpTocList = document.getElementById('help-toc-list');
+      helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
+      fetch('/api/help/index?lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+        .then(function (response) { return response.json(); })
+        .then(function (data) {
+          helpTopics = data || [];
+          renderHelpToc();
+          if (!helpTopics.length) {
+            document.getElementById('help-content').innerHTML = '<div class="help-loading">No help topics available.</div>';
+            return;
+          }
+          var startIdx = 0;
+          if (keyword) {
+            var search = keyword.toLowerCase();
+            for (var i = 0; i < helpTopics.length; i += 1) {
+              if (helpTopics[i].title.toLowerCase().indexOf(search) !== -1 ||
+                  (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(search.replace(/\s+/g, '_')) !== -1)) {
+                startIdx = i;
+                break;
+              }
+            }
+          }
+          loadHelpTopic(startIdx);
+        })
+        .catch(function () {
+          helpTocList.innerHTML = '<div class="help-loading">Failed to load topics.</div>';
+        });
+    }
+
+    function initHelpOverlay() {
+      var helpOvl = document.getElementById('help-ovl');
+      var helpFilter = document.getElementById('help-toc-filter');
+      var helpDragHandle = document.getElementById('help-drag-handle');
+      var helpLangEN = document.getElementById('help-lang-en');
+      var helpLangDE = document.getElementById('help-lang-de');
+      var helpClose = document.getElementById('help-close');
+
+      helpFilter.addEventListener('input', renderHelpToc);
+      helpLangEN.addEventListener('click', function () {
+        if (helpLang === 'EN') return;
+        helpLang = 'EN';
+        helpLangEN.classList.add('active');
+        helpLangDE.classList.remove('active');
+        loadHelpIndex(helpDefaultTopic);
+      });
+      helpLangDE.addEventListener('click', function () {
+        if (helpLang === 'DE') return;
+        helpLang = 'DE';
+        helpLangDE.classList.add('active');
+        helpLangEN.classList.remove('active');
+        loadHelpIndex(helpDefaultTopic);
+      });
+      helpClose.addEventListener('click', function () {
+        helpOvl.classList.remove('visible');
+      });
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') {
+          helpOvl.classList.remove('visible');
+        }
+      });
+
+      (function () {
+        var startX;
+        var startY;
+        var boxLeft;
+        var boxTop;
+        helpDragHandle.addEventListener('mousedown', function (event) {
+          event.preventDefault();
+          var rect = helpOvl.getBoundingClientRect();
+          helpOvl.style.transform = 'none';
+          helpOvl.style.left = rect.left + 'px';
+          helpOvl.style.top = rect.top + 'px';
+          startX = event.clientX;
+          startY = event.clientY;
+          boxLeft = rect.left;
+          boxTop = rect.top;
+          function onMove(moveEvent) {
+            helpOvl.style.left = (boxLeft + moveEvent.clientX - startX) + 'px';
+            helpOvl.style.top = (boxTop + moveEvent.clientY - startY) + 'px';
+          }
+          function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          }
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+      }());
+
+      window._openCoinDataHelp = function () {
+        helpOvl.classList.add('visible');
+        if (!helpTopics.length) {
+          loadHelpIndex(helpDefaultTopic);
+          return;
+        }
+        var search = helpDefaultTopic.toLowerCase();
+        for (var i = 0; i < helpTopics.length; i += 1) {
+          if (helpTopics[i].title.toLowerCase().indexOf(search) !== -1 ||
+              (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(search.replace(/\s+/g, '_')) !== -1)) {
+            loadHelpTopic(i);
+            return;
+          }
+        }
+        loadHelpTopic(0);
+      };
+      window.PBGUI_HELP_OPENER = window._openCoinDataHelp;
+    }
+
+    function getUiStorageKey() {
+      return 'coin-data-ui-state';
+    }
+
+    function loadUiState() {
+      try {
+        var raw = localStorage.getItem(getUiStorageKey());
+        if (!raw) return;
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          if (parsed.activeView === 'main' || parsed.activeView === 'unmatched' || parsed.activeView === 'hip3') {
+            uiState.activeView = parsed.activeView;
+            uiState.selectedTable = parsed.activeView;
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to load Coin Data UI state', error);
+      }
+    }
+
+    function saveUiState() {
+      try {
+        localStorage.setItem(getUiStorageKey(), JSON.stringify({
+          activeView: uiState.activeView
+        }));
+      } catch (error) {
+        console.warn('Failed to save Coin Data UI state', error);
+      }
+    }
+
+    function loadFiltersFromQuery() {
+      var params = new URLSearchParams(window.location.search);
+      if (params.get('exchange')) filters.exchange = params.get('exchange');
+      if (params.get('hip3_dex')) filters.hip3_dex = params.get('hip3_dex');
+      if (params.get('market_cap')) filters.market_cap = Number(params.get('market_cap')) || 0;
+      if (params.get('vol_mcap')) filters.vol_mcap = Number(params.get('vol_mcap')) || 0;
+      if (params.get('only_cpt') === '1') filters.only_cpt = true;
+      if (params.get('tags')) {
+        filters.tags = params.get('tags').split(',').map(function (tag) {
+          return tag.trim();
+        }).filter(Boolean);
+      }
+    }
+
+    function saveFiltersToQuery() {
+      var params = new URLSearchParams(window.location.search);
+      params.set('exchange', filters.exchange || '');
+      if (filters.hip3_dex) params.set('hip3_dex', filters.hip3_dex);
+      else params.delete('hip3_dex');
+      params.set('market_cap', String(filters.market_cap || 0));
+      params.set('vol_mcap', String(filters.vol_mcap || 0));
+      if (filters.tags.length) params.set('tags', filters.tags.join(','));
+      else params.delete('tags');
+      if (filters.only_cpt) params.set('only_cpt', '1'); else params.delete('only_cpt');
+      var nextUrl = window.location.pathname + '?' + params.toString();
+      window.history.replaceState({}, '', nextUrl);
+    }
+
+    function authHeaders() {
+      return {
+        'Authorization': 'Bearer ' + TOKEN,
+        'Content-Type': 'application/json'
+      };
+    }
+
+    function buildRefreshJobUrl(jobId) {
+      var params = new URLSearchParams();
+      params.set('token', TOKEN);
+      return API_BASE + '/refresh/jobs/' + encodeURIComponent(jobId) + '?' + params.toString();
+    }
+
+    function updateBusyProgress(percent, subtle) {
+      var safePercent = typeof percent === 'number' && isFinite(percent)
+        ? Math.max(0, Math.min(100, percent))
+        : 0;
+      var label = safePercent.toFixed(1).replace(/\.0$/, '');
+      document.getElementById('busy-progress-fill').style.width = safePercent + '%';
+      document.getElementById('busy-progress-label').textContent = label + '%';
+      if (typeof subtle === 'string') {
+        document.getElementById('busy-subtle').textContent = subtle;
+      }
+    }
+
+    function stopBusyPolling() {
+      if (busyJobPollTimer) {
+        window.clearInterval(busyJobPollTimer);
+        busyJobPollTimer = 0;
+      }
+      busyJobId = '';
+    }
+
+    function showBusy(title, subtle) {
+      stopBusyPolling();
+      document.getElementById('busy-title').textContent = title || 'Working...';
+      updateBusyProgress(0, subtle || 'Please wait.');
+      document.getElementById('busy-overlay').classList.add('visible');
+    }
+
+    function hideBusy() {
+      stopBusyPolling();
+      document.getElementById('busy-overlay').classList.remove('visible');
+    }
+
+    function setActionStatus(message, isError) {
+      var node = document.getElementById('action-status');
+      if (!node) return;
+      node.textContent = message || 'Ready.';
+      node.style.color = isError ? '#fca5a5' : '#94a3b8';
+    }
+
+    function toggleButtonState(buttonId, active) {
+      var button = document.getElementById(buttonId);
+      if (button) button.classList.toggle('active', !!active);
+    }
+
+    function supportsHip3(exchange) {
+      return String(exchange || '').toLowerCase() === 'hyperliquid';
+    }
+
+    function supportsCopyTradingFilter(exchange) {
+      var exchangeId = String(exchange || '').toLowerCase();
+      return exchangeId === 'binance' || exchangeId === 'bitget' || exchangeId === 'bybit';
+    }
+
+    function normalizeExchangeSpecificState(exchange) {
+      if (!supportsHip3(exchange) && uiState.activeView === 'hip3') {
+        uiState.activeView = 'main';
+        uiState.selectedTable = 'main';
+        uiState.selectedKey = '';
+      }
+      if (!supportsHip3(exchange)) {
+        filters.hip3_dex = '';
+      }
+      if (!supportsCopyTradingFilter(exchange)) {
+        filters.only_cpt = false;
+      }
+      if (uiState.selectedTable === 'hip3' && !supportsHip3(exchange)) {
+        uiState.selectedTable = 'main';
+        uiState.selectedKey = '';
+      }
+    }
+
+    function syncConditionalButtons() {
+      var exchange = filters.exchange;
+      document.getElementById('btn-view-hip3').classList.toggle('hidden', !supportsHip3(exchange));
+      document.getElementById('btn-only-cpt').classList.toggle('hidden', !supportsCopyTradingFilter(exchange));
+    }
+
+    function syncToggleButtons() {
+      syncConditionalButtons();
+      toggleButtonState('btn-only-cpt', filters.only_cpt);
+      toggleButtonState('btn-view-main', uiState.activeView === 'main');
+      toggleButtonState('btn-view-unmatched', uiState.activeView === 'unmatched');
+      toggleButtonState('btn-view-hip3', uiState.activeView === 'hip3');
+    }
+
+    function buildStateUrl() {
+      var params = new URLSearchParams();
+      var exchange = filters.exchange;
+      if (filters.exchange) params.set('exchange', filters.exchange);
+      params.set('market_cap', String(filters.market_cap || 0));
+      params.set('vol_mcap', String(filters.vol_mcap || 0));
+      if (filters.only_cpt && supportsCopyTradingFilter(exchange)) params.set('only_cpt', 'true');
+      filters.tags.forEach(function (tag) { params.append('tags', tag); });
+      params.set('token', TOKEN);
+      return API_BASE + '/state?' + params.toString();
+    }
+
+    function applyServerState(nextState) {
+      serverState = nextState;
+      filters.exchange = nextState.filters.exchange;
+      filters.market_cap = Number(nextState.filters.market_cap || 0);
+      filters.vol_mcap = Number(nextState.filters.vol_mcap || 0);
+      filters.tags = (nextState.filters.tags || []).slice();
+      filters.only_cpt = !!nextState.filters.only_cpt;
+      normalizeExchangeSpecificState(filters.exchange);
+      if (uiState.selectedKey) {
+        var allRows = [].concat(nextState.rows || [], nextState.hip3_rows || [], nextState.unmatched_rows || []);
+        var exists = allRows.some(function (row) {
+          return rowKey(row, uiState.selectedTable) === uiState.selectedKey;
+        });
+        if (!exists) {
+          uiState.selectedKey = '';
+          uiState.selectedTable = 'main';
+        }
+      }
+      renderPage();
+      saveFiltersToQuery();
+      saveUiState();
+    }
+
+    function loadState() {
+      var requestSeq = ++loadStateRequestSeq;
+      setActionStatus('Loading Coin Data...', false);
+      return fetch(buildStateUrl(), { cache: 'no-store' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.json();
+        })
+        .then(function (data) {
+          if (requestSeq !== loadStateRequestSeq) return;
+          applyServerState(data);
+          setActionStatus('Ready.', false);
+        })
+        .catch(function (error) {
+          if (requestSeq !== loadStateRequestSeq) return;
+          setActionStatus('Failed to load Coin Data: ' + error.message, true);
+          throw error;
+        });
+    }
+
+    function pollRefreshJob(jobId, okFallback) {
+      return fetch(buildRefreshJobUrl(jobId), { cache: 'no-store' })
+        .then(function (response) {
+          if (!response.ok) {
+            return response.json().catch(function () { return {}; }).then(function (payload) {
+              throw new Error(payload.detail || ('HTTP ' + response.status));
+            });
+          }
+          return response.json();
+        })
+        .then(function (payload) {
+          var job = payload.job || {};
+          if (busyJobId !== jobId) return;
+          updateBusyProgress(Number(job.percent || 0), job.message || 'Working...');
+          if (job.status === 'completed') {
+            if (job.state) applyServerState(job.state);
+            setActionStatus(job.result_message || okFallback, false);
+            hideBusy();
+            return;
+          }
+          if (job.status === 'error') {
+            setActionStatus(job.error || job.message || 'Refresh failed', true);
+            hideBusy();
+          }
+        });
+    }
+
+    function startRefreshJobPolling(jobId, okFallback) {
+      stopBusyPolling();
+      busyJobId = jobId;
+      pollRefreshJob(jobId, okFallback)
+        .catch(function (error) {
+          if (busyJobId !== jobId) return;
+          setActionStatus(error.message, true);
+          hideBusy();
+        });
+      busyJobPollTimer = window.setInterval(function () {
+        pollRefreshJob(jobId, okFallback)
+          .catch(function (error) {
+            if (busyJobId !== jobId) return;
+            setActionStatus(error.message, true);
+            hideBusy();
+          });
+      }, 350);
+    }
+
+    function runRefresh(path, busyTitle, okFallback) {
+      showBusy(busyTitle, 'Starting refresh...');
+      setActionStatus(busyTitle + '...', false);
+      return fetch(API_BASE + path, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          exchange: filters.exchange,
+          market_cap: filters.market_cap,
+          vol_mcap: filters.vol_mcap,
+          tags: filters.tags,
+          only_cpt: filters.only_cpt && supportsCopyTradingFilter(filters.exchange)
+        })
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            return response.json().catch(function () { return {}; }).then(function (payload) {
+              throw new Error(payload.detail || ('HTTP ' + response.status));
+            });
+          }
+          return response.json();
+        })
+        .then(function (payload) {
+          if (!payload.job_id) {
+            throw new Error('Refresh job did not return a job id');
+          }
+          startRefreshJobPolling(payload.job_id, okFallback);
+        })
+        .catch(function (error) {
+          setActionStatus(error.message, true);
+          hideBusy();
+        })
+    }
+
+    function renderWarnings() {
+      var node = document.getElementById('warning-box');
+      var warnings = (serverState && serverState.warnings) || [];
+      if (!warnings.length) {
+        node.classList.add('hidden');
+        node.innerHTML = '';
+        return;
+      }
+      node.classList.remove('hidden');
+      node.innerHTML = warnings.map(function (warning) {
+        return '<div>' + escapeHtml(warning) + '</div>';
+      }).join('');
+    }
+
+    function renderSidebarMeta() {
+      var currentCount = serverState.counts.main || 0;
+      if (uiState.activeView === 'unmatched') currentCount = serverState.counts.unmatched_visible || 0;
+      if (uiState.activeView === 'hip3') currentCount = getFilteredHip3Rows().length;
+      document.getElementById('sb-count').textContent = currentCount + ' rows';
+      document.getElementById('btn-refresh-cmc').removeAttribute('title');
+    }
+
+    function renderSummaries() {
+      var hip3VisibleCount = getFilteredHip3Rows().length;
+      var hip3TotalCount = serverState.counts.hip3 || 0;
+      var hip3CountLabel = filters.hip3_dex
+        ? (hip3VisibleCount + ' of ' + hip3TotalCount)
+        : String(hip3VisibleCount);
+      document.getElementById('btn-view-main').textContent = 'Matched Symbols (' + (serverState.counts.main || 0) + ')';
+      document.getElementById('btn-view-unmatched').textContent = 'CMC Unmatched (' + (serverState.counts.unmatched_visible || 0) + ')';
+      document.getElementById('btn-view-hip3').textContent = 'HIP-3 Symbols (' + hip3CountLabel + ')';
+      document.getElementById('btn-only-cpt').textContent = 'Only Copy Trading';
+      document.getElementById('quotes-pill').textContent = 'Quotes: ' + ((serverState.options.quote_filter || []).join(', ') || '-');
+      document.getElementById('main-panel-title').textContent = 'Matched symbols (' + (serverState.counts.main || 0) + ')';
+      document.getElementById('main-panel-meta').textContent = serverState.meta.exchange_line + ' | ' + serverState.meta.cmc_line;
+      document.getElementById('main-panel-meta').title = [
+        serverState.meta.exchange_line_detail || serverState.meta.exchange_line,
+        serverState.meta.cmc_line_detail || serverState.meta.cmc_line
+      ].filter(Boolean).join(' | ');
+      document.getElementById('unmatched-summary').textContent = serverState.sections.unmatched_title;
+      document.getElementById('hip3-summary-title').textContent = filters.hip3_dex
+        ? ('HIP-3 symbols (' + hip3VisibleCount + ' of ' + hip3TotalCount + ', DEX: ' + filters.hip3_dex + ')')
+        : serverState.sections.hip3_title;
+    }
+
+    function renderExchangeOptions() {
+      var select = document.getElementById('filter-exchange');
+      var options = serverState.options.exchanges || [];
+      select.innerHTML = options.map(function (exchange) {
+        var selected = exchange === filters.exchange ? ' selected' : '';
+        return '<option value="' + escapeHtml(exchange) + '"' + selected + '>' + escapeHtml(exchange) + '</option>';
+      }).join('');
+      syncFilterNumberInput('filter-market-cap', 'market_cap');
+      syncFilterNumberInput('filter-vol-mcap', 'vol_mcap');
+    }
+
+    function getHip3DexOptions() {
+      var seen = {};
+      var options = [];
+      ((serverState && serverState.hip3_rows) || []).forEach(function (row) {
+        var dex = String((row && row.dex) || '').trim();
+        if (!dex || seen[dex]) return;
+        seen[dex] = true;
+        options.push(dex);
+      });
+      return options.sort(function (left, right) {
+        return left.localeCompare(right);
+      });
+    }
+
+    function getFilteredHip3Rows() {
+      var rows = ((serverState && serverState.hip3_rows) || []).slice();
+      if (!filters.hip3_dex) return rows;
+      return rows.filter(function (row) {
+        return String((row && row.dex) || '') === filters.hip3_dex;
+      });
+    }
+
+    function renderHip3DexFilter() {
+      var field = document.getElementById('field-hip3-dex');
+      var select = document.getElementById('filter-hip3-dex');
+      var options = [];
+      if (!field || !select) return;
+
+      if (!supportsHip3(filters.exchange) || uiState.activeView !== 'hip3') {
+        filters.hip3_dex = '';
+        field.classList.add('hidden');
+        select.innerHTML = '<option value="">All DEXes</option>';
+        select.disabled = true;
+        return;
+      }
+
+      options = getHip3DexOptions();
+      if (filters.hip3_dex && options.indexOf(filters.hip3_dex) === -1) {
+        filters.hip3_dex = '';
+      }
+
+      field.classList.remove('hidden');
+      select.disabled = !options.length;
+      select.innerHTML = '<option value="">All DEXes</option>' + options.map(function (dex) {
+        var selected = dex === filters.hip3_dex ? ' selected' : '';
+        return '<option value="' + escapeHtml(dex) + '"' + selected + '>' + escapeHtml(dex) + '</option>';
+      }).join('');
+    }
+
+    function ensureTagController() {
+      if (tagMsController || !window.PBGuiEditorShared) return;
+      tagMsController = window.PBGuiEditorShared.createMultiselectController({
+        controllerName: 'coin-data-tags',
+        onAfterRender: function (id, state, renderOpts) {
+          if (id !== 'tag-filter-wrap') return;
+          var input = document.getElementById('tag-filter-input');
+          if (input) input.placeholder = state.selected.length ? '' : 'Select tags...';
+          filters.tags = tagMsController.getValues(id);
+          if (!(renderOpts && renderOpts.silent)) loadState();
+        }
+      });
+    }
+
+    function renderTagFilter() {
+      ensureTagController();
+      var input = document.getElementById('tag-filter-input');
+      var tags = serverState.options.tags || [];
+      if (!tagMsController || !input) return;
+      input.disabled = !tags.length;
+      input.value = '';
+      input.placeholder = tags.length ? 'Select tags...' : 'No tags available';
+      tagMsController.rebuild('tag-filter-wrap', tags, filters.tags, { silent: true });
+    }
+
+    function normalizeFilterNumberText(rawValue) {
+      return rawValue == null ? '' : String(rawValue).trim().replace(/,/g, '.');
+    }
+
+    function parseFilterNumber(rawValue, fallback) {
+      var normalized = normalizeFilterNumberText(rawValue);
+      if (normalized === '') return 0;
+      var parsed = Number(normalized);
+      return isFinite(parsed) ? parsed : fallback;
+    }
+
+    function isIncompleteFilterNumber(rawValue) {
+      var normalized = normalizeFilterNumberText(rawValue);
+      return normalized === '+' || normalized === '-' || normalized === '.' || normalized === '+.' || normalized === '-.' || /\.$/.test(normalized);
+    }
+
+    function syncFilterNumberInput(inputId, filterKey) {
+      var input = document.getElementById(inputId);
+      if (!input) return;
+      if (document.activeElement === input && filterDrafts[filterKey] !== null) {
+        input.value = filterDrafts[filterKey];
+        return;
+      }
+      if (filterDrafts[filterKey] !== null && !isIncompleteFilterNumber(filterDrafts[filterKey])) {
+        input.value = filterDrafts[filterKey];
+        return;
+      }
+      input.value = String(filters[filterKey] || 0);
+    }
+
+    function commitFilterNumberDraft(filterKey, rawValue) {
+      filterDrafts[filterKey] = rawValue == null ? '' : String(rawValue);
+      if (rawValue == null || rawValue === '') {
+        filters[filterKey] = 0;
+        return true;
+      }
+      if (isIncompleteFilterNumber(rawValue)) {
+        return false;
+      }
+      filters[filterKey] = parseFilterNumber(rawValue, filters[filterKey]);
+      return true;
+    }
+
+    function finalizeFilterNumberDraft(inputId, filterKey) {
+      var input = document.getElementById(inputId);
+      if (!input) return;
+      var rawValue = input.value;
+      var committed = commitFilterNumberDraft(filterKey, rawValue);
+      if (committed) return true;
+      filterDrafts[filterKey] = String(filters[filterKey] || 0);
+      input.value = filterDrafts[filterKey];
+      return true;
+    }
+
+    function applyFilterNumberValue(inputId, filterKey, rawValue, reloadNow) {
+      var input = document.getElementById(inputId);
+      var normalized = normalizeFilterNumberText(rawValue);
+      if (input) input.value = normalized;
+      filterDrafts[filterKey] = normalized;
+      filters[filterKey] = parseFilterNumber(normalized, filters[filterKey]);
+      if (reloadNow) triggerFilterReloadNow();
+      else scheduleFilterReload();
+    }
+
+    function filterKeyForInputId(inputId) {
+      if (inputId === 'filter-market-cap') return 'market_cap';
+      if (inputId === 'filter-vol-mcap') return 'vol_mcap';
+      return '';
+    }
+
+    function formatStepperValue(value) {
+      if (!isFinite(value)) return '0';
+      var rounded = Number(value.toFixed(12));
+      if (Math.abs(rounded - Math.round(rounded)) < 1e-12) {
+        return String(Math.round(rounded));
+      }
+      return rounded.toFixed(12).replace(/0+$/, '').replace(/\.$/, '');
+    }
+
+    function getDynamicVolMcapStepValue(current, direction) {
+      var values = (((serverState || {}).options || {}).vol_mcap_values || []).map(function (value) {
+        return Number(value);
+      }).filter(function (value) {
+        return isFinite(value) && value > 0;
+      });
+      var epsilon = 1e-12;
+      var i;
+      if (!values.length) return null;
+      if (direction > 0) {
+        for (i = 0; i < values.length; i += 1) {
+          if (values[i] > current + epsilon) return values[i];
+        }
+        return current;
+      }
+      for (i = values.length - 1; i >= 0; i -= 1) {
+        if (values[i] < current - epsilon) return values[i];
+      }
+      return current;
+    }
+
+    function stepFilterField(id, direction) {
+      var input = document.getElementById(id);
+      if (!input) return;
+      var filterKey = filterKeyForInputId(id);
+      if (filterKey === 'vol_mcap') {
+        var currentDynamic = parseFilterNumber(input.value, filters.vol_mcap);
+        var nextDynamic = getDynamicVolMcapStepValue(currentDynamic, direction);
+        if (nextDynamic == null) return;
+        if (Math.abs(nextDynamic - currentDynamic) < 1e-12) return;
+        applyFilterNumberValue(id, filterKey, formatStepperValue(nextDynamic), true);
+        return;
+      }
+      var step = parseFloat(input.step) || 1;
+      var min = input.min !== '' ? parseFloat(input.min) : -Infinity;
+      var max = input.max !== '' ? parseFloat(input.max) : Infinity;
+      var current = parseFloat(input.value);
+      if (!isFinite(current)) current = 0;
+      var decimals = (String(step).split('.')[1] || '').length;
+      var next = current + (direction * step);
+
+      next = Math.min(max, Math.max(min, parseFloat(next.toFixed(decimals))));
+      input.value = decimals > 0 ? next.toFixed(decimals) : String(next);
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    function initNumberSteppers() {
+      Array.prototype.forEach.call(document.querySelectorAll('input[type="number"], input.stepper-input'), function (input) {
+        if (input.parentNode && input.parentNode.classList.contains('num-stepper')) return;
+        if (!input.id) return;
+
+        var wrap = document.createElement('div');
+        wrap.className = 'num-stepper';
+        input.parentNode.insertBefore(wrap, input);
+
+        var minus = document.createElement('button');
+        minus.className = 'stepper-btn';
+        minus.type = 'button';
+        minus.textContent = '−';
+        minus.addEventListener('mousedown', function (event) {
+          event.preventDefault();
+        });
+        minus.addEventListener('click', function () {
+          stepFilterField(input.id, -1);
+        });
+
+        var plus = document.createElement('button');
+        plus.className = 'stepper-btn';
+        plus.type = 'button';
+        plus.textContent = '+';
+        plus.addEventListener('mousedown', function (event) {
+          event.preventDefault();
+        });
+        plus.addEventListener('click', function () {
+          stepFilterField(input.id, 1);
+        });
+
+        wrap.appendChild(minus);
+        wrap.appendChild(input);
+        wrap.appendChild(plus);
+
+        input.addEventListener('wheel', function (event) {
+          event.preventDefault();
+          stepFilterField(input.id, event.deltaY < 0 ? 1 : -1);
+        }, { passive: false });
+      });
+    }
+
+    function scheduleFilterReload() {
+      window.clearTimeout(filterInputDebounceTimer);
+      filterInputDebounceTimer = window.setTimeout(function () {
+        loadState();
+      }, 220);
+    }
+
+    function triggerFilterReloadNow() {
+      window.clearTimeout(filterInputDebounceTimer);
+      loadState();
+    }
+
+    function sortRows(rows, tableName) {
+      var state = sortState[tableName];
+      var direction = state.dir === 'asc' ? 1 : -1;
+      return rows.slice().sort(function (left, right) {
+        var lv = left[state.key];
+        var rv = right[state.key];
+        if (typeof lv === 'boolean') lv = lv ? 1 : 0;
+        if (typeof rv === 'boolean') rv = rv ? 1 : 0;
+        if (lv == null && rv == null) return 0;
+        if (lv == null) return 1;
+        if (rv == null) return -1;
+        if (typeof lv === 'number' && typeof rv === 'number') return (lv - rv) * direction;
+        return String(lv).localeCompare(String(rv)) * direction;
+      });
+    }
+
+    function renderTags(tags) {
+      if (!tags || !tags.length) return '-';
+      var shown = tags.slice(0, 3).map(function (tag) {
+        return '<span class="tag-chip" title="' + escapeHtml(tag) + '">' + escapeHtml(tag) + '</span>';
+      }).join('');
+      if (tags.length > 3) {
+        shown += '<span class="tag-chip" title="' + escapeHtml(tags.join(', ')) + '">+' + (tags.length - 3) + '</span>';
+      }
+      return '<div class="tags-cell" title="' + escapeHtml(tags.join(', ')) + '">' + shown + '</div>';
+    }
+
+    function noticeBadge(notice) {
+      if (!notice) return '<span class="badge dim">-</span>';
+      return '<span class="badge warn" title="' + escapeHtml(notice) + '">Notice</span>';
+    }
+
+    function cptBadge(copyTrading) {
+      return copyTrading
+        ? '<span class="badge ok">Yes</span>'
+        : '<span class="badge dim">No</span>';
+    }
+
+    function renderMainRows() {
+      var panel = document.getElementById('main-panel');
+      var body = document.getElementById('main-body');
+      var empty = document.getElementById('main-empty');
+      var shouldShow = uiState.activeView === 'main';
+      panel.classList.toggle('hidden', !shouldShow);
+      if (!shouldShow) return;
+      var rows = sortRows(serverState.rows || [], 'main');
+      if (!rows.length) {
+        body.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+      body.innerHTML = rows.map(function (row) {
+        var key = rowKey(row, 'main');
+        var selected = uiState.selectedKey === key ? ' selected' : '';
+        return '<tr class="data-row' + selected + '" data-table="main" data-key="' + escapeHtml(key) + '">' +
+          '<td title="' + escapeHtml(row.coin) + '">' + escapeHtml(row.coin) + '</td>' +
+          '<td class="mono" title="' + escapeHtml(row.ccxt_symbol) + '">' + escapeHtml(row.ccxt_symbol) + '</td>' +
+          '<td title="' + escapeHtml(row.base) + '">' + escapeHtml(row.base) + '</td>' +
+          '<td title="' + escapeHtml(row.quote) + '">' + escapeHtml(row.quote) + '</td>' +
+          '<td>' + cptBadge(row.copy_trading) + '</td>' +
+          '<td>' + escapeHtml(row.cmc_rank == null ? '-' : row.cmc_rank) + '</td>' +
+          '<td title="' + escapeHtml(formatPrice(row.price)) + '">' + escapeHtml(formatPrice(row.price)) + '</td>' +
+          '<td title="' + escapeHtml(formatCompact(row.market_cap)) + '">' + escapeHtml(formatCompact(row.market_cap)) + '</td>' +
+          '<td title="' + escapeHtml(formatCompact(row.volume_24h)) + '">' + escapeHtml(formatCompact(row.volume_24h)) + '</td>' +
+          '<td title="' + escapeHtml(formatRatio(row.vol_mcap)) + '">' + escapeHtml(formatRatio(row.vol_mcap)) + '</td>' +
+          '<td>' + renderTags(row.tags) + '</td>' +
+          '<td>' + noticeBadge(row.notice) + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    function renderUnmatchedRows() {
+      var panel = document.getElementById('unmatched-panel');
+      var body = document.getElementById('unmatched-body');
+      var empty = document.getElementById('unmatched-empty');
+      var shouldShow = uiState.activeView === 'unmatched';
+      panel.classList.toggle('hidden', !shouldShow);
+      if (!shouldShow) return;
+      panel.open = true;
+
+      var rows = sortRows(serverState.unmatched_rows || [], 'unmatched');
+      if (!rows.length) {
+        body.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+      body.innerHTML = rows.map(function (row) {
+        var key = rowKey(row, 'unmatched');
+        var selected = uiState.selectedKey === key ? ' selected' : '';
+        return '<tr class="data-row' + selected + '" data-table="unmatched" data-key="' + escapeHtml(key) + '">' +
+          '<td title="' + escapeHtml(row.coin) + '">' + escapeHtml(row.coin) + '</td>' +
+          '<td class="mono" title="' + escapeHtml(row.symbol) + '">' + escapeHtml(row.symbol) + '</td>' +
+          '<td title="' + escapeHtml(row.base || '') + '">' + escapeHtml(row.base || '-') + '</td>' +
+          '<td title="' + escapeHtml(row.quote || '') + '">' + escapeHtml(row.quote || '-') + '</td>' +
+          '<td class="mono" title="' + escapeHtml(row.ccxt_symbol || '') + '">' + escapeHtml(row.ccxt_symbol || '-') + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    function renderHip3Rows() {
+      var panel = document.getElementById('hip3-panel');
+      var body = document.getElementById('hip3-body');
+      var empty = document.getElementById('hip3-empty');
+      var shouldShow = uiState.activeView === 'hip3';
+      panel.classList.toggle('hidden', !shouldShow);
+      panel.classList.toggle('active-panel', shouldShow);
+      if (!shouldShow) {
+        panel.open = false;
+        return;
+      }
+      panel.open = true;
+
+      var rows = sortRows(getFilteredHip3Rows(), 'hip3');
+      if (!rows.length) {
+        body.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+      body.innerHTML = rows.map(function (row) {
+        var key = rowKey(row, 'hip3');
+        var selected = uiState.selectedKey === key ? ' selected' : '';
+        return '<tr class="data-row' + selected + '" data-table="hip3" data-key="' + escapeHtml(key) + '">' +
+          '<td title="' + escapeHtml(row.dex || '') + '">' + escapeHtml(row.dex || '-') + '</td>' +
+          '<td title="' + escapeHtml(row.coin || '') + '">' + escapeHtml(row.coin || '-') + '</td>' +
+          '<td class="mono" title="' + escapeHtml(row.ccxt_symbol || '') + '">' + escapeHtml(row.ccxt_symbol || '-') + '</td>' +
+          '<td title="' + escapeHtml(row.quote || '') + '">' + escapeHtml(row.quote || '-') + '</td>' +
+          '<td title="' + escapeHtml(formatPrice(row.price)) + '">' + escapeHtml(formatPrice(row.price)) + '</td>' +
+          '<td title="' + escapeHtml(formatCompact(row.volume_24h)) + '">' + escapeHtml(formatCompact(row.volume_24h)) + '</td>' +
+          '<td>' + cptBadge(row.copy_trading) + '</td>' +
+          '<td>' + noticeBadge(row.notice) + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    function selectedRowData() {
+      if (!uiState.selectedKey) return null;
+      var rows = [];
+      if (uiState.selectedTable === 'main') rows = serverState.rows || [];
+      else if (uiState.selectedTable === 'hip3') rows = getFilteredHip3Rows();
+      else rows = serverState.unmatched_rows || [];
+      for (var i = 0; i < rows.length; i += 1) {
+        if (rowKey(rows[i], uiState.selectedTable) === uiState.selectedKey) return rows[i];
+      }
+      return null;
+    }
+
+    function resetSelectedCardLayout() {
+      var card = document.getElementById('selected-card');
+      card.dataset.layoutMode = 'auto';
+      card.style.left = '';
+      card.style.top = '';
+      card.style.right = '';
+      card.style.bottom = '';
+      card.style.width = '';
+      card.style.height = '';
+      card.style.transform = '';
+    }
+
+    function fitSelectedCardToContent() {
+      var card = document.getElementById('selected-card');
+      var grid = document.getElementById('selected-grid');
+      var head = card.querySelector('.details-head');
+      if (!card.classList.contains('visible')) return;
+      if (window.innerWidth <= 980) return;
+      if (card.dataset.layoutMode === 'manual') return;
+
+      var minWidth = parseFloat(window.getComputedStyle(card).minWidth) || 520;
+      var minHeight = parseFloat(window.getComputedStyle(card).minHeight) || 280;
+      var maxWidth = Math.max(minWidth, Math.min(window.innerWidth - 16, 1120));
+      var maxHeight = Math.max(minHeight, window.innerHeight - 88);
+      var widthCandidates = [640, 760, 900, maxWidth]
+        .map(function (value) { return Math.max(minWidth, Math.min(maxWidth, value)); })
+        .filter(function (value, index, values) { return values.indexOf(value) === index; })
+        .sort(function (left, right) { return left - right; });
+      var targetWidth = widthCandidates[widthCandidates.length - 1] || maxWidth;
+      var targetHeight = maxHeight;
+
+      card.style.width = targetWidth + 'px';
+      card.style.height = 'auto';
+
+      widthCandidates.some(function (candidateWidth) {
+        card.style.width = candidateWidth + 'px';
+        var contentHeight = Math.ceil(head.offsetHeight + grid.scrollHeight + 2);
+        if (contentHeight <= maxHeight) {
+          targetWidth = candidateWidth;
+          targetHeight = Math.max(minHeight, contentHeight);
+          return true;
+        }
+        targetWidth = candidateWidth;
+        targetHeight = Math.min(maxHeight, Math.max(minHeight, contentHeight));
+        return false;
+      });
+
+      card.style.width = targetWidth + 'px';
+      card.style.height = targetHeight + 'px';
+    }
+
+    function renderSelectedRow() {
+      var card = document.getElementById('selected-card');
+      var grid = document.getElementById('selected-grid');
+      var cmcLink = document.getElementById('selected-cmc-link');
+      var row = selectedRowData();
+      if (!row || uiState.selectedTable !== uiState.activeView) {
+        card.classList.remove('visible');
+        grid.innerHTML = '';
+        cmcLink.hidden = true;
+        cmcLink.removeAttribute('href');
+        resetSelectedCardLayout();
+        return;
+      }
+
+      card.classList.add('visible');
+      document.getElementById('selected-title').textContent = row.coin || row.symbol || row.ccxt_symbol || 'Selected symbol';
+
+      if (row.cmc_link) {
+        cmcLink.hidden = false;
+        cmcLink.href = row.cmc_link;
+      } else {
+        cmcLink.hidden = true;
+        cmcLink.removeAttribute('href');
+      }
+
+      var fields = [
+        { label: 'CCXT Symbol', value: row.ccxt_symbol || row.symbol || '-' },
+        { label: 'Base', value: row.base || '-' },
+        { label: 'Quote', value: row.quote || '-' },
+        { label: 'CMC ID', value: row.cmc_id == null ? '-' : row.cmc_id },
+        { label: 'CMC Rank', value: row.cmc_rank == null ? '-' : row.cmc_rank },
+        { label: 'Price', value: formatPrice(row.price) },
+        { label: 'Market Cap', value: formatCompact(row.market_cap) },
+        { label: 'Volume 24h', value: formatCompact(row.volume_24h) },
+        { label: 'vol/mcap', value: formatRatio(row.vol_mcap) },
+        { label: 'Contract Size', value: row.contract_size == null ? '-' : row.contract_size },
+        { label: 'Min Amount', value: row.min_amount == null ? '-' : row.min_amount },
+        { label: 'Min Cost', value: row.min_cost == null ? '-' : row.min_cost },
+        { label: 'Precision Amount', value: row.precision_amount == null ? '-' : row.precision_amount },
+        { label: 'Max Leverage', value: row.max_leverage == null ? '-' : row.max_leverage },
+        { label: 'Min Order Price', value: row.min_order_price == null ? '-' : row.min_order_price },
+        { label: 'Tags', value: (row.tags || []).join(', ') || '-', wide: true, wrap: true }
+      ];
+
+      grid.innerHTML = fields.map(function (field) {
+        var kvClass = field.wide ? 'kv wide' : 'kv';
+        var valueClass = field.wrap ? 'kv-value wrap' : 'kv-value';
+        return '<div class="' + kvClass + '"><div class="kv-label">' + escapeHtml(field.label) + '</div><div class="' + valueClass + '" title="' + escapeHtml(field.value) + '">' + escapeHtml(field.value) + '</div></div>';
+      }).join('');
+
+      if (row.notice) {
+        grid.innerHTML += '<div class="notice-box"><strong>Notice</strong><br>' + escapeHtml(row.notice) + '</div>';
+      }
+
+      requestAnimationFrame(fitSelectedCardToContent);
+    }
+
+    function renderSortPill() {
+      var state = sortState.main;
+      document.getElementById('main-sort-pill').textContent = 'Sorted by ' + state.key.replace('_', ' ') + ' (' + state.dir + ')';
+    }
+
+    function syncActiveTableViewport() {
+      var activeWrap = null;
+      var available = 0;
+      Array.prototype.forEach.call(document.querySelectorAll('#main-panel .table-wrap, #unmatched-panel .table-wrap, #hip3-panel .table-wrap'), function (wrap) {
+        wrap.style.height = '';
+        wrap.style.maxHeight = '';
+      });
+      if (uiState.activeView === 'main') {
+        activeWrap = document.querySelector('#main-panel .table-wrap');
+      } else if (uiState.activeView === 'unmatched') {
+        activeWrap = document.querySelector('#unmatched-panel .table-wrap');
+      } else if (uiState.activeView === 'hip3') {
+        activeWrap = document.querySelector('#hip3-panel .table-wrap');
+      }
+      if (!activeWrap || window.innerWidth <= 980) return;
+      available = Math.floor(window.innerHeight - activeWrap.getBoundingClientRect().top - 12);
+      available = Math.max(180, available);
+      activeWrap.style.height = available + 'px';
+      activeWrap.style.maxHeight = available + 'px';
+    }
+
+    function bindRowSelection() {
+      Array.prototype.forEach.call(document.querySelectorAll('tr.data-row'), function (row) {
+        row.addEventListener('click', function () {
+          uiState.selectedTable = row.getAttribute('data-table') || 'main';
+          uiState.selectedKey = row.getAttribute('data-key') || '';
+          renderPage();
+        });
+      });
+    }
+
+    function renderPage() {
+      syncToggleButtons();
+      renderWarnings();
+      renderExchangeOptions();
+      renderHip3DexFilter();
+      renderSidebarMeta();
+      renderSummaries();
+      renderTagFilter();
+      renderUnmatchedRows();
+      renderMainRows();
+      renderHip3Rows();
+      renderSelectedRow();
+      renderSortPill();
+      requestAnimationFrame(syncActiveTableViewport);
+      bindRowSelection();
+    }
+
+    function handleSortClick(event) {
+      var header = event.target.closest('th.sortable');
+      if (!header) return;
+      var tableName = header.getAttribute('data-table');
+      var key = header.getAttribute('data-key');
+      if (!tableName || !key || !sortState[tableName]) return;
+      if (sortState[tableName].key === key) {
+        sortState[tableName].dir = sortState[tableName].dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortState[tableName].key = key;
+        sortState[tableName].dir = key === 'coin' || key === 'ccxt_symbol' ? 'asc' : 'desc';
+      }
+      renderPage();
+    }
+
+    function closeSelectedDetails() {
+      uiState.selectedKey = '';
+      uiState.selectedTable = uiState.activeView;
+      resetSelectedCardLayout();
+      renderPage();
+    }
+
+    function setActiveView(viewName) {
+      uiState.activeView = viewName;
+      uiState.selectedKey = '';
+      uiState.selectedTable = viewName;
+      renderPage();
+      saveUiState();
+    }
+
+    function resetFilters() {
+      filters.hip3_dex = '';
+      filters.market_cap = 0;
+      filters.vol_mcap = 10;
+      filterDrafts.market_cap = null;
+      filterDrafts.vol_mcap = null;
+      filters.tags = [];
+      filters.only_cpt = false;
+      syncToggleButtons();
+      loadState();
+    }
+
+    function bindControls() {
+      document.addEventListener('click', handleSortClick);
+
+      (function () {
+        var card = document.getElementById('selected-card');
+        var head = card.querySelector('.details-head');
+        var startX;
+        var startY;
+        var boxLeft;
+        var boxTop;
+        var boxWidth;
+        var boxHeight;
+
+        head.addEventListener('mousedown', function (event) {
+          if (event.button !== 0) return;
+          if (window.innerWidth <= 980) return;
+          if (event.target.closest('.details-actions')) return;
+          event.preventDefault();
+          card.dataset.layoutMode = 'manual';
+          var rect = card.getBoundingClientRect();
+          card.style.transform = 'none';
+          card.style.left = rect.left + 'px';
+          card.style.top = rect.top + 'px';
+          card.style.width = rect.width + 'px';
+          card.style.height = rect.height + 'px';
+          startX = event.clientX;
+          startY = event.clientY;
+          boxLeft = rect.left;
+          boxTop = rect.top;
+          boxWidth = rect.width;
+          boxHeight = rect.height;
+
+          function onMove(moveEvent) {
+            var maxLeft = Math.max(8, window.innerWidth - boxWidth - 8);
+            var maxTop = Math.max(56, window.innerHeight - boxHeight - 8);
+            var nextLeft = Math.min(Math.max(8, boxLeft + moveEvent.clientX - startX), maxLeft);
+            var nextTop = Math.min(Math.max(56, boxTop + moveEvent.clientY - startY), maxTop);
+            card.style.left = nextLeft + 'px';
+            card.style.top = nextTop + 'px';
+          }
+
+          function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          }
+
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+
+        Array.prototype.forEach.call(card.querySelectorAll('.details-resize-handle'), function (handle) {
+          handle.addEventListener('mousedown', function (event) {
+            if (event.button !== 0) return;
+            if (window.innerWidth <= 980) return;
+            event.preventDefault();
+            event.stopPropagation();
+            card.dataset.layoutMode = 'manual';
+
+            var direction = handle.getAttribute('data-resize') || '';
+            var rect = card.getBoundingClientRect();
+            var startClientX = event.clientX;
+            var startClientY = event.clientY;
+            var startLeft = rect.left;
+            var startTop = rect.top;
+            var startWidth = rect.width;
+            var startHeight = rect.height;
+            var minWidth = parseFloat(window.getComputedStyle(card).minWidth) || 520;
+            var minHeight = parseFloat(window.getComputedStyle(card).minHeight) || 280;
+
+            card.style.transform = 'none';
+            card.style.left = rect.left + 'px';
+            card.style.top = rect.top + 'px';
+            card.style.width = rect.width + 'px';
+            card.style.height = rect.height + 'px';
+
+            function onResize(moveEvent) {
+              var dx = moveEvent.clientX - startClientX;
+              var dy = moveEvent.clientY - startClientY;
+              var nextLeft = startLeft;
+              var nextTop = startTop;
+              var nextWidth = startWidth;
+              var nextHeight = startHeight;
+
+              if (direction.indexOf('right') !== -1) {
+                nextWidth = Math.max(minWidth, startWidth + dx);
+                nextWidth = Math.min(nextWidth, window.innerWidth - startLeft - 8);
+              }
+              if (direction.indexOf('left') !== -1) {
+                nextWidth = Math.max(minWidth, startWidth - dx);
+                nextLeft = startLeft + (startWidth - nextWidth);
+                if (nextLeft < 8) {
+                  nextLeft = 8;
+                  nextWidth = startLeft + startWidth - nextLeft;
+                }
+              }
+              if (direction.indexOf('bottom') !== -1) {
+                nextHeight = Math.max(minHeight, startHeight + dy);
+                nextHeight = Math.min(nextHeight, window.innerHeight - startTop - 8);
+              }
+              if (direction.indexOf('top') !== -1) {
+                nextHeight = Math.max(minHeight, startHeight - dy);
+                nextTop = startTop + (startHeight - nextHeight);
+                if (nextTop < 56) {
+                  nextTop = 56;
+                  nextHeight = startTop + startHeight - nextTop;
+                }
+              }
+
+              nextWidth = Math.max(minWidth, nextWidth);
+              nextHeight = Math.max(minHeight, nextHeight);
+
+              card.style.left = nextLeft + 'px';
+              card.style.top = nextTop + 'px';
+              card.style.width = nextWidth + 'px';
+              card.style.height = nextHeight + 'px';
+            }
+
+            function onResizeEnd() {
+              document.removeEventListener('mousemove', onResize);
+              document.removeEventListener('mouseup', onResizeEnd);
+            }
+
+            document.addEventListener('mousemove', onResize);
+            document.addEventListener('mouseup', onResizeEnd);
+          });
+        });
+      }());
+
+      window.addEventListener('resize', function () {
+        if (window.innerWidth <= 980) {
+          resetSelectedCardLayout();
+          syncActiveTableViewport();
+          return;
+        }
+        fitSelectedCardToContent();
+        syncActiveTableViewport();
+      });
+
+      document.getElementById('selected-cmc-link').addEventListener('click', function (event) {
+        var href = event.currentTarget.getAttribute('href');
+        if (!href || href === '#') {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          window.open(href, '_blank', 'noopener,noreferrer');
+        } catch (_) {}
+      });
+
+      document.getElementById('btn-refresh-exchange').addEventListener('click', function () {
+        runRefresh('/refresh/exchange', 'Refreshing selected exchange...', 'Refreshed selected exchange.');
+      });
+      document.getElementById('btn-refresh-all').addEventListener('click', function () {
+        runRefresh('/refresh/all', 'Refreshing all exchanges...', 'All exchanges refreshed.');
+      });
+      document.getElementById('btn-refresh-cmc').addEventListener('click', function () {
+        runRefresh('/refresh/cmc', 'Refreshing CMC + selected exchange...', 'CoinMarketCap data and the selected exchange refreshed.');
+      });
+      document.getElementById('btn-refresh-cmc-all').addEventListener('click', function () {
+        runRefresh('/refresh/cmc_all', 'Refreshing CMC + all exchanges...', 'CoinMarketCap data and all exchanges refreshed.');
+      });
+
+      document.getElementById('btn-only-cpt').addEventListener('click', function () {
+        filters.only_cpt = !filters.only_cpt;
+        syncToggleButtons();
+        loadState();
+      });
+      document.getElementById('btn-view-main').addEventListener('click', function () {
+        setActiveView('main');
+      });
+      document.getElementById('btn-view-unmatched').addEventListener('click', function () {
+        setActiveView('unmatched');
+      });
+      document.getElementById('btn-view-hip3').addEventListener('click', function () {
+        setActiveView('hip3');
+      });
+      document.getElementById('btn-reset-filters').addEventListener('click', resetFilters);
+      document.getElementById('btn-close-details').addEventListener('click', closeSelectedDetails);
+      document.getElementById('filter-exchange').addEventListener('change', function (event) {
+        filters.exchange = event.target.value;
+        filters.hip3_dex = '';
+        filters.tags = [];
+        normalizeExchangeSpecificState(filters.exchange);
+        uiState.selectedKey = '';
+        loadState();
+      });
+      document.getElementById('filter-hip3-dex').addEventListener('change', function (event) {
+        filters.hip3_dex = event.target.value || '';
+        uiState.selectedKey = '';
+        renderPage();
+        saveFiltersToQuery();
+      });
+      document.getElementById('field-hip3-dex').addEventListener('mousedown', function (event) {
+        event.stopPropagation();
+      });
+      document.getElementById('field-hip3-dex').addEventListener('click', function (event) {
+        event.stopPropagation();
+      });
+      document.getElementById('filter-hip3-dex').addEventListener('mousedown', function (event) {
+        event.stopPropagation();
+      });
+      document.getElementById('filter-hip3-dex').addEventListener('click', function (event) {
+        event.stopPropagation();
+      });
+      document.getElementById('filter-market-cap').addEventListener('input', function (event) {
+        if (!commitFilterNumberDraft('market_cap', event.target.value)) {
+          window.clearTimeout(filterInputDebounceTimer);
+          return;
+        }
+        scheduleFilterReload();
+      });
+      document.getElementById('filter-market-cap').addEventListener('change', function (event) {
+        finalizeFilterNumberDraft('filter-market-cap', 'market_cap');
+        triggerFilterReloadNow();
+      });
+      document.getElementById('filter-vol-mcap').addEventListener('input', function (event) {
+        if (!commitFilterNumberDraft('vol_mcap', event.target.value)) {
+          window.clearTimeout(filterInputDebounceTimer);
+          return;
+        }
+        scheduleFilterReload();
+      });
+      document.getElementById('filter-vol-mcap').addEventListener('change', function (event) {
+        finalizeFilterNumberDraft('filter-vol-mcap', 'vol_mcap');
+        triggerFilterReloadNow();
+      });
+
+      var tagWrap = document.getElementById('tag-filter-wrap');
+      tagWrap.addEventListener('mousedown', function (event) {
+        if (event.target.closest('.ms-x')) return;
+        var input = document.getElementById('tag-filter-input');
+        if (!input || input.disabled) return;
+        window.setTimeout(function () {
+          input.focus();
+        }, 0);
+      });
+    }
+
+    loadUiState();
+    loadFiltersFromQuery();
+    initHelpOverlay();
+    window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
+    initNumberSteppers();
+    bindControls();
+    loadState();
+  </script>
+
+  <script>
+    window.PBGUI_NAV_CONFIG = {
+      subtitle: 'COIN DATA',
+      current: 'info_coin_data',
+      token: TOKEN,
+      stBase: ST_BASE,
+      apiBase: API_BASE,
+      version: PBGUI_VERSION,
+      serial: PBGUI_SERIAL
+    };
+  </script>
+  <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+</body>
+</html>

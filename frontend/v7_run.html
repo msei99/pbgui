@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PBv7 Run</title>
 <link rel="stylesheet" href="/app/css/sidebar.css?v=1">
+<script src="/app/js/sidebar_resize.js?v=1"></script>
 <style>
 /* ─── Reset & Base ─────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -987,24 +988,7 @@ loadInstances();  /* initial REST fetch for immediate data */
 connectWS();      /* then switch to real-time WebSocket */
 
 /* ─── Sidebar resize ─────────────────────────────────────── */
-(function () {
-  var resizeEl = document.getElementById('sidebar-resize');
-  var sidebar  = document.getElementById('sidebar');
-  var active   = false;
-  resizeEl.addEventListener('mousedown', function (e) {
-    e.preventDefault(); active = true; resizeEl.classList.add('active');
-  });
-  document.addEventListener('mousemove', function (e) {
-    if (!active) return;
-    var newW = e.clientX;
-    if (newW < 140) newW = 140;
-    if (newW > 300) newW = 300;
-    sidebar.style.width = newW + 'px';
-  });
-  document.addEventListener('mouseup', function () {
-    if (active) { active = false; resizeEl.classList.remove('active'); }
-  });
-}());
+window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
 </script>
 
 <!-- ── Shared nav bar (must come after var TOKEN/ST_BASE etc.) ── -->
