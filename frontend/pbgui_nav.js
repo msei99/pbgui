@@ -447,6 +447,7 @@
      ════════════════════════════════════ */
   var FASTAPI_PAGES = {
     'dashboards':        '/api/dashboard/main_page',
+    'info_coin_data':    '/api/coin-data/main_page',
     'system_api_keys':   '/api/api-keys/main_page',
     'system_logging':     '/api/logging/main_page',
     'system_vps_monitor': '/api/vps/main_page',

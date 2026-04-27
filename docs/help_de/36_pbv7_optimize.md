@@ -28,6 +28,8 @@ Sidebar-Aktionen:
 | **Queue Selected** | Alle ausgewählten Configs zur Queue hinzufügen |
 | **Delete Selected** | Alle ausgewählten Configs löschen |
 
+Wenn du eine bestehende Optimize-Config öffnest und vor dem Speichern `config_name` änderst, speichert PBGui diesen Editorzustand jetzt als neue Config-Datei unter dem neuen Namen. Die ursprünglich geöffnete Config bleibt unverändert; das ist also ein Save-as-new und kein Rename der alten Datei.
+
 Mit dem Suchfeld lässt sich nach Config-Namen filtern. Die Config-Zeilen unterstützen jetzt dieselbe Click-and-Drag-Mehrfachauswahl wie Backtest, und rechts werden kompakte Icon-Aktionen statt Textbuttons verwendet.
 
 ### Strukturierter Editor
@@ -149,7 +151,7 @@ Jede Queue-Zeile hat eine **Log**-Aktion.
 Sie öffnet den gemeinsamen schwebenden Log-Viewer und streamt die lokale Datei aus `data/logs/optimizes/`.
 Die **Edit**-Aktion öffnet die tatsächliche Config-Datei, auf die diese Queue-Zeile zeigt, auch wenn die Zeilenbezeichnung nicht dem gespeicherten Config-Dateinamen entspricht.
 Wenn ein älterer Queue-Eintrag noch auf einen gelöschten Config-Pfad zeigt, PBGui aber passende Configs findet, kann das Matching-Config-Modal diesen bestehenden Queue-Eintrag jetzt direkt reparieren. Nach Auswahl des richtigen Kandidaten aktualisiert PBGui die Queue-Zeile auf den gewählten Config-Pfad samt frischem eingebettetem Snapshot, sodass der Eintrag nicht mehr manuell gelöscht und neu gequeued werden muss.
-Neuere Queue-Einträge behalten zusätzlich einen eingebetteten Config-Snapshot. Wenn die ursprüngliche Config-Datei später umbenannt oder gelöscht wird, aktualisiert PBGui die Queue-Referenz beim Speichern/Umbenennen und kann den Queue-Job weiterhin aus diesem Snapshot öffnen oder starten, statt am veralteten Pfad zu scheitern.
+Neuere Queue-Einträge behalten zusätzlich einen eingebetteten Config-Snapshot. Wenn die ursprüngliche Config-Datei später gelöscht wird, kann PBGui den Queue-Job weiterhin aus diesem Snapshot öffnen oder starten, statt am veralteten Pfad zu scheitern. Das Speichern einer bearbeiteten Config unter anderem `config_name` erzeugt jetzt eine neue Config und lässt bestehende Queue-Zeilen der alten Config unverändert.
 Wenn ein älterer Queue-Eintrag noch aus der Zeit vor diesen Snapshots stammt und sein ursprünglicher Config-Pfad fehlt, während mehrere passende Configs existieren, öffnet PBGui jetzt direkt ein Auswahl-Modal mit **Open**-Buttons für diese Kandidaten statt nur kurz einen Toast-Fehler anzuzeigen.
 PBGui lehnt **Requeue** jetzt außerdem für Queue-Zeilen ab, deren Config weiterhin nicht startbar ist. Solche Zeilen behalten ihren aktuellen `error`-Status und das vorhandene Optimize-Log, bis die Config wirklich korrigiert wurde, statt in einen irreführenden `queued`-Status ohne startbaren Job zurückgesetzt zu werden.
 

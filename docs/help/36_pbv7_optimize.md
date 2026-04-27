@@ -28,6 +28,8 @@ Sidebar actions:
 | **Queue Selected** | Add all selected configs to the queue |
 | **Delete Selected** | Delete all selected configs |
 
+When you open an existing optimize config and change `config_name` before saving, PBGui now saves that editor state as a new config file under the new name. The originally opened config stays unchanged; this is a save-as-new operation, not a rename of the old file.
+
 Use the search field to filter by config name. Config rows support the same click-and-drag multi-selection pattern as Backtest, and the actions on the right are compact icon buttons.
 
 ### Structured editor
@@ -149,7 +151,7 @@ Each queue row has a **Log** action.
 It opens the shared floating log viewer and streams the local file from `data/logs/optimizes/`.
 The **Edit** action opens the actual config file referenced by that queue row, even if the row label differs from the stored config filename.
 If an older queue row still points to a deleted config path but PBGui finds matching configs, the matching-config modal can now repair that existing queue entry in place. Choose the correct candidate and PBGui updates the queue row to the selected config path plus a fresh embedded snapshot, so you do not have to delete the row and queue it again manually.
-Newer queue items also keep an embedded config snapshot. If the original config file is later renamed or deleted, PBGui updates queued references on save/rename and can still reopen or start that queued job from its stored snapshot instead of failing on the stale path.
+Newer queue items also keep an embedded config snapshot. If the original config file is later deleted, PBGui can still reopen or start that queued job from its stored snapshot instead of failing on the stale path. Saving an edited config under a different `config_name` now creates a new config and leaves existing queue rows for the old config untouched.
 If an older queue row predates snapshots and its original config path is gone while multiple matching configs still exist, PBGui now opens a selection modal with direct **Open** buttons for those candidates instead of only flashing a short error toast.
 PBGui now also rejects **Requeue** for queue rows whose config is still unlaunchable. Those rows keep their current `error` state and existing optimize log until the config has actually been fixed, instead of being reset to a misleading `queued` state with no runnable job behind it.
 

@@ -5,7 +5,7 @@ Logs stream live via WebSocket — no page reload required.
 
 ## Layout
 
-- **Sidebar (left)**: list of all available log files in `data/logs/`
+- **Sidebar (left)**: list of all available log files in `data/logs/`, with adjustable width on desktop
 - **Toolbar**: level filter, lines count, version selector, stream controls
 - **Log area**: scrollable terminal output with search and highlighting
 

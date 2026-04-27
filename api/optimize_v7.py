@@ -2261,17 +2261,13 @@ def save_config(name: str, body: dict, source_name: str | None = None,
             optimize["n_cpus"] = multiprocessing.cpu_count()
         cfg["optimize"] = optimize
     cfg_file = _opt_configs_dir() / f"{name}.json"
-    old_cfg_file = _opt_configs_dir() / f"{source_name}.json" if source_name else cfg_file
     save_pb7_config(cfg, cfg_file)
     _update_queue_config_references(
-        [old_cfg_file, cfg_file],
+        [cfg_file],
         target_path=cfg_file,
         target_name=name,
         config_snapshot=cfg,
     )
-    if source_name and source_name != name:
-        _validate_name(source_name)
-        (_opt_configs_dir() / f"{source_name}.json").unlink(missing_ok=True)
     return {"ok": True, "name": name}
 
 

@@ -7,7 +7,7 @@
 I offer API-Service where I run passivbot for you as a Service.
 Just contact me on Telegram for more information.
 
-# v1.75
+# v1.76
 
 ### Overview
 Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
@@ -322,6 +322,14 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.76 (27-04-2026)
+- Added: Coin Data now runs as a full FastAPI page with shared PBGui navigation, the in-page Guide overlay, sticky tables, hoverable status/details, and a draggable/resizable detail panel with an `Open CMC` button for direct CoinMarketCap links.
+- Changed: Coin Data now uses a cleaner single-table workflow with sidebar view switches for `Matched Symbols`, `CMC Unmatched`, and Hyperliquid `HIP-3 Symbols`, plus header sorting and context-aware actions like `Only Copy Trading`.
+- Changed: Coin Data refresh actions are now split into explicit `Refresh Selected Exchange`, `Refresh All Exchanges`, `Refresh CMC + Selected Exchange`, and `Refresh CMC + All Exchanges`, with real percentage progress overlays during longer refresh jobs.
+- Changed: Coin Data filters were redesigned around live `market_cap` and `vol/mcap` inputs, searchable tag selection, a compact full-width table layout, and a dedicated `DEX` selector for Hyperliquid HIP-3 rows.
+- Changed: Coin Data and Logging sidebar resizing now uses the same shared desktop resize handle as Run, Backtest, and Optimize.
+- Changed: In FastAPI PBv7 Optimize, saving with a different `config_name` now creates a new config file and leaves the originally opened config unchanged.
 
 ## v1.75 (26-04-2026)
 - Added: Help & Tutorials now runs as a pure FastAPI page at `/app/help.html`, while the Information menu and embedded Guide buttons open the shared Guide & Help overlay with consistent fullscreen and window behavior across FastAPI pages.

@@ -6,6 +6,7 @@
 <title>PBGui - V7 Optimize</title>
 <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
+<script src="/app/js/sidebar_resize.js?v=1"></script>
 <style>
 :root {
   --bg: #0e1117;
@@ -9568,6 +9569,7 @@ async function saveEditor(andQueue) {
   var queueAfterSave = !!andQueue;
   var name = '';
   var configPayload = null;
+  var isNewName = false;
   if (editorVisible()) {
     if (!ensureRawJsonValidForSave()) {
       setPageEditorStatus('Raw JSON is invalid.', 'err');
@@ -9601,6 +9603,7 @@ async function saveEditor(andQueue) {
   var sourceQuery = state.editorSourceName && state.editorSourceName !== name
     ? '?source_name=' + encodeURIComponent(state.editorSourceName)
     : '';
+  isNewName = !!sourceQuery;
   await apiFetch('/configs/' + encodeURIComponent(name) + sourceQuery, {
     method: 'PUT',
     body: JSON.stringify(configPayload)
@@ -9617,7 +9620,11 @@ async function saveEditor(andQueue) {
   } else {
     closeAllModals();
   }
-  toast(queueAfterSave ? 'Config saved and queued.' : 'Config saved.', 'ok');
+  if (queueAfterSave) {
+    toast(isNewName ? 'Saved as new config and queued.' : 'Config saved and queued.', 'ok');
+  } else {
+    toast(isNewName ? ('Saved as new config "' + name + '".') : 'Config saved.', 'ok');
+  }
   await loadConfigs();
   await loadQueue();
   if (queueAfterSave) setPanel('queue');
@@ -10297,27 +10304,7 @@ function attachEventHandlers() {
 }
 
 function initSidebarResize() {
-  var resizeEl = el('sidebar-resize');
-  var sidebar = el('sidebar');
-  if (!resizeEl || !sidebar) return;
-  var active = false;
-  resizeEl.addEventListener('mousedown', function(event) {
-    event.preventDefault();
-    active = true;
-    resizeEl.classList.add('active');
-  });
-  document.addEventListener('mousemove', function(event) {
-    if (!active) return;
-    var nextWidth = event.clientX;
-    if (nextWidth < 140) nextWidth = 140;
-    if (nextWidth > 300) nextWidth = 300;
-    sidebar.style.width = nextWidth + 'px';
-  });
-  document.addEventListener('mouseup', function() {
-    if (!active) return;
-    active = false;
-    resizeEl.classList.remove('active');
-  });
+  window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
 }
 
 function initSelections() {
