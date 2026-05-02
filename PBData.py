@@ -22,7 +22,7 @@ import asyncio
 import random
 from logging_helpers import human_log as _human_log, set_service_min_level, is_debug_enabled
 from Exchange import set_ws_limits, Exchange as _Exchange
-from market_data import load_market_data_config, get_daily_hour_coverage_for_dataset, set_enabled_coins
+from market_data import get_daily_hour_coverage_for_dataset, get_effective_enabled_coins, load_market_data_config, set_enabled_coins
 from rate_limit_budget import RateLimitBudget, EXCHANGE_RATE_LIMITS, get_weight
 from hyperliquid_best_1m import update_latest_hyperliquid_1m_api_for_coin
 from binance_best_1m import update_latest_binance_1m_for_coin
@@ -121,6 +121,22 @@ async def _wait_for_flag(flag_path: _Path, timeout: float) -> bool:
             await asyncio.sleep(5.0)
             elapsed += 5.0
         return False
+
+
+def _prune_coin_status_map(saved_coins: dict | None, enabled_coins: list[str]) -> dict:
+    enabled = {
+        str(coin).strip().upper()
+        for coin in (enabled_coins or [])
+        if str(coin).strip()
+    }
+    if not enabled or not isinstance(saved_coins, dict):
+        return {}
+    pruned: dict = {}
+    for coin, coin_status in saved_coins.items():
+        coin_key = str(coin).strip().upper()
+        if coin_key in enabled and isinstance(coin_status, dict):
+            pruned[coin_key] = coin_status
+    return pruned
 
 
 async def _notify_api_balance():
@@ -802,9 +818,20 @@ class PBData():
                         pass
 
                 cfg = load_market_data_config()
-                coins = list(cfg.enabled_coins.get("hyperliquid", []) or [])
+                coins, missing_saved_coins, auto_enable_new_coins = get_effective_enabled_coins("hyperliquid", cfg=cfg)
                 coins = [str(c).strip().upper() for c in coins if str(c).strip()]
                 invalid_live_meta_coins: set[str] = set()
+
+                if missing_saved_coins and not auto_enable_new_coins:
+                    try:
+                        set_enabled_coins("hyperliquid", coins)
+                        _human_log(
+                            "PBData",
+                            f"[market-data] pruned unavailable enabled coins from hyperliquid list: {', '.join(sorted(missing_saved_coins))}",
+                            level="INFO",
+                        )
+                    except Exception as e:
+                        _human_log("PBData", f"[market-data] failed to prune unavailable hyperliquid coins: {e}", level="WARNING")
 
                 # Determine how many coins to skip when resuming a crashed mid-cycle
                 _coins_done_offset = 0
@@ -830,7 +857,7 @@ class PBData():
                     "current_coin": None,
                     "coins_done": _coins_done_offset,
                     "coins_total": len(coins),
-                    "coins": dict(_prev_hl),
+                    "coins": _prune_coin_status_map(_prev_hl, coins),
                 }
                 try:
                     await self._update_market_data_status("latest_1m", status)
@@ -872,6 +899,15 @@ class PBData():
                         lookback_days = max_lb
 
                     try:
+                        budget_lock = self._budget_poller_locks.get('hyperliquid')
+                        budget_lock_acquired = False
+                        if budget_lock:
+                            # Keep the Hyperliquid latest-1m worker on the same lock as
+                            # the shared pollers so large candleSnapshot requests do not
+                            # get starved by continuously refilling competing pollers.
+                            await budget_lock.acquire()
+                            budget_lock_acquired = True
+
                         # Acquire rate budget for HL candleSnapshot.
                         # Weight = 44/day (20 base + ceil(1440 candles/60) = 44 per HL docs).
                         # update_latest_hyperliquid_1m_api_for_coin makes one API call per
@@ -907,6 +943,12 @@ class PBData():
                         coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "error"
                         coin_status["error"] = str(e)
+                    finally:
+                        if budget_lock and budget_lock_acquired:
+                            try:
+                                budget_lock.release()
+                            except Exception:
+                                pass
 
                     status["coins"][coin] = coin_status
                     status["coins_done"] = status.get("coins_done", 0) + 1
@@ -1030,8 +1072,19 @@ class PBData():
                         pass
 
                 cfg = load_market_data_config()
-                coins = list(cfg.enabled_coins.get("binance", []) or [])
+                coins, missing_saved_coins, auto_enable_new_coins = get_effective_enabled_coins("binance", cfg=cfg)
                 coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+
+                if missing_saved_coins and not auto_enable_new_coins:
+                    try:
+                        set_enabled_coins("binance", coins)
+                        _human_log(
+                            "PBData",
+                            f"[market-data] pruned unavailable enabled coins from binance list: {', '.join(sorted(missing_saved_coins))}",
+                            level="INFO",
+                        )
+                    except Exception as e:
+                        _human_log("PBData", f"[market-data] failed to prune unavailable binance coins: {e}", level="WARNING")
 
                 if not coins:
                     await asyncio.sleep(float(self._binance_latest_1m_interval_seconds))
@@ -1061,7 +1114,7 @@ class PBData():
                     "current_coin": None,
                     "coins_done": _coins_done_offset,
                     "coins_total": len(coins),
-                    "coins": dict(_prev_bnc),
+                    "coins": _prune_coin_status_map(_prev_bnc, coins),
                 }
                 try:
                     await self._update_market_data_status("binance_latest_1m", status_bnc)
@@ -1213,8 +1266,19 @@ class PBData():
                         pass
 
                 cfg = load_market_data_config()
-                coins = list(cfg.enabled_coins.get("bybit", []) or [])
+                coins, missing_saved_coins, auto_enable_new_coins = get_effective_enabled_coins("bybit", cfg=cfg)
                 coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+
+                if missing_saved_coins and not auto_enable_new_coins:
+                    try:
+                        set_enabled_coins("bybit", coins)
+                        _human_log(
+                            "PBData",
+                            f"[market-data] pruned unavailable enabled coins from bybit list: {', '.join(sorted(missing_saved_coins))}",
+                            level="INFO",
+                        )
+                    except Exception as e:
+                        _human_log("PBData", f"[market-data] failed to prune unavailable bybit coins: {e}", level="WARNING")
 
                 if not coins:
                     await asyncio.sleep(float(self._bybit_latest_1m_interval_seconds))
@@ -1242,7 +1306,7 @@ class PBData():
                     "current_coin": None,
                     "coins_done": _coins_done_offset,
                     "coins_total": len(coins),
-                    "coins": dict(_prev_bbt),
+                    "coins": _prune_coin_status_map(_prev_bbt, coins),
                 }
                 try:
                     await self._update_market_data_status("bybit_latest_1m", status_bbt)

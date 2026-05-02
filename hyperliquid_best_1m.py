@@ -100,6 +100,9 @@ def _tiingo_default_state() -> dict[str, Any]:
         "hour_requests": 0,
         "day_requests": 0,
         "month_bytes": 0,
+        "server_429_wait_until_ts": 0,
+        "server_429_last_wait_s": 0,
+        "server_429_last_seen_ts": 0,
     }
 
 
@@ -128,6 +131,9 @@ def _tiingo_load_usage_state_once() -> None:
             "hour_requests": max(0, int(rec.get("hour_requests") or 0)),
             "day_requests": max(0, int(rec.get("day_requests") or 0)),
             "month_bytes": max(0, int(rec.get("month_bytes") or 0)),
+            "server_429_wait_until_ts": max(0, int(rec.get("server_429_wait_until_ts") or 0)),
+            "server_429_last_wait_s": max(0, int(rec.get("server_429_last_wait_s") or 0)),
+            "server_429_last_seen_ts": max(0, int(rec.get("server_429_last_seen_ts") or 0)),
         }
 
 
@@ -145,6 +151,9 @@ def _tiingo_persist_usage_state() -> None:
             "hour_requests": max(0, int(state.get("hour_requests") or 0)),
             "day_requests": max(0, int(state.get("day_requests") or 0)),
             "month_bytes": max(0, int(state.get("month_bytes") or 0)),
+            "server_429_wait_until_ts": max(0, int(state.get("server_429_wait_until_ts") or 0)),
+            "server_429_last_wait_s": max(0, int(state.get("server_429_last_wait_s") or 0)),
+            "server_429_last_seen_ts": max(0, int(state.get("server_429_last_seen_ts") or 0)),
         }
     payload = {
         "version": 1,
@@ -326,6 +335,7 @@ def _tiingo_state_for_key_unlocked(api_key: str) -> dict[str, Any]:
     hour_key = now.strftime("%Y%m%d%H")
     day_key = now.strftime("%Y%m%d")
     month_key = now.strftime("%Y%m")
+    now_ts = int(now.timestamp())
 
     if str(state.get("hour_key") or "") != hour_key:
         state["hour_key"] = hour_key
@@ -338,6 +348,10 @@ def _tiingo_state_for_key_unlocked(api_key: str) -> dict[str, Any]:
     if str(state.get("month_key") or "") != month_key:
         state["month_key"] = month_key
         state["month_bytes"] = 0
+        _tiingo_persist_usage_state()
+    if int(state.get("server_429_wait_until_ts") or 0) > 0 and int(state.get("server_429_wait_until_ts") or 0) <= now_ts:
+        state["server_429_wait_until_ts"] = 0
+        state["server_429_last_wait_s"] = 0
         _tiingo_persist_usage_state()
     return state
 
@@ -352,6 +366,9 @@ def get_tiingo_runtime_usage(*, api_key: str) -> dict[str, int]:
     hour_requests = int(state.get("hour_requests") or 0)
     day_requests = int(state.get("day_requests") or 0)
     month_bytes = int(state.get("month_bytes") or 0)
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    wait_until_ts = int(state.get("server_429_wait_until_ts") or 0)
+    wait_remaining_s = max(0, wait_until_ts - now_ts) if wait_until_ts > 0 else 0
     return {
         "hour_requests": hour_requests,
         "hour_remaining": max(0, int(TIINGO_MAX_REQ_PER_HOUR) - hour_requests),
@@ -362,6 +379,9 @@ def get_tiingo_runtime_usage(*, api_key: str) -> dict[str, int]:
         "hour_limit": int(TIINGO_MAX_REQ_PER_HOUR),
         "day_limit": int(TIINGO_MAX_REQ_PER_DAY),
         "month_bytes_limit": int(TIINGO_MAX_BANDWIDTH_PER_MONTH_BYTES),
+        "server_429_wait_remaining_s": wait_remaining_s,
+        "server_429_last_wait_s": int(state.get("server_429_last_wait_s") or 0),
+        "server_429_last_seen_ts": int(state.get("server_429_last_seen_ts") or 0),
     }
 
 
@@ -371,6 +391,16 @@ def _tiingo_register_call(*, api_key: str, response_bytes: int) -> None:
         state["hour_requests"] = int(state.get("hour_requests") or 0) + 1
         state["day_requests"] = int(state.get("day_requests") or 0) + 1
         state["month_bytes"] = int(state.get("month_bytes") or 0) + max(0, int(response_bytes))
+        _tiingo_persist_usage_state()
+
+
+def _tiingo_register_server_429(*, api_key: str, wait_s: int) -> None:
+    with _tiingo_usage_file_lock():
+        state = _tiingo_state_for_key_unlocked(api_key)
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        state["server_429_last_seen_ts"] = now_ts
+        state["server_429_last_wait_s"] = max(0, int(wait_s))
+        state["server_429_wait_until_ts"] = now_ts + max(0, int(wait_s))
         _tiingo_persist_usage_state()
 
 
@@ -732,6 +762,7 @@ def _tiingo_fetch_1m_iex(
             status = None
         if status == 429 and allow_rate_limit_hour_retry:
             wait_s = _seconds_until_next_hour_utc(datetime.now(timezone.utc))
+            _tiingo_register_server_429(api_key=token, wait_s=int(wait_s))
             if status_cb is not None:
                 try:
                     status_cb(
@@ -871,6 +902,7 @@ def _tiingo_fetch_1m_fx(
             status = None
         if status == 429 and allow_rate_limit_hour_retry:
             wait_s = _seconds_until_next_hour_utc(datetime.now(timezone.utc))
+            _tiingo_register_server_429(api_key=token, wait_s=int(wait_s))
             if status_cb is not None:
                 try:
                     status_cb(

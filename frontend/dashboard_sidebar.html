@@ -248,6 +248,7 @@ section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
 
 </style>
 
+<script src="/app/js/pbgui_dialogs.js?v=1"></script>
 <script>
 (function() {
   'use strict';
@@ -497,16 +498,24 @@ section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
 
 
   /* ── Event delegation ── */
-  root.addEventListener('click', function(e) {
+  root.addEventListener('click', async function(e) {
     /* toolbar buttons */
     var btn = e.target.closest('.ds-btn');
     if (btn) {
       var act = btn.getAttribute('data-act');
       if (act === 'delete_dashboard') {
-        if (!confirm('Delete this dashboard?')) return;
+        if (!(await window.PBGuiDialogs.confirm({
+          title: 'Delete dashboard',
+          message: 'Delete this dashboard?',
+          confirmText: 'Delete'
+        }))) return;
       }
       if (act === 'delete_selected') {
-        if (!confirm('Delete dashboard \u201c' + CURRENT + '\u201d?')) return;
+        if (!(await window.PBGuiDialogs.confirm({
+          title: 'Delete dashboard',
+          message: 'Delete dashboard “' + CURRENT + '”?',
+          confirmText: 'Delete'
+        }))) return;
         sendAction('delete_dashboard');
         return;
       }

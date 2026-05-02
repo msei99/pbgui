@@ -136,10 +136,10 @@ Use the **Select All** / **Deselect** toolbar above the table.
 |---------|-------------|
 | **CPU** | Number of parallel backtest processes (max = CPU core count) |
 | **Autostart** | When enabled the worker automatically picks up `queued` jobs |
-| **HLCVS Cache Cleanup — Enabled** | Periodically delete old `pb7/caches/hlcvs_data` directories |
+| **HLCVS Cache Cleanup — Enabled** | Periodically delete old directories under `pb7/caches/hlcvs_data` and `pb7/caches/ohlcvs/materialized` |
 | **Retention (days)** | Delete directories older than this many days (default: 7) |
 | **Check interval (h)** | How often the cleanup runs in hours (default: 24) |
-| **🧹 Clean Now** | Run the cleanup immediately using the current retention value; reports how many directories were removed and how much disk space was freed |
+| **🧹 Clean Now** | Run the cleanup immediately using the current retention value across both cache roots; reports how many directories were removed and how much disk space was freed |
 
 ---
 

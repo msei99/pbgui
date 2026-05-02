@@ -12,6 +12,8 @@ Die Seite öffnet mit einem Kachel-Raster, das alle Services auf einen Blick zei
 
 Klicke auf eine Kachel, um das Detail-Panel des Service zu öffnen.
 
+Die Übersicht enthält jetzt auch eine eigene **Workers**-Kachel. Sie öffnet den nur für Administration gedachten Worker-Bereich für Queue-Worker, Sync-/Watcher-Worker und interne Helper-Tasks.
+
 | Service | Funktion |
 |---|---|
 | **PBRun** | Startet/stoppt lokale Passivbot-Prozesse und verwaltet dynamische Coin-Filter |
@@ -38,6 +40,27 @@ Klicke auf eine Service-Kachel (oder den Sidebar-Eintrag), um ein dediziertes De
   - **Info**: Remote-Server-Info (nur PBRemote)
 
 Über die Sidebar links zwischen Services wechseln oder zur Übersicht zurückkehren.
+
+## Workers-Panel
+
+Der Sidebar-Eintrag **Workers** öffnet ein eigenes Admin-Panel innerhalb der Services-Seite. Es ist für Betrieb und Fehlersuche gedacht, nicht für die tägliche Bot-Bedienung.
+
+Das Panel gruppiert Worker in:
+
+- **Queue Workers**: gemeinsamer Market-Data-Queue-Worker, Backtest-Queue-Worker, Optimize-Queue-Worker
+- **Sync / Watchers**: API-Key-Dateisync, V7-Config-Sync
+- **Internal Helpers**: Archive-Sync und HLCVS-Cleanup-Hintergrundtasks
+
+Pro Worker lassen sich ansehen:
+
+- Laufend/gestoppt-Status
+- Kleine Laufzeitstatistiken wie Queue-Größe, aktive Jobs, verbundene Hosts oder Watchdog-Status
+- Start/Stop/Restart-Aktionen, sofern unterstützt
+- Ein lokaler Log-Viewer, wenn der Worker in eine eigene Logdatei schreibt
+
+Stop- und Restart-Aktionen im Workers-Panel fragen vor dem Senden des Befehls zusätzlich nach einer Bestätigung.
+
+Einige Worker nutzen statt eines dedizierten lokalen Logs einen passenden Monitor. Der gemeinsame Market-Data-Queue-Worker verwendet zum Beispiel den Job Monitor, weil die Logs dort pro Queue-Job geführt werden. In diesen Fällen wird der Monitor beim Auswählen des Workers direkt im rechten Log-Bereich eingebettet, bleibt auch bei Worker-Refreshes stabil offen und man bleibt innerhalb der Services-Seite.
 
 ## Typische Startreihenfolge
 

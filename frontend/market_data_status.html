@@ -30,6 +30,11 @@
         line-height: 1.6;
         margin: 0;
         padding: 0;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
     }
 
     .mds-root * {
@@ -37,109 +42,22 @@
     }
 
     .mds-root .mds-container {
+        width: 100%;
         max-width: 100%;
         margin: 0 auto;
-    }
-
-    .mds-root .mds-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 0;
-        padding: 0.5rem 0.75rem;
-        background: var(--mds-bg-secondary);
-        border-radius: 8px;
-        border: 1px solid var(--mds-border-color);
-        cursor: pointer;
-        user-select: none;
-        transition: background 0.2s;
-        gap: 1rem;
-        flex-wrap: wrap;
-    }
-
-    .mds-root .mds-header:hover {
-        background: var(--mds-bg-tertiary);
-    }
-
-    .mds-root .mds-header h2 {
-        font-size: var(--fs-lg);
-        font-weight: 600;
-        color: var(--mds-text-primary);
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        margin: 0;
-        padding: 0;
-    }
-
-    .mds-root .mds-header-left {
+        flex: 1 1 auto;
+        min-height: 0;
         display: flex;
         flex-direction: column;
-        gap: 0.25rem;
-        flex: 1;
-        min-width: 200px;
-    }
-
-    .mds-root .mds-header-right {
-        display: flex;
-        gap: 0.75rem;
-        align-items: center;
-        flex-wrap: wrap;
-    }
-
-    .mds-root .mds-expand-icon {
-        font-size: var(--fs-md);
-        transition: transform 0.2s;
-        flex-shrink: 0;
-    }
-
-    .mds-root .mds-expand-icon.expanded {
-        transform: rotate(90deg);
     }
 
     .mds-root .mds-content-wrapper {
-        transition: max-height 0.3s ease, opacity 0.3s ease, margin 0.3s ease, padding 0.3s ease;
-        overflow: hidden;
-    }
-
-    .mds-root .mds-content-wrapper.collapsed {
-        max-height: 0;
-        opacity: 0;
-        margin: 0;
-        padding: 0;
-        pointer-events: none;
-    }
-
-    .mds-root .mds-content-wrapper.expanded {
-        max-height: 2000px;
-        opacity: 1;
-        margin-top: 0.5rem;
-    }
-
-    .mds-root .mds-status-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.4rem 0.8rem;
-        border-radius: 6px;
-        font-size: var(--fs-sm);
-        font-weight: 500;
-        white-space: nowrap;
-    }
-
-    .mds-root .mds-status-badge.running {
-        background: var(--mds-accent-success);
-        color: white;
-    }
-
-    .mds-root .mds-status-badge.idle {
-        background: var(--mds-bg-tertiary);
-        color: var(--mds-text-secondary);
-    }
-
-    .mds-root .mds-status-badge.queued {
-        background: var(--mds-accent-info);
-        color: white;
+        width: 100%;
+        margin-top: 0;
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
     }
 
     .mds-root .mds-controls {
@@ -240,15 +158,22 @@
     }
 
     .mds-root .mds-coin-table-container {
+        width: 100%;
         background: var(--mds-bg-secondary);
         border-radius: 8px;
         border: 1px solid var(--mds-border-color);
         overflow: hidden;
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
     }
 
     .mds-root .mds-table-wrapper {
+        width: 100%;
+        flex: 1 1 auto;
+        min-height: 0;
         overflow-x: auto;
-        max-height: 350px;
         overflow-y: auto;
     }
 
@@ -318,37 +243,6 @@
         opacity: 0.3;
     }
 
-    .mds-root .mds-ws-status {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.4rem;
-        padding: 0.3rem 0.6rem;
-        border-radius: 6px;
-        font-size: var(--fs-sm);
-        background: var(--mds-bg-tertiary);
-        border: 1px solid var(--mds-border-color);
-        white-space: nowrap;
-    }
-
-    .mds-root .mds-ws-indicator {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: var(--mds-accent-success);
-        animation: mds-pulse 2s infinite;
-        flex-shrink: 0;
-    }
-
-    .mds-root .mds-ws-indicator.disconnected {
-        background: var(--mds-accent-danger);
-        animation: none;
-    }
-
-    @keyframes mds-pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.5; }
-    }
-
     .mds-root .mds-toast {
         position: fixed;
         top: 20px;
@@ -374,28 +268,7 @@
 
 <div class="mds-root" id="__MDS_ROOT_ID__" data-token="" data-exchange="" data-api-host="" data-api-base="">
     <div class="mds-container">
-        <div class="mds-header" id="__MDS_ID__header-toggle">
-            <div class="mds-header-left">
-                <h2>
-                    <span class="mds-expand-icon" id="__MDS_ID__expand-icon">&#9654;</span>
-                    Market Data Status Monitor
-                </h2>
-                <div style="font-size: 0.8rem; color: var(--mds-text-secondary); margin-left: 1.5rem;" id="__MDS_ID__exchange-name">
-                    Loading...
-                </div>
-            </div>
-            <div class="mds-header-right" id="__MDS_ID__header-right">
-                <div class="mds-ws-status">
-                    <span class="mds-ws-indicator" id="__MDS_ID__ws-indicator"></span>
-                    <span id="__MDS_ID__ws-status-text">Connected</span>
-                </div>
-                <div class="mds-status-badge idle" id="__MDS_ID__status-badge">
-                    Idle
-                </div>
-            </div>
-        </div>
-
-        <div class="mds-content-wrapper collapsed" id="__MDS_ID__content-wrapper">
+        <div class="mds-content-wrapper" id="__MDS_ID__content-wrapper">
             <div class="mds-controls">
                 <button id="__MDS_ID__btn-refresh-now" class="mds-btn primary" disabled>
                     &#9193; Refresh Now
@@ -448,6 +321,7 @@
     </div>
 </div>
 
+<script src="/app/js/pbgui_dialogs.js?v=1"></script>
 <script>
 (function() {
     // === Per-instance scope: all DOM queries use this root ===
@@ -464,14 +338,12 @@
     var API_HOST = root.getAttribute('data-api-host') || window.location.host;
     var API_BASE = root.getAttribute('data-api-base') || (window.location.origin + '/api');
 
-    // === Collapsible state (persisted in localStorage per exchange) ===
-    var STORAGE_KEY = 'market_data_expanded_' + EXCHANGE;
-    var isExpanded = localStorage.getItem(STORAGE_KEY) === 'true';
-
     // === WebSocket ===
     var ws = null;
     var reconnectAttempts = 0;
+    var reconnectTimer = null;
     var MAX_RECONNECT_ATTEMPTS = Infinity; // always retry
+    var destroyed = false;
 
     // === State ===
     var currentStatus = {
@@ -489,60 +361,34 @@
         return;
     }
 
-    $('exchange-name').textContent = getExchangeDisplayName(EXCHANGE);
-    initCollapsibleState();
+    root.__mdsDestroy = destroyMonitor;
+
     connectWebSocket();
     setupEventListeners();
 
-    // === Collapse / Expand ===
-    function initCollapsibleState() {
-        var cw = $('content-wrapper');
-        var icon = $('expand-icon');
-        if (isExpanded) {
-            cw.classList.remove('collapsed');
-            cw.classList.add('expanded');
-            icon.classList.add('expanded');
-        } else {
-            cw.classList.remove('expanded');
-            cw.classList.add('collapsed');
-            icon.classList.remove('expanded');
+    function destroyMonitor() {
+        destroyed = true;
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
         }
-    }
-
-    function toggleContent() {
-        isExpanded = !isExpanded;
-        localStorage.setItem(STORAGE_KEY, isExpanded.toString());
-        var cw = $('content-wrapper');
-        var icon = $('expand-icon');
-        if (isExpanded) {
-            cw.classList.remove('collapsed');
-            cw.classList.add('expanded');
-            icon.classList.add('expanded');
-        } else {
-            cw.classList.remove('expanded');
-            cw.classList.add('collapsed');
-            icon.classList.remove('expanded');
+        if (ws) {
+            try {
+                ws.onopen = null;
+                ws.onmessage = null;
+                ws.onclose = null;
+                ws.onerror = null;
+                ws.close();
+            } catch (error) {
+                void error;
+            }
+            ws = null;
         }
-    }
-
-    // Header click toggles (addEventListener — DOMPurify strips inline onclick)
-    $('header-toggle').addEventListener('click', toggleContent);
-    // Prevent toggle when clicking controls in header-right
-    $('header-right').addEventListener('click', function(e) { e.stopPropagation(); });
-
-    // === Exchange display name ===
-    function getExchangeDisplayName(exchange) {
-        var names = {
-            'binanceusdm': 'Binance USDM',
-            'binance': 'Binance USDM',
-            'bybit': 'Bybit',
-            'hyperliquid': 'Hyperliquid'
-        };
-        return names[exchange] || exchange.toUpperCase();
     }
 
     // === WebSocket ===
     function connectWebSocket() {
+        if (destroyed) return;
         var wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         var wsUrl = wsProtocol + '//' + API_HOST + '/ws/market-data?token=' + API_TOKEN + '&exchange=' + EXCHANGE;
 
@@ -567,10 +413,10 @@
 
         ws.onclose = function() {
             updateConnectionStatus(false);
-            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            if (!destroyed && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                 reconnectAttempts++;
                 var delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-                setTimeout(connectWebSocket, delay);
+                reconnectTimer = setTimeout(connectWebSocket, delay);
             }
         };
 
@@ -580,32 +426,12 @@
     }
 
     function updateConnectionStatus(connected, message) {
-        var indicator = $('ws-indicator');
-        var statusText = $('ws-status-text');
-        if (connected) {
-            indicator.classList.remove('disconnected');
-            statusText.textContent = 'Connected';
-        } else {
-            indicator.classList.add('disconnected');
-            statusText.textContent = message || 'Disconnected';
-        }
+        void connected;
+        void message;
     }
 
     // === UI updates ===
     function updateUI(data) {
-        // Status badge
-        var badge = $('status-badge');
-        if (data.running) {
-            badge.className = 'mds-status-badge running';
-            badge.textContent = 'Running';
-        } else if (data.queued) {
-            badge.className = 'mds-status-badge queued';
-            badge.textContent = 'Queued';
-        } else {
-            badge.className = 'mds-status-badge idle';
-            badge.textContent = 'Idle';
-        }
-
         // Buttons
         var btnRefresh = $('btn-refresh-now');
         var btnCancel = $('btn-cancel');
@@ -706,10 +532,15 @@
         $('btn-cancel').addEventListener('click', function() {
             callAPI('/market-data/cancel-refresh', { exchange: EXCHANGE }, 'Refresh cancelled');
         });
-        $('btn-stop').addEventListener('click', function() {
-            if (confirm('Stop the current market data refresh run?')) {
-                callAPI('/market-data/stop-run', { exchange: EXCHANGE }, 'Stop signal sent');
-            }
+        $('btn-stop').addEventListener('click', async function() {
+            var confirmed = await window.PBGuiDialogs.confirm({
+                title: 'Stop refresh run',
+                message: 'Stop the current market data refresh run?',
+                detail: 'The active refresh for the selected exchange will be stopped.',
+                confirmText: 'Stop'
+            });
+            if (!confirmed) return;
+            callAPI('/market-data/stop-run', { exchange: EXCHANGE }, 'Stop signal sent');
         });
     }
 

@@ -780,6 +780,7 @@ html, body {
   <iframe id="tpl-iframe" src=""></iframe>
 </div>
 
+<script src="/app/js/pbgui_dialogs.js?v=1"></script>
 <script>
 (function () {
   'use strict';
@@ -1131,7 +1132,12 @@ html, body {
           }
         });
       })
-      .catch(function () { alert('Delete failed.'); });
+      .catch(function () {
+        window.PBGuiDialogs.alert({
+          title: 'Delete dashboard',
+          message: 'Delete failed.'
+        });
+      });
   });
 
   /* ── Templates popup ── */

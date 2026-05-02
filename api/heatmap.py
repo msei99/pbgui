@@ -21,6 +21,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from api.auth import SessionToken, require_auth
+from hyperliquid_api import normalize_hyperliquid_coin
 
 router = APIRouter()
 
@@ -1308,6 +1309,19 @@ def queue_l2book_download(
     }
 
 
+def _filter_hyperliquid_l2book_download_coins(coins: list[str]) -> list[str]:
+    filtered: list[str] = []
+    for coin in coins:
+        coin_s = str(coin or "").strip()
+        if not coin_s:
+            continue
+        coin_u = coin_s.upper()
+        if coin_u.startswith("XYZ:") or coin_u.startswith("XYZ-"):
+            continue
+        filtered.append(coin_s)
+    return filtered
+
+
 # --------------------------------------------------------------------------- /l2book-download-info
 
 @router.get("/l2book-download-info")
@@ -1316,15 +1330,16 @@ def l2book_download_info(
 ) -> dict[str, Any]:
     """
     Return info needed by the l2Book Download form:
-      - coins: enabled Hyperliquid coins
+            - coins: enabled Hyperliquid coins with XYZ/TradFi symbols removed
       - has_aws_creds: bool
       - archive_range: {oldest_day, newest_day} (best-effort, may be empty)
     """
-    from market_data import load_market_data_config, load_aws_profile_credentials, load_aws_profile_region
+    from market_data import get_effective_enabled_coins, load_market_data_config, load_aws_profile_credentials, load_aws_profile_region
 
     profile = "pbgui-hyperliquid"
     cfg = load_market_data_config()
-    coins = sorted(cfg.enabled_coins.get("hyperliquid", []))
+    coins, _, _ = get_effective_enabled_coins("hyperliquid", cfg=cfg)
+    coins = _filter_hyperliquid_l2book_download_coins(coins)
 
     creds = {}
     try:
@@ -1394,6 +1409,7 @@ def queue_l2book_download_bulk(
     import re as _re
     from task_queue import enqueue_job, read_worker_pid, is_pid_running
     from market_data import (
+        get_effective_enabled_coins,
         load_market_data_config,
         load_aws_profile_credentials,
         load_aws_profile_region,
@@ -1413,19 +1429,25 @@ def queue_l2book_download_bulk(
     raw_coins = request.get("coins", [])
     if not isinstance(raw_coins, list):
         raw_coins = []
-    raw_coins = [str(c).strip() for c in raw_coins if str(c).strip()]
+    raw_coins = [
+        normalize_hyperliquid_coin(str(c).strip())
+        for c in raw_coins
+        if str(c).strip()
+    ]
+    raw_coins = [c for c in raw_coins if c]
     raw_coins_upper = [c.upper() for c in raw_coins]
 
     cfg = load_market_data_config()
-    all_coins = sorted(cfg.enabled_coins.get("hyperliquid", []))
+    all_coins, _, _ = get_effective_enabled_coins("hyperliquid", cfg=cfg)
+    downloadable_coins = _filter_hyperliquid_l2book_download_coins(all_coins)
 
-    if not all_coins:
+    if not downloadable_coins:
         return {"error": "No enabled Hyperliquid coins configured"}
 
     if "ALL" in raw_coins_upper:
-        payload_coins = list(all_coins)
+        payload_coins = list(downloadable_coins)
     else:
-        payload_coins = [c for c in raw_coins if c in all_coins]
+        payload_coins = [c for c in raw_coins if c in downloadable_coins]
 
     if not payload_coins:
         return {"error": "No matching enabled coins selected"}
@@ -1441,6 +1463,7 @@ def queue_l2book_download_bulk(
         return {"error": "end_day must be >= start_day"}
 
     only_missing = bool(request.get("only_missing_1m_src_hours", True))
+    skip_archive_preflight = bool(request.get("skip_archive_preflight", False))
 
     # --- load AWS creds ---
     creds = {}
@@ -1458,52 +1481,62 @@ def queue_l2book_download_bulk(
 
     # --- preflight: probe archive for coin existence ---
     missing_coins: list[str] = []
-    try:
-        rng = get_hyperliquid_archive_day_range_aws(
-            aws_access_key_id=ak,
-            aws_secret_access_key=sk,
-            region_name=region,
-        )
-        probe_day = ""
-        if isinstance(rng, (tuple, list)) and len(rng) >= 2:
-            probe_day = str(rng[1] or rng[0] or "").strip()
-        elif isinstance(rng, dict):
-            probe_day = str(rng.get("newest_day") or rng.get("oldest_day") or "").strip()
-        if not probe_day:
-            return {"error": "Failed to detect archive range for preflight"}
+    preflight_unconfirmed_coins: list[str] = []
+    response_message = ""
+    if not skip_archive_preflight:
+        try:
+            rng = get_hyperliquid_archive_day_range_aws(
+                aws_access_key_id=ak,
+                aws_secret_access_key=sk,
+                region_name=region,
+            )
+            probe_day = ""
+            if isinstance(rng, (tuple, list)) and len(rng) >= 2:
+                probe_day = str(rng[1] or rng[0] or "").strip()
+            elif isinstance(rng, dict):
+                probe_day = str(rng.get("newest_day") or rng.get("oldest_day") or "").strip()
+            if not probe_day:
+                return {"error": "Failed to detect archive range for preflight"}
 
-        probe_hours = list_hyperliquid_archive_hours_aws(
-            day=probe_day,
-            aws_access_key_id=ak,
-            aws_secret_access_key=sk,
-            region_name=region,
-        )
-        if not probe_hours:
-            return {"error": f"No archive hours found for probe day {probe_day}"}
-
-        missing_coins = []
-        for coin in list(payload_coins):
-            ok = check_hyperliquid_l2book_coin_exists_aws(
-                coin=coin,
+            probe_hours = list_hyperliquid_archive_hours_aws(
                 day=probe_day,
                 aws_access_key_id=ak,
                 aws_secret_access_key=sk,
                 region_name=region,
-                hours=probe_hours,
             )
-            if not ok:
-                missing_coins.append(coin)
+            if not probe_hours:
+                return {"error": f"No archive hours found for probe day {probe_day}"}
 
-        if missing_coins:
-            payload_coins = [c for c in payload_coins if c not in missing_coins]
+            missing_coins = []
+            for coin in list(payload_coins):
+                ok = check_hyperliquid_l2book_coin_exists_aws(
+                    coin=coin,
+                    day=probe_day,
+                    aws_access_key_id=ak,
+                    aws_secret_access_key=sk,
+                    region_name=region,
+                    hours=probe_hours,
+                )
+                if not ok:
+                    missing_coins.append(coin)
 
-        if not payload_coins:
-            return {"error": f"No selected coins exist in the archive (missing: {', '.join(missing_coins)})"}
-    except Exception as e:
-        if "Failed to detect" in str(e) or "No archive hours" in str(e):
-            return {"error": str(e)}
-        # non-critical preflight failure — proceed anyway
-        pass
+            if missing_coins:
+                filtered_payload_coins = [c for c in payload_coins if c not in missing_coins]
+                if filtered_payload_coins:
+                    payload_coins = filtered_payload_coins
+                else:
+                    preflight_unconfirmed_coins = list(missing_coins)
+                    missing_coins = []
+                    response_message = (
+                        "Archive preflight could not confirm the selected coin(s) "
+                        f"({', '.join(preflight_unconfirmed_coins)}). Queued anyway; "
+                        "the worker will verify availability during download."
+                    )
+        except Exception as e:
+            if "Failed to detect" in str(e) or "No archive hours" in str(e):
+                return {"error": str(e)}
+            # non-critical preflight failure — proceed anyway
+            pass
 
     # --- enqueue job ---
     try:
@@ -1548,6 +1581,8 @@ def queue_l2book_download_bulk(
         "coins": payload_coins,
         "coins_count": len(payload_coins),
         "missing_coins": missing_coins,
+        "preflight_unconfirmed_coins": preflight_unconfirmed_coins,
+        "message": response_message,
     }
 
 
@@ -1562,11 +1597,11 @@ def build_ohlcv_info(
       - eligible_coins: list[str] — coins eligible for building
       - all_coins: list[str] — all enabled Hyperliquid coins
     """
-    from market_data import load_market_data_config
+    from market_data import get_effective_enabled_coins, load_market_data_config
     import json as _j
 
     cfg = load_market_data_config()
-    all_coins = sorted(cfg.enabled_coins.get("hyperliquid", []))
+    all_coins, _, _ = get_effective_enabled_coins("hyperliquid", cfg=cfg)
 
     # Load TradFi map for eligibility check
     tradfi_map_path = Path(__file__).resolve().parents[1] / "data" / "tradfi_symbol_map.json"
@@ -1658,10 +1693,18 @@ def queue_build_ohlcv(
     raw_coins = request.get("coins", [])
     if not isinstance(raw_coins, list):
         raw_coins = []
-    raw_coins = [str(c).strip() for c in raw_coins if str(c).strip()]
+    raw_coins = [
+        normalize_hyperliquid_coin(str(c).strip())
+        for c in raw_coins
+        if str(c).strip()
+    ]
+    raw_coins = [c for c in raw_coins if c]
     raw_upper = [c.upper() for c in raw_coins]
+    selected_only = bool(request.get("selected_only", False))
 
     if "ALL" in raw_upper or not raw_coins:
+        if selected_only:
+            return {"error": "No explicitly selected coins were provided"}
         build_coins = list(eligible)
     else:
         build_coins = [c for c in raw_coins if c in eligible]

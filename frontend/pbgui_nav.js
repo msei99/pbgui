@@ -50,6 +50,7 @@
       { page: 'dashboards',           icon: '&#128202;', label: 'Dashboards'        },
       { page: 'info_coin_data',       icon: '&#129689;', label: 'Coin Data'         },
       { page: 'info_market_data',     icon: '&#128452;', label: 'Market Data'       },
+      { page: 'info_market_data_fastapi', icon: '&#128187;', label: 'Market Data (FastAPI)' },
       { page: 'help',                 icon: '&#10067;',  label: 'Help'              }
     ]},
     { id: 'pbv7', label: 'PBv7', items: [
@@ -180,6 +181,24 @@
     '#pbgui-about-footer{padding:0.75rem 2rem;border-top:1px solid #1e2736;',
     'text-align:center;font-size:var(--fs-xs);color:#4a5568;background:#0e1117;}',
 
+    /* shared confirm overlay */
+    '#pbgui-confirm-ovl{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);',
+    'z-index:3050;align-items:center;justify-content:center;backdrop-filter:blur(2px);}',
+    '#pbgui-confirm-ovl.visible{display:flex;}',
+    '#pbgui-confirm-box{background:#131b2b;border:1px solid #2d3748;border-radius:14px;',
+    'box-shadow:0 20px 70px rgba(0,0,0,.9);overflow:hidden;width:min(460px,92vw);}',
+    '#pbgui-confirm-body{display:grid;gap:var(--sp-md);padding:var(--sp-lg);}',
+    '#pbgui-confirm-msg{font-size:var(--fs-base);line-height:1.5;color:#e2e8f0;}',
+    '#pbgui-confirm-detail{font-size:var(--fs-sm);line-height:1.45;color:#94a3b8;}',
+    '#pbgui-confirm-actions{display:flex;justify-content:flex-end;gap:var(--sp-sm);flex-wrap:wrap;}',
+    '.pbgui-modal-btn{display:inline-flex;align-items:center;justify-content:center;height:var(--btn-h);',
+    'padding:0 var(--sp-md);border-radius:8px;border:1px solid transparent;font-size:var(--fs-base);',
+    'font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,color .15s;}',
+    '.pbgui-modal-btn.secondary{background:rgba(99,179,237,.08);border-color:rgba(99,179,237,.25);color:#e2e8f0;}',
+    '.pbgui-modal-btn.secondary:hover{background:rgba(99,179,237,.16);border-color:#63b3ed;}',
+    '.pbgui-modal-btn.primary{background:#63b3ed;border-color:#63b3ed;color:#0b1220;}',
+    '.pbgui-modal-btn.primary:hover{background:#7cc4f5;}',
+
     /* shared help overlay chrome */
     '#help-ovl.is-maximized{max-width:none;max-height:none;resize:none;}',
     '#help-ovl.is-maximized #help-drag-handle{cursor:default;pointer-events:none;}',
@@ -272,6 +291,8 @@
      NOTIFICATION LOG PANEL
      ════════════════════════════════════ */
   var _notifyViewer = null;
+  var _navConfirmResolve = null;
+  var _navConfirmReturnFocus = null;
 
   function buildNotifyPanel() {
     if (document.getElementById('pbgui-notify-panel')) return;
@@ -440,6 +461,92 @@
     document.body.appendChild(wrapper.firstChild);
   }
 
+  function buildConfirmOverlay() {
+    if (document.getElementById('pbgui-confirm-ovl')) return;
+    var wrapper = document.createElement('div');
+    wrapper.innerHTML = ''
+      + '<div id="pbgui-confirm-ovl" aria-hidden="true">'
+      +   '<div id="pbgui-confirm-box" role="dialog" aria-modal="true" aria-labelledby="pbgui-confirm-title">'
+      +     '<div class="pbgui-ovl-header">'
+      +       '<span class="pbgui-ovl-title" id="pbgui-confirm-title">Confirm action</span>'
+      +       '<button class="pbgui-ovl-close" id="pbgui-confirm-close">&#x2715;</button>'
+      +     '</div>'
+      +     '<div id="pbgui-confirm-body">'
+      +       '<div id="pbgui-confirm-msg"></div>'
+      +       '<div id="pbgui-confirm-detail" hidden></div>'
+      +       '<div id="pbgui-confirm-actions">'
+      +         '<button type="button" class="pbgui-modal-btn secondary" id="pbgui-confirm-cancel">Cancel</button>'
+      +         '<button type="button" class="pbgui-modal-btn primary" id="pbgui-confirm-accept">Confirm</button>'
+      +       '</div>'
+      +     '</div>'
+      +   '</div>'
+      + '</div>';
+    document.body.appendChild(wrapper.firstChild);
+
+    var overlay = document.getElementById('pbgui-confirm-ovl');
+    var closeBtn = document.getElementById('pbgui-confirm-close');
+    var cancelBtn = document.getElementById('pbgui-confirm-cancel');
+    var acceptBtn = document.getElementById('pbgui-confirm-accept');
+    if (overlay) overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) closeNavConfirm(false);
+    });
+    if (closeBtn) closeBtn.addEventListener('click', function () { closeNavConfirm(false); });
+    if (cancelBtn) cancelBtn.addEventListener('click', function () { closeNavConfirm(false); });
+    if (acceptBtn) acceptBtn.addEventListener('click', function () { closeNavConfirm(true); });
+  }
+
+  function closeNavConfirm(confirmed) {
+    var overlay = document.getElementById('pbgui-confirm-ovl');
+    if (overlay) {
+      overlay.classList.remove('visible');
+      overlay.setAttribute('aria-hidden', 'true');
+    }
+    var resolver = _navConfirmResolve;
+    var returnFocus = _navConfirmReturnFocus;
+    _navConfirmResolve = null;
+    _navConfirmReturnFocus = null;
+    if (returnFocus && typeof returnFocus.focus === 'function') {
+      try { returnFocus.focus(); } catch (_) {}
+    }
+    if (typeof resolver === 'function') resolver(Boolean(confirmed));
+  }
+
+  function showNavConfirm(options) {
+    options = options || {};
+    buildConfirmOverlay();
+    var overlay = document.getElementById('pbgui-confirm-ovl');
+    var title = document.getElementById('pbgui-confirm-title');
+    var message = document.getElementById('pbgui-confirm-msg');
+    var detail = document.getElementById('pbgui-confirm-detail');
+    var cancelBtn = document.getElementById('pbgui-confirm-cancel');
+    var acceptBtn = document.getElementById('pbgui-confirm-accept');
+    if (!overlay || !title || !message || !detail || !cancelBtn || !acceptBtn) {
+      return Promise.resolve(window.confirm(String(options.message || 'Are you sure?')));
+    }
+
+    if (typeof _navConfirmResolve === 'function') {
+      var previousResolve = _navConfirmResolve;
+      _navConfirmResolve = null;
+      previousResolve(false);
+    }
+
+    title.textContent = String(options.title || 'Confirm action');
+    message.textContent = String(options.message || 'Are you sure?');
+    acceptBtn.textContent = String(options.confirmText || 'Confirm');
+    cancelBtn.textContent = String(options.cancelText || 'Cancel');
+    var detailText = String(options.detail || '').trim();
+    detail.textContent = detailText;
+    detail.hidden = !detailText;
+    _navConfirmReturnFocus = document.activeElement;
+
+    return new Promise(function (resolve) {
+      _navConfirmResolve = resolve;
+      overlay.classList.add('visible');
+      overlay.setAttribute('aria-hidden', 'false');
+      acceptBtn.focus();
+    });
+  }
+
   /* ════════════════════════════════════
      FASTAPI DIRECT ROUTES
      Pages served directly by FastAPI — navigate without Streamlit detour.
@@ -448,6 +555,7 @@
   var FASTAPI_PAGES = {
     'dashboards':        '/api/dashboard/main_page',
     'info_coin_data':    '/api/coin-data/main_page',
+    'info_market_data_fastapi': '/api/market-data/main_page',
     'system_api_keys':   '/api/api-keys/main_page',
     'system_logging':     '/api/logging/main_page',
     'system_vps_monitor': '/api/vps/main_page',
@@ -667,26 +775,45 @@
 
     /* Esc key closes about overlay */
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && aboutOvl) aboutOvl.classList.remove('visible');
+      var confirmOvl = document.getElementById('pbgui-confirm-ovl');
+      if (e.key === 'Escape') {
+        if (confirmOvl && confirmOvl.classList.contains('visible')) {
+          closeNavConfirm(false);
+          return;
+        }
+        if (aboutOvl) aboutOvl.classList.remove('visible');
+      }
+      if (e.key === 'Enter' && confirmOvl && confirmOvl.classList.contains('visible')) {
+        if (e.target && e.target.id === 'pbgui-confirm-cancel') return;
+        e.preventDefault();
+        closeNavConfirm(true);
+      }
     });
 
     /* Restart button */
     var restartBtn = document.getElementById('pbgui-restart-btn');
     if (restartBtn) {
       restartBtn.addEventListener('click', function () {
-        if (!confirm('Restart the PBGui API server now?\nThe page will reload automatically.')) return;
-        var c2 = cfg();
-        var origin2 = '';
-        if (c2.apiBase) { var m2 = c2.apiBase.match(/^(https?:\/\/[^/]+)/); if (m2) origin2 = m2[1]; }
-        if (!origin2) origin2 = window.location.origin;
-        fetch(origin2 + '/api/server-restart', {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + c2.token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: c2.token })
-        }).then(function() {
-          showRestartOverlay(origin2, c2.token);
-        }).catch(function() {
-          showRestartOverlay(origin2, c2.token);
+        showNavConfirm({
+          title: 'Restart API server',
+          message: 'Restart the PBGui API server now?',
+          detail: 'The page will reload automatically.',
+          confirmText: 'Restart'
+        }).then(function (confirmed) {
+          if (!confirmed) return;
+          var c2 = cfg();
+          var origin2 = '';
+          if (c2.apiBase) { var m2 = c2.apiBase.match(/^(https?:\/\/[^/]+)/); if (m2) origin2 = m2[1]; }
+          if (!origin2) origin2 = window.location.origin;
+          fetch(origin2 + '/api/server-restart', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + c2.token, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: c2.token })
+          }).then(function() {
+            showRestartOverlay(origin2, c2.token);
+          }).catch(function() {
+            showRestartOverlay(origin2, c2.token);
+          });
         });
       });
     }
@@ -839,6 +966,7 @@
     buildNav();
     buildNotifyPanel();
     buildAbout();
+    buildConfirmOverlay();
     setupHandlers();
     startTokenRefresh();
   }
@@ -852,5 +980,6 @@
   /* Expose overlay helper so other scripts on the same page (e.g. services_monitor.html)
      can call it without requiring closure access to this IIFE. */
   window.showRestartOverlay = showRestartOverlay;
+  window.PBGuiConfirm = showNavConfirm;
 
 }());

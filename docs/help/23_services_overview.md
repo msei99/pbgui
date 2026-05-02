@@ -12,6 +12,8 @@ The page opens with a card grid showing all services at a glance. Each card disp
 
 Click a card to open that service's detail panel.
 
+The Overview also includes a dedicated **Workers** card. It opens the admin-only worker area for queue workers, sync/watcher workers, and internal helper tasks.
+
 | Service | Purpose |
 |---|---|
 | **PBRun** | Starts/stops local Passivbot bot processes and manages dynamic coin filters |
@@ -38,6 +40,27 @@ Click a service card (or its sidebar entry) to open a dedicated detail panel wit
   - **Info**: Remote server info (PBRemote only)
 
 Use the sidebar on the left to switch between services or return to the Overview.
+
+## Workers panel
+
+The **Workers** sidebar entry opens a dedicated admin panel inside the Services page. It is intended for operations and troubleshooting, not for day-to-day bot usage.
+
+The panel groups workers into:
+
+- **Queue Workers**: shared Market Data queue worker, Backtest queue worker, Optimize queue worker
+- **Sync / Watchers**: API key file sync watcher, V7 config sync watcher
+- **Internal Helpers**: archive sync and HLCVS cleanup background tasks
+
+For each worker you can inspect:
+
+- Running/stopped state
+- Small runtime statistics such as queued items, active jobs, connected hosts, or watchdog state
+- Start/Stop/Restart actions where supported
+- A local log viewer when the worker writes its own log file
+
+Stop and Restart actions in the Workers panel ask for confirmation before the command is sent.
+
+Some workers expose a monitor instead of a dedicated local log. For example, the shared Market Data queue worker uses the Job Monitor because job logs are tracked per queued job. In those cases selecting the worker embeds the monitor directly in the right-hand log pane, keeps it in place during worker refreshes, and lets you stay inside the Services page.
 
 ## Typical startup sequence
 

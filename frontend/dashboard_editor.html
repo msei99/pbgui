@@ -2590,7 +2590,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
   /* ── Save / Cancel — callable from sidebar messages ── */
   function doSave() {
     var name = (state.name || '').trim();
-    if (!name) { alert('Please enter a dashboard name.'); return; }
+    if (!name) { setStatus('Please enter a dashboard name.', 'error'); return; }
     setStatus('saving\u2026', '');
     var payload = {};
     Object.keys(state).forEach(function (k) { payload[k] = state[k]; });

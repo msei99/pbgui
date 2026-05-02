@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections import Counter
 import glob
 import json
 import importlib
+import os
+import signal
+import subprocess
+import sys
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -52,6 +59,425 @@ def _get_service(name: str):
     raise ValueError(f"Unknown service: {name}")
 
 
+def _task_active(task: Any) -> bool:
+    return bool(task and not task.done())
+
+
+def _worker_stat(label: str, value: Any) -> dict[str, str]:
+    return {"label": str(label), "value": str(value)}
+
+
+def _worker_item(
+    *,
+    worker_id: str,
+    label: str,
+    group: str,
+    worker_type: str,
+    running: bool,
+    summary: str,
+    description: str,
+    note: str = "",
+    stats: list[dict[str, str]] | None = None,
+    log_file: str | None = None,
+    monitor_path: str | None = None,
+    available: bool = True,
+    can_start: bool | None = None,
+    can_stop: bool | None = None,
+) -> dict[str, Any]:
+    if can_start is None:
+        can_start = available
+    if can_stop is None:
+        can_stop = available
+    return {
+        "id": worker_id,
+        "label": label,
+        "group": group,
+        "type": worker_type,
+        "running": bool(running),
+        "summary": summary,
+        "description": description,
+        "note": note,
+        "stats": stats or [],
+        "log_file": log_file,
+        "monitor_path": monitor_path,
+        "available": bool(available),
+        "can_start": bool(can_start),
+        "can_stop": bool(can_stop),
+    }
+
+
+def _get_task_worker_item() -> dict[str, Any]:
+    from task_queue import list_jobs, read_worker_pid, is_pid_running, clear_worker_pid
+
+    jobs = list_jobs(states=["pending", "running", "done", "failed"], limit=0)
+    counts = Counter(str(job.get("status") or "unknown").strip().lower() for job in jobs)
+    pid = read_worker_pid()
+    running = bool(pid and is_pid_running(int(pid)))
+    if pid and not running:
+        clear_worker_pid()
+        pid = None
+
+    pending = counts.get("pending", 0)
+    active = counts.get("running", 0) + counts.get("cancelling", 0)
+    done = counts.get("done", 0)
+    failed = counts.get("failed", 0)
+    summary = f"{pending} pending, {active} active"
+    return _worker_item(
+        worker_id="market-data-task",
+        label="Market Data Queue",
+        group="queue",
+        worker_type="process worker",
+        running=running,
+        summary=summary,
+        description="Processes queued Market Data and Heatmap jobs from the shared task queue.",
+        note="Stop sends SIGTERM to the worker process. If pending jobs remain, the PBAPIServer watchdog may start it again.",
+        stats=[
+            _worker_stat("PID", pid or "-"),
+            _worker_stat("Pending", pending),
+            _worker_stat("Active", active),
+            _worker_stat("Done", done),
+            _worker_stat("Failed", failed),
+        ],
+        monitor_path="/app/jobs_monitor.html",
+        log_file=None,
+    )
+
+
+async def _get_backtest_worker_item() -> dict[str, Any]:
+    import api.backtest_v7 as bt7
+
+    await bt7._store.refresh_from_disk()
+    items = list(bt7._store.items.values())
+    counts = Counter(str(item.get("status") or "unknown").strip().lower() for item in items)
+    settings = bt7._read_ini_section()
+    cpu = settings.get("cpu", "1")
+    autostart = settings.get("autostart", "False").lower() == "true"
+    running = _task_active(getattr(bt7._worker, "_task", None))
+    summary = f"{counts.get('queued', 0)} queued, {counts.get('running', 0) + counts.get('backtesting', 0)} active"
+    return _worker_item(
+        worker_id="backtest-queue",
+        label="Backtest Queue",
+        group="queue",
+        worker_type="scheduler task",
+        running=running,
+        summary=summary,
+        description="Schedules queued PB7 backtests and launches detached PB7 subprocesses.",
+        note="Stopping the worker pauses queue processing only. Already launched PB7 backtest subprocesses continue running.",
+        stats=[
+            _worker_stat("Queued", counts.get("queued", 0)),
+            _worker_stat("Running", counts.get("running", 0)),
+            _worker_stat("Backtesting", counts.get("backtesting", 0)),
+            _worker_stat("Complete", counts.get("complete", 0)),
+            _worker_stat("Error", counts.get("error", 0)),
+            _worker_stat("Autostart", "On" if autostart else "Off"),
+            _worker_stat("CPU limit", cpu),
+        ],
+        log_file="BacktestV7API.log",
+    )
+
+
+async def _get_optimize_worker_item() -> dict[str, Any]:
+    import api.optimize_v7 as opt7
+
+    await opt7._store.refresh_from_disk()
+    items = list(opt7._store.items.values())
+    counts = Counter(str(item.get("status") or "unknown").strip().lower() for item in items)
+    settings = opt7._read_ini_section()
+    autostart = settings.get("autostart", "False").lower() == "true"
+    cpu_override = settings.get("cpu_override", "True").lower() == "true"
+    cpu = settings.get("cpu", "1")
+    running = _task_active(getattr(opt7._worker, "_task", None))
+    summary = f"{counts.get('queued', 0)} queued, {counts.get('running', 0) + counts.get('optimizing', 0)} active"
+    return _worker_item(
+        worker_id="optimize-queue",
+        label="Optimize Queue",
+        group="queue",
+        worker_type="scheduler task",
+        running=running,
+        summary=summary,
+        description="Schedules queued PB7 optimize jobs and launches detached PB7 optimizer subprocesses.",
+        note="Stopping the worker pauses queue processing only. Already launched PB7 optimize subprocesses continue running.",
+        stats=[
+            _worker_stat("Queued", counts.get("queued", 0)),
+            _worker_stat("Running", counts.get("running", 0)),
+            _worker_stat("Optimizing", counts.get("optimizing", 0)),
+            _worker_stat("Complete", counts.get("complete", 0)),
+            _worker_stat("Error", counts.get("error", 0)),
+            _worker_stat("Autostart", "On" if autostart else "Off"),
+            _worker_stat("Autostart CPU", cpu),
+            _worker_stat("CPU override", "On" if cpu_override else "Off"),
+        ],
+        log_file="OptimizeV7API.log",
+    )
+
+
+def _get_archive_sync_worker_item() -> dict[str, Any]:
+    import api.backtest_v7 as bt7
+
+    running = _task_active(getattr(bt7._archive_sync_worker, "_task", None))
+    return _worker_item(
+        worker_id="archive-sync",
+        label="Archive Sync",
+        group="internal",
+        worker_type="periodic task",
+        running=running,
+        summary="Auto-pulls configured backtest archives",
+        description="Keeps configured backtest archives up to date in the background.",
+        note="This worker is tied to the Backtest subsystem and is usually only needed for archive maintenance.",
+        stats=[
+            _worker_stat("Running", "Yes" if running else "No"),
+            _worker_stat("Auto pull", bt7._read_auto_pull_interval()),
+        ],
+        log_file="ArchiveSync.log",
+    )
+
+
+def _get_hlcvs_cleanup_worker_item() -> dict[str, Any]:
+    import api.backtest_v7 as bt7
+
+    running = _task_active(getattr(bt7._hlcvs_cleanup_worker, "_task", None))
+    targets = []
+    try:
+        targets = bt7._cleanup_cache_targets()
+    except Exception:
+        targets = []
+    return _worker_item(
+        worker_id="hlcvs-cleanup",
+        label="HLCVS Cleanup",
+        group="internal",
+        worker_type="periodic task",
+        running=running,
+        summary=f"Maintains {len(targets)} cache target(s)",
+        description="Periodically removes expired PB7 cache materialization data from configured cleanup targets.",
+        stats=[
+            _worker_stat("Running", "Yes" if running else "No"),
+            _worker_stat("Targets", len(targets)),
+        ],
+        log_file="HLCVSCleanup.log",
+    )
+
+
+def _get_file_sync_worker_item() -> dict[str, Any]:
+    from api.api_keys import _file_sync_worker
+
+    if not _file_sync_worker:
+        return _worker_item(
+            worker_id="file-sync",
+            label="API Key File Sync",
+            group="sync",
+            worker_type="watcher + watchdog",
+            running=False,
+            summary="Worker not initialized",
+            description="Pushes api-keys.json updates and watches remote VPS copies for changes.",
+            note="Available only while PBAPIServer has initialized the FileSyncWorker.",
+            available=False,
+            can_start=False,
+            can_stop=False,
+            log_file="FileSync.log",
+        )
+
+    status = _file_sync_worker.get_status()
+    hosts = status.get("hosts", {})
+    connected = status.get("connected_hosts", [])
+    watcher_active = sum(1 for item in hosts.values() if item.get("watcher_active"))
+    in_sync = sum(1 for item in hosts.values() if item.get("in_sync") is True)
+    watchdog_active = _task_active(getattr(_file_sync_worker, "_watchdog", None))
+    running = bool(watchdog_active or watcher_active)
+    return _worker_item(
+        worker_id="file-sync",
+        label="API Key File Sync",
+        group="sync",
+        worker_type="watcher + watchdog",
+        running=running,
+        summary=f"{watcher_active}/{len(connected)} watcher(s) active",
+        description="Pushes api-keys.json updates and watches remote VPS copies for changes.",
+        note="Start/stop controls the inotify watchers and watchdog inside PBAPIServer.",
+        stats=[
+            _worker_stat("Connected hosts", len(connected)),
+            _worker_stat("Watchers active", watcher_active),
+            _worker_stat("Hosts in sync", in_sync),
+            _worker_stat("Watchdog", "On" if watchdog_active else "Off"),
+        ],
+        log_file="FileSync.log",
+    )
+
+
+def _get_v7_sync_worker_item() -> dict[str, Any]:
+    from api.v7_instances import _v7_sync
+
+    if not _v7_sync:
+        return _worker_item(
+            worker_id="v7-config-sync",
+            label="V7 Config Sync",
+            group="sync",
+            worker_type="watcher + watchdog",
+            running=False,
+            summary="Worker not initialized",
+            description="Watches remote V7 instance state and synchronizes config changes between masters.",
+            note="Available only while PBAPIServer has initialized the V7ConfigSyncWorker.",
+            available=False,
+            can_start=False,
+            can_stop=False,
+            log_file="V7ConfigSync.log",
+        )
+
+    watchers = getattr(_v7_sync, "_watchers", {})
+    connected = _v7_sync.pool.connected_hosts()
+    watcher_active = sum(1 for task in watchers.values() if _task_active(task))
+    watchdog_active = _task_active(getattr(_v7_sync, "_watchdog", None))
+    running = bool(watchdog_active or watcher_active)
+    return _worker_item(
+        worker_id="v7-config-sync",
+        label="V7 Config Sync",
+        group="sync",
+        worker_type="watcher + watchdog",
+        running=running,
+        summary=f"{watcher_active}/{len(connected)} watcher(s) active",
+        description="Watches remote V7 instance state and synchronizes config changes between masters.",
+        note="Start/stop controls the inotify watchers and watchdog inside PBAPIServer.",
+        stats=[
+            _worker_stat("Connected hosts", len(connected)),
+            _worker_stat("Watchers active", watcher_active),
+            _worker_stat("Watchdog", "On" if watchdog_active else "Off"),
+        ],
+        log_file="V7ConfigSync.log",
+    )
+
+
+async def _collect_worker_groups() -> list[dict[str, Any]]:
+    groups = [
+        {
+            "id": "queue",
+            "label": "Queue Workers",
+            "items": [
+                _get_task_worker_item(),
+                await _get_backtest_worker_item(),
+                await _get_optimize_worker_item(),
+            ],
+        },
+        {
+            "id": "sync",
+            "label": "Sync / Watchers",
+            "items": [
+                _get_file_sync_worker_item(),
+                _get_v7_sync_worker_item(),
+            ],
+        },
+        {
+            "id": "internal",
+            "label": "Internal Helpers",
+            "items": [
+                _get_archive_sync_worker_item(),
+                _get_hlcvs_cleanup_worker_item(),
+            ],
+        },
+    ]
+    return groups
+
+
+async def _find_worker(worker_id: str) -> dict[str, Any] | None:
+    groups = await _collect_worker_groups()
+    for group in groups:
+        for item in group.get("items", []):
+            if item.get("id") == worker_id:
+                return item
+    return None
+
+
+def _spawn_task_worker() -> None:
+    from task_queue import clear_worker_pid
+
+    clear_worker_pid()
+    subprocess.Popen(
+        [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+    )
+
+
+async def _start_worker(worker_id: str) -> None:
+    if worker_id == "market-data-task":
+        _spawn_task_worker()
+        return
+    if worker_id == "backtest-queue":
+        import api.backtest_v7 as bt7
+        bt7._worker.start()
+        return
+    if worker_id == "optimize-queue":
+        import api.optimize_v7 as opt7
+        opt7._worker.start()
+        return
+    if worker_id == "archive-sync":
+        import api.backtest_v7 as bt7
+        bt7._archive_sync_worker.start()
+        return
+    if worker_id == "hlcvs-cleanup":
+        import api.backtest_v7 as bt7
+        bt7._hlcvs_cleanup_worker.start()
+        return
+    if worker_id == "file-sync":
+        from api.api_keys import _file_sync_worker
+        if not _file_sync_worker:
+            raise HTTPException(status_code=409, detail="FileSyncWorker not initialized")
+        await _file_sync_worker.start_watchers()
+        _file_sync_worker.start_watchdog()
+        return
+    if worker_id == "v7-config-sync":
+        from api.v7_instances import _v7_sync
+        if not _v7_sync:
+            raise HTTPException(status_code=409, detail="V7ConfigSyncWorker not initialized")
+        await _v7_sync.start_watchers()
+        _v7_sync.start_watchdog()
+        return
+    raise HTTPException(status_code=404, detail=f"Unknown worker: {worker_id}")
+
+
+async def _stop_worker(worker_id: str) -> None:
+    if worker_id == "market-data-task":
+        from task_queue import read_worker_pid, is_pid_running, clear_worker_pid
+
+        pid = read_worker_pid()
+        if pid and is_pid_running(int(pid)):
+            os.kill(int(pid), signal.SIGTERM)
+            await asyncio.sleep(0.4)
+        pid = read_worker_pid()
+        if pid and not is_pid_running(int(pid)):
+            clear_worker_pid()
+        return
+    if worker_id == "backtest-queue":
+        import api.backtest_v7 as bt7
+        bt7._worker.stop()
+        return
+    if worker_id == "optimize-queue":
+        import api.optimize_v7 as opt7
+        opt7._worker.stop()
+        return
+    if worker_id == "archive-sync":
+        import api.backtest_v7 as bt7
+        bt7._archive_sync_worker.stop()
+        return
+    if worker_id == "hlcvs-cleanup":
+        import api.backtest_v7 as bt7
+        bt7._hlcvs_cleanup_worker.stop()
+        return
+    if worker_id == "file-sync":
+        from api.api_keys import _file_sync_worker
+        if not _file_sync_worker:
+            raise HTTPException(status_code=409, detail="FileSyncWorker not initialized")
+        await _file_sync_worker.stop_watchers()
+        _file_sync_worker.stop_watchdog()
+        return
+    if worker_id == "v7-config-sync":
+        from api.v7_instances import _v7_sync
+        if not _v7_sync:
+            raise HTTPException(status_code=409, detail="V7ConfigSyncWorker not initialized")
+        await _v7_sync.stop_watchers()
+        _v7_sync.stop_watchdog()
+        return
+    raise HTTPException(status_code=404, detail=f"Unknown worker: {worker_id}")
+
+
 # ── Status ───────────────────────────────────────────────────
 
 @router.get("/status")
@@ -66,6 +492,23 @@ def get_status(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
             _log(SERVICE, f"status check failed for {svc}: {e}", level="WARNING")
             result[svc] = {"running": False, "error": str(e)}
     return result
+
+
+@router.get("/workers/status")
+async def get_workers_status(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    groups = await _collect_worker_groups()
+    total = sum(len(group.get("items", [])) for group in groups)
+    running = sum(
+        1
+        for group in groups
+        for item in group.get("items", [])
+        if item.get("running")
+    )
+    return {
+        "updated_ts": int(time.time()),
+        "counts": {"total": total, "running": running},
+        "groups": groups,
+    }
 
 
 # ── Start / Stop ─────────────────────────────────────────────
@@ -95,6 +538,29 @@ def stop_service(service: str, session: SessionToken = Depends(require_auth)) ->
         return {"running": bool(obj.is_running())}
     except Exception as e:
         _log(SERVICE, f"stop {service} failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/workers/{worker_id}/{action}")
+async def worker_action(worker_id: str, action: str, session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action not in {"start", "stop"}:
+        raise HTTPException(status_code=404, detail=f"Unknown action: {action}")
+
+    try:
+        if normalized_action == "start":
+            await _start_worker(worker_id)
+        else:
+            await _stop_worker(worker_id)
+        await asyncio.sleep(0.1)
+        item = await _find_worker(worker_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail=f"Unknown worker: {worker_id}")
+        return {"ok": True, "worker": item}
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log(SERVICE, f"worker action failed ({worker_id}/{normalized_action}): {e}\n{traceback.format_exc()}", level="ERROR")
         raise HTTPException(status_code=500, detail=str(e))
 
 

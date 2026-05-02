@@ -2339,6 +2339,7 @@ textarea.json-invalid:focus {
 <script src="/app/js/editor_shared.js?v=10"></script>
 <script src="/app/js/suite_editor.js?v=4"></script>
 <script src="/app/js/log_viewer_panel.js?v=8"></script>
+<script src="/app/js/pbgui_dialogs.js?v=1"></script>
 <script>
 var TOKEN = "%%TOKEN%%";
 var API_BASE = "%%API_BASE%%";
@@ -9862,7 +9863,11 @@ async function loadParetos(path, name) {
 }
 
 async function deleteConfig(name) {
-  if (!window.confirm('Delete optimize config "' + name + '"?')) return;
+  if (!(await window.PBGuiDialogs.confirm({
+    title: 'Delete optimize config',
+    message: 'Delete optimize config "' + name + '"?',
+    confirmText: 'Delete'
+  }))) return;
   await apiFetch('/configs/' + encodeURIComponent(name), { method: 'DELETE' });
   state.selectedConfigs.delete(name);
   toast('Config deleted.', 'ok');
@@ -9881,7 +9886,13 @@ async function duplicateSelected() {
     toast('Select exactly one config to duplicate.', 'err');
     return;
   }
-  var newName = window.prompt('Duplicate config as:', selected[0] + '_copy');
+  var newName = await window.PBGuiDialogs.prompt({
+    title: 'Duplicate config',
+    message: 'Duplicate config as:',
+    label: 'New config name',
+    defaultValue: selected[0] + '_copy',
+    confirmText: 'Duplicate'
+  });
   if (!newName) return;
   await apiFetch('/configs/' + encodeURIComponent(selected[0]) + '/duplicate', {
     method: 'POST',
@@ -9897,7 +9908,11 @@ async function deleteSelectedConfigs() {
     toast('Select at least one config to delete.', 'err');
     return;
   }
-  if (!window.confirm('Delete ' + selected.length + ' selected config(s)?')) return;
+  if (!(await window.PBGuiDialogs.confirm({
+    title: 'Delete configs',
+    message: 'Delete ' + selected.length + ' selected config(s)?',
+    confirmText: 'Delete'
+  }))) return;
   for (var i = 0; i < selected.length; i++) {
     await apiFetch('/configs/' + encodeURIComponent(selected[i]), { method: 'DELETE' });
   }
@@ -9912,7 +9927,11 @@ async function deleteSelectedQueue() {
     toast('Select at least one queue item to delete.', 'err');
     return;
   }
-  if (!window.confirm('Delete ' + selected.length + ' selected queue item(s)?')) return;
+  if (!(await window.PBGuiDialogs.confirm({
+    title: 'Delete queue items',
+    message: 'Delete ' + selected.length + ' selected queue item(s)?',
+    confirmText: 'Delete'
+  }))) return;
   for (var i = 0; i < selected.length; i++) {
     await apiFetch('/queue/' + encodeURIComponent(selected[i]), { method: 'DELETE' });
   }
@@ -10032,7 +10051,11 @@ async function deleteResultsByPaths(paths) {
   var selected = Array.from(new Set((paths || []).filter(Boolean)));
   if (!selected.length) return;
   var label = selected.length === 1 ? 'this optimize result directory' : (selected.length + ' optimize result directories');
-  if (!window.confirm('Delete ' + label + '?')) return;
+  if (!(await window.PBGuiDialogs.confirm({
+    title: 'Delete optimize results',
+    message: 'Delete ' + label + '?',
+    confirmText: 'Delete'
+  }))) return;
   for (var i = 0; i < selected.length; i++) {
     await apiFetch('/results?path=' + encodeURIComponent(selected[i]), { method: 'DELETE' });
     state.selectedResults.delete(selected[i]);
