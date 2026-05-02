@@ -126,6 +126,104 @@
             cursor: not-allowed;
             opacity: 0.5;
         }
+
+        /* Action dialog */
+        .action-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 1100;
+            background: rgba(0, 0, 0, 0.72);
+            align-items: center;
+            justify-content: center;
+            padding: var(--sp-lg);
+        }
+        .action-modal.active { display: flex; }
+        .action-modal-card {
+            width: min(460px, 92vw);
+            background: #131b2b;
+            border: 1px solid #2d3748;
+            border-radius: 12px;
+            box-shadow: 0 20px 70px rgba(0, 0, 0, 0.9);
+            overflow: hidden;
+        }
+        .action-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: var(--sp-sm);
+            padding: 0.85rem 1.1rem;
+            border-bottom: 1px solid #1e2736;
+            background: #111827;
+        }
+        .action-modal-title {
+            font-size: var(--fs-md);
+            font-weight: 700;
+            color: #e2e8f0;
+        }
+        .action-modal-close {
+            background: transparent;
+            border: none;
+            color: #64748b;
+            font-size: var(--fs-lg);
+            cursor: pointer;
+            padding: 0.2rem 0.35rem;
+            border-radius: 5px;
+            line-height: 1;
+        }
+        .action-modal-close:hover {
+            color: #e2e8f0;
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .action-modal-body {
+            display: grid;
+            gap: var(--sp-md);
+            padding: var(--sp-lg);
+        }
+        .action-modal-message {
+            font-size: var(--fs-base);
+            color: #e2e8f0;
+            line-height: 1.5;
+        }
+        .action-modal-detail {
+            font-size: var(--fs-sm);
+            color: #94a3b8;
+            line-height: 1.45;
+        }
+        .action-modal-detail[hidden] { display: none !important; }
+        .action-modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: var(--sp-sm);
+            flex-wrap: wrap;
+        }
+        .action-modal-actions .btn {
+            min-width: 96px;
+        }
+        .action-modal-cancel[hidden] { display: none !important; }
+
+        body.is-embedded {
+            padding: 0;
+            background: transparent;
+        }
+        body.is-embedded .container {
+            max-width: none;
+        }
+        body.is-embedded header {
+            justify-content: flex-end;
+            margin-bottom: var(--sp-sm);
+            padding-bottom: 0;
+            border-bottom: 0;
+        }
+        body.is-embedded header h1 {
+            display: none;
+        }
+        body.is-embedded .tabs {
+            margin-bottom: var(--sp-sm);
+        }
+        body.is-embedded .tab-header-actions {
+            padding: 0 0 var(--sp-sm);
+        }
     </style>
 </head>
 <body>
@@ -182,14 +280,36 @@
         </div>
     </div>
 
+    <div id="action-modal" class="action-modal" aria-hidden="true">
+        <div class="action-modal-card" role="dialog" aria-modal="true" aria-labelledby="action-modal-title">
+            <div class="action-modal-header">
+                <div class="action-modal-title" id="action-modal-title">Confirm action</div>
+                <button class="action-modal-close" id="action-modal-close" type="button">&#x2715;</button>
+            </div>
+            <div class="action-modal-body">
+                <div class="action-modal-message" id="action-modal-message"></div>
+                <div class="action-modal-detail" id="action-modal-detail" hidden></div>
+                <div class="action-modal-actions">
+                    <button class="btn btn-secondary action-modal-cancel" id="action-modal-cancel" type="button">Cancel</button>
+                    <button class="btn btn-info" id="action-modal-accept" type="button">Confirm</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         const API_BASE = window.location.origin + '/api';
         
         // Extract token and exchange filter from URL query parameters
         const urlParams = new URLSearchParams(window.location.search);
         const API_TOKEN = urlParams.get('token');
+        const EMBED_MODE = urlParams.get('embed') === '1';
         const EXCHANGE_FILTER = (urlParams.get('exchange') || '').trim().toLowerCase();
         const JOB_TYPE_FILTER = (urlParams.get('job_type') || '').trim().toLowerCase();
+
+        if (EMBED_MODE) {
+            document.body.classList.add('is-embedded');
+        }
         
         if (!API_TOKEN) {
             document.body.innerHTML = '<div style="padding:40px;text-align:center;color:#ff4b4b;">Error: No authentication token provided</div>';
@@ -204,6 +324,83 @@
         let reconnectAttempts = 0;
         const MAX_RECONNECT_ATTEMPTS = 5;
         let expandedJobs = new Set();
+        let actionDialogResolve = null;
+        let actionDialogReturnFocus = null;
+
+        function closeActionDialog(confirmed) {
+            const modal = document.getElementById('action-modal');
+            if (modal) {
+                modal.classList.remove('active');
+                modal.setAttribute('aria-hidden', 'true');
+            }
+            const resolver = actionDialogResolve;
+            const returnFocus = actionDialogReturnFocus;
+            actionDialogResolve = null;
+            actionDialogReturnFocus = null;
+            if (returnFocus && typeof returnFocus.focus === 'function') {
+                try { returnFocus.focus(); } catch (_) {}
+            }
+            if (typeof resolver === 'function') resolver(Boolean(confirmed));
+        }
+
+        function showActionDialog(options) {
+            options = options || {};
+            const modal = document.getElementById('action-modal');
+            const title = document.getElementById('action-modal-title');
+            const message = document.getElementById('action-modal-message');
+            const detail = document.getElementById('action-modal-detail');
+            const cancelBtn = document.getElementById('action-modal-cancel');
+            const acceptBtn = document.getElementById('action-modal-accept');
+
+            if (!modal || !title || !message || !detail || !cancelBtn || !acceptBtn) {
+                if (options.cancelText === null || options.cancelText === '') {
+                    window.alert(String(options.message || 'Done.'));
+                    return Promise.resolve(true);
+                }
+                return Promise.resolve(window.confirm(String(options.message || 'Are you sure?')));
+            }
+
+            if (typeof actionDialogResolve === 'function') {
+                const previousResolve = actionDialogResolve;
+                actionDialogResolve = null;
+                previousResolve(false);
+            }
+
+            title.textContent = String(options.title || 'Confirm action');
+            message.textContent = String(options.message || 'Are you sure?');
+            const detailText = String(options.detail || '').trim();
+            detail.textContent = detailText;
+            detail.hidden = !detailText;
+
+            const cancelText = options.cancelText;
+            if (cancelText === null || cancelText === '') {
+                cancelBtn.hidden = true;
+            } else {
+                cancelBtn.hidden = false;
+                cancelBtn.textContent = String(cancelText || 'Cancel');
+            }
+            acceptBtn.textContent = String(options.confirmText || 'Confirm');
+            acceptBtn.className = 'btn ' + (options.confirmClass || 'btn-info');
+            actionDialogReturnFocus = document.activeElement;
+
+            return new Promise((resolve) => {
+                actionDialogResolve = resolve;
+                modal.classList.add('active');
+                modal.setAttribute('aria-hidden', 'false');
+                acceptBtn.focus();
+            });
+        }
+
+        async function showActionNotice(options) {
+            await showActionDialog({
+                title: options && options.title ? options.title : 'Notice',
+                message: options && options.message ? options.message : '',
+                detail: options && options.detail ? options.detail : '',
+                confirmText: options && options.confirmText ? options.confirmText : 'OK',
+                confirmClass: options && options.confirmClass ? options.confirmClass : 'btn-info',
+                cancelText: null
+            });
+        }
 
         // ── Job Filter ──
         function matchesExchangeFilter(job) {
@@ -537,7 +734,12 @@
 
         // ── API Actions ──
         async function cancelJob(jobId) {
-            if (!confirm(`Cancel job ${jobId}?`)) return;
+            if (!(await showActionDialog({
+                title: 'Cancel job',
+                message: `Cancel job ${jobId}?`,
+                confirmText: 'Cancel job',
+                confirmClass: 'btn-danger'
+            }))) return;
             
             try {
                 const resp = await fetch(`${API_BASE}/jobs/cancel?token=${API_TOKEN}`, {
@@ -550,16 +752,22 @@
                     console.log(`Job ${jobId} cancelled`);
                 } else {
                     const err = await resp.json();
-                    alert(`Failed to cancel: ${err.detail}`);
+                    await showActionNotice({ title: 'Cancel failed', message: `Failed to cancel: ${err.detail}` });
                 }
             } catch (e) {
                 console.error('Cancel error:', e);
-                alert('Failed to cancel job');
+                await showActionNotice({ title: 'Cancel failed', message: 'Failed to cancel job' });
             }
         }
 
         async function deleteJob(jobId) {
-            if (!confirm(`Delete job ${jobId}?`)) return;
+            if (!(await showActionDialog({
+                title: 'Delete job',
+                message: `Delete job ${jobId}?`,
+                detail: 'This action cannot be undone.',
+                confirmText: 'Delete',
+                confirmClass: 'btn-danger'
+            }))) return;
             
             try {
                 const resp = await fetch(`${API_BASE}/jobs/${jobId}?token=${API_TOKEN}`, {
@@ -571,16 +779,21 @@
                     loadTab(currentTab); // Refresh current tab
                 } else {
                     const err = await resp.json();
-                    alert(`Failed to delete: ${err.detail}`);
+                    await showActionNotice({ title: 'Delete failed', message: `Failed to delete: ${err.detail}` });
                 }
             } catch (e) {
                 console.error('Delete error:', e);
-                alert('Failed to delete job');
+                await showActionNotice({ title: 'Delete failed', message: 'Failed to delete job' });
             }
         }
 
         async function retryJob(jobId) {
-            if (!confirm(`Retry failed job ${jobId}?`)) return;
+            if (!(await showActionDialog({
+                title: 'Retry failed job',
+                message: `Retry failed job ${jobId}?`,
+                confirmText: 'Retry',
+                confirmClass: 'btn-info'
+            }))) return;
             
             try {
                 const resp = await fetch(`${API_BASE}/jobs/${jobId}/retry?token=${API_TOKEN}`, {
@@ -592,16 +805,21 @@
                     loadTab(currentTab); // Refresh current tab
                 } else {
                     const err = await resp.json();
-                    alert(`Failed to retry: ${err.detail}`);
+                    await showActionNotice({ title: 'Retry failed', message: `Failed to retry: ${err.detail}` });
                 }
             } catch (e) {
                 console.error('Retry error:', e);
-                alert('Failed to retry job');
+                await showActionNotice({ title: 'Retry failed', message: 'Failed to retry job' });
             }
         }
 
         async function requeueJob(jobId) {
-            if (!confirm(`Requeue job ${jobId}?`)) return;
+            if (!(await showActionDialog({
+                title: 'Requeue job',
+                message: `Requeue job ${jobId}?`,
+                confirmText: 'Requeue',
+                confirmClass: 'btn-info'
+            }))) return;
             
             try {
                 const resp = await fetch(`${API_BASE}/jobs/${jobId}/requeue?token=${API_TOKEN}`, {
@@ -613,11 +831,11 @@
                     loadTab(currentTab); // Refresh current tab
                 } else {
                     const err = await resp.json();
-                    alert(`Failed to requeue: ${err.detail}`);
+                    await showActionNotice({ title: 'Requeue failed', message: `Failed to requeue: ${err.detail}` });
                 }
             } catch (e) {
                 console.error('Requeue error:', e);
-                alert('Failed to requeue job');
+                await showActionNotice({ title: 'Requeue failed', message: 'Failed to requeue job' });
             }
         }
 
@@ -625,12 +843,13 @@
             const stateLabel = state === 'done' ? 'done' : 'failed';
             const exchangeLabel = EXCHANGE_FILTER ? ` for ${EXCHANGE_FILTER}` : '';
             
-            if (!confirm(`⚠️ Delete ALL ${stateLabel} jobs${exchangeLabel}?\n\nThis action cannot be undone.`)) {
-                return;
-            }
-            
-            // Second confirmation for safety
-            if (!confirm(`Are you SURE? This will delete ALL ${stateLabel} jobs${exchangeLabel}.`)) {
+            if (!(await showActionDialog({
+                title: `Delete all ${stateLabel} jobs`,
+                message: `Delete all ${stateLabel} jobs${exchangeLabel}?`,
+                detail: 'This action cannot be undone.',
+                confirmText: 'Delete all',
+                confirmClass: 'btn-danger'
+            }))) {
                 return;
             }
             
@@ -653,15 +872,20 @@
                 
                 if (resp.ok) {
                     const data = await resp.json();
-                    alert(`Successfully deleted ${data.deleted} of ${data.total} jobs`);
+                    await showActionNotice({
+                        title: 'Jobs deleted',
+                        message: `Successfully deleted ${data.deleted} of ${data.total} jobs.`,
+                        confirmText: 'OK',
+                        confirmClass: 'btn-info'
+                    });
                     loadTab(currentTab); // Refresh current tab
                 } else {
                     const err = await resp.json();
-                    alert(`Failed to delete jobs: ${err.detail}`);
+                    await showActionNotice({ title: 'Delete failed', message: `Failed to delete jobs: ${err.detail}` });
                 }
             } catch (e) {
                 console.error('Delete all error:', e);
-                alert('Failed to delete jobs');
+                await showActionNotice({ title: 'Delete failed', message: 'Failed to delete jobs' });
             }
         }
 
@@ -760,6 +984,27 @@
         document.getElementById('log-modal').addEventListener('click', (e) => {
             if (e.target.id === 'log-modal') {
                 closeLogModal();
+            }
+        });
+
+        document.getElementById('action-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'action-modal') {
+                closeActionDialog(false);
+            }
+        });
+        document.getElementById('action-modal-close').addEventListener('click', () => closeActionDialog(false));
+        document.getElementById('action-modal-cancel').addEventListener('click', () => closeActionDialog(false));
+        document.getElementById('action-modal-accept').addEventListener('click', () => closeActionDialog(true));
+        document.addEventListener('keydown', (e) => {
+            const modal = document.getElementById('action-modal');
+            if (!modal.classList.contains('active')) return;
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeActionDialog(false);
+            } else if (e.key === 'Enter') {
+                if (e.target && e.target.id === 'action-modal-cancel') return;
+                e.preventDefault();
+                closeActionDialog(true);
             }
         });
 

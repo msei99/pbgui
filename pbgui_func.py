@@ -216,6 +216,7 @@ def get_navi_paths():
         "INFO_DASHBOARDS":     os.path.join(NAVI_BASE_DIR, "info_dashboards.py"),
         "INFO_COIN_DATA":      os.path.join(NAVI_BASE_DIR, "info_coin_data.py"),
         "INFO_MARKET_DATA":    os.path.join(NAVI_BASE_DIR, "info_market_data.py"),
+        "INFO_MARKET_DATA_FASTAPI": os.path.join(NAVI_BASE_DIR, "info_market_data_fastapi.py"),
 
         "V7_RUN":              os.path.join(NAVI_BASE_DIR, "v7_run.py"),
         "V7_BACKTEST":         os.path.join(NAVI_BASE_DIR, "v7_backtest.py"),
@@ -242,6 +243,7 @@ def build_navigation():
     pSe1 = st.Page(paths["INFO_DASHBOARDS"], title="Dashboards", icon=":material/dashboard:")
     pSe2 = st.Page(paths["INFO_COIN_DATA"], title="Coin Data", icon=":material/monetization_on:")
     pSe3 = st.Page(paths["INFO_MARKET_DATA"], title="Market Data", icon=":material/storage:")
+    pSe4 = st.Page(paths["INFO_MARKET_DATA_FASTAPI"], title="Market Data (FastAPI)", icon=":material/storage:")
     pH1 = st.Page(paths["HELP"], title="Help & Tutorials", icon=":material/help:")
 
     p71 = st.Page(paths["V7_RUN"], title="Run", icon=":material/play_arrow:")
@@ -257,7 +259,7 @@ def build_navigation():
     
     # Do not include DEBUGLOG page; centralized debuglog removed
                 
-    InfotmationPages = [pSe1, pSe2, pSe3, pH1]
+    InfotmationPages = [pSe1, pSe2, pSe3, pSe4, pH1]
     v7Pages = [p71, p72, p77, p73, p74, p75, p76]
 
     # Navigation

@@ -101,6 +101,90 @@
     .card-btn.stop  { border-color: #7f1d1d; color: #fca5a5; background: #2d1515; }
     .card-btn.restart { border-color: #b45309; color: #fcd34d; background: #1c1a08; }
 
+    /* ── Workers ── */
+    .workers-shell {
+      display: grid; grid-template-columns: minmax(340px, 44%) minmax(360px, 56%);
+      flex: 1; min-height: 0; overflow: hidden;
+    }
+    .workers-groups {
+      overflow-y: auto; padding: var(--sp-lg); border-right: 1px solid #1e2736;
+      display: flex; flex-direction: column; gap: var(--sp-lg); min-height: 0;
+    }
+    .worker-group { display: flex; flex-direction: column; gap: var(--sp-md); }
+    .worker-group-title {
+      font-size: var(--fs-sm); font-weight: 700; letter-spacing: 0.05em;
+      text-transform: uppercase; color: #94a3b8;
+    }
+    .worker-group-subtitle { font-size: var(--fs-xs); color: #64748b; }
+    .worker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sp-md); }
+    .worker-card {
+      background: #131b2b; border: 1px solid #1e2736; border-radius: 10px;
+      padding: var(--sp-md); display: flex; flex-direction: column; gap: var(--sp-sm);
+      cursor: pointer; transition: border-color 0.12s, background 0.12s;
+    }
+    .worker-card:hover { border-color: #2d3748; }
+    .worker-card.selected { border-color: rgba(99,179,237,0.55); background: #162032; }
+    .worker-card.running { border-color: rgba(33,195,84,0.4); }
+    .worker-card.stopped { border-color: rgba(255,75,75,0.3); }
+    .worker-type { font-size: var(--fs-xs); color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+    .worker-summary { font-size: var(--fs-sm); color: #cbd5e1; }
+    .worker-stats-inline { display: flex; flex-wrap: wrap; gap: var(--sp-xs); }
+    .worker-pill {
+      display: inline-flex; align-items: center; gap: var(--sp-xs);
+      padding: 2px 7px; border-radius: 999px; border: 1px solid #2d3748;
+      font-size: var(--fs-xs); color: #94a3b8; background: #111827;
+    }
+    .worker-btnrow { display: flex; flex-wrap: wrap; gap: var(--sp-xs); margin-top: var(--sp-xs); }
+    .worker-detail {
+      display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
+      background: #0f1722;
+    }
+    .worker-detail-body {
+      padding: var(--sp-lg); overflow-y: auto; display: flex; flex-direction: column;
+      gap: var(--sp-md); border-bottom: 1px solid #1e2736;
+    }
+    .worker-detail-empty {
+      color: #64748b; font-size: var(--fs-base); display: flex; align-items: center;
+      justify-content: center; min-height: 220px; text-align: center;
+    }
+    .worker-detail-top { display: flex; justify-content: space-between; gap: var(--sp-md); align-items: flex-start; }
+    .worker-detail-title { font-size: var(--fs-lg); font-weight: 700; color: #e2e8f0; }
+    .worker-detail-subtitle { font-size: var(--fs-sm); color: #94a3b8; margin-top: var(--sp-xs); }
+    .worker-detail-desc { font-size: var(--fs-base); color: #cbd5e1; line-height: 1.5; }
+    .worker-detail-note {
+      font-size: var(--fs-sm); color: #fcd34d; background: #1c1a08;
+      border: 1px solid rgba(180,83,9,0.45); border-radius: 8px; padding: var(--sp-sm) var(--sp-md);
+    }
+    .worker-state-badge {
+      display: inline-flex; align-items: center; gap: var(--sp-xs); padding: 4px 9px;
+      border-radius: 999px; border: 1px solid #2d3748; font-size: var(--fs-xs);
+      font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .worker-state-badge.running { color: #4ade80; border-color: rgba(33,195,84,0.45); background: #052e16; }
+    .worker-state-badge.stopped { color: #fca5a5; border-color: rgba(255,75,75,0.35); background: #2d1515; }
+    .worker-detail-actions { display: flex; flex-wrap: wrap; gap: var(--sp-sm); }
+    .worker-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--sp-sm); }
+    .worker-stat-card {
+      background: #131b2b; border: 1px solid #1e2736; border-radius: 8px;
+      padding: var(--sp-sm) var(--sp-md); min-width: 0;
+    }
+    .worker-stat-label {
+      font-size: var(--fs-xs); color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;
+      margin-bottom: 3px;
+    }
+    .worker-stat-value { font-size: var(--fs-md); color: #e2e8f0; font-weight: 700; }
+    .worker-log-section { flex: 1; min-height: 320px; overflow: hidden; display: flex; flex-direction: column; }
+    .worker-log-empty {
+      flex: 1; display: flex; flex-direction: column; gap: var(--sp-md); align-items: center; justify-content: center;
+      text-align: center; color: #64748b; padding: var(--sp-lg);
+    }
+    .worker-log-empty.has-monitor {
+      align-items: stretch; justify-content: stretch; padding: 0; color: inherit;
+    }
+    .worker-monitor-frame {
+      flex: 1; width: 100%; min-height: 320px; border: 0; background: #0b1220;
+    }
+
     /* ── Settings form ── */
     .settings-wrap { padding: 1.25rem 1.5rem; overflow-y: auto; flex: 1; }
     .form-section-title { font-size: var(--fs-sm); font-weight: 700; color: #94a3b8; margin: 0 0 0.5rem; }
@@ -244,6 +328,12 @@
       .overview-grid { grid-template-columns: 1fr; }
     }
 
+    @media (max-width: 1100px) {
+      .workers-shell { grid-template-columns: 1fr; }
+      .workers-groups { border-right: none; border-bottom: 1px solid #1e2736; }
+      .worker-log-section { min-height: 260px; }
+    }
+
     /* ── Help overlay ── */
     #help-ovl {
       display: none; position: fixed; top: 50%; left: 50%;
@@ -365,6 +455,9 @@
       <button class="sb-btn active" data-panel="overview">
         <span class="sb-dot"></span>Overview
       </button>
+      <button class="sb-btn" data-panel="workers">
+        <span class="sb-dot" id="dot-workers"></span>Workers
+      </button>
       <button class="sb-btn" data-panel="pbrun">
         <span class="sb-dot" id="dot-pbrun"></span>PBRun
       </button>
@@ -392,6 +485,35 @@
     <!-- Overview panel -->
     <div id="panel-overview" class="svc-panel active">
       <div class="overview-grid" id="overview-grid" style="padding:1.5rem;overflow-y:auto;flex:1;"></div>
+    </div>
+
+    <!-- Workers panel -->
+    <div id="panel-workers" class="svc-panel">
+      <div class="ctrl-strip">
+        <span class="ctrl-title">Workers</span>
+        <div class="ctrl-status">
+          <div class="status-dot" id="cs-workers"></div>
+          <span class="status-label" id="sl-workers">loading…</span>
+        </div>
+        <span style="flex:1"></span>
+        <button class="ctrl-btn" type="button" onclick="fetchWorkers(true)">&#8635; Refresh</button>
+      </div>
+      <div class="workers-shell">
+        <div class="workers-groups" id="workers-groups">
+          <div class="worker-detail-empty">Loading workers…</div>
+        </div>
+        <div class="worker-detail">
+          <div class="worker-detail-body" id="worker-detail-body">
+            <div class="worker-detail-empty">Select a worker to inspect status, actions, and logs.</div>
+          </div>
+          <div class="worker-log-section">
+            <div class="worker-log-empty" id="worker-log-empty">
+              <div>Worker log or monitor details will appear here.</div>
+            </div>
+            <div id="worker-log-wrap" class="log-wrap" style="display:none;"><div id="worker-log" style="height:100%;"></div></div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- PBRun panel -->
@@ -640,8 +762,9 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
+<script src="/app/js/pbgui_dialogs.js?v=1"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
-<!-- Shared nav bar + page-local Help opener -->
+<!-- Guide button override — must run AFTER pbgui_nav.js DOMContentLoaded handler -->
 <script>
 /* ── Help overlay ── */
 (function () {
@@ -844,7 +967,17 @@ window.PBGUI_NAV_CONFIG = {
     }
     loadTopic(0);
   };
-  window.PBGUI_HELP_OPENER = window._openServicesHelp;
+
+  document.addEventListener('DOMContentLoaded', function() {
+    var btn = document.getElementById('pbgui-guide-btn');
+    if (btn) {
+      var fresh = btn.cloneNode(true);
+      btn.parentNode.replaceChild(fresh, btn);
+      fresh.addEventListener('click', function() {
+        if (typeof window._openServicesHelp === 'function') window._openServicesHelp();
+      });
+    }
+  });
 }());
 </script>
 <!-- Main logic -->
@@ -867,10 +1000,26 @@ window.PBGUI_NAV_CONFIG = {
 
   var _status = {};
   var _logViewers = {};
+  var _workerLogViewer = null;
+  var _workerLogViewerActive = false;
   var _statusTimer = null;
+  var _workersTimer = null;
   var _fetchSummaryTimer = null;
   var _pollerMetricsTimer = null;
   var _settingsLoaded = {};
+  var _workers = { counts: { total: 0, running: 0 }, groups: [] };
+  var _workerIndex = {};
+  var _selectedWorkerId = '';
+  var _currentPanelId = 'overview';
+
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
 
   /* ── Status polling ────────────────────────────────────── */
   function fetchStatus() {
@@ -909,8 +1058,270 @@ window.PBGUI_NAV_CONFIG = {
         }
       }
     });
+    updateWorkersSummary();
     renderOverviewCards();
   }
+
+  /* ── Worker status polling ─────────────────────────────── */
+  window.fetchWorkers = function (force) {
+    fetch(API_BASE + '/workers/status?token=' + TOKEN)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        _workers = data || { counts: { total: 0, running: 0 }, groups: [] };
+        rebuildWorkerIndex();
+        updateWorkersSummary();
+        renderOverviewCards();
+        renderWorkers();
+        scheduleWorkers();
+      })
+      .catch(function () {
+        if (force) {
+          var groups = document.getElementById('workers-groups');
+          if (groups && _currentPanelId === 'workers') {
+            groups.innerHTML = '<div class="worker-detail-empty">Failed to load worker status.</div>';
+          }
+        }
+        scheduleWorkers();
+      });
+  };
+
+  function scheduleWorkers() {
+    clearTimeout(_workersTimer);
+    if (_currentPanelId === 'workers') {
+      _workersTimer = setTimeout(function () { window.fetchWorkers(false); }, 5000);
+    }
+  }
+
+  function rebuildWorkerIndex() {
+    _workerIndex = {};
+    (_workers.groups || []).forEach(function (group) {
+      (group.items || []).forEach(function (item) {
+        _workerIndex[item.id] = item;
+      });
+    });
+  }
+
+  function updateWorkersSummary() {
+    var counts = _workers.counts || { total: 0, running: 0 };
+    var running = Number(counts.running || 0);
+    var total = Number(counts.total || 0);
+    var cls = running > 0 ? 'running' : 'stopped';
+    var dotSb = document.getElementById('dot-workers');
+    var dotCs = document.getElementById('cs-workers');
+    var lbl = document.getElementById('sl-workers');
+    if (dotSb) dotSb.className = 'sb-dot ' + cls;
+    if (dotCs) dotCs.className = 'status-dot ' + cls;
+    if (lbl) lbl.textContent = running + ' / ' + total + ' running';
+  }
+
+  function renderWorkerActionButtons(item, compact) {
+    if (!item || item.available === false) return '';
+    var cls = compact ? 'card-btn' : 'ctrl-btn';
+    var html = '';
+    if (item.running) {
+      if (item.can_stop !== false) {
+        html += '<button class="' + cls + ' stop" onclick="workerConfirmAction(\'' + item.id + '\',\'stop\');event.stopPropagation()">&#9632; Stop</button>';
+        if (item.can_start !== false) {
+          html += '<button class="' + cls + ' restart" onclick="workerRestart(\'' + item.id + '\');event.stopPropagation()">&#8635; Restart</button>';
+        }
+      }
+    } else if (item.can_start !== false) {
+      html += '<button class="' + cls + ' start" onclick="workerAction(\'' + item.id + '\',\'start\');event.stopPropagation()">&#9654; Start</button>';
+    }
+    return html;
+  }
+
+  function renderWorkers() {
+    var groupsWrap = document.getElementById('workers-groups');
+    if (!groupsWrap) return;
+    var groups = _workers.groups || [];
+    if (!groups.length) {
+      groupsWrap.innerHTML = '<div class="worker-detail-empty">No workers available.</div>';
+      renderWorkerDetail();
+      return;
+    }
+    var html = '';
+    groups.forEach(function (group) {
+      var items = group.items || [];
+      if (!items.length) return;
+      html += '<section class="worker-group">';
+      html += '<div><div class="worker-group-title">' + esc(group.label || group.id || 'Workers') + '</div>';
+      html += '<div class="worker-group-subtitle">' + items.length + ' item(s)</div></div>';
+      html += '<div class="worker-grid">';
+      items.forEach(function (item) {
+        var cls = item.running ? 'running' : 'stopped';
+        var selected = item.id === _selectedWorkerId ? ' selected' : '';
+        var stats = (item.stats || []).slice(0, 3).map(function (stat) {
+          return '<span class="worker-pill">' + esc(stat.label) + ': ' + esc(stat.value) + '</span>';
+        }).join('');
+        html += '<article class="worker-card ' + cls + selected + '" onclick="selectWorker(\'' + item.id + '\')">';
+        html += '<div class="worker-type">' + esc(item.type || 'worker') + '</div>';
+        html += '<div class="card-name">' + esc(item.label || item.id) + '</div>';
+        html += '<div class="card-status-row"><span class="card-dot ' + cls + '"></span>' + (item.running ? 'Running' : 'Stopped') + '</div>';
+        html += '<div class="worker-summary">' + esc(item.summary || '') + '</div>';
+        if (stats) html += '<div class="worker-stats-inline">' + stats + '</div>';
+        html += '<div class="worker-btnrow">' + renderWorkerActionButtons(item, true) + '</div>';
+        html += '</article>';
+      });
+      html += '</div></section>';
+    });
+    groupsWrap.innerHTML = html;
+
+    if (!_selectedWorkerId || !_workerIndex[_selectedWorkerId]) {
+      var first = null;
+      groups.some(function (group) {
+        if (group.items && group.items.length) {
+          first = group.items[0].id;
+          return true;
+        }
+        return false;
+      });
+      _selectedWorkerId = first || '';
+    }
+    renderWorkerDetail();
+  }
+
+  window.selectWorker = function (workerId) {
+    _selectedWorkerId = workerId;
+    renderWorkers();
+  };
+
+  function renderWorkerDetail() {
+    var body = document.getElementById('worker-detail-body');
+    if (!body) return;
+    var item = _workerIndex[_selectedWorkerId];
+    if (!item) {
+      body.innerHTML = '<div class="worker-detail-empty">Select a worker to inspect status, actions, and logs.</div>';
+      updateWorkerLog(null);
+      return;
+    }
+    var statsHtml = (item.stats || []).map(function (stat) {
+      return '<div class="worker-stat-card"><div class="worker-stat-label">' + esc(stat.label) + '</div><div class="worker-stat-value">' + esc(stat.value) + '</div></div>';
+    }).join('');
+    var html = '<div class="worker-detail-top">';
+    html += '<div><div class="worker-detail-title">' + esc(item.label || item.id) + '</div>';
+    html += '<div class="worker-detail-subtitle">' + esc(item.type || 'worker') + ' • ' + esc(item.summary || '') + '</div></div>';
+    html += '<span class="worker-state-badge ' + (item.running ? 'running' : 'stopped') + '">' + (item.running ? 'Running' : 'Stopped') + '</span>';
+    html += '</div>';
+    html += '<div class="worker-detail-desc">' + esc(item.description || '') + '</div>';
+    if (item.note) {
+      html += '<div class="worker-detail-note">' + esc(item.note) + '</div>';
+    }
+    html += '<div class="worker-detail-actions">' + renderWorkerActionButtons(item, false) + '</div>';
+    if (statsHtml) {
+      html += '<div class="worker-stats-grid">' + statsHtml + '</div>';
+    }
+    body.innerHTML = html;
+    updateWorkerLog(item);
+  }
+
+  function getWorkerMonitorUrl(item) {
+    if (!item || !item.monitor_path) return '';
+    var sep = item.monitor_path.indexOf('?') === -1 ? '?' : '&';
+    return item.monitor_path + sep + 'token=' + encodeURIComponent(TOKEN);
+  }
+
+  function updateWorkerLog(item) {
+    var empty = document.getElementById('worker-log-empty');
+    var wrap = document.getElementById('worker-log-wrap');
+    if (!empty || !wrap) return;
+    empty.classList.remove('has-monitor');
+    if (_workerLogViewer && (!item || !item.log_file) && _workerLogViewerActive) {
+      _workerLogViewer.close();
+      _workerLogViewerActive = false;
+    }
+    if (!item) {
+      wrap.style.display = 'none';
+      empty.style.display = 'flex';
+      empty.innerHTML = '<div>Worker log or monitor details will appear here.</div>';
+      return;
+    }
+    if (!item.log_file) {
+      if (item.monitor_path) {
+        var monitorUrl = getWorkerMonitorUrl(item);
+        var existingFrame = empty.querySelector('.worker-monitor-frame');
+        wrap.style.display = 'none';
+        empty.style.display = 'flex';
+        empty.classList.add('has-monitor');
+        if (
+          existingFrame &&
+          existingFrame.dataset.workerId === item.id &&
+          existingFrame.getAttribute('src') === monitorUrl
+        ) {
+          existingFrame.setAttribute('title', (item.label || item.id) + ' monitor');
+          return;
+        }
+        empty.innerHTML = '<iframe class="worker-monitor-frame" data-worker-id="' + esc(item.id) + '" src="' + esc(monitorUrl) + '" title="' + esc((item.label || item.id) + ' monitor') + '"></iframe>';
+        return;
+      }
+      wrap.style.display = 'none';
+      empty.style.display = 'flex';
+      empty.innerHTML = '<div>No dedicated local log is configured for this worker.</div>';
+      return;
+    }
+    empty.style.display = 'none';
+    wrap.style.display = 'block';
+    try {
+      if (!_workerLogViewer) {
+        _workerLogViewer = new LogViewerPanel({
+          containerId: 'worker-log',
+          wsBase: WS_BASE,
+          token: TOKEN,
+          defaultFile: item.log_file,
+          height: '100%'
+        });
+        _workerLogViewer.open();
+        _workerLogViewerActive = true;
+      } else {
+        if (!_workerLogViewerActive) {
+          _workerLogViewer.open();
+          _workerLogViewerActive = true;
+        }
+        _workerLogViewer.setFile(item.log_file);
+      }
+    } catch (e) {
+      wrap.style.display = 'none';
+      empty.style.display = 'flex';
+      empty.innerHTML = '<div style="color:#fca5a5;">Log viewer unavailable: ' + esc(e.message || e) + '</div>';
+    }
+  }
+
+  async function workerConfirm(title, message, confirmText) {
+    if (window.PBGuiDialogs && typeof window.PBGuiDialogs.confirm === 'function') {
+      return window.PBGuiDialogs.confirm({ title: title, message: message, confirmText: confirmText });
+    }
+    return Promise.resolve(window.confirm(message));
+  }
+
+  window.workerConfirmAction = async function (workerId, action) {
+    var item = _workerIndex[workerId];
+    if (!item) return;
+    var label = item.label || workerId;
+    var ok = true;
+    if (action === 'stop') {
+      ok = await workerConfirm('Stop worker', 'Stop worker "' + label + '"?', 'Stop');
+    }
+    if (!ok) return;
+    return window.workerAction(workerId, action);
+  };
+
+  window.workerRestart = async function (workerId) {
+    var item = _workerIndex[workerId];
+    if (!item) return;
+    var label = item.label || workerId;
+    var ok = await workerConfirm('Restart worker', 'Restart worker "' + label + '"?', 'Restart');
+    if (!ok) return;
+    return window.workerAction(workerId, 'stop').then(function () {
+      setTimeout(function () { window.workerAction(workerId, 'start'); }, 600);
+    });
+  };
+
+  window.workerAction = function (workerId, action) {
+    return fetch(API_BASE + '/workers/' + encodeURIComponent(workerId) + '/' + encodeURIComponent(action) + '?token=' + TOKEN, { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function () { window.fetchWorkers(true); })
+      .catch(function () {});
+  };
 
   /* ── Overview cards ────────────────────────────────────── */
   function renderOverviewCards() {
@@ -934,23 +1345,33 @@ window.PBGUI_NAV_CONFIG = {
            +  '<div style="display:flex;gap:4px;flex-wrap:wrap;">' + btns + '</div>'
            +  '</div>';
     });
+        var workerCounts = _workers.counts || { total: 0, running: 0 };
+        var workerCls = Number(workerCounts.running || 0) > 0 ? 'running' : 'stopped';
+        html += '<div class="svc-card ' + workerCls + '" onclick="selectPanel(\'workers\')">'
+          +  '<div class="card-name">Workers</div>'
+          +  '<div class="card-status-row"><span class="card-dot ' + workerCls + '"></span>' + esc((workerCounts.running || 0) + ' / ' + (workerCounts.total || 0) + ' running') + '</div>'
+          +  '<div style="display:flex;gap:4px;flex-wrap:wrap;"><button class="card-btn" onclick="selectPanel(\'workers\');event.stopPropagation()">Open</button></div>'
+          +  '</div>';
     grid.innerHTML = html;
   }
 
   /* ── Panel navigation ──────────────────────────────────── */
   function selectPanel(panelId, tab) {
+    _currentPanelId = panelId;
     document.querySelectorAll('.sb-btn').forEach(function (b) {
       b.classList.toggle('active', b.getAttribute('data-panel') === panelId);
     });
     document.querySelectorAll('.svc-panel').forEach(function (p) {
       p.classList.toggle('active', p.id === 'panel-' + panelId);
     });
-    if (panelId !== 'overview') {
+    if (panelId !== 'overview' && panelId !== 'workers') {
       initLogViewer(panelId);
     }
+    clearTimeout(_workersTimer); _workersTimer = null;
     clearInterval(_fetchSummaryTimer); _fetchSummaryTimer = null;
     clearInterval(_pollerMetricsTimer); _pollerMetricsTimer = null;
     if (panelId === 'pbcoindata') loadCmcKeyStatus();
+    if (panelId === 'workers') window.fetchWorkers(true);
     /* update guide keyword for the active panel */
     var svc = SERVICES.find(function (s) { return s.id === panelId; });
     window._servicesGuideKeyword = svc ? svc.guideKeyword : 'services_overview';
@@ -1429,10 +1850,14 @@ window.PBGUI_NAV_CONFIG = {
       }).catch(function () { _showMsg('bucket-action-msg', 'Test failed', true); });
   };
 
-  window.deleteBucket = function () {
+  window.deleteBucket = async function () {
     var sel = _val('pbremote-bucket-select');
     if (!sel) { _showMsg('bucket-action-msg', 'No bucket selected', true); return; }
-    if (!confirm('Delete bucket "' + sel + '"?')) return;
+    if (!(await window.PBGuiDialogs.confirm({
+      title: 'Delete bucket',
+      message: 'Delete bucket "' + sel + '"?',
+      confirmText: 'Delete'
+    }))) return;
     fetch(API_BASE + '/settings/pbremote/bucket-delete?token=' + TOKEN, {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ bucket: sel }),
     }).then(function (r) { return r.json(); })
@@ -2356,6 +2781,7 @@ window.PBGUI_NAV_CONFIG = {
 
   /* ── Init ──────────────────────────────────────────────── */
   fetchStatus();
+  window.fetchWorkers(false);
 
 }());
 </script>

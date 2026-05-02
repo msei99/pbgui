@@ -13,7 +13,8 @@ import numpy as np
 
 from logging_helpers import human_log
 from market_data_sources import get_source_minutes_for_range
-from PBCoinData import get_symbol_for_coin
+from PBCoinData import CoinData, compute_coin_name, get_symbol_for_coin
+from pbgui_purefunc import load_symbols_from_ini
 
 
 _DAY_HOUR_RE = re.compile(r"^(\d{8})-(\d{2})\.(lz4|jsonl|npz)$")
@@ -264,10 +265,11 @@ def _atomic_write_text(path: Path, content: str) -> None:
 
 @dataclass
 class MarketDataConfig:
-    """Minimal config: enabled coins per exchange."""
+    """Market-data config: enabled coins and auto-enable flags per exchange."""
 
     version: int
     enabled_coins: dict[str, list[str]]
+    auto_enable_new_coins: dict[str, bool]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -276,11 +278,22 @@ class MarketDataConfig:
                 str(ex): [str(c) for c in coins]
                 for ex, coins in (self.enabled_coins or {}).items()
             },
+            "auto_enable_new_coins": {
+                str(ex): bool(enabled)
+                for ex, enabled in (self.auto_enable_new_coins or {}).items()
+            },
         }
 
 
-def _canonical_enabled_coin(exchange: str, coin: str) -> str:
+def _normalize_market_data_exchange(exchange: str) -> str:
     ex = str(exchange or "").strip().lower()
+    if ex in ("binanceusdm", "binance-usdm"):
+        return "binance"
+    return ex
+
+
+def _canonical_enabled_coin(exchange: str, coin: str) -> str:
+    ex = _normalize_market_data_exchange(exchange)
     s = str(coin or "").strip()
     if not s:
         return ""
@@ -295,16 +308,19 @@ def _canonical_enabled_coin(exchange: str, coin: str) -> str:
 def load_market_data_config() -> MarketDataConfig:
     path = get_market_data_config_path()
     if not path.exists():
-        return MarketDataConfig(version=1, enabled_coins={})
+        return MarketDataConfig(version=1, enabled_coins={}, auto_enable_new_coins={})
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return MarketDataConfig(version=1, enabled_coins={})
+        return MarketDataConfig(version=1, enabled_coins={}, auto_enable_new_coins={})
 
     version = int(raw.get("version", 1)) if isinstance(raw, dict) else 1
     enabled = raw.get("enabled_coins", {}) if isinstance(raw, dict) else {}
+    auto_enable = raw.get("auto_enable_new_coins", {}) if isinstance(raw, dict) else {}
     if not isinstance(enabled, dict):
         enabled = {}
+    if not isinstance(auto_enable, dict):
+        auto_enable = {}
 
     cleaned: dict[str, list[str]] = {}
     for ex, coins in enabled.items():
@@ -312,17 +328,25 @@ def load_market_data_config() -> MarketDataConfig:
             continue
         if not isinstance(coins, list):
             continue
-        ex_key = ex.strip().lower()
-        norm_coins = sorted(
-            {
-                _canonical_enabled_coin(ex_key, c)
-                for c in coins
-                if _canonical_enabled_coin(ex_key, c)
-            }
+        ex_key = _normalize_market_data_exchange(ex)
+        merged = set(cleaned.get(ex_key, []))
+        merged.update(
+            _canonical_enabled_coin(ex_key, c)
+            for c in coins
+            if _canonical_enabled_coin(ex_key, c)
         )
-        cleaned[ex_key] = norm_coins
+        cleaned[ex_key] = sorted(merged)
 
-    return MarketDataConfig(version=version, enabled_coins=cleaned)
+    cleaned_auto: dict[str, bool] = {}
+    for ex, enabled_flag in auto_enable.items():
+        if not isinstance(ex, str):
+            continue
+        ex_key = _normalize_market_data_exchange(ex)
+        if not ex_key:
+            continue
+        cleaned_auto[ex_key] = bool(enabled_flag)
+
+    return MarketDataConfig(version=version, enabled_coins=cleaned, auto_enable_new_coins=cleaned_auto)
 
 
 def save_market_data_config(cfg: MarketDataConfig) -> None:
@@ -333,7 +357,7 @@ def save_market_data_config(cfg: MarketDataConfig) -> None:
 
 def set_enabled_coins(exchange: str, coins: list[str]) -> MarketDataConfig:
     cfg = load_market_data_config()
-    ex = str(exchange or "").strip().lower()
+    ex = _normalize_market_data_exchange(exchange)
     if not ex:
         raise ValueError("exchange is empty")
     norm_coins = sorted(
@@ -346,6 +370,155 @@ def set_enabled_coins(exchange: str, coins: list[str]) -> MarketDataConfig:
     cfg.enabled_coins[ex] = norm_coins
     save_market_data_config(cfg)
     return cfg
+
+
+def set_auto_enable_new_coins(exchange: str, enabled: bool) -> MarketDataConfig:
+    cfg = load_market_data_config()
+    ex = _normalize_market_data_exchange(exchange)
+    if not ex:
+        raise ValueError("exchange is empty")
+    cfg.auto_enable_new_coins[ex] = bool(enabled)
+    save_market_data_config(cfg)
+    return cfg
+
+
+def get_market_data_coin_options(exchange: str) -> list[str]:
+    ex = _normalize_market_data_exchange(exchange)
+    if not ex:
+        return []
+
+    try:
+        coindata = CoinData()
+        approved_coins, _ = coindata.filter_mapping(
+            exchange=ex,
+            market_cap_min_m=0,
+            vol_mcap_max=float("inf"),
+            only_cpt=False,
+            notices_ignore=False,
+            tags=[],
+            quote_filter=None,
+            use_cache=True,
+            active_only=True,
+        )
+        approved = sorted(
+            {
+                _canonical_enabled_coin(ex, coin)
+                for coin in approved_coins
+                if _canonical_enabled_coin(ex, coin)
+            }
+        )
+        if approved:
+            return _filter_live_market_data_coin_options(ex, approved)
+    except Exception:
+        pass
+
+    try:
+        mapping_path = Path(__file__).resolve().parent / "data" / "coindata" / ex / "mapping.json"
+        if mapping_path.exists():
+            mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+            mapped_coins: set[str] = set()
+            for row in mapping if isinstance(mapping, list) else []:
+                if not bool(row.get("swap", False)) or not bool(row.get("active", True)) or not bool(row.get("linear", True)):
+                    continue
+                coin = str(row.get("coin") or "").strip()
+                if not coin:
+                    symbol = str(row.get("ccxt_symbol") or row.get("symbol") or "").strip()
+                    quote = str(row.get("quote") or "").strip().upper()
+                    if not symbol:
+                        continue
+                    coin = compute_coin_name(symbol, quote)
+                coin = _canonical_enabled_coin(ex, coin)
+                if coin:
+                    mapped_coins.add(coin)
+            if mapped_coins:
+                return _filter_live_market_data_coin_options(ex, sorted(mapped_coins))
+    except Exception:
+        pass
+
+    try:
+        symbols = load_symbols_from_ini(ex, "swap")
+        fallback = sorted(
+            {
+                _canonical_enabled_coin(ex, symbol)
+                for symbol in symbols
+                if _canonical_enabled_coin(ex, symbol)
+            }
+        )
+        if fallback:
+            return _filter_live_market_data_coin_options(ex, fallback)
+    except Exception:
+        pass
+
+    return []
+
+
+def _filter_live_market_data_coin_options(exchange: str, coins: list[str]) -> list[str]:
+    ex = _normalize_market_data_exchange(exchange)
+    normalized = sorted(
+        {
+            _canonical_enabled_coin(ex, coin)
+            for coin in (coins or [])
+            if _canonical_enabled_coin(ex, coin)
+        }
+    )
+    if ex != "hyperliquid":
+        return normalized
+
+    try:
+        from hyperliquid_api import resolve_hyperliquid_coin_name
+    except Exception:
+        return normalized
+
+    out: list[str] = []
+    for coin in normalized:
+        coin_l = coin.lower()
+        if not (coin_l.startswith("xyz:") or coin_l.startswith("xyz-")):
+            out.append(coin)
+            continue
+        try:
+            resolve_hyperliquid_coin_name(coin=coin, timeout_s=5.0)
+            out.append(coin)
+        except Exception:
+            continue
+    return out
+
+
+def get_effective_enabled_coins(
+    exchange: str,
+    *,
+    cfg: MarketDataConfig | None = None,
+    coin_options: list[str] | None = None,
+) -> tuple[list[str], list[str], bool]:
+    ex = _normalize_market_data_exchange(exchange)
+    if not ex:
+        return [], [], False
+
+    config = cfg or load_market_data_config()
+    saved_enabled_raw = [
+        _canonical_enabled_coin(ex, coin)
+        for coin in (config.enabled_coins.get(ex, []) or [])
+        if _canonical_enabled_coin(ex, coin)
+    ]
+    auto_enable = bool((config.auto_enable_new_coins or {}).get(ex, False))
+
+    options_source = coin_options if coin_options is not None else get_market_data_coin_options(ex)
+    normalized_options = sorted(
+        {
+            _canonical_enabled_coin(ex, coin)
+            for coin in (options_source or [])
+            if _canonical_enabled_coin(ex, coin)
+        }
+    )
+    if not normalized_options:
+        return saved_enabled_raw, [], auto_enable
+
+    option_set = set(normalized_options)
+    if auto_enable:
+        return normalized_options, [], auto_enable
+
+    enabled = [coin for coin in saved_enabled_raw if coin in option_set]
+    missing = sorted(set(saved_enabled_raw) - option_set)
+    return enabled, missing, auto_enable
 
 
 def summarize_raw_inventory(

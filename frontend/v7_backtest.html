@@ -1154,6 +1154,7 @@ function openSettingsModal() {
         '\x3Cinput type="checkbox" id="set-cleanup-enabled"' + (cleanupEnabled ? ' checked' : '') + ' onchange="settingsToggleCleanup()">' +
         '\x3Cspan>Enabled\x3C/span>' +
       '\x3C/label>' +
+      '\x3Cdiv style="color:var(--text-dim);font-size:var(--fs-xs)">Cleans old directories in `pb7/caches/hlcvs_data` and `pb7/caches/ohlcvs/materialized`.\x3C/div>' +
       '\x3Cdiv id="cleanup-opts" style="' + (cleanupEnabled ? '' : 'opacity:0.4;pointer-events:none;') + '">' +
         '\x3Cdiv style="display:flex;gap:var(--sp-md);align-items:center">' +
           '\x3Cdiv style="flex:1">' +
@@ -1233,7 +1234,12 @@ function cleanHlcvsNow() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ days: days })
   }).then(function(d) {
-    toast('Cleaned ' + (d.removed || 0) + ' dirs (' + (d.freed_mb || 0) + ' MB freed)', 'ok');
+    var targetLabels = Array.isArray(d.targets)
+      ? d.targets.map(function(t) { return String((t || {}).label || '').trim(); }).filter(Boolean)
+      : [];
+    var targetsText = targetLabels.length ? ' across ' + targetLabels.join(' + ') : '';
+    var errorsText = Number(d.errors || 0) > 0 ? ' (' + Number(d.errors || 0) + ' errors)' : '';
+    toast('Cleaned ' + (d.removed || 0) + ' dirs' + targetsText + ' (' + (d.freed_mb || 0) + ' MB freed)' + errorsText, 'ok');
     if (btn) { btn.disabled = false; btn.textContent = '\ud83e\uddf9 Clean Now'; }
   }).catch(function(e) {
     toast('Cleanup failed: ' + e.message, 'err');

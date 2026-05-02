@@ -72,6 +72,72 @@ Expanders are shown in this order:
 6. TradFi Symbol Mappings
 7. Download l2Book from AWS
 
+## Parallel FastAPI Page
+
+The parallel `Market Data (FastAPI)` page keeps the same workflows, but the sidebar now exposes the settings area through three dedicated subsections:
+
+The sidebar itself is now navigation-only: it contains the main page sections plus the contextual `Settings` actions, without separate overview or status summary info boxes.
+
+- `Coin Refresh` — exchange refresh settings and the enabled-coins workflow
+- `AWS / l2Book` — Hyperliquid archive download settings
+- `TradFi / Tiingo` — Tiingo credentials and TradFi mapping controls
+
+The shared `Guide` button on that page opens this `Market Data` topic directly inside the page overlay, so the current Market Data view stays visible while you read.
+
+The FastAPI sidebar no longer shows a separate `Actions` section. Instead it exposes direct shortcuts that stay inside the FastAPI page:
+
+- `Best 1m` opens a dedicated FastAPI panel for the current exchange.
+- `Download l2Books` opens the embedded Hyperliquid data-actions panel directly when `Hyperliquid` is selected.
+- `Already Have` stays inside FastAPI too: when that panel is active, the sidebar reveals dataset buttons for the selected exchange instead of in-panel tabs.
+
+`Best 1m` and `Download l2Books` now also use the same active button highlight as the other Market Data sidebar entries, so the currently open shortcut section is visible directly in the sidebar.
+
+Inside that FastAPI `Best 1m` panel, Hyperliquid reuses the full download/build actions component in a focused way: `Best 1m` shows only the build content, and `Download l2Books` shows only the download content. The extra outer header card, nested window chrome, and the expander header itself are removed there so only the actual form content remains visible.
+
+Hyperliquid `Best 1m` now also matches the newer FastAPI editing patterns more closely: the build range uses the same editor-style popup calendar as the Backtest/Optimize editors, and the coin chooser is rendered as a multi-column enabled-coins grid with `Filter enabled coin list`, `Select visible`, and `Clear all` instead of the old compact dropdown. The visible coin rows are directly clickable now and also support mouse-drag selection so larger ranges can be marked or cleared without checkbox clicking. Fast drag moves now interpolate the rows between cursor updates as well, so quick paint-style selection no longer skips coins.
+
+Hyperliquid `Download l2Books` now uses that same coin-grid pattern too instead of the old compact dropdown. You can filter the enabled coin list, click visible rows directly, bulk-select the current filtered slice, clear the explicit selection, or drag across the visible grid to paint larger download ranges quickly. `XYZ-*` / TradFi symbols are excluded there because Hyperliquid l2Book archive downloads only apply to native coins. Leaving the selection empty still queues all remaining downloadable coins.
+
+The focused Hyperliquid panel now also re-fits its embedded height when you switch between `Best 1m` and `Download l2Books`, so the shorter download view no longer keeps the empty tail and extra scrollbar from the previously taller build view.
+
+The embedded Hyperliquid view also avoids a second internal page scrollbar now, so scrolling stays on the main Market Data page instead of splitting between the page and the focused panel.
+
+For the archive-backed exchanges, the coin chooser now uses a settings-style enabled-coins grid directly in the FastAPI panel: `Filter enabled coin list` narrows the grid, `Select visible` adds the current filtered slice, `Clear all` resets the explicit selection, and you can drag across the visible coin rows with the mouse to add or remove larger ranges quickly. Fast drag movement now fills the intermediate rows too, so quickly painting through the grid no longer loses coins between mouse events. Leaving the selection empty still queues all enabled coins, while any explicit selection limits the queued Best 1m job to exactly those coins.
+
+That FastAPI `Best 1m` view now also starts directly with the build fields for Binance and Bybit. The redundant intro header text and the extra top `Refresh` button were removed.
+
+For Binance and Bybit, the FastAPI `Best 1m` build panel also shows the filtered Job Monitor directly below the full build form again, so you can watch queued, running, done, and failed `Best 1m` jobs for the selected exchange without leaving the panel.
+
+That build area is flatter now as well: the coin/build section no longer sits inside an extra rounded card frame, and the embedded Job Monitor drops its standalone page chrome so the whole view reads as one continuous Market Data panel.
+
+That embedded Job Monitor now also grows with its own content height, so you no longer get a second scrollbar inside the monitor area while the outer Market Data page is already scrollable.
+
+Its action dialogs are styled in-page now as well: cancel, delete, retry, requeue, and bulk-delete confirmations no longer fall back to browser-native popup windows.
+
+The FastAPI `Already Have` panel now follows the same parity goal. The selected exchange gets dataset buttons directly in the sidebar: `1m` and `PB7 cache` are always available, while Hyperliquid also shows `1m_api` and `l2Book`. The main panel then keeps the same workflow as Streamlit: summary metrics, a filterable inventory table, deletion tools for writable datasets, a coverage heatmap, a minute heatmap when available, and an optional OHLCV detail chart. `PB7 cache` remains read-only.
+
+That FastAPI OHLCV detail chart now uses the same lazy zoom strategy as the Streamlit version. The initial iframe only ships coarse layers, so long histories open reliably again, and wheel zoom pulls finer candles on demand instead of trying to embed the full `15m` / `5m` / `1m` pyramid up front.
+
+The iframe template itself is now served as real HTML/JS again, so the chart no longer stalls on a blank `Loading chart...` panel because of escaped quote characters inside the embedded script.
+
+In Hyperliquid `Already Have` → `l2Book`, the toolbar next to `Select All` / `Deselect` now also exposes a default-off toggle to include enabled non-XYZ coins that still have no l2Book files at all. That makes it possible to spot coins with completely missing l2Book coverage directly in the inventory table instead of only seeing coins that already have at least one archived hour.
+
+The `Already Have` sidebar stays button-only now. `Delete older than` was replaced by `Delete by Date`; clicking it opens a small dialog with the cutoff date picker and the delete preview instead of embedding that extra input block permanently in the sidebar.
+
+That dialog now also mirrors the clearer Backtest editor date control pattern more closely: the cutoff field has a visible calendar button, and the current delete scope shows the selected coin names in a small scrollable list so multi-coin deletes stay explicit before you confirm them.
+
+The final delete confirmation now also stays inside the PBGui styling: instead of the browser-native popup, delete actions open a centered confirmation window with the current scope and selected coins when applicable.
+
+When you select one or more coins in `Already Have`, the sidebar exposes the queue action that matches the current dataset view. In `1m`, `1m_api`, and `PB7 cache`, that remains `Build best 1m` for the selected coins on the current exchange. In Hyperliquid `l2Book`, the sidebar instead exposes an l2Book download queue action for those selected coins, so the inventory view no longer offers the unrelated Best 1m job there. The inventory sidebar itself is now button-only: queue/delete confirmations and errors no longer stay in persistent sidebar callouts, but go through the normal toast/notification path or the existing confirmation dialogs instead. The visible coin labels in this inventory UI now use the short coin name only, including the table, sidebar action buttons, and the heatmap/OHLCV captions.
+
+In `PB7 cache`, the toolbar above the table now also includes a small timeframe quick filter next to `Select All` and `Deselect`. Use it to switch between `all`, `1m`, and `1h` rows before selecting coins, which avoids the short-name duplicates that appear when the same coin exists in both cached timeframes.
+
+In Hyperliquid inventory views, the type filter now also supports `xyz only`, `xyz mapped`, and `xyz not mapped`. The table shows a `mapping` column for Hyperliquid rows, so you can immediately see the effective TradFi mapping status for each visible XYZ instrument, including statuses such as `mapped`, `no provider`, or `pending`. Active XYZ instruments are no longer shown as `delisted` just because an old entry in `tradfi_symbol_map.json` was not refreshed yet; when the live Hyperliquid mapping still lists the symbol, PBGui now resolves an active non-delisted status instead.
+
+The inventory table now also uses the same mouse-selection behavior as the FastAPI Backtest/Optimize tables: clicking toggles a single row, dragging across rows adds or removes a contiguous range, and `Select All` only selects the rows that are currently visible after filtering.
+
+The inventory table headers are sortable as well. Clicking a column header toggles between ascending and descending order for the currently visible rows in that dataset view.
+
 ## Settings (Latest 1m Auto-Refresh) — Hyperliquid
 
 Controls the automatic 1m candle refresh loop for Hyperliquid symbols.
@@ -83,6 +149,8 @@ Controls the automatic 1m candle refresh loop for Hyperliquid symbols.
 - **API timeout per coin (s)** — per-coin request timeout (default: 30s)
 - **Min / Max lookback days** — window for the latest fetch (default: 2 / 4 days)
 - Changes are saved to `pbgui.ini` and applied in the next cycle — no restart needed.
+
+Hyperliquid latest-1m catch-up requests can now reserve the full configured 4-day `candle_snapshot` budget correctly. A previous burst-cap mismatch in the local rate limiter could force repeated `budget_timeout` results even when the API request itself was valid.
 
 ## Settings (Binance USDM Latest 1m Auto-Refresh)
 
@@ -117,6 +185,7 @@ While a cycle is running, a progress bar shows `coins done / total` and the curr
 ### Status Table
 
 Shows per-coin result of the last completed cycle:
+- Only coins from the current enabled-coins set are shown; the FastAPI monitor filters stale rows immediately, and the next PBData cycle also drops them from the stored status.
 - `last_fetch` — timestamp of last attempt
 - `result` — `ok`, `error`, or `skipped`
 - `lookback_days` — days fetched
@@ -134,7 +203,22 @@ When PBData restarts, it reads the last run timestamp and waits the remaining in
 - Job progress with day/month context for stock-perp builds
 - In stock-perp minute view, overlay highlights for `market holiday` and `expected out-of-session gap` can be toggled off to inspect raw missing gaps directly
 - Minute view includes an optional `OHLCV chart` expander with interactive Plotly candlesticks and volume bars for fast visual validation
+- The overview and minute heatmaps on the FastAPI page keep Plotly wheel zoom disabled, and their Plotly modebar appears only on hover. Normal page scrolling therefore does not accidentally zoom those heatmaps, but the plot tools are still available when needed
 - The chart uses lazy zoom: fully zoomed out it shows coarse candles (typically `1d`) and automatically recalculates finer timeframes when zooming in — no manual timeframe selection needed
+- On the FastAPI page, those finer candles are fetched on demand inside the iframe, which keeps very long histories responsive instead of front-loading the full fine-resolution payload
+- Those FastAPI lazy loads now use much smaller timeframe-specific windows and only fetch the exact fine layer that is currently needed, which keeps zoom interactions noticeably snappier
+- The FastAPI chart opens in pan mode and keeps its Y axes movable, so after zooming you can drag the visible candles up or down instead of being forced to keep the auto-fitted vertical position
+- The FastAPI chart now also keeps your chosen Plotly interaction mode across rerenders and snaps pans/zooms back to the real candle span, so it no longer unexpectedly flips tools or drifts into an empty chart window
+- Stale FastAPI zoom requests are now aborted as soon as you move again, and same-timeframe pans avoid extra re-layout work unless the visible span really changed, which keeps the chart more responsive during rapid inspection
+- At the data edges, FastAPI now keeps your current zoom span and shifts it against the nearest valid boundary instead of bouncing back to the full range, which makes dragging near the ends feel much more natural
+- FastAPI now also merges newly fetched fine windows into the already loaded client-side layer instead of replacing it, so candles you just inspected do not vanish again as soon as you pan a bit further
+- FastAPI now also treats zoom and pan clamps differently: zooms clip to the actual selected overlap with loaded data, while pans keep their span at the edges. That makes rectangle zoom behave much closer to the area you actually selected
+- When you zoom back out but still stay inside the same fine timeframe, FastAPI now reloads that same timeframe if the cached client-side window no longer covers most of the visible range. That avoids cases where the chart still showed `1m` but large parts of the selected window were empty
+- FastAPI now also tracks already loaded fine-timeframe windows as separate client-side coverage intervals instead of collapsing them into one `first candle .. last candle` block. That means zoom-out checks can see real uncovered holes between previously loaded windows and fetch them instead of leaving blank regions inside the visible chart area
+- When FastAPI reloads the same fine timeframe, it now redraws the actual Plotly traces instead of updating only the layout. That ensures newly fetched candles become visible immediately instead of leaving the chart badge at `1m` while the missing section still looks empty
+- FastAPI now also checks the actual number of loaded candles inside the current same-timeframe view. If a `1m` / `5m` / `15m` window is effectively empty despite the current timeframe badge, it triggers a same-timeframe reload instead of trusting coverage heuristics alone
+- FastAPI now also normalizes Plotly relayout ranges that come without an explicit timezone before it clamps or rerenders the chart. Deep `1m` zoom-outs therefore stay on the intended time window instead of jumping back by the browser's local timezone offset
+- FastAPI now also normalizes Plotly wheel/relayout timestamps with higher fractional precision before reusing them. That avoids rare deep `1m` wheel zoom-outs where the visible range could collapse into an empty sliver even though candles existed in the intended window
 - The coin name is shown as a label in the top-left corner of the chart
 - For equity stock-perps, historical stock split dates are shown as vertical dashed orange lines with annotations (e.g. "Split 20:1"); OHLCV data is automatically adjusted for splits
 - Split factor data is stored per exchange in `data/coindata/hyperliquid/split_factors.json` (fetched from Tiingo Daily API)
@@ -172,12 +256,14 @@ Start-date semantics:
 
 Buttons are arranged in two aligned rows.
 
+The inline mapping editor stays hidden by default and only opens when you explicitly click `Edit`.
+
 Row 1 (selected-symbol workflow):
 - Search ticker
 - Edit
 - Test Resolve
 - Fetch start date
-- Spec
+- Refresh spec
 
 Row 2 (global workflow):
 - Auto-Map
@@ -186,15 +272,32 @@ Row 2 (global workflow):
 - Refresh prices
 - View specs
 
+The action result box below the buttons can be closed again, and Auto-Map results expose expandable categories such as `Not found` and `Skipped` so you can inspect which symbols were affected.
+
+The Tiingo widget above this section is a PBGui-local tracker, not the authoritative Tiingo dashboard usage view. PBGui labels those cards as local counters now, and it also shows a warning when Tiingo has returned a live `server_429` backoff. That means you can see the current retry wait directly even when the local `Hour` / `Day` / `Month Bandwidth` counters have not reached zero yet.
+
+Auto-Map summary counts now follow the same non-delisted mapping rows that are visible in the table, so old delisted leftovers from the raw JSON file are no longer mixed into the result totals.
+
+Auto-Map now also reconciles those visible rows against the current Hyperliquid XYZ activity before deciding to skip them. That means an active row with a stale raw `delisted` flag in `tradfi_symbol_map.json` is processed as active again, and descriptive stock texts such as `LLY tracks ... Eli Lilly and Company` now pass the Tiingo name check instead of landing in `Skipped`.
+
+Pending rows keep a single `auto-map: not found` note marker, so repeated Auto-Map runs no longer spam the Note column with duplicate fragments.
+
+TradFi type handling now follows the live XYZ specification cache more closely: the spec parser reads the dedicated Description and Underlying columns, and Auto-Map decides between direct lookup, FX mapping, and `no_provider` from the derived instrument type instead of relying only on a static symbol list.
+
+`Search ticker` now opens in the floating PBGui utility window itself: you can edit the Tiingo query there, run the search, inspect the visible result list with the current Tiingo price when available, compare it with the current Hyperliquid price for the selected XYZ symbol, and apply a match directly from the same window. If Tiingo has no quote for a hit, the price is shown as unavailable instead of a misleading `0.0000`. Search hits with Tiingo exchange suffixes such as `BNO:BAT` are also matched against the underlying Tiingo quote ticker automatically, so they can still show the correct price.
+
 ### Specs Popup
 
 `View specs` opens a popup with:
 - Source/fetched timestamp/row count
 - Link to original XYZ specification page
-- Large table view using most of the dialog height
+- A floating window that can be moved, resized, and closed like the other PBGui utility windows
+- Large table view using most of the window height
 - Clickable links:
   - Pyth Link
   - HL Link
+
+Pyth links now preserve the encoded symbol separator required by `pythdata.app`, so symbols like `AMZN/USD` open through `%2F` instead of landing on a 404 page.
 
 ### Notes
 
@@ -205,6 +308,8 @@ Row 2 (global workflow):
 ## Download l2Book from AWS
 
 Downloads Hyperliquid l2Book archive files (Requester Pays).
+
+On the FastAPI page, the Hyperliquid download panel now uses the same enabled-coins grid selector as `Best 1m`: `Filter enabled coin list` narrows the visible slice, `Select visible` adds the filtered rows in one step, `Clear all` resets the explicit selection, and you can click or drag across visible rows to build a download set quickly. `XYZ-*` / TradFi symbols are filtered out here because there is no Hyperliquid l2Book archive download for them. If you leave the selection empty, PBGui still queues all remaining downloadable Hyperliquid coins.
 
 Workflow:
 1. Configure AWS profile and region
@@ -227,6 +332,10 @@ Storage path:
 
 This starts background build jobs for eligible symbols.
 
+On the FastAPI page, Binance USDM and Bybit use a settings-style enabled-coins grid directly in the `Best 1m` build panel. You can narrow the list with `Filter enabled coin list`, click single rows, drag across visible rows to add or remove larger ranges quickly, or bulk-add the current filtered slice via `Select visible`. If you leave the explicit selection empty, PBGui queues all enabled coins for the current exchange.
+
+On Hyperliquid, the focused `Best 1m` build panel now uses the same `Filter enabled coin list` + multi-column grid pattern for coin selection and the shared popup calendar style for `Start date` / `End date`, replacing the older single-row dropdown and browser-native date fields. The visible coin rows can be clicked directly or selected in larger ranges by dragging the mouse across the grid.
+
 ### Job Types
 
 **`hl_best_1m`** — Hyperliquid XYZ stock-perps:
@@ -247,6 +356,7 @@ The job panel shows three sections:
 - **Failed / Done** — completed jobs
 
 Actions:
+- **Cancel** — requests cooperative cancellation for a running job from the embedded monitor; the worker stops at the next safe checkpoint
 - **Retry** — requeues a failed job to Pending
 - **Delete** — removes individual job
 - **Delete selected / Delete all** — bulk delete from Failed or Done list

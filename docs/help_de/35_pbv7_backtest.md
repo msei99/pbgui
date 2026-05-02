@@ -136,10 +136,10 @@ Zeigt alle ausstehenden, laufenden und abgeschlossenen Backtest-Jobs mit Echtzei
 |-------------|-------------|
 | **CPU** | Anzahl paralleler Backtest-Prozesse (max = CPU-Kernanzahl) |
 | **Autostart** | Wenn aktiviert, startet der Worker `queued`-Jobs automatisch |
-| **HLCVS Cache Cleanup — Enabled** | Alte `pb7/caches/hlcvs_data`-Verzeichnisse regelmäßig löschen |
+| **HLCVS Cache Cleanup — Enabled** | Alte Verzeichnisse unter `pb7/caches/hlcvs_data` und `pb7/caches/ohlcvs/materialized` regelmäßig löschen |
 | **Retention (days)** | Verzeichnisse löschen, die älter als dieser Wert sind (Standard: 7) |
 | **Check interval (h)** | Prüfintervall in Stunden (Standard: 24) |
-| **🧹 Clean Now** | Bereinigung sofort mit dem aktuellen Retention-Wert ausführen; zeigt per Toast wie viele Verzeichnisse gelöscht und wie viel Speicher freigegeben wurden |
+| **🧹 Clean Now** | Bereinigung sofort mit dem aktuellen Retention-Wert über beide Cache-Pfade ausführen; zeigt per Toast wie viele Verzeichnisse gelöscht und wie viel Speicher freigegeben wurden |
 
 ---
 

@@ -25,7 +25,7 @@ import traceback
 import uuid
 from pathlib import Path, PurePath
 from shutil import copytree, rmtree
-from typing import Optional
+from typing import Any, Optional
 
 import psutil
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -734,28 +734,76 @@ class HLCVSCleanupWorker:
 
     @staticmethod
     def _do_cleanup(retention_days: int):
-        hlcvs_dir = Path(pb7dir()) / "caches" / "hlcvs_data"
-        if not hlcvs_dir.is_dir():
-            return
-        cutoff = datetime.datetime.now().timestamp() - (retention_days * 86400)
-        removed = 0
-        errors = 0
-        for entry in hlcvs_dir.iterdir():
-            if not entry.is_dir():
-                continue
-            try:
-                mtime = entry.stat().st_mtime
-                if mtime < cutoff:
-                    rmtree(entry)
-                    removed += 1
-            except Exception as e:
-                errors += 1
-                _log(CLEANUP_SERVICE, f"Failed to remove {entry.name}: {e}", level="WARNING")
+        result = _cleanup_cache_roots(retention_days)
+        removed = int(result.get("removed") or 0)
+        freed_bytes = int(result.get("freed_bytes") or 0)
+        errors = int(result.get("errors") or 0)
         if removed > 0:
-            _log(CLEANUP_SERVICE,
-                 f"Cleaned {removed} hlcvs_data dirs older than {retention_days}d"
-                 + (f" ({errors} errors)" if errors else ""),
-                 level="INFO")
+            _log(
+                CLEANUP_SERVICE,
+                f"Cleaned {removed} cache dirs older than {retention_days}d, freed {freed_bytes // (1024 * 1024)} MB"
+                + (f" ({errors} errors)" if errors else ""),
+                level="INFO",
+            )
+        elif errors > 0:
+            _log(
+                CLEANUP_SERVICE,
+                f"Cleanup older than {retention_days}d finished with {errors} errors",
+                level="WARNING",
+            )
+
+
+def _cleanup_cache_targets() -> list[tuple[str, Path]]:
+    cache_root = Path(pb7dir()) / "caches"
+    return [
+        ("hlcvs_data", cache_root / "hlcvs_data"),
+        ("ohlcvs/materialized", cache_root / "ohlcvs" / "materialized"),
+    ]
+
+
+def _cleanup_cache_roots(retention_days: int) -> dict[str, Any]:
+    cutoff = datetime.datetime.now().timestamp() - (retention_days * 86400)
+    targets: list[dict[str, Any]] = []
+    removed = 0
+    freed = 0
+    errors = 0
+
+    for label, root in _cleanup_cache_targets():
+        target_removed = 0
+        target_freed = 0
+        target_errors = 0
+        if root.is_dir():
+            for entry in root.iterdir():
+                if not entry.is_dir():
+                    continue
+                try:
+                    if entry.stat().st_mtime < cutoff:
+                        size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+                        rmtree(entry)
+                        target_removed += 1
+                        target_freed += size
+                except Exception as e:
+                    target_errors += 1
+                    _log(CLEANUP_SERVICE, f"Failed to remove {label}/{entry.name}: {e}", level="WARNING")
+        targets.append(
+            {
+                "label": label,
+                "path": str(root),
+                "removed": target_removed,
+                "freed_bytes": target_freed,
+                "errors": target_errors,
+            }
+        )
+        removed += target_removed
+        freed += target_freed
+        errors += target_errors
+
+    return {
+        "removed": removed,
+        "freed_bytes": freed,
+        "errors": errors,
+        "targets": targets,
+    }
 
 
 _hlcvs_cleanup_worker = HLCVSCleanupWorker()
@@ -988,29 +1036,32 @@ async def hlcvs_cleanup_now(body: dict, session: SessionToken = Depends(require_
 
 
 def _hlcvs_cleanup_now_sync(retention_days: int) -> dict:
-    hlcvs_dir = Path(pb7dir()) / "caches" / "hlcvs_data"
-    if not hlcvs_dir.is_dir():
-        return {"removed": 0, "freed_mb": 0}
-    import time
-    cutoff = time.time() - (retention_days * 86400)
-    removed = 0
-    freed = 0
-    for entry in hlcvs_dir.iterdir():
-        if not entry.is_dir():
-            continue
-        try:
-            if entry.stat().st_mtime < cutoff:
-                size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
-                rmtree(entry)
-                removed += 1
-                freed += size
-        except Exception as e:
-            _log(CLEANUP_SERVICE, f"Failed to remove {entry.name}: {e}", level="WARNING")
+    result = _cleanup_cache_roots(retention_days)
+    removed = int(result.get("removed") or 0)
+    freed = int(result.get("freed_bytes") or 0)
+    errors = int(result.get("errors") or 0)
     if removed > 0:
-        _log(CLEANUP_SERVICE,
-             f"Manual cleanup: removed {removed} dirs older than {retention_days}d, freed {freed // (1024*1024)} MB",
-             level="INFO")
-    return {"removed": removed, "freed_mb": round(freed / (1024 * 1024))}
+        _log(
+            CLEANUP_SERVICE,
+            f"Manual cleanup: removed {removed} dirs older than {retention_days}d, freed {freed // (1024 * 1024)} MB"
+            + (f" ({errors} errors)" if errors else ""),
+            level="INFO",
+        )
+    return {
+        "removed": removed,
+        "freed_mb": round(freed / (1024 * 1024)),
+        "errors": errors,
+        "targets": [
+            {
+                "label": str(target.get("label") or ""),
+                "path": str(target.get("path") or ""),
+                "removed": int(target.get("removed") or 0),
+                "freed_mb": round(int(target.get("freed_bytes") or 0) / (1024 * 1024)),
+                "errors": int(target.get("errors") or 0),
+            }
+            for target in (result.get("targets") or [])
+        ],
+    }
 
 
 # ── REST: Bot params (from passivbot schema) ─────────────────

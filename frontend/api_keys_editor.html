@@ -1048,6 +1048,7 @@
         <div id="diffContent" style="flex:1; overflow:auto;"></div>
     </div>
 
+    <script src="/app/js/pbgui_dialogs.js?v=1"></script>
     <script>
     // ── Config ──────────────────────────────────────────────
     // TOKEN, API_BASE, ST_BASE, PBGUI_VERSION and PBGUI_SERIAL are injected server-side by /main_page.
@@ -1714,9 +1715,13 @@
     }
 
     // ── Panel navigation ────────────────────────────────────
-    function backToList() {
+    async function backToList() {
         if (document.getElementById("editPanel").style.display !== "none" && formDirty) {
-            if (!confirm("You have unsaved changes. Leave without saving?")) return;
+            if (!(await window.PBGuiDialogs.confirm({
+                title: "Discard changes",
+                message: "You have unsaved changes. Leave without saving?",
+                confirmText: "Leave"
+            }))) return;
         }
         formDirty = false;
         ["editPanel","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
@@ -1881,16 +1886,25 @@
 
     // ── Delete user ─────────────────────────────────────────
     function confirmDelete(name) {
-        if (confirm("Delete user '" + name + "'? This cannot be undone.")) {
-            doDelete(name);
-        }
+        window.PBGuiDialogs.confirm({
+            title: "Delete user",
+            message: "Delete user '" + name + "'?",
+            detail: "This cannot be undone.",
+            confirmText: "Delete"
+        }).then(function(confirmed) {
+            if (confirmed) doDelete(name);
+        });
     }
 
     async function deleteUser() {
         if (!editingName) return;
-        if (confirm("Delete user '" + editingName + "'? This cannot be undone.")) {
-            await doDelete(editingName);
-        }
+        if (!(await window.PBGuiDialogs.confirm({
+            title: "Delete user",
+            message: "Delete user '" + editingName + "'?",
+            detail: "This cannot be undone.",
+            confirmText: "Delete"
+        }))) return;
+        await doDelete(editingName);
     }
 
     async function doDelete(name) {
@@ -2271,7 +2285,11 @@
     }
 
     async function deleteComment(key) {
-        if (!confirm("Delete comment '" + key + "'?")) return;
+        if (!(await window.PBGuiDialogs.confirm({
+            title: "Delete comment",
+            message: "Delete comment '" + key + "'?",
+            confirmText: "Delete"
+        }))) return;
         try {
             await apiFetch("/comments/list/" + encodeURIComponent(key), { method: "DELETE" });
             showToast("Comment deleted", "success");
@@ -2596,7 +2614,11 @@
     }
 
     async function tradfiClear() {
-        if (!confirm("Clear TradFi config?")) return;
+        if (!(await window.PBGuiDialogs.confirm({
+            title: "Clear TradFi config",
+            message: "Clear TradFi config?",
+            confirmText: "Clear"
+        }))) return;
         try {
             await apiFetch("/tradfi/config", { method: "DELETE" });
             setupMaskedField("tradfiApiKey", "");
@@ -3280,11 +3302,12 @@
     }
 
     async function restoreBackup(filename) {
-        if (!confirm(
-            "Restore from backup:\n" + filename + "\n\n" +
-            "This will overwrite the current api-keys.json.\n" +
-            "A pre-restore snapshot will be saved first.\n\nProceed?"
-        )) return;
+        if (!(await window.PBGuiDialogs.confirm({
+            title: "Restore backup",
+            message: "Restore from backup:\n" + filename,
+            detail: "This will overwrite the current api-keys.json. A pre-restore snapshot will be saved first.",
+            confirmText: "Restore"
+        }))) return;
         try {
             await apiFetch("/backups/restore", {
                 method: "POST",

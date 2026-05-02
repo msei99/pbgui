@@ -274,6 +274,7 @@ body {
   <div style="color:#4a5568;padding:1rem">Loading…</div>
 </div>
 
+<script src="/app/js/pbgui_dialogs.js?v=1"></script>
 <script>
 (function() {
   'use strict';
@@ -324,6 +325,10 @@ body {
     el.textContent = text;
     el.className = 'msg ' + type;
     setTimeout(function() { el.textContent = ''; el.className = 'msg'; }, 3500);
+  }
+
+  function confirmDialog(options) {
+    return window.PBGuiDialogs.confirm(options);
   }
 
 
@@ -670,10 +675,14 @@ body {
     /* Delete selected template(s) */
     var delTplBtn = document.getElementById('btn-del-tpl');
     if (delTplBtn) {
-      delTplBtn.addEventListener('click', function() {
+      delTplBtn.addEventListener('click', async function() {
         if (!_selTemplates.length) return;
         var label = _selTemplates.length === 1 ? '\u201c' + _selTemplates[0] + '\u201d' : _selTemplates.length + ' templates';
-        if (!confirm('Delete ' + label + '?')) return;
+        if (!(await confirmDialog({
+          title: 'Delete templates',
+          message: 'Delete ' + label + '?',
+          confirmText: 'Delete'
+        }))) return;
         var pending = _selTemplates.slice();
         var toDelete = pending.slice();
         function deleteNext() {
@@ -749,7 +758,7 @@ body {
     /* Create dashboard(s) */
     var createBtn = document.getElementById('btn-create');
     if (createBtn) {
-      createBtn.addEventListener('click', function() {
+      createBtn.addEventListener('click', async function() {
         var template = (document.getElementById('tpl-select').value || '').trim();
         if (!template) { showMsg('create-msg', 'Select a template', 'err'); return; }
         var users = getEffectiveUsers();
@@ -757,7 +766,11 @@ body {
 
         if (users.length > 0) {
           /* One dashboard per user — name optional, default: username */
-          if (!confirm('Create ' + users.length + ' dashboard(s) from template \u201c' + template + '\u201d?')) return;
+          if (!(await confirmDialog({
+            title: 'Create dashboards',
+            message: 'Create ' + users.length + ' dashboard(s) from template “' + template + '”?',
+            confirmText: 'Create'
+          }))) return;
           createBtn.disabled = true;
           var pending = users.slice();
           var nCreated = 0, nSkipped = 0;
@@ -774,11 +787,23 @@ body {
             var dashName = nameInput || user;
             apiGet('/dashboards/' + encodeURIComponent(dashName), function(existing) {
               if (existing && existing.config !== undefined) {
-                if (!confirm('Dashboard \u201c' + dashName + '\u201d already exists.\nOverwrite it?')) {
-                  nSkipped++;
-                  createNext();
-                  return;
-                }
+                confirmDialog({
+                  title: 'Overwrite dashboard',
+                  message: 'Dashboard “' + dashName + '” already exists.',
+                  detail: 'Overwrite it with the selected template?',
+                  confirmText: 'Overwrite'
+                }).then(function(confirmed) {
+                  if (!confirmed) {
+                    nSkipped++;
+                    createNext();
+                    return;
+                  }
+                  apiPost('/dashboards/from_template', {template: template, name: dashName}, function(res) {
+                    if (res && res.status === 'ok') nCreated++; else nSkipped++;
+                    createNext();
+                  });
+                });
+                return;
               }
               apiPost('/dashboards/from_template', {template: template, name: dashName}, function(res) {
                 if (res && res.status === 'ok') nCreated++; else nSkipped++;
@@ -793,10 +818,30 @@ body {
           createBtn.disabled = true;
           apiGet('/dashboards/' + encodeURIComponent(nameInput), function(existing) {
             if (existing && existing.config !== undefined) {
-              if (!confirm('Dashboard \u201c' + nameInput + '\u201d already exists.\nOverwrite it?')) {
-                createBtn.disabled = false;
-                return;
-              }
+              confirmDialog({
+                title: 'Overwrite dashboard',
+                message: 'Dashboard “' + nameInput + '” already exists.',
+                detail: 'Overwrite it with the selected template?',
+                confirmText: 'Overwrite'
+              }).then(function(confirmed) {
+                if (!confirmed) {
+                  createBtn.disabled = false;
+                  return;
+                }
+                apiPost('/dashboards/from_template', {template: template, name: nameInput}, function(res) {
+                  createBtn.disabled = false;
+                  if (res && res.status === 'ok') {
+                    showMsg('create-msg', '\u201c' + nameInput + '\u201d created', 'ok');
+                    document.getElementById('dash-name').value = '';
+                    if (window.parent && window.parent !== window) {
+                      window.parent.postMessage({type: 'pbgui_dashboard_created'}, '*');
+                    }
+                  } else {
+                    showMsg('create-msg', 'Error creating dashboard', 'err');
+                  }
+                });
+              });
+              return;
             }
             apiPost('/dashboards/from_template', {template: template, name: nameInput}, function(res) {
               createBtn.disabled = false;

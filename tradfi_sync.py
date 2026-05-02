@@ -173,12 +173,18 @@ def sync_tradfi_spec(pbgui_dir: Path | None = None) -> dict[str, Any]:
             else:
                 added_delisted += 1
         else:
-            # Existing entry — fill description from spec cache if still empty
+            # Existing mapping.json entry — refresh spec-derived description/type.
             entry = entry_by_key[coin_name]
-            if not str(entry.get("description") or "").strip():
-                spec_desc = str((_spec_by_coin.get(coin_name) or {}).get("description") or "")
+            spec_entry = _spec_by_coin.get(coin_name) or {}
+            spec_desc = str(spec_entry.get("description") or "").strip()
+            spec_type = str(spec_entry.get("canonical_type") or "").strip().lower()
+            if str(entry.get("spec_source") or "").strip().lower() == "mapping.json":
                 if spec_desc:
                     entry["description"] = spec_desc
+                if spec_type:
+                    entry["canonical_type"] = spec_type
+            elif not str(entry.get("description") or "").strip() and spec_desc:
+                entry["description"] = spec_desc
 
     # ── 4. Mark disappeared pending coins as delisted ─────────────────────────
     # We NEVER overwrite manually-verified entries (status not "pending").
@@ -224,24 +230,37 @@ def sync_tradfi_spec(pbgui_dir: Path | None = None) -> dict[str, Any]:
 
 # ── XYZ Specification Index (docs.trade.xyz) ──────────────────────────────────
 
-def _pyth_href_to_canonical_type(href: str, underlying: str, coin: str) -> str:
+def _pyth_href_to_canonical_type(href: str, underlying: str, coin: str, description: str = "") -> str:
     """Derive canonical_type from Pyth insight URL or underlying/coin fallback."""
     href_lower = href.lower()
+    combined_lower = " ".join(
+        part.strip().lower()
+        for part in (str(underlying or ""), str(description or ""))
+        if str(part or "").strip()
+    )
     if "/equity.us." in href_lower or "equity.us%2" in href_lower:
         return "equity_us"
     if "/equity.kr." in href_lower or "equity.kr%2" in href_lower:
         return "equity_kr"
+    if "/equity.jp." in href_lower or "equity.jp%2" in href_lower:
+        return "equity_jp"
     if "/metal." in href_lower:
         return "commodity"
     if "/fx." in href_lower:
         return "fx"
     if "/commodities." in href_lower:
         return "commodity"
+    if "/index." in href_lower or "/indices." in href_lower:
+        return "index_etf"
     # No Pyth link — fall back on underlying text and coin name
     if underlying.upper().endswith(".KS"):
         return "equity_kr"
+    if any(token in combined_lower for token in {"crude oil", "barrel", "precious metal", "natural gas", "copper", "uranium"}):
+        return "commodity"
+    if any(token in combined_lower for token in {" price-weighted index", " benchmark for the japanese equity market", " benchmark for the south korean equity market", " index of ", " serves as a widely followed benchmark"}):
+        return "index_etf"
     upper = coin.upper()
-    if upper in {"GOLD", "SILVER", "PLATINUM", "PALLADIUM", "CL", "NATGAS", "COPPER", "ALUMINIUM", "URANIUM"}:
+    if upper in {"GOLD", "SILVER", "PLATINUM", "PALLADIUM", "CL", "NATGAS", "COPPER", "ALUMINIUM", "URANIUM", "BRENTOIL"}:
         return "commodity"
     if upper in {"EUR", "JPY", "GBP", "DXY"}:
         return "fx"
@@ -257,6 +276,53 @@ def _normalize_instrument_to_coin(instrument: str) -> str:
     """
     coin = re.sub(r'\s*\(.*?\)\s*$', '', instrument).strip()
     return coin.upper()
+
+
+def _clean_spec_cell_text(value: str) -> str:
+    text = str(value or "").replace("arrow-up-right", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _parse_xyz_spec_row(row: Any, fetched_at: str) -> dict[str, Any] | None:
+    cells = row.find_all(attrs={"role": "cell"})
+    if len(cells) < 4:
+        return None
+
+    instrument = _clean_spec_cell_text(cells[0].get_text(" ", strip=True))
+    if not instrument:
+        return None
+
+    description = _clean_spec_cell_text(cells[1].get_text(" ", strip=True))
+    underlying_cell = cells[2]
+    underlying_text = _clean_spec_cell_text(underlying_cell.get_text(" ", strip=True))
+    link = underlying_cell.find("a")
+    underlying_href = link["href"] if (link and link.has_attr("href")) else ""
+    max_leverage = _clean_spec_cell_text(cells[3].get_text(" ", strip=True))
+
+    coin = _normalize_instrument_to_coin(instrument)
+    canonical_type = _pyth_href_to_canonical_type(underlying_href, underlying_text, coin, description)
+    if coin == "XYZ100":
+        canonical_type = "index"
+
+    import urllib.parse as _uparse
+
+    pyth_symbol = ""
+    if underlying_href and "/explore/" in underlying_href:
+        pyth_symbol = _uparse.unquote(underlying_href.split("/explore/")[-1]).strip()
+    elif underlying_href and "/price-feeds/" in underlying_href:
+        pyth_symbol = _uparse.unquote(underlying_href.split("/price-feeds/")[-1]).strip()
+
+    return {
+        "xyz_coin": coin,
+        "instrument_label": instrument,
+        "underlying": underlying_text,
+        "underlying_href": underlying_href,
+        "pyth_symbol": pyth_symbol,
+        "max_leverage": max_leverage,
+        "canonical_type": canonical_type,
+        "description": description,
+        "fetched_at": fetched_at,
+    }
 
 
 def fetch_xyz_spec(pbgui_dir: Path | None = None) -> list[dict]:
@@ -295,51 +361,24 @@ def fetch_xyz_spec(pbgui_dir: Path | None = None) -> list[dict]:
     results: list[dict] = []
     fetched_at = datetime.now(timezone.utc).isoformat()
 
-    import urllib.parse as _uparse
     for row in table_rows[1:]:  # skip header row
-        cells = row.find_all(attrs={"role": "cell"})
-        if len(cells) < 2:
+        entry = _parse_xyz_spec_row(row, fetched_at)
+        if not entry:
             continue
-        instrument = cells[0].get_text(strip=True)
-        link = cells[1].find("a")
-        underlying_text = (
-            cells[1].get_text(strip=True).replace("arrow-up-right", "").strip()
-        )
-        underlying_href = link["href"] if (link and link.has_attr("href")) else ""
-        # Normalize URL: fix percent-encoding and common typos from source HTML
-        # (e.g. docs.trade.xyz has 'ttps://' instead of 'https://' for some entries)
-        underlying_href = underlying_href.replace("%2F", "/").replace("%2f", "/")
+
+        underlying_href = str(entry.get("underlying_href") or "")
         if underlying_href.startswith("//"):
             underlying_href = "https:" + underlying_href
         elif underlying_href and "://" in underlying_href and not underlying_href.startswith(("http://", "https://")):
             # Garbled scheme (e.g. 'ttps://') — strip the bad prefix, keep the rest
             underlying_href = "https://" + underlying_href.split("://", 1)[1]
-        max_leverage = cells[2].get_text(strip=True) if len(cells) > 2 else ""
-
-        coin = _normalize_instrument_to_coin(instrument)
-        canonical_type = _pyth_href_to_canonical_type(underlying_href, underlying_text, coin)
-        # Special overrides
-        if coin == "XYZ100":
-            canonical_type = "index"
-
-        # Extract the Pyth symbol from the insights URL for description lookup
-        pyth_symbol = ""
-        if underlying_href and "/price-feeds/" in underlying_href:
-            pyth_symbol = _uparse.unquote(underlying_href.split("/price-feeds/")[-1]).strip()
-
-        entry = {
-            "xyz_coin": coin,
-            "instrument_label": instrument,
-            "underlying": underlying_text,
-            "underlying_href": underlying_href,
-            "pyth_symbol": pyth_symbol,
-            "max_leverage": max_leverage,
-            "canonical_type": canonical_type,
-            "description": "",
-            "fetched_at": fetched_at,
-        }
+        entry["underlying_href"] = underlying_href
         results.append(entry)
-        _log("tradfi_sync", f"spec: {coin} → {canonical_type} ({underlying_text})", level="DEBUG")
+        _log(
+            "tradfi_sync",
+            f"spec: {entry['xyz_coin']} → {entry['canonical_type']} ({entry['underlying']})",
+            level="DEBUG",
+        )
 
     _log(
         "tradfi_sync",
@@ -365,7 +404,7 @@ def fetch_xyz_spec(pbgui_dir: Path | None = None) -> list[dict]:
         _enriched = 0
         for entry in results:
             ps = entry.get("pyth_symbol", "")
-            if ps and ps in _sym_to_desc:
+            if ps and ps in _sym_to_desc and not str(entry.get("description") or "").strip():
                 entry["description"] = _sym_to_desc[ps]
                 _enriched += 1
         _log("tradfi_sync", f"Pyth Hermes: {_enriched}/{len(results)} descriptions enriched", level="INFO")
@@ -390,6 +429,13 @@ def fetch_xyz_spec(pbgui_dir: Path | None = None) -> list[dict]:
 _TIINGO_META_CACHE_FILE = "tiingo_meta.json"
 _TIINGO_META_URL = "https://api.tiingo.com/tiingo/fundamentals/meta"
 
+_TIINGO_DIRECT_TYPES: frozenset[str] = frozenset({
+    "equity_us", "etf", "commodity_etf",
+})
+_NO_PROVIDER_TYPES: frozenset[str] = frozenset({
+    "commodity", "fx", "index", "index_etf", "equity_kr", "equity_jp",
+})
+
 # ISO 4217 / XAU/XAG static FX map: xyz_coin → tiingo fx pair
 _FX_COMMODITY_MAP: dict[str, dict] = {
     "EUR":       {"tiingo_fx_ticker": "EURUSD",  "tiingo_fx_invert": False},
@@ -401,13 +447,6 @@ _FX_COMMODITY_MAP: dict[str, dict] = {
     "PALLADIUM": {"tiingo_fx_ticker": "XPDUSD",  "tiingo_fx_invert": False},
 }
 
-# Coins with no Tiingo data source
-_NO_PROVIDER_COINS: frozenset[str] = frozenset({
-    "NATGAS", "COPPER", "ALUMINIUM", "URANIUM",
-    "DXY", "XYZ100", "JP225", "KR200", "CL",
-    "HYUNDAI", "HYUN", "SKHX", "SMSN", "SOFTBANK",
-})
-
 # xyz_coin → Tiingo ticker when the names differ (KR/JP OTC/ADR tickers, ETFs with no fundamentals)
 _KNOWN_TICKER_ALIASES: dict[str, str] = {
     "URNM":     "URNM",    # Sprott Uranium Miners ETF — ETFs have no fundamentals
@@ -417,6 +456,20 @@ _KNOWN_TICKER_ALIASES: dict[str, str] = {
 _US_EXCHANGES: frozenset[str] = frozenset({
     "NASDAQ", "NYSE", "NYSE ARCA", "NYSE MKT", "CBOE", "BATS",
 })
+
+
+def _auto_map_strategy_for_entry(coin: str, canonical_type: str) -> str:
+    if coin in _FX_COMMODITY_MAP:
+        return "mapped_fx"
+    if coin in _KNOWN_TICKER_ALIASES:
+        return "alias"
+
+    normalized_type = str(canonical_type or "").strip().lower()
+    if normalized_type in _NO_PROVIDER_TYPES:
+        return "no_provider"
+    if normalized_type in _TIINGO_DIRECT_TYPES:
+        return "equity_lookup"
+    return "equity_lookup"
 
 
 def _tiingo_cache_dir(pbgui_dir: Path | str | None = None) -> Path:
@@ -492,13 +545,33 @@ def _pyth_desc_to_company(description: str) -> str:
     return _normalize_name(description.split(" / ")[0] if " / " in description else description)
 
 
+_NAME_MATCH_STOPWORDS: frozenset[str] = frozenset({
+    "and", "company", "co", "corp", "corporation", "group", "holding", "holdings",
+    "inc", "incorporated", "limited", "ltd", "plc", "sa", "spa", "nv",
+})
+
+
+def _name_tokens(value: str) -> set[str]:
+    return {
+        token for token in _normalize_name(value).split()
+        if token and token not in _NAME_MATCH_STOPWORDS
+    }
+
+
 def _names_match(pyth_desc: str, tiingo_name: str) -> bool:
     """Return True when the company name extracted from Pyth description matches Tiingo name."""
     p = _pyth_desc_to_company(pyth_desc)
     t = _normalize_name(tiingo_name)
     if not p or not t:
         return False
-    return p == t or t.startswith(p) or p.startswith(t)
+    if p == t or t.startswith(p) or p.startswith(t):
+        return True
+
+    p_tokens = _name_tokens(pyth_desc)
+    t_tokens = _name_tokens(tiingo_name)
+    if p_tokens and t_tokens and (t_tokens.issubset(p_tokens) or p_tokens.issubset(t_tokens)):
+        return True
+    return False
 
 
 def auto_map_tradfi(
@@ -508,14 +581,14 @@ def auto_map_tradfi(
 ) -> dict[str, Any]:
     """Auto-map pending TradFi entries to Tiingo tickers.
 
-    Processing order per entry (only ``status="pending"`` entries are touched):
+    Processing order per entry (only visible, non-delisted rows with ``status="pending"`` are touched):
       1. FX / precious metals  → static ISO 4217 table  → tiingo_fx_ticker, status="ok"
-      2. _NO_PROVIDER_COINS    → status="no_provider"
+            2. Type-based provider   → status="no_provider" for unsupported Tiingo types
       3. _KNOWN_TICKER_ALIASES → tiingo_ticker (alias), status="alias"
       4. Direct equity lookup  → coin in Tiingo meta + name validation → status="ok"
       5. Not found             → note updated, status stays "pending"
 
-    Returns summary dict with counts per phase.
+    Returns summary dict with counts per phase plus per-category item details.
     """
     coindata = _coindata_dir(pbgui_dir)
     map_path = coindata / _MAP_FILE
@@ -523,6 +596,87 @@ def auto_map_tradfi(
         raise FileNotFoundError(f"tradfi_symbol_map.json not found at {map_path}")
 
     records: list[dict] = json.loads(map_path.read_text(encoding="utf-8"))
+    try:
+        from market_data_tradfi import (
+            add_tradfi_auto_map_not_found_note,
+            apply_tradfi_spec_defaults,
+            build_effective_tradfi_status_map,
+            build_merged_tradfi_table,
+            clear_tradfi_auto_map_not_found_note,
+            load_xyz_spec_by_coin,
+            normalize_tradfi_note,
+            resolve_tradfi_canonical_type,
+        )
+
+        visible_coins = {
+            str((row or {}).get("xyz_coin") or "").strip().upper()
+            for row in build_merged_tradfi_table()
+            if str((row or {}).get("xyz_coin") or "").strip()
+        }
+        effective_status_by_coin = build_effective_tradfi_status_map()
+        spec_by_coin = load_xyz_spec_by_coin()
+    except Exception:
+        def normalize_tradfi_note(raw_note: object) -> str:
+            parts = [part.strip() for part in str(raw_note or "").split("|") if part.strip()]
+            if not parts:
+                return ""
+            cleaned: list[str] = []
+            saw_auto_map_not_found = False
+            for part in parts:
+                if part == "auto-map: not found":
+                    if saw_auto_map_not_found:
+                        continue
+                    saw_auto_map_not_found = True
+                cleaned.append(part)
+            return " | ".join(cleaned)
+
+        def clear_tradfi_auto_map_not_found_note(raw_note: object) -> str:
+            parts = [
+                part.strip()
+                for part in normalize_tradfi_note(raw_note).split("|")
+                if part.strip() and part.strip() != "auto-map: not found"
+            ]
+            return " | ".join(parts)
+
+        def add_tradfi_auto_map_not_found_note(raw_note: object) -> str:
+            parts = [part.strip() for part in clear_tradfi_auto_map_not_found_note(raw_note).split("|") if part.strip()]
+            parts.append("auto-map: not found")
+            return " | ".join(parts)
+
+        def apply_tradfi_spec_defaults(entry: dict[str, Any], spec_row: dict[str, Any] | None = None) -> dict[str, Any]:
+            row = dict(entry or {})
+            spec = dict(spec_row or {})
+            if not row:
+                return row
+            if str(row.get("spec_source") or "").strip().lower() != "mapping.json":
+                return row
+            spec_description = str(spec.get("description") or "").strip()
+            spec_type = str(spec.get("canonical_type") or "").strip().lower()
+            if spec_description:
+                row["description"] = spec_description
+            if spec_type:
+                row["canonical_type"] = spec_type
+            return row
+
+        def resolve_tradfi_canonical_type(entry: dict[str, Any] | None, spec_row: dict[str, Any] | None = None) -> str:
+            spec_source = str((entry or {}).get("spec_source") or "").strip().lower()
+            spec_type = str((spec_row or {}).get("canonical_type") or "").strip().lower()
+            row_type = str((entry or {}).get("canonical_type") or "").strip().lower()
+            if spec_source == "mapping.json" and spec_type:
+                return spec_type
+            if row_type:
+                return row_type
+            if spec_type:
+                return spec_type
+            return "equity_us"
+
+        visible_coins = {
+            str((entry or {}).get("xyz_coin") or "").strip().upper()
+            for entry in records
+            if str((entry or {}).get("status") or "").strip().lower() != "delisted"
+        }
+        effective_status_by_coin = {}
+        spec_by_coin = {}
     meta_index = fetch_tiingo_meta(api_key, pbgui_dir, force_refresh=force_meta_refresh)
     now_utc = datetime.now(timezone.utc).isoformat()
 
@@ -533,14 +687,37 @@ def auto_map_tradfi(
         "not_found": 0,
         "skipped": 0,
     }
+    details: dict[str, list[str]] = {
+        "mapped_equity": [],
+        "mapped_fx": [],
+        "no_provider": [],
+        "not_found": [],
+        "skipped": [],
+    }
 
     for entry in records:
-        status = str(entry.get("status") or "").lower()
         coin = str(entry.get("xyz_coin") or "").upper()
+        entry["note"] = normalize_tradfi_note(entry.get("note"))
+        spec_row = spec_by_coin.get(coin) or {}
+        entry.update(apply_tradfi_spec_defaults(entry, spec_row))
+        canonical_type = resolve_tradfi_canonical_type(entry, spec_row)
+        raw_status = str(entry.get("status") or "").strip().lower()
+        status = str((effective_status_by_coin or {}).get(coin) or raw_status).strip().lower()
+        if status and coin in visible_coins and status != raw_status:
+            entry["status"] = status
+
+        if not coin or coin not in visible_coins:
+            continue
 
         if status != "pending":
+            entry["note"] = clear_tradfi_auto_map_not_found_note(entry.get("note"))
             counts["skipped"] += 1
+            details["skipped"].append(f"{coin} (status: {status or 'unknown'})")
             continue
+
+        entry["note"] = clear_tradfi_auto_map_not_found_note(entry.get("note"))
+
+        strategy = _auto_map_strategy_for_entry(coin, canonical_type)
 
         # 1. FX / precious metals
         if coin in _FX_COMMODITY_MAP:
@@ -550,24 +727,29 @@ def auto_map_tradfi(
             entry["status"] = "ok"
             entry["last_verified"] = now_utc
             counts["mapped_fx"] += 1
+            details["mapped_fx"].append(
+                f"{coin} -> FX:{fx['tiingo_fx_ticker']}" + (" (inv)" if fx.get("tiingo_fx_invert") else "")
+            )
             _log("tradfi_sync", f"auto-map FX: {coin} → {fx['tiingo_fx_ticker']}", level="DEBUG")
             continue
 
-        # 2. No provider
-        if coin in _NO_PROVIDER_COINS:
+        # 2. Type-driven no provider
+        if strategy == "no_provider":
             entry["status"] = "no_provider"
             entry["last_verified"] = now_utc
             counts["no_provider"] += 1
-            _log("tradfi_sync", f"auto-map no_provider: {coin}", level="DEBUG")
+            details["no_provider"].append(f"{coin} ({canonical_type or 'unknown'})")
+            _log("tradfi_sync", f"auto-map no_provider: {coin} ({canonical_type})", level="DEBUG")
             continue
 
         # 3. Known alias (KR/JP OTC and ETF tickers not covered by fundamentals/meta)
         alias = _KNOWN_TICKER_ALIASES.get(coin)
-        if alias:
+        if strategy == "alias" and alias:
             entry["tiingo_ticker"] = alias
             entry["status"] = "alias"
             entry["last_verified"] = now_utc
             counts["mapped_equity"] += 1
+            details["mapped_equity"].append(f"{coin} -> {alias}")
             _log("tradfi_sync", f"auto-map alias: {coin} → {alias}", level="DEBUG")
             continue
 
@@ -582,6 +764,7 @@ def auto_map_tradfi(
                 entry["status"] = "ok"
                 entry["last_verified"] = now_utc
                 counts["mapped_equity"] += 1
+                details["mapped_equity"].append(coin)
                 _log("tradfi_sync", f"auto-map equity: {coin} ('{tiingo_name}')", level="DEBUG")
                 continue
             else:
@@ -592,17 +775,19 @@ def auto_map_tradfi(
                 )
 
         # 5. Not found
-        existing_note = str(entry.get("note") or "").strip().rstrip("|").strip()
-        entry["note"] = (existing_note + " | auto-map: not found").strip(" |")
+        entry["note"] = add_tradfi_auto_map_not_found_note(entry.get("note"))
         counts["not_found"] += 1
+        details["not_found"].append(f"{coin} (name mismatch)" if meta_entry else coin)
 
     # Save atomically
     tmp = map_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(records, indent=4, ensure_ascii=False), encoding="utf-8")
     tmp.replace(map_path)
 
+    result: dict[str, Any] = dict(counts)
+    result["details"] = details
     _log("tradfi_sync", f"auto_map_tradfi done: {counts}", level="INFO")
-    return counts
+    return result
 
 
 def load_xyz_spec(pbgui_dir: Path | None = None, max_age_hours: float = 24.0) -> list[dict] | None:

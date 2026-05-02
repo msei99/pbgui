@@ -11,7 +11,7 @@ So burst_capacity + refill_rate × 60 == W — even after a full burst the
 
 Usage::
 
-    budget = RateLimitBudget(weight_per_minute=1200, burst_capacity=120)
+    budget = RateLimitBudget(weight_per_minute=1200, burst_capacity=240)
     if await budget.acquire(weight=20):
         # make the API call
         ...
@@ -136,12 +136,16 @@ class RateLimitBudget:
 # - Hyperliquid: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits
 #
 # burst_capacity is chosen so that capacity + refill_rate × 60 == weight_per_minute.
-# Example: HL → 120 + 18×60 = 1200 ✓
+# Example: HL → 240 + 16×60 = 1200 ✓
+#
+# Hyperliquid latest_1m can reserve up to 44 * 4 = 176 weight for a single
+# 4-day candle_snapshot catch-up request, so the burst capacity must exceed
+# that largest single reservation or the acquire can never succeed.
 
 EXCHANGE_RATE_LIMITS: dict[str, dict] = {
     'hyperliquid': {
         'weight_per_minute': 1200,
-        'burst_capacity': 120,
+        'burst_capacity': 240,
     },
     # Future exchanges can be added here:
     # 'bybit': {'weight_per_minute': 600, 'burst_capacity': 60},
