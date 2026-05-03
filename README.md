@@ -203,7 +203,9 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 ### Docker (Any OS)
-Want to use **Docker** instead? Follow this [Quickstart guide](https://github.com/LeonSpors/passivbot-docker).
+Want to use **Docker** instead? See the actively maintained community Docker project [dreamelite96/pbgui-docker](https://github.com/dreamelite96/pbgui-docker).
+
+It is an independent Docker integration for current PBGui and Passivbot v7 releases and replaces the outdated LeonSpors Docker wrapper.
 
 ## Running
 ```
@@ -324,6 +326,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.77 (03-05-2026)
+- Changed: the README `Docker (Any OS)` section now points to the actively maintained community project `dreamelite96/pbgui-docker` instead of the outdated LeonSpors Docker wrapper.
 - Added: Market Data now runs as a full FastAPI workflow with native panels for `OHLCV Data`, `Build Best 1m`, `Download l2Books`, inventory management, and TradFi tools; the legacy Streamlit Market Data page was removed.
 - Added: `System -> Services` now includes a dedicated `Workers` admin area with grouped queue, sync, and internal workers, including inline monitors, logs, and control actions.
 - Added: the shared and Market Data Job Monitors now expose `View` for full job details and `Run` on pending jobs, including the Hyperliquid inline monitor used in `Build Best 1m` and `Download l2Books`.
