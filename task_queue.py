@@ -131,6 +131,38 @@ def request_cancel_job(job_id: str, *, reason: str = "cancel requested") -> bool
     return False
 
 
+def request_run_job(job_id: str) -> bool:
+    """Request that one pending job starts with manual priority.
+
+    The worker keeps its normal FIFO slot per job type, but a manual run request
+    may open one additional same-type slot so one extra job can run in parallel.
+    Returns True if a matching pending job was found and marked.
+    """
+
+    jid = str(job_id or "").strip()
+    if not jid:
+        return False
+
+    for p in _iter_job_paths(["pending"]):
+        if p.stem != jid:
+            continue
+        try:
+            obj = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if str(obj.get("status") or "").strip().lower() != "pending":
+            return False
+
+        update_job_file(
+            p,
+            mutate=lambda o: o.update(
+                {"run_requested": True, "run_requested_ts": int(time.time())}
+            ),
+        )
+        return True
+    return False
+
+
 def force_fail_job(job_id: str, *, error: str = "cancelled") -> bool:
     """Immediately mark job failed and move it to failed/.
 
@@ -182,6 +214,8 @@ def retry_failed_job(job_id: str) -> bool:
             o["status"] = "pending"
             o["error"] = ""
             o["cancel_requested"] = False
+            o["run_requested"] = False
+            o["run_requested_ts"] = 0
             o["progress"] = {}
 
         update_job_file(p, mutate=mut)

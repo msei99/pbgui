@@ -81,5 +81,5 @@ if not is_authenticted() or is_session_state_not_initialized():
     st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
     st.stop()
 
-set_page_config("Market Data (FastAPI)")
+set_page_config("Market Data")
 open_market_data_fastapi()

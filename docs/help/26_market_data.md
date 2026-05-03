@@ -72,9 +72,9 @@ Expanders are shown in this order:
 6. TradFi Symbol Mappings
 7. Download l2Book from AWS
 
-## Parallel FastAPI Page
+## Market Data Page
 
-The parallel `Market Data (FastAPI)` page keeps the same workflows, but the sidebar now exposes the settings area through three dedicated subsections:
+The `Market Data` page now runs directly on the FastAPI implementation, and the sidebar exposes the settings area through three dedicated subsections:
 
 The sidebar itself is now navigation-only: it contains the main page sections plus the contextual `Settings` actions, without separate overview or status summary info boxes.
 
@@ -84,13 +84,13 @@ The sidebar itself is now navigation-only: it contains the main page sections pl
 
 The shared `Guide` button on that page opens this `Market Data` topic directly inside the page overlay, so the current Market Data view stays visible while you read.
 
-The FastAPI sidebar no longer shows a separate `Actions` section. Instead it exposes direct shortcuts that stay inside the FastAPI page:
+The sidebar no longer shows a separate `Actions` section. Instead it exposes direct shortcuts that stay inside the page:
 
-- `Best 1m` opens a dedicated FastAPI panel for the current exchange.
+- `OHLCV Data` stays inside FastAPI too: when that panel is active, the sidebar reveals dataset buttons for the selected exchange instead of in-panel tabs.
+- `Build Best 1m` opens a dedicated FastAPI panel for the current exchange.
 - `Download l2Books` opens the embedded Hyperliquid data-actions panel directly when `Hyperliquid` is selected.
-- `Already Have` stays inside FastAPI too: when that panel is active, the sidebar reveals dataset buttons for the selected exchange instead of in-panel tabs.
 
-`Best 1m` and `Download l2Books` now also use the same active button highlight as the other Market Data sidebar entries, so the currently open shortcut section is visible directly in the sidebar.
+`Build Best 1m` and `Download l2Books` now also use the same active button highlight as the other Market Data sidebar entries, so the currently open shortcut section is visible directly in the sidebar.
 
 Inside that FastAPI `Best 1m` panel, Hyperliquid reuses the full download/build actions component in a focused way: `Best 1m` shows only the build content, and `Download l2Books` shows only the download content. The extra outer header card, nested window chrome, and the expander header itself are removed there so only the actual form content remains visible.
 
@@ -112,23 +112,27 @@ That build area is flatter now as well: the coin/build section no longer sits in
 
 That embedded Job Monitor now also grows with its own content height, so you no longer get a second scrollbar inside the monitor area while the outer Market Data page is already scrollable.
 
+The embedded monitor URL now carries the current PBGui serial as a cache-buster, so frontend updates also refresh the iframe itself and new monitor actions such as `View` show up immediately without staying on an older cached copy.
+
+Hyperliquid uses its own inline data-actions page instead of that shared iframe, and that inline Job Monitor now also includes the same `View` action for active, done, and failed jobs so the details modal is consistent across Market Data and `System -> Services`. Pending rows in both monitor variants now also expose `Run`, which requests one extra manual same-type parallel slot so one selected pending job can start alongside the already running job of that type. Active rows stay in stable queue/start order now as well, so live progress updates no longer reshuffle two running jobs back and forth. `View` and `Log` dialogs in both variants are capped to the visible browser viewport too, and they now follow both the browser scroll position and clipping parent panels such as the scrollable `Build Best 1m` container, so their close button stays inside the actually visible monitor area instead of opening above it.
+
 Its action dialogs are styled in-page now as well: cancel, delete, retry, requeue, and bulk-delete confirmations no longer fall back to browser-native popup windows.
 
-The FastAPI `Already Have` panel now follows the same parity goal. The selected exchange gets dataset buttons directly in the sidebar: `1m` and `PB7 cache` are always available, while Hyperliquid also shows `1m_api` and `l2Book`. The main panel then keeps the same workflow as Streamlit: summary metrics, a filterable inventory table, deletion tools for writable datasets, a coverage heatmap, a minute heatmap when available, and an optional OHLCV detail chart. `PB7 cache` remains read-only.
+The FastAPI `OHLCV Data` panel now follows the same parity goal. The selected exchange gets dataset buttons directly in the sidebar: `1m` and `PB7 cache` are always available, while Hyperliquid also shows `1m_api` and `l2Book`. The main panel then keeps the same workflow as Streamlit: summary metrics, a filterable inventory table, deletion tools for writable datasets, a coverage heatmap, a minute heatmap when available, and an optional OHLCV detail chart. `PB7 cache` remains read-only.
 
 That FastAPI OHLCV detail chart now uses the same lazy zoom strategy as the Streamlit version. The initial iframe only ships coarse layers, so long histories open reliably again, and wheel zoom pulls finer candles on demand instead of trying to embed the full `15m` / `5m` / `1m` pyramid up front.
 
 The iframe template itself is now served as real HTML/JS again, so the chart no longer stalls on a blank `Loading chart...` panel because of escaped quote characters inside the embedded script.
 
-In Hyperliquid `Already Have` → `l2Book`, the toolbar next to `Select All` / `Deselect` now also exposes a default-off toggle to include enabled non-XYZ coins that still have no l2Book files at all. That makes it possible to spot coins with completely missing l2Book coverage directly in the inventory table instead of only seeing coins that already have at least one archived hour.
+In Hyperliquid `OHLCV Data` → `l2Book`, the toolbar next to `Select All` / `Deselect` now also exposes a default-off toggle to include enabled non-XYZ coins that still have no l2Book files at all. That makes it possible to spot coins with completely missing l2Book coverage directly in the inventory table instead of only seeing coins that already have at least one archived hour.
 
-The `Already Have` sidebar stays button-only now. `Delete older than` was replaced by `Delete by Date`; clicking it opens a small dialog with the cutoff date picker and the delete preview instead of embedding that extra input block permanently in the sidebar.
+The `OHLCV Data` sidebar stays button-only now. `Delete older than` was replaced by `Delete by Date`; clicking it opens a small dialog with the cutoff date picker and the delete preview instead of embedding that extra input block permanently in the sidebar.
 
 That dialog now also mirrors the clearer Backtest editor date control pattern more closely: the cutoff field has a visible calendar button, and the current delete scope shows the selected coin names in a small scrollable list so multi-coin deletes stay explicit before you confirm them.
 
 The final delete confirmation now also stays inside the PBGui styling: instead of the browser-native popup, delete actions open a centered confirmation window with the current scope and selected coins when applicable.
 
-When you select one or more coins in `Already Have`, the sidebar exposes the queue action that matches the current dataset view. In `1m`, `1m_api`, and `PB7 cache`, that remains `Build best 1m` for the selected coins on the current exchange. In Hyperliquid `l2Book`, the sidebar instead exposes an l2Book download queue action for those selected coins, so the inventory view no longer offers the unrelated Best 1m job there. The inventory sidebar itself is now button-only: queue/delete confirmations and errors no longer stay in persistent sidebar callouts, but go through the normal toast/notification path or the existing confirmation dialogs instead. The visible coin labels in this inventory UI now use the short coin name only, including the table, sidebar action buttons, and the heatmap/OHLCV captions.
+When you select one or more coins in `OHLCV Data`, the sidebar exposes the queue action that matches the current dataset view. In `1m`, `1m_api`, and `PB7 cache`, that remains `Build best 1m` for the selected coins on the current exchange. In Hyperliquid `l2Book`, the sidebar instead exposes an l2Book download queue action for those selected coins, so the inventory view no longer offers the unrelated Best 1m job there. The inventory sidebar itself is now button-only: queue/delete confirmations and errors no longer stay in persistent sidebar callouts, but go through the normal toast/notification path or the existing confirmation dialogs instead. The visible coin labels in this inventory UI now use the short coin name only, including the table, sidebar action buttons, and the heatmap/OHLCV captions.
 
 In `PB7 cache`, the toolbar above the table now also includes a small timeframe quick filter next to `Select All` and `Deselect`. Use it to switch between `all`, `1m`, and `1h` rows before selecting coins, which avoids the short-name duplicates that appear when the same coin exists in both cached timeframes.
 
@@ -356,11 +360,12 @@ The job panel shows three sections:
 - **Failed / Done** — completed jobs
 
 Actions:
+- **Run** — marks one pending job for manual priority and allows one additional same-type job to start in parallel with the already running one
+- **View** — opens the full job details (summary, payload, progress, last result)
 - **Cancel** — requests cooperative cancellation for a running job from the embedded monitor; the worker stops at the next safe checkpoint
 - **Retry** — requeues a failed job to Pending
 - **Delete** — removes individual job
 - **Delete selected / Delete all** — bulk delete from Failed or Done list
-- **Raw JSON** (🔍 button) — shows full job file content for debugging
 
 ### Progress Display
 

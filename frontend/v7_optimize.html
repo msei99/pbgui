@@ -2231,6 +2231,10 @@ textarea.json-invalid:focus {
         <input id="settings-cpu-override" type="checkbox">
         <span data-tip="If enabled, autostart rewrites optimize.n_cpus right before launch. If disabled, PBGui uses the n_cpus already stored in each config.">Override config CPU</span>
       </label>
+      <label class="toggle" for="settings-use-pbgui-market-data">
+        <input id="settings-use-pbgui-market-data" type="checkbox">
+        <span data-tip="If enabled, PBGui rewrites backtest.ohlcv_source_dir to the PBGui market data path right before launching a queued optimize config.">Use PBGui Market Data</span>
+      </label>
       <label class="toggle" for="settings-autostart">
         <input id="settings-autostart" type="checkbox">
         <span data-tip="When enabled, PBGui starts the next queued optimize job automatically once no other optimize is running.">Autostart</span>
@@ -2355,6 +2359,7 @@ var state = {
     autostart: false,
     cpu: 1,
     cpu_override: true,
+    use_pbgui_market_data: false,
     cpu_max: 1,
     host_cpu_count: 1,
     hsl_signal_modes: [],
@@ -7696,6 +7701,7 @@ function collectEditorConfig(baseConfig, opts) {
   pbgui.market_cap = toNullableNumber(el('opted-market-cap').value);
   pbgui.vol_mcap = toNullableNumber(el('opted-vol-mcap').value);
   pbgui.tags = optGetMs('ms-opt-tags');
+  if (pbgui.use_pbgui_market_data !== undefined) delete pbgui.use_pbgui_market_data;
   pbgui.only_cpt = !!el('opted-only-cpt').checked;
   pbgui.notices_ignore = !!el('opted-notices-ignore').checked;
   var coinSources = optKvCollect('opt-kv-cs');
@@ -9980,6 +9986,7 @@ function syncQueueSettingsModalFields() {
   el('settings-cpu-max').textContent = String(cpuMax);
   el('settings-autostart').checked = normalizeAutostart(state.settings.autostart);
   el('settings-cpu-override').checked = !!state.settings.cpu_override;
+  el('settings-use-pbgui-market-data').checked = !!state.settings.use_pbgui_market_data;
 
   var override = !!el('settings-cpu-override').checked;
   el('settings-cpu-value').disabled = !override;
@@ -10020,13 +10027,15 @@ async function saveQueueSettingsFromModal() {
   var cpuMax = normalizeOptimizePositiveInteger(state.settings.cpu_max || state.settings.host_cpu_count) || 1;
   cpu = Math.max(1, Math.min(cpu, cpuMax));
   var autostart = !!el('settings-autostart').checked;
+  var usePbguiMarketData = !!el('settings-use-pbgui-market-data').checked;
   await apiFetch('/settings', {
     method: 'POST',
-    body: JSON.stringify({ cpu: cpu, autostart: autostart, cpu_override: cpuOverride })
+    body: JSON.stringify({ cpu: cpu, autostart: autostart, cpu_override: cpuOverride, use_pbgui_market_data: usePbguiMarketData })
   });
   state.settings.cpu = cpu;
   state.settings.autostart = autostart;
   state.settings.cpu_override = cpuOverride;
+  state.settings.use_pbgui_market_data = usePbguiMarketData;
   state.settingsModalDirty = false;
   state.settingsModalCpuDirty = false;
   state.settingsModalCpuOverrideDirty = false;
@@ -10215,6 +10224,10 @@ function attachEventHandlers() {
     state.settingsModalCpuOverrideDirty = true;
     syncQueueSettingsModalFields();
   });
+  el('settings-use-pbgui-market-data').addEventListener('change', function() {
+    state.settings.use_pbgui_market_data = !!el('settings-use-pbgui-market-data').checked;
+    state.settingsModalDirty = true;
+  });
   el('settings-autostart').addEventListener('change', function() {
     state.settingsModalDirty = true;
   });
@@ -10391,6 +10404,13 @@ function connectWS() {
             var raw = msg.settings.cpu_override;
             var enabled = raw === true || String(raw).toLowerCase() === 'true';
             state.settings.cpu_override = enabled;
+          }
+        }
+        if (Object.prototype.hasOwnProperty.call(msg.settings, 'use_pbgui_market_data')) {
+          var settingsOpenForPbguiData = el('settings-modal').classList.contains('open');
+          if (!settingsOpenForPbguiData || !state.settingsModalDirty) {
+            var rawPbguiData = msg.settings.use_pbgui_market_data;
+            state.settings.use_pbgui_market_data = rawPbguiData === true || String(rawPbguiData).toLowerCase() === 'true';
           }
         }
       }

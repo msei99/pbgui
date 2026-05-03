@@ -305,6 +305,23 @@ def _load_editor_payload_from_queue_data(data: dict, *, filename: str | None = N
     )
 
 
+def _get_pbgui_market_data_path() -> str:
+    from market_data import get_market_data_root_dir
+    return str(get_market_data_root_dir())
+
+
+def _apply_pbgui_market_data_override(cfg: dict, enabled: bool) -> tuple[bool, str | None]:
+    if not enabled:
+        return False, None
+    backtest = cfg.setdefault("backtest", {})
+    target_path = _get_pbgui_market_data_path()
+    current_path = str(backtest.get("ohlcv_source_dir") or "").strip()
+    if current_path == target_path:
+        return False, target_path
+    backtest["ohlcv_source_dir"] = target_path
+    return True, target_path
+
+
 def _update_queue_config_references(
     source_paths: list[Path],
     *,
@@ -1894,6 +1911,23 @@ class OptimizeWorker:
                 log_path.write_text(f"Failed to restore optimize config from queue snapshot: {exc}\n", encoding="utf-8")
                 return
 
+        try:
+            settings = _read_ini_section()
+            use_pbgui_market_data = settings.get("use_pbgui_market_data", "False").lower() == "true"
+            changed, pbgui_data_path = _apply_pbgui_market_data_override(config, use_pbgui_market_data)
+            if changed:
+                save_pb7_config(config, config_path)
+                _log(
+                    SERVICE,
+                    f"Adjusted backtest.ohlcv_source_dir to PBGui market data before optimize launch for {item.get('name') or filename}: {pbgui_data_path}",
+                    level="INFO",
+                )
+        except Exception as exc:
+            log_path = _opt_log_dir() / f"{filename}.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(f"Failed to apply PBGui market data override: {exc}\n", encoding="utf-8")
+            return
+
         if cpu_override is not None:
             try:
                 override_cpu = _normalize_autostart_cpu(cpu_override)
@@ -2084,6 +2118,7 @@ def get_settings(session: SessionToken = Depends(require_auth)):
         "autostart": settings.get("autostart", "False").lower() == "true",
         "cpu": _normalize_autostart_cpu(settings.get("cpu", "1")),
         "cpu_override": settings.get("cpu_override", "True").lower() == "true",
+        "use_pbgui_market_data": settings.get("use_pbgui_market_data", "False").lower() == "true",
         "cpu_max": cpu_max,
         "host_cpu_count": cpu_max,
         "hsl_signal_modes": get_hsl_signal_modes(),
@@ -2098,8 +2133,7 @@ def get_settings(session: SessionToken = Depends(require_auth)):
 @router.get("/pbgui_data_path")
 def get_pbgui_data_path(session: SessionToken = Depends(require_auth)):
     """Return the PBGui-managed market data root directory."""
-    from market_data import get_market_data_root_dir
-    return {"path": str(get_market_data_root_dir())}
+    return {"path": _get_pbgui_market_data_path()}
 
 
 @router.post("/ohlcv-preflight")
@@ -2174,6 +2208,8 @@ def update_settings(body: dict, session: SessionToken = Depends(require_auth)):
         _write_ini("cpu", str(_normalize_autostart_cpu(body["cpu"])))
     if "cpu_override" in body:
         _write_ini("cpu_override", str(bool(body["cpu_override"])))
+    if "use_pbgui_market_data" in body:
+        _write_ini("use_pbgui_market_data", str(bool(body["use_pbgui_market_data"])))
     _store.notify()
     return {"ok": True}
 

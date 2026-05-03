@@ -60,7 +60,7 @@ For each worker you can inspect:
 
 Stop and Restart actions in the Workers panel ask for confirmation before the command is sent.
 
-Some workers expose a monitor instead of a dedicated local log. For example, the shared Market Data queue worker uses the Job Monitor because job logs are tracked per queued job. In those cases selecting the worker embeds the monitor directly in the right-hand log pane, keeps it in place during worker refreshes, and lets you stay inside the Services page.
+Some workers expose a monitor instead of a dedicated local log. For example, the shared Market Data queue worker uses the Job Monitor because job logs are tracked per queued job. In those cases selecting the worker embeds the monitor directly in the right-hand log pane, keeps it in place during worker refreshes, and lets you stay inside the Services page. The embedded Job Monitor now exposes `View` for full job details and `Run` on pending rows; `Run` requests one extra manual same-type parallel slot, so one selected pending job can start alongside the already running job of that type. Active rows also keep a stable queue/start order now, so live progress updates no longer reshuffle two running jobs against each other. `View` and `Log` dialogs are clamped to the visible browser viewport as well, and they now track both the outer page scroll offset and clipping parent panels, so their close button stays reachable even when the monitor sits inside a taller embedded region whose header is already above the visible browser window.
 
 ## Typical startup sequence
 

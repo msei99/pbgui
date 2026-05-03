@@ -196,6 +196,23 @@ def _write_ini(key: str, value: str, section: str = "backtest_v7"):
     save_ini(section, key, value)
 
 
+def _get_pbgui_market_data_path() -> str:
+    from market_data import get_market_data_root_dir
+    return str(get_market_data_root_dir())
+
+
+def _apply_pbgui_market_data_override(cfg: dict, enabled: bool) -> tuple[bool, str | None]:
+    if not enabled:
+        return False, None
+    backtest = cfg.setdefault("backtest", {})
+    target_path = _get_pbgui_market_data_path()
+    current_path = str(backtest.get("ohlcv_source_dir") or "").strip()
+    if current_path == target_path:
+        return False, target_path
+    backtest["ohlcv_source_dir"] = target_path
+    return True, target_path
+
+
 # ── BacktestStore — in-memory state with change notification ──
 
 class BacktestStore:
@@ -390,9 +407,25 @@ class BacktestWorker:
         config_path = item["json"]
         filename = item["filename"]
 
-        cmd = [venv, "-u", str(PurePath(f"{pb7}/src/backtest.py")), str(PurePath(config_path))]
         log_path = _bt_log_dir() / f"{filename}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            cfg = load_pb7_config(Path(config_path))
+            settings = _read_ini_section()
+            use_pbgui_market_data = settings.get("use_pbgui_market_data", "False").lower() == "true"
+            changed, pbgui_data_path = _apply_pbgui_market_data_override(cfg, use_pbgui_market_data)
+            if changed:
+                save_pb7_config(cfg, Path(config_path))
+                _log(
+                    SERVICE,
+                    f"Adjusted backtest.ohlcv_source_dir to PBGui market data before launch for {item.get('name') or filename}: {pbgui_data_path}",
+                    level="INFO",
+                )
+        except Exception as exc:
+            log_path.write_text(f"Failed to prepare backtest config before launch: {exc}\n", encoding="utf-8")
+            return
+
+        cmd = [venv, "-u", str(PurePath(f"{pb7}/src/backtest.py")), str(PurePath(config_path))]
         log_file = open(log_path, "w")
 
         old_path = os.environ.get("PATH", "")
@@ -933,8 +966,7 @@ def get_queue_draft(draft_id: str, session: SessionToken = Depends(require_auth)
 @router.get("/pbgui_data_path")
 def get_pbgui_data_path(session: SessionToken = Depends(require_auth)):
     """Return the PBGui-managed market data root directory."""
-    from market_data import get_market_data_root_dir
-    return {"path": str(get_market_data_root_dir())}
+    return {"path": _get_pbgui_market_data_path()}
 
 
 @router.post("/ohlcv-preflight")
@@ -1000,6 +1032,7 @@ def get_settings(session: SessionToken = Depends(require_auth)):
     return {
         "autostart": settings.get("autostart", "False").lower() == "true",
         "cpu": min(int(settings.get("cpu", "1")), cpu_max),
+        "use_pbgui_market_data": settings.get("use_pbgui_market_data", "False").lower() == "true",
         "cpu_max": cpu_max,
         "hsl_signal_modes": get_hsl_signal_modes(),
         "hlcvs_cleanup_enabled": settings.get("hlcvs_cleanup_enabled", "False").lower() == "true",
@@ -1015,6 +1048,8 @@ def update_settings(body: dict, session: SessionToken = Depends(require_auth)):
     if "cpu" in body:
         cpu = max(1, min(int(body["cpu"]), multiprocessing.cpu_count()))
         _write_ini("cpu", str(cpu))
+    if "use_pbgui_market_data" in body:
+        _write_ini("use_pbgui_market_data", str(bool(body["use_pbgui_market_data"])))
     if "hlcvs_cleanup_enabled" in body:
         _write_ini("hlcvs_cleanup_enabled", str(bool(body["hlcvs_cleanup_enabled"])))
     if "hlcvs_cleanup_days" in body:
