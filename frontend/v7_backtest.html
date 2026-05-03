@@ -661,6 +661,7 @@ textarea.json-invalid:focus {
         <button class="sb-btn danger" onclick="deleteSelectedConfigs()">🗑 Delete Selected</button>
       </div>
       <div id="ctx-queue" class="ctx-actions" style="display:none">
+        <button class="sb-btn" onclick="compareSelectedQueue()">📈 Compare</button>
         <button class="sb-btn" onclick="clearFinished()">✓ Clear Finished</button>
         <button class="sb-btn danger" onclick="stopAllQueue()">⬛ Stop All</button>
         <button class="sb-btn danger" onclick="deleteSelectedQueue()">🗑 Delete Selected</button>
@@ -929,7 +930,7 @@ var archives    = [];          // git archives
 var archiveResults = [];       // results in selected archive
 var legacyResults = [];        // results in legacy pb7/backtests paths
 var compareSet  = [];          // paths of results to compare
-var settings    = { autostart: false, cpu: 1, cpu_max: 1, hsl_signal_modes: [], hlcvs_cleanup_enabled: false, hlcvs_cleanup_days: 7, hlcvs_cleanup_interval_h: 24 };
+var settings    = { autostart: false, cpu: 1, cpu_max: 1, hsl_signal_modes: [], use_pbgui_market_data: false, hlcvs_cleanup_enabled: false, hlcvs_cleanup_days: 7, hlcvs_cleanup_interval_h: 24 };
 var currentPanel = 'configs';
 var _pendingResultFilter = '';  /* config name to pre-filter when next loadResults runs */
 var sortCol     = 'modified';  // current sort column
@@ -1037,13 +1038,18 @@ function connectWS() {
           var justCompleted = newItems.some(function(q) {
             return q.status === 'complete' && prevRunning[q.filename];
           });
-          if (justCompleted) loadConfigs();
+          if (justCompleted) {
+            loadConfigs();
+            results = [];
+            if (currentPanel === 'results') loadResults();
+          }
         }
         _lastQueueHash = newHash;
         queueItems = newItems;
         if (msg.settings) {
           settings.autostart = msg.settings.autostart === 'True' || msg.settings.autostart === true;
           settings.cpu = parseInt(msg.settings.cpu) || 1;
+          settings.use_pbgui_market_data = msg.settings.use_pbgui_market_data === 'True' || msg.settings.use_pbgui_market_data === true;
           settings.hlcvs_cleanup_enabled = msg.settings.hlcvs_cleanup_enabled === 'True' || msg.settings.hlcvs_cleanup_enabled === true;
           settings.hlcvs_cleanup_days = parseInt(msg.settings.hlcvs_cleanup_days) || 7;
           settings.hlcvs_cleanup_interval_h = parseInt(msg.settings.hlcvs_cleanup_interval_h) || 24;
@@ -1130,6 +1136,7 @@ function openSettingsModal() {
   var cpuMax = settings.cpu_max || 16;
   var cpu = settings.cpu || 1;
   var autostart = settings.autostart || false;
+  var usePbguiMarketData = settings.use_pbgui_market_data || false;
   var cleanupEnabled = settings.hlcvs_cleanup_enabled || false;
   var cleanupDays = settings.hlcvs_cleanup_days || 7;
   var cleanupInterval = settings.hlcvs_cleanup_interval_h || 24;
@@ -1147,6 +1154,10 @@ function openSettingsModal() {
       '\x3Clabel class="sb-toggle">' +
         '\x3Cinput type="checkbox" id="set-autostart"' + (autostart ? ' checked' : '') + '>' +
         '\x3Cspan>Autostart\x3C/span>' +
+      '\x3C/label>' +
+      '\x3Clabel class="sb-toggle">' +
+        '\x3Cinput type="checkbox" id="set-pbgui-market-data"' + (usePbguiMarketData ? ' checked' : '') + '>' +
+        '\x3Cspan>Use PBGui Market Data\x3C/span>' +
       '\x3C/label>' +
       '\x3Chr class="sb-sep">' +
       '\x3Cdiv class="sb-label">HLCVS Cache Cleanup\x3C/div>' +
@@ -1197,12 +1208,14 @@ function settingsToggleCleanup() {
 function saveSettingsFromModal() {
   var cpu = parseInt(document.getElementById('set-cpu-val').value, 10);
   var autostart = document.getElementById('set-autostart').checked;
+  var usePbguiMarketData = document.getElementById('set-pbgui-market-data').checked;
   var cleanupEnabled = document.getElementById('set-cleanup-enabled').checked;
   var cleanupDays = parseInt(document.getElementById('set-cleanup-days').value, 10) || 7;
   var cleanupInterval = parseInt(document.getElementById('set-cleanup-interval').value, 10) || 24;
 
   settings.cpu = cpu;
   settings.autostart = autostart;
+  settings.use_pbgui_market_data = usePbguiMarketData;
   settings.hlcvs_cleanup_enabled = cleanupEnabled;
   settings.hlcvs_cleanup_days = cleanupDays;
   settings.hlcvs_cleanup_interval_h = cleanupInterval;
@@ -1213,6 +1226,7 @@ function saveSettingsFromModal() {
     body: JSON.stringify({
       cpu: cpu,
       autostart: autostart,
+      use_pbgui_market_data: usePbguiMarketData,
       hlcvs_cleanup_enabled: cleanupEnabled,
       hlcvs_cleanup_days: cleanupDays,
       hlcvs_cleanup_interval_h: cleanupInterval
@@ -3699,6 +3713,7 @@ function collectConfig() {
   cfg.pbgui.market_cap     = parseFloat(document.getElementById('cfg-market-cap').value) || 0;
   cfg.pbgui.vol_mcap       = parseFloat(document.getElementById('cfg-vol-mcap').value) || 10;
   cfg.pbgui.tags           = cfgGetMs('ms-cfg-tags');
+  if (cfg.pbgui.use_pbgui_market_data !== undefined) delete cfg.pbgui.use_pbgui_market_data;
   cfg.pbgui.only_cpt       = document.getElementById('cfg-only-cpt').checked;
   cfg.pbgui.notices_ignore = document.getElementById('cfg-notices-ignore').checked;
 
@@ -4217,24 +4232,32 @@ function closeLogPanel() {
 /* ════════════════════════════════════════════════
    RESULTS VIEW — matching Streamlit BacktestV7Results
    ════════════════════════════════════════════════ */
-function loadResults() {
-  var filterName = _pendingResultFilter;  /* capture before async */
-  _pendingResultFilter = '';              /* clear immediately */
-  apiFetch('/results').then(function(d) {
-    results = d.results || [];
-    var cfgSel = document.getElementById('results-config-filter');
-    if (cfgSel) {
-      var savedVal = filterName || cfgSel.value;
-      var names = {};
-      results.forEach(function(r) { if (r.config_name) names[r.config_name] = true; });
-      var sorted = Object.keys(names).sort();
-      cfgSel.innerHTML = '\x3Coption value="">All configs\x3C/option>';
-      sorted.forEach(function(n) {
-        cfgSel.innerHTML += '\x3Coption value="' + esc(n) + '"' + (n === savedVal ? ' selected' : '') + '>' + esc(n) + '\x3C/option>';
-      });
-    }
-    renderResults();
-  }).catch(function(e) { toast('Load results failed: ' + e.message, 'err'); });
+function _applyResultsData(resultItems, filterName) {
+  results = resultItems || [];
+  var cfgSel = document.getElementById('results-config-filter');
+  if (cfgSel) {
+    var savedVal = typeof filterName === 'string' ? filterName : cfgSel.value;
+    var names = {};
+    results.forEach(function(r) { if (r.config_name) names[r.config_name] = true; });
+    var sorted = Object.keys(names).sort();
+    cfgSel.innerHTML = '\x3Coption value="">All configs\x3C/option>';
+    sorted.forEach(function(n) {
+      cfgSel.innerHTML += '\x3Coption value="' + esc(n) + '"' + (n === savedVal ? ' selected' : '') + '>' + esc(n) + '\x3C/option>';
+    });
+  }
+  renderResults();
+  return results;
+}
+
+function loadResults(filterName) {
+  var selectedFilter = arguments.length ? filterName : _pendingResultFilter;
+  _pendingResultFilter = '';
+  return apiFetch('/results').then(function(d) {
+    return _applyResultsData(d.results || [], selectedFilter);
+  }).catch(function(e) {
+    toast('Load results failed: ' + e.message, 'err');
+    throw e;
+  });
 }
 
 function refreshResults() { loadResults(); }
@@ -4709,6 +4732,14 @@ function getSelectedResults() {
   var sel = [];
   document.querySelectorAll('#results-list .tbl tbody tr.selected').forEach(function(tr) { sel.push(tr.dataset.path); });
   return sel;
+}
+
+function setSelectedResults(paths) {
+  var selected = {};
+  (paths || []).forEach(function(path) { selected[path] = true; });
+  document.querySelectorAll('#results-list .tbl tbody tr').forEach(function(tr) {
+    tr.classList.toggle('selected', !!selected[tr.dataset.path]);
+  });
 }
 
 function selectAllArchiveResults() {
@@ -5690,6 +5721,186 @@ function loadFillsImages(cd) {
 }
 
 /* ── Compare ───────────────────────────────────── */
+function _parseIsoMillis(value) {
+  var ts = Date.parse(value || '');
+  return isNaN(ts) ? NaN : ts;
+}
+
+function _clearResultsFilters() {
+  var cfgSel = document.getElementById('results-config-filter');
+  if (cfgSel) cfgSel.value = '';
+  var filterEl = document.getElementById('results-filter');
+  if (filterEl) filterEl.value = '';
+}
+
+function _compareResultPaths(paths, resultSet, compareEl, chartId) {
+  compareEl.style.display = '';
+  compareEl.innerHTML = '\x3Cdiv style="text-align:center;padding:var(--sp-lg);color:var(--text-dim)">Loading equity data for comparison…\x3C/div>';
+
+  var promises = paths.map(function(path) {
+    if (_beCache[path]) return Promise.resolve({ path: path, be: _beCache[path] });
+    return fetchCSV(path, 'equity').then(function(csv) {
+      var r = resultSet.find(function(rr) { return rr.path === path; }) || {};
+      var be = normalizeBE(csv, r);
+      _beCache[path] = be;
+      return { path: path, be: be };
+    }).catch(function() {
+      return { path: path, be: { time: [], equity: [], balance: [] } };
+    });
+  });
+
+  return Promise.all(promises).then(function(allData) {
+    var traces = [];
+    var colors = ['#4da6ff', '#21c354', '#ff8c00', '#ff4b4b', '#b366ff', '#ffcc00', '#00cccc', '#ff66b2'];
+    allData.forEach(function(item, i) {
+      if (!item.be.time.length) return;
+      var label = item.path.split('/').slice(-3).join('/');
+      traces.push({ x: item.be.time, y: item.be.equity, name: 'eq ' + label, line: { width: 0.75, color: colors[i % colors.length] } });
+      traces.push({ x: item.be.time, y: item.be.balance, name: 'bal ' + label, line: { width: 2.5, color: colors[i % colors.length], dash: 'dot' } });
+    });
+    if (!traces.length) {
+      compareEl.innerHTML = '\x3Cdiv style="text-align:center;padding:var(--sp-lg);color:var(--text-dim)">No equity data found for the selected results.\x3C/div>';
+      return false;
+    }
+    var layout = _chartLayout('', 'Balance');
+    compareEl.innerHTML = chartWrap(chartId);
+    Plotly.newPlot(chartId, traces, layout, _plotlyConf());
+    return true;
+  });
+}
+
+function _resolveQueueComparePaths(selectedQueueItems) {
+  var queueByConfig = {};
+  selectedQueueItems.forEach(function(item) {
+    if (!queueByConfig[item.name]) queueByConfig[item.name] = [];
+    queueByConfig[item.name].push(item);
+  });
+
+  var resultGroupsByConfig = {};
+  results.forEach(function(result) {
+    if (!result || !result.config_name || !result.result_name || !result.path) return;
+    var configGroups = resultGroupsByConfig[result.config_name] || (resultGroupsByConfig[result.config_name] = {});
+    var group = configGroups[result.result_name];
+    if (!group) {
+      group = { result_name: result.result_name, modifiedTs: NaN, paths: [] };
+      configGroups[result.result_name] = group;
+    }
+    group.paths.push(result.path);
+    var modifiedTs = _parseIsoMillis(result.modified);
+    if (isNaN(group.modifiedTs) || (!isNaN(modifiedTs) && modifiedTs > group.modifiedTs)) {
+      group.modifiedTs = modifiedTs;
+    }
+  });
+
+  var assignedByFilename = {};
+  var unmatched = [];
+
+  Object.keys(queueByConfig).forEach(function(configName) {
+    var queueGroup = queueByConfig[configName].slice().sort(function(a, b) {
+      var ta = _parseIsoMillis(a.created);
+      var tb = _parseIsoMillis(b.created);
+      if (isNaN(ta) && isNaN(tb)) return String(a.filename || '').localeCompare(String(b.filename || ''));
+      if (isNaN(ta)) return 1;
+      if (isNaN(tb)) return -1;
+      if (ta < tb) return -1;
+      if (ta > tb) return 1;
+      return String(a.filename || '').localeCompare(String(b.filename || ''));
+    });
+
+    var groupedResults = Object.keys(resultGroupsByConfig[configName] || {}).map(function(key) {
+      return resultGroupsByConfig[configName][key];
+    }).sort(function(a, b) {
+      if (isNaN(a.modifiedTs) && isNaN(b.modifiedTs)) return a.result_name.localeCompare(b.result_name);
+      if (isNaN(a.modifiedTs)) return 1;
+      if (isNaN(b.modifiedTs)) return -1;
+      if (a.modifiedTs < b.modifiedTs) return -1;
+      if (a.modifiedTs > b.modifiedTs) return 1;
+      return a.result_name.localeCompare(b.result_name);
+    });
+
+    var usedGroupNames = {};
+    queueGroup.forEach(function(item) {
+      var createdTs = _parseIsoMillis(item.created);
+      var futureIdx = -1;
+      var fallbackIdx = -1;
+      var fallbackDelta = Infinity;
+
+      groupedResults.forEach(function(group, idx) {
+        if (usedGroupNames[group.result_name]) return;
+        if (futureIdx === -1 && !isNaN(createdTs) && !isNaN(group.modifiedTs) && group.modifiedTs >= createdTs) {
+          futureIdx = idx;
+        }
+        if (fallbackIdx === -1) {
+          fallbackIdx = idx;
+        }
+        if (!isNaN(createdTs) && !isNaN(group.modifiedTs)) {
+          var delta = Math.abs(group.modifiedTs - createdTs);
+          if (delta < fallbackDelta) {
+            fallbackDelta = delta;
+            fallbackIdx = idx;
+          }
+        }
+      });
+
+      var chosenIdx = futureIdx >= 0 ? futureIdx : fallbackIdx;
+      if (chosenIdx < 0) {
+        unmatched.push(item);
+        return;
+      }
+
+      var chosen = groupedResults[chosenIdx];
+      usedGroupNames[chosen.result_name] = true;
+      assignedByFilename[item.filename] = chosen.paths.slice().sort();
+    });
+  });
+
+  var paths = [];
+  var seenPaths = {};
+  selectedQueueItems.forEach(function(item) {
+    (assignedByFilename[item.filename] || []).forEach(function(path) {
+      if (seenPaths[path]) return;
+      seenPaths[path] = true;
+      paths.push(path);
+    });
+  });
+
+  return { paths: paths, unmatched: unmatched };
+}
+
+function compareSelectedQueue() {
+  var selected = getSelectedQueue();
+  if (selected.length < 2) { toast('Select at least 2 queue items to compare', 'err'); return; }
+
+  var selectedItems = selected.map(function(filename) {
+    return queueItems.find(function(item) { return item.filename === filename; }) || null;
+  }).filter(Boolean);
+  var completedItems = selectedItems.filter(function(item) { return item.status === 'complete'; });
+  var skippedIncomplete = selectedItems.length - completedItems.length;
+
+  if (completedItems.length < 2) {
+    toast('Select at least 2 completed queue items to compare', 'err');
+    return;
+  }
+
+  loadResults('').then(function() {
+    var matched = _resolveQueueComparePaths(completedItems);
+    if (matched.paths.length < 2) {
+      toast('Could not match at least 2 result sets for the selected queue items', 'err');
+      return;
+    }
+
+    _clearResultsFilters();
+    selectPanel('results');
+    setSelectedResults(matched.paths);
+    _compareResultPaths(matched.paths, results, document.getElementById('compare-chart-area'), 'compare-chart-div');
+
+    var skippedCount = skippedIncomplete + matched.unmatched.length;
+    if (skippedCount > 0) {
+      toast('Compared matching completed queue results and skipped ' + skippedCount + ' queue item(s) without a completed result match', 'warn');
+    }
+  }).catch(function() {});
+}
+
 function compareSelected() {
   var compareEl = document.getElementById('compare-chart-area');
 
@@ -5702,34 +5913,7 @@ function compareSelected() {
 
   var sel = getSelectedResults();
   if (sel.length < 2) { toast('Select at least 2 results to compare', 'err'); return; }
-
-  compareEl.style.display = '';
-  compareEl.innerHTML = '\x3Cdiv style="text-align:center;padding:var(--sp-lg);color:var(--text-dim)">Loading equity data for comparison\u2026\x3C/div>';
-
-  var promises = sel.map(function(path) {
-    if (_beCache[path]) return Promise.resolve({ path: path, be: _beCache[path] });
-    return fetchCSV(path, 'equity').then(function(csv) {
-      /* Find matching result for end_date */
-      var r = results.find(function(rr) { return rr.path === path; }) || {};
-      var be = normalizeBE(csv, r);
-      _beCache[path] = be;
-      return { path: path, be: be };
-    }).catch(function() { return { path: path, be: { time: [], equity: [], balance: [] } }; });
-  });
-
-  Promise.all(promises).then(function(allData) {
-    var traces = [];
-    var colors = ['#4da6ff', '#21c354', '#ff8c00', '#ff4b4b', '#b366ff', '#ffcc00', '#00cccc', '#ff66b2'];
-    allData.forEach(function(item, i) {
-      if (!item.be.time.length) return;
-      var label = item.path.split('/').slice(-3).join('/');
-      traces.push({ x: item.be.time, y: item.be.equity, name: 'eq ' + label, line: { width: 0.75, color: colors[i % colors.length] } });
-      traces.push({ x: item.be.time, y: item.be.balance, name: 'bal ' + label, line: { width: 2.5, color: colors[i % colors.length], dash: 'dot' } });
-    });
-    var layout = _chartLayout('', 'Balance');
-    compareEl.innerHTML = chartWrap('compare-chart-div');
-    Plotly.newPlot('compare-chart-div', traces, layout, _plotlyConf());
-  });
+  _compareResultPaths(sel, results, compareEl, 'compare-chart-div');
 }
 
 function compareSelectedArchive() {

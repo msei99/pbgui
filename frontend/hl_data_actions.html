@@ -24,6 +24,11 @@
         overflow-x: hidden;
     }
 
+    html.hlda-embedded,
+    body.hlda-embedded {
+        overflow: hidden;
+    }
+
     .hlda-root {
         --hlda-bg: #0e1117;
         --hlda-bg2: #161b22;
@@ -46,6 +51,12 @@
         --fs-md: 15px;
         --fs-lg: 18px;
         --fs-xl: 22px;
+        --sp-xs: 4px;
+        --sp-sm: 8px;
+        --sp-md: 12px;
+        --sp-lg: 20px;
+        --input-h: 32px;
+        --btn-h: 32px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
         color: var(--hlda-text);
         line-height: 1.6;
@@ -374,12 +385,19 @@
     .hlda-root .hlda-modal {
         display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
         background: rgba(0,0,0,.7); z-index: 10000; align-items: center; justify-content: center;
+        padding-top: calc(var(--hlda-modal-visible-top-offset, 0px) + var(--sp-lg, 20px));
+        padding-right: var(--sp-lg, 20px);
+        padding-bottom: calc(var(--hlda-modal-visible-bottom-offset, 0px) + var(--sp-lg, 20px));
+        padding-left: var(--sp-lg, 20px);
+        overflow-y: auto;
     }
     .hlda-root .hlda-modal.active { display: flex; }
     .hlda-root .hlda-modal-box {
         background: var(--hlda-bg); border: 1px solid var(--hlda-border2);
-        border-radius: 8px; width: 90%; max-width: 800px; max-height: 80vh;
+        border-radius: 8px; width: min(800px, calc(100vw - (var(--sp-lg) * 2))); max-width: 800px;
+        max-height: calc(var(--hlda-modal-visible-height, 100vh) - (var(--sp-lg, 20px) * 2));
         display: flex; flex-direction: column;
+        overflow: hidden;
     }
     .hlda-root .hlda-modal-hd {
         display: flex; justify-content: space-between; align-items: center;
@@ -395,6 +413,67 @@
         padding: 12px 16px; overflow-y: auto; flex: 1;
         font-family: 'Fira Code', 'Consolas', monospace; font-size: var(--fs-xs);
         line-height: 1.5; white-space: pre-wrap; color: var(--hlda-text2);
+    }
+    .hlda-root .hlda-modal-body.is-details {
+        display: grid;
+        gap: var(--sp-md);
+        font-family: inherit;
+        font-size: var(--fs-base);
+        line-height: 1.5;
+        white-space: normal;
+        color: var(--hlda-text);
+        background: #0f172a;
+    }
+    .hlda-root .hlda-detail-section {
+        display: grid;
+        gap: var(--sp-sm);
+        padding: var(--sp-md);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.82);
+    }
+    .hlda-root .hlda-detail-section h4 {
+        margin: 0;
+        font-size: var(--fs-md);
+        color: var(--hlda-text);
+    }
+    .hlda-root .hlda-detail-grid {
+        display: grid;
+        grid-template-columns: minmax(120px, max-content) 1fr;
+        gap: var(--sp-xs) var(--sp-sm);
+        align-items: start;
+        font-size: var(--fs-sm);
+    }
+    .hlda-root .hlda-detail-key {
+        color: var(--hlda-text3);
+        font-weight: 600;
+    }
+    .hlda-root .hlda-detail-value {
+        min-width: 0;
+        color: var(--hlda-text2);
+        word-break: break-word;
+    }
+    .hlda-root .hlda-detail-empty {
+        color: var(--hlda-text3);
+        font-size: var(--fs-sm);
+    }
+    .hlda-root .hlda-json {
+        margin: 0;
+        padding: var(--sp-md);
+        border-radius: 6px;
+        border: 1px solid rgba(148, 163, 184, 0.14);
+    .hlda-root .hlda-jbtn.view { border-color: rgba(20, 184, 166, 0.42); background: rgba(20, 184, 166, 0.16); color: #99f6e4; }
+    .hlda-root .hlda-jbtn.view:hover { background: rgba(20, 184, 166, 0.26); color: #f0fdfa; }
+    .hlda-root .hlda-jbtn.run { border-color: rgba(34, 197, 94, 0.42); background: rgba(34, 197, 94, 0.16); color: #86efac; }
+    .hlda-root .hlda-jbtn.run:hover { background: rgba(34, 197, 94, 0.26); color: #f0fdf4; }
+        background: #0b1220;
+        color: var(--hlda-text2);
+        font-family: 'Fira Code', 'Consolas', monospace;
+        font-size: var(--fs-sm);
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-x: auto;
     }
 </style>
 
@@ -438,6 +517,10 @@
 
 (function() {
     console.log('[HLDA] Script starting...');
+    if (window.self !== window.top) {
+        document.documentElement.classList.add('hlda-embedded');
+        document.body.classList.add('hlda-embedded');
+    }
     var ROOT = document.getElementById('__HLDA_ROOT__');
     console.log('[HLDA] ROOT element:', ROOT);
     if (!ROOT) { console.error('[HLDA] Root element not found'); return; }
@@ -459,6 +542,83 @@
     var activeJobs = { dl: [], build: [] };
     var currentTab = { dl: 'running', build: 'running' };
     var ws = null, wsRetryCount = 0;
+
+    function isClippingAncestor(element, view) {
+        if (!element || !view || typeof view.getComputedStyle !== 'function') return false;
+        var style = view.getComputedStyle(element);
+        if (!style) return false;
+        var overflowValue = String(style.overflow || '') + ' ' + String(style.overflowY || '') + ' ' + String(style.overflowX || '');
+        return /(auto|scroll|hidden|clip|overlay)/i.test(overflowValue);
+    }
+
+    function resolveModalViewportMetrics() {
+        var fallbackHeight = Math.max(0, window.innerHeight || 0);
+        var topViewportHeight = fallbackHeight;
+        try {
+            if (window.top && window.top.innerHeight) {
+                topViewportHeight = Math.max(0, window.top.innerHeight || 0);
+            }
+        } catch (e) {}
+
+        var fallback = {
+            visibleHeight: topViewportHeight || fallbackHeight,
+            topOffset: 0,
+            bottomOffset: 0,
+        };
+
+        try {
+            var frame = window.frameElement;
+            if (!frame || !window.top || window.top === window) return fallback;
+            var ownerDoc = frame.ownerDocument || (window.top && window.top.document) || null;
+            var ownerView = (ownerDoc && ownerDoc.defaultView) || window.top;
+            var rect = frame.getBoundingClientRect();
+            var clipTop = 0;
+            var clipBottom = topViewportHeight;
+            var ancestor = frame.parentElement;
+            while (ancestor) {
+                if (isClippingAncestor(ancestor, ownerView)) {
+                    var ancestorRect = ancestor.getBoundingClientRect();
+                    clipTop = Math.max(clipTop, ancestorRect.top);
+                    clipBottom = Math.min(clipBottom, ancestorRect.bottom);
+                }
+                ancestor = ancestor.parentElement;
+            }
+            var visibleTop = Math.max(rect.top, clipTop);
+            var visibleBottom = Math.min(rect.bottom, clipBottom);
+            var visibleHeight = Math.max(0, visibleBottom - visibleTop);
+            return {
+                visibleHeight: visibleHeight || fallback.visibleHeight,
+                topOffset: Math.max(0, visibleTop - rect.top),
+                bottomOffset: Math.max(0, rect.bottom - visibleBottom),
+            };
+        } catch (e) {
+            return fallback;
+        }
+    }
+
+    function updateModalViewportHeight() {
+        var metrics = resolveModalViewportMetrics();
+        ROOT.style.setProperty('--hlda-modal-visible-height', Math.max(0, metrics.visibleHeight) + 'px');
+        ROOT.style.setProperty('--hlda-modal-visible-top-offset', Math.max(0, metrics.topOffset) + 'px');
+        ROOT.style.setProperty('--hlda-modal-visible-bottom-offset', Math.max(0, metrics.bottomOffset) + 'px');
+    }
+
+    updateModalViewportHeight();
+    window.addEventListener('resize', updateModalViewportHeight);
+    window.addEventListener('scroll', updateModalViewportHeight, { passive: true });
+    try {
+        var parentDoc = window.frameElement && window.frameElement.ownerDocument;
+        if (parentDoc) {
+            parentDoc.addEventListener('scroll', updateModalViewportHeight, { passive: true, capture: true });
+        }
+        if (window.top && window.top !== window) {
+            window.top.addEventListener('resize', updateModalViewportHeight);
+            window.top.addEventListener('scroll', updateModalViewportHeight, { passive: true });
+            if (window.top.document && window.top.document !== parentDoc) {
+                window.top.document.addEventListener('scroll', updateModalViewportHeight, { passive: true, capture: true });
+            }
+        }
+    } catch (e) {}
 
     if (SHOW_ONLY_SECTION) {
         ROOT.classList.add('show-only-section');
@@ -587,6 +747,12 @@
                 break;
             case 'switch-tab':
                 switchTab(ns, t.getAttribute('data-tab'));
+                break;
+            case 'run-job':
+                runJob(t.getAttribute('data-job'));
+                break;
+            case 'show-job-details':
+                showJobDetails(t.getAttribute('data-job'));
                 break;
             case 'show-log':
                 showLog(t.getAttribute('data-job'));
@@ -1476,11 +1642,7 @@
                                 return (j.type||'').toLowerCase() === jt &&
                                        (j.status==='pending' || j.status==='running');
                             });
-                            filtered.sort(function(a,b) {
-                                if (a.status==='running'&&b.status!=='running') return -1;
-                                if (b.status==='running'&&a.status!=='running') return 1;
-                                return (b.updated_ts||0)-(a.updated_ts||0);
-                            });
+                            filtered.sort(compareActiveJobs);
                             activeJobs[ns] = filtered;
                             updateHeaderStatus(ns);
                             if (currentTab[ns] === 'running') renderActivePanel(ns);
@@ -1531,6 +1693,8 @@
                     '\x3Cspan class="jtype"\x3E' + escHtml(job.type) + '\x3C/span\x3E' +
                 '\x3C/div\x3E' +
                 '\x3Cdiv class="hlda-ja"\x3E' +
+                    (job.status === 'pending' ? '\x3Cbutton class="hlda-jbtn run" data-action="run-job" data-job="' + escAttr(job.id) + '"\x3ERun\x3C/button\x3E' : '') +
+                    '\x3Cbutton class="hlda-jbtn view" data-action="show-job-details" data-job="' + escAttr(job.id) + '"\x3EView\x3C/button\x3E' +
                     '\x3Cbutton class="hlda-jbtn" data-action="show-log" data-job="' + escAttr(job.id) + '"\x3ELog\x3C/button\x3E' +
                     '\x3Cbutton class="hlda-jbtn danger" data-action="cancel-job" data-job="' + escAttr(job.id) + '"\x3ECancel\x3C/button\x3E' +
                 '\x3C/div\x3E' +
@@ -1603,6 +1767,7 @@
                     (durStr ? '\x3Cspan class="jdur"\x3E' + durStr + '\x3C/span\x3E' : '') +
                 '\x3C/div\x3E' +
                 '\x3Cdiv class="hlda-ja"\x3E' +
+                    '\x3Cbutton class="hlda-jbtn view" data-action="show-job-details" data-job="' + escAttr(job.id) + '"\x3EView\x3C/button\x3E' +
                     '\x3Cbutton class="hlda-jbtn" data-action="show-log" data-job="' + escAttr(job.id) + '"\x3ELog\x3C/button\x3E' +
                     (isFailed ? '\x3Cbutton class="hlda-jbtn" data-action="retry-job" data-job="' + escAttr(job.id) + '"\x3ERetry\x3C/button\x3E' : '') +
                     (isDone ? '\x3Cbutton class="hlda-jbtn" data-action="requeue-job" data-job="' + escAttr(job.id) + '"\x3ERequeue\x3C/button\x3E' : '') +
@@ -1631,9 +1796,144 @@
     }
 
     // ── Job actions ──
+    function formatJobDuration(job) {
+        var createdTs = parseFloat(job && job.created_ts || 0);
+        var updatedTs = parseFloat(job && job.updated_ts || 0);
+        if (!(createdTs > 0) || !(updatedTs >= createdTs)) return '';
+        var duration = Math.round(updatedTs - createdTs);
+        var hh = Math.floor(duration / 3600);
+        var mm = Math.floor((duration % 3600) / 60);
+        var ss = duration % 60;
+        if (hh > 0) return hh + 'h ' + String(mm).padStart(2, '0') + 'm';
+        if (mm > 0) return mm + 'm ' + String(ss).padStart(2, '0') + 's';
+        return ss + 's';
+    }
+
+    function formatJsonBlock(value) {
+        if (!value || (typeof value === 'object' && Object.keys(value).length === 0)) {
+            return '\x3Cdiv class="hlda-detail-empty"\x3ENo data.\x3C/div\x3E';
+        }
+        return '\x3Cpre class="hlda-json"\x3E' + escHtml(JSON.stringify(value, null, 2)) + '\x3C/pre\x3E';
+    }
+
+    function renderDetailRows(rows) {
+        var html = (rows || []).filter(function(row) {
+            return row && row.value !== '' && row.value !== null && row.value !== undefined;
+        }).map(function(row) {
+            return '\x3Cdiv class="hlda-detail-key"\x3E' + escHtml(String(row.label)) + '\x3C/div\x3E' +
+                   '\x3Cdiv class="hlda-detail-value"\x3E' + escHtml(String(row.value)) + '\x3C/div\x3E';
+        }).join('');
+        return html || '\x3Cdiv class="hlda-detail-empty"\x3ENo details available.\x3C/div\x3E';
+    }
+
+    function renderJobDetails(job) {
+        var payload = job && job.payload && typeof job.payload === 'object' ? job.payload : {};
+        var progress = job && job.progress && typeof job.progress === 'object' ? job.progress : {};
+        var lastResult = progress.last_result && typeof progress.last_result === 'object' ? progress.last_result : {};
+        var coins = Array.isArray(payload.coins) ? payload.coins.join(', ') : '';
+        var range = (payload.start_day || payload.end_day)
+            ? (fmtDay(payload.start_day || '') || '?') + ' → ' + (fmtDay(payload.end_day || '') || '?')
+            : '';
+        var currentChunk = progress.chunk_start ? String(progress.chunk_start) + ' → ' + String(progress.chunk_end || '') : '';
+
+        var summaryRows = [
+            { label: 'Status', value: job.status || '' },
+            { label: 'Type', value: job.type || '' },
+            { label: 'Exchange', value: job.exchange || '' },
+            { label: 'Created', value: fmtTS(job.created_ts) },
+            { label: 'Updated', value: fmtTS(job.updated_ts) },
+            { label: 'Duration', value: formatJobDuration(job) },
+            { label: 'Run requested', value: job.run_requested ? 'Yes' : '' },
+            { label: 'Cancel requested', value: job.cancel_requested ? 'Yes' : '' },
+            { label: 'Error', value: job.error || '' }
+        ];
+        var scopeRows = [
+            { label: 'Coins', value: coins },
+            { label: 'Range', value: range },
+            { label: 'Chunk days', value: payload.chunk_days },
+            { label: 'Profile', value: payload.profile || '' },
+            { label: 'Region', value: payload.region || '' },
+            { label: 'Refetch', value: payload.refetch ? 'Yes' : '' },
+            { label: 'Only missing 1m_src hours', value: payload.only_missing_1m_src_hours !== undefined ? (payload.only_missing_1m_src_hours ? 'Yes' : 'No') : '' },
+            { label: 'Current coin', value: progress.coin || '' },
+            { label: 'Current chunk', value: currentChunk },
+            { label: 'Stage', value: progress.stage || '' },
+            { label: 'Step', value: progress.total ? String(progress.step || 0) + '/' + String(progress.total) : '' },
+            { label: 'Chunk progress', value: progress.chunk_total ? String(progress.chunk_done || 0) + '/' + String(progress.chunk_total) : '' }
+        ];
+
+        return '\x3Cdiv class="hlda-detail-section"\x3E' +
+                   '\x3Ch4\x3ESummary\x3C/h4\x3E' +
+                   '\x3Cdiv class="hlda-detail-grid"\x3E' + renderDetailRows(summaryRows) + '\x3C/div\x3E' +
+               '\x3C/div\x3E' +
+               '\x3Cdiv class="hlda-detail-section"\x3E' +
+                   '\x3Ch4\x3EScope\x3C/h4\x3E' +
+                   '\x3Cdiv class="hlda-detail-grid"\x3E' + renderDetailRows(scopeRows) + '\x3C/div\x3E' +
+               '\x3C/div\x3E' +
+               '\x3Cdiv class="hlda-detail-section"\x3E' +
+                   '\x3Ch4\x3EPayload\x3C/h4\x3E' + formatJsonBlock(payload) +
+               '\x3C/div\x3E' +
+               '\x3Cdiv class="hlda-detail-section"\x3E' +
+                   '\x3Ch4\x3EProgress\x3C/h4\x3E' + formatJsonBlock(progress) +
+               '\x3C/div\x3E' +
+               '\x3Cdiv class="hlda-detail-section"\x3E' +
+                   '\x3Ch4\x3ELast Result\x3C/h4\x3E' + formatJsonBlock(lastResult) +
+               '\x3C/div\x3E';
+    }
+
+    async function runJob(id) {
+        try {
+            var resp = await fetch(API_BASE + '/jobs/' + id + '/run?token=' + TOKEN, { method: 'POST' });
+            if (!resp.ok) {
+                var detail = 'HTTP ' + resp.status;
+                try {
+                    var err = await resp.json();
+                    if (err && (err.detail || err.error)) detail = String(err.detail || err.error);
+                } catch (e) {}
+                throw new Error(detail);
+            }
+        } catch (e) {
+            var modal = $('modal'), title = $('modal-title'), body = $('modal-body');
+            if (modal && title && body) {
+                body.classList.remove('is-details');
+                title.textContent = 'Run failed';
+                body.textContent = 'Failed to start job ' + id + ': ' + (e && e.message ? e.message : 'Unknown error');
+                updateModalViewportHeight();
+                modal.classList.add('active');
+            }
+        }
+    }
+
+    async function showJobDetails(jobId) {
+        var modal = $('modal'), title = $('modal-title'), body = $('modal-body');
+        if (!modal || !title || !body) return;
+        title.textContent = 'Job Details: ' + jobId;
+        body.classList.add('is-details');
+        body.innerHTML = '\x3Cdiv class="hlda-detail-empty"\x3ELoading…\x3C/div\x3E';
+        updateModalViewportHeight();
+        modal.classList.add('active');
+        try {
+            var resp = await fetch(API_BASE + '/jobs/' + jobId + '?token=' + TOKEN);
+            if (!resp.ok) {
+                var detail = 'HTTP ' + resp.status;
+                try {
+                    var err = await resp.json();
+                    if (err && (err.detail || err.error)) detail = String(err.detail || err.error);
+                } catch (e) {}
+                throw new Error(detail);
+            }
+            var job = await resp.json();
+            body.innerHTML = renderJobDetails(job || {});
+        } catch(e) {
+            body.innerHTML = '\x3Cdiv class="hlda-detail-empty" style="color:#ef4444;"\x3EFailed to load job details: ' + escHtml(e && e.message ? e.message : 'Unknown error') + '\x3C/div\x3E';
+        }
+    }
+
     async function showLog(jobId) {
         var modal=$('modal'), title=$('modal-title'), body=$('modal-body');
+        body.classList.remove('is-details');
         title.textContent='Log: '+jobId; body.textContent='Loading…';
+        updateModalViewportHeight();
         modal.classList.add('active');
         try {
             var r=await fetch(API_BASE + '/jobs/' + jobId + '/log?token=' + TOKEN);
@@ -1642,7 +1942,11 @@
             body.textContent = (d.log||d.lines||[]).join('\n') || 'No log entries.';
         } catch(e) { body.textContent='Failed to load log: '+e.message; }
     }
-    function closeModal() { $('modal').classList.remove('active'); }
+    function closeModal() {
+        var modal = $('modal'), body = $('modal-body');
+        if (body) body.classList.remove('is-details');
+        if (modal) modal.classList.remove('active');
+    }
 
     async function cancelJob(id) {
         try {
@@ -1664,6 +1968,7 @@
             if (modal && title && body) {
                 title.textContent='Cancel failed';
                 body.textContent='Failed to cancel job ' + id + ': ' + (e && e.message ? e.message : 'Unknown error');
+                updateModalViewportHeight();
                 modal.classList.add('active');
             }
         }
@@ -1712,6 +2017,15 @@
         if(isNaN(d.getTime())) return String(ts);
         function p(n){return String(n).padStart(2,'0');}
         return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+    }
+    function compareActiveJobs(a, b) {
+        var aRunning = !!(a && a.status === 'running');
+        var bRunning = !!(b && b.status === 'running');
+        if (aRunning !== bRunning) return aRunning ? -1 : 1;
+        var aCreated = parseFloat(a && a.created_ts || 0);
+        var bCreated = parseFloat(b && b.created_ts || 0);
+        if (aCreated !== bCreated) return aCreated - bCreated;
+        return String(a && a.id || '').localeCompare(String(b && b.id || ''));
     }
     function escHtml(t) { var d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
     function escAttr(t) { return String(t).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\x3C/g,'&lt;').replace(/\x3E/g,'&gt;'); }

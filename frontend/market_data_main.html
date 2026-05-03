@@ -50,7 +50,8 @@
 
     #page-body {
       display: flex;
-      height: calc(100vh - 52px);
+      flex: 1 1 auto;
+      min-height: 0;
       overflow: hidden;
     }
 
@@ -2582,9 +2583,7 @@
         <div id="sidebar-toolbar">
           <button class="sb-btn" id="btn-panel-settings" data-panel="settings-panel">Settings</button>
           <button class="sb-btn" id="btn-panel-status" data-panel="status-panel">Status Monitor</button>
-          <a class="sb-btn sidebar-shortcut" id="sidebar-best-1m-link" href="#">Best 1m</a>
-          <a class="sb-btn sidebar-shortcut" id="sidebar-l2books-link" href="#" hidden>Download l2Books</a>
-          <button class="sb-btn" id="btn-panel-inventory" data-panel="inventory-panel">Already Have</button>
+          <button class="sb-btn" id="btn-panel-inventory" data-panel="inventory-panel">OHLCV Data</button>
           <div id="inventory-subsection-nav" hidden>
             <button class="sb-btn inventory-subsection-btn" id="btn-inventory-view-1m" type="button">1m</button>
             <button class="sb-btn inventory-subsection-btn" id="btn-inventory-view-1m-api" type="button" hidden>1m_api</button>
@@ -2602,6 +2601,8 @@
             <hr class="sb-sep">
             <button class="sb-btn" id="btn-inventory-clear-dataset" type="button">Clear dataset</button>
           </div>
+          <a class="sb-btn sidebar-shortcut" id="sidebar-best-1m-link" href="#">Build Best 1m</a>
+          <a class="sb-btn sidebar-shortcut" id="sidebar-l2books-link" href="#" hidden>Download l2Books</a>
           <button class="sb-btn" id="btn-panel-activity" data-panel="activity-panel">Activity Log</button>
           <hr class="sb-sep" id="sidebar-context-sep" hidden>
           <div id="sidebar-context-actions" hidden>
@@ -2922,12 +2923,12 @@
                   <p class="note">Queued, running, done, and failed Best 1m jobs for the selected exchange.</p>
                 </div>
               </div>
-              <iframe class="best1m-job-monitor-frame" id="best1m-job-monitor-frame" title="Best 1m Job Monitor" loading="lazy"></iframe>
+              <iframe class="best1m-job-monitor-frame" id="best1m-job-monitor-frame" title="Best 1m Job Monitor" loading="lazy" scrolling="no"></iframe>
             </article>
           </div>
         </article>
         <div class="best1m-panel-flat" id="best1m-hyperliquid-wrap" hidden>
-          <iframe class="best1m-frame" id="best1m-hyperliquid-frame" title="Hyperliquid data actions" loading="lazy"></iframe>
+          <iframe class="best1m-frame" id="best1m-hyperliquid-frame" title="Hyperliquid data actions" loading="lazy" scrolling="no"></iframe>
         </div>
       </section>
 
@@ -2936,7 +2937,7 @@
           <article class="panel-card inventory-shell">
             <div class="panel-head">
               <div>
-                <div class="eyebrow">Already Have</div>
+                <div class="eyebrow">OHLCV Data</div>
                 <h3 id="inventory-title">1m candles</h3>
                 <p class="note" id="inventory-helper-note">Click a row to display the heatmap.</p>
               </div>
@@ -3034,7 +3035,7 @@
     var PBGUI_SERIAL = "%%SERIAL%%";
 
     window.PBGUI_NAV_CONFIG = {
-      subtitle: 'Market Data FastAPI',
+      subtitle: 'Market Data',
       current: 'info_market_data_fastapi',
       token: TOKEN,
       stBase: ST_BASE,
@@ -3060,8 +3061,8 @@
       var sectionButtons = [
         { buttonId: 'btn-panel-settings', panelId: 'settings-panel', label: 'Settings' },
         { buttonId: 'btn-panel-status', panelId: 'status-panel', label: 'Status Monitor' },
-        { buttonId: null, panelId: 'best1m-panel', label: 'Best 1m' },
-        { buttonId: 'btn-panel-inventory', panelId: 'inventory-panel', label: 'Already Have' },
+        { buttonId: 'btn-panel-inventory', panelId: 'inventory-panel', label: 'OHLCV Data' },
+        { buttonId: null, panelId: 'best1m-panel', label: 'Build Best 1m' },
         { buttonId: 'btn-panel-activity', panelId: 'activity-panel', label: 'Activity Log' }
       ];
       var settingsSubsectionButtons = [
@@ -3418,10 +3419,6 @@
         return exchangeOptions[0];
       }
 
-      function getLegacyHref() {
-        return ST_BASE + '/?target=INFO_MARKET_DATA&token=' + encodeURIComponent(TOKEN);
-      }
-
       function getWsBase() {
         if (window.WS_BASE) return window.WS_BASE;
         var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -3506,6 +3503,7 @@
         var jobMeta = best1mJobMonitorMeta[meta.key];
         if (!jobMeta) return '';
         var url = '/app/jobs_monitor.html?token=' + encodeURIComponent(TOKEN)
+          + '&v=' + encodeURIComponent(PBGUI_SERIAL || '0')
           + '&embed=1'
           + '&exchange=' + encodeURIComponent(jobMeta.exchange)
           + '&job_type=' + encodeURIComponent(jobMeta.jobType);
@@ -6545,7 +6543,7 @@
           viewState.deleteSelectedCoins = (viewState.deleteSelectedCoins || []).filter(function (coin) {
             return viewState.availableCoins.indexOf(coin) !== -1;
           });
-          document.getElementById('inventory-title').textContent = String(payload.view_label || 'Already Have');
+          document.getElementById('inventory-title').textContent = String(payload.view_label || 'OHLCV Data');
           document.getElementById('inventory-helper-note').textContent = String(payload.helper_note || 'Click a row to display the heatmap.');
           document.getElementById('inventory-coin-filter').value = viewState.coinFilter;
           syncInventoryKindFilterOptions();

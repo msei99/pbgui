@@ -255,7 +255,8 @@ _relay_target = st.query_params.get("target", "")
 _relay_token  = st.query_params.get("token",  "")
 if _relay_target and _relay_token:
     _navi_paths = get_navi_paths()
-    _page_path  = _navi_paths.get(_relay_target, "")
+    _resolved_target = "INFO_MARKET_DATA_FASTAPI" if _relay_target == "INFO_MARKET_DATA" else _relay_target
+    _page_path  = _navi_paths.get(_resolved_target, "")
     if _page_path:
         try:
             from api.auth import validate_token as _vt
@@ -268,7 +269,7 @@ if _relay_target and _relay_token:
                     if _rk not in ("target", "token"):
                         st.session_state[f"_relay_{_rk}"] = _rv
                 # Only switch_page when the target is not this page itself
-                if _relay_target != "SYSTEM_LOGIN":
+                if _resolved_target != "SYSTEM_LOGIN":
                     st.switch_page(_page_path)
                     st.stop()  # prevent fall-through that renders login UI without password prompt
                 # else: fall through and render the normal Welcome page

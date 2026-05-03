@@ -70,9 +70,9 @@ Die Expander erscheinen in dieser Reihenfolge:
 6. TradFi Symbol Mappings
 7. Download l2Book from AWS
 
-## Parallele FastAPI-Seite
+## Market-Data-Seite
 
-Die parallele Seite `Market Data (FastAPI)` behält dieselben Workflows, teilt den Bereich `Settings` in der Sidebar aber in drei klare Unterbereiche auf:
+Die Seite `Market Data` läuft jetzt direkt auf der FastAPI-Implementierung und teilt den Bereich `Settings` in der Sidebar in drei klare Unterbereiche auf:
 
 Die Sidebar selbst ist jetzt reine Navigation: Sie enthält nur die Hauptbereiche der Seite plus die kontextbezogenen `Settings`-Aktionen, aber keine separate Overview- oder Status-Infofläche mehr.
 
@@ -82,13 +82,13 @@ Die Sidebar selbst ist jetzt reine Navigation: Sie enthält nur die Hauptbereich
 
 Der gemeinsame `Guide`-Button auf dieser Seite öffnet dieses `Market Data`-Thema direkt in einem Overlay innerhalb der Seite, sodass die aktuelle Market-Data-Ansicht beim Lesen sichtbar bleibt.
 
-Die FastAPI-Sidebar zeigt keinen separaten Bereich `Actions` mehr. Stattdessen gibt es dort direkte Shortcuts, die innerhalb der FastAPI-Seite bleiben:
+Die Sidebar zeigt keinen separaten Bereich `Actions` mehr. Stattdessen gibt es dort direkte Shortcuts, die innerhalb der Seite bleiben:
 
-- `Best 1m` öffnet ein eigenes FastAPI-Panel für die aktuell gewählte Exchange.
+- `OHLCV Data` bleibt ebenfalls vollständig in FastAPI: Wenn dieses Panel aktiv ist, zeigt die Sidebar datasetspezifische Buttons für die gewählte Exchange statt interner Tabs.
+- `Build Best 1m` öffnet ein eigenes FastAPI-Panel für die aktuell gewählte Exchange.
 - `Download l2Books` öffnet bei `Hyperliquid` direkt das eingebettete Hyperliquid-Data-Actions-Panel.
-- `Already Have` bleibt ebenfalls vollständig in FastAPI: Wenn dieses Panel aktiv ist, zeigt die Sidebar datasetspezifische Buttons für die gewählte Exchange statt interner Tabs.
 
-`Best 1m` und `Download l2Books` verwenden jetzt außerdem dieselbe aktive Button-Markierung wie die übrigen Market-Data-Sidebar-Einträge, sodass der aktuell geöffnete Shortcut-Bereich direkt in der Sidebar sichtbar bleibt.
+`Build Best 1m` und `Download l2Books` verwenden jetzt außerdem dieselbe aktive Button-Markierung wie die übrigen Market-Data-Sidebar-Einträge, sodass der aktuell geöffnete Shortcut-Bereich direkt in der Sidebar sichtbar bleibt.
 
 Innerhalb dieses FastAPI-`Best 1m`-Panels nutzt Hyperliquid die vollständige Download-/Build-Komponente weiter, aber fokussiert: `Best 1m` zeigt nur den Build-Inhalt, und `Download l2Books` zeigt nur den Download-Inhalt. Die zusätzliche äußere Header-Karte, die Fenster-in-Fenster-Optik und auch der Expander-Kopf entfallen dort, sodass nur noch der eigentliche Formularinhalt sichtbar bleibt.
 
@@ -110,23 +110,27 @@ Dieser Build-Bereich ist jetzt außerdem flacher aufgebaut: Der Coin-/Build-Teil
 
 Dieser eingebettete Job Monitor wächst jetzt außerdem mit seiner eigenen Inhaltshöhe mit, sodass im Monitorbereich kein zweiter unnötiger Scrollbalken mehr erscheint, während die äußere Market-Data-Seite bereits scrollbar ist.
 
+Die URL des eingebetteten Monitors trägt jetzt zusätzlich die aktuelle PBGui-Serial als Cache-Buster. Dadurch lädt das iframe nach Frontend-Updates auch wirklich die neue `jobs_monitor.html`, und neue Aktionen wie `View` bleiben nicht mehr an einer alten gecachten Monitor-Version hängen.
+
+Hyperliquid verwendet statt dieses gemeinsamen iframes eine eigene Inline-Data-Actions-Seite. Dieser Inline-Job-Monitor zeigt jetzt ebenfalls die `View`-Aktion für aktive, erfolgreiche und fehlgeschlagene Jobs an, sodass dieselbe Detailansicht wie unter `System -> Services` verfügbar ist. Pending-Zeilen in beiden Monitor-Varianten bieten jetzt zusätzlich `Run`; damit wird ein zusätzlicher manueller Parallel-Slot für denselben Job-Typ angefordert, sodass genau ein ausgewählter Pending-Job neben dem bereits laufenden Job dieses Typs starten kann. Aktive Zeilen bleiben jetzt außerdem in einer stabilen Queue-/Start-Reihenfolge, sodass Live-Progress-Updates zwei laufende Jobs nicht mehr ständig gegeneinander umsortieren. `View`- und `Log`-Dialoge sind jetzt ebenfalls auf den sichtbaren Browser-Viewport begrenzt und berücksichtigen zusätzlich sowohl die Browser-Scrollposition als auch clippende Eltern-Panels wie den scrollbar eingebetteten `Build Best 1m`-Bereich, sodass der Close-Button innerhalb des tatsächlich sichtbaren Monitorbereichs bleibt statt darüber zu öffnen.
+
 Auch seine Aktionsdialoge sind jetzt im Seitenstil eingebettet: Cancel-, Delete-, Retry-, Requeue- und Bulk-Delete-Bestätigungen fallen nicht mehr auf browsernative Popup-Fenster zurück.
 
-Das FastAPI-Panel `Already Have` folgt jetzt demselben Paritätsziel. Für die gewählte Exchange erscheinen die Dataset-Buttons direkt in der Sidebar: `1m` und `PB7 cache` sind immer verfügbar, auf Hyperliquid zusätzlich `1m_api` und `l2Book`. Im Hauptbereich bleibt dann derselbe Ablauf wie in Streamlit erhalten: Summary-Metriken, eine filterbare Inventory-Tabelle, Delete-Tools für schreibbare Datasets, eine Coverage-Heatmap, bei Verfügbarkeit eine Minute-Heatmap und optional ein OHLCV-Detailchart. `PB7 cache` bleibt read-only.
+Das FastAPI-Panel `OHLCV Data` folgt jetzt demselben Paritätsziel. Für die gewählte Exchange erscheinen die Dataset-Buttons direkt in der Sidebar: `1m` und `PB7 cache` sind immer verfügbar, auf Hyperliquid zusätzlich `1m_api` und `l2Book`. Im Hauptbereich bleibt dann derselbe Ablauf wie in Streamlit erhalten: Summary-Metriken, eine filterbare Inventory-Tabelle, Delete-Tools für schreibbare Datasets, eine Coverage-Heatmap, bei Verfügbarkeit eine Minute-Heatmap und optional ein OHLCV-Detailchart. `PB7 cache` bleibt read-only.
 
 Dieses FastAPI-OHLCV-Detailchart nutzt jetzt ebenfalls dieselbe Lazy-Zoom-Strategie wie die Streamlit-Version. Das Iframe lädt anfangs nur grobe Layer, dadurch öffnen lange Historien wieder zuverlässig, und feinere Kerzen werden beim Reinzoomen gezielt nachgeladen statt den kompletten `15m`-/`5m`-/`1m`-Pyramiden-Block sofort einzubetten.
 
 Auch das Iframe-Template selbst wird jetzt wieder als echtes HTML/JS ausgeliefert, sodass der Chart nicht mehr wegen versehentlich escapeter Anführungszeichen im eingebetteten Script auf einem leeren `Loading chart...`-Panel stehen bleibt.
 
-In Hyperliquid `Already Have` → `l2Book` gibt es jetzt zusätzlich einen standardmäßig ausgeschalteten Toggle neben `Select All` / `Deselect`, der aktivierte non-XYZ Coins ohne jegliche l2Book-Dateien mit in die Tabelle aufnimmt. Dadurch lassen sich Coins mit komplett fehlender l2Book-Abdeckung direkt in der Inventory-Tabelle erkennen, statt nur Coins zu sehen, für die bereits mindestens eine Archivstunde vorhanden ist.
+In Hyperliquid `OHLCV Data` → `l2Book` gibt es jetzt zusätzlich einen standardmäßig ausgeschalteten Toggle neben `Select All` / `Deselect`, der aktivierte non-XYZ Coins ohne jegliche l2Book-Dateien mit in die Tabelle aufnimmt. Dadurch lassen sich Coins mit komplett fehlender l2Book-Abdeckung direkt in der Inventory-Tabelle erkennen, statt nur Coins zu sehen, für die bereits mindestens eine Archivstunde vorhanden ist.
 
-Die `Already Have`-Sidebar bleibt jetzt wieder button-only. `Delete older than` wurde durch `Delete by Date` ersetzt; ein Klick darauf öffnet ein kleines Fenster mit Date-Picker und Löschvorschau, statt diesen Zusatzblock dauerhaft in der Sidebar einzublenden.
+Die `OHLCV Data`-Sidebar bleibt jetzt wieder button-only. `Delete older than` wurde durch `Delete by Date` ersetzt; ein Klick darauf öffnet ein kleines Fenster mit Date-Picker und Löschvorschau, statt diesen Zusatzblock dauerhaft in der Sidebar einzublenden.
 
 Dieses Fenster folgt jetzt außerdem stärker dem klareren Datumsfeld-Muster aus dem Backtest-Editor: Das Cutoff-Feld hat einen gut sichtbaren Kalender-Button, und der aktuelle Löschumfang zeigt die ausgewählten Coin-Namen in einer kleinen scrollbaren Liste, damit Mehrfachlöschungen vor dem Bestätigen eindeutig bleiben.
 
 Auch die letzte Löschbestätigung bleibt jetzt im PBGui-Stil: Statt des browsernativen Popups öffnen Delete-Aktionen ein zentriertes Bestätigungsfenster mit aktuellem Scope und, falls passend, den ausgewählten Coins.
 
-Sobald du in `Already Have` einen oder mehrere Coins auswählst, erscheint in der Sidebar jetzt die Queue-Aktion passend zum aktuellen Dataset-View. In `1m`, `1m_api` und `PB7 cache` bleibt das `Build best 1m` für die ausgewählten Coins auf der aktuellen Exchange. In Hyperliquid `l2Book` erscheint stattdessen eine l2Book-Download-Queue-Aktion für genau diese ausgewählten Coins, sodass dort nicht mehr der unpassende Best-1m-Job angeboten wird. Die Inventory-Sidebar selbst ist jetzt button-only: Queue-/Delete-Bestätigungen und Fehler bleiben nicht mehr als persistente Sidebar-Hinweise stehen, sondern laufen über die normalen Toast-/Notification-Meldungen bzw. die vorhandenen Bestätigungsdialoge. Die sichtbaren Coin-Beschriftungen in diesem Inventory-Bereich zeigen jetzt außerdem nur noch den Short-Namen, also in Tabelle, Sidebar-Aktionsbuttons sowie in den Heatmap-/OHLCV-Beschriftungen.
+Sobald du in `OHLCV Data` einen oder mehrere Coins auswählst, erscheint in der Sidebar jetzt die Queue-Aktion passend zum aktuellen Dataset-View. In `1m`, `1m_api` und `PB7 cache` bleibt das `Build best 1m` für die ausgewählten Coins auf der aktuellen Exchange. In Hyperliquid `l2Book` erscheint stattdessen eine l2Book-Download-Queue-Aktion für genau diese ausgewählten Coins, sodass dort nicht mehr der unpassende Best-1m-Job angeboten wird. Die Inventory-Sidebar selbst ist jetzt button-only: Queue-/Delete-Bestätigungen und Fehler bleiben nicht mehr als persistente Sidebar-Hinweise stehen, sondern laufen über die normalen Toast-/Notification-Meldungen bzw. die vorhandenen Bestätigungsdialoge. Die sichtbaren Coin-Beschriftungen in diesem Inventory-Bereich zeigen jetzt außerdem nur noch den Short-Namen, also in Tabelle, Sidebar-Aktionsbuttons sowie in den Heatmap-/OHLCV-Beschriftungen.
 
 Im `PB7 cache` gibt es oberhalb der Tabelle jetzt außerdem einen kleinen Timeframe-Schnellfilter direkt neben `Select All` und `Deselect`. Damit kannst du vor der Auswahl zwischen `all`, `1m` und `1h` umschalten, sodass Short-Name-Dubletten wie `ADA` getrennt nach Cache-Timeframe eingegrenzt werden können.
 
@@ -354,11 +358,12 @@ Das Job-Panel zeigt drei Bereiche:
 - **Failed / Done** — abgeschlossene Jobs
 
 Aktionen:
+- **Run** — markiert einen Pending-Job für manuelle Priorität und erlaubt einen zusätzlichen parallelen Slot für denselben Job-Typ neben dem bereits laufenden Job
+- **View** — öffnet die vollständigen Job-Details (Summary, Payload, Progress, Last Result)
 - **Cancel** — fordert für einen laufenden Job im eingebetteten Monitor einen kooperativen Abbruch an; der Worker stoppt am nächsten sicheren Checkpoint
 - **Retry** — stellt einen fehlgeschlagenen Job wieder in Pending ein
 - **Delete** — löscht einen einzelnen Job
 - **Delete selected / Delete all** — Bulk-Löschen aus Failed- oder Done-Liste
-- **Raw JSON** (🔍 Button) — zeigt den vollständigen Job-Datei-Inhalt zur Fehlersuche
 
 ### Fortschrittsanzeige
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
+import sys
 import time
 import threading
 from dataclasses import dataclass
@@ -210,7 +212,7 @@ def _run_job(job_path: Path) -> None:
         return
 
     if bool(obj.get("cancel_requested")):
-        update_job_file(job_path, mutate=lambda o: o.update({"status": "failed", "error": "cancelled"}))
+        update_job_file(job_path, mutate=lambda o: o.update({"status": "failed", "error": "cancelled", "run_requested": False, "run_requested_ts": 0}))
         move_job_file(job_path, "failed")
         return
 
@@ -219,7 +221,7 @@ def _run_job(job_path: Path) -> None:
     payload = payload if isinstance(payload, dict) else {}
 
     def mark_error(err: str) -> None:
-        update_job_file(job_path, mutate=lambda o: o.update({"status": "failed", "error": str(err)}))
+        update_job_file(job_path, mutate=lambda o: o.update({"status": "failed", "error": str(err), "run_requested": False, "run_requested_ts": 0}))
 
     # Stamp this worker's PID so _requeue_stale_running_jobs on a concurrent
     # worker startup can check whether we are still alive before stealing the job.
@@ -237,12 +239,122 @@ def _run_job(job_path: Path) -> None:
         else:
             raise RuntimeError(f"Unknown job type: {jtype}")
 
-        update_job_file(job_path, mutate=lambda o: o.update({"status": "done"}))
+        update_job_file(job_path, mutate=lambda o: o.update({"status": "done", "run_requested": False, "run_requested_ts": 0}))
         move_job_file(job_path, "done")
     except Exception as e:
         _job_log(f"job error {job_path.name}: {e}")
         mark_error(str(e))
         move_job_file(job_path, "failed")
+
+
+def start_pending_job(job_id: str) -> tuple[bool, str]:
+    """Move one pending job to running and launch a detached one-shot runner.
+
+    This path is used by the API `Run` action so it works immediately even when
+    the long-running queue worker has not been restarted yet.
+    """
+
+    jid = str(job_id or "").strip()
+    if not jid:
+        return False, "Job ID is empty"
+
+    pending_path = get_task_state_dir("pending") / f"{jid}.json"
+    obj = _load_job(pending_path)
+    if not obj:
+        return False, "Job not found or not in pending state"
+    if str(obj.get("status") or "").strip().lower() != "pending":
+        return False, "Job not found or not in pending state"
+
+    jtype = str(obj.get("type") or "").strip()
+    if not jtype:
+        return False, "Job type is missing"
+
+    same_type_running = 0
+    same_type_manual = 0
+    running_dir = get_task_state_dir("running")
+    for running_path in sorted(running_dir.glob("*.json")):
+        running_obj = _load_job(running_path)
+        if not running_obj:
+            continue
+        if str(running_obj.get("type") or "").strip() != jtype:
+            continue
+        same_type_running += 1
+        if bool(running_obj.get("manual_parallel")):
+            same_type_manual += 1
+
+    if same_type_running >= 2 or same_type_manual >= 1:
+        return False, f"Another manual {jtype} job is already running"
+
+    try:
+        update_job_file(
+            pending_path,
+            mutate=lambda o: o.update(
+                {
+                    "status": "pending",
+                    "error": "",
+                    "run_requested": False,
+                    "run_requested_ts": 0,
+                }
+            ),
+        )
+        running_path = move_job_file(pending_path, "running")
+        update_job_file(
+            running_path,
+            mutate=lambda o: o.update(
+                {
+                    "status": "running",
+                    "error": "",
+                    "manual_parallel": True,
+                    "run_requested": False,
+                    "run_requested_ts": 0,
+                }
+            ),
+        )
+    except Exception as exc:
+        return False, f"Failed to prepare job start: {exc}"
+
+    try:
+        subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "--run-job", str(running_path)],
+            cwd=str(Path(__file__).resolve().parent),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        _job_log(f"started manual job {running_path.name} type={jtype} manual_parallel=1")
+        return True, ""
+    except Exception as exc:
+        try:
+            update_job_file(
+                running_path,
+                mutate=lambda o: o.update(
+                    {
+                        "status": "pending",
+                        "manual_parallel": False,
+                        "run_requested": False,
+                        "run_requested_ts": 0,
+                    }
+                ),
+            )
+            move_job_file(running_path, "pending")
+        except Exception:
+            pass
+        return False, f"Failed to launch manual runner: {exc}"
+
+
+def run_single_job_file(job_path_str: str) -> int:
+    """Run exactly one job file and exit.
+
+    Used for the detached manual `Run` action from the API.
+    """
+
+    job_path = Path(str(job_path_str or "").strip())
+    if not job_path.exists():
+        return 1
+    signal.signal(signal.SIGTERM, _handle_stop)
+    signal.signal(signal.SIGINT, _handle_stop)
+    _run_job(job_path)
+    return 0
 
 
 def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
@@ -1036,11 +1148,12 @@ def main() -> int:
     )
     _sweep_t.start()
 
-    # One active thread per job type — at most one job of each type runs in parallel.
-    active_threads: dict[str, threading.Thread] = {}
+    # Keep one regular FIFO slot per job type. A manual run request may open one
+    # additional same-type slot so one extra pending job can run in parallel.
+    active_threads: dict[str, dict[str, Any]] = {}
     threads_lock = threading.Lock()
 
-    def _run_job_thread(job_run: Path, jtype: str) -> None:
+    def _run_job_thread(job_run: Path, job_id: str) -> None:
         """Thread target: run one job, handle requeue/fail, then unregister."""
         try:
             _run_job(job_run)
@@ -1068,7 +1181,7 @@ def main() -> int:
                 pass
         finally:
             with threads_lock:
-                active_threads.pop(jtype, None)
+                active_threads.pop(job_id, None)
 
     try:
         # On startup ALL running/ files are stale (worker was killed or crashed).
@@ -1085,11 +1198,31 @@ def main() -> int:
                 except Exception:
                     pass
 
-                with threads_lock:
-                    running_types = set(active_threads.keys())
+                running_dir = get_task_state_dir("running")
+                running_counts: dict[str, dict[str, int]] = {}
+                for running_path in running_dir.glob("*.json"):
+                    running_obj = _load_job(running_path)
+                    if not running_obj:
+                        continue
+                    running_type = str(running_obj.get("type") or "").strip()
+                    if not running_type:
+                        continue
+                    bucket = running_counts.setdefault(running_type, {"running": 0, "manual": 0})
+                    bucket["running"] += 1
+                    if bool(running_obj.get("manual_parallel")):
+                        bucket["manual"] += 1
 
                 pending_dir = get_task_state_dir("pending")
-                jobs = sorted(pending_dir.glob("*.json"), key=lambda p: p.name)
+                jobs: list[tuple[Path, dict[str, Any], bool, Any]] = []
+                for job_src in pending_dir.glob("*.json"):
+                    obj = _load_job(job_src)
+                    if not obj:
+                        continue
+                    manual_run = bool(obj.get("run_requested")) and str(obj.get("status") or "").strip().lower() == "pending"
+                    manual_run_ts = int(obj.get("run_requested_ts") or 0) if manual_run else 0
+                    sort_key: Any = manual_run_ts if manual_run else job_src.name
+                    jobs.append((job_src, obj, manual_run, sort_key))
+                jobs.sort(key=lambda item: (0 if item[2] else 1, item[3]))
 
                 if not jobs:
                     time.sleep(2.0)
@@ -1097,30 +1230,49 @@ def main() -> int:
                     continue
 
                 started_any = False
-                for job_src in jobs:
+                for job_src, obj, manual_run, _sort_key in jobs:
                     if _STOP:
                         break
-                    obj = _load_job(job_src)
-                    if not obj:
-                        continue
                     jtype = str(obj.get("type") or "").strip()
+                    if not jtype:
+                        continue
                     with threads_lock:
-                        if jtype in active_threads:
-                            # This type is already running — skip, keep FIFO order.
+                        type_counts = running_counts.get(jtype, {"running": 0, "manual": 0})
+                        same_type_running = int(type_counts.get("running") or 0)
+                        same_type_manual = int(type_counts.get("manual") or 0)
+
+                        if manual_run:
+                            if same_type_running >= 2 or same_type_manual >= 1:
+                                continue
+                        elif same_type_running >= 1:
+                            # Regular queue keeps a single FIFO slot per job type.
                             continue
+
                         try:
                             job_run = move_job_file(job_src, "running")
                         except Exception:
                             continue
+                        job_id = job_run.stem
                         t = threading.Thread(
                             target=_run_job_thread,
-                            args=(job_run, jtype),
+                            args=(job_run, job_id),
                             daemon=True,
-                            name=f"job-{jtype}",
+                            name=f"job-{jtype}-{job_id[:6]}",
                         )
-                        active_threads[jtype] = t
+                        active_threads[job_id] = {
+                            "thread": t,
+                            "type": jtype,
+                            "manual_parallel": manual_run,
+                        }
+                        running_counts[jtype] = {
+                            "running": same_type_running + 1,
+                            "manual": same_type_manual + (1 if manual_run else 0),
+                        }
                     t.start()
-                    _job_log(f"started job {job_run.name} type={jtype}")
+                    _job_log(
+                        f"started job {job_run.name} type={jtype}"
+                        + (" manual_parallel=1" if manual_run else "")
+                    )
                     started_any = True
 
                 if not started_any:
@@ -1137,8 +1289,10 @@ def main() -> int:
 
         # Wait for running threads to finish (each will requeue its job on _STOP).
         _job_log("worker stopping; waiting for active jobs...")
-        for t in list(active_threads.values()):
-            t.join(timeout=30.0)
+        for meta in list(active_threads.values()):
+            thread = meta.get("thread") if isinstance(meta, dict) else meta
+            if isinstance(thread, threading.Thread):
+                thread.join(timeout=30.0)
         _job_log("worker stopping")
         return 0
     finally:
@@ -1146,4 +1300,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--run-job":
+        raise SystemExit(run_single_job_file(sys.argv[2]))
     raise SystemExit(main())

@@ -125,17 +125,23 @@ Zeigt alle ausstehenden, laufenden und abgeschlossenen Backtest-Jobs mit Echtzei
 
 | Schaltfläche | Aktion |
 |--------|--------|
+| **📈 Compare** | Die passenden Ergebnisse für die ausgewählten abgeschlossenen Queue-Jobs laden, zu Results wechseln und den Vergleich direkt öffnen |
 | **✓ Clear Finished** | Alle `complete`- und `error`-Jobs entfernen |
 | **⬛ Stop All** | Alle laufenden Backtest-Prozesse beenden |
 | **🗑 Delete Selected** | Ausgewählte Queue-Einträge entfernen |
 | **⚙ Settings** | Einstellungs-Modal öffnen |
 
+Wenn du mehrere abgeschlossene Queue-Zeilen auswählst und **📈 Compare** klickst, löst PBGui pro ausgewähltem Queue-Eintrag den passenden Ergebnis-Batch auf, öffnet das **Results**-Panel, markiert diese Ergebniszeilen vor und rendert den Vergleich sofort. Queue-Einträge, die noch nicht abgeschlossen sind oder kein passendes gespeichertes Ergebnis haben, werden übersprungen.
+
 ### Einstellungs-Modal
+
+Der Queue-Settings-Dialog enthält jetzt zusätzlich `Use PBGui Market Data`. Wenn diese Option aktiv ist, setzt PBGui `backtest.ohlcv_source_dir` unmittelbar vor jedem gequeueeten oder manuell gestarteten Backtest auf das aktuelle PBGui-Market-Data-Root um, unabhängig davon, welcher Pfad im Config-Editor gespeichert ist.
 
 | Einstellung | Beschreibung |
 |-------------|-------------|
 | **CPU** | Anzahl paralleler Backtest-Prozesse (max = CPU-Kernanzahl) |
 | **Autostart** | Wenn aktiviert, startet der Worker `queued`-Jobs automatisch |
+| **Use PBGui Market Data** | Überschreibt `backtest.ohlcv_source_dir` direkt vor dem Start, sodass Queue-Jobs immer den von PBGui verwalteten OHLCV-Datensatz verwenden |
 | **HLCVS Cache Cleanup — Enabled** | Alte Verzeichnisse unter `pb7/caches/hlcvs_data` und `pb7/caches/ohlcvs/materialized` regelmäßig löschen |
 | **Retention (days)** | Verzeichnisse löschen, die älter als dieser Wert sind (Standard: 7) |
 | **Check interval (h)** | Prüfintervall in Stunden (Standard: 24) |
@@ -152,6 +158,8 @@ Alle abgeschlossenen Backtest-Ergebnisse durchsuchen.
 - **Config**-Dropdown — nach Config-Name filtern (exakte Übereinstimmung)
 - **Suchfeld** — Freitext-Filter über alle Spalten
 - Spaltenheader anklicken zum Sortieren; erneut klicken für umgekehrte Reihenfolge
+
+Abgeschlossene Queue-Jobs invalidieren jetzt sofort den gecachten Results-Stand. Wenn du bereits im Results-Panel bist, lädt PBGui die Tabelle automatisch neu, sodass der neue Eintrag ohne Panel-Wechsel erscheint.
 
 ### Toolbar-Aktionen
 

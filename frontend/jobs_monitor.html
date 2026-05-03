@@ -7,9 +7,19 @@
     <link rel="stylesheet" href="/app/css/app.css">
     <style>
         /* Additional styles for new features */
-        .job-actions button { margin-left: 0.3rem; }
+        .job-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--sp-xs);
+            align-items: center;
+        }
+        .job-actions button { margin-left: 0; }
         .btn-secondary { background: #4a5568; }
         .btn-secondary:hover { background: #2d3748; }
+        .btn-view { background: #0f766e; color: #f8fafc; }
+        .btn-view:hover { background: #115e59; }
+        .btn-run { background: #15803d; color: #f8fafc; }
+        .btn-run:hover { background: #166534; }
         .btn-info { background: #3182ce; }
         .btn-info:hover { background: #2c5282; }
         
@@ -18,10 +28,14 @@
             display: none;
             position: fixed;
             z-index: 1000;
-            left: 0;
-            top: 0;
+            inset: 0;
             width: 100%;
             height: 100%;
+            padding-top: calc(var(--modal-visible-top-offset, 0px) + var(--sp-lg, 20px));
+            padding-right: var(--sp-lg, 20px);
+            padding-bottom: calc(var(--modal-visible-bottom-offset, 0px) + var(--sp-lg, 20px));
+            padding-left: var(--sp-lg, 20px);
+            overflow-y: auto;
             background-color: rgba(0,0,0,0.7);
         }
         .modal.active { display: flex; align-items: center; justify-content: center; }
@@ -29,11 +43,12 @@
             background: #1a202c;
             border-radius: 8px;
             padding: 1.5rem;
-            width: 90%;
+            width: min(900px, calc(100vw - (var(--sp-lg) * 2)));
             max-width: 900px;
-            max-height: 80vh;
+            max-height: calc(var(--modal-visible-height, 100vh) - (var(--sp-lg, 20px) * 2));
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         }
         .modal-header {
             display: flex;
@@ -51,6 +66,61 @@
             border-radius: 4px;
             font-family: 'Courier New', monospace;
             font-size: var(--fs-sm);
+        }
+        .job-details-modal-body {
+            background: #0f172a;
+            padding: var(--sp-md);
+            font-family: inherit;
+            font-size: var(--fs-base);
+            color: #e2e8f0;
+            display: grid;
+            gap: var(--sp-md);
+        }
+        .details-section {
+            background: #111827;
+            border: 1px solid #243041;
+            border-radius: 6px;
+            padding: var(--sp-md);
+            display: grid;
+            gap: var(--sp-sm);
+        }
+        .details-section h3 {
+            margin: 0;
+            font-size: var(--fs-md);
+            color: #f8fafc;
+        }
+        .details-kv {
+            display: grid;
+            grid-template-columns: minmax(120px, max-content) 1fr;
+            gap: var(--sp-xs) var(--sp-sm);
+            align-items: start;
+            font-size: var(--fs-sm);
+        }
+        .details-kv-key {
+            color: #94a3b8;
+            font-weight: 600;
+        }
+        .details-kv-value {
+            color: #e2e8f0;
+            min-width: 0;
+            word-break: break-word;
+        }
+        .details-empty {
+            color: #94a3b8;
+            font-size: var(--fs-sm);
+        }
+        .json-block {
+            margin: 0;
+            padding: var(--sp-md);
+            border-radius: 4px;
+            background: #0b1220;
+            border: 1px solid #1e293b;
+            color: #e2e8f0;
+            font-family: 'Courier New', monospace;
+            font-size: var(--fs-sm);
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-x: auto;
         }
         .log-line {
             margin: 0.25rem 0;
@@ -202,12 +272,15 @@
         }
         .action-modal-cancel[hidden] { display: none !important; }
 
+        html.is-embedded,
         body.is-embedded {
             padding: 0;
             background: transparent;
+            overflow: hidden;
         }
         body.is-embedded .container {
             max-width: none;
+            overflow: hidden;
         }
         body.is-embedded header {
             justify-content: flex-end;
@@ -280,6 +353,18 @@
         </div>
     </div>
 
+    <div id="details-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Job Details: <span id="details-job-id"></span></h2>
+                <button class="close-btn" onclick="closeDetailsModal()">Close</button>
+            </div>
+            <div class="modal-body job-details-modal-body" id="details-content">
+                <p>Loading...</p>
+            </div>
+        </div>
+    </div>
+
     <div id="action-modal" class="action-modal" aria-hidden="true">
         <div class="action-modal-card" role="dialog" aria-modal="true" aria-labelledby="action-modal-title">
             <div class="action-modal-header">
@@ -308,7 +393,95 @@
         const JOB_TYPE_FILTER = (urlParams.get('job_type') || '').trim().toLowerCase();
 
         if (EMBED_MODE) {
+            document.documentElement.classList.add('is-embedded');
             document.body.classList.add('is-embedded');
+        }
+
+        function isClippingAncestor(element, view) {
+            if (!element || !view || typeof view.getComputedStyle !== 'function') {
+                return false;
+            }
+            const style = view.getComputedStyle(element);
+            if (!style) {
+                return false;
+            }
+            const overflowValue = `${String(style.overflow || '')} ${String(style.overflowY || '')} ${String(style.overflowX || '')}`;
+            return /(auto|scroll|hidden|clip|overlay)/i.test(overflowValue);
+        }
+
+        function resolveModalViewportMetrics() {
+            const fallbackHeight = Math.max(0, window.innerHeight || 0);
+            let topViewportHeight = fallbackHeight;
+            try {
+                if (window.top && window.top.innerHeight) {
+                    topViewportHeight = Math.max(0, window.top.innerHeight || 0);
+                }
+            } catch (_) {
+                topViewportHeight = fallbackHeight;
+            }
+
+            const fallback = {
+                visibleHeight: topViewportHeight || fallbackHeight,
+                topOffset: 0,
+                bottomOffset: 0,
+            };
+
+            try {
+                const frame = window.frameElement;
+                if (!frame || !window.top || window.top === window) {
+                    return fallback;
+                }
+                const ownerDoc = frame.ownerDocument || (window.top && window.top.document) || null;
+                const ownerView = (ownerDoc && ownerDoc.defaultView) || window.top;
+                const rect = frame.getBoundingClientRect();
+                let clipTop = 0;
+                let clipBottom = topViewportHeight;
+                let ancestor = frame.parentElement;
+                while (ancestor) {
+                    if (isClippingAncestor(ancestor, ownerView)) {
+                        const ancestorRect = ancestor.getBoundingClientRect();
+                        clipTop = Math.max(clipTop, ancestorRect.top);
+                        clipBottom = Math.min(clipBottom, ancestorRect.bottom);
+                    }
+                    ancestor = ancestor.parentElement;
+                }
+                const visibleTop = Math.max(rect.top, clipTop);
+                const visibleBottom = Math.min(rect.bottom, clipBottom);
+                const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+                return {
+                    visibleHeight: visibleHeight || fallback.visibleHeight,
+                    topOffset: Math.max(0, visibleTop - rect.top),
+                    bottomOffset: Math.max(0, rect.bottom - visibleBottom),
+                };
+            } catch (_) {
+                return fallback;
+            }
+        }
+
+        function updateModalViewportHeight() {
+            const metrics = resolveModalViewportMetrics();
+            document.documentElement.style.setProperty('--modal-visible-height', `${Math.max(0, metrics.visibleHeight)}px`);
+            document.documentElement.style.setProperty('--modal-visible-top-offset', `${Math.max(0, metrics.topOffset)}px`);
+            document.documentElement.style.setProperty('--modal-visible-bottom-offset', `${Math.max(0, metrics.bottomOffset)}px`);
+        }
+
+        updateModalViewportHeight();
+        window.addEventListener('resize', updateModalViewportHeight);
+        window.addEventListener('scroll', updateModalViewportHeight, { passive: true });
+        try {
+            const parentDoc = window.frameElement && window.frameElement.ownerDocument;
+            if (parentDoc) {
+                parentDoc.addEventListener('scroll', updateModalViewportHeight, { passive: true, capture: true });
+            }
+            if (window.top && window.top !== window) {
+                window.top.addEventListener('resize', updateModalViewportHeight);
+                window.top.addEventListener('scroll', updateModalViewportHeight, { passive: true });
+                if (window.top.document && window.top.document !== parentDoc) {
+                    window.top.document.addEventListener('scroll', updateModalViewportHeight, { passive: true, capture: true });
+                }
+            }
+        } catch (_) {
+            void _;
         }
         
         if (!API_TOKEN) {
@@ -385,6 +558,7 @@
 
             return new Promise((resolve) => {
                 actionDialogResolve = resolve;
+                updateModalViewportHeight();
                 modal.classList.add('active');
                 modal.setAttribute('aria-hidden', 'false');
                 acceptBtn.focus();
@@ -402,6 +576,7 @@
             });
         }
 
+            updateModalViewportHeight();
         // ── Job Filter ──
         function matchesExchangeFilter(job) {
             // No filter = show all jobs
@@ -414,6 +589,7 @@
                 if (!allowedTypes.some(t => jt === t)) return false;
             }
             
+                        updateModalViewportHeight();
             // Try explicit exchange field first
             let jobExchange = (job.exchange || '').trim().toLowerCase();
             
@@ -518,11 +694,8 @@
                 return;
             }
 
-            // Sort: running first, then by updated_ts descending (newest on top)
-            activeJobs.sort((a, b) => {
-                if (a.status !== b.status) return a.status === 'running' ? -1 : 1;
-                return (b.updated_ts || 0) - (a.updated_ts || 0);
-            });
+            // Keep active jobs stable: running first, then queue/start order.
+            activeJobs.sort(compareActiveJobs);
 
             runningContainer.innerHTML = activeJobs.map(renderActiveJob).join('');
         }
@@ -534,6 +707,7 @@
             const coin = progress.coin || '';
             const chunk = progress.chunk_start ? `${progress.chunk_start}→${progress.chunk_end}` : '';
             const isExpanded = expandedJobs.has(job.id);
+            const durationStr = formatJobDuration(job);
             
             const statusClass = job.status === 'running' ? 'status-running' : 'status-pending';
             
@@ -558,8 +732,11 @@
                             <strong class="job-id">${job.id}</strong>
                             <span class="badge ${statusClass}">${job.status}</span>
                             <span class="job-type">${job.type}</span>
+                            ${durationStr ? `<span class="detail" style="color:#8899aa;">${durationStr}</span>` : ''}
                         </div>
                         <div class="job-actions">
+                            ${job.status === 'pending' ? `<button class="btn btn-run" onclick="runJob('${job.id}')">Run</button>` : ''}
+                            <button class="btn btn-view" onclick="showJobDetails('${job.id}')">View</button>
                             <button class="btn btn-info" onclick="showLog('${job.id}')">Log</button>
                             <button class="btn btn-danger" onclick="cancelJob('${job.id}')">Cancel</button>
                         </div>
@@ -628,19 +805,7 @@
             const flBytes = formatBytes(progress.failed_bytes_total || lr.failed_bytes || 0);
             const hasStats = (downloaded + skipped + failed) > 0;
 
-            // Duration
-            const createdTs = parseFloat(job.created_ts || 0);
-            const updatedTs = parseFloat(job.updated_ts || 0);
-            let durationStr = '';
-            if (createdTs > 0 && updatedTs >= createdTs) {
-                let dur = Math.round(updatedTs - createdTs);
-                const h = Math.floor(dur / 3600);
-                const m = Math.floor((dur % 3600) / 60);
-                const s = dur % 60;
-                if (h > 0) durationStr = `${h}h ${String(m).padStart(2,'0')}m ${String(s).padStart(2,'0')}s`;
-                else if (m > 0) durationStr = `${m}m ${String(s).padStart(2,'0')}s`;
-                else durationStr = `${s}s`;
-            }
+            const durationStr = formatJobDuration(job);
 
             const isExpanded = expandedJobs.has(job.id);
 
@@ -653,6 +818,7 @@
                             ${durationStr ? `<span class="detail" style="color:#8899aa;">${durationStr}</span>` : ''}
                         </div>
                         <div class="job-actions">
+                            <button class="btn btn-view" onclick="showJobDetails('${job.id}')">View</button>
                             <button class="btn btn-info" onclick="showLog('${job.id}')">Log</button>
                             ${isFailed ? `<button class="btn btn-secondary" onclick="retryJob('${job.id}')">Retry</button>` : ''}
                             ${isDone ? `<button class="btn btn-secondary" onclick="requeueJob('${job.id}')">Requeue</button>` : ''}
@@ -689,6 +855,19 @@
             return yyyymmdd.slice(0,4) + '-' + yyyymmdd.slice(4,6) + '-' + yyyymmdd.slice(6,8);
         }
 
+        function formatJobDuration(job) {
+            const createdTs = parseFloat(job.created_ts || 0);
+            const updatedTs = parseFloat(job.updated_ts || 0);
+            if (!(createdTs > 0) || updatedTs < createdTs) return '';
+            const dur = Math.round(updatedTs - createdTs);
+            const h = Math.floor(dur / 3600);
+            const m = Math.floor((dur % 3600) / 60);
+            const s = dur % 60;
+            if (h > 0) return `${h}h ${String(m).padStart(2,'0')}m ${String(s).padStart(2,'0')}s`;
+            if (m > 0) return `${m}m ${String(s).padStart(2,'0')}s`;
+            return `${s}s`;
+        }
+
         // ── Helper Functions ──
         function calculateProgress(pr) {
             if (!pr.total) return 0;
@@ -715,6 +894,18 @@
             const pad = n => String(n).padStart(2, '0');
             return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' '
                  + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+        }
+
+        function compareActiveJobs(a, b) {
+            const aRunning = a && a.status === 'running';
+            const bRunning = b && b.status === 'running';
+            if (aRunning !== bRunning) return aRunning ? -1 : 1;
+
+            const aCreated = parseFloat(a && a.created_ts || 0);
+            const bCreated = parseFloat(b && b.created_ts || 0);
+            if (aCreated !== bCreated) return aCreated - bCreated;
+
+            return String(a && a.id || '').localeCompare(String(b && b.id || ''));
         }
 
         function toggleExpander(jobId, event) {
@@ -929,6 +1120,130 @@
             return div.innerHTML;
         }
 
+        function formatJsonBlock(value) {
+            if (!value || (typeof value === 'object' && Object.keys(value).length === 0)) {
+                return '<div class="details-empty">No data.</div>';
+            }
+            return `<pre class="json-block">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+        }
+
+        function renderDetailRows(rows) {
+            const rendered = (rows || []).filter(row => row && row.value !== '' && row.value !== null && row.value !== undefined)
+                .map(row => {
+                    return '<div class="details-kv-key">' + escapeHtml(String(row.label)) + '</div>' +
+                           '<div class="details-kv-value">' + escapeHtml(String(row.value)) + '</div>';
+                }).join('');
+            return rendered || '<div class="details-empty">No details available.</div>';
+        }
+
+        function renderJobDetails(job) {
+            const payload = job && job.payload && typeof job.payload === 'object' ? job.payload : {};
+            const progress = job && job.progress && typeof job.progress === 'object' ? job.progress : {};
+            const coins = Array.isArray(payload.coins) ? payload.coins.join(', ') : '';
+            const range = (payload.start_day || payload.end_day)
+                ? `${fmtDayCompact(payload.start_day || '')} → ${fmtDayCompact(payload.end_day || '')}`
+                : '';
+            const lastResult = progress.last_result && typeof progress.last_result === 'object' ? progress.last_result : {};
+
+            const summaryRows = [
+                { label: 'Status', value: job.status || '' },
+                { label: 'Type', value: job.type || '' },
+                { label: 'Exchange', value: job.exchange || '' },
+                { label: 'Created', value: formatTimestamp(job.created_ts) },
+                { label: 'Updated', value: formatTimestamp(job.updated_ts) },
+                { label: 'Duration', value: formatJobDuration(job) },
+                { label: 'Run requested', value: job.run_requested ? 'Yes' : '' },
+                { label: 'Cancel requested', value: job.cancel_requested ? 'Yes' : '' },
+                { label: 'Error', value: job.error || '' }
+            ];
+
+            const scopeRows = [
+                { label: 'Coins', value: coins },
+                { label: 'Range', value: range },
+                { label: 'Chunk days', value: payload.chunk_days },
+                { label: 'Profile', value: payload.profile || '' },
+                { label: 'Region', value: payload.region || '' },
+                { label: 'Refetch', value: payload.refetch ? 'Yes' : '' },
+                { label: 'Only missing 1m_src hours', value: payload.only_missing_1m_src_hours !== undefined ? (payload.only_missing_1m_src_hours ? 'Yes' : 'No') : '' },
+                { label: 'Current coin', value: progress.coin || '' },
+                { label: 'Current chunk', value: progress.chunk_start ? `${progress.chunk_start} → ${progress.chunk_end}` : '' },
+                { label: 'Stage', value: progress.stage || '' },
+                { label: 'Step', value: progress.total ? `${progress.step || 0}/${progress.total}` : '' },
+                { label: 'Chunk progress', value: progress.chunk_total ? `${progress.chunk_done || 0}/${progress.chunk_total}` : '' }
+            ];
+
+            return `
+                <div class="details-section">
+                    <h3>Summary</h3>
+                    <div class="details-kv">${renderDetailRows(summaryRows)}</div>
+                </div>
+                <div class="details-section">
+                    <h3>Scope</h3>
+                    <div class="details-kv">${renderDetailRows(scopeRows)}</div>
+                </div>
+                <div class="details-section">
+                    <h3>Payload</h3>
+                    ${formatJsonBlock(payload)}
+                </div>
+                <div class="details-section">
+                    <h3>Progress</h3>
+                    ${formatJsonBlock(progress)}
+                </div>
+                <div class="details-section">
+                    <h3>Last Result</h3>
+                    ${formatJsonBlock(lastResult)}
+                </div>
+            `;
+        }
+
+            async function runJob(jobId) {
+                try {
+                    const resp = await fetch(`${API_BASE}/jobs/${jobId}/run?token=${API_TOKEN}`, {
+                        method: 'POST'
+                    });
+                    if (!resp.ok) {
+                        const err = await resp.json().catch(() => ({}));
+                        throw new Error(err.detail || resp.statusText || 'Failed to request run');
+                    }
+                } catch (e) {
+                    console.error('Run job error:', e);
+                    await showActionNotice({
+                        title: 'Run failed',
+                        message: `Failed to start job ${jobId}.`,
+                        detail: (e && e.message) || 'Unknown error',
+                        confirmText: 'Close',
+                        confirmClass: 'btn-danger'
+                    });
+                }
+            }
+
+        async function showJobDetails(jobId) {
+            const modal = document.getElementById('details-modal');
+            const content = document.getElementById('details-content');
+            const title = document.getElementById('details-job-id');
+
+            title.textContent = jobId;
+            content.innerHTML = '<p>Loading...</p>';
+            modal.classList.add('active');
+
+            try {
+                const resp = await fetch(`${API_BASE}/jobs/${jobId}?token=${API_TOKEN}`);
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    throw new Error(err.detail || resp.statusText || 'Failed to load job details');
+                }
+                const job = await resp.json();
+                content.innerHTML = renderJobDetails(job || {});
+            } catch (e) {
+                console.error('Job details error:', e);
+                content.innerHTML = `<div class="details-empty" style="color:#ef4444;">Failed to load job details: ${escapeHtml((e && e.message) || 'Unknown error')}</div>`;
+            }
+        }
+
+        function closeDetailsModal() {
+            document.getElementById('details-modal').classList.remove('active');
+        }
+
         // ── Tab Switching ──
         document.querySelectorAll('.tab-btn').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -984,6 +1299,11 @@
         document.getElementById('log-modal').addEventListener('click', (e) => {
             if (e.target.id === 'log-modal') {
                 closeLogModal();
+            }
+        });
+        document.getElementById('details-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'details-modal') {
+                closeDetailsModal();
             }
         });
 

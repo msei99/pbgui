@@ -125,17 +125,23 @@ Use the **Select All** / **Deselect** toolbar above the table.
 
 | Button | Action |
 |--------|--------|
+| **📈 Compare** | Load the matching results for the selected completed queue jobs, switch to Results, and open the comparison chart directly |
 | **✓ Clear Finished** | Remove all `complete` and `error` jobs |
 | **⬛ Stop All** | Kill all running backtest processes |
 | **🗑 Delete Selected** | Remove selected queue entries |
 | **⚙ Settings** | Open the Settings modal |
 
+When you select multiple completed queue rows and click **📈 Compare**, PBGui resolves the matching result batch for each selected queue item, opens the **Results** panel, preselects those result rows, and renders the comparison chart immediately. Queue items that are not complete yet or have no matching stored result are skipped.
+
 ### Settings modal
+
+The queue settings dialog now also includes `Use PBGui Market Data`. When that setting is enabled, PBGui rewrites `backtest.ohlcv_source_dir` to the current PBGui market-data root immediately before each queued or manual backtest launch, regardless of the path stored in the config editor.
 
 | Setting | Description |
 |---------|-------------|
 | **CPU** | Number of parallel backtest processes (max = CPU core count) |
 | **Autostart** | When enabled the worker automatically picks up `queued` jobs |
+| **Use PBGui Market Data** | Overrides `backtest.ohlcv_source_dir` right before launch so queued jobs always use the PBGui-managed OHLCV dataset |
 | **HLCVS Cache Cleanup — Enabled** | Periodically delete old directories under `pb7/caches/hlcvs_data` and `pb7/caches/ohlcvs/materialized` |
 | **Retention (days)** | Delete directories older than this many days (default: 7) |
 | **Check interval (h)** | How often the cleanup runs in hours (default: 24) |
@@ -152,6 +158,8 @@ Browse all completed backtest results.
 - **Config** dropdown — filter by config name (exact match)
 - **Search** text field — free-text filter on any column
 - Click any column header to sort; click again to reverse
+
+Completed queue jobs now invalidate the cached Results list immediately. If you are already on the Results panel when a backtest finishes, PBGui refreshes the table automatically so the new result appears without having to leave and reopen the panel.
 
 ### Toolbar actions
 

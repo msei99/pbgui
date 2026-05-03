@@ -49,8 +49,7 @@
     { id: 'information', label: 'Information', items: [
       { page: 'dashboards',           icon: '&#128202;', label: 'Dashboards'        },
       { page: 'info_coin_data',       icon: '&#129689;', label: 'Coin Data'         },
-      { page: 'info_market_data',     icon: '&#128452;', label: 'Market Data'       },
-      { page: 'info_market_data_fastapi', icon: '&#128187;', label: 'Market Data (FastAPI)' },
+      { page: 'info_market_data_fastapi', icon: '&#128187;', label: 'Market Data' },
       { page: 'help',                 icon: '&#10067;',  label: 'Help'              }
     ]},
     { id: 'pbv7', label: 'PBv7', items: [

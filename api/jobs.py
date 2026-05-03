@@ -18,6 +18,7 @@ from task_queue import (
     is_pid_running,
 )
 from api.auth import require_auth, SessionToken, get_token_from_request
+from task_worker import start_pending_job
 
 router = APIRouter()
 
@@ -82,6 +83,18 @@ def cancel_job(req: CancelJobRequest, session: SessionToken = Depends(require_au
     if not ok:
         raise HTTPException(status_code=404, detail="Job not found or not cancelable")
     return {"success": True, "job_id": req.job_id}
+
+
+@router.post("/{job_id}/run")
+def run_job(job_id: str, session: SessionToken = Depends(require_auth)):
+    """Start one pending job immediately as a manual same-type parallel runner."""
+    ok, detail = start_pending_job(job_id)
+    if not ok:
+        raise HTTPException(
+            status_code=409 if detail and "already running" in detail else 404,
+            detail=detail or "Job not found or not in pending state"
+        )
+    return {"success": True, "job_id": job_id}
 
 
 @router.delete("/{job_id}")
