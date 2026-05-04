@@ -297,7 +297,7 @@ class Monitor():
                         self.log_info = line
                         self.infos_today += 1
                     # Skip PNLs after restart bot
-                    # Legacy (PB6/PB7 older): "initiating pnl" / "new pnl"
+                    # Legacy older bot output: "initiating pnl" / "new pnl"
                     # PB7 v7.7+: FillEventsManager + boot banner
                     if (
                         "initiating pnl" in line
@@ -844,7 +844,7 @@ class PBRun():
         self.instances_status_v7 = InstancesStatus(f'{self.pbgdir}/data/cmd/status_v7.json')
         self.instances_status_v7.pbname = self.name
         self.instances_status_v7.activate_ts = self.activate_v7_ts
-        # Init pbdirs
+        # Init PB7 directory
         self.pb7dir = None
         if pb_config.has_option("main", "pb7dir"):
             self.pb7dir = pb_config.get("main", "pb7dir")
@@ -855,7 +855,7 @@ class PBRun():
             else:
                 _log("PBRun", "No passivbot directory configured in pbgui.ini", level="ERROR")
                 return
-        # Init pbvenvs
+        # Init PB7 virtual environment
         self.pb7venv = None
         if pb_config.has_option("main", "pb7venv"):
             self.pb7venv = pb_config.get("main", "pb7venv")
@@ -971,7 +971,7 @@ class PBRun():
                     self.pb7_commit_origin = pb7_commit.stdout
 
     def load_git_commits(self):
-        """Load the git commit hash of pbgui, pb6 and pb7 using git log -n 1"""
+        """Load the git commit hash of pbgui and pb7 using git log -n 1"""
         pbgui_git = Path(f'{self.pbgdir}/.git')
         if pbgui_git.exists():
             pbgui_git = Path(f'{self.pbgdir}/.git')
@@ -1348,7 +1348,7 @@ class PBRun():
             self.pb7_branches_data[branch_name] = commits
 
     def load_versions_origin(self):
-        """git show origin:README.md and load the versions of pbgui, pb6 and pb7"""
+        """git show origin:README.md and load the versions of pbgui and pb7"""
         if Path(f'{self.pbgdir}/.git').exists():
             pbgui_readme_origin = _run_subprocess(["git", "--git-dir", f'{self.pbgdir}/.git', "show", "origin/main:README.md"], timeout=20)
             if not pbgui_readme_origin or pbgui_readme_origin.returncode != 0:
@@ -1368,7 +1368,7 @@ class PBRun():
                     self.pb7_version_origin = f'v{m.group(1)}'
 
     def load_versions(self):
-        """Load the versions of pbgui, pb6 and pb7 from README.md"""
+        """Load the versions of pbgui and pb7 from README.md"""
         pbgui_readme = Path(f'{self.pbgdir}/README.md')
         if pbgui_readme.exists():
             # read only first 20 lines

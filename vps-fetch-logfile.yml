@@ -1,5 +1,5 @@
 ---
-# Update pbgui, pb6 and pb7
+# Fetch logfile from VPS
 # Steps:
 # 1. Clone pbgui repository
 # 2. Restart PBRun, PBRemote and PBCoinData if pbgui repository was updated

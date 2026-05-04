@@ -7,16 +7,14 @@
 # 4. Update Server
 # 5. Reboot if required
 # 6. Create swapfile
-# 7. Install git, python3.12 (and optionally python3.10 for PB6), rustc, cargo
+# 7. Install git, python3.12, rustc, cargo
 # 8. Clone pbgui repository
-# 9. Clone passivbot repository for pb6
-# 10. Clone passivbot repository for pb7
-# 11. Create python3.12 venv for pbgui
-# 12. Create python3.10 venv for pb6
-# 13. Create python3.12 venv for pb7
-# 14. Build passivbot-rust with maturin
-# 15. Setup pbgui
-# 16. Restart PBRun, PBRemote and PBCoinData
+# 9. Clone passivbot repository for pb7
+# 10. Create python3.12 venv for pbgui
+# 11. Create python3.12 venv for pb7
+# 12. Build passivbot-rust with maturin
+# 13. Setup pbgui
+# 14. Restart PBRun, PBRemote and PBCoinData
 
 - hosts: "{{ hostname }}"
   gather_facts: yes
@@ -218,10 +216,18 @@
       command: update-grub
       become: yes
 
-    - name: Add deadsnakes/ppa for installing python3.10/python3.12
+    - name: Check if python3.12-venv is available from current apt sources
+      command: apt-cache policy python3.12-venv
+      register: python312_venv_policy
+      changed_when: false
+      failed_when: false
+
+    - name: Add deadsnakes/ppa for installing python3.12 only when distro does not provide it
       apt_repository:
         repo: ppa:deadsnakes/ppa
+        update_cache: yes
       become: yes
+      when: python312_venv_policy.stdout is search('(?m)^\s*Candidate:\s*\(none\)\s*$')
 
     - name: Install git, python3.12, rclone, gcc
       apt:
@@ -339,60 +345,6 @@
         - { regexp: '<bucket_name>:', replace: "{{ bucket_name }}" }
         - { regexp: '<api_key>', replace: "{{ api_key }}" }
     
-    - name: remove pb6 from pbgui.ini
-      lineinfile:
-        path: "{{ install_dir }}/pbgui/pbgui.ini"
-        regexp: 'pb6'
-        state: absent
-
-    # --- PB6 cleanup: remove leftover pb6 installations ---
-    - name: Check if pb6 directory exists
-      stat:
-        path: "{{ install_dir }}/pb6"
-      register: pb6_dir
-
-    - name: Check if pb6 venv exists
-      stat:
-        path: "{{ install_dir }}/venv_pb6"
-      register: pb6_venv
-
-    - name: Kill all running pb6 processes
-      shell: |
-        pids="$(ps -ef | grep "{{ install_dir }}/pb6/passivbot" | grep -v grep | awk '{print $2}')"
-        if [ -n "$pids" ]; then
-          echo "Killing pb6 processes: $pids"
-          kill $pids
-        else
-          echo "No pb6 processes running"
-        fi
-      args:
-        executable: /bin/bash
-      changed_when: false
-      ignore_errors: yes
-      when: pb6_dir.stat.exists
-
-    - name: Remove pb6 directory
-      file:
-        path: "{{ install_dir }}/pb6"
-        state: absent
-      when: pb6_dir.stat.exists
-
-    - name: Remove pb6 venv
-      file:
-        path: "{{ install_dir }}/venv_pb6"
-        state: absent
-      when: pb6_venv.stat.exists
-
-    - name: Remove python3.10-venv package
-      apt:
-        pkg:
-          - python3.10-venv
-        state: absent
-        autoremove: yes
-        clean: yes
-      become: yes
-      when: pb6_dir.stat.exists or pb6_venv.stat.exists
-
     - name: copy rclone config from local to remote
       copy:
         src: "{{ local_home }}/.config/rclone/"

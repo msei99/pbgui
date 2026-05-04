@@ -72,15 +72,6 @@
         clean: yes
       become: yes
 
-    - name: Remove python3.10-venv
-      apt:
-        pkg:
-          - python3.10-venv
-        state: absent
-        autoremove: yes
-        clean: yes
-      become: yes
-
     - name: Remove old PBGui venv
       file:
         path: "{{ install_dir }}/venv_pbgui"

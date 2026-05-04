@@ -18,7 +18,6 @@ The main view shows a table with all servers (Master + VPS) and their current st
 | **Reboot** | ✅ no reboot needed / ❌ reboot required |
 | **Updates** | Pending Linux package updates |
 | **PBGui / PBGui Branch / PBGui github** | Installed version, branch, and whether it matches GitHub origin |
-| **PB6 / PB6 github** | PB6 version vs GitHub origin |
 | **PB7 / PB7 Branch / PB7 github** | PB7 version, branch, and whether it matches GitHub origin |
 | **API Sync** | ✅ API keys in sync with Master / ❌ out of sync |
 
@@ -47,9 +46,9 @@ Sidebar actions:
 |--------|--------|
 | `:material/refresh:` | Reload status |
 | `:material/home:` | Back to Overview |
-| **Update PBGui, PB6 and PB7** | Update all components |
+| **Update PBGui and PB7** | Update all components |
 | **Update PBGui** | Update only PBGui |
-| **Update pb6 and pb7** | Update only PB6/PB7 |
+| **Update PB7** | Update only PB7 |
 | **Install rustup** | Install Rust toolchain (requires sudo password) |
 | **Install rclone** | Install rclone (requires sudo password) |
 | **Update PB7 venv** | Recreate PB7 Python 3.12 venv (requires sudo password) |
@@ -73,7 +72,7 @@ Sidebar actions:
 | **Read settings from VPS** | Fetch current config from VPS via SSH |
 | **Initialize** | Run initial VPS setup wizard |
 | **Update PBGui** | Update PBGui on this VPS |
-| **Update PBGui, PB6 and PB7** | Update all components |
+| **Update PBGui and PB7** | Update all components |
 | **Update PB7 venv** | Recreate PB7 Python 3.12 venv |
 | **Update PBGui venv** | Recreate PBGui Python 3.12 venv |
 | **Update Linux** | Run `apt upgrade` (optional reboot checkbox) |
@@ -107,8 +106,8 @@ The **Log viewer** at the bottom lets you fetch and display any log file from th
 ## Typical workflows
 
 ### Update all servers
-1. Click **Master (local)** → **Update PBGui, PB6 and PB7** → wait for the log to show *successful*
-2. For each VPS: click the hostname → **Update PBGui, PB6 and PB7**
+1. Click **Master (local)** → **Update PBGui and PB7** → wait for the log to show *successful*
+2. For each VPS: click the hostname → **Update PBGui and PB7**
 
 ### Switch to a feature branch
 1. Open Master or VPS detail

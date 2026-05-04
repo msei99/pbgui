@@ -1170,8 +1170,8 @@ class OptimizeConfigs:
         self.index = 0
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
-        pbdir = pb_config.get("main", "pbdir")
-        self.config_path = f'{pbdir}/configs/optimize'
+        pbdir = pb_config.get("main", "pbdir", fallback="").strip()
+        self.config_path = f'{pbdir}/configs/optimize' if pbdir else ""
         self.load()
 
     def __iter__(self):
@@ -1200,6 +1200,8 @@ class OptimizeConfigs:
                 return config
 
     def load(self):
+        if not self.config_path:
+            return
         p = str(Path(f'{self.config_path}/*.hjson'))
         configs = glob.glob(p)
         for config in configs:

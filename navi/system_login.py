@@ -1,7 +1,7 @@
 import streamlit as st
 import platform
-from pbgui_func import check_password, set_page_config, change_ini, is_pb7_installed, is_authenticted, get_navi_paths
-from pbgui_purefunc import load_ini, save_ini
+from pbgui_func import check_password, set_page_config, change_ini, is_pb7_installed, is_authenticted, get_navi_paths, redirect_to_fastapi_welcome
+from pbgui_purefunc import load_ini, save_ini, pb7_runtime_status, streamlit_secrets_path
 import pbgui_help
 from Services import Services
 from RunV7 import V7Instances
@@ -48,6 +48,24 @@ def _relay_mini_init():
     # pbcoindata is set by the Services() constructor
 
 
+def _consume_logout_request() -> bool:
+    """Secondary logout safeguard for direct Welcome page execution.
+
+    The primary logout handling now happens in `build_navigation()` before any
+    token bootstrap runs. This local fallback keeps direct page execution safe
+    in the Streamlit page runner as well.
+    """
+    logout_flag = str(st.query_params.get("logout", "")).strip().lower()
+    if logout_flag not in ("1", "true", "yes", "on"):
+        return False
+
+    for key in ("api_token", "password_correct", "password", "user"):
+        st.session_state.pop(key, None)
+
+    st.query_params.pop("logout", None)
+    st.query_params.pop("token", None)
+    st.query_params.pop("target", None)
+    return True
 def change_password():
     with st.expander("Change Password"):
         with st.form("change_password_form"):
@@ -72,10 +90,11 @@ def change_password():
 
             # Update the secrets.toml file
             try:
-                secrets_path = Path(".streamlit/secrets.toml")
+                secrets_path = streamlit_secrets_path()
                 if not secrets_path.exists():
                     st.error("secrets.toml file does not exist.")
                     # Create empty file
+                    secrets_path.parent.mkdir(parents=True, exist_ok=True)
                     with open(secrets_path, "w") as f:
                         f.write("")
 
@@ -105,6 +124,8 @@ def change_password():
 
             
 def do_init():
+    pb7_status = pb7_runtime_status()
+
     # Missing Password
     if "password_missing" in st.session_state:
         st.warning('You are using PBGUI without a password! Please set a password using "Change Password" below.', icon="⚠️")
@@ -116,28 +137,16 @@ def do_init():
             save_ini("main", "pb7dir", st.session_state.pb7dir)
             if "users" in st.session_state:
                 del st.session_state.users
-    st.session_state.pb7dir = load_ini("main", "pb7dir")
-    if ".." in st.session_state.pb7dir:
-        st.session_state.pb7dir = os.path.abspath(st.session_state.pb7dir)
-        save_ini("main", "pb7dir", st.session_state.pb7dir)
-    if Path(f"{st.session_state.pb7dir}/src/passivbot.py").exists():
-        pb7dir_ok = "✅"
-    else:
-        pb7dir_ok = "❌"
+    st.session_state.pb7dir = pb7_status["pb7dir"]
+    pb7dir_ok = "✅" if pb7_status["import_ready"] else "❌"
 
     # Load pb7 venv from pbgui.ini
     if "input_pb7venv" in st.session_state:
         if st.session_state.input_pb7venv != st.session_state.pb7venv:
             st.session_state.pb7venv = st.session_state.input_pb7venv
             save_ini("main", "pb7venv", st.session_state.pb7venv)
-    st.session_state.pb7venv = load_ini("main", "pb7venv")
-    if ".." in st.session_state.pb7venv:
-        st.session_state.pb7venv = os.path.abspath(st.session_state.pb7venv)
-        save_ini("main", "pb7venv", st.session_state.pb7venv)
-    if Path(st.session_state.pb7venv).is_file() and PurePath(st.session_state.pb7venv).name.startswith("python"):
-        pb7venv_ok = "✅"
-    else:
-        pb7venv_ok = "❌"
+    st.session_state.pb7venv = pb7_status["pb7venv"]
+    pb7venv_ok = "✅" if pb7_status["venv_ready"] else "❌"
 
     # Load pbname from pbgui.ini
     st.session_state.pbname = load_ini("main", "pbname")
@@ -194,13 +203,16 @@ def do_init():
                     st.session_state.role = "slave"
         st.checkbox("Master", value=st.session_state.master, key="input_master", help=pbgui_help.role)
 
+    for message in pb7_status["errors"]:
+        st.warning(message, icon="⚠️")
+    for message in pb7_status["warnings"]:
+        st.info(message, icon="ℹ️")
+
     # Check if passivbot v7 is installed
-    if not is_pb7_installed():
-        st.warning('No Passivbot V7 installed', icon="⚠️")
+    if not pb7_status["import_ready"]:
         st.stop()
     # Check if any pb7 venv is configured
-    if is_pb7_installed() and not st.session_state.pb7venv:
-        st.warning('Passivbot V7 venv is not configured', icon="⚠️")
+    if not pb7_status["venv_ready"]:
         st.stop()
     # Init Users
     if 'users' not in st.session_state:
@@ -279,6 +291,8 @@ if _relay_target and _relay_token:
 
 # Page Setup
 set_page_config("Welcome")
+_consume_logout_request()
+redirect_to_fastapi_welcome()
 st.header("Welcome to Passivbot GUI", divider="red")
     
 # Show Login-Dialog on demand

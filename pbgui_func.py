@@ -9,7 +9,17 @@ import requests
 import os
 from time import sleep
 from pathlib import Path
-from pbgui_purefunc import load_ini, save_ini, load_symbols_from_ini as _load_symbols_from_mapping, PBGUI_VERSION, PBGDIR
+from pbgui_purefunc import (
+    load_ini,
+    save_ini,
+    load_symbols_from_ini as _load_symbols_from_mapping,
+    PBGUI_VERSION,
+    PBGDIR,
+    pb7dir as _pb7dir,
+    pb7venv as _pb7venv,
+    is_pb7_installed as _is_pb7_installed,
+    streamlit_secrets_path,
+)
 # LogHandler removed: centralized debuglog removed per user request
 from PBRemote import PBRemote
 from MonitorConfig import MonitorConfig
@@ -94,16 +104,12 @@ def select_file(parameter):
         if st.button(":red[Cancel]"):
             st.rerun()
 
-def pb7dir(): return load_ini("main", "pb7dir")
+def pb7dir(): return _pb7dir()
 
-def pb7venv(): return load_ini("main", "pb7venv")
+def pb7venv(): return _pb7venv()
 
 def is_pb7_installed():
-    if Path(f"{pb7dir()}/src/passivbot.py").exists():
-        return True
-    return False
-
-PBGDIR = Path.cwd()
+    return _is_pb7_installed()
 
 
 def is_authenticted():
@@ -114,8 +120,9 @@ def is_authenticted():
 
 def check_password():
     # if secrets file is missing, crate it with password = "PBGui$Data!"
-    secrets_path = Path(".streamlit/secrets.toml")
+    secrets_path = streamlit_secrets_path()
     if not secrets_path.exists():
+        secrets_path.parent.mkdir(parents=True, exist_ok=True)
         with open(secrets_path, "w") as f:
             f.write('password = "PBGui$Bot!"')
 
@@ -227,7 +234,111 @@ def get_navi_paths():
     }
     return paths
 
+
+def _consume_streamlit_logout_request() -> bool:
+    logout_flag = str(st.query_params.get("logout", "")).strip().lower()
+    if logout_flag not in ("1", "true", "yes", "on"):
+        return False
+
+    for key in ("api_token", "password_correct", "password", "user"):
+        st.session_state.pop(key, None)
+
+    st.query_params.pop("logout", None)
+    st.query_params.pop("token", None)
+    st.query_params.pop("target", None)
+    return True
+
+
+def _streamlit_session_authenticated() -> bool:
+    return bool(
+        st.session_state.get("password_correct")
+        or st.session_state.get("password_missing")
+    )
+
+
+def _get_valid_fastapi_token() -> str:
+    if not _streamlit_session_authenticated():
+        st.session_state.pop("api_token", None)
+        return ""
+
+    from api.auth import generate_token, validate_token
+
+    token = st.session_state.get("api_token", "")
+    if token:
+        try:
+            if validate_token(token):
+                return token
+        except Exception:
+            pass
+
+    user_id = (
+        st.session_state.get("user", {}).get("id")
+        or st.session_state.get("user")
+        or "anonymous"
+    )
+    token = generate_token(str(user_id), expires_in_seconds=86400).token
+    st.session_state["api_token"] = token
+    return token
+
+
+def _fastapi_supports_auth_routes(host: str, port: int) -> bool:
+    probe_host = str(host or "").strip() or "127.0.0.1"
+    if probe_host == "0.0.0.0":
+        probe_host = "127.0.0.1"
+    try:
+        response = requests.get(
+            f"http://{probe_host}:{int(port)}/api/auth/bootstrap",
+            timeout=(1, 2),
+        )
+        return response.ok
+    except (requests.RequestException, ValueError, TypeError):
+        return False
+
+
+def redirect_to_fastapi_welcome() -> bool:
+    """Redirect the browser to the standalone FastAPI welcome page.
+
+    Returns False when the API server could not be started, so the caller may
+    fall back to the legacy Streamlit welcome page.
+    """
+    from api.auth import validate_token as _vt
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        return False
+
+    token = _get_valid_fastapi_token()
+    if token:
+        try:
+            if not _vt(token):
+                token = ""
+        except Exception:
+            token = ""
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    url = f"http://{browser_host}:{api_port}/api/auth/main_page?st_base={st_base}"
+    if token:
+        url += f"&token={token}"
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
+
 def build_navigation():
+    _consume_streamlit_logout_request()
+
     paths = get_navi_paths()
 
     # Single Pages
@@ -282,30 +393,14 @@ def build_navigation():
     # Resolve API server once; reused by both server-side and client-side paths.
     _fa_ok = False
     _fa_port = 0
+    _token = ""
     try:
         _, _fa_port, _fa_ok = _start_fastapi_server_if_needed()
     except Exception:
         pass
 
-    # Ensure token exists and is still valid (needed for both paths below).
     if _fa_ok:
-        _need_token = "api_token" not in st.session_state
-        if not _need_token:
-            try:
-                from api.auth import validate_token
-                if not validate_token(st.session_state["api_token"]):
-                    _need_token = True
-            except Exception:
-                _need_token = True
-        if _need_token:
-            try:
-                from api.auth import generate_token
-                _uid = (st.session_state.get("user", {}).get("id")
-                        or st.session_state.get("user")
-                        or "anonymous")
-                st.session_state["api_token"] = generate_token(str(_uid), expires_in_seconds=86400).token
-            except Exception:
-                pass
+        _token = _get_valid_fastapi_token()
 
     # Derive browser host/port once.
     _bhost, _sport = "127.0.0.1", 8501
@@ -323,9 +418,9 @@ def build_navigation():
         if not is_authenticted() or is_session_state_not_initialized():
             st.switch_page(paths["SYSTEM_LOGIN"])
             st.stop()
-        if _fa_ok and "api_token" in st.session_state:
+        if _fa_ok and _token:
             _url = (f"http://{_bhost}:{_fa_port}/api/logging/main_page"
-                    f"?token={st.session_state['api_token']}"
+                    f"?token={_token}"
                     f"&st_base=http://{_bhost}:{_sport}")
             st.html(f'<script>window.location.replace("{_url}");</script>',
                     unsafe_allow_javascript=True)
@@ -337,9 +432,9 @@ def build_navigation():
         if not is_authenticted() or is_session_state_not_initialized():
             st.switch_page(paths["SYSTEM_LOGIN"])
             st.stop()
-        if _fa_ok and "api_token" in st.session_state:
+        if _fa_ok and _token:
             _url = (f"http://{_bhost}:{_fa_port}/api/vps/main_page"
-                    f"?token={st.session_state['api_token']}"
+                    f"?token={_token}"
                     f"&st_base=http://{_bhost}:{_sport}")
             st.html(f'<script>window.location.replace("{_url}");</script>',
                     unsafe_allow_javascript=True)
@@ -351,9 +446,9 @@ def build_navigation():
         if not is_authenticted() or is_session_state_not_initialized():
             st.switch_page(paths["SYSTEM_LOGIN"])
             st.stop()
-        if _fa_ok and "api_token" in st.session_state:
+        if _fa_ok and _token:
             _url = (f"http://{_bhost}:{_fa_port}/api/services/main_page"
-                    f"?token={st.session_state['api_token']}"
+                    f"?token={_token}"
                     f"&st_base=http://{_bhost}:{_sport}")
             st.html(f'<script>window.location.replace("{_url}");</script>',
                     unsafe_allow_javascript=True)
@@ -371,9 +466,9 @@ def build_navigation():
         if not is_authenticted() or is_session_state_not_initialized():
             st.switch_page(paths["SYSTEM_LOGIN"])
             st.stop()
-        if _fa_ok and "api_token" in st.session_state:
+        if _fa_ok and _token:
             _url = (f"http://{_bhost}:{_fa_port}/api/balance-calc/main_page"
-                    f"?token={st.session_state['api_token']}"
+                    f"?token={_token}"
                     f"&st_base=http://{_bhost}:{_sport}")
             st.html(f'<script>window.location.replace("{_url}");</script>',
                     unsafe_allow_javascript=True)
@@ -384,9 +479,9 @@ def build_navigation():
         if not is_authenticted() or is_session_state_not_initialized():
             st.switch_page(paths["SYSTEM_LOGIN"])
             st.stop()
-        if _fa_ok and "api_token" in st.session_state:
+        if _fa_ok and _token:
             _url = (f"http://{_bhost}:{_fa_port}/app/help.html"
-                    f"?token={st.session_state['api_token']}"
+                    f"?token={_token}"
                     f"&st_base=http://{_bhost}:{_sport}")
             st.html(f'<script>window.location.replace("{_url}");</script>',
                     unsafe_allow_javascript=True)
@@ -397,9 +492,9 @@ def build_navigation():
         if not is_authenticted() or is_session_state_not_initialized():
             st.switch_page(paths["SYSTEM_LOGIN"])
             st.stop()
-        if _fa_ok and "api_token" in st.session_state:
+        if _fa_ok and _token:
             _url = (f"http://{_bhost}:{_fa_port}/api/coin-data/main_page"
-                    f"?token={st.session_state['api_token']}"
+                f"?token={_token}"
                     f"&st_base=http://{_bhost}:{_sport}")
             st.html(f'<script>window.location.replace("{_url}");</script>',
                     unsafe_allow_javascript=True)
@@ -412,8 +507,7 @@ def build_navigation():
     #    NOTE: v7_run is NOT included here because Streamlit still handles the
     #    edit/add flows. The server-side interception (1d) handles the normal
     #    nav-bar "Run" click; it's fast enough (just injects a redirect script).
-    if _fa_ok and "api_token" in st.session_state:
-        _token = st.session_state["api_token"]
+    if _fa_ok and _token:
         _log_url = (f"http://{_bhost}:{_fa_port}/api/logging/main_page"
                     f"?token={_token}&st_base=http://{_bhost}:{_sport}")
         _vps_url = (f"http://{_bhost}:{_fa_port}/api/vps/main_page"
@@ -716,10 +810,17 @@ def _start_fastapi_server_if_needed() -> tuple[str, int, bool]:
     else:
         srv = PBApiServer()
 
-    if not srv.is_running():
+    already_running = srv.is_running()
+    if not already_running:
         srv.run()
+    elif not _fastapi_supports_auth_routes(srv.host, srv.port):
+        srv.restart()
 
-    return (srv.host, srv.port, srv.is_running())
+    running = srv.is_running()
+    if running and not _fastapi_supports_auth_routes(srv.host, srv.port):
+        return (srv.host, srv.port, False)
+
+    return (srv.host, srv.port, running)
 
 
 def render_fastapi_job_monitor(height: int = 800, exchange: str = "", job_type: str = "") -> None:

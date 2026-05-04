@@ -1,0 +1,1390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PBGui - Welcome</title>
+    <style>
+        :root {
+            --fs-xs: 11px;
+            --fs-sm: 13px;
+            --fs-base: 14px;
+            --fs-md: 15px;
+            --fs-lg: 18px;
+            --fs-xl: 22px;
+            --sp-xs: 4px;
+            --sp-sm: 8px;
+            --sp-md: 12px;
+            --sp-lg: 20px;
+            --input-h: 32px;
+            --btn-h: 32px;
+        }
+
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            background: #0e1117;
+            color: #e2e8f0;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-size: var(--fs-base);
+        }
+
+        #page-body {
+            display: flex;
+            height: calc(100vh - 52px);
+            overflow: hidden;
+            user-select: none;
+        }
+
+        #sidebar {
+            width: 240px;
+            min-width: 180px;
+            max-width: 340px;
+            flex-shrink: 0;
+            background: #0e1117;
+            border-right: 1px solid #1e2736;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+
+        #sidebar-resize {
+            position: absolute;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 4px;
+            cursor: col-resize;
+            background: transparent;
+        }
+
+        #sidebar-resize:hover,
+        #sidebar-resize.active {
+            background: rgba(99, 179, 237, 0.4);
+        }
+
+        #sidebar-sticky {
+            flex-shrink: 0;
+            padding: 0.5rem 0.5rem 0;
+        }
+
+        #sidebar-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: var(--sp-sm);
+            padding: 0.3rem 0.25rem 0.5rem;
+        }
+
+        .sb-title {
+            font-size: var(--fs-sm);
+            text-transform: uppercase;
+            letter-spacing: 0.09em;
+            color: #64748b;
+            font-weight: 700;
+        }
+
+        .sb-meta {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: var(--sp-xs);
+        }
+
+        .sb-count {
+            font-size: var(--fs-sm);
+            background: #1a202c;
+            border: 1px solid #2d3748;
+            border-radius: 10px;
+            padding: 0.1rem 0.5rem;
+            color: #94a3b8;
+            font-weight: 600;
+        }
+
+        #sidebar-toolbar {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+            padding: 0.3rem 0.1rem 0.45rem;
+            border-bottom: 1px solid #1e2736;
+        }
+
+        .sb-sep {
+            border: none;
+            border-top: 1px solid #1e2736;
+            margin: 2px 0;
+        }
+
+        .sb-btn {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.38rem 0.65rem;
+            border-radius: 6px;
+            font-size: var(--fs-base);
+            cursor: pointer;
+            border: 1px solid #2d3748;
+            background: #1a202c;
+            color: #94a3b8;
+            transition: background 0.12s, border-color 0.12s, color 0.12s;
+            width: 100%;
+            text-align: left;
+            height: auto;
+        }
+
+        .sb-btn:hover { background: #252d3d; color: #e2e8f0; border-color: #4a5568; }
+        .sb-btn.active { background: #26a69a22; border-color: #26a69a; color: #26a69a; }
+        .sb-btn.info { color: #63b3ed; border-color: rgba(99, 179, 237, 0.27); }
+        .sb-btn.info:hover { background: rgba(99, 179, 237, 0.1); border-color: rgba(99, 179, 237, 0.5); }
+        .sb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        #main-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            min-width: 0;
+            user-select: text;
+            background:
+                radial-gradient(circle at top right, rgba(99, 179, 237, 0.08), transparent 30%),
+                radial-gradient(circle at bottom left, rgba(38, 166, 154, 0.08), transparent 28%),
+                #0e1117;
+        }
+
+        .page-section {
+            display: grid;
+            gap: var(--sp-md);
+            margin-bottom: 20px;
+            scroll-margin-top: 16px;
+        }
+
+        .panel {
+            background: #111827;
+            border: 1px solid #1e2736;
+            border-radius: 14px;
+            padding: 20px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+        }
+
+        .hero-panel {
+            background:
+                radial-gradient(circle at right top, rgba(56, 189, 248, 0.12), transparent 36%),
+                linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(15, 23, 42, 0.98));
+        }
+
+        .hero-grid,
+        .grid-two,
+        .field-grid,
+        .route-grid {
+            display: grid;
+            gap: var(--sp-lg);
+        }
+
+        .hero-grid {
+            grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+            align-items: start;
+        }
+
+        .grid-two,
+        .route-grid,
+        .field-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--sp-sm);
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(59, 130, 246, 0.12);
+            border: 1px solid rgba(96, 165, 250, 0.18);
+            color: #93c5fd;
+            font-size: var(--fs-sm);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            font-weight: 700;
+        }
+
+        h1 {
+            margin: 18px 0 12px;
+            font-size: 34px;
+            line-height: 1.04;
+            letter-spacing: -0.04em;
+            max-width: 13ch;
+        }
+
+        .lead,
+        .panel-copy,
+        .muted,
+        .summary-copy {
+            color: #94a3b8;
+            line-height: 1.6;
+        }
+
+        .lead {
+            margin: 0;
+            max-width: 62ch;
+            color: #bfd0e5;
+        }
+
+        .meta-strip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--sp-sm);
+            margin-top: 22px;
+        }
+
+        .meta-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 10px;
+            border-radius: 10px;
+            background: rgba(15, 23, 42, 0.9);
+            border: 1px solid rgba(148, 163, 184, 0.14);
+            color: #cbd5e1;
+            font-size: var(--fs-sm);
+        }
+
+        .meta-pill strong,
+        .summary-card strong {
+            color: #f8fafc;
+            font-weight: 700;
+        }
+
+        .summary-grid {
+            display: grid;
+            gap: var(--sp-md);
+        }
+
+        .summary-card {
+            padding: 14px 16px;
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.92);
+            border: 1px solid rgba(148, 163, 184, 0.13);
+        }
+
+        .summary-label {
+            display: block;
+            margin-bottom: 6px;
+            color: #64748b;
+            font-size: var(--fs-sm);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .summary-card strong {
+            display: block;
+            font-size: var(--fs-lg);
+            margin-bottom: 6px;
+        }
+
+        .panel-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: var(--sp-md);
+            flex-wrap: wrap;
+        }
+
+        .panel-title {
+            margin: 0 0 8px;
+            font-size: var(--fs-lg);
+            color: #f8fafc;
+        }
+
+        .panel-copy,
+        .muted,
+        .summary-copy,
+        .section-copy {
+            margin: 0;
+            font-size: var(--fs-base);
+        }
+
+        .section-heading {
+            display: flex;
+            flex-direction: column;
+            gap: var(--sp-xs);
+            margin-bottom: var(--sp-sm);
+        }
+
+        .section-kicker {
+            font-size: var(--fs-sm);
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #64748b;
+        }
+
+        .auth-status {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--sp-sm);
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            background: rgba(15, 23, 42, 0.82);
+            color: #cbd5e1;
+            font-size: var(--fs-sm);
+            font-weight: 600;
+        }
+
+        .chip.ok { color: #86efac; border-color: rgba(34, 197, 94, 0.28); }
+        .chip.warn { color: #fde68a; border-color: rgba(245, 158, 11, 0.28); }
+        .chip.bad { color: #fca5a5; border-color: rgba(239, 68, 68, 0.28); }
+
+        .banner {
+            display: none;
+            margin-bottom: var(--sp-md);
+            padding: 12px 14px;
+            border-radius: 12px;
+            font-size: var(--fs-base);
+            line-height: 1.5;
+        }
+
+        .banner.show { display: block; }
+        .banner.error { background: rgba(127, 29, 29, 0.45); border: 1px solid rgba(248, 113, 113, 0.28); color: #fecaca; }
+        .banner.info { background: rgba(30, 64, 175, 0.25); border: 1px solid rgba(96, 165, 250, 0.24); color: #bfdbfe; }
+        .banner.success { background: rgba(6, 95, 70, 0.34); border: 1px solid rgba(52, 211, 153, 0.24); color: #bbf7d0; }
+
+        .field-grid {
+            margin-top: 18px;
+        }
+
+        .field-browse {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: var(--sp-sm);
+            align-items: center;
+        }
+
+        .pw-wrap {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .pw-wrap input {
+            flex: 1;
+            padding-right: 40px;
+        }
+
+        .pw-eye-btn {
+            position: absolute;
+            right: 10px;
+            top: 0;
+            bottom: 0;
+            margin: auto 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            padding: 0;
+            border: none;
+            border-radius: 0;
+            background: none;
+            color: #64748b;
+            font-size: var(--fs-md);
+            line-height: 1;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .pw-eye-btn:hover:not(:disabled) {
+            transform: none;
+            background: none;
+            color: #94a3b8;
+        }
+
+        .browse-btn {
+            min-width: 96px;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .field.full {
+            grid-column: 1 / -1;
+        }
+
+        label {
+            color: #94a3b8;
+            font-size: var(--fs-sm);
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        input,
+        select,
+        button {
+            font-size: var(--fs-base);
+        }
+
+        input,
+        select {
+            width: 100%;
+            height: var(--input-h);
+            border-radius: 8px;
+            border: 1px solid #2d3748;
+            background: #0e1117;
+            color: #f8fafc;
+            padding: 0 12px;
+        }
+
+        input:focus,
+        select:focus {
+            outline: none;
+            border-color: #26a69a;
+            box-shadow: 0 0 0 3px rgba(38, 166, 154, 0.16);
+        }
+
+        button {
+            height: var(--btn-h);
+            border-radius: 8px;
+            border: 1px solid transparent;
+            padding: 0 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.14s ease, border-color 0.14s ease, transform 0.14s ease, color 0.14s ease;
+        }
+
+        button:hover:not(:disabled) { transform: translateY(-1px); }
+        button:disabled,
+        input:disabled,
+        select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: var(--sp-sm);
+        }
+
+        .btn-primary {
+            background: #26a69a;
+            border-color: #26a69a;
+            color: #ffffff;
+        }
+
+        .btn-primary:hover:not(:disabled) { background: #2bbbad; }
+
+        .btn-secondary {
+            background: #1a202c;
+            border-color: #2d3748;
+            color: #cbd5e1;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #252d3d;
+            border-color: #4a5568;
+        }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--sp-sm);
+            margin-top: 18px;
+        }
+
+        .status-list,
+        .issues {
+            display: grid;
+            gap: 10px;
+            margin-top: 18px;
+        }
+
+        .status-row {
+            display: grid;
+            grid-template-columns: 130px 110px minmax(0, 1fr);
+            gap: 10px;
+            align-items: center;
+            padding: 12px 14px;
+            border-radius: 12px;
+            background: #0f172a;
+            border: 1px solid #1e293b;
+        }
+
+        .status-label {
+            color: #cbd5e1;
+            font-weight: 700;
+        }
+
+        .status-value {
+            color: #93c5fd;
+            font-size: var(--fs-sm);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .status-detail {
+            color: #94a3b8;
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
+        .issue {
+            padding: 12px 14px;
+            border-radius: 12px;
+            font-size: var(--fs-base);
+            line-height: 1.5;
+        }
+
+        .issue.error {
+            background: rgba(127, 29, 29, 0.45);
+            border: 1px solid rgba(248, 113, 113, 0.22);
+            color: #fecaca;
+        }
+
+        .issue.warning {
+            background: rgba(120, 53, 15, 0.38);
+            border: 1px solid rgba(245, 158, 11, 0.22);
+            color: #fde68a;
+        }
+
+        .route-grid {
+            margin-top: 18px;
+        }
+
+        .route-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            justify-content: flex-start;
+            gap: 4px;
+            text-align: left;
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            color: #f8fafc;
+            padding: 14px;
+            height: auto;
+            min-height: 88px;
+        }
+
+        .route-btn strong {
+            display: block;
+            font-size: var(--fs-md);
+        }
+
+        .route-btn span {
+            display: block;
+            color: #94a3b8;
+            font-size: var(--fs-sm);
+            font-weight: 500;
+            line-height: 1.5;
+        }
+
+        .route-btn:hover:not(:disabled) {
+            background: #162235;
+            border-color: #2c3f5b;
+        }
+
+        .browser-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 4100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: var(--sp-lg);
+            background: rgba(2, 6, 23, 0.78);
+            backdrop-filter: blur(6px);
+        }
+
+        .browser-modal[hidden] {
+            display: none;
+        }
+
+        .browser-dialog {
+            width: min(860px, calc(100vw - 40px));
+            max-height: calc(100vh - 48px);
+            display: flex;
+            flex-direction: column;
+            gap: var(--sp-md);
+        }
+
+        .browser-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--sp-md);
+        }
+
+        .browser-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--sp-sm);
+            align-items: center;
+        }
+
+        .browser-path {
+            flex: 1;
+            min-width: 280px;
+        }
+
+        .browser-list {
+            display: grid;
+            gap: var(--sp-xs);
+            min-height: 240px;
+            max-height: 420px;
+            overflow-y: auto;
+            padding: var(--sp-xs);
+            border-radius: 12px;
+            border: 1px solid #1e2736;
+            background: #0f172a;
+        }
+
+        .browser-entry {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: var(--sp-sm);
+            width: 100%;
+            min-height: var(--btn-h);
+            padding: 0 12px;
+            border-radius: 8px;
+            border: 1px solid #223148;
+            background: #111827;
+            color: #e2e8f0;
+            text-align: left;
+        }
+
+        .browser-entry:hover:not(:disabled) {
+            background: #172133;
+            border-color: #345074;
+        }
+
+        .browser-entry.selected {
+            border-color: #26a69a;
+            background: rgba(38, 166, 154, 0.15);
+            color: #d1fae5;
+        }
+
+        .browser-entry-kind {
+            color: #64748b;
+            font-size: var(--fs-sm);
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
+
+        .browser-empty {
+            padding: 12px 14px;
+            border-radius: 10px;
+            border: 1px dashed rgba(148, 163, 184, 0.22);
+            color: #94a3b8;
+            text-align: center;
+        }
+
+        #section-password[hidden] {
+            display: none;
+        }
+
+        @media (max-width: 980px) {
+            #sidebar {
+                display: none;
+            }
+
+            .hero-grid,
+            .grid-two,
+            .field-grid,
+            .route-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .status-row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav id="topnav"></nav>
+
+    <div id="page-body">
+        <div id="sidebar">
+            <div id="sidebar-sticky">
+                <div id="sidebar-header">
+                    <span class="sb-title">Welcome</span>
+                    <div class="sb-meta">
+                        <span class="sb-count" id="sb-auth-state">Guest</span>
+                        <span class="sb-count" id="sb-ready-state">PB7 blocked</span>
+                    </div>
+                </div>
+                <div id="sidebar-toolbar">
+                    <button class="sb-btn active" data-section-target="overview">Overview</button>
+                    <button class="sb-btn" data-section-target="setup">PB7 Setup</button>
+                    <button class="sb-btn" data-section-target="status">Runtime Status</button>
+                    <hr class="sb-sep">
+                    <button class="sb-btn" id="sidebar-password-btn" disabled>Change Password</button>
+                </div>
+            </div>
+            <div id="sidebar-resize"></div>
+        </div>
+
+        <div id="main-content">
+            <div id="banner" class="banner"></div>
+
+            <section id="section-overview" class="page-section" data-section="overview">
+                <div class="panel hero-panel">
+                    <div class="eyebrow">PBGui Welcome</div>
+                    <div class="hero-grid">
+                        <div>
+                            <div class="meta-strip">
+                                <div class="meta-pill"><strong>Version</strong> <span id="meta-version">%%VERSION%%</span></div>
+                                <div class="meta-pill"><strong>Serial</strong> <span id="meta-serial">%%SERIAL%%</span></div>
+                                <div class="meta-pill"><strong>API</strong> <span id="meta-origin">local</span></div>
+                            </div>
+                        </div>
+                        <div class="summary-grid">
+                            <div class="summary-card">
+                                <span class="summary-label">Session</span>
+                                <strong id="summary-auth">Guest</strong>
+                                <p class="summary-copy" id="summary-auth-copy">Waiting for bootstrap status…</p>
+                            </div>
+                            <div class="summary-card">
+                                <span class="summary-label">PB7</span>
+                                <strong id="summary-pb7">Checking…</strong>
+                                <p class="summary-copy" id="summary-pb7-copy">Runtime health is still loading.</p>
+                            </div>
+                            <div class="summary-card">
+                                <span class="summary-label">Identity</span>
+                                <strong id="summary-identity">Unnamed host</strong>
+                                <p class="summary-copy" id="summary-role">Role not loaded yet.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="section-setup" class="page-section" data-section="setup">
+                <div class="section-heading">
+                    <span class="section-kicker">Configuration</span>
+                    <p class="section-copy">These values are read from pbgui.ini and used by both Streamlit and FastAPI paths.</p>
+                </div>
+                <div class="panel">
+                    <h2 class="panel-title">PB7 Setup</h2>
+                    <p class="panel-copy">Setup changes are available immediately to the lazy PB7 config loader. Login is required to save.</p>
+                    <div class="field-grid">
+                        <div class="field full">
+                            <label for="pb7dir">Passivbot V7 path</label>
+                            <div class="field-browse">
+                                <input id="pb7dir" type="text" placeholder="/path/to/pb7">
+                                <button id="browse-pb7dir-btn" class="btn btn-secondary browse-btn" type="button">Browse</button>
+                            </div>
+                        </div>
+                        <div class="field full">
+                            <label for="pb7venv">Passivbot V7 python interpreter</label>
+                            <div class="field-browse">
+                                <input id="pb7venv" type="text" placeholder="/path/to/venv/bin/python">
+                                <button id="browse-pb7venv-btn" class="btn btn-secondary browse-btn" type="button">Browse</button>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="pbname">Bot name</label>
+                            <input id="pbname" type="text" maxlength="32">
+                        </div>
+                        <div class="field">
+                            <label for="role">Role</label>
+                            <select id="role">
+                                <option value="slave">Slave</option>
+                                <option value="master">Master</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="actions">
+                        <button id="save-setup-btn" class="btn btn-primary" disabled>Save Setup</button>
+                    </div>
+                </div>
+            </section>
+
+            <section id="section-password" class="page-section" data-section="password" hidden>
+                <div class="section-heading">
+                    <span class="section-kicker">Security</span>
+                    <p class="section-copy">The password form now lives behind the sidebar action instead of sitting inline on the access card.</p>
+                </div>
+                <div class="panel">
+                    <h2 class="panel-title">Change Password</h2>
+                    <p class="panel-copy">Leave the new password empty if you want to disable password protection.</p>
+                    <div class="field-grid">
+                        <div class="field">
+                            <label for="current-password">Current password</label>
+                            <div class="pw-wrap">
+                                <input id="current-password" type="password" autocomplete="current-password">
+                                <button type="button" class="pw-eye-btn" onclick="togglePwVisible('current-password', this)" tabindex="-1" title="Show or hide current password" aria-label="Show or hide current password">&#128065;</button>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="new-password">New password</label>
+                            <div class="pw-wrap">
+                                <input id="new-password" type="password" autocomplete="new-password">
+                                <button type="button" class="pw-eye-btn" onclick="togglePwVisible('new-password', this)" tabindex="-1" title="Show or hide new password" aria-label="Show or hide new password">&#128065;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="actions">
+                        <button id="change-password-btn" class="btn btn-secondary">Change Password</button>
+                    </div>
+                </div>
+            </section>
+
+            <section id="section-status" class="page-section" data-section="status">
+                <div class="section-heading">
+                    <span class="section-kicker">Runtime</span>
+                    <p class="section-copy">Import readiness keeps the API server up. Full readiness also requires a valid PB7 interpreter.</p>
+                </div>
+                <div class="panel">
+                    <h2 class="panel-title">Runtime Status</h2>
+                    <div class="status-list" id="status-list"></div>
+                    <div class="issues" id="issues"></div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <div id="file-browser-modal" class="browser-modal" hidden>
+        <div class="panel browser-dialog" role="dialog" aria-modal="true" aria-labelledby="file-browser-title">
+            <div class="browser-head">
+                <h2 id="file-browser-title" class="panel-title">Select Path</h2>
+                <button id="file-browser-close" class="btn btn-secondary" type="button">Close</button>
+            </div>
+            <div class="browser-toolbar">
+                <button id="file-browser-up" class="btn btn-secondary" type="button">Up</button>
+                <button id="file-browser-select" class="btn btn-primary" type="button">Select</button>
+                <input id="file-browser-path" class="browser-path" type="text" readonly>
+            </div>
+            <div id="file-browser-list" class="browser-list"></div>
+        </div>
+    </div>
+
+    <script>
+        var TOKEN = "%%TOKEN%%";
+        var ST_BASE = "%%ST_BASE%%";
+        var API_ORIGIN = "%%API_ORIGIN%%";
+        var PBGUI_VERSION = "%%VERSION%%";
+        var PBGUI_SERIAL = "%%SERIAL%%";
+
+        if (TOKEN === "%%" + "TOKEN%%") TOKEN = "";
+        if (ST_BASE === "%%" + "ST_BASE%%") ST_BASE = "";
+        if (API_ORIGIN === "%%" + "API_ORIGIN%%") API_ORIGIN = window.location.origin;
+        if (PBGUI_VERSION === "%%" + "VERSION%%") PBGUI_VERSION = "";
+        if (PBGUI_SERIAL === "%%" + "SERIAL%%") PBGUI_SERIAL = "";
+
+        var API_BASE = API_ORIGIN + "/api";
+        var query = new URLSearchParams(window.location.search);
+        if (!TOKEN) TOKEN = query.get("token") || "";
+        if (!ST_BASE) ST_BASE = query.get("st_base") || "";
+        var NEXT_PATH = query.get("next") || "";
+        if (NEXT_PATH && !NEXT_PATH.startsWith("/")) NEXT_PATH = "";
+
+        var state = {
+            bootstrap: null,
+            passwordOpen: false,
+            activeSection: "overview",
+            fileBrowser: {
+                open: false,
+                target: "",
+                mode: "directory",
+                currentPath: "",
+                parentPath: "",
+                selectedPath: "",
+                entries: []
+            }
+        };
+
+        function syncNavConfig() {
+            window.PBGUI_NAV_CONFIG = {
+                subtitle: "WELCOME",
+                current: "/",
+                token: TOKEN,
+                stBase: ST_BASE,
+                apiBase: API_BASE,
+                version: PBGUI_VERSION,
+                serial: PBGUI_SERIAL
+            };
+        }
+
+        syncNavConfig();
+
+        function authHeaders(jsonBody) {
+            var headers = {};
+            if (jsonBody !== false) headers["Content-Type"] = "application/json";
+            if (TOKEN) headers["Authorization"] = "Bearer " + TOKEN;
+            return headers;
+        }
+
+        async function fetchJson(url, options) {
+            var response = await fetch(url, options || {});
+            var text = await response.text();
+            var data = {};
+            if (text) {
+                try {
+                    data = JSON.parse(text);
+                } catch (error) {
+                    data = { detail: text };
+                }
+            }
+            if (!response.ok) {
+                throw new Error(data.detail || ("Request failed with status " + response.status));
+            }
+            return data;
+        }
+
+        function setBanner(message, kind) {
+            var banner = document.getElementById("banner");
+            if (!message) {
+                banner.className = "banner";
+                banner.textContent = "";
+                return;
+            }
+            banner.className = "banner show " + (kind || "info");
+            banner.textContent = message;
+        }
+
+        function syncUrl() {
+            var nextUrl = new URL(window.location.href);
+            if (TOKEN) nextUrl.searchParams.set("token", TOKEN);
+            else nextUrl.searchParams.delete("token");
+            if (ST_BASE) nextUrl.searchParams.set("st_base", ST_BASE);
+            else nextUrl.searchParams.delete("st_base");
+            if (NEXT_PATH) nextUrl.searchParams.set("next", NEXT_PATH);
+            window.history.replaceState(null, "", nextUrl.toString());
+            syncNavConfig();
+        }
+
+        function setActiveSection(name) {
+            state.activeSection = name;
+            document.querySelectorAll("[data-section-target]").forEach(function (btn) {
+                btn.classList.toggle("active", btn.dataset.sectionTarget === name);
+            });
+        }
+
+        function focusSection(name) {
+            var section = document.getElementById("section-" + name);
+            if (!section || section.hidden) return;
+            setActiveSection(name);
+            section.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+
+        function fileBrowserTitle() {
+            return state.fileBrowser.target === "pb7venv"
+                ? "Select Passivbot V7 Python Interpreter"
+                : "Select Passivbot V7 Path";
+        }
+
+        function closeFileBrowser() {
+            state.fileBrowser.open = false;
+            document.getElementById("file-browser-modal").hidden = true;
+        }
+
+        function applyFileBrowserSelection() {
+            var target = state.fileBrowser.target;
+            if (!target) return;
+
+            var selectedPath = state.fileBrowser.mode === "directory"
+                ? state.fileBrowser.currentPath
+                : state.fileBrowser.selectedPath;
+            if (!selectedPath) return;
+
+            document.getElementById(target).value = selectedPath;
+            closeFileBrowser();
+        }
+
+        function renderFileBrowser() {
+            var modal = document.getElementById("file-browser-modal");
+            if (!state.fileBrowser.open) {
+                modal.hidden = true;
+                return;
+            }
+
+            modal.hidden = false;
+            document.getElementById("file-browser-title").textContent = fileBrowserTitle();
+            document.getElementById("file-browser-path").value = state.fileBrowser.currentPath || "";
+
+            var upBtn = document.getElementById("file-browser-up");
+            var selectBtn = document.getElementById("file-browser-select");
+            var list = document.getElementById("file-browser-list");
+
+            upBtn.disabled = !state.fileBrowser.parentPath || state.fileBrowser.parentPath === state.fileBrowser.currentPath;
+            selectBtn.textContent = state.fileBrowser.mode === "directory" ? "Select This Folder" : "Select Selected File";
+            selectBtn.disabled = state.fileBrowser.mode === "python" && !state.fileBrowser.selectedPath;
+
+            list.innerHTML = "";
+            if (!state.fileBrowser.entries.length) {
+                var empty = document.createElement("div");
+                empty.className = "browser-empty";
+                empty.textContent = "No matching entries in this directory.";
+                list.appendChild(empty);
+                return;
+            }
+
+            state.fileBrowser.entries.forEach(function (entry) {
+                var row = document.createElement("button");
+                row.type = "button";
+                row.className = "browser-entry";
+                if (!entry.is_dir && entry.path === state.fileBrowser.selectedPath) {
+                    row.classList.add("selected");
+                }
+
+                var kind = document.createElement("span");
+                kind.className = "browser-entry-kind";
+                kind.textContent = entry.is_dir ? "DIR" : "PY";
+                row.appendChild(kind);
+
+                var name = document.createElement("span");
+                name.textContent = entry.name;
+                row.appendChild(name);
+
+                row.addEventListener("click", function () {
+                    if (entry.is_dir) {
+                        loadFileBrowser(entry.path);
+                        return;
+                    }
+                    state.fileBrowser.selectedPath = entry.path;
+                    renderFileBrowser();
+                });
+
+                list.appendChild(row);
+            });
+        }
+
+        async function loadFileBrowser(path) {
+            try {
+                var browserPath = path || "";
+                var data = await fetchJson(
+                    API_ORIGIN + "/api/auth/browse?path=" + encodeURIComponent(browserPath) + "&mode=" + encodeURIComponent(state.fileBrowser.mode),
+                    { headers: authHeaders(false) }
+                );
+                state.fileBrowser.currentPath = data.current_path || "";
+                state.fileBrowser.parentPath = data.parent_path || data.current_path || "";
+                state.fileBrowser.entries = data.entries || [];
+                state.fileBrowser.selectedPath = state.fileBrowser.mode === "python" ? (data.selected_path || "") : (data.current_path || "");
+                renderFileBrowser();
+            } catch (error) {
+                setBanner(error.message, "error");
+            }
+        }
+
+        function openFileBrowser(target, mode) {
+            var auth = (state.bootstrap && state.bootstrap.auth) || {};
+            if (!auth.authenticated) {
+                setBanner("Log in before browsing server paths.", "error");
+                focusSection("access");
+                return;
+            }
+
+            state.fileBrowser.open = true;
+            state.fileBrowser.target = target;
+            state.fileBrowser.mode = mode;
+            state.fileBrowser.currentPath = "";
+            state.fileBrowser.parentPath = "";
+            state.fileBrowser.selectedPath = "";
+            state.fileBrowser.entries = [];
+            renderFileBrowser();
+            loadFileBrowser(document.getElementById(target).value);
+        }
+
+        function updateActiveSectionFromScroll() {
+            var scroller = document.getElementById("main-content");
+            var sections = Array.prototype.slice.call(document.querySelectorAll(".page-section[data-section]"))
+                .filter(function (section) { return !section.hidden; });
+            if (!sections.length) return;
+
+            var current = sections[0];
+            var bestDistance = Math.abs(current.offsetTop - scroller.scrollTop);
+            sections.forEach(function (section) {
+                var distance = Math.abs(section.offsetTop - scroller.scrollTop - 12);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    current = section;
+                }
+            });
+            setActiveSection(current.dataset.section);
+        }
+
+        function navigateTo(path) {
+            if (!TOKEN) {
+                setBanner("Login required before leaving the welcome page.", "error");
+                focusSection("access");
+                return;
+            }
+            var nextUrl = new URL(path, window.location.origin);
+            nextUrl.searchParams.set("token", TOKEN);
+            if (ST_BASE) nextUrl.searchParams.set("st_base", ST_BASE);
+            window.location.href = nextUrl.toString();
+        }
+
+        function renderIssues(setup) {
+            var issues = document.getElementById("issues");
+            issues.innerHTML = "";
+            (setup.errors || []).forEach(function (message) {
+                var item = document.createElement("div");
+                item.className = "issue error";
+                item.textContent = message;
+                issues.appendChild(item);
+            });
+            (setup.warnings || []).forEach(function (message) {
+                var item = document.createElement("div");
+                item.className = "issue warning";
+                item.textContent = message;
+                issues.appendChild(item);
+            });
+            if (!issues.childElementCount) {
+                var item = document.createElement("div");
+                item.className = "issue warning";
+                item.textContent = "No setup issues detected.";
+                issues.appendChild(item);
+            }
+        }
+
+        function renderStatus(setup) {
+            var rows = [
+                { label: "PB7 source", state: setup.import_ready ? "ready" : "missing", detail: setup.src_dir || "No PB7 path configured" },
+                { label: "PB7 config", state: setup.config_load_exists ? "available" : "missing", detail: setup.config_load_file || "No config/load.py path" },
+                { label: "PB7 python", state: setup.venv_ready ? "ready" : "missing", detail: setup.pb7venv || "No interpreter configured" },
+                { label: "Identity", state: setup.master ? "master" : "slave", detail: setup.pbname || "Unnamed host" }
+            ];
+            var list = document.getElementById("status-list");
+            list.innerHTML = "";
+            rows.forEach(function (row) {
+                var el = document.createElement("div");
+                el.className = "status-row";
+                el.innerHTML =
+                    '<div class="status-label">' + row.label + '</div>' +
+                    '<div class="status-value">' + row.state + '</div>' +
+                    '<div class="status-detail">' + row.detail + '</div>';
+                list.appendChild(el);
+            });
+            renderIssues(setup);
+        }
+
+        function renderSummary(auth, setup) {
+            document.getElementById("summary-auth").textContent = auth.authenticated ? "Authenticated" : "Guest";
+            document.getElementById("summary-auth-copy").textContent = auth.authenticated
+                ? "A valid API token is active for this browser session."
+                : auth.password_required
+                    ? "Use the simple PBGui root login page to authenticate this browser session."
+                    : "This browser session is authenticated automatically because no password is configured.";
+
+            document.getElementById("summary-pb7").textContent = setup.ready
+                ? "PB7 ready"
+                : (setup.import_ready ? "PB7 source ready" : "PB7 blocked");
+            document.getElementById("summary-pb7-copy").textContent = setup.ready
+                ? "Source path and interpreter both look valid."
+                : (setup.import_ready
+                    ? "The source path is valid, but the configured Python interpreter still needs attention."
+                    : "The API page stays up so you can fix PB7 path problems here.");
+
+            document.getElementById("summary-identity").textContent = setup.pbname || "Unnamed host";
+            document.getElementById("summary-role").textContent = (setup.master ? "Master" : "Slave") + " role";
+        }
+
+        function resetPasswordFieldVisibility(inputId) {
+            var input = document.getElementById(inputId);
+            if (!input) return;
+            input.type = "password";
+            var button = input.parentElement ? input.parentElement.querySelector(".pw-eye-btn") : null;
+            if (button) button.textContent = "\uD83D\uDC41";
+        }
+
+        function togglePwVisible(inputId, button) {
+            var input = document.getElementById(inputId);
+            if (!input) return;
+            var makeVisible = input.type === "password";
+            input.type = makeVisible ? "text" : "password";
+            button.textContent = makeVisible ? "\uD83D\uDE48" : "\uD83D\uDC41";
+        }
+
+        function renderAuth(auth, setup) {
+            document.getElementById("save-setup-btn").disabled = !auth.authenticated;
+            document.getElementById("browse-pb7dir-btn").disabled = !auth.authenticated;
+            document.getElementById("browse-pb7venv-btn").disabled = !auth.authenticated;
+            document.getElementById("sidebar-password-btn").disabled = !auth.authenticated;
+            document.getElementById("sb-auth-state").textContent = auth.authenticated ? "Authenticated" : "Guest";
+            document.getElementById("sb-ready-state").textContent = setup.ready ? "PB7 ready" : (setup.import_ready ? "Import only" : "PB7 blocked");
+
+            var passwordSection = document.getElementById("section-password");
+            if (!auth.authenticated) {
+                state.passwordOpen = false;
+                passwordSection.hidden = true;
+                document.getElementById("current-password").value = "";
+                document.getElementById("new-password").value = "";
+                resetPasswordFieldVisibility("current-password");
+                resetPasswordFieldVisibility("new-password");
+            } else {
+                passwordSection.hidden = !state.passwordOpen;
+            }
+
+            if (auth.error) {
+                setBanner(auth.error, "error");
+            }
+        }
+
+        function render(data) {
+            state.bootstrap = data;
+            document.getElementById("meta-version").textContent = data.version || PBGUI_VERSION || "";
+            document.getElementById("meta-serial").textContent = data.serial || PBGUI_SERIAL || "";
+            document.getElementById("meta-origin").textContent = API_ORIGIN;
+
+            var setup = data.setup || {};
+            var auth = data.auth || {};
+            document.getElementById("pb7dir").value = setup.pb7dir || "";
+            document.getElementById("pb7venv").value = setup.pb7venv || "";
+            document.getElementById("pbname").value = setup.pbname || "";
+            document.getElementById("role").value = setup.role === "master" ? "master" : "slave";
+
+            renderSummary(auth, setup);
+            renderAuth(auth, setup);
+            renderStatus(setup);
+            syncUrl();
+            updateActiveSectionFromScroll();
+        }
+
+        async function loadBootstrap(message, kind) {
+            try {
+                var headers = TOKEN ? { "Authorization": "Bearer " + TOKEN } : {};
+                var data = await fetchJson(API_ORIGIN + "/api/auth/bootstrap", { headers: headers });
+                if (!data.auth.authenticated) TOKEN = "";
+                render(data);
+                setBanner(message || "", kind || "info");
+            } catch (error) {
+                setBanner(error.message, "error");
+            }
+        }
+
+        async function saveSetup() {
+            try {
+                var data = await fetchJson(API_ORIGIN + "/api/auth/setup", {
+                    method: "POST",
+                    headers: authHeaders(true),
+                    body: JSON.stringify({
+                        pb7dir: document.getElementById("pb7dir").value,
+                        pb7venv: document.getElementById("pb7venv").value,
+                        pbname: document.getElementById("pbname").value,
+                        role: document.getElementById("role").value
+                    })
+                });
+                render(data);
+                setBanner(data.message || "Setup saved.", "success");
+                focusSection("setup");
+            } catch (error) {
+                setBanner(error.message, "error");
+                focusSection("setup");
+            }
+        }
+
+        async function changePassword() {
+            try {
+                var data = await fetchJson(API_ORIGIN + "/api/auth/change-password", {
+                    method: "POST",
+                    headers: authHeaders(true),
+                    body: JSON.stringify({
+                        current_password: document.getElementById("current-password").value,
+                        new_password: document.getElementById("new-password").value
+                    })
+                });
+                document.getElementById("current-password").value = "";
+                document.getElementById("new-password").value = "";
+                resetPasswordFieldVisibility("current-password");
+                resetPasswordFieldVisibility("new-password");
+                render(data);
+                setBanner(data.message || "Password updated.", "success");
+                focusSection("password");
+            } catch (error) {
+                setBanner(error.message, "error");
+                focusSection("password");
+            }
+        }
+
+        function openPasswordSection() {
+            var auth = (state.bootstrap && state.bootstrap.auth) || {};
+            if (!auth.authenticated) {
+                setBanner("Log in before changing the password.", "error");
+                focusSection("overview");
+                return;
+            }
+            state.passwordOpen = true;
+            document.getElementById("section-password").hidden = false;
+            focusSection("password");
+        }
+
+        document.querySelectorAll("[data-section-target]").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                focusSection(btn.dataset.sectionTarget);
+            });
+        });
+
+        document.getElementById("save-setup-btn").addEventListener("click", saveSetup);
+        document.getElementById("sidebar-password-btn").addEventListener("click", openPasswordSection);
+        document.getElementById("change-password-btn").addEventListener("click", changePassword);
+        document.getElementById("browse-pb7dir-btn").addEventListener("click", function () {
+            openFileBrowser("pb7dir", "directory");
+        });
+        document.getElementById("browse-pb7venv-btn").addEventListener("click", function () {
+            openFileBrowser("pb7venv", "python");
+        });
+        document.getElementById("file-browser-close").addEventListener("click", closeFileBrowser);
+        document.getElementById("file-browser-up").addEventListener("click", function () {
+            if (state.fileBrowser.parentPath) loadFileBrowser(state.fileBrowser.parentPath);
+        });
+        document.getElementById("file-browser-select").addEventListener("click", applyFileBrowserSelection);
+        document.getElementById("new-password").addEventListener("keydown", function (event) {
+            if (event.key === "Enter") changePassword();
+        });
+        document.addEventListener("keydown", function (event) {
+            if (event.key === "Escape" && state.fileBrowser.open) {
+                closeFileBrowser();
+            }
+        });
+        document.getElementById("file-browser-modal").addEventListener("click", function (event) {
+            if (event.target === event.currentTarget) {
+                closeFileBrowser();
+            }
+        });
+        document.getElementById("main-content").addEventListener("scroll", updateActiveSectionFromScroll);
+
+        (function () {
+            var resizeEl = document.getElementById("sidebar-resize");
+            var sidebar = document.getElementById("sidebar");
+            var active = false;
+            resizeEl.addEventListener("mousedown", function (event) {
+                event.preventDefault();
+                active = true;
+                resizeEl.classList.add("active");
+            });
+            document.addEventListener("mousemove", function (event) {
+                if (!active) return;
+                var newWidth = event.clientX;
+                if (newWidth < 160) newWidth = 160;
+                if (newWidth > 420) newWidth = 420;
+                sidebar.style.width = newWidth + "px";
+            });
+            document.addEventListener("mouseup", function () {
+                if (!active) return;
+                active = false;
+                resizeEl.classList.remove("active");
+            });
+        }());
+
+        loadBootstrap();
+    </script>
+
+    <script src="/app/pbgui_nav.js"></script>
+</body>
+</html>

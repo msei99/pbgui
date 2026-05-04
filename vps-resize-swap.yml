@@ -2,7 +2,7 @@
 # Resize swapfile for VPS
 # Steps:
 # 1. Stop PBRun
-# 2. Stop all running pb6 and pb7 bots
+# 2. Stop all running pb7 bots
 # 3. Delete existing swapfile if it exists
 # 4. Create new swapfile
 # 5. Set swappiness and vfs_cache_pressure
@@ -54,17 +54,6 @@
           args:
             executable: /bin/bash
             chdir: "{{ install_dir }}/pbgui"
-
-        - name: kill all pb6 processes
-          shell: |
-            pids="$(ps -ef | grep "{{ install_dir }}/pb6/passivbot" | grep -v grep | awk '{print $2}')"
-            if [ -n "$pids" ]; then
-              kill $pids
-            fi
-          args:
-            executable: /bin/bash
-          changed_when: false
-          ignore_errors: yes
 
         - name: kill all pb7 processes
           shell: |

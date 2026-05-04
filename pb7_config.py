@@ -33,22 +33,52 @@ the config to passivbot for execution.
 
 import json
 import os
+import importlib
 import sys
 import tempfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from pbgui_purefunc import pb7dir
+from pbgui_purefunc import pb7_runtime_status
 
-# ── Ensure pb7/src is importable ──────────────────────────────
 
-_pb7_src = str(Path(pb7dir()) / "src")
-if _pb7_src not in sys.path:
-    sys.path.insert(0, _pb7_src)
+class PB7ConfigurationError(RuntimeError):
+    """Raised when PB7's config pipeline cannot be imported from the configured path."""
 
-from config.load import load_prepared_config  # noqa: E402
-from config_utils import strip_config_metadata  # noqa: E402
+
+_PB7_CONFIG_API_CACHE: dict[str, tuple[Any, Any]] = {}
+
+
+def _get_pb7_config_api() -> tuple[Any, Any]:
+    status = pb7_runtime_status()
+    src_dir = status["src_dir"]
+    if src_dir in _PB7_CONFIG_API_CACHE:
+        return _PB7_CONFIG_API_CACHE[src_dir]
+
+    if not status["import_ready"]:
+        raise PB7ConfigurationError("; ".join(status["errors"]))
+
+    if src_dir and src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+
+    for module_name in ("config.load", "config_utils", "config"):
+        module = sys.modules.get(module_name)
+        module_file = str(getattr(module, "__file__", "") or "")
+        if module and module_file and not module_file.startswith(src_dir):
+            sys.modules.pop(module_name, None)
+
+    try:
+        load_prepared_config = importlib.import_module("config.load").load_prepared_config
+        strip_config_metadata = importlib.import_module("config_utils").strip_config_metadata
+    except Exception as exc:
+        raise PB7ConfigurationError(
+            f"Failed to import PB7 config pipeline from {src_dir}: {exc}"
+        ) from exc
+
+    _PB7_CONFIG_API_CACHE.clear()
+    _PB7_CONFIG_API_CACHE[src_dir] = (load_prepared_config, strip_config_metadata)
+    return _PB7_CONFIG_API_CACHE[src_dir]
 
 # Keys that PBGui stores inside the config but passivbot strips during
 # normalization.  We extract them before the pipeline and re-attach after.
@@ -199,6 +229,7 @@ def _finalize_prepared_pb7_config(
     Applies optional neutralization/status collection, strips passivbot
     metadata, and re-attaches PBGui-only sections such as ``pbgui``.
     """
+    _, strip_config_metadata = _get_pb7_config_api()
     if neutralize_added:
         transform_log = []
         for step in prepared.get("_transform_log", []):
@@ -257,6 +288,7 @@ def _load_prepared_config_from_dict(
     base_config_path: str = "",
 ) -> dict:
     """Run PB7's file-based config pipeline against an in-memory config dict."""
+    load_prepared_config, _ = _get_pb7_config_api()
     tmp_dir = None
     if base_config_path:
         try:
@@ -310,6 +342,7 @@ def prepare_pb7_config_dict(
     if not isinstance(config, dict):
         raise TypeError("config must be a dict")
 
+    _, strip_config_metadata = _get_pb7_config_api()
     source = strip_config_metadata(deepcopy(config))
     source.pop("_pbgui_param_status", None)
 
@@ -377,6 +410,7 @@ def load_pb7_config(
             base_config_path=path,
         )
     else:
+        load_prepared_config, _ = _get_pb7_config_api()
         prepared = load_prepared_config(path, verbose=verbose)
     finalized = _finalize_prepared_pb7_config(
         prepared,

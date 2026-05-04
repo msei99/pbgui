@@ -2,9 +2,10 @@ import json
 import hjson
 import pprint
 import configparser
+import os
 import platform
 import time as _time
-from pathlib import Path
+from pathlib import Path, PurePath
 import subprocess
 import re
 
@@ -56,20 +57,52 @@ def coin_from_symbol_code(symbol_code: str) -> str:
 
     return s.strip().upper()
 
+
+def pbgui_ini_path() -> Path:
+    return Path(__file__).resolve().parent / "pbgui.ini"
+
+
+def streamlit_secrets_path() -> Path:
+    return Path(__file__).resolve().parent / ".streamlit" / "secrets.toml"
+
+
+def _normalize_path_setting(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute() or ".." in raw or raw.startswith("~"):
+        candidate = candidate.resolve(strict=False)
+    return str(candidate)
+
+
+def _normalize_ini_value(parameter: str, value: str) -> str:
+    if parameter in {"pb7dir", "pb7venv"}:
+        return _normalize_path_setting(value)
+    return str(value)
+
+
+def _write_ini_config(pb_config: configparser.ConfigParser) -> None:
+    ini_path = pbgui_ini_path()
+    ini_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = ini_path.with_suffix(".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as pbgui_configfile:
+        pb_config.write(pbgui_configfile)
+    os.replace(str(tmp_path), str(ini_path))
+
 def save_ini(section : str, parameter : str, value : str):
     pb_config = configparser.ConfigParser()
-    pb_config.read('pbgui.ini')
+    pb_config.read(pbgui_ini_path())
     if not pb_config.has_section(section):
         pb_config.add_section(section)
-    pb_config.set(section, parameter, value)
-    with open('pbgui.ini', 'w') as pbgui_configfile:
-        pb_config.write(pbgui_configfile)
+    pb_config.set(section, parameter, _normalize_ini_value(parameter, value))
+    _write_ini_config(pb_config)
 
 def load_ini(section : str, parameter : str):
     pb_config = configparser.ConfigParser()
-    pb_config.read('pbgui.ini')
+    pb_config.read(pbgui_ini_path())
     if pb_config.has_option(section, parameter):
-        return pb_config.get(section, parameter)
+        return _normalize_ini_value(parameter, pb_config.get(section, parameter))
     else:
         return ""
 
@@ -80,7 +113,7 @@ def migrate_ini_sections():
     Preserves all existing keys. Safe to call multiple times (no-op if already migrated).
     Called once at application startup.
     """
-    ini_path = Path("pbgui.ini")
+    ini_path = pbgui_ini_path()
     if not ini_path.exists():
         return
     cfg = configparser.ConfigParser()
@@ -94,22 +127,85 @@ def migrate_ini_sections():
             cfg.remove_section(old)
             changed = True
     if changed:
-        with open(str(ini_path), "w") as f:
-            cfg.write(f)
+        _write_ini_config(cfg)
 
 def pb7dir(): return load_ini("main", "pb7dir")
 
 def pb7venv(): return load_ini("main", "pb7venv")
 
+
+def pb7_runtime_status() -> dict:
+    current_pb7dir = pb7dir()
+    current_pb7venv = pb7venv()
+    src_dir = str(Path(current_pb7dir) / "src") if current_pb7dir else ""
+    passivbot_file = str(Path(src_dir) / "passivbot.py") if src_dir else ""
+    config_load_file = str(Path(src_dir) / "config" / "load.py") if src_dir else ""
+
+    pb7dir_exists = bool(current_pb7dir) and Path(current_pb7dir).is_dir()
+    passivbot_exists = bool(passivbot_file) and Path(passivbot_file).is_file()
+    config_load_exists = bool(config_load_file) and Path(config_load_file).is_file()
+    pb7venv_exists = bool(current_pb7venv) and Path(current_pb7venv).is_file()
+    interpreter_name_ok = bool(current_pb7venv) and PurePath(current_pb7venv).name.startswith("python")
+
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if not current_pb7dir:
+        errors.append("Passivbot V7 path is not configured.")
+    elif not pb7dir_exists:
+        errors.append(f"Passivbot V7 path does not exist: {current_pb7dir}")
+    else:
+        if not passivbot_exists:
+            errors.append(f"Passivbot V7 path is missing src/passivbot.py: {passivbot_file}")
+        if not config_load_exists:
+            errors.append(f"Passivbot V7 path is missing src/config/load.py: {config_load_file}")
+
+    if not current_pb7venv:
+        errors.append("Passivbot V7 python interpreter is not configured.")
+    elif not pb7venv_exists:
+        errors.append(f"Passivbot V7 python interpreter does not exist: {current_pb7venv}")
+    elif not interpreter_name_ok:
+        errors.append(
+            "Passivbot V7 python interpreter must point to a python executable "
+            f"(got {PurePath(current_pb7venv).name})."
+        )
+
+    pbname = load_ini("main", "pbname").strip() or platform.node()
+    role = load_ini("main", "role").strip() or "slave"
+    is_master = role == "master"
+    import_ready = pb7dir_exists and passivbot_exists and config_load_exists
+    venv_ready = pb7venv_exists and interpreter_name_ok
+
+    if import_ready and not venv_ready:
+        warnings.append("PB7 source is available, but the configured Python interpreter is not ready.")
+
+    return {
+        "pb7dir": current_pb7dir,
+        "pb7venv": current_pb7venv,
+        "pbname": pbname,
+        "role": role,
+        "master": is_master,
+        "src_dir": src_dir,
+        "passivbot_file": passivbot_file,
+        "config_load_file": config_load_file,
+        "pb7dir_exists": pb7dir_exists,
+        "passivbot_exists": passivbot_exists,
+        "config_load_exists": config_load_exists,
+        "pb7venv_exists": pb7venv_exists,
+        "interpreter_name_ok": interpreter_name_ok,
+        "import_ready": import_ready,
+        "venv_ready": venv_ready,
+        "ready": import_ready and venv_ready,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
 def is_pb7_installed():
-    if Path(f"{pb7dir()}/src/passivbot.py").exists():
-        return True
-    return False
+    return pb7_runtime_status()["import_ready"]
 
 
 def pb7srcdir() -> str:
-    d = pb7dir()
-    return f"{d}/src" if d else ""
+    return pb7_runtime_status()["src_dir"]
 
 
 def import_passivbot_rust():
@@ -119,7 +215,11 @@ def import_passivbot_rust():
     """
     import sys
 
-    src_dir = pb7srcdir()
+    status = pb7_runtime_status()
+    if not status["import_ready"]:
+        raise RuntimeError("PB7 source is not ready: " + "; ".join(status["errors"]))
+
+    src_dir = status["src_dir"]
     if src_dir and src_dir not in sys.path:
         sys.path.insert(0, src_dir)
 
@@ -127,7 +227,7 @@ def import_passivbot_rust():
 
     return pbr
 
-PBGDIR = Path.cwd()
+PBGDIR = Path(__file__).resolve().parent
 PBGUI_VERSION = "v1.77"
 _serial_path = PBGDIR / 'api' / 'serial.txt'
 PBGUI_SERIAL = _serial_path.read_text().strip() if _serial_path.exists() else ''
@@ -143,7 +243,7 @@ SYNC_EXCLUDE_FILES = frozenset({
 def _get_pbname() -> str:
     """Return this master's hostname from pbgui.ini or platform.node()."""
     cfg = configparser.ConfigParser()
-    cfg.read(PBGDIR / "pbgui.ini")
+    cfg.read(pbgui_ini_path())
     if cfg.has_option("main", "pbname"):
         return cfg.get("main", "pbname")
     return platform.node()

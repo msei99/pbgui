@@ -1780,7 +1780,7 @@ install_pbgui_venv = """
 
     Notes:
     - requirements.txt is the default (Python 3.12)
-    - requirements310.txt keeps the pinned Python 3.10 baseline
+    - requirements310.txt remains only for legacy rollback and migration paths
     ```"""
 
 update_pb7_venv = """

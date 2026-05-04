@@ -18,7 +18,6 @@ Die Hauptansicht zeigt eine Tabelle mit allen Servern (Master + VPS) und ihrem a
 | **Reboot** | ✅ kein Reboot nötig / ❌ Reboot erforderlich |
 | **Updates** | Ausstehende Linux-Paket-Updates |
 | **PBGui / PBGui Branch / PBGui github** | Installierte Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
-| **PB6 / PB6 github** | PB6-Version vs. GitHub-Origin |
 | **PB7 / PB7 Branch / PB7 github** | PB7-Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
 | **API Sync** | ✅ API-Keys synchron mit Master / ❌ nicht synchron |
 
@@ -47,9 +46,9 @@ Sidebar-Aktionen:
 |--------|--------|
 | `:material/refresh:` | Status neu laden |
 | `:material/home:` | Zurück zur Übersicht |
-| **Update PBGui, PB6 and PB7** | Alle Komponenten aktualisieren |
+| **Update PBGui and PB7** | Alle Komponenten aktualisieren |
 | **Update PBGui** | Nur PBGui aktualisieren |
-| **Update pb6 and pb7** | Nur PB6/PB7 aktualisieren |
+| **Update PB7** | Nur PB7 aktualisieren |
 | **Install rustup** | Rust-Toolchain installieren (benötigt sudo-Passwort) |
 | **Install rclone** | rclone installieren (benötigt sudo-Passwort) |
 | **Update PB7 venv** | PB7 Python-3.12-Venv neu erstellen (benötigt sudo-Passwort) |
@@ -73,7 +72,7 @@ Sidebar-Aktionen:
 | **Read settings from VPS** | Aktuelle Konfiguration per SSH vom VPS abrufen |
 | **Initialize** | Ersteinrichtungs-Assistent starten |
 | **Update PBGui** | PBGui auf diesem VPS aktualisieren |
-| **Update PBGui, PB6 and PB7** | Alle Komponenten aktualisieren |
+| **Update PBGui and PB7** | Alle Komponenten aktualisieren |
 | **Update PB7 venv** | PB7 Python-3.12-Venv neu erstellen |
 | **Update PBGui venv** | PBGui Python-3.12-Venv neu erstellen |
 | **Update Linux** | `apt upgrade` ausführen (optionale Reboot-Checkbox) |
@@ -107,8 +106,8 @@ Der **Log-Viewer** am Seitenende erlaubt das Abrufen und Anzeigen beliebiger Log
 ## Typische Arbeitsabläufe
 
 ### Alle Server aktualisieren
-1. **Master (local)** klicken → **Update PBGui, PB6 and PB7** → auf *successful* im Log warten
-2. Für jeden VPS: Hostname klicken → **Update PBGui, PB6 and PB7**
+1. **Master (local)** klicken → **Update PBGui and PB7** → auf *successful* im Log warten
+2. Für jeden VPS: Hostname klicken → **Update PBGui and PB7**
 
 ### Auf einen Feature-Branch wechseln
 1. Master oder VPS-Detailansicht öffnen

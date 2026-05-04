@@ -26,15 +26,14 @@ It has the following functions:
 
 ### Requirements
 - Python 3.12 (default)
-- Python 3.10 (only required if you use PB6)
 - Streamlit 1.54.0
 - Linux
 
 ### Migration (Python 3.10 -> 3.12)
 
-PBGui and PB7 use Python 3.12 by default. PB6 stays on Python 3.10.
+PBGui and PB7 use Python 3.12 by default.
 
-If you already have PBGui running, you can upgrade in a few clicks:
+If you already have an older PBGui installation running on Python 3.10, you can upgrade in a few clicks:
 
 Master (recommended):
 - Open the VPS Manager on your Master.
@@ -54,8 +53,6 @@ VPS:
 - **PB7**
   - Click "Update PB7 venv" if you also run PB7 on that VPS.
 - Recommended (especially on small VPS): After the update, click "Cleanup VPS" once to free disk space.
-
-Note: PB6 stays on Python 3.10. If you don't use PB6 on a VPS, Python 3.10 components may be removed to save disk space.
 
 ### Recommendation
 
@@ -159,34 +156,25 @@ Step 7: Connect to PBGui
 
 ### Ubuntu installer
 
-There is a install.sh for Ubuntu. Working on Ubunt24.04
+There is an Ubuntu `install.sh` for PBGui + PB7. It works on Ubuntu 24.04 and only adds Deadsnakes when `python3.12-venv` is not available from the current distro repositories.
 ```
 curl -L https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/install.sh | bash
 ```
 
 ### Manual Installation for all Linux distributions
 
-Clone pbgui and passivbot v6 and v7
+Clone pbgui and passivbot v7
 ```
 git clone https://github.com/msei99/pbgui.git
-git clone https://github.com/enarjord/passivbot.git pb6
 git clone https://github.com/enarjord/passivbot.git pb7
 ```
 Create virtual environments
 ```
-python3.10 -m venv venv_pb6
 python3.12 -m venv venv_pb7
 python3.12 -m venv venv_pbgui
 ```
-Install requirements for pb6, pb7 and pbgui
+Install requirements for pb7 and pbgui
 ```
-source venv_pb6/bin/activate
-cd pb6
-git checkout v6.1.4b_latest_v6
-pip install --upgrade pip
-pip install -r requirements.txt
-deactivate
-cd ..
 source venv_pb7/bin/activate
 cd pb7
 pip install --upgrade pip
@@ -294,8 +282,6 @@ You need to configure pbgui.ini with a minimum of this settings on your VPS.
 Example pbgui.ini (replace parameters with your own correct settings).
 ```
 [main]
-pbdir = /home/mani/software/pb6
-pbvenv = /home/mani/software/venv_pb6/bin/python
 pb7dir = /home/mani/software/pb7
 pb7venv = /home/mani/software/venv_pb7/bin/python
 pbname = manibot50
@@ -324,6 +310,29 @@ Edit pbguipath in the start.bat to your pbgui installation path
 Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 # Changelog
+
+## v1.78 (unreleased)
+- Fixed: `master-update-pbgui.yml` no longer contains a stray PB6 cleanup condition after the PB7-only cleanup, so the localhost PBGui update playbook stays structurally clean.
+- Changed: Current setup, update playbooks, and operator documentation now consistently describe and execute a PB7-only workflow; the remaining PB6 cleanup blocks were removed from the active setup/update path.
+- Changed: The Ubuntu `install.sh` flow now installs only PBGui plus PB7, removes the bundled PB6 bootstrap and config keys, and adds the Deadsnakes PPA only when the distro does not already provide `python3.12-venv`; legacy optimize config loading now tolerates a missing PB6 path.
+- Fixed: `vps-setup.yml` now checks whether `python3.12-venv` is already available from the current distro apt sources before adding the Deadsnakes PPA, so Ubuntu 24.04 VPS setup no longer fails just because Launchpad is unreachable.
+- Changed: The shared FastAPI top-nav logout action now uses the earlier simple door icon again so the control fits the rest of the navigation more naturally.
+- Changed: Standalone FastAPI pages now expose a shared icon-only logout action at the far right of the top navigation next to `About`, so logout works consistently across all pages.
+- Changed: The simple root login screen no longer uses background gradients and now stays cleanly centered on a plain black browser background.
+- Changed: The FastAPI Welcome page now skips the redundant `Access` section entirely, and password-protected sessions are routed back to the simple root login page instead of handling login locally.
+- Changed: Logging out from the FastAPI Welcome page now returns to the simple root login page, and that root page was reduced to the PBGui logo badge plus the password field only.
+- Changed: Accessing the FastAPI root at `localhost:8000` now shows a minimal login page only when a password is configured; without a password it jumps straight into the Welcome page and auto-authenticates the browser session.
+- Changed: The FastAPI Welcome change-password form now uses the same eye-toggle reveal control as other PBGui credential inputs so the current and new password can be shown temporarily while editing.
+- Changed: The FastAPI Welcome hero no longer shows the large explanatory intro text and now keeps only the compact status summary.
+- Added: The FastAPI Welcome `PB7 Setup` section now includes authenticated `Browse` actions for the Passivbot V7 path and Python interpreter fields, using a small server-side file browser instead of manual path typing only.
+- Fixed: Streamlit now only mints FastAPI tokens for authenticated Welcome sessions, the Information menu is back to a single `Market Data` FastAPI entry, and the Welcome page reloads with the fresh token after login so the shared FastAPI menus unlock immediately.
+- Fixed: The unreleased changelog was cleaned up after the `v1.77` release, so `v1.78 (unreleased)` now lists only the actual post-release work.
+- Added: A standalone FastAPI `Welcome` page now handles login, password changes, PB7 path/interpreter setup, and direct entry into the standalone FastAPI pages.
+- Changed: The FastAPI Welcome page now uses the shared PBGui top navigation and a standard left sidebar, removes the extra `Continue` / `Refresh Status` actions, and focuses the password field automatically in the logged-out password-protected state.
+- Fixed: Logout from the FastAPI Welcome flow now also clears the mirrored Streamlit auth session, so refreshes, 401 redirects, and reopening `http://localhost:8501/` while logged out no longer silently sign the browser back in.
+- Fixed: The shared FastAPI top navigation now keeps protected menu groups disabled while the browser is logged out, preventing guest clicks from ending on raw `Missing authentication token` API errors.
+- Fixed: Streamlit now restarts a stale PBApiServer automatically when the running API process is missing the newer `/api/auth/*` welcome routes, and the Streamlit `Market Data` entry now points cleanly to the FastAPI page instead of the removed legacy target.
+- Changed: PB7 config imports are now loaded lazily with a dedicated configuration error, so a broken `pb7dir` no longer prevents `PBApiServer.py` from starting and the UI can surface the problem cleanly.
 
 ## v1.77 (03-05-2026)
 - Changed: the README `Docker (Any OS)` section now points to the actively maintained community project `dreamelite96/pbgui-docker` instead of the previous Docker link.

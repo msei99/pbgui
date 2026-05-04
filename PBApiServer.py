@@ -30,10 +30,10 @@ import psutil
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.auth import SessionToken, require_auth
+from api.auth import SessionToken, build_root_entry_response, optional_auth, require_auth, router as auth_router
 from api.api_keys import router as api_keys_router
 from api.dashboard import router as dashboard_router
 from api.dashboards import router as dashboards_router
@@ -52,6 +52,7 @@ from api.backtest_v7 import startup as bt7_startup, shutdown as bt7_shutdown
 from api.optimize_v7 import router as optimize_v7_router
 from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
 from logging_helpers import human_log as _log
+from pb7_config import PB7ConfigurationError
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, PBGUI_SERIAL, PBGUI_VERSION
 
 SERVICE = "PBApiServer"
@@ -318,6 +319,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(api_keys_router, prefix="/api/api-keys", tags=["api-keys"])
 app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(dashboards_router, prefix="/api/dashboards", tags=["dashboards"])
@@ -333,6 +335,17 @@ app.include_router(balance_calc_router, prefix="/api/balance-calc", tags=["balan
 app.include_router(coin_data_router, prefix="/api/coin-data", tags=["coin-data"])
 app.include_router(backtest_v7_router, prefix="/api/backtest-v7", tags=["backtest-v7"])
 app.include_router(optimize_v7_router, prefix="/api/optimize-v7", tags=["optimize-v7"])
+
+
+@app.exception_handler(PB7ConfigurationError)
+async def handle_pb7_configuration_error(request: Request, exc: PB7ConfigurationError):
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "pb7_configuration_error",
+            "detail": str(exc),
+        },
+    )
 
 
 # ── Central UI notification log ──────────────────────────────
@@ -884,18 +897,14 @@ def serve_plotly_js():
     return FileResponse(str(path), media_type="application/javascript")
 
 
-@app.get("/")
-def root():
-    """API root endpoint."""
-    return {
-        "service": "PBGui API",
-        "version": "1.65",
-        "endpoints": {
-            "jobs": "/api/jobs/",
-            "websocket": "ws://localhost:8000/ws/jobs",
-            "frontend": "/app/jobs_monitor.html"
-        }
-    }
+@app.get("/", include_in_schema=False)
+def root(
+    request: Request,
+    st_base: str = "",
+    session: SessionToken | None = Depends(optional_auth),
+):
+    """UI root endpoint."""
+    return build_root_entry_response(request=request, st_base=st_base, session=session)
 
 
 @app.get("/health")

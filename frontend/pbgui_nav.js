@@ -86,6 +86,8 @@
     'transition:color .15s,border-color .15s,background .15s;white-space:nowrap;}',
     '.nav-group-btn:hover{color:#e2e8f0;background:rgba(255,255,255,.04);}',
     '.nav-group-btn.active{color:#63b3ed;border-bottom-color:#63b3ed;}',
+    '.nav-group-btn.disabled{opacity:.45;cursor:not-allowed;}',
+    '.nav-group-btn.disabled:hover{color:#94a3b8;background:transparent;border-bottom-color:transparent;}',
 
     '.nav-arrow{font-size:0.58rem;opacity:0.6;transition:transform .15s;}',
     '.nav-group.open .nav-arrow{transform:rotate(180deg);}',
@@ -114,6 +116,8 @@
     'color:#64748b;font-size:var(--fs-sm);font-weight:500;cursor:pointer;',
     'transition:all .15s;white-space:nowrap;height:32px;}',
     '.nav-action-btn:hover{background:rgba(255,255,255,.05);border-color:#2d3748;color:#e2e8f0;}',
+    '.nav-action-btn.icon-only{justify-content:center;gap:0;padding:0;width:32px;min-width:32px;}',
+    '.nav-action-btn.icon-only svg{width:16px;height:16px;display:block;stroke:currentColor;}',
     '.nav-action-btn.accent{color:#63b3ed;border-color:rgba(99,179,237,.25);background:rgba(99,179,237,.04);}',
     '.nav-action-btn.accent:hover{background:rgba(99,179,237,.12);border-color:#63b3ed;}',
     '.nav-action-btn.restart{color:#f59e0b;border-color:rgba(245,158,11,.3);background:rgba(245,158,11,.06);display:none;}',
@@ -123,6 +127,8 @@
     '@keyframes nav-blink{0%,100%{opacity:1;}50%{opacity:.3;}}',
     '.nav-action-btn.notify{color:#64748b;}',
     '.nav-action-btn.notify:hover{color:#e2e8f0;}',
+    '.nav-action-btn.logout{color:#94a3b8;}',
+    '.nav-action-btn.logout:hover{color:#f8fafc;}',
 
     /* notification log panel */
     '#pbgui-notify-panel{position:fixed;bottom:0;right:0;width:50%;height:40vh;min-width:240px;min-height:150px;',
@@ -227,6 +233,7 @@
     if (!nav) return;
     var c = cfg();
     var CURRENT = c.current;
+    var canNavigate = !!c.token;
     var navGroups = NAV_GROUPS.map(function (group) {
       return {
         id: group.id,
@@ -260,7 +267,7 @@
     navGroups.forEach(function (group) {
       var isActive = (group.id === activeGroup);
       html += '<div class="nav-group">';
-      html += '<button class="nav-group-btn' + (isActive ? ' active' : '') + '" data-group="' + group.id + '">';
+      html += '<button class="nav-group-btn' + (isActive ? ' active' : '') + (canNavigate ? '' : ' disabled') + '" data-group="' + group.id + '"' + (canNavigate ? '' : ' disabled aria-disabled="true"') + '>';
       html += esc(group.label) + ' <span class="nav-arrow">&#9660;</span></button>';
       html += '<div class="nav-dropdown">';
       group.items.forEach(function (item) {
@@ -281,6 +288,13 @@
           + '<button class="nav-action-btn notify" id="pbgui-notify-btn" title="Notification log">&#128276;</button>'
           + '<button class="nav-action-btn accent" id="pbgui-guide-btn">&#128218; Guide</button>'
           + '<button class="nav-action-btn" id="pbgui-about-btn">&#x2139;&#xFE0F; About</button>'
+          + '<button class="nav-action-btn icon-only logout" id="pbgui-logout-btn" title="Logout" aria-label="Logout">'
+          +   '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
+          +     '<path d="M4 4.75C4 4.33579 4.33579 4 4.75 4H13.25C13.6642 4 14 4.33579 14 4.75V19.25C14 19.6642 13.6642 20 13.25 20H4.75C4.33579 20 4 19.6642 4 19.25V4.75Z" stroke-width="1.7" stroke-linejoin="round"/>'
+          +     '<path d="M14 6.25L18.75 8V16L14 17.75V6.25Z" stroke-width="1.7" stroke-linejoin="round"/>'
+          +     '<circle cx="15.8" cy="12" r="0.85" fill="currentColor" stroke="none"/>'
+          +   '</svg>'
+          + '</button>'
           + '</div>';
 
     nav.innerHTML = html;
@@ -552,6 +566,7 @@
      Key = nav page id, value = path under the API origin.
      ════════════════════════════════════ */
   var FASTAPI_PAGES = {
+    '/':                 '/api/auth/main_page',
     'dashboards':        '/api/dashboard/main_page',
     'info_coin_data':    '/api/coin-data/main_page',
     'info_market_data_fastapi': '/api/market-data/main_page',
@@ -689,6 +704,10 @@
     function navTo(page) {
       if (!page) return;
 
+      if (!TOKEN && page !== '/') {
+        return;
+      }
+
       /* Direct FastAPI page — navigate without Streamlit relay */
       if (FASTAPI_PAGES[page] && apiOrigin) {
         var faUrl = apiOrigin + FASTAPI_PAGES[page]
@@ -770,6 +789,12 @@
       aboutOvl.addEventListener('click', function (e) {
         if (e.target === aboutOvl) aboutOvl.classList.remove('visible');
       });
+    }
+
+    var logoutBtn = document.getElementById('pbgui-logout-btn');
+    if (logoutBtn) {
+      logoutBtn.style.display = TOKEN ? 'inline-flex' : 'none';
+      logoutBtn.addEventListener('click', function () { performLogout(); });
     }
 
     /* Esc key closes about overlay */
@@ -909,14 +934,46 @@
      TOKEN KEEP-ALIVE & 401 REDIRECT
      ════════════════════════════════════ */
 
-  /* Redirect to Streamlit login when token is invalid/expired. */
+  /* Redirect to the standalone root login when token is invalid/expired. */
   function redirectToLogin() {
-    var base = cfg().stBase || '';
-    if (base) {
-      window.location.replace(base);
-    } else {
-      window.location.replace('/');
+    var c = cfg();
+    var origin = '';
+    if (c.apiBase) {
+      var match = String(c.apiBase).match(/^(https?:\/\/[^/]+)/);
+      if (match) origin = match[1];
     }
+    if (!origin) origin = window.location.origin;
+    var url = new URL(origin + '/');
+    if (c.stBase) url.searchParams.set('st_base', c.stBase);
+    window.location.replace(url.toString());
+  }
+
+  function performLogout() {
+    var c = cfg();
+    var origin = '';
+    if (c.apiBase) {
+      var match = String(c.apiBase).match(/^(https?:\/\/[^/]+)/);
+      if (match) origin = match[1];
+    }
+    if (!origin) origin = window.location.origin;
+
+    var redirect = function () {
+      var url = new URL(origin + '/');
+      if (c.stBase) url.searchParams.set('st_base', c.stBase);
+      window.location.replace(url.toString());
+    };
+
+    if (!c.token) {
+      redirect();
+      return;
+    }
+
+    fetch(origin + '/api/auth/logout', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + c.token }
+    }).finally(function () {
+      redirect();
+    });
   }
 
   /* Periodically call /api/token-refresh to extend token expiry.

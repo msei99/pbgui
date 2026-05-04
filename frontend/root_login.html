@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PBGui - Login</title>
+    <style>
+        :root {
+            --fs-xs: 11px;
+            --fs-sm: 13px;
+            --fs-base: 14px;
+            --fs-md: 15px;
+            --fs-lg: 18px;
+            --fs-xl: 22px;
+            --sp-xs: 4px;
+            --sp-sm: 8px;
+            --sp-md: 12px;
+            --sp-lg: 20px;
+            --input-h: 32px;
+            --btn-h: 32px;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            background: #000000;
+            color: #e2e8f0;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-size: var(--fs-base);
+        }
+
+        body {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+        }
+
+        .card {
+            width: min(100%, 320px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 0;
+            border: none;
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .brand {
+            display: inline-flex;
+            margin-bottom: var(--sp-lg);
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: var(--sp-sm);
+            width: 100%;
+        }
+
+        input,
+        button {
+            font-size: var(--fs-base);
+        }
+
+        input {
+            width: 100%;
+            height: var(--input-h);
+            padding: 0 12px;
+            border-radius: 8px;
+            border: 1px solid #2d3748;
+            background: #0e1117;
+            color: #f8fafc;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #26a69a;
+            box-shadow: 0 0 0 3px rgba(38, 166, 154, 0.16);
+        }
+
+        .banner {
+            display: none;
+            margin-top: var(--sp-md);
+            padding: var(--sp-md);
+            border-radius: 10px;
+            border: 1px solid rgba(248, 113, 113, 0.28);
+            background: rgba(127, 29, 29, 0.45);
+            color: #fecaca;
+            line-height: 1.5;
+        }
+
+        .banner.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <div class="brand" aria-label="PBGui Welcome">
+            <svg width="112" height="36" viewBox="0 0 112 36" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true">
+                <rect x="1" y="1" width="34" height="34" rx="7" fill="#1a2744" stroke="#3182ce" stroke-width="1.5"/>
+                <rect x="7" y="21" width="5" height="9" rx="1.5" fill="#63b3ed"/>
+                <rect x="14.5" y="15" width="5" height="15" rx="1.5" fill="#4299e1"/>
+                <rect x="22" y="9" width="5" height="21" rx="1.5" fill="#3182ce"/>
+                <text x="42" y="15" font-family="'Segoe UI',system-ui,sans-serif" font-size="13" font-weight="700" fill="#e2e8f0" letter-spacing="0.3">PBGui</text>
+                <text x="42" y="28" font-family="'Segoe UI',system-ui,sans-serif" font-size="7.5" font-weight="400" fill="#4299e1" letter-spacing="1.2">WELCOME</text>
+            </svg>
+        </div>
+        <form id="login-form">
+            <div class="field">
+                <input id="password" type="password" autocomplete="current-password" autofocus placeholder="Password" aria-label="Password">
+            </div>
+        </form>
+        <div id="banner" class="banner" role="alert"></div>
+    </main>
+
+    <script>
+        var API_ORIGIN = "%%API_ORIGIN%%";
+        var ST_BASE = "%%ST_BASE%%";
+
+        if (API_ORIGIN === "%%" + "API_ORIGIN%%") API_ORIGIN = window.location.origin;
+        if (ST_BASE === "%%" + "ST_BASE%%") ST_BASE = "";
+
+        function setBanner(message) {
+            var banner = document.getElementById("banner");
+            if (!message) {
+                banner.className = "banner";
+                banner.textContent = "";
+                return;
+            }
+            banner.className = "banner show";
+            banner.textContent = message;
+        }
+
+        async function fetchJson(url, options) {
+            var response = await fetch(url, options || {});
+            var text = await response.text();
+            var data = {};
+            if (text) {
+                try {
+                    data = JSON.parse(text);
+                } catch (error) {
+                    data = { detail: text };
+                }
+            }
+            if (!response.ok) {
+                throw new Error(data.detail || ("Request failed with status " + response.status));
+            }
+            return data;
+        }
+
+        function redirectToWelcome(token) {
+            var target = new URL(API_ORIGIN + "/api/auth/main_page");
+            if (token) target.searchParams.set("token", token);
+            if (ST_BASE) target.searchParams.set("st_base", ST_BASE);
+            window.location.replace(target.toString());
+        }
+
+        async function submitLogin(event) {
+            event.preventDefault();
+            setBanner("");
+
+            var password = document.getElementById("password").value;
+
+            try {
+                var data = await fetchJson(API_ORIGIN + "/api/auth/login", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ password: password })
+                });
+                redirectToWelcome((data.auth && data.auth.token) || "");
+            } catch (error) {
+                setBanner(error.message);
+            }
+        }
+
+        document.getElementById("login-form").addEventListener("submit", submitLogin);
+    </script>
+</body>
+</html>
