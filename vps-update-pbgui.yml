@@ -12,16 +12,13 @@
     # ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"
     # user_pw: "{{ user_pw }}"
+    install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
 
   tasks:
     - name: display facts
       debug:
         var: ansible_facts
       tags: debug,never
-
-    - name: get install_dir
-      set_fact:
-        install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
 
     - name: Get current branch
       command: git rev-parse --abbrev-ref HEAD

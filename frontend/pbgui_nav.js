@@ -42,7 +42,8 @@
       { page: '/',                    icon: '&#128682;', label: 'Welcome'           },
       { page: 'system_api_keys',      icon: '&#128273;', label: 'API-Keys'          },
       { page: 'system_services',      icon: '&#128295;', label: 'PBGUI Services'    },
-      { page: 'system_vps_manager',   icon: '&#128421;', label: 'VPS Manager'       },
+      { page: 'system_vps_manager_fastapi', icon: '&#128421;', label: 'VPS Manager' },
+      { page: 'system_vps_manager',   icon: '&#128340;', label: 'VPS Manager Legacy' },
       { page: 'system_vps_monitor',   icon: '&#128223;', label: 'VPS Monitor'       },
       { page: 'system_logging',       icon: '&#128196;', label: 'Logging'           }
     ]},
@@ -571,6 +572,7 @@
     'info_coin_data':    '/api/coin-data/main_page',
     'info_market_data_fastapi': '/api/market-data/main_page',
     'system_api_keys':   '/api/api-keys/main_page',
+    'system_vps_manager_fastapi': '/api/vps-manager/main_page',
     'system_logging':     '/api/logging/main_page',
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',

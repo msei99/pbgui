@@ -1,0 +1,133 @@
+# PBGui — Agent Instructions
+
+## Before Finishing ANY Task
+
+1. **Changelog** — Add entry to `README.md` → `# Changelog` → current `(unreleased)` section. Never skip.
+2. **serial.txt** — If any file under `api/`, `PBApiServer.py`, or a module imported at API startup changed: increment `api/serial.txt` by 1.
+3. **Commit** — Always ask before committing or pushing. Never commit without explicit user confirmation.
+
+## Project Architecture
+
+### Stack
+- **Backend**: FastAPI (migrating from Streamlit). All new features as FastAPI routes.
+- **Frontend**: Vanilla JS + HTML (no React, Vue, jQuery). Served via FastAPI `/app/` static mount.
+- **Legacy UI**: Streamlit pages in `navi/` — do not add new Streamlit polling fragments.
+- **CSS**: Custom dark theme, CSS variables per page (`:root`), no Tailwind/Bootstrap.
+- **Python**: 3.12 default, 3.10 for PB6 legacy.
+
+### Directory Layout
+| Path | Purpose |
+|------|---------|
+| `api/` | FastAPI route modules (auth, dashboard, vps, logging, market_data, etc.) |
+| `navi/` | Streamlit pages (legacy) |
+| `frontend/` | Vanilla JS HTML pages |
+| `frontend/js/` | Shared JS modules: `log_viewer_panel.js`, `pbgui_nav.js`, `pbgui_dialogs.js` |
+| `master/` | Async backend daemons: SSH pool, monitoring, log streaming, file sync |
+| `components/` | Streamlit custom components |
+| `tests/` | Pytest tests |
+| `docs/help/` | English guides |
+| `docs/help_de/` | German guides |
+| `data/` | Runtime data: `logs/`, `instances/`, `run_v7/`, `bt_v7/`, `opt_v7/`, `dashboards/` |
+
+### Data Flow
+```
+FastAPI router → reads DB / memory → returns JSON
+Vanilla JS fetch() → GET /api/... with Bearer token → updates DOM
+WebSocket /ws/* → push every N seconds → JS updates charts/tables
+SSE /api/live/stream → delta applies on top of DB snapshot
+```
+
+## Code Conventions
+
+### General
+- **GUI language is English throughout** — only guides are offered in DE as well.
+- Snake_case for variables/functions, PascalCase for classes, UPPER_CASE for constants.
+- Private methods: `_leading_underscore`.
+- `SERVICE = "ModuleName"` constant at top of every module for logging.
+
+### FastAPI Patterns
+- Router variable always named `router = APIRouter()`.
+- Auth via `require_auth` / `optional_auth` dependencies (Bearer token or `?token=` query param).
+- HTML pages: `%%TOKEN%%`, `%%API_BASE%%`, `%%WS_BASE%%` placeholders replaced server-side.
+- WebSocket validation: check `token` query param, close 4001 on invalid.
+- Name validation: reject `/`, `\\`, `\x00`, `.`, `..`.
+
+### Frontend Patterns
+- HTML page template:
+  ```html
+  <nav id="topnav"></nav>
+  <div id="page-body">...</div>
+  <script>
+    window.TOKEN = %%TOKEN%%;
+    window.API_BASE = %%API_BASE%%;
+    window.WS_BASE = %%WS_BASE%%;
+    window.PBGUI_NAV_CONFIG = { subtitle: '...', current: 'page_key' };
+  </script>
+  <script src="/app/pbgui_nav.js"></script>
+  ```
+- Log viewing: always use shared `LogViewerPanel` from `frontend/js/log_viewer_panel.js`.
+- Navigation: `pbgui_nav.js` via `PBGUI_NAV_CONFIG` + `window.TOKEN`.
+- Cache busting: use `?v=N` on JS/CSS asset URLs, increment when file changes.
+
+### Streamlit Patterns (Legacy)
+- `st.html(unsafe_allow_javascript=True)` for dynamic height content.
+- `st.components.v1.iframe()` for fixed height.
+- DOMPurify constraint: `<`/`>` inside JS string literals in `st.html` must be `\x3C`/`\x3E`.
+- Session state: prefix with module name (e.g., `edit_multi_`, `bc_`, `v7_`).
+- Never open a dialog inside another dialog (`@st.dialog` → use `st.error` inline).
+- Guide button: `c_title, c_help = st.columns([0.95, 0.05])`, button in `c_help`.
+
+### Logging
+- 3-tier model:
+  - Tier 1: Daemon logs (own file, e.g. `PBRun.log`) — NOT in `LOG_GROUPS`.
+  - Tier 2: Data pipeline logs (own file) — NOT in `LOG_GROUPS`.
+  - Tier 3: UI helpers → `PBGui.log` — MUST be added to `LOG_GROUPS` in `logging_helpers.py`.
+- Import: `from logging_helpers import human_log as _log`, then `_log('ServiceName', msg, level='...')`.
+- Never use `print()` or `logging.xxx()` in GUI modules.
+- Never use `traceback.print_exc()` — use `meta={'traceback': traceback.format_exc()}`.
+- All logs go to `data/logs/`.
+
+### Passivbot Configs
+- Load/save via `pb7_config.py` (`load_pb7_config` / `save_pb7_config`) — never raw `json.load`/`json.dump`.
+- Exception: override configs (`{SYMBOL.json}`) are sparse diffs — raw JSON is fine.
+- Symbol resolution: always use `data/coindata/{exchange}/mapping.json` — never ad-hoc CCXT fetches.
+- USDT linear perps: filter `quote == "USDT"` and `swap == True`.
+
+### File Operations
+- Atomic writes: temp file + `os.replace()` for configs, PID files, JSON data files, secrets.
+- Not needed for: log files, one-time creation.
+- Check `Path.exists()` before read, handle parse errors explicitly.
+- JSON with `indent=4`.
+- Use `pathlib.Path` over string paths.
+
+### Error Handling
+- FastAPI: `raise HTTPException(status_code=..., detail=...)`.
+- Streamlit: `error_popup()` only for critical errors; `st.error()` inline for validation.
+- Always log exceptions before showing popup.
+- Retry only for transient errors (Network, Timeout).
+- Never blanket catch without logging.
+
+## Important Constraints
+
+### Do NOT Modify Without Approval
+- PB7/passivbot code (`pb7/` or upstream repo).
+- PB6 legacy modules: `Multi.py`, `Backtest.py`, `Optimize.py`, `BacktestMulti.py`, `OptimizeMulti.py`, `Instance.py`, all `navi/v6_*` files.
+- Do not deploy/copy files to manibot01 or any remote server without explicit permission.
+
+### General Rules
+- Never make large unsolicited design changes. Propose first, wait for "Yes".
+- Never extend scope — stop when the original request is satisfied. Ask if something extra seems useful.
+- Never silently do more than requested.
+- Always ask before committing or pushing.
+- Never build modal windows/dialogs that close when the user clicks outside them; require an explicit button/action to close.
+
+### Release Workflow
+- Steps in `RELEASING.md`.
+- Per release: bump `README.md` version + changelog, bump `pbgui_func.py` About string.
+- Commit: `Release vX.YY`, tag `vX.YY`, push branch + tags.
+
+## Testing
+- Run: `/home/mani/software/venv_pbgui/bin/python -m pytest tests/`
+- Pytest 7.0+, discovery: `test_*.py`, `Test*` classes, `test_*` functions.
+- Use `@pytest.mark.parametrize` for multiple cases.
+- Module/class/function docstrings required.

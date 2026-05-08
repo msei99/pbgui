@@ -42,6 +42,7 @@ from api.logging import router as logging_router
 from api.market_data import router as market_data_router
 from api.heatmap import router as heatmap_router
 from api.vps import router as vps_router
+from api.vps_manager import router as vps_manager_router
 from api.services import router as services_router
 from api.live import router as live_router
 from api.v7_instances import router as v7_router
@@ -328,6 +329,7 @@ app.include_router(logging_router, prefix="/api/logging", tags=["logging"])
 app.include_router(market_data_router, prefix="/api", tags=["market-data"])
 app.include_router(heatmap_router, prefix="/api/heatmap", tags=["heatmap"])
 app.include_router(vps_router, tags=["vps"])
+app.include_router(vps_manager_router, prefix="/api/vps-manager", tags=["vps-manager"])
 app.include_router(services_router, prefix="/api/services", tags=["services"])
 app.include_router(live_router, prefix="/api/live", tags=["live"])
 app.include_router(v7_router, prefix="/api/v7", tags=["v7"])

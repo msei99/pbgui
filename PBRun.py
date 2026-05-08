@@ -230,6 +230,18 @@ class Monitor():
         self.pnl_counter_yesterday = 0
         self.init_found = False
 
+    @staticmethod
+    def _parse_log_ts(value):
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            return int(datetime.fromisoformat(raw).timestamp())
+        except ValueError:
+            return None
+
     def watch_log(self):
         yesterday = True
         logfile = Path(f'{self.path}/passivbot.log')
@@ -263,19 +275,12 @@ class Monitor():
             for line in new_content:
                 elements = line.split()
                 if len(elements) > 1:
-                    if elements[1] == "ERROR" or elements[1] == "INFO":
-                        # check elements[0] for correct isoformat
-                        if len(elements[0]) == 19:
-                            if elements[0][4] == "-" and elements[0][7] == "-" and elements[0][10] == "T" and elements[0][13] == ":" and elements[0][16] == ":":
-                                ts = int(datetime.fromisoformat(elements[0]).timestamp())
-                                if ts < yesterday_ts:
-                                    continue
-                                else:
-                                    seek = False
-                                if ts < today_ts:
-                                    yesterday = True
-                                else:
-                                    yesterday = False
+                    ts = self._parse_log_ts(elements[0])
+                    if ts is not None:
+                        if ts < yesterday_ts:
+                            continue
+                        seek = False
+                        yesterday = ts < today_ts
                 if seek:
                     continue
                 if tb_found:

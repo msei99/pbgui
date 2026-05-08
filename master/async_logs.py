@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import subprocess
 import time
 from collections import deque
@@ -31,6 +32,11 @@ SERVICE_LOGS: dict[str, str] = {
     "PBCoinData": "data/logs/PBCoinData.log",
     "PBData":    "data/logs/PBData.log",
     "PBMon":     "data/logs/PBMon.log",
+    "PBGui":     "data/logs/PBGui.log",
+    "PBApiServer": "data/logs/PBApiServer.log",
+    "FastAPI":   "data/logs/FastAPI.log",
+    "VPSMonitor": "data/logs/VPSMonitor.log",
+    "VPSManagerApi": "data/logs/VPSManagerApi.log",
 }
 
 
@@ -56,6 +62,95 @@ def local_logs_dir() -> Path:
     return _project_root() / "data" / "logs"
 
 
+_TASK_LOG_ALIAS_RE = re.compile(r"^(?P<stem>[A-Za-z0-9_-]+)(?:\.(?P<history>\d+))?$")
+_TASK_LOG_FILE_RE = re.compile(r"^(?P<stem>[A-Za-z0-9_-]+)\.log(?:\.(?P<history>\d+))?$")
+
+
+def _task_log_filename_from_action(action: str, prefix: str,
+                                   legacy_action_files: dict[str, str]) -> Optional[str]:
+    raw_action = action.strip()
+    if raw_action in legacy_action_files:
+        return legacy_action_files[raw_action]
+    match = _TASK_LOG_ALIAS_RE.fullmatch(raw_action)
+    if not match:
+        return None
+    stem = match.group("stem") or ""
+    history = match.group("history")
+    legacy_stems = {Path(item).stem for item in legacy_action_files.values()}
+    if not (stem.startswith(prefix) or stem.startswith(prefix.replace("-", "_")) or stem in legacy_stems):
+        return None
+    filename = f"{stem}.log"
+    if history is not None:
+        filename += f".{history}"
+    return filename
+
+
+def _task_action_from_filename(filename: str) -> Optional[str]:
+    match = _TASK_LOG_FILE_RE.fullmatch(filename)
+    if not match:
+        return None
+    stem = match.group("stem") or ""
+    history = match.group("history")
+    return f"{stem}.{history}" if history is not None else stem
+
+
+def _list_vps_task_log_aliases() -> list[str]:
+    result: list[str] = []
+    root = _project_root() / "data" / "vpsmanager"
+    if root.exists():
+        for fp in sorted(root.glob("*.log*")):
+            if not fp.is_file():
+                continue
+            action = _task_action_from_filename(fp.name)
+            if action:
+                result.append(f"MasterAction:{action}")
+    hosts_root = root / "hosts"
+    if hosts_root.exists():
+        for host_dir in sorted(path for path in hosts_root.iterdir() if path.is_dir()):
+            for fp in sorted(host_dir.glob("*.log*")):
+                if not fp.is_file():
+                    continue
+                action = _task_action_from_filename(fp.name)
+                if action:
+                    result.append(f"VPSAction:{host_dir.name}:{action}")
+    return result
+
+
+def _resolve_vps_action_log_path(filename: str) -> Optional[Path]:
+    root = _project_root()
+    if filename.startswith("VPSAction:"):
+        parts = filename.split(":", 2)
+        if len(parts) != 3:
+            return None
+        action_files = {
+            "init": "vps_init.log",
+            "setup": "vps_setup.log",
+            "update": "vps_update.log",
+        }
+        hostname = parts[1].strip()
+        action = parts[2].strip()
+        resolved_name = _task_log_filename_from_action(action, "vps-", action_files)
+        if not hostname or not resolved_name:
+            return None
+        fp = root / "data" / "vpsmanager" / "hosts" / hostname / resolved_name
+        allowed_root = (root / "data" / "vpsmanager" / "hosts").resolve()
+        if not fp.resolve().is_relative_to(allowed_root):
+            return None
+        return fp
+    if filename.startswith("MasterAction:"):
+        action = filename.split(":", 1)[1].strip()
+        action_files = {"update": "vps_update.log"}
+        resolved_name = _task_log_filename_from_action(action, "master-", action_files)
+        if not resolved_name:
+            return None
+        fp = root / "data" / "vpsmanager" / resolved_name
+        allowed_root = (root / "data" / "vpsmanager").resolve()
+        if not fp.resolve().is_relative_to(allowed_root):
+            return None
+        return fp
+    return None
+
+
 def resolve_local_log_path(filename: str) -> Optional[Path]:
     """Resolve a local log identifier to its absolute path.
 
@@ -64,6 +159,9 @@ def resolve_local_log_path(filename: str) -> Optional[Path]:
     Returns None if the resolved path escapes allowed directories.
     """
     root = _project_root()
+    action_log = _resolve_vps_action_log_path(filename)
+    if action_log is not None:
+        return action_log
     if filename.startswith("Bot:"):
         instance_name = filename[4:]
         fp = root / "data" / "run_v7" / instance_name / "passivbot.log"
@@ -140,21 +238,20 @@ class AsyncLogStreamer:
                               lines: int = 100) -> Optional[str]:
         """Fetch the last N lines of a remote log file."""
         log_path = _resolve_log_path(service_or_path)
-        full_path = f"~/{REMOTE_PBGUI_DIR}/{log_path}"
-
-        if lines == 0:
-            cmd = f"cat {full_path} 2>/dev/null"
-        else:
-            cmd = f"tail -n {lines} {full_path} 2>/dev/null"
-
-        result = await self._pool.run(hostname, cmd, timeout=30)
-        if result is None:
-            _log(SERVICE, f"[log] Cannot fetch logs from {hostname}: "
-                 "no connection", level="WARNING")
-            return None
-        if result.exit_status != 0:
-            return None
-        return result.stdout or ""
+        result = None
+        for base_dir in self._pool.get_remote_pbgui_dirs(hostname):
+            full_path = f"~/{base_dir}/{log_path}"
+            if lines == 0:
+                cmd = f"cat {full_path} 2>/dev/null"
+            else:
+                cmd = f"tail -n {lines} {full_path} 2>/dev/null"
+            result = await self._pool.run(hostname, cmd, timeout=30)
+            if result is None:
+                _log(SERVICE, f"[log] Cannot fetch logs from {hostname}: no connection", level="WARNING")
+                return None
+            if result.exit_status == 0 and (result.stdout or '').strip():
+                return result.stdout or ""
+        return ""
 
     async def get_bot_log(self, hostname: str, instance_name: str,
                           lines: int = 100,
@@ -163,22 +260,27 @@ class AsyncLogStreamer:
         if pb_version == "7":
             paths = [
                 f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log",
+                f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log.old",
                 f"~/{REMOTE_PBGUI_DIR}/data/logs/{instance_name}.log",
             ]
         else:
             paths = [
                 f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log",
+                f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log.old",
                 f"~/{REMOTE_PBGUI_DIR}/data/logs/{instance_name}.log",
             ]
 
+        collected: list[str] = []
         for path in paths:
             cmd = (f"test -f {path} && "
                    f"{'cat' if lines == 0 else f'tail -n {lines}'} "
                    f"{path} 2>/dev/null")
             result = await self._pool.run(hostname, cmd, timeout=30)
             if result and result.exit_status == 0 and (result.stdout or "").strip():
-                return result.stdout
-        return None
+                collected.append(result.stdout.rstrip("\n"))
+        if not collected:
+            return None
+        return "\n".join(part for part in collected if part)
 
     async def get_log_info(self, hostname: str, service_or_path: str,
                            pb_version: str = None) -> Optional[dict]:
@@ -190,15 +292,15 @@ class AsyncLogStreamer:
             log_path = resolve_bot_log_path(bot_name, pv or "7")
         else:
             log_path = _resolve_log_path(service_or_path)
-        full_path = f"~/{REMOTE_PBGUI_DIR}/{log_path}"
-
-        result = await self._pool.run(
-            hostname, f"stat -c '%s' {full_path} 2>/dev/null", timeout=10
-        )
-        if result and result.exit_status == 0:
-            output = (result.stdout or "").strip()
-            if output.isdigit():
-                return {"size": int(output)}
+        for base_dir in self._pool.get_remote_pbgui_dirs(hostname):
+            full_path = f"~/{base_dir}/{log_path}"
+            result = await self._pool.run(
+                hostname, f"stat -c '%s' {full_path} 2>/dev/null", timeout=10
+            )
+            if result and result.exit_status == 0:
+                output = (result.stdout or "").strip()
+                if output.isdigit():
+                    return {"size": int(output)}
         return None
 
     # ── Live remote log streaming ─────────────────────────────
@@ -207,7 +309,15 @@ class AsyncLogStreamer:
                            service_or_path: str) -> Optional[str]:
         """Start a live log stream (tail -f) as an async task."""
         log_path = _resolve_log_path(service_or_path)
-        full_path = f"~/{REMOTE_PBGUI_DIR}/{log_path}"
+        full_path = None
+        for base_dir in self._pool.get_remote_pbgui_dirs(hostname):
+            candidate = f"~/{base_dir}/{log_path}"
+            result = await self._pool.run(hostname, f"test -f {candidate}", timeout=10)
+            if result and result.exit_status == 0:
+                full_path = candidate
+                break
+        if full_path is None:
+            full_path = f"~/{self._pool.get_remote_pbgui_dir(hostname)}/{log_path}"
 
         self._stream_counter += 1
         stream_id = f"{hostname}:{log_path}:{self._stream_counter}"
@@ -393,6 +503,7 @@ class AsyncLogStreamer:
             result.extend(
                 sorted(p.name for p in d.glob("*.log") if p.is_file())
             )
+        result.extend(_list_vps_task_log_aliases())
         run_v7 = _project_root() / "data" / "run_v7"
         if run_v7.exists():
             # detect running instances via process list
@@ -411,7 +522,7 @@ class AsyncLogStreamer:
                 for p in run_v7.glob("*/passivbot.log")
                 if p.is_file() and str(p.parent) in running_dirs
             ))
-        return result
+        return list(dict.fromkeys(result))
 
     @staticmethod
     def get_local_logs(filename: str, lines: int = 200) -> tuple[list[str], int]:

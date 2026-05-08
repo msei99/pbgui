@@ -14,6 +14,7 @@
     # ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"
     # user_pw: "{{ user_pw }}"
+    install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
 
   tasks:
     - name: display facts
@@ -30,7 +31,7 @@
             echo 0
           fi
         }
-        install_dir="{{ ansible_facts['env']['HOME'] }}/software"
+        install_dir="{{ install_dir }}"
         echo "free_mb=$(df -Pm "$install_dir" | awk 'NR==2 {print $4}')"
         echo "venv_pb7_mb=$(path_mb "$install_dir/venv_pb7")"
         echo "rust_target_mb=$(path_mb "$install_dir/pb7/passivbot-rust/target")"
@@ -71,7 +72,7 @@
             echo 0
           fi
         }
-        install_dir="{{ ansible_facts['env']['HOME'] }}/software"
+        install_dir="{{ install_dir }}"
         echo "free_mb=$(df -Pm "$install_dir" | awk 'NR==2 {print $4}')"
         echo "venv_pb7_mb=$(path_mb "$install_dir/venv_pb7")"
         echo "rust_target_mb=$(path_mb "$install_dir/pb7/passivbot-rust/target")"
@@ -81,10 +82,6 @@
         executable: /bin/bash
       register: pb7_disk_after_rust_update
       changed_when: false
-
-    - name: get install_dir
-      set_fact:
-        install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
 
     - name: Get current pbgui branch
       command: git rev-parse --abbrev-ref HEAD
@@ -250,6 +247,21 @@
         chdir: "{{ install_dir }}/pb7/passivbot-rust"
         executable: /bin/bash
       register: maturin_result
+      listen: "restart pb7"
+
+    - name: Write rust source stamp after maturin build
+      shell: |
+        source "{{ install_dir }}/venv_pb7/bin/activate"
+        python - <<'PY'
+        import sys
+        sys.path.insert(0, 'src')
+        from rust_utils import stamp_compiled_extensions, source_fingerprint
+        stamp_compiled_extensions(source_fingerprint())
+        print('Rust source stamp updated.')
+        PY
+      args:
+        chdir: "{{ install_dir }}/pb7"
+        executable: /bin/bash
       listen: "restart pb7"
 
     - name: Measure pb7 disk footprint after Rust build

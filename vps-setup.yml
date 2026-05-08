@@ -51,7 +51,7 @@
     - name: get remote_home and install_dir
       set_fact:
         remote_home: "{{ ansible_facts['env']['HOME'] }}"
-        install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
+        install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
     
     - name: print install_dir
       debug:
@@ -295,6 +295,20 @@
         chdir: "{{ install_dir }}/pb7/passivbot-rust"
         executable: /bin/bash
       register: maturin_result
+
+    - name: Write rust source stamp after maturin build
+      shell: |
+        source "{{ install_dir }}/venv_pb7/bin/activate"
+        python - <<'PY'
+        import sys
+        sys.path.insert(0, 'src')
+        from rust_utils import stamp_compiled_extensions, source_fingerprint
+        stamp_compiled_extensions(source_fingerprint())
+        print('Rust source stamp updated.')
+        PY
+      args:
+        chdir: "{{ install_dir }}/pb7"
+        executable: /bin/bash
 
     - name: remove pip cache directory
       file:

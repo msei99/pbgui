@@ -15,17 +15,14 @@
     user: "{{ user }}"
     target_branch: "{{ branch }}"
     target_commit: "{{ commit | default('') }}"
+    install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
+    pbgdir: "{{ install_dir }}/pbgui"
 
   tasks:
     - name: display facts
       debug:
         var: ansible_facts
       tags: debug,never
-
-    - name: get install_dir
-      set_fact:
-        install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
-        pbgdir: "{{ ansible_facts['env']['HOME'] + '/software/pbgui' }}"
 
     - name: Fetch from origin
       command: git fetch origin

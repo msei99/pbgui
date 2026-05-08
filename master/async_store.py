@@ -57,6 +57,7 @@ class SystemMetrics:
 
     def to_dict(self) -> dict:
         return {
+            "timestamp": self.timestamp,
             "cpu": self.cpu,
             "mem_total": self.mem_total,
             "mem_available": self.mem_available,
@@ -87,6 +88,7 @@ class VPSStore:
         self.system: dict[str, SystemMetrics] = {}
         self.instances: dict[str, list[dict]] = {}
         self.v7_instances: dict[str, list[dict]] = {}  # v7 config details per host
+        self.host_meta: dict[str, dict] = {}
         self.services: dict[str, dict] = {}
         self.streams: dict[str, dict] = {}  # stream diagnostics per host
 
@@ -113,6 +115,13 @@ class VPSStore:
         self.v7_instances[hostname] = data
         self.changed.set()
 
+    def update_host_meta(self, hostname: str, data: dict):
+        """Merge host metadata collected via SSH for a host."""
+        current = dict(self.host_meta.get(hostname, {}))
+        current.update(data)
+        self.host_meta[hostname] = current
+        self.changed.set()
+
     def update_services(self, results: dict):
         """Update service check results (all hosts at once)."""
         self.services = results
@@ -128,6 +137,7 @@ class VPSStore:
         self.system.pop(hostname, None)
         self.instances.pop(hostname, None)
         self.v7_instances.pop(hostname, None)
+        self.host_meta.pop(hostname, None)
         self.streams.pop(hostname, None)
         # Don't clear services — they're host-keyed inside the dict
         self.services.pop(hostname, None)
@@ -170,6 +180,7 @@ class VPSStore:
             },
             "instances": self.instances,
             "v7_instances": self.v7_instances,
+            "host_meta": self.host_meta,
             "streams": self.streams,
             "services": self.services,
             "local_logs": local_logs,

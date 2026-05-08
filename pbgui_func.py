@@ -215,6 +215,7 @@ def get_navi_paths():
         "SYSTEM_LOGIN":        os.path.join(NAVI_BASE_DIR, "system_login.py"),
         "SYSTEM_API_KEYS":     os.path.join(NAVI_BASE_DIR, "system_api_keys.py"),
         "SYSTEM_SERVICES":     os.path.join(NAVI_BASE_DIR, "system_services.py"),
+        "SYSTEM_VPS_MANAGER_FASTAPI": os.path.join(NAVI_BASE_DIR, "system_vps_manager_fastapi.py"),
         "SYSTEM_VPS_MANAGER":  os.path.join(NAVI_BASE_DIR, "system_vps_manager.py"),
         "SYSTEM_VPS_MONITOR":  os.path.join(NAVI_BASE_DIR, "system_vps_monitor.py"),
         "SYSTEM_LOGGING":      os.path.join(NAVI_BASE_DIR, "system_logging.py"),
@@ -345,7 +346,8 @@ def build_navigation():
     pM1 = st.Page(paths["SYSTEM_LOGIN"], title="Welcome", icon=":material/logout:")
     pM2 = st.Page(paths["SYSTEM_API_KEYS"], title="API-Keys", icon=":material/key:")
     pM3 = st.Page(paths["SYSTEM_SERVICES"], title="PBGUI Services", icon=":material/build:")
-    pM4 = st.Page(paths["SYSTEM_VPS_MANAGER"], title="VPS Manager", icon=":material/computer:")
+    pM4 = st.Page(paths["SYSTEM_VPS_MANAGER_FASTAPI"], title="VPS Manager", icon=":material/computer:")
+    pM4a = st.Page(paths["SYSTEM_VPS_MANAGER"], title="VPS Manager Legacy", icon=":material/history:")
     pM4b = st.Page(paths["SYSTEM_VPS_MONITOR"], title="VPS Monitor", icon=":material/monitor_heart:")
     pM5 = st.Page(paths["SYSTEM_LOGGING"], title="Logging", icon=":material/article:")
     # Debuglog page removed
@@ -364,7 +366,7 @@ def build_navigation():
     p77 = st.Page(paths["V7_LIVE_VS_BACKTEST"], title="Live vs Backtest", icon=":material/swap_horiz:")
        
     # Page Groups
-    SystemPages = [pM1, pM2, pM3, pM4, pM4b, pM5]
+    SystemPages = [pM1, pM2, pM3, pM4, pM4a, pM4b, pM5]
     
     # Do not include DEBUGLOG page; centralized debuglog removed
                 
@@ -441,6 +443,20 @@ def build_navigation():
             st.stop()
         redirect_to_fastapi_vps_monitor()
 
+    # 1bb. SERVER-SIDE interception for VPS Manager.
+    if navi.url_path == "system_vps_manager_fastapi":
+        if not is_authenticted() or is_session_state_not_initialized():
+            st.switch_page(paths["SYSTEM_LOGIN"])
+            st.stop()
+        if _fa_ok and _token:
+            _url = (f"http://{_bhost}:{_fa_port}/api/vps-manager/main_page"
+                    f"?token={_token}"
+                    f"&st_base=http://{_bhost}:{_sport}")
+            st.html(f'<script>window.location.replace("{_url}");</script>',
+                    unsafe_allow_javascript=True)
+            st.stop()
+        redirect_to_fastapi_vps_manager()
+
     # 1c. SERVER-SIDE interception for Services.
     if navi.url_path == "system_services":
         if not is_authenticted() or is_session_state_not_initialized():
@@ -510,6 +526,8 @@ def build_navigation():
     if _fa_ok and _token:
         _log_url = (f"http://{_bhost}:{_fa_port}/api/logging/main_page"
                     f"?token={_token}&st_base=http://{_bhost}:{_sport}")
+        _vps_manager_url = (f"http://{_bhost}:{_fa_port}/api/vps-manager/main_page"
+                    f"?token={_token}&st_base=http://{_bhost}:{_sport}")
         _vps_url = (f"http://{_bhost}:{_fa_port}/api/vps/main_page"
                     f"?token={_token}&st_base=http://{_bhost}:{_sport}")
         _svc_url = (f"http://{_bhost}:{_fa_port}/api/services/main_page"
@@ -522,6 +540,7 @@ def build_navigation():
                           f"?token={_token}&st_base=http://{_bhost}:{_sport}")
         _fa_pages = (
             f'"info_coin_data":"{_coin_data_url}",'
+            f'"system_vps_manager_fastapi":"{_vps_manager_url}",' 
             f'"system_logging":"{_log_url}",'
             f'"system_vps_monitor":"{_vps_url}",'
             f'"system_services":"{_svc_url}",'
@@ -1066,6 +1085,53 @@ def redirect_to_fastapi_vps_monitor() -> None:
     st_base = f"http://{browser_host}:{st_port}"
     url = (
         f"http://{browser_host}:{api_port}/api/vps/main_page"
+        f"?token={token}"
+        f"&st_base={st_base}"
+    )
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
+
+
+def redirect_to_fastapi_vps_manager() -> None:
+    """Redirect the browser to the standalone FastAPI VPS Manager page."""
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    url = (
+        f"http://{browser_host}:{api_port}/api/vps-manager/main_page"
         f"?token={token}"
         f"&st_base={st_base}"
     )

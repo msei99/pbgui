@@ -14,16 +14,14 @@
     vps_dir: "{{ vps_dir }}"
     logfile: "{{ logfile }}"
     # user_pw: "{{ user_pw }}"
+    install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
+    logs_dir: "{{ install_dir }}/pbgui/data"
 
   tasks:
     - name: display facts
       debug:
         var: ansible_facts
       tags: debug,never
-
-    - name: get logs_dir
-      set_fact:
-        logs_dir: "{{ ansible_facts['env']['HOME'] + '/software/pbgui/data' }}"
 
     - name: fetch logfile from vps
       fetch:

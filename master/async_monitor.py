@@ -22,9 +22,7 @@ import asyncssh
 from pbgui_purefunc import PBGDIR, load_ini, save_ini
 from logging_helpers import human_log as _log
 from ini_watcher import IniWatcher
-from master.async_pool import (
-    AsyncSSHPool, ConnectionStatus, REMOTE_PBGUI_DIR,
-)
+from master.async_pool import AsyncSSHPool, ConnectionStatus
 from master.async_store import VPSStore, SystemMetrics
 
 SERVICE = "VPSMonitor"
@@ -34,6 +32,8 @@ SERVICE = "VPSMonitor"
 LOOP_INTERVAL = 15          # seconds between main loop iterations
 SERVICE_CHECK_EVERY = 4     # every N iterations (= 60s at 15s)
 INSTANCE_COLLECT_INTERVAL = 30  # seconds
+HOST_META_INTERVAL = 30     # seconds
+PACKAGE_STATUS_INTERVAL = 3600  # seconds
 
 # ── Remote scripts (same as old realtime_collector) ─────────
 
@@ -136,6 +136,178 @@ for cf in glob.glob(os.path.join(PBGDIR, 'data/run_v7/*/config.json')):
 print(json.dumps([monitors, v7]))
 "'''
 
+HOST_META_SCRIPT = r'''python3 -u -c "
+import configparser, hashlib, json, os, re, subprocess, sys
+from pathlib import Path
+
+HOME = os.path.expanduser('~')
+PBGDIR = os.path.join(HOME, '__PBGDIR__')
+INI_PATH = os.path.join(PBGDIR, 'pbgui.ini')
+
+
+def run(cmd, timeout=10):
+    try:
+        res = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=timeout,
+        )
+        if res.returncode == 0:
+            return (res.stdout or '').strip()
+    except Exception:
+        pass
+    return ''
+
+
+def read_pbgui_version(root):
+    readme = Path(root) / 'README.md'
+    if not readme.exists():
+        return 'N/A'
+    try:
+        for line in readme.read_text(encoding='utf-8', errors='ignore').splitlines()[:20]:
+            match = re.search(r'v[0-9.]+', line)
+            if match:
+                return match.group(0)
+    except Exception:
+        pass
+    return 'N/A'
+
+
+def read_pb7_version(pb7dir):
+    if not pb7dir:
+        return 'N/A'
+    version_file = Path(pb7dir) / 'src' / 'passivbot_version.py'
+    if not version_file.exists():
+        return 'N/A'
+    try:
+        content = version_file.read_text(encoding='utf-8', errors='ignore')
+        match = re.search(r'__version__\s*=\s*[\"\']([^\"\']+)[\"\']', content)
+        if match:
+            return 'v' + match.group(1)
+    except Exception:
+        pass
+    return 'N/A'
+
+
+def git_value(git_dir, args, default=''):
+    if not git_dir or not Path(git_dir).exists():
+        return default
+    value = run(['git', '--git-dir', git_dir] + list(args), timeout=10)
+    return value or default
+
+
+def python_version(exe):
+    if not exe or not Path(exe).exists():
+        return ''
+    return run([exe, '-c', 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'], timeout=5)
+
+
+cfg = configparser.ConfigParser()
+try:
+    cfg.read(INI_PATH)
+except Exception:
+    pass
+
+role = cfg.get('main', 'role', fallback='slave')
+pb7dir = cfg.get('main', 'pb7dir', fallback='')
+pb7venv = cfg.get('main', 'pb7venv', fallback='')
+
+result = {
+    'role': role,
+    'boot': 0,
+    'api_md5': '',
+    'reboot': os.path.exists('/var/run/reboot-required'),
+    'pbgv': read_pbgui_version(PBGDIR),
+    'pbgc': '',
+    'pbgb': 'unknown',
+    'pbgpy': 'N/A',
+    'pb7v': read_pb7_version(pb7dir),
+    'pb7c': '',
+    'pb7b': 'unknown',
+    'pb7py': 'N/A',
+}
+
+try:
+    with open('/proc/stat', encoding='utf-8') as f:
+        for line in f:
+            if line.startswith('btime '):
+                result['boot'] = int(line.split()[1])
+                break
+except Exception:
+    pass
+
+api_keys = Path(pb7dir) / 'api-keys.json' if pb7dir else None
+if api_keys and api_keys.exists():
+    try:
+        result['api_md5'] = hashlib.md5(api_keys.read_bytes()).hexdigest()
+    except Exception:
+        pass
+
+pbgui_git = str(Path(PBGDIR) / '.git')
+result['pbgc'] = git_value(pbgui_git, ['log', '-n', '1', '--pretty=format:%H'])
+result['pbgb'] = git_value(pbgui_git, ['rev-parse', '--abbrev-ref', 'HEAD'], 'unknown')
+
+pb7_git = str(Path(pb7dir) / '.git') if pb7dir else ''
+result['pb7c'] = git_value(pb7_git, ['log', '-n', '1', '--pretty=format:%H'])
+result['pb7b'] = git_value(pb7_git, ['rev-parse', '--abbrev-ref', 'HEAD'], 'unknown')
+
+for candidate in (
+    str(Path(PBGDIR) / '.venv' / 'bin' / 'python'),
+    str(Path(HOME) / 'software' / 'venv_pbgui' / 'bin' / 'python'),
+):
+    version = python_version(candidate)
+    if version:
+        result['pbgpy'] = version
+        break
+if result['pbgpy'] == 'N/A':
+    result['pbgpy'] = f'{sys.version_info.major}.{sys.version_info.minor}'
+
+pb7_python = python_version(pb7venv)
+if pb7_python:
+    result['pb7py'] = pb7_python
+
+logs_dir = os.path.join(PBGDIR, 'data', 'logs')
+available = []
+if os.path.isdir(logs_dir):
+    for f in sorted(os.listdir(logs_dir)):
+        full = os.path.join(logs_dir, f)
+        if os.path.isfile(full) and (f.endswith('.log') or f.endswith('.log.old')):
+            available.append('data/logs/' + f)
+result['available_logs'] = available
+
+print(json.dumps(result))
+"'''
+
+PACKAGE_STATUS_SCRIPT = r'''python3 -u -c "
+import json, os, re, subprocess
+
+result = {
+    'upgrades': 'N/A',
+    'reboot': os.path.exists('/var/run/reboot-required'),
+}
+env = os.environ.copy()
+env['LANG'] = 'C'
+try:
+    res = subprocess.run(
+        ['apt-get', 'dist-upgrade', '-s'],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=20,
+        env=env,
+    )
+    if res.returncode == 0:
+        match = re.search(r'(\d+) upgraded', res.stdout or '')
+        if match:
+            result['upgrades'] = match.group(1)
+except Exception:
+    pass
+
+print(json.dumps(result))
+"'''
+
 
 # ── Service definitions ─────────────────────────────────────
 
@@ -192,6 +364,7 @@ class VPSMonitor:
         # Alert dedup
         self._connection_alerts: set[str] = set()
         self._service_alerts: set[str] = set()
+        self._connection_alerts_enabled_at: float = 0.0
 
         # Restart rate limiting
         self._restart_history: dict[str, dict[str, list[datetime]]] = {}
@@ -199,6 +372,8 @@ class VPSMonitor:
 
         # Instance collection timing
         self._last_instance_collect: float = 0.0
+        self._last_host_meta_collect: dict[str, float] = {}
+        self._last_package_status_collect: dict[str, float] = {}
 
         # Debug logging
         self._debug_logging: Optional[bool] = None
@@ -264,6 +439,7 @@ class VPSMonitor:
             return
         self._running = True
         _log(SERVICE, "Starting VPS monitor...")
+        self._connection_alerts_enabled_at = time.time() + 90.0
 
         self.pool.load_vps_configs()
         self.store.load_ui_settings()
@@ -369,13 +545,15 @@ class VPSMonitor:
             if success:
                 _log(SERVICE, f"Reconnected to {hostname}")
                 self._start_metrics_stream(hostname)
+                self._last_host_meta_collect.pop(hostname, None)
+                self._last_package_status_collect.pop(hostname, None)
                 alert_key = f"conn:{hostname}"
                 if alert_key in self._connection_alerts:
                     self._connection_alerts.discard(alert_key)
                     newly_reconnected.append(hostname)
 
         # Send reconnect alerts (batched if mass reconnect)
-        if newly_reconnected:
+        if newly_reconnected and time.time() >= self._connection_alerts_enabled_at:
             if len(newly_reconnected) >= max(2, len(enabled) * 0.5):
                 hosts_str = ", ".join(sorted(newly_reconnected))
                 await self._send_alert(
@@ -395,6 +573,9 @@ class VPSMonitor:
 
         # 4. Collect instances (every ~30s)
         await self._collect_instances_all()
+
+        # 4b. Collect host metadata on the same SSH channel
+        await self._collect_host_meta_all()
 
         # 5. Service monitoring (every N iterations)
         if loop_count % SERVICE_CHECK_EVERY == 0:
@@ -479,7 +660,7 @@ class VPSMonitor:
                 return
 
             self.store.update_stream_info(hostname, {
-                "alive": True, "active": True, "error": None,
+                "alive": True, "active": True, "error": None, "last_update": 0,
             })
 
             async for line in proc.stdout:
@@ -490,6 +671,12 @@ class VPSMonitor:
                     data = json.loads(line)
                     metrics = SystemMetrics.from_json(data)
                     self.store.update_system(hostname, metrics)
+                    self.store.update_stream_info(hostname, {
+                        "alive": True,
+                        "active": True,
+                        "error": None,
+                        "last_update": metrics.timestamp,
+                    })
                 except json.JSONDecodeError:
                     continue
 
@@ -586,15 +773,113 @@ class VPSMonitor:
             except json.JSONDecodeError:
                 pass
 
+    async def collect_host_meta_now(self, hostname: str,
+                                    *, include_package_status: bool = False):
+        """Public: immediately collect host metadata from a single VPS."""
+        entry = self.pool.get_connection(hostname)
+        if not entry:
+            _log(SERVICE, f"[host-meta] collect_host_meta_now: "
+                 f"{hostname} not connected", level="WARNING")
+            return
+        try:
+            await self._collect_host_meta(hostname,
+                                          include_package_status=include_package_status,
+                                          force=True)
+            _log(SERVICE, f"[host-meta] Immediate collect for {hostname}",
+                 level="DEBUG")
+        except Exception as e:
+            _log(SERVICE, f"[host-meta] Immediate collect error on "
+                 f"{hostname}: {e}", level="WARNING")
+
+    async def _collect_host_meta_all(self):
+        """Collect host metadata from all connected VPS via the shared SSH pool."""
+        now = time.time()
+        connected = self.pool.connected_hosts()
+        targets = [
+            h for h in connected
+            if h in self._stream_tasks and not self._stream_tasks[h].done()
+        ]
+        if not targets:
+            return
+
+        scheduled: list[tuple[str, bool]] = []
+        for hostname in targets:
+            needs_host_meta = now - self._last_host_meta_collect.get(hostname, 0.0) >= HOST_META_INTERVAL
+            needs_package_status = now - self._last_package_status_collect.get(hostname, 0.0) >= PACKAGE_STATUS_INTERVAL
+            if needs_host_meta or needs_package_status:
+                scheduled.append((hostname, needs_package_status))
+
+        if not scheduled:
+            return
+
+        results = await asyncio.gather(
+            *(
+                self._collect_host_meta(hostname, include_package_status=include_package_status)
+                for hostname, include_package_status in scheduled
+            ),
+            return_exceptions=True,
+        )
+        for (hostname, include_package_status), result in zip(scheduled, results):
+            if isinstance(result, Exception):
+                label = "Package status" if include_package_status else "host-meta"
+                _log(SERVICE, f"[{label}] Error on {hostname}: {result}",
+                     level="WARNING")
+
+    async def _collect_host_meta(self, hostname: str,
+                                 *, include_package_status: bool = False,
+                                 force: bool = False):
+        """Collect SSH-derived host metadata for a single VPS."""
+        now = time.time()
+        collect_host_meta = force or (
+            now - self._last_host_meta_collect.get(hostname, 0.0) >= HOST_META_INTERVAL
+        )
+        collect_package_status = include_package_status and (
+            force or now - self._last_package_status_collect.get(hostname, 0.0) >= PACKAGE_STATUS_INTERVAL
+        )
+
+        if not collect_host_meta and not collect_package_status:
+            return
+
+        if collect_host_meta:
+            pbgui_dir = self.pool.get_remote_pbgui_dir(hostname)
+            script = HOST_META_SCRIPT.replace('__PBGDIR__', pbgui_dir)
+            result = await self.pool.run(hostname, script, timeout=20)
+            if result and result.exit_status == 0 and result.stdout:
+                try:
+                    parsed = json.loads(result.stdout.strip())
+                    if isinstance(parsed, dict):
+                        self.store.update_host_meta(hostname, parsed)
+                        self._last_host_meta_collect[hostname] = now
+                        if self.debug_logging:
+                            _log(SERVICE, f"[host-meta] Collected metadata for {hostname}",
+                                 level="DEBUG")
+                except json.JSONDecodeError:
+                    pass
+
+        if collect_package_status:
+            package_result = await self.pool.run(hostname, PACKAGE_STATUS_SCRIPT,
+                                                 timeout=30)
+            if package_result and package_result.exit_status == 0 and package_result.stdout:
+                try:
+                    package_data = json.loads(package_result.stdout.strip())
+                    if isinstance(package_data, dict):
+                        self.store.update_host_meta(hostname, package_data)
+                        self._last_package_status_collect[hostname] = now
+                except json.JSONDecodeError:
+                    pass
+
     # ── Service monitoring ──────────────────────────────────
 
     async def _check_service(self, hostname: str, svc: ServiceInfo
                              ) -> dict:
         """Check if a service is running on a VPS."""
-        pid_path = f"{REMOTE_PBGUI_DIR}/{svc.pid_file}"
-
-        # Step 1: Read PID file
-        result = await self.pool.run(hostname, f'cat {pid_path}', timeout=10)
+        result = None
+        for base_dir in self.pool.get_remote_pbgui_dirs(hostname):
+            pid_path = f"{base_dir}/{svc.pid_file}"
+            result = await self.pool.run(hostname, f'cat {pid_path}', timeout=10)
+            pid_str = (result.stdout or "").strip() if result else ""
+            if pid_str.isdigit():
+                break
         if result is None:
             return {
                 "status": ServiceStatus.UNKNOWN.value,
@@ -650,36 +935,42 @@ class VPSMonitor:
 
         _log(SERVICE, f"[service] Restarting {service_name} on {hostname}")
 
-        # Detect venv
-        venv_check = await self.pool.run(
-            hostname,
-            f'test -f ~/software/venv_pbgui/bin/activate && echo "venv_pbgui" '
-            f'|| (test -f ~/{REMOTE_PBGUI_DIR}/.venv/bin/activate '
-            f'&& echo "dotvenv" || echo "system")',
-            timeout=5,
-        )
-        venv_type = (venv_check.stdout or "").strip() if venv_check else "system"
-
-        if venv_type == "venv_pbgui":
-            start_cmd = (
-                f"cd ~/{REMOTE_PBGUI_DIR} && "
-                f"source ~/software/venv_pbgui/bin/activate && "
-                f"nohup python -u starter.py -r {service_name} "
-                f"> /dev/null 2>&1 &"
+        start_cmd = ""
+        for base_dir in self.pool.get_remote_pbgui_dirs(hostname):
+            venv_check = await self.pool.run(
+                hostname,
+                f'test -d ~/{base_dir} || exit 1; '
+                f'test -f ~/software/venv_pbgui/bin/activate && echo "venv_pbgui" '
+                f'|| (test -f ~/{base_dir}/.venv/bin/activate '
+                f'&& echo "dotvenv" || echo "system")',
+                timeout=5,
             )
-        elif venv_type == "dotvenv":
-            start_cmd = (
-                f"cd ~/{REMOTE_PBGUI_DIR} && "
-                f"source ~/{REMOTE_PBGUI_DIR}/.venv/bin/activate && "
-                f"nohup python -u starter.py -r {service_name} "
-                f"> /dev/null 2>&1 &"
-            )
-        else:
-            start_cmd = (
-                f"cd ~/{REMOTE_PBGUI_DIR} && "
-                f"nohup python3 -u starter.py -r {service_name} "
-                f"> /dev/null 2>&1 &"
-            )
+            if not venv_check or venv_check.exit_status != 0:
+                continue
+            venv_type = (venv_check.stdout or "").strip() if venv_check else "system"
+            if venv_type == "venv_pbgui":
+                start_cmd = (
+                    f"cd ~/{base_dir} && "
+                    f"source ~/software/venv_pbgui/bin/activate && "
+                    f"nohup python -u starter.py -r {service_name} "
+                    f"> /dev/null 2>&1 &"
+                )
+            elif venv_type == "dotvenv":
+                start_cmd = (
+                    f"cd ~/{base_dir} && "
+                    f"source ~/{base_dir}/.venv/bin/activate && "
+                    f"nohup python -u starter.py -r {service_name} "
+                    f"> /dev/null 2>&1 &"
+                )
+            else:
+                start_cmd = (
+                    f"cd ~/{base_dir} && "
+                    f"nohup python3 -u starter.py -r {service_name} "
+                    f"> /dev/null 2>&1 &"
+                )
+            break
+        if not start_cmd:
+            return False
 
         result = await self.pool.run(hostname, start_cmd, timeout=15)
         if result and result.exit_status == 0:
@@ -766,6 +1057,15 @@ class VPSMonitor:
                 self._connection_alerts.discard(alert_key)
 
         if not newly_disconnected:
+            return
+
+        if time.time() < self._connection_alerts_enabled_at:
+            if self.debug_logging:
+                _log(
+                    SERVICE,
+                    f"[conn] suppressing startup disconnect alerts for {len(newly_disconnected)} host(s)",
+                    level="DEBUG",
+                )
             return
 
         total_hosts = len(status)

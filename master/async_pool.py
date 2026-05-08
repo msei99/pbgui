@@ -14,6 +14,7 @@ import configparser
 import glob
 import io
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -46,6 +47,7 @@ class VPSConfig:
     ip: str
     user: str
     ssh_port: int = 22
+    remote_pbgui_dir: Optional[str] = None
 
 
 @dataclass
@@ -156,6 +158,7 @@ class AsyncSSHPool:
                     ip=ip,
                     user=user,
                     ssh_port=ssh_port,
+                    remote_pbgui_dir=config.get('remote_pbgui_dir') or None,
                 )
 
                 if hostname in self._connections:
@@ -669,17 +672,99 @@ class AsyncSSHPool:
 
     # ── Remote pbgui.ini access ─────────────────────────────
 
+    def _normalize_remote_pbgui_dir(self, value: str | None, username: str) -> str | None:
+        raw = str(value or '').strip().rstrip('/')
+        if not raw:
+            return None
+        if raw.startswith('~/'):
+            raw = raw[2:]
+        elif raw.startswith('./'):
+            raw = raw[2:]
+        elif username == 'root' and raw.startswith('/root/'):
+            raw = raw[len('/root/'):]
+        elif username and raw.startswith(f'/home/{username}/'):
+            raw = raw[len(f'/home/{username}/'):]
+        return raw or None
+
+    async def _run_conn_command(self, entry: VPSConnection, command: str,
+                                conn: Optional[asyncssh.SSHClientConnection] = None):
+        ssh_conn = conn or entry.conn
+        if ssh_conn is None:
+            return None
+        return await ssh_conn.run(command, check=False)
+
+    async def _is_valid_remote_pbgui_dir(self, entry: VPSConnection, remote_pbgui_dir: str,
+                                         conn: Optional[asyncssh.SSHClientConnection] = None) -> bool:
+        remote_pbgui_dir = str(remote_pbgui_dir or '').strip().rstrip('/')
+        if not remote_pbgui_dir:
+            return False
+        base_expr = remote_pbgui_dir if remote_pbgui_dir.startswith('/') else f'$HOME/{remote_pbgui_dir}'
+        cmd = (
+            f'base={base_expr}; '
+            f'test -d "$base" && '
+            f'test -f "$base/starter.py" && '
+            f'test -d "$base/data/logs" && '
+            f'echo yes || echo no'
+        )
+        result = await self._run_conn_command(entry, cmd, conn)
+        return bool(result and (result.stdout or '').strip() == 'yes')
+
+    async def _persist_remote_pbgui_dir(self, hostname: str, remote_pbgui_dir: str) -> None:
+        config_path = Path(PBGDIR) / 'data' / 'vpsmanager' / 'hosts' / hostname / f'{hostname}.json'
+        if not config_path.exists():
+            return
+        try:
+            data = json.loads(config_path.read_text(encoding='utf-8'))
+        except Exception:
+            return
+        if str(data.get('remote_pbgui_dir') or '') == str(remote_pbgui_dir or ''):
+            return
+        data['remote_pbgui_dir'] = remote_pbgui_dir
+        tmp_path = config_path.with_suffix('.tmp')
+        tmp_path.write_text(json.dumps(data, indent=4), encoding='utf-8')
+        tmp_path.replace(config_path)
+
+    async def _detect_remote_pbgui_dir(self, entry: VPSConnection,
+                                       conn: Optional[asyncssh.SSHClientConnection] = None) -> str:
+        candidates: list[str] = []
+
+        def add_candidate(value: str | None):
+            normalized = self._normalize_remote_pbgui_dir(value, entry.config.user)
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+
+        add_candidate(entry.data.get('remote_pbgui_dir'))
+        add_candidate(entry.config.remote_pbgui_dir)
+
+        process_cmd = "ps -ef | grep -E 'PBRun\\.py|PBRemote\\.py|PBCoinData\\.py|PBApiServer\\.py|starter\\.py' | grep -v grep"
+        process_result = await self._run_conn_command(entry, process_cmd, conn)
+        process_output = (process_result.stdout or '') if process_result else ''
+        for match in re.findall(r'(/[^\s]+/(?:PBRun|PBRemote|PBCoinData|PBApiServer|starter)\.py)', process_output):
+            add_candidate(str(Path(match).parent))
+
+        add_candidate(REMOTE_PBGUI_DIR)
+        add_candidate('pbgui')
+
+        for candidate in candidates:
+            if await self._is_valid_remote_pbgui_dir(entry, candidate, conn):
+                await self._persist_remote_pbgui_dir(entry.config.hostname, candidate)
+                return candidate
+        return REMOTE_PBGUI_DIR
+
     async def _cache_remote_ini(self, entry: VPSConnection,
                                 conn: Optional[asyncssh.SSHClientConnection] = None):
         """Read remote pbgui.ini on connect and cache paths in entry.data."""
         hostname = entry.config.hostname
+        remote_pbgui_dir = await self._detect_remote_pbgui_dir(entry, conn)
+        entry.data['remote_pbgui_dir'] = remote_pbgui_dir
+        entry.config.remote_pbgui_dir = remote_pbgui_dir
         try:
-            ini = await self._read_ini_internal(entry, conn)
+            ini = await self._read_ini_internal(entry, conn, remote_pbgui_dir=remote_pbgui_dir)
             entry.data['ini'] = ini
             entry.data['pb7dir'] = ini.get('main', 'pb7dir', fallback=None)
             entry.data['pbname'] = ini.get('main', 'pbname', fallback=hostname)
             _log(SERVICE, f"[ini] Cached remote config for {hostname} "
-                 f"(pb7dir={entry.data['pb7dir']})", level="DEBUG")
+                 f"(pbgui_dir={remote_pbgui_dir}, pb7dir={entry.data['pb7dir']})", level="DEBUG")
         except Exception as e:
             _log(SERVICE, f"[ini] Failed to read remote ini for {hostname}: "
                  f"{e}", level="WARNING")
@@ -689,10 +774,12 @@ class AsyncSSHPool:
 
     async def _read_ini_internal(self,
                                  entry: VPSConnection,
-                                 conn: Optional[asyncssh.SSHClientConnection] = None
+                                 conn: Optional[asyncssh.SSHClientConnection] = None,
+                                 remote_pbgui_dir: Optional[str] = None,
                                  ) -> configparser.ConfigParser:
         """Read and parse remote pbgui.ini via SFTP (uses entry.conn directly)."""
-        remote_path = f"{REMOTE_PBGUI_DIR}/pbgui.ini"
+        base_dir = remote_pbgui_dir or entry.data.get('remote_pbgui_dir') or entry.config.remote_pbgui_dir or REMOTE_PBGUI_DIR
+        remote_path = f"{base_dir}/pbgui.ini"
         ssh_conn = conn or entry.conn
         if ssh_conn is None:
             raise ConnectionError("SSH connection closed")
@@ -731,7 +818,7 @@ class AsyncSSHPool:
         entry = self._connections.get(hostname)
         if not entry or not entry.conn:
             return False
-        remote_path = f"{REMOTE_PBGUI_DIR}/pbgui.ini"
+        remote_path = f"{entry.data.get('remote_pbgui_dir') or entry.config.remote_pbgui_dir or REMOTE_PBGUI_DIR}/pbgui.ini"
         try:
             buf = io.StringIO()
             config.write(buf)
@@ -777,3 +864,18 @@ class AsyncSSHPool:
             _log(SERVICE, f"[ini] set_remote_ini_value failed for "
                  f"{hostname}: {e}", level="ERROR")
             return False
+
+    def get_remote_pbgui_dir(self, hostname: str) -> str:
+        entry = self._connections.get(hostname)
+        if not entry:
+            return REMOTE_PBGUI_DIR
+        return str(entry.data.get('remote_pbgui_dir') or entry.config.remote_pbgui_dir or REMOTE_PBGUI_DIR)
+
+    def get_remote_pbgui_dirs(self, hostname: str) -> list[str]:
+        candidates = [self.get_remote_pbgui_dir(hostname), REMOTE_PBGUI_DIR, 'pbgui']
+        out: list[str] = []
+        for item in candidates:
+            value = str(item or '').strip().rstrip('/')
+            if value and value not in out:
+                out.append(value)
+        return out

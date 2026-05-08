@@ -3,6 +3,8 @@
 The **VPS Manager** page lets you add, configure, and maintain remote VPS servers that run Passivbot instances.
 Each VPS is managed via Ansible playbooks executed from the Master (local) server.
 
+The default menu entry **System -> VPS Manager** now opens the standalone **FastAPI** page. The previous Streamlit implementation is still available as **System -> VPS Manager Legacy**.
+
 ---
 
 ## Overview table
@@ -21,31 +23,35 @@ The main view shows a table with all servers (Master + VPS) and their current st
 | **PB7 / PB7 Branch / PB7 github** | PB7 version, branch, and whether it matches GitHub origin |
 | **API Sync** | ✅ API keys in sync with Master / ❌ out of sync |
 
-Sidebar:
+Left sidebar:
 
 | Button | Action |
 |--------|--------|
-| `:material/refresh:` | Reload all VPS status and version data |
-| `:material/add_box:` | Add a new VPS |
-| **Master (local)** button | Open the Master management view |
-| **VPS hostname** buttons | Open the per-VPS management view |
+| **Add VPS** | Open the add / initialize form |
+| **Refresh** | Reload all VPS status and version data |
+| **Master** | Open the local Master management view |
+| **API in sync / API not in sync** | Show API sync state and push API credentials to remotes that are out of sync |
+| **Managed VPS** cards | Open the per-VPS management view |
+| **Detected missing VPS** cards | Prefill the Add form for remote slave hosts seen by PBRemote |
 
-At the bottom of the sidebar an **API sync status button** shows the current state:
-- **🟢 API in sync** (green, disabled) — all online VPS servers have the current API keys
-- **🔴 API not in sync** (red, clickable) — one or more servers are out of date; click to push keys to all of them; a live counter shows remaining servers (timeout: 180 s)
+The overview uses the normal shared PBGui FastAPI shell. When you switch to **Master** or a specific **VPS**, the left sidebar changes into the view-specific action list just like the old page. The main overview area now stays focused on the table; missing VPS candidates remain in the sidebar instead of a second main-panel section.
+
+The page keeps a live WebSocket connection for overview rows, progress logs, branch state, and API sync progress.
+
+Live updates do not close the **VPS** selector anymore while you are choosing another host from the sidebar.
+
+Live refreshes now update only the changed status regions, so typing in Add/Edit forms keeps the cursor in place and opened password reveal fields stay open while new monitor or progress data arrives.
 
 ---
 
 ## Master management
 
-Click the coloured **Master (local)** button in the sidebar to manage the local server.
+Open **Master** in the left control rail to manage the local server.
 
 Sidebar actions:
 
 | Button | Action |
 |--------|--------|
-| `:material/refresh:` | Reload status |
-| `:material/home:` | Back to Overview |
 | **Update PBGui and PB7** | Update all components |
 | **Update PBGui** | Update only PBGui |
 | **Update PB7** | Update only PB7 |
@@ -54,23 +60,28 @@ Sidebar actions:
 | **Update PB7 venv** | Recreate PB7 Python 3.12 venv (requires sudo password) |
 | **Install PBGui venv** | Recreate PBGui Python 3.12 venv (requires sudo password) |
 
-The **Branch Management** expanders let you switch PBGui or PB7 to a different branch or commit without leaving the UI. Fork/custom-remote support is available via the optional *Custom remote* sub-expander.
+The **Master** content area also contains:
+- a live status grid for PBRemote / CoinData / last command state
+- **PBGui Branch Management** for branch or commit switches
+- **PB7 Branch Management** with optional custom remote / fork URL support
+- a **Monitor** section with server metrics plus PB7 activity data; if live monitor rows are missing, the page still lists running PB7 bot names from `status_v7.json`
+- a **Progress** section with separate status buckets; when a sidebar action starts a master ansible task, the main pane switches to the shared **Command Log Viewer** for the full output, and **Home** returns to the normal master overview
 
 ---
 
 ## VPS management
 
-Click a VPS hostname button in the sidebar to open its detail view.
+Click a VPS card in the left rail to open its detail view.
 
 Sidebar actions:
 
 | Button | Action |
 |--------|--------|
-| `:material/refresh:` | Reload VPS status |
-| `:material/home:` | Back to Overview |
-| `:material/delete:` | Remove this VPS from PBGui |
 | **Read settings from VPS** | Fetch current config from VPS via SSH |
 | **Initialize** | Run initial VPS setup wizard |
+| **Save VPS** | Persist the current setup fields to the VPS Manager JSON entry |
+| **Setup VPS** | Run the setup playbook with the current setup fields |
+| **Delete VPS** | Remove this VPS from PBGui |
 | **Update PBGui** | Update PBGui on this VPS |
 | **Update PBGui and PB7** | Update all components |
 | **Update PB7 venv** | Recreate PB7 Python 3.12 venv |
@@ -80,26 +91,51 @@ Sidebar actions:
 | **Cleanup VPS** | Remove old packages and logs |
 | **Resize Swap** | Resize swap file to configured size |
 | **Update Firewall Settings** | Apply ufw firewall rules |
+| **Task Logs** | Open the dedicated shared log-viewer screen for all stored VPS playbook logs and their history |
+| **Host Logs** | Open the dedicated shared log-viewer screen for VPS service logs and file targets |
 | **Update CoinData API** | Push updated CoinMarketCap API key |
 
-The **VPS Setup Settings** expander contains the connection parameters (password, swap, rclone bucket, CoinMarketCap key, firewall).
-Run **Setup VPS** once all parameters are filled in to complete the initial setup.
+The **VPS** content area also contains:
+- a setup/config grid for password, swap, bucket, CoinMarketCap key and firewall fields
+- **PBGui Branch Management** and **PB7 Branch Management** with the same switch / update workflow as the Master page
+- a **Remote Monitor** section with server metrics plus PB7 activity data; if live monitor rows are missing, the page still lists running PB7 bot names from `status_v7.json`
+- a **Progress** section with separate status buckets for init, setup and update runs; use the sidebar action buttons to open the shared **Command Log Viewer** whenever you need the full ansible output
 
-**Branch Management** expanders (PBGui and PB7) work the same as on the Master — switch branch or commit via Ansible without manual SSH.
+The sidebar keeps the detailed log workflows separate from the normal host overview:
+- utility actions such as **Task Logs**, **Host Logs**, **Read settings from VPS**, **Initialize**, or **Delete VPS** stay above a divider, while the executable ansible playbook buttons are grouped below it
+- **Task Logs** opens a dedicated filtered viewer for all stored playbook logs of the selected VPS, including rotated history files
+- actions such as **Initialize**, **Setup VPS**, **Update PBGui**, **Update PBGui and PB7**, **Update Linux**, **Cleanup VPS**, or **Update CoinData API** switch the main pane to the shared **Command Log Viewer** automatically
+- **Host Logs** opens a dedicated **Host Log Viewer** screen for service logs, running bot logs, and file-style targets such as `sync.log`
+- **Back to Host Overview** returns from either log screen to the normal VPS detail view without losing the selected host context
+- every callable VPS Manager task now keeps its own current log plus rotated history entries in the shared viewer; the retention defaults to 10 history files and can be changed via `[vps_manager] task_log_history` in `pbgui.ini`
+- when ansible output already contains terminal ANSI colors, the shared viewer now preserves those colors in the browser instead of relying only on text-pattern guesses
+- ansible task logs with glued result markers or escaped payload control sequences like `\n` / `\r` are now expanded into readable separate display lines inside the shared viewer
+- structured ansible result payloads with JSON bodies are now pretty-printed into multiline blocks, which makes nested metadata like `stat` results readable directly in the shared viewer
 
-The **Log viewer** at the bottom lets you fetch and display any log file from the VPS (PBRun, PBRemote, PBCoinData, etc.).
+The status cards above the setup grid are live operator hints:
+- **Update Ready** turns green as soon as a VPS user password is entered locally and shows how many Linux updates are pending.
+- **CoinData Ready** shows the remaining CoinMarketCap credits when that value is available from PBRemote.
+- Pending Linux updates and reboot-needed hints are refreshed from a live SSH package-status probe, so the cards no longer wait for the slower hourly `PBRemote` alive refresh.
+- The detail page also includes a one-row summary table plus a remote server resource snapshot similar to the old Streamlit view.
+
+Sensitive fields such as **VPS User Password** and **CoinMarketCap API Key** include an eye button so you can temporarily reveal the stored value while editing.
+
+The reveal state is preserved during live updates, so opening an eye button does not immediately flip back to hidden when fresh WebSocket data arrives.
 
 ---
 
 ## Adding a new VPS
 
-1. Click `:material/add_box:` in the sidebar.
-2. Follow the 4-step wizard:
-   - **Step 1** – Get a VPS (hosting recommendations)
-   - **Step 2** – Install Ubuntu 24.04 on the VPS
-   - **Step 3** – Add the VPS IP and hostname to your local `/etc/hosts`
-   - **Step 4** – Enter credentials and click **Init VPS**
-3. After initialisation succeeds, open the VPS detail view and click **Setup VPS**.
+1. Click **Add VPS** in the left sidebar, or use a **Detected missing VPS** card to prefill hostname/IP.
+2. Follow the step cards at the top of the page:
+   - prepare an Ubuntu VPS
+   - add the hostname to your local `/etc/hosts`
+   - save the VPS record first
+   - run **Init VPS**, then finish with **Setup VPS** from the detail page
+3. Fill the **Step 4: Initial setup of your VPS** form and the **Save VPS Entry** defaults.
+4. Click **Save VPS** to create or update the stored record.
+5. Click **Init VPS** to start the bootstrap run.
+6. After initialisation succeeds, open the VPS detail page and click **Setup VPS**.
 
 ---
 

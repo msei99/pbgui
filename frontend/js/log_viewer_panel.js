@@ -60,12 +60,17 @@ class LogViewerPanel {
 
 /* sidebar */
 .lvp-sidebar{
-    width:170px;min-width:120px;max-width:240px;
+    width:auto;min-width:140px;
     background:#111827;border-right:1px solid #1e293b;
     display:flex;flex-direction:column;overflow:hidden;flex-shrink:0;
-    transition:width .18s ease;
+    position:relative;
 }
-.lvp-sidebar.lvp-collapsed{width:0;min-width:0;border-right:none}
+.lvp-sidebar.lvp-collapsed{width:0;min-width:0;border-right:none;overflow:hidden}
+.lvp-sidebar-resize{
+    position:absolute;top:0;right:-4px;bottom:0;width:8px;
+    z-index:10;cursor:col-resize;
+    user-select:none;
+}
 .lvp-sidebar-header{
     padding:4px 6px 4px 0;border-bottom:1px solid #1e293b;
     flex-shrink:0;white-space:nowrap;
@@ -112,7 +117,7 @@ class LogViewerPanel {
 .lvp-item-badge{
     font-size:11px;color:#94a3b8;
     font-family:'Cascadia Code','Fira Code','Consolas',monospace;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .lvp-sep{width:1px;height:18px;background:#334155;flex-shrink:0}
 .lvp-file-size{font-size:11px;color:#888;min-width:40px}
@@ -169,6 +174,30 @@ class LogViewerPanel {
 .lvp-log-warning {color:#ff8c00}
 .lvp-log-error   {color:#ff4b4b}
 .lvp-log-critical{color:#b39ddb;font-weight:600}
+.lvp-ansi-bold{font-weight:600}
+.lvp-ansi-fg-30{color:#8b95a7}
+.lvp-ansi-fg-31{color:#ff4b4b}
+.lvp-ansi-fg-32{color:#21c354}
+.lvp-ansi-fg-33{color:#f4b942}
+.lvp-ansi-fg-34{color:#7cc7ff}
+.lvp-ansi-fg-35{color:#d28cff}
+.lvp-ansi-fg-36{color:#58c7e6}
+.lvp-ansi-fg-37{color:#e2e8f0}
+.lvp-ansi-fg-90{color:#64748b}
+.lvp-ansi-fg-91{color:#ff7a7a}
+.lvp-ansi-fg-92{color:#69e69c}
+.lvp-ansi-fg-93{color:#ffd36b}
+.lvp-ansi-fg-94{color:#9bd7ff}
+.lvp-ansi-fg-95{color:#ebb0ff}
+.lvp-ansi-fg-96{color:#86eaff}
+.lvp-ansi-fg-97{color:#f8fafc}
+.lvp-ansible-task{color:#7cc7ff;font-weight:600}
+.lvp-ansible-play{color:#7cc7ff;font-weight:700}
+.lvp-ansible-ok{color:#21c354}
+.lvp-ansible-changed{color:#f4b942}
+.lvp-ansible-skipped{color:#58c7e6}
+.lvp-ansible-failed{color:#ff4b4b;font-weight:600}
+.lvp-ansible-warning{color:#d28cff}
 .lvp-hidden      {display:none !important}
 .lvp-level-hidden{display:none !important}
 .lvp-highlight      {background:rgba(255,200,0,.18)}
@@ -238,6 +267,8 @@ class LogViewerPanel {
         this._presetSet = LogViewerPanel.PRESETS[opts.presets] || LogViewerPanel.PRESETS.system;
         this._showRestart = !!opts.showRestart;
         this._onFileChange = opts.onFileChange || null;
+        this._localFileFilter = typeof opts.localFileFilter === 'function' ? opts.localFileFilter : null;
+        this._startLocalAtEnd = !!opts.startLocalAtEnd;
 
         /* runtime state */
         this._ws           = null;
@@ -274,6 +305,69 @@ class LogViewerPanel {
         this._bindEvents();
     }
 
+    _normalizeIncomingLines(lines) {
+        var normalized = [];
+        for (var i = 0; i < (lines || []).length; i++) {
+            var expanded = this._expandIncomingLine(lines[i]);
+            if (expanded.length) normalized.push.apply(normalized, expanded);
+            else normalized.push('');
+        }
+        return normalized;
+    }
+
+    _prettyFormatStructuredPayload(text) {
+        var source = String(text == null ? '' : text);
+        if (!source) return source;
+
+        var prefix = '';
+        var payload = source;
+        var match = source.match(/^(.*?=>\s*)([{[][^]*)$/);
+        if (match) {
+            prefix = match[1] || '';
+            payload = match[2] || '';
+        } else if (!/^\s*[{[]/.test(source)) {
+            return source;
+        }
+
+        try {
+            return prefix + JSON.stringify(JSON.parse(this._stripAnsi(payload)), null, 2);
+        } catch (error) {
+            return source;
+        }
+    }
+
+    _expandIncomingLine(line) {
+        var text = String(line == null ? '' : line);
+        if (!text) return [''];
+        var structuredPayload = /=>\s*[{[]/.test(text);
+
+        if (structuredPayload) {
+            text = this._prettyFormatStructuredPayload(text);
+            text = text
+                .replace(/\\r\\n/g, '\n')
+                .replace(/\\n/g, '\n')
+                .replace(/\\r/g, '\n')
+                .replace(/\\t/g, '    ');
+        }
+
+        text = text.replace(/\r\n?/g, '\n');
+
+        var ansi = '(?:\\x1B(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~]))*';
+        var markers = '(?:\\[WARNING\\]:|ok: \\[|changed: \\[|fatal: \\[|failed: \\[|skipping: \\[|PLAY \\[|TASK \\[|RUNNING HANDLER \\[|PLAY RECAP)';
+        text = text.replace(new RegExp('(\\*{5,})(?=' + ansi + markers + ')', 'g'), '$1\n');
+        text = text.replace(new RegExp('([^\\n])(' + ansi + markers + ')', 'g'), '$1\n$2');
+        text = text.replace(/\n{3,}/g, '\n\n');
+
+        var parts = text.split('\n');
+        if (!structuredPayload) return parts;
+
+        var compact = [];
+        for (var i = 0; i < parts.length; i++) {
+            if (parts[i].trim()) compact.push(parts[i]);
+        }
+        return compact.length ? compact : [''];
+    }
+
     /* ── DOM helper ───────────────────────────────────────────── */
     _q(suffix) { return document.getElementById(this._cid + '-lvp-' + suffix); }
 
@@ -304,6 +398,7 @@ class LogViewerPanel {
       '</button>' +
     '</div>' +
     '<div class="lvp-item-list" id="' + p + 'item-list"></div>' +
+    '<div class="lvp-sidebar-resize" id="' + p + 'sidebar-resize"></div>' +
   '</div>' +
   '<!-- viewer -->' +
   '<div class="lvp-viewer">' +
@@ -398,6 +493,7 @@ class LogViewerPanel {
         this._q('ln-btn').addEventListener('click',      function() { me._toggleLineNums(); });
         this._q('sb-toggle').addEventListener('click',   function() { me._toggleSidebar(); });
         this._q('sb-hdr-toggle').addEventListener('click', function() { me._toggleSidebar(); });
+        this._q('sidebar-resize').addEventListener('mousedown', function(e) { me._initResize(e); });
         this._q('preset').addEventListener('change',     function() { me._onPresetChange(); });
         this._q('search').addEventListener('input',      function() { me._onSearchInput(); });
         this._q('search').addEventListener('keydown',    function(e) { me._onSearchKeydown(e); });
@@ -539,8 +635,13 @@ class LogViewerPanel {
             this._updateHostDropdown();
             if (this._host === 'local' && this._vpState.local_logs)
                 this._updateFileList(this._vpState.local_logs);
-            if (this._host !== 'local')
-                this._buildServiceList();
+            if (this._host !== 'local') {
+                var nextServices = this._getServices();
+                if (!this._arrayEq(this._lastServiceList || [], nextServices)) {
+                    this._lastServiceList = nextServices;
+                    this._buildServiceList();
+                }
+            }
             break;
 
         case 'local_logs_list':
@@ -549,7 +650,7 @@ class LogViewerPanel {
 
         case 'local_logs':
             if (msg.sid !== undefined && msg.sid !== this._sid) return;
-            this._lines    = msg.lines || [];
+            this._lines    = this._normalizeIncomingLines(msg.lines || []);
             this._lineBase = 0;
             this._streaming = !!msg.streaming;
             if (msg.file_size !== undefined) this._showFileSize(msg.file_size);
@@ -564,7 +665,7 @@ class LogViewerPanel {
 
         case 'logs':
             if (msg.sid !== undefined && msg.sid !== this._sid) return;
-            this._lines    = msg.lines || [];
+            this._lines    = this._normalizeIncomingLines(msg.lines || []);
             this._lineBase = 0;
             if (msg.streaming) this._streaming = true;
             this._updateStreamBtn();
@@ -594,13 +695,14 @@ class LogViewerPanel {
     }
 
     _ingestLines(newLines) {
-        this._lines.push.apply(this._lines, newLines);
+        var normalized = this._normalizeIncomingLines(newLines);
+        this._lines.push.apply(this._lines, normalized);
         if (this._MAX !== Infinity && this._lines.length > this._MAX) {
             var trim = this._lines.length - this._MAX;
             this._lines = this._lines.slice(-this._MAX);
             this._lineBase += trim;
         }
-        this._appendLines(newLines);
+        this._appendLines(normalized);
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -649,6 +751,11 @@ class LogViewerPanel {
             if (b === 'local') return 1;
             return a.localeCompare(b);
         });
+        if (this._arrayEq(this._lastHostList || [], hosts)) {
+            if (hosts.indexOf(this._host) >= 0 && sel.value !== this._host) sel.value = this._host;
+            return;
+        }
+        this._lastHostList = hosts;
         var prev = sel.value;
         sel.innerHTML = '';
         for (var i = 0; i < hosts.length; i++) {
@@ -666,11 +773,141 @@ class LogViewerPanel {
         }
     }
 
+    _arrayEq(a, b) {
+        if (a.length !== b.length) return false;
+        for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+        return true;
+    }
+
     _updateFileList(files) {
-        this._fileList = (files || []).slice().sort();
+        var nextFiles = (files || []).slice();
+        if (this._localFileFilter)
+            nextFiles = nextFiles.filter(this._localFileFilter);
+        nextFiles.sort();
+        if (this._arrayEq(this._fileList, nextFiles)) return;
+        this._fileList = nextFiles;
+        var hadFile = !!this._file;
+        if (!hadFile && this._fileList.length) {
+            this._file = this._fileList[0];
+        }
+        if (this._file && this._fileList.indexOf(this._file) < 0) {
+            this._fileList.unshift(this._file);
+        }
         if (this._isLocal()) {
             this._buildFileList();
         }
+        if (this._isLocal() && !hadFile && this._file) {
+            this._subscribe();
+        }
+    }
+
+    _taskLabel(rawAction) {
+        var action = rawAction || '';
+        var match = action.match(/^(.*?)(?:\.(\d+))?$/);
+        var command = match ? (match[1] || '') : action;
+        var history = match && match[2] ? parseInt(match[2], 10) : 0;
+        var labels = {
+            'init': 'Initialize',
+            'setup': 'Setup VPS',
+            'update': 'Update',
+            'vps_init': 'Initialize',
+            'vps_setup': 'Setup VPS',
+            'vps_update': 'Update',
+            'vps-init': 'Initialize',
+            'vps-setup': 'Setup VPS',
+            'vps-update': 'Update Linux',
+            'vps-update-pbgui': 'Update PBGui',
+            'vps-update-pb': 'Update PBGui and PB7',
+            'vps-pb7-python312': 'Update PB7 venv',
+            'vps-pbgui-python312': 'Update PBGui venv',
+            'vps-reboot': 'Reboot VPS',
+            'vps-cleanup': 'Cleanup VPS',
+            'vps-resize-swap': 'Resize Swap',
+            'vps-update-firewall': 'Update Firewall Settings',
+            'vps-update-coindata': 'Update CoinData API',
+            'master-update-pb': 'Update PBGui and PB7',
+            'master-update-pbgui': 'Update PBGui',
+            'master-update-pb7': 'Update PB7',
+            'master-install-rustup': 'Install rustup',
+            'master-install-rclone': 'Install rclone',
+            'master-pb7-python312': 'Update PB7 venv',
+            'master-pbgui-python312': 'Install PBGui venv'
+        };
+        var label = labels[command] || command
+            .replace(/^vps[-_]/, '')
+            .replace(/^master[-_]/, '')
+            .split(/[-_]+/)
+            .filter(Boolean)
+            .map(function(part) {
+                return part.charAt(0).toUpperCase() + part.slice(1);
+            })
+            .join(' ');
+        return {
+            command: command,
+            history: history,
+            label: label || 'Task'
+        };
+    }
+
+    _taskHistoryBase(file) {
+        var f = file || '';
+        if (f.indexOf('VPSAction:') === 0) {
+            var parts = f.split(':');
+            var host = parts[1] || '';
+            var info = this._taskLabel(parts.slice(2).join(':'));
+            return 'VPSAction:' + host + ':' + info.command;
+        }
+        if (f.indexOf('MasterAction:') === 0) {
+            var masterInfo = this._taskLabel(f.split(':').slice(1).join(':'));
+            return 'MasterAction:' + masterInfo.command;
+        }
+        return '';
+    }
+
+    _taskHistoryIndex(file) {
+        var f = file || '';
+        if (f.indexOf('VPSAction:') === 0) {
+            return this._taskLabel(f.split(':').slice(2).join(':')).history;
+        }
+        if (f.indexOf('MasterAction:') === 0) {
+            return this._taskLabel(f.split(':').slice(1).join(':')).history;
+        }
+        return 0;
+    }
+
+    _orderedFileList() {
+        var files = this._fileList.slice();
+        var base = this._taskHistoryBase(this._file);
+        if (!base) return files;
+        var me = this;
+        var related = files.filter(function(item) { return me._taskHistoryBase(item) === base; });
+        if (!related.length) return files;
+        related.sort(function(a, b) {
+            return me._taskHistoryIndex(a) - me._taskHistoryIndex(b);
+        });
+        var rest = files.filter(function(item) { return me._taskHistoryBase(item) !== base; });
+        return related.concat(rest);
+    }
+
+    _fileLabel(file) {
+        var f = file || '';
+        if (!f) return '';
+        if (f.indexOf('Bot:') === 0) return '\ud83e\udd16 ' + f.substring(4);
+        if (f.indexOf('VPSAction:') === 0) {
+            var vpsParts = f.split(':');
+            var host = vpsParts[1] || 'VPS';
+            var vpsInfo = this._taskLabel(vpsParts.slice(2).join(':'));
+            return host + ' ' + vpsInfo.label + (vpsInfo.history ? ' (History ' + vpsInfo.history + ')' : '');
+        }
+        if (f.indexOf('MasterAction:') === 0) {
+            var masterInfo = this._taskLabel(f.split(':').slice(1).join(':'));
+            return 'Master ' + masterInfo.label + (masterInfo.history ? ' (History ' + masterInfo.history + ')' : '');
+        }
+        if (f.indexOf('/') >= 0) {
+            var pathParts = f.split('/').filter(Boolean);
+            return pathParts[pathParts.length - 1] || f;
+        }
+        return f;
     }
 
     _buildFileList() {
@@ -678,17 +915,17 @@ class LogViewerPanel {
         if (!list) return;
         list.innerHTML = '';
         var me = this;
-        for (var i = 0; i < this._fileList.length; i++) {
+        var files = this._orderedFileList();
+        for (var i = 0; i < files.length; i++) {
             (function(f) {
                 var btn = document.createElement('button');
                 btn.className = 'lvp-item-btn' + (f === me._file ? ' lvp-active' : '');
-                var label = f;
-                if (f.indexOf('Bot:') === 0) label = '\ud83e\udd16 ' + f.substring(4);
+                var label = me._fileLabel(f);
                 btn.textContent = label;
                 btn.title = f;
                 btn.addEventListener('click', function() { me._selectItem(f); });
                 list.appendChild(btn);
-            })(this._fileList[i]);
+            })(files[i]);
         }
     }
 
@@ -711,23 +948,48 @@ class LogViewerPanel {
     }
 
     _getServices() {
-        var svcs = ['PBRun', 'PBRemote', 'PBCoinData'];
+        var svcs = ['PBRun', 'PBRemote', 'PBCoinData', 'PBData', 'PBMon', 'PBGui', 'PBApiServer', 'FastAPI', 'VPSMonitor', 'VPSManagerApi', 'data/logs/sync.log'];
         if (this._vpState && this._host !== 'local') {
+            var meta = (this._vpState.host_meta || {})[this._host] || {};
+            var available = meta.available_logs;
+            if (Array.isArray(available) && available.length > 0) {
+                /* available_logs contains relative paths like "data/logs/PBRun.log" */
+                var availSet = {};
+                for (var i = 0; i < available.length; i++) availSet[available[i]] = true;
+                /* keep known services that have a matching log file */
+                svcs = svcs.filter(function(s) { return !!availSet[s]; });
+                /* add extra log files not in the known list */
+                for (var j = 0; j < available.length; j++) {
+                    if (svcs.indexOf(available[j]) < 0) svcs.push(available[j]);
+                }
+            } else if (String(meta.role) === 'slave') {
+                /* fallback: filter by role when available_logs not yet collected */
+                var masterOnly = ['PBGui', 'PBApiServer', 'FastAPI', 'VPSMonitor', 'VPSManagerApi'];
+                svcs = svcs.filter(function(s) { return masterOnly.indexOf(s) < 0; });
+            }
             /* PB7 instances (config-status): {name, running, cv, eo, rv} */
             var v7 = this._vpState.v7_instances || {};
             var v7Insts = v7[this._host] || [];
-            for (var j = 0; j < v7Insts.length; j++) {
-                var v7i = v7Insts[j];
+            for (var k = 0; k < v7Insts.length; k++) {
+                var v7i = v7Insts[k];
                 if (v7i.name && v7i.running) svcs.push('Bot:' + v7i.name + ':7');
             }
         }
-        return svcs;
+        if (this._service && svcs.indexOf(this._service) < 0) svcs.unshift(this._service);
+        return Array.from(new Set(svcs));
     }
 
     _svcLabel(s) {
         if (s.indexOf('Bot:') === 0) {
             var parts = s.substring(4).split(':');
             return '\ud83e\udd16 ' + parts[0];
+        }
+        if (s.indexOf('/') >= 0) {
+            var pathParts = s.split('/').filter(Boolean);
+            if (pathParts.length >= 2 && pathParts[pathParts.length - 1] === 'passivbot.log') {
+                return '\ud83e\udd16 ' + pathParts[pathParts.length - 2];
+            }
+            return pathParts[pathParts.length - 1] || s;
         }
         return s;
     }
@@ -762,7 +1024,7 @@ class LogViewerPanel {
     _updateBadge() {
         var badge = this._q('item-badge');
         if (!badge) return;
-        if (this._isLocal()) badge.textContent = this._file || '(no file)';
+        if (this._isLocal()) badge.textContent = this._fileLabel(this._file) || '(no file)';
         else badge.textContent = this._svcLabel(this._service);
     }
 
@@ -773,6 +1035,8 @@ class LogViewerPanel {
         var badge    = this._q('item-badge');
         if (this._sidebarOpen) {
             sidebar.classList.remove('lvp-collapsed');
+            sidebar.style.flex = '';
+            sidebar.style.width = '';
             if (tbToggle) tbToggle.style.display = 'none';
             if (badge) badge.style.display = 'none';
             if (this._isLocal() && this._ws && this._ws.readyState === WebSocket.OPEN)
@@ -784,6 +1048,30 @@ class LogViewerPanel {
             if (tbToggle) tbToggle.style.display = '';
             if (badge) badge.style.display = '';
         }
+    }
+
+    _initResize(e) {
+        e.preventDefault();
+        var sidebar = this._q('sidebar');
+        if (sidebar.classList.contains('lvp-collapsed')) return;
+        var me = this;
+        var startX = e.clientX;
+        var startW = sidebar.offsetWidth;
+        function onMove(e2) {
+            var newW = Math.max(100, startW + e2.clientX - startX);
+            sidebar.style.flex = 'none';
+            sidebar.style.width = newW + 'px';
+        }
+        function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -800,7 +1088,8 @@ class LogViewerPanel {
         var sid = ++this._sid;
         if (this._isLocal()) {
             if (!this._file) return;
-            this._send({ cmd: 'subscribe_local_logs', file: this._file, lines: this._getLines(), sid: sid });
+            this._send({ cmd: 'subscribe_local_logs', file: this._file, lines: this._getLines(), sid: sid, start_at_end: !!this._startLocalAtEnd });
+            this._startLocalAtEnd = false;
         } else {
             if (!this._host || !this._service) return;
             this._send({ cmd: 'subscribe_logs', host: this._host, service: this._service, lines: this._getLines(), sid: sid });
@@ -878,7 +1167,8 @@ class LogViewerPanel {
         var a    = document.createElement('a');
         a.href   = url;
         if (this._isLocal()) {
-            a.download = this._file || 'log.log';
+            var localName = (this._file || 'log.log').replace(/[/:]+/g, '_');
+            a.download = /\.log$/i.test(localName) ? localName : (localName + '.log');
         } else {
             var sn = this._service.indexOf('Bot:') === 0
                 ? this._service.substring(4).split(':')[0]
@@ -960,12 +1250,115 @@ class LogViewerPanel {
     /* ═══════════════════════════════════════════════════════════
        Level filter
        ═══════════════════════════════════════════════════════ */
+    _stripAnsi(line) {
+        return String(line == null ? '' : line)
+            .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+    }
+
+    _hasAnsi(line) {
+        return /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/.test(String(line == null ? '' : line));
+    }
+
+    _applyAnsiCodes(state, codes) {
+        for (var i = 0; i < codes.length; i++) {
+            var code = parseInt(codes[i], 10);
+            if (isNaN(code)) continue;
+            if (code === 0) {
+                state.bold = false;
+                state.fg = null;
+            } else if (code === 1) {
+                state.bold = true;
+            } else if (code === 22) {
+                state.bold = false;
+            } else if (code === 39) {
+                state.fg = null;
+            } else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {
+                state.fg = code;
+            }
+        }
+    }
+
+    _ansiStateClass(state) {
+        var classes = [];
+        if (state.bold) classes.push('lvp-ansi-bold');
+        if (state.fg != null) classes.push('lvp-ansi-fg-' + state.fg);
+        return classes.join(' ');
+    }
+
+    _parseAnsiSegments(line) {
+        var text = String(line == null ? '' : line);
+        var re = /\x1B(?:\[([0-9;]*)m|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g;
+        var state = { bold: false, fg: null };
+        var segments = [];
+        var lastIndex = 0;
+        var match;
+        var me = this;
+
+        function pushSegment(segmentText) {
+            if (!segmentText) return;
+            segments.push({
+                text: segmentText,
+                className: me._ansiStateClass(state)
+            });
+        }
+
+        while ((match = re.exec(text)) !== null) {
+            if (match.index > lastIndex) {
+                pushSegment(text.slice(lastIndex, match.index));
+            }
+            if (match[1] !== undefined) {
+                me._applyAnsiCodes(state, match[1] ? match[1].split(';') : ['0']);
+            }
+            lastIndex = re.lastIndex;
+        }
+        if (lastIndex < text.length) {
+            pushSegment(text.slice(lastIndex));
+        }
+        return segments;
+    }
+
+    _renderAnsiHtml(line, re) {
+        var segments = this._parseAnsiSegments(line);
+        var parts = [];
+        for (var i = 0; i < segments.length; i++) {
+            var seg = segments[i];
+            var html = this._esc(seg.text);
+            if (re) html = html.replace(re, '<mark>$1</mark>');
+            if (seg.className) parts.push('<span class="' + seg.className + '">' + html + '</span>');
+            else parts.push(html);
+        }
+        return parts.join('');
+    }
+
     _extractLevel(line) {
-        var m = line.match(/\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]/i);
+        var clean = this._stripAnsi(line);
+        if (/\b(fatal|failed)\s*:/i.test(clean) || /\b(unreachable|failed)=\s*[1-9]\d*\b/i.test(clean))
+            return 'ERROR';
+        if (/\[WARNING\]:/i.test(clean) || /\bWARNING\b/i.test(clean))
+            return 'WARNING';
+        if (/\bchanged\s*:/i.test(clean) || /\bchanged=\s*[1-9]\d*\b/i.test(clean))
+            return 'WARNING';
+        var m = clean.match(/\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]/i);
         if (m) return m[1].toUpperCase();
-        var m2 = line.match(/\b(DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL)\b/i);
+        var m2 = clean.match(/\b(DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL)\b/i);
         if (m2) { var l = m2[1].toUpperCase(); return l === 'WARN' ? 'WARNING' : l; }
         return 'INFO';
+    }
+
+    _extractAnsiClass(line) {
+        var clean = this._stripAnsi(line);
+        if (/^\s*(PLAY RECAP|PLAY \[)/i.test(clean)) return 'lvp-ansible-play';
+        if (/^\s*TASK \[/i.test(clean)) return 'lvp-ansible-task';
+        if (/\[WARNING\]:/i.test(clean)) return 'lvp-ansible-warning';
+        if (/\b(fatal|failed)\s*:/i.test(clean) || /\b(unreachable|failed)=\s*[1-9]\d*\b/i.test(clean))
+            return 'lvp-ansible-failed';
+        if (/\bchanged\s*:/i.test(clean) || /\bchanged=\s*[1-9]\d*\b/i.test(clean))
+            return 'lvp-ansible-changed';
+        if (/\b(skipping|skipped)\s*:/i.test(clean) || /\bskipped=\s*[1-9]\d*\b/i.test(clean))
+            return 'lvp-ansible-skipped';
+        if (/\bok\s*:/i.test(clean) || /\bok=\s*[1-9]\d*\b/i.test(clean))
+            return 'lvp-ansible-ok';
+        return '';
     }
 
     _levelClass(level) {
@@ -1017,21 +1410,28 @@ class LogViewerPanel {
     _buildDiv(line, lineNum) {
         var div = document.createElement('div');
         if (lineNum != null) div.dataset.ln = lineNum;
-        var level = this._extractLevel(line);
+        var rawLine = String(line == null ? '' : line);
+        var cleanLine = this._stripAnsi(rawLine);
+        var hasAnsi = this._hasAnsi(rawLine);
+        var level = this._extractLevel(cleanLine);
         div.dataset.level = level;
-        div.dataset.text  = line;
-        var cls = this._levelClass(level);
+        div.dataset.text  = cleanLine;
+        var cls = hasAnsi ? 'lvp-log-info' : this._levelClass(level);
+        var ansiClass = this._extractAnsiClass(cleanLine);
+        if (ansiClass) cls += ' ' + ansiClass;
         if (!this._visLevels.has(level)) cls += ' lvp-level-hidden';
 
         var re = this._getSearchRe();
-        if (this._searchTerm && this._testMatch(line)) {
+        if (this._searchTerm && this._testMatch(cleanLine)) {
             cls += ' lvp-highlight';
-            div.innerHTML = re ? this._esc(line).replace(re, '<mark>$1</mark>') : this._esc(line);
+            if (hasAnsi) div.innerHTML = this._renderAnsiHtml(rawLine, re);
+            else div.innerHTML = re ? this._esc(cleanLine).replace(re, '<mark>$1</mark>') : this._esc(cleanLine);
         } else if (this._searchTerm && this._filterMode) {
-            div.textContent = line;
+            div.textContent = cleanLine;
             cls += ' lvp-hidden';
         } else {
-            div.textContent = line;
+            if (hasAnsi) div.innerHTML = this._renderAnsiHtml(rawLine, null);
+            else div.textContent = cleanLine;
         }
         div.className = cls;
         return div;

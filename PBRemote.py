@@ -15,7 +15,7 @@ import glob
 import json
 from datetime import datetime
 import platform
-from PBRun import PBRun
+from PBRun import PBRun, RunV7
 from Status import InstancesStatus
 import shutil
 import hashlib
@@ -698,16 +698,36 @@ class PBRemote():
     def load_monitor(self):
         monitor = []
         pbgdir = Path.cwd()
-        path_v7 = PurePath(f'{pbgdir}/data/run_v7/')
-        for instance in self.local_run.instances_status_v7.instances:
-            if instance.running:
-                monitor_file = Path(f'{path_v7}/{instance.name}/monitor.json')
-                if Path(monitor_file).exists():
-                    try:
-                        with open(monitor_file, "r", encoding='utf-8') as f:
-                            monitor.append(json.load(f))
-                    except Exception as e:
-                        _log('PBRemote', f'load_monitor: skipping corrupt {monitor_file}: {e}', level='WARNING')
+        path_v7 = Path(f'{pbgdir}/data/run_v7')
+        for config_file in sorted(path_v7.glob('*/config.json')):
+            try:
+                with open(config_file, "r", encoding='utf-8') as f:
+                    config = json.load(f)
+            except Exception as e:
+                _log('PBRemote', f'load_monitor: skipping corrupt config {config_file}: {e}', level='WARNING')
+                continue
+
+            if config.get('pbgui', {}).get('enabled_on') != self.name:
+                continue
+
+            run_v7 = RunV7()
+            run_v7.path = str(config_file.parent)
+            run_v7.user = config_file.parent.name
+            run_v7.name = self.name
+            run_v7.pb7dir = self.local_run.pb7dir
+            run_v7.pb7venv = self.local_run.pb7venv
+            run_v7.pbgdir = str(pbgdir)
+
+            if not run_v7.load() or not run_v7.is_running():
+                continue
+
+            monitor_file = config_file.parent / 'monitor.json'
+            if monitor_file.exists():
+                try:
+                    with open(monitor_file, "r", encoding='utf-8') as f:
+                        monitor.append(json.load(f))
+                except Exception as e:
+                    _log('PBRemote', f'load_monitor: skipping corrupt {monitor_file}: {e}', level='WARNING')
         return monitor
 
     def alive(self):

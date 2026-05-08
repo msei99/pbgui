@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import traceback
+from datetime import date, datetime
+from time import mktime
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, Request
@@ -51,6 +54,107 @@ def init(monitor: VPSMonitor, streamer: AsyncLogStreamer):
     global _monitor, _streamer
     _monitor = monitor
     _streamer = streamer
+
+
+def get_monitor() -> Optional[VPSMonitor]:
+    """Return the shared VPSMonitor instance if startup has initialized it."""
+    return _monitor
+
+
+async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str | None = None,
+                              kind: str = "tracebacks", bucket: str = "recent",
+                              expected_count: int | None = None, lines: int = 5000) -> list[str]:
+    """Return filtered bot-log lines for popup display."""
+    if not _streamer or not hostname or not bot_name:
+        return []
+    content = await _streamer.get_bot_log(hostname, bot_name, lines=lines, pb_version=pb_version)
+    all_lines = (content or "").splitlines()
+    if not all_lines:
+        return []
+
+    bucket_name = str(bucket or "recent").strip().lower()
+    today_ts = int(mktime(date.today().timetuple()))
+    yesterday_ts = today_ts - 86400
+
+    def line_bucket(line: str) -> str | None:
+        parts = line.split()
+        if not parts:
+            return None
+        stamp = parts[0].rstrip("Z")
+        if len(stamp) != 19:
+            return None
+        try:
+            ts = int(datetime.fromisoformat(stamp).timestamp())
+        except ValueError:
+            return None
+        if ts < yesterday_ts:
+            return None
+        if ts < today_ts:
+            return "yesterday"
+        return "today"
+
+    entry_start_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s+")
+    kind_name = str(kind or "tracebacks").strip().lower()
+
+    entries: list[list[str]] = []
+    current: list[str] = []
+    for line in all_lines:
+        if entry_start_re.match(line):
+            if current:
+                entries.append(current)
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        entries.append(current)
+
+    def entry_matches(entry: list[str]) -> bool:
+        if not entry:
+            return False
+        matched_bucket = line_bucket(entry[0])
+        if bucket_name in {"today", "yesterday"} and matched_bucket != bucket_name:
+            return False
+        if bucket_name == "recent" and matched_bucket is None:
+            return False
+        first_parts = entry[0].split()
+        level = first_parts[1].upper() if len(first_parts) > 1 else ""
+        if kind_name == "errors":
+            return level == "ERROR"
+        return any("Traceback" in line for line in entry)
+
+    matched_entries = [entry for entry in entries if entry_matches(entry)]
+    if expected_count is not None and expected_count >= 0 and len(matched_entries) > expected_count:
+        matched_entries = matched_entries[-expected_count:]
+
+    if not matched_entries:
+        return []
+
+    out: list[str] = []
+    for index, entry in enumerate(matched_entries):
+        if index:
+            out.extend(["", "-----", ""])
+        out.extend(entry)
+    return out
+
+
+def get_monitor_state_snapshot() -> dict:
+    """Return the same full-state snapshot used by the VPS Monitor WebSocket."""
+    if not _monitor:
+        return {
+            "connections": {"total": 0, "connected": 0, "disconnected": 0, "auth_failed": 0, "connections": {}},
+            "system": {},
+            "instances": {},
+            "v7_instances": {},
+            "host_meta": {},
+            "streams": {},
+            "services": {},
+            "local_logs": [],
+            "timestamp": time.time(),
+            "ui_settings": {},
+        }
+    conn_summary = _monitor.pool.get_status_summary()
+    local_logs = _streamer.list_local_logs() if _streamer else []
+    return _monitor.store.get_full_state(conn_summary, local_logs)
 
 
 # ── Allowed UI setting keys (whitelist) ──────────────────────
@@ -592,6 +696,7 @@ async def _cmd_subscribe_local_logs(ws: WebSocket,
     filename = request.get("file", "")
     lines_n = int(request.get("lines", 200))
     sid = request.get("sid")
+    start_at_end = bool(request.get("start_at_end"))
     fp = resolve_local_log_path(filename) if filename else None
 
     if fp is None:
@@ -600,7 +705,7 @@ async def _cmd_subscribe_local_logs(ws: WebSocket,
         })
         return None
 
-    content = tail_file(fp, lines_n) if fp.exists() else []
+    content = [] if start_at_end else (tail_file(fp, lines_n) if fp.exists() else [])
     try:
         file_size = fp.stat().st_size
     except Exception:

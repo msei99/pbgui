@@ -1526,6 +1526,7 @@ function populateHosts() {
   disOpt.textContent = 'disabled';
   sel.appendChild(disOpt);
   allHosts.forEach(function(h) {
+    if (h === 'disabled') return;
     var opt = document.createElement('option');
     opt.value = h;
     opt.textContent = h;
@@ -2782,7 +2783,7 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/log_viewer_panel.js?v=8"></script>
+<script src="/app/js/log_viewer_panel.js?v=13"></script>
 <script src="/app/js/coin_overrides_editor.js?v=8"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */

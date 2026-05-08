@@ -13,6 +13,7 @@
     user: "{{ user }}"
     api_key: "{{ coinmarketcap_api_key }}"
     reboot: "{{ reboot }}"
+    install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
 
   tasks:
     - name: display facts
@@ -20,11 +21,6 @@
         var: ansible_facts
       tags: debug,never
 
-    - name: get remote_home and install_dir
-      set_fact:
-        remote_home: "{{ ansible_facts['env']['HOME'] }}"
-        install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
-    
     - name: print install_dir
       debug:
         var: install_dir

@@ -13,7 +13,7 @@
     ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"
     # user_pw: "{{ user_pw }}"
-    reboot: "{{ reboot }}"
+    reboot_requested: "{{ reboot_requested | default(reboot | default(false)) | bool }}"
 
   tasks:
     - name: display facts
@@ -78,6 +78,6 @@
         msg: "Rebooting machine in 5 seconds"
       when:
         - reboot_required_file.stat.exists == true
-        - reboot == true
+        - reboot_requested
       become: yes
     
