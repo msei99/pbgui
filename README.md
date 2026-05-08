@@ -313,6 +313,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Fixed: `PBRun.watch_log()` now reconstructs today/yesterday counters once after a `PBRun` restart by scanning only recently modified `passivbot.log.old` and `passivbot.log`, and it resets the live file offset after log truncation/rotation so monitoring does not silently stop reading new lines.
 - Fixed: Host Log Viewer now only shows log files that actually exist on the remote VPS; the host metadata script dynamically discovers all `*.log` and `*.log.old` files in `data/logs/` on each host and the `LogViewerPanel` filters its service list accordingly, including extra logs like `tradfi_sync.log`.
 - Changed: VPS Manager sidebar buttons (Update PBGui, Update PBGui and PB7, Update Linux, Reboot VPS) now show green when up to date and orange when an update or reboot is pending; removed the "Update PB7 venv" and "Update PBGui venv" buttons.
 - Changed: VPS Manager detail header now shows update count with colored dot (green = 0, red = pending) instead of dash; removed duplicate Updates card from Status Details.

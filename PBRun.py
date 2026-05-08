@@ -242,20 +242,27 @@ class Monitor():
         except ValueError:
             return None
 
+    def _load_recent_log_backfill(self, yesterday_ts):
+        lines = []
+        for log_path in (
+            Path(f'{self.path}/passivbot.log.old'),
+            Path(f'{self.path}/passivbot.log'),
+        ):
+            if not log_path.exists():
+                continue
+            try:
+                if int(log_path.stat().st_mtime) < yesterday_ts:
+                    continue
+                with open(log_path, "r") as f:
+                    lines.extend(f.read().splitlines())
+            except OSError:
+                continue
+        return lines
+
     def watch_log(self):
         yesterday = True
         logfile = Path(f'{self.path}/passivbot.log')
         if logfile.exists():
-            seek = False
-            if not self.log_lp:
-                self.log_lp = 0
-                seek = True
-            current_position = logfile.stat().st_size
-            with open(logfile, "r") as f:
-                f.seek(self.log_lp)
-                new_content = f.read().splitlines()
-            self.log_lp = current_position
-            tb_found = False
             today_ts = int(mktime(date.today().timetuple()))
             yesterday_ts = today_ts - 86400
             if self.log_watch_ts != 0 and self.log_watch_ts < today_ts:
@@ -272,6 +279,18 @@ class Monitor():
                 self.pnl_today = 0
                 self.pnl_counter_yesterday = self.pnl_counter_today
                 self.pnl_counter_today = 0
+            tb_found = False
+            if self.log_lp is None:
+                new_content = self._load_recent_log_backfill(yesterday_ts)
+                self.log_lp = logfile.stat().st_size
+            else:
+                current_position = logfile.stat().st_size
+                if self.log_lp > current_position:
+                    self.log_lp = 0
+                with open(logfile, "r") as f:
+                    f.seek(self.log_lp)
+                    new_content = f.read().splitlines()
+                self.log_lp = current_position
             for line in new_content:
                 elements = line.split()
                 if len(elements) > 1:
@@ -279,10 +298,7 @@ class Monitor():
                     if ts is not None:
                         if ts < yesterday_ts:
                             continue
-                        seek = False
                         yesterday = ts < today_ts
-                if seek:
-                    continue
                 if tb_found:
                     if not "ERROR" in line and not "INFO" in line and not "Traceback" in line:
                         self.log_traceback.append(line)
