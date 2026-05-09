@@ -420,7 +420,7 @@ class AsyncLogStreamer:
         try:
             while stream.active and attempt <= _MAX_RETRIES:
                 proc = await self._pool.start_process(
-                    stream.hostname, f"tail -f -n 0 {full_path} 2>/dev/null"
+                    stream.hostname, f"tail -F -n 0 {full_path} 2>/dev/null"
                 )
                 if not proc:
                     attempt += 1

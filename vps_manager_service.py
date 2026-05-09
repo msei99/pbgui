@@ -426,6 +426,10 @@ class VPSManagerService:
             logfiles = [f for f in logfiles if f in SLAVE_HOST_LOGFILES]
         monitor_payload = self._build_monitor_payload(host_state, hostname=hostname)
         logfiles.extend(monitor_payload.get("logfiles", []))
+        # add old bot log files
+        bot_logs = (monitor_state.get("bot_logs") or {}).get(hostname, {})
+        for log_list in bot_logs.values():
+            logfiles.extend(log_list)
         return {
             "kind": "vps",
             "hostname": hostname,

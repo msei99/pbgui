@@ -2285,8 +2285,6 @@
           ready: !!detail,
           name: detail && detail.status ? (detail.status.name || 'Master') : 'Master',
           localUser: config.local_user || '',
-          pbgui: detail && detail.branches ? detail.branches.pbgui || null : null,
-          pb7: detail && detail.branches ? detail.branches.pb7 || null : null,
           remoteBranches: Array.isArray(store.master.remoteBranches) ? store.master.remoteBranches : []
         });
       }
@@ -2305,8 +2303,6 @@
           view: store.view,
           hostname: store.hostname || '',
           ready: !!detail,
-          pbgui: detail && detail.branches ? detail.branches.pbgui || null : null,
-          pb7: detail && detail.branches ? detail.branches.pb7 || null : null,
           remoteBranches: ui && Array.isArray(ui.remoteBranches) ? ui.remoteBranches : [],
           taskLogFile: store.taskLog.file || '',
           taskLogTitle: store.taskLog.title || '',
@@ -2745,6 +2741,7 @@
       var tbody = document.querySelector('#' + containerId + ' tbody');
       if (!tbody) return;
       store._v7fp = store._v7fp || {};
+      var missing = false;
       items.forEach(function(item) {
         var name = String(item.name || '');
         var fp = [item.cpu, item.memory_mb, item.swap_mb,
@@ -2754,11 +2751,19 @@
         if (store._v7fp[name] === fp) return;
         store._v7fp[name] = fp;
         var row = tbody.querySelector('tr[data-bot="' + escAttr(name) + '"]');
-        if (!row) return;
+        if (!row) { missing = true; return; }
         var host = item.server || store.hostname || '';
         var pbVersion = String(item.pb_version || '7');
         row.innerHTML = _renderServiceRowCells(item, host, pbVersion);
       });
+      if (missing && items.length) {
+        store._v7fp = {};
+        setHtmlIfChanged(containerId, renderMonitorPanel(
+          (store.detail && store.detail.monitor) || {},
+          store.view === 'master',
+          (store.detail && store.detail.status) || {}
+        ));
+      }
     }
 
     function _liveUpdateTelemetry(serverMetrics) {
@@ -2858,6 +2863,8 @@
       if (serviceMap[normalized]) return serviceMap[normalized];
       const newBotMatch = normalized.match(/software\/pb7\/logs\/(.+)\.log$/);
       if (newBotMatch) return 'Bot:' + newBotMatch[1] + ':7';
+      const oldBotMatch = normalized.match(/pb7\/logs\/(\d{8}_.+?)\.log$/);
+      if (oldBotMatch) return 'pb7/logs/' + oldBotMatch[1] + '.log';
       const botMatch = normalized.match(/(?:data\/)?run_v7\/([^/]+)\/passivbot\.log$/);
       if (botMatch) return 'Bot:' + botMatch[1] + ':7';
       if (normalized.indexOf('logs/') === 0) return 'data/' + normalized;

@@ -96,13 +96,23 @@ def _attach_process_stats(process: psutil.Process, monitor: "Monitor"):
 
 
 def _ts_wrap_stderr(stderr_pipe, filepath: str):
-    """Read stderr lines and write them with UTC timestamp prefix."""
+    """Read stderr lines and write non-log lines with UTC timestamp prefix.
+
+    Passivbot log lines already have a ``YYYY-MM-DDTHH:MM:SSZ`` prefix and are
+    written to ``pb7/logs/`` by passivbot's own file handler — skip those.
+    Only raw stderr (tracebacks, startup tracebacks, subprocess noise) gets saved.
+    """
     try:
         with open(filepath, "ab") as f:
             for raw_line in stderr_pipe:
+                line = raw_line.strip() if isinstance(raw_line, str) else raw_line.decode(errors='replace').strip()
+                if not line:
+                    continue
+                # skip passivbot log lines (already saved via its FileHandler)
+                if len(line) >= 20 and line[4] == '-' and line[7] == '-' and line[10] == 'T' and line[19] == 'Z':
+                    continue
                 ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-                line = ts + " " + raw_line
-                f.write(line.encode() if isinstance(raw_line, str) else (ts + " ").encode() + raw_line)
+                f.write(f"{ts} {line}\n".encode())
     except Exception:
         pass
 

@@ -184,6 +184,25 @@ monitors = []
 v7 = []
 new_cache = {}
 
+# collect old passivbot log files for sidebar selector
+old_bot_logs = {}
+try:
+    log_dir = os.path.join(PB7DIR, 'logs')
+    if os.path.isdir(log_dir):
+        for f in sorted(os.listdir(log_dir)):
+            if not f.endswith('.log'): continue
+            # extract bot name: either "name.log" or "20260508_..._name_config_run.json.log"
+            if os.path.islink(os.path.join(log_dir, f)): continue
+            # get the base name before "_config_run"
+            base = f.rsplit('_config_run', 1)[0]
+            # extract bot name from end of the full path
+            parts = base.split('__')
+            for p in parts:
+                if p in running:
+                    old_bot_logs.setdefault(p, []).append(f'pb7/logs/{f}')
+                    break
+except Exception: pass
+
 for name, cfg_dir in sorted(running.items()):
     # config version + enabled_on
     version = 0; enabled_on = 'disabled'
@@ -209,16 +228,16 @@ for name, cfg_dir in sorted(running.items()):
             d = os.path.join(mroot, ex, name)
             if os.path.isdir(d) and os.path.isfile(os.path.join(d, 'state.latest.json')):
                 monitor_dir = d; break
-    if not monitor_dir: continue
 
-    # start time from state.latest.json
+    # start time from state.latest.json (or default 0 if no monitor dir)
     start_ts = 0.0
-    sf = os.path.join(monitor_dir, 'state.latest.json')
-    if os.path.isfile(sf):
-        try:
-            meta = json.load(open(sf)).get('meta', {})
-            start_ts = float(meta.get('bot_start_ts_ms', 0)) / 1000.0
-        except Exception: pass
+    if monitor_dir:
+        sf = os.path.join(monitor_dir, 'state.latest.json')
+        if os.path.isfile(sf):
+            try:
+                meta = json.load(open(sf)).get('meta', {})
+                start_ts = float(meta.get('bot_start_ts_ms', 0)) / 1000.0
+            except Exception: pass
 
     # per-bot cache
     bc = dict(host_cache.get(name, {}))
@@ -241,8 +260,6 @@ for name, cfg_dir in sorted(running.items()):
 
     # pb7 log (errors, PNL) — passivbot's own formatted output
     pb7_log = os.path.join(PB7DIR, 'logs', f'{name}.log')
-    if not os.path.isfile(pb7_log):
-        continue
 
     # stderr capture (traceback source, wrapper-timestamped)
     err_log = os.path.join(cfg_dir, 'passivbot_err.log')
@@ -256,8 +273,7 @@ for name, cfg_dir in sorted(running.items()):
     yesterday_start = today_start - 86400
 
     # helper: count in passivbot log (et/ey/ct/pt, NOT tracebacks)
-    def count_pb7(fp, is_old):
-        nonlocal bc
+    def count_pb7(fp, is_old, bc):
         last_day = None
         try:
             with open(fp, 'r') as f:
@@ -288,8 +304,7 @@ for name, cfg_dir in sorted(running.items()):
         except Exception: pass
 
     # helper: count tracebacks from passivbot_err.log (wrapper-timestamped)
-    def count_err(fp):
-        nonlocal bc
+    def count_err(fp, bc):
         try:
             with open(fp, 'r') as f:
                 for line in f:
@@ -306,13 +321,14 @@ for name, cfg_dir in sorted(running.items()):
 
     if first_run:
         # errors/PNL: scan pb7 log from start
-        count_pb7(pb7_log, False)
+        if os.path.isfile(pb7_log):
+            count_pb7(pb7_log, False, bc)
         bc['log_off'] = os.path.getsize(pb7_log) if os.path.isfile(pb7_log) else 0
         # tracebacks: scan err_log and its .old
         tb_found = False
         for fp in (old_err, err_log):
             if os.path.isfile(fp):
-                count_err(fp)
+                count_err(fp, bc)
                 tb_found = True
         if not tb_found:
             # fallback: old passivbot.log may have tracebacks (before migration)
@@ -339,39 +355,40 @@ for name, cfg_dir in sorted(running.items()):
         bc['err_off'] = os.path.getsize(err_log) if os.path.isfile(err_log) else 0
     else:
         # incremental read: pb7 log
-        try:
-            size = os.path.getsize(pb7_log)
-            offset = bc['log_off']
-            if offset > size: offset = 0
-            last_day = None
-            with open(pb7_log, 'r') as f:
-                f.seek(offset)
-                for line in f:
-                    mts = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)', line)
-                    if mts:
-                        ts_str = mts.group(1).rstrip('Z')
-                        try:
-                            ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
-                            if ts_val >= today_start: last_day = 'today'
-                            elif ts_val >= yesterday_start: last_day = 'yesterday'
-                        except: pass
-                    if last_day is None: continue
-                    if ' ERROR ' in line:
-                        if last_day == 'today': bc['et'] += 1
-                        else: bc['ey'] += 1
-                    m = FILL_SUMMARY_RE.search(line)
-                    if m:
-                        c = int(m.group(1)); pnl = float(m.group(2))
-                        if last_day == 'today': bc['ct'] += c; bc['pt'] += pnl
-                        else: bc['cy'] += c; bc['py'] += pnl
-                    else:
-                        m = FILL_PNL_RE.search(line)
+        if os.path.isfile(pb7_log):
+            try:
+                size = os.path.getsize(pb7_log)
+                offset = bc['log_off']
+                if offset > size: offset = 0
+                last_day = None
+                with open(pb7_log, 'r') as f:
+                    f.seek(offset)
+                    for line in f:
+                        mts = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)', line)
+                        if mts:
+                            ts_str = mts.group(1).rstrip('Z')
+                            try:
+                                ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
+                                if ts_val >= today_start: last_day = 'today'
+                                elif ts_val >= yesterday_start: last_day = 'yesterday'
+                            except: pass
+                        if last_day is None: continue
+                        if ' ERROR ' in line:
+                            if last_day == 'today': bc['et'] += 1
+                            else: bc['ey'] += 1
+                        m = FILL_SUMMARY_RE.search(line)
                         if m:
-                            pnl = float(m.group(1))
-                            if last_day == 'today': bc['ct'] += 1; bc['pt'] += pnl
-                            else: bc['cy'] += 1; bc['py'] += pnl
-                bc['log_off'] = f.tell()
-        except Exception: pass
+                            c = int(m.group(1)); pnl = float(m.group(2))
+                            if last_day == 'today': bc['ct'] += c; bc['pt'] += pnl
+                            else: bc['cy'] += c; bc['py'] += pnl
+                        else:
+                            m = FILL_PNL_RE.search(line)
+                            if m:
+                                pnl = float(m.group(1))
+                                if last_day == 'today': bc['ct'] += 1; bc['pt'] += pnl
+                                else: bc['cy'] += 1; bc['py'] += pnl
+                    bc['log_off'] = f.tell()
+            except Exception: pass
         # incremental read: err_log
         if os.path.isfile(err_log):
             try:
@@ -393,58 +410,6 @@ for name, cfg_dir in sorted(running.items()):
                     bc['err_off'] = f.tell()
             except Exception: pass
 
-    bc['pt'] = round(bc['pt'], 8)
-    bc['py'] = round(bc['py'], 8)
-        # set offset to end of current log to only read new lines going forward
-        if os.path.isfile(log_path):
-            bc['log_off'] = os.path.getsize(log_path)
-
-    bc['log_path'] = log_path
-
-    # read new lines from current log (date-bucketed)
-    try:
-        size = os.path.getsize(log_path)
-        offset = bc['log_off']
-        if offset > size:
-            offset = 0
-        today_start = int(datetime.strptime(TODAY + 'T00:00:00', '%Y-%m-%dT%H:%M:%S').timestamp())
-        yesterday_start = today_start - 86400
-        last_day = None
-        with open(log_path, 'r') as f:
-            f.seek(offset)
-            for line in f:
-                mts = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)', line)
-                if mts:
-                    ts_str = mts.group(1).rstrip('Z')
-                    try:
-                        ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
-                        if ts_val >= today_start: last_day = 'today'
-                        elif ts_val >= yesterday_start: last_day = 'yesterday'
-                    except: pass
-                if last_day is None: continue
-                if ' ERROR ' in line:
-                    if last_day == 'today': bc['et'] += 1
-                    else: bc['ey'] += 1
-                if 'Traceback' in line:
-                    if last_day == 'today': bc['tt'] += 1
-                    else: bc['ty'] += 1
-                m = FILL_SUMMARY_RE.search(line)
-                if m:
-                    c = int(m.group(1)); pnl = float(m.group(2))
-                    if last_day == 'today': bc['ct'] += c; bc['pt'] += pnl
-                    else: bc['cy'] += c; bc['py'] += pnl
-                else:
-                    m = FILL_PNL_RE.search(line)
-                    if m:
-                        pnl = float(m.group(1))
-                        if last_day == 'today': bc['ct'] += 1; bc['pt'] += pnl
-                        else: bc['cy'] += 1; bc['py'] += pnl
-            bc['log_off'] = f.tell()
-    except Exception: pass
-
-    bc['pt'] = round(bc['pt'], 8)
-    bc['py'] = round(bc['py'], 8)
-
     # build monitor dict
     monitors.append({
         'u': name, 'p': '7', 'v': version, 'st': start_ts,
@@ -462,7 +427,8 @@ for name, cfg_dir in sorted(running.items()):
         'log_off': bc['log_off'], 'err_off': bc['err_off'],
     }
 
-print(json.dumps({'monitors': monitors, 'v7': v7, 'cache': new_cache}))
+print(json.dumps({'monitors': monitors, 'v7': v7, 'cache': new_cache,
+    'bot_logs': old_bot_logs}))
 "'''
 
 
@@ -1097,9 +1063,12 @@ class VPSMonitor:
                     monitors = parsed.get('monitors', [])
                     v7_list = parsed.get('v7', [])
                     new_host_cache = parsed.get('cache', {})
+                    bot_logs = parsed.get('bot_logs', {})
                     if isinstance(monitors, list) and isinstance(v7_list, list):
                         self.store.update_instances(hostname, monitors)
                         self.store.update_v7_instances(hostname, v7_list)
+                        if bot_logs:
+                            self.store.update_bot_logs(hostname, bot_logs)
                         if new_host_cache:
                             self._monitor_cache[hostname] = new_host_cache
                             self._save_monitor_cache()

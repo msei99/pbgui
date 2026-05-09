@@ -91,6 +91,7 @@ class VPSStore:
         self.host_meta: dict[str, dict] = {}
         self.services: dict[str, dict] = {}
         self.streams: dict[str, dict] = {}  # stream diagnostics per host
+        self.bot_logs: dict[str, dict[str, list[str]]] = {}  # old bot log files per host
 
         # asyncio.Event — set on every data update, cleared by readers
         self.changed = asyncio.Event()
@@ -137,6 +138,11 @@ class VPSStore:
     def update_v7_instances(self, hostname: str, data: list[dict]):
         """Update v7 instance details (config_version, running_version, enabled_on)."""
         self.v7_instances[hostname] = data
+        self.changed.set()
+
+    def update_bot_logs(self, hostname: str, data: dict[str, list[str]]):
+        """Update old bot log file listings for a host."""
+        self.bot_logs[hostname] = data
         self.changed.set()
 
     def update_host_meta(self, hostname: str, data: dict):
@@ -207,6 +213,7 @@ class VPSStore:
             "host_meta": self.host_meta,
             "streams": self.streams,
             "services": self.services,
+            "bot_logs": self.bot_logs,
             "local_logs": local_logs,
             "timestamp": time.time(),
             "ui_settings": dict(self._ui_settings),
