@@ -38,7 +38,7 @@ PACKAGE_STATUS_INTERVAL = 3600  # seconds
 # ── Remote scripts (same as old realtime_collector) ─────────
 
 MONITOR_AGENT_SCRIPT = r'''python3 -u -c "
-import json, os, sys, time, threading
+import json, os, sys, time, threading, subprocess
 def rcpu():
     with open('/proc/stat') as f:
         p = f.readline().split()
@@ -67,6 +67,8 @@ def _ppid_watcher():
             os._exit(0)
 t = threading.Thread(target=_ppid_watcher, daemon=True)
 t.start()
+_bots_cpu_prev = {}
+_bots = {}
 pi, pt = rcpu()
 time.sleep(1)
 while True:
@@ -81,60 +83,389 @@ while True:
         dused = s.f_frsize * (s.f_blocks - s.f_bfree)
         dfree = s.f_frsize * s.f_bavail
         dpct = round(dused / dtot * 100, 1) if dtot else 0
-        print(json.dumps({'ts': time.time(), 'cpu': cpu, 'mem': mem, 'disk': [dtot, dused, dfree, dpct], 'swap': swap}), flush=True)
+        bots = []
+        try:
+            now = time.time()
+            out = subprocess.check_output(['ps', 'auxw'], text=True, timeout=2)
+            for line in out.splitlines():
+                if 'main.py' not in line or 'config_run.json' not in line:
+                    continue
+                parts = line.split()
+                pid = int(parts[1])
+                try:
+                    with open(f'/proc/{pid}/stat') as sf:
+                        sfp = sf.read().split()
+                    ticks = int(sfp[13]) + int(sfp[14])
+                except Exception:
+                    continue
+                prev = _bots_cpu_prev.get(pid)
+                cpu_pct = 0.0
+                if prev:
+                    dt_sec = now - prev[1]
+                    if dt_sec > 0:
+                        cpu_pct = round((ticks - prev[0]) / (dt_sec * 100) * 100, 1)
+                _bots_cpu_prev[pid] = (ticks, now)
+                rss_mb = 0
+                swap_mb = 0
+                try:
+                    with open(f'/proc/{pid}/status') as sf:
+                        for sl in sf.read().splitlines():
+                            if sl.startswith('VmRSS:'):
+                                rss_mb = round(int(sl.split()[1]) / 1024, 1)
+                            elif sl.startswith('VmSwap:'):
+                                swap_mb = round(int(sl.split()[1]) / 1024, 1)
+                except Exception:
+                    pass
+                name = _bots.get(pid, '')
+                if not name:
+                    for p in parts:
+                        if p.endswith('/config_run.json'):
+                            name = p.split('/')[-2]
+                            _bots[pid] = name
+                            break
+                if name:
+                    bots.append({'name': name, 'cpu': cpu_pct, 'rss_mb': rss_mb, 'swap_mb': swap_mb})
+            alive = set()
+            for pl in out.splitlines():
+                if 'main.py' in pl and 'config_run.json' in pl:
+                    ps = pl.split()
+                    if len(ps) > 1:
+                        alive.add(int(ps[1]))
+            for dead in list(_bots_cpu_prev.keys()):
+                if dead not in alive:
+                    del _bots_cpu_prev[dead]
+                    _bots.pop(dead, None)
+        except Exception:
+            pass
+        print(json.dumps({'ts': time.time(), 'cpu': cpu, 'mem': mem, 'disk': [dtot, dused, dfree, dpct], 'swap': swap, 'bots': bots}), flush=True)
     except Exception:
         pass
     time.sleep(1)
 "'''
 
 INSTANCE_COLLECT_SCRIPT = r'''python3 -u -c "
-import json, glob, os, subprocess
+import json, os, re, subprocess, time
+from datetime import datetime
+
 HOME = os.path.expanduser('~')
 PBGDIR = os.path.join(HOME, 'software/pbgui')
-running_dirs = set()
+PB7DIR = os.path.join(HOME, 'software/pb7')
+TODAY = datetime.utcnow().strftime('%Y-%m-%d')
+YESTERDAY = datetime.utcfromtimestamp(time.time() - 86400).strftime('%Y-%m-%d')
+
+# PNL regex (matches PBRun patterns)
+FILL_SUMMARY_RE = re.compile(r'\[fill\]\s+(\d+)\s+fills,\s+pnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\s+\w+')
+FILL_PNL_RE = re.compile(r'\bpnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\b')
+
+# cache from master
+cache_raw = os.environ.get('PBGUI_CACHE', '{}')
+host_cache = {}
+try:
+    host_cache = json.loads(cache_raw)
+except Exception:
+    pass
+
+# find running bots
+running = {}
 try:
     out = subprocess.check_output(['ps', 'aux'], text=True)
     for line in out.splitlines():
-        if 'main.py' in line and 'config_run.json' in line:
-            for part in line.split():
-                if part.endswith('/config_run.json'):
-                    running_dirs.add(os.path.dirname(part))
+        if 'main.py' not in line or 'config_run.json' not in line:
+            continue
+        for part in line.split():
+            if part.endswith('/config_run.json'):
+                d = os.path.dirname(part)
+                running[os.path.basename(d)] = d
+                break
 except Exception:
     pass
+
 monitors = []
-for pat in [
-    os.path.join(PBGDIR, 'data/run_v7/*/monitor.json'),
-]:
-    for mf in glob.glob(pat):
-        if os.path.dirname(mf) in running_dirs:
-            try:
-                with open(mf) as f:
-                    monitors.append(json.load(f))
-            except Exception:
-                pass
 v7 = []
-for cf in glob.glob(os.path.join(PBGDIR, 'data/run_v7/*/config.json')):
-    d = os.path.dirname(cf)
-    name = os.path.basename(d)
-    running = d in running_dirs
-    e = {'name': name, 'running': running}
+new_cache = {}
+
+for name, cfg_dir in sorted(running.items()):
+    # config version + enabled_on
+    version = 0; enabled_on = 'disabled'
+    cf = os.path.join(cfg_dir, 'config.json')
+    if os.path.isfile(cf):
+        try:
+            pbgui = json.load(open(cf)).get('pbgui', {})
+            version = pbgui.get('version', 0)
+            enabled_on = pbgui.get('enabled_on', 'disabled')
+        except Exception: pass
+    rv = 0
+    rvf = os.path.join(cfg_dir, 'running_version.txt')
+    if os.path.isfile(rvf):
+        try: rv = int(open(rvf).read().strip())
+        except Exception: pass
+    v7.append({'name': name, 'running': True, 'cv': version, 'eo': enabled_on, 'rv': rv})
+
+    # passivbot monitor dir (for start time)
+    monitor_dir = None
+    mroot = os.path.join(PB7DIR, 'monitor')
+    if os.path.isdir(mroot):
+        for ex in os.listdir(mroot):
+            d = os.path.join(mroot, ex, name)
+            if os.path.isdir(d) and os.path.isfile(os.path.join(d, 'state.latest.json')):
+                monitor_dir = d; break
+    if not monitor_dir: continue
+
+    # start time from state.latest.json
+    start_ts = 0.0
+    sf = os.path.join(monitor_dir, 'state.latest.json')
+    if os.path.isfile(sf):
+        try:
+            meta = json.load(open(sf)).get('meta', {})
+            start_ts = float(meta.get('bot_start_ts_ms', 0)) / 1000.0
+        except Exception: pass
+
+    # per-bot cache
+    bc = dict(host_cache.get(name, {}))
+    bc.setdefault('today', TODAY)
+    bc.setdefault('et', 0); bc.setdefault('ey', 0)
+    bc.setdefault('tt', 0); bc.setdefault('ty', 0)
+    bc.setdefault('ct', 0); bc.setdefault('cy', 0)
+    bc.setdefault('pt', 0.0); bc.setdefault('py', 0.0)
+    bc.setdefault('log_off', 0)
+
+    # day change
+    if bc['today'] != TODAY:
+        bc['ey'] = bc['et']; bc['et'] = 0
+        bc['ty'] = bc['tt']; bc['tt'] = 0
+        bc['cy'] = bc['ct']; bc['ct'] = 0
+        bc['py'] = bc['pt']; bc['pt'] = 0.0
+        bc['log_off'] = 0
+        bc['err_off'] = 0
+        bc['today'] = TODAY
+
+    # pb7 log (errors, PNL) — passivbot's own formatted output
+    pb7_log = os.path.join(PB7DIR, 'logs', f'{name}.log')
+    if not os.path.isfile(pb7_log):
+        continue
+
+    # stderr capture (traceback source, wrapper-timestamped)
+    err_log = os.path.join(cfg_dir, 'passivbot_err.log')
+    old_err = os.path.join(cfg_dir, 'passivbot_err.log.old')
+
+    bc.setdefault('log_off', 0)
+    bc.setdefault('err_off', 0)
+
+    first_run = name not in host_cache
+    today_start = int(datetime.strptime(TODAY + 'T00:00:00', '%Y-%m-%dT%H:%M:%S').timestamp())
+    yesterday_start = today_start - 86400
+
+    # helper: count in passivbot log (et/ey/ct/pt, NOT tracebacks)
+    def count_pb7(fp, is_old):
+        nonlocal bc
+        last_day = None
+        try:
+            with open(fp, 'r') as f:
+                for line in f:
+                    mts = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)', line)
+                    if mts:
+                        ts_str = mts.group(1).rstrip('Z')
+                        try:
+                            ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
+                            if ts_val >= today_start: last_day = 'today'
+                            elif ts_val >= yesterday_start: last_day = 'yesterday'
+                        except: pass
+                    if last_day is None: continue
+                    if ' ERROR ' in line:
+                        if last_day == 'today': bc['et'] += 1
+                        else: bc['ey'] += 1
+                    m = FILL_SUMMARY_RE.search(line)
+                    if m:
+                        c = int(m.group(1)); pnl = float(m.group(2))
+                        if last_day == 'today': bc['ct'] += c; bc['pt'] += pnl
+                        else: bc['cy'] += c; bc['py'] += pnl
+                    else:
+                        m = FILL_PNL_RE.search(line)
+                        if m:
+                            pnl = float(m.group(1))
+                            if last_day == 'today': bc['ct'] += 1; bc['pt'] += pnl
+                            else: bc['cy'] += 1; bc['py'] += pnl
+        except Exception: pass
+
+    # helper: count tracebacks from passivbot_err.log (wrapper-timestamped)
+    def count_err(fp):
+        nonlocal bc
+        try:
+            with open(fp, 'r') as f:
+                for line in f:
+                    if 'Traceback' not in line: continue
+                    mts = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)', line)
+                    if not mts: continue
+                    ts_str = mts.group(1).rstrip('Z')
+                    try:
+                        ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
+                        if ts_val >= today_start: bc['tt'] += 1
+                        elif ts_val >= yesterday_start: bc['ty'] += 1
+                    except: pass
+        except Exception: pass
+
+    if first_run:
+        # errors/PNL: scan pb7 log from start
+        count_pb7(pb7_log, False)
+        bc['log_off'] = os.path.getsize(pb7_log) if os.path.isfile(pb7_log) else 0
+        # tracebacks: scan err_log and its .old
+        tb_found = False
+        for fp in (old_err, err_log):
+            if os.path.isfile(fp):
+                count_err(fp)
+                tb_found = True
+        if not tb_found:
+            # fallback: old passivbot.log may have tracebacks (before migration)
+            old_main = os.path.join(cfg_dir, 'passivbot.log')
+            if os.path.isfile(old_main):
+                # old format: no wrapper timestamps, use last_day tracking
+                last_day = None
+                try:
+                    with open(old_main, 'r') as f:
+                        for line in f:
+                            # try wrapper timestamp first, then original
+                            mts = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)', line)
+                            if mts:
+                                ts_str = mts.group(1).rstrip('Z')
+                                try:
+                                    ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
+                                    if ts_val >= today_start: last_day = 'today'
+                                    elif ts_val >= yesterday_start: last_day = 'yesterday'
+                                except: pass
+                            if 'Traceback' in line and last_day:
+                                if last_day == 'today': bc['tt'] += 1
+                                else: bc['ty'] += 1
+                except Exception: pass
+        bc['err_off'] = os.path.getsize(err_log) if os.path.isfile(err_log) else 0
+    else:
+        # incremental read: pb7 log
+        try:
+            size = os.path.getsize(pb7_log)
+            offset = bc['log_off']
+            if offset > size: offset = 0
+            last_day = None
+            with open(pb7_log, 'r') as f:
+                f.seek(offset)
+                for line in f:
+                    mts = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)', line)
+                    if mts:
+                        ts_str = mts.group(1).rstrip('Z')
+                        try:
+                            ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
+                            if ts_val >= today_start: last_day = 'today'
+                            elif ts_val >= yesterday_start: last_day = 'yesterday'
+                        except: pass
+                    if last_day is None: continue
+                    if ' ERROR ' in line:
+                        if last_day == 'today': bc['et'] += 1
+                        else: bc['ey'] += 1
+                    m = FILL_SUMMARY_RE.search(line)
+                    if m:
+                        c = int(m.group(1)); pnl = float(m.group(2))
+                        if last_day == 'today': bc['ct'] += c; bc['pt'] += pnl
+                        else: bc['cy'] += c; bc['py'] += pnl
+                    else:
+                        m = FILL_PNL_RE.search(line)
+                        if m:
+                            pnl = float(m.group(1))
+                            if last_day == 'today': bc['ct'] += 1; bc['pt'] += pnl
+                            else: bc['cy'] += 1; bc['py'] += pnl
+                bc['log_off'] = f.tell()
+        except Exception: pass
+        # incremental read: err_log
+        if os.path.isfile(err_log):
+            try:
+                size = os.path.getsize(err_log)
+                offset = bc['err_off']
+                if offset > size: offset = 0
+                with open(err_log, 'r') as f:
+                    f.seek(offset)
+                    for line in f:
+                        if 'Traceback' not in line: continue
+                        mts = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)', line)
+                        if not mts: continue
+                        ts_str = mts.group(1).rstrip('Z')
+                        try:
+                            ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
+                            if ts_val >= today_start: bc['tt'] += 1
+                            elif ts_val >= yesterday_start: bc['ty'] += 1
+                        except: pass
+                    bc['err_off'] = f.tell()
+            except Exception: pass
+
+    bc['pt'] = round(bc['pt'], 8)
+    bc['py'] = round(bc['py'], 8)
+        # set offset to end of current log to only read new lines going forward
+        if os.path.isfile(log_path):
+            bc['log_off'] = os.path.getsize(log_path)
+
+    bc['log_path'] = log_path
+
+    # read new lines from current log (date-bucketed)
     try:
-        with open(cf) as f:
-            pbgui = json.load(f).get('pbgui', {})
-        e['cv'] = pbgui.get('version', 0)
-        e['eo'] = pbgui.get('enabled_on', 'disabled')
-    except Exception:
-        e['cv'] = 0
-        e['eo'] = 'unknown'
-    rv = os.path.join(d, 'running_version.txt')
-    try:
-        with open(rv) as f:
-            e['rv'] = int(f.read().strip())
-    except Exception:
-        e['rv'] = 0
-    v7.append(e)
-print(json.dumps([monitors, v7]))
+        size = os.path.getsize(log_path)
+        offset = bc['log_off']
+        if offset > size:
+            offset = 0
+        today_start = int(datetime.strptime(TODAY + 'T00:00:00', '%Y-%m-%dT%H:%M:%S').timestamp())
+        yesterday_start = today_start - 86400
+        last_day = None
+        with open(log_path, 'r') as f:
+            f.seek(offset)
+            for line in f:
+                mts = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)', line)
+                if mts:
+                    ts_str = mts.group(1).rstrip('Z')
+                    try:
+                        ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
+                        if ts_val >= today_start: last_day = 'today'
+                        elif ts_val >= yesterday_start: last_day = 'yesterday'
+                    except: pass
+                if last_day is None: continue
+                if ' ERROR ' in line:
+                    if last_day == 'today': bc['et'] += 1
+                    else: bc['ey'] += 1
+                if 'Traceback' in line:
+                    if last_day == 'today': bc['tt'] += 1
+                    else: bc['ty'] += 1
+                m = FILL_SUMMARY_RE.search(line)
+                if m:
+                    c = int(m.group(1)); pnl = float(m.group(2))
+                    if last_day == 'today': bc['ct'] += c; bc['pt'] += pnl
+                    else: bc['cy'] += c; bc['py'] += pnl
+                else:
+                    m = FILL_PNL_RE.search(line)
+                    if m:
+                        pnl = float(m.group(1))
+                        if last_day == 'today': bc['ct'] += 1; bc['pt'] += pnl
+                        else: bc['cy'] += 1; bc['py'] += pnl
+            bc['log_off'] = f.tell()
+    except Exception: pass
+
+    bc['pt'] = round(bc['pt'], 8)
+    bc['py'] = round(bc['py'], 8)
+
+    # build monitor dict
+    monitors.append({
+        'u': name, 'p': '7', 'v': version, 'st': start_ts,
+        'm': [0]*10, 'c': 0.0,
+        'i': '', 'it': 0, 'iy': 0, 'e': '', 't': '',
+        'et': bc['et'], 'ey': bc['ey'],
+        'tt': bc['tt'], 'ty': bc['ty'],
+        'pt': bc['pt'], 'py': bc['py'],
+        'ct': bc['ct'], 'cy': bc['cy'],
+    })
+    new_cache[name] = {
+        'today': bc['today'],
+        'et': bc['et'], 'ey': bc['ey'], 'tt': bc['tt'], 'ty': bc['ty'],
+        'ct': bc['ct'], 'cy': bc['cy'], 'pt': bc['pt'], 'py': bc['py'],
+        'log_off': bc['log_off'], 'err_off': bc['err_off'],
+    }
+
+print(json.dumps({'monitors': monitors, 'v7': v7, 'cache': new_cache}))
 "'''
+
+
 
 HOST_META_SCRIPT = r'''python3 -u -c "
 import configparser, hashlib, json, os, re, subprocess, sys
@@ -375,6 +706,10 @@ class VPSMonitor:
         self._last_host_meta_collect: dict[str, float] = {}
         self._last_package_status_collect: dict[str, float] = {}
 
+        # Monitor cache (persisted across restarts, per-host per-bot GZ state)
+        self._cache_path = Path(PBGDIR) / 'data' / 'monitor_cache.json'
+        self._monitor_cache: dict[str, dict[str, dict]] = {}
+
         # Debug logging
         self._debug_logging: Optional[bool] = None
 
@@ -444,6 +779,7 @@ class VPSMonitor:
         self.pool.load_vps_configs()
         self.store.load_ui_settings()
         self._ini_watcher.start()
+        self._load_monitor_cache()
 
         enabled = self.enabled_hosts
         if not enabled:
@@ -671,6 +1007,9 @@ class VPSMonitor:
                     data = json.loads(line)
                     metrics = SystemMetrics.from_json(data)
                     self.store.update_system(hostname, metrics)
+                    bots = data.get("bots")
+                    if bots:
+                        self.store.update_instances_live(hostname, bots)
                     self.store.update_stream_info(hostname, {
                         "alive": True,
                         "active": True,
@@ -747,31 +1086,53 @@ class VPSMonitor:
 
     async def _collect_instances(self, hostname: str):
         """Collect bot instances from a single VPS."""
-        result = await self.pool.run(hostname, INSTANCE_COLLECT_SCRIPT,
-                                     timeout=15)
+        host_cache = self._monitor_cache.get(hostname, {})
+        cache_json = json.dumps(host_cache)
+        cmd = f"PBGUI_CACHE='{cache_json}' {INSTANCE_COLLECT_SCRIPT}"
+        result = await self.pool.run(hostname, cmd, timeout=30)
         if result and result.exit_status == 0 and result.stdout:
             try:
                 parsed = json.loads(result.stdout.strip())
-                # New format: [monitors, v7_instances]
-                if (isinstance(parsed, list) and len(parsed) == 2
-                        and isinstance(parsed[0], list)
-                        and isinstance(parsed[1], list)):
+                if isinstance(parsed, dict):
+                    monitors = parsed.get('monitors', [])
+                    v7_list = parsed.get('v7', [])
+                    new_host_cache = parsed.get('cache', {})
+                    if isinstance(monitors, list) and isinstance(v7_list, list):
+                        self.store.update_instances(hostname, monitors)
+                        self.store.update_v7_instances(hostname, v7_list)
+                        if new_host_cache:
+                            self._monitor_cache[hostname] = new_host_cache
+                            self._save_monitor_cache()
+                        if self.debug_logging:
+                            _log(SERVICE, f"[instances] Collected "
+                                 f"{len(monitors)} monitors, "
+                                 f"{len(v7_list)} v7 instances from "
+                                 f"{hostname}", level="DEBUG")
+                        return
+                # fallback: old format
+                if isinstance(parsed, list) and len(parsed) == 2:
                     self.store.update_instances(hostname, parsed[0])
                     self.store.update_v7_instances(hostname, parsed[1])
-                    if self.debug_logging:
-                        _log(SERVICE, f"[instances] Collected "
-                             f"{len(parsed[0])} monitors, "
-                             f"{len(parsed[1])} v7 instances from "
-                             f"{hostname}", level="DEBUG")
                 else:
-                    # Old format (plain list of monitors) — backwards compat
                     self.store.update_instances(hostname, parsed)
-                    if self.debug_logging:
-                        _log(SERVICE, f"[instances] Collected "
-                             f"{len(parsed)} from {hostname} (old format)",
-                             level="DEBUG")
             except json.JSONDecodeError:
                 pass
+
+    def _load_monitor_cache(self) -> None:
+        try:
+            if self._cache_path.exists():
+                self._monitor_cache = json.loads(self._cache_path.read_text())
+        except Exception:
+            self._monitor_cache = {}
+
+    def _save_monitor_cache(self) -> None:
+        try:
+            tmp = self._cache_path.with_suffix('.json.tmp')
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(self._monitor_cache))
+            tmp.replace(self._cache_path)
+        except Exception:
+            pass
 
     async def collect_host_meta_now(self, hostname: str,
                                     *, include_package_status: bool = False):

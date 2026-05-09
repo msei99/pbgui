@@ -67,7 +67,16 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
     """Return filtered bot-log lines for popup display."""
     if not _streamer or not hostname or not bot_name:
         return []
-    content = await _streamer.get_bot_log(hostname, bot_name, lines=lines, pb_version=pb_version)
+
+    kind_name = str(kind or "tracebacks").strip().lower()
+
+    if kind_name == "tracebacks":
+        # read from PBRun's captured stderr (passivbot_err.log) — has wrapper timestamps
+        stderr_path = f"data/run_v7/{bot_name}/passivbot_err.log"
+        content = await _streamer.get_recent_logs(hostname, stderr_path, lines=lines)
+    else:
+        content = await _streamer.get_bot_log(hostname, bot_name, lines=lines, pb_version=pb_version)
+
     all_lines = (content or "").splitlines()
     if not all_lines:
         return []
@@ -94,7 +103,6 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
         return "today"
 
     entry_start_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s+")
-    kind_name = str(kind or "tracebacks").strip().lower()
 
     entries: list[list[str]] = []
     current: list[str] = []

@@ -313,6 +313,17 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Changed: PBRun now captures only stderr (not stdout) to `passivbot_err.log` with a UTC-timestamp wrapper thread, reducing log I/O by ~95%; the old `passivbot.log` and `.old` files are cleaned up automatically.
+- Changed: VPS Manager error and PNL counters are sourced from Passivbot's own formatted log (`software/pb7/logs/{name}.log`), while traceback counters come from PBRun's stderr capture (`passivbot_err.log`) with wrapper timestamps for day-bucketing.
+- Changed: the bot-log-match popup for tracebacks now reads from `passivbot_err.log` (stderr capture) which has the actual traceback content.
+- Changed: removed deprecated v6 and single/multi routing from the monitor payload builder; all bot instances are now treated as v7-only.
+- Changed: VPS Manager bot-table CPU, memory, and swap now update every second via the live metrics SSH stream including per-process `VmSwap` from `/proc/[pid]/status`.
+- Fixed: VPS telemetry bot-log fetches now combine `passivbot.log.old` and `passivbot.log` into a single time-ordered tail on the remote host, so the viewer always shows the most recent N lines from the combined history instead of appending stale old-file entries behind the current log.
+- Fixed: opening a bot log from VPS telemetry now recreates the shared host-log viewer for that selection, so the panel subscribes to the chosen bot log immediately instead of sometimes showing stale lines from the previously open log context.
+- Fixed: FastAPI VPS Manager task-log pages no longer rebuild the whole log viewer shell on live progress updates, so a newly opened branch-switch log does not go blank mid-run before the final lines arrive.
+- Fixed: FastAPI VPS Manager branch-switch actions now open the matching task log view immediately, instead of starting the playbook silently and forcing you to navigate to `Task Logs` manually.
+- Fixed: FastAPI VPS Manager branch panels now show closer Streamlit parity for commit selection, including loaded commit counts, incremental `+50` loading, and commit metadata/details for the selected or current branch commit.
+- Fixed: VPS Manager live panels now update individual cells/text in place instead of replacing the entire innerHTML on every push; the bot table, status flags, and status fields only touch DOM elements whose values actually changed, so the page no longer flickers and bot-name buttons remain clickable during live updates.
 - Fixed: `PBRun.watch_log()` now reconstructs today/yesterday counters once after a `PBRun` restart by scanning only recently modified `passivbot.log.old` and `passivbot.log`, and it resets the live file offset after log truncation/rotation so monitoring does not silently stop reading new lines.
 - Fixed: Host Log Viewer now only shows log files that actually exist on the remote VPS; the host metadata script dynamically discovers all `*.log` and `*.log.old` files in `data/logs/` on each host and the `LogViewerPanel` filters its service list accordingly, including extra logs like `tradfi_sync.log`.
 - Changed: VPS Manager sidebar buttons (Update PBGui, Update PBGui and PB7, Update Linux, Reboot VPS) now show green when up to date and orange when an update or reboot is pending; removed the "Update PB7 venv" and "Update PBGui venv" buttons.

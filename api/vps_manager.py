@@ -218,7 +218,7 @@ async def _push_loop(websocket: WebSocket, service: VPSManagerService, context: 
                 await websocket.send_json({"type": "state", "data": state})
                 last_state = encoded_state
 
-            detail = await asyncio.to_thread(_build_detail_for_context, service, context)
+            detail = await asyncio.to_thread(_build_quick_detail_for_context, service, context)
             if detail is not None:
                 encoded_detail = json.dumps(detail, sort_keys=True, default=str)
                 if encoded_detail != last_detail:

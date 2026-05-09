@@ -191,13 +191,6 @@ class LogViewerPanel {
 .lvp-ansi-fg-95{color:#ebb0ff}
 .lvp-ansi-fg-96{color:#86eaff}
 .lvp-ansi-fg-97{color:#f8fafc}
-.lvp-ansible-task{color:#7cc7ff;font-weight:600}
-.lvp-ansible-play{color:#7cc7ff;font-weight:700}
-.lvp-ansible-ok{color:#21c354}
-.lvp-ansible-changed{color:#f4b942}
-.lvp-ansible-skipped{color:#58c7e6}
-.lvp-ansible-failed{color:#ff4b4b;font-weight:600}
-.lvp-ansible-warning{color:#d28cff}
 .lvp-hidden      {display:none !important}
 .lvp-level-hidden{display:none !important}
 .lvp-highlight      {background:rgba(255,200,0,.18)}
@@ -1345,22 +1338,6 @@ class LogViewerPanel {
         return 'INFO';
     }
 
-    _extractAnsiClass(line) {
-        var clean = this._stripAnsi(line);
-        if (/^\s*(PLAY RECAP|PLAY \[)/i.test(clean)) return 'lvp-ansible-play';
-        if (/^\s*TASK \[/i.test(clean)) return 'lvp-ansible-task';
-        if (/\[WARNING\]:/i.test(clean)) return 'lvp-ansible-warning';
-        if (/\b(fatal|failed)\s*:/i.test(clean) || /\b(unreachable|failed)=\s*[1-9]\d*\b/i.test(clean))
-            return 'lvp-ansible-failed';
-        if (/\bchanged\s*:/i.test(clean) || /\bchanged=\s*[1-9]\d*\b/i.test(clean))
-            return 'lvp-ansible-changed';
-        if (/\b(skipping|skipped)\s*:/i.test(clean) || /\bskipped=\s*[1-9]\d*\b/i.test(clean))
-            return 'lvp-ansible-skipped';
-        if (/\bok\s*:/i.test(clean) || /\bok=\s*[1-9]\d*\b/i.test(clean))
-            return 'lvp-ansible-ok';
-        return '';
-    }
-
     _levelClass(level) {
         var map = { DEBUG:'lvp-log-debug', INFO:'lvp-log-info', WARNING:'lvp-log-warning',
                     ERROR:'lvp-log-error', CRITICAL:'lvp-log-critical' };
@@ -1417,8 +1394,6 @@ class LogViewerPanel {
         div.dataset.level = level;
         div.dataset.text  = cleanLine;
         var cls = hasAnsi ? 'lvp-log-info' : this._levelClass(level);
-        var ansiClass = this._extractAnsiClass(cleanLine);
-        if (ansiClass) cls += ' ' + ansiClass;
         if (!this._visLevels.has(level)) cls += ' lvp-level-hidden';
 
         var re = this._getSearchRe();

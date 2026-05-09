@@ -348,7 +348,7 @@ class VPSManagerService:
         return hosts
 
     def build_state(self) -> dict[str, Any]:
-        self.refresh(force=self._first_refresh_done)
+        self.refresh(force=False)
         pbremote = self._ensure_pbremote()
         monitor_state = self._get_monitor_state()
         overview_rows = self._build_overview_rows(pbremote, monitor_state)
@@ -429,7 +429,7 @@ class VPSManagerService:
         return {
             "kind": "vps",
             "hostname": hostname,
-            "status": self._build_vps_status(vps, host_state, pbremote, coindata_ok),
+            "status": self._build_vps_status(vps, host_state, pbremote, coindata_ok, quick=quick),
             "config": self._build_vps_config(vps),
             "branches": {
                 "pbgui": self._build_vps_pbgui_branch_state(pbremote, host_state),
@@ -689,9 +689,9 @@ class VPSManagerService:
         }
 
     def _build_vps_status(self, vps: VPS, host_state: dict[str, Any],
-                          pbremote: PBRemote, coindata_ok: bool) -> dict[str, Any]:
+                          pbremote: PBRemote, coindata_ok: bool, *, quick: bool = False) -> dict[str, Any]:
         summary_row = self._build_vps_overview_row(pbremote, vps.hostname, host_state)
-        live_package_status = self._get_live_vps_package_status(vps, host_state)
+        live_package_status = None if quick else self._get_live_vps_package_status(vps, host_state)
         if live_package_status:
             summary_row = dict(summary_row)
             if live_package_status.get("upgrades") not in (None, ""):
@@ -702,7 +702,7 @@ class VPSManagerService:
         pb7_github = self._build_remote_pb7_github_status(pbremote, host_state)
         return {
             "hosts_ok": vps.is_vps_in_hosts(),
-            "ssh_ok": vps.is_vps_ssh_open(),
+            "ssh_ok": self._host_online(host_state) if quick else vps.is_vps_ssh_open(),
             "init_ok": vps.init_status == "successful",
             "setup_ok": vps.setup_status == "successful",
             "update_ok": vps.update_status == "successful",
@@ -948,7 +948,7 @@ class VPSManagerService:
                 "server": server.name,
                 "version": getattr(server, "pb7_version", "N/A"),
                 "name": monitor["u"],
-                "pb_version": monitor["p"],
+                "pb_version": "7",
                 "start_time": datetime.fromtimestamp(start_ts).strftime("%Y-%m-%d %H:%M:%S") if start_ts else "",
                 "memory_mb": round(monitor["m"][0] / 1024 / 1024, 2),
                 "swap_mb": round(swap_value, 2),
@@ -957,46 +957,20 @@ class VPSManagerService:
                 "pnl_today": _safe_float(monitor["pt"]),
                 "pnls_yesterday": _safe_int(monitor["cy"]),
                 "pnl_yesterday": _safe_float(monitor["py"]),
-                "last_info": monitor["i"],
-                "infos_today": _safe_int(monitor["it"]),
-                "infos_yesterday": _safe_int(monitor["iy"]),
-                "last_error": monitor["e"],
                 "errors_today": _safe_int(monitor["et"]),
                 "errors_yesterday": _safe_int(monitor["ey"]),
-                "last_traceback": monitor["t"],
                 "tracebacks_today": _safe_int(monitor["tt"]),
                 "tracebacks_yesterday": _safe_int(monitor["ty"]),
             }
-            if item["pb_version"] == "7":
-                item["levels"] = {
-                    "cpu": _metric_level(item["cpu"], cfg.cpu_warning_v7, cfg.cpu_error_v7),
-                    "memory": _metric_level(item["memory_mb"], cfg.mem_warning_v7, cfg.mem_error_v7),
-                    "swap": _metric_level(item["swap_mb"], cfg.swap_warning_v7, cfg.swap_error_v7),
-                    "errors": _metric_level(item["errors_today"], cfg.error_warning_v7, cfg.error_error_v7),
-                    "tracebacks": _metric_level(item["tracebacks_today"], cfg.traceback_warning_v7, cfg.traceback_error_v7),
-                }
-                payload["v7"].append(item)
-                payload["logfiles"].append(f"run_v7/{item['name']}/passivbot.log")
-            elif item["pb_version"] == "6":
-                item["levels"] = {
-                    "cpu": _metric_level(item["cpu"], cfg.cpu_warning_multi, cfg.cpu_error_multi),
-                    "memory": _metric_level(item["memory_mb"], cfg.mem_warning_multi, cfg.mem_error_multi),
-                    "swap": _metric_level(item["swap_mb"], cfg.swap_warning_multi, cfg.swap_error_multi),
-                    "errors": _metric_level(item["errors_today"], cfg.error_warning_multi, cfg.error_error_multi),
-                    "tracebacks": _metric_level(item["tracebacks_today"], cfg.traceback_warning_multi, cfg.traceback_error_multi),
-                }
-                payload["multi"].append(item)
-                payload["logfiles"].append(f"multi/{item['name']}/passivbot.log")
-            elif item["pb_version"] == "s":
-                item["levels"] = {
-                    "cpu": _metric_level(item["cpu"], cfg.cpu_warning_single, cfg.cpu_error_single),
-                    "memory": _metric_level(item["memory_mb"], cfg.mem_warning_single, cfg.mem_error_single),
-                    "swap": _metric_level(item["swap_mb"], cfg.swap_warning_single, cfg.swap_error_single),
-                    "errors": _metric_level(item["errors_today"], cfg.error_warning_single, cfg.error_error_single),
-                    "tracebacks": _metric_level(item["tracebacks_today"], cfg.traceback_warning_single, cfg.traceback_error_single),
-                }
-                payload["single"].append(item)
-                payload["logfiles"].append(f"instances/{item['name']}/passivbot.log")
+            item["levels"] = {
+                "cpu": _metric_level(item["cpu"], cfg.cpu_warning_v7, cfg.cpu_error_v7),
+                "memory": _metric_level(item["memory_mb"], cfg.mem_warning_v7, cfg.mem_error_v7),
+                "swap": _metric_level(item["swap_mb"], cfg.swap_warning_v7, cfg.swap_error_v7),
+                "errors": _metric_level(item["errors_today"], cfg.error_warning_v7, cfg.error_error_v7),
+                "tracebacks": _metric_level(item["tracebacks_today"], cfg.traceback_warning_v7, cfg.traceback_error_v7),
+            }
+            payload["v7"].append(item)
+            payload["logfiles"].append(f"run_v7/{item['name']}/passivbot.log")
         existing_v7_names = {item["name"] for item in payload["v7"] if item.get("name")}
         payload["v7_running"] = self._build_running_v7_payload(server, existing_v7_names)
         for item in payload["v7_running"]:
@@ -1023,7 +997,7 @@ class VPSManagerService:
                 "server": hostname,
                 "version": meta.get("pb7v", "N/A"),
                 "name": monitor.get("u", ""),
-                "pb_version": monitor.get("p", ""),
+                "pb_version": "7",
                 "start_time": datetime.fromtimestamp(start_ts).strftime("%Y-%m-%d %H:%M:%S") if start_ts else "",
                 "memory_mb": round(_safe_float(metrics[0]) / 1024 / 1024, 2) if metrics else 0.0,
                 "swap_mb": round(swap_value, 2),
@@ -1032,27 +1006,21 @@ class VPSManagerService:
                 "pnl_today": _safe_float(monitor.get("pt")),
                 "pnls_yesterday": _safe_int(monitor.get("cy")),
                 "pnl_yesterday": _safe_float(monitor.get("py")),
-                "last_info": monitor.get("i", ""),
-                "infos_today": _safe_int(monitor.get("it")),
-                "infos_yesterday": _safe_int(monitor.get("iy")),
-                "last_error": monitor.get("e", ""),
                 "errors_today": _safe_int(monitor.get("et")),
                 "errors_yesterday": _safe_int(monitor.get("ey")),
-                "last_traceback": monitor.get("t", ""),
                 "tracebacks_today": _safe_int(monitor.get("tt")),
                 "tracebacks_yesterday": _safe_int(monitor.get("ty")),
             }
-            if item["pb_version"] == "7":
-                item["levels"] = {
-                    "cpu": _metric_level(item["cpu"], cfg.cpu_warning_v7, cfg.cpu_error_v7),
-                    "memory": _metric_level(item["memory_mb"], cfg.mem_warning_v7, cfg.mem_error_v7),
-                    "swap": _metric_level(item["swap_mb"], cfg.swap_warning_v7, cfg.swap_error_v7),
-                    "errors": _metric_level(item["errors_today"], cfg.error_warning_v7, cfg.error_error_v7),
-                    "tracebacks": _metric_level(item["tracebacks_today"], cfg.traceback_warning_v7, cfg.traceback_error_v7),
-                }
-                payload["v7"].append(item)
-                if item["name"]:
-                    payload["logfiles"].append(f"run_v7/{item['name']}/passivbot.log")
+            item["levels"] = {
+                "cpu": _metric_level(item["cpu"], cfg.cpu_warning_v7, cfg.cpu_error_v7),
+                "memory": _metric_level(item["memory_mb"], cfg.mem_warning_v7, cfg.mem_error_v7),
+                "swap": _metric_level(item["swap_mb"], cfg.swap_warning_v7, cfg.swap_error_v7),
+                "errors": _metric_level(item["errors_today"], cfg.error_warning_v7, cfg.error_error_v7),
+                "tracebacks": _metric_level(item["tracebacks_today"], cfg.traceback_warning_v7, cfg.traceback_error_v7),
+            }
+            payload["v7"].append(item)
+            if item["name"]:
+                payload["logfiles"].append(f"run_v7/{item['name']}/passivbot.log")
 
         existing_v7_names = {item["name"] for item in payload["v7"] if item.get("name")}
         payload["v7_running"] = self._build_running_v7_payload_from_telemetry(host_state, existing_v7_names)

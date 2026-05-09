@@ -5,6 +5,7 @@ It checks for status and activate files, starts and stops v7 bots accordingly.
 """
 import psutil
 import subprocess
+import threading
 import configparser
 import shlex
 import sys
@@ -92,6 +93,18 @@ def _attach_process_stats(process: psutil.Process, monitor: "Monitor"):
         monitor.cpu = process.cpu_percent()
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         monitor.cpu = None
+
+
+def _ts_wrap_stderr(stderr_pipe, filepath: str):
+    """Read stderr lines and write them with UTC timestamp prefix."""
+    try:
+        with open(filepath, "ab") as f:
+            for raw_line in stderr_pipe:
+                ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                line = ts + " " + raw_line
+                f.write(line.encode() if isinstance(raw_line, str) else (ts + " ").encode() + raw_line)
+    except Exception:
+        pass
 
 
 def _memory_usage_bytes(memory_info) -> int:
@@ -695,14 +708,14 @@ class RunV7():
             os.environ['PATH'] = new_os_path
             try:
                 cmd = [self.pb7venv, '-u', PurePath(f'{self.pb7dir}/src/main.py'), PurePath(f'{self.path}/config_run.json')]
-                logfile = Path(f'{self.path}/passivbot.log')
-                with open(logfile, "ab") as log:
-                    if platform.system() == "Windows":
-                        creationflags = subprocess.DETACHED_PROCESS
-                        creationflags |= subprocess.CREATE_NO_WINDOW
-                        subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pb7dir, text=True, creationflags=creationflags)
-                    else:
-                        subprocess.Popen(cmd, stdout=log, stderr=log, cwd=self.pb7dir, text=True, start_new_session=True)
+                err_log = str(Path(f'{self.path}/passivbot_err.log'))
+                if platform.system() == "Windows":
+                    creationflags = subprocess.DETACHED_PROCESS
+                    creationflags |= subprocess.CREATE_NO_WINDOW
+                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=self.pb7dir, text=True, creationflags=creationflags)
+                else:
+                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=self.pb7dir, text=True, start_new_session=True)
+                threading.Thread(target=_ts_wrap_stderr, args=(proc.stderr, err_log), daemon=True).start()
             finally:
                 os.environ['PATH'] = old_os_path
             _log("PBRun", f"Start: passivbot_v7 {self.path}/config_run.json")
@@ -714,13 +727,20 @@ class RunV7():
             sleep(1)
 
     def clean_log(self):
-        logfile = Path(f'{self.path}/passivbot.log')
-        if logfile.exists():
-            if logfile.stat().st_size >= 10485760:
-                logfile_old = Path(f'{str(logfile)}.old')
-                copy(logfile,logfile_old)
-                with open(logfile,'r+') as file:
+        # passivbot_err.log: rotate at 1MB (stderr is minimal)
+        err_log = Path(f'{self.path}/passivbot_err.log')
+        if err_log.exists():
+            if err_log.stat().st_size >= 1_048_576:
+                err_log_old = Path(f'{str(err_log)}.old')
+                copy(err_log, err_log_old)
+                with open(err_log, 'r+') as file:
                     file.truncate()
+        # delete old passivbot.log files (no longer used)
+        for old in (Path(f'{self.path}/passivbot.log'), Path(f'{self.path}/passivbot.log.old')):
+            try:
+                old.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     def create_v7_running_version(self):
         # Write running Version to file

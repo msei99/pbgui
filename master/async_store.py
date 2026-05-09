@@ -110,6 +110,30 @@ class VPSStore:
         self.instances[hostname] = data
         self.changed.set()
 
+    def update_instances_live(self, hostname: str, bots: list[dict]):
+        """Merge live CPU/RSS/Swap from the metrics stream into existing instance entries.
+
+        Only overwrites cpu (``c``), rss (``m[0]``) and swap (``m[9]``);
+        preserves all other fields from the monitor.json collection.
+        """
+        existing = self.instances.get(hostname, [])
+        if not existing:
+            return
+        merge_map = {b["name"]: b for b in bots if b.get("name")}
+        for inst in existing:
+            name = inst.get("u") or inst.get("name")
+            live = merge_map.get(name)
+            if not live:
+                continue
+            inst["c"] = live.get("cpu", inst.get("c", 0))
+            rss = live.get("rss_mb", 0)
+            if rss > 0 and "m" in inst and isinstance(inst["m"], list) and len(inst["m"]) >= 1:
+                inst["m"][0] = int(rss * 1024 * 1024)
+            swap = live.get("swap_mb", 0)
+            if "m" in inst and isinstance(inst["m"], list) and len(inst["m"]) >= 10:
+                inst["m"][9] = int(swap * 1024 * 1024)
+        self.changed.set()
+
     def update_v7_instances(self, hostname: str, data: list[dict]):
         """Update v7 instance details (config_version, running_version, enabled_on)."""
         self.v7_instances[hostname] = data

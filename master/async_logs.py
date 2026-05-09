@@ -46,8 +46,8 @@ def _resolve_log_path(service_or_path: str) -> str:
 
 
 def resolve_bot_log_path(instance_name: str, pb_version: str) -> str:
-    """Resolve a bot instance to its relative log file path."""
-    return f"data/run_v7/{instance_name}/passivbot.log"
+    """Resolve a bot instance to its remote log file path (passivbot's own log)."""
+    return f"software/pb7/logs/{instance_name}.log"
 
 
 # ── Local log helpers ─────────────────────────────────────────
@@ -256,31 +256,21 @@ class AsyncLogStreamer:
     async def get_bot_log(self, hostname: str, instance_name: str,
                           lines: int = 100,
                           pb_version: str = None) -> Optional[str]:
-        """Fetch recent log lines for a specific bot instance."""
-        if pb_version == "7":
-            paths = [
-                f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log",
-                f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log.old",
-                f"~/{REMOTE_PBGUI_DIR}/data/logs/{instance_name}.log",
-            ]
-        else:
-            paths = [
-                f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log",
-                f"~/{REMOTE_PBGUI_DIR}/data/run_v7/{instance_name}/passivbot.log.old",
-                f"~/{REMOTE_PBGUI_DIR}/data/logs/{instance_name}.log",
-            ]
+        """Fetch the most recent *lines* from the bot's own passivbot log.
 
-        collected: list[str] = []
-        for path in paths:
-            cmd = (f"test -f {path} && "
-                   f"{'cat' if lines == 0 else f'tail -n {lines}'} "
-                   f"{path} 2>/dev/null")
-            result = await self._pool.run(hostname, cmd, timeout=30)
-            if result and result.exit_status == 0 and (result.stdout or "").strip():
-                collected.append(result.stdout.rstrip("\n"))
-        if not collected:
-            return None
-        return "\n".join(part for part in collected if part)
+        Passivbot writes its log to ``~/software/pb7/logs/{name}.log`` and
+        manages rotation internally; the stable filename always points to the
+        current run.
+        """
+        log_path = f"~/software/pb7/logs/{instance_name}.log"
+        if lines == 0:
+            cmd = f"cat {log_path} 2>/dev/null"
+        else:
+            cmd = f"tail -n {lines} {log_path} 2>/dev/null"
+        result = await self._pool.run(hostname, cmd, timeout=30)
+        if result and result.exit_status == 0 and (result.stdout or "").strip():
+            return result.stdout.rstrip("\n")
+        return None
 
     async def get_log_info(self, hostname: str, service_or_path: str,
                            pb_version: str = None) -> Optional[dict]:
@@ -292,6 +282,20 @@ class AsyncLogStreamer:
             log_path = resolve_bot_log_path(bot_name, pv or "7")
         else:
             log_path = _resolve_log_path(service_or_path)
+
+        # Paths that start with a subdirectory (e.g. software/pb7/logs/) are
+        # absolute from HOME and don't need the pbgui base dir prepended.
+        if "/" in log_path:
+            full_path = f"~/{log_path}"
+            result = await self._pool.run(
+                hostname, f"stat -c '%s' {full_path} 2>/dev/null", timeout=10
+            )
+            if result and result.exit_status == 0:
+                output = (result.stdout or "").strip()
+                if output.isdigit():
+                    return {"size": int(output)}
+            return None
+
         for base_dir in self._pool.get_remote_pbgui_dirs(hostname):
             full_path = f"~/{base_dir}/{log_path}"
             result = await self._pool.run(
@@ -310,14 +314,20 @@ class AsyncLogStreamer:
         """Start a live log stream (tail -f) as an async task."""
         log_path = _resolve_log_path(service_or_path)
         full_path = None
-        for base_dir in self._pool.get_remote_pbgui_dirs(hostname):
-            candidate = f"~/{base_dir}/{log_path}"
-            result = await self._pool.run(hostname, f"test -f {candidate}", timeout=10)
-            if result and result.exit_status == 0:
-                full_path = candidate
-                break
-        if full_path is None:
-            full_path = f"~/{self._pool.get_remote_pbgui_dir(hostname)}/{log_path}"
+
+        # Paths that contain a subdirectory (e.g. software/pb7/logs/name.log)
+        # are absolute from HOME.
+        if "/" in log_path:
+            full_path = f"~/{log_path}"
+        else:
+            for base_dir in self._pool.get_remote_pbgui_dirs(hostname):
+                candidate = f"~/{base_dir}/{log_path}"
+                result = await self._pool.run(hostname, f"test -f {candidate}", timeout=10)
+                if result and result.exit_status == 0:
+                    full_path = candidate
+                    break
+            if full_path is None:
+                full_path = f"~/{self._pool.get_remote_pbgui_dir(hostname)}/{log_path}"
 
         self._stream_counter += 1
         stream_id = f"{hostname}:{log_path}:{self._stream_counter}"
