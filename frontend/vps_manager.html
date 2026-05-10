@@ -2280,11 +2280,15 @@
       }
       if (store.view === 'master') {
         const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
+        const monitor = detail && detail.monitor ? detail.monitor : {};
         return stableStringify({
           view: 'master',
           ready: !!detail,
           name: detail && detail.status ? (detail.status.name || 'Master') : 'Master',
           localUser: config.local_user || '',
+          hasServerMetrics: !!monitor.server,
+          hasV7Rows: Array.isArray(monitor.v7) && monitor.v7.length > 0,
+          hasV7Fallback: Array.isArray(monitor.v7_running) && monitor.v7_running.length > 0,
           remoteBranches: Array.isArray(store.master.remoteBranches) ? store.master.remoteBranches : []
         });
       }
@@ -2298,11 +2302,15 @@
       }
       if (isVpsContextView()) {
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
+        const monitor = detail && detail.monitor ? detail.monitor : {};
         const ui = store.hostname && store.vps[store.hostname] ? store.vps[store.hostname] : null;
         return stableStringify({
           view: store.view,
           hostname: store.hostname || '',
           ready: !!detail,
+          hasServerMetrics: store.view === 'vps' ? !!monitor.server : false,
+          hasV7Rows: store.view === 'vps' ? (Array.isArray(monitor.v7) && monitor.v7.length > 0) : false,
+          hasV7Fallback: store.view === 'vps' ? (Array.isArray(monitor.v7_running) && monitor.v7_running.length > 0) : false,
           remoteBranches: ui && Array.isArray(ui.remoteBranches) ? ui.remoteBranches : [],
           taskLogFile: store.taskLog.file || '',
           taskLogTitle: store.taskLog.title || '',
@@ -2740,24 +2748,44 @@
     function _liveUpdateServiceRows(containerId, items) {
       var tbody = document.querySelector('#' + containerId + ' tbody');
       if (!tbody) return;
-      store._v7fp = store._v7fp || {};
-      var missing = false;
+      var rows = Array.from(tbody.querySelectorAll('tr[data-bot]'));
+      var rowMap = {};
+      rows.forEach(function(row) {
+        rowMap[String(row.getAttribute('data-bot') || '')] = row;
+      });
+      var needsFullRerender = rows.length !== items.length;
+      var nextNames = {};
       items.forEach(function(item) {
         var name = String(item.name || '');
-        var fp = [item.cpu, item.memory_mb, item.swap_mb,
-                  item.errors_today, item.errors_yesterday,
-                  item.tracebacks_today, item.tracebacks_yesterday,
-                  item.pnl_today, item.pnl_yesterday].join('|');
-        if (store._v7fp[name] === fp) return;
-        store._v7fp[name] = fp;
-        var row = tbody.querySelector('tr[data-bot="' + escAttr(name) + '"]');
-        if (!row) { missing = true; return; }
+        nextNames[name] = true;
+        var row = rowMap[name];
+        if (!row) {
+          needsFullRerender = true;
+          return;
+        }
         var host = item.server || store.hostname || '';
         var pbVersion = String(item.pb_version || '7');
-        row.innerHTML = _renderServiceRowCells(item, host, pbVersion);
+        var cellHtml = _renderServiceRowCells(item, host, pbVersion);
+        BOT_COLUMNS.forEach(function(col) {
+          var cell = row.querySelector('td[data-col="' + col.field + '"]');
+          if (!cell) {
+            needsFullRerender = true;
+            return;
+          }
+          var payload = cellHtml[col.field] || { html: '', sig: '' };
+          if (cell.getAttribute('data-render-sig') !== payload.sig) {
+            cell.setAttribute('data-render-sig', payload.sig);
+            cell.innerHTML = payload.html;
+          }
+        });
       });
-      if (missing && items.length) {
-        store._v7fp = {};
+      rows.forEach(function(row) {
+        var name = String(row.getAttribute('data-bot') || '');
+        if (!nextNames[name]) {
+          needsFullRerender = true;
+        }
+      });
+      if (needsFullRerender) {
         setHtmlIfChanged(containerId, renderMonitorPanel(
           (store.detail && store.detail.monitor) || {},
           store.view === 'master',
@@ -3351,13 +3379,14 @@
     }
 
     function fetchBotLogMatches(hostname, botName, pbVersion, kind, bucket, expectedCount) {
+      if (bucket !== 'today' && bucket !== 'yesterday') return;
       send({
         cmd: 'fetch_bot_log_matches',
         hostname: hostname,
         bot_name: botName,
         pb_version: pbVersion || '7',
         kind: kind,
-        bucket: bucket || 'recent',
+        bucket: bucket,
         expected_count: expectedCount == null ? null : Number(expectedCount),
         lines: 0
       });
@@ -3403,13 +3432,13 @@
 
     function openBotLogMatchesModal(botName, kind, bucket, expectedCount, lines) {
       prepareAlertModalWindow(980, 820);
-      const bucketLabel = bucket === 'today' ? 'Today' : bucket === 'yesterday' ? 'Yesterday' : 'Recent';
+      const bucketLabel = bucket === 'today' ? 'Today' : 'Yesterday';
       const countSuffix = Number.isFinite(Number(expectedCount)) ? ' (' + Number(expectedCount) + ')' : '';
       document.getElementById('alertModalTitle').textContent = (kind === 'errors' ? 'Errors' : 'Tracebacks') + ' — ' + bucketLabel + countSuffix + ' — ' + botName;
       const box = document.getElementById('alertModalBody');
       box.innerHTML = lines.length
         ? `<pre class="log-matches-pre">${_renderLogMatchLines(lines, kind)}</pre>`
-        : `<div>No ${esc(kind)} found for ${esc(bucketLabel.toLowerCase())} in the recent bot log.</div>`;
+        : `<div>No ${esc(kind)} found for ${esc(bucketLabel.toLowerCase())}.</div>`;
       document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Close</button>';
       document.getElementById('alertModalOverlay').classList.add('visible');
       setTimeout(function() { box.scrollTop = 0; }, 0);
@@ -3524,6 +3553,12 @@
           store._pendingHostname = '';
         }
         sendContext();
+        if (store.view === 'master') {
+          scheduleMasterDetailFetch();
+        }
+        if (store.view === 'vps' && store.hostname) {
+          scheduleVpsDetailFetch(store.hostname);
+        }
       };
       ws.onmessage = function (event) {
         try {
@@ -3570,6 +3605,68 @@
       }
     }
 
+    function fetchVpsDetail(hostname) {
+      return fetch(API_BASE + '/detail/' + encodeURIComponent(hostname) + '?token=' + encodeURIComponent(TOKEN))
+        .then(function (r) {
+          if (!r.ok) throw new Error('detail fetch failed');
+          return r.json();
+        })
+        .then(function (data) {
+          if (!data || data.kind !== 'vps' || data.hostname !== hostname) return;
+          if (store.hostname !== hostname) return;
+          var hadDetail = !!(store.detail && store.detail.kind === 'vps' && store.detail.hostname === hostname);
+          store.detail = data;
+          ensureVpsUi(data.hostname, data);
+          if (!hadDetail) {
+            renderUi({ forceView: true });
+            return;
+          }
+          renderUi();
+        })
+        .catch(function () {});
+    }
+
+    function fetchMasterDetail() {
+      return fetch(API_BASE + '/detail-master?token=' + encodeURIComponent(TOKEN))
+        .then(function (r) {
+          if (!r.ok) throw new Error('master detail fetch failed');
+          return r.json();
+        })
+        .then(function (data) {
+          if (!data || data.kind !== 'master') return;
+          var hadDetail = !!(store.detail && store.detail.kind === 'master');
+          store.detail = data;
+          ensureMasterUi(data);
+          if (!hadDetail) {
+            renderUi({ forceView: true });
+            return;
+          }
+          renderUi();
+        })
+        .catch(function () {});
+    }
+
+    function scheduleMasterDetailFetch() {
+      clearTimeout(store._detailTimer);
+      store._detailTimer = 0;
+      store._detailTimer = setTimeout(function () {
+        store._detailTimer = 0;
+        if (store.view !== 'master') return;
+        fetchMasterDetail();
+      }, 3000);
+    }
+
+    function scheduleVpsDetailFetch(hostname) {
+      clearTimeout(store._detailTimer);
+      store._detailTimer = 0;
+      if (!hostname) return;
+      store._detailTimer = setTimeout(function () {
+        store._detailTimer = 0;
+        if (store.view !== 'vps' || store.hostname !== hostname) return;
+        fetchVpsDetail(hostname);
+      }, 3000);
+    }
+
     function handleMessage(msg) {
       if (!msg || typeof msg !== 'object') return;
       if (msg.type === 'state') {
@@ -3581,7 +3678,6 @@
         store.detail = msg.data || null;
         if (store.detail && store.detail.kind === 'vps') {
           ensureVpsUi(store.detail.hostname, store.detail);
-          clearTimeout(store._detailTimer);
         }
         renderUi();
         return;
@@ -3622,7 +3718,7 @@
       }
       if (msg.type === 'bot_log_matches') {
         const lines = Array.isArray(msg.lines) ? msg.lines : [];
-        openBotLogMatchesModal(String(msg.bot_name || ''), String(msg.kind || 'tracebacks'), String(msg.bucket || 'recent'), msg.expected_count, lines);
+        openBotLogMatchesModal(String(msg.bot_name || ''), String(msg.kind || 'tracebacks'), String(msg.bucket || 'today'), msg.expected_count, lines);
       }
     }
 
@@ -3635,6 +3731,7 @@
           store.hostname = msg.data.hostname;
           store.view = 'vps';
           sendContext();
+          scheduleVpsDetailFetch(store.hostname);
           needsForceView = true;
         }
       } else if (cmd === 'save_vps_config') {
@@ -3650,6 +3747,7 @@
           store.hostname = hostname;
           store.view = 'vps';
           sendContext();
+          scheduleVpsDetailFetch(store.hostname);
           needsForceView = true;
         }
       } else if (cmd === 'setup_vps') {
@@ -3728,6 +3826,8 @@
     }
 
     function selectView(view, hostname) {
+      clearTimeout(store._detailTimer);
+      store._detailTimer = 0;
       store.view = view;
       if (typeof hostname === 'string') {
         store.hostname = hostname;
@@ -3745,22 +3845,11 @@
       }
       sendContext();
       renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+      if (view === 'master') {
+        scheduleMasterDetailFetch();
+      }
       if (view === 'vps' && hostname) {
-        clearTimeout(store._detailTimer);
-        store._detailTimer = setTimeout(function () {
-          if (!store.detail || store.detail.kind !== 'vps' || store.detail.hostname !== hostname) {
-            fetch(API_BASE + '/detail/' + encodeURIComponent(hostname) + '?token=' + encodeURIComponent(TOKEN))
-              .then(function (r) { return r.json(); })
-              .then(function (data) {
-                if (data && data.kind === 'vps' && data.hostname === hostname) {
-                  store.detail = data;
-                  ensureVpsUi(data.hostname, data);
-                  renderUi();
-                }
-              })
-              .catch(function () {});
-          }
-        }, 3000);
+        scheduleVpsDetailFetch(hostname);
       }
     }
 
@@ -5250,17 +5339,52 @@
       const hasErrorsYesterday = Number(item.errors_yesterday || 0) > 0;
       const hasTracebacksToday = Number(item.tracebacks_today || 0) > 0;
       const hasTracebacksYesterday = Number(item.tracebacks_yesterday || 0) > 0;
-      return `\
-        <td><div><span class='tag' style='cursor:pointer;color:var(--accent);background:rgba(93,196,255,0.12)' onclick='openBotLog(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)})' title='Open bot log'>${esc(item.name || '-')}</span></div><div class='field-help' title='Bot start time'>${esc(item.start_time || '-')}</div></td>
-        <td>${_cpuTag(item.cpu)}</td>
-        <td>${_memSwapTag(item.memory_mb, 'MB', (item.levels && item.levels.memory) || 'ok')}</td>
-        <td>${_memSwapTag(item.swap_mb, 'MB', (item.levels && item.levels.swap) || 'ok')}</td>
-        <td>${hasErrorsToday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "errors", "today", ${Number(item.errors_today || 0)})' style='cursor:pointer'>${_metricTag(item.errors_today)}</span>` : _metricTag(item.errors_today)}</td>
-        <td>${hasTracebacksToday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "tracebacks", "today", ${Number(item.tracebacks_today || 0)})' style='cursor:pointer'>${_metricTag(item.tracebacks_today)}</span>` : _metricTag(item.tracebacks_today)}</td>
-        <td>${esc((Number(item.pnl_today) || 0).toFixed(2))}</td>
-        <td>${hasErrorsYesterday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "errors", "yesterday", ${Number(item.errors_yesterday || 0)})' style='cursor:pointer'>${_metricTag(item.errors_yesterday)}</span>` : _metricTag(item.errors_yesterday)}</td>
-        <td>${hasTracebacksYesterday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "tracebacks", "yesterday", ${Number(item.tracebacks_yesterday || 0)})' style='cursor:pointer'>${_metricTag(item.tracebacks_yesterday)}</span>` : _metricTag(item.tracebacks_yesterday)}</td>
-        <td>${esc((Number(item.pnl_yesterday) || 0).toFixed(2))}</td>`;
+      const memoryLevel = (item.levels && item.levels.memory) || 'ok';
+      const swapLevel = (item.levels && item.levels.swap) || 'ok';
+      const pnlsToday = Number(item.pnls_today || 0);
+      const pnlsYesterday = Number(item.pnls_yesterday || 0);
+      return {
+        name: {
+          html: `<div><span class='tag' style='cursor:pointer;color:var(--accent);background:rgba(93,196,255,0.12)' onclick='openBotLog(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)})' title='Open bot log'>${esc(item.name || '-')}</span></div><div class='field-help' title='Bot start time'>${esc(item.start_time || '-')}</div>`,
+          sig: [host, pbVersion, String(item.name || ''), String(item.start_time || '')].join('|')
+        },
+        cpu: {
+          html: _cpuTag(item.cpu),
+          sig: String(Number(item.cpu) || 0)
+        },
+        memory_mb: {
+          html: _memSwapTag(item.memory_mb, 'MB', memoryLevel),
+          sig: [String(Number(item.memory_mb) || 0), memoryLevel].join('|')
+        },
+        swap_mb: {
+          html: _memSwapTag(item.swap_mb, 'MB', swapLevel),
+          sig: [String(Number(item.swap_mb) || 0), swapLevel].join('|')
+        },
+        errors_today: {
+          html: hasErrorsToday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "errors", "today", ${Number(item.errors_today || 0)})' style='cursor:pointer'>${_metricTag(item.errors_today)}</span>` : _metricTag(item.errors_today),
+          sig: [host, pbVersion, String(item.name || ''), 'errors', 'today', String(Number(item.errors_today) || 0), hasErrorsToday ? '1' : '0'].join('|')
+        },
+        tracebacks_today: {
+          html: hasTracebacksToday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "tracebacks", "today", ${Number(item.tracebacks_today || 0)})' style='cursor:pointer'>${_metricTag(item.tracebacks_today)}</span>` : _metricTag(item.tracebacks_today),
+          sig: [host, pbVersion, String(item.name || ''), 'tracebacks', 'today', String(Number(item.tracebacks_today) || 0), hasTracebacksToday ? '1' : '0'].join('|')
+        },
+        pnl_today: {
+          html: `<div>${esc((Number(item.pnl_today) || 0).toFixed(2))}</div><div class='field-help' title='Realized fill count'>fills: ${esc(pnlsToday)}</div>`,
+          sig: [String((Number(item.pnl_today) || 0).toFixed(2)), String(pnlsToday)].join('|')
+        },
+        errors_yesterday: {
+          html: hasErrorsYesterday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "errors", "yesterday", ${Number(item.errors_yesterday || 0)})' style='cursor:pointer'>${_metricTag(item.errors_yesterday)}</span>` : _metricTag(item.errors_yesterday),
+          sig: [host, pbVersion, String(item.name || ''), 'errors', 'yesterday', String(Number(item.errors_yesterday) || 0), hasErrorsYesterday ? '1' : '0'].join('|')
+        },
+        tracebacks_yesterday: {
+          html: hasTracebacksYesterday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "tracebacks", "yesterday", ${Number(item.tracebacks_yesterday || 0)})' style='cursor:pointer'>${_metricTag(item.tracebacks_yesterday)}</span>` : _metricTag(item.tracebacks_yesterday),
+          sig: [host, pbVersion, String(item.name || ''), 'tracebacks', 'yesterday', String(Number(item.tracebacks_yesterday) || 0), hasTracebacksYesterday ? '1' : '0'].join('|')
+        },
+        pnl_yesterday: {
+          html: `<div>${esc((Number(item.pnl_yesterday) || 0).toFixed(2))}</div><div class='field-help' title='Realized fill count'>fills: ${esc(pnlsYesterday)}</div>`,
+          sig: [String((Number(item.pnl_yesterday) || 0).toFixed(2)), String(pnlsYesterday)].join('|')
+        }
+      };
     }
 
     function renderServiceRows(items) {
@@ -5284,7 +5408,11 @@
               ${sorted.map(function (item) {
                 const host = item.server || store.hostname || '';
                 const pbVersion = String(item.pb_version || '7');
-                return `<tr data-bot='${escAttr(item.name || '')}'>${_renderServiceRowCells(item, host, pbVersion)}</tr>`;
+                const cellHtml = _renderServiceRowCells(item, host, pbVersion);
+                return `<tr data-bot='${escAttr(item.name || '')}'>${BOT_COLUMNS.map(function (col) {
+                  const payload = cellHtml[col.field] || { html: '', sig: '' };
+                  return `<td data-col='${escAttr(col.field)}' data-render-sig='${escAttr(payload.sig)}'>${payload.html}</td>`;
+                }).join('')}</tr>`;
               }).join('')}
             </tbody>
           </table>

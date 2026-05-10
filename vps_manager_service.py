@@ -120,6 +120,12 @@ class VPSManagerService:
         self._first_refresh_done = False
         self._api_sync_task: asyncio.Task | None = None
         self._vps_package_status_cache: dict[str, dict[str, Any]] = {}
+        # Quick detail is pushed every second. Any status that requires a slower
+        # validation step must reuse the last full-detail result instead of
+        # falling back to a weaker default on the next quick push.
+        self._master_coindata_ok_cache: bool = False
+        self._vps_coindata_status_cache: dict[str, bool] = {}
+        self._vps_ssh_ok_cache: dict[str, bool] = {}
         self.api_sync_state: dict[str, Any] = {
             "running": False,
             "remaining": 0,
@@ -377,6 +383,7 @@ class VPSManagerService:
             coindata_ok = coindata.fetch_api_status()
         except Exception:
             coindata_ok = False
+        self._master_coindata_ok_cache = bool(coindata_ok)
         return {
             "kind": "master",
             "status": self._build_master_status(pbremote, coindata_ok),
@@ -392,7 +399,9 @@ class VPSManagerService:
         pbremote = self._ensure_pbremote()
         return {
             "kind": "master",
-            "status": self._build_master_status(pbremote, False),
+            # Quick detail must not overwrite validated full-detail status with
+            # a cheap fallback such as a hardcoded False.
+            "status": self._build_master_status(pbremote, self._master_coindata_ok_cache),
             "branches": {
                 "pbgui": self._build_master_pbgui_branch_state(pbremote),
                 "pb7": self._build_master_pb7_branch_state(pbremote),
@@ -408,7 +417,9 @@ class VPSManagerService:
         vps = self._require_vps(hostname)
         monitor_state = self._get_monitor_state()
         host_state = self._get_host_telemetry(monitor_state, hostname)
-        coindata_ok = False
+        # Quick detail may be less fresh, but it must not regress fields that
+        # were already validated by the full-detail path.
+        coindata_ok = bool(self._vps_coindata_status_cache.get(hostname, False)) if quick else False
         if not quick:
             try:
                 coindata = self._ensure_coindata()
@@ -419,6 +430,7 @@ class VPSManagerService:
                     coindata.api_key = old_key
             except Exception:
                 coindata_ok = False
+            self._vps_coindata_status_cache[hostname] = bool(coindata_ok)
 
         logfiles = list(BASE_HOST_LOGFILES)
         role = str(self._host_meta(host_state).get("role") or "slave")
@@ -694,8 +706,15 @@ class VPSManagerService:
 
     def _build_vps_status(self, vps: VPS, host_state: dict[str, Any],
                           pbremote: PBRemote, coindata_ok: bool, *, quick: bool = False) -> dict[str, Any]:
+        hostname = str(vps.hostname or "")
         summary_row = self._build_vps_overview_row(pbremote, vps.hostname, host_state)
-        live_package_status = None if quick else self._get_live_vps_package_status(vps, host_state)
+        live_package_status = None
+        if quick:
+            # Keep the last full package probe visible between quick pushes.
+            cached_package_status = self._vps_package_status_cache.get(hostname) or {}
+            live_package_status = cached_package_status.get("data") or None
+        else:
+            live_package_status = self._get_live_vps_package_status(vps, host_state)
         if live_package_status:
             summary_row = dict(summary_row)
             if live_package_status.get("upgrades") not in (None, ""):
@@ -704,9 +723,20 @@ class VPSManagerService:
         server = pbremote.find_server(vps.hostname)
         pbgui_github = self._build_remote_pbgui_github_status(pbremote, host_state)
         pb7_github = self._build_remote_pb7_github_status(pbremote, host_state)
+        if quick:
+            if not self._host_online(host_state):
+                ssh_ok = False
+            elif hostname in self._vps_ssh_ok_cache:
+                # Keep the last full SSH validation result while the host stays online.
+                ssh_ok = bool(self._vps_ssh_ok_cache[hostname])
+            else:
+                ssh_ok = True
+        else:
+            ssh_ok = vps.is_vps_ssh_open()
+            self._vps_ssh_ok_cache[hostname] = bool(ssh_ok)
         return {
             "hosts_ok": vps.is_vps_in_hosts(),
-            "ssh_ok": self._host_online(host_state) if quick else vps.is_vps_ssh_open(),
+            "ssh_ok": ssh_ok,
             "init_ok": vps.init_status == "successful",
             "setup_ok": vps.setup_status == "successful",
             "update_ok": vps.update_status == "successful",

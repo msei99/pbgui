@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse
 from api.auth import validate_token, require_auth, SessionToken
 from pbgui_purefunc import save_ini
 from logging_helpers import human_log as _log
-from master.async_monitor import VPSMonitor
+from master.async_monitor import VPSMonitor, INSTANCE_COLLECT_SCRIPT
 from master.async_logs import (
     AsyncLogStreamer, LocalLogSub, resolve_bot_log_path,
     local_logs_dir, tail_file, resolve_local_log_path,
@@ -62,87 +62,29 @@ def get_monitor() -> Optional[VPSMonitor]:
 
 
 async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str | None = None,
-                              kind: str = "tracebacks", bucket: str = "recent",
+                              kind: str = "tracebacks", bucket: str,
                               expected_count: int | None = None, lines: int = 5000) -> list[str]:
-    """Return filtered bot-log lines for popup display."""
+    """Return filtered bot-log lines for popup display.
+
+    Delegates to the same remote script that counts errors / tracebacks,
+    guaranteeing identical file-reading order, timestamp parsing, and
+    day-bucket logic.
+    """
     if not _streamer or not hostname or not bot_name:
         return []
-
-    kind_name = str(kind or "tracebacks").strip().lower()
-
-    if kind_name == "tracebacks":
-        # read from PBRun's captured stderr (passivbot_err.log) — has wrapper timestamps
-        stderr_path = f"data/run_v7/{bot_name}/passivbot_err.log"
-        content = await _streamer.get_recent_logs(hostname, stderr_path, lines=lines)
-    else:
-        content = await _streamer.get_bot_log(hostname, bot_name, lines=lines, pb_version=pb_version)
-
-    all_lines = (content or "").splitlines()
-    if not all_lines:
+    if bucket not in {"today", "yesterday"}:
         return []
-
-    bucket_name = str(bucket or "recent").strip().lower()
-    today_ts = int(mktime(date.today().timetuple()))
-    yesterday_ts = today_ts - 86400
-
-    def line_bucket(line: str) -> str | None:
-        parts = line.split()
-        if not parts:
-            return None
-        stamp = parts[0].rstrip("Z")
-        if len(stamp) != 19:
-            return None
+    cmd = (f"PBGUI_DUMP=1 PBGUI_DUMP_KIND={kind} PBGUI_DUMP_BOT={bot_name} "
+           f"PBGUI_DUMP_BUCKET={bucket} PBGUI_DUMP_LINES={lines} "
+           f"{INSTANCE_COLLECT_SCRIPT}")
+    result = await _streamer._pool.run(hostname, cmd, timeout=30)
+    if result and result.exit_status == 0 and result.stdout:
         try:
-            ts = int(datetime.fromisoformat(stamp).timestamp())
-        except ValueError:
-            return None
-        if ts < yesterday_ts:
-            return None
-        if ts < today_ts:
-            return "yesterday"
-        return "today"
-
-    entry_start_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s+")
-
-    entries: list[list[str]] = []
-    current: list[str] = []
-    for line in all_lines:
-        if entry_start_re.match(line):
-            if current:
-                entries.append(current)
-            current = [line]
-        elif current:
-            current.append(line)
-    if current:
-        entries.append(current)
-
-    def entry_matches(entry: list[str]) -> bool:
-        if not entry:
-            return False
-        matched_bucket = line_bucket(entry[0])
-        if bucket_name in {"today", "yesterday"} and matched_bucket != bucket_name:
-            return False
-        if bucket_name == "recent" and matched_bucket is None:
-            return False
-        first_parts = entry[0].split()
-        level = first_parts[1].upper() if len(first_parts) > 1 else ""
-        if kind_name == "errors":
-            return level == "ERROR"
-        return any("Traceback" in line for line in entry)
-
-    matched_entries = [entry for entry in entries if entry_matches(entry)]
-    if expected_count is not None and expected_count >= 0 and len(matched_entries) > expected_count:
-        matched_entries = matched_entries[-expected_count:]
-
-    if not matched_entries:
-        return []
-
-    out: list[str] = []
-    for index, entry in enumerate(matched_entries):
-        if index:
-            out.extend(["", "-----", ""])
-        out.extend(entry)
-    return out
+            parsed = json.loads(result.stdout.strip())
+            return parsed.get("lines", [])
+        except json.JSONDecodeError:
+            pass
+    return []
 
 
 def get_monitor_state_snapshot() -> dict:

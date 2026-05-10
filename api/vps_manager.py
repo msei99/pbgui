@@ -78,6 +78,17 @@ def get_vps_detail(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.get("/detail-master")
+def get_master_detail(
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    try:
+        detail = _get_service().build_master_detail()
+        return JSONResponse(content=detail)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.websocket("/ws")
 async def ws_vps_manager(websocket: WebSocket):
     token = websocket.query_params.get("token", "")
@@ -174,12 +185,16 @@ async def ws_vps_manager(websocket: WebSocket):
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True})
                 elif cmd == "fetch_bot_log_matches":
+                    bucket = str(msg.get("bucket") or "").strip()
+                    if bucket not in {"today", "yesterday"}:
+                        await websocket.send_json({"type": "error", "error": "bucket must be today or yesterday", "cmd": cmd})
+                        continue
                     lines = await get_bot_log_matches(
                         str(msg.get("hostname") or ""),
                         str(msg.get("bot_name") or ""),
                         pb_version=str(msg.get("pb_version") or "") or None,
                         kind=str(msg.get("kind") or "tracebacks"),
-                        bucket=str(msg.get("bucket") or "recent"),
+                        bucket=bucket,
                         expected_count=int(msg.get("expected_count")) if msg.get("expected_count") is not None else None,
                         lines=int(msg.get("lines") or 5000),
                     )
@@ -188,7 +203,7 @@ async def ws_vps_manager(websocket: WebSocket):
                         "hostname": str(msg.get("hostname") or ""),
                         "bot_name": str(msg.get("bot_name") or ""),
                         "kind": str(msg.get("kind") or "tracebacks"),
-                        "bucket": str(msg.get("bucket") or "recent"),
+                        "bucket": bucket,
                         "expected_count": int(msg.get("expected_count")) if msg.get("expected_count") is not None else None,
                         "lines": lines,
                     })
