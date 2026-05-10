@@ -313,6 +313,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Removed: the old Streamlit `VPS Manager Legacy` page and its navigation entry, so `VPS Manager` now routes only to the FastAPI implementation.
 - Changed: VPS init `private_key_user` and `private_key_file` are now session-only and are no longer persisted in host JSON files.
 - Changed: documented explicit code guardrails in VPS Manager so password, sudo, and init private-key fields must never be persisted back into host JSON or normal detail payloads.
 - Fixed: FastAPI `VPS Manager` no longer persists VPS login or sudo passwords in `data/vpsmanager/hosts/*/*.json`; secrets now stay only in server memory per login session, expire after 15 minutes, are removed on logout/token cleanup, and can only be revealed on demand via the password eye within that TTL.
