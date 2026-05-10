@@ -444,18 +444,28 @@ old_bot_logs = {}
 try:
     log_dir = os.path.join(PB7DIR, 'logs')
     if os.path.isdir(log_dir):
+        running_names = sorted((name for name in running.keys() if name), key=len, reverse=True)
         for f in sorted(os.listdir(log_dir)):
             if not f.endswith('.log'): continue
             # extract bot name: either name.log or 20260508_..._name_config_run.json.log
             if os.path.islink(os.path.join(log_dir, f)): continue
-            # get the base name before _config_run
-            base = f.rsplit('_config_run', 1)[0]
-            # extract bot name from end of the full path
-            parts = base.split('__')
-            for p in parts:
-                if p in running:
-                    old_bot_logs.setdefault(p, []).append(f'pb7/logs/{f}')
-                    break
+            direct_name = f[:-4]
+            matched_name = direct_name if direct_name in running else ''
+            if not matched_name:
+                for name in running_names:
+                    if name in f:
+                        matched_name = name
+                        break
+            if matched_name:
+                old_bot_logs.setdefault(matched_name, []).append(f'pb7/logs/{f}')
+        for name in running_names:
+            cfg_dir = running.get(name, '')
+            if not cfg_dir:
+                continue
+            for err_name in ('passivbot_err.log', 'passivbot_err.log.old'):
+                err_path = os.path.join(cfg_dir, err_name)
+                if os.path.isfile(err_path):
+                    old_bot_logs.setdefault(name, []).append(f'data/run_v7/{name}/{err_name}')
 except Exception: pass
 
 for name, cfg_dir in sorted(running.items()):
@@ -760,8 +770,8 @@ pb7_python = python_version(pb7venv)
 if pb7_python:
     result['pb7py'] = pb7_python
 
-logs_dir = os.path.join(PBGDIR, 'data', 'logs')
 available = []
+logs_dir = os.path.join(PBGDIR, 'data', 'logs')
 if os.path.isdir(logs_dir):
     for f in sorted(os.listdir(logs_dir)):
         full = os.path.join(logs_dir, f)

@@ -91,6 +91,7 @@ class LogViewerPanel {
     font-size:11px;cursor:pointer;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis;transition:background .12s;
 }
+.lvp-item-btn.lvp-subitem{padding-left:26px;color:#cbd5e1;font-size:10px}
 .lvp-item-btn:hover{background:#1e293b}
 .lvp-item-btn.lvp-active{
     background:#1e293b;border-left-color:#4da6ff;color:#4da6ff;font-weight:600;
@@ -262,6 +263,7 @@ class LogViewerPanel {
         this._onFileChange = opts.onFileChange || null;
         this._localFileFilter = typeof opts.localFileFilter === 'function' ? opts.localFileFilter : null;
         this._startLocalAtEnd = !!opts.startLocalAtEnd;
+        this._serviceListOverride = typeof opts.serviceListOverride === 'function' ? opts.serviceListOverride : null;
 
         /* runtime state */
         this._ws           = null;
@@ -281,12 +283,15 @@ class LogViewerPanel {
         this._searchAbort  = 0;
         this._searchTimer  = null;
         this._showLineNums = false;
-        this._sidebarOpen  = false;
+        this._sidebarOpen  = true;
         this._fileList     = [];
         this._vpState      = null;
         this._contextLines = 5;
         this._blocksCollapsed = true;
         this._fileSize     = null;
+        this._restartResetTimer = 0;
+        this._restartTargetService = null;
+        this._startRemoteAtEnd = false;
 
         this._MAX    = 5000;
         this._CHUNK  = 500;
@@ -384,7 +389,7 @@ class LogViewerPanel {
         c.innerHTML =
 '<div class="lvp-root">' +
   '<!-- sidebar -->' +
-  '<div class="lvp-sidebar lvp-collapsed" id="' + p + 'sidebar">' +
+  '<div class="lvp-sidebar" id="' + p + 'sidebar">' +
     '<div class="lvp-sidebar-header">' +
       '<button class="lvp-sb-hdr-toggle" id="' + p + 'sb-hdr-toggle">' +
         'Files <span class="lvp-sb-hdr-toggle-arrow">&#9664;</span>' +
@@ -403,7 +408,7 @@ class LogViewerPanel {
         '</select>' +
       '</label>' +
       '<div class="lvp-sep"></div>' +
-      '<button class="lvp-sb-toggle" id="' + p + 'sb-toggle">' +
+      '<button class="lvp-sb-toggle lvp-sb-open" id="' + p + 'sb-toggle" style="display:none">' +
         '<span class="lvp-sb-arrow">&#9658;</span> Files' +
       '</button>' +
       '<span class="lvp-item-badge" id="' + p + 'item-badge"></span>' +
@@ -682,9 +687,35 @@ class LogViewerPanel {
                     rb.textContent = msg.success ? '\u2705 Restarted' : '\u274c Failed';
                     setTimeout(function() { rb.textContent = '\ud83d\udd04 Restart'; }, 3000);
                 }
+                if (msg.success) this._resetAfterRestart(this._restartTargetService || this._activeItem());
+                this._restartTargetService = null;
             }
             break;
         }
+    }
+
+    _resetAfterRestart(nextItem) {
+        var me = this;
+        if (this._restartResetTimer) {
+            clearTimeout(this._restartResetTimer);
+            this._restartResetTimer = 0;
+        }
+        this._unsubscribe();
+        this._clear();
+        this._showFileSize(null);
+        this._streaming = false;
+        if (!this._isLocal() && nextItem) {
+            this._service = nextItem;
+            this._startRemoteAtEnd = true;
+            this._buildServiceList();
+        }
+        this._updateStreamBtn();
+        this._updateBadge();
+        this._updateRestartBtn();
+        this._restartResetTimer = setTimeout(function() {
+            me._restartResetTimer = 0;
+            me._subscribe();
+        }, 2500);
     }
 
     _ingestLines(newLines) {
@@ -922,25 +953,185 @@ class LogViewerPanel {
         }
     }
 
+    _collectKnownBotNames(services) {
+        var names = [];
+        var seen = {};
+        function add(name) {
+            var n = String(name || '');
+            if (!n || seen[n]) return;
+            seen[n] = true;
+            names.push(n);
+        }
+
+        for (var i = 0; i < services.length; i++) {
+            var svc = String(services[i] || '');
+            if (svc.indexOf('Bot:') === 0) add(svc.substring(4).split(':')[0]);
+        }
+
+        if (this._vpState && this._host !== 'local') {
+            var v7 = this._vpState.v7_instances || {};
+            var v7Insts = v7[this._host] || [];
+            for (var j = 0; j < v7Insts.length; j++) add(v7Insts[j] && v7Insts[j].name);
+
+            var botLogsByHost = this._vpState.bot_logs || {};
+            var botLogs = botLogsByHost[this._host] || {};
+            for (var botName in botLogs) {
+                if (Object.prototype.hasOwnProperty.call(botLogs, botName)) add(botName);
+            }
+        }
+
+        names.sort(function(a, b) { return b.length - a.length; });
+        return names;
+    }
+
+    _archiveLogMeta(path, knownBots) {
+        var svc = String(path || '');
+        if (svc.indexOf('pb7/logs/') !== 0 && svc.indexOf('software/pb7/logs/') !== 0) return null;
+
+        var base = svc.split('/').filter(Boolean).pop() || svc;
+        var tsMatch = base.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+        var timestamp = '';
+        var sortKey = '';
+        if (tsMatch) {
+            timestamp = tsMatch[1] + '-' + tsMatch[2] + '-' + tsMatch[3] + ' ' + tsMatch[4] + ':' + tsMatch[5] + ':' + tsMatch[6];
+            sortKey = tsMatch[1] + tsMatch[2] + tsMatch[3] + tsMatch[4] + tsMatch[5] + tsMatch[6];
+        }
+
+        var bot = '';
+        var inferred = base.match(/data_run_v7_(.+?)(?:_config_run(?:\.[^.]+)?|_con(?:fig(?:_run)?)?)\.log$/);
+        if (inferred) bot = inferred[1];
+
+        if (!bot) {
+            var candidates = Array.isArray(knownBots) ? knownBots : [];
+            for (var i = 0; i < candidates.length; i++) {
+                if (base.indexOf(candidates[i]) >= 0) {
+                    bot = candidates[i];
+                    break;
+                }
+            }
+        }
+
+        return {
+            bot: bot,
+            timestamp: timestamp,
+            sortKey: sortKey,
+        };
+    }
+
+    _botErrorLogMeta(path) {
+        var svc = String(path || '');
+        var match = svc.match(/^data\/run_v7\/([^/]+)\/(passivbot_err\.log(?:\.old)?)$/);
+        if (!match) return null;
+        return {
+            bot: match[1],
+            filename: match[2],
+            isOld: match[2].endsWith('.old'),
+        };
+    }
+
+    _serviceEntries(services) {
+        var entries = [];
+        var knownBots = this._collectKnownBotNames(services);
+        var botOrder = [];
+        var botGroups = {};
+        var fallbackEntries = [];
+        var me = this;
+
+        function ensureGroup(botName) {
+            if (!botGroups[botName]) {
+                botGroups[botName] = { live: null, history: [] };
+                botOrder.push(botName);
+            }
+            return botGroups[botName];
+        }
+
+        for (var i = 0; i < services.length; i++) {
+            var svc = String(services[i] || '');
+            if (!svc) continue;
+
+            if (svc.indexOf('Bot:') === 0) {
+                var botName = svc.substring(4).split(':')[0];
+                ensureGroup(botName).live = svc;
+                continue;
+            }
+
+            var errMeta = this._botErrorLogMeta(svc);
+            if (errMeta) {
+                ensureGroup(errMeta.bot).history.push({
+                    value: svc,
+                    label: errMeta.isOld ? 'error.old' : 'error',
+                    title: svc,
+                    className: 'lvp-subitem',
+                    sortKey: errMeta.isOld ? '1' : '2',
+                });
+                continue;
+            }
+
+            var archive = this._archiveLogMeta(svc, knownBots);
+            if (archive && archive.bot) {
+                ensureGroup(archive.bot).history.push({
+                    value: svc,
+                    label: archive.timestamp || me._svcLabel(svc),
+                    title: svc,
+                    className: 'lvp-subitem',
+                    sortKey: archive.sortKey || '',
+                });
+                continue;
+            }
+
+            fallbackEntries.push({ value: svc, label: this._svcLabel(svc), title: svc, className: '' });
+        }
+
+        entries = entries.concat(fallbackEntries);
+
+        for (var j = 0; j < botOrder.length; j++) {
+            var bot = botOrder[j];
+            var group = botGroups[bot];
+            if (!group) continue;
+
+            if (group.live) {
+                entries.push({ value: group.live, label: this._svcLabel(group.live), title: group.live, className: '' });
+            }
+
+            group.history.sort(function(a, b) {
+                if (a.sortKey && b.sortKey && a.sortKey !== b.sortKey) return b.sortKey.localeCompare(a.sortKey);
+                if (a.sortKey && !b.sortKey) return -1;
+                if (!a.sortKey && b.sortKey) return 1;
+                return a.title.localeCompare(b.title);
+            });
+            entries = entries.concat(group.history);
+        }
+
+        return entries;
+    }
+
     _buildServiceList() {
         var list = this._q('item-list');
         if (!list) return;
         list.innerHTML = '';
-        var services = this._getServices();
+        var services = this._serviceEntries(this._getServices());
         var me = this;
         for (var i = 0; i < services.length; i++) {
-            (function(s) {
+            (function(entry) {
                 var btn = document.createElement('button');
-                btn.className = 'lvp-item-btn' + (s === me._service ? ' lvp-active' : '');
-                btn.textContent = me._svcLabel(s);
-                btn.title = s;
-                btn.addEventListener('click', function() { me._selectItem(s); });
+                btn.className = 'lvp-item-btn' + (entry.value === me._service ? ' lvp-active' : '') + (entry.className ? ' ' + entry.className : '');
+                btn.textContent = entry.label;
+                btn.title = entry.title || entry.value;
+                btn.addEventListener('click', function() { me._selectItem(entry.value); });
                 list.appendChild(btn);
             })(services[i]);
         }
     }
 
     _getServices() {
+        if (this._serviceListOverride && this._host !== 'local') {
+            var overridden = this._serviceListOverride(this._host, this._vpState);
+            if (Array.isArray(overridden) && overridden.length) {
+                var next = Array.from(new Set(overridden.filter(function(item) { return !!item; })));
+                if (this._service && next.indexOf(this._service) < 0) next.unshift(this._service);
+                return next;
+            }
+        }
         var svcs = ['PBRun', 'PBRemote', 'PBCoinData', 'PBData', 'PBMon', 'PBGui', 'PBApiServer', 'FastAPI', 'VPSMonitor', 'VPSManagerApi', 'data/logs/sync.log'];
         if (this._vpState && this._host !== 'local') {
             var meta = (this._vpState.host_meta || {})[this._host] || {};
@@ -967,6 +1158,17 @@ class LogViewerPanel {
                 var v7i = v7Insts[k];
                 if (v7i.name && v7i.running) svcs.push('Bot:' + v7i.name + ':7');
             }
+            var botLogsByHost = this._vpState.bot_logs || {};
+            var botLogs = botLogsByHost[this._host] || {};
+            for (var botName in botLogs) {
+                if (!Object.prototype.hasOwnProperty.call(botLogs, botName)) continue;
+                var botFiles = botLogs[botName] || [];
+                for (var m = 0; m < botFiles.length; m++) {
+                    var file = String(botFiles[m] || '');
+                    if (!file) continue;
+                    svcs.push(file);
+                }
+            }
         }
         if (this._service && svcs.indexOf(this._service) < 0) svcs.unshift(this._service);
         return Array.from(new Set(svcs));
@@ -979,6 +1181,14 @@ class LogViewerPanel {
         }
         if (s.indexOf('/') >= 0) {
             var pathParts = s.split('/').filter(Boolean);
+            var errMeta = this._botErrorLogMeta(s);
+            if (errMeta) return errMeta.bot + ' ' + (errMeta.isOld ? 'error.old' : 'error');
+            if (s.indexOf('pb7/logs/') === 0 || s.indexOf('software/pb7/logs/') === 0) {
+                var archive = this._archiveLogMeta(s);
+                if (archive && archive.bot && archive.timestamp) return '\ud83d\udcdc ' + archive.bot + ' ' + archive.timestamp;
+                if (archive && archive.bot) return '\ud83d\udcdc ' + archive.bot + ' history';
+                if (archive && archive.timestamp) return '\ud83d\udcdc ' + archive.timestamp;
+            }
             if (pathParts.length >= 2 && pathParts[pathParts.length - 1] === 'passivbot.log') {
                 return '\ud83e\udd16 ' + pathParts[pathParts.length - 2];
             }
@@ -1085,7 +1295,9 @@ class LogViewerPanel {
             this._startLocalAtEnd = false;
         } else {
             if (!this._host || !this._service) return;
-            this._send({ cmd: 'subscribe_logs', host: this._host, service: this._service, lines: this._getLines(), sid: sid });
+            var startAtEnd = !!this._startRemoteAtEnd;
+            this._startRemoteAtEnd = false;
+            this._send({ cmd: 'subscribe_logs', host: this._host, service: this._service, lines: this._getLines(), sid: sid, start_at_end: startAtEnd });
             this._send({ cmd: 'get_log_info', host: this._host, service: this._service });
         }
         this._streaming = true;
@@ -1210,6 +1422,10 @@ class LogViewerPanel {
             }
             return null;
         }
+        if (this._service && (this._service.indexOf('pb7/logs/') === 0 || this._service.indexOf('software/pb7/logs/') === 0)) {
+            var archive = this._archiveLogMeta(this._service);
+            if (archive && archive.bot) return 'Bot:' + archive.bot + ':7';
+        }
         return this._service || null;
     }
 
@@ -1218,6 +1434,7 @@ class LogViewerPanel {
         if (!svc) return;
         var host = this._host || 'local';
         var rb = this._q('restart-btn');
+        this._restartTargetService = (!this._isLocal() && svc.indexOf('Bot:') === 0) ? svc : this._activeItem();
         if (rb) { rb.disabled = true; rb.textContent = '\u231b Restarting\u2026'; }
 
         if (svc.indexOf('Bot:') === 0) {

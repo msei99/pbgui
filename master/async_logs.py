@@ -45,6 +45,12 @@ def _resolve_log_path(service_or_path: str) -> str:
     return SERVICE_LOGS.get(service_or_path, service_or_path)
 
 
+def _is_home_relative_log_path(log_path: str) -> bool:
+    """Return True for remote paths rooted from HOME, not remote pbgui dir."""
+    normalized = str(log_path or "").lstrip("./")
+    return normalized.startswith("software/")
+
+
 def resolve_bot_log_path(instance_name: str, pb_version: str) -> str:
     """Resolve a bot instance to its remote log file path (passivbot's own log)."""
     return f"software/pb7/logs/{instance_name}.log"
@@ -239,6 +245,24 @@ class AsyncLogStreamer:
         """Fetch the last N lines of a remote log file."""
         log_path = _resolve_log_path(service_or_path)
         result = None
+
+        # Only HOME-rooted paths like software/pb7/logs/... bypass the remote
+        # pbgui base dir. Relative paths like data/logs/PBRun.log must still be
+        # resolved below each remote pbgui candidate.
+        if _is_home_relative_log_path(log_path):
+            full_path = f"~/{log_path}"
+            if lines == 0:
+                cmd = f"cat {full_path} 2>/dev/null"
+            else:
+                cmd = f"tail -n {lines} {full_path} 2>/dev/null"
+            result = await self._pool.run(hostname, cmd, timeout=30)
+            if result is None:
+                _log(SERVICE, f"[log] Cannot fetch logs from {hostname}: no connection", level="WARNING")
+                return None
+            if result.exit_status == 0:
+                return (result.stdout or "")
+            return ""
+
         for base_dir in self._pool.get_remote_pbgui_dirs(hostname):
             full_path = f"~/{base_dir}/{log_path}"
             if lines == 0:
@@ -283,9 +307,10 @@ class AsyncLogStreamer:
         else:
             log_path = _resolve_log_path(service_or_path)
 
-        # Paths that start with a subdirectory (e.g. software/pb7/logs/) are
-        # absolute from HOME and don't need the pbgui base dir prepended.
-        if "/" in log_path:
+        # Only HOME-rooted paths like software/pb7/logs/... bypass the remote
+        # pbgui base dir. Relative paths like data/logs/PBRun.log must still be
+        # resolved below each remote pbgui candidate.
+        if _is_home_relative_log_path(log_path):
             full_path = f"~/{log_path}"
             result = await self._pool.run(
                 hostname, f"stat -c '%s' {full_path} 2>/dev/null", timeout=10
@@ -315,9 +340,10 @@ class AsyncLogStreamer:
         log_path = _resolve_log_path(service_or_path)
         full_path = None
 
-        # Paths that contain a subdirectory (e.g. software/pb7/logs/name.log)
-        # are absolute from HOME.
-        if "/" in log_path:
+        # Only HOME-rooted paths like software/pb7/logs/... bypass the remote
+        # pbgui base dir. Relative paths like data/logs/PBRun.log must still be
+        # resolved below each remote pbgui candidate.
+        if _is_home_relative_log_path(log_path):
             full_path = f"~/{log_path}"
         else:
             for base_dir in self._pool.get_remote_pbgui_dirs(hostname):

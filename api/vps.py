@@ -560,13 +560,17 @@ async def _cmd_subscribe_logs(ws: WebSocket,
 
     # Send initial chunk
     lines_n = int(request.get("lines", 200))
+    start_at_end = bool(request.get("start_at_end"))
     if service.startswith("Bot:"):
-        parts = service[4:].strip().split(":")
-        bot_name = parts[0]
-        pb_version = parts[1] if len(parts) > 1 else None
-        content = await _streamer.get_bot_log(host, bot_name, lines_n, pb_version)
+        if start_at_end:
+            content = ""
+        else:
+            parts = service[4:].strip().split(":")
+            bot_name = parts[0]
+            pb_version = parts[1] if len(parts) > 1 else None
+            content = await _streamer.get_bot_log(host, bot_name, lines_n, pb_version)
     else:
-        content = await _streamer.get_recent_logs(host, service, lines_n)
+        content = "" if start_at_end else await _streamer.get_recent_logs(host, service, lines_n)
 
     resp: dict = {
         "type": "logs", "host": host, "service": service,
