@@ -21,8 +21,8 @@ from pbgui_purefunc import (
     streamlit_secrets_path,
 )
 # LogHandler removed: centralized debuglog removed per user request
-from PBRemote import PBRemote
 from MonitorConfig import MonitorConfig
+from master.async_monitor import collect_alerts_from_snapshot, load_alert_snapshot
 from typing import Optional, Callable, Literal
 
 
@@ -682,10 +682,7 @@ def info_popup(message):
         st.rerun()
 
 def has_vps_errors():
-    if "pbremote" not in st.session_state:
-        st.session_state.pbremote = PBRemote()
-    st.session_state.pbremote.update_remote_servers()
-    errors = st.session_state.pbremote.has_error()
+    errors = collect_alerts_from_snapshot(load_alert_snapshot(), MonitorConfig())
     if errors:
         with st.expander("VPS Errors", expanded=True):
             for error in errors:

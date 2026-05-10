@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from api.auth import require_auth, SessionToken
+from api.vps import get_monitor_state_snapshot
 from pbgui_purefunc import PBGDIR, load_ini, save_ini
 from logging_helpers import human_log as _log
 
@@ -622,28 +623,45 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
 
 @router.get("/pbremote/info")
 def get_pbremote_info(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    """Return PBRemote configuration: role, bucket, remote servers, api-sync status."""
+    """Return PBRemote config plus remote host state using monitor/file-sync data."""
     try:
         from PBRemote import PBRemote
         obj = PBRemote()
         if obj.error:
             return {"error": obj.error, "configured": False}
+        monitor_state = get_monitor_state_snapshot()
+        connections = ((monitor_state.get("connections") or {}).get("connections") or {})
+        system_state = monitor_state.get("system") or {}
+        host_meta = monitor_state.get("host_meta") or {}
+        fs_worker = getattr(__import__("api.api_keys", fromlist=["_file_sync_worker"]), "_file_sync_worker", None)
+        remote_md5s = getattr(fs_worker, "_remote_md5s", {}) if fs_worker else {}
+        local_md5 = fs_worker._compute_local_md5() if fs_worker else obj.api_md5
         servers = []
-        for s in obj.remote_servers:
-            online = bool(s.is_online())
+        unsynced_hosts: list[str] = []
+        for hostname in sorted({*connections.keys(), *host_meta.keys()}):
+            conn = connections.get(hostname) or {}
+            meta = host_meta.get(hostname) or {}
+            system = system_state.get(hostname) or {}
+            status = str(conn.get("status") or "")
+            online = status == "connected"
+            remote_md5 = ((remote_md5s.get(hostname) or {}).get("pb7"))
+            in_sync = None if remote_md5 is None else (remote_md5 == local_md5)
+            if online and in_sync is False:
+                unsynced_hosts.append(hostname)
+            last_seen_ts = float(system.get("timestamp") or 0)
             servers.append({
-                "name": s.name,
-                "role": s.role or "unknown",
+                "name": hostname,
+                "role": str(meta.get("role") or "unknown"),
                 "online": online,
-                "last_seen_s": s.rtd,
-                "pbgui_version": s.pbgui_version,
+                "last_seen_s": (max(int(time.time() - last_seen_ts), 0) if last_seen_ts else None),
+                "pbgui_version": str(meta.get("pbgv") or "N/A"),
             })
         return {
             "configured": True,
             "error": None,
             "role": obj.role,
             "bucket": obj.bucket or "",
-            "api_synced": bool(obj.check_if_api_synced()),
+            "api_synced": len(unsynced_hosts) == 0,
             "remote_servers": servers,
         }
     except Exception as e:
@@ -652,16 +670,23 @@ def get_pbremote_info(session: SessionToken = Depends(require_auth)) -> Dict[str
 
 
 @router.post("/pbremote/api-sync")
-def trigger_pbremote_api_sync(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    """Push local api-keys.json to all remote servers and check sync status."""
+async def trigger_pbremote_api_sync(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    """Push local api-keys.json to connected VPS via SSH and report sync state."""
     try:
         from PBRemote import PBRemote
         obj = PBRemote()
         if obj.error:
             raise HTTPException(status_code=400, detail=obj.error)
-        obj.sync_api_up()
-        synced = bool(obj.check_if_api_synced())
-        return {"ok": True, "api_synced": synced}
+        api_keys_mod = __import__("api.api_keys", fromlist=["_file_sync_worker"])
+        fs_worker = getattr(api_keys_mod, "_file_sync_worker", None)
+        if fs_worker is None:
+            return {"ok": False, "configured": False, "api_synced": True, "error": "FileSyncWorker not initialized"}
+        results = await fs_worker.push_api_keys(dry_run=False, no_propagate=False)
+        if isinstance(results, dict) and "error" in results and len(results) == 1:
+            raise HTTPException(status_code=400, detail=results["error"])
+        status = fs_worker.get_status()
+        synced = all(bool((status.get("hosts") or {}).get(hostname, {}).get("in_sync")) for hostname in (status.get("connected_hosts") or []))
+        return {"ok": True, "configured": True, "api_synced": synced}
     except HTTPException:
         raise
     except Exception as e:

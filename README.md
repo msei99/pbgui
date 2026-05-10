@@ -313,6 +313,9 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Changed: `PBMon` and the Streamlit `VPS Errors` banner now read a persisted SSH monitor snapshot written by `VPSMonitor`, so alerting no longer depends on `PBRemote.has_error()` and legacy `alive` / `monitor.json` payloads.
+- Fixed: legacy API-sync push actions now return explicit compatibility payloads when `FileSyncWorker` is not initialized, so the API Keys and Services pages no longer mis-handle that startup state as a hard transport failure or false successful push.
+- Changed: legacy API-sync status endpoints now derive remote sync state from the SSH/FileSync worker and FastAPI monitor connection data instead of `PBRemote.remote_servers` alive snapshots.
 - Changed: FastAPI `VPS Manager` master detail no longer reads local bot monitor rows via `PBRemote.load_monitor()` / `monitor.json`; it now builds the master monitor panel from a local collector path with live process stats plus cached PB7 log counters.
 - Fixed: Streamlit startup no longer crashes in `build_navigation()` after the legacy VPS Manager removal; the stale `pM4a` page reference was removed from the `SystemPages` list.
 - Changed: FastAPI `VPS Manager` no longer auto-discovers import candidates in the sidebar; host imports are now manual by hostname and require a matching local `/etc/hosts` entry before the Add VPS form is prefilled.

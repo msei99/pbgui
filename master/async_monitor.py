@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import asyncssh
 
@@ -35,6 +35,177 @@ INSTANCE_COLLECT_INTERVAL = 30  # seconds
 HOST_META_INTERVAL = 30     # seconds
 PACKAGE_STATUS_INTERVAL = 3600  # seconds
 MONITOR_CACHE_VERSION = 2
+STATE_SNAPSHOT_VERSION = 1
+
+
+def build_alert_snapshot(*,
+                         connections: dict[str, Any],
+                         system: dict[str, Any],
+                         instances: dict[str, Any],
+                         host_meta: dict[str, Any]) -> dict[str, Any]:
+    """Build the persisted subset used by non-FastAPI alert consumers."""
+    return {
+        "version": STATE_SNAPSHOT_VERSION,
+        "timestamp": time.time(),
+        "connections": connections,
+        "system": system,
+        "instances": instances,
+        "host_meta": host_meta,
+    }
+
+
+def load_alert_snapshot() -> dict[str, Any]:
+    """Load the persisted VPS monitor snapshot for PBMon/Streamlit consumers."""
+    path = Path(PBGDIR) / 'data' / 'vps_monitor_state.json'
+    try:
+        if not path.exists():
+            return build_alert_snapshot(
+                connections={},
+                system={},
+                instances={},
+                host_meta={},
+            )
+        payload = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(payload, dict):
+            raise ValueError('snapshot payload is not a dict')
+        snapshot = build_alert_snapshot(
+            connections=(payload.get('connections') or {}),
+            system=(payload.get('system') or {}),
+            instances=(payload.get('instances') or {}),
+            host_meta=(payload.get('host_meta') or {}),
+        )
+        snapshot['timestamp'] = float(payload.get('timestamp') or 0)
+        return snapshot
+    except Exception as e:
+        _log(SERVICE, f"[snapshot] Failed to load alert snapshot: {e}", level="WARNING")
+        return build_alert_snapshot(
+            connections={},
+            system={},
+            instances={},
+            host_meta={},
+        )
+
+
+def collect_alerts_from_snapshot(snapshot: dict[str, Any], monitor_config) -> list[dict[str, Any]]:
+    """Return alert rows for offline hosts, system pressure, and v7 counters."""
+    errors: list[dict[str, Any]] = []
+    connections = snapshot.get('connections') or {}
+    system_state = snapshot.get('system') or {}
+    instances = snapshot.get('instances') or {}
+
+    for hostname in sorted({*connections.keys(), *system_state.keys(), *instances.keys()}):
+        conn = connections.get(hostname) or {}
+        status = str(conn.get('status') or '')
+        if status and status != ConnectionStatus.CONNECTED.value:
+            errors.append({
+                'server': hostname,
+                'name': 'offline',
+                'mem': 0,
+                'cpu': 0,
+                'error': 0,
+                'traceback': 0,
+            })
+            continue
+
+        metrics = system_state.get(hostname) or {}
+        mem_available_mb = float(metrics.get('mem_available') or 0) / 1024 / 1024
+        swap_free_mb = float(metrics.get('swap_free') or 0) / 1024 / 1024
+        disk_free_mb = float(metrics.get('disk_free') or 0) / 1024 / 1024
+        cpu = float(metrics.get('cpu') or 0)
+        has_system_metrics = any(metrics.get(key) not in (None, 0, 0.0) for key in ('mem_total', 'disk_total', 'swap_total', 'timestamp'))
+        if has_system_metrics and (
+            mem_available_mb <= monitor_config.mem_error_server
+            or swap_free_mb <= monitor_config.swap_error_server
+            or disk_free_mb <= monitor_config.disk_error_server
+            or cpu >= monitor_config.cpu_error_server
+        ):
+            if mem_available_mb <= monitor_config.mem_error_server:
+                color_mem = 'red'
+            elif mem_available_mb <= monitor_config.mem_warning_server:
+                color_mem = 'orange'
+            else:
+                color_mem = 'green'
+            if swap_free_mb <= monitor_config.swap_error_server:
+                color_swap = 'red'
+            elif swap_free_mb <= monitor_config.swap_warning_server:
+                color_swap = 'orange'
+            else:
+                color_swap = 'green'
+            if disk_free_mb <= monitor_config.disk_error_server:
+                color_disk = 'red'
+            elif disk_free_mb <= monitor_config.disk_warning_server:
+                color_disk = 'orange'
+            else:
+                color_disk = 'green'
+            if cpu >= monitor_config.cpu_error_server:
+                color_cpu = 'red'
+            elif cpu >= monitor_config.cpu_warning_server:
+                color_cpu = 'orange'
+            else:
+                color_cpu = 'green'
+            errors.append({
+                'server': hostname,
+                'name': 'system',
+                'mem': f':{color_mem}[{int(mem_available_mb)}]',
+                'cpu': f':{color_cpu}[{cpu}]',
+                'swap': f':{color_swap}[{int(swap_free_mb)}]',
+                'disk': f':{color_disk}[{int(disk_free_mb)}]',
+            })
+
+        for monitor in instances.get(hostname) or []:
+            metrics_list = monitor.get('m') or []
+            swap_value = metrics_list[9] / 1024 / 1024 if len(metrics_list) == 10 and metrics_list[9] else 0.0
+            memory_mb = metrics_list[0] / 1024 / 1024 if metrics_list else 0.0
+            cpu_value = float(monitor.get('c') or 0)
+            errors_today = int(monitor.get('et') or 0)
+            tracebacks_today = int(monitor.get('tt') or 0)
+            if (
+                memory_mb > monitor_config.mem_error_v7
+                or swap_value > monitor_config.swap_error_v7
+                or cpu_value > monitor_config.cpu_error_v7
+                or errors_today > monitor_config.error_error_v7
+                or tracebacks_today > monitor_config.traceback_error_v7
+            ):
+                if memory_mb > monitor_config.mem_error_v7:
+                    color_mem = 'red'
+                elif memory_mb > monitor_config.mem_warning_v7:
+                    color_mem = 'orange'
+                else:
+                    color_mem = 'green'
+                if swap_value > monitor_config.swap_error_v7:
+                    color_swap = 'red'
+                elif swap_value > monitor_config.swap_warning_v7:
+                    color_swap = 'orange'
+                else:
+                    color_swap = 'green'
+                if cpu_value > monitor_config.cpu_error_v7:
+                    color_cpu = 'red'
+                elif cpu_value > monitor_config.cpu_warning_v7:
+                    color_cpu = 'orange'
+                else:
+                    color_cpu = 'green'
+                if errors_today > monitor_config.error_error_v7:
+                    color_error = 'red'
+                elif errors_today > monitor_config.error_warning_v7:
+                    color_error = 'orange'
+                else:
+                    color_error = 'green'
+                if tracebacks_today > monitor_config.traceback_error_v7:
+                    color_traceback = 'red'
+                elif tracebacks_today > monitor_config.traceback_warning_v7:
+                    color_traceback = 'orange'
+                else:
+                    color_traceback = 'green'
+                errors.append({
+                    'server': f':blue[{hostname}]',
+                    'name': f':blue[{monitor.get("u", "")}]',
+                    'mem': f':{color_mem}[{round(memory_mb, 1)}]',
+                    'swap': f':{color_swap}[{round(swap_value, 1)}]',
+                    'cpu': f':{color_cpu}[{cpu_value}]',
+                    'error': f':{color_error}[{errors_today}]',
+                    'traceback': f':{color_traceback}[{tracebacks_today}]',
+                })
+    return errors
 
 # ── Remote scripts (same as old realtime_collector) ─────────
 
@@ -880,6 +1051,7 @@ class VPSMonitor:
         # Monitor cache (persisted across restarts, per-host per-bot GZ state)
         self._cache_path = Path(PBGDIR) / 'data' / 'monitor_cache.json'
         self._monitor_cache: dict[str, dict[str, dict]] = {}
+        self._state_snapshot_path = Path(PBGDIR) / 'data' / 'vps_monitor_state.json'
 
         # Debug logging
         self._debug_logging: Optional[bool] = None
@@ -951,6 +1123,7 @@ class VPSMonitor:
         self.store.load_ui_settings()
         self._ini_watcher.start()
         self._load_monitor_cache()
+        self._save_state_snapshot()
 
         enabled = self.enabled_hosts
         if not enabled:
@@ -1114,6 +1287,7 @@ class VPSMonitor:
                 await self.pool.disconnect(h)
                 self.pool.remove_host(h)
                 self.store.remove_host(h)
+            self._save_state_snapshot()
 
         if newly_enabled:
             _log(SERVICE, f"Hosts newly enabled: "
@@ -1126,6 +1300,7 @@ class VPSMonitor:
                 if h in self.pool.hostnames():
                     if await self.pool.connect(h):
                         self._start_metrics_stream(h)
+        self._save_state_snapshot()
 
     # ── Metric streams ──────────────────────────────────────
 
@@ -1181,6 +1356,7 @@ class VPSMonitor:
                     bots = data.get("bots")
                     if bots:
                         self.store.update_instances_live(hostname, bots)
+                    self._save_state_snapshot()
                     self.store.update_stream_info(hostname, {
                         "alive": True,
                         "active": True,
@@ -1207,6 +1383,7 @@ class VPSMonitor:
             self.store.update_stream_info(hostname, {
                 "alive": False, "active": False, "error": None,
             })
+            self._save_state_snapshot()
             _log(SERVICE, f"[metrics] Stream ended for {hostname}")
 
     # ── Instance collection ─────────────────────────────────
@@ -1277,6 +1454,7 @@ class VPSMonitor:
                         self.store.update_instances(hostname, monitors)
                         self.store.update_v7_instances(hostname, v7_list)
                         self.store.update_bot_logs(hostname, bot_logs if isinstance(bot_logs, dict) else {})
+                        self._save_state_snapshot()
                         if isinstance(new_host_cache, dict):
                             self._monitor_cache[hostname] = new_host_cache
                             self._save_monitor_cache()
@@ -1290,8 +1468,10 @@ class VPSMonitor:
                 if isinstance(parsed, list) and len(parsed) == 2:
                     self.store.update_instances(hostname, parsed[0])
                     self.store.update_v7_instances(hostname, parsed[1])
+                    self._save_state_snapshot()
                 else:
                     self.store.update_instances(hostname, parsed)
+                    self._save_state_snapshot()
             except json.JSONDecodeError:
                 pass
 
@@ -1400,6 +1580,7 @@ class VPSMonitor:
                     if isinstance(parsed, dict):
                         self.store.update_host_meta(hostname, parsed)
                         self._last_host_meta_collect[hostname] = now
+                        self._save_state_snapshot()
                         if self.debug_logging:
                             _log(SERVICE, f"[host-meta] Collected metadata for {hostname}",
                                  level="DEBUG")
@@ -1415,6 +1596,7 @@ class VPSMonitor:
                     if isinstance(package_data, dict):
                         self.store.update_host_meta(hostname, package_data)
                         self._last_package_status_collect[hostname] = now
+                        self._save_state_snapshot()
                 except json.JSONDecodeError:
                     pass
 
@@ -1576,6 +1758,23 @@ class VPSMonitor:
                 host_svc[svc_name] = check
             all_results[hostname] = host_svc
         return all_results
+
+    def _save_state_snapshot(self) -> None:
+        try:
+            conn_summary = self.pool.get_status_summary()
+            snapshot = build_alert_snapshot(
+                connections=(conn_summary.get('connections') or {}),
+                system={h: m.to_dict() for h, m in self.store.system.items()},
+                instances=self.store.instances,
+                host_meta=self.store.host_meta,
+            )
+            tmp = self._state_snapshot_path.with_suffix('.json.tmp')
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(snapshot), encoding='utf-8')
+            tmp.replace(self._state_snapshot_path)
+        except Exception as e:
+            if self.debug_logging:
+                _log(SERVICE, f"[snapshot] Failed to persist alert snapshot: {e}", level="WARNING")
 
     # ── Restart rate limiting ───────────────────────────────
 

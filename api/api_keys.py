@@ -1682,19 +1682,14 @@ def tradfi_get_profiles(
     }
 
 
-# ── API Sync (rclone / VPS distribution) ─────────────────────
-
-def _get_pbremote() -> Any:
-    """Instantiate PBRemote. Returns the instance (may have .error set)."""
-    from PBRemote import PBRemote
-    return PBRemote()
+# ── API Sync (legacy routes backed by SSH/FileSync status) ───
 
 
 @router.get("/sync/status")
 def get_sync_status(
     session: SessionToken = Depends(require_auth),
 ) -> dict:
-    """Check whether api-keys.json is in sync with all remote (VPS) servers.
+    """Check whether api-keys.json is in sync with all connected VPS via SSH.
 
     Returns:
       - configured: False when rclone / PBRemote is not set up
@@ -1703,19 +1698,17 @@ def get_sync_status(
       - total_servers: count of known remote servers
     """
     try:
-        pbremote = _get_pbremote()
-        if pbremote.error:
-            return {"configured": False, "synced": True, "unsynced_servers": [], "total_servers": 0, "error": pbremote.error}
-        total = len(pbremote.remote_servers)
-        unsynced = [
-            s.name for s in pbremote.remote_servers
-            if s.is_online() and not s.is_api_md5_same(pbremote.api_md5)
-        ]
+        if not _file_sync_worker:
+            return {"configured": False, "synced": True, "unsynced_servers": [], "total_servers": 0, "error": "FileSyncWorker not initialized"}
+        status = _file_sync_worker.get_status()
+        connected_hosts = list(status.get("connected_hosts") or [])
+        hosts = status.get("hosts") or {}
+        unsynced = [hostname for hostname in connected_hosts if hosts.get(hostname, {}).get("in_sync") is False]
         return {
             "configured": True,
             "synced": len(unsynced) == 0,
             "unsynced_servers": unsynced,
-            "total_servers": total,
+            "total_servers": len(connected_hosts),
         }
     except Exception as e:
         _log(SERVICE, f"sync/status error: {e}", level="WARNING", meta={"traceback": traceback.format_exc()})
@@ -1726,19 +1719,15 @@ def get_sync_status(
 def push_sync(
     session: SessionToken = Depends(require_auth),
 ) -> dict:
-    """Push current api-keys.json to rclone remote storage for VPS distribution.
-
-    Calls sync_api_up() (copies api-keys to data/cmd/) then sync('up','cmd')
-    to upload via rclone immediately. Poll GET /sync/status to confirm delivery.
-    """
+    """Push current api-keys.json to connected VPS via SSH/SFTP."""
     try:
-        pbremote = _get_pbremote()
-        if pbremote.error:
-            raise HTTPException(status_code=400, detail=f"PBRemote not configured: {pbremote.error}")
-        pbremote.sync_api_up()
-        pbremote.sync("up", "cmd")
-        _log(SERVICE, "API keys pushed to rclone remote storage")
-        return {"success": True}
+        if not _file_sync_worker:
+            return {"success": False, "configured": False, "error": "FileSyncWorker not initialized"}
+        results = asyncio.run(_file_sync_worker.push_api_keys(dry_run=False, no_propagate=False))
+        if isinstance(results, dict) and "error" in results and len(results) == 1:
+            raise HTTPException(status_code=400, detail=results["error"])
+        _log(SERVICE, "API keys pushed to connected VPS via SSH")
+        return {"success": True, "configured": True}
     except HTTPException:
         raise
     except Exception as e:
@@ -1868,4 +1857,3 @@ async def set_ssh_retention(
         "backup_retention_days": req.backup_retention_days,
         "backup_min_versions": req.backup_min_versions,
     }
-

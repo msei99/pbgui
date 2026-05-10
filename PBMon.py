@@ -9,9 +9,10 @@ from time import sleep
 import platform
 import traceback
 from api_key_state import get_user_state
+from MonitorConfig import MonitorConfig
+from master.async_monitor import collect_alerts_from_snapshot, load_alert_snapshot
 from pbgui_func import PBGDIR
 from telegram import Bot
-from PBRemote import PBRemote
 from pbgui_purefunc import load_ini, save_ini
 from logging_helpers import human_log as _log
 
@@ -49,7 +50,7 @@ class PBMon():
         self.offline_error = []
         self.system_error = []
         self.instance_error = []
-        self.pbremote = PBRemote()
+        self.monitor_config = MonitorConfig()
         self._telegram_token = ""
         self._telegram_chat_id = ""
         self._hl_expiry_last_warned: dict[str, str] = {}  # {username: "YYYY-MM-DD"}
@@ -190,8 +191,7 @@ class PBMon():
             await self.send_telegram_message(msg)
 
     async def has_errors(self):
-        self.pbremote.update_remote_servers()
-        errors = self.pbremote.has_error()
+        errors = collect_alerts_from_snapshot(load_alert_snapshot(), self.monitor_config)
         if errors:
             msg = ""
             for error in errors:

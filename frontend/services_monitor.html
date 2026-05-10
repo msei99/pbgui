@@ -2159,6 +2159,11 @@ window.PBGUI_NAV_CONFIG = {
       .then(function (r) { return r.json(); })
       .then(function (d) {
         btn.disabled = false;
+        if (d && d.ok === false) {
+          _flash('pbremote-sync-msg', d.error || 'Sync unavailable', true);
+          loadPBRemoteInfo();
+          return;
+        }
         _flash('pbremote-sync-msg', d.api_synced ? 'In sync' : 'Pushed \u2014 not yet synced', !d.api_synced);
         loadPBRemoteInfo();
       })
