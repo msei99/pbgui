@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import getpass
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -13,6 +14,7 @@ from typing import Any
 
 from api.vps import get_monitor, get_monitor_state_snapshot
 from logging_helpers import human_log as _log
+from master.async_monitor import INSTANCE_COLLECT_SCRIPT, MONITOR_CACHE_VERSION
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from PBRemote import PBRemote
@@ -114,6 +116,8 @@ class VPSManagerService:
         # validation step must reuse the last full-detail result instead of
         # falling back to a weaker default on the next quick push.
         self._master_coindata_ok_cache: bool = False
+        self._master_monitor_payload_cache: dict[str, Any] | None = None
+        self._master_monitor_cache: dict[str, Any] = {"_version": MONITOR_CACHE_VERSION}
         self._vps_coindata_status_cache: dict[str, bool] = {}
         self._vps_ssh_ok_cache: dict[str, bool] = {}
         self._session_secrets: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
@@ -498,6 +502,7 @@ class VPSManagerService:
         except Exception:
             coindata_ok = False
         self._master_coindata_ok_cache = bool(coindata_ok)
+        master_monitor = self._build_local_master_monitor_payload(pbremote, refresh=True)
         return {
             "kind": "master",
             "status": self._build_master_status(pbremote, coindata_ok),
@@ -505,7 +510,7 @@ class VPSManagerService:
                 "pbgui": self._build_master_pbgui_branch_state(pbremote),
                 "pb7": self._build_master_pb7_branch_state(pbremote),
             },
-            "monitor": self._build_monitor_payload(pbremote),
+            "monitor": master_monitor,
             "progress": self._build_master_progress(include_log=True),
         }
 
@@ -520,7 +525,7 @@ class VPSManagerService:
                 "pbgui": self._build_master_pbgui_branch_state(pbremote),
                 "pb7": self._build_master_pb7_branch_state(pbremote),
             },
-            "monitor": self._build_monitor_payload(pbremote),
+            "monitor": self._build_local_master_monitor_payload(pbremote, refresh=False),
             "progress": self._build_master_progress(include_log=True),
         }
 
@@ -962,6 +967,171 @@ class VPSManagerService:
                 "usage_pct": min(_safe_int(server.swap[3]), 100),
             },
         }
+
+    def _empty_monitor_payload(self) -> dict[str, Any]:
+        return {"server": None, "v7": [], "v7_running": [], "multi": [], "single": [], "logfiles": []}
+
+    def _collect_local_master_live_bot_stats(self) -> dict[str, dict[str, float]]:
+        stats: dict[str, dict[str, float]] = {}
+        try:
+            result = subprocess.run(
+                ["ps", "auxw"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                cwd=PBGDIR,
+            )
+        except Exception as exc:
+            _log(SERVICE, f"local master ps probe failed: {exc}", level="WARNING")
+            return stats
+        if result.returncode != 0:
+            return stats
+        for raw_line in (result.stdout or "").splitlines():
+            if "main.py" not in raw_line or "config_run.json" not in raw_line:
+                continue
+            parts = raw_line.split(None, 10)
+            if len(parts) < 11:
+                continue
+            try:
+                pid = int(parts[1])
+            except Exception:
+                continue
+            cmdline = parts[10]
+            bot_name = ""
+            try:
+                for arg in shlex.split(cmdline):
+                    if arg.endswith("/config_run.json") or arg.endswith("\\config_run.json"):
+                        bot_name = Path(arg).parent.name
+                        break
+            except Exception:
+                continue
+            if not bot_name:
+                continue
+            swap_mb = 0.0
+            try:
+                status_path = Path(f"/proc/{pid}/status")
+                if status_path.exists():
+                    for line in status_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                        if line.startswith("VmSwap:"):
+                            swap_mb = round(_safe_float(line.split()[1]) / 1024, 2)
+                            break
+            except Exception:
+                swap_mb = 0.0
+            stats[bot_name] = {
+                "cpu": round(_safe_float(parts[2]), 2),
+                "rss_mb": round(_safe_float(parts[5]) / 1024, 2),
+                "swap_mb": swap_mb,
+            }
+        return stats
+
+    def _collect_local_master_monitor_snapshot(self) -> dict[str, Any]:
+        env = dict(os.environ)
+        env.update({
+            "PBGUI_CACHE_VERSION": str(MONITOR_CACHE_VERSION),
+            "PBGUI_CACHE": json.dumps(self._master_monitor_cache),
+        })
+        try:
+            result = subprocess.run(
+                INSTANCE_COLLECT_SCRIPT,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=PBGDIR,
+                env=env,
+            )
+        except Exception as exc:
+            _log(SERVICE, f"local master monitor collect failed: {exc}", level="WARNING")
+            return {"monitors": [], "v7": [], "bot_logs": {}}
+        if result.returncode != 0 or not result.stdout:
+            stderr = str(result.stderr or "").strip()
+            if stderr:
+                _log(SERVICE, f"local master monitor collect failed: {stderr}", level="WARNING")
+            return {"monitors": [], "v7": [], "bot_logs": {}}
+        try:
+            parsed = json.loads(result.stdout.strip())
+        except json.JSONDecodeError as exc:
+            _log(SERVICE, f"local master monitor JSON parse failed: {exc}", level="WARNING")
+            return {"monitors": [], "v7": [], "bot_logs": {}}
+        if not isinstance(parsed, dict):
+            return {"monitors": [], "v7": [], "bot_logs": {}}
+        new_cache = parsed.get("cache")
+        if isinstance(new_cache, dict):
+            self._master_monitor_cache = new_cache
+        return {
+            "monitors": parsed.get("monitors") if isinstance(parsed.get("monitors"), list) else [],
+            "v7": parsed.get("v7") if isinstance(parsed.get("v7"), list) else [],
+            "bot_logs": parsed.get("bot_logs") if isinstance(parsed.get("bot_logs"), dict) else {},
+        }
+
+    def _build_local_running_v7_payload(self, v7_rows: list[dict[str, Any]], existing_names: set[str] | None = None) -> list[dict[str, Any]]:
+        known_names = existing_names or set()
+        items: list[dict[str, Any]] = []
+        for instance in v7_rows:
+            if not _truthy(instance.get("running", True)):
+                continue
+            name = str(instance.get("name") or "")
+            if not name or name in known_names:
+                continue
+            items.append(
+                {
+                    "name": name,
+                    "version": _safe_int(instance.get("cv")),
+                    "enabled_on": str(instance.get("eo") or ""),
+                    "activate_ts": "",
+                }
+            )
+        items.sort(key=lambda item: item["name"])
+        return items
+
+    def _build_local_master_monitor_payload(self, pbremote: PBRemote, *, refresh: bool) -> dict[str, Any]:
+        if not refresh and self._master_monitor_payload_cache is not None:
+            return self._master_monitor_payload_cache
+        payload = self._empty_monitor_payload()
+        payload["server"] = self._build_server_metrics(pbremote)
+        snapshot = self._collect_local_master_monitor_snapshot()
+        live_stats = self._collect_local_master_live_bot_stats()
+        cfg = self.monitor_config
+        for monitor in snapshot.get("monitors") or []:
+            name = str(monitor.get("u") or "")
+            live = live_stats.get(name) or {}
+            start_ts = _safe_int(monitor.get("st"))
+            item = {
+                "server": pbremote.name,
+                "version": getattr(pbremote, "pb7_version", "N/A"),
+                "name": name,
+                "pb_version": "7",
+                "start_time": datetime.fromtimestamp(start_ts).strftime("%Y-%m-%d %H:%M:%S") if start_ts else "",
+                "memory_mb": round(_safe_float(live.get("rss_mb")), 2),
+                "swap_mb": round(_safe_float(live.get("swap_mb")), 2),
+                "cpu": round(_safe_float(live.get("cpu")), 2),
+                "pnls_today": _safe_int(monitor.get("ct")),
+                "pnl_today": _safe_float(monitor.get("pt")),
+                "pnls_yesterday": _safe_int(monitor.get("cy")),
+                "pnl_yesterday": _safe_float(monitor.get("py")),
+                "errors_today": _safe_int(monitor.get("et")),
+                "errors_yesterday": _safe_int(monitor.get("ey")),
+                "tracebacks_today": _safe_int(monitor.get("tt")),
+                "tracebacks_yesterday": _safe_int(monitor.get("ty")),
+            }
+            item["levels"] = {
+                "cpu": _metric_level(item["cpu"], cfg.cpu_warning_v7, cfg.cpu_error_v7),
+                "memory": _metric_level(item["memory_mb"], cfg.mem_warning_v7, cfg.mem_error_v7),
+                "swap": _metric_level(item["swap_mb"], cfg.swap_warning_v7, cfg.swap_error_v7),
+                "errors": _metric_level(item["errors_today"], cfg.error_warning_v7, cfg.error_error_v7),
+                "tracebacks": _metric_level(item["tracebacks_today"], cfg.traceback_warning_v7, cfg.traceback_error_v7),
+            }
+            payload["v7"].append(item)
+            if name:
+                payload["logfiles"].append(f"run_v7/{name}/passivbot.log")
+        existing_v7_names = {item["name"] for item in payload["v7"] if item.get("name")}
+        payload["v7_running"] = self._build_local_running_v7_payload(snapshot.get("v7") or [], existing_v7_names)
+        for item in payload["v7_running"]:
+            if item.get("name"):
+                payload["logfiles"].append(f"run_v7/{item['name']}/passivbot.log")
+        payload["logfiles"] = sorted(dict.fromkeys(payload["logfiles"]))
+        self._master_monitor_payload_cache = payload
+        return payload
 
     def _build_master_pbgui_branch_state(self, pbremote: PBRemote) -> dict[str, Any]:
         local_run = pbremote.local_run

@@ -313,6 +313,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Changed: FastAPI `VPS Manager` master detail no longer reads local bot monitor rows via `PBRemote.load_monitor()` / `monitor.json`; it now builds the master monitor panel from a local collector path with live process stats plus cached PB7 log counters.
 - Fixed: Streamlit startup no longer crashes in `build_navigation()` after the legacy VPS Manager removal; the stale `pM4a` page reference was removed from the `SystemPages` list.
 - Changed: FastAPI `VPS Manager` no longer auto-discovers import candidates in the sidebar; host imports are now manual by hostname and require a matching local `/etc/hosts` entry before the Add VPS form is prefilled.
 - Fixed: the shared FastAPI navigation no longer exposes the removed `VPS Manager Legacy` menu entry, so all PBGui shells now point `System -> VPS Manager` only to the FastAPI page.
