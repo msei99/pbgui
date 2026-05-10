@@ -3,7 +3,7 @@
 Die **VPS Manager** Seite erlaubt das Hinzufügen, Konfigurieren und Warten von Remote-VPS-Servern, auf denen Passivbot-Instanzen laufen.
 Jeder VPS wird über Ansible-Playbooks verwaltet, die vom Master (lokal) ausgeführt werden.
 
-Der Standard-Menüeintrag **System -> VPS Manager** öffnet jetzt die eigenständige **FastAPI**-Seite. Die bisherige Streamlit-Implementierung bleibt als **System -> VPS Manager Legacy** verfügbar.
+Der Standard-Menüeintrag **System -> VPS Manager** öffnet die eigenständige **FastAPI**-Seite.
 
 ---
 
@@ -32,9 +32,9 @@ Linke Sidebar:
 | **Refresh** | Alle VPS-Status- und Versionsdaten neu laden |
 | **Managed VPS** Karten | Per-VPS-Verwaltungsansicht öffnen |
 | **API in sync / API not in sync** | API-Sync-Status anzeigen und API-Zugangsdaten auf nicht synchronisierte Remotes übertragen |
-| **Detected missing VPS** Karten | Add-Formular mit Remote-Slave-Hosts aus PBRemote vorbefüllen |
+| **Import Host** | Den manuellen Hostname-Import öffnen; der Hostname muss bereits lokal über `/etc/hosts` auflösbar sein |
 
-Die Übersicht nutzt jetzt die normale gemeinsame PBGui-FastAPI-Shell. Beim Wechsel zu **Master** oder zu einem konkreten **VPS** wird die linke Sidebar wie auf der alten Seite zu einer kontextabhängigen Aktionsliste umgeschaltet. Der Hauptbereich der Übersicht bleibt dabei auf die Tabelle fokussiert; fehlende VPS-Kandidaten bleiben in der Sidebar statt in einem zweiten Hauptpanel.
+Die Übersicht nutzt jetzt die normale gemeinsame PBGui-FastAPI-Shell. Beim Wechsel zu **Master** oder zu einem konkreten **VPS** wird die linke Sidebar wie auf der alten Seite zu einer kontextabhängigen Aktionsliste umgeschaltet. Der Hauptbereich der Übersicht bleibt dabei auf die Tabelle fokussiert, während der Host-Import als manuelle Hostname-Aktion in der Sidebar verfügbar bleibt.
 
 Die Seite hält eine Live-WebSocket-Verbindung für Übersicht, Fortschritt, Branch-Status und API-Sync-Fortschritt offen.
 
@@ -126,7 +126,7 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
 
 ## Neuen VPS hinzufügen
 
-1. **Add VPS** in der linken Sidebar klicken oder eine **Detected missing VPS**-Karte verwenden, um Hostname/IP vorzubelegen.
+1. **Add VPS** in der linken Sidebar klicken oder **Import Host** verwenden, um das Add-Formular aus einem bereits lokal in `/etc/hosts` eingetragenen Hostnamen vorzubelegen.
 2. Die Schritt-Karten oben auf der Seite durchgehen:
    - Ubuntu-VPS vorbereiten
    - Hostname in die lokale `/etc/hosts` eintragen

@@ -43,7 +43,6 @@
       { page: 'system_api_keys',      icon: '&#128273;', label: 'API-Keys'          },
       { page: 'system_services',      icon: '&#128295;', label: 'PBGUI Services'    },
       { page: 'system_vps_manager_fastapi', icon: '&#128421;', label: 'VPS Manager' },
-      { page: 'system_vps_manager',   icon: '&#128340;', label: 'VPS Manager Legacy' },
       { page: 'system_vps_monitor',   icon: '&#128223;', label: 'VPS Monitor'       },
       { page: 'system_logging',       icon: '&#128196;', label: 'Logging'           }
     ]},

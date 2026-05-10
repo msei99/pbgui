@@ -2233,9 +2233,7 @@
       if (isMasterContextView() || isVpsContextView()) {
         return stableStringify({ hidden: true, view: store.view, hostname: store.hostname || '' });
       }
-      const overview = ((store.state || {}).overview) || {};
       const rows = getOverviewRows();
-      const importCandidates = Array.isArray(overview.import_candidates) ? overview.import_candidates : [];
       const masterRow = rows.find(function (row) { return row.nav === 'master'; }) || null;
       return stableStringify({
         view: store.view,
@@ -2254,13 +2252,6 @@
             pbgui_branch: row.pbgui_branch,
             pb7_branch: row.pb7_branch,
             api_sync: row.api_sync
-          };
-        }),
-        importCandidates: importCandidates.map(function (item) {
-          return {
-            hostname: item.hostname,
-            ip_from_hosts: item.ip_from_hosts,
-            online: !!item.online
           };
         })
       });
@@ -3836,7 +3827,10 @@
     function handleResult(msg) {
       const cmd = msg.cmd || '';
       let needsForceView = false;
-      if (cmd === 'save_vps') {
+      if (cmd === 'prepare_import') {
+        applyPreparedImport(msg.data || {});
+        return;
+      } else if (cmd === 'save_vps') {
         toast('VPS saved.', 'success');
         if (msg.data && msg.data.hostname) {
           store.hostname = msg.data.hostname;
@@ -3990,13 +3984,47 @@
       send({ cmd: 'sync_api' });
     }
 
-    function prefillImportCandidate(hostname, ip, defaultUser) {
+    function openManualImportPrompt() {
+      document.getElementById('alertModalTitle').textContent = 'Import VPS by Hostname';
+      const box = document.getElementById('alertModalBody');
+      box.className = 'notice';
+      box.innerHTML = `
+        <div style="display:grid;gap:12px">
+          <div>Enter the VPS hostname exactly as it is mapped in your local <span class='code'>/etc/hosts</span>.</div>
+          <div>
+            <label style="display:block;margin-bottom:6px">Hostname</label>
+            <input type="text" id="import-hostname-input" placeholder="manibot42" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none">
+          </div>
+          <div class='field-help'>This import only works when the hostname already exists in your local <span class='code'>/etc/hosts</span> file.</div>
+        </div>`;
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" id="import-hostname-confirm">Import</button>';
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      document.getElementById('import-hostname-confirm').onclick = function () {
+        const input = document.getElementById('import-hostname-input');
+        const hostname = input ? String(input.value || '').trim() : '';
+        send({ cmd: 'prepare_import', hostname: hostname });
+      };
+      setTimeout(function () {
+        const input = document.getElementById('import-hostname-input');
+        if (input) {
+          input.focus();
+          input.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') document.getElementById('import-hostname-confirm').click();
+          });
+        }
+      }, 100);
+    }
+
+    function applyPreparedImport(data) {
+      const payload = data || {};
       store.addForm = Object.assign(defaultAddForm(), store.addForm, {
-        hostname: hostname || '',
-        ip: ip || '',
-        user: store.addForm.user || defaultUser || 'root'
+        hostname: payload.hostname || '',
+        ip: payload.ip || '',
+        user: store.addForm.user || payload.user || ''
       });
+      closeAlertModal();
       selectView('add');
+      toast('Import form prepared from local /etc/hosts.', 'success');
     }
 
     function setAddField(name, value) {
@@ -4787,9 +4815,7 @@
     }
 
     function renderSidebarList() {
-      const overview = ((store.state || {}).overview) || {};
       const rows = getOverviewRows();
-      const importCandidates = Array.isArray(overview.import_candidates) ? overview.import_candidates : [];
       const masterRow = rows.find(function (row) { return row.nav === 'master'; }) || null;
       const sidebarList = document.getElementById('sidebar-list');
       if (isMasterContextView() || isVpsContextView()) {
@@ -4804,17 +4830,6 @@
               <div class='tag ${row.online ? 'ok' : 'error'}'>${row.online ? 'Online' : 'Offline'}</div>
             </div>
             <div class='side-button-sub'>${esc(row.pbgui_branch || '-')} | ${esc(row.pb7_branch || '-')} | API ${esc(row.api_sync || '-')}</div>
-          </button>`;
-      }).join('');
-      const importButtons = importCandidates.map(function (item) {
-        const roleLabel = item.role === 'master' ? 'Import Master' : 'Import Slave';
-        return `
-          <button class='side-button' type='button' onclick='prefillImportCandidate(${js(item.hostname)}, ${js(item.ip_from_hosts || '')}, ${js(item.default_user || '')})'>
-            <div class='side-button-row'>
-              <div class='side-button-title'>${esc(item.hostname)}</div>
-              <div class='tag ${item.online ? 'ok' : 'warning'}'>${item.online ? 'Online' : 'Offline'}</div>
-            </div>
-            <div class='side-button-sub'>${roleLabel}${item.ip_from_hosts ? ' | IP ' + esc(item.ip_from_hosts) : ''}</div>
           </button>`;
       }).join('');
       const masterButton = masterRow ? `
@@ -4835,8 +4850,14 @@
           ${serverButtons || `<div class='empty-state'>No saved VPS entries yet.</div>`}
         </div>
         <div class='side-group'>
-          <div class='side-group-title'>Discovered Servers</div>
-          ${importButtons || `<div class='empty-state'>No remote servers detected.</div>`}
+          <div class='side-group-title'>Import Host</div>
+          <button class='side-button' type='button' onclick='openManualImportPrompt()'>
+            <div class='side-button-row'>
+              <div class='side-button-title'>Import by Hostname</div>
+              <div class='tag ok'>Manual</div>
+            </div>
+            <div class='side-button-sub'>Requires a matching local /etc/hosts entry before the import can continue.</div>
+          </button>
         </div>`;
       if (sidebarList && sidebarList.innerHTML !== html) sidebarList.innerHTML = html;
     }

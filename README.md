@@ -313,6 +313,9 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Fixed: Streamlit startup no longer crashes in `build_navigation()` after the legacy VPS Manager removal; the stale `pM4a` page reference was removed from the `SystemPages` list.
+- Changed: FastAPI `VPS Manager` no longer auto-discovers import candidates in the sidebar; host imports are now manual by hostname and require a matching local `/etc/hosts` entry before the Add VPS form is prefilled.
+- Fixed: the shared FastAPI navigation no longer exposes the removed `VPS Manager Legacy` menu entry, so all PBGui shells now point `System -> VPS Manager` only to the FastAPI page.
 - Removed: the old Streamlit `VPS Manager Legacy` page and its navigation entry, so `VPS Manager` now routes only to the FastAPI implementation.
 - Changed: VPS init `private_key_user` and `private_key_file` are now session-only and are no longer persisted in host JSON files.
 - Changed: documented explicit code guardrails in VPS Manager so password, sudo, and init private-key fields must never be persisted back into host JSON or normal detail payloads.
@@ -415,13 +418,12 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Changed: FastAPI `VPS Manager` monitor panel redesigned — removed redundant title, system boot pill, and round-trip delay duplication; CPU shown as resource bar alongside Memory, Disk, Swap; RTD shown as pill in system-header tags.
 - Changed: FastAPI `VPS Manager` password-dependent sidebar buttons (Reboot, Update Linux) now prompt for the VPS user password via modal instead of being disabled, with config auto-save before command execution.
 - Changed: FastAPI `VPS Manager` running-instances monitor table now shows separate `Errors Today`, `Errors Yesterday`, `Tracebacks Today` and `Tracebacks Yesterday` columns, matching the legacy Streamlit monitor layout.
-- Changed: FastAPI `VPS Manager` now supports importing and managing remote PBGui master servers via SSH (Linux Update, PBGui Update, PB7 Update, Reboot, Log Viewer) — discovered peer masters appear in the sidebar under "Discovered Servers" with an "Import Master" button, and once configured behave identically to managed VPS hosts.
+- Changed: FastAPI `VPS Manager` now supports importing and managing remote PBGui master servers via SSH (Linux Update, PBGui Update, PB7 Update, Reboot, Log Viewer), and once configured they behave identically to managed VPS hosts.
 - Changed: FastAPI `VPS Manager` Init Ready and Setup Ready status cards/tags hidden for already-operational VPS (detected via PBGui version telemetry).
 - Changed: FastAPI `VPS Manager` Status Details panel simplified — removed duplicate fields (Start, Updates, API Sync, PBGui, PB7) now shown in system header; Progress panel removed (timestamps in Status Details suffice).
 - Changed: FastAPI `VPS Manager` page-header ("VPS Manager" title + red rule) removed from all views; sidebar label shortened to "VPS Manager".
 - Fixed: FastAPI `VPS Manager` view state is now persisted via URL hash, surviving browser refreshes.
 - Fixed: `VPS.save()` now persists `user_pw`, `init_methode`, `root_pw`, `user_sudo`, `user_sudo_pw` and other credential fields; `VPS.load()` reads them back — previously passwords were lost after any `refresh()`, causing "Waiting for VPS detail" to hang forever.
-- Fixed: `prefillImportCandidate` no longer defaults SSH user to `root`; uses `getpass.getuser()` from the backend instead.
 - Fixed: `v7_edit.html` enabled_on dropdown no longer shows duplicate "disabled" entry when a host named "disabled" exists.
 - Fixed: All VPS Ansible playbooks (`vps-update-pb`, `vps-setup`, `vps-switch-pb7-branch`, `vps-pb7-python312`) now write the passivbot Rust source stamp after `maturin develop`, preventing concurrent bot recompiles on restart.
 - Fixed: `vps-update.yml` reboot condition now uses `reboot | default(false) | bool` and the backend coerces the `reboot` extravar to a proper Python boolean, ensuring the "Reboot after Linux update" checkbox is reliably honored.

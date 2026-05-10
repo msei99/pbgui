@@ -3,7 +3,7 @@
 The **VPS Manager** page lets you add, configure, and maintain remote VPS servers that run Passivbot instances.
 Each VPS is managed via Ansible playbooks executed from the Master (local) server.
 
-The default menu entry **System -> VPS Manager** now opens the standalone **FastAPI** page. The previous Streamlit implementation is still available as **System -> VPS Manager Legacy**.
+The default menu entry **System -> VPS Manager** opens the standalone **FastAPI** page.
 
 ---
 
@@ -32,9 +32,9 @@ Left sidebar:
 | **Master** | Open the local Master management view |
 | **API in sync / API not in sync** | Show API sync state and push API credentials to remotes that are out of sync |
 | **Managed VPS** cards | Open the per-VPS management view |
-| **Detected missing VPS** cards | Prefill the Add form for remote slave hosts seen by PBRemote |
+| **Import Host** | Open the manual hostname import dialog; the hostname must already resolve via local `/etc/hosts` |
 
-The overview uses the normal shared PBGui FastAPI shell. When you switch to **Master** or a specific **VPS**, the left sidebar changes into the view-specific action list just like the old page. The main overview area now stays focused on the table; missing VPS candidates remain in the sidebar instead of a second main-panel section.
+The overview uses the normal shared PBGui FastAPI shell. When you switch to **Master** or a specific **VPS**, the left sidebar changes into the view-specific action list just like the old page. The main overview area now stays focused on the table, while host import stays available from the sidebar as a manual hostname-based action.
 
 The page keeps a live WebSocket connection for overview rows, progress logs, branch state, and API sync progress.
 
@@ -126,7 +126,7 @@ The reveal state is preserved during live updates, so opening an eye button does
 
 ## Adding a new VPS
 
-1. Click **Add VPS** in the left sidebar, or use a **Detected missing VPS** card to prefill hostname/IP.
+1. Click **Add VPS** in the left sidebar, or use **Import Host** to prefill the Add form from a hostname already mapped in local `/etc/hosts`.
 2. Follow the step cards at the top of the page:
    - prepare an Ubuntu VPS
    - add the hostname to your local `/etc/hosts`

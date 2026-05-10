@@ -474,7 +474,6 @@ class VPSManagerService:
         pbremote = self._ensure_pbremote()
         monitor_state = self._get_monitor_state()
         overview_rows = self._build_overview_rows(pbremote, monitor_state)
-        import_candidates = self._build_import_candidates(pbremote)
         return {
             "config": {
                 "master_name": getattr(pbremote, "name", "local"),
@@ -485,7 +484,6 @@ class VPSManagerService:
             "errors": self._build_errors(pbremote),
             "overview": {
                 "rows": overview_rows,
-                "import_candidates": import_candidates,
                 "api_sync": self._build_api_sync_state(pbremote, monitor_state),
             },
         }
@@ -600,23 +598,6 @@ class VPSManagerService:
             "error": str(self.api_sync_state.get("error") or ""),
             "success": bool(self.api_sync_state.get("success")),
         }
-
-    def _build_import_candidates(self, pbremote: PBRemote) -> list[dict[str, Any]]:
-        existing = {item.hostname for item in self.vpsmanager.vpss if item.hostname}
-        out: list[dict[str, Any]] = []
-        default_user = getpass.getuser()
-        for server in sorted(pbremote.remote_servers, key=lambda item: item.name):
-            if server.role in ("slave", "master") and server.name not in existing:
-                temp = VPS()
-                temp.hostname = server.name
-                out.append({
-                    "hostname": server.name,
-                    "ip_from_hosts": temp.fetch_vps_ip_from_hosts(),
-                    "online": server.is_online(),
-                    "role": server.role or "slave",
-                    "default_user": default_user,
-                })
-        return out
 
     def _build_overview_rows(self, pbremote: PBRemote,
                              monitor_state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1292,6 +1273,25 @@ class VPSManagerService:
             self.vpsmanager.vpss.append(vps)
             self.vpsmanager.vpss.sort(key=lambda item: item.hostname or "")
         return self._build_vps_config(token, vps)
+
+    def prepare_import(self, hostname: Any) -> dict[str, Any]:
+        hostname = str(hostname or "").strip()
+        if not hostname:
+            raise ValueError("Hostname is required.")
+        if hostname in self.vpsmanager.list():
+            raise ValueError("Hostname already exists.")
+        temp = VPS()
+        temp.hostname = hostname
+        ip = str(temp.fetch_vps_ip_from_hosts() or "").strip()
+        if not ip:
+            raise ValueError("Hostname is not available in local /etc/hosts.")
+        if not _valid_ipv4(ip):
+            raise ValueError("Hostname in local /etc/hosts does not resolve to a valid IPv4 address.")
+        return {
+            "hostname": hostname,
+            "ip": ip,
+            "user": getpass.getuser(),
+        }
 
     def save_vps_config(self, token: str, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
         vps = self._require_vps(hostname)

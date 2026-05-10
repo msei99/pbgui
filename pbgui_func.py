@@ -364,7 +364,7 @@ def build_navigation():
     p77 = st.Page(paths["V7_LIVE_VS_BACKTEST"], title="Live vs Backtest", icon=":material/swap_horiz:")
        
     # Page Groups
-    SystemPages = [pM1, pM2, pM3, pM4, pM4a, pM4b, pM5]
+    SystemPages = [pM1, pM2, pM3, pM4, pM4b, pM5]
     
     # Do not include DEBUGLOG page; centralized debuglog removed
                 
