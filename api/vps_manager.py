@@ -72,7 +72,7 @@ def get_vps_detail(
     session: SessionToken = Depends(require_auth),
 ) -> JSONResponse:
     try:
-        detail = _get_service().build_vps_detail(hostname)
+        detail = _get_service().build_vps_detail(session.token, hostname)
         return JSONResponse(content=detail)
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -98,7 +98,7 @@ async def ws_vps_manager(websocket: WebSocket):
 
     await websocket.accept()
     service = _get_service()
-    context: dict[str, str] = {"view": "overview", "hostname": ""}
+    context: dict[str, str] = {"view": "overview", "hostname": "", "token": token}
     push_task = asyncio.create_task(_push_loop(websocket, service, context), name="vps-manager-push")
     try:
         async for raw in websocket.iter_text():
@@ -122,21 +122,23 @@ async def ws_vps_manager(websocket: WebSocket):
                     await service.start_api_sync()
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True})
                 elif cmd == "save_vps":
-                    data = await asyncio.to_thread(service.save_vps, msg.get("form") or {})
+                    data = await asyncio.to_thread(service.save_vps, token, msg.get("form") or {})
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "save_vps_config":
                     data = await asyncio.to_thread(
                         service.save_vps_config,
+                        token,
                         str(msg.get("hostname") or ""),
                         msg.get("form") or {},
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "init_vps":
-                    data = await asyncio.to_thread(service.init_vps, msg.get("form") or {}, debug=bool(msg.get("debug")))
+                    data = await asyncio.to_thread(service.init_vps, token, msg.get("form") or {}, debug=bool(msg.get("debug")))
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "setup_vps":
                     data = await asyncio.to_thread(
                         service.setup_vps,
+                        token,
                         str(msg.get("hostname") or ""),
                         msg.get("form") or {},
                         debug=bool(msg.get("debug")),
@@ -146,8 +148,16 @@ async def ws_vps_manager(websocket: WebSocket):
                     await asyncio.to_thread(service.delete_vps, str(msg.get("hostname") or ""))
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True})
                 elif cmd == "read_vps_settings":
-                    data = await asyncio.to_thread(service.read_vps_settings, str(msg.get("hostname") or ""))
+                    data = await asyncio.to_thread(service.read_vps_settings, token, str(msg.get("hostname") or ""))
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "reveal_secret":
+                    data = await asyncio.to_thread(
+                        service.reveal_session_secret,
+                        token,
+                        str(msg.get("hostname") or ""),
+                        str(msg.get("field") or ""),
+                    )
+                    await websocket.send_json({"type": "secret_value", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "fetch_vps_log":
                     data = await asyncio.to_thread(
                         service.fetch_vps_log,
@@ -177,6 +187,7 @@ async def ws_vps_manager(websocket: WebSocket):
                 elif cmd == "run_vps_command":
                     await asyncio.to_thread(
                         service.run_vps_command,
+                        token=token,
                         hostname=str(msg.get("hostname") or ""),
                         command=str(msg.get("command") or ""),
                         command_text=str(msg.get("command_text") or ""),
@@ -258,7 +269,7 @@ def _build_detail_for_context(service: VPSManagerService, context: dict[str, str
     if view == "vps":
         hostname = str(context.get("hostname") or "")
         if hostname:
-            return service.build_vps_detail(hostname)
+            return service.build_vps_detail(str(context.get("token") or ""), hostname)
     return None
 
 
@@ -269,7 +280,7 @@ def _build_quick_detail_for_context(service: VPSManagerService, context: dict[st
     if view == "vps":
         hostname = str(context.get("hostname") or "")
         if hostname:
-            return service.build_vps_detail(hostname, quick=True)
+            return service.build_vps_detail(str(context.get("token") or ""), hostname, quick=True)
     return None
 
 

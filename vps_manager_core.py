@@ -116,6 +116,13 @@ def _rotate_task_log(path: Path, history_count: int) -> None:
         path.replace(_rotated_task_log_path(path, 1))
 
 
+def _prepare_runner_private_data_dir(base_dir: Path) -> Path:
+    private_dir = base_dir / "tmp"
+    shutil.rmtree(private_dir, ignore_errors=True)
+    private_dir.mkdir(parents=True, exist_ok=True)
+    return private_dir
+
+
 class VPS:
     def __init__(self):
         self._hostname = None
@@ -187,8 +194,6 @@ class VPS:
             self.ip = config["ip"]
         if "user" in config:
             self.user = config["user"]
-        if "user_pw" in config:
-            self.user_pw = config["user_pw"]
         if "swap" in config:
             self.swap = config["swap"]
         if "last_setup" in config:
@@ -221,18 +226,10 @@ class VPS:
             self.init_methode = config["init_methode"]
         if "remove_user" in config:
             self.remove_user = config["remove_user"]
-        if "initial_root_pw" in config:
-            self.initial_root_pw = config["initial_root_pw"]
-        if "root_pw" in config:
-            self.root_pw = config["root_pw"]
         if "private_key_user" in config:
             self.private_key_user = config["private_key_user"]
         if "private_key_file" in config:
             self.private_key_file = config["private_key_file"]
-        if "user_sudo" in config:
-            self.user_sudo = config["user_sudo"]
-        if "user_sudo_pw" in config:
-            self.user_sudo_pw = config["user_sudo_pw"]
         if "remote_pbgui_dir" in config:
             self.remote_pbgui_dir = config["remote_pbgui_dir"]
 
@@ -681,14 +678,15 @@ class VPS:
         if self.hostname:
             self.path = Path(f"{PBGDIR}/data/vpsmanager/hosts/{self.hostname}")
             self.path.mkdir(parents=True, exist_ok=True)
-            self.privat_data_dir = Path(f"{self.path}/tmp")
-            self.privat_data_dir.mkdir(parents=True, exist_ok=True)
             file_path = f"{self.path}/{self.hostname}.json"
+            # Never persist credentials or bootstrap secrets here. VPS passwords,
+            # sudo credentials, and init private-key fields must stay session-only
+            # in memory. Re-introducing them into host JSON would recreate the
+            # security regression this module now guards against.
             config = {
                 "_hostname": self.hostname,
                 "ip": self.ip,
                 "user": self.user,
-                "user_pw": self.user_pw,
                 "swap": self.swap,
                 "bucket": self.bucket,
                 "coinmarketcap_api_key": self.coinmarketcap_api_key,
@@ -705,12 +703,6 @@ class VPS:
                 "command_text": self.command_text,
                 "init_methode": self.init_methode,
                 "remove_user": self.remove_user,
-                "initial_root_pw": self.initial_root_pw,
-                "root_pw": self.root_pw,
-                "private_key_user": self.private_key_user,
-                "private_key_file": self.private_key_file,
-                "user_sudo": self.user_sudo,
-                "user_sudo_pw": self.user_sudo_pw,
                 "remote_pbgui_dir": self.remote_pbgui_dir,
             }
             with open(file_path, "w", encoding="utf-8") as handle:
@@ -795,6 +787,7 @@ class VPSManager:
         vps.command_text = "Initialize"
         vps.setup_status = None
         vps.save()
+        vps.privat_data_dir = _prepare_runner_private_data_dir(vps.path)
         vps.remove_init_log()
         vps.init_log = ""
         if debug:
@@ -803,35 +796,40 @@ class VPSManager:
         else:
             tags = None
             verbosity = 1
-        ansible_runner.run_async(
-            playbook=str(PurePath(f"{PBGDIR}/vps-init.yml")),
-            inventory=vps.hostname,
-            extravars={
-                "hostname": vps.hostname,
-                "ip": vps.ip,
-                "initial_root_pw": vps.initial_root_pw if vps.init_methode == "root" else vps.user_sudo_pw if vps.init_methode == "password" else "",
-                "init_user": vps.private_key_user if vps.init_methode == "private_key" else vps.user_sudo if vps.init_methode == "password" else "root",
-                "privatel_key_file": vps.private_key_file,
-                "root_pw": vps.root_pw,
-                "user": vps.user,
-                "user_pw": vps.user_pw,
-                "remove_user": vps.remove_user,
-                "debug": debug,
-            },
-            quiet=True,
-            envvars=_ansible_envvars(),
-            tags=tags,
-            verbosity=verbosity,
-            private_data_dir=vps.privat_data_dir,
-            event_handler=vps.init_event_handler,
-            status_handler=vps.init_status_handler,
-            finished_callback=vps.init_finished,
-        )
+        try:
+            ansible_runner.run_async(
+                playbook=str(PurePath(f"{PBGDIR}/vps-init.yml")),
+                inventory=vps.hostname,
+                extravars={
+                    "hostname": vps.hostname,
+                    "ip": vps.ip,
+                    "initial_root_pw": vps.initial_root_pw if vps.init_methode == "root" else vps.user_sudo_pw if vps.init_methode == "password" else "",
+                    "init_user": vps.private_key_user if vps.init_methode == "private_key" else vps.user_sudo if vps.init_methode == "password" else "root",
+                    "privatel_key_file": vps.private_key_file,
+                    "root_pw": vps.root_pw,
+                    "user": vps.user,
+                    "user_pw": vps.user_pw,
+                    "remove_user": vps.remove_user,
+                    "debug": debug,
+                },
+                quiet=True,
+                envvars=_ansible_envvars(),
+                tags=tags,
+                verbosity=verbosity,
+                private_data_dir=vps.privat_data_dir,
+                event_handler=vps.init_event_handler,
+                status_handler=vps.init_status_handler,
+                finished_callback=vps.init_finished,
+            )
+        except Exception:
+            shutil.rmtree(vps.privat_data_dir, ignore_errors=True)
+            raise
 
     def setup_vps(self, vps: VPS, debug=False):
         vps.command = "vps-setup"
         vps.command_text = "Setup VPS"
         vps.save()
+        vps.privat_data_dir = _prepare_runner_private_data_dir(vps.path)
         vps.remove_setup_log()
         vps.setup_log = ""
         if debug:
@@ -840,35 +838,40 @@ class VPSManager:
         else:
             tags = None
             verbosity = 1
-        ansible_runner.run_async(
-            playbook=str(PurePath(f"{PBGDIR}/vps-setup.yml")),
-            inventory=vps.hostname,
-            extravars={
-                "hostname": vps.hostname,
-                "user": vps.user,
-                "user_pw": vps.user_pw,
-                "swap_size": vps.swap,
-                "bucket": vps.bucket,
-                "coinmarketcap_api_key": vps.coinmarketcap_api_key,
-                "firewall": vps.firewall,
-                "firewall_ssh_port": vps.firewall_ssh_port,
-                "firewall_ssh_ips": vps.firewall_ssh_ips.split(","),
-                "debug": debug,
-                "install_dir": _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user),
-            },
-            quiet=True,
-            envvars=_ansible_envvars(),
-            tags=tags,
-            verbosity=verbosity,
-            private_data_dir=vps.privat_data_dir,
-            event_handler=vps.setup_event_handler,
-            status_handler=vps.setup_status_handler,
-            finished_callback=vps.setup_finished,
-        )
+        try:
+            ansible_runner.run_async(
+                playbook=str(PurePath(f"{PBGDIR}/vps-setup.yml")),
+                inventory=vps.hostname,
+                extravars={
+                    "hostname": vps.hostname,
+                    "user": vps.user,
+                    "user_pw": vps.user_pw,
+                    "swap_size": vps.swap,
+                    "bucket": vps.bucket,
+                    "coinmarketcap_api_key": vps.coinmarketcap_api_key,
+                    "firewall": vps.firewall,
+                    "firewall_ssh_port": vps.firewall_ssh_port,
+                    "firewall_ssh_ips": vps.firewall_ssh_ips.split(","),
+                    "debug": debug,
+                    "install_dir": _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user),
+                },
+                quiet=True,
+                envvars=_ansible_envvars(),
+                tags=tags,
+                verbosity=verbosity,
+                private_data_dir=vps.privat_data_dir,
+                event_handler=vps.setup_event_handler,
+                status_handler=vps.setup_status_handler,
+                finished_callback=vps.setup_finished,
+            )
+        except Exception:
+            shutil.rmtree(vps.privat_data_dir, ignore_errors=True)
+            raise
 
     def update_vps(self, vps: VPS, debug=False, extra_vars=None):
         vps.update_status = None
         vps.save()
+        vps.privat_data_dir = _prepare_runner_private_data_dir(vps.path)
         vps.remove_update_log()
         vps.update_log = ""
         if debug:
@@ -900,46 +903,55 @@ class VPSManager:
         ansible_extravars["reboot"] = reboot_requested
         ansible_extravars["reboot_requested"] = reboot_requested
 
-        ansible_runner.run_async(
-            playbook=str(PurePath(f"{PBGDIR}/{vps.command}.yml")),
-            inventory=vps.hostname,
-            extravars=ansible_extravars,
-            quiet=True,
-            envvars=_ansible_envvars(),
-            tags=tags,
-            verbosity=verbosity,
-            private_data_dir=vps.privat_data_dir,
-            event_handler=vps.update_event_handler,
-            status_handler=vps.update_status_handler,
-            finished_callback=vps.update_finished,
-        )
+        try:
+            ansible_runner.run_async(
+                playbook=str(PurePath(f"{PBGDIR}/{vps.command}.yml")),
+                inventory=vps.hostname,
+                extravars=ansible_extravars,
+                quiet=True,
+                envvars=_ansible_envvars(),
+                tags=tags,
+                verbosity=verbosity,
+                private_data_dir=vps.privat_data_dir,
+                event_handler=vps.update_event_handler,
+                status_handler=vps.update_status_handler,
+                finished_callback=vps.update_finished,
+            )
+        except Exception:
+            shutil.rmtree(vps.privat_data_dir, ignore_errors=True)
+            raise
 
     def fetch_log(self, vps: VPS, debug=False):
         vps.save()
+        vps.privat_data_dir = _prepare_runner_private_data_dir(vps.path)
         if debug:
             tags = "debug,all"
             verbosity = 3
         else:
             tags = None
             verbosity = 1
-        ansible_runner.run(
-            playbook=str(PurePath(f"{PBGDIR}/{vps.command}.yml")),
-            inventory=vps.hostname,
-            extravars={
-                "hostname": vps.hostname,
-                "user": vps.user,
-                "vps_dir": str(vps.path) + "/" + str(PurePath(vps.logfilename).parent),
-                "logfile": vps.logfilename,
-                "debug": debug,
-                "install_dir": _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user),
-            },
-            quiet=True,
-            envvars=_ansible_envvars(),
-            tags=tags,
-            verbosity=verbosity,
-            private_data_dir=vps.privat_data_dir,
-            finished_callback=vps.fetch_log_finished,
-        )
+        try:
+            ansible_runner.run(
+                playbook=str(PurePath(f"{PBGDIR}/{vps.command}.yml")),
+                inventory=vps.hostname,
+                extravars={
+                    "hostname": vps.hostname,
+                    "user": vps.user,
+                    "vps_dir": str(vps.path) + "/" + str(PurePath(vps.logfilename).parent),
+                    "logfile": vps.logfilename,
+                    "debug": debug,
+                    "install_dir": _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user),
+                },
+                quiet=True,
+                envvars=_ansible_envvars(),
+                tags=tags,
+                verbosity=verbosity,
+                private_data_dir=vps.privat_data_dir,
+                finished_callback=vps.fetch_log_finished,
+            )
+        except Exception:
+            shutil.rmtree(vps.privat_data_dir, ignore_errors=True)
+            raise
 
     def update_master(self, debug=False, sudo_pw=None, extra_vars=None):
         self.update_status = None

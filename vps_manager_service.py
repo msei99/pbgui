@@ -25,28 +25,18 @@ PB7_UPSTREAM_REMOTE_NAME = "origin"
 PB7_UPSTREAM_REMOTE_URL = "https://github.com/enarjord/passivbot.git"
 SWAP_OPTIONS = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"]
 INIT_METHODS = ["root", "password", "private_key"]
-SLAVE_HOST_LOGFILES = [
-    "logs/PBCoinData.log",
-    "logs/PBRun.log",
-    "logs/PBRemote.log",
-    "logs/PBData.log",
-    "logs/PBMon.log",
-    "logs/sync.log",
-]
-
-BASE_HOST_LOGFILES = [
-    "logs/PBCoinData.log",
-    "logs/PBRun.log",
-    "logs/PBRemote.log",
-    "logs/PBData.log",
-    "logs/PBMon.log",
-    "logs/PBGui.log",
-    "logs/PBApiServer.log",
-    "logs/FastAPI.log",
-    "logs/VPSMonitor.log",
-    "logs/VPSManagerApi.log",
-    "logs/sync.log",
-]
+SESSION_SECRET_TTL_SECONDS = 15 * 60
+# Guardrail: every field listed here is sensitive bootstrap/auth material and
+# must never be written to host JSON or included in normal config/detail payloads.
+SECRET_FIELDS = (
+    "user_pw",
+    "initial_root_pw",
+    "root_pw",
+    "user_sudo",
+    "user_sudo_pw",
+    "private_key_user",
+    "private_key_file",
+)
 
 
 def _now_ts() -> int:
@@ -126,6 +116,7 @@ class VPSManagerService:
         self._master_coindata_ok_cache: bool = False
         self._vps_coindata_status_cache: dict[str, bool] = {}
         self._vps_ssh_ok_cache: dict[str, bool] = {}
+        self._session_secrets: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
         self.api_sync_state: dict[str, Any] = {
             "running": False,
             "remaining": 0,
@@ -145,6 +136,131 @@ class VPSManagerService:
         if self.coindata is None:
             self.coindata = CoinData()
         return self.coindata
+
+    def clear_session_secrets(self, token: str) -> None:
+        token = str(token or "").strip()
+        if token:
+            self._session_secrets.pop(token, None)
+
+    def prune_session_secrets(self, valid_tokens: set[str] | None = None) -> None:
+        now = _now_ts()
+        next_store: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
+        for token, host_map in self._session_secrets.items():
+            if valid_tokens is not None and token not in valid_tokens:
+                continue
+            next_host_map: dict[str, dict[str, dict[str, Any]]] = {}
+            for hostname, field_map in host_map.items():
+                next_field_map: dict[str, dict[str, Any]] = {}
+                for field_name, payload in field_map.items():
+                    if payload.get("value") and int(payload.get("expires_at") or 0) > now:
+                        next_field_map[field_name] = payload
+                if next_field_map:
+                    next_host_map[hostname] = next_field_map
+            if next_host_map:
+                next_store[token] = next_host_map
+        self._session_secrets = next_store
+
+    def _get_secret_bucket(self, token: str, hostname: str, *, create: bool = False) -> dict[str, dict[str, Any]] | None:
+        token = str(token or "").strip()
+        hostname = str(hostname or "").strip()
+        if not token or not hostname:
+            return None
+        self.prune_session_secrets()
+        host_map = self._session_secrets.get(token)
+        if host_map is None:
+            if not create:
+                return None
+            host_map = {}
+            self._session_secrets[token] = host_map
+        bucket = host_map.get(hostname)
+        if bucket is None and create:
+            bucket = {}
+            host_map[hostname] = bucket
+        return bucket
+
+    def _session_secret_payload(self, value: str) -> dict[str, Any]:
+        now = _now_ts()
+        return {
+            "value": value,
+            "stored_at": now,
+            "expires_at": now + SESSION_SECRET_TTL_SECONDS,
+        }
+
+    def _store_session_secrets(self, token: str, hostname: str, form: dict[str, Any]) -> None:
+        bucket = self._get_secret_bucket(token, hostname, create=True)
+        if bucket is None:
+            return
+        # Only the token-scoped in-memory store may retain these fields.
+        # Do not mirror them into persisted VPS config or generic API payloads.
+        for field_name in SECRET_FIELDS:
+            if field_name not in form:
+                continue
+            value = str(form.get(field_name) or "")
+            if value:
+                bucket[field_name] = self._session_secret_payload(value)
+            else:
+                bucket.pop(field_name, None)
+        if not bucket:
+            host_map = self._session_secrets.get(str(token or "").strip()) or {}
+            host_map.pop(str(hostname or "").strip(), None)
+
+    def _secret_entry(self, token: str, hostname: str, field_name: str) -> dict[str, Any] | None:
+        bucket = self._get_secret_bucket(token, hostname, create=False)
+        if not bucket:
+            return None
+        entry = bucket.get(field_name)
+        if not entry:
+            return None
+        if int(entry.get("expires_at") or 0) <= _now_ts():
+            bucket.pop(field_name, None)
+            if not bucket:
+                host_map = self._session_secrets.get(str(token or "").strip()) or {}
+                host_map.pop(str(hostname or "").strip(), None)
+            return None
+        return entry
+
+    def _session_secret_value(self, token: str, hostname: str, field_name: str) -> str:
+        entry = self._secret_entry(token, hostname, field_name)
+        return str(entry.get("value") or "") if entry else ""
+
+    def _session_secret_meta(self, token: str, hostname: str) -> dict[str, Any]:
+        hostname = str(hostname or "")
+        now = _now_ts()
+        out: dict[str, Any] = {}
+        for field_name in SECRET_FIELDS:
+            entry = self._secret_entry(token, hostname, field_name)
+            expires_at = int(entry.get("expires_at") or 0) if entry else 0
+            out[field_name] = {
+                "stored": entry is not None,
+                "expires_at": expires_at,
+                "remaining_seconds": max(expires_at - now, 0),
+            }
+        return out
+
+    def reveal_session_secret(self, token: str, hostname: str, field_name: str) -> dict[str, Any]:
+        if field_name not in SECRET_FIELDS:
+            raise ValueError("Unsupported secret field.")
+        meta = self._session_secret_meta(token, hostname).get(field_name) or {}
+        return {
+            "hostname": str(hostname or ""),
+            "field": field_name,
+            "value": self._session_secret_value(token, hostname, field_name),
+            "stored": bool(meta.get("stored")),
+            "expires_at": int(meta.get("expires_at") or 0),
+            "remaining_seconds": int(meta.get("remaining_seconds") or 0),
+        }
+
+    def _apply_session_secrets_to_vps(self, token: str, vps: VPS) -> None:
+        hostname = str(vps.hostname or "")
+        for field_name in SECRET_FIELDS:
+            value = self._session_secret_value(token, hostname, field_name)
+            setattr(vps, field_name, value or None)
+
+    def _require_user_password(self, token: str, hostname: str) -> str:
+        value = self._session_secret_value(token, hostname, "user_pw")
+        if not value:
+            raise ValueError("VPS user password expired or missing. Please enter it again.")
+        return value
 
     def _sync_vps_inventory(self) -> None:
         pattern = str(Path(f"{PBGDIR}/data/vpsmanager/hosts/*/*.json"))
@@ -410,11 +526,12 @@ class VPSManagerService:
             "progress": self._build_master_progress(include_log=True),
         }
 
-    def build_vps_detail(self, hostname: str, *, quick: bool = False) -> dict[str, Any]:
+    def build_vps_detail(self, token: str, hostname: str, *, quick: bool = False) -> dict[str, Any]:
         if not quick:
             self.refresh(force=False)
         pbremote = self._ensure_pbremote()
         vps = self._require_vps(hostname)
+        self._apply_session_secrets_to_vps(token, vps)
         monitor_state = self._get_monitor_state()
         host_state = self._get_host_telemetry(monitor_state, hostname)
         # Quick detail may be less fresh, but it must not regress fields that
@@ -432,12 +549,12 @@ class VPSManagerService:
                 coindata_ok = False
             self._vps_coindata_status_cache[hostname] = bool(coindata_ok)
 
-        logfiles = list(BASE_HOST_LOGFILES)
-        role = str(self._host_meta(host_state).get("role") or "slave")
-        if role == "slave":
-            logfiles = [f for f in logfiles if f in SLAVE_HOST_LOGFILES]
+        logfiles: list[str] = []
         monitor_payload = self._build_monitor_payload(host_state, hostname=hostname)
         logfiles.extend(monitor_payload.get("logfiles", []))
+        available_logs = ((self._host_meta(host_state).get("available_logs") or []) if host_state else [])
+        if isinstance(available_logs, list):
+            logfiles.extend(available_logs)
         # add old bot log files
         bot_logs = (monitor_state.get("bot_logs") or {}).get(hostname, {})
         for log_list in bot_logs.values():
@@ -446,7 +563,7 @@ class VPSManagerService:
             "kind": "vps",
             "hostname": hostname,
             "status": self._build_vps_status(vps, host_state, pbremote, coindata_ok, quick=quick),
-            "config": self._build_vps_config(vps),
+            "config": self._build_vps_config(token, vps),
             "branches": {
                 "pbgui": self._build_vps_pbgui_branch_state(pbremote, host_state),
                 "pb7": self._build_vps_pb7_branch_state(pbremote, host_state, hostname),
@@ -757,6 +874,15 @@ class VPSManagerService:
             "server_metrics": self._build_remote_server_metrics(vps.hostname, host_state),
         }
 
+    def build_vps_status_with_session(self, token: str, hostname: str, *, quick: bool = False) -> dict[str, Any]:
+        vps = self._require_vps(hostname)
+        self._apply_session_secrets_to_vps(token, vps)
+        monitor_state = self._get_monitor_state()
+        pbremote = self._ensure_pbremote()
+        host_state = self._get_host_telemetry(monitor_state, hostname)
+        coindata_ok = bool(self._vps_coindata_status_cache.get(hostname, False)) if quick else False
+        return self._build_vps_status(vps, host_state, pbremote, coindata_ok, quick=quick)
+
     def _get_live_vps_package_status(self, vps: VPS, host_state: dict[str, Any]) -> dict[str, Any] | None:
         hostname = str(vps.hostname or "")
         if not hostname:
@@ -943,12 +1069,14 @@ class VPSManagerService:
             "update_log": vps.get_update_log_text() if include_logs else "",
         }
 
-    def _build_vps_config(self, vps: VPS) -> dict[str, Any]:
+    def _build_vps_config(self, token: str, vps: VPS) -> dict[str, Any]:
+        secret_status = self._session_secret_meta(token, str(vps.hostname or ""))
+        # Keep detail/config payloads secret-free. The frontend only gets
+        # presence/TTL metadata and must explicitly request an on-demand reveal.
         return {
             "hostname": vps.hostname,
             "ip": vps.ip or "",
             "user": vps.user or "",
-            "user_pw": vps.user_pw or "",
             "swap": vps.swap or "0",
             "bucket": vps.bucket or "",
             "coinmarketcap_api_key": vps.coinmarketcap_api_key or "",
@@ -957,12 +1085,7 @@ class VPSManagerService:
             "firewall_ssh_ips": vps.firewall_ssh_ips or "",
             "init_methode": vps.init_methode or "root",
             "remove_user": bool(vps.remove_user),
-            "initial_root_pw": vps.initial_root_pw or "",
-            "root_pw": vps.root_pw or "",
-            "private_key_user": vps.private_key_user or "",
-            "private_key_file": vps.private_key_file or "",
-            "user_sudo": vps.user_sudo or "",
-            "user_sudo_pw": vps.user_sudo_pw or "",
+            "secret_status": secret_status,
         }
 
     def _build_monitor_payload(self, server, hostname: str | None = None) -> dict[str, Any]:
@@ -1133,8 +1256,9 @@ class VPSManagerService:
         self.vpsmanager.command_text = command_text
         self.vpsmanager.update_master(debug=debug, sudo_pw=sudo_pw, extra_vars=extra_vars)
 
-    def run_vps_command(self, *, hostname: str, command: str, command_text: str, debug: bool = False, extra_vars: dict[str, Any] | None = None) -> None:
+    def run_vps_command(self, *, token: str, hostname: str, command: str, command_text: str, debug: bool = False, extra_vars: dict[str, Any] | None = None) -> None:
         vps = self._require_vps(hostname)
+        self._apply_session_secrets_to_vps(token, vps)
         vps.command = command
         vps.command_text = command_text
         self.vpsmanager.update_vps(vps, debug=debug, extra_vars=extra_vars)
@@ -1145,9 +1269,10 @@ class VPSManagerService:
         self.vpsmanager.vpss = [item for item in self.vpsmanager.vpss if item.hostname != hostname]
         self._set_vps_monitor_enabled(hostname, enabled=False)
 
-    def read_vps_settings(self, hostname: str) -> dict[str, Any]:
+    def read_vps_settings(self, token: str, hostname: str) -> dict[str, Any]:
         pbremote = self._ensure_pbremote()
         vps = self._require_vps(hostname)
+        vps.user_pw = self._require_user_password(token, hostname)
         if not vps.can_login_ssh():
             raise ValueError("Cannot login via SSH. Please check username and password.")
         vps.bucket = pbremote.bucket
@@ -1156,27 +1281,28 @@ class VPSManagerService:
         vps.swap = info.get("swap", "0") if info.get("swap") in SWAP_OPTIONS else "0"
         vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
         vps.save()
-        return self._build_vps_config(vps)
+        return self._build_vps_config(token, vps)
 
-    def save_vps(self, form: dict[str, Any]) -> dict[str, Any]:
-        vps, is_new = self._hydrate_vps_from_form(form, allow_create=True)
-        self._apply_vps_setup_form(vps, form)
+    def save_vps(self, token: str, form: dict[str, Any]) -> dict[str, Any]:
+        vps, is_new = self._hydrate_vps_from_form(token, form, allow_create=True)
+        self._apply_vps_setup_form(token, vps, form)
         vps.save()
         self._set_vps_monitor_enabled(vps.hostname, enabled=True)
         if is_new:
             self.vpsmanager.vpss.append(vps)
             self.vpsmanager.vpss.sort(key=lambda item: item.hostname or "")
-        return self._build_vps_config(vps)
+        return self._build_vps_config(token, vps)
 
-    def save_vps_config(self, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
+    def save_vps_config(self, token: str, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
         vps = self._require_vps(hostname)
-        self._apply_vps_setup_form(vps, form)
+        self._apply_vps_setup_form(token, vps, form)
         vps.save()
         self._set_vps_monitor_enabled(vps.hostname, enabled=True)
-        return self._build_vps_config(vps)
+        return self._build_vps_config(token, vps)
 
-    def init_vps(self, form: dict[str, Any], *, debug: bool = False) -> dict[str, Any]:
-        vps, is_new = self._hydrate_vps_from_form(form, allow_create=True)
+    def init_vps(self, token: str, form: dict[str, Any], *, debug: bool = False) -> dict[str, Any]:
+        vps, is_new = self._hydrate_vps_from_form(token, form, allow_create=True)
+        self._apply_session_secrets_to_vps(token, vps)
         if not vps.has_init_parameters():
             raise ValueError("Init parameters are incomplete.")
         self._set_vps_monitor_enabled(vps.hostname, enabled=True)
@@ -1198,9 +1324,10 @@ class VPSManagerService:
             hosts.discard(hostname)
         save_ini("vps_monitor", "enabled_hosts", ",".join(sorted(hosts)))
 
-    def setup_vps(self, hostname: str, form: dict[str, Any], *, debug: bool = False) -> dict[str, Any]:
+    def setup_vps(self, token: str, hostname: str, form: dict[str, Any], *, debug: bool = False) -> dict[str, Any]:
         vps = self._require_vps(hostname)
-        self._apply_vps_setup_form(vps, form)
+        self._apply_vps_setup_form(token, vps, form)
+        self._apply_session_secrets_to_vps(token, vps)
         if not vps.has_setup_parameters():
             raise ValueError("Setup parameters are incomplete.")
         self.vpsmanager.setup_vps(vps, debug=debug)
@@ -1218,7 +1345,7 @@ class VPSManagerService:
             content = "\n".join(content.splitlines()[::-1])
         return {"filename": filename, "size_kb": int(size_kb), "content": content}
 
-    def _hydrate_vps_from_form(self, form: dict[str, Any], *, allow_create: bool) -> tuple[VPS, bool]:
+    def _hydrate_vps_from_form(self, token: str, form: dict[str, Any], *, allow_create: bool) -> tuple[VPS, bool]:
         hostname = str(form.get("hostname") or "").strip()
         if not hostname:
             raise ValueError("Hostname is required.")
@@ -1229,10 +1356,10 @@ class VPSManagerService:
                 raise ValueError(f"Unknown VPS: {hostname}")
             vps = VPS()
             vps.hostname = hostname
-        self._apply_vps_full_form(vps, form, is_new=is_new)
+        self._apply_vps_full_form(token, vps, form, is_new=is_new)
         return vps, is_new
 
-    def _apply_vps_full_form(self, vps: VPS, form: dict[str, Any], *, is_new: bool) -> None:
+    def _apply_vps_full_form(self, token: str, vps: VPS, form: dict[str, Any], *, is_new: bool) -> None:
         master_name = str(self._ensure_pbremote().name or "").strip()
         ip = str(form.get("ip") or "").strip()
         if ip and not _valid_ipv4(ip):
@@ -1255,17 +1382,13 @@ class VPSManagerService:
         vps.ip = ip or vps.ip
         vps.init_methode = init_methode
         vps.remove_user = _truthy(form.get("remove_user"))
-        vps.initial_root_pw = str(form.get("initial_root_pw") or "")
-        vps.root_pw = str(form.get("root_pw") or "")
-        vps.private_key_user = str(form.get("private_key_user") or "")
-        vps.private_key_file = str(form.get("private_key_file") or "")
-        vps.user_sudo = str(form.get("user_sudo") or "")
-        vps.user_sudo_pw = str(form.get("user_sudo_pw") or "")
         vps.user = str(form.get("user") or vps.user or "")
-        vps.user_pw = str(form.get("user_pw") or "")
+        self._store_session_secrets(token, hostname, form)
 
-    def _apply_vps_setup_form(self, vps: VPS, form: dict[str, Any]) -> None:
-        user_pw = str(form.get("user_pw") or vps.user_pw or "")
+    def _apply_vps_setup_form(self, token: str, vps: VPS, form: dict[str, Any]) -> None:
+        hostname = str(vps.hostname or "")
+        self._store_session_secrets(token, hostname, form)
+        user_pw = str(form.get("user_pw") or self._session_secret_value(token, hostname, "user_pw") or "")
         if user_pw and ("{{" in user_pw or "}}" in user_pw):
             raise ValueError("user_pw contains '{{' or '}}'.")
         swap = str(form.get("swap") or vps.swap or "0")
@@ -1276,7 +1399,7 @@ class VPSManagerService:
             for ip in [part.strip() for part in firewall_ips.split(",") if part.strip()]:
                 if not _valid_ipv4(ip):
                     raise ValueError("IP-Addresses to allow contains an invalid IPv4 address.")
-        vps.user_pw = user_pw
+        vps.user_pw = user_pw or None
         vps.swap = swap
         vps.bucket = str(form.get("bucket") or vps.bucket or "")
         vps.coinmarketcap_api_key = str(form.get("coinmarketcap_api_key") or vps.coinmarketcap_api_key or "")

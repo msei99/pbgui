@@ -22,9 +22,26 @@ from pbgui_purefunc import (
     streamlit_secrets_path,
 )
 
-
 router = APIRouter()
 _DEFAULT_PASSWORD = "PBGui$Bot!"
+
+
+def _clear_vps_manager_secrets(token: str) -> None:
+    try:
+        from api.vps_manager import _get_service as _get_vps_manager_service
+
+        _get_vps_manager_service().clear_session_secrets(token)
+    except Exception:
+        pass
+
+
+def _prune_vps_manager_secrets(valid_tokens: set[str]) -> None:
+    try:
+        from api.vps_manager import _get_service as _get_vps_manager_service
+
+        _get_vps_manager_service().prune_session_secrets(valid_tokens)
+    except Exception:
+        pass
 
 
 class SessionToken(BaseModel):
@@ -247,6 +264,7 @@ def validate_token(token: str) -> Optional[SessionToken]:
         if session.expires_at < time.time():
             # Delete expired token
             token_file.unlink(missing_ok=True)
+            _clear_vps_manager_secrets(token.strip())
             return None
         
         return session
@@ -265,6 +283,7 @@ def revoke_token(token: str) -> bool:
         True if token was found and deleted, False otherwise
     """
     token_file = get_tokens_dir() / f"{token.strip()}.json"
+    _clear_vps_manager_secrets(token.strip())
     if token_file.exists():
         token_file.unlink()
         return True
@@ -279,18 +298,25 @@ def cleanup_expired_tokens() -> int:
     """
     deleted = 0
     now = time.time()
-    
+    valid_tokens: set[str] = set()
+
     for token_file in get_tokens_dir().glob("*.json"):
         try:
             data = json.loads(token_file.read_text(encoding="utf-8"))
             if data.get("expires_at", 0) < now:
                 token_file.unlink()
+                _clear_vps_manager_secrets(token_file.stem)
                 deleted += 1
+            else:
+                valid_tokens.add(token_file.stem)
         except Exception:
             # Delete corrupt token files
             token_file.unlink()
+            _clear_vps_manager_secrets(token_file.stem)
             deleted += 1
-    
+
+    _prune_vps_manager_secrets(valid_tokens)
+
     return deleted
 
 

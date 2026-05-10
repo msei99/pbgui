@@ -313,6 +313,22 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Changed: VPS init `private_key_user` and `private_key_file` are now session-only and are no longer persisted in host JSON files.
+- Changed: documented explicit code guardrails in VPS Manager so password, sudo, and init private-key fields must never be persisted back into host JSON or normal detail payloads.
+- Fixed: FastAPI `VPS Manager` no longer persists VPS login or sudo passwords in `data/vpsmanager/hosts/*/*.json`; secrets now stay only in server memory per login session, expire after 15 minutes, are removed on logout/token cleanup, and can only be revealed on demand via the password eye within that TTL.
+- Fixed: VPS Manager no longer creates host `tmp/` runner directories during plain config saves, and each VPS Ansible run now recreates and removes its private `tmp/` workspace explicitly so stale runner artifacts with secrets do not linger after failed or abandoned runs.
+- Changed: cleaned stored VPS host JSON files under `data/vpsmanager/hosts/*/*.json` by removing persisted password and sudo credential fields (`user_pw`, `initial_root_pw`, `root_pw`, `user_sudo`, `user_sudo_pw`).
+- Fixed: VPS Manager `Host Logs` now only offers real files from the VPS, keeps `data/logs/*.log.old` in the selector, and limits PB7 archive plus `passivbot_err(.old)` entries to currently running bots so stale bot logs are no longer offered.
+- Fixed: opening VPS Manager `Host Logs` directly now triggers and keeps the VPS detail refresh in that view, so the shared log viewer hydrates with the real host log list, archived bot logs, and bot `error` / `error.old` entries without first opening the main VPS detail page.
+- Fixed: VPS Manager Host Logs now merges VPS detail log files with the live monitor state's `bot_logs` and discovered host logs, so archived PB7 bot logs are no longer filtered out when the viewer builds its service list.
+- Fixed: the shared `LogViewerPanel` now merges archived per-host bot log files from the VPS monitor state itself, so Host Logs can list historical `pb7/logs/*.log` files even before the richer VPS detail payload has refreshed.
+- Fixed: VPS Manager Host Logs now maps archived `software/pb7/logs/*.log` files back to their bot names more reliably, so each bot's historical PB7 log files appear in the selector instead of only the current live log alias.
+- Fixed: VPS Manager Host Logs now exposes the full per-host bot log history gathered for that VPS detail, not just the currently running bot log aliases, and the shared restart button is enabled there for selected bot logs.
+- Changed: bumped the shared `log_viewer_panel.js` cache-buster so browsers fetch the new Host Logs selector logic instead of reusing stale cached JavaScript.
+- Changed: VPS Host Logs now groups archived `pb7/logs/*.log` entries underneath their matching bot and shortens those labels to `YYYY-MM-DD HH:MM:SS`, so the selector no longer shows long raw archive filenames.
+- Fixed: archived VPS Host Log entries now use the correct remote `software/pb7/logs/...` path when opened, so selecting a dated history entry loads content instead of showing an empty pane.
+- Changed: when restarting a service or bot from the shared log viewer, the panel now clears immediately and re-subscribes shortly after, so the view starts fresh on the new log run instead of mixing old and new lines.
+- Fixed: restarting from a dated bot-history entry now switches the viewer back to the live bot log and re-subscribes from the end, so the panel no longer jumps back into the old archived file right after restart.
 - Changed: documented the VPS Manager `quick` vs `full` detail rule in code: quick pushes may be less fresh, but must reuse the last validated full-detail result for expensive status fields instead of overwriting them with weaker defaults.
 - Fixed: VPS Manager quick detail updates now also preserve the last full-check `SSH Ready` result and cached live package status for update/reboot indicators, so those cards no longer regress to weaker quick-only approximations between full refreshes.
 - Fixed: VPS Manager master detail now also gets a delayed full refresh after the initial quick WebSocket detail, so validated fields like CoinData status are no longer stuck on quick-only fallback values.

@@ -2016,7 +2016,7 @@
     </main>
   </div>
 
-  <script src='/app/js/log_viewer_panel.js?v=16'></script>
+  <script src='/app/js/log_viewer_panel.js?v=21'></script>
   <script>
     const TOKEN = "%%TOKEN%%";
     const API_BASE = "%%API_BASE%%";
@@ -2065,6 +2065,7 @@
       helpTopicIndex: -1,
       helpCache: {},
       pendingConfirm: null,
+      pendingSecretReveal: {},
       visibleFields: {},
       renderSignatures: {
         sidebarActions: '',
@@ -2607,12 +2608,43 @@
       const ui = ensureVpsUi(hostname, detail);
       const localValue = String((((ui || {}).form || {}).user_pw) || '');
       if (localValue.trim()) return localValue;
-      const detailValue = String((((detail || {}).config || {}).user_pw) || '');
-      if (detailValue.trim()) return detailValue;
       if (store.view === 'vps' && store.hostname === hostname && syncCurrentVpsSecretsFromDom()) {
         return String((((ui || {}).form || {}).user_pw) || '');
       }
       return '';
+    }
+
+    function getSecretStatus(hostname, fieldName) {
+      const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === hostname ? store.detail : null;
+      return (((detail || {}).config || {}).secret_status || {})[fieldName] || { stored: false, expires_at: 0, remaining_seconds: 0 };
+    }
+
+    function hasSessionSecret(hostname, fieldName) {
+      const status = getSecretStatus(hostname, fieldName);
+      return !!status.stored && Number(status.remaining_seconds || 0) > 0;
+    }
+
+    function formatRemainingSeconds(value) {
+      const seconds = Math.max(parseInt(value, 10) || 0, 0);
+      if (!seconds) return 'expired';
+      const minutes = Math.floor(seconds / 60);
+      const rest = seconds % 60;
+      return String(minutes).padStart(2, '0') + ':' + String(rest).padStart(2, '0');
+    }
+
+    function renderSecretHint(hostname, fieldName) {
+      const status = getSecretStatus(hostname, fieldName);
+      if (!status.stored) return '';
+      if (Number(status.remaining_seconds || 0) <= 0) {
+        return `<div class='field-sub error'>Session password expired</div>`;
+      }
+      return `<div class='field-sub'>Stored in this login session for ${esc(formatRemainingSeconds(status.remaining_seconds))}</div>`;
+    }
+
+    function requestSecretReveal(hostname, fieldName, visibilityKey) {
+      const key = String(hostname || '') + ':' + String(fieldName || '');
+      store.pendingSecretReveal[key] = String(visibilityKey || '');
+      send({ cmd: 'reveal_secret', hostname: hostname, field: fieldName });
     }
 
     function applySyncedVpsSecrets() {
@@ -2673,7 +2705,7 @@
         const syncedSecrets = syncCurrentVpsSecretsFromDom();
         const ui = ensureVpsUi(store.hostname, store.detail && store.detail.hostname === store.hostname ? store.detail : null);
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
-        const canRunRemote = !!String(getEffectiveVpsUserPw(store.hostname) || '').trim() || !!(detail && detail.status && detail.status.update_ready);
+        const canRunRemote = !!String(getEffectiveVpsUserPw(store.hostname) || '').trim() || hasSessionSecret(store.hostname, 'user_pw') || !!(detail && detail.status && detail.status.update_ready);
         if (syncedSecrets) {
           renderSidebarActions();
           if (detail) {
@@ -2684,14 +2716,14 @@
           btn.disabled = !canRunRemote;
         });
         const setupBtn = document.getElementById('vps-setup-btn');
-        if (setupBtn) setupBtn.disabled = !canSetupForm(ui.form || {});
+        if (setupBtn) setupBtn.disabled = !(canSetupForm(ui.form || {}) || (hasSessionSecret(store.hostname, 'user_pw') && ui.form.swap && ui.form.bucket && ui.form.coinmarketcap_api_key));
       }
       if (store.view === 'vps-setup' && store.hostname) {
         const ui = ensureVpsUi(store.hostname, store.detail && store.detail.hostname === store.hostname ? store.detail : null);
         const saveBtn = document.getElementById('vps-save-btn');
         if (saveBtn) saveBtn.disabled = !canSaveForm(ui.form || {}, ui.savedForm);
         const setupBtn = document.getElementById('vps-setup-btn');
-        if (setupBtn) setupBtn.disabled = !canSetupForm(ui.form || {});
+        if (setupBtn) setupBtn.disabled = !(canSetupForm(ui.form || {}) || (hasSessionSecret(store.hostname, 'user_pw') && ui.form.swap && ui.form.bucket && ui.form.coinmarketcap_api_key));
       }
     }
 
@@ -2885,14 +2917,24 @@
         'data/logs/VPSMonitor.log': 'VPSMonitor',
         'logs/VPSManagerApi.log': 'VPSManagerApi',
         'data/logs/VPSManagerApi.log': 'VPSManagerApi',
+        'logs/Exchange.log': 'data/logs/Exchange.log',
+        'data/logs/Exchange.log': 'data/logs/Exchange.log',
+        'logs/PBRun.log.old': 'data/logs/PBRun.log.old',
+        'data/logs/PBRun.log.old': 'data/logs/PBRun.log.old',
         'logs/sync.log': 'data/logs/sync.log',
-        'data/logs/sync.log': 'data/logs/sync.log'
+        'data/logs/sync.log': 'data/logs/sync.log',
+        'logs/sync.log.old': 'data/logs/sync.log.old',
+        'data/logs/sync.log.old': 'data/logs/sync.log.old',
+        'logs/tradfi_sync.log': 'data/logs/tradfi_sync.log',
+        'data/logs/tradfi_sync.log': 'data/logs/tradfi_sync.log'
       };
       if (serviceMap[normalized]) return serviceMap[normalized];
       const newBotMatch = normalized.match(/software\/pb7\/logs\/(.+)\.log$/);
       if (newBotMatch) return 'Bot:' + newBotMatch[1] + ':7';
       const oldBotMatch = normalized.match(/pb7\/logs\/(\d{8}_.+?)\.log$/);
-      if (oldBotMatch) return 'pb7/logs/' + oldBotMatch[1] + '.log';
+      if (oldBotMatch) return 'software/pb7/logs/' + oldBotMatch[1] + '.log';
+      const botErrMatch = normalized.match(/(?:data\/)?run_v7\/([^/]+)\/(passivbot_err\.log(?:\.old)?)$/);
+      if (botErrMatch) return 'data/run_v7/' + botErrMatch[1] + '/' + botErrMatch[2];
       const botMatch = normalized.match(/(?:data\/)?run_v7\/([^/]+)\/passivbot\.log$/);
       if (botMatch) return 'Bot:' + botMatch[1] + ':7';
       if (normalized.indexOf('logs/') === 0) return 'data/' + normalized;
@@ -2900,6 +2942,39 @@
         return 'data/' + normalized;
       }
       return normalized;
+    }
+
+    function getVpsLogViewerServices(hostname, vpState) {
+      const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === hostname ? store.detail : null;
+      const logfiles = detail && Array.isArray(detail.logfiles) ? detail.logfiles : [];
+      const state = vpState || store.state || {};
+      const botLogsByHost = (state.bot_logs || {});
+      const botLogs = botLogsByHost[hostname] || {};
+      const hostMeta = (state.host_meta || {})[hostname] || {};
+      const availableLogs = Array.isArray(hostMeta.available_logs) ? hostMeta.available_logs : [];
+      const services = [];
+      logfiles.forEach(function (filename) {
+        const normalized = normalizeVpsLogViewerTarget(filename);
+        if (normalized) services.push(normalized);
+      });
+      if (!logfiles.length) {
+        availableLogs.forEach(function (filename) {
+          const normalized = normalizeVpsLogViewerTarget(filename);
+          if (normalized) services.push(normalized);
+        });
+        Object.keys(botLogs).forEach(function (botName) {
+          const entries = Array.isArray(botLogs[botName]) ? botLogs[botName] : [];
+          entries.forEach(function (filename) {
+            const normalized = normalizeVpsLogViewerTarget(filename);
+            if (normalized) services.push(normalized);
+          });
+        });
+      }
+      if (detail && detail.log_preview && detail.log_preview.filename) {
+        const current = normalizeVpsLogViewerTarget(detail.log_preview.filename);
+        if (current && services.indexOf(current) >= 0) services.unshift(current);
+      }
+      return Array.from(new Set(services));
     }
 
     function syncVpsLogViewer() {
@@ -2931,7 +3006,10 @@
           defaultHost: detail.hostname,
           defaultService: requestedTarget,
           presets: 'trading',
-          showRestart: false
+          showRestart: true,
+          serviceListOverride: function (host, vpState) {
+            return getVpsLogViewerServices(host, vpState);
+          }
         });
         vpsLogViewer.open();
         vpsLogViewer.setHost(detail.hostname);
@@ -3016,22 +3094,26 @@
       return JSON.stringify(value == null ? '' : String(value));
     }
 
-    function renderVisibilityInput(type, value, oninput, title, visibilityKey) {
+    function renderVisibilityInput(type, value, oninput, title, visibilityKey, revealAction) {
       const isVisible = type === 'password' && isFieldVisible(visibilityKey);
       const inputType = isVisible ? 'text' : type;
       const buttonLabel = isVisible ? '&#128584;' : '&#128065;';
       return `
         <div class='pw-wrap'>
           <input type='${inputType}' value='${escAttr(value)}' oninput="${oninput}">
-          <button type='button' class='pw-eye-btn' onclick='togglePwVisible(this, ${js(visibilityKey || '')})' tabindex='-1' title='${escAttr(title || 'Show or hide value')}' aria-label='${escAttr(title || 'Show or hide value')}'>${buttonLabel}</button>
+          <button type='button' class='pw-eye-btn' onclick='togglePwVisible(this, ${js(visibilityKey || '')}, ${revealAction || 'null'})' tabindex='-1' title='${escAttr(title || 'Show or hide value')}' aria-label='${escAttr(title || 'Show or hide value')}'>${buttonLabel}</button>
         </div>`;
     }
 
-    function togglePwVisible(btn, visibilityKey) {
+    function togglePwVisible(btn, visibilityKey, revealAction) {
       const wrap = btn && btn.parentElement;
       const input = wrap ? wrap.querySelector('input') : null;
       if (!input) return;
       if (input.type === 'password') {
+        if (!String(input.value || '').trim() && typeof revealAction === 'function') {
+          revealAction(input, btn, visibilityKey);
+          return;
+        }
         input.type = 'text';
         btn.textContent = '\uD83D\uDE48';
         setFieldVisible(visibilityKey, true);
@@ -3556,7 +3638,7 @@
         if (store.view === 'master') {
           scheduleMasterDetailFetch();
         }
-        if (store.view === 'vps' && store.hostname) {
+        if (isVpsContextView() && store.hostname) {
           scheduleVpsDetailFetch(store.hostname);
         }
       };
@@ -3662,7 +3744,7 @@
       if (!hostname) return;
       store._detailTimer = setTimeout(function () {
         store._detailTimer = 0;
-        if (store.view !== 'vps' || store.hostname !== hostname) return;
+        if (!isVpsContextView() || store.hostname !== hostname) return;
         fetchVpsDetail(hostname);
       }, 3000);
     }
@@ -3680,6 +3762,35 @@
           ensureVpsUi(store.detail.hostname, store.detail);
         }
         renderUi();
+        return;
+      }
+      if (msg.type === 'secret_value') {
+        const data = msg.data || {};
+        const hostname = String(data.hostname || '');
+        const field = String(data.field || '');
+        if (!hostname || !field) return;
+        const revealKey = hostname + ':' + field;
+        const visibilityKey = String((store.pendingSecretReveal || {})[revealKey] || '');
+        delete store.pendingSecretReveal[revealKey];
+        const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
+        if (!data.stored || !String(data.value || '').trim()) {
+          toast('Stored session password expired. Please enter it again.', 'warning');
+          return;
+        }
+        ui.form[field] = String(data.value || '');
+        if (visibilityKey) {
+          setFieldVisible(visibilityKey, true);
+        }
+        if (store.detail && store.detail.kind === 'vps' && store.detail.hostname === hostname) {
+          const secretStatus = (((store.detail.config || {}).secret_status) || {});
+          secretStatus[field] = {
+            stored: !!data.stored,
+            expires_at: Number(data.expires_at || 0),
+            remaining_seconds: Number(data.remaining_seconds || 0)
+          };
+          store.detail.config = Object.assign({}, store.detail.config || {}, { secret_status: secretStatus });
+        }
+        renderUi({ forceSidebarActions: true, forceView: true });
         return;
       }
       if (msg.type === 'result') {
@@ -3848,7 +3959,7 @@
       if (view === 'master') {
         scheduleMasterDetailFetch();
       }
-      if (view === 'vps' && hostname) {
+      if (isVpsContextView() && hostname) {
         scheduleVpsDetailFetch(hostname);
       }
     }
@@ -3935,6 +4046,17 @@
       refreshLocalInteractiveState();
     }
 
+    function buildSecretAwareForm(hostname, form) {
+      const out = Object.assign({}, form || {});
+      ['user_pw', 'initial_root_pw', 'root_pw', 'user_sudo', 'user_sudo_pw', 'private_key_user', 'private_key_file'].forEach(function (fieldName) {
+        if (String(out[fieldName] || '').trim()) return;
+        if (hasSessionSecret(hostname, fieldName)) {
+          delete out[fieldName];
+        }
+      });
+      return out;
+    }
+
     function saveAddVps() {
       send({ cmd: 'save_vps', form: Object.assign({}, store.addForm) });
     }
@@ -3951,7 +4073,7 @@
 
     function saveVpsConfig(hostname) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
-      send({ cmd: 'save_vps_config', hostname: hostname, form: Object.assign({}, ui.form) });
+      send({ cmd: 'save_vps_config', hostname: hostname, form: buildSecretAwareForm(hostname, ui.form) });
     }
 
     function runMaster(command, commandText, extraVars) {
@@ -3988,7 +4110,7 @@
     function runVps(hostname, command, commandText, extraVars, saveConfigFirst) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
       if (saveConfigFirst !== false) {
-        send({ cmd: 'save_vps_config', hostname: hostname, form: Object.assign({}, ui.form) });
+        send({ cmd: 'save_vps_config', hostname: hostname, form: buildSecretAwareForm(hostname, ui.form) });
       }
       send({
         cmd: 'run_vps_command',
@@ -4078,11 +4200,15 @@
       store.view = 'vps-host-logs';
       sendContext();
       renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+      if (store.hostname) {
+        fetchVpsDetail(store.hostname);
+        scheduleVpsDetailFetch(store.hostname);
+      }
     }
 
     function setupVps(hostname) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
-      send({ cmd: 'setup_vps', hostname: hostname, form: Object.assign({}, ui.form), debug: !!ui.debug });
+      send({ cmd: 'setup_vps', hostname: hostname, form: buildSecretAwareForm(hostname, ui.form), debug: !!ui.debug });
     }
 
     function refreshVpsSettings(hostname) {
@@ -4111,7 +4237,7 @@
       const hasBase = !!(form && form.ip && form.user && form.user_pw);
       if (!hasBase) return false;
       if (form.init_methode === 'private_key') {
-        return !!(form.private_key_user && form.private_key_file);
+        return !!((form.private_key_user && form.private_key_file) || (hasSessionSecret(form.hostname, 'private_key_user') && hasSessionSecret(form.hostname, 'private_key_file')));
       }
       if (form.init_methode === 'password') {
         return !!(form.user_sudo && form.user_sudo_pw);
@@ -4595,7 +4721,7 @@
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
         const ui = ensureVpsUi(store.hostname, detail);
         const selectedHost = store.hostname;
-        const canRunRemote = !!String(getEffectiveVpsUserPw(selectedHost) || '').trim() || !!(detail && detail.status && detail.status.update_ready);
+        const canRunRemote = !!String(getEffectiveVpsUserPw(selectedHost) || '').trim() || hasSessionSecret(selectedHost, 'user_pw') || !!(detail && detail.status && detail.status.update_ready);
         const st = (detail && detail.status) || {};
         const pbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
         const bothBtnClass = (st.pbgui_update_available || st.pb7_update_available) ? 'sb-btn warning' : 'sb-btn ok';
@@ -5020,6 +5146,17 @@
       if (Object.prototype.hasOwnProperty.call(status, 'online')) {
         cards.push({ key:'online', label: 'Online', ok: !!status.online, sub: status.online ? 'Live telemetry received' : 'No current live telemetry' });
       }
+      if (store.detail && store.detail.kind === 'vps' && store.detail.hostname) {
+        const userPwStatus = getSecretStatus(store.detail.hostname, 'user_pw');
+        if (userPwStatus.stored) {
+          cards.push({
+            key:'session_user_pw',
+            label: 'Session Password',
+            ok: Number(userPwStatus.remaining_seconds || 0) > 0,
+            sub: Number(userPwStatus.remaining_seconds || 0) > 0 ? 'Stored for ' + formatRemainingSeconds(userPwStatus.remaining_seconds) : 'Expired - enter again'
+          });
+        }
+      }
       return `
         <div class='status-grid'>
           ${cards.map(function (card) {
@@ -5152,7 +5289,7 @@
       const ui = ensureVpsUi(detail.hostname, detail);
       const status = detail.status || {};
       const summary = status.summary_row || {};
-      const canSetup = canSetupForm(ui.form || {});
+      const canSetup = canSetupForm(ui.form || {}) || (hasSessionSecret(detail.hostname, 'user_pw') && ui.form.swap && ui.form.bucket && ui.form.coinmarketcap_api_key);
       const canSave = canSaveForm(ui.form || {}, ui.savedForm);
       const vpsUserPwVisibilityKey = 'vps:' + detail.hostname + ':user_pw';
       const vpsCoinmarketcapKeyVisibilityKey = 'vps:' + detail.hostname + ':coinmarketcap_api_key';
@@ -5182,7 +5319,8 @@
             <div class='field-grid'>
               <div class='field'>
                 <label>VPS User Password</label>
-                ${renderVisibilityInput('password', ui.form.user_pw || '', `setVpsField(${js(detail.hostname)}, 'user_pw', this.value)`, 'Show or hide VPS user password', vpsUserPwVisibilityKey)}
+                ${renderVisibilityInput('password', ui.form.user_pw || '', `setVpsField(${js(detail.hostname)}, 'user_pw', this.value)`, 'Show or hide VPS user password', vpsUserPwVisibilityKey, `function(input, btn, visibilityKey){ requestSecretReveal(${js(detail.hostname)}, 'user_pw', visibilityKey); }`)}
+                ${renderSecretHint(detail.hostname, 'user_pw')}
               </div>
               <div class='field'>
                 <label>Swap Size</label>
