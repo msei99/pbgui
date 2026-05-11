@@ -10,7 +10,7 @@ import configparser
 import sys
 import os
 from pathlib import Path, PurePath
-from time import sleep
+from time import monotonic, sleep
 import glob
 import json
 from datetime import datetime
@@ -439,6 +439,56 @@ class PBRemote():
             return hashlib.md5(file_contents).hexdigest()
         return None
 
+    def cleanup_legacy_alive_once(self):
+        pbgdir = Path.cwd()
+        marker = Path(f'{pbgdir}/data/pbremote_legacy_alive_cleanup.json')
+        if marker.exists():
+            return
+
+        _log('PBRemote', 'Run one-time cleanup for legacy alive files', level='INFO')
+        local_removed = 0
+        cleanup_failed = False
+
+        for pattern in (
+            f'{pbgdir}/data/cmd/alive_*.cmd*',
+            f'{pbgdir}/data/remote/cmd_*/alive_*.cmd*',
+        ):
+            for alive_path in glob.glob(pattern):
+                try:
+                    Path(alive_path).unlink(missing_ok=True)
+                    local_removed += 1
+                except Exception:
+                    cleanup_failed = True
+                    _log('PBRemote', f'Failed to remove legacy alive file: {alive_path}', level='ERROR', meta={'traceback': traceback.format_exc()})
+
+        cmd = ['rclone', 'delete', '-v', '--include', 'cmd_*/alive_*.cmd*', f'{self.bucket_dir}']
+        logfile = Path(f'{pbgdir}/data/logs/sync.log')
+        with open(logfile, 'ab') as log:
+            if platform.system() == 'Windows':
+                creationflags = subprocess.CREATE_NO_WINDOW
+                result = subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
+            else:
+                result = subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
+        if result.returncode != 0:
+            cleanup_failed = True
+            _log('PBRemote', 'Legacy alive bucket cleanup failed; will retry on next startup', level='ERROR')
+
+        if cleanup_failed:
+            return
+
+        tmp_path = marker.with_suffix('.tmp')
+        with tmp_path.open('w', encoding='utf-8') as f:
+            json.dump(
+                {
+                    'completed_at': datetime.now().isoformat(timespec='seconds'),
+                    'local_removed': local_removed,
+                },
+                f,
+                indent=4,
+            )
+        tmp_path.replace(marker)
+        _log('PBRemote', f'Finished one-time legacy alive cleanup (local_removed={local_removed})', level='INFO')
+
     def load_remote(self):
         """
         Load remote cmd directories and create one RemoteServer view per host.
@@ -681,20 +731,50 @@ def main():
         sys.exit(1)
     _log('PBRemote', f'Start: PBRemote {remote.bucket}', level='INFO')
     remote.save_pid()
+    remote.cleanup_legacy_alive_once()
+
+    def _apply_remote_updates():
+        remote.update_remote_servers()
+        for server in remote.remote_servers:
+            for s in remote.remote_servers:
+                s.load()
+            server.sync_v7_down(remote.role)
+            server.sync_api()
+
+    remote.sync_status_down()
+    _apply_remote_updates()
+
+    local_sync_interval = 5.0
+    remote_sync_interval = 15.0
+    api_check_interval = 15.0
+    next_local_sync = monotonic() + local_sync_interval
+    next_remote_sync = monotonic() + remote_sync_interval
+    next_api_check = monotonic() + api_check_interval
+
     while True:
         try:
-            remote.sync_v7_up()
-            remote.check_if_api_synced()
-            remote.sync_status_down()
-            remote.update_remote_servers()
-            for server in remote.remote_servers:
-                for s in remote.remote_servers:
-                    s.load()
-                server.sync_v7_down(remote.role)
-                server.sync_api()
+            now = monotonic()
+
+            if now >= next_local_sync:
+                remote.sync_v7_up()
+                next_local_sync = now + local_sync_interval
+
+            cmd_api_file = Path(f'{remote.cmd_path}/api-keys.json')
+            if cmd_api_file.exists() and now >= next_api_check:
+                remote.check_if_api_synced()
+                next_api_check = now + api_check_interval
+
+            if now >= next_remote_sync:
+                if not remote.is_sync_running():
+                    remote.sync_status_down()
+                    _apply_remote_updates()
+                next_remote_sync = now + remote_sync_interval
+
+            sleep(1)
         except Exception as e:
             _log('PBRemote', f'Something went wrong, but continue: {e}', level='ERROR')
             _log('PBRemote', 'PBRemote main loop traceback', level='DEBUG', meta={'traceback': traceback.format_exc()})
+            sleep(1)
 
 if __name__ == '__main__':
     main()

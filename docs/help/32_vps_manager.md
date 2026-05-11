@@ -118,6 +118,8 @@ The status cards above the setup grid are live operator hints:
 - Pending Linux updates and reboot-needed hints are refreshed from a live SSH package-status probe, so the cards no longer wait for the slower hourly `PBRemote` alive refresh.
 - The detail page also includes a one-row summary table plus a remote server resource snapshot similar to the old Streamlit view.
 
+`Cleanup VPS` also installs or refreshes two small daily cleanup cron jobs on the VPS: one user-level job for pip and rustup caches, plus one root-level job for `journalctl --vacuum-time=1d`. The periodic jobs run quietly and do not keep their own log history.
+
 Sensitive fields such as **VPS User Password** and **CoinMarketCap API Key** include an eye button so you can temporarily reveal the stored value while editing.
 
 The reveal state is preserved during live updates, so opening an eye button does not immediately flip back to hidden when fresh WebSocket data arrives.

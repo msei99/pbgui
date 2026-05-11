@@ -118,6 +118,8 @@ Die Status-Kacheln oberhalb des Setup-Rasters sind jetzt direkte Operator-Hinwei
 - Ausstehende Linux-Updates und Reboot-Hinweise werden zusätzlich über eine Live-SSH-Paketstatus-Abfrage aktualisiert, sodass die Karten nicht mehr auf den langsameren stündlichen `PBRemote`-Alive-Refresh warten müssen.
 - Die Detailseite enthält außerdem wieder eine einzeilige Zusammenfassungstabelle plus einen Remote-Server-Ressourcenblock ähnlich zur alten Streamlit-Ansicht.
 
+`Cleanup VPS` installiert oder aktualisiert jetzt zusätzlich zwei kleine tägliche Cleanup-Cronjobs auf der VPS: einen User-Job für Pip- und Rustup-Caches sowie einen Root-Job für `journalctl --vacuum-time=1d`. Die periodischen Jobs laufen still und behalten keine eigene Log-Historie.
+
 Sensible Felder wie **VPS User Password** und **CoinMarketCap API Key** haben einen Auge-Button, damit der gespeicherte Wert beim Bearbeiten kurz eingeblendet werden kann.
 
 Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöffnetes Auge nicht sofort wieder auf versteckt zurückspringt, wenn neue WebSocket-Daten ankommen.
