@@ -660,7 +660,7 @@ def get_pbremote_info(session: SessionToken = Depends(require_auth)) -> Dict[str
             "role": obj.role,
             "bucket": obj.bucket or "",
             "api_synced": len(unsynced_hosts) == 0,
-            "remote_servers": servers,
+            "servers": servers,
         }
     except Exception as e:
         _log(SERVICE, f"pbremote info failed: {e}", level="WARNING")

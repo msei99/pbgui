@@ -219,7 +219,7 @@ VPS configuration persisted at `data/vpsmanager/hosts/{hostname}/{hostname}.json
 1. `pbgui_func.py:385` — Legacy Streamlit sync button
 2. `navi/system_services.py:260` — Service monitoring UI red sync button
 3. `api/api_keys.py:1754` — `POST /sync/push` REST endpoint
-4. `navi/system_vps_manager.py:181` — VPS Manager UI red sync button
+4. `frontend/vps_manager.html` / FastAPI VPS Manager compatibility sync action during migration
 
 **No conflict with SSH sync** — old buttons trigger rclone, new "SSH API Sync" button triggers the new FileSyncWorker. Both can coexist during migration.
 

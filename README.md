@@ -315,6 +315,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - PBRemote: remove `alive_*.cmd` writing/reading and alive-related rclone filters so remote host monitoring no longer depends on the alive filesystem path.
 - PBRun: remove the last `class Monitor` / `self.monitor` residue and drop the remaining `monitor.json` copy-excludes now that runtime monitoring no longer uses that file.
 - API sync: switch FastAPI sync-status/reporting paths to SSH `host_meta.api_md5` instead of PBRemote/alive-derived state, while keeping PBRemote only for bucket/config duties.
+- Services UI: rename the remaining `/pbremote/info` host list payload from `remote_servers` to `servers` now that it comes from SSH/store data rather than PBRemote remote-server monitoring.
 - FastAPI Run: Fixed the standalone Run editor so loading, importing, or drafting a config with empty coin or tag filters no longer reuses stale multiselect state from the previous editor session.
 - FastAPI Optimize: Fixed editor state leaking coins, tags, limits, scoring, and suite edits across config switches when opening or saving under a different config name.
 - FastAPI Backtest: Reset editor-local multiselect, suite, and chip-editor state on config switches so stale GUI selections do not leak into other configs.
@@ -345,7 +346,8 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Changed: `VPS Monitor` metric hovers now use a persistent custom tooltip for CPU, RAM, Disk, and Swap instead of native `title` tooltips, so the hover text stays visible across the 1-second dashboard re-renders and also exposes the extra RAM/Disk/Swap details.
 - Changed: `PBMon` and the Streamlit `VPS Errors` banner now read a persisted SSH monitor snapshot written by `VPSMonitor`, so alerting no longer depends on `PBRemote.has_error()` and legacy `alive` / `monitor.json` payloads.
 - Fixed: legacy API-sync push actions now return explicit compatibility payloads when `FileSyncWorker` is not initialized, so the API Keys and Services pages no longer mis-handle that startup state as a hard transport failure or false successful push.
-- Changed: legacy API-sync status endpoints now derive remote sync state from the SSH/FileSync worker and FastAPI monitor connection data instead of `PBRemote.remote_servers` alive snapshots.
+- Changed: legacy API-sync status endpoints now derive remote sync state from the SSH/FileSync worker and FastAPI monitor metadata instead of `PBRemote.remote_servers` alive snapshots.
+- Docs: refresh stale VPS sync/migration docs to reflect the removed legacy VPS Manager page plus the removal of `monitor.json` and alive runtime files.
 - Changed: FastAPI `VPS Manager` master detail no longer reads local bot monitor rows via `PBRemote.load_monitor()` / `monitor.json`; it now builds the master monitor panel from a local collector path with live process stats plus cached PB7 log counters.
 - Fixed: Streamlit startup no longer crashes in `build_navigation()` after the legacy VPS Manager removal; the stale `pM4a` page reference was removed from the `SystemPages` list.
 - Changed: FastAPI `VPS Manager` no longer auto-discovers import candidates in the sidebar; host imports are now manual by hostname and require a matching local `/etc/hosts` entry before the Add VPS form is prefilled.

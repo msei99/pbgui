@@ -1990,7 +1990,8 @@ window.PBGUI_NAV_CONFIG = {
     var allInst = (instData && instData.instances) || {};
     var sysMap  = (instData && instData.system)    || {};
     var vmap = {'7': 'V7', '6': 'Multi', 's': 'Single'};
-    var sortedServers = data.remote_servers.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
+    var servers = Array.isArray(data.servers) ? data.servers : [];
+    var sortedServers = servers.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
     var totalInst = 0;
     sortedServers.forEach(function (s) { totalInst += (allInst[s.name] || []).length; });
 
@@ -2025,14 +2026,14 @@ window.PBGUI_NAV_CONFIG = {
 
     html += '<hr class="form-divider">';
     html += '<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">';
-    html += '<span class="form-section-title" style="margin:0;">Remote Servers (' + data.remote_servers.length + ') \u2014 ' + totalInst + ' instances</span>';
+    html += '<span class="form-section-title" style="margin:0;">Servers (' + servers.length + ') \u2014 ' + totalInst + ' instances</span>';
     html += '<button class="form-btn" onclick="pbriExpandAll(true)">Expand all</button>';
     html += '<button class="form-btn" onclick="pbriExpandAll(false)">Collapse all</button>';
     html += '<button class="form-btn" id="pbri-sys-btn" onclick="pbriToggleSys(this)">Hide metrics</button>';
     html += '</div>';
 
-    if (!data.remote_servers.length) {
-      html += '<div style="color:#4a5568;font-size:var(--fs-sm);">No remote servers found.</div>';
+    if (!servers.length) {
+      html += '<div style="color:#4a5568;font-size:var(--fs-sm);">No servers found.</div>';
     } else {
       html += '<div style="overflow:auto;max-height:70vh;" id="pbri-table-wrap"><table class="fs-table" style="border-collapse:collapse;">';
       html += '<thead><tr>' +

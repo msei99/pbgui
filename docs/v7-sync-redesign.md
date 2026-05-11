@@ -23,15 +23,15 @@ Der separate "Activate"-Button im GUI für v7 wird entfernt — Save schreibt un
   - `config.json` — Haupt-Config (immer vorhanden)
   - `{SYMBOL}.json` — Per-Coin Configs (z.B. `ALGOUSDT.json`, `DOGEUSDT.json`, `XRP.json`)
 - **Nicht gesynct** werden runtime/lokale Dateien:
-  - `ignored_coins.json`, `approved_coins.json`, `config_run.json`, `monitor.json`
+  - `ignored_coins.json`, `approved_coins.json`, `config_run.json`
 - Nur von Mastern geschrieben
 - VPS bekommt sie per SSH (sofort) oder PBRemote/rclone (verzögert)
 - `pbgui.version` für Config-Versionierung (wie bisher)
 
 ## Running-State
 
-- Wie bisher über `alive_*.cmd.gz`
-- Kein separates Runtime-File nötig
+- Läuft über `status_v7.json` plus SSH/VPS monitor state
+- Kein separates Alive- oder Monitor-File nötig
 - `running_version.txt` pro Instanz bleibt für inotify-Feedback
 
 ---
@@ -150,7 +150,7 @@ Master:
 
 ## Wichtige Regeln
 
-1. **config.json + Coin-Configs** ({SYMBOL}.json) werden gesynct — NICHT: ignored_coins.json, approved_coins.json, config_run.json, monitor.json
+1. **config.json + Coin-Configs** ({SYMBOL}.json) werden gesynct — NICHT: ignored_coins.json, approved_coins.json, config_run.json
 2. **v6 Multi/Single bleibt komplett unverändert** — activate_*.cmd etc. bleibt für v6
 3. **PBRun Polling** (nicht inotify) zur Vermeidung neuer Komplexität
 4. **Kein Activate-Button** mehr für v7 im GUI — Save triggert alles
