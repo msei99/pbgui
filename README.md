@@ -312,6 +312,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.78 (unreleased)
+- PBRemote: remove the last unused `has_error()` residue so PBRemote and `starter.py` no longer carry any dead `async_monitor` / master-only `asyncssh` dependency path on VPS installations.
 - PBRemote: replace the old busy-loop with a small interval scheduler so startup still performs one immediate remote refresh, local status uploads stay on a short cadence, and the remote fallback pull now runs only every 15 seconds instead of continuously hammering rclone.
 - PBRemote: run a one-time startup cleanup for legacy `alive_*.cmd*` leftovers in local `data/cmd`, mirrored `data/remote/cmd_*`, and matching bucket files, then persist a marker under `data/` so the migration does not repeat after success.
 - VPS cleanup: make `Cleanup VPS` the only path that installs or refreshes the daily cleanup jobs, split the periodic maintenance into a quiet user-space cache cleanup plus a separate root `journalctl --vacuum-time=1d` cron, and keep alive-file cleanup out of the recurring jobs.

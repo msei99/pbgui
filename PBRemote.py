@@ -20,9 +20,7 @@ from Status import InstancesStatus
 import shutil
 import hashlib
 import traceback
-from MonitorConfig import MonitorConfig
 from logging_helpers import human_log as _log
-from master.async_monitor import collect_alerts_from_snapshot, load_alert_snapshot
 
 class RemoteServer():
     def __init__(self, path: str):
@@ -323,9 +321,6 @@ class PBRemote():
     def remove(self, remote_servers: RemoteServer):
         if remote_servers:
             self.remote_servers.remove(remote_servers)
-
-    def has_error(self):
-        return collect_alerts_from_snapshot(load_alert_snapshot(), MonitorConfig())
 
     def is_sync_running(self):
         if self.sync_pid():
