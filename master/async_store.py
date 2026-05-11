@@ -124,7 +124,7 @@ class VPSStore:
         """Merge live CPU/RSS/Swap from the metrics stream into existing instance entries.
 
         Only overwrites cpu (``c``), 60s cpu, rss (``m[0]``) and swap (``m[9]``);
-        preserves all other fields from the monitor.json collection.
+        preserves the log-derived counters already collected into the instance snapshot.
         """
         existing = self.instances.get(hostname, [])
         if not existing:

@@ -10,11 +10,11 @@ import configparser
 import shlex
 import sys
 from pathlib import Path, PurePath
-from time import sleep, mktime
+from time import sleep
 import glob
 import json
 import hjson
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 import platform
 from shutil import copy, copytree, rmtree, ignore_patterns
 import os
@@ -25,12 +25,6 @@ from Status import InstanceStatus, InstancesStatus
 from PBCoinData import CoinData
 from logging_helpers import human_log as _log
 import re
-
-
-_PB7_FILL_SUMMARY_RE = re.compile(
-    r"\[fill\]\s+(?P<count>\d+)\s+fills,\s+pnl=(?P<pnl>[+-]?(?:\d+\.?\d*|\d*\.\d+))\s+\w+"
-)
-_PB7_FILL_PNL_RE = re.compile(r"\bpnl=(?P<pnl>[+-]?(?:\d+\.?\d*|\d*\.\d+))\b")
 
 
 def _arg_matches_path(arg: str, expected_path: Path) -> bool:
@@ -226,239 +220,9 @@ def _ensure_dynamic_ignore_ready(dynamic_ignore: "DynamicIgnore") -> bool:
 
 class Monitor():
     def __init__(self):
-        self.path = None
-        self.user = None
-        self.version = None
-        self.pb_version = None
-        self.log_lp = None
         self.start_time = 0
         self.memory = 0
         self.cpu = 0
-        self.log_error = None
-        self.log_info = None
-        self.log_traceback = None
-        self.log_watch_ts = 0
-        self.error_time = 0
-        self.errors_today = 0
-        self.errors_yesterday = 0
-        self.info_time = 0
-        self.infos_today = 0
-        self.infos_yesterday = 0
-        self.traceback_time = 0
-        self.tracebacks_today = 0
-        self.tracebacks_yesterday = 0
-        self.pnl_today = 0
-        self.pnl_yesterday = 0
-        self.pnl_counter_today = 0
-        self.pnl_counter_yesterday = 0
-        self.init_found = False
-
-    @staticmethod
-    def _parse_log_ts(value):
-        raw = str(value or "").strip()
-        if not raw:
-            return None
-        try:
-            if raw.endswith("Z"):
-                raw = raw[:-1] + "+00:00"
-            return int(datetime.fromisoformat(raw).timestamp())
-        except ValueError:
-            return None
-
-    def _load_recent_log_backfill(self, yesterday_ts):
-        lines = []
-        for log_path in (
-            Path(f'{self.path}/passivbot.log.old'),
-            Path(f'{self.path}/passivbot.log'),
-        ):
-            if not log_path.exists():
-                continue
-            try:
-                if int(log_path.stat().st_mtime) < yesterday_ts:
-                    continue
-                with open(log_path, "r") as f:
-                    lines.extend(f.read().splitlines())
-            except OSError:
-                continue
-        return lines
-
-    def watch_log(self):
-        yesterday = True
-        logfile = Path(f'{self.path}/passivbot.log')
-        if logfile.exists():
-            today_ts = int(mktime(date.today().timetuple()))
-            yesterday_ts = today_ts - 86400
-            if self.log_watch_ts != 0 and self.log_watch_ts < today_ts:
-                self.log_error = None
-                self.log_info = None
-                self.log_traceback = None
-                self.errors_yesterday = self.errors_today
-                self.errors_today = 0
-                self.infos_yesterday = self.infos_today
-                self.infos_today = 0
-                self.tracebacks_yesterday = self.tracebacks_today
-                self.tracebacks_today = 0
-                self.pnl_yesterday = self.pnl_today
-                self.pnl_today = 0
-                self.pnl_counter_yesterday = self.pnl_counter_today
-                self.pnl_counter_today = 0
-            tb_found = False
-            if self.log_lp is None:
-                new_content = self._load_recent_log_backfill(yesterday_ts)
-                self.log_lp = logfile.stat().st_size
-            else:
-                current_position = logfile.stat().st_size
-                if self.log_lp > current_position:
-                    self.log_lp = 0
-                with open(logfile, "r") as f:
-                    f.seek(self.log_lp)
-                    new_content = f.read().splitlines()
-                self.log_lp = current_position
-            for line in new_content:
-                elements = line.split()
-                if len(elements) > 1:
-                    ts = self._parse_log_ts(elements[0])
-                    if ts is not None:
-                        if ts < yesterday_ts:
-                            continue
-                        yesterday = ts < today_ts
-                if tb_found:
-                    if not "ERROR" in line and not "INFO" in line and not "Traceback" in line:
-                        self.log_traceback.append(line)
-                    else:
-                        tb_found = False
-                        self.tracebacks_today += 1
-                if "ERROR" in line:
-                    if yesterday:
-                        self.errors_yesterday += 1
-                    else:
-                        self.log_error = line
-                        self.errors_today += 1
-                elif "INFO" in line:                 
-                    if yesterday:
-                        self.infos_yesterday += 1
-                    else:
-                        self.log_info = line
-                        self.infos_today += 1
-                    # Skip PNLs after restart bot
-                    # Legacy older bot output: "initiating pnl" / "new pnl"
-                    # PB7 v7.7+: FillEventsManager + boot banner
-                    if (
-                        "initiating pnl" in line
-                        or "[fills] initializing FillEventsManager" in line
-                        or "[boot] starting bot" in line
-                    ):
-                        self.init_found = True
-                    if (
-                        "[boot] READY - Bot initialization complete" in line
-                        or "starting execution loop" in line
-                        or "done initiating bot" in line
-                        or "watching" in line
-                        or "[fills] initialized" in line
-                    ):
-                        self.init_found = False
-                    if self.init_found:
-                        continue
-
-                    # PB7 v7.7+: realized PnL is logged via fill events
-                    # Example per fill: "[fill] ... pnl=+5.5 USDT"
-                    # Example summary: "[fill] 12 fills, pnl=-1.23 USDT"
-                    if "[fill]" in line:
-                        match_summary = _PB7_FILL_SUMMARY_RE.search(line)
-                        if match_summary:
-                            fill_count = int(match_summary.group("count"))
-                            pnl_value = float(match_summary.group("pnl"))
-                            if yesterday:
-                                self.pnl_yesterday += pnl_value
-                                self.pnl_counter_yesterday += fill_count
-                            else:
-                                self.pnl_today += pnl_value
-                                self.pnl_counter_today += fill_count
-                        else:
-                            self_pnl_match = _PB7_FILL_PNL_RE.search(line)
-                            if self_pnl_match:
-                                pnl_value = float(self_pnl_match.group("pnl"))
-                            else:
-                                pnl_value = 0.0
-                            if yesterday:
-                                self.pnl_yesterday += pnl_value
-                                self.pnl_counter_yesterday += 1
-                            else:
-                                self.pnl_today += pnl_value
-                                self.pnl_counter_today += 1
-                        continue
-
-                    if "new pnl" in line:
-                        if len(elements) == 7:
-                            if yesterday:
-                                self.pnl_yesterday += float(elements[5])
-                                self.pnl_counter_yesterday += int(elements[2])
-                            else:
-                                self.pnl_today += float(elements[5])
-                                self.pnl_counter_today += int(elements[2])
-                    if "balance" in line:
-                        if len(elements) == 6:
-                            if elements[4] == "->":
-                                if yesterday:
-                                    self.pnl_yesterday += (float(elements[5]) - float(elements[3]))
-                                    self.pnl_counter_yesterday += 1
-                                else:
-                                    self.pnl_today += (float(elements[5]) - float(elements[3]))
-                                    self.pnl_counter_today += 1
-                elif "Traceback" in line:
-                    if yesterday:
-                        self.tracebacks_yesterday += 1
-                    else:
-                        self.log_traceback = []
-                        self.log_traceback.append(line)
-                        tb_found = True
-            self.log_watch_ts = int(datetime.now().timestamp())
-            self.save_monitor()
-
-    def save_monitor(self):
-        monitor_file = Path(f'{self.path}/monitor.json')
-        monitor = ({
-            # u = user
-            # p = pb_version
-            # v = version
-            # st = start_time
-            # m = memory
-            # c = cpu
-            # i = info
-            # it = infos_today
-            # iy = infos_yesterday
-            # e = error
-            # et = errors_today
-            # ey = errors_yesterday
-            # t = traceback
-            # tt = tracebacks_today
-            # ty = tracebacks_yesterday
-            # pt = pnl_today
-            # py = pnl_yesterday
-            # ct = pnl_counter_today
-            # cy = pnl_counter_yesterday
-            "u": self.user,
-            "p": self.pb_version,
-            "v": self.version,
-            "st": self.start_time,
-            "m": self.memory,
-            "c": self.cpu,
-            "i": self.log_info,
-            "it": self.infos_today,
-            "iy": self.infos_yesterday,
-            "e": self.log_error,
-            "et": self.errors_today,
-            "ey": self.errors_yesterday,
-            "t": self.log_traceback,
-            "tt": self.tracebacks_today,
-            "ty": self.tracebacks_yesterday,
-            "pt": self.pnl_today,
-            "py": self.pnl_yesterday,
-            "ct": self.pnl_counter_today,
-            "cy": self.pnl_counter_yesterday
-            })
-        _atomic_write_json(monitor_file, monitor)
-
 class DynamicIgnore():
     def __init__(self):
         self.path = None
@@ -761,16 +525,12 @@ class RunV7():
         """Load version for PB v7."""
         file = Path(f'{self.path}/config.json')
         file_run = Path(f'{self.path}/config_run.json')
-        self.monitor.path = self.path
-        self.monitor.user = self.user
-        self.monitor.pb_version = "7"
         if file.exists():
             try:
                 with open(file, "r", encoding='utf-8') as f:
                     v7_config = f.read()
                 self._v7_config = json.loads(v7_config)
                 self.version = self._v7_config["pbgui"]["version"]
-                self.monitor.version = self.version
                 if self.name == self._v7_config["pbgui"]["enabled_on"]:
                     # Fix path in coin_flags
                     if "coin_flags" in self._v7_config["live"]:
@@ -1763,7 +1523,6 @@ def main():
                 for run_v7 in run.run_v7:
                     run_v7.watch()
                     run_v7.watch_dynamic()
-                    run_v7.monitor.watch_log()
             if count%2 == 0:
                 if run.pb7dir:
                     for run_v7 in run.run_v7:

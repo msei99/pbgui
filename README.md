@@ -312,6 +312,8 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.78 (unreleased)
+- VPS monitor cleanup: refresh stale `monitor.json` wording in the async store while keeping compatibility excludes that prevent old leftover files from being copied forward.
+- PBRun: remove the remaining legacy `monitor.json` writer path and keep only the in-memory process stats still needed for local low-memory bot restarts.
 - PBRemote/PBMon: stop reading and shipping legacy `monitor.json` bot payloads through `alive_*.cmd`; alerting now stays on the persisted VPS monitor snapshot path.
 
 - Added: The v7 optimize editor now exposes per-side `hsl_enabled` runtime overrides next to the HSL no-restart controls and automatically fixes HSL bounds when that side is disabled, avoiding wasted optimizer search space.
