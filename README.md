@@ -312,6 +312,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.78 (unreleased)
+- PBRemote/PBMon: stop reading and shipping legacy `monitor.json` bot payloads through `alive_*.cmd`; alerting now stays on the persisted VPS monitor snapshot path.
 
 - Added: The v7 optimize editor now exposes per-side `hsl_enabled` runtime overrides next to the HSL no-restart controls and automatically fixes HSL bounds when that side is disabled, avoiding wasted optimizer search space.
 - Fixed: PB7 optimize `Results` now also lists pareto-only result directories when `write_all_results` leaves out `all_results.bin`, so completed runs with just `pareto/*.json` no longer disappear from the web UI.

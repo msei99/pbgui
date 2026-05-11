@@ -1,10 +1,10 @@
 import streamlit as st
-from pbgui_purefunc import load_ini, save_ini
 from datetime import datetime
 import pandas as pd
 from time import sleep
 from pbgui_func import error_popup, info_popup
 from MonitorConfig import MonitorConfig
+from master.async_monitor import load_alert_snapshot
 
 class Monitor():
     def __init__(self):
@@ -93,9 +93,9 @@ class Monitor():
             # d_multi = []
             # d_single = []
             self.logfiles = []
+            instances_by_server = (load_alert_snapshot().get('instances') or {})
             for server in self.servers:
-                if server.monitor:
-                    for monitor in server.monitor:
+                for monitor in instances_by_server.get(server.name) or []:
                         version = server.pb7_version
                         if len(monitor["m"]) == 10:
                             swap_value = monitor["m"][9]

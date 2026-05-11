@@ -15,7 +15,7 @@ import glob
 import json
 from datetime import datetime
 import platform
-from PBRun import PBRun, RunV7
+from PBRun import PBRun
 from Status import InstancesStatus
 import shutil
 import hashlib
@@ -23,6 +23,7 @@ import traceback
 import gzip
 from MonitorConfig import MonitorConfig
 from logging_helpers import human_log as _log
+from master.async_monitor import collect_alerts_from_snapshot, load_alert_snapshot
 
 class RemoteServer():
     def __init__(self, path: str):
@@ -48,7 +49,6 @@ class RemoteServer():
         self._disk = []
         self._cpu = 0
         self._boot = 0
-        self._monitor = []
         self._upgrades = 0
         self._reboot = False
         self._cmc_credits = 0
@@ -93,9 +93,6 @@ class RemoteServer():
     def cpu(self): return self._cpu
     @property
     def boot(self): return self._boot
-    @property
-    def monitor(self): return self._monitor
-    @property
     def upgrades(self): return self._upgrades
     @property
     def reboot(self): return self._reboot
@@ -211,8 +208,6 @@ class RemoteServer():
                         self._cpu = cfg["cpu"]
                     if "boot" in cfg:
                         self._boot = cfg["boot"]
-                    if "monitor" in cfg:
-                        self._monitor = cfg["monitor"]
                     if "upgrades" in cfg:
                         self._upgrades = cfg["upgrades"]
                     if "reboot" in cfg:
@@ -428,9 +423,6 @@ class PBRemote():
     def boot(self):
         return psutil.boot_time()
     @property
-    def monitor(self):
-        return self.load_monitor()
-    @property
     def pb7_version(self):
         return self.local_run.pb7_version
 
@@ -477,120 +469,7 @@ class PBRemote():
             self.remote_servers.remove(remote_servers)
 
     def has_error(self):
-        # Load MonitorConfig
-        monitor_config = MonitorConfig()
-        # Check if servers has errors or tracebacks
-        errors = []
-        for server in self.remote_servers:
-            if not server.is_online():
-                error = ({
-                    "server": server.name,
-                    "name": "offline",
-                    "mem": 0,
-                    "cpu": 0,
-                    "error": 0,
-                    "traceback": 0
-                })
-                errors.append(error)
-            else:
-                if (
-                    int(server.mem[1] / 1024 / 1024) <= monitor_config.mem_error_server or
-                    int(server.swap[2] / 1024 / 1024) <= monitor_config.swap_error_server or
-                    int(server.disk[2] / 1024 / 1024) <= monitor_config.disk_error_server or
-                    server.cpu >= monitor_config.cpu_error_server
-                ):
-                    if int(server.mem[1] / 1024 / 1024) <= monitor_config.mem_error_server:
-                        color_mem = "red"
-                    elif int(server.mem[1] / 1024 / 1024) <= monitor_config.mem_warning_server:
-                        color_mem = "orange"
-                    else:
-                        color_mem = "green"
-                    if int(server.swap[2] / 1024 / 1024) <= monitor_config.swap_error_server:
-                        color_swap = "red"
-                    elif int(server.swap[2] / 1024 / 1024) <= monitor_config.swap_warning_server:
-                        color_swap = "orange"
-                    else:
-                        color_swap = "green"
-                    if int(server.disk[2] / 1024 / 1024) <= monitor_config.disk_error_server:
-                        color_disk = "red"
-                    elif int(server.disk[2] / 1024 / 1024) <= monitor_config.disk_warning_server:
-                        color_disk = "orange"
-                    else:
-                        color_disk = "green"
-                    if server.cpu >= monitor_config.cpu_error_server:
-                        color_cpu = "red"
-                    elif server.cpu >= monitor_config.cpu_warning_server:
-                        color_cpu = "orange"
-                    else:
-                        color_cpu = "green"
-                    error = ({
-                        "server": server.name,
-                        "name": "system",
-                        "mem": f':{color_mem}[{int(server.mem[1] / 1024 / 1024)}]',
-                        "cpu": f':{color_cpu}[{server.cpu}]',
-                        "swap": f':{color_swap}[{int(server.swap[2] / 1024 / 1024)}]',
-                        "disk": f':{color_disk}[{int(server.disk[2] / 1024 / 1024)}]'
-                    })
-                    errors.append(error)
-            if server.monitor:
-                for monitor in server.monitor:
-                    # Determine swap value, fix if vps not reporting swap
-                    if len(monitor["m"]) == 10:
-                        if monitor["m"][9] > 0:
-                            swap_value = round(monitor["m"][9]/1024/1024, 1)
-                        else:
-                            swap_value = 0
-                    else:
-                        swap_value = 0
-                    if monitor["p"] == "7":
-                        if (
-                            monitor["m"][0]/1024/1024 > monitor_config.mem_error_v7 or
-                            swap_value > monitor_config.swap_error_v7 or
-                            monitor["c"] > monitor_config.cpu_error_v7 or
-                            monitor["et"] > monitor_config.error_error_v7 or
-                            monitor["tt"] > monitor_config.traceback_error_v7
-                        ):
-                            if monitor["m"][0]/1024/1024 > monitor_config.mem_error_v7:
-                                color_mem = "red"
-                            elif monitor["m"][0]/1024/1024 > monitor_config.mem_warning_v7:
-                                color_mem = "orange"
-                            else:
-                                color_mem = "green"
-                            if swap_value > monitor_config.swap_error_v7:
-                                color_swap = "red"
-                            elif swap_value > monitor_config.swap_warning_v7:
-                                color_swap = "orange"
-                            else:
-                                color_swap = "green"
-                            if monitor["c"] > monitor_config.cpu_error_v7:
-                                color_cpu = "red"
-                            elif monitor["c"] > monitor_config.cpu_warning_v7:
-                                color_cpu = "orange"
-                            else:
-                                color_cpu = "green"
-                            if monitor["et"] > monitor_config.error_error_v7:
-                                color_error = "red"
-                            elif monitor["et"] > monitor_config.error_warning_v7:
-                                color_error = "orange"
-                            else:
-                                color_error = "green"
-                            if monitor["tt"] > monitor_config.traceback_error_v7:
-                                color_traceback = "red"
-                            elif monitor["tt"] > monitor_config.traceback_warning_v7:
-                                color_traceback = "orange"
-                            else:
-                                color_traceback = "green"
-                            error = ({
-                                "server": f':blue[{server.name}]',
-                                "name": f':blue[{monitor["u"]}]',
-                                "mem": f':{color_mem}[{round(monitor["m"][0]/1024/1024,1)}]',
-                                "swap": f':{color_swap}[{swap_value}]',
-                                "cpu": f':{color_cpu}[{monitor["c"]}]',
-                                "error": f':{color_error}[{monitor["et"]}]',
-                                "traceback": f':{color_traceback}[{monitor["tt"]}]'
-                            })
-                            errors.append(error)
-        return errors
+        return collect_alerts_from_snapshot(load_alert_snapshot(), MonitorConfig())
 
     def is_sync_running(self):
         if self.sync_pid():
@@ -695,41 +574,6 @@ class PBRemote():
             api_file.unlink(missing_ok=True)
         return True
 
-    def load_monitor(self):
-        monitor = []
-        pbgdir = Path.cwd()
-        path_v7 = Path(f'{pbgdir}/data/run_v7')
-        for config_file in sorted(path_v7.glob('*/config.json')):
-            try:
-                with open(config_file, "r", encoding='utf-8') as f:
-                    config = json.load(f)
-            except Exception as e:
-                _log('PBRemote', f'load_monitor: skipping corrupt config {config_file}: {e}', level='WARNING')
-                continue
-
-            if config.get('pbgui', {}).get('enabled_on') != self.name:
-                continue
-
-            run_v7 = RunV7()
-            run_v7.path = str(config_file.parent)
-            run_v7.user = config_file.parent.name
-            run_v7.name = self.name
-            run_v7.pb7dir = self.local_run.pb7dir
-            run_v7.pb7venv = self.local_run.pb7venv
-            run_v7.pbgdir = str(pbgdir)
-
-            if not run_v7.load() or not run_v7.is_running():
-                continue
-
-            monitor_file = config_file.parent / 'monitor.json'
-            if monitor_file.exists():
-                try:
-                    with open(monitor_file, "r", encoding='utf-8') as f:
-                        monitor.append(json.load(f))
-                except Exception as e:
-                    _log('PBRemote', f'load_monitor: skipping corrupt {monitor_file}: {e}', level='WARNING')
-        return monitor
-
     def alive(self):
         """
         Saves system informations like the name, memory, swaps, disk space and cpu usage to an alive file that is then synchronised with rclone from local to the remote storage.
@@ -753,7 +597,6 @@ class PBRemote():
         # self.disk = psutil.disk_usage('/')
         # self.cpu = psutil.cpu_percent()
         # self.boot = psutil.boot_time()
-        # self.monitor = self.load_monitor()
         cfg = ({
             "timestamp": timestamp,
             "startts": self.startts,
@@ -764,7 +607,6 @@ class PBRemote():
             "disk": self.disk,
             "cpu": self.cpu,
             "boot": self.boot,
-            "monitor": self.monitor,
             "upgrades": self.local_run.upgrades,
             "reboot": self.local_run.reboot,
             "role": self.role,
