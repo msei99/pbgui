@@ -77,16 +77,16 @@ def _atomic_write_config(path: Path, parser: configparser.ConfigParser):
         raise
 
 
-def _attach_process_stats(process: psutil.Process, monitor: "Monitor"):
-    monitor.start_time = process.create_time()
+def _attach_process_stats(process: psutil.Process, run_v7: "RunV7"):
+    run_v7.start_time = process.create_time()
     try:
-        monitor.memory = process.memory_full_info()
+        run_v7.memory = process.memory_full_info()
     except (psutil.NoSuchProcess, psutil.AccessDenied):
-        monitor.memory = None
+        run_v7.memory = None
     try:
-        monitor.cpu = process.cpu_percent()
+        run_v7.cpu = process.cpu_percent()
     except (psutil.NoSuchProcess, psutil.AccessDenied):
-        monitor.cpu = None
+        run_v7.cpu = None
 
 
 def _ts_wrap_stderr(stderr_pipe, filepath: str):
@@ -218,11 +218,6 @@ def _ensure_dynamic_ignore_ready(dynamic_ignore: "DynamicIgnore") -> bool:
         return lists_ready()
     return False
 
-class Monitor():
-    def __init__(self):
-        self.start_time = 0
-        self.memory = 0
-        self.cpu = 0
 class DynamicIgnore():
     def __init__(self):
         self.path = None
@@ -403,7 +398,6 @@ class DynamicIgnore():
 
 class RunV7():
     def __init__(self):
-        self.monitor = Monitor()
         self.user = None
         self.path = None
         self._v7_config = {}
@@ -414,6 +408,9 @@ class RunV7():
         self.pbgdir = None
         self.dynamic_ignore = None
         self._dynamic_wait_log_ts = 0
+        self.start_time = 0
+        self.memory = None
+        self.cpu = None
 
     def watch(self):
         if self.is_running():
@@ -451,7 +448,7 @@ class RunV7():
                 any("main.py" in sub for sub in cmdline)
                 and any(_arg_matches_path(sub, expected_config) for sub in cmdline)
             ):
-                _attach_process_stats(process, self.monitor)
+                _attach_process_stats(process, self)
                 return process
 
     def stop(self):
@@ -1285,7 +1282,7 @@ class PBRun():
                         destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{local.version}')
                         if not destination.exists():
                             destination.mkdir(parents=True)
-                        copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
+                        copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json'))
                     # Install new v7 version
                     _log("PBRun", f"Install: New V7 Version {instance.name} Old: {local.version} New: {instance.version}")
                     # Remove old *.json configs
@@ -1333,7 +1330,7 @@ class PBRun():
                     destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{date}')
                     if not destination.exists():
                         destination.mkdir(parents=True)
-                    copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json', 'monitor.json'))
+                    copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json'))
                     rmtree(source, ignore_errors=True)
                     remove_instances.append(instance)
         if remove_instances:

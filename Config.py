@@ -7741,7 +7741,7 @@ class ConfigV7():
             for item in instance_dir.iterdir():
                 if item.suffix == '.json' and item.name not in (
                     'config.json.tmp', 'ignored_coins.json', 'approved_coins.json',
-                    'config_run.json', 'monitor.json'
+                    'config_run.json'
                 ):
                     shutil.copy2(str(item), str(backup_dir / item.name))
             # Apply retention policy
@@ -8277,4 +8277,3 @@ class BalanceCalculator:
             st.write(f"**Calculation:** `{min_order_price} / (({bot_side.total_wallet_exposure_limit} / {bot_side.n_positions}) * {bot_side.entry_initial_qty_pct}) = {result:.2f}`")
             recommended_balance = math.ceil(result * 1.1 / 10) * 10
             st.write(f"### Recommended Balance (10% more): :green[{int(recommended_balance)} USDT]")
-

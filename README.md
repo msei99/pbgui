@@ -312,6 +312,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.78 (unreleased)
+- PBRun: remove the last `class Monitor` / `self.monitor` residue and drop the remaining `monitor.json` copy-excludes now that runtime monitoring no longer uses that file.
 - API sync: switch FastAPI sync-status/reporting paths to SSH `host_meta.api_md5` instead of PBRemote/alive-derived state, while keeping PBRemote only for bucket/config duties.
 - FastAPI Run: Fixed the standalone Run editor so loading, importing, or drafting a config with empty coin or tag filters no longer reuses stale multiselect state from the previous editor session.
 - FastAPI Optimize: Fixed editor state leaking coins, tags, limits, scoring, and suite edits across config switches when opening or saving under a different config name.

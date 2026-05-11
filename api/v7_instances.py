@@ -888,7 +888,7 @@ async def save_instance_config(
                 for item in instance_dir.iterdir():
                     if item.suffix == ".json" and item.name not in (
                         "config.json.tmp", "ignored_coins.json",
-                        "approved_coins.json", "config_run.json", "monitor.json"
+                        "approved_coins.json", "config_run.json"
                     ):
                         shutil.copy2(str(item), str(backup_dir / item.name))
         except Exception:

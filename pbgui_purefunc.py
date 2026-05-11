@@ -236,7 +236,7 @@ PBGUI_SERIAL = _serial_path.read_text().strip() if _serial_path.exists() else ''
 STATUS_V7_FILE = PBGDIR / "data" / "cmd" / "status_v7.json"
 SYNC_EXCLUDE_FILES = frozenset({
     "ignored_coins.json", "approved_coins.json",
-    "config_run.json", "monitor.json", "running_version.txt",
+    "config_run.json", "running_version.txt",
 })
 
 
