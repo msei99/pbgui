@@ -1495,7 +1495,7 @@ async function init() {
       coinOvInit('coin-overrides-container', { apiBase: API_BASE });
       coinOvSetConfigName('');
       populateForm();
-      loadSymbolsAndTags(cfg);
+      loadSymbolsAndTags(cfg, { preferConfigValues: true });
     } else {
       var cfgResp = await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/config').then(function(r) { return r.json(); });
       cfg = cfgResp.config || {};
@@ -1503,7 +1503,7 @@ async function init() {
       coinOvInit('coin-overrides-container', { apiBase: API_BASE });
       coinOvSetConfigName(INSTANCE_NAME);
       populateForm();
-      loadSymbolsAndTags(cfg);
+      loadSymbolsAndTags(cfg, { preferConfigValues: true });
     }
 
     // User change → reload symbols/tags
@@ -1604,18 +1604,19 @@ function buildDefaultConfig(user) {
   };
 }
 
-async function loadSymbolsAndTags(sourceCfg) {
+async function loadSymbolsAndTags(sourceCfg, opts) {
+  opts = opts || {};
   var user = document.getElementById('f-user').value;
   var exchange = '';
   for (var i = 0; i < allUsers.length; i++) {
     if (allUsers[i].name === user) { exchange = allUsers[i].exchange; break; }
   }
 
-  var approvedLong = getCoinsForLoad(sourceCfg, 'approved_coins', 'long', 'ms-approved-long');
-  var approvedShort = getCoinsForLoad(sourceCfg, 'approved_coins', 'short', 'ms-approved-short');
-  var ignoredLong = getCoinsForLoad(sourceCfg, 'ignored_coins', 'long', 'ms-ignored-long');
-  var ignoredShort = getCoinsForLoad(sourceCfg, 'ignored_coins', 'short', 'ms-ignored-short');
-  var selectedTags = getTagsForLoad(sourceCfg);
+  var approvedLong = getCoinsForLoad(sourceCfg, 'approved_coins', 'long', 'ms-approved-long', opts);
+  var approvedShort = getCoinsForLoad(sourceCfg, 'approved_coins', 'short', 'ms-approved-short', opts);
+  var ignoredLong = getCoinsForLoad(sourceCfg, 'ignored_coins', 'long', 'ms-ignored-long', opts);
+  var ignoredShort = getCoinsForLoad(sourceCfg, 'ignored_coins', 'short', 'ms-ignored-short', opts);
+  var selectedTags = getTagsForLoad(sourceCfg, opts);
   var seededCoins = approvedLong.concat(approvedShort).concat(ignoredLong).concat(ignoredShort)
     .filter(function(v, i, a) { return v && v !== 'all' && a.indexOf(v) === i; }).sort();
   var seededAnchor = captureRawEditorAnchor();
@@ -1676,9 +1677,11 @@ function getCoinSelectionValue(rawValue, side, allowAll) {
   return [];
 }
 
-function getCoinsForLoad(sourceCfg, key, side, wrapId) {
+function getCoinsForLoad(sourceCfg, key, side, wrapId, opts) {
+  opts = opts || {};
   var live = (sourceCfg && sourceCfg.live) || {};
   var selected = getCoinSelectionValue(live[key], side, key === 'approved_coins');
+  if (opts.preferConfigValues) return selected;
   if (selected.length) return selected;
   if (msState[wrapId]) return getMultiselectValues(wrapId);
   return getCoins(key, side).slice();
@@ -1696,8 +1699,10 @@ function collectApprovedCoinsValue(longValues, shortValues) {
   };
 }
 
-function getTagsForLoad(sourceCfg) {
+function getTagsForLoad(sourceCfg, opts) {
+  opts = opts || {};
   var pbgui = (sourceCfg && sourceCfg.pbgui) || {};
+  if (opts.preferConfigValues) return Array.isArray(pbgui.tags) ? pbgui.tags.slice() : [];
   if (Array.isArray(pbgui.tags)) return pbgui.tags.slice();
   if (msState['ms-tags']) return getMultiselectValues('ms-tags');
   return ((cfg.pbgui || {}).tags || []).slice();
@@ -1883,7 +1888,7 @@ async function syncEditorFromParsed(parsed) {
   var anchor = captureRawEditorAnchor();
   cfg = parsed || {};
   populateForm({ skipRawUpdate: true });
-  await loadSymbolsAndTags(cfg);
+  await loadSymbolsAndTags(cfg, { preferConfigValues: true });
   restoreRawEditorAnchor(anchor);
 }
 
@@ -2181,7 +2186,7 @@ async function doImport() {
   cfg = prepared.config;
   paramStatus = prepared.param_status || {};
   populateForm();
-  loadSymbolsAndTags(cfg);
+  loadSymbolsAndTags(cfg, { preferConfigValues: true });
   closeImportModal();
   toast('Config imported', 'ok');
 }

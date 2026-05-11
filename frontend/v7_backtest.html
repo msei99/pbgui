@@ -1705,6 +1705,7 @@ function setCfgBotParamStatus(paramStatus) {
 }
 
 function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
+  resetBacktestEditorUiState();
   document.getElementById('configs-list').style.display = 'none';
   document.getElementById('configs-toolbar').style.display = 'none';
   var ed = document.getElementById('configs-editor');
@@ -2039,7 +2040,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   loadCfgSymbols(cfg);
   // Init and populate suite editor
   suiteInit('suite-container', { apiBase: API_BASE });
-  suiteLoad(cfg);
+  suiteLoad(cfg, { preserveEdit: false });
   cfgWireDateRange('cfg-start-date', 'cfg-end-date');
   var cfgNameEl = document.getElementById('cfg-name');
   if (cfgNameEl) cfgNameEl.addEventListener('input', syncManagedBacktestBaseDirField);
@@ -2630,6 +2631,30 @@ var _cfgMsController = window.PBGuiEditorShared.createMultiselectController({
   }
 });
 var _cfgMs = _cfgMsController.state;
+
+function resetBacktestEditorUiState() {
+  [
+    'ms-cfg-exchanges',
+    'ms-cfg-app-long',
+    'ms-cfg-app-short',
+    'ms-cfg-ign-long',
+    'ms-cfg-ign-short',
+    'ms-cfg-tags'
+  ].forEach(function(id) {
+    _cfgMsController.rebuild(id, [], [], { silent: true });
+  });
+  _cfgEditorCfg = null;
+  _cfgSymbolsLoadSeq = 0;
+  _kvData = {};
+  _kvSymCache = {};
+  _kvHighlight = {};
+  if (typeof _suiteState !== 'undefined') {
+    _suiteState.enabled = false;
+    _suiteState.scenarios = [];
+    _suiteState.editIdx = -1;
+    _suiteState.aggregate = { default: 'mean' };
+  }
+}
 
 function cfgRebuildMs(id, options, selected) {
   _cfgMsController.rebuild(id, options, selected);
@@ -3860,6 +3885,7 @@ function closeEditor() {
   window.PBGuiEditorShared.clearFixedValidationStatus();
   editingConfig = null;
   _cfgEditorCfg = null;
+  resetBacktestEditorUiState();
   document.getElementById('configs-editor').style.display = 'none';
   document.getElementById('configs-list').style.display = '';
   document.getElementById('configs-toolbar').style.display = '';

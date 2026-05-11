@@ -5904,6 +5904,43 @@ function currentMultiselectValues(id, fallback) {
   return Array.isArray(fallback) ? fallback.slice() : [];
 }
 
+function resetOptimizeEditorUiState() {
+  [
+    'ms-opt-exchanges',
+    'ms-opt-app-long',
+    'ms-opt-app-short',
+    'ms-opt-ign-long',
+    'ms-opt-ign-short',
+    'ms-opt-tags'
+  ].forEach(function(id) {
+    _optMsController.rebuild(id, [], [], { silent: true });
+  });
+  _optKvData['opt-kv-cs'] = {};
+  _optKvSymCache = {};
+  _optKvHighlight = {};
+  state.optimizeBounds = [];
+  state.optimizeFixedParams = [];
+  state.runtimeOverrideValues = {};
+  state.scoringEntries = [];
+  state.scoringEditIndex = -1;
+  state.scoringEditForm = null;
+  state.scoringAddForm = defaultScoringForm();
+  state.scoringAddVisible = false;
+  state.limitEntries = [];
+  state.limitEditIndex = -1;
+  state.limitEditForm = null;
+  state.limitAddForm = defaultLimitForm();
+  state.limitAddVisible = false;
+  _optCommittedCrossoverI = 70;
+  _optCommittedMutationI = 20;
+  if (typeof _suiteState !== 'undefined') {
+    _suiteState.enabled = false;
+    _suiteState.scenarios = [];
+    _suiteState.editIdx = -1;
+    _suiteState.aggregate = { default: 'mean' };
+  }
+}
+
 var _optSymbolsLoadSeq = 0;
 var _optMsCp = {
   'ms-opt-app-long': 'ms-opt-ign-long',
@@ -7039,18 +7076,29 @@ async function optFetchV7Json(path, opts) {
   return data;
 }
 
-async function loadOptSymbols(cfg) {
+async function loadOptSymbols(cfg, opts) {
+  opts = opts || {};
   cfg = cfg || {};
   var backtest = cfg.backtest || {};
   var live = cfg.live || {};
   var pbgui = cfg.pbgui || {};
   var requestSeq = ++_optSymbolsLoadSeq;
   var exchanges = currentMultiselectValues('ms-opt-exchanges', Array.isArray(backtest.exchanges) ? backtest.exchanges : (backtest.exchange ? [backtest.exchange] : []));
-  var approvedLong = currentMultiselectValues('ms-opt-app-long', coinSideSelection(live.approved_coins, 'long', true));
-  var approvedShort = currentMultiselectValues('ms-opt-app-short', coinSideSelection(live.approved_coins, 'short', true));
-  var ignoredLong = currentMultiselectValues('ms-opt-ign-long', coinSideSelection(live.ignored_coins, 'long', false));
-  var ignoredShort = currentMultiselectValues('ms-opt-ign-short', coinSideSelection(live.ignored_coins, 'short', false));
-  var selectedTags = currentMultiselectValues('ms-opt-tags', Array.isArray(pbgui.tags) ? pbgui.tags : []);
+  var approvedLong = opts.preferConfigValues
+    ? coinSideSelection(live.approved_coins, 'long', true)
+    : currentMultiselectValues('ms-opt-app-long', coinSideSelection(live.approved_coins, 'long', true));
+  var approvedShort = opts.preferConfigValues
+    ? coinSideSelection(live.approved_coins, 'short', true)
+    : currentMultiselectValues('ms-opt-app-short', coinSideSelection(live.approved_coins, 'short', true));
+  var ignoredLong = opts.preferConfigValues
+    ? coinSideSelection(live.ignored_coins, 'long', false)
+    : currentMultiselectValues('ms-opt-ign-long', coinSideSelection(live.ignored_coins, 'long', false));
+  var ignoredShort = opts.preferConfigValues
+    ? coinSideSelection(live.ignored_coins, 'short', false)
+    : currentMultiselectValues('ms-opt-ign-short', coinSideSelection(live.ignored_coins, 'short', false));
+  var selectedTags = opts.preferConfigValues
+    ? (Array.isArray(pbgui.tags) ? pbgui.tags.slice() : [])
+    : currentMultiselectValues('ms-opt-tags', Array.isArray(pbgui.tags) ? pbgui.tags : []);
   var seededCoins = uniqStrings([].concat(
     approvedLong.filter(function(value) { return value !== 'all'; }),
     approvedShort.filter(function(value) { return value !== 'all'; }),
@@ -7688,7 +7736,7 @@ function populateOptimizeEditor(config, opts) {
   }
   if (typeof suiteInit === 'function') {
     suiteInit('suite-container', { apiBase: API_BASE });
-    suiteLoad(cfg, { preserveEdit: true });
+    suiteLoad(cfg, { preserveEdit: false });
   }
   setScoringEntries(optimize.scoring, { suppressSync: true });
   setLimitEntries(optimize.limits, { suppressSync: true });
@@ -7705,7 +7753,7 @@ function populateOptimizeEditor(config, opts) {
   bindOptimizeBackendUi();
   updateOptimizeBackendSections();
   toggleOptimizeSeedPathInput();
-  loadOptSymbols(cfg).catch(function(error) {
+  loadOptSymbols(cfg, { preferConfigValues: true }).catch(function(error) {
     console.error('loadOptSymbols failed:', error);
   });
   getOptimizeJsonFieldIds().forEach(function(id) {
@@ -8437,6 +8485,7 @@ function initOptimizeOhlcvPreflightController() {
 
 function showStructuredEditor(config, name, sourceName, paramStatusOverride, backendHint) {
   closeAllModals();
+  resetOptimizeEditorUiState();
   state.editorSourceName = sourceName || '';
   state.editorDraftName = name || '';
   state.editingConfig = name || '';
@@ -8472,6 +8521,7 @@ function closeEditor() {
   state.editorDraftName = '';
   state.editorBackendHint = '';
   state.editorLastConfig = null;
+  resetOptimizeEditorUiState();
   setOptBotParamStatus({});
 }
 
