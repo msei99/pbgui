@@ -313,6 +313,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 - VPS monitor cleanup: refresh stale `monitor.json` wording in the async store while keeping compatibility excludes that prevent old leftover files from being copied forward.
+- API sync: switch FastAPI sync-status/reporting paths to SSH `host_meta.api_md5` instead of PBRemote/alive-derived state, while keeping PBRemote only for bucket/config duties.
 - PBRun: remove the remaining legacy `monitor.json` writer path and keep only the in-memory process stats still needed for local low-memory bot restarts.
 - PBRemote/PBMon: stop reading and shipping legacy `monitor.json` bot payloads through `alive_*.cmd`; alerting now stays on the persisted VPS monitor snapshot path.
 

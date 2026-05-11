@@ -31,6 +31,7 @@ from api_key_state import (
     strip_runtime_extra,
     update_user_state,
 )
+from api.vps import get_monitor_state_snapshot
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR as _PBGDIR
 
@@ -1689,21 +1690,27 @@ def tradfi_get_profiles(
 def get_sync_status(
     session: SessionToken = Depends(require_auth),
 ) -> dict:
-    """Check whether api-keys.json is in sync with all connected VPS via SSH.
+    """Check whether api-keys.json is in sync with all connected VPS via SSH metadata.
 
     Returns:
-      - configured: False when rclone / PBRemote is not set up
+      - configured: False when the sync worker is not initialized
       - synced: True if all online servers have the same API key MD5
       - unsynced_servers: names of servers that are out of sync
-      - total_servers: count of known remote servers
+      - total_servers: count of connected VPS
     """
     try:
         if not _file_sync_worker:
             return {"configured": False, "synced": True, "unsynced_servers": [], "total_servers": 0, "error": "FileSyncWorker not initialized"}
         status = _file_sync_worker.get_status()
         connected_hosts = list(status.get("connected_hosts") or [])
-        hosts = status.get("hosts") or {}
-        unsynced = [hostname for hostname in connected_hosts if hosts.get(hostname, {}).get("in_sync") is False]
+        local_md5 = _file_sync_worker._compute_local_md5()
+        monitor_state = get_monitor_state_snapshot()
+        host_meta = monitor_state.get("host_meta") or {}
+        unsynced = []
+        for hostname in connected_hosts:
+            api_md5 = str((host_meta.get(hostname) or {}).get("api_md5") or "")
+            if api_md5 and api_md5 != local_md5:
+                unsynced.append(hostname)
         return {
             "configured": True,
             "synced": len(unsynced) == 0,

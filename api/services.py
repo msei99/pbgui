@@ -623,7 +623,7 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
 
 @router.get("/pbremote/info")
 def get_pbremote_info(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    """Return PBRemote config plus remote host state using monitor/file-sync data."""
+    """Return PBRemote config plus remote host state using SSH monitor metadata."""
     try:
         from PBRemote import PBRemote
         obj = PBRemote()
@@ -633,9 +633,7 @@ def get_pbremote_info(session: SessionToken = Depends(require_auth)) -> Dict[str
         connections = ((monitor_state.get("connections") or {}).get("connections") or {})
         system_state = monitor_state.get("system") or {}
         host_meta = monitor_state.get("host_meta") or {}
-        fs_worker = getattr(__import__("api.api_keys", fromlist=["_file_sync_worker"]), "_file_sync_worker", None)
-        remote_md5s = getattr(fs_worker, "_remote_md5s", {}) if fs_worker else {}
-        local_md5 = fs_worker._compute_local_md5() if fs_worker else obj.api_md5
+        local_md5 = str(obj.api_md5 or "")
         servers = []
         unsynced_hosts: list[str] = []
         for hostname in sorted({*connections.keys(), *host_meta.keys()}):
@@ -644,8 +642,8 @@ def get_pbremote_info(session: SessionToken = Depends(require_auth)) -> Dict[str
             system = system_state.get(hostname) or {}
             status = str(conn.get("status") or "")
             online = status == "connected"
-            remote_md5 = ((remote_md5s.get(hostname) or {}).get("pb7"))
-            in_sync = None if remote_md5 is None else (remote_md5 == local_md5)
+            remote_md5 = str(meta.get("api_md5") or "")
+            in_sync = None if not remote_md5 else (remote_md5 == local_md5)
             if online and in_sync is False:
                 unsynced_hosts.append(hostname)
             last_seen_ts = float(system.get("timestamp") or 0)
@@ -673,10 +671,6 @@ def get_pbremote_info(session: SessionToken = Depends(require_auth)) -> Dict[str
 async def trigger_pbremote_api_sync(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
     """Push local api-keys.json to connected VPS via SSH and report sync state."""
     try:
-        from PBRemote import PBRemote
-        obj = PBRemote()
-        if obj.error:
-            raise HTTPException(status_code=400, detail=obj.error)
         api_keys_mod = __import__("api.api_keys", fromlist=["_file_sync_worker"])
         fs_worker = getattr(api_keys_mod, "_file_sync_worker", None)
         if fs_worker is None:
