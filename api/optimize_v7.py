@@ -1384,6 +1384,19 @@ def _first_pareto_file(result_dir: Path) -> Optional[Path]:
     return None
 
 
+def _iter_result_dirs(base: Path):
+    seen: set[Path] = set()
+    if not base.exists():
+        return
+    for result_dir in sorted(path for path in base.iterdir() if path.is_dir()):
+        if (result_dir / "all_results.bin").exists() or _first_pareto_file(result_dir):
+            resolved = result_dir.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            yield result_dir
+
+
 def _result_name_from_pareto(path: Path) -> str:
     try:
         data = _load_pareto_json(path)
@@ -2635,8 +2648,7 @@ def list_results(session: SessionToken = Depends(require_auth)):
     if not base.exists():
         return {"results": []}
     results = []
-    for all_results in sorted(base.glob("*/all_results.bin")):
-        result_dir = all_results.parent
+    for result_dir in _iter_result_dirs(base):
         pareto_dir = result_dir / "pareto"
         pareto_files = sorted(pareto_dir.glob("*.json")) if pareto_dir.exists() else []
         first_pareto = pareto_files[0] if pareto_files else None
@@ -2659,7 +2671,7 @@ def list_results(session: SessionToken = Depends(require_auth)):
                 "pareto_count": len(pareto_files),
                 "mode": mode,
                 "scenario_count": scenario_count,
-                "modified": datetime.datetime.fromtimestamp(all_results.stat().st_mtime).isoformat(),
+                "modified": datetime.datetime.fromtimestamp(result_dir.stat().st_mtime).isoformat(),
             }
         )
     return {"results": results}

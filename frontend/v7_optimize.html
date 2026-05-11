@@ -768,6 +768,21 @@ button, input, textarea, select { font: inherit; }
   min-width: 0;
 }
 
+.runtime-override-field-bool {
+  align-content: end;
+}
+
+.runtime-override-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-md);
+  margin-bottom: var(--sp-md);
+}
+
+.runtime-override-cell-span-2 {
+  grid-column: span 2;
+}
+
 .runtime-override-label {
   font-size: var(--fs-sm);
   font-weight: 600;
@@ -779,10 +794,31 @@ button, input, textarea, select { font: inherit; }
   -moz-appearance: textfield;
 }
 
+.runtime-override-field select {
+  width: 100%;
+  min-width: 0;
+  height: var(--input-h);
+  padding: 0 var(--sp-sm);
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
 .runtime-override-input::-webkit-inner-spin-button,
 .runtime-override-input::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
+}
+
+.runtime-override-check {
+  display: flex;
+  align-items: center;
+  min-height: var(--input-h);
+}
+
+.runtime-override-check input[type="checkbox"] {
+  accent-color: var(--accent);
 }
 
 .runtime-override-key {
@@ -1054,7 +1090,7 @@ button, input, textarea, select { font: inherit; }
 
 .chk-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 6px;
   min-height: var(--input-h);
   height: auto;
@@ -4249,6 +4285,13 @@ function fieldCheckbox(id, label, checked) {
     '<label for="' + id + '">' + label + '</label></div></div>';
 }
 
+function fieldCheckboxInline(id, label, checked, tip) {
+  return '<label class="runtime-override-field runtime-override-field-bool">'
+    + '<span class="runtime-override-label"' + (tip ? ' data-tip="' + escAttr(tip) + '"' : '') + '>' + escapeHtml(label) + '</span>'
+    + '<span class="runtime-override-check chk-row"><input type="checkbox" id="' + id + '"' + (checked ? ' checked' : '') + '></span>'
+    + '</label>';
+}
+
 function autoResizeTa(node) {
   if (window.PBGuiEditorShared && window.PBGuiEditorShared.autoResizeTextarea) {
     window.PBGuiEditorShared.autoResizeTextarea(node);
@@ -4736,6 +4779,12 @@ function normalizeOptimizeRuntimeOverrideValues(rawOverrides) {
   var overrides = normalizeOptimizeRuntimeOverrideMap(rawOverrides);
   var result = {};
   OPT_FIXED_RUNTIME_OVERRIDE_FIELDS.forEach(function(field) {
+    if (field.type === 'boolean') {
+      if (Object.prototype.hasOwnProperty.call(overrides, field.key)) {
+        result[field.key] = normalizeOptimizeRuntimeOverrideBooleanValue(overrides[field.key], !!field.defaultValue);
+      }
+      return;
+    }
     if (Object.prototype.hasOwnProperty.call(overrides, field.key)) {
       result[field.key] = formatOptimizeRuntimeOverrideValueText(overrides[field.key]);
       return;
@@ -4756,6 +4805,57 @@ function getOptimizeBoundSuffix(key) {
   if (cleanKey.indexOf('long_') === 0) return cleanKey.slice(5);
   if (cleanKey.indexOf('short_') === 0) return cleanKey.slice(6);
   return cleanKey;
+}
+
+function getOptimizeHslEnabledOverrideKey(side) {
+  return 'bot.' + side + '.hsl_enabled';
+}
+
+function getOptimizeConfigBotHslEnabled(side) {
+  var cfg = state.editorLastConfig || {};
+  var bot = cfg.bot || {};
+  var sideCfg = bot[side] || {};
+  return !!sideCfg.hsl_enabled;
+}
+
+function normalizeOptimizeRuntimeOverrideBooleanValue(value, fallback) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    var trimmed = value.trim().toLowerCase();
+    if (trimmed === 'true') return true;
+    if (trimmed === 'false') return false;
+  }
+  return fallback;
+}
+
+function isOptimizeHslEnabledForSide(side) {
+  var key = getOptimizeHslEnabledOverrideKey(side);
+  var field = getOptimizeRuntimeOverrideFieldMeta(key);
+  var fallback = getOptimizeConfigBotHslEnabled(side);
+  if (!(field && field.type === 'boolean')) fallback = !!fallback;
+  var raw = state.runtimeOverrideValues && Object.prototype.hasOwnProperty.call(state.runtimeOverrideValues, key)
+    ? state.runtimeOverrideValues[key]
+    : fallback;
+  return normalizeOptimizeRuntimeOverrideBooleanValue(raw, fallback);
+}
+
+function isOptimizeHslAutoFixedBound(key) {
+  var cleanKey = String(key || '');
+  var group = getOptimizeBoundGroup(cleanKey);
+  if (group !== 'long' && group !== 'short') return false;
+  var suffix = getOptimizeBoundSuffix(cleanKey);
+  if (['hsl_red_threshold', 'hsl_ema_span_minutes', 'hsl_cooldown_minutes_after_red'].indexOf(suffix) === -1) {
+    return false;
+  }
+  return !isOptimizeHslEnabledForSide(group);
+}
+
+function getOptimizeEffectiveFixedParamSet() {
+  var fixedSet = new Set(state.optimizeFixedParams || []);
+  (state.optimizeBounds || []).forEach(function(entry) {
+    if (isOptimizeHslAutoFixedBound(entry.key)) fixedSet.add(entry.key);
+  });
+  return fixedSet;
 }
 
 function countOptimizeDecimals(value) {
@@ -5300,6 +5400,9 @@ function renderOptimizeBoundRow(entry, fixedSet) {
   var meta = entry.meta || getOptimizeBoundMeta(entry.key, entry.lowValue, entry.highValue, entry.stepValue);
   var lowPercent = getOptimizeBoundPercent(entry.lowValue, meta);
   var highPercent = getOptimizeBoundPercent(entry.highValue, meta);
+  var autoFixed = isOptimizeHslAutoFixedBound(entry.key);
+  var fixedTip = getOptimizeBoundFixedTip(entry);
+  if (autoFixed) fixedTip += ' Auto-fixed because HSL is disabled for this side during optimize runs.';
   return ''
     + '<div class="optimize-bound-row" id="' + getOptimizeBoundDomId(entry.key) + '">'
     +   '<div class="optimize-bound-head">'
@@ -5321,7 +5424,7 @@ function renderOptimizeBoundRow(entry, fixedSet) {
     +     '</div>'
     +     '<div class="optimize-bound-step-col">'
     +       '<input class="optimize-bound-step-input" type="text" inputmode="decimal" spellcheck="false" autocomplete="off" value="' + escapeHtml(entry.stepText) + '" oninput="updateOptimizeBoundField(' + escAttr(JSON.stringify(entry.key)) + ', &quot;step&quot;, this.value, this)" onblur="finalizeOptimizeBoundStepField(' + escAttr(JSON.stringify(entry.key)) + ', this)">'
-    +       '<label class="optimize-bound-fixed"><input type="checkbox" ' + (fixedSet.has(entry.key) ? 'checked ' : '') + 'onchange="toggleOptimizeFixedParam(' + escAttr(JSON.stringify(entry.key)) + ', this.checked)"><span data-tip="' + escAttr(getOptimizeBoundFixedTip(entry)) + '">fixed</span></label>'
+    +       '<label class="optimize-bound-fixed"><input type="checkbox" ' + (fixedSet.has(entry.key) ? 'checked ' : '') + (autoFixed ? 'disabled ' : '') + 'onchange="toggleOptimizeFixedParam(' + escAttr(JSON.stringify(entry.key)) + ', this.checked)"><span data-tip="' + escAttr(fixedTip) + '">fixed</span></label>'
     +     '</div>'
     +   '</div>'
     + '</div>';
@@ -5342,7 +5445,7 @@ function renderOptimizeBoundsEditor() {
   var panel = el('opted-bounds-panel');
   if (!panel) return;
   var groups = { long: [], short: [], other: [] };
-  var fixedSet = new Set(state.optimizeFixedParams || []);
+  var fixedSet = getOptimizeEffectiveFixedParamSet();
   (state.optimizeBounds || []).forEach(function(entry) {
     groups[entry.group] = groups[entry.group] || [];
     groups[entry.group].push(entry);
@@ -5365,23 +5468,99 @@ function renderOptimizeBoundsEditor() {
 function renderOptimizeRuntimeOverridesEditor() {
   var panel = el('opted-runtime-overrides-panel');
   if (!panel) return;
+  function renderRuntimeOverrideField(field) {
+    var meta = getOptimizeRuntimeOverrideFieldMeta(field.key) || field;
+    if (field.type === 'boolean') {
+      var checked = isOptimizeHslEnabledForSide(field.side || 'long');
+      return ''
+        + '<label class="runtime-override-field runtime-override-field-bool">'
+        +   '<span class="runtime-override-label" data-tip="' + escAttr(meta.tip) + '">' + escapeHtml(meta.label) + '</span>'
+        +   '<span class="runtime-override-check chk-row"><input type="checkbox" ' + (checked ? 'checked ' : '') + 'onchange="toggleOptimizeRuntimeOverrideCheckbox(' + escAttr(JSON.stringify(field.key)) + ', this.checked)"></span>'
+        + '</label>';
+    }
+    var valueText = Object.prototype.hasOwnProperty.call(state.runtimeOverrideValues || {}, field.key)
+      ? formatOptimizeRuntimeOverrideValueText(state.runtimeOverrideValues[field.key])
+      : field.defaultValueText;
+    return ''
+      + '<label class="runtime-override-field">'
+      +   '<span class="runtime-override-label" data-tip="' + escAttr(meta.tip) + '">' + escapeHtml(meta.label) + '</span>'
+      +   '<input class="runtime-override-input" type="text" inputmode="decimal" spellcheck="false" autocomplete="off" placeholder="0.0 - 1.0" value="' + escapeHtml(valueText) + '" oninput="updateOptimizeRuntimeOverrideValue(' + escAttr(JSON.stringify(field.key)) + ', this.value, this)" onblur="finalizeOptimizeRuntimeOverrideValue(' + escAttr(JSON.stringify(field.key)) + ', this)">'
+      + '</label>';
+  }
+  var longEnabledField = getOptimizeRuntimeOverrideFieldMeta('bot.long.hsl_enabled');
+  var shortEnabledField = getOptimizeRuntimeOverrideFieldMeta('bot.short.hsl_enabled');
+  var longNoRestartField = getOptimizeRuntimeOverrideFieldMeta('bot.long.hsl_no_restart_drawdown_threshold');
+  var shortNoRestartField = getOptimizeRuntimeOverrideFieldMeta('bot.short.hsl_no_restart_drawdown_threshold');
+  var longEnabledChecked = isOptimizeHslEnabledForSide('long');
+  var shortEnabledChecked = isOptimizeHslEnabledForSide('short');
+  var losslessEnabled = el('opted-enable-lossless-close-trailing') ? el('opted-enable-lossless-close-trailing').checked : false;
+  var tpGridDirection = el('opted-enable-tp-grid-direction') ? el('opted-enable-tp-grid-direction').value : 'none';
   var html = ''
     + '<div class="limits-panel runtime-overrides-panel">'
-    +   '<div class="runtime-override-simple-grid">'
-    +     OPT_FIXED_RUNTIME_OVERRIDE_FIELDS.map(function(field) {
-            var meta = getOptimizeRuntimeOverrideFieldMeta(field.key) || field;
-            var valueText = Object.prototype.hasOwnProperty.call(state.runtimeOverrideValues || {}, field.key)
-              ? formatOptimizeRuntimeOverrideValueText(state.runtimeOverrideValues[field.key])
-              : field.defaultValueText;
-            return ''
-              + '<label class="runtime-override-field">'
-              +   '<span class="runtime-override-label" data-tip="' + escAttr(meta.tip) + '">' + escapeHtml(meta.label) + '</span>'
-              +   '<input class="runtime-override-input" type="text" inputmode="decimal" spellcheck="false" autocomplete="off" placeholder="0.0 - 1.0" value="' + escapeHtml(valueText) + '" oninput="updateOptimizeRuntimeOverrideValue(' + escAttr(JSON.stringify(field.key)) + ', this.value, this)" onblur="finalizeOptimizeRuntimeOverrideValue(' + escAttr(JSON.stringify(field.key)) + ', this)">'
-              + '</label>';
-          }).join('')
+    +   '<div class="runtime-override-row">'
+    +     fieldCheckboxInline('opted-runtime-lossless-close-trailing', 'lossless_close_trailing', losslessEnabled, 'Keeps close_trailing_threshold_pct at least as large as close_trailing_retracement_pct before each evaluation.')
+    +     '<label class="runtime-override-field">'
+    +       '<span class="runtime-override-label" data-tip="TP grid direction override for optimize bounds helper rules.">tp_grid_direction</span>'
+    +       '<select id="opted-runtime-tp-grid-direction" onchange="syncOptimizeRuntimeOverrideHelpers()">'
+    +         '<option value="none">none</option>'
+    +         '<option value="forward">forward</option>'
+    +         '<option value="backward">backward</option>'
+    +       '</select>'
+    +     '</label>'
+    +     '<div class="runtime-override-cell-span-2"></div>'
+    +   '</div>'
+    +   '<div class="runtime-override-row">'
+    +     fieldCheckboxInline('opted-runtime-long-hsl-enabled', longEnabledField.label, longEnabledChecked, longEnabledField.tip)
+    +     renderRuntimeOverrideField(longNoRestartField)
+    +     fieldCheckboxInline('opted-runtime-short-hsl-enabled', shortEnabledField.label, shortEnabledChecked, shortEnabledField.tip)
+    +     renderRuntimeOverrideField(shortNoRestartField)
     +   '</div>'
     + '</div>';
   panel.innerHTML = html;
+  var longNode = el('opted-runtime-long-hsl-enabled');
+  if (longNode) {
+    longNode.checked = longEnabledChecked;
+    longNode.onchange = function() {
+      setOptimizeBotBoolField('long', 'hsl_enabled', this.checked);
+      toggleOptimizeRuntimeOverrideCheckbox('bot.long.hsl_enabled', this.checked);
+    };
+  }
+  var shortNode = el('opted-runtime-short-hsl-enabled');
+  if (shortNode) {
+    shortNode.checked = shortEnabledChecked;
+    shortNode.onchange = function() {
+      setOptimizeBotBoolField('short', 'hsl_enabled', this.checked);
+      toggleOptimizeRuntimeOverrideCheckbox('bot.short.hsl_enabled', this.checked);
+    };
+  }
+  var losslessToggle = el('opted-enable-lossless-close-trailing');
+  var runtimeLosslessToggle = el('opted-runtime-lossless-close-trailing');
+  if (runtimeLosslessToggle) {
+    runtimeLosslessToggle.checked = losslessToggle ? losslessToggle.checked : false;
+    runtimeLosslessToggle.onchange = function() {
+      var shared = el('opted-enable-lossless-close-trailing');
+      if (shared) shared.checked = this.checked;
+      scheduleStructuredEditorSync();
+    };
+  }
+  var tpGridNode = el('opted-runtime-tp-grid-direction');
+  if (tpGridNode) tpGridNode.value = el('opted-enable-tp-grid-direction') ? el('opted-enable-tp-grid-direction').value : 'none';
+}
+
+function syncOptimizeRuntimeOverrideHelpers() {
+  var source = el('opted-runtime-tp-grid-direction');
+  var target = el('opted-enable-tp-grid-direction');
+  if (source && target) target.value = source.value;
+  scheduleStructuredEditorSync();
+}
+
+function toggleOptimizeRuntimeOverrideCheckbox(key, checked) {
+  var cleanKey = String(key || '').trim();
+  if (!cleanKey) return;
+  state.runtimeOverrideValues = state.runtimeOverrideValues || {};
+  state.runtimeOverrideValues[cleanKey] = !!checked;
+  renderOptimizeBoundsEditor();
+  scheduleStructuredEditorSync();
 }
 
 function updateOptimizeBoundField(key, field, rawValue, inputNode) {
@@ -5538,6 +5717,16 @@ function collectOptimizeRuntimeOverrides(opts) {
   var fallback = normalizeOptimizeRuntimeOverrideMap(opts.fallbackValue);
   var result = {};
   OPT_FIXED_RUNTIME_OVERRIDE_FIELDS.forEach(function(field) {
+    if (field.type === 'boolean') {
+      if (Object.prototype.hasOwnProperty.call(state.runtimeOverrideValues || {}, field.key)) {
+        result[field.key] = normalizeOptimizeRuntimeOverrideBooleanValue(state.runtimeOverrideValues[field.key], !!field.defaultValue);
+      } else if (Object.prototype.hasOwnProperty.call(fallback, field.key)) {
+        result[field.key] = normalizeOptimizeRuntimeOverrideBooleanValue(fallback[field.key], !!field.defaultValue);
+      } else {
+        result[field.key] = !!field.defaultValue;
+      }
+      return;
+    }
     var valueText = Object.prototype.hasOwnProperty.call(state.runtimeOverrideValues || {}, field.key)
       ? String(state.runtimeOverrideValues[field.key] || '')
       : '';
@@ -5765,14 +5954,32 @@ var OPT_ENABLE_OVERRIDE_VALUES = [
 var OPT_ENABLE_OVERRIDE_SET = new Set(OPT_ENABLE_OVERRIDE_VALUES);
 var OPT_FIXED_RUNTIME_OVERRIDE_FIELDS = [
   {
+    key: 'bot.long.hsl_enabled',
+    label: 'Long HSL enabled',
+    side: 'long',
+    type: 'boolean',
+    defaultValue: false,
+    tip: 'Optimize-only runtime override for bot.long.hsl_enabled. Enable this if you want long-side HSL parameters to affect optimizer backtests.'
+  },
+  {
+    key: 'bot.short.hsl_enabled',
+    label: 'Short HSL enabled',
+    side: 'short',
+    type: 'boolean',
+    defaultValue: false,
+    tip: 'Optimize-only runtime override for bot.short.hsl_enabled. Enable this if you want short-side HSL parameters to affect optimizer backtests.'
+  },
+  {
     key: 'bot.long.hsl_no_restart_drawdown_threshold',
     label: 'Long HSL no-restart drawdown threshold',
+    type: 'number',
     defaultValueText: '1',
     tip: 'Optimize-only override for bot.long.hsl_no_restart_drawdown_threshold. Keep 1.0 to disable terminal no-restart during optimizer evaluations so HSL metrics can constrain candidates instead of being truncated early.'
   },
   {
     key: 'bot.short.hsl_no_restart_drawdown_threshold',
     label: 'Short HSL no-restart drawdown threshold',
+    type: 'number',
     defaultValueText: '1',
     tip: 'Optimize-only override for bot.short.hsl_no_restart_drawdown_threshold. Keep 1.0 to disable terminal no-restart during optimizer evaluations so HSL metrics can constrain candidates instead of being truncated early.'
   }
@@ -6937,6 +7144,18 @@ function optBotSyncFromJson(side) {
   autoResizeTa(textarea);
 }
 
+function setOptimizeBotBoolField(side, key, value) {
+  var textarea = el('opted-bot-' + side);
+  if (!textarea) return;
+  try {
+    var obj = JSON.parse(textarea.value || '{}');
+    obj[key] = !!value;
+    textarea.value = JSON.stringify(obj, null, 2);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    autoResizeTa(textarea);
+  } catch (error) {}
+}
+
 function editorStatusNode() {
   return el('cfg-editor-status');
 }
@@ -7256,14 +7475,8 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
         + '<span class="arrow">▶</span> <span id="opted-bounds-summary">Bounds & Overrides (' + Object.keys(optimize.bounds || {}).length + ')</span>'
       + '</div>'
       + '<div class="expander-body">'
-        + '<div class="form-row cols-8">'
-          + fieldSelect('opted-enable-tp-grid-direction', 'tp_grid_direction', [
-              { value: 'none', label: 'none' },
-              { value: 'forward', label: 'forward_tp_grid' },
-              { value: 'backward', label: 'backward_tp_grid' }
-            ], getOptimizeTpGridDirection(enableOverrides), false, 'Enforces a direction for the TP grid by constraining close_grid_markup_start and close_grid_markup_end before evaluation.')
-          + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-enable-lossless-close-trailing"' + (enableOverrides.indexOf('lossless_close_trailing') >= 0 ? ' checked' : '') + '><label for="opted-enable-lossless-close-trailing"><span data-tip="Keeps close_trailing_threshold_pct at least as large as close_trailing_retracement_pct before each evaluation.">lossless_close_trailing</span></label></div></div>'
-        + '</div>'
+        + '<input type="checkbox" id="opted-enable-lossless-close-trailing" style="display:none"' + (enableOverrides.indexOf('lossless_close_trailing') >= 0 ? ' checked' : '') + '>'
+        + '<input type="text" id="opted-enable-tp-grid-direction" style="display:none" value="' + escapeHtml(getOptimizeTpGridDirection(enableOverrides)) + '">'
         + '<div id="opted-runtime-overrides-panel"></div>'
         + '<div id="opted-bounds-panel"></div>'
       + '</div>'
