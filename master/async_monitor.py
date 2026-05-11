@@ -36,6 +36,12 @@ HOST_META_INTERVAL = 30     # seconds
 PACKAGE_STATUS_INTERVAL = 3600  # seconds
 MONITOR_CACHE_VERSION = 2
 STATE_SNAPSHOT_VERSION = 1
+CPU_HISTORY_VERSION = 1
+CPU_HISTORY_WINDOW_MINUTES = 24 * 60
+CPU_HISTORY_STEP_SECONDS = 60
+CPU_HISTORY_RESOLUTION_PCT = 0.5
+CPU_HISTORY_MAX_PCT = 127.0
+CPU_HISTORY_FLUSH_INTERVAL = 10.0
 
 
 def build_alert_snapshot(*,
@@ -111,13 +117,17 @@ def collect_alerts_from_snapshot(snapshot: dict[str, Any], monitor_config) -> li
         mem_available_mb = float(metrics.get('mem_available') or 0) / 1024 / 1024
         swap_free_mb = float(metrics.get('swap_free') or 0) / 1024 / 1024
         disk_free_mb = float(metrics.get('disk_free') or 0) / 1024 / 1024
-        cpu = float(metrics.get('cpu') or 0)
+        cpu_live = float(metrics.get('cpu') or 0)
+        cpu_60s = float(metrics.get('cpu_60s') or 0)
+        cpu_60s_window = float(metrics.get('cpu_60s_window') or 0)
+        cpu_confirmed = cpu_60s_window >= 60
+        cpu = cpu_60s if cpu_confirmed else cpu_live
         has_system_metrics = any(metrics.get(key) not in (None, 0, 0.0) for key in ('mem_total', 'disk_total', 'swap_total', 'timestamp'))
         if has_system_metrics and (
             mem_available_mb <= monitor_config.mem_error_server
             or swap_free_mb <= monitor_config.swap_error_server
             or disk_free_mb <= monitor_config.disk_error_server
-            or cpu >= monitor_config.cpu_error_server
+            or (cpu_confirmed and cpu >= monitor_config.cpu_error_server)
         ):
             if mem_available_mb <= monitor_config.mem_error_server:
                 color_mem = 'red'
@@ -137,9 +147,9 @@ def collect_alerts_from_snapshot(snapshot: dict[str, Any], monitor_config) -> li
                 color_disk = 'orange'
             else:
                 color_disk = 'green'
-            if cpu >= monitor_config.cpu_error_server:
+            if cpu_confirmed and cpu >= monitor_config.cpu_error_server:
                 color_cpu = 'red'
-            elif cpu >= monitor_config.cpu_warning_server:
+            elif cpu_confirmed and cpu >= monitor_config.cpu_warning_server:
                 color_cpu = 'orange'
             else:
                 color_cpu = 'green'
@@ -156,13 +166,17 @@ def collect_alerts_from_snapshot(snapshot: dict[str, Any], monitor_config) -> li
             metrics_list = monitor.get('m') or []
             swap_value = metrics_list[9] / 1024 / 1024 if len(metrics_list) == 10 and metrics_list[9] else 0.0
             memory_mb = metrics_list[0] / 1024 / 1024 if metrics_list else 0.0
-            cpu_value = float(monitor.get('c') or 0)
+            cpu_live = float(monitor.get('c') or 0)
+            cpu_60s = float(monitor.get('cpu_60s') or 0)
+            cpu_60s_window = float(monitor.get('cpu_60s_window') or 0)
+            cpu_confirmed = cpu_60s_window >= 60
+            cpu_value = cpu_60s if cpu_confirmed else cpu_live
             errors_today = int(monitor.get('et') or 0)
             tracebacks_today = int(monitor.get('tt') or 0)
             if (
                 memory_mb > monitor_config.mem_error_v7
                 or swap_value > monitor_config.swap_error_v7
-                or cpu_value > monitor_config.cpu_error_v7
+                or (cpu_confirmed and cpu_value > monitor_config.cpu_error_v7)
                 or errors_today > monitor_config.error_error_v7
                 or tracebacks_today > monitor_config.traceback_error_v7
             ):
@@ -178,9 +192,9 @@ def collect_alerts_from_snapshot(snapshot: dict[str, Any], monitor_config) -> li
                     color_swap = 'orange'
                 else:
                     color_swap = 'green'
-                if cpu_value > monitor_config.cpu_error_v7:
+                if cpu_confirmed and cpu_value > monitor_config.cpu_error_v7:
                     color_cpu = 'red'
-                elif cpu_value > monitor_config.cpu_warning_v7:
+                elif cpu_confirmed and cpu_value > monitor_config.cpu_warning_v7:
                     color_cpu = 'orange'
                 else:
                     color_cpu = 'green'
@@ -207,6 +221,232 @@ def collect_alerts_from_snapshot(snapshot: dict[str, Any], monitor_config) -> li
                 })
     return errors
 
+
+def _cpu_history_encode(value: Any, *, confirmed: bool) -> int:
+    if not confirmed:
+        return 0
+    try:
+        pct = float(value)
+    except Exception:
+        return 0
+    pct = max(0.0, min(pct, CPU_HISTORY_MAX_PCT))
+    return max(1, min(255, int(round(pct / CPU_HISTORY_RESOLUTION_PCT)) + 1))
+
+
+def _cpu_history_decode(value: int) -> float | None:
+    try:
+        encoded = int(value)
+    except Exception:
+        return None
+    if encoded <= 0:
+        return None
+    return round((encoded - 1) * CPU_HISTORY_RESOLUTION_PCT, 1)
+
+
+class CpuHistoryStore:
+    """Compact 24h per-minute CPU history persisted as a binary ringbuffer."""
+
+    def __init__(self, root_dir: Path, stem: str):
+        self.root_dir = root_dir
+        self.bin_path = root_dir / f"{stem}.bin"
+        self.index_path = root_dir / f"{stem}_index.json"
+        self._series: dict[str, bytearray] = {}
+        self._meta: dict[str, dict[str, int]] = {}
+        self._next_slot = 0
+        self._loaded = False
+        self._dirty = False
+        self._last_flush_ts = 0.0
+
+    def load(self) -> None:
+        if self._loaded:
+            return
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        raw_index: dict[str, Any] = {}
+        raw_binary = b""
+        try:
+            if self.index_path.exists():
+                loaded = json.loads(self.index_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    raw_index = loaded
+        except Exception as exc:
+            _log(SERVICE, f"[history] Failed to load {self.index_path.name}: {exc}", level="WARNING")
+        try:
+            if self.bin_path.exists():
+                raw_binary = self.bin_path.read_bytes()
+        except Exception as exc:
+            _log(SERVICE, f"[history] Failed to load {self.bin_path.name}: {exc}", level="WARNING")
+
+        series_meta = raw_index.get("series") or {}
+        if not isinstance(series_meta, dict):
+            series_meta = {}
+        for key, meta in series_meta.items():
+            if not isinstance(key, str) or not isinstance(meta, dict):
+                continue
+            slot = int(meta.get("slot") or 0)
+            head = int(meta.get("head") or 0)
+            last_minute = int(meta.get("last_minute") or 0)
+            if slot < 0 or head < 0 or head >= CPU_HISTORY_WINDOW_MINUTES:
+                continue
+            start = slot * CPU_HISTORY_WINDOW_MINUTES
+            end = start + CPU_HISTORY_WINDOW_MINUTES
+            buf = bytearray(CPU_HISTORY_WINDOW_MINUTES)
+            chunk = raw_binary[start:end]
+            if chunk:
+                buf[: min(len(chunk), CPU_HISTORY_WINDOW_MINUTES)] = chunk[:CPU_HISTORY_WINDOW_MINUTES]
+            self._series[key] = buf
+            self._meta[key] = {
+                "slot": slot,
+                "head": head,
+                "last_minute": max(last_minute, 0),
+            }
+            self._next_slot = max(self._next_slot, slot + 1)
+        self._loaded = True
+
+    def _ensure_series(self, key: str) -> tuple[bytearray, dict[str, int]]:
+        self.load()
+        meta = self._meta.get(key)
+        if meta is None:
+            meta = {
+                "slot": self._next_slot,
+                "head": 0,
+                "last_minute": 0,
+            }
+            self._next_slot += 1
+            self._meta[key] = meta
+            self._series[key] = bytearray(CPU_HISTORY_WINDOW_MINUTES)
+            self._dirty = True
+        return self._series[key], meta
+
+    def record(self, key: str, *, minute: int, value: Any, confirmed: bool) -> None:
+        key = str(key or "").strip()
+        if not key:
+            return
+        if minute <= 0:
+            minute = int(time.time() // CPU_HISTORY_STEP_SECONDS)
+        buf, meta = self._ensure_series(key)
+        encoded = _cpu_history_encode(value, confirmed=confirmed)
+        changed = False
+        meta_changed = False
+        last_minute = int(meta.get("last_minute") or 0)
+
+        if last_minute <= 0:
+            meta["head"] = 0
+            meta["last_minute"] = minute
+            buf[:] = b"\x00" * CPU_HISTORY_WINDOW_MINUTES
+            buf[0] = encoded
+            meta_changed = True
+            changed = True
+        elif minute < last_minute:
+            return
+        elif minute == last_minute:
+            head = int(meta.get("head") or 0)
+            if buf[head] != encoded:
+                buf[head] = encoded
+                changed = True
+        else:
+            delta = minute - last_minute
+            if delta >= CPU_HISTORY_WINDOW_MINUTES:
+                buf[:] = b"\x00" * CPU_HISTORY_WINDOW_MINUTES
+                meta["head"] = 0
+                meta["last_minute"] = minute
+                buf[0] = encoded
+                meta_changed = True
+                changed = True
+            else:
+                head = int(meta.get("head") or 0)
+                for _ in range(delta):
+                    head = (head + 1) % CPU_HISTORY_WINDOW_MINUTES
+                    if buf[head] != 0:
+                        buf[head] = 0
+                        changed = True
+                meta["head"] = head
+                meta["last_minute"] = minute
+                meta_changed = True
+                if buf[head] != encoded:
+                    buf[head] = encoded
+                    changed = True
+        if changed or meta_changed:
+            self._dirty = True
+
+    def build_payload(self, key: str, *, hostname: str, bot_name: str = "",
+                      end_minute: int | None = None) -> dict[str, Any]:
+        key = str(key or "").strip()
+        self.load()
+        if end_minute is None or end_minute <= 0:
+            end_minute = int(time.time() // CPU_HISTORY_STEP_SECONDS)
+        start_minute = end_minute - CPU_HISTORY_WINDOW_MINUTES + 1
+        meta = self._meta.get(key)
+        buf = self._series.get(key)
+        points: list[float | None] = []
+        last_minute = int((meta or {}).get("last_minute") or 0)
+        head = int((meta or {}).get("head") or 0)
+        for minute in range(start_minute, end_minute + 1):
+            if not meta or buf is None or last_minute <= 0:
+                points.append(None)
+                continue
+            distance = last_minute - minute
+            if distance < 0 or distance >= CPU_HISTORY_WINDOW_MINUTES:
+                points.append(None)
+                continue
+            slot = (head - distance) % CPU_HISTORY_WINDOW_MINUTES
+            points.append(_cpu_history_decode(buf[slot]))
+        return {
+            "available": True,
+            "scope": "bot" if bot_name else "host",
+            "hostname": hostname,
+            "bot_name": bot_name,
+            "source": "cpu_60s",
+            "step_seconds": CPU_HISTORY_STEP_SECONDS,
+            "window_minutes": CPU_HISTORY_WINDOW_MINUTES,
+            "resolution_pct": CPU_HISTORY_RESOLUTION_PCT,
+            "start_minute": start_minute,
+            "end_minute": end_minute,
+            "last_minute": last_minute,
+            "series_exists": meta is not None,
+            "points": points,
+        }
+
+    def maybe_flush(self, *, force: bool = False, now_ts: float | None = None) -> None:
+        self.load()
+        if not self._dirty:
+            return
+        now_ts = float(now_ts or time.time())
+        if not force and (now_ts - self._last_flush_ts) < CPU_HISTORY_FLUSH_INTERVAL:
+            return
+        self._flush()
+        self._last_flush_ts = now_ts
+        self._dirty = False
+
+    def _flush(self) -> None:
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        slot_count = max(self._next_slot, 0)
+        payload = bytearray(slot_count * CPU_HISTORY_WINDOW_MINUTES)
+        for key, meta in self._meta.items():
+            slot = int(meta.get("slot") or 0)
+            start = slot * CPU_HISTORY_WINDOW_MINUTES
+            end = start + CPU_HISTORY_WINDOW_MINUTES
+            buf = self._series.get(key) or bytearray(CPU_HISTORY_WINDOW_MINUTES)
+            payload[start:end] = bytes(buf[:CPU_HISTORY_WINDOW_MINUTES])
+        index_payload = {
+            "version": CPU_HISTORY_VERSION,
+            "window_minutes": CPU_HISTORY_WINDOW_MINUTES,
+            "step_seconds": CPU_HISTORY_STEP_SECONDS,
+            "series": {
+                key: {
+                    "slot": int(meta.get("slot") or 0),
+                    "head": int(meta.get("head") or 0),
+                    "last_minute": int(meta.get("last_minute") or 0),
+                }
+                for key, meta in sorted(self._meta.items())
+            },
+        }
+        tmp_bin = self.bin_path.with_suffix(".bin.tmp")
+        tmp_json = self.index_path.with_suffix(".json.tmp")
+        tmp_bin.write_bytes(bytes(payload))
+        tmp_bin.replace(self.bin_path)
+        tmp_json.write_text(json.dumps(index_payload, indent=4), encoding="utf-8")
+        tmp_json.replace(self.index_path)
+
 # ── Remote scripts (same as old realtime_collector) ─────────
 
 MONITOR_AGENT_SCRIPT = r'''python3 -u -c "
@@ -216,6 +456,11 @@ def rcpu():
         p = f.readline().split()
     idle = int(p[4])
     return idle, sum(int(x) for x in p[1:])
+def system_cpu_pct(idle_prev, total_prev, idle_now, total_now):
+    dt = total_now - total_prev
+    if dt <= 0:
+        return 0.0
+    return round((1 - ((idle_now - idle_prev) / dt)) * 100, 1)
 def rmem():
     d = {}
     with open('/proc/meminfo') as f:
@@ -240,15 +485,34 @@ def _ppid_watcher():
 t = threading.Thread(target=_ppid_watcher, daemon=True)
 t.start()
 _bots_cpu_prev = {}
+_bots_cpu_history = {}
 _bots = {}
 pi, pt = rcpu()
+_cpu_60s_history = [(time.time(), pi, pt)]
 time.sleep(1)
 while True:
     try:
         ci, ct = rcpu()
-        di, dt = ci - pi, ct - pt
-        cpu = round((1 - di / dt) * 100, 1) if dt else 0
+        now = time.time()
+        cpu = system_cpu_pct(pi, pt, ci, ct)
         pi, pt = ci, ct
+        _cpu_60s_history.append((now, ci, ct))
+        cutoff = now - 62
+        _cpu_60s_history = [sample for sample in _cpu_60s_history if sample[0] >= cutoff]
+        cpu_60s = 0.0
+        cpu_60s_window = 0.0
+        cpu_60s_base = None
+        for sample in _cpu_60s_history:
+            elapsed = now - sample[0]
+            if elapsed >= 60:
+                cpu_60s_base = sample
+            else:
+                break
+        if cpu_60s_base:
+            cpu_60s_window = round(now - cpu_60s_base[0], 1)
+            cpu_60s = system_cpu_pct(cpu_60s_base[1], cpu_60s_base[2], ci, ct)
+        elif _cpu_60s_history:
+            cpu_60s_window = round(now - _cpu_60s_history[0][0], 1)
         mem, swap = rmem()
         s = os.statvfs('/')
         dtot = s.f_frsize * s.f_blocks
@@ -271,12 +535,35 @@ while True:
                 except Exception:
                     continue
                 prev = _bots_cpu_prev.get(pid)
-                cpu_pct = 0.0
+                bot_cpu_pct = 0.0
+                bot_cpu_60s = 0.0
+                bot_cpu_60s_window = 0.0
                 if prev:
                     dt_sec = now - prev[1]
                     if dt_sec > 0:
-                        cpu_pct = round((ticks - prev[0]) / (dt_sec * 100) * 100, 1)
+                        bot_cpu_pct = round((ticks - prev[0]) / (dt_sec * 100) * 100, 1)
                 _bots_cpu_prev[pid] = (ticks, now)
+                history = _bots_cpu_history.get(pid)
+                if history is None:
+                    history = []
+                    _bots_cpu_history[pid] = history
+                history.append((now, ticks))
+                cutoff = now - 62
+                history[:] = [sample for sample in history if sample[0] >= cutoff]
+                bot_cpu_60s_base = None
+                for sample in history:
+                    elapsed = now - sample[0]
+                    if elapsed >= 60:
+                        bot_cpu_60s_base = sample
+                    else:
+                        break
+                if bot_cpu_60s_base:
+                    dt_sec = now - bot_cpu_60s_base[0]
+                    if dt_sec > 0:
+                        bot_cpu_60s_window = round(dt_sec, 1)
+                        bot_cpu_60s = round((ticks - bot_cpu_60s_base[1]) / (dt_sec * 100) * 100, 1)
+                elif history:
+                    bot_cpu_60s_window = round(now - history[0][0], 1)
                 rss_mb = 0
                 swap_mb = 0
                 try:
@@ -296,7 +583,7 @@ while True:
                             _bots[pid] = name
                             break
                 if name:
-                    bots.append({'name': name, 'cpu': cpu_pct, 'rss_mb': rss_mb, 'swap_mb': swap_mb})
+                    bots.append({'name': name, 'cpu': bot_cpu_pct, 'cpu_60s': bot_cpu_60s, 'cpu_60s_window': bot_cpu_60s_window, 'rss_mb': rss_mb, 'swap_mb': swap_mb})
             alive = set()
             for pl in out.splitlines():
                 if 'main.py' in pl and 'config_run.json' in pl:
@@ -306,10 +593,11 @@ while True:
             for dead in list(_bots_cpu_prev.keys()):
                 if dead not in alive:
                     del _bots_cpu_prev[dead]
+                    _bots_cpu_history.pop(dead, None)
                     _bots.pop(dead, None)
         except Exception:
             pass
-        print(json.dumps({'ts': time.time(), 'cpu': cpu, 'mem': mem, 'disk': [dtot, dused, dfree, dpct], 'swap': swap, 'bots': bots}), flush=True)
+        print(json.dumps({'ts': time.time(), 'cpu': cpu, 'cpu_60s': cpu_60s, 'cpu_60s_window': cpu_60s_window, 'cpu_60s_samples': len(_cpu_60s_history), 'mem': mem, 'disk': [dtot, dused, dfree, dpct], 'swap': swap, 'bots': bots}), flush=True)
     except Exception:
         pass
     time.sleep(1)
@@ -891,6 +1179,7 @@ result = {
     'role': role,
     'boot': 0,
     'api_md5': '',
+    'cmc_credits': None,
     'reboot': os.path.exists('/var/run/reboot-required'),
     'pbgv': read_pbgui_version(PBGDIR),
     'pbgc': '',
@@ -940,6 +1229,13 @@ if result['pbgpy'] == 'N/A':
 pb7_python = python_version(pb7venv)
 if pb7_python:
     result['pb7py'] = pb7_python
+
+try:
+    raw_credits = cfg.get('coinmarketcap', 'credits_left', fallback='')
+    if raw_credits not in ('', None):
+        result['cmc_credits'] = int(float(raw_credits))
+except Exception:
+    pass
 
 available = []
 logs_dir = os.path.join(PBGDIR, 'data', 'logs')
@@ -1052,6 +1348,9 @@ class VPSMonitor:
         self._cache_path = Path(PBGDIR) / 'data' / 'monitor_cache.json'
         self._monitor_cache: dict[str, dict[str, dict]] = {}
         self._state_snapshot_path = Path(PBGDIR) / 'data' / 'vps_monitor_state.json'
+        history_dir = Path(PBGDIR) / 'data' / 'monitor_history'
+        self._host_cpu_history = CpuHistoryStore(history_dir, 'hosts_cpu_24h')
+        self._bot_cpu_history = CpuHistoryStore(history_dir, 'bots_cpu_24h')
 
         # Debug logging
         self._debug_logging: Optional[bool] = None
@@ -1123,6 +1422,8 @@ class VPSMonitor:
         self.store.load_ui_settings()
         self._ini_watcher.start()
         self._load_monitor_cache()
+        self._host_cpu_history.load()
+        self._bot_cpu_history.load()
         self._save_state_snapshot()
 
         enabled = self.enabled_hosts
@@ -1173,6 +1474,8 @@ class VPSMonitor:
         self._tasks.clear()
         self._stream_tasks.clear()
         self._ini_watcher.stop()
+        self._host_cpu_history.maybe_flush(force=True)
+        self._bot_cpu_history.maybe_flush(force=True)
         await self.pool.disconnect_all()
         _log(SERVICE, "VPS monitor stopped")
 
@@ -1353,9 +1656,13 @@ class VPSMonitor:
                     data = json.loads(line)
                     metrics = SystemMetrics.from_json(data)
                     self.store.update_system(hostname, metrics)
+                    self._record_host_cpu_history(hostname, metrics)
                     bots = data.get("bots")
                     if bots:
                         self.store.update_instances_live(hostname, bots)
+                        self._record_bot_cpu_history(hostname, bots, metrics.timestamp)
+                    self._host_cpu_history.maybe_flush(now_ts=metrics.timestamp)
+                    self._bot_cpu_history.maybe_flush(now_ts=metrics.timestamp)
                     self._save_state_snapshot()
                     self.store.update_stream_info(hostname, {
                         "alive": True,
@@ -1383,8 +1690,72 @@ class VPSMonitor:
             self.store.update_stream_info(hostname, {
                 "alive": False, "active": False, "error": None,
             })
+            self._host_cpu_history.maybe_flush(force=True)
+            self._bot_cpu_history.maybe_flush(force=True)
             self._save_state_snapshot()
             _log(SERVICE, f"[metrics] Stream ended for {hostname}")
+
+    def _record_host_cpu_history(self, hostname: str, metrics: SystemMetrics) -> None:
+        minute = int((metrics.timestamp or time.time()) // CPU_HISTORY_STEP_SECONDS)
+        self._host_cpu_history.record(
+            hostname,
+            minute=minute,
+            value=metrics.cpu_60s,
+            confirmed=float(metrics.cpu_60s_window or 0.0) >= 60.0,
+        )
+
+    def _record_bot_cpu_history(self, hostname: str, bots: list[dict], timestamp: float) -> None:
+        minute = int((timestamp or time.time()) // CPU_HISTORY_STEP_SECONDS)
+        for bot in bots or []:
+            name = str(bot.get('name') or '').strip()
+            if not name:
+                continue
+            self._bot_cpu_history.record(
+                self._bot_history_key(hostname, name),
+                minute=minute,
+                value=bot.get('cpu_60s'),
+                confirmed=float(bot.get('cpu_60s_window') or 0.0) >= 60.0,
+            )
+
+    def _bot_history_key(self, hostname: str, bot_name: str) -> str:
+        return f"{hostname}:{bot_name}"
+
+    def get_host_cpu_history(self, hostname: str) -> dict[str, Any]:
+        hostname = str(hostname or '').strip()
+        if not hostname:
+            return {
+                'available': False,
+                'scope': 'host',
+                'hostname': '',
+                'bot_name': '',
+                'source': 'cpu_60s',
+                'step_seconds': CPU_HISTORY_STEP_SECONDS,
+                'window_minutes': CPU_HISTORY_WINDOW_MINUTES,
+                'resolution_pct': CPU_HISTORY_RESOLUTION_PCT,
+                'points': [],
+            }
+        return self._host_cpu_history.build_payload(hostname, hostname=hostname)
+
+    def get_bot_cpu_history(self, hostname: str, bot_name: str) -> dict[str, Any]:
+        hostname = str(hostname or '').strip()
+        bot_name = str(bot_name or '').strip()
+        if not hostname or not bot_name:
+            return {
+                'available': False,
+                'scope': 'bot',
+                'hostname': hostname,
+                'bot_name': bot_name,
+                'source': 'cpu_60s',
+                'step_seconds': CPU_HISTORY_STEP_SECONDS,
+                'window_minutes': CPU_HISTORY_WINDOW_MINUTES,
+                'resolution_pct': CPU_HISTORY_RESOLUTION_PCT,
+                'points': [],
+            }
+        return self._bot_cpu_history.build_payload(
+            self._bot_history_key(hostname, bot_name),
+            hostname=hostname,
+            bot_name=bot_name,
+        )
 
     # ── Instance collection ─────────────────────────────────
 

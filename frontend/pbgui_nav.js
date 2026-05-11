@@ -67,6 +67,7 @@
      CSS (injected into <head>)
      ════════════════════════════════════ */
   var NAV_CSS = [
+    ':root{--fs-xs:11px;--fs-sm:13px;--fs-base:14px;--fs-md:15px;--fs-lg:18px;--fs-xl:28px;--sp-xs:4px;--sp-sm:8px;--sp-md:12px;--sp-lg:20px;--btn-h:32px;}',
     'html,body{height:100%;}',
     'body{padding:0!important;overflow:hidden;}',
 
@@ -80,11 +81,11 @@
 
     '.nav-group{position:relative;height:100%;display:flex;align-items:center;}',
 
-    '.nav-group-btn{display:flex;align-items:center;gap:0.3rem;padding:0.3rem 0.7rem;',
-    'height:100%;background:transparent;border:none;color:#94a3b8;font-size:var(--fs-base);',
+    'button.nav-group-btn{display:flex;align-items:center;gap:0.3rem;padding:0.3rem 0.7rem;',
+    'height:100%;background:transparent;border:none;border-radius:0;color:#94a3b8;font-size:var(--fs-base);',
     'font-weight:500;cursor:pointer;border-bottom:2px solid transparent;',
     'transition:color .15s,border-color .15s,background .15s;white-space:nowrap;}',
-    '.nav-group-btn:hover{color:#e2e8f0;background:rgba(255,255,255,.04);}',
+    'button.nav-group-btn:hover:not(:disabled){color:#e2e8f0;background:rgba(255,255,255,.04);transform:none;}',
     '.nav-group-btn.active{color:#63b3ed;border-bottom-color:#63b3ed;}',
     '.nav-group-btn.disabled{opacity:.45;cursor:not-allowed;}',
     '.nav-group-btn.disabled:hover{color:#94a3b8;background:transparent;border-bottom-color:transparent;}',

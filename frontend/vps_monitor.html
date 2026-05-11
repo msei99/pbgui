@@ -32,6 +32,137 @@ body {
   flex-direction: column;
 }
 
+#metric-tooltip {
+  position: fixed;
+  z-index: 9999;
+  max-width: 320px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(12, 16, 24, 0.96);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  white-space: pre-line;
+  display: none;
+}
+
+#cpu-history-ovl {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(3, 6, 10, 0.72);
+  backdrop-filter: blur(4px);
+  z-index: 3001;
+}
+
+#cpu-history-ovl.visible {
+  display: flex;
+}
+
+.cpu-history-box {
+  width: min(980px, calc(100vw - 32px));
+  max-height: min(86vh, 880px);
+  border-radius: 18px;
+  background: rgba(12, 21, 34, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.54);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.cpu-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(17, 29, 47, 0.94);
+}
+
+.cpu-history-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.cpu-history-sub {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.cpu-history-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.cpu-history-close:hover { color: var(--text); }
+
+.cpu-history-body {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+  overflow: auto;
+}
+
+.cpu-chart-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cpu-chart-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(16, 29, 48, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.cpu-chart-wrap {
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(10, 17, 27, 0.82);
+  padding: 10px;
+}
+
+.cpu-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.cpu-clickable {
+  cursor: pointer;
+}
+
+.cpu-clickable:hover {
+  outline: 1px solid rgba(77, 166, 255, 0.35);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+#inst-tbody td.cpu-clickable:hover {
+  outline: none;
+  box-shadow: inset 0 0 0 1px rgba(77, 166, 255, 0.35);
+  border-radius: 6px;
+}
+
 /* ─── Connection Banner ────────────────────────────────────── */
 #conn-banner {
   padding: 8px 16px;
@@ -146,35 +277,46 @@ body.compact .tab-content      { padding: 8px 10px; }
 
 /* Compact inline metrics in header row — sits between vps-title and arrow */
 .compact-metrics {
-  display: flex;
-  gap: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  column-gap: 10px;
   flex: 1;
   margin-left: 16px;
   font-size: 12px;
   font-weight: 600;
   align-items: center;
+  min-width: 0;
 }
 .compact-metric {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 34px minmax(0, max-content) 28px 44px;
   align-items: center;
-  gap: 4px;
-  width: 175px;
-  flex-shrink: 0;
+  column-gap: 4px;
+  min-width: 0;
+  justify-content: start;
 }
 .compact-metric .cm-label {
-  width: 34px;
   text-align: right;
   color: var(--text-dim);
   font-weight: 500;
-  flex-shrink: 0;
+  white-space: nowrap;
 }
 .compact-metric .cm-value {
-  width: 72px;
+  min-width: 0;
   text-align: right;
+  white-space: nowrap;
+}
+.compact-metric .cm-sub {
+  width: 28px;
+  text-align: right;
+  color: var(--text-dim);
+  font-size: 10px;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 .compact-bar {
-  width: 50px;
+  width: 44px;
   height: 6px;
   background: var(--bg3);
   border-radius: 3px;
@@ -198,6 +340,7 @@ body.compact .tab-content      { padding: 8px 10px; }
   transition: border-color 0.2s;
 }
 .vps-card.connected { border-left: 3px solid var(--green); }
+.vps-card.connecting { border-left: 3px solid var(--orange); }
 .vps-card.disconnected { border-left: 3px solid var(--red); }
 .vps-header {
   display: flex;
@@ -408,6 +551,14 @@ tr.row-inactive td { opacity: 0.45; }
 }
 .inst-action:hover { opacity: 1; }
 .inst-actions { white-space: nowrap; }
+.inst-cpu-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.25;
+  margin-top: 2px;
+  white-space: nowrap;
+}
 
 /* ─── Responsive ──────────────────────────────────────────── */
 @media (max-width: 600px) {
@@ -540,6 +691,22 @@ tr.row-inactive td { opacity: 0.45; }
   </div>
 </div>
 
+<div id="cpu-history-ovl">
+  <div class="cpu-history-box">
+    <div class="cpu-history-head">
+      <div>
+        <div id="cpu-history-title" class="cpu-history-title">CPU History</div>
+        <div id="cpu-history-sub" class="cpu-history-sub">Loading…</div>
+      </div>
+      <button class="cpu-history-close" type="button" onclick="closeCpuHistory()">&times;</button>
+    </div>
+    <div class="cpu-history-body">
+      <div id="cpu-history-meta" class="cpu-chart-meta"></div>
+      <div id="cpu-history-chart" class="cpu-chart-wrap"></div>
+    </div>
+  </div>
+</div>
+
 <!-- Connection Banner -->
 <div id="conn-banner" class="conn-waiting">Connecting to VPS Monitor...</div>
 
@@ -639,6 +806,7 @@ let instFilterOthers = false;
 
 // Logs tab state
 let vpsLogViewer = null;
+let cpuHistoryRequestId = 0;
 
 // ── WebSocket ──────────────────────────────────────────────
 function connect() {
@@ -719,10 +887,118 @@ function handleMessage(msg) {
     case 'result':
       handleResult(msg);
       break;
+    case 'cpu_history':
+      handleCpuHistory(msg.data || null, msg.host || '', msg.bot_name || '', msg.sid || '');
+      break;
     case 'error':
       console.error('Server error:', msg.error);
       break;
   }
+}
+
+let metricTooltipVisible = false;
+
+function tooltipTextForMetrics(label, metrics) {
+  if (!metrics) return '';
+  if (label === 'CPU') {
+    const cpuUi = cpuTelemetry(metrics);
+    return cpuUi.compactTitle;
+  }
+  if (label === 'RAM') {
+    return [
+      'RAM used: ' + fmtBytes(metrics.mem_used),
+      'RAM free: ' + fmtBytes(metrics.mem_available),
+      'RAM total: ' + fmtBytes(metrics.mem_total),
+      'Usage: ' + (Number(metrics.mem_percent || 0)).toFixed(1) + '%',
+    ].join('\n');
+  }
+  if (label === 'Disk') {
+    return [
+      'Disk used: ' + fmtBytes(metrics.disk_used),
+      'Disk free: ' + fmtBytes(metrics.disk_free),
+      'Disk total: ' + fmtBytes(metrics.disk_total),
+      'Usage: ' + (Number(metrics.disk_percent || 0)).toFixed(1) + '%',
+    ].join('\n');
+  }
+  if (label === 'Swap') {
+    return [
+      'Swap used: ' + fmtBytes(metrics.swap_used),
+      'Swap free: ' + fmtBytes(metrics.swap_free),
+      'Swap total: ' + fmtBytes(metrics.swap_total),
+      'Usage: ' + (Number(metrics.swap_percent || 0)).toFixed(1) + '%',
+    ].join('\n');
+  }
+  return '';
+}
+
+function tooltipAttr(text) {
+  return text ? ` data-tip="${escAttr(text)}"` : '';
+}
+
+function ensureMetricTooltip() {
+  let el = document.getElementById('metric-tooltip');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'metric-tooltip';
+  document.body.appendChild(el);
+  return el;
+}
+
+function hideMetricTooltip() {
+  const el = document.getElementById('metric-tooltip');
+  if (!el) return;
+  el.style.display = 'none';
+  metricTooltipVisible = false;
+}
+
+function showMetricTooltip(target, event) {
+  if (!target) return;
+  const text = String(target.getAttribute('data-tip') || '');
+  if (!text) return;
+  const el = ensureMetricTooltip();
+  el.textContent = text;
+  el.style.display = 'block';
+  metricTooltipVisible = true;
+  positionMetricTooltip(event);
+}
+
+function positionMetricTooltip(event) {
+  const el = document.getElementById('metric-tooltip');
+  if (!el || !metricTooltipVisible || !event) return;
+  const offset = 14;
+  const rect = el.getBoundingClientRect();
+  let left = event.clientX + offset;
+  let top = event.clientY + offset;
+  if (left + rect.width > window.innerWidth - 8) left = event.clientX - rect.width - offset;
+  if (top + rect.height > window.innerHeight - 8) top = event.clientY - rect.height - offset;
+  el.style.left = Math.max(8, left) + 'px';
+  el.style.top = Math.max(8, top) + 'px';
+}
+
+function initMetricTooltipHandlers() {
+  document.addEventListener('mouseover', function (event) {
+    const target = event.target && event.target.closest ? event.target.closest('[data-tip]') : null;
+    if (!target) return;
+    showMetricTooltip(target, event);
+  });
+  document.addEventListener('mousemove', function (event) {
+    if (!metricTooltipVisible) return;
+    const target = event.target && event.target.closest ? event.target.closest('[data-tip]') : null;
+    if (!target) {
+      hideMetricTooltip();
+      return;
+    }
+    positionMetricTooltip(event);
+  });
+  document.addEventListener('mouseout', function (event) {
+    const target = event.target && event.target.closest ? event.target.closest('[data-tip]') : null;
+    if (!target) return;
+    const related = event.relatedTarget && event.relatedTarget.closest ? event.relatedTarget.closest('[data-tip]') : null;
+    if (related === target) return;
+    hideMetricTooltip();
+  });
+  window.addEventListener('scroll', hideMetricTooltip, true);
+  window.addEventListener('blur', hideMetricTooltip);
 }
 
 function handleResult(msg) {
@@ -833,17 +1109,25 @@ function renderDashboard() {
   // Summary bar
   const total = Object.keys(conns).length;
   const connected = Object.values(conns).filter(c => c.status === 'connected').length;
+  const connecting = Object.values(conns).filter(c => c.status === 'connecting').length;
+  const disconnected = total - connected - connecting;
   const summaryEl = document.getElementById('dash-summary');
   summaryEl.innerHTML = `
     <span class="summary-item"><span class="summary-dot" style="background:var(--green)"></span> ${connected} connected</span>
-    <span class="summary-item"><span class="summary-dot" style="background:var(--red)"></span> ${total - connected} disconnected</span>
+    <span class="summary-item"><span class="summary-dot" style="background:var(--orange)"></span> ${connecting} connecting</span>
+    <span class="summary-item"><span class="summary-dot" style="background:var(--red)"></span> ${disconnected} disconnected</span>
     <span class="summary-item" style="color:var(--text-dim)">Updated: ${ageStr(state.timestamp)}</span>
   `;
 
   // VPS cards
+  const statusRank = (status) => {
+    if (status === 'connected') return 0;
+    if (status === 'connecting') return 1;
+    return 2;
+  };
   const sorted = Object.keys(conns).sort((a, b) => {
-    const ac = conns[a].status === 'connected' ? 0 : 1;
-    const bc = conns[b].status === 'connected' ? 0 : 1;
+    const ac = statusRank(String(conns[a].status || 'disconnected'));
+    const bc = statusRank(String(conns[b].status || 'disconnected'));
     return ac - bc || a.localeCompare(b);
   });
 
@@ -852,7 +1136,9 @@ function renderDashboard() {
   let html = '';
   for (const host of sorted) {
     const info = conns[host];
-    const isConn = info.status === 'connected';
+    const status = String(info.status || 'disconnected');
+    const isConn = status === 'connected';
+    const isConnecting = status === 'connecting';
     const metrics = sys[host];
     const stream = streams[host] || {};
     // compactToggled tracks manual open/close; reset on mode switch
@@ -860,10 +1146,10 @@ function renderDashboard() {
       ? compactToggled[host]
       : (compactMode ? true : !isConn);  // compact: default closed, normal: default open if connected
 
-    html += `<div class="vps-card ${isConn ? 'connected' : 'disconnected'}" data-host="${host}">`;
+    html += `<div class="vps-card ${isConn ? 'connected' : (isConnecting ? 'connecting' : 'disconnected')}" data-host="${host}">`;
     html += `<div class="vps-header" onclick="toggleCard(this)">`;
-    html += `<span class="vps-title">${isConn ? '✅' : '❌'} ${host}`;
-    html += ` <span class="vps-badge ${isConn ? 'badge-green' : 'badge-red'}"${hideIP ? ' style="display:none"' : ''}>${info.ip || '?'}</span>`;
+    html += `<span class="vps-title">${isConn ? '✅' : (isConnecting ? '⏳' : '❌')} ${host}`;
+    html += ` <span class="vps-badge ${isConn ? 'badge-green' : (isConnecting ? 'badge-orange' : 'badge-red')}"${hideIP ? ' style="display:none"' : ''}>${info.ip || '?'}</span>`;
     if (stream.alive) {
       const m = metrics;
       const lastUpdate = stream.last_update || (m ? m.timestamp : 0);
@@ -874,12 +1160,13 @@ function renderDashboard() {
     html += `</span>`;
     // Inline metrics in header (always shown for connected hosts)
     if (isConn && metrics) {
+      const cpuUi = cpuTelemetry(metrics);
       html += `<span class="compact-metrics">`;
-      html += compactMetric('CPU', metrics.cpu.toFixed(0) + '%', metrics.cpu);
-      html += compactMetric('RAM', fmtBytes(metrics.mem_used), metrics.mem_percent);
-      html += compactMetric('Disk', fmtBytes(metrics.disk_used), metrics.disk_percent);
+      html += compactMetric('CPU', cpuUi.liveCompact, metrics.cpu, cpuUi.compactSub, tooltipTextForMetrics('CPU', metrics), ` class="cpu-clickable compact-metric" data-cpu-history-host="${escAttr(host)}"`);
+      html += compactMetric('RAM', fmtBytes(metrics.mem_used), metrics.mem_percent, '', tooltipTextForMetrics('RAM', metrics));
+      html += compactMetric('Disk', fmtBytes(metrics.disk_used), metrics.disk_percent, '', tooltipTextForMetrics('Disk', metrics));
       if (metrics.swap_total > 0) {
-        html += compactMetric('Swap', fmtBytes(metrics.swap_used), metrics.swap_percent);
+        html += compactMetric('Swap', fmtBytes(metrics.swap_used), metrics.swap_percent, '', tooltipTextForMetrics('Swap', metrics));
       }
       html += `</span>`;
     }
@@ -888,20 +1175,23 @@ function renderDashboard() {
     html += `<div class="vps-body ${isCollapsed ? 'collapsed' : ''}">`;
 
     if (!isConn) {
-      const err = info.error || '';
-      html += `<div style="color:var(--red);padding:8px 0">Disconnected${err ? ': ' + esc(err) : ''}</div>`;
+      const err = info.error || info.last_error || '';
+      const statusText = isConnecting ? 'Connecting...' : 'Disconnected';
+      const statusColor = isConnecting ? 'var(--orange)' : 'var(--red)';
+      html += `<div style="color:${statusColor};padding:8px 0">${statusText}${err ? ': ' + esc(err) : ''}</div>`;
     } else if (!metrics) {
       html += `<div style="color:var(--text-dim);padding:8px 0">Waiting for system metrics...</div>`;
     } else {
+      const cpuUi = cpuTelemetry(metrics);
       html += `<div class="metrics-grid">`;
-      html += metricCard('CPU', metrics.cpu.toFixed(1) + '%', '', metrics.cpu);
+      html += metricCard('CPU', cpuUi.liveFull, cpuUi.fullSub, metrics.cpu, tooltipTextForMetrics('CPU', metrics), ` class="cpu-clickable metric-card" data-cpu-history-host="${escAttr(host)}"`);
       html += metricCard('RAM', fmtBytes(metrics.mem_used),
-        fmtBytes(metrics.mem_total), metrics.mem_percent);
+        fmtBytes(metrics.mem_total), metrics.mem_percent, tooltipTextForMetrics('RAM', metrics));
       html += metricCard('Disk', fmtBytes(metrics.disk_used),
-        fmtBytes(metrics.disk_total), metrics.disk_percent);
+        fmtBytes(metrics.disk_total), metrics.disk_percent, tooltipTextForMetrics('Disk', metrics));
       if (metrics.swap_total > 0) {
         html += metricCard('Swap', fmtBytes(metrics.swap_used),
-          fmtBytes(metrics.swap_total), metrics.swap_percent);
+          fmtBytes(metrics.swap_total), metrics.swap_percent, tooltipTextForMetrics('Swap', metrics));
       }
       html += `</div>`;
     }
@@ -915,10 +1205,10 @@ function renderDashboard() {
   cardsEl.innerHTML = html;
 }
 
-function metricCard(label, value, sub, pct) {
+function metricCard(label, value, sub, pct, title, extraAttrs) {
   const color = pctColor(pct);
   return `
-    <div class="metric-card">
+    <div${extraAttrs || ' class="metric-card"'}${tooltipAttr(title)}>
       <div class="metric-label">${label}</div>
       <div class="metric-value" style="color:${color}">${value}</div>
       ${sub ? `<div class="metric-sub">${sub}</div>` : ''}
@@ -928,13 +1218,54 @@ function metricCard(label, value, sub, pct) {
     </div>`;
 }
 
-function compactMetric(label, value, pct) {
+function compactMetric(label, value, pct, sub, title, extraAttrs) {
   const color = pctColor(pct);
-  return `<span class="compact-metric">
+  return `<span${extraAttrs || ' class="compact-metric"'}${tooltipAttr(title)}>
     <span class="cm-label">${label}</span>
     <span class="cm-value" style="color:${color}">${value}</span>
+    ${sub ? `<span class="cm-sub">${sub}</span>` : ''}
     <span class="compact-bar"><span class="compact-bar-fill" style="width:${Math.min(pct, 100)}%;background:${color}"></span></span>
   </span>`;
+}
+
+function cpuTelemetry(metrics) {
+  const live = Number.isFinite(Number(metrics && metrics.cpu)) ? Number(metrics.cpu) : 0;
+  const avg60 = Number.isFinite(Number(metrics && metrics.cpu_60s)) ? Number(metrics.cpu_60s) : 0;
+  const window60 = Number.isFinite(Number(metrics && metrics.cpu_60s_window)) ? Number(metrics.cpu_60s_window) : 0;
+  const confirmed = window60 >= 60;
+  let compactSub = '';
+  let fullSub = '';
+  if (confirmed) {
+    compactSub = avg60.toFixed(0) + '%';
+    fullSub = '1m CPU ' + avg60.toFixed(1) + '%';
+  } else if (window60 > 0) {
+    compactSub = Math.min(60, Math.floor(window60)) + 's';
+    fullSub = '1m CPU warming up (' + Math.min(60, Math.floor(window60)) + 's/60s)';
+  }
+  return {
+    liveCompact: live.toFixed(0) + '%',
+    liveFull: live.toFixed(1) + '%',
+    compactSub,
+    fullSub,
+    compactTitle: confirmed
+      ? ([
+          'CPU live (about 1s): ' + live.toFixed(1) + '%',
+          'CPU 1m (60s window): ' + avg60.toFixed(1) + '%',
+        ].join('\n'))
+      : ([
+          'CPU live (about 1s): ' + live.toFixed(1) + '%',
+          'CPU 1m (60s window) warming up: ' + Math.min(60, Math.floor(window60)) + 's/60s',
+        ].join('\n')),
+  };
+}
+
+function escAttr(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
 }
 
 function toggleCard(header) {
@@ -992,6 +1323,8 @@ function renderInstances() {
         host, version, name, start: startStr,
         pbVersion: inst.p || '?',
         memMB: parseFloat(memMB), cpu: inst.c || 0,
+        cpu60s: Number.isFinite(Number(inst.cpu_60s)) ? Number(inst.cpu_60s) : 0,
+        cpu60sWindow: Number.isFinite(Number(inst.cpu_60s_window)) ? Number(inst.cpu_60s_window) : 0,
         pnlToday: inst.pt || 0, fillsToday: inst.ct || 0,
         pnlYesterday: inst.py || 0, fillsYesterday: inst.cy || 0,
         errorsToday: inst.et || 0, errorsYesd: inst.ey || 0,
@@ -1012,7 +1345,7 @@ function renderInstances() {
       rows.push({
         host, version: 'V7', name: v.name, start: '–',
         pbVersion: '7',
-        memMB: 0, cpu: 0,
+        memMB: 0, cpu: 0, cpu60s: 0, cpu60sWindow: 0,
         pnlToday: 0, fillsToday: 0,
         pnlYesterday: 0, fillsYesterday: 0,
         errorsToday: 0, errorsYesd: 0,
@@ -1113,7 +1446,7 @@ function renderInstances() {
       <td>${r.runningVer !== null ? r.runningVer : '–'}</td>
       <td>${esc(r.start)}</td>
       <td>${r.memMB.toFixed(1)}</td>
-      <td>${r.cpu.toFixed(1)}</td>
+      <td class="cpu-clickable" data-cpu-history-host="${escAttr(r.host)}" data-cpu-history-bot="${escAttr(r.name)}">${instanceCpuCell(r.host, r.name, r.cpu, r.cpu60s, r.cpu60sWindow)}</td>
       <td class="${pnlClass(r.pnlToday)}">${r.pnlToday.toFixed(2)}</td>
       <td>${r.fillsToday}</td>
       <td class="${pnlClass(r.pnlYesterday)}">${r.pnlYesterday.toFixed(2)}</td>
@@ -1128,6 +1461,162 @@ function renderInstances() {
       </td>
     </tr>
   `).join('');
+}
+
+function instanceCpuCell(host, name, liveCpu, cpu60s, cpu60sWindow) {
+  const live = Number.isFinite(Number(liveCpu)) ? Number(liveCpu) : 0;
+  const avg60 = Number.isFinite(Number(cpu60s)) ? Number(cpu60s) : 0;
+  const window60 = Number.isFinite(Number(cpu60sWindow)) ? Number(cpu60sWindow) : 0;
+  let sub = '';
+  if (window60 >= 60) sub = '60s ' + avg60.toFixed(1) + '%';
+  else if (window60 > 0) sub = '60s warmup ' + Math.min(60, Math.floor(window60)) + 's/60s';
+  return `<span>${live.toFixed(1)}${sub ? `<span class="inst-cpu-sub">${esc(sub)}</span>` : ''}</span>`;
+}
+
+window.openCpuHistory = function openCpuHistory(host, botName) {
+  const overlay = document.getElementById('cpu-history-ovl');
+  const title = document.getElementById('cpu-history-title');
+  const sub = document.getElementById('cpu-history-sub');
+  const meta = document.getElementById('cpu-history-meta');
+  const chart = document.getElementById('cpu-history-chart');
+  if (!overlay || !title || !sub || !meta || !chart) return;
+  const hostName = String(host || '');
+  const bot = String(botName || '');
+  if (!hostName) return;
+  cpuHistoryRequestId += 1;
+  const rid = cpuHistoryRequestId;
+  if (overlay.parentElement !== document.body) {
+    document.body.appendChild(overlay);
+  }
+  overlay.classList.add('visible');
+  overlay.style.display = 'flex';
+  overlay.style.visibility = 'visible';
+  overlay.style.opacity = '1';
+  overlay.style.zIndex = '5001';
+  title.textContent = bot ? ('CPU History - ' + bot + ' @ ' + hostName) : ('CPU History - ' + hostName);
+  sub.textContent = 'Loading 24h cpu_60s history...';
+  meta.innerHTML = '';
+  chart.innerHTML = '<div style="color:var(--text-dim);padding:24px;text-align:center">Loading…</div>';
+  send({ cmd: 'get_cpu_history', host: hostName, bot_name: bot, sid: String(rid) });
+};
+
+window.closeCpuHistory = function closeCpuHistory() {
+  const overlay = document.getElementById('cpu-history-ovl');
+  if (!overlay) return;
+  overlay.classList.remove('visible');
+  overlay.style.display = 'none';
+  overlay.style.visibility = 'hidden';
+  overlay.style.opacity = '0';
+};
+
+function getCpuHistoryTarget(target) {
+  if (!target || typeof target.closest !== 'function') return null;
+  const trigger = target.closest('[data-cpu-history-host]');
+  if (!trigger) return null;
+  const host = String(trigger.getAttribute('data-cpu-history-host') || '').trim();
+  const bot = String(trigger.getAttribute('data-cpu-history-bot') || '').trim();
+  if (!host) return null;
+  return { host, bot };
+}
+
+let lastCpuHistoryOpen = { key: '', ts: 0 };
+
+function handleCpuHistoryInteraction(event) {
+  const target = getCpuHistoryTarget(event.target);
+  if (!target) return;
+  const key = target.host + '::' + target.bot;
+  const now = Date.now();
+  if (lastCpuHistoryOpen.key === key && (now - lastCpuHistoryOpen.ts) < 400) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  lastCpuHistoryOpen = { key, ts: now };
+  event.preventDefault();
+  event.stopPropagation();
+  openCpuHistory(target.host, target.bot);
+}
+
+function handleCpuHistory(payload, host, botName, sid) {
+  const overlay = document.getElementById('cpu-history-ovl');
+  if (!overlay || !overlay.classList.contains('visible')) return;
+  if (sid && String(sid) !== String(cpuHistoryRequestId)) return;
+  const title = document.getElementById('cpu-history-title');
+  const sub = document.getElementById('cpu-history-sub');
+  const meta = document.getElementById('cpu-history-meta');
+  const chart = document.getElementById('cpu-history-chart');
+  if (!title || !sub || !meta || !chart) return;
+  const data = payload || {};
+  const points = Array.isArray(data.points) ? data.points : [];
+  title.textContent = botName ? ('CPU History - ' + botName + ' @ ' + host) : ('CPU History - ' + host);
+  sub.textContent = '24h history, 1 sample/minute, source: cpu_60s';
+  meta.innerHTML = renderCpuHistoryMeta(data, points);
+  chart.innerHTML = renderCpuHistoryChart(data, points);
+}
+
+function renderCpuHistoryMeta(data, points) {
+  const valid = points.filter(function (v) { return typeof v === 'number' && Number.isFinite(v); });
+  const latest = valid.length ? valid[valid.length - 1] : null;
+  const peak = valid.length ? Math.max.apply(null, valid) : null;
+  const threshold = Number.isFinite(Number(data && data.threshold_pct)) ? Number(data.threshold_pct) : null;
+  const lastMinute = Number.isFinite(Number(data && data.last_minute)) ? Number(data.last_minute) : 0;
+  const lastSeen = lastMinute > 0 ? new Date(lastMinute * 60000).toLocaleString() : 'n/a';
+  return [
+    cpuChartPill('Latest', latest == null ? 'n/a' : latest.toFixed(1) + '%'),
+    cpuChartPill('Peak', peak == null ? 'n/a' : peak.toFixed(1) + '%'),
+    cpuChartPill('Threshold', threshold == null ? 'n/a' : threshold.toFixed(1) + '%'),
+    cpuChartPill('Last sample', lastSeen),
+  ].join('');
+}
+
+function cpuChartPill(label, value) {
+  return `<span class="cpu-chart-pill"><strong>${esc(label)}:</strong> ${esc(value)}</span>`;
+}
+
+function renderCpuHistoryChart(data, points) {
+  if (!points.length) {
+    return '<div style="color:var(--text-dim);padding:24px;text-align:center">No history available yet.</div>';
+  }
+  const width = 920;
+  const height = 280;
+  const pad = { left: 42, right: 14, top: 14, bottom: 28 };
+  const innerW = width - pad.left - pad.right;
+  const innerH = height - pad.top - pad.bottom;
+  const threshold = Number.isFinite(Number(data && data.threshold_pct)) ? Number(data.threshold_pct) : null;
+  const valid = points
+    .map(function (value, index) { return typeof value === 'number' && Number.isFinite(value) ? { index: index, value: value } : null; })
+    .filter(Boolean);
+  if (!valid.length) {
+    return '<div style="color:var(--text-dim);padding:24px;text-align:center">No confirmed 60s samples stored yet.</div>';
+  }
+  const maxValue = Math.max(100, threshold || 0, Math.max.apply(null, valid.map(function (item) { return item.value; })));
+  function x(index) { return pad.left + (index / Math.max(points.length - 1, 1)) * innerW; }
+  function y(value) { return pad.top + innerH - (value / maxValue) * innerH; }
+  let path = '';
+  valid.forEach(function (item, idx) {
+    path += (idx === 0 ? 'M' : ' L') + x(item.index).toFixed(1) + ' ' + y(item.value).toFixed(1);
+  });
+  const guides = [0, 25, 50, 75, 100].filter(function (v, i, arr) { return v <= maxValue || i === arr.length - 1; }).map(function (v) {
+    const yy = y(v);
+    return `<line x1="${pad.left}" y1="${yy.toFixed(1)}" x2="${(width - pad.right)}" y2="${yy.toFixed(1)}" stroke="rgba(255,255,255,0.08)" stroke-width="1" />`
+      + `<text x="${pad.left - 8}" y="${(yy + 4).toFixed(1)}" text-anchor="end" fill="rgba(255,255,255,0.55)" font-size="11">${v}%</text>`;
+  }).join('');
+  const thresholdLine = threshold == null ? '' : `<line x1="${pad.left}" y1="${y(threshold).toFixed(1)}" x2="${(width - pad.right)}" y2="${y(threshold).toFixed(1)}" stroke="rgba(255,75,75,0.75)" stroke-width="1.5" stroke-dasharray="6 4" />`;
+  const thresholdLabel = threshold == null ? '' : `<text x="${width - pad.right}" y="${(y(threshold) - 6).toFixed(1)}" text-anchor="end" fill="rgba(255,120,120,0.9)" font-size="11">alert ${threshold.toFixed(1)}%</text>`;
+  return `
+    <svg class="cpu-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="24 hour CPU history chart">
+      <rect x="0" y="0" width="${width}" height="${height}" rx="10" fill="rgba(5,9,15,0.55)"></rect>
+      ${guides}
+      ${thresholdLine}
+      ${thresholdLabel}
+      <path d="${path}" fill="none" stroke="rgba(93,196,255,0.95)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"></path>
+      <text x="${pad.left}" y="${height - 8}" fill="rgba(255,255,255,0.55)" font-size="11">24h ago</text>
+      <text x="${width - pad.right}" y="${height - 8}" text-anchor="end" fill="rgba(255,255,255,0.55)" font-size="11">now</text>
+    </svg>`;
+}
+
+function jsq(value) {
+  return JSON.stringify(value == null ? '' : String(value));
 }
 
 function selectInstance(idx) {
@@ -1283,6 +1772,7 @@ function initVpsLogViewer() {
 
 // ── Init ───────────────────────────────────────────────────
 connect();
+initMetricTooltipHandlers();
 
 // ── Sidebar resize ─────────────────────────────────────────
 (function () {
@@ -1512,6 +2002,12 @@ window.PBGUI_NAV_CONFIG = {
 document.addEventListener('DOMContentLoaded', function() {
   var btn = document.getElementById('pbgui-guide-btn');
   if (btn) { var fresh = btn.cloneNode(true); btn.parentNode.replaceChild(fresh, btn); fresh.addEventListener('click', function() { if (typeof window._openVpsHelp === 'function') window._openVpsHelp(); }); }
+});
+
+document.addEventListener('click', handleCpuHistoryInteraction, true);
+
+document.getElementById('cpu-history-ovl').addEventListener('click', function (event) {
+  if (event.target === event.currentTarget) closeCpuHistory();
 });
 </script>
 </body>

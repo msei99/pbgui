@@ -19,6 +19,9 @@ class SystemMetrics:
     """Latest system metrics from a VPS."""
     timestamp: float = 0.0
     cpu: float = 0.0
+    cpu_60s: float = 0.0
+    cpu_60s_window: float = 0.0
+    cpu_60s_samples: int = 0
     mem_total: int = 0
     mem_available: int = 0
     mem_percent: float = 0.0
@@ -41,6 +44,9 @@ class SystemMetrics:
         return cls(
             timestamp=data.get("ts", 0.0),
             cpu=data.get("cpu", 0.0),
+            cpu_60s=data.get("cpu_60s", 0.0),
+            cpu_60s_window=data.get("cpu_60s_window", 0.0),
+            cpu_60s_samples=data.get("cpu_60s_samples", 0),
             mem_total=mem[0] if len(mem) > 0 else 0,
             mem_available=mem[1] if len(mem) > 1 else 0,
             mem_percent=mem[2] if len(mem) > 2 else 0.0,
@@ -59,6 +65,9 @@ class SystemMetrics:
         return {
             "timestamp": self.timestamp,
             "cpu": self.cpu,
+            "cpu_60s": self.cpu_60s,
+            "cpu_60s_window": self.cpu_60s_window,
+            "cpu_60s_samples": self.cpu_60s_samples,
             "mem_total": self.mem_total,
             "mem_available": self.mem_available,
             "mem_percent": self.mem_percent,
@@ -114,7 +123,7 @@ class VPSStore:
     def update_instances_live(self, hostname: str, bots: list[dict]):
         """Merge live CPU/RSS/Swap from the metrics stream into existing instance entries.
 
-        Only overwrites cpu (``c``), rss (``m[0]``) and swap (``m[9]``);
+        Only overwrites cpu (``c``), 60s cpu, rss (``m[0]``) and swap (``m[9]``);
         preserves all other fields from the monitor.json collection.
         """
         existing = self.instances.get(hostname, [])
@@ -127,6 +136,8 @@ class VPSStore:
             if not live:
                 continue
             inst["c"] = live.get("cpu", inst.get("c", 0))
+            inst["cpu_60s"] = live.get("cpu_60s", inst.get("cpu_60s", 0))
+            inst["cpu_60s_window"] = live.get("cpu_60s_window", inst.get("cpu_60s_window", 0))
             rss = live.get("rss_mb", 0)
             if rss > 0 and "m" in inst and isinstance(inst["m"], list) and len(inst["m"]) >= 1:
                 inst["m"][0] = int(rss * 1024 * 1024)

@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from api.vps import get_monitor, get_monitor_state_snapshot
+from api.vps import get_monitor, get_monitor_state_snapshot, get_cpu_history_snapshot
 from logging_helpers import human_log as _log
 from master.async_monitor import INSTANCE_COLLECT_SCRIPT, MONITOR_CACHE_VERSION
 from MonitorConfig import MonitorConfig
@@ -118,6 +118,7 @@ class VPSManagerService:
         self._master_coindata_ok_cache: bool = False
         self._master_monitor_payload_cache: dict[str, Any] | None = None
         self._master_monitor_cache: dict[str, Any] = {"_version": MONITOR_CACHE_VERSION}
+        self._master_bot_cpu_history: dict[str, dict[str, Any]] = {}
         self._vps_coindata_status_cache: dict[str, bool] = {}
         self._vps_ssh_ok_cache: dict[str, bool] = {}
         self._session_secrets: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
@@ -343,10 +344,6 @@ class VPSManagerService:
                 _log(SERVICE, f"refresh package status failed: {exc}", level="WARNING")
             pbremote.systemts = _now_ts()
 
-        try:
-            pbremote.update_remote_servers()
-        except Exception as exc:
-            _log(SERVICE, f"refresh remote servers failed: {exc}", level="WARNING")
         self._first_refresh_done = True
 
     def _get_monitor_state(self) -> dict[str, Any]:
@@ -581,6 +578,15 @@ class VPSManagerService:
             },
         }
 
+    def get_cpu_history(self, hostname: str, *, bot_name: str = "") -> dict[str, Any]:
+        hostname = str(hostname or "").strip()
+        bot_name = str(bot_name or "").strip()
+        if not hostname:
+            raise ValueError("Hostname is required.")
+        if hostname != self._ensure_pbremote().name:
+            self._require_vps(hostname)
+        return get_cpu_history_snapshot(hostname, bot_name=bot_name)
+
     def _build_errors(self, pbremote: PBRemote) -> list[str]:
         out: list[str] = []
         if pbremote.error:
@@ -682,50 +688,6 @@ class VPSManagerService:
             "rtd": min(self._build_remote_rtd(host_state), 9999),
         }
 
-    def _build_peer_master_overview_row(self, pbremote: PBRemote, server) -> dict[str, Any]:
-        host_state = {
-            "meta": {
-                "role": getattr(server, "role", "master"),
-                "api_md5": getattr(server, "api_md5", ""),
-                "reboot": bool(getattr(server, "reboot", False)),
-                "upgrades": getattr(server, "upgrades", "N/A"),
-                "pbgv": getattr(server, "pbgui_version", "N/A"),
-                "pbgc": getattr(server, "pbgui_commit", ""),
-                "pbgb": getattr(server, "pbgui_branch", "unknown"),
-                "pbgpy": getattr(server, "pbgui_python", "N/A"),
-                "pb7v": getattr(server, "pb7_version", "N/A"),
-                "pb7c": getattr(server, "pb7_commit", ""),
-                "pb7b": getattr(server, "pb7_branch", "unknown"),
-                "pb7py": getattr(server, "pb7_python", "N/A"),
-            }
-        }
-        api_md5 = str(getattr(server, "api_md5", "") or "")
-        if api_md5 and server.is_api_md5_same(pbremote.api_md5):
-            api_sync = "✅"
-        elif api_md5:
-            api_sync = "❌"
-        else:
-            api_sync = "-"
-        return {
-            "name": server.name,
-            "hostname": server.name,
-            "nav": "none",
-            "online": bool(server.is_online()),
-            "role": "master",
-            "role_icon": "🧠",
-            "start": datetime.fromtimestamp(server.boot).strftime("%Y-%m-%d %H:%M:%S") if getattr(server, "boot", 0) else "",
-            "reboot_required": bool(getattr(server, "reboot", False)),
-            "updates": getattr(server, "upgrades", "N/A"),
-            "pbgui": f"{getattr(server, 'pbgui_version', 'N/A')}{'' if getattr(server, 'pbgui_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(server, 'pbgui_python'))}",
-            "pbgui_branch": f"{getattr(server, 'pbgui_branch', 'unknown')} ({_short_commit(getattr(server, 'pbgui_commit', ''))})",
-            "pbgui_github": self._build_remote_pbgui_github_status(pbremote, host_state),
-            "pb7": f"{getattr(server, 'pb7_version', 'N/A')}{'' if getattr(server, 'pb7_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(server, 'pb7_python'))}",
-            "pb7_branch": f"{getattr(server, 'pb7_branch', 'unknown')} ({_short_commit(getattr(server, 'pb7_commit', ''))})",
-            "pb7_github": self._build_remote_pb7_github_status(pbremote, host_state),
-            "api_sync": api_sync,
-            "rtd": min(int(getattr(server, 'rtd', 9999) or 9999), 9999),
-        }
-
     def _build_master_pbgui_github_status(self, pbremote: PBRemote, current_branch: str, current_commit: str) -> str:
         local_run = pbremote.local_run
         branches = getattr(local_run, "pbgui_branches_data", {}) or {}
@@ -823,7 +785,6 @@ class VPSManagerService:
             if live_package_status.get("upgrades") not in (None, ""):
                 summary_row["updates"] = live_package_status.get("upgrades")
             summary_row["reboot_required"] = bool(live_package_status.get("reboot", False))
-        server = pbremote.find_server(vps.hostname)
         pbgui_github = self._build_remote_pbgui_github_status(pbremote, host_state)
         pb7_github = self._build_remote_pb7_github_status(pbremote, host_state)
         if quick:
@@ -847,7 +808,7 @@ class VPSManagerService:
             "pending_updates": summary_row.get("updates", "N/A"),
             "rclone_ok": bool(getattr(pbremote, "bucket", None)),
             "coindata_ok": coindata_ok,
-            "cmc_credits": getattr(server, "cmc_credits", None) if server else None,
+            "cmc_credits": self._host_meta(host_state).get("cmc_credits"),
             "online": self._host_online(host_state),
             "last_command": vps.command_text,
             "last_update": vps.last_update,
@@ -921,6 +882,9 @@ class VPSManagerService:
             "rtd": self._build_remote_rtd(host_state),
             "boot": datetime.fromtimestamp(boot).strftime("%Y-%m-%d %H:%M:%S") if boot else "",
             "cpu": _safe_float(system.get("cpu")),
+            "cpu_60s": _safe_float(system.get("cpu_60s")),
+            "cpu_60s_window": _safe_float(system.get("cpu_60s_window")),
+            "cpu_60s_confirmed": _safe_float(system.get("cpu_60s_window")) >= 60,
             "mem": {
                 "total_mb": _safe_int(_safe_float(system.get("mem_total")) / 1024 / 1024),
                 "free_mb": _safe_int(_safe_float(system.get("mem_available")) / 1024 / 1024),
@@ -948,6 +912,9 @@ class VPSManagerService:
             "rtd": int(getattr(server, "rtd", 0) or 0),
             "boot": datetime.fromtimestamp(server.boot).strftime("%Y-%m-%d %H:%M:%S") if getattr(server, "boot", 0) else "",
             "cpu": _safe_float(server.cpu),
+            "cpu_60s": _safe_float(getattr(server, "cpu_60s", 0)),
+            "cpu_60s_window": _safe_float(getattr(server, "cpu_60s_window", 0)),
+            "cpu_60s_confirmed": _safe_float(getattr(server, "cpu_60s_window", 0)) >= 60,
             "mem": {
                 "total_mb": _safe_int(server.mem[0] / 1024 / 1024),
                 "free_mb": _safe_int(server.mem[1] / 1024 / 1024),
@@ -971,8 +938,36 @@ class VPSManagerService:
     def _empty_monitor_payload(self) -> dict[str, Any]:
         return {"server": None, "v7": [], "v7_running": [], "multi": [], "single": [], "logfiles": []}
 
+    def _master_bot_cpu_60s(self, name: str, pid: int, ticks: int, now: float) -> tuple[float, float]:
+        entry = self._master_bot_cpu_history.get(name)
+        if not isinstance(entry, dict) or _safe_int(entry.get("pid")) != pid:
+            entry = {"pid": pid, "history": []}
+            self._master_bot_cpu_history[name] = entry
+        history = entry.get("history")
+        if not isinstance(history, list):
+            history = []
+            entry["history"] = history
+        history.append((now, ticks))
+        cutoff = now - 62
+        history[:] = [sample for sample in history if sample[0] >= cutoff]
+        base_sample = None
+        for sample in history:
+            if now - sample[0] >= 60:
+                base_sample = sample
+            else:
+                break
+        if base_sample is not None:
+            dt_sec = now - base_sample[0]
+            if dt_sec > 0:
+                return round((ticks - base_sample[1]) / (dt_sec * 100), 2), round(dt_sec, 1)
+        if history:
+            return 0.0, round(now - history[0][0], 1)
+        return 0.0, 0.0
+
     def _collect_local_master_live_bot_stats(self) -> dict[str, dict[str, float]]:
         stats: dict[str, dict[str, float]] = {}
+        now = time.time()
+        seen_names: set[str] = set()
         try:
             result = subprocess.run(
                 ["ps", "auxw"],
@@ -1007,6 +1002,18 @@ class VPSManagerService:
                 continue
             if not bot_name:
                 continue
+            seen_names.add(bot_name)
+            cpu_60s = 0.0
+            cpu_60s_window = 0.0
+            try:
+                stat_path = Path(f"/proc/{pid}/stat")
+                if stat_path.exists():
+                    stat_parts = stat_path.read_text(encoding="utf-8", errors="ignore").split()
+                    ticks = _safe_int(stat_parts[13]) + _safe_int(stat_parts[14])
+                    cpu_60s, cpu_60s_window = self._master_bot_cpu_60s(bot_name, pid, ticks, now)
+            except Exception:
+                cpu_60s = 0.0
+                cpu_60s_window = 0.0
             swap_mb = 0.0
             try:
                 status_path = Path(f"/proc/{pid}/status")
@@ -1019,9 +1026,14 @@ class VPSManagerService:
                 swap_mb = 0.0
             stats[bot_name] = {
                 "cpu": round(_safe_float(parts[2]), 2),
+                "cpu_60s": cpu_60s,
+                "cpu_60s_window": cpu_60s_window,
                 "rss_mb": round(_safe_float(parts[5]) / 1024, 2),
                 "swap_mb": swap_mb,
             }
+        for name in list(self._master_bot_cpu_history.keys()):
+            if name not in seen_names:
+                self._master_bot_cpu_history.pop(name, None)
         return stats
 
     def _collect_local_master_monitor_snapshot(self) -> dict[str, Any]:
@@ -1105,6 +1117,9 @@ class VPSManagerService:
                 "memory_mb": round(_safe_float(live.get("rss_mb")), 2),
                 "swap_mb": round(_safe_float(live.get("swap_mb")), 2),
                 "cpu": round(_safe_float(live.get("cpu")), 2),
+                "cpu_60s": round(_safe_float(live.get("cpu_60s")), 2),
+                "cpu_60s_window": round(_safe_float(live.get("cpu_60s_window")), 1),
+                "cpu_60s_confirmed": _safe_float(live.get("cpu_60s_window")) >= 60,
                 "pnls_today": _safe_int(monitor.get("ct")),
                 "pnl_today": _safe_float(monitor.get("pt")),
                 "pnls_yesterday": _safe_int(monitor.get("cy")),
@@ -1239,51 +1254,10 @@ class VPSManagerService:
             "secret_status": secret_status,
         }
 
-    def _build_monitor_payload(self, server, hostname: str | None = None) -> dict[str, Any]:
-        if hostname is not None:
-            return self._build_remote_monitor_payload(hostname, server)
-        payload = {"server": self._build_server_metrics(server), "v7": [], "v7_running": [], "multi": [], "single": [], "logfiles": []}
-        if not server or not getattr(server, "monitor", None):
-            payload["v7_running"] = self._build_running_v7_payload(server)
-            for item in payload["v7_running"]:
-                payload["logfiles"].append(f"run_v7/{item['name']}/passivbot.log")
-            return payload
-        cfg = self.monitor_config
-        for monitor in server.monitor:
-            swap_value = monitor["m"][9] / 1024 / 1024 if len(monitor["m"]) == 10 else 0.0
-            start_ts = _safe_int(monitor["st"])
-            item = {
-                "server": server.name,
-                "version": getattr(server, "pb7_version", "N/A"),
-                "name": monitor["u"],
-                "pb_version": "7",
-                "start_time": datetime.fromtimestamp(start_ts).strftime("%Y-%m-%d %H:%M:%S") if start_ts else "",
-                "memory_mb": round(monitor["m"][0] / 1024 / 1024, 2),
-                "swap_mb": round(swap_value, 2),
-                "cpu": round(_safe_float(monitor["c"]), 2),
-                "pnls_today": _safe_int(monitor["ct"]),
-                "pnl_today": _safe_float(monitor["pt"]),
-                "pnls_yesterday": _safe_int(monitor["cy"]),
-                "pnl_yesterday": _safe_float(monitor["py"]),
-                "errors_today": _safe_int(monitor["et"]),
-                "errors_yesterday": _safe_int(monitor["ey"]),
-                "tracebacks_today": _safe_int(monitor["tt"]),
-                "tracebacks_yesterday": _safe_int(monitor["ty"]),
-            }
-            item["levels"] = {
-                "cpu": _metric_level(item["cpu"], cfg.cpu_warning_v7, cfg.cpu_error_v7),
-                "memory": _metric_level(item["memory_mb"], cfg.mem_warning_v7, cfg.mem_error_v7),
-                "swap": _metric_level(item["swap_mb"], cfg.swap_warning_v7, cfg.swap_error_v7),
-                "errors": _metric_level(item["errors_today"], cfg.error_warning_v7, cfg.error_error_v7),
-                "tracebacks": _metric_level(item["tracebacks_today"], cfg.traceback_warning_v7, cfg.traceback_error_v7),
-            }
-            payload["v7"].append(item)
-            payload["logfiles"].append(f"run_v7/{item['name']}/passivbot.log")
-        existing_v7_names = {item["name"] for item in payload["v7"] if item.get("name")}
-        payload["v7_running"] = self._build_running_v7_payload(server, existing_v7_names)
-        for item in payload["v7_running"]:
-            payload["logfiles"].append(f"run_v7/{item['name']}/passivbot.log")
-        return payload
+    def _build_monitor_payload(self, host_state: dict[str, Any], hostname: str | None = None) -> dict[str, Any]:
+        if hostname is None:
+            return self._empty_monitor_payload()
+        return self._build_remote_monitor_payload(hostname, host_state)
 
     def _build_remote_monitor_payload(self, hostname: str,
                                       host_state: dict[str, Any]) -> dict[str, Any]:
@@ -1310,6 +1284,9 @@ class VPSManagerService:
                 "memory_mb": round(_safe_float(metrics[0]) / 1024 / 1024, 2) if metrics else 0.0,
                 "swap_mb": round(swap_value, 2),
                 "cpu": round(_safe_float(monitor.get("c")), 2),
+                "cpu_60s": round(_safe_float(monitor.get("cpu_60s")), 2),
+                "cpu_60s_window": round(_safe_float(monitor.get("cpu_60s_window")), 1),
+                "cpu_60s_confirmed": _safe_float(monitor.get("cpu_60s_window")) >= 60,
                 "pnls_today": _safe_int(monitor.get("ct")),
                 "pnl_today": _safe_float(monitor.get("pt")),
                 "pnls_yesterday": _safe_int(monitor.get("cy")),
@@ -1353,30 +1330,6 @@ class VPSManagerService:
                     "version": _safe_int(instance.get("cv")),
                     "enabled_on": str(instance.get("eo") or ""),
                     "activate_ts": "",
-                }
-            )
-        items.sort(key=lambda item: item["name"])
-        return items
-
-    def _build_running_v7_payload(self, server, existing_names: set[str] | None = None) -> list[dict[str, Any]]:
-        status_v7 = getattr(server, "instances_status_v7", None)
-        if not status_v7:
-            return []
-        known_names = existing_names or set()
-        items: list[dict[str, Any]] = []
-        for instance in getattr(status_v7, "instances", []) or []:
-            if not getattr(instance, "running", False):
-                continue
-            name = str(getattr(instance, "name", "") or "")
-            if not name or name in known_names:
-                continue
-            activate_ts = _safe_int(getattr(instance, "activate_ts", 0))
-            items.append(
-                {
-                    "name": name,
-                    "version": _safe_int(getattr(instance, "version", 0)),
-                    "enabled_on": str(getattr(instance, "enabled_on", "") or ""),
-                    "activate_ts": datetime.fromtimestamp(activate_ts).strftime("%Y-%m-%d %H:%M:%S") if activate_ts else "",
                 }
             )
         items.sort(key=lambda item: item["name"])

@@ -89,6 +89,19 @@ def get_master_detail(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.get("/cpu-history/{hostname}")
+def get_cpu_history(
+    hostname: str,
+    bot_name: str = Query(default="", description="Optional bot name for bot CPU history"),
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    try:
+        payload = _get_service().get_cpu_history(hostname, bot_name=bot_name)
+        return JSONResponse(content=payload)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.websocket("/ws")
 async def ws_vps_manager(websocket: WebSocket):
     token = websocket.query_params.get("token", "")
@@ -220,6 +233,20 @@ async def ws_vps_manager(websocket: WebSocket):
                         "bucket": bucket,
                         "expected_count": int(msg.get("expected_count")) if msg.get("expected_count") is not None else None,
                         "lines": lines,
+                    })
+                elif cmd == "get_cpu_history":
+                    data = await asyncio.to_thread(
+                        service.get_cpu_history,
+                        str(msg.get("hostname") or ""),
+                        bot_name=str(msg.get("bot_name") or ""),
+                    )
+                    await websocket.send_json({
+                        "type": "cpu_history",
+                        "cmd": cmd,
+                        "success": True,
+                        "hostname": str(msg.get("hostname") or ""),
+                        "bot_name": str(msg.get("bot_name") or ""),
+                        "data": data,
                     })
                 else:
                     await websocket.send_json({"type": "error", "error": f"Unknown command: {cmd}"})

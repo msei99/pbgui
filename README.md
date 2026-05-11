@@ -313,6 +313,27 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Added: The v7 optimize editor now exposes per-side `hsl_enabled` runtime overrides next to the HSL no-restart controls and automatically fixes HSL bounds when that side is disabled, avoiding wasted optimizer search space.
+- Fixed: PB7 optimize `Results` now also lists pareto-only result directories when `write_all_results` leaves out `all_results.bin`, so completed runs with just `pareto/*.json` no longer disappear from the web UI.
+- Fixed: VPS Monitor CPU history opening now uses delegated CPU click targets plus an explicitly forced overlay open state, so host and bot CPU clicks keep opening a visible modal even while the dashboard and instance DOM re-renders in the 1-second live loop.
+- Fixed: VPS Monitor Instances now render only a single CPU hover/click frame around the full CPU cell; the inner live/60s text no longer draws a second nested outline.
+- Fixed: the VPS Monitor Instances CPU hover frame now draws inside the cell with an inset border, so the first row no longer loses the top edge to table clipping.
+- Changed: `vps_manager_service.py` no longer keeps the dead FastAPI fallback that read per-host bot rows from `PBRemote.server.monitor` / legacy `monitor.json`; active VPS Manager monitor payloads now use only the SSH monitor snapshot or the local collector path.
+- Fixed: the shared top navigation now forces its own flat button shape and hover behavior in `pbgui_nav.js`, so the active menu underline stays consistent across pages including Welcome without page-specific overrides.
+- Improved: VPS Manager bot tables now keep the CPU history click target on the CPU tag itself, widen the CPU column for the `60s CPU` subline, shorten the error/traceback/PNL column titles, and color PNL values green for profit and red for loss.
+- Changed: `VPSMonitor` now keeps a compact 24-hour per-minute `cpu_60s` history for both hosts and bots in `data/monitor_history/` using a small persisted binary ringbuffer, so CPU charts can be loaded on demand without bloating the 1-second full-state payload.
+- Added: FastAPI VPS monitor and VPS Manager backends now expose on-demand host or bot `cpu_60s` history fetch paths, providing a shared history source for the upcoming CPU chart overlays in both pages.
+- Changed: VPS system CPU alerts now use a true 60-second `/proc/stat` SSH collector CPU window from the persisted monitor snapshot, while the VPS Manager telemetry keeps the fast live CPU reading and also shows the separate 60-second CPU status.
+- Changed: `PBMon` instance CPU alerts now also require a confirmed 60-second per-bot CPU window from the SSH collector snapshot, so brief single-bot spikes no longer trigger noisy bot CPU warnings.
+- Changed: `VPS Monitor` metric tooltips now render CPU, RAM, Disk, and Swap details on separate lines inside the persistent custom hover, so the narrower tooltip stays readable without awkward wrapped `|` separators.
+- Fixed: shared top-nav confirm dialogs now define their own spacing and font-size tokens in `pbgui_nav.js`, so restart confirmations on pages like `VPS Monitor` no longer collapse their action buttons into the message area.
+- Fixed: `VPS Monitor` now renders the SSH pool `connecting` state as orange `Connecting...` instead of showing every non-connected host as red `Disconnected`, which makes API restart recovery less misleading for slower reconnecting hosts.
+- Improved: `VPS Monitor` dashboard sorting now places `connecting` hosts between healthy `connected` hosts and truly `disconnected` hosts, so restart recovery order stays visually clear.
+- Changed: per-bot CPU cells in both `VPS Monitor` and `VPS Manager` now show the live CPU together with the bot-specific 60-second CPU status or warmup progress, and the local master monitor path now computes the same 60-second bot CPU telemetry for its own instances.
+- Fixed: the VPS Monitor SSH metrics collector no longer freezes after the first sample; a collector-local CPU helper name collision was removed so live dashboard CPU, RAM, disk, swap, and per-host age badges keep updating continuously.
+- Changed: bumped `api/serial.txt` again after the live VPS Monitor freeze fix so the next API restart definitely picks up the final `async_monitor.py` collector change.
+- Fixed: restored the actual `VPS Monitor` dashboard CPU 60-second rendering in `frontend/vps_monitor.html` after a broken partial frontend state had fallen back to the old 1-second-only compact row and CPU card logic.
+- Changed: `VPS Monitor` metric hovers now use a persistent custom tooltip for CPU, RAM, Disk, and Swap instead of native `title` tooltips, so the hover text stays visible across the 1-second dashboard re-renders and also exposes the extra RAM/Disk/Swap details.
 - Changed: `PBMon` and the Streamlit `VPS Errors` banner now read a persisted SSH monitor snapshot written by `VPSMonitor`, so alerting no longer depends on `PBRemote.has_error()` and legacy `alive` / `monitor.json` payloads.
 - Fixed: legacy API-sync push actions now return explicit compatibility payloads when `FileSyncWorker` is not initialized, so the API Keys and Services pages no longer mis-handle that startup state as a hard transport failure or false successful push.
 - Changed: legacy API-sync status endpoints now derive remote sync state from the SSH/FileSync worker and FastAPI monitor connection data instead of `PBRemote.remote_servers` alive snapshots.

@@ -23,6 +23,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, R
 from fastapi.responses import HTMLResponse
 
 from api.auth import validate_token, require_auth, SessionToken
+from MonitorConfig import MonitorConfig
 from pbgui_purefunc import save_ini
 from logging_helpers import human_log as _log
 from master.async_monitor import VPSMonitor, INSTANCE_COLLECT_SCRIPT
@@ -105,6 +106,28 @@ def get_monitor_state_snapshot() -> dict:
     conn_summary = _monitor.pool.get_status_summary()
     local_logs = _streamer.list_local_logs() if _streamer else []
     return _monitor.store.get_full_state(conn_summary, local_logs)
+
+
+def get_cpu_history_snapshot(hostname: str, *, bot_name: str = "") -> dict:
+    """Return on-demand 24h cpu_60s history for a host or bot."""
+    cfg = MonitorConfig()
+    threshold_pct = float(cfg.cpu_error_v7 if bot_name else cfg.cpu_error_server)
+    if not _monitor:
+        return {
+            "available": False,
+            "scope": "bot" if bot_name else "host",
+            "hostname": str(hostname or ""),
+            "bot_name": str(bot_name or ""),
+            "source": "cpu_60s",
+            "step_seconds": 60,
+            "window_minutes": 24 * 60,
+            "resolution_pct": 0.5,
+            "threshold_pct": threshold_pct,
+            "points": [],
+        }
+    payload = _monitor.get_bot_cpu_history(hostname, bot_name) if bot_name else _monitor.get_host_cpu_history(hostname)
+    payload["threshold_pct"] = threshold_pct
+    return payload
 
 
 # ── Allowed UI setting keys (whitelist) ──────────────────────
@@ -250,6 +273,11 @@ async def ws_vps(websocket: WebSocket):
             # ── kill_instance ──
             elif cmd == "kill_instance":
                 result = await _cmd_kill_instance(request)
+                await websocket.send_json(result)
+
+            # ── get_cpu_history ──
+            elif cmd == "get_cpu_history":
+                result = _cmd_get_cpu_history(request)
                 await websocket.send_json(result)
 
             # ── set_setting ──
@@ -638,6 +666,25 @@ def _cmd_get_local_logs(request: dict) -> dict:
     resp: dict = {
         "type": "local_logs", "file": filename,
         "lines": content, "file_size": file_size,
+    }
+    if sid is not None:
+        resp["sid"] = sid
+    return resp
+
+
+def _cmd_get_cpu_history(request: dict) -> dict:
+    host = str(request.get("host") or "").strip()
+    bot_name = str(request.get("bot_name") or "").strip()
+    sid = request.get("sid")
+    if not host:
+        return {"type": "error", "error": "host required", "cmd": "get_cpu_history"}
+    payload = get_cpu_history_snapshot(host, bot_name=bot_name)
+    resp: dict = {
+        "type": "cpu_history",
+        "cmd": "get_cpu_history",
+        "host": host,
+        "bot_name": bot_name,
+        "data": payload,
     }
     if sid is not None:
         resp["sid"] = sid

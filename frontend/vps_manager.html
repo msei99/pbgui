@@ -711,6 +711,12 @@
       line-height: 1.4;
     }
 
+    .resource-meter-sub {
+      color: var(--text-muted);
+      font-size: var(--fs-xs);
+      line-height: 1.4;
+    }
+
     .resource-track {
       height: 8px;
       border-radius: 999px;
@@ -730,6 +736,47 @@
 
     .resource-fill.error {
       background: var(--danger);
+    }
+
+    .cpu-clickable {
+      cursor: pointer;
+      display: inline-flex;
+    }
+
+    .cpu-clickable:hover {
+      filter: brightness(1.08);
+    }
+
+    .cpu-chart-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .cpu-chart-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(16, 29, 48, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+
+    .cpu-chart-wrap {
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(10, 17, 27, 0.82);
+      padding: 10px;
+    }
+
+    .cpu-chart-svg {
+      width: 100%;
+      height: auto;
+      display: block;
     }
 
     table {
@@ -935,6 +982,7 @@
     }
 
     #alertModalOverlay,
+    #cpuHistoryOverlay,
     #help-ovl {
       position: fixed;
       inset: 0;
@@ -947,11 +995,13 @@
     }
 
     #alertModalOverlay.visible,
+    #cpuHistoryOverlay.visible,
     #help-ovl.visible {
       display: flex;
     }
 
     .modal-box,
+    .cpu-history-box,
     .help-box {
       width: min(780px, calc(100vw - 32px));
       max-height: min(86vh, 880px);
@@ -965,6 +1015,7 @@
     }
 
     .modal-head,
+    .cpu-history-head,
     .help-head {
       display: flex;
       align-items: center;
@@ -976,6 +1027,7 @@
     }
 
     .modal-body,
+    .cpu-history-body,
     .help-body {
       padding: 16px;
       display: grid;
@@ -1968,6 +2020,25 @@
     </div>
   </div>
 
+  <div id='cpuHistoryOverlay'>
+    <div class='cpu-history-box'>
+      <div class='cpu-history-head'>
+        <div>
+          <div class='panel-title' id='cpuHistoryTitle'>CPU History</div>
+          <div class='panel-sub' id='cpuHistorySubtitle'>Loading…</div>
+        </div>
+        <button class='close-btn' type='button' onclick='closeCpuHistoryModal()'>&times;</button>
+      </div>
+      <div class='cpu-history-body'>
+        <div id='cpuHistoryMeta'></div>
+        <div id='cpuHistoryBody'></div>
+        <div class='button-row'>
+          <button class='btn ghost' type='button' onclick='closeCpuHistoryModal()'>Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id='help-ovl'>
     <div class='help-box'>
       <div class='help-head'>
@@ -2836,14 +2907,15 @@
       });
       var cpuMeter = document.querySelector('[data-meter="cpu"]');
       if (cpuMeter) {
-        var cpuVal = Number.isFinite(Number(serverMetrics.cpu)) ? Number(serverMetrics.cpu) : 0;
-        var cpuPct = Math.max(0, Math.min(cpuVal, 100));
+        var cpuTelemetry = formatCpuTelemetry(serverMetrics);
         var cpuTitle = cpuMeter.querySelector('.resource-meter-title');
-        if (cpuTitle) setNodeTextIfChanged(cpuTitle, 'CPU ' + esc(cpuVal) + '%');
+        if (cpuTitle) setNodeTextIfChanged(cpuTitle, cpuTelemetry.title);
+        var cpuSub = cpuMeter.querySelector('.resource-meter-sub');
+        if (cpuSub) setNodeTextIfChanged(cpuSub, cpuTelemetry.sub);
         var cpuFill = cpuMeter.querySelector('.resource-fill');
         if (cpuFill) {
-          setNodeClassNameIfChanged(cpuFill, 'resource-fill ' + resourceTone(cpuPct));
-          cpuFill.style.width = cpuPct + '%';
+          setNodeClassNameIfChanged(cpuFill, 'resource-fill ' + resourceTone(cpuTelemetry.livePct));
+          cpuFill.style.width = cpuTelemetry.livePct + '%';
         }
       }
     }
@@ -5132,6 +5204,180 @@
         </div>`;
     }
 
+    function formatCpuTelemetry(serverMetrics) {
+      const liveValue = Number.isFinite(Number(serverMetrics && serverMetrics.cpu)) ? Number(serverMetrics.cpu) : 0;
+      const livePct = Math.max(0, Math.min(liveValue, 100));
+      const cpu60sValue = Number.isFinite(Number(serverMetrics && serverMetrics.cpu_60s)) ? Number(serverMetrics.cpu_60s) : 0;
+      const cpu60sWindow = Number.isFinite(Number(serverMetrics && serverMetrics.cpu_60s_window)) ? Number(serverMetrics.cpu_60s_window) : 0;
+      const cpu60sConfirmed = !!(serverMetrics && serverMetrics.cpu_60s_confirmed) || cpu60sWindow >= 60;
+      let sub = '60s CPU waiting for data';
+      if (cpu60sConfirmed) {
+        sub = '60s CPU ' + cpu60sValue.toFixed(1) + '%';
+      } else if (cpu60sWindow > 0) {
+        sub = '60s CPU warming up (' + Math.min(60, Math.floor(cpu60sWindow)) + 's/60s)';
+      }
+      return {
+        livePct: livePct,
+        title: 'CPU Live ' + liveValue.toFixed(1) + '%',
+        sub: sub
+      };
+    }
+
+    function setCpuHistoryLoading(host, bot) {
+      document.getElementById('cpuHistoryTitle').textContent = bot ? ('CPU History - ' + bot + ' @ ' + host) : ('CPU History - ' + host);
+      document.getElementById('cpuHistorySubtitle').textContent = 'Loading 24h cpu_60s history...';
+      document.getElementById('cpuHistoryMeta').innerHTML = '';
+      document.getElementById('cpuHistoryBody').innerHTML = '<div class="empty-state">Loading...</div>';
+    }
+
+    function showCpuHistoryOverlay() {
+      const overlay = document.getElementById('cpuHistoryOverlay');
+      if (!overlay) return;
+      if (overlay.parentElement !== document.body) {
+        document.body.appendChild(overlay);
+      }
+      overlay.classList.add('visible');
+      overlay.style.display = 'flex';
+      overlay.style.visibility = 'visible';
+      overlay.style.opacity = '1';
+      overlay.style.zIndex = '5000';
+    }
+
+    function hideCpuHistoryOverlay() {
+      const overlay = document.getElementById('cpuHistoryOverlay');
+      if (!overlay) return;
+      overlay.classList.remove('visible');
+      overlay.style.display = 'none';
+      overlay.style.visibility = 'hidden';
+      overlay.style.opacity = '0';
+    }
+
+    window.closeCpuHistoryModal = function closeCpuHistoryModal() {
+      hideCpuHistoryOverlay();
+    };
+
+    window.openCpuHistory = function openCpuHistory(hostname, botName) {
+      const host = String(hostname || '').trim();
+      const bot = String(botName || '').trim();
+      if (!host) return;
+      setCpuHistoryLoading(host, bot);
+      showCpuHistoryOverlay();
+      fetch(API_BASE + '/cpu-history/' + encodeURIComponent(host) + '?token=' + encodeURIComponent(TOKEN) + (bot ? '&bot_name=' + encodeURIComponent(bot) : ''))
+        .then(function (response) {
+          if (!response.ok) throw new Error('cpu history fetch failed');
+          return response.json();
+        })
+        .then(function (data) {
+          document.getElementById('cpuHistoryTitle').textContent = bot ? ('CPU History - ' + bot + ' @ ' + host) : ('CPU History - ' + host);
+          document.getElementById('cpuHistorySubtitle').textContent = '24h history, 1 sample/minute, source: cpu_60s';
+          const payload = data || {};
+          const points = Array.isArray(payload.points) ? payload.points : [];
+          document.getElementById('cpuHistoryMeta').innerHTML = renderCpuHistoryMeta(payload, points);
+          document.getElementById('cpuHistoryBody').innerHTML = renderCpuHistoryChart(payload, points);
+        })
+        .catch(function (error) {
+          document.getElementById('cpuHistorySubtitle').textContent = 'Failed to load history';
+          document.getElementById('cpuHistoryBody').innerHTML = '<div class="empty-state">Failed to load CPU history: ' + esc(error.message || error) + '</div>';
+        });
+    };
+
+    function getCpuHistoryTarget(target) {
+      if (!target || typeof target.closest !== 'function') return null;
+      const trigger = target.closest('[data-cpu-history-host]');
+      if (!trigger) return null;
+      const host = String(trigger.getAttribute('data-cpu-history-host') || '').trim();
+      const bot = String(trigger.getAttribute('data-cpu-history-bot') || '').trim();
+      if (!host) return null;
+      return { host: host, bot: bot };
+    }
+
+    let lastCpuHistoryOpen = { key: '', ts: 0 };
+    const CPU_HISTORY_DEBUG = (new URLSearchParams(window.location.search).get('cpu_debug') || '') === '1';
+
+    function handleCpuHistoryInteraction(event) {
+      const cpuTarget = getCpuHistoryTarget(event.target);
+      if (!cpuTarget) return;
+      const key = cpuTarget.host + '::' + cpuTarget.bot;
+      const now = Date.now();
+      if (lastCpuHistoryOpen.key === key && (now - lastCpuHistoryOpen.ts) < 400) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      lastCpuHistoryOpen = { key: key, ts: now };
+      event.preventDefault();
+      event.stopPropagation();
+      if (CPU_HISTORY_DEBUG) {
+        toast('CPU click debug: ' + cpuTarget.host + (cpuTarget.bot ? ' / ' + cpuTarget.bot : ''), 'info');
+      }
+      openCpuHistory(cpuTarget.host, cpuTarget.bot);
+    }
+
+    function renderCpuHistoryMeta(data, points) {
+      const valid = points.filter(function (v) { return typeof v === 'number' && Number.isFinite(v); });
+      const latest = valid.length ? valid[valid.length - 1] : null;
+      const peak = valid.length ? Math.max.apply(null, valid) : null;
+      const threshold = Number.isFinite(Number(data && data.threshold_pct)) ? Number(data.threshold_pct) : null;
+      const lastMinute = Number.isFinite(Number(data && data.last_minute)) ? Number(data.last_minute) : 0;
+      const lastSeen = lastMinute > 0 ? new Date(lastMinute * 60000).toLocaleString() : 'n/a';
+      return `<div class='cpu-chart-meta'>`
+        + cpuChartPill('Latest', latest == null ? 'n/a' : latest.toFixed(1) + '%')
+        + cpuChartPill('Peak', peak == null ? 'n/a' : peak.toFixed(1) + '%')
+        + cpuChartPill('Threshold', threshold == null ? 'n/a' : threshold.toFixed(1) + '%')
+        + cpuChartPill('Last sample', lastSeen)
+        + `</div>`;
+    }
+
+    function cpuChartPill(label, value) {
+      return `<span class='cpu-chart-pill'><strong>${esc(label)}:</strong> ${esc(value)}</span>`;
+    }
+
+    function renderCpuHistoryChart(data, points) {
+      if (!points.length) {
+        return `<div class='empty-state'>No history available yet.</div>`;
+      }
+      const valid = points.map(function (value, index) {
+        return typeof value === 'number' && Number.isFinite(value) ? { index: index, value: value } : null;
+      }).filter(Boolean);
+      if (!valid.length) {
+        return `<div class='empty-state'>No confirmed 60s samples stored yet.</div>`;
+      }
+      const width = 920;
+      const height = 280;
+      const pad = { left: 42, right: 14, top: 14, bottom: 28 };
+      const innerW = width - pad.left - pad.right;
+      const innerH = height - pad.top - pad.bottom;
+      const threshold = Number.isFinite(Number(data && data.threshold_pct)) ? Number(data.threshold_pct) : null;
+      const maxValue = Math.max(100, threshold || 0, Math.max.apply(null, valid.map(function (item) { return item.value; })));
+      function x(index) { return pad.left + (index / Math.max(points.length - 1, 1)) * innerW; }
+      function y(value) { return pad.top + innerH - (value / maxValue) * innerH; }
+      let path = '';
+      valid.forEach(function (item, idx) {
+        path += (idx === 0 ? 'M' : ' L') + x(item.index).toFixed(1) + ' ' + y(item.value).toFixed(1);
+      });
+      const guides = [0, 25, 50, 75, 100].filter(function (v, i, arr) {
+        return v <= maxValue || i === arr.length - 1;
+      }).map(function (v) {
+        const yy = y(v);
+        return `<line x1='${pad.left}' y1='${yy.toFixed(1)}' x2='${(width - pad.right)}' y2='${yy.toFixed(1)}' stroke='rgba(255,255,255,0.08)' stroke-width='1' />`
+          + `<text x='${pad.left - 8}' y='${(yy + 4).toFixed(1)}' text-anchor='end' fill='rgba(255,255,255,0.55)' font-size='11'>${v}%</text>`;
+      }).join('');
+      const thresholdLine = threshold == null ? '' : `<line x1='${pad.left}' y1='${y(threshold).toFixed(1)}' x2='${(width - pad.right)}' y2='${y(threshold).toFixed(1)}' stroke='rgba(255,75,75,0.75)' stroke-width='1.5' stroke-dasharray='6 4' />`;
+      const thresholdLabel = threshold == null ? '' : `<text x='${width - pad.right}' y='${(y(threshold) - 6).toFixed(1)}' text-anchor='end' fill='rgba(255,120,120,0.9)' font-size='11'>alert ${threshold.toFixed(1)}%</text>`;
+      return `
+        <div class='cpu-chart-wrap'>
+          <svg class='cpu-chart-svg' viewBox='0 0 ${width} ${height}' role='img' aria-label='24 hour CPU history chart'>
+            <rect x='0' y='0' width='${width}' height='${height}' rx='10' fill='rgba(5,9,15,0.55)'></rect>
+            ${guides}
+            ${thresholdLine}
+            ${thresholdLabel}
+            <path d='${path}' fill='none' stroke='rgba(93,196,255,0.95)' stroke-width='2.5' stroke-linejoin='round' stroke-linecap='round'></path>
+            <text x='${pad.left}' y='${height - 8}' fill='rgba(255,255,255,0.55)' font-size='11'>24h ago</text>
+            <text x='${width - pad.right}' y='${height - 8}' text-anchor='end' fill='rgba(255,255,255,0.55)' font-size='11'>now</text>
+          </svg>
+        </div>`;
+    }
+
     function formatLatency(value) {
       const numeric = Number(value || 0);
       if (!Number.isFinite(numeric) || numeric <= 0) return 'n/a';
@@ -5432,15 +5678,15 @@
 
     var BOT_COLUMNS = [
       { label: 'Name',              field: 'name',                  width: '21%', type: 'str' },
-      { label: 'CPU',               field: 'cpu',                   width: '6%',  type: 'num' },
+      { label: 'CPU',               field: 'cpu',                   width: '10%', type: 'num' },
       { label: 'Memory',            field: 'memory_mb',             width: '7%',  type: 'num' },
       { label: 'Swap',              field: 'swap_mb',               width: '7%',  type: 'num' },
-      { label: 'Errors Today',      field: 'errors_today',          width: '10%', type: 'num' },
-      { label: 'Tracebacks Today',  field: 'tracebacks_today',      width: '12%', type: 'num' },
-      { label: 'PNL Today',         field: 'pnl_today',             width: '8%',  type: 'num' },
-      { label: 'Errors Yesterday',  field: 'errors_yesterday',      width: '10%', type: 'num' },
-      { label: 'Tracebacks Yest.',  field: 'tracebacks_yesterday',  width: '12%', type: 'num' },
-      { label: 'PNL Yesterday',     field: 'pnl_yesterday',         width: '7%',  type: 'num' },
+      { label: 'Err Tdy',           field: 'errors_today',          width: '8%',  type: 'num' },
+      { label: 'TB Tdy',            field: 'tracebacks_today',      width: '10%', type: 'num' },
+      { label: 'PNL Tdy',           field: 'pnl_today',             width: '8%',  type: 'num' },
+      { label: 'Err Yday',          field: 'errors_yesterday',      width: '8%',  type: 'num' },
+      { label: 'TB Yday',           field: 'tracebacks_yesterday',  width: '10%', type: 'num' },
+      { label: 'PNL Yday',          field: 'pnl_yesterday',         width: '8%',  type: 'num' },
     ];
 
     function sortBotTable(field) {
@@ -5476,6 +5722,23 @@
       return '<span class="tag" style="color:#ef6a70;background:#3b0d0d">' + esc(n) + '%</span>';
     }
 
+    function _cpuSubline(item) {
+      const cpu60s = Number(item && item.cpu_60s);
+      const cpu60sWindow = Number(item && item.cpu_60s_window);
+      const cpu60sConfirmed = !!(item && item.cpu_60s_confirmed) || cpu60sWindow >= 60;
+      if (cpu60sConfirmed) return '60s CPU ' + (Number.isFinite(cpu60s) ? cpu60s.toFixed(1) : '0.0') + '%';
+      if (Number.isFinite(cpu60sWindow) && cpu60sWindow > 0) return '60s CPU warming up (' + Math.min(60, Math.floor(cpu60sWindow)) + 's/60s)';
+      return '60s CPU waiting for data';
+    }
+
+    function _pnlValueHtml(value) {
+      const pnl = Number(value) || 0;
+      let color = 'var(--text)';
+      if (pnl > 0) color = 'var(--ok)';
+      else if (pnl < 0) color = 'var(--danger)';
+      return `<span style='color:${color}'>${esc(pnl.toFixed(2))}</span>`;
+    }
+
     function _memSwapTag(v, suffix, level) {
       var n = Number(v) || 0;
       if (level === 'error')   return '<span class="tag" style="color:#ef6a70;background:#3b0d0d">' + esc(n) + ' ' + suffix + '</span>';
@@ -5508,8 +5771,8 @@
           sig: [host, pbVersion, String(item.name || ''), String(item.start_time || '')].join('|')
         },
         cpu: {
-          html: _cpuTag(item.cpu),
-          sig: String(Number(item.cpu) || 0)
+          html: `<div><span class='cpu-clickable' data-cpu-history-host='${escAttr(host)}' data-cpu-history-bot='${escAttr(item.name || '')}'>${_cpuTag(item.cpu)}</span><div class='field-help'>${esc(_cpuSubline(item))}</div></div>`,
+          sig: [String(Number(item.cpu) || 0), String(Number(item.cpu_60s) || 0), String(Number(item.cpu_60s_window) || 0), item.cpu_60s_confirmed ? '1' : '0'].join('|')
         },
         memory_mb: {
           html: _memSwapTag(item.memory_mb, 'MB', memoryLevel),
@@ -5528,7 +5791,7 @@
           sig: [host, pbVersion, String(item.name || ''), 'tracebacks', 'today', String(Number(item.tracebacks_today) || 0), hasTracebacksToday ? '1' : '0'].join('|')
         },
         pnl_today: {
-          html: `<div>${esc((Number(item.pnl_today) || 0).toFixed(2))}</div><div class='field-help' title='Realized fill count'>fills: ${esc(pnlsToday)}</div>`,
+          html: `<div>${_pnlValueHtml(item.pnl_today)}</div><div class='field-help' title='Realized fill count'>fills: ${esc(pnlsToday)}</div>`,
           sig: [String((Number(item.pnl_today) || 0).toFixed(2)), String(pnlsToday)].join('|')
         },
         errors_yesterday: {
@@ -5540,7 +5803,7 @@
           sig: [host, pbVersion, String(item.name || ''), 'tracebacks', 'yesterday', String(Number(item.tracebacks_yesterday) || 0), hasTracebacksYesterday ? '1' : '0'].join('|')
         },
         pnl_yesterday: {
-          html: `<div>${esc((Number(item.pnl_yesterday) || 0).toFixed(2))}</div><div class='field-help' title='Realized fill count'>fills: ${esc(pnlsYesterday)}</div>`,
+          html: `<div>${_pnlValueHtml(item.pnl_yesterday)}</div><div class='field-help' title='Realized fill count'>fills: ${esc(pnlsYesterday)}</div>`,
           sig: [String((Number(item.pnl_yesterday) || 0).toFixed(2)), String(pnlsYesterday)].join('|')
         }
       };
@@ -5614,8 +5877,7 @@
       } else {
         pb7Content = renderRunningPb7Fallback(pb7Fallback);
       }
-      const cpuValue = Number.isFinite(Number(serverMetrics.cpu)) ? Number(serverMetrics.cpu) : 0;
-      const cpuPct = Math.max(0, Math.min(cpuValue, 100));
+      const cpuTelemetry = formatCpuTelemetry(serverMetrics);
       const metrics = hasServerMetrics ? `
         <div class='stack'>
           <div style='font-size:var(--fs-sm);color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.06em'>Telemetry Data</div>
@@ -5626,9 +5888,10 @@
             </div>
             <div class='stack'>
               ${renderResourceMeter('Swap', serverMetrics.swap)}
-              <div class='resource-meter' data-meter='cpu'>
-                <div class='resource-meter-title'>CPU ${esc(cpuValue)}%</div>
-                <div class='resource-track'><div class='resource-fill ${resourceTone(cpuPct)}' style='width:${cpuPct}%'></div></div>
+              <div class='resource-meter cpu-clickable' data-meter='cpu' data-cpu-history-host='${escAttr(summary.hostname || summary.name || store.hostname || "")}'>
+                <div class='resource-meter-title'>${esc(cpuTelemetry.title)}</div>
+                <div class='resource-meter-sub'>${esc(cpuTelemetry.sub)}</div>
+                <div class='resource-track'><div class='resource-fill ${resourceTone(cpuTelemetry.livePct)}' style='width:${cpuTelemetry.livePct}%'></div></div>
               </div>
             </div>
           </div>
@@ -5763,6 +6026,9 @@
       if (!target.closest('.pw-wrap')) return;
       scheduleVpsSecretSyncPasses();
     });
+
+    document.addEventListener('pointerdown', handleCpuHistoryInteraction, true);
+    document.addEventListener('click', handleCpuHistoryInteraction, true);
 
     restoreViewFromHash();
     renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
