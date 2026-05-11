@@ -1,8 +1,8 @@
 """
 PBRemote manages cloud storage synchronization for v7 passivbot instances.
 
-RemoteServer() imports v7 configs and alive data from remote storage.
-PBRemote() exports v7 configs, status and alive data to remote storage.
+RemoteServer() imports remote cmd/status data from storage.
+PBRemote() exports v7 configs and status data to remote storage.
 """
 import psutil
 import subprocess
@@ -20,7 +20,6 @@ from Status import InstancesStatus
 import shutil
 import hashlib
 import traceback
-import gzip
 from MonitorConfig import MonitorConfig
 from logging_helpers import human_log as _log
 from master.async_monitor import collect_alerts_from_snapshot, load_alert_snapshot
@@ -34,45 +33,19 @@ class RemoteServer():
             path (str): Path to the remote server configuration.
         """
         self._name = None
-        self._ts = 0
-        self._startts = 0
-        self._rtd = None
         self._edit = False
         self._path = path
         self._unique = []
         self._api_md5 = None
         self._pb7dir = None
         self._bucket = None
-        # self._instances = []
-        self._mem = []
-        self._swap = []
-        self._disk = []
-        self._cpu = 0
-        self._boot = 0
-        self._upgrades = 0
-        self._reboot = False
-        self._cmc_credits = 0
         self._role = None
-        self._pbgui_version = "N/A"
-        self._pbgui_commit = None
-        self._pbgui_branch = "unknown"
-        self._pbgui_python = "N/A"
-        self._pb7_version = "N/A"
-        self._pb7_commit = None
-        self._pb7_branch = "unknown"
-        self._pb7_python = "N/A"
         self.pbname = None
         self.instances_status_v7 = InstancesStatus(f'{self.path}/status_v7.json')
         self.instances_status_v7.load()
 
     @property
     def name(self): return self._name
-    @property
-    def ts(self): return self._ts
-    @property
-    def startts(self): return self._startts
-    @property
-    def rtd(self): return self._rtd
     @property
     def edit(self): return self._edit
     @property
@@ -84,51 +57,12 @@ class RemoteServer():
     @property
     def bucket(self): return self._bucket
     @property
-    def mem(self): return self._mem
-    @property
-    def swap(self): return self._swap
-    @property
-    def disk(self): return self._disk
-    @property
-    def cpu(self): return self._cpu
-    @property
-    def boot(self): return self._boot
-    def upgrades(self): return self._upgrades
-    @property
-    def reboot(self): return self._reboot
-    @property
-    def cmc_credits(self): return self._cmc_credits
-    @property
     def role(self): return self._role
-    @property
-    def pbgui_version(self): return self._pbgui_version
-    @property
-    def pbgui_commit(self): return self._pbgui_commit
-    @property
-    def pbgui_branch(self): return self._pbgui_branch
-    @property
-    def pbgui_python(self): return self._pbgui_python
-    @property
-    def pb7_version(self): return self._pb7_version
-    @property
-    def pb7_commit(self): return self._pb7_commit
-    @property
-    def pb7_branch(self): return self._pb7_branch
-    @property
-    def pb7_python(self): return self._pb7_python
 
     @name.setter
     def name(self, new_name):
         if self._name != new_name:
             self._name = new_name
-    @ts.setter
-    def ts(self, new_ts):
-        if self._ts != new_ts:
-            self._ts = new_ts
-    @startts.setter
-    def startts(self, new_startts):
-        if self._startts != new_startts:
-            self._startts = new_startts
     @edit.setter
     def edit(self, new_edit):
         if self._edit != new_edit:
@@ -160,100 +94,25 @@ class RemoteServer():
             return True
         return False
 
-    def is_online(self):
-        """
-        Check if the remote server is online by loading the alive_*.cmd file and checking if the latest is less than 300 seconds ago.
-
-        Returns:
-            bool: True if the remote server is online, False otherwise.
-        """
-        self.load()
-        timestamp = round(datetime.now().timestamp())
-        self._rtd = timestamp - self.ts
-        if self._rtd < 300:
-            return True
-        return False
-
     def load(self):
         """
         Load the server's configuration.
         """
-        p = str(Path(f'{self._path}/alive_*.cmd*'))
-        alive_remote = glob.glob(p)
-        alive_remote.sort()
         self._name = PurePath(self._path).name[4:]
-        if alive_remote:
-            while len(alive_remote) > 0:
-                remote = Path(alive_remote.pop())
-                try:
-                    if str(remote).endswith('.gz'):
-                        with gzip.open(remote, "rt", encoding='utf-8') as f:
-                            cfg = json.load(f)
-                    else:
-                        with open(remote, "r", encoding='utf-8') as f:
-                            cfg = json.load(f)
-                    if "name" in cfg and "timestamp" in cfg:
-                        self._ts = cfg["timestamp"]
-                    if "startts" in cfg:
-                        self._startts = cfg["startts"]
-                    if "api_md5" in cfg:
-                        self._api_md5 = cfg["api_md5"]
-                    if "mem" in cfg:
-                        self._mem = cfg["mem"]
-                    if "swap" in cfg:
-                        self._swap = cfg["swap"]
-                    if "disk" in cfg:
-                        self._disk = cfg["disk"]
-                    if "cpu" in cfg:
-                        self._cpu = cfg["cpu"]
-                    if "boot" in cfg:
-                        self._boot = cfg["boot"]
-                    if "upgrades" in cfg:
-                        self._upgrades = cfg["upgrades"]
-                    if "reboot" in cfg:
-                        self._reboot = cfg["reboot"]
-                    if "cmc" in cfg:
-                        self._cmc_credits = cfg["cmc"]
-                    if "role" in cfg:
-                        self._role = cfg["role"]
-                    if "pbgv" in cfg:
-                        self._pbgui_version = cfg["pbgv"]
-                    if "pbgc" in cfg:
-                        self._pbgui_commit = cfg["pbgc"]
-                    if "pbgb" in cfg:
-                        self._pbgui_branch = cfg["pbgb"]
-                    else:
-                        # Reset to unknown if pbgb not in alive file (old version)
-                        self._pbgui_branch = "unknown"
-                    if "pbgpy" in cfg:
-                        self._pbgui_python = cfg["pbgpy"]
-                    else:
-                        self._pbgui_python = "N/A"
-                    if "pb7v" in cfg:
-                        self._pb7_version = cfg["pb7v"]
-                    if "pb7c" in cfg:
-                        self._pb7_commit = cfg["pb7c"]
-                    if "pb7b" in cfg:
-                        self._pb7_branch = cfg["pb7b"]
-                    else:
-                        # Reset to unknown if pb7b not in alive file (old version)
-                        self._pb7_branch = "unknown"
-                    if "pb7py" in cfg:
-                        self._pb7_python = cfg["pb7py"]
-                    else:
-                        self._pb7_python = "N/A"
-                    return
-                except Exception as e:
-                    _log('PBRemote', f'{str(remote)} is corrupted {e}', level='ERROR')
+        self._api_md5 = None
+        self._role = None
+        api_file = Path(self._path) / 'api-keys.json'
+        if api_file.exists():
+            self._api_md5 = self.calculate_md5(api_file)
 
     def sync_v7_down(self, role: str):
-        """Sync v7 configs + alive from remote storage to local machine."""
+        """Sync v7 configs from remote storage to local machine."""
         if self.instances_status_v7.has_new_status():
             _log('PBRemote', f'New status_v7.json from: {self.name}', level='INFO')
             _log('PBRemote', f'Sync v7 from: {self.name}', level='INFO')
             pbgdir = Path.cwd()
             if role == "master":
-                cmd = ['rclone', 'sync', '-v', '--filter', f'- cmd_{self.pbname}/*', '--filter', '+ cmd_**/alive_*.cmd*', '--filter', f'+ run_v7_{self.name}/**/*.json', '--filter', '- *', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
+                cmd = ['rclone', 'sync', '-v', '--filter', f'- cmd_{self.pbname}/*', '--filter', f'+ run_v7_{self.name}/**/*.json', '--filter', '- *', f'{self.bucket}', PurePath(f'{pbgdir}/data/remote')]
             else:
                 cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', f'{self.bucket}/run_v7_{self.name}', PurePath(f'{pbgdir}/data/remote/run_v7_{self.name}')]
             logfile = Path(f'{pbgdir}/data/logs/sync.log')
@@ -337,10 +196,7 @@ class PBRemote():
         self.remote_servers = []
         self.local_run = PBRun()
         self.index = 0
-        self.startts = None
-        self.alivets = 0
         self.systemts = 0
-        self.rtd = 0
         pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
@@ -496,11 +352,11 @@ class PBRemote():
         Synchronise between local server and remote storage.
         
         Supported sync paths:
-            up/cmd: alive_*.cmd, api-keys.json
-            up/status_v7: status_v7.json, alive_*.cmd
+            up/cmd: api-keys.json
+            up/status_v7: status_v7.json
             up/run_v7: *.json (v7 configs)
             down/master: all except own cmd, instances, multi, run_v7
-            down/slave: same but also excludes alive files from other servers
+            down/slave: same without pulling other hosts' cmd payloads
         
         Args:
             direction (str): Either "up" (local to remote) or "down" (remote to local).
@@ -509,15 +365,15 @@ class PBRemote():
         pbgdir = Path.cwd()
         cmd = None
         if direction == 'up' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd*,api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'up' and spath == 'status_v7':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{alive_*.cmd*,status_v7.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
+            cmd = ['rclone', 'sync', '-v', '--include', f'{{status_v7.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'run_v7':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
         elif direction == 'down' and spath == 'master':
             cmd = ['rclone', 'sync', '-v', '--exclude', f'{{cmd_{self.name}/*,instances_**,multi_**,run_v7_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
         elif direction == 'down' and spath == 'slave':
-            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{cmd_{self.name}/*,cmd_**/alive_*.cmd*,instances_**,multi_**,run_v7_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
+            cmd = ['rclone', 'sync', '-v', '--exclude', f'{{cmd_{self.name}/*,instances_**,multi_**,run_v7_**}}', f'{self.bucket_dir}', PurePath(f'{pbgdir}/data/remote')]
         if cmd is None:
             _log('PBRemote', f'sync() called with unknown combination: direction={direction!r} spath={spath!r}', level='ERROR')
             return
@@ -541,7 +397,7 @@ class PBRemote():
 
     def sync_v7_up(self):
         if self.role != "master":
-            # Slave: nothing to do — alive is handled by remote.alive()
+            # Slave: nothing to do.
             return
         if self.local_run.instances_status_v7.has_new_status():
             _log('PBRemote', f'New status_v7.json from: {self.name}', level='INFO')
@@ -574,66 +430,6 @@ class PBRemote():
             api_file.unlink(missing_ok=True)
         return True
 
-    def alive(self):
-        """
-        Saves system informations like the name, memory, swaps, disk space and cpu usage to an alive file that is then synchronised with rclone from local to the remote storage.
-        If there are more than 9 alive files, it will delete the oldest one.
-        """
-        timestamp = round(datetime.now().timestamp())
-        if timestamp - self.systemts > 3600:
-            self.local_run.has_upgrades()
-            self.local_run.has_reboot()
-            self.local_run.fetch_cmc_credits()
-            self.systemts = timestamp
-        self.local_run.load_versions()
-        self.local_run.load_git_commits()
-        if hasattr(self.local_run, 'update_pb7_python_version'):
-            self.local_run.update_pb7_python_version()
-        if timestamp - self.alivets < 60:
-            return
-        self.alivets = timestamp
-        # self.mem = psutil.virtual_memory()
-        # self.swap = psutil.swap_memory()
-        # self.disk = psutil.disk_usage('/')
-        # self.cpu = psutil.cpu_percent()
-        # self.boot = psutil.boot_time()
-        cfg = ({
-            "timestamp": timestamp,
-            "startts": self.startts,
-            "name": self.name,
-            "api_md5": self.api_md5,
-            "mem": self.mem,
-            "swap": self.swap,
-            "disk": self.disk,
-            "cpu": self.cpu,
-            "boot": self.boot,
-            "upgrades": self.local_run.upgrades,
-            "reboot": self.local_run.reboot,
-            "role": self.role,
-            "cmc": self.local_run.coindata.credits_left,
-            "pbgv": self.local_run.pbgui_version,
-            "pbgc": self.local_run.pbgui_commit,
-            "pbgb": getattr(self.local_run, 'pbgui_branch', 'unknown'),
-            "pbgpy": getattr(self.local_run, 'pbgui_python', 'N/A'),
-            "pb7v": self.local_run.pb7_version,
-            "pb7c": self.local_run.pb7_commit,
-            "pb7b": getattr(self.local_run, 'pb7_branch', 'unknown'),
-            "pb7py": getattr(self.local_run, 'pb7_python', 'N/A'),
-            })
-        # Save the JSON data as a gzip file
-        cfile = Path(f'{self.cmd_path}/alive_{timestamp}.cmd.gz')
-        with gzip.open(cfile, "wt", encoding='utf-8') as f:
-            json.dump(cfg, f)
-        # with open(cfile, "w", encoding='utf-8') as f:
-        #     json.dump(cfg, f)
-        self.sync('up', 'cmd')
-        p = str(Path(f'{self.cmd_path}/alive_*.cmd*'))
-        found_local = glob.glob(p)
-        found_local.sort()
-        while len(found_local) > 9:
-            local = Path(found_local.pop(0))
-            local.unlink(missing_ok=True)
-
     def calculate_api_md5(self):
         """Makes a md5 hash from the api-keys.json in passivbot v7 folder."""
         file = Path(f'{self.pb7dir}/api-keys.json') if self.pb7dir else None
@@ -645,8 +441,7 @@ class PBRemote():
 
     def load_remote(self):
         """
-        Loads every cmd files and create a new RemoteServer instance for each new possible instances, and tries to start instances with load_instances(). 
-        It then adds the RemoteServer to remote_servers if the RemoteServer exists.
+        Load remote cmd directories and create one RemoteServer view per host.
         """
         pbgdir = Path.cwd()
         self.remote_servers = []
@@ -663,8 +458,7 @@ class PBRemote():
 
     def update_remote_servers(self):
         """
-        Loads every cmd files and create a new RemoteServer instance for each new possible instances, and tries to start instances with load_instances(). 
-        It then adds the RemoteServer to remote_servers if the RemoteServer exists.
+        Refresh remote cmd-directory views.
         """
         pbgdir = Path.cwd()
         p = str(Path(f'{pbgdir}/data/remote/cmd_*'))
@@ -887,14 +681,12 @@ def main():
         sys.exit(1)
     _log('PBRemote', f'Start: PBRemote {remote.bucket}', level='INFO')
     remote.save_pid()
-    remote.startts = round(datetime.now().timestamp())
     while True:
         try:
             remote.sync_v7_up()
             remote.check_if_api_synced()
             remote.sync_status_down()
             remote.update_remote_servers()
-            remote.alive()
             for server in remote.remote_servers:
                 for s in remote.remote_servers:
                     s.load()
