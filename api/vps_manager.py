@@ -102,6 +102,20 @@ def get_cpu_history(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.get("/metric-history/{hostname}")
+def get_metric_history(
+    hostname: str,
+    metric: str = Query(default="cpu", description="Metric key: cpu, memory, disk, swap"),
+    bot_name: str = Query(default="", description="Optional bot name for bot CPU history"),
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    try:
+        payload = _get_service().get_metric_history(hostname, bot_name=bot_name, metric=metric)
+        return JSONResponse(content=payload)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.websocket("/ws")
 async def ws_vps_manager(websocket: WebSocket):
     token = websocket.query_params.get("token", "")
@@ -213,8 +227,8 @@ async def ws_vps_manager(websocket: WebSocket):
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True})
                 elif cmd == "fetch_bot_log_matches":
                     bucket = str(msg.get("bucket") or "").strip()
-                    if bucket not in {"today", "yesterday"}:
-                        await websocket.send_json({"type": "error", "error": "bucket must be today or yesterday", "cmd": cmd})
+                    if bucket != "today":
+                        await websocket.send_json({"type": "error", "error": "bucket must be today", "cmd": cmd})
                         continue
                     lines = await get_bot_log_matches(
                         str(msg.get("hostname") or ""),
@@ -246,6 +260,22 @@ async def ws_vps_manager(websocket: WebSocket):
                         "success": True,
                         "hostname": str(msg.get("hostname") or ""),
                         "bot_name": str(msg.get("bot_name") or ""),
+                        "data": data,
+                    })
+                elif cmd == "get_metric_history":
+                    data = await asyncio.to_thread(
+                        service.get_metric_history,
+                        str(msg.get("hostname") or ""),
+                        bot_name=str(msg.get("bot_name") or ""),
+                        metric=str(msg.get("metric") or "cpu"),
+                    )
+                    await websocket.send_json({
+                        "type": "metric_history",
+                        "cmd": cmd,
+                        "success": True,
+                        "hostname": str(msg.get("hostname") or ""),
+                        "bot_name": str(msg.get("bot_name") or ""),
+                        "metric": str(msg.get("metric") or "cpu"),
                         "data": data,
                     })
                 else:

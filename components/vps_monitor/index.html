@@ -947,9 +947,9 @@ function renderInstances() {
         pbVersion: inst.p || '?',
         memMB: parseFloat(memMB), cpu: inst.c || 0,
         pnlToday: inst.pt || 0, fillsToday: inst.ct || 0,
-        pnlYesterday: inst.py || 0, fillsYesterday: inst.cy || 0,
-        errorsToday: inst.et || 0, errorsYesd: inst.ey || 0,
-        tbsToday: inst.tt || 0, tbsYesd: inst.ty || 0,
+        pnlHist: inst.pnl_hist_total || 0, fillsHist: inst.pnls_hist_total || 0,
+        errorsToday: inst.et || 0, errors4w: inst.errors_4w || 0,
+        tbsToday: inst.tt || 0, tbs4w: inst.tracebacks_4w || 0,
         lastError: inst.e || '', lastTB: inst.t || '', lastInfo: inst.i || '',
       });
     }
@@ -995,9 +995,9 @@ function renderInstances() {
     {key:'host',label:'Server'},{key:'version',label:'Version'},{key:'name',label:'Name'},
     {key:'start',label:'Start'},{key:'memMB',label:'Mem (MB)'},{key:'cpu',label:'CPU %'},
     {key:'pnlToday',label:'PnL Today'},{key:'fillsToday',label:'Fills'},
-    {key:'pnlYesterday',label:'PnL Yesd'},{key:'fillsYesterday',label:'Fills Y'},
-    {key:'errorsToday',label:'Err Today'},{key:'errorsYesd',label:'Err Y'},
-    {key:'tbsToday',label:'TBs Today'},{key:'tbsYesd',label:'TBs Y'},
+    {key:'pnlHist',label:'PnL Hist'},{key:'fillsHist',label:'Fills Hist'},
+    {key:'errorsToday',label:'Err Tdy'},{key:'errors4w',label:'Err 4W'},
+    {key:'tbsToday',label:'TB Tdy'},{key:'tbs4w',label:'TB 4W'},
     {key:'_actions',label:''},
   ];
 
@@ -1029,12 +1029,12 @@ function renderInstances() {
       <td>${r.cpu.toFixed(1)}</td>
       <td class="${pnlClass(r.pnlToday)}">${r.pnlToday.toFixed(2)}</td>
       <td>${r.fillsToday}</td>
-      <td class="${pnlClass(r.pnlYesterday)}">${r.pnlYesterday.toFixed(2)}</td>
-      <td>${r.fillsYesterday}</td>
+      <td class="${pnlClass(r.pnlHist)}">${r.pnlHist.toFixed(2)}</td>
+      <td>${r.fillsHist}</td>
       <td class="${errClass(r.errorsToday)}">${r.errorsToday}</td>
-      <td class="${errClass(r.errorsYesd)}">${r.errorsYesd}</td>
+      <td class="${errClass(r.errors4w)}">${r.errors4w}</td>
       <td class="${errClass(r.tbsToday)}">${r.tbsToday}</td>
-      <td class="${errClass(r.tbsYesd)}">${r.tbsYesd}</td>
+      <td class="${errClass(r.tbs4w)}">${r.tbs4w}</td>
       <td class="inst-actions">
         <span class="inst-action" title="View Log" onclick="event.stopPropagation();viewInstanceLog('${esc(r.host)}','${esc(r.name)}','${esc(r.pbVersion)}')">📋</span>
         <span class="inst-action" title="Restart (kill)" onclick="event.stopPropagation();killInstance('${esc(r.host)}','${esc(r.name)}','${esc(r.pbVersion)}',this)">🔄</span>

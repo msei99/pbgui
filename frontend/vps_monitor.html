@@ -76,6 +76,17 @@ body {
   flex-direction: column;
 }
 
+.cpu-history-box.modal-history-window {
+  position: fixed;
+  width: min(980px, calc(100vw - 32px));
+  height: min(560px, calc(100vh - 32px));
+  min-width: min(520px, calc(100vw - 32px));
+  min-height: min(320px, calc(100vh - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  overflow: hidden;
+}
+
 .cpu-history-head {
   display: flex;
   align-items: center;
@@ -84,6 +95,11 @@ body {
   padding: 14px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(17, 29, 47, 0.94);
+}
+
+.cpu-history-box.modal-history-window .cpu-history-head {
+  cursor: move;
+  user-select: none;
 }
 
 .cpu-history-title {
@@ -111,9 +127,12 @@ body {
 
 .cpu-history-body {
   padding: 16px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
   gap: 14px;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .cpu-chart-meta {
@@ -139,12 +158,130 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(10, 17, 27, 0.82);
   padding: 10px;
+  flex: 1;
+  min-height: 240px;
+  overflow: hidden;
 }
 
 .cpu-chart-svg {
   width: 100%;
-  height: auto;
+  height: 100%;
   display: block;
+}
+
+.cpu-history-resize-handle {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  border-radius: 8px;
+  display: none;
+  background: linear-gradient(135deg, transparent 0 45%, rgba(93,196,255,0.18) 45% 55%, transparent 55% 100%);
+}
+
+.cpu-history-resize-handle::before {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid rgba(93,196,255,0.55);
+  border-bottom: 2px solid rgba(93,196,255,0.55);
+  border-radius: 0 0 6px 0;
+}
+
+.cpu-history-box.modal-history-window .cpu-history-resize-handle {
+  display: block;
+}
+
+.cpu-history-resize-handle.side-top,
+.cpu-history-resize-handle.side-bottom {
+  left: 12px;
+  right: 12px;
+  height: 10px;
+  width: auto;
+  background: none;
+}
+
+.cpu-history-resize-handle.side-left,
+.cpu-history-resize-handle.side-right {
+  top: 12px;
+  bottom: 12px;
+  width: 10px;
+  height: auto;
+  background: none;
+}
+
+.cpu-history-resize-handle.side-top {
+  top: 0;
+  left: 12px;
+  right: 12px;
+  bottom: auto;
+  cursor: ns-resize;
+}
+
+.cpu-history-resize-handle.side-right {
+  top: 12px;
+  right: 0;
+  bottom: 12px;
+  left: auto;
+  cursor: ew-resize;
+}
+
+.cpu-history-resize-handle.side-bottom {
+  right: 12px;
+  bottom: 0;
+  left: 12px;
+  top: auto;
+  cursor: ns-resize;
+}
+
+.cpu-history-resize-handle.side-left {
+  top: 12px;
+  left: 0;
+  bottom: 12px;
+  right: auto;
+  cursor: ew-resize;
+}
+
+.cpu-history-resize-handle.corner {
+  width: 18px;
+  height: 18px;
+}
+
+.cpu-history-resize-handle.corner-top-left {
+  top: 0;
+  left: 0;
+  right: auto;
+  bottom: auto;
+  cursor: nwse-resize;
+}
+
+.cpu-history-resize-handle.corner-top-right {
+  top: 0;
+  right: 0;
+  left: auto;
+  bottom: auto;
+  cursor: nesw-resize;
+}
+
+.cpu-history-resize-handle.corner-bottom-right {
+  right: 0;
+  bottom: 0;
+  left: auto;
+  top: auto;
+  cursor: nwse-resize;
+}
+
+.cpu-history-resize-handle.corner-bottom-left {
+  left: 0;
+  bottom: 0;
+  right: auto;
+  top: auto;
+  cursor: nesw-resize;
 }
 
 .cpu-clickable {
@@ -692,8 +829,16 @@ tr.row-inactive td { opacity: 0.45; }
 </div>
 
 <div id="cpu-history-ovl">
-  <div class="cpu-history-box">
-    <div class="cpu-history-head">
+  <div class="cpu-history-box" id="cpu-history-box">
+    <div class="cpu-history-resize-handle side-top" data-resize="top"></div>
+    <div class="cpu-history-resize-handle side-right" data-resize="right"></div>
+    <div class="cpu-history-resize-handle side-bottom" data-resize="bottom"></div>
+    <div class="cpu-history-resize-handle side-left" data-resize="left"></div>
+    <div class="cpu-history-resize-handle corner corner-top-left" data-resize="top-left"></div>
+    <div class="cpu-history-resize-handle corner corner-top-right" data-resize="top-right"></div>
+    <div class="cpu-history-resize-handle corner corner-bottom-right" data-resize="bottom-right"></div>
+    <div class="cpu-history-resize-handle corner corner-bottom-left" data-resize="bottom-left"></div>
+    <div class="cpu-history-head" id="cpu-history-head">
       <div>
         <div id="cpu-history-title" class="cpu-history-title">CPU History</div>
         <div id="cpu-history-sub" class="cpu-history-sub">Loading…</div>
@@ -888,7 +1033,10 @@ function handleMessage(msg) {
       handleResult(msg);
       break;
     case 'cpu_history':
-      handleCpuHistory(msg.data || null, msg.host || '', msg.bot_name || '', msg.sid || '');
+      handleCpuHistory(msg.data || null, msg.host || '', msg.bot_name || '', msg.sid || '', 'cpu');
+      break;
+    case 'metric_history':
+      handleCpuHistory(msg.data || null, msg.host || '', msg.bot_name || '', msg.sid || '', msg.metric || 'cpu');
       break;
     case 'error':
       console.error('Server error:', msg.error);
@@ -1162,11 +1310,11 @@ function renderDashboard() {
     if (isConn && metrics) {
       const cpuUi = cpuTelemetry(metrics);
       html += `<span class="compact-metrics">`;
-      html += compactMetric('CPU', cpuUi.liveCompact, metrics.cpu, cpuUi.compactSub, tooltipTextForMetrics('CPU', metrics), ` class="cpu-clickable compact-metric" data-cpu-history-host="${escAttr(host)}"`);
-      html += compactMetric('RAM', fmtBytes(metrics.mem_used), metrics.mem_percent, '', tooltipTextForMetrics('RAM', metrics));
-      html += compactMetric('Disk', fmtBytes(metrics.disk_used), metrics.disk_percent, '', tooltipTextForMetrics('Disk', metrics));
+      html += compactMetric('CPU', cpuUi.liveCompact, metrics.cpu, cpuUi.compactSub, tooltipTextForMetrics('CPU', metrics), ` class="cpu-clickable compact-metric" data-history-host="${escAttr(host)}" data-history-metric="cpu" data-cpu-history-host="${escAttr(host)}"`);
+      html += compactMetric('RAM', fmtBytes(metrics.mem_used), metrics.mem_percent, '', tooltipTextForMetrics('RAM', metrics), ` class="cpu-clickable compact-metric" data-history-host="${escAttr(host)}" data-history-metric="memory"`);
+      html += compactMetric('Disk', fmtBytes(metrics.disk_used), metrics.disk_percent, '', tooltipTextForMetrics('Disk', metrics), ` class="cpu-clickable compact-metric" data-history-host="${escAttr(host)}" data-history-metric="disk"`);
       if (metrics.swap_total > 0) {
-        html += compactMetric('Swap', fmtBytes(metrics.swap_used), metrics.swap_percent, '', tooltipTextForMetrics('Swap', metrics));
+        html += compactMetric('Swap', fmtBytes(metrics.swap_used), metrics.swap_percent, '', tooltipTextForMetrics('Swap', metrics), ` class="cpu-clickable compact-metric" data-history-host="${escAttr(host)}" data-history-metric="swap"`);
       }
       html += `</span>`;
     }
@@ -1184,14 +1332,14 @@ function renderDashboard() {
     } else {
       const cpuUi = cpuTelemetry(metrics);
       html += `<div class="metrics-grid">`;
-      html += metricCard('CPU', cpuUi.liveFull, cpuUi.fullSub, metrics.cpu, tooltipTextForMetrics('CPU', metrics), ` class="cpu-clickable metric-card" data-cpu-history-host="${escAttr(host)}"`);
+      html += metricCard('CPU', cpuUi.liveFull, cpuUi.fullSub, metrics.cpu, tooltipTextForMetrics('CPU', metrics), ` class="cpu-clickable metric-card" data-history-host="${escAttr(host)}" data-history-metric="cpu" data-cpu-history-host="${escAttr(host)}"`);
       html += metricCard('RAM', fmtBytes(metrics.mem_used),
-        fmtBytes(metrics.mem_total), metrics.mem_percent, tooltipTextForMetrics('RAM', metrics));
+        fmtBytes(metrics.mem_total), metrics.mem_percent, tooltipTextForMetrics('RAM', metrics), ` class="cpu-clickable metric-card" data-history-host="${escAttr(host)}" data-history-metric="memory"`);
       html += metricCard('Disk', fmtBytes(metrics.disk_used),
-        fmtBytes(metrics.disk_total), metrics.disk_percent, tooltipTextForMetrics('Disk', metrics));
+        fmtBytes(metrics.disk_total), metrics.disk_percent, tooltipTextForMetrics('Disk', metrics), ` class="cpu-clickable metric-card" data-history-host="${escAttr(host)}" data-history-metric="disk"`);
       if (metrics.swap_total > 0) {
         html += metricCard('Swap', fmtBytes(metrics.swap_used),
-          fmtBytes(metrics.swap_total), metrics.swap_percent, tooltipTextForMetrics('Swap', metrics));
+          fmtBytes(metrics.swap_total), metrics.swap_percent, tooltipTextForMetrics('Swap', metrics), ` class="cpu-clickable metric-card" data-history-host="${escAttr(host)}" data-history-metric="swap"`);
       }
       html += `</div>`;
     }
@@ -1226,6 +1374,305 @@ function compactMetric(label, value, pct, sub, title, extraAttrs) {
     ${sub ? `<span class="cm-sub">${sub}</span>` : ''}
     <span class="compact-bar"><span class="compact-bar-fill" style="width:${Math.min(pct, 100)}%;background:${color}"></span></span>
   </span>`;
+}
+
+const METRIC_HISTORY_META = {
+  cpu: { label: 'CPU', source: 'cpu_60s', unit: '%', empty: 'No confirmed 60s samples stored yet.' },
+  memory: { label: 'Memory', source: 'mem_percent', unit: '%', botSource: 'rss_mb', botUnit: 'MB', empty: 'No memory history available yet.', botEmpty: 'No bot memory history available yet.' },
+  disk: { label: 'Disk', source: 'disk_percent', unit: '%', empty: 'No disk history available yet.' },
+  swap: { label: 'Swap', source: 'swap_percent', unit: '%', botSource: 'swap_mb', botUnit: 'MB', empty: 'No swap history available yet.', botEmpty: 'No bot swap history available yet.' },
+  errors: { label: 'Errors', source: 'passivbot.log', unit: '', empty: 'No bot error history available yet.', timezoneBasis: 'UTC', countMetric: true },
+  tracebacks: { label: 'Tracebacks', source: 'passivbot_err.log', unit: '', empty: 'No bot traceback history available yet.', timezoneBasis: 'UTC', countMetric: true },
+  pnl: { label: 'PNL', source: 'passivbot.log', unit: '', empty: 'No bot PNL history available yet.', timezoneBasis: 'UTC', pnlMetric: true },
+  pnl_fills: { label: 'Fills', source: 'passivbot.log', unit: '', empty: 'No bot fill history available yet.', timezoneBasis: 'UTC', fillsMetric: true },
+};
+
+function metricHistoryMeta(metric) {
+  return METRIC_HISTORY_META[metric] || METRIC_HISTORY_META.cpu;
+}
+
+function metricHistoryTitle(metric, host, bot) {
+  const meta = metricHistoryMeta(metric);
+  return bot ? (meta.label + ' History - ' + bot + ' @ ' + host) : (meta.label + ' History - ' + host);
+}
+
+function metricHistorySubtitle(metric, payload) {
+  const meta = metricHistoryMeta(metric);
+  const source = String((payload && payload.source) || meta.source || '').trim();
+  if (meta.countMetric) return '4w history, 1 sample/hour, UTC day totals, source: ' + source;
+  if (meta.fillsMetric) return 'full history from available logs, UTC daily fill totals, source: ' + source;
+  if (meta.pnlMetric) return 'full history from available logs, UTC daily aggregates, source: ' + source;
+  return '24h history, 1 sample/minute, source: ' + source;
+}
+
+function metricHistoryLoadingSubtitle(metric, botName) {
+  const meta = metricHistoryMeta(metric);
+  const source = botName && meta.botSource ? meta.botSource : meta.source;
+  if (meta.fillsMetric) return 'Loading full ' + source + ' fill history...';
+  if (meta.pnlMetric) return 'Loading full ' + source + ' history...';
+  return (meta.countMetric ? 'Loading 4w ' : 'Loading 24h ') + source + ' history...';
+}
+
+function metricHistoryUnit(metric, payload) {
+  const meta = metricHistoryMeta(metric);
+  const isBot = !!String(payload && payload.bot_name || '').trim();
+  if (isBot && meta.botUnit) return meta.botUnit;
+  return meta.unit || '';
+}
+
+function metricHistoryEmpty(metric, payload) {
+  const meta = metricHistoryMeta(metric);
+  const isBot = !!String(payload && payload.bot_name || '').trim();
+  if (isBot && meta.botEmpty) return meta.botEmpty;
+  return meta.empty;
+}
+
+function metricHistoryScale(metric, payload) {
+  const unit = metricHistoryUnit(metric, payload);
+  const meta = metricHistoryMeta(metric);
+  if (meta.countMetric) {
+    return {
+      baseline: 0,
+      guideValues: function(maxValue) {
+        const top = Math.max(4, Math.ceil(maxValue / 4) * 4);
+        const out = [];
+        for (let i = 0; i <= 4; i += 1) out.push(Math.round((top * i) / 4));
+        return { maxValue: top, values: out };
+      },
+      label: function(v) { return String(v); }
+    };
+  }
+  if (meta.fillsMetric) {
+    return {
+      baseline: 0,
+      guideValues: function(maxValue) {
+        const top = Math.max(4, Math.ceil(maxValue / 4) * 4);
+        const out = [];
+        for (let i = 0; i <= 4; i += 1) out.push(Math.round((top * i) / 4));
+        return { maxValue: top, values: out };
+      },
+      label: function(v) { return String(Math.round(v)); }
+    };
+  }
+  if (meta.pnlMetric) {
+    return {
+      baseline: null,
+      guideValues: function(minValue, maxValue) {
+        const lo = Math.min(0, Math.floor(minValue));
+        const hi = Math.max(0, Math.ceil(maxValue));
+        const span = Math.max(hi - lo, 4);
+        const step = Math.max(1, Math.ceil(span / 4));
+        const out = [];
+        for (let value = lo; value <= hi; value += step) out.push(value);
+        if (!out.includes(0)) out.push(0);
+        out.sort(function(a, b) { return a - b; });
+        return { minValue: lo, maxValue: hi === lo ? lo + 1 : hi, values: out };
+      },
+      label: function(v) { return Number(v).toFixed(2); }
+    };
+  }
+  if (unit === 'MB') {
+    return {
+      baseline: 0,
+      guideValues: function(maxValue) {
+        const steps = 4;
+        const top = Math.max(1, Math.ceil(maxValue / 50) * 50);
+        const out = [];
+        for (let i = 0; i <= steps; i += 1) out.push(Math.round((top * i) / steps));
+        return { maxValue: top, values: out };
+      },
+      label: function(v) { return v + 'MB'; }
+    };
+  }
+  return {
+    baseline: 100,
+    guideValues: function(maxValue) {
+      return { maxValue: Math.max(100, maxValue), values: [0, 25, 50, 75, 100] };
+    },
+    label: function(v) { return v + '%'; }
+  };
+}
+
+function metricHistoryValueLabel(metric, value, payload) {
+  if (!Number.isFinite(Number(value))) return 'n/a';
+  const meta = metricHistoryMeta(metric);
+  const unit = metricHistoryUnit(metric, payload);
+  const numeric = Number(value);
+  return ((meta.countMetric || meta.fillsMetric) ? String(Math.round(numeric)) : numeric.toFixed(2)) + unit;
+}
+
+function metricHistorySeriesPoints(metric, payload) {
+  const meta = metricHistoryMeta(metric);
+  if (meta.fillsMetric && Array.isArray(payload && payload.fills_points)) return payload.fills_points;
+  if (meta.pnlMetric && Array.isArray(payload && payload.cumulative_points) && payload.cumulative_points.length) return payload.cumulative_points;
+  return Array.isArray(payload && payload.points) ? payload.points : [];
+}
+
+function formatUtcHourLabel(hour) {
+  if (!Number.isFinite(Number(hour)) || Number(hour) <= 0) return 'n/a';
+  return new Date(Number(hour) * 3600000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+}
+
+function formatUtcDayLabel(day) {
+  if (!Number.isFinite(Number(day)) || Number(day) <= 0) return 'n/a';
+  return new Date(Number(day) * 86400000).toISOString().slice(0, 10);
+}
+
+const CPU_HISTORY_MARGIN = 16;
+const CPU_HISTORY_MIN_WIDTH = 520;
+const CPU_HISTORY_MIN_HEIGHT = 320;
+
+function getCpuHistoryRectLimits() {
+  const maxWidth = Math.max(320, window.innerWidth - (CPU_HISTORY_MARGIN * 2));
+  const maxHeight = Math.max(240, window.innerHeight - (CPU_HISTORY_MARGIN * 2));
+  return {
+    minWidth: Math.min(CPU_HISTORY_MIN_WIDTH, maxWidth),
+    minHeight: Math.min(CPU_HISTORY_MIN_HEIGHT, maxHeight),
+    maxWidth: maxWidth,
+    maxHeight: maxHeight,
+  };
+}
+
+function clampCpuHistoryRect(rect) {
+  const limits = getCpuHistoryRectLimits();
+  const width = Math.min(Math.max(rect.width, limits.minWidth), limits.maxWidth);
+  const height = Math.min(Math.max(rect.height, limits.minHeight), limits.maxHeight);
+  const maxLeft = Math.max(CPU_HISTORY_MARGIN, window.innerWidth - width - CPU_HISTORY_MARGIN);
+  const maxTop = Math.max(CPU_HISTORY_MARGIN, window.innerHeight - height - CPU_HISTORY_MARGIN);
+  return {
+    left: Math.min(Math.max(rect.left, CPU_HISTORY_MARGIN), maxLeft),
+    top: Math.min(Math.max(rect.top, CPU_HISTORY_MARGIN), maxTop),
+    width: width,
+    height: height,
+  };
+}
+
+function applyCpuHistoryRect(rect) {
+  const box = document.getElementById('cpu-history-box');
+  if (!box) return;
+  const next = clampCpuHistoryRect(rect);
+  box.style.left = next.left + 'px';
+  box.style.top = next.top + 'px';
+  box.style.width = next.width + 'px';
+  box.style.height = next.height + 'px';
+}
+
+function resetCpuHistoryWindow() {
+  const box = document.getElementById('cpu-history-box');
+  if (!box) return;
+  box.classList.remove('modal-history-window');
+  box.style.left = '';
+  box.style.top = '';
+  box.style.width = '';
+  box.style.height = '';
+}
+
+function prepareCpuHistoryWindow(widthPx, heightPx) {
+  const box = document.getElementById('cpu-history-box');
+  if (!box) return;
+  box.classList.add('modal-history-window');
+  applyCpuHistoryRect({
+    left: Math.round((window.innerWidth - (widthPx || 980)) / 2),
+    top: Math.round((window.innerHeight - (heightPx || 560)) / 2),
+    width: widthPx || 980,
+    height: heightPx || 560,
+  });
+}
+
+function initCpuHistoryInteractions() {
+  const box = document.getElementById('cpu-history-box');
+  const head = document.getElementById('cpu-history-head');
+  const resizeHandles = Array.from(box ? box.querySelectorAll('.cpu-history-resize-handle[data-resize]') : []);
+  if (!box || !head || !resizeHandles.length) return;
+  let drag = null;
+  let resize = null;
+  function releasePointer(target, pointerId) {
+    try { target.releasePointerCapture(pointerId); } catch (error) {}
+  }
+  head.addEventListener('pointerdown', function (event) {
+    if (!box.classList.contains('modal-history-window')) return;
+    if (event.button !== 0) return;
+    if (event.target && event.target.closest('.cpu-history-close')) return;
+    const rect = box.getBoundingClientRect();
+    drag = { pointerId: event.pointerId, dx: event.clientX - rect.left, dy: event.clientY - rect.top };
+    head.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  head.addEventListener('pointermove', function (event) {
+    if (!drag || drag.pointerId !== event.pointerId || !box.classList.contains('modal-history-window')) return;
+    applyCpuHistoryRect({ left: event.clientX - drag.dx, top: event.clientY - drag.dy, width: box.offsetWidth, height: box.offsetHeight });
+  });
+  head.addEventListener('pointerup', function (event) {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    drag = null;
+    releasePointer(head, event.pointerId);
+  });
+  head.addEventListener('pointercancel', function (event) {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    drag = null;
+    releasePointer(head, event.pointerId);
+  });
+  function updateResizeRect(base, direction, clientX, clientY) {
+    const dx = clientX - base.startX;
+    const dy = clientY - base.startY;
+    let nextLeft = base.left;
+    let nextTop = base.top;
+    let nextWidth = base.width;
+    let nextHeight = base.height;
+
+    if (direction.indexOf('right') !== -1) {
+      nextWidth = base.width + dx;
+    }
+    if (direction.indexOf('left') !== -1) {
+      nextWidth = base.width - dx;
+      nextLeft = base.left + dx;
+    }
+    if (direction.indexOf('bottom') !== -1) {
+      nextHeight = base.height + dy;
+    }
+    if (direction.indexOf('top') !== -1) {
+      nextHeight = base.height - dy;
+      nextTop = base.top + dy;
+    }
+
+    applyCpuHistoryRect({ left: nextLeft, top: nextTop, width: nextWidth, height: nextHeight });
+  }
+
+  resizeHandles.forEach(function (handle) {
+    handle.addEventListener('pointerdown', function (event) {
+      if (!box.classList.contains('modal-history-window')) return;
+      if (event.button !== 0) return;
+      const rect = box.getBoundingClientRect();
+      resize = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+        direction: String(handle.getAttribute('data-resize') || ''),
+        handle: handle,
+      };
+      handle.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    handle.addEventListener('pointermove', function (event) {
+      if (!resize || resize.pointerId !== event.pointerId || resize.handle !== handle || !box.classList.contains('modal-history-window')) return;
+      updateResizeRect(resize, resize.direction, event.clientX, event.clientY);
+    });
+    handle.addEventListener('pointerup', function (event) {
+      if (!resize || resize.pointerId !== event.pointerId || resize.handle !== handle) return;
+      resize = null;
+      releasePointer(handle, event.pointerId);
+    });
+    handle.addEventListener('pointercancel', function (event) {
+      if (!resize || resize.pointerId !== event.pointerId || resize.handle !== handle) return;
+      resize = null;
+      releasePointer(handle, event.pointerId);
+    });
+  });
 }
 
 function cpuTelemetry(metrics) {
@@ -1302,6 +1749,7 @@ function renderInstances() {
       const version = vmap[inst.p] || inst.p || '?';
       const memList = inst.m || [];
       const memMB = memList[0] ? (memList[0] / 1048576).toFixed(1) : '0';
+      const swapMB = memList[9] ? (memList[9] / 1048576).toFixed(1) : '0';
       const startTs = inst.st || 0;
       const startStr = startTs ? new Date(startTs * 1000).toISOString().slice(0,16).replace('T',' ') : '?';
 
@@ -1322,13 +1770,13 @@ function renderInstances() {
       rows.push({
         host, version, name, start: startStr,
         pbVersion: inst.p || '?',
-        memMB: parseFloat(memMB), cpu: inst.c || 0,
+        memMB: parseFloat(memMB), swapMB: parseFloat(swapMB), cpu: inst.c || 0,
         cpu60s: Number.isFinite(Number(inst.cpu_60s)) ? Number(inst.cpu_60s) : 0,
         cpu60sWindow: Number.isFinite(Number(inst.cpu_60s_window)) ? Number(inst.cpu_60s_window) : 0,
         pnlToday: inst.pt || 0, fillsToday: inst.ct || 0,
-        pnlYesterday: inst.py || 0, fillsYesterday: inst.cy || 0,
-        errorsToday: inst.et || 0, errorsYesd: inst.ey || 0,
-        tbsToday: inst.tt || 0, tbsYesd: inst.ty || 0,
+        pnlHist: inst.pnl_hist_total || 0, fillsHist: inst.pnls_hist_total || 0,
+        errorsToday: inst.et || 0, errors4w: inst.errors_4w || 0,
+        tbsToday: inst.tt || 0, tbs4w: inst.tracebacks_4w || 0,
         lastError: inst.e || '', lastTB: inst.t || '', lastInfo: inst.i || '',
         configVer, runningVer, enabledOn, syncStatus,
       });
@@ -1345,11 +1793,11 @@ function renderInstances() {
       rows.push({
         host, version: 'V7', name: v.name, start: '–',
         pbVersion: '7',
-        memMB: 0, cpu: 0, cpu60s: 0, cpu60sWindow: 0,
+        memMB: 0, swapMB: 0, cpu: 0, cpu60s: 0, cpu60sWindow: 0,
         pnlToday: 0, fillsToday: 0,
-        pnlYesterday: 0, fillsYesterday: 0,
-        errorsToday: 0, errorsYesd: 0,
-        tbsToday: 0, tbsYesd: 0,
+        pnlHist: 0, fillsHist: 0,
+        errorsToday: 0, errors4w: 0,
+        tbsToday: 0, tbs4w: 0,
         lastError: '', lastTB: '', lastInfo: '',
         configVer: v.cv, runningVer: v.rv, enabledOn: v.eo, syncStatus,
       });
@@ -1409,11 +1857,11 @@ function renderInstances() {
     {key:'host',label:'Server'},{key:'version',label:'Version'},{key:'name',label:'Name'},
     {key:'syncStatus',label:'Sync'},{key:'enabledOn',label:'Enabled On'},
     {key:'configVer',label:'Cfg Ver'},{key:'runningVer',label:'Run Ver'},
-    {key:'start',label:'Start'},{key:'memMB',label:'Mem (MB)'},{key:'cpu',label:'CPU %'},
+    {key:'start',label:'Start'},{key:'memMB',label:'Mem (MB)'},{key:'cpu',label:'CPU %'},{key:'swapMB',label:'Swap (MB)'},
     {key:'pnlToday',label:'PnL Today'},{key:'fillsToday',label:'Fills'},
-    {key:'pnlYesterday',label:'PnL Yesd'},{key:'fillsYesterday',label:'Fills Y'},
-    {key:'errorsToday',label:'Err Today'},{key:'errorsYesd',label:'Err Y'},
-    {key:'tbsToday',label:'TBs Today'},{key:'tbsYesd',label:'TBs Y'},
+    {key:'pnlHist',label:'PnL Hist'},{key:'fillsHist',label:'Fills Hist'},
+    {key:'errorsToday',label:'Err Tdy'},{key:'errors4w',label:'Err 4W'},
+    {key:'tbsToday',label:'TB Tdy'},{key:'tbs4w',label:'TB 4W'},
     {key:'_actions',label:''},
   ];
 
@@ -1445,16 +1893,17 @@ function renderInstances() {
       <td>${r.configVer !== null ? r.configVer : '–'}</td>
       <td>${r.runningVer !== null ? r.runningVer : '–'}</td>
       <td>${esc(r.start)}</td>
-      <td>${r.memMB.toFixed(1)}</td>
+      <td class="cpu-clickable" data-history-host="${escAttr(r.host)}" data-history-bot="${escAttr(r.name)}" data-history-metric="memory">${r.memMB.toFixed(1)}</td>
       <td class="cpu-clickable" data-cpu-history-host="${escAttr(r.host)}" data-cpu-history-bot="${escAttr(r.name)}">${instanceCpuCell(r.host, r.name, r.cpu, r.cpu60s, r.cpu60sWindow)}</td>
-      <td class="${pnlClass(r.pnlToday)}">${r.pnlToday.toFixed(2)}</td>
+      <td class="cpu-clickable" data-history-host="${escAttr(r.host)}" data-history-bot="${escAttr(r.name)}" data-history-metric="swap">${r.swapMB != null ? Number(r.swapMB).toFixed(1) : '0.0'}</td>
+      <td class="cpu-clickable ${pnlClass(r.pnlToday)}" data-history-host="${escAttr(r.host)}" data-history-bot="${escAttr(r.name)}" data-history-metric="pnl">${r.pnlToday.toFixed(2)}</td>
       <td>${r.fillsToday}</td>
-      <td class="${pnlClass(r.pnlYesterday)}">${r.pnlYesterday.toFixed(2)}</td>
-      <td>${r.fillsYesterday}</td>
-      <td class="${errClass(r.errorsToday)}">${r.errorsToday}</td>
-      <td class="${errClass(r.errorsYesd)}">${r.errorsYesd}</td>
-      <td class="${errClass(r.tbsToday)}">${r.tbsToday}</td>
-      <td class="${errClass(r.tbsYesd)}">${r.tbsYesd}</td>
+      <td class="cpu-clickable ${pnlClass(r.pnlHist)}" data-history-host="${escAttr(r.host)}" data-history-bot="${escAttr(r.name)}" data-history-metric="pnl">${r.pnlHist.toFixed(2)}</td>
+      <td class="cpu-clickable" data-history-host="${escAttr(r.host)}" data-history-bot="${escAttr(r.name)}" data-history-metric="pnl_fills">${r.fillsHist}</td>
+      <td class="cpu-clickable ${errClass(r.errorsToday)}" data-history-host="${escAttr(r.host)}" data-history-bot="${escAttr(r.name)}" data-history-metric="errors">${r.errorsToday}</td>
+      <td class="cpu-clickable ${errClass(r.errors4w)}" data-history-host="${escAttr(r.host)}" data-history-bot="${escAttr(r.name)}" data-history-metric="errors">${r.errors4w}</td>
+      <td class="cpu-clickable ${errClass(r.tbsToday)}" data-history-host="${escAttr(r.host)}" data-history-bot="${escAttr(r.name)}" data-history-metric="tracebacks">${r.tbsToday}</td>
+      <td class="cpu-clickable ${errClass(r.tbs4w)}" data-history-host="${escAttr(r.host)}" data-history-bot="${escAttr(r.name)}" data-history-metric="tracebacks">${r.tbs4w}</td>
       <td class="inst-actions">
         <span class="inst-action" title="View Log" onclick="event.stopPropagation();viewInstanceLog('${esc(r.host)}','${esc(r.name)}','${esc(r.pbVersion)}')">📋</span>
         <span class="inst-action" title="Restart (kill)" onclick="event.stopPropagation();killInstance('${esc(r.host)}','${esc(r.name)}','${esc(r.pbVersion)}',this)">🔄</span>
@@ -1473,7 +1922,7 @@ function instanceCpuCell(host, name, liveCpu, cpu60s, cpu60sWindow) {
   return `<span>${live.toFixed(1)}${sub ? `<span class="inst-cpu-sub">${esc(sub)}</span>` : ''}</span>`;
 }
 
-window.openCpuHistory = function openCpuHistory(host, botName) {
+window.openMetricHistory = function openMetricHistory(host, metricName, botName) {
   const overlay = document.getElementById('cpu-history-ovl');
   const title = document.getElementById('cpu-history-title');
   const sub = document.getElementById('cpu-history-sub');
@@ -1481,6 +1930,8 @@ window.openCpuHistory = function openCpuHistory(host, botName) {
   const chart = document.getElementById('cpu-history-chart');
   if (!overlay || !title || !sub || !meta || !chart) return;
   const hostName = String(host || '');
+  const metric = String(metricName || 'cpu').trim().toLowerCase() || 'cpu';
+  const requestMetric = metric === 'pnl_fills' ? 'pnl' : metric;
   const bot = String(botName || '');
   if (!hostName) return;
   cpuHistoryRequestId += 1;
@@ -1493,11 +1944,18 @@ window.openCpuHistory = function openCpuHistory(host, botName) {
   overlay.style.visibility = 'visible';
   overlay.style.opacity = '1';
   overlay.style.zIndex = '5001';
-  title.textContent = bot ? ('CPU History - ' + bot + ' @ ' + hostName) : ('CPU History - ' + hostName);
-  sub.textContent = 'Loading 24h cpu_60s history...';
+  prepareCpuHistoryWindow(980, 560);
+  cpuHistoryDisplayMetric = metric;
+  title.textContent = metricHistoryTitle(metric, hostName, bot);
+  const metaInfo = metricHistoryMeta(metric);
+  sub.textContent = metricHistoryLoadingSubtitle(metric, bot);
   meta.innerHTML = '';
   chart.innerHTML = '<div style="color:var(--text-dim);padding:24px;text-align:center">Loading…</div>';
-  send({ cmd: 'get_cpu_history', host: hostName, bot_name: bot, sid: String(rid) });
+  send({ cmd: requestMetric === 'cpu' ? 'get_cpu_history' : 'get_metric_history', host: hostName, bot_name: bot, metric: requestMetric, sid: String(rid) });
+};
+
+window.openCpuHistory = function openCpuHistory(host, botName) {
+  window.openMetricHistory(host, 'cpu', botName);
 };
 
 window.closeCpuHistory = function closeCpuHistory() {
@@ -1507,24 +1965,27 @@ window.closeCpuHistory = function closeCpuHistory() {
   overlay.style.display = 'none';
   overlay.style.visibility = 'hidden';
   overlay.style.opacity = '0';
+  resetCpuHistoryWindow();
 };
 
 function getCpuHistoryTarget(target) {
   if (!target || typeof target.closest !== 'function') return null;
-  const trigger = target.closest('[data-cpu-history-host]');
+  const trigger = target.closest('[data-history-host], [data-cpu-history-host]');
   if (!trigger) return null;
-  const host = String(trigger.getAttribute('data-cpu-history-host') || '').trim();
-  const bot = String(trigger.getAttribute('data-cpu-history-bot') || '').trim();
+  const host = String(trigger.getAttribute('data-history-host') || trigger.getAttribute('data-cpu-history-host') || '').trim();
+  const bot = String(trigger.getAttribute('data-history-bot') || trigger.getAttribute('data-cpu-history-bot') || '').trim();
+  const metric = String(trigger.getAttribute('data-history-metric') || 'cpu').trim().toLowerCase() || 'cpu';
   if (!host) return null;
-  return { host, bot };
+  return { host, bot, metric };
 }
 
 let lastCpuHistoryOpen = { key: '', ts: 0 };
+let cpuHistoryDisplayMetric = 'cpu';
 
 function handleCpuHistoryInteraction(event) {
   const target = getCpuHistoryTarget(event.target);
   if (!target) return;
-  const key = target.host + '::' + target.bot;
+  const key = target.metric + '::' + target.host + '::' + target.bot;
   const now = Date.now();
   if (lastCpuHistoryOpen.key === key && (now - lastCpuHistoryOpen.ts) < 400) {
     event.preventDefault();
@@ -1534,10 +1995,10 @@ function handleCpuHistoryInteraction(event) {
   lastCpuHistoryOpen = { key, ts: now };
   event.preventDefault();
   event.stopPropagation();
-  openCpuHistory(target.host, target.bot);
+  openMetricHistory(target.host, target.metric, target.bot);
 }
 
-function handleCpuHistory(payload, host, botName, sid) {
+function handleCpuHistory(payload, host, botName, sid, metricName) {
   const overlay = document.getElementById('cpu-history-ovl');
   if (!overlay || !overlay.classList.contains('visible')) return;
   if (sid && String(sid) !== String(cpuHistoryRequestId)) return;
@@ -1547,25 +2008,53 @@ function handleCpuHistory(payload, host, botName, sid) {
   const chart = document.getElementById('cpu-history-chart');
   if (!title || !sub || !meta || !chart) return;
   const data = payload || {};
-  const points = Array.isArray(data.points) ? data.points : [];
-  title.textContent = botName ? ('CPU History - ' + botName + ' @ ' + host) : ('CPU History - ' + host);
-  sub.textContent = '24h history, 1 sample/minute, source: cpu_60s';
-  meta.innerHTML = renderCpuHistoryMeta(data, points);
-  chart.innerHTML = renderCpuHistoryChart(data, points);
+  const metric = sid && String(sid) === String(cpuHistoryRequestId)
+    ? cpuHistoryDisplayMetric
+    : (String(metricName || (data && data.metric) || 'cpu').trim().toLowerCase() || 'cpu');
+  const points = metricHistorySeriesPoints(metric, data);
+  title.textContent = metricHistoryTitle(metric, host, botName);
+  sub.textContent = metricHistorySubtitle(metric, data);
+  meta.innerHTML = renderCpuHistoryMeta(data, points, metric);
+  chart.innerHTML = renderCpuHistoryChart(data, points, metric);
 }
 
-function renderCpuHistoryMeta(data, points) {
+function getCpuHistoryChartHeight() {
+  const chart = document.getElementById('cpu-history-chart');
+  if (!chart) return 280;
+  const style = window.getComputedStyle(chart);
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+  const paddingBottom = parseFloat(style.paddingBottom) || 0;
+  const available = chart.clientHeight - paddingTop - paddingBottom;
+  return Math.max(220, Math.round(available || 280));
+}
+
+function renderCpuHistoryMeta(data, points, metric) {
   const valid = points.filter(function (v) { return typeof v === 'number' && Number.isFinite(v); });
   const latest = valid.length ? valid[valid.length - 1] : null;
   const peak = valid.length ? Math.max.apply(null, valid) : null;
-  const threshold = Number.isFinite(Number(data && data.threshold_pct)) ? Number(data.threshold_pct) : null;
+  const totalPnl = Number.isFinite(Number(data && data.total_pnl)) ? Number(data.total_pnl) : null;
+  const totalFills = Number.isFinite(Number(data && data.total_fills)) ? Number(data.total_fills) : null;
+  const bestDayPnl = Number.isFinite(Number(data && data.best_day_pnl)) ? Number(data.best_day_pnl) : null;
+  const worstDayPnl = Number.isFinite(Number(data && data.worst_day_pnl)) ? Number(data.worst_day_pnl) : null;
+  const lastFillTs = Number.isFinite(Number(data && data.last_fill_ts)) ? Number(data.last_fill_ts) : 0;
+  const warningThreshold = Number.isFinite(Number(data && data.warning_threshold)) ? Number(data.warning_threshold) : null;
+  const errorThreshold = Number.isFinite(Number(data && data.error_threshold)) ? Number(data.error_threshold) : null;
   const lastMinute = Number.isFinite(Number(data && data.last_minute)) ? Number(data.last_minute) : 0;
+  const lastHour = Number.isFinite(Number(data && data.last_hour)) ? Number(data.last_hour) : 0;
   const lastSeen = lastMinute > 0 ? new Date(lastMinute * 60000).toLocaleString() : 'n/a';
+  const lastSeenHourly = formatUtcHourLabel(lastHour);
+  const metaInfo = metricHistoryMeta(metric);
+  const showThresholds = !metaInfo.pnlMetric && !metaInfo.fillsMetric;
   return [
-    cpuChartPill('Latest', latest == null ? 'n/a' : latest.toFixed(1) + '%'),
-    cpuChartPill('Peak', peak == null ? 'n/a' : peak.toFixed(1) + '%'),
-    cpuChartPill('Threshold', threshold == null ? 'n/a' : threshold.toFixed(1) + '%'),
-    cpuChartPill('Last sample', lastSeen),
+    metaInfo.pnlMetric ? cpuChartPill('Total PNL', metricHistoryValueLabel(metric, totalPnl, data)) : '',
+    (metaInfo.pnlMetric || metaInfo.fillsMetric) ? cpuChartPill('Total fills', String(totalFills == null ? 'n/a' : totalFills)) : '',
+    cpuChartPill('Latest', metricHistoryValueLabel(metric, latest, data)),
+    cpuChartPill('Peak', metricHistoryValueLabel(metric, peak, data)),
+    metaInfo.pnlMetric && bestDayPnl != null ? cpuChartPill('Best day', metricHistoryValueLabel(metric, bestDayPnl, data)) : '',
+    metaInfo.pnlMetric && worstDayPnl != null ? cpuChartPill('Worst day', metricHistoryValueLabel(metric, worstDayPnl, data)) : '',
+    showThresholds && warningThreshold != null ? cpuChartPill('Warning', metricHistoryValueLabel(metric, warningThreshold, data)) : '',
+    showThresholds && errorThreshold != null ? cpuChartPill('Error', metricHistoryValueLabel(metric, errorThreshold, data)) : '',
+    cpuChartPill(metaInfo.countMetric ? 'Last hour' : ((metaInfo.pnlMetric || metaInfo.fillsMetric) ? 'Last fill' : 'Last sample'), metaInfo.countMetric ? lastSeenHourly : ((metaInfo.pnlMetric || metaInfo.fillsMetric) ? (lastFillTs > 0 ? new Date(lastFillTs * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC' : 'n/a') : lastSeen)),
   ].join('');
 }
 
@@ -1573,45 +2062,102 @@ function cpuChartPill(label, value) {
   return `<span class="cpu-chart-pill"><strong>${esc(label)}:</strong> ${esc(value)}</span>`;
 }
 
-function renderCpuHistoryChart(data, points) {
+function renderCpuHistoryChart(data, points, metric) {
   if (!points.length) {
     return '<div style="color:var(--text-dim);padding:24px;text-align:center">No history available yet.</div>';
   }
+  const meta = metricHistoryMeta(metric);
   const width = 920;
-  const height = 280;
-  const pad = { left: 42, right: 14, top: 14, bottom: 28 };
-  const innerW = width - pad.left - pad.right;
-  const innerH = height - pad.top - pad.bottom;
-  const threshold = Number.isFinite(Number(data && data.threshold_pct)) ? Number(data.threshold_pct) : null;
-  const valid = points
+  const height = getCpuHistoryChartHeight();
+  const warningThreshold = !meta.pnlMetric && !meta.fillsMetric && Number.isFinite(Number(data && data.warning_threshold)) ? Number(data.warning_threshold) : null;
+  const errorThreshold = !meta.pnlMetric && !meta.fillsMetric && Number.isFinite(Number(data && data.error_threshold)) ? Number(data.error_threshold) : null;
+  const chartPoints = points;
+  const valid = chartPoints
     .map(function (value, index) { return typeof value === 'number' && Number.isFinite(value) ? { index: index, value: value } : null; })
     .filter(Boolean);
   if (!valid.length) {
-    return '<div style="color:var(--text-dim);padding:24px;text-align:center">No confirmed 60s samples stored yet.</div>';
+    return '<div style="color:var(--text-dim);padding:24px;text-align:center">' + esc(metricHistoryEmpty(metric, data)) + '</div>';
   }
-  const maxValue = Math.max(100, threshold || 0, Math.max.apply(null, valid.map(function (item) { return item.value; })));
-  function x(index) { return pad.left + (index / Math.max(points.length - 1, 1)) * innerW; }
-  function y(value) { return pad.top + innerH - (value / maxValue) * innerH; }
+  const scale = metricHistoryScale(metric, data);
+  const values = valid.map(function (item) { return item.value; });
+  const minRaw = Math.min.apply(null, values.concat([warningThreshold || 0, errorThreshold || 0]));
+  const maxRaw = Math.max.apply(null, values.concat([warningThreshold || 0, errorThreshold || 0]));
+  const guidesMeta = meta.pnlMetric ? scale.guideValues(minRaw, maxRaw) : scale.guideValues(Math.max(scale.baseline, maxRaw));
+  const guideLabelWidth = guidesMeta.values.reduce(function (maxLen, value) {
+    return Math.max(maxLen, String(scale.label(value)).length);
+  }, 0);
+  const pad = { left: Math.max(42, Math.min(112, 12 + guideLabelWidth * 7)), right: 14, top: 14, bottom: 28 };
+  const innerW = width - pad.left - pad.right;
+  const innerH = height - pad.top - pad.bottom;
+  const minValue = meta.pnlMetric ? guidesMeta.minValue : 0;
+  const maxValue = guidesMeta.maxValue;
+  function x(index) { return pad.left + (index / Math.max(chartPoints.length - 1, 1)) * innerW; }
+  function y(value) { return pad.top + innerH - ((value - minValue) / Math.max(maxValue - minValue, 1e-9)) * innerH; }
   let path = '';
   valid.forEach(function (item, idx) {
     path += (idx === 0 ? 'M' : ' L') + x(item.index).toFixed(1) + ' ' + y(item.value).toFixed(1);
   });
-  const guides = [0, 25, 50, 75, 100].filter(function (v, i, arr) { return v <= maxValue || i === arr.length - 1; }).map(function (v) {
+  const pointMarkers = (meta.pnlMetric || meta.fillsMetric) ? valid.map(function (item) {
+    return `<circle cx="${x(item.index).toFixed(1)}" cy="${y(item.value).toFixed(1)}" r="${valid.length === 1 ? 4 : 3}" fill="rgba(93,196,255,0.95)" stroke="rgba(5,9,15,0.9)" stroke-width="1.2" />`;
+  }).join('') : '';
+  const guides = guidesMeta.values.filter(function (v, i, arr) { return v <= maxValue || i === arr.length - 1; }).map(function (v) {
     const yy = y(v);
     return `<line x1="${pad.left}" y1="${yy.toFixed(1)}" x2="${(width - pad.right)}" y2="${yy.toFixed(1)}" stroke="rgba(255,255,255,0.08)" stroke-width="1" />`
-      + `<text x="${pad.left - 8}" y="${(yy + 4).toFixed(1)}" text-anchor="end" fill="rgba(255,255,255,0.55)" font-size="11">${v}%</text>`;
+      + `<text x="${pad.left - 8}" y="${(yy + 4).toFixed(1)}" text-anchor="end" fill="rgba(255,255,255,0.55)" font-size="11">${scale.label(v)}</text>`;
   }).join('');
-  const thresholdLine = threshold == null ? '' : `<line x1="${pad.left}" y1="${y(threshold).toFixed(1)}" x2="${(width - pad.right)}" y2="${y(threshold).toFixed(1)}" stroke="rgba(255,75,75,0.75)" stroke-width="1.5" stroke-dasharray="6 4" />`;
-  const thresholdLabel = threshold == null ? '' : `<text x="${width - pad.right}" y="${(y(threshold) - 6).toFixed(1)}" text-anchor="end" fill="rgba(255,120,120,0.9)" font-size="11">alert ${threshold.toFixed(1)}%</text>`;
+  let dailyLine = '';
+  let dailyLabels = '';
+  if (meta.countMetric && Array.isArray(data && data.daily_points) && data.daily_points.length) {
+    const dailyPoints = data.daily_points.map(function (value, index) {
+      return typeof value === 'number' && Number.isFinite(value) ? { index: index, value: value } : null;
+    }).filter(Boolean);
+    const dayCount = Math.max((data && data.daily_points && data.daily_points.length) || 0, 1);
+    const dayPath = dailyPoints.map(function (item, idx) {
+      const dayX = pad.left + (((item.index + 0.5) / dayCount) * innerW);
+      return (idx === 0 ? 'M' : ' L') + dayX.toFixed(1) + ' ' + y(item.value).toFixed(1);
+    }).join('');
+    if (dayPath) {
+      dailyLine = `<path d="${dayPath}" fill="none" stroke="rgba(171,219,255,0.92)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>`;
+    }
+    dailyLabels = `<text x="${pad.left}" y="${pad.top + 14}" fill="rgba(171,219,255,0.9)" font-size="11">daily UTC</text>`
+      + `<text x="${pad.left + 72}" y="${pad.top + 14}" fill="rgba(93,196,255,0.72)" font-size="11">hourly UTC</text>`;
+  }
+  const zeroLine = meta.pnlMetric && minValue < 0 && maxValue > 0 ? `<line x1="${pad.left}" y1="${y(0).toFixed(1)}" x2="${(width - pad.right)}" y2="${y(0).toFixed(1)}" stroke="rgba(255,255,255,0.18)" stroke-width="1" stroke-dasharray="3 3" />` : '';
+  const warningLine = warningThreshold == null ? '' : `<line x1="${pad.left}" y1="${y(warningThreshold).toFixed(1)}" x2="${(width - pad.right)}" y2="${y(warningThreshold).toFixed(1)}" stroke="rgba(244,185,66,0.85)" stroke-width="1.5" stroke-dasharray="6 4" />`;
+  const errorLine = errorThreshold == null ? '' : `<line x1="${pad.left}" y1="${y(errorThreshold).toFixed(1)}" x2="${(width - pad.right)}" y2="${y(errorThreshold).toFixed(1)}" stroke="rgba(255,75,75,0.78)" stroke-width="1.5" stroke-dasharray="6 4" />`;
+  const warningLabel = warningThreshold == null ? '' : `<text x="${width - pad.right}" y="${(y(warningThreshold) - 6).toFixed(1)}" text-anchor="end" fill="rgba(244,210,120,0.95)" font-size="11">warning ${metricHistoryValueLabel(metric, warningThreshold, data)}</text>`;
+  const errorLabel = errorThreshold == null ? '' : `<text x="${width - pad.right}" y="${(y(errorThreshold) + 14).toFixed(1)}" text-anchor="end" fill="rgba(255,120,120,0.95)" font-size="11">error ${metricHistoryValueLabel(metric, errorThreshold, data)}</text>`;
+  const rangeLabel = meta.countMetric ? '4 week' : ((meta.pnlMetric || meta.fillsMetric) ? 'full' : '24 hour');
+  const startLabel = meta.countMetric ? '4w ago' : ((meta.pnlMetric || meta.fillsMetric) ? 'first day' : '24h ago');
+  let xAxisLabels = '';
+  if ((meta.pnlMetric || meta.fillsMetric) && Array.isArray(data && data.days) && data.days.length) {
+    const tickCount = Math.min(4, data.days.length);
+    const ticks = [];
+    for (let i = 0; i < tickCount; i += 1) {
+      const idx = tickCount === 1 ? 0 : Math.round(((data.days.length - 1) * i) / (tickCount - 1));
+      if (ticks.some(function (tick) { return tick.index === idx; })) continue;
+      ticks.push({ index: idx, label: formatUtcDayLabel(data.days[idx]) });
+    }
+    xAxisLabels = ticks.map(function (tick) {
+      const xx = x(tick.index).toFixed(1);
+      const anchor = tick.index === 0 ? 'start' : (tick.index === chartPoints.length - 1 ? 'end' : 'middle');
+      return `<text x="${xx}" y="${height - 8}" text-anchor="${anchor}" fill="rgba(255,255,255,0.55)" font-size="11">${esc(tick.label)}</text>`;
+    }).join('');
+  }
   return `
-    <svg class="cpu-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="24 hour CPU history chart">
+    <svg class="cpu-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escAttr(rangeLabel)} ${escAttr(metricHistoryMeta(metric).label)} history chart">
       <rect x="0" y="0" width="${width}" height="${height}" rx="10" fill="rgba(5,9,15,0.55)"></rect>
       ${guides}
-      ${thresholdLine}
-      ${thresholdLabel}
+      ${zeroLine}
+      ${warningLine}
+      ${errorLine}
+      ${warningLabel}
+      ${errorLabel}
+      ${dailyLine}
       <path d="${path}" fill="none" stroke="rgba(93,196,255,0.95)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"></path>
-      <text x="${pad.left}" y="${height - 8}" fill="rgba(255,255,255,0.55)" font-size="11">24h ago</text>
-      <text x="${width - pad.right}" y="${height - 8}" text-anchor="end" fill="rgba(255,255,255,0.55)" font-size="11">now</text>
+      ${pointMarkers}
+      ${dailyLabels}
+      ${xAxisLabels || `<text x="${pad.left}" y="${height - 8}" fill="rgba(255,255,255,0.55)" font-size="11">${startLabel}</text><text x="${width - pad.right}" y="${height - 8}" text-anchor="end" fill="rgba(255,255,255,0.55)" font-size="11">now</text>`}
     </svg>`;
 }
 
@@ -2005,6 +2551,13 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 document.addEventListener('click', handleCpuHistoryInteraction, true);
+window.addEventListener('resize', function () {
+  const overlay = document.getElementById('cpu-history-ovl');
+  const box = document.getElementById('cpu-history-box');
+  if (!overlay || !box || !overlay.classList.contains('visible')) return;
+  applyCpuHistoryRect(box.getBoundingClientRect());
+});
+initCpuHistoryInteractions();
 
 document.getElementById('cpu-history-ovl').addEventListener('click', function (event) {
   if (event.target === event.currentTarget) closeCpuHistory();

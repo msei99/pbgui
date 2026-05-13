@@ -25,15 +25,21 @@ class SystemMetrics:
     mem_total: int = 0
     mem_available: int = 0
     mem_percent: float = 0.0
+    mem_60s_peak: float = 0.0
+    mem_60s_window: float = 0.0
     mem_used: int = 0
     disk_total: int = 0
     disk_used: int = 0
     disk_free: int = 0
     disk_percent: float = 0.0
+    disk_60s_peak: float = 0.0
+    disk_60s_window: float = 0.0
     swap_total: int = 0
     swap_used: int = 0
     swap_free: int = 0
     swap_percent: float = 0.0
+    swap_60s_peak: float = 0.0
+    swap_60s_window: float = 0.0
 
     @classmethod
     def from_json(cls, data: dict) -> "SystemMetrics":
@@ -50,15 +56,21 @@ class SystemMetrics:
             mem_total=mem[0] if len(mem) > 0 else 0,
             mem_available=mem[1] if len(mem) > 1 else 0,
             mem_percent=mem[2] if len(mem) > 2 else 0.0,
+            mem_60s_peak=data.get("mem_60s_peak", 0.0),
+            mem_60s_window=data.get("mem_60s_window", 0.0),
             mem_used=mem[3] if len(mem) > 3 else 0,
             disk_total=disk[0] if len(disk) > 0 else 0,
             disk_used=disk[1] if len(disk) > 1 else 0,
             disk_free=disk[2] if len(disk) > 2 else 0,
             disk_percent=disk[3] if len(disk) > 3 else 0.0,
+            disk_60s_peak=data.get("disk_60s_peak", 0.0),
+            disk_60s_window=data.get("disk_60s_window", 0.0),
             swap_total=swap[0] if len(swap) > 0 else 0,
             swap_used=swap[1] if len(swap) > 1 else 0,
             swap_free=swap[2] if len(swap) > 2 else 0,
             swap_percent=swap[3] if len(swap) > 3 else 0.0,
+            swap_60s_peak=data.get("swap_60s_peak", 0.0),
+            swap_60s_window=data.get("swap_60s_window", 0.0),
         )
 
     def to_dict(self) -> dict:
@@ -71,15 +83,21 @@ class SystemMetrics:
             "mem_total": self.mem_total,
             "mem_available": self.mem_available,
             "mem_percent": self.mem_percent,
+            "mem_60s_peak": self.mem_60s_peak,
+            "mem_60s_window": self.mem_60s_window,
             "mem_used": self.mem_used,
             "disk_total": self.disk_total,
             "disk_used": self.disk_used,
             "disk_free": self.disk_free,
             "disk_percent": self.disk_percent,
+            "disk_60s_peak": self.disk_60s_peak,
+            "disk_60s_window": self.disk_60s_window,
             "swap_total": self.swap_total,
             "swap_used": self.swap_used,
             "swap_free": self.swap_free,
             "swap_percent": self.swap_percent,
+            "swap_60s_peak": self.swap_60s_peak,
+            "swap_60s_window": self.swap_60s_window,
         }
 
 
@@ -151,9 +169,31 @@ class VPSStore:
         self.v7_instances[hostname] = data
         self.changed.set()
 
-    def update_bot_logs(self, hostname: str, data: dict[str, list[str]]):
-        """Update old bot log file listings for a host."""
-        self.bot_logs[hostname] = data
+    def update_bot_logs(self, hostname: str, data: dict[str, Any]):
+        """Update bot log file listings for a host.
+
+        The collector may return either the legacy flat list format or a
+        structured mapping with `errors`/`tracebacks`/`sidebar` groups.
+        Store a flat sidebar-friendly view here; callers that need the richer
+        structure should keep using the raw collector payload directly.
+        """
+        normalized: dict[str, list[str]] = {}
+        for bot_name, payload in (data or {}).items():
+            if isinstance(payload, list):
+                normalized[str(bot_name)] = [str(item) for item in payload]
+                continue
+            if isinstance(payload, dict):
+                sidebar = payload.get("sidebar")
+                if isinstance(sidebar, list):
+                    normalized[str(bot_name)] = [str(item) for item in sidebar]
+                    continue
+                merged: list[str] = []
+                for key in ("errors", "tracebacks"):
+                    values = payload.get(key)
+                    if isinstance(values, list):
+                        merged.extend(str(item) for item in values)
+                normalized[str(bot_name)] = merged
+        self.bot_logs[hostname] = normalized
         self.changed.set()
 
     def update_host_meta(self, hostname: str, data: dict):

@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from api.auth import require_auth, SessionToken
 from api.vps import get_monitor_state_snapshot
@@ -859,21 +859,30 @@ _MC_FIELDS = [
     'mem_warning_v7', 'mem_error_v7', 'swap_warning_v7', 'swap_error_v7',
     'cpu_warning_v7', 'cpu_error_v7', 'error_warning_v7', 'error_error_v7',
     'traceback_warning_v7', 'traceback_error_v7',
-    'mem_warning_multi', 'mem_error_multi', 'swap_warning_multi', 'swap_error_multi',
-    'cpu_warning_multi', 'cpu_error_multi', 'error_warning_multi', 'error_error_multi',
-    'traceback_warning_multi', 'traceback_error_multi',
-    'mem_warning_single', 'mem_error_single', 'swap_warning_single', 'swap_error_single',
-    'cpu_warning_single', 'cpu_error_single', 'error_warning_single', 'error_error_single',
-    'traceback_warning_single', 'traceback_error_single',
 ]
+
+
+def _load_monitor_config_values() -> Dict[str, float]:
+    from MonitorConfig import MonitorConfig
+
+    mc = MonitorConfig()
+    return {field: getattr(mc, field) for field in _MC_FIELDS}
+
+
+def _save_monitor_config_values(values: Dict[str, float]) -> None:
+    from MonitorConfig import MonitorConfig
+
+    mc = MonitorConfig()
+    for field in _MC_FIELDS:
+        if field in values:
+            setattr(mc, field, float(values[field]))
+    mc.save_monitor_config()
 
 
 @router.get("/settings/monitor-config")
 def get_monitor_config(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
     """Return all monitor threshold values."""
-    from MonitorConfig import MonitorConfig
-    mc = MonitorConfig()
-    return {f: getattr(mc, f) for f in _MC_FIELDS}
+    return _load_monitor_config_values()
 
 
 @router.post("/settings/monitor-config")
@@ -882,12 +891,7 @@ def save_monitor_config(
 ) -> Dict[str, Any]:
     """Save monitor threshold values."""
     try:
-        from MonitorConfig import MonitorConfig
-        mc = MonitorConfig()
-        for f in _MC_FIELDS:
-            if f in body:
-                setattr(mc, f, float(body[f]))
-        mc.save_monitor_config()
+        _save_monitor_config_values(body)
         return {"ok": True}
     except Exception as e:
         _log(SERVICE, f"save monitor config: {e}", level="ERROR")
@@ -1029,6 +1033,7 @@ def get_api_server_settings(session: SessionToken = Depends(require_auth)) -> Di
         "auto_restart": auto_restart,
         "enabled_hosts": enabled_hosts,
         "available_hosts": _available_vps_hosts(),
+        "monitor_config": _load_monitor_config_values(),
     }
 
 
@@ -1037,6 +1042,7 @@ class APIServerSettings(BaseModel):
     port: int = 8000
     auto_restart: bool = True
     enabled_hosts: List[str] = []
+    monitor_config: Dict[str, float] = Field(default_factory=dict)
 
 
 @router.post("/settings/api-server")
@@ -1050,6 +1056,7 @@ def save_api_server_settings(
         obj.port = body.port
         save_ini("vps_monitor", "auto_restart", str(body.auto_restart))
         save_ini("vps_monitor", "enabled_hosts", ",".join(sorted(body.enabled_hosts)))
+        _save_monitor_config_values(body.monitor_config)
         return {"ok": True}
     except Exception as e:
         _log(SERVICE, f"save api-server settings: {e}", level="ERROR")

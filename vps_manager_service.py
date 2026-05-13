@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from api.vps import get_monitor, get_monitor_state_snapshot, get_cpu_history_snapshot
+from api.vps import get_monitor, get_monitor_state_snapshot, get_metric_history_snapshot
 from logging_helpers import human_log as _log
 from master.async_monitor import INSTANCE_COLLECT_SCRIPT, MONITOR_CACHE_VERSION
 from MonitorConfig import MonitorConfig
@@ -39,6 +39,8 @@ SECRET_FIELDS = (
     "private_key_user",
     "private_key_file",
 )
+
+ROLLING_PEAK_WINDOW_SECONDS = 60.0
 
 
 def _now_ts() -> int:
@@ -127,6 +129,11 @@ class VPSManagerService:
         self._master_monitor_payload_cache: dict[str, Any] | None = None
         self._master_monitor_cache: dict[str, Any] = {"_version": MONITOR_CACHE_VERSION}
         self._master_bot_cpu_history: dict[str, dict[str, Any]] = {}
+        self._master_server_metric_history: dict[str, list[tuple[float, float]]] = {
+            "memory": [],
+            "disk": [],
+            "swap": [],
+        }
         self._vps_coindata_status_cache: dict[str, bool] = {}
         self._vps_ssh_ok_cache: dict[str, bool] = {}
         self._session_secrets: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
@@ -609,13 +616,16 @@ class VPSManagerService:
         }
 
     def get_cpu_history(self, hostname: str, *, bot_name: str = "") -> dict[str, Any]:
+        return self.get_metric_history(hostname, bot_name=bot_name, metric="cpu")
+
+    def get_metric_history(self, hostname: str, *, bot_name: str = "", metric: str = "cpu") -> dict[str, Any]:
         hostname = str(hostname or "").strip()
         bot_name = str(bot_name or "").strip()
         if not hostname:
             raise ValueError("Hostname is required.")
         if hostname != self._ensure_pbremote().name:
             self._require_vps(hostname)
-        return get_cpu_history_snapshot(hostname, bot_name=bot_name)
+        return get_metric_history_snapshot(hostname, bot_name=bot_name, metric=metric)
 
     def _build_errors(self, pbremote: PBRemote) -> list[str]:
         out: list[str] = []
@@ -920,24 +930,34 @@ class VPSManagerService:
                 "free_mb": _safe_int(_safe_float(system.get("mem_available")) / 1024 / 1024),
                 "used_mb": _safe_int(_safe_float(system.get("mem_used")) / 1024 / 1024),
                 "usage_pct": _safe_int(system.get("mem_percent")),
+                "usage_60s_peak": _safe_float(system.get("mem_60s_peak")),
+                "usage_60s_window": _safe_float(system.get("mem_60s_window")),
             },
             "disk": {
                 "total_mb": _safe_int(_safe_float(system.get("disk_total")) / 1024 / 1024),
                 "used_mb": _safe_int(_safe_float(system.get("disk_used")) / 1024 / 1024),
                 "free_mb": _safe_int(_safe_float(system.get("disk_free")) / 1024 / 1024),
                 "usage_pct": _safe_int(system.get("disk_percent")),
+                "usage_60s_peak": _safe_float(system.get("disk_60s_peak")),
+                "usage_60s_window": _safe_float(system.get("disk_60s_window")),
             },
             "swap": {
                 "total_mb": _safe_int(_safe_float(system.get("swap_total")) / 1024 / 1024),
                 "used_mb": _safe_int(_safe_float(system.get("swap_used")) / 1024 / 1024),
                 "free_mb": _safe_int(_safe_float(system.get("swap_free")) / 1024 / 1024),
                 "usage_pct": min(_safe_int(system.get("swap_percent")), 100),
+                "usage_60s_peak": _safe_float(system.get("swap_60s_peak")),
+                "usage_60s_window": _safe_float(system.get("swap_60s_window")),
             },
         }
 
     def _build_server_metrics(self, server) -> dict[str, Any] | None:
         if not server or not getattr(server, "mem", None) or not getattr(server, "disk", None) or not getattr(server, "swap", None):
             return None
+        memory_peak, memory_window = self._update_master_server_metric_peak("memory", _safe_float(server.mem[2]))
+        disk_peak, disk_window = self._update_master_server_metric_peak("disk", _safe_float(server.disk[3]))
+        swap_total = _safe_float(server.swap[0])
+        swap_peak, swap_window = self._update_master_server_metric_peak("swap", _safe_float(server.swap[3]), enabled=swap_total > 0)
         return {
             "rtd": int(getattr(server, "rtd", 0) or 0),
             "boot": datetime.fromtimestamp(server.boot).strftime("%Y-%m-%d %H:%M:%S") if getattr(server, "boot", 0) else "",
@@ -950,20 +970,44 @@ class VPSManagerService:
                 "free_mb": _safe_int(server.mem[1] / 1024 / 1024),
                 "used_mb": _safe_int(server.mem[3] / 1024 / 1024),
                 "usage_pct": _safe_int(server.mem[2]),
+                "usage_60s_peak": memory_peak,
+                "usage_60s_window": memory_window,
             },
             "disk": {
                 "total_mb": _safe_int(server.disk[0] / 1024 / 1024),
                 "used_mb": _safe_int(server.disk[1] / 1024 / 1024),
                 "free_mb": _safe_int(server.disk[2] / 1024 / 1024),
                 "usage_pct": _safe_int(server.disk[3]),
+                "usage_60s_peak": disk_peak,
+                "usage_60s_window": disk_window,
             },
             "swap": {
                 "total_mb": _safe_int(server.swap[0] / 1024 / 1024),
                 "used_mb": _safe_int(server.swap[1] / 1024 / 1024),
                 "free_mb": _safe_int(server.swap[2] / 1024 / 1024),
                 "usage_pct": min(_safe_int(server.swap[3]), 100),
+                "usage_60s_peak": swap_peak,
+                "usage_60s_window": swap_window,
             },
         }
+
+    def _update_master_server_metric_peak(self, metric: str, value: float, *, enabled: bool = True) -> tuple[float, float]:
+        metric = str(metric or "").strip().lower()
+        history = self._master_server_metric_history.get(metric)
+        if history is None:
+            return 0.0, 0.0
+        if not enabled:
+            history.clear()
+            return 0.0, 0.0
+        now = time.time()
+        history.append((now, max(0.0, float(value))))
+        cutoff = now - (ROLLING_PEAK_WINDOW_SECONDS + 2.0)
+        history[:] = [sample for sample in history if sample[0] >= cutoff]
+        if not history:
+            return 0.0, 0.0
+        peak = round(max(sample[1] for sample in history), 1)
+        window = round(now - history[0][0], 1)
+        return peak, window
 
     def _empty_monitor_payload(self) -> dict[str, Any]:
         return {"server": None, "v7": [], "v7_running": [], "multi": [], "single": [], "logfiles": []}
@@ -1106,6 +1150,26 @@ class VPSManagerService:
             "bot_logs": parsed.get("bot_logs") if isinstance(parsed.get("bot_logs"), dict) else {},
         }
 
+    def _bot_count_total(self, hostname: str, bot_name: str, metric: str) -> int:
+        monitor = get_monitor()
+        if not monitor or not hostname or not bot_name:
+            return 0
+        try:
+            payload = monitor.get_bot_metric_history(hostname, bot_name, metric)
+        except Exception:
+            return 0
+        return _safe_int((payload or {}).get("total_count"))
+
+    def _bot_pnl_total(self, hostname: str, bot_name: str) -> tuple[float, int]:
+        monitor = get_monitor()
+        if not monitor or not hostname or not bot_name:
+            return 0.0, 0
+        try:
+            payload = monitor.get_bot_metric_history(hostname, bot_name, "pnl")
+        except Exception:
+            return 0.0, 0
+        return _safe_float((payload or {}).get("total_pnl")), _safe_int((payload or {}).get("total_fills"))
+
     def _build_local_running_v7_payload(self, v7_rows: list[dict[str, Any]], existing_names: set[str] | None = None) -> list[dict[str, Any]]:
         known_names = existing_names or set()
         items: list[dict[str, Any]] = []
@@ -1138,6 +1202,7 @@ class VPSManagerService:
             name = str(monitor.get("u") or "")
             live = live_stats.get(name) or {}
             start_ts = _safe_int(monitor.get("st"))
+            pnl_hist_total, pnls_hist_total = self._bot_pnl_total(pbremote.name, name)
             item = {
                 "server": pbremote.name,
                 "version": getattr(pbremote, "pb7_version", "N/A"),
@@ -1152,12 +1217,12 @@ class VPSManagerService:
                 "cpu_60s_confirmed": _safe_float(live.get("cpu_60s_window")) >= 60,
                 "pnls_today": _safe_int(monitor.get("ct")),
                 "pnl_today": _safe_float(monitor.get("pt")),
-                "pnls_yesterday": _safe_int(monitor.get("cy")),
-                "pnl_yesterday": _safe_float(monitor.get("py")),
+                "pnls_hist_total": pnls_hist_total,
+                "pnl_hist_total": pnl_hist_total,
                 "errors_today": _safe_int(monitor.get("et")),
-                "errors_yesterday": _safe_int(monitor.get("ey")),
+                "errors_4w": self._bot_count_total(pbremote.name, name, "errors"),
                 "tracebacks_today": _safe_int(monitor.get("tt")),
-                "tracebacks_yesterday": _safe_int(monitor.get("ty")),
+                "tracebacks_4w": self._bot_count_total(pbremote.name, name, "tracebacks"),
             }
             item["levels"] = {
                 "cpu": _metric_level(item["cpu"], cfg.cpu_warning_v7, cfg.cpu_error_v7),
@@ -1305,10 +1370,12 @@ class VPSManagerService:
             metrics = monitor.get("m") or []
             swap_value = metrics[9] / 1024 / 1024 if len(metrics) == 10 else 0.0
             start_ts = _safe_int(monitor.get("st"))
+            bot_name = str(monitor.get("u") or "")
+            pnl_hist_total, pnls_hist_total = self._bot_pnl_total(hostname, bot_name)
             item = {
                 "server": hostname,
                 "version": meta.get("pb7v", "N/A"),
-                "name": monitor.get("u", ""),
+                "name": bot_name,
                 "pb_version": "7",
                 "start_time": datetime.fromtimestamp(start_ts).strftime("%Y-%m-%d %H:%M:%S") if start_ts else "",
                 "memory_mb": round(_safe_float(metrics[0]) / 1024 / 1024, 2) if metrics else 0.0,
@@ -1319,12 +1386,12 @@ class VPSManagerService:
                 "cpu_60s_confirmed": _safe_float(monitor.get("cpu_60s_window")) >= 60,
                 "pnls_today": _safe_int(monitor.get("ct")),
                 "pnl_today": _safe_float(monitor.get("pt")),
-                "pnls_yesterday": _safe_int(monitor.get("cy")),
-                "pnl_yesterday": _safe_float(monitor.get("py")),
+                "pnls_hist_total": pnls_hist_total,
+                "pnl_hist_total": pnl_hist_total,
                 "errors_today": _safe_int(monitor.get("et")),
-                "errors_yesterday": _safe_int(monitor.get("ey")),
+                "errors_4w": self._bot_count_total(hostname, bot_name, "errors"),
                 "tracebacks_today": _safe_int(monitor.get("tt")),
-                "tracebacks_yesterday": _safe_int(monitor.get("ty")),
+                "tracebacks_4w": self._bot_count_total(hostname, bot_name, "tracebacks"),
             }
             item["levels"] = {
                 "cpu": _metric_level(item["cpu"], cfg.cpu_warning_v7, cfg.cpu_error_v7),

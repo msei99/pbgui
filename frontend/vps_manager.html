@@ -717,6 +717,27 @@
       line-height: 1.4;
     }
 
+    .resource-meter-row {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .resource-meter-label {
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .resource-meter-value {
+      color: var(--text-dim);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
     .resource-track {
       height: 8px;
       border-radius: 999px;
@@ -743,6 +764,41 @@
       display: inline-flex;
     }
 
+    .cpu-meter {
+      display: grid;
+      gap: 8px;
+    }
+
+    .cpu-meter-row {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .cpu-meter-label {
+      color: var(--text-muted);
+    }
+
+    .cpu-meter-value {
+      color: var(--text-dim);
+    }
+
+    .cpu-meter-row.warming .cpu-meter-label,
+    .cpu-meter-row.warming .cpu-meter-value {
+      color: var(--text-muted);
+      opacity: 0.78;
+    }
+
+    .cpu-meter-row.warming .resource-fill {
+      opacity: 0.55;
+    }
+
+    .resource-meter.cpu-clickable {
+      display: grid;
+      width: 100%;
+    }
+
     .cpu-clickable:hover {
       filter: brightness(1.08);
     }
@@ -752,6 +808,17 @@
       flex-wrap: wrap;
       gap: 8px;
       margin-bottom: 12px;
+    }
+
+    #cpuHistoryMeta {
+      flex: 0 0 auto;
+    }
+
+    #cpuHistoryBody {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
     }
 
     .cpu-chart-pill {
@@ -771,11 +838,14 @@
       border: 1px solid rgba(255, 255, 255, 0.06);
       background: rgba(10, 17, 27, 0.82);
       padding: 10px;
+      flex: 1;
+      min-height: 240px;
+      overflow: hidden;
     }
 
     .cpu-chart-svg {
       width: 100%;
-      height: auto;
+      height: 100%;
       display: block;
     }
 
@@ -982,8 +1052,7 @@
     }
 
     #alertModalOverlay,
-    #cpuHistoryOverlay,
-    #help-ovl {
+    #cpuHistoryOverlay {
       position: fixed;
       inset: 0;
       display: none;
@@ -995,14 +1064,12 @@
     }
 
     #alertModalOverlay.visible,
-    #cpuHistoryOverlay.visible,
-    #help-ovl.visible {
+    #cpuHistoryOverlay.visible {
       display: flex;
     }
 
     .modal-box,
-    .cpu-history-box,
-    .help-box {
+    .cpu-history-box {
       width: min(780px, calc(100vw - 32px));
       max-height: min(86vh, 880px);
       border-radius: 18px;
@@ -1014,9 +1081,19 @@
       flex-direction: column;
     }
 
+    .cpu-history-box {
+      position: fixed;
+      width: min(980px, calc(100vw - 32px));
+      height: min(560px, calc(100vh - 32px));
+      min-width: min(520px, calc(100vw - 32px));
+      min-height: min(320px, calc(100vh - 32px));
+      max-width: calc(100vw - 32px);
+      max-height: calc(100vh - 32px);
+      overflow: hidden;
+    }
+
     .modal-head,
-    .cpu-history-head,
-    .help-head {
+    .cpu-history-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -1026,13 +1103,20 @@
       background: rgba(17, 29, 47, 0.94);
     }
 
+    .cpu-history-head {
+      cursor: move;
+      user-select: none;
+    }
+
     .modal-body,
-    .cpu-history-body,
-    .help-body {
+    .cpu-history-body {
       padding: 16px;
-      display: grid;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
       gap: 14px;
-      overflow: auto;
+      overflow: hidden;
     }
 
     .modal-box.log-matches-modal {
@@ -1109,6 +1193,79 @@
       display: block;
     }
 
+    .cpu-history-resize-handle {
+      position: absolute;
+      z-index: 3;
+      display: none;
+    }
+
+    .cpu-history-resize-handle.side-top,
+    .cpu-history-resize-handle.side-bottom {
+      left: 12px;
+      right: 12px;
+      height: 10px;
+    }
+
+    .cpu-history-resize-handle.side-left,
+    .cpu-history-resize-handle.side-right {
+      top: 12px;
+      bottom: 12px;
+      width: 10px;
+    }
+
+    .cpu-history-resize-handle.side-top {
+      top: 0;
+      cursor: ns-resize;
+    }
+
+    .cpu-history-resize-handle.side-right {
+      right: 0;
+      cursor: ew-resize;
+    }
+
+    .cpu-history-resize-handle.side-bottom {
+      bottom: 0;
+      cursor: ns-resize;
+    }
+
+    .cpu-history-resize-handle.side-left {
+      left: 0;
+      cursor: ew-resize;
+    }
+
+    .cpu-history-resize-handle.corner {
+      width: 18px;
+      height: 18px;
+    }
+
+    .cpu-history-resize-handle.corner-top-left {
+      top: 0;
+      left: 0;
+      cursor: nwse-resize;
+    }
+
+    .cpu-history-resize-handle.corner-top-right {
+      top: 0;
+      right: 0;
+      cursor: nesw-resize;
+    }
+
+    .cpu-history-resize-handle.corner-bottom-right {
+      right: 0;
+      bottom: 0;
+      cursor: nwse-resize;
+    }
+
+    .cpu-history-resize-handle.corner-bottom-left {
+      left: 0;
+      bottom: 0;
+      cursor: nesw-resize;
+    }
+
+    .cpu-history-box.modal-history-window .cpu-history-resize-handle {
+      display: block;
+    }
+
     .close-btn {
       background: none;
       border: none;
@@ -1136,6 +1293,197 @@
       border: 1px dashed rgba(255, 255, 255, 0.1);
       border-radius: 16px;
     }
+
+    /* Shared guide overlay layout expected by pbgui_nav.js hooks */
+    #help-ovl {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 3000;
+      width: min(900px, 95vw);
+      height: min(700px, 90vh);
+      min-width: 480px;
+      min-height: 300px;
+      background: #131b2b;
+      border: 1px solid #2d3748;
+      border-radius: 12px;
+      box-shadow: 0 20px 70px rgba(0,0,0,0.9);
+      flex-direction: column;
+      overflow: hidden;
+      resize: both;
+    }
+
+    #help-ovl.visible { display: flex; }
+
+    #help-drag-handle {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 48px;
+      height: 46px;
+      cursor: move;
+      z-index: 2;
+    }
+
+    #help-ovl > .ovl-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .ovl-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.85rem 1.1rem 0.85rem 1.25rem;
+      border-bottom: 1px solid #1e2736;
+      flex-shrink: 0;
+      background: #111827;
+    }
+
+    .ovl-header-title {
+      font-size: var(--fs-md);
+      font-weight: 700;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .ovl-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      position: relative;
+      z-index: 3;
+    }
+
+    .ovl-close {
+      background: transparent;
+      border: none;
+      color: #64748b;
+      font-size: var(--fs-lg);
+      cursor: pointer;
+      padding: 0.2rem 0.35rem;
+      border-radius: 5px;
+      line-height: 1;
+      transition: color 0.12s, background 0.12s;
+    }
+
+    .ovl-close:hover { color: #e2e8f0; background: rgba(255,255,255,0.06); }
+
+    .lang-pill {
+      display: flex;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .lang-pill button {
+      background: transparent;
+      border: none;
+      color: #64748b;
+      font-size: var(--fs-xs);
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      padding: 0.2rem 0.55rem;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+
+    .lang-pill button.active {
+      background: #1e3a5f;
+      color: #63b3ed;
+    }
+
+    .lang-pill button:hover:not(.active) {
+      background: rgba(255,255,255,0.04);
+      color: #e2e8f0;
+    }
+
+    #help-body { display: flex; flex: 1; overflow: hidden; }
+
+    #help-toc {
+      width: 230px;
+      min-width: 170px;
+      flex-shrink: 0;
+      border-right: 1px solid #1e2736;
+      overflow-y: auto;
+      padding: 0.5rem 0;
+      background: #0e1117;
+    }
+
+    #help-toc-filter {
+      width: calc(100% - 1.2rem);
+      margin: 0 0.6rem 0.4rem;
+      background: #1a202c;
+      color: #e2e8f0;
+      border: 1px solid #2d3748;
+      border-radius: 5px;
+      padding: 0.35rem 0.5rem;
+      font-size: var(--fs-sm);
+      outline: none;
+    }
+
+    #help-toc-filter:focus { border-color: #4a5568; }
+    #help-toc-filter::placeholder { color: #4a5568; }
+
+    .toc-item {
+      display: block;
+      padding: 0.42rem 0.9rem;
+      color: #94a3b8;
+      font-size: var(--fs-sm);
+      cursor: pointer;
+      border-left: 3px solid transparent;
+      transition: all 0.1s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .toc-item:hover { background: #1a2030; color: #e2e8f0; }
+
+    .toc-item.active {
+      border-left-color: #63b3ed;
+      color: #63b3ed;
+      background: rgba(99,179,237,0.07);
+      font-weight: 600;
+    }
+
+    #help-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem 1.8rem;
+      line-height: 1.7;
+      color: #cbd5e0;
+      font-size: var(--fs-base);
+    }
+
+    #help-content h1 { font-size: var(--fs-xl); color: #e2e8f0; margin: 0 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #1e2736; }
+    #help-content h2 { font-size: var(--fs-lg); color: #e2e8f0; margin: 1.5rem 0 0.5rem; }
+    #help-content h3 { font-size: var(--fs-md); color: #cbd5e0; margin: 1.1rem 0 0.35rem; }
+    #help-content p { margin: 0.5rem 0; }
+    #help-content a { color: #63b3ed; text-decoration: none; }
+    #help-content a:hover { text-decoration: underline; }
+    #help-content strong { color: #e2e8f0; }
+    #help-content em { color: #94a3b8; font-style: italic; }
+    #help-content code { background: #1a202c; color: #f6ad55; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.85em; font-family: 'Fira Code', 'Consolas', monospace; }
+    #help-content pre { background: #0e1117; border: 1px solid #2d3748; border-radius: 6px; padding: 0.9rem 1rem; overflow-x: auto; margin: 0.75rem 0; }
+    #help-content pre code { background: none; padding: 0; color: #a0aec0; }
+    #help-content ul, #help-content ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+    #help-content li { margin: 0.2rem 0; }
+    #help-content blockquote { border-left: 3px solid #63b3ed; margin: 0.75rem 0; padding: 0.4rem 0.9rem; background: rgba(99,179,237,0.05); border-radius: 0 5px 5px 0; color: #94a3b8; }
+    #help-content table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; }
+    #help-content th, #help-content td { border: 1px solid #2d3748; padding: 0.4rem 0.7rem; text-align: left; font-size: var(--fs-sm); }
+    #help-content th { background: #1a202c; color: #e2e8f0; font-weight: 600; }
+    #help-content hr { border: none; border-top: 1px solid #1e2736; margin: 1rem 0; }
+    #help-content img { max-width: 100%; border-radius: 6px; margin: 0.5rem 0; }
+    .help-loading { color: #4a5568; font-style: italic; padding: 2rem; text-align: center; }
 
     .log-viewer-shell {
       flex: 1;
@@ -1185,9 +1533,6 @@
         min-height: 0;
       }
 
-      .help-toolbar {
-        grid-template-columns: 1fr;
-      }
     }
 
     /* Legacy-like shell overrides for the FastAPI migration */
@@ -2021,8 +2366,16 @@
   </div>
 
   <div id='cpuHistoryOverlay'>
-    <div class='cpu-history-box'>
-      <div class='cpu-history-head'>
+    <div class='cpu-history-box' id='cpuHistoryBox'>
+      <div class='cpu-history-resize-handle side-top' data-resize='top'></div>
+      <div class='cpu-history-resize-handle side-right' data-resize='right'></div>
+      <div class='cpu-history-resize-handle side-bottom' data-resize='bottom'></div>
+      <div class='cpu-history-resize-handle side-left' data-resize='left'></div>
+      <div class='cpu-history-resize-handle corner corner-top-left' data-resize='top-left'></div>
+      <div class='cpu-history-resize-handle corner corner-top-right' data-resize='top-right'></div>
+      <div class='cpu-history-resize-handle corner corner-bottom-right' data-resize='bottom-right'></div>
+      <div class='cpu-history-resize-handle corner corner-bottom-left' data-resize='bottom-left'></div>
+      <div class='cpu-history-head' id='cpuHistoryHead'>
         <div>
           <div class='panel-title' id='cpuHistoryTitle'>CPU History</div>
           <div class='panel-sub' id='cpuHistorySubtitle'>Loading…</div>
@@ -2032,37 +2385,29 @@
       <div class='cpu-history-body'>
         <div id='cpuHistoryMeta'></div>
         <div id='cpuHistoryBody'></div>
-        <div class='button-row'>
-          <button class='btn ghost' type='button' onclick='closeCpuHistoryModal()'>Close</button>
-        </div>
       </div>
     </div>
   </div>
 
   <div id='help-ovl'>
-    <div class='help-box'>
-      <div class='help-head'>
-        <div>
-          <div class='panel-title'>Help &amp; Tutorials</div>
-          <div class='panel-sub'>Page-local guide overlay for the FastAPI VPS Manager.</div>
+    <div class='ovl-panel'>
+      <div id='help-drag-handle'></div>
+      <div class='ovl-header'>
+        <div class='ovl-header-title'>&#128218; Guide &amp; Help</div>
+        <div class='ovl-header-actions'>
+          <div class='lang-pill'>
+            <button id='help-lang-en' class='active'>EN</button>
+            <button id='help-lang-de'>DE</button>
+          </div>
+          <button class='ovl-close' id='help-close'>&#x2715;</button>
         </div>
-        <button class='close-btn' type='button' onclick='closeHelp()'>&times;</button>
       </div>
-      <div class='help-body'>
-        <div class='help-toolbar'>
-          <div class='field'>
-            <label for='helpLang'>Language</label>
-            <select id='helpLang' onchange='changeHelpLanguage(this.value)'>
-              <option value='en'>English</option>
-              <option value='de'>Deutsch</option>
-            </select>
-          </div>
-          <div class='field'>
-            <label for='helpTopic'>Topic</label>
-            <select id='helpTopic' onchange='loadHelpTopicFromSelect()'></select>
-          </div>
+      <div id='help-body'>
+        <div id='help-toc'>
+          <input id='help-toc-filter' type='text' placeholder='Filter topics…' autocomplete='off'>
+          <div id='help-toc-list'></div>
         </div>
-        <div id='helpContent' class='markdown-body'></div>
+        <div id='help-content'><div class='help-loading'>Select a topic from the left.</div></div>
       </div>
     </div>
   </div>
@@ -2898,11 +3243,39 @@
         if (!el) return;
         var title = el.querySelector('.resource-meter-title');
         if (title) setNodeTextIfChanged(title, labels[key] + ' Free: ' + esc(metric.free_mb || 0) + ' MB | Used: ' + esc(metric.used_mb || 0) + ' MB | Total: ' + esc(metric.total_mb || 0) + ' MB');
-        var fill = el.querySelector('.resource-fill');
-        if (fill) {
-          var usage = Number.isFinite(Number(metric.usage_pct)) ? Math.max(0, Math.min(Number(metric.usage_pct), 100)) : 0;
-          setNodeClassNameIfChanged(fill, 'resource-fill ' + resourceTone(usage));
-          fill.style.width = usage + '%';
+        var usage = Number.isFinite(Number(metric.usage_pct)) ? Math.max(0, Math.min(Number(metric.usage_pct), 100)) : 0;
+        var liveRow = el.querySelector('[data-resource-row="live"]');
+        if (liveRow) setNodeClassNameIfChanged(liveRow, 'cpu-meter-row');
+        var liveFill = el.querySelector('[data-resource-bar="live"]');
+        if (liveFill) {
+          setNodeClassNameIfChanged(liveFill, 'resource-fill ' + resourceTone(usage));
+          liveFill.style.width = usage + '%';
+        }
+        var liveValue = el.querySelector('[data-resource-value="live"]');
+        if (liveValue) {
+          setNodeTextIfChanged(liveValue, (Number.isFinite(Number(metric.usage_pct)) ? Number(metric.usage_pct) : 0).toFixed(1) + '%');
+        }
+        var peak60 = Number.isFinite(Number(metric.usage_60s_peak)) ? Math.max(0, Math.min(Number(metric.usage_60s_peak), 100)) : 0;
+        var peak60Window = Number.isFinite(Number(metric.usage_60s_window)) ? Number(metric.usage_60s_window) : 0;
+        var peak60Confirmed = peak60Window >= 60;
+        var peakRow = el.querySelector('[data-resource-row="peak60"]');
+        if (peakRow) {
+          setNodeClassNameIfChanged(peakRow, peak60Confirmed ? 'cpu-meter-row' : 'cpu-meter-row warming');
+        }
+        var peakFill = el.querySelector('[data-resource-bar="peak60"]');
+        if (peakFill) {
+          setNodeClassNameIfChanged(peakFill, 'resource-fill ' + resourceTone(peak60));
+          peakFill.style.width = peak60 + '%';
+        }
+        var peakValue = el.querySelector('[data-resource-value="peak60"]');
+        if (peakValue) {
+          var peakText = 'waiting';
+          if (peak60Confirmed) {
+            peakText = peak60.toFixed(1) + '%';
+          } else if (peak60Window > 0) {
+            peakText = 'warming ' + Math.min(60, Math.floor(peak60Window)) + 's';
+          }
+          setNodeTextIfChanged(peakValue, peakText);
         }
       });
       var cpuMeter = document.querySelector('[data-meter="cpu"]');
@@ -2910,12 +3283,27 @@
         var cpuTelemetry = formatCpuTelemetry(serverMetrics);
         var cpuTitle = cpuMeter.querySelector('.resource-meter-title');
         if (cpuTitle) setNodeTextIfChanged(cpuTitle, cpuTelemetry.title);
-        var cpuSub = cpuMeter.querySelector('.resource-meter-sub');
-        if (cpuSub) setNodeTextIfChanged(cpuSub, cpuTelemetry.sub);
-        var cpuFill = cpuMeter.querySelector('.resource-fill');
-        if (cpuFill) {
-          setNodeClassNameIfChanged(cpuFill, 'resource-fill ' + resourceTone(cpuTelemetry.livePct));
-          cpuFill.style.width = cpuTelemetry.livePct + '%';
+        var liveRow = cpuMeter.querySelector('[data-cpu-row="live"]');
+        if (liveRow) {
+          setNodeClassNameIfChanged(liveRow, 'cpu-meter-row');
+        }
+        var liveValue = cpuMeter.querySelector('[data-cpu-value="live"]');
+        if (liveValue) setNodeTextIfChanged(liveValue, cpuTelemetry.liveValueText);
+        var liveFill = cpuMeter.querySelector('[data-cpu-bar="live"]');
+        if (liveFill) {
+          setNodeClassNameIfChanged(liveFill, 'resource-fill ' + resourceTone(cpuTelemetry.livePct));
+          liveFill.style.width = cpuTelemetry.livePct + '%';
+        }
+        var avgRow = cpuMeter.querySelector('[data-cpu-row="avg60"]');
+        if (avgRow) {
+          setNodeClassNameIfChanged(avgRow, cpuTelemetry.avg60Confirmed ? 'cpu-meter-row' : 'cpu-meter-row warming');
+        }
+        var avgValue = cpuMeter.querySelector('[data-cpu-value="avg60"]');
+        if (avgValue) setNodeTextIfChanged(avgValue, cpuTelemetry.avg60ValueText);
+        var avgFill = cpuMeter.querySelector('[data-cpu-bar="avg60"]');
+        if (avgFill) {
+          setNodeClassNameIfChanged(avgFill, 'resource-fill ' + resourceTone(cpuTelemetry.avg60Pct));
+          avgFill.style.width = cpuTelemetry.avg60Pct + '%';
         }
       }
     }
@@ -3598,89 +3986,173 @@
       eye.textContent = isPw ? '🙈' : '👁';
     }
 
-    function openHelp() {
-      document.body.classList.add('help-open');
-      document.getElementById('help-ovl').classList.add('visible');
-      document.getElementById('helpLang').value = store.helpLang;
-      if (!store.helpTopics.length) {
-        loadHelpIndex();
+    (function () {
+      var helpOvl = document.getElementById('help-ovl');
+      var helpContent = document.getElementById('help-content');
+      var helpTocList = document.getElementById('help-toc-list');
+      var helpFilter = document.getElementById('help-toc-filter');
+      var helpLangEN = document.getElementById('help-lang-en');
+      var helpLangDE = document.getElementById('help-lang-de');
+      var helpDragHandle = document.getElementById('help-drag-handle');
+      var helpLang = 'EN';
+      var helpTopics = [];
+      var helpSel = 0;
+      var helpDefaultTopic = 'vps_manager';
+      var helpCache = {};
+
+      function mdToHtml(md) {
+        return DOMPurify.sanitize(marked.parse(String(md || '')));
       }
-    }
 
-    function closeHelp() {
-      document.body.classList.remove('help-open');
-      document.getElementById('help-ovl').classList.remove('visible');
-    }
+      function renderToc() {
+        var filterValue = String(helpFilter.value || '').trim().toLowerCase();
+        helpTocList.innerHTML = '';
+        helpTopics.forEach(function (topic, idx) {
+          var title = String((topic || {}).title || '');
+          if (filterValue && title.toLowerCase().indexOf(filterValue) === -1) return;
+          var el = document.createElement('div');
+          el.className = 'toc-item' + (idx === helpSel ? ' active' : '');
+          el.textContent = title || String((topic || {}).file || 'Untitled');
+          el.addEventListener('click', function () { loadTopic(idx); });
+          helpTocList.appendChild(el);
+        });
+      }
 
-    function renderMarkdown(md) {
-      return DOMPurify.sanitize(marked.parse(String(md || '')));
-    }
+      function loadTopic(idx) {
+        helpSel = idx;
+        renderToc();
+        var topic = helpTopics[idx];
+        if (!topic) return;
+        var cacheKey = helpLang + ':' + String(topic.file || '');
+        if (helpCache[cacheKey] !== undefined) {
+          helpContent.innerHTML = helpCache[cacheKey];
+          helpContent.scrollTop = 0;
+          return;
+        }
+        helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
+        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+          .then(function (response) {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.json();
+          })
+          .then(function (data) {
+            var html = mdToHtml(data.content || '');
+            helpCache[cacheKey] = html;
+            helpContent.innerHTML = html;
+            helpContent.scrollTop = 0;
+          })
+          .catch(function () {
+            helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>';
+          });
+      }
 
-    function loadHelpIndex() {
-      fetch('/api/help/index?lang=' + encodeURIComponent(store.helpLang) + '&token=' + encodeURIComponent(TOKEN))
-        .then(function (response) {
-          if (!response.ok) throw new Error('HTTP ' + response.status);
-          return response.json();
-        })
-        .then(function (data) {
-          const topics = Array.isArray(data.topics) ? data.topics : [];
-          store.helpTopics = topics;
-          if (!topics.length) {
-            document.getElementById('helpTopic').innerHTML = '';
-            document.getElementById('helpContent').innerHTML = '<div class="empty-state">No help topics found.</div>';
+      function loadHelpIndex(keyword) {
+        helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
+        fetch('/api/help/index?lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+          .then(function (response) {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.json();
+          })
+          .then(function (data) {
+            helpTopics = Array.isArray(data) ? data : [];
+            renderToc();
+            if (!helpTopics.length) {
+              helpContent.innerHTML = '<div class="help-loading">No help topics found.</div>';
+              return;
+            }
+            var startIdx = 0;
+            if (keyword) {
+              var kw = String(keyword).toLowerCase();
+              for (var i = 0; i < helpTopics.length; i += 1) {
+                var title = String((helpTopics[i] || {}).title || '').toLowerCase();
+                var file = String((helpTopics[i] || {}).file || '').toLowerCase();
+                if (title.indexOf(kw) !== -1 || file.indexOf(kw) !== -1) {
+                  startIdx = i;
+                  break;
+                }
+              }
+            }
+            loadTopic(startIdx);
+          })
+          .catch(function () {
+            helpTocList.innerHTML = '<div class="help-loading">Failed to load topics.</div>';
+          });
+      }
+
+      helpFilter.addEventListener('input', renderToc);
+      helpLangEN.addEventListener('click', function () {
+        if (helpLang === 'EN') return;
+        helpLang = 'EN';
+        helpLangEN.classList.add('active');
+        helpLangDE.classList.remove('active');
+        helpSel = 0;
+        loadHelpIndex(helpDefaultTopic);
+      });
+      helpLangDE.addEventListener('click', function () {
+        if (helpLang === 'DE') return;
+        helpLang = 'DE';
+        helpLangDE.classList.add('active');
+        helpLangEN.classList.remove('active');
+        helpSel = 0;
+        loadHelpIndex(helpDefaultTopic);
+      });
+
+      window.closeHelp = function () {
+        helpOvl.classList.remove('visible');
+      };
+
+      document.getElementById('help-close').addEventListener('click', function () {
+        window.closeHelp();
+      });
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') window.closeHelp();
+      });
+
+      (function () {
+        var startX;
+        var startY;
+        var boxL;
+        var boxT;
+        helpDragHandle.addEventListener('mousedown', function (event) {
+          event.preventDefault();
+          var rect = helpOvl.getBoundingClientRect();
+          helpOvl.style.transform = 'none';
+          helpOvl.style.left = rect.left + 'px';
+          helpOvl.style.top = rect.top + 'px';
+          startX = event.clientX;
+          startY = event.clientY;
+          boxL = rect.left;
+          boxT = rect.top;
+          function onMove(moveEvent) {
+            helpOvl.style.left = (boxL + moveEvent.clientX - startX) + 'px';
+            helpOvl.style.top = (boxT + moveEvent.clientY - startY) + 'px';
+          }
+          function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          }
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+      }());
+
+      window.PBGUI_HELP_OPENER = function () {
+        helpOvl.classList.add('visible');
+        if (!helpTopics.length) {
+          loadHelpIndex(helpDefaultTopic);
+          return;
+        }
+        for (var i = 0; i < helpTopics.length; i += 1) {
+          var title = String((helpTopics[i] || {}).title || '').toLowerCase();
+          var file = String((helpTopics[i] || {}).file || '').toLowerCase();
+          if (title.indexOf('vps manager') !== -1 || file.indexOf('vps_manager') !== -1) {
+            loadTopic(i);
             return;
           }
-          store.helpTopicIndex = 0;
-          renderHelpTopicOptions();
-          loadHelpTopic(0);
-        })
-        .catch(function (error) {
-          document.getElementById('helpContent').innerHTML = `<div class='empty-state'>Failed to load help index: ${esc(error.message || error)}</div>`;
-        });
-    }
-
-    function renderHelpTopicOptions() {
-      const select = document.getElementById('helpTopic');
-      select.innerHTML = store.helpTopics.map(function (topic, index) {
-        const selected = index === store.helpTopicIndex ? ' selected' : '';
-        return `<option value='${index}'${selected}>${esc(topic.title || topic.file || 'Untitled')}</option>`;
-      }).join('');
-    }
-
-    function loadHelpTopicFromSelect() {
-      const select = document.getElementById('helpTopic');
-      const idx = parseInt(select.value, 10);
-      if (Number.isFinite(idx)) {
-        store.helpTopicIndex = idx;
-        loadHelpTopic(idx);
-      }
-    }
-
-    function loadHelpTopic(index) {
-      const topic = store.helpTopics[index];
-      if (!topic) return;
-      const cacheKey = `${store.helpLang}:${topic.file}`;
-      if (store.helpCache[cacheKey]) {
-        document.getElementById('helpContent').innerHTML = store.helpCache[cacheKey];
-        return;
-      }
-      document.getElementById('helpContent').innerHTML = '<div class="empty-state">Loading help content...</div>';
-      fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + encodeURIComponent(store.helpLang) + '&token=' + encodeURIComponent(TOKEN))
-        .then(function (response) {
-          if (!response.ok) throw new Error('HTTP ' + response.status);
-          return response.json();
-        })
-        .then(function (data) {
-          const html = renderMarkdown(data.content || '');
-          store.helpCache[cacheKey] = html;
-          document.getElementById('helpContent').innerHTML = html;
-        })
-        .catch(function (error) {
-          document.getElementById('helpContent').innerHTML = `<div class='empty-state'>Failed to load help content: ${esc(error.message || error)}</div>`;
-        });
-    }
-
-    window.PBGUI_HELP_OPENER = openHelp;
+        }
+        loadTopic(0);
+      };
+    }());
 
     function connectWs() {
       clearTimeout(store.reconnectTimer);
@@ -5195,12 +5667,33 @@
 
     function renderResourceMeter(label, metric) {
       if (!metric) return '';
-      var mkey = {'Memory':'mem','Disk':'disk','Swap':'swap'}[label] || label.toLowerCase();
+      var meterKey = {'Memory':'mem','Disk':'disk','Swap':'swap'}[label] || label.toLowerCase();
+      var historyKey = {'Memory':'memory','Disk':'disk','Swap':'swap'}[label] || label.toLowerCase();
       var usage = Number.isFinite(Number(metric.usage_pct)) ? Math.max(0, Math.min(Number(metric.usage_pct), 100)) : 0;
+      var peak60 = Number.isFinite(Number(metric.usage_60s_peak)) ? Math.max(0, Math.min(Number(metric.usage_60s_peak), 100)) : 0;
+      var peak60Window = Number.isFinite(Number(metric.usage_60s_window)) ? Number(metric.usage_60s_window) : 0;
+      var peak60Confirmed = peak60Window >= 60;
+      var peak60Text = 'waiting';
+      if (peak60Confirmed) {
+        peak60Text = peak60.toFixed(1) + '%';
+      } else if (peak60Window > 0) {
+        peak60Text = 'warming ' + Math.min(60, Math.floor(peak60Window)) + 's';
+      }
       return `
-        <div class='resource-meter' data-meter='${escAttr(mkey)}'>
+        <div class='resource-meter cpu-clickable' data-meter='${escAttr(meterKey)}' data-history-host='${escAttr(store.hostname || "")}' data-history-metric='${escAttr(historyKey)}'>
           <div class='resource-meter-title'>${esc(label)} Free: ${esc(metric.free_mb || 0)} MB | Used: ${esc(metric.used_mb || 0)} MB | Total: ${esc(metric.total_mb || 0)} MB</div>
-          <div class='resource-track'><div class='resource-fill ${resourceTone(usage)}' style='width:${usage}%'></div></div>
+          <div class='cpu-meter'>
+            <div class='cpu-meter-row' data-resource-row='live'>
+              <div class='cpu-meter-label'>1s</div>
+              <div class='resource-track'><div class='resource-fill ${resourceTone(usage)}' data-resource-bar='live' style='width:${usage}%'></div></div>
+              <div class='cpu-meter-value' data-resource-value='live'>${esc(usage.toFixed(1))}%</div>
+            </div>
+            <div class='cpu-meter-row ${peak60Confirmed ? '' : 'warming'}' data-resource-row='peak60'>
+              <div class='cpu-meter-label'>60s</div>
+              <div class='resource-track'><div class='resource-fill ${resourceTone(peak60)}' data-resource-bar='peak60' style='width:${peak60}%'></div></div>
+              <div class='cpu-meter-value' data-resource-value='peak60'>${esc(peak60Text)}</div>
+            </div>
+          </div>
         </div>`;
     }
 
@@ -5208,24 +5701,326 @@
       const liveValue = Number.isFinite(Number(serverMetrics && serverMetrics.cpu)) ? Number(serverMetrics.cpu) : 0;
       const livePct = Math.max(0, Math.min(liveValue, 100));
       const cpu60sValue = Number.isFinite(Number(serverMetrics && serverMetrics.cpu_60s)) ? Number(serverMetrics.cpu_60s) : 0;
+      const cpu60sPct = Math.max(0, Math.min(cpu60sValue, 100));
       const cpu60sWindow = Number.isFinite(Number(serverMetrics && serverMetrics.cpu_60s_window)) ? Number(serverMetrics.cpu_60s_window) : 0;
       const cpu60sConfirmed = !!(serverMetrics && serverMetrics.cpu_60s_confirmed) || cpu60sWindow >= 60;
-      let sub = '60s CPU waiting for data';
+      let avg60ValueText = 'waiting';
       if (cpu60sConfirmed) {
-        sub = '60s CPU ' + cpu60sValue.toFixed(1) + '%';
+        avg60ValueText = cpu60sValue.toFixed(1) + '%';
       } else if (cpu60sWindow > 0) {
-        sub = '60s CPU warming up (' + Math.min(60, Math.floor(cpu60sWindow)) + 's/60s)';
+        avg60ValueText = 'warming ' + Math.min(60, Math.floor(cpu60sWindow)) + 's';
       }
       return {
         livePct: livePct,
-        title: 'CPU Live ' + liveValue.toFixed(1) + '%',
-        sub: sub
+        liveValueText: liveValue.toFixed(1) + '%',
+        avg60Pct: cpu60sPct,
+        avg60ValueText: avg60ValueText,
+        avg60Confirmed: cpu60sConfirmed,
+        title: 'CPU Utilisation:'
       };
     }
 
-    function setCpuHistoryLoading(host, bot) {
-      document.getElementById('cpuHistoryTitle').textContent = bot ? ('CPU History - ' + bot + ' @ ' + host) : ('CPU History - ' + host);
-      document.getElementById('cpuHistorySubtitle').textContent = 'Loading 24h cpu_60s history...';
+    const METRIC_HISTORY_META = {
+      cpu: { label: 'CPU', source: 'cpu_60s', unit: '%', empty: 'No confirmed 60s samples stored yet.' },
+      memory: { label: 'Memory', source: 'mem_percent', unit: '%', botSource: 'rss_mb', botUnit: 'MB', empty: 'No memory history available yet.', botEmpty: 'No bot memory history available yet.' },
+      disk: { label: 'Disk', source: 'disk_percent', unit: '%', empty: 'No disk history available yet.' },
+      swap: { label: 'Swap', source: 'swap_percent', unit: '%', botSource: 'swap_mb', botUnit: 'MB', empty: 'No swap history available yet.', botEmpty: 'No bot swap history available yet.' },
+      errors: { label: 'Errors', source: 'passivbot.log', unit: '', empty: 'No bot error history available yet.', timezoneBasis: 'UTC', countMetric: true },
+      tracebacks: { label: 'Tracebacks', source: 'passivbot_err.log', unit: '', empty: 'No bot traceback history available yet.', timezoneBasis: 'UTC', countMetric: true },
+      pnl: { label: 'PNL', source: 'passivbot.log', unit: '', empty: 'No bot PNL history available yet.', timezoneBasis: 'UTC', pnlMetric: true },
+      pnl_fills: { label: 'Fills', source: 'passivbot.log', unit: '', empty: 'No bot fill history available yet.', timezoneBasis: 'UTC', fillsMetric: true }
+    };
+
+    function metricHistoryMeta(metric) {
+      return METRIC_HISTORY_META[metric] || METRIC_HISTORY_META.cpu;
+    }
+
+    function metricHistoryTitle(metric, host, bot) {
+      const meta = metricHistoryMeta(metric);
+      return bot ? (meta.label + ' History - ' + bot + ' @ ' + host) : (meta.label + ' History - ' + host);
+    }
+
+    function metricHistorySubtitle(metric, payload) {
+      const meta = metricHistoryMeta(metric);
+      const source = String((payload && payload.source) || meta.source || '').trim();
+      if (meta.countMetric) return '4w history, 1 sample/hour, UTC day totals, source: ' + source;
+      if (meta.fillsMetric) return 'full history from available logs, UTC daily fill totals, source: ' + source;
+      if (meta.pnlMetric) return 'full history from available logs, UTC daily aggregates, source: ' + source;
+      return '24h history, 1 sample/minute, source: ' + source;
+    }
+
+    function metricHistoryLoadingSubtitle(metric) {
+      const meta = metricHistoryMeta(metric);
+      if (meta.fillsMetric) return 'Loading full ' + meta.source + ' fill history...';
+      if (meta.pnlMetric) return 'Loading full ' + meta.source + ' history...';
+      return (meta.countMetric ? 'Loading 4w ' : 'Loading 24h ') + meta.source + ' history...';
+    }
+
+    function metricHistoryUnit(metric, payload) {
+      const meta = metricHistoryMeta(metric);
+      const isBot = !!String(payload && payload.bot_name || '').trim();
+      if (isBot && meta.botUnit) return meta.botUnit;
+      return meta.unit || '';
+    }
+
+    function metricHistoryEmpty(metric, payload) {
+      const meta = metricHistoryMeta(metric);
+      const isBot = !!String(payload && payload.bot_name || '').trim();
+      if (isBot && meta.botEmpty) return meta.botEmpty;
+      return meta.empty;
+    }
+
+    function metricHistoryScale(metric, payload) {
+      const unit = metricHistoryUnit(metric, payload);
+      const meta = metricHistoryMeta(metric);
+      if (meta.countMetric) {
+        return {
+          baseline: 0,
+          guideValues: function(maxValue) {
+            const top = Math.max(4, Math.ceil(maxValue / 4) * 4);
+            const out = [];
+            for (let i = 0; i <= 4; i += 1) out.push(Math.round((top * i) / 4));
+            return { maxValue: top, values: out };
+          },
+          label: function(v) { return String(v); }
+        };
+      }
+      if (meta.fillsMetric) {
+        return {
+          baseline: 0,
+          guideValues: function(maxValue) {
+            const top = Math.max(4, Math.ceil(maxValue / 4) * 4);
+            const out = [];
+            for (let i = 0; i <= 4; i += 1) out.push(Math.round((top * i) / 4));
+            return { maxValue: top, values: out };
+          },
+          label: function(v) { return String(Math.round(v)); }
+        };
+      }
+      if (meta.pnlMetric) {
+        return {
+          baseline: null,
+          guideValues: function(minValue, maxValue) {
+            const lo = Math.min(0, Math.floor(minValue));
+            const hi = Math.max(0, Math.ceil(maxValue));
+            const span = Math.max(hi - lo, 4);
+            const step = Math.max(1, Math.ceil(span / 4));
+            const out = [];
+            for (let value = lo; value <= hi; value += step) out.push(value);
+            if (!out.includes(0)) out.push(0);
+            out.sort(function(a, b) { return a - b; });
+            return { minValue: lo, maxValue: hi === lo ? lo + 1 : hi, values: out };
+          },
+          label: function(v) { return Number(v).toFixed(2); }
+        };
+      }
+      if (unit === 'MB') {
+        return {
+          baseline: 0,
+          guideValues: function(maxValue) {
+            const steps = 4;
+            const top = Math.max(1, Math.ceil(maxValue / 50) * 50);
+            const out = [];
+            for (let i = 0; i <= steps; i += 1) out.push(Math.round((top * i) / steps));
+            return { maxValue: top, values: out };
+          },
+          label: function(v) { return v + 'MB'; }
+        };
+      }
+      return {
+        baseline: 100,
+        guideValues: function(maxValue) {
+          return { maxValue: Math.max(100, maxValue), values: [0, 25, 50, 75, 100] };
+        },
+        label: function(v) { return v + '%'; }
+      };
+    }
+
+    function metricHistoryValueLabel(metric, value, payload) {
+      if (!Number.isFinite(Number(value))) return 'n/a';
+      const meta = metricHistoryMeta(metric);
+      const unit = metricHistoryUnit(metric, payload);
+      const numeric = Number(value);
+      return ((meta.countMetric || meta.fillsMetric) ? String(Math.round(numeric)) : numeric.toFixed(2)) + unit;
+    }
+
+    function metricHistorySeriesPoints(metric, payload) {
+      const meta = metricHistoryMeta(metric);
+      if (meta.fillsMetric && Array.isArray(payload && payload.fills_points)) return payload.fills_points;
+      if (meta.pnlMetric && Array.isArray(payload && payload.cumulative_points) && payload.cumulative_points.length) return payload.cumulative_points;
+      return Array.isArray(payload && payload.points) ? payload.points : [];
+    }
+
+    function formatUtcHourLabel(hour) {
+      if (!Number.isFinite(Number(hour)) || Number(hour) <= 0) return 'n/a';
+      return new Date(Number(hour) * 3600000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+    }
+
+    function formatUtcDayLabel(day) {
+      if (!Number.isFinite(Number(day)) || Number(day) <= 0) return 'n/a';
+      return new Date(Number(day) * 86400000).toISOString().slice(0, 10);
+    }
+
+    const CPU_HISTORY_MARGIN = 16;
+    const CPU_HISTORY_MIN_WIDTH = 520;
+    const CPU_HISTORY_MIN_HEIGHT = 320;
+
+    function getCpuHistoryRectLimits() {
+      const maxWidth = Math.max(320, window.innerWidth - (CPU_HISTORY_MARGIN * 2));
+      const maxHeight = Math.max(240, window.innerHeight - (CPU_HISTORY_MARGIN * 2));
+      return {
+        minWidth: Math.min(CPU_HISTORY_MIN_WIDTH, maxWidth),
+        minHeight: Math.min(CPU_HISTORY_MIN_HEIGHT, maxHeight),
+        maxWidth: maxWidth,
+        maxHeight: maxHeight,
+      };
+    }
+
+    function clampCpuHistoryRect(rect) {
+      const limits = getCpuHistoryRectLimits();
+      const width = Math.min(Math.max(rect.width, limits.minWidth), limits.maxWidth);
+      const height = Math.min(Math.max(rect.height, limits.minHeight), limits.maxHeight);
+      const maxLeft = Math.max(CPU_HISTORY_MARGIN, window.innerWidth - width - CPU_HISTORY_MARGIN);
+      const maxTop = Math.max(CPU_HISTORY_MARGIN, window.innerHeight - height - CPU_HISTORY_MARGIN);
+      return {
+        left: Math.min(Math.max(rect.left, CPU_HISTORY_MARGIN), maxLeft),
+        top: Math.min(Math.max(rect.top, CPU_HISTORY_MARGIN), maxTop),
+        width: width,
+        height: height,
+      };
+    }
+
+    function applyCpuHistoryRect(rect) {
+      const box = document.getElementById('cpuHistoryBox');
+      if (!box) return;
+      const next = clampCpuHistoryRect(rect);
+      box.style.left = next.left + 'px';
+      box.style.top = next.top + 'px';
+      box.style.width = next.width + 'px';
+      box.style.height = next.height + 'px';
+    }
+
+    function resetCpuHistoryWindow() {
+      const box = document.getElementById('cpuHistoryBox');
+      if (!box) return;
+      box.classList.remove('modal-history-window');
+      box.style.left = '';
+      box.style.top = '';
+      box.style.width = '';
+      box.style.height = '';
+    }
+
+    function prepareCpuHistoryWindow(widthPx, heightPx) {
+      const box = document.getElementById('cpuHistoryBox');
+      if (!box) return;
+      box.classList.add('modal-history-window');
+      applyCpuHistoryRect({
+        left: Math.round((window.innerWidth - (widthPx || 980)) / 2),
+        top: Math.round((window.innerHeight - (heightPx || 560)) / 2),
+        width: widthPx || 980,
+        height: heightPx || 560,
+      });
+    }
+
+    function initCpuHistoryModalInteractions() {
+      const box = document.getElementById('cpuHistoryBox');
+      const head = document.getElementById('cpuHistoryHead');
+      const resizeHandles = Array.from(box ? box.querySelectorAll('.cpu-history-resize-handle[data-resize]') : []);
+      if (!box || !head || !resizeHandles.length) return;
+      let drag = null;
+      let resize = null;
+      function releasePointer(target, pointerId) {
+        try { target.releasePointerCapture(pointerId); } catch (error) {}
+      }
+      head.addEventListener('pointerdown', function (event) {
+        if (!box.classList.contains('modal-history-window')) return;
+        if (event.button !== 0) return;
+        if (event.target && event.target.closest('.close-btn')) return;
+        const rect = box.getBoundingClientRect();
+        drag = { pointerId: event.pointerId, dx: event.clientX - rect.left, dy: event.clientY - rect.top };
+        head.setPointerCapture(event.pointerId);
+        event.preventDefault();
+      });
+      head.addEventListener('pointermove', function (event) {
+        if (!drag || drag.pointerId !== event.pointerId || !box.classList.contains('modal-history-window')) return;
+        applyCpuHistoryRect({ left: event.clientX - drag.dx, top: event.clientY - drag.dy, width: box.offsetWidth, height: box.offsetHeight });
+      });
+      head.addEventListener('pointerup', function (event) {
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        drag = null;
+        releasePointer(head, event.pointerId);
+      });
+      head.addEventListener('pointercancel', function (event) {
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        drag = null;
+        releasePointer(head, event.pointerId);
+      });
+      function updateResizeRect(base, direction, clientX, clientY) {
+        const dx = clientX - base.startX;
+        const dy = clientY - base.startY;
+        let nextLeft = base.left;
+        let nextTop = base.top;
+        let nextWidth = base.width;
+        let nextHeight = base.height;
+
+        if (direction.indexOf('right') !== -1) {
+          nextWidth = base.width + dx;
+        }
+        if (direction.indexOf('left') !== -1) {
+          nextWidth = base.width - dx;
+          nextLeft = base.left + dx;
+        }
+        if (direction.indexOf('bottom') !== -1) {
+          nextHeight = base.height + dy;
+        }
+        if (direction.indexOf('top') !== -1) {
+          nextHeight = base.height - dy;
+          nextTop = base.top + dy;
+        }
+
+        applyCpuHistoryRect({ left: nextLeft, top: nextTop, width: nextWidth, height: nextHeight });
+      }
+
+      resizeHandles.forEach(function (handle) {
+        handle.addEventListener('pointerdown', function (event) {
+          if (!box.classList.contains('modal-history-window')) return;
+          if (event.button !== 0) return;
+          const rect = box.getBoundingClientRect();
+          resize = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+            direction: String(handle.getAttribute('data-resize') || ''),
+            handle: handle,
+          };
+          handle.setPointerCapture(event.pointerId);
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        handle.addEventListener('pointermove', function (event) {
+          if (!resize || resize.pointerId !== event.pointerId || resize.handle !== handle || !box.classList.contains('modal-history-window')) return;
+          updateResizeRect(resize, resize.direction, event.clientX, event.clientY);
+        });
+        handle.addEventListener('pointerup', function (event) {
+          if (!resize || resize.pointerId !== event.pointerId || resize.handle !== handle) return;
+          resize = null;
+          releasePointer(handle, event.pointerId);
+        });
+        handle.addEventListener('pointercancel', function (event) {
+          if (!resize || resize.pointerId !== event.pointerId || resize.handle !== handle) return;
+          resize = null;
+          releasePointer(handle, event.pointerId);
+        });
+      });
+    }
+
+    function setCpuHistoryLoading(host, bot, metric) {
+      document.getElementById('cpuHistoryTitle').textContent = metricHistoryTitle(metric, host, bot);
+      document.getElementById('cpuHistorySubtitle').textContent = metricHistoryLoadingSubtitle(metric);
       document.getElementById('cpuHistoryMeta').innerHTML = '';
       document.getElementById('cpuHistoryBody').innerHTML = '<div class="empty-state">Loading...</div>';
     }
@@ -5254,41 +6049,56 @@
 
     window.closeCpuHistoryModal = function closeCpuHistoryModal() {
       hideCpuHistoryOverlay();
+      resetCpuHistoryWindow();
     };
 
-    window.openCpuHistory = function openCpuHistory(hostname, botName) {
+    let cpuHistoryDisplayMetric = 'cpu';
+    let cpuHistoryLastPayload = null;
+
+    window.openMetricHistory = function openMetricHistory(hostname, metricName, botName) {
       const host = String(hostname || '').trim();
+      const metric = String(metricName || 'cpu').trim().toLowerCase() || 'cpu';
+      const requestMetric = metric === 'pnl_fills' ? 'pnl' : metric;
       const bot = String(botName || '').trim();
       if (!host) return;
-      setCpuHistoryLoading(host, bot);
+      cpuHistoryDisplayMetric = metric;
+      setCpuHistoryLoading(host, bot, metric);
       showCpuHistoryOverlay();
-      fetch(API_BASE + '/cpu-history/' + encodeURIComponent(host) + '?token=' + encodeURIComponent(TOKEN) + (bot ? '&bot_name=' + encodeURIComponent(bot) : ''))
+      prepareCpuHistoryWindow(980, 560);
+      fetch(API_BASE + '/metric-history/' + encodeURIComponent(host) + '?token=' + encodeURIComponent(TOKEN) + '&metric=' + encodeURIComponent(requestMetric) + (bot ? '&bot_name=' + encodeURIComponent(bot) : ''))
         .then(function (response) {
-          if (!response.ok) throw new Error('cpu history fetch failed');
+          if (!response.ok) throw new Error('metric history fetch failed');
           return response.json();
         })
         .then(function (data) {
-          document.getElementById('cpuHistoryTitle').textContent = bot ? ('CPU History - ' + bot + ' @ ' + host) : ('CPU History - ' + host);
-          document.getElementById('cpuHistorySubtitle').textContent = '24h history, 1 sample/minute, source: cpu_60s';
           const payload = data || {};
-          const points = Array.isArray(payload.points) ? payload.points : [];
-          document.getElementById('cpuHistoryMeta').innerHTML = renderCpuHistoryMeta(payload, points);
-          document.getElementById('cpuHistoryBody').innerHTML = renderCpuHistoryChart(payload, points);
+          const points = metricHistorySeriesPoints(metric, payload);
+          cpuHistoryLastPayload = { data: payload, host: host, botName: bot, metric: metric };
+          document.getElementById('cpuHistoryTitle').textContent = metricHistoryTitle(metric, host, bot);
+          document.getElementById('cpuHistorySubtitle').textContent = metricHistorySubtitle(metric, payload);
+          document.getElementById('cpuHistoryMeta').innerHTML = renderCpuHistoryMeta(payload, points, metric);
+          document.getElementById('cpuHistoryBody').innerHTML = renderCpuHistoryChart(payload, points, metric);
         })
         .catch(function (error) {
+          cpuHistoryLastPayload = null;
           document.getElementById('cpuHistorySubtitle').textContent = 'Failed to load history';
-          document.getElementById('cpuHistoryBody').innerHTML = '<div class="empty-state">Failed to load CPU history: ' + esc(error.message || error) + '</div>';
+          document.getElementById('cpuHistoryBody').innerHTML = '<div class="empty-state">Failed to load ' + esc(metricHistoryMeta(metric).label) + ' history: ' + esc(error.message || error) + '</div>';
         });
+    };
+
+    window.openCpuHistory = function openCpuHistory(hostname, botName) {
+      window.openMetricHistory(hostname, 'cpu', botName);
     };
 
     function getCpuHistoryTarget(target) {
       if (!target || typeof target.closest !== 'function') return null;
-      const trigger = target.closest('[data-cpu-history-host]');
+      const trigger = target.closest('[data-history-host], [data-cpu-history-host]');
       if (!trigger) return null;
-      const host = String(trigger.getAttribute('data-cpu-history-host') || '').trim();
-      const bot = String(trigger.getAttribute('data-cpu-history-bot') || '').trim();
+      const host = String(trigger.getAttribute('data-history-host') || trigger.getAttribute('data-cpu-history-host') || '').trim();
+      const bot = String(trigger.getAttribute('data-history-bot') || trigger.getAttribute('data-cpu-history-bot') || '').trim();
+      const metric = String(trigger.getAttribute('data-history-metric') || 'cpu').trim().toLowerCase() || 'cpu';
       if (!host) return null;
-      return { host: host, bot: bot };
+      return { host: host, bot: bot, metric: metric };
     }
 
     let lastCpuHistoryOpen = { key: '', ts: 0 };
@@ -5297,7 +6107,7 @@
     function handleCpuHistoryInteraction(event) {
       const cpuTarget = getCpuHistoryTarget(event.target);
       if (!cpuTarget) return;
-      const key = cpuTarget.host + '::' + cpuTarget.bot;
+      const key = cpuTarget.metric + '::' + cpuTarget.host + '::' + cpuTarget.bot;
       const now = Date.now();
       if (lastCpuHistoryOpen.key === key && (now - lastCpuHistoryOpen.ts) < 400) {
         event.preventDefault();
@@ -5308,23 +6118,38 @@
       event.preventDefault();
       event.stopPropagation();
       if (CPU_HISTORY_DEBUG) {
-        toast('CPU click debug: ' + cpuTarget.host + (cpuTarget.bot ? ' / ' + cpuTarget.bot : ''), 'info');
+        toast('History click debug: ' + cpuTarget.metric + ' ' + cpuTarget.host + (cpuTarget.bot ? ' / ' + cpuTarget.bot : ''), 'info');
       }
-      openCpuHistory(cpuTarget.host, cpuTarget.bot);
+      openMetricHistory(cpuTarget.host, cpuTarget.metric, cpuTarget.bot);
     }
 
-    function renderCpuHistoryMeta(data, points) {
+    function renderCpuHistoryMeta(data, points, metric) {
       const valid = points.filter(function (v) { return typeof v === 'number' && Number.isFinite(v); });
       const latest = valid.length ? valid[valid.length - 1] : null;
       const peak = valid.length ? Math.max.apply(null, valid) : null;
-      const threshold = Number.isFinite(Number(data && data.threshold_pct)) ? Number(data.threshold_pct) : null;
+      const totalPnl = Number.isFinite(Number(data && data.total_pnl)) ? Number(data.total_pnl) : null;
+      const totalFills = Number.isFinite(Number(data && data.total_fills)) ? Number(data.total_fills) : null;
+      const bestDayPnl = Number.isFinite(Number(data && data.best_day_pnl)) ? Number(data.best_day_pnl) : null;
+      const worstDayPnl = Number.isFinite(Number(data && data.worst_day_pnl)) ? Number(data.worst_day_pnl) : null;
+      const lastFillTs = Number.isFinite(Number(data && data.last_fill_ts)) ? Number(data.last_fill_ts) : 0;
+      const warningThreshold = Number.isFinite(Number(data && data.warning_threshold)) ? Number(data.warning_threshold) : null;
+      const errorThreshold = Number.isFinite(Number(data && data.error_threshold)) ? Number(data.error_threshold) : null;
       const lastMinute = Number.isFinite(Number(data && data.last_minute)) ? Number(data.last_minute) : 0;
+      const lastHour = Number.isFinite(Number(data && data.last_hour)) ? Number(data.last_hour) : 0;
       const lastSeen = lastMinute > 0 ? new Date(lastMinute * 60000).toLocaleString() : 'n/a';
+      const lastSeenHourly = formatUtcHourLabel(lastHour);
+      const meta = metricHistoryMeta(metric);
+      const showThresholds = !meta.pnlMetric && !meta.fillsMetric;
       return `<div class='cpu-chart-meta'>`
-        + cpuChartPill('Latest', latest == null ? 'n/a' : latest.toFixed(1) + '%')
-        + cpuChartPill('Peak', peak == null ? 'n/a' : peak.toFixed(1) + '%')
-        + cpuChartPill('Threshold', threshold == null ? 'n/a' : threshold.toFixed(1) + '%')
-        + cpuChartPill('Last sample', lastSeen)
+        + (meta.pnlMetric ? cpuChartPill('Total PNL', metricHistoryValueLabel(metric, totalPnl, data)) : '')
+        + ((meta.pnlMetric || meta.fillsMetric) ? cpuChartPill('Total fills', String(totalFills == null ? 'n/a' : totalFills)) : '')
+        + cpuChartPill('Latest', metricHistoryValueLabel(metric, latest, data))
+        + cpuChartPill('Peak', metricHistoryValueLabel(metric, peak, data))
+        + (meta.pnlMetric && bestDayPnl != null ? cpuChartPill('Best day', metricHistoryValueLabel(metric, bestDayPnl, data)) : '')
+        + (meta.pnlMetric && worstDayPnl != null ? cpuChartPill('Worst day', metricHistoryValueLabel(metric, worstDayPnl, data)) : '')
+        + (showThresholds && warningThreshold != null ? cpuChartPill('Warning', metricHistoryValueLabel(metric, warningThreshold, data)) : '')
+        + (showThresholds && errorThreshold != null ? cpuChartPill('Error', metricHistoryValueLabel(metric, errorThreshold, data)) : '')
+        + cpuChartPill(meta.countMetric ? 'Last hour' : ((meta.pnlMetric || meta.fillsMetric) ? 'Last fill' : 'Last sample'), meta.countMetric ? lastSeenHourly : ((meta.pnlMetric || meta.fillsMetric) ? (lastFillTs > 0 ? new Date(lastFillTs * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC' : 'n/a') : lastSeen))
         + `</div>`;
     }
 
@@ -5332,48 +6157,115 @@
       return `<span class='cpu-chart-pill'><strong>${esc(label)}:</strong> ${esc(value)}</span>`;
     }
 
-    function renderCpuHistoryChart(data, points) {
+    function getCpuHistoryChartHeight() {
+      const chart = document.getElementById('cpuHistoryBody');
+      if (!chart) return 280;
+      const style = window.getComputedStyle(chart);
+      const paddingTop = parseFloat(style.paddingTop) || 0;
+      const paddingBottom = parseFloat(style.paddingBottom) || 0;
+      const available = chart.clientHeight - paddingTop - paddingBottom;
+      return Math.max(220, Math.round(available || 280));
+    }
+
+    function renderCpuHistoryChart(data, points, metric) {
       if (!points.length) {
         return `<div class='empty-state'>No history available yet.</div>`;
       }
-      const valid = points.map(function (value, index) {
+      const meta = metricHistoryMeta(metric);
+      const chartPoints = points;
+      const valid = chartPoints.map(function (value, index) {
         return typeof value === 'number' && Number.isFinite(value) ? { index: index, value: value } : null;
       }).filter(Boolean);
       if (!valid.length) {
-        return `<div class='empty-state'>No confirmed 60s samples stored yet.</div>`;
+        return `<div class='empty-state'>${metricHistoryEmpty(metric, data)}</div>`;
       }
       const width = 920;
-      const height = 280;
-      const pad = { left: 42, right: 14, top: 14, bottom: 28 };
+      const height = getCpuHistoryChartHeight();
+      const warningThreshold = !meta.pnlMetric && !meta.fillsMetric && Number.isFinite(Number(data && data.warning_threshold)) ? Number(data.warning_threshold) : null;
+      const errorThreshold = !meta.pnlMetric && !meta.fillsMetric && Number.isFinite(Number(data && data.error_threshold)) ? Number(data.error_threshold) : null;
+      const scale = metricHistoryScale(metric, data);
+      const values = valid.map(function (item) { return item.value; });
+      const minRaw = Math.min.apply(null, values.concat([warningThreshold || 0, errorThreshold || 0]));
+      const maxRaw = Math.max.apply(null, values.concat([warningThreshold || 0, errorThreshold || 0]));
+      const guidesMeta = meta.pnlMetric ? scale.guideValues(minRaw, maxRaw) : scale.guideValues(Math.max(scale.baseline, maxRaw));
+      const guideLabelWidth = guidesMeta.values.reduce(function (maxLen, value) {
+        return Math.max(maxLen, String(scale.label(value)).length);
+      }, 0);
+      const pad = { left: Math.max(42, Math.min(112, 12 + guideLabelWidth * 7)), right: 14, top: 14, bottom: 28 };
       const innerW = width - pad.left - pad.right;
       const innerH = height - pad.top - pad.bottom;
-      const threshold = Number.isFinite(Number(data && data.threshold_pct)) ? Number(data.threshold_pct) : null;
-      const maxValue = Math.max(100, threshold || 0, Math.max.apply(null, valid.map(function (item) { return item.value; })));
-      function x(index) { return pad.left + (index / Math.max(points.length - 1, 1)) * innerW; }
-      function y(value) { return pad.top + innerH - (value / maxValue) * innerH; }
+      const minValue = meta.pnlMetric ? guidesMeta.minValue : 0;
+      const maxValue = guidesMeta.maxValue;
+      function x(index) { return pad.left + (index / Math.max(chartPoints.length - 1, 1)) * innerW; }
+      function y(value) { return pad.top + innerH - ((value - minValue) / Math.max(maxValue - minValue, 1e-9)) * innerH; }
       let path = '';
       valid.forEach(function (item, idx) {
         path += (idx === 0 ? 'M' : ' L') + x(item.index).toFixed(1) + ' ' + y(item.value).toFixed(1);
       });
-      const guides = [0, 25, 50, 75, 100].filter(function (v, i, arr) {
+      const pointMarkers = (meta.pnlMetric || meta.fillsMetric) ? valid.map(function (item) {
+        return `<circle cx='${x(item.index).toFixed(1)}' cy='${y(item.value).toFixed(1)}' r='${valid.length === 1 ? 4 : 3}' fill='rgba(93,196,255,0.95)' stroke='rgba(5,9,15,0.9)' stroke-width='1.2' />`;
+      }).join('') : '';
+      const guides = guidesMeta.values.filter(function (v, i, arr) {
         return v <= maxValue || i === arr.length - 1;
       }).map(function (v) {
         const yy = y(v);
         return `<line x1='${pad.left}' y1='${yy.toFixed(1)}' x2='${(width - pad.right)}' y2='${yy.toFixed(1)}' stroke='rgba(255,255,255,0.08)' stroke-width='1' />`
-          + `<text x='${pad.left - 8}' y='${(yy + 4).toFixed(1)}' text-anchor='end' fill='rgba(255,255,255,0.55)' font-size='11'>${v}%</text>`;
+          + `<text x='${pad.left - 8}' y='${(yy + 4).toFixed(1)}' text-anchor='end' fill='rgba(255,255,255,0.55)' font-size='11'>${scale.label(v)}</text>`;
       }).join('');
-      const thresholdLine = threshold == null ? '' : `<line x1='${pad.left}' y1='${y(threshold).toFixed(1)}' x2='${(width - pad.right)}' y2='${y(threshold).toFixed(1)}' stroke='rgba(255,75,75,0.75)' stroke-width='1.5' stroke-dasharray='6 4' />`;
-      const thresholdLabel = threshold == null ? '' : `<text x='${width - pad.right}' y='${(y(threshold) - 6).toFixed(1)}' text-anchor='end' fill='rgba(255,120,120,0.9)' font-size='11'>alert ${threshold.toFixed(1)}%</text>`;
+      let dailyLine = '';
+      let dailyLabels = '';
+      if (meta.countMetric && Array.isArray(data && data.daily_points) && data.daily_points.length) {
+        const dailyPoints = data.daily_points.map(function (value, index) {
+          return typeof value === 'number' && Number.isFinite(value) ? { index: index, value: value } : null;
+        }).filter(Boolean);
+        const dayCount = Math.max((data && data.daily_points && data.daily_points.length) || 0, 1);
+        const dayPath = dailyPoints.map(function (item, idx) {
+          const dayX = pad.left + (((item.index + 0.5) / dayCount) * innerW);
+          return (idx === 0 ? 'M' : ' L') + dayX.toFixed(1) + ' ' + y(item.value).toFixed(1);
+        }).join('');
+        if (dayPath) {
+          dailyLine = `<path d='${dayPath}' fill='none' stroke='rgba(171,219,255,0.92)' stroke-width='2' stroke-linejoin='round' stroke-linecap='round'></path>`;
+        }
+        dailyLabels = `<text x='${pad.left}' y='${pad.top + 14}' fill='rgba(171,219,255,0.9)' font-size='11'>daily UTC</text>`
+          + `<text x='${pad.left + 72}' y='${pad.top + 14}' fill='rgba(93,196,255,0.72)' font-size='11'>hourly UTC</text>`;
+      }
+      const warningLine = warningThreshold == null ? '' : `<line x1='${pad.left}' y1='${y(warningThreshold).toFixed(1)}' x2='${(width - pad.right)}' y2='${y(warningThreshold).toFixed(1)}' stroke='rgba(244,185,66,0.85)' stroke-width='1.5' stroke-dasharray='6 4' />`;
+      const errorLine = errorThreshold == null ? '' : `<line x1='${pad.left}' y1='${y(errorThreshold).toFixed(1)}' x2='${(width - pad.right)}' y2='${y(errorThreshold).toFixed(1)}' stroke='rgba(255,75,75,0.78)' stroke-width='1.5' stroke-dasharray='6 4' />`;
+      const warningLabel = warningThreshold == null ? '' : `<text x='${width - pad.right}' y='${(y(warningThreshold) - 6).toFixed(1)}' text-anchor='end' fill='rgba(244,210,120,0.95)' font-size='11'>warning ${metricHistoryValueLabel(metric, warningThreshold, data)}</text>`;
+      const errorLabel = errorThreshold == null ? '' : `<text x='${width - pad.right}' y='${(y(errorThreshold) + 14).toFixed(1)}' text-anchor='end' fill='rgba(255,120,120,0.95)' font-size='11'>error ${metricHistoryValueLabel(metric, errorThreshold, data)}</text>`;
+      const zeroLine = meta.pnlMetric && minValue < 0 && maxValue > 0 ? `<line x1='${pad.left}' y1='${y(0).toFixed(1)}' x2='${(width - pad.right)}' y2='${y(0).toFixed(1)}' stroke='rgba(255,255,255,0.18)' stroke-width='1' stroke-dasharray='3 3' />` : '';
+      const rangeLabel = meta.countMetric ? '4 week' : ((meta.pnlMetric || meta.fillsMetric) ? 'full' : '24 hour');
+      const startLabel = meta.countMetric ? '4w ago' : ((meta.pnlMetric || meta.fillsMetric) ? 'first day' : '24h ago');
+      let xAxisLabels = '';
+      if ((meta.pnlMetric || meta.fillsMetric) && Array.isArray(data && data.days) && data.days.length) {
+        const tickCount = Math.min(4, data.days.length);
+        const ticks = [];
+        for (let i = 0; i < tickCount; i += 1) {
+          const idx = tickCount === 1 ? 0 : Math.round(((data.days.length - 1) * i) / (tickCount - 1));
+          if (ticks.some(function (tick) { return tick.index === idx; })) continue;
+          ticks.push({ index: idx, label: formatUtcDayLabel(data.days[idx]) });
+        }
+        xAxisLabels = ticks.map(function (tick) {
+          const xx = x(tick.index).toFixed(1);
+          const anchor = tick.index === 0 ? 'start' : (tick.index === chartPoints.length - 1 ? 'end' : 'middle');
+          return `<text x='${xx}' y='${height - 8}' text-anchor='${anchor}' fill='rgba(255,255,255,0.55)' font-size='11'>${esc(tick.label)}</text>`;
+        }).join('');
+      }
       return `
         <div class='cpu-chart-wrap'>
-          <svg class='cpu-chart-svg' viewBox='0 0 ${width} ${height}' role='img' aria-label='24 hour CPU history chart'>
+          <svg class='cpu-chart-svg' viewBox='0 0 ${width} ${height}' preserveAspectRatio='none' role='img' aria-label='${escAttr(rangeLabel)} ${escAttr(metricHistoryMeta(metric).label)} history chart'>
             <rect x='0' y='0' width='${width}' height='${height}' rx='10' fill='rgba(5,9,15,0.55)'></rect>
             ${guides}
-            ${thresholdLine}
-            ${thresholdLabel}
+            ${zeroLine}
+            ${warningLine}
+            ${errorLine}
+            ${warningLabel}
+            ${errorLabel}
+            ${dailyLine}
             <path d='${path}' fill='none' stroke='rgba(93,196,255,0.95)' stroke-width='2.5' stroke-linejoin='round' stroke-linecap='round'></path>
-            <text x='${pad.left}' y='${height - 8}' fill='rgba(255,255,255,0.55)' font-size='11'>24h ago</text>
-            <text x='${width - pad.right}' y='${height - 8}' text-anchor='end' fill='rgba(255,255,255,0.55)' font-size='11'>now</text>
+            ${pointMarkers}
+            ${dailyLabels}
+            ${xAxisLabels || `<text x='${pad.left}' y='${height - 8}' fill='rgba(255,255,255,0.55)' font-size='11'>${startLabel}</text><text x='${width - pad.right}' y='${height - 8}' text-anchor='end' fill='rgba(255,255,255,0.55)' font-size='11'>now</text>`}
           </svg>
         </div>`;
     }
@@ -5682,11 +6574,11 @@
       { label: 'Memory',            field: 'memory_mb',             width: '7%',  type: 'num' },
       { label: 'Swap',              field: 'swap_mb',               width: '7%',  type: 'num' },
       { label: 'Err Tdy',           field: 'errors_today',          width: '8%',  type: 'num' },
-      { label: 'TB Tdy',            field: 'tracebacks_today',      width: '10%', type: 'num' },
+      { label: 'Err 4W',            field: 'errors_4w',             width: '8%',  type: 'num' },
+      { label: 'TB Tdy',            field: 'tracebacks_today',      width: '8%',  type: 'num' },
+      { label: 'TB 4W',             field: 'tracebacks_4w',         width: '8%',  type: 'num' },
       { label: 'PNL Tdy',           field: 'pnl_today',             width: '8%',  type: 'num' },
-      { label: 'Err Yday',          field: 'errors_yesterday',      width: '8%',  type: 'num' },
-      { label: 'TB Yday',           field: 'tracebacks_yesterday',  width: '10%', type: 'num' },
-      { label: 'PNL Yday',          field: 'pnl_yesterday',         width: '8%',  type: 'num' },
+      { label: 'PNL Hist',          field: 'pnl_hist_total',        width: '8%',  type: 'num' },
     ];
 
     function sortBotTable(field) {
@@ -5756,15 +6648,19 @@
       return '<span class="tag" style="color:#cc3333;background:#3d0505">' + esc(v) + '</span>';
     }
 
+    function _historyMetricBubble(n, host, botName, metric) {
+      return `<span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(botName || '')}' data-history-metric='${escAttr(metric)}'>${_metricTag(n)}</span>`;
+    }
+
     function _renderServiceRowCells(item, host, pbVersion) {
       const hasErrorsToday = Number(item.errors_today || 0) > 0;
-      const hasErrorsYesterday = Number(item.errors_yesterday || 0) > 0;
       const hasTracebacksToday = Number(item.tracebacks_today || 0) > 0;
-      const hasTracebacksYesterday = Number(item.tracebacks_yesterday || 0) > 0;
+      const errorHistoryBubble = _historyMetricBubble(item.errors_4w, host, item.name || '', 'errors');
+      const tracebackHistoryBubble = _historyMetricBubble(item.tracebacks_4w, host, item.name || '', 'tracebacks');
       const memoryLevel = (item.levels && item.levels.memory) || 'ok';
       const swapLevel = (item.levels && item.levels.swap) || 'ok';
       const pnlsToday = Number(item.pnls_today || 0);
-      const pnlsYesterday = Number(item.pnls_yesterday || 0);
+      const pnlsHistTotal = Number(item.pnls_hist_total || 0);
       return {
         name: {
           html: `<div><span class='tag' style='cursor:pointer;color:var(--accent);background:rgba(93,196,255,0.12)' onclick='openBotLog(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)})' title='Open bot log'>${esc(item.name || '-')}</span></div><div class='field-help' title='Bot start time'>${esc(item.start_time || '-')}</div>`,
@@ -5775,36 +6671,36 @@
           sig: [String(Number(item.cpu) || 0), String(Number(item.cpu_60s) || 0), String(Number(item.cpu_60s_window) || 0), item.cpu_60s_confirmed ? '1' : '0'].join('|')
         },
         memory_mb: {
-          html: _memSwapTag(item.memory_mb, 'MB', memoryLevel),
+          html: `<span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(item.name || '')}' data-history-metric='memory'>${_memSwapTag(item.memory_mb, 'MB', memoryLevel)}</span>`,
           sig: [String(Number(item.memory_mb) || 0), memoryLevel].join('|')
         },
         swap_mb: {
-          html: _memSwapTag(item.swap_mb, 'MB', swapLevel),
+          html: `<span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(item.name || '')}' data-history-metric='swap'>${_memSwapTag(item.swap_mb, 'MB', swapLevel)}</span>`,
           sig: [String(Number(item.swap_mb) || 0), swapLevel].join('|')
         },
         errors_today: {
           html: hasErrorsToday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "errors", "today", ${Number(item.errors_today || 0)})' style='cursor:pointer'>${_metricTag(item.errors_today)}</span>` : _metricTag(item.errors_today),
           sig: [host, pbVersion, String(item.name || ''), 'errors', 'today', String(Number(item.errors_today) || 0), hasErrorsToday ? '1' : '0'].join('|')
         },
+        errors_4w: {
+          html: errorHistoryBubble,
+          sig: [host, String(item.name || ''), 'errors', String(Number(item.errors_4w) || 0)].join('|')
+        },
         tracebacks_today: {
           html: hasTracebacksToday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "tracebacks", "today", ${Number(item.tracebacks_today || 0)})' style='cursor:pointer'>${_metricTag(item.tracebacks_today)}</span>` : _metricTag(item.tracebacks_today),
           sig: [host, pbVersion, String(item.name || ''), 'tracebacks', 'today', String(Number(item.tracebacks_today) || 0), hasTracebacksToday ? '1' : '0'].join('|')
         },
+        tracebacks_4w: {
+          html: tracebackHistoryBubble,
+          sig: [host, String(item.name || ''), 'tracebacks', String(Number(item.tracebacks_4w) || 0)].join('|')
+        },
         pnl_today: {
-          html: `<div>${_pnlValueHtml(item.pnl_today)}</div><div class='field-help' title='Realized fill count'>fills: ${esc(pnlsToday)}</div>`,
+          html: `<div><span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(item.name || '')}' data-history-metric='pnl'>${_pnlValueHtml(item.pnl_today)}</span></div><div class='field-help cpu-clickable' title='Realized fill count' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(item.name || '')}' data-history-metric='pnl_fills'>fills: ${esc(pnlsToday)}</div>`,
           sig: [String((Number(item.pnl_today) || 0).toFixed(2)), String(pnlsToday)].join('|')
         },
-        errors_yesterday: {
-          html: hasErrorsYesterday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "errors", "yesterday", ${Number(item.errors_yesterday || 0)})' style='cursor:pointer'>${_metricTag(item.errors_yesterday)}</span>` : _metricTag(item.errors_yesterday),
-          sig: [host, pbVersion, String(item.name || ''), 'errors', 'yesterday', String(Number(item.errors_yesterday) || 0), hasErrorsYesterday ? '1' : '0'].join('|')
-        },
-        tracebacks_yesterday: {
-          html: hasTracebacksYesterday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "tracebacks", "yesterday", ${Number(item.tracebacks_yesterday || 0)})' style='cursor:pointer'>${_metricTag(item.tracebacks_yesterday)}</span>` : _metricTag(item.tracebacks_yesterday),
-          sig: [host, pbVersion, String(item.name || ''), 'tracebacks', 'yesterday', String(Number(item.tracebacks_yesterday) || 0), hasTracebacksYesterday ? '1' : '0'].join('|')
-        },
-        pnl_yesterday: {
-          html: `<div>${_pnlValueHtml(item.pnl_yesterday)}</div><div class='field-help' title='Realized fill count'>fills: ${esc(pnlsYesterday)}</div>`,
-          sig: [String((Number(item.pnl_yesterday) || 0).toFixed(2)), String(pnlsYesterday)].join('|')
+        pnl_hist_total: {
+          html: `<div><span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(item.name || '')}' data-history-metric='pnl'>${_pnlValueHtml(item.pnl_hist_total)}</span></div><div class='field-help cpu-clickable' title='Realized fill count' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(item.name || '')}' data-history-metric='pnl_fills'>fills: ${esc(pnlsHistTotal)}</div>`,
+          sig: [String((Number(item.pnl_hist_total) || 0).toFixed(2)), String(pnlsHistTotal)].join('|')
         }
       };
     }
@@ -5888,10 +6784,20 @@
             </div>
             <div class='stack'>
               ${renderResourceMeter('Swap', serverMetrics.swap)}
-              <div class='resource-meter cpu-clickable' data-meter='cpu' data-cpu-history-host='${escAttr(summary.hostname || summary.name || store.hostname || "")}'>
+              <div class='resource-meter cpu-clickable' data-meter='cpu' data-history-host='${escAttr(summary.hostname || summary.name || store.hostname || "")}' data-history-metric='cpu' data-cpu-history-host='${escAttr(summary.hostname || summary.name || store.hostname || "")}'>
                 <div class='resource-meter-title'>${esc(cpuTelemetry.title)}</div>
-                <div class='resource-meter-sub'>${esc(cpuTelemetry.sub)}</div>
-                <div class='resource-track'><div class='resource-fill ${resourceTone(cpuTelemetry.livePct)}' style='width:${cpuTelemetry.livePct}%'></div></div>
+                <div class='cpu-meter'>
+                  <div class='cpu-meter-row' data-cpu-row='live'>
+                    <div class='cpu-meter-label'>1s</div>
+                    <div class='resource-track'><div class='resource-fill ${resourceTone(cpuTelemetry.livePct)}' data-cpu-bar='live' style='width:${cpuTelemetry.livePct}%'></div></div>
+                    <div class='cpu-meter-value' data-cpu-value='live'>${esc(cpuTelemetry.liveValueText)}</div>
+                  </div>
+                  <div class='cpu-meter-row ${cpuTelemetry.avg60Confirmed ? '' : 'warming'}' data-cpu-row='avg60'>
+                    <div class='cpu-meter-label'>60s</div>
+                    <div class='resource-track'><div class='resource-fill ${resourceTone(cpuTelemetry.avg60Pct)}' data-cpu-bar='avg60' style='width:${cpuTelemetry.avg60Pct}%'></div></div>
+                    <div class='cpu-meter-value' data-cpu-value='avg60'>${esc(cpuTelemetry.avg60ValueText)}</div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -6017,7 +6923,9 @@
     }
 
     document.getElementById('help-ovl').addEventListener('click', function (event) {
-      if (event.target === event.currentTarget) closeHelp();
+      if (event.target === event.currentTarget && typeof window.closeHelp === 'function') {
+        window.closeHelp();
+      }
     });
 
     document.addEventListener('focusin', function (event) {
@@ -6028,6 +6936,21 @@
     });
 
     document.addEventListener('pointerdown', handleCpuHistoryInteraction, true);
+    window.addEventListener('resize', function () {
+      const overlay = document.getElementById('cpuHistoryOverlay');
+      const box = document.getElementById('cpuHistoryBox');
+      if (!overlay || !box || !overlay.classList.contains('visible')) return;
+      applyCpuHistoryRect(box.getBoundingClientRect());
+      if (cpuHistoryLastPayload) {
+        const points = metricHistorySeriesPoints(cpuHistoryLastPayload.metric, cpuHistoryLastPayload.data);
+        document.getElementById('cpuHistoryMeta').innerHTML = renderCpuHistoryMeta(cpuHistoryLastPayload.data, points, cpuHistoryLastPayload.metric);
+        document.getElementById('cpuHistoryBody').innerHTML = renderCpuHistoryChart(cpuHistoryLastPayload.data, points, cpuHistoryLastPayload.metric);
+      }
+    });
+    initCpuHistoryModalInteractions();
+    document.getElementById('cpuHistoryOverlay').addEventListener('click', function (event) {
+      if (event.target === event.currentTarget) closeCpuHistoryModal();
+    });
     document.addEventListener('click', handleCpuHistoryInteraction, true);
 
     restoreViewFromHash();

@@ -732,6 +732,7 @@
             <span class="form-label">Monitored VPS Hosts <span style="color:#4a5568;font-weight:400;">(click to toggle)</span></span>
             <div class="multiselect-wrap" id="vps-hosts-select"></div>
           </div>
+          <div id="apiserver-monitor-config-wrap"></div>
           <div style="margin-top:1rem;">
             <button class="form-btn save" onclick="saveApiServerSettings()">&#128190; Save</button>
             <span class="inline-msg" id="apiserver-save-msg"></span>
@@ -1502,6 +1503,8 @@ window.PBGUI_NAV_CONFIG = {
       var ar = document.getElementById('apiserver-auto-restart');
       if (ar) ar.checked = data.auto_restart !== false;
       renderVpsHosts(data.available_hosts || [], data.enabled_hosts || []);
+      var monitorWrap = document.getElementById('apiserver-monitor-config-wrap');
+      if (monitorWrap) monitorWrap.innerHTML = renderMonitorSettingsFields(data.monitor_config || {});
     }
   }
 
@@ -1635,21 +1638,18 @@ window.PBGUI_NAV_CONFIG = {
   /* ── PBRemote settings ─────────────────────────────────── */
   var _bucketEditOpen = false;
   var _bucketData = {};  /* current bucket config being edited */
-  var _monitorSnapshot = {};  /* saved values for dirty detection */
 
   function loadPBRemoteSettings() {
     _settingsLoaded['pbremote'] = true;
     var wrap = document.getElementById('pbremote-settings-wrap');
     if (wrap) wrap.innerHTML = '<div style="color:#4a5568;font-style:italic;">Loading&#8230;</div>';
-    Promise.all([
-      fetch(API_BASE + '/settings/pbremote/buckets?token=' + TOKEN).then(function (r) { return r.json(); }),
-      fetch(API_BASE + '/settings/monitor-config?token=' + TOKEN).then(function (r) { return r.json(); }),
-    ])
-    .then(function (results) { renderPBRemoteSettings(results[0], results[1], wrap); })
+    fetch(API_BASE + '/settings/pbremote/buckets?token=' + TOKEN)
+    .then(function (r) { return r.json(); })
+    .then(function (data) { renderPBRemoteSettings(data, wrap); })
     .catch(function () { if (wrap) wrap.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Failed to load settings.</div>'; });
   }
 
-  function renderPBRemoteSettings(bucketsData, monitorData, wrap) {
+  function renderPBRemoteSettings(bucketsData, wrap) {
     if (!wrap) return;
     var buckets = (bucketsData && bucketsData.buckets) || [];
     var rcloneOk = bucketsData && bucketsData.rclone_available;
@@ -1685,31 +1685,25 @@ window.PBGUI_NAV_CONFIG = {
     /* Bucket edit form placeholder */
     html += '<div id="bucket-edit-form" style="display:none;"></div>';
     html += '<span class="inline-msg" id="bucket-action-msg"></span>';
+    wrap.innerHTML = html;
+  }
 
-    html += '<hr class="form-divider">';
-
-    /* ── Monitor Settings section ── */
-    html += '<div class="form-section-title">Monitor Settings</div>';
-
+  function renderMonitorSettingsFields(monitorData) {
+    var html = '';
     var groups = [
       { title: 'Server Monitor', prefix: 'server', fields: ['mem', 'swap', 'disk', 'cpu'] },
       { title: 'V7 Monitor', prefix: 'v7', fields: ['mem', 'swap', 'cpu', 'error', 'traceback'] },
-      { title: 'Multi Monitor', prefix: 'multi', fields: ['mem', 'swap', 'cpu', 'error', 'traceback'] },
-      { title: 'Single Monitor', prefix: 'single', fields: ['mem', 'swap', 'cpu', 'error', 'traceback'] },
     ];
 
-    _monitorSnapshot = {};
     groups.forEach(function (g) {
-      html += '<div style="margin-bottom:1rem;">';
+      html += '<div style="margin-top:1rem;">';
       html += '<div style="font-size:var(--fs-sm);color:#93c5fd;font-weight:600;margin-bottom:0.4rem;">' + g.title + '</div>';
       html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:0.5rem;">';
       g.fields.forEach(function (f) {
         var warnKey = f + '_warning_' + g.prefix;
         var errKey = f + '_error_' + g.prefix;
-        var warnVal = monitorData[warnKey] !== undefined ? monitorData[warnKey] : 0;
-        var errVal = monitorData[errKey] !== undefined ? monitorData[errKey] : 0;
-        _monitorSnapshot[warnKey] = warnVal;
-        _monitorSnapshot[errKey] = errVal;
+        var warnVal = monitorData && monitorData[warnKey] !== undefined ? monitorData[warnKey] : 0;
+        var errVal = monitorData && monitorData[errKey] !== undefined ? monitorData[errKey] : 0;
         var label = f.charAt(0).toUpperCase() + f.slice(1);
         html += '<div style="display:flex;flex-direction:column;gap:2px;">';
         html += '<span style="font-size:var(--fs-xs);color:#94a3b8;">' + _esc(label) + ' warn</span>';
@@ -1722,12 +1716,23 @@ window.PBGUI_NAV_CONFIG = {
       });
       html += '</div></div>';
     });
+    return html;
+  }
 
-    html += '<div style="margin-top:1rem;">';
-    html += '<button class="form-btn save" onclick="saveMonitorConfig()">&#128190; Save Monitor Settings</button>';
-    html += '<span class="inline-msg" id="monitor-settings-msg"></span>';
-    html += '</div>';
-    wrap.innerHTML = html;
+  function collectMonitorConfigFromForm() {
+    var body = {};
+    var fields = [
+      'mem_warning_server', 'mem_error_server', 'swap_warning_server', 'swap_error_server',
+      'disk_warning_server', 'disk_error_server', 'cpu_warning_server', 'cpu_error_server',
+      'mem_warning_v7', 'mem_error_v7', 'swap_warning_v7', 'swap_error_v7',
+      'cpu_warning_v7', 'cpu_error_v7', 'error_warning_v7', 'error_error_v7',
+      'traceback_warning_v7', 'traceback_error_v7',
+    ];
+    fields.forEach(function (f) {
+      var el = document.getElementById('mc-' + f);
+      if (el) body[f] = parseFloat(el.value) || 0;
+    });
+    return body;
   }
 
   /* ── Bucket select → load config ── */
@@ -1871,35 +1876,6 @@ window.PBGUI_NAV_CONFIG = {
           _resultPopup('Error', d.message || d.error || 'Delete failed', '', false);
         }
       }).catch(function () { _showMsg('bucket-action-msg', 'Delete failed', true); });
-  };
-
-  /* ── Save monitor config ── */
-  window.saveMonitorConfig = function () {
-    var body = {};
-    var fields = [
-      'mem_warning_server', 'mem_error_server', 'swap_warning_server', 'swap_error_server',
-      'disk_warning_server', 'disk_error_server', 'cpu_warning_server', 'cpu_error_server',
-      'mem_warning_v7', 'mem_error_v7', 'swap_warning_v7', 'swap_error_v7',
-      'cpu_warning_v7', 'cpu_error_v7', 'error_warning_v7', 'error_error_v7',
-      'traceback_warning_v7', 'traceback_error_v7',
-      'mem_warning_multi', 'mem_error_multi', 'swap_warning_multi', 'swap_error_multi',
-      'cpu_warning_multi', 'cpu_error_multi', 'error_warning_multi', 'error_error_multi',
-      'traceback_warning_multi', 'traceback_error_multi',
-      'mem_warning_single', 'mem_error_single', 'swap_warning_single', 'swap_error_single',
-      'cpu_warning_single', 'cpu_error_single', 'error_warning_single', 'error_error_single',
-      'traceback_warning_single', 'traceback_error_single',
-    ];
-    fields.forEach(function (f) {
-      var el = document.getElementById('mc-' + f);
-      if (el) body[f] = parseFloat(el.value) || 0;
-    });
-    fetch(API_BASE + '/settings/monitor-config?token=' + TOKEN, {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
-    }).then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d.ok) { _showMsg('monitor-settings-msg', 'Saved', false); }
-        else { _showMsg('monitor-settings-msg', d.error || d.detail || 'Save failed', true); }
-      }).catch(function () { _showMsg('monitor-settings-msg', 'Save failed', true); });
   };
 
   function _showMsg(id, msg, isError) { _flash(id, msg, isError); }
@@ -2100,11 +2076,11 @@ window.PBGUI_NAV_CONFIG = {
           var memMB    = inst.m && inst.m[0]  ? (inst.m[0]  / 1048576).toFixed(1) : '0';
           var swapMB   = inst.m && inst.m.length >= 10 && inst.m[9] ? (inst.m[9] / 1048576).toFixed(1) : '0';
           var startStr = inst.st ? new Date(inst.st * 1000).toISOString().slice(0,16).replace('T',' ') : '?';
-          var ptv = inst.pt || 0, pyv = inst.py || 0;
+          var ptv = inst.pt || 0, phv = inst.pnl_hist_total || 0;
           var pnlT    = ptv.toFixed(6);
-          var pnlY    = pyv.toFixed(6);
+          var pnlH    = phv.toFixed(6);
           var pnlTCls = ptv > 0 ? 'color:#4ade80' : ptv === 0 ? 'color:#f59e0b' : 'color:#fca5a5';
-          var pnlYCls = pyv > 0 ? 'color:#4ade80' : pyv === 0 ? 'color:#f59e0b' : 'color:#fca5a5';
+          var pnlHCls = phv > 0 ? 'color:#4ade80' : phv === 0 ? 'color:#f59e0b' : 'color:#fca5a5';
           var cpuVal  = inst.c || 0;
           var cpuStr  = cpuVal.toFixed(1);
           var cpuCls  = cpuVal === 0 ? 'color:#f59e0b' : '';
@@ -2117,8 +2093,8 @@ window.PBGUI_NAV_CONFIG = {
             '<td' + (cpuCls ? ' style="' + cpuCls + '"' : '') + '>' + cpuStr + '</td>' +
             '<td>' + (inst.ct || 0) + '</td>' +
             '<td style="' + pnlTCls + '">' + pnlT + '</td>' +
-            '<td>' + (inst.cy || 0) + '</td>' +
-            '<td style="' + pnlYCls + '">' + pnlY + '</td>' +
+            '<td>' + (inst.pnls_hist_total || 0) + '</td>' +
+            '<td style="' + pnlHCls + '">' + pnlH + '</td>' +
             '<td>' + (inst.it || 0) + '</td>' +
             '<td>' + (inst.et || 0) + '</td>' +
             '<td>' + (inst.tt || 0) + '</td>' +
@@ -2633,6 +2609,7 @@ window.PBGUI_NAV_CONFIG = {
       port:         parseInt(_val('apiserver-port') || '8000', 10),
       auto_restart: !!(document.getElementById('apiserver-auto-restart') || {}).checked,
       enabled_hosts: hosts,
+      monitor_config: collectMonitorConfigFromForm(),
     }, 'apiserver-save-msg');
   };
 

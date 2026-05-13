@@ -50,6 +50,76 @@ LOG_PUSH_INTERVAL = 0.15     # ~150ms for log line push
 LOCAL_LOG_PUSH_INTERVAL = 0.15
 
 
+def _host_usage_threshold(total_bytes: float, free_threshold_mb: float) -> Optional[float]:
+    total = float(total_bytes or 0)
+    free_mb = float(free_threshold_mb or 0)
+    if total <= 0:
+        return None
+    free_bytes = max(0.0, free_mb * 1024 * 1024)
+    usage_pct = 100.0 - ((free_bytes / total) * 100.0)
+    return max(0.0, min(100.0, usage_pct))
+
+
+def _metric_thresholds(hostname: str, metric: str, *, bot_name: str = "") -> dict[str, Optional[float]]:
+    cfg = MonitorConfig()
+    metric = str(metric or "cpu").strip().lower()
+    bot_name = str(bot_name or "").strip()
+    if bot_name:
+        if metric == "errors":
+            return {
+                "warning_threshold": float(cfg.error_warning_v7),
+                "error_threshold": float(cfg.error_error_v7),
+            }
+        if metric == "tracebacks":
+            return {
+                "warning_threshold": float(cfg.traceback_warning_v7),
+                "error_threshold": float(cfg.traceback_error_v7),
+            }
+        if metric == "pnl":
+            return {"warning_threshold": None, "error_threshold": None}
+        if metric == "memory":
+            return {
+                "warning_threshold": float(cfg.mem_warning_v7),
+                "error_threshold": float(cfg.mem_error_v7),
+            }
+        if metric == "swap":
+            return {
+                "warning_threshold": float(cfg.swap_warning_v7),
+                "error_threshold": float(cfg.swap_error_v7),
+            }
+        return {
+            "warning_threshold": float(cfg.cpu_warning_v7),
+            "error_threshold": float(cfg.cpu_error_v7),
+        }
+
+    if metric == "cpu":
+        return {
+            "warning_threshold": float(cfg.cpu_warning_server),
+            "error_threshold": float(cfg.cpu_error_server),
+        }
+
+    metrics = (_monitor.store.system.get(hostname) if _monitor else None)
+    if metric == "memory":
+        total = float(getattr(metrics, "mem_total", 0) or 0)
+        return {
+            "warning_threshold": _host_usage_threshold(total, cfg.mem_warning_server),
+            "error_threshold": _host_usage_threshold(total, cfg.mem_error_server),
+        }
+    if metric == "disk":
+        total = float(getattr(metrics, "disk_total", 0) or 0)
+        return {
+            "warning_threshold": _host_usage_threshold(total, cfg.disk_warning_server),
+            "error_threshold": _host_usage_threshold(total, cfg.disk_error_server),
+        }
+    if metric == "swap":
+        total = float(getattr(metrics, "swap_total", 0) or 0)
+        return {
+            "warning_threshold": _host_usage_threshold(total, cfg.swap_warning_server),
+            "error_threshold": _host_usage_threshold(total, cfg.swap_error_server),
+        }
+    return {"warning_threshold": None, "error_threshold": None}
+
+
 def init(monitor: VPSMonitor, streamer: AsyncLogStreamer):
     """Called once at FastAPI startup to inject shared objects."""
     global _monitor, _streamer
@@ -73,7 +143,7 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
     """
     if not _streamer or not hostname or not bot_name:
         return []
-    if bucket not in {"today", "yesterday"}:
+    if bucket != "today":
         return []
     cmd = (f"PBGUI_DUMP=1 PBGUI_DUMP_KIND={kind} PBGUI_DUMP_BOT={bot_name} "
            f"PBGUI_DUMP_BUCKET={bucket} PBGUI_DUMP_LINES={lines} "
@@ -108,26 +178,43 @@ def get_monitor_state_snapshot() -> dict:
     return _monitor.store.get_full_state(conn_summary, local_logs)
 
 
-def get_cpu_history_snapshot(hostname: str, *, bot_name: str = "") -> dict:
-    """Return on-demand 24h cpu_60s history for a host or bot."""
-    cfg = MonitorConfig()
-    threshold_pct = float(cfg.cpu_error_v7 if bot_name else cfg.cpu_error_server)
+def get_metric_history_snapshot(hostname: str, *, bot_name: str = "", metric: str = "cpu") -> dict:
+    """Return on-demand 24h metric history for a host or bot."""
+    bot_name = str(bot_name or "").strip()
+    metric = str(metric or "cpu").strip().lower()
+    if bot_name and metric == "disk":
+        metric = "cpu"
+    if metric not in {"cpu", "memory", "disk", "swap", "errors", "tracebacks", "pnl"}:
+        metric = "cpu"
+    thresholds = _metric_thresholds(hostname, metric, bot_name=bot_name)
     if not _monitor:
         return {
             "available": False,
             "scope": "bot" if bot_name else "host",
+            "metric": metric,
             "hostname": str(hostname or ""),
             "bot_name": str(bot_name or ""),
-            "source": "cpu_60s",
-            "step_seconds": 60,
-            "window_minutes": 24 * 60,
-            "resolution_pct": 0.5,
-            "threshold_pct": threshold_pct,
+            "source": "cpu_60s" if metric == "cpu" else ("rss_mb" if metric == "memory" and bot_name else ("swap_mb" if metric == "swap" and bot_name else ("passivbot.log" if metric in {"errors", "pnl"} else ("passivbot_err.log" if metric == "tracebacks" else f"{metric}_percent")))),
+            "step_seconds": 3600 if metric in {"errors", "tracebacks"} else (86400 if metric == "pnl" else 60),
+            **({"window_hours": 24 * 28} if metric in {"errors", "tracebacks"} else ({"start_day": 0, "end_day": 0, "days": [], "cumulative_points": [], "fills_points": [], "total_pnl": 0.0, "total_fills": 0, "last_fill_ts": 0} if metric == "pnl" else {"window_minutes": 24 * 60})),
+            "warning_threshold": thresholds["warning_threshold"],
+            "error_threshold": thresholds["error_threshold"],
+            **({"unit": "MB"} if bot_name and metric in {"memory", "swap"} else {"resolution_pct": 0.5}),
+            **({"timezone_basis": "UTC", "daily_points": [], "daily_step_seconds": 86400} if metric in {"errors", "tracebacks"} else ({"timezone_basis": "UTC"} if metric == "pnl" else {})),
             "points": [],
         }
-    payload = _monitor.get_bot_cpu_history(hostname, bot_name) if bot_name else _monitor.get_host_cpu_history(hostname)
-    payload["threshold_pct"] = threshold_pct
+    if bot_name:
+        payload = _monitor.get_bot_metric_history(hostname, bot_name, metric)
+    else:
+        payload = _monitor.get_host_metric_history(hostname, metric)
+    payload["warning_threshold"] = thresholds["warning_threshold"]
+    payload["error_threshold"] = thresholds["error_threshold"]
     return payload
+
+
+def get_cpu_history_snapshot(hostname: str, *, bot_name: str = "") -> dict:
+    """Backward-compatible CPU-only history accessor."""
+    return get_metric_history_snapshot(hostname, bot_name=bot_name, metric="cpu")
 
 
 # ── Allowed UI setting keys (whitelist) ──────────────────────
@@ -278,6 +365,10 @@ async def ws_vps(websocket: WebSocket):
             # ── get_cpu_history ──
             elif cmd == "get_cpu_history":
                 result = _cmd_get_cpu_history(request)
+                await websocket.send_json(result)
+
+            elif cmd == "get_metric_history":
+                result = _cmd_get_metric_history(request)
                 await websocket.send_json(result)
 
             # ── set_setting ──
@@ -684,6 +775,27 @@ def _cmd_get_cpu_history(request: dict) -> dict:
         "cmd": "get_cpu_history",
         "host": host,
         "bot_name": bot_name,
+        "data": payload,
+    }
+    if sid is not None:
+        resp["sid"] = sid
+    return resp
+
+
+def _cmd_get_metric_history(request: dict) -> dict:
+    host = str(request.get("host") or "").strip()
+    bot_name = str(request.get("bot_name") or "").strip()
+    metric = str(request.get("metric") or "cpu").strip().lower()
+    sid = request.get("sid")
+    if not host:
+        return {"type": "error", "error": "host required", "cmd": "get_metric_history"}
+    payload = get_metric_history_snapshot(host, bot_name=bot_name, metric=metric)
+    resp: dict = {
+        "type": "metric_history",
+        "cmd": "get_metric_history",
+        "host": host,
+        "bot_name": bot_name,
+        "metric": metric,
         "data": payload,
     }
     if sid is not None:

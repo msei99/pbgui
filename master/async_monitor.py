@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import traceback
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
@@ -42,6 +43,83 @@ CPU_HISTORY_STEP_SECONDS = 60
 CPU_HISTORY_RESOLUTION_PCT = 0.5
 CPU_HISTORY_MAX_PCT = 127.0
 CPU_HISTORY_FLUSH_INTERVAL = 10.0
+COUNT_HISTORY_VERSION = 1
+COUNT_HISTORY_WINDOW_HOURS = 24 * 28
+COUNT_HISTORY_STEP_SECONDS = 3600
+BOT_MEMORY_HISTORY_RESOLUTION_MB = 2.0
+BOT_MEMORY_HISTORY_MAX_MB = 32766.0
+BOT_SWAP_HISTORY_RESOLUTION_MB = 2.0
+BOT_SWAP_HISTORY_MAX_MB = 32766.0
+HOST_HISTORY_SOURCES = {
+    "cpu": "cpu_60s",
+    "memory": "mem_percent",
+    "disk": "disk_percent",
+    "swap": "swap_percent",
+}
+BOT_HISTORY_SOURCES = {
+    "cpu": "cpu_60s",
+    "memory": "rss_mb",
+    "swap": "swap_mb",
+    "errors": "passivbot.log",
+    "tracebacks": "passivbot_err.log",
+    "pnl": "passivbot.log",
+}
+
+PNL_HISTORY_VERSION = 1
+
+
+def _utc_day_from_ts(ts_val: int) -> int:
+    return int(ts_val // 86400)
+
+
+def _iso_day_label(day: int) -> str:
+    if day <= 0:
+        return "n/a"
+    return datetime.fromtimestamp(day * 86400, timezone.utc).strftime("%Y-%m-%d")
+
+
+def _parse_log_timestamp(line: str) -> int | None:
+    match = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z', str(line or ''))
+    if not match:
+        return None
+    try:
+        return int(datetime.strptime(match.group(1), '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc).timestamp())
+    except Exception:
+        return None
+
+
+def _extract_fill_summary(line: str) -> tuple[float, int] | None:
+    text = str(line or '')
+    if '[fill]' not in text:
+        return None
+    summary = FILL_SUMMARY_RE.search(text)
+    if summary:
+        return float(summary.group(2)), int(summary.group(1))
+    pnl_match = FILL_PNL_RE.search(text)
+    if pnl_match:
+        return float(pnl_match.group(1)), 1
+    return None
+
+
+def _count_hourly_log_occurrences(lines: list[str], *, needle: str) -> dict[int, int]:
+    buckets: dict[int, int] = {}
+    for line in lines or []:
+        if needle not in line:
+            continue
+        match = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z', str(line))
+        if not match:
+            continue
+        try:
+            ts_val = int(datetime.strptime(match.group(1), '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc).timestamp())
+        except Exception:
+            continue
+        hour = ts_val // COUNT_HISTORY_STEP_SECONDS
+        buckets[hour] = buckets.get(hour, 0) + 1
+    return buckets
+
+
+def _shell_quote(value: str) -> str:
+    return "'" + str(value or '').replace("'", "'\"'\"'") + "'"
 
 
 def build_alert_snapshot(*,
@@ -243,6 +321,27 @@ def _cpu_history_decode(value: int) -> float | None:
     return round((encoded - 1) * CPU_HISTORY_RESOLUTION_PCT, 1)
 
 
+def _bot_metric_history_encode(value: Any, *, confirmed: bool, resolution: float, max_value: float) -> int:
+    if not confirmed:
+        return 0
+    try:
+        numeric = float(value)
+    except Exception:
+        return 0
+    numeric = max(0.0, min(numeric, max_value))
+    return max(1, min(255, int(round(numeric / resolution)) + 1))
+
+
+def _bot_metric_history_decode(value: int, *, resolution: float) -> float | None:
+    try:
+        encoded = int(value)
+    except Exception:
+        return None
+    if encoded <= 0:
+        return None
+    return round((encoded - 1) * resolution, 1)
+
+
 class CpuHistoryStore:
     """Compact 24h per-minute CPU history persisted as a binary ringbuffer."""
 
@@ -317,7 +416,8 @@ class CpuHistoryStore:
             self._dirty = True
         return self._series[key], meta
 
-    def record(self, key: str, *, minute: int, value: Any, confirmed: bool) -> None:
+    def record(self, key: str, *, minute: int, value: Any, confirmed: bool,
+               same_minute_mode: str = "replace") -> None:
         key = str(key or "").strip()
         if not key:
             return
@@ -340,8 +440,11 @@ class CpuHistoryStore:
             return
         elif minute == last_minute:
             head = int(meta.get("head") or 0)
-            if buf[head] != encoded:
-                buf[head] = encoded
+            next_value = encoded
+            if same_minute_mode == "peak":
+                next_value = max(int(buf[head]), encoded)
+            if buf[head] != next_value:
+                buf[head] = next_value
                 changed = True
         else:
             delta = minute - last_minute
@@ -369,6 +472,7 @@ class CpuHistoryStore:
             self._dirty = True
 
     def build_payload(self, key: str, *, hostname: str, bot_name: str = "",
+                      metric: str = "cpu", source: str = "cpu_60s",
                       end_minute: int | None = None) -> dict[str, Any]:
         key = str(key or "").strip()
         self.load()
@@ -393,9 +497,10 @@ class CpuHistoryStore:
         return {
             "available": True,
             "scope": "bot" if bot_name else "host",
+            "metric": metric,
             "hostname": hostname,
             "bot_name": bot_name,
-            "source": "cpu_60s",
+            "source": source,
             "step_seconds": CPU_HISTORY_STEP_SECONDS,
             "window_minutes": CPU_HISTORY_WINDOW_MINUTES,
             "resolution_pct": CPU_HISTORY_RESOLUTION_PCT,
@@ -447,6 +552,501 @@ class CpuHistoryStore:
         tmp_json.write_text(json.dumps(index_payload, indent=4), encoding="utf-8")
         tmp_json.replace(self.index_path)
 
+
+class BotMetricHistoryStore(CpuHistoryStore):
+    """Compact 24h per-minute bot metric history for MB-based metrics."""
+
+    def __init__(self, root_dir: Path, stem: str, *, resolution: float, max_value: float):
+        super().__init__(root_dir, stem)
+        self._resolution = float(resolution)
+        self._max_value = float(max_value)
+
+    def record(self, key: str, *, minute: int, value: Any, confirmed: bool,
+               same_minute_mode: str = "replace") -> None:
+        key = str(key or "").strip()
+        if not key:
+            return
+        if minute <= 0:
+            minute = int(time.time() // CPU_HISTORY_STEP_SECONDS)
+        buf, meta = self._ensure_series(key)
+        encoded = _bot_metric_history_encode(
+            value,
+            confirmed=confirmed,
+            resolution=self._resolution,
+            max_value=self._max_value,
+        )
+        changed = False
+        meta_changed = False
+        last_minute = int(meta.get("last_minute") or 0)
+
+        if last_minute <= 0:
+            meta["head"] = 0
+            meta["last_minute"] = minute
+            buf[:] = b"\x00" * CPU_HISTORY_WINDOW_MINUTES
+            buf[0] = encoded
+            meta_changed = True
+            changed = True
+        elif minute < last_minute:
+            return
+        elif minute == last_minute:
+            head = int(meta.get("head") or 0)
+            next_value = encoded
+            if same_minute_mode == "peak":
+                next_value = max(int(buf[head]), encoded)
+            if buf[head] != next_value:
+                buf[head] = next_value
+                changed = True
+        else:
+            delta = minute - last_minute
+            if delta >= CPU_HISTORY_WINDOW_MINUTES:
+                buf[:] = b"\x00" * CPU_HISTORY_WINDOW_MINUTES
+                meta["head"] = 0
+                meta["last_minute"] = minute
+                buf[0] = encoded
+                meta_changed = True
+                changed = True
+            else:
+                head = int(meta.get("head") or 0)
+                for _ in range(delta):
+                    head = (head + 1) % CPU_HISTORY_WINDOW_MINUTES
+                    if buf[head] != 0:
+                        buf[head] = 0
+                        changed = True
+                meta["head"] = head
+                meta["last_minute"] = minute
+                meta_changed = True
+                if buf[head] != encoded:
+                    buf[head] = encoded
+                    changed = True
+        if changed or meta_changed:
+            self._dirty = True
+
+    def build_payload(self, key: str, *, hostname: str, bot_name: str = "",
+                      metric: str = "memory", source: str = "rss_mb",
+                      end_minute: int | None = None) -> dict[str, Any]:
+        key = str(key or "").strip()
+        self.load()
+        if end_minute is None or end_minute <= 0:
+            end_minute = int(time.time() // CPU_HISTORY_STEP_SECONDS)
+        start_minute = end_minute - CPU_HISTORY_WINDOW_MINUTES + 1
+        meta = self._meta.get(key)
+        buf = self._series.get(key)
+        points: list[float | None] = []
+        last_minute = int((meta or {}).get("last_minute") or 0)
+        head = int((meta or {}).get("head") or 0)
+        for minute in range(start_minute, end_minute + 1):
+            if not meta or buf is None or last_minute <= 0:
+                points.append(None)
+                continue
+            distance = last_minute - minute
+            if distance < 0 or distance >= CPU_HISTORY_WINDOW_MINUTES:
+                points.append(None)
+                continue
+            slot = (head - distance) % CPU_HISTORY_WINDOW_MINUTES
+            points.append(_bot_metric_history_decode(buf[slot], resolution=self._resolution))
+        return {
+            "available": True,
+            "scope": "bot",
+            "metric": metric,
+            "hostname": hostname,
+            "bot_name": bot_name,
+            "source": source,
+            "unit": "MB",
+            "step_seconds": CPU_HISTORY_STEP_SECONDS,
+            "window_minutes": CPU_HISTORY_WINDOW_MINUTES,
+            "resolution_mb": self._resolution,
+            "start_minute": start_minute,
+            "end_minute": end_minute,
+            "last_minute": last_minute,
+            "series_exists": meta is not None,
+            "points": points,
+        }
+
+
+class BotCountHistoryStore:
+    """Persistent 4-week per-hour bot counter history with daily UTC aggregates."""
+
+    def __init__(self, root_dir: Path, stem: str):
+        self.root_dir = root_dir
+        self.bin_path = root_dir / f"{stem}.bin"
+        self.index_path = root_dir / f"{stem}_index.json"
+        self._series: dict[str, bytearray] = {}
+        self._meta: dict[str, dict[str, int]] = {}
+        self._next_slot = 0
+        self._loaded = False
+        self._dirty = False
+        self._last_flush_ts = 0.0
+
+    def load(self) -> None:
+        if self._loaded:
+            return
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        raw_index: dict[str, Any] = {}
+        raw_binary = b""
+        try:
+            if self.index_path.exists():
+                loaded = json.loads(self.index_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    raw_index = loaded
+        except Exception as exc:
+            _log(SERVICE, f"[history] Failed to load {self.index_path.name}: {exc}", level="WARNING")
+        try:
+            if self.bin_path.exists():
+                raw_binary = self.bin_path.read_bytes()
+        except Exception as exc:
+            _log(SERVICE, f"[history] Failed to load {self.bin_path.name}: {exc}", level="WARNING")
+
+        series_meta = raw_index.get("series") or {}
+        if not isinstance(series_meta, dict):
+            series_meta = {}
+        for key, meta in series_meta.items():
+            if not isinstance(key, str) or not isinstance(meta, dict):
+                continue
+            slot = int(meta.get("slot") or 0)
+            head = int(meta.get("head") or 0)
+            last_hour = int(meta.get("last_hour") or 0)
+            if slot < 0 or head < 0 or head >= COUNT_HISTORY_WINDOW_HOURS:
+                continue
+            start = slot * COUNT_HISTORY_WINDOW_HOURS
+            end = start + COUNT_HISTORY_WINDOW_HOURS
+            buf = bytearray(COUNT_HISTORY_WINDOW_HOURS)
+            chunk = raw_binary[start:end]
+            if chunk:
+                buf[: min(len(chunk), COUNT_HISTORY_WINDOW_HOURS)] = chunk[:COUNT_HISTORY_WINDOW_HOURS]
+            self._series[key] = buf
+            self._meta[key] = {
+                "slot": slot,
+                "head": head,
+                "last_hour": max(last_hour, 0),
+            }
+            self._next_slot = max(self._next_slot, slot + 1)
+        self._loaded = True
+
+    def _ensure_series(self, key: str) -> tuple[bytearray, dict[str, int]]:
+        self.load()
+        meta = self._meta.get(key)
+        if meta is None:
+            meta = {
+                "slot": self._next_slot,
+                "head": 0,
+                "last_hour": 0,
+            }
+            self._next_slot += 1
+            self._meta[key] = meta
+            self._series[key] = bytearray(COUNT_HISTORY_WINDOW_HOURS)
+            self._dirty = True
+        return self._series[key], meta
+
+    def set_count(self, key: str, *, hour: int, value: int) -> None:
+        key = str(key or "").strip()
+        if not key or hour <= 0:
+            return
+        buf, meta = self._ensure_series(key)
+        value = max(0, min(255, int(value)))
+        changed = False
+        meta_changed = False
+        last_hour = int(meta.get("last_hour") or 0)
+
+        if last_hour <= 0:
+            meta["head"] = 0
+            meta["last_hour"] = hour
+            buf[:] = b"\x00" * COUNT_HISTORY_WINDOW_HOURS
+            buf[0] = value
+            changed = True
+            meta_changed = True
+        elif hour < last_hour:
+            distance = last_hour - hour
+            if distance >= COUNT_HISTORY_WINDOW_HOURS:
+                return
+            slot = (int(meta.get("head") or 0) - distance) % COUNT_HISTORY_WINDOW_HOURS
+            if buf[slot] != value:
+                buf[slot] = value
+                changed = True
+        elif hour == last_hour:
+            head = int(meta.get("head") or 0)
+            if buf[head] != value:
+                buf[head] = value
+                changed = True
+        else:
+            delta = hour - last_hour
+            if delta >= COUNT_HISTORY_WINDOW_HOURS:
+                buf[:] = b"\x00" * COUNT_HISTORY_WINDOW_HOURS
+                meta["head"] = 0
+                meta["last_hour"] = hour
+                buf[0] = value
+                changed = True
+                meta_changed = True
+            else:
+                head = int(meta.get("head") or 0)
+                for _ in range(delta):
+                    head = (head + 1) % COUNT_HISTORY_WINDOW_HOURS
+                    if buf[head] != 0:
+                        buf[head] = 0
+                        changed = True
+                meta["head"] = head
+                meta["last_hour"] = hour
+                meta_changed = True
+                if buf[head] != value:
+                    buf[head] = value
+                    changed = True
+        if changed or meta_changed:
+            self._dirty = True
+
+    def build_payload(self, key: str, *, hostname: str, bot_name: str = "",
+                      metric: str = "errors", source: str = "passivbot.log",
+                      end_hour: int | None = None) -> dict[str, Any]:
+        key = str(key or "").strip()
+        self.load()
+        if end_hour is None or end_hour <= 0:
+            end_hour = int(time.time() // COUNT_HISTORY_STEP_SECONDS)
+        start_hour = end_hour - COUNT_HISTORY_WINDOW_HOURS + 1
+        meta = self._meta.get(key)
+        buf = self._series.get(key)
+        points: list[int | None] = []
+        last_hour = int((meta or {}).get("last_hour") or 0)
+        head = int((meta or {}).get("head") or 0)
+        daily_buckets: dict[int, int] = {}
+        for hour in range(start_hour, end_hour + 1):
+            value = None
+            if meta and buf is not None and last_hour > 0:
+                distance = last_hour - hour
+                if 0 <= distance < COUNT_HISTORY_WINDOW_HOURS:
+                    slot = (head - distance) % COUNT_HISTORY_WINDOW_HOURS
+                    value = int(buf[slot])
+            points.append(value)
+            if value is not None:
+                day = hour // 24
+                daily_buckets[day] = daily_buckets.get(day, 0) + value
+        daily_points = []
+        start_day = start_hour // 24
+        end_day = end_hour // 24
+        for day in range(start_day, end_day + 1):
+            daily_points.append(daily_buckets.get(day, 0))
+        total_count = sum(value for value in points if isinstance(value, int))
+        return {
+            "available": True,
+            "scope": "bot",
+            "metric": metric,
+            "hostname": hostname,
+            "bot_name": bot_name,
+            "source": source,
+            "step_seconds": COUNT_HISTORY_STEP_SECONDS,
+            "window_hours": COUNT_HISTORY_WINDOW_HOURS,
+            "start_hour": start_hour,
+            "end_hour": end_hour,
+            "last_hour": last_hour,
+            "series_exists": meta is not None,
+            "timezone_basis": "UTC",
+            "points": points,
+            "total_count": total_count,
+            "daily_points": daily_points,
+            "daily_step_seconds": 86400,
+            "daily_start_day": start_day,
+            "daily_end_day": end_day,
+        }
+
+    def maybe_flush(self, *, force: bool = False, now_ts: float | None = None) -> None:
+        self.load()
+        if not self._dirty:
+            return
+        now_ts = float(now_ts or time.time())
+        if not force and (now_ts - self._last_flush_ts) < CPU_HISTORY_FLUSH_INTERVAL:
+            return
+        self._flush()
+        self._last_flush_ts = now_ts
+        self._dirty = False
+
+    def _flush(self) -> None:
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        slot_count = max(self._next_slot, 0)
+        payload = bytearray(slot_count * COUNT_HISTORY_WINDOW_HOURS)
+        for key, meta in self._meta.items():
+            slot = int(meta.get("slot") or 0)
+            start = slot * COUNT_HISTORY_WINDOW_HOURS
+            end = start + COUNT_HISTORY_WINDOW_HOURS
+            buf = self._series.get(key) or bytearray(COUNT_HISTORY_WINDOW_HOURS)
+            payload[start:end] = bytes(buf[:COUNT_HISTORY_WINDOW_HOURS])
+        index_payload = {
+            "version": COUNT_HISTORY_VERSION,
+            "window_hours": COUNT_HISTORY_WINDOW_HOURS,
+            "step_seconds": COUNT_HISTORY_STEP_SECONDS,
+            "series": {
+                key: {
+                    "slot": int(meta.get("slot") or 0),
+                    "head": int(meta.get("head") or 0),
+                    "last_hour": int(meta.get("last_hour") or 0),
+                }
+                for key, meta in sorted(self._meta.items())
+            },
+        }
+        tmp_bin = self.bin_path.with_suffix(".bin.tmp")
+        tmp_json = self.index_path.with_suffix(".json.tmp")
+        tmp_bin.write_bytes(bytes(payload))
+        tmp_bin.replace(self.bin_path)
+        tmp_json.write_text(json.dumps(index_payload, indent=4), encoding="utf-8")
+        tmp_json.replace(self.index_path)
+
+
+class BotPnlHistoryStore:
+    """Persistent bot PNL history keyed by bot name with UTC daily aggregates."""
+
+    def __init__(self, root_dir: Path, stem: str):
+        self.root_dir = root_dir
+        self.data_path = root_dir / f"{stem}.json"
+        self._loaded = False
+        self._dirty = False
+        self._last_flush_ts = 0.0
+        self._series: dict[str, dict[str, Any]] = {}
+
+    def load(self) -> None:
+        if self._loaded:
+            return
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            if self.data_path.exists():
+                loaded = json.loads(self.data_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    for bot_name, payload in loaded.items():
+                        if not isinstance(bot_name, str) or not isinstance(payload, dict):
+                            continue
+                        days = payload.get("days") or {}
+                        if not isinstance(days, dict):
+                            days = {}
+                        normalized_days: dict[str, dict[str, Any]] = {}
+                        for day, entry in days.items():
+                            if not isinstance(entry, dict):
+                                continue
+                            normalized_days[str(day)] = {
+                                "pnl": float(entry.get("pnl") or 0.0),
+                                "fills": int(entry.get("fills") or 0),
+                            }
+                        self._series[bot_name] = {
+                            "days": normalized_days,
+                            "last_fill_ts": int(payload.get("last_fill_ts") or 0),
+                        }
+        except Exception as exc:
+            _log(SERVICE, f"[history] Failed to load {self.data_path.name}: {exc}", level="WARNING")
+        self._loaded = True
+
+    def _ensure_bot(self, bot_name: str) -> dict[str, Any]:
+        self.load()
+        name = str(bot_name or '').strip()
+        payload = self._series.get(name)
+        if payload is None:
+            payload = {"days": {}, "last_fill_ts": 0}
+            self._series[name] = payload
+            self._dirty = True
+        return payload
+
+    def add_day_values(self, bot_name: str, *, day: int, pnl: float, fills: int) -> bool:
+        name = str(bot_name or '').strip()
+        if not name or day <= 0:
+            return False
+        payload = self._ensure_bot(name)
+        days = payload["days"]
+        entry = days.get(str(day))
+        if not isinstance(entry, dict):
+            entry = {"pnl": 0.0, "fills": 0}
+            days[str(day)] = entry
+        entry["pnl"] = float(entry.get("pnl") or 0.0) + float(pnl or 0.0)
+        entry["fills"] = int(entry.get("fills") or 0) + int(fills or 0)
+        self._dirty = True
+        return True
+
+    def set_last_fill_ts(self, bot_name: str, ts_val: int) -> bool:
+        name = str(bot_name or '').strip()
+        if not name or ts_val <= 0:
+            return False
+        payload = self._ensure_bot(name)
+        if ts_val <= int(payload.get("last_fill_ts") or 0):
+            return False
+        payload["last_fill_ts"] = int(ts_val)
+        self._dirty = True
+        return True
+
+    def get_last_fill_ts(self, bot_name: str) -> int:
+        self.load()
+        payload = self._series.get(str(bot_name or '').strip()) or {}
+        return int(payload.get("last_fill_ts") or 0)
+
+    def get_total(self, bot_name: str) -> tuple[float, int]:
+        self.load()
+        payload = self._series.get(str(bot_name or '').strip()) or {}
+        days = payload.get("days") or {}
+        total_pnl = 0.0
+        total_fills = 0
+        for entry in days.values():
+            if not isinstance(entry, dict):
+                continue
+            total_pnl += float(entry.get("pnl") or 0.0)
+            total_fills += int(entry.get("fills") or 0)
+        return total_pnl, total_fills
+
+    def build_payload(self, bot_name: str, *, hostname: str, metric: str = "pnl", source: str = "passivbot.log") -> dict[str, Any]:
+        name = str(bot_name or '').strip()
+        self.load()
+        payload = self._series.get(name) or {"days": {}, "last_fill_ts": 0}
+        raw_days = payload.get("days") or {}
+        day_keys: list[int] = []
+        for key in raw_days.keys():
+            try:
+                day_keys.append(int(key))
+            except Exception:
+                continue
+        day_keys.sort()
+        points: list[float] = []
+        cumulative_points: list[float] = []
+        fills_points: list[int] = []
+        total = 0.0
+        total_fills = 0
+        best_day_pnl = None
+        worst_day_pnl = None
+        for day in day_keys:
+            entry = raw_days.get(str(day)) or {}
+            day_pnl = float(entry.get("pnl") or 0.0)
+            day_fills = int(entry.get("fills") or 0)
+            total += day_pnl
+            total_fills += day_fills
+            points.append(day_pnl)
+            cumulative_points.append(total)
+            fills_points.append(day_fills)
+            best_day_pnl = day_pnl if best_day_pnl is None else max(best_day_pnl, day_pnl)
+            worst_day_pnl = day_pnl if worst_day_pnl is None else min(worst_day_pnl, day_pnl)
+        return {
+            "available": True,
+            "scope": "bot",
+            "metric": metric,
+            "hostname": hostname,
+            "bot_name": name,
+            "source": source,
+            "timezone_basis": "UTC",
+            "series_exists": bool(day_keys),
+            "days": day_keys,
+            "start_day": day_keys[0] if day_keys else 0,
+            "end_day": day_keys[-1] if day_keys else 0,
+            "points": points,
+            "cumulative_points": cumulative_points,
+            "fills_points": fills_points,
+            "last_fill_ts": int(payload.get("last_fill_ts") or 0),
+            "total_pnl": total,
+            "total_fills": total_fills,
+            "best_day_pnl": best_day_pnl,
+            "worst_day_pnl": worst_day_pnl,
+        }
+
+    def maybe_flush(self, *, force: bool = False, now_ts: float | None = None) -> None:
+        self.load()
+        if not self._dirty:
+            return
+        now_ts = float(now_ts or time.time())
+        if not force and (now_ts - self._last_flush_ts) < CPU_HISTORY_FLUSH_INTERVAL:
+            return
+        tmp_path = self.data_path.with_suffix('.json.tmp')
+        tmp_path.write_text(json.dumps(self._series, indent=4), encoding='utf-8')
+        tmp_path.replace(self.data_path)
+        self._last_flush_ts = now_ts
+        self._dirty = False
+
 # ── Remote scripts (same as old realtime_collector) ─────────
 
 MONITOR_AGENT_SCRIPT = r'''python3 -u -c "
@@ -477,6 +1077,11 @@ def rmem():
     su = st - sf
     sp = round(su / st * 100, 1) if st else 0
     return [mt, ma, mp, mu], [st, su, sf, sp]
+def peak_pct(samples):
+    vals = [float(v) for (_, v) in samples if v is not None]
+    if not vals:
+        return 0.0
+    return round(max(vals), 1)
 def _ppid_watcher():
     while True:
         time.sleep(3)
@@ -489,6 +1094,9 @@ _bots_cpu_history = {}
 _bots = {}
 pi, pt = rcpu()
 _cpu_60s_history = [(time.time(), pi, pt)]
+_mem_60s_history = []
+_disk_60s_history = []
+_swap_60s_history = []
 time.sleep(1)
 while True:
     try:
@@ -519,6 +1127,20 @@ while True:
         dused = s.f_frsize * (s.f_blocks - s.f_bfree)
         dfree = s.f_frsize * s.f_bavail
         dpct = round(dused / dtot * 100, 1) if dtot else 0
+        _mem_60s_history.append((now, mem[2]))
+        _disk_60s_history.append((now, dpct))
+        if swap[0] > 0:
+            _swap_60s_history.append((now, swap[3]))
+        cutoff = now - 62
+        _mem_60s_history = [sample for sample in _mem_60s_history if sample[0] >= cutoff]
+        _disk_60s_history = [sample for sample in _disk_60s_history if sample[0] >= cutoff]
+        _swap_60s_history = [sample for sample in _swap_60s_history if sample[0] >= cutoff]
+        mem_60s_window = round(now - _mem_60s_history[0][0], 1) if _mem_60s_history else 0.0
+        disk_60s_window = round(now - _disk_60s_history[0][0], 1) if _disk_60s_history else 0.0
+        swap_60s_window = round(now - _swap_60s_history[0][0], 1) if _swap_60s_history else 0.0
+        mem_60s_peak = peak_pct(_mem_60s_history)
+        disk_60s_peak = peak_pct(_disk_60s_history)
+        swap_60s_peak = peak_pct(_swap_60s_history)
         bots = []
         try:
             now = time.time()
@@ -597,7 +1219,7 @@ while True:
                     _bots.pop(dead, None)
         except Exception:
             pass
-        print(json.dumps({'ts': time.time(), 'cpu': cpu, 'cpu_60s': cpu_60s, 'cpu_60s_window': cpu_60s_window, 'cpu_60s_samples': len(_cpu_60s_history), 'mem': mem, 'disk': [dtot, dused, dfree, dpct], 'swap': swap, 'bots': bots}), flush=True)
+        print(json.dumps({'ts': time.time(), 'cpu': cpu, 'cpu_60s': cpu_60s, 'cpu_60s_window': cpu_60s_window, 'cpu_60s_samples': len(_cpu_60s_history), 'mem_60s_peak': mem_60s_peak, 'mem_60s_window': mem_60s_window, 'disk_60s_peak': disk_60s_peak, 'disk_60s_window': disk_60s_window, 'swap_60s_peak': swap_60s_peak, 'swap_60s_window': swap_60s_window, 'mem': mem, 'disk': [dtot, dused, dfree, dpct], 'swap': swap, 'bots': bots}), flush=True)
     except Exception:
         pass
     time.sleep(1)
@@ -605,13 +1227,15 @@ while True:
 
 INSTANCE_COLLECT_SCRIPT = r'''python3 -u -c "
 import json, os, re, subprocess, time
-from datetime import datetime
+from datetime import datetime, timezone
 
 HOME = os.path.expanduser('~')
 PBGDIR = os.path.join(HOME, 'software/pbgui')
 PB7DIR = os.path.join(HOME, 'software/pb7')
-TODAY = datetime.utcnow().strftime('%Y-%m-%d')
-YESTERDAY = datetime.utcfromtimestamp(time.time() - 86400).strftime('%Y-%m-%d')
+TODAY_START = int(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+YESTERDAY_START = TODAY_START - 86400
+TODAY = datetime.fromtimestamp(TODAY_START, timezone.utc).strftime('%Y-%m-%d')
+YESTERDAY = datetime.fromtimestamp(YESTERDAY_START, timezone.utc).strftime('%Y-%m-%d')
 
 # PNL regex (matches PBRun patterns)
 FILL_SUMMARY_RE = re.compile(r'\[fill\]\s+(\d+)\s+fills,\s+pnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\s+\w+')
@@ -619,11 +1243,52 @@ FILL_PNL_RE = re.compile(r'\bpnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\b')
 
 # shared helpers (used by both counting and dump mode)
 
+def _utc_ts(ts_str):
+    return int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc).timestamp())
+
+def _parse_log_timestamp(line):
+    mts = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z', str(line or ''))
+    if not mts:
+        return None
+    try:
+        return _utc_ts(mts.group(1))
+    except Exception:
+        return None
+
+def _utc_day_from_ts(ts_val):
+    return int(int(ts_val) // 86400)
+
+def _extract_fill_summary(line):
+    text = str(line or '')
+    if '[fill]' not in text:
+        return None
+    m = FILL_SUMMARY_RE.search(text)
+    if m:
+        return float(m.group(2)), int(m.group(1))
+    m = FILL_PNL_RE.search(text)
+    if m:
+        return float(m.group(1)), 1
+    return None
+
+def _count_hourly_occurrences(lines, needle):
+    buckets = {}
+    for line in lines or []:
+        if needle not in line:
+            continue
+        mts = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z', str(line))
+        if not mts:
+            continue
+        try:
+            hour = _utc_ts(mts.group(1)) // 3600
+        except Exception:
+            continue
+        buckets[hour] = buckets.get(hour, 0) + 1
+    return buckets
+
 def _process_pb7_line(line, mode, bc=None, lines_out=None, last_day=None):
     if ' ERROR ' in line:
         if mode == 'count' and bc is not None:
             if last_day == 'today': bc['et'] += 1
-            elif last_day == 'yesterday': bc['ey'] += 1
         elif mode == 'dump' and lines_out is not None:
             lines_out.append(line.rstrip('\n'))
     if mode == 'count' and bc is not None:
@@ -633,13 +1298,11 @@ def _process_pb7_line(line, mode, bc=None, lines_out=None, last_day=None):
         if m:
             c = int(m.group(1)); pnl = float(m.group(2))
             if last_day == 'today': bc['ct'] += c; bc['pt'] += pnl
-            elif last_day == 'yesterday': bc['cy'] += c; bc['py'] += pnl
         else:
             m = FILL_PNL_RE.search(line)
             if m:
                 pnl = float(m.group(1))
                 if last_day == 'today': bc['ct'] += 1; bc['pt'] += pnl
-                elif last_day == 'yesterday': bc['cy'] += 1; bc['py'] += pnl
 
 def _read_pb7_tail(fp, offset, today_start, yesterday_start, bc):
     # Incrementally read one pb7 log file from offset to EOF.
@@ -655,7 +1318,7 @@ def _read_pb7_tail(fp, offset, today_start, yesterday_start, bc):
                 if mts:
                     ts_str = mts.group(1).rstrip('Z')
                     try:
-                        ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
+                        ts_val = _utc_ts(ts_str)
                         if ts_val >= today_start: last_day = 'today'
                         elif ts_val >= yesterday_start: last_day = 'yesterday'
                         else: last_day = None
@@ -680,14 +1343,13 @@ def _read_err_tail(fp, offset, today_start, yesterday_start, bc):
                 if mts:
                     ts_str = mts.group(1).rstrip('Z')
                     try:
-                        ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
+                        ts_val = _utc_ts(ts_str)
                         if ts_val >= today_start: last_day = 'today'
                         elif ts_val >= yesterday_start: last_day = 'yesterday'
                         else: last_day = None
                     except: pass
                 if 'Traceback' in line:
                     if last_day == 'today': bc['tt'] += 1
-                    elif last_day == 'yesterday': bc['ty'] += 1
             return f.tell()
     except Exception:
         pass
@@ -715,7 +1377,7 @@ def _read_pb7_file(fp, mode, today_start, yesterday_start, bc=None, lines_out=No
                 if mts:
                     ts_str = mts.group(1).rstrip('Z')
                     try:
-                        ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
+                        ts_val = _utc_ts(ts_str)
                         if earliest is None or ts_val < earliest:
                             earliest = ts_val
                         if mode == 'dump' and ts_val >= (target_end or ts_val + 1):
@@ -744,7 +1406,7 @@ def _read_err_file(fp, mode, today_start, yesterday_start, bc=None):
                 if mts:
                     ts_str = mts.group(1).rstrip('Z')
                     try:
-                        ts_val = int(datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S').timestamp())
+                        ts_val = _utc_ts(ts_str)
                         if ts_val >= today_start: last_day = 'today'
                         elif ts_val >= yesterday_start: last_day = 'yesterday'
                         else: last_day = None
@@ -752,7 +1414,6 @@ def _read_err_file(fp, mode, today_start, yesterday_start, bc=None):
                 if 'Traceback' in line and last_day:
                     if mode == 'count' and bc is not None:
                         if last_day == 'today': bc['tt'] += 1
-                        else: bc['ty'] += 1
     except Exception: pass
 
 # cache from master
@@ -816,8 +1477,8 @@ if dump_mode:
                 pb7_old_files.append(fp)
         except Exception: pass
 
-        today_start = int(datetime.strptime(TODAY + 'T00:00:00', '%Y-%m-%dT%H:%M:%S').timestamp())
-        yesterday_start = today_start - 86400
+        today_start = TODAY_START
+        yesterday_start = YESTERDAY_START
         if dump_bucket == 'today':
             target_start = today_start
             target_end = today_start + 86400
@@ -855,7 +1516,7 @@ if dump_mode:
                             ts_val = None
                             if mts:
                                 try:
-                                    ts_val = int(datetime.strptime(mts.group(1).rstrip('Z'), '%Y-%m-%dT%H:%M:%S').timestamp())
+                                    ts_val = _utc_ts(mts.group(1).rstrip('Z'))
                                 except: pass
                             if ts_val is not None and ts_val != last_ts:
                                 flush_tb_entry()
@@ -894,12 +1555,114 @@ if dump_mode:
     print(json.dumps({'lines': lines_out}))
     exit(0)
 
+# ── count-history rebuild mode: return UTC hourly buckets for one bot ──
+rebuild_mode = os.environ.get('PBGUI_REBUILD_COUNTS')
+if rebuild_mode:
+    rebuild_bot = os.environ.get('PBGUI_REBUILD_BOT', '')
+    rebuild_from_hour = int(os.environ.get('PBGUI_REBUILD_FROM_HOUR', '0') or 0)
+    rebuild_to_hour = int(os.environ.get('PBGUI_REBUILD_TO_HOUR', '0') or 0)
+    cfg_dir = running.get(rebuild_bot)
+    result = {'bot': rebuild_bot, 'from_hour': rebuild_from_hour, 'to_hour': rebuild_to_hour, 'errors': {}, 'tracebacks': {}}
+    if cfg_dir and rebuild_to_hour > 0 and rebuild_from_hour > 0 and rebuild_from_hour <= rebuild_to_hour:
+        pb7_log = os.path.join(PB7DIR, 'logs', f'{rebuild_bot}.log')
+        err_log = os.path.join(cfg_dir, 'passivbot_err.log')
+        old_err = os.path.join(cfg_dir, 'passivbot_err.log.old')
+
+        pb7_old_files = []
+        try:
+            import glob as _glob4
+            log_real = os.path.realpath(pb7_log) if os.path.isfile(pb7_log) else ''
+            for fp in sorted(
+                _glob4.glob(os.path.join(PB7DIR, 'logs', '*' + rebuild_bot + '*.log')),
+                key=os.path.getmtime, reverse=True
+            ):
+                if not os.path.isfile(fp): continue
+                if os.path.islink(fp): continue
+                if log_real and os.path.realpath(fp) == log_real: continue
+                pb7_old_files.append(fp)
+        except Exception:
+            pass
+
+        files_by_metric = {
+            'errors': list(pb7_old_files) + ([pb7_log] if os.path.isfile(pb7_log) else []),
+            'tracebacks': [fp for fp in (old_err, err_log) if os.path.isfile(fp)],
+        }
+        needles = {'errors': ' ERROR ', 'tracebacks': 'Traceback'}
+        for metric, files in files_by_metric.items():
+            lines = []
+            for fp in files:
+                try:
+                    with open(fp, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines.extend(f.read().splitlines())
+                except Exception:
+                    pass
+            buckets = _count_hourly_occurrences(lines, needles[metric])
+            result[metric] = {
+                str(hour): int(buckets.get(hour, 0))
+                for hour in range(rebuild_from_hour, rebuild_to_hour + 1)
+            }
+    print(json.dumps(result))
+    exit(0)
+
+rebuild_pnl_mode = os.environ.get('PBGUI_REBUILD_PNL')
+if rebuild_pnl_mode:
+    rebuild_bot = os.environ.get('PBGUI_REBUILD_BOT', '')
+    rebuild_since_ts = int(os.environ.get('PBGUI_REBUILD_PNL_SINCE_TS', '0') or 0)
+    cfg_dir = running.get(rebuild_bot)
+    result = {'bot': rebuild_bot, 'since_ts': rebuild_since_ts, 'days': {}, 'last_fill_ts': 0}
+    if cfg_dir:
+        pb7_log = os.path.join(PB7DIR, 'logs', f'{rebuild_bot}.log')
+        pb7_old_files = []
+        try:
+            import glob as _glob5
+            log_real = os.path.realpath(pb7_log) if os.path.isfile(pb7_log) else ''
+            for fp in sorted(
+                _glob5.glob(os.path.join(PB7DIR, 'logs', '*' + rebuild_bot + '*.log')),
+                key=os.path.getmtime,
+            ):
+                if not os.path.isfile(fp):
+                    continue
+                if os.path.islink(fp):
+                    continue
+                if log_real and os.path.realpath(fp) == log_real:
+                    continue
+                pb7_old_files.append(fp)
+        except Exception:
+            pass
+        files = list(pb7_old_files) + ([pb7_log] if os.path.isfile(pb7_log) else [])
+        days = {}
+        last_fill_ts = 0
+        for fp in files:
+            try:
+                with open(fp, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        fill = _extract_fill_summary(line)
+                        if fill is None:
+                            continue
+                        ts_val = _parse_log_timestamp(line)
+                        if ts_val is None or ts_val <= rebuild_since_ts:
+                            continue
+                        day = str(_utc_day_from_ts(ts_val))
+                        entry = days.get(day)
+                        if entry is None:
+                            entry = {'pnl': 0.0, 'fills': 0}
+                            days[day] = entry
+                        entry['pnl'] += float(fill[0])
+                        entry['fills'] += int(fill[1])
+                        last_fill_ts = max(last_fill_ts, ts_val)
+            except Exception:
+                pass
+        result['days'] = days
+        result['last_fill_ts'] = last_fill_ts
+    print(json.dumps(result))
+    exit(0)
+
 monitors = []
 v7 = []
 new_cache = {'_version': EXPECTED_CACHE_VERSION}
 
-# collect old passivbot log files for sidebar selector
-old_bot_logs = {}
+# collect bot log files for sidebar selector and history rebuild
+bot_logs = {}
 try:
     log_dir = os.path.join(PB7DIR, 'logs')
     if os.path.isdir(log_dir):
@@ -916,7 +1679,7 @@ try:
                         matched_name = name
                         break
             if matched_name:
-                old_bot_logs.setdefault(matched_name, []).append(f'pb7/logs/{f}')
+                bot_logs.setdefault(matched_name, {'errors': [], 'tracebacks': [], 'sidebar': []})['sidebar'].append(f'pb7/logs/{f}')
         for name in running_names:
             cfg_dir = running.get(name, '')
             if not cfg_dir:
@@ -924,7 +1687,7 @@ try:
             for err_name in ('passivbot_err.log', 'passivbot_err.log.old'):
                 err_path = os.path.join(cfg_dir, err_name)
                 if os.path.isfile(err_path):
-                    old_bot_logs.setdefault(name, []).append(f'data/run_v7/{name}/{err_name}')
+                    bot_logs.setdefault(name, {'errors': [], 'tracebacks': [], 'sidebar': []})['sidebar'].append(f'data/run_v7/{name}/{err_name}')
 except Exception: pass
 
 for name, cfg_dir in sorted(running.items()):
@@ -966,10 +1729,10 @@ for name, cfg_dir in sorted(running.items()):
     # per-bot cache
     bc = dict(host_cache.get(name, {}))
     bc.setdefault('today', TODAY)
-    bc.setdefault('et', 0); bc.setdefault('ey', 0)
-    bc.setdefault('tt', 0); bc.setdefault('ty', 0)
-    bc.setdefault('ct', 0); bc.setdefault('cy', 0)
-    bc.setdefault('pt', 0.0); bc.setdefault('py', 0.0)
+    bc.setdefault('et', 0)
+    bc.setdefault('tt', 0)
+    bc.setdefault('ct', 0)
+    bc.setdefault('pt', 0.0)
     bc.setdefault('log_off', 0)
     bc.setdefault('log_fp', '')
     bc.setdefault('log_sig', '')
@@ -977,10 +1740,10 @@ for name, cfg_dir in sorted(running.items()):
 
     # day change
     if bc['today'] != TODAY:
-        bc['ey'] = bc['et']; bc['et'] = 0
-        bc['ty'] = bc['tt']; bc['tt'] = 0
-        bc['cy'] = bc['ct']; bc['ct'] = 0
-        bc['py'] = bc['pt']; bc['pt'] = 0.0
+        bc['et'] = 0
+        bc['tt'] = 0
+        bc['ct'] = 0
+        bc['pt'] = 0.0
         bc['today'] = TODAY
 
     # pb7 log (errors, PNL) — passivbot's own formatted output
@@ -1009,12 +1772,18 @@ for name, cfg_dir in sorted(running.items()):
     err_log = os.path.join(cfg_dir, 'passivbot_err.log')
     old_err = os.path.join(cfg_dir, 'passivbot_err.log.old')
 
+    bot_entry = bot_logs.setdefault(name, {'errors': [], 'tracebacks': [], 'sidebar': []})
+    bot_entry['errors'] = list(pb7_old_files)
+    if os.path.isfile(pb7_log):
+        bot_entry['errors'].append(pb7_log)
+    bot_entry['tracebacks'] = [fp for fp in (old_err, err_log) if os.path.isfile(fp)]
+
     bc.setdefault('log_off', 0)
     bc.setdefault('err_off', 0)
 
     first_run = name not in host_cache
-    today_start = int(datetime.strptime(TODAY + 'T00:00:00', '%Y-%m-%dT%H:%M:%S').timestamp())
-    yesterday_start = today_start - 86400
+    today_start = TODAY_START
+    yesterday_start = YESTERDAY_START
 
     if first_run:
         # errors/PNL: read old files until yesterday covered, then current log
@@ -1079,20 +1848,20 @@ for name, cfg_dir in sorted(running.items()):
         'u': name, 'p': '7', 'v': version, 'st': start_ts,
         'm': [0]*10, 'c': 0.0,
         'i': '', 'it': 0, 'iy': 0, 'e': '', 't': '',
-        'et': bc['et'], 'ey': bc['ey'],
-        'tt': bc['tt'], 'ty': bc['ty'],
-        'pt': bc['pt'], 'py': bc['py'],
-        'ct': bc['ct'], 'cy': bc['cy'],
+        'et': bc['et'],
+        'tt': bc['tt'],
+        'pt': bc['pt'],
+        'ct': bc['ct'],
     })
     new_cache[name] = {
         'today': bc['today'],
-        'et': bc['et'], 'ey': bc['ey'], 'tt': bc['tt'], 'ty': bc['ty'],
-        'ct': bc['ct'], 'cy': bc['cy'], 'pt': bc['pt'], 'py': bc['py'],
+        'et': bc['et'], 'tt': bc['tt'],
+        'ct': bc['ct'], 'pt': bc['pt'],
         'log_off': bc['log_off'], 'err_off': bc['err_off'], 'log_fp': bc['log_fp'], 'log_sig': bc['log_sig'], 'err_sig': bc['err_sig'],
     }
 
 print(json.dumps({'monitors': monitors, 'v7': v7, 'cache': new_cache,
-    'bot_logs': old_bot_logs}))
+    'bot_logs': bot_logs}))
 "'''
 
 
@@ -1349,8 +2118,32 @@ class VPSMonitor:
         self._monitor_cache: dict[str, dict[str, dict]] = {}
         self._state_snapshot_path = Path(PBGDIR) / 'data' / 'vps_monitor_state.json'
         history_dir = Path(PBGDIR) / 'data' / 'monitor_history'
-        self._host_cpu_history = CpuHistoryStore(history_dir, 'hosts_cpu_24h')
+        self._host_metric_history = {
+            'cpu': CpuHistoryStore(history_dir, 'hosts_cpu_24h'),
+            'memory': CpuHistoryStore(history_dir, 'hosts_memory_24h'),
+            'disk': CpuHistoryStore(history_dir, 'hosts_disk_24h'),
+            'swap': CpuHistoryStore(history_dir, 'hosts_swap_24h'),
+        }
         self._bot_cpu_history = CpuHistoryStore(history_dir, 'bots_cpu_24h')
+        self._bot_metric_history = {
+            'memory': BotMetricHistoryStore(
+                history_dir,
+                'bots_memory_24h',
+                resolution=BOT_MEMORY_HISTORY_RESOLUTION_MB,
+                max_value=BOT_MEMORY_HISTORY_MAX_MB,
+            ),
+            'swap': BotMetricHistoryStore(
+                history_dir,
+                'bots_swap_24h',
+                resolution=BOT_SWAP_HISTORY_RESOLUTION_MB,
+                max_value=BOT_SWAP_HISTORY_MAX_MB,
+            ),
+        }
+        self._bot_count_history = {
+            'errors': BotCountHistoryStore(history_dir, 'bots_errors_4w'),
+            'tracebacks': BotCountHistoryStore(history_dir, 'bots_tracebacks_4w'),
+        }
+        self._bot_pnl_history = BotPnlHistoryStore(history_dir, 'bots_pnl_history')
 
         # Debug logging
         self._debug_logging: Optional[bool] = None
@@ -1422,8 +2215,14 @@ class VPSMonitor:
         self.store.load_ui_settings()
         self._ini_watcher.start()
         self._load_monitor_cache()
-        self._host_cpu_history.load()
+        for store in self._host_metric_history.values():
+            store.load()
         self._bot_cpu_history.load()
+        for store in self._bot_metric_history.values():
+            store.load()
+        for store in self._bot_count_history.values():
+            store.load()
+        self._bot_pnl_history.load()
         self._save_state_snapshot()
 
         enabled = self.enabled_hosts
@@ -1474,8 +2273,14 @@ class VPSMonitor:
         self._tasks.clear()
         self._stream_tasks.clear()
         self._ini_watcher.stop()
-        self._host_cpu_history.maybe_flush(force=True)
+        for store in self._host_metric_history.values():
+            store.maybe_flush(force=True)
         self._bot_cpu_history.maybe_flush(force=True)
+        for store in self._bot_metric_history.values():
+            store.maybe_flush(force=True)
+        for store in self._bot_count_history.values():
+            store.maybe_flush(force=True)
+        self._bot_pnl_history.maybe_flush(force=True)
         await self.pool.disconnect_all()
         _log(SERVICE, "VPS monitor stopped")
 
@@ -1656,13 +2461,20 @@ class VPSMonitor:
                     data = json.loads(line)
                     metrics = SystemMetrics.from_json(data)
                     self.store.update_system(hostname, metrics)
-                    self._record_host_cpu_history(hostname, metrics)
+                    self._record_host_metric_history(hostname, metrics)
                     bots = data.get("bots")
                     if bots:
                         self.store.update_instances_live(hostname, bots)
                         self._record_bot_cpu_history(hostname, bots, metrics.timestamp)
-                    self._host_cpu_history.maybe_flush(now_ts=metrics.timestamp)
+                        self._record_bot_metric_history(hostname, bots, metrics.timestamp)
+                    for store in self._host_metric_history.values():
+                        store.maybe_flush(now_ts=metrics.timestamp)
                     self._bot_cpu_history.maybe_flush(now_ts=metrics.timestamp)
+                    for store in self._bot_metric_history.values():
+                        store.maybe_flush(now_ts=metrics.timestamp)
+                    for store in self._bot_count_history.values():
+                        store.maybe_flush(now_ts=metrics.timestamp)
+                    self._bot_pnl_history.maybe_flush(now_ts=metrics.timestamp)
                     self._save_state_snapshot()
                     self.store.update_stream_info(hostname, {
                         "alive": True,
@@ -1690,18 +2502,45 @@ class VPSMonitor:
             self.store.update_stream_info(hostname, {
                 "alive": False, "active": False, "error": None,
             })
-            self._host_cpu_history.maybe_flush(force=True)
+            for store in self._host_metric_history.values():
+                store.maybe_flush(force=True)
             self._bot_cpu_history.maybe_flush(force=True)
+            for store in self._bot_metric_history.values():
+                store.maybe_flush(force=True)
+            for store in self._bot_count_history.values():
+                store.maybe_flush(force=True)
+            self._bot_pnl_history.maybe_flush(force=True)
             self._save_state_snapshot()
             _log(SERVICE, f"[metrics] Stream ended for {hostname}")
 
-    def _record_host_cpu_history(self, hostname: str, metrics: SystemMetrics) -> None:
+    def _record_host_metric_history(self, hostname: str, metrics: SystemMetrics) -> None:
         minute = int((metrics.timestamp or time.time()) // CPU_HISTORY_STEP_SECONDS)
-        self._host_cpu_history.record(
+        self._host_metric_history['cpu'].record(
             hostname,
             minute=minute,
             value=metrics.cpu_60s,
             confirmed=float(metrics.cpu_60s_window or 0.0) >= 60.0,
+        )
+        self._host_metric_history['memory'].record(
+            hostname,
+            minute=minute,
+            value=metrics.mem_percent,
+            confirmed=metrics.mem_total > 0,
+            same_minute_mode='peak',
+        )
+        self._host_metric_history['disk'].record(
+            hostname,
+            minute=minute,
+            value=metrics.disk_percent,
+            confirmed=metrics.disk_total > 0,
+            same_minute_mode='peak',
+        )
+        self._host_metric_history['swap'].record(
+            hostname,
+            minute=minute,
+            value=metrics.swap_percent,
+            confirmed=metrics.swap_total > 0,
+            same_minute_mode='peak',
         )
 
     def _record_bot_cpu_history(self, hostname: str, bots: list[dict], timestamp: float) -> None:
@@ -1717,44 +2556,245 @@ class VPSMonitor:
                 confirmed=float(bot.get('cpu_60s_window') or 0.0) >= 60.0,
             )
 
+    def _record_bot_metric_history(self, hostname: str, bots: list[dict], timestamp: float) -> None:
+        minute = int((timestamp or time.time()) // CPU_HISTORY_STEP_SECONDS)
+        for bot in bots or []:
+            name = str(bot.get('name') or '').strip()
+            if not name:
+                continue
+            key = self._bot_history_key(hostname, name)
+            self._bot_metric_history['memory'].record(
+                key,
+                minute=minute,
+                value=bot.get('rss_mb'),
+                confirmed=float(bot.get('rss_mb') or 0.0) > 0.0,
+                same_minute_mode='peak',
+            )
+            self._bot_metric_history['swap'].record(
+                key,
+                minute=minute,
+                value=bot.get('swap_mb'),
+                confirmed=float(bot.get('swap_mb') or 0.0) > 0.0,
+                same_minute_mode='peak',
+            )
+
+    async def _rebuild_bot_count_history(self, hostname: str, bot_logs: dict[str, Any] | None) -> None:
+        if not hostname or not isinstance(bot_logs, dict):
+            return
+        now_hour = int(time.time() // COUNT_HISTORY_STEP_SECONDS)
+        min_hour = now_hour - COUNT_HISTORY_WINDOW_HOURS + 1
+        for bot_name, payload in bot_logs.items():
+            name = str(bot_name or '').strip()
+            if not name:
+                continue
+            key = self._bot_history_key(hostname, name)
+            rebuild_from_hour = now_hour
+            for metric in ('errors', 'tracebacks'):
+                store = self._bot_count_history[metric]
+                store.load()
+                meta = store._meta.get(key) or {}
+                last_hour = int(meta.get('last_hour') or 0)
+                metric_from_hour = max(min_hour, last_hour if last_hour > 0 else min_hour)
+                rebuild_from_hour = min(rebuild_from_hour, metric_from_hour)
+
+            if rebuild_from_hour > now_hour:
+                continue
+
+            cmd = (
+                f"PBGUI_REBUILD_COUNTS=1 PBGUI_REBUILD_BOT={_shell_quote(name)} "
+                f"PBGUI_REBUILD_FROM_HOUR={rebuild_from_hour} PBGUI_REBUILD_TO_HOUR={now_hour} "
+                f"{INSTANCE_COLLECT_SCRIPT}"
+            )
+            result = await self.pool.run(hostname, cmd, timeout=90)
+            if not result or result.exit_status != 0 or not result.stdout:
+                continue
+            try:
+                parsed = json.loads(result.stdout.strip())
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            for metric in ('errors', 'tracebacks'):
+                store = self._bot_count_history[metric]
+                buckets = parsed.get(metric) or {}
+                if not isinstance(buckets, dict):
+                    buckets = {}
+                for hour in range(rebuild_from_hour, now_hour + 1):
+                    value = buckets.get(str(hour), buckets.get(hour, 0))
+                    store.set_count(key, hour=hour, value=int(value or 0))
+                store.maybe_flush(now_ts=time.time())
+
+    async def _rebuild_bot_pnl_history(self, hostname: str, bot_logs: dict[str, Any] | None) -> None:
+        if not hostname or not isinstance(bot_logs, dict):
+            return
+        for bot_name in bot_logs.keys():
+            name = str(bot_name or '').strip()
+            if not name:
+                continue
+            last_fill_ts = self._bot_pnl_history.get_last_fill_ts(name)
+            cmd = (
+                f"PBGUI_REBUILD_PNL=1 PBGUI_REBUILD_BOT={_shell_quote(name)} "
+                f"PBGUI_REBUILD_PNL_SINCE_TS={int(last_fill_ts)} {INSTANCE_COLLECT_SCRIPT}"
+            )
+            result = await self.pool.run(hostname, cmd, timeout=90)
+            if not result or result.exit_status != 0 or not result.stdout:
+                continue
+            try:
+                parsed = json.loads(result.stdout.strip())
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            changed = False
+            days = parsed.get('days') or {}
+            if isinstance(days, dict):
+                for day_key, entry in days.items():
+                    if not isinstance(entry, dict):
+                        continue
+                    try:
+                        day = int(day_key)
+                    except Exception:
+                        continue
+                    changed = self._bot_pnl_history.add_day_values(
+                        name,
+                        day=day,
+                        pnl=float(entry.get('pnl') or 0.0),
+                        fills=int(entry.get('fills') or 0),
+                    ) or changed
+            changed = self._bot_pnl_history.set_last_fill_ts(name, int(parsed.get('last_fill_ts') or 0)) or changed
+            if changed:
+                self._bot_pnl_history.maybe_flush(now_ts=time.time())
+
     def _bot_history_key(self, hostname: str, bot_name: str) -> str:
         return f"{hostname}:{bot_name}"
 
-    def get_host_cpu_history(self, hostname: str) -> dict[str, Any]:
+    def _bot_pnl_history_key(self, bot_name: str) -> str:
+        return str(bot_name or '').strip()
+
+    def _bot_count_total(self, hostname: str, bot_name: str, metric: str) -> int:
         hostname = str(hostname or '').strip()
-        if not hostname:
+        bot_name = str(bot_name or '').strip()
+        metric = str(metric or '').strip().lower()
+        store = self._bot_count_history.get(metric)
+        if not hostname or not bot_name or store is None:
+            return 0
+        payload = store.build_payload(
+            self._bot_history_key(hostname, bot_name),
+            hostname=hostname,
+            bot_name=bot_name,
+            metric=metric,
+            source=BOT_HISTORY_SOURCES.get(metric, ''),
+        )
+        return int(payload.get('total_count') or 0)
+
+    def _bot_pnl_total(self, bot_name: str) -> tuple[float, int]:
+        return self._bot_pnl_history.get_total(self._bot_pnl_history_key(bot_name))
+
+    def get_host_cpu_history(self, hostname: str) -> dict[str, Any]:
+        return self.get_host_metric_history(hostname, 'cpu')
+
+    def get_host_metric_history(self, hostname: str, metric: str) -> dict[str, Any]:
+        hostname = str(hostname or '').strip()
+        metric = str(metric or 'cpu').strip().lower()
+        source = HOST_HISTORY_SOURCES.get(metric, HOST_HISTORY_SOURCES['cpu'])
+        store = self._host_metric_history.get(metric)
+        if not hostname or store is None:
             return {
                 'available': False,
                 'scope': 'host',
+                'metric': metric,
                 'hostname': '',
                 'bot_name': '',
-                'source': 'cpu_60s',
+                'source': source,
                 'step_seconds': CPU_HISTORY_STEP_SECONDS,
                 'window_minutes': CPU_HISTORY_WINDOW_MINUTES,
                 'resolution_pct': CPU_HISTORY_RESOLUTION_PCT,
                 'points': [],
             }
-        return self._host_cpu_history.build_payload(hostname, hostname=hostname)
+        return store.build_payload(
+            hostname,
+            hostname=hostname,
+            metric=metric,
+            source=source,
+        )
 
     def get_bot_cpu_history(self, hostname: str, bot_name: str) -> dict[str, Any]:
+        return self.get_bot_metric_history(hostname, bot_name, 'cpu')
+
+    def get_bot_metric_history(self, hostname: str, bot_name: str, metric: str) -> dict[str, Any]:
         hostname = str(hostname or '').strip()
         bot_name = str(bot_name or '').strip()
+        metric = str(metric or 'cpu').strip().lower()
+        source = BOT_HISTORY_SOURCES.get(metric, BOT_HISTORY_SOURCES['cpu'])
         if not hostname or not bot_name:
             return {
                 'available': False,
                 'scope': 'bot',
+                'metric': metric,
                 'hostname': hostname,
                 'bot_name': bot_name,
-                'source': 'cpu_60s',
+                'source': source,
                 'step_seconds': CPU_HISTORY_STEP_SECONDS,
                 'window_minutes': CPU_HISTORY_WINDOW_MINUTES,
-                'resolution_pct': CPU_HISTORY_RESOLUTION_PCT,
                 'points': [],
             }
-        return self._bot_cpu_history.build_payload(
+        if metric == 'cpu':
+            return self._bot_cpu_history.build_payload(
+                self._bot_history_key(hostname, bot_name),
+                hostname=hostname,
+                bot_name=bot_name,
+                metric='cpu',
+                source='cpu_60s',
+            )
+        if metric in {'errors', 'tracebacks'}:
+            store = self._bot_count_history.get(metric)
+            if store is None:
+                return {
+                    'available': False,
+                    'scope': 'bot',
+                    'metric': metric,
+                    'hostname': hostname,
+                    'bot_name': bot_name,
+                    'source': source,
+                    'step_seconds': COUNT_HISTORY_STEP_SECONDS,
+                    'window_hours': COUNT_HISTORY_WINDOW_HOURS,
+                    'points': [],
+                    'daily_points': [],
+                    'timezone_basis': 'UTC',
+                }
+            return store.build_payload(
+                self._bot_history_key(hostname, bot_name),
+                hostname=hostname,
+                bot_name=bot_name,
+                metric=metric,
+                source=source,
+            )
+        if metric == 'pnl':
+            return self._bot_pnl_history.build_payload(
+                self._bot_pnl_history_key(bot_name),
+                hostname=hostname,
+                metric='pnl',
+                source=source,
+            )
+        store = self._bot_metric_history.get(metric)
+        if store is None:
+            return {
+                'available': False,
+                'scope': 'bot',
+                'metric': metric,
+                'hostname': hostname,
+                'bot_name': bot_name,
+                'source': source,
+                'step_seconds': CPU_HISTORY_STEP_SECONDS,
+                'window_minutes': CPU_HISTORY_WINDOW_MINUTES,
+                'points': [],
+            }
+        return store.build_payload(
             self._bot_history_key(hostname, bot_name),
             hostname=hostname,
             bot_name=bot_name,
+            metric=metric,
+            source=source,
         )
 
     # ── Instance collection ─────────────────────────────────
@@ -1822,7 +2862,20 @@ class VPSMonitor:
                     new_host_cache = parsed.get('cache', {})
                     bot_logs = parsed.get('bot_logs', {})
                     if isinstance(monitors, list) and isinstance(v7_list, list):
-                        self.store.update_instances(hostname, monitors)
+                        await self._rebuild_bot_count_history(hostname, bot_logs if isinstance(bot_logs, dict) else {})
+                        await self._rebuild_bot_pnl_history(hostname, bot_logs if isinstance(bot_logs, dict) else {})
+                        enriched_monitors = []
+                        for monitor in monitors:
+                            item = dict(monitor) if isinstance(monitor, dict) else monitor
+                            if isinstance(item, dict):
+                                bot_name = str(item.get('u') or '')
+                                item['errors_4w'] = self._bot_count_total(hostname, bot_name, 'errors')
+                                item['tracebacks_4w'] = self._bot_count_total(hostname, bot_name, 'tracebacks')
+                                total_pnl, total_fills = self._bot_pnl_total(bot_name)
+                                item['pnl_hist_total'] = total_pnl
+                                item['pnls_hist_total'] = total_fills
+                            enriched_monitors.append(item)
+                        self.store.update_instances(hostname, enriched_monitors)
                         self.store.update_v7_instances(hostname, v7_list)
                         self.store.update_bot_logs(hostname, bot_logs if isinstance(bot_logs, dict) else {})
                         self._save_state_snapshot()

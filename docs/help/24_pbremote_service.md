@@ -32,4 +32,4 @@ Once configured and running, PBRemote will automatically sync data in the backgr
 
 - **Log**: Live PBRemote log viewer for troubleshooting synchronization issues
 - **Info**: Remote server status, API sync status, and instance overview per server (with system resource bars for memory, swap, disk, CPU)
-- **Settings**: Bucket configuration and Monitor Settings (warning/error thresholds for Server, V7, Multi, and Single instances)
+- **Settings**: Bucket configuration only. VPS monitor warning/error thresholds now live under the PBAPIServer **Settings** tab in the **VPS Monitoring** section.
