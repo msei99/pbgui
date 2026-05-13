@@ -15,6 +15,14 @@ from Exchange import Exchange, Exchanges, V7
 from logging_helpers import human_log as _log
 
 
+def _arg_matches_path(arg: str, expected_path: Path) -> bool:
+    if not arg:
+        return False
+    expected = str(expected_path)
+    expected_alt = expected.replace("/", "\\")
+    return str(arg).endswith(expected) or str(arg).endswith(expected_alt)
+
+
 def remove_powers_of_ten(text):
     """
     Remove any variant of "10", "100", "1000", "10000", etc. from a string.
@@ -441,6 +449,7 @@ class CoinData:
         self._vol_mcap = 10.0
         self._only_cpt = False
         self._notices_ignore = False
+        self._logged_idle = False
 
     def _sync_cmc_metrics_log_interval(self):
         """Align metrics health-log cadence with data-fetch cadence."""
@@ -2416,75 +2425,12 @@ class CoinData:
         """
         now_ts = datetime.now().timestamp()
 
-        def _refresh_exchange_mapping(exchange: str):
-            started_ts = datetime.now().timestamp()
-
-            markets_ok = bool(self.fetch_ccxt_markets(exchange))
-            if not markets_ok:
-                elapsed = datetime.now().timestamp() - started_ts
-                return {
-                    "exchange": exchange,
-                    "markets_ok": False,
-                    "mapping_ok": False,
-                    "prices_ok": False,
-                    "active": 0,
-                    "priced": 0,
-                    "unmatched_relevant": 0,
-                    "unmatched_relevant_unique": 0,
-                    "elapsed": elapsed,
-                    "ok": False,
-                }
-
-            markets = self.load_ccxt_markets(exchange)
-            self.fetch_copy_trading_symbols(exchange, markets)
-            mapping_ok = bool(self.build_mapping(exchange))
-            prices_ok = bool(self.update_prices(exchange)) if mapping_ok else False
-
-            rows = self.load_exchange_mapping(exchange)
-            active = sum(1 for r in rows if r.get("active", True))
-            priced = sum(1 for r in rows if r.get("active", True) and float(r.get("price_last") or 0) > 0)
-            build_stats = self._last_build_mapping_stats.get(exchange, {})
-
-            elapsed = datetime.now().timestamp() - started_ts
-            return {
-                "exchange": exchange,
-                "markets_ok": markets_ok,
-                "mapping_ok": mapping_ok,
-                "prices_ok": prices_ok,
-                "active": active,
-                "priced": priced,
-                "unmatched_relevant": int(build_stats.get("unmatched_relevant", 0) or 0),
-                "unmatched_relevant_unique": int(build_stats.get("unmatched_relevant_unique", 0) or 0),
-                "elapsed": elapsed,
-                "ok": markets_ok and mapping_ok and prices_ok,
-            }
-
-        def _source_is_newer_than_mapping(exchange: str):
-            exchange_dir = self._get_exchange_dir(exchange)
-            mapping_file = exchange_dir / "mapping.json"
-            if not mapping_file.exists():
-                return True, "missing mapping.json"
-
-            mapping_ts = mapping_file.stat().st_mtime
-            pbgdir = Path.cwd()
-            coindata_file = pbgdir / "data" / "coindata" / "coindata.json"
-            metadata_file = pbgdir / "data" / "coindata" / "metadata.json"
-            markets_file = exchange_dir / "ccxt_markets.json"
-
-            if coindata_file.exists() and coindata_file.stat().st_mtime > mapping_ts:
-                return True, "coindata.json newer than mapping"
-            if metadata_file.exists() and metadata_file.stat().st_mtime > mapping_ts:
-                return True, "metadata.json newer than mapping"
-            if markets_file.exists() and markets_file.stat().st_mtime > mapping_ts:
-                return True, "ccxt_markets.json newer than mapping"
-            return False, ""
-
         refreshed_in_self_heal = set()
 
         # Self-heal pass: if mapping is missing/stale, rebuild immediately
         # independent of interval, with exponential backoff up to 24h.
         for exchange in V7.list():
-            needs_heal, reason = _source_is_newer_than_mapping(exchange)
+            needs_heal, reason = self._source_is_newer_than_mapping(exchange)
             if not needs_heal:
                 continue
 
@@ -2494,7 +2440,7 @@ class CoinData:
 
             _log('PBCoinData', f'Self-heal mapping trigger for {exchange}: {reason}', level='WARNING')
             try:
-                result = _refresh_exchange_mapping(exchange)
+                result = self.refresh_exchange_mapping(exchange)
                 if not bool(result.get("ok")):
                     raise RuntimeError(
                         f'refresh result not ok '
@@ -2529,7 +2475,7 @@ class CoinData:
                 try:
                     if exchange in refreshed_in_self_heal:
                         continue
-                    cycle_results.append(_refresh_exchange_mapping(exchange))
+                    cycle_results.append(self.refresh_exchange_mapping(exchange))
                 except Exception as e:
                     cycle_results.append({
                         "exchange": exchange,
@@ -2595,6 +2541,109 @@ class CoinData:
             return pb_config.get('main', 'role', fallback='slave').strip().lower() == 'master'
         except Exception:
             return False
+
+    def _source_is_newer_than_mapping(self, exchange: str) -> tuple[bool, str]:
+        exchange_dir = self._get_exchange_dir(exchange)
+        mapping_file = exchange_dir / "mapping.json"
+        if not mapping_file.exists():
+            return True, "missing mapping.json"
+
+        mapping_ts = mapping_file.stat().st_mtime
+        pbgdir = Path.cwd()
+        coindata_file = pbgdir / "data" / "coindata" / "coindata.json"
+        metadata_file = pbgdir / "data" / "coindata" / "metadata.json"
+        markets_file = exchange_dir / "ccxt_markets.json"
+
+        if coindata_file.exists() and coindata_file.stat().st_mtime > mapping_ts:
+            return True, "coindata.json newer than mapping"
+        if metadata_file.exists() and metadata_file.stat().st_mtime > mapping_ts:
+            return True, "metadata.json newer than mapping"
+        if markets_file.exists() and markets_file.stat().st_mtime > mapping_ts:
+            return True, "ccxt_markets.json newer than mapping"
+        return False, ""
+
+    def refresh_exchange_mapping(self, exchange: str) -> dict:
+        """Refresh CCXT markets, mapping and prices for one exchange."""
+        started_ts = datetime.now().timestamp()
+
+        markets_ok = bool(self.fetch_ccxt_markets(exchange))
+        if not markets_ok:
+            elapsed = datetime.now().timestamp() - started_ts
+            return {
+                "exchange": exchange,
+                "markets_ok": False,
+                "mapping_ok": False,
+                "prices_ok": False,
+                "active": 0,
+                "priced": 0,
+                "unmatched_relevant": 0,
+                "unmatched_relevant_unique": 0,
+                "elapsed": elapsed,
+                "ok": False,
+            }
+
+        markets = self.load_ccxt_markets(exchange)
+        self.fetch_copy_trading_symbols(exchange, markets)
+        mapping_ok = bool(self.build_mapping(exchange))
+        prices_ok = bool(self.update_prices(exchange)) if mapping_ok else False
+
+        rows = self.load_exchange_mapping(exchange)
+        active = sum(1 for r in rows if r.get("active", True))
+        priced = sum(1 for r in rows if r.get("active", True) and float(r.get("price_last") or 0) > 0)
+        build_stats = self._last_build_mapping_stats.get(exchange, {})
+
+        elapsed = datetime.now().timestamp() - started_ts
+        return {
+            "exchange": exchange,
+            "markets_ok": markets_ok,
+            "mapping_ok": mapping_ok,
+            "prices_ok": prices_ok,
+            "active": active,
+            "priced": priced,
+            "unmatched_relevant": int(build_stats.get("unmatched_relevant", 0) or 0),
+            "unmatched_relevant_unique": int(build_stats.get("unmatched_relevant_unique", 0) or 0),
+            "elapsed": elapsed,
+            "ok": markets_ok and mapping_ok and prices_ok,
+        }
+
+    @staticmethod
+    def _has_dynamic_ignore_bots() -> bool:
+        """Check if any actually-running V7 instance on this node uses dynamic_ignore.
+
+        Scans data/run_v7/*/config.json for dynamic_ignore=True, then verifies
+        the bot is really running by checking for main.py + config_run.json in
+        the process cmdline (same detection logic as RunV7.pid() in PBRun.py).
+        """
+        run_v7_dir = Path('data/run_v7')
+        if not run_v7_dir.exists():
+            return False
+        for instance_dir in run_v7_dir.iterdir():
+            if not instance_dir.is_dir():
+                continue
+            config_file = instance_dir / 'config.json'
+            if not config_file.exists():
+                continue
+            try:
+                with open(config_file, encoding='utf-8') as f:
+                    cfg = json.load(f)
+                if not cfg.get('pbgui', {}).get('dynamic_ignore', False):
+                    continue
+            except Exception:
+                continue
+            config_run = instance_dir / 'config_run.json'
+            if not config_run.exists():
+                continue
+            for proc in psutil.process_iter():
+                try:
+                    cmdline = proc.cmdline()
+                except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
+                    continue
+                if (
+                    any('main.py' in s for s in cmdline)
+                    and any(_arg_matches_path(s, config_run) for s in cmdline)
+                ):
+                    return True
+        return False
 
     def _run_tradfi_sync(self):
         """Sync TradFi symbol map + XYZ spec after a mapping update cycle.
@@ -2774,11 +2823,21 @@ def main():
     pbcoindata.save_pid()
     while True:
         try:
+            pbcoindata.load_config()
+            if not pbcoindata._is_master():
+                if not pbcoindata._has_dynamic_ignore_bots():
+                    if not pbcoindata._logged_idle:
+                        _log('PBCoinData', 'No running dynamic_ignore bots — idle mode', level='INFO')
+                        pbcoindata._logged_idle = True
+                    sleep(60)
+                    continue
+                if pbcoindata._logged_idle:
+                    _log('PBCoinData', 'Running dynamic_ignore bot detected — resuming', level='INFO')
+                    pbcoindata._logged_idle = False
             pbcoindata.load_data()
             pbcoindata.load_metadata()
             pbcoindata.update_mappings()
             sleep(60)
-            pbcoindata.load_config()
         except Exception as e:
             _log('PBCoinData', f'Something went wrong, but continue: {e}', level='ERROR')
             _log('PBCoinData', 'PBCoinData main loop traceback', level='DEBUG', meta={'traceback': traceback.format_exc()})

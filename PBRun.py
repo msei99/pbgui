@@ -408,9 +408,88 @@ class RunV7():
         self.pbgdir = None
         self.dynamic_ignore = None
         self._dynamic_wait_log_ts = 0
+        self._dynamic_bootstrap_log_ts = 0
+        self._dynamic_bootstrap_refresh_ts = 0
+        self._dynamic_watch_ts = 0
+        self._dynamic_watch_sig = None
         self.start_time = 0
         self.memory = None
         self.cpu = None
+
+    def _dynamic_watch_signature(self):
+        if self.dynamic_ignore is None:
+            return None
+
+        pbgdir = Path.cwd()
+        paths = [pbgdir / "data" / "coindata" / "metadata.json"]
+
+        signature = []
+        for path in paths:
+            try:
+                stat = path.stat()
+                signature.append((str(path), stat.st_mtime_ns, stat.st_size))
+            except FileNotFoundError:
+                signature.append((str(path), None, None))
+            except OSError:
+                signature.append((str(path), None, None))
+        return tuple(signature)
+
+    def _bootstrap_dynamic_ignore_data(self) -> bool:
+        try:
+            if self.dynamic_ignore is None:
+                return True
+
+            exchange_id = getattr(self.dynamic_ignore.coindata, "exchange", None)
+            if not exchange_id:
+                return False
+
+            self.dynamic_ignore.coindata.load_config()
+
+            # First try to build or reuse list files from whatever local mapping data
+            # is already available, avoiding a CMC/CCXT refresh unless it is needed.
+            self.dynamic_ignore.watch()
+            if self.dynamic_ignore.lists_ready():
+                return True
+
+            needs_refresh, reason = self.dynamic_ignore.coindata._source_is_newer_than_mapping(exchange_id)
+            if not needs_refresh:
+                return False
+
+            now_ts = int(datetime.now().timestamp())
+            refresh_interval_s = 300
+            if now_ts - self._dynamic_bootstrap_refresh_ts < refresh_interval_s:
+                return False
+
+            if now_ts - self._dynamic_bootstrap_log_ts >= 60:
+                _log(
+                    "PBRun",
+                    f"Bootstrap dynamic_ignore data for {self.path} ({exchange_id}): {reason}",
+                    level="INFO",
+                )
+                self._dynamic_bootstrap_log_ts = now_ts
+
+            self.dynamic_ignore.coindata.load_data()
+            self.dynamic_ignore.coindata.load_metadata()
+            result = self.dynamic_ignore.coindata.refresh_exchange_mapping(exchange_id)
+            self._dynamic_bootstrap_refresh_ts = now_ts
+            if not bool(result.get("ok")):
+                _log(
+                    "PBRun",
+                    (
+                        f"Dynamic_ignore bootstrap refresh failed for {self.path} ({exchange_id}): "
+                        f"markets_ok={result.get('markets_ok')} mapping_ok={result.get('mapping_ok')} "
+                        f"prices_ok={result.get('prices_ok')}"
+                    ),
+                    level="WARNING",
+                )
+                return False
+
+            self.dynamic_ignore.watch()
+            return self.dynamic_ignore.lists_ready()
+        except Exception as e:
+            _log("PBRun", f"Dynamic_ignore bootstrap error for {self.path}: {e}", level="ERROR")
+            _log("PBRun", "Dynamic_ignore bootstrap traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
+            return False
 
     def watch(self):
         if self.is_running():
@@ -429,8 +508,20 @@ class RunV7():
             self.start()
 
     def watch_dynamic(self):
-        if self.dynamic_ignore is not None:
-            self.dynamic_ignore.watch()
+        if self.dynamic_ignore is None:
+            return
+
+        current_sig = self._dynamic_watch_signature()
+        if current_sig == self._dynamic_watch_sig:
+            return
+
+        now_ts = int(datetime.now().timestamp())
+        if self._dynamic_watch_ts and now_ts - self._dynamic_watch_ts < 60:
+            return
+
+        self.dynamic_ignore.watch()
+        self._dynamic_watch_ts = now_ts
+        self._dynamic_watch_sig = current_sig
 
     def is_running(self):
         if self.pid():
@@ -464,15 +555,16 @@ class RunV7():
     def start(self):
         if not self.is_running():
             if self.dynamic_ignore is not None and not _ensure_dynamic_ignore_ready(self.dynamic_ignore):
-                now_ts = int(datetime.now().timestamp())
-                if now_ts - self._dynamic_wait_log_ts >= 60:
-                    _log(
-                        "PBRun",
-                        f"Delay start: passivbot_v7 {self.path}/config_run.json waiting for dynamic ignore lists",
-                        level="WARNING",
-                    )
-                    self._dynamic_wait_log_ts = now_ts
-                return
+                if not self._bootstrap_dynamic_ignore_data():
+                    now_ts = int(datetime.now().timestamp())
+                    if now_ts - self._dynamic_wait_log_ts >= 60:
+                        _log(
+                            "PBRun",
+                            f"Delay start: passivbot_v7 {self.path}/config_run.json waiting for dynamic ignore lists",
+                            level="WARNING",
+                        )
+                        self._dynamic_wait_log_ts = now_ts
+                    return
             self._dynamic_wait_log_ts = 0
             old_os_path = os.environ.get('PATH', '')
             new_os_path = os.path.dirname(self.pb7venv) + os.pathsep + old_os_path

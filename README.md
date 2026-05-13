@@ -312,6 +312,8 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.78 (unreleased)
+- PBRun: only recalculate runtime `dynamic_ignore` lists when new CoinMarketCap metadata arrived (`metadata.json`), throttle those recalculations to at most once per minute instead of reevaluating them every 5 seconds, and keep bootstrap failures contained so bots stay in a logged waiting state instead of aborting the loop on exceptions.
+- PBCoinData/PBRun: on slave nodes (VPS), keep coin-data refresh idle while no `dynamic_ignore` V7 bot is running, but let PBRun bootstrap the required CoinMarketCap/CCXT data once when such a bot is about to start so it can generate fresh ignore lists and then continue with normal configured refresh intervals while the bot is running.
 - VPS Manager: fix the broken Guide initialization after the shared-help migration by aligning the page's help HTML/CSS with the shared `pbgui_nav.js` expectations, so the page no longer throws missing-element JS errors and the rest of the UI can finish loading.
 - VPS Manager: replace the custom Guide modal with the same shared help-overlay structure used by the other FastAPI pages, so the nav-bar Guide button, maximize hook, topic list, and EN/DE controls behave consistently.
 - VPS Manager: make the Guide button open the dedicated VPS Manager help topic (`32_vps_manager.md`) instead of just showing the generic first help entry.
