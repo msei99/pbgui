@@ -2641,6 +2641,8 @@
     let taskLogViewer = null;
     let taskLogViewerFile = '';
     let taskLogViewerKey = '';
+    let masterHostLogViewer = null;
+    let masterHostLogViewerKey = '';
 
     function defaultAddForm() {
       return {
@@ -2757,7 +2759,7 @@
     }
 
     function isMasterContextView() {
-      return store.view === 'master' || store.view === 'master-task-log';
+      return store.view === 'master' || store.view === 'master-task-log' || store.view === 'master-host-logs';
     }
 
     function isVpsContextView() {
@@ -2767,6 +2769,11 @@
     function isVpsTaskLogAlias(file, hostname) {
       if (!file || !hostname) return false;
       return String(file).indexOf('VPSAction:' + hostname + ':') === 0;
+    }
+
+    function isMasterTaskLogAlias(file) {
+      if (!file) return false;
+      return String(file).indexOf('MasterAction:') === 0;
     }
 
     function getMasterTaskLogFile(command) {
@@ -3667,6 +3674,67 @@
       }
     }
 
+    function getMasterHostLogServices(hostname, vpState) {
+      if (hostname && hostname !== 'local') return [];
+      const state = vpState || store.state || {};
+      return Array.isArray(state.local_logs) ? state.local_logs.slice() : [];
+    }
+
+    function syncMasterHostLogViewer() {
+      const container = document.getElementById('master-host-log-viewer-target');
+      if (store.view !== 'master-host-logs' || !container || typeof LogViewerPanel !== 'function') {
+        if (masterHostLogViewer) {
+          masterHostLogViewer.close();
+          masterHostLogViewer = null;
+        }
+        masterHostLogViewerKey = '';
+        return;
+      }
+      const state = store.state || {};
+      const requestedKey = 'master-host-logs';
+      const needsRecreate = !masterHostLogViewer || masterHostLogViewerKey !== requestedKey || !document.getElementById('master-host-log-viewer-target-lvp-sidebar');
+      if (needsRecreate) {
+        if (masterHostLogViewer) {
+          masterHostLogViewer.close();
+        }
+        masterHostLogViewer = new LogViewerPanel({
+          containerId: 'master-host-log-viewer-target',
+          wsBase: WS_BASE,
+          token: TOKEN,
+          defaultHost: 'local',
+          defaultService: 'PBRun',
+          presets: 'trading',
+          showRestart: true,
+          serviceListOverride: function (host, vpState) {
+            return getMasterHostLogServices(host, vpState);
+          }
+        });
+        masterHostLogViewer.open();
+        masterHostLogViewerKey = requestedKey;
+        return;
+      }
+    }
+
+    function openMasterHostLogs() {
+      selectView('master-host-logs');
+    }
+
+    function renderMasterHostLogsView() {
+      return `
+        <div class='log-view-page'>
+          <div class='panel'>
+            <div class='panel-head'>
+              <div>
+                <div class='panel-title'>Host Logs</div>
+              </div>
+            </div>
+            <div class='panel-body'>
+              <div id='master-host-log-viewer-target' class='task-log-viewer-shell'></div>
+            </div>
+          </div>
+        </div>`;
+    }
+
     function syncTaskLogViewer() {
       const container = document.getElementById('task-log-viewer-target');
       const enabled = (store.view === 'master-task-log' || store.view === 'vps-task-log') && !!container && typeof LogViewerPanel === 'function';
@@ -3695,7 +3763,10 @@
           defaultHost: 'local',
           defaultFile: requestedFile,
           startLocalAtEnd: !!(store.taskLog && store.taskLog.startEmpty),
-          localFileFilter: browseMode && store.hostname ? function(file) {
+          localFileFilter: browseMode ? function(file) {
+            if (store.taskLog && store.taskLog.scope === 'master') {
+              return isMasterTaskLogAlias(file);
+            }
             return isVpsTaskLogAlias(file, store.hostname);
           } : null,
           presets: 'system',
@@ -4828,6 +4899,7 @@
 
     function viewHash(view, hostname) {
       if (view === 'master') return '#master';
+      if (view === 'master-host-logs') return '#master/host-logs';
       if (hostname) {
         if (view === 'vps') return '#vps/' + encodeURIComponent(hostname);
         if (view === 'vps-setup') return '#vps/' + encodeURIComponent(hostname) + '/setup';
@@ -4870,6 +4942,10 @@
       if (!hash || hash === 'overview') return;
       if (hash === 'master') {
         selectView('master');
+        return;
+      }
+      if (hash === 'master/host-logs') {
+        selectView('master-host-logs');
         return;
       }
       const m = hash.match(/^vps\/([^/]+)(?:\/(.+))?/);
@@ -5031,6 +5107,21 @@
         file: getMasterTaskLogFile(command || ''),
         runKey: String(Date.now()),
         startEmpty: true
+      };
+      store.view = 'master-task-log';
+      sendContext();
+      renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+    }
+
+    function openMasterTaskLogs() {
+      store.taskLog = {
+        scope: 'master',
+        hostname: '',
+        command: '',
+        title: 'Task Logs',
+        file: '',
+        browse: true,
+        startEmpty: false
       };
       store.view = 'master-task-log';
       sendContext();
@@ -5685,7 +5776,8 @@
         html = `
           <button class='sb-btn' type='button' onclick='refreshState()'>Refresh</button>
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Home</button>
-          ${store.view === 'master-task-log' ? `<button class='sb-btn' type='button' onclick='selectView("master")'>Back to Master Overview</button>` : ''}
+          ${store.view === 'master-task-log' || store.view === 'master-host-logs' ? `<button class='sb-btn' type='button' onclick='selectView("master")'>Back to Master Overview</button>` : `<button class='sb-btn' type='button' onclick='openMasterTaskLogs()'>Task Logs</button>`}
+          ${store.view !== 'master-host-logs' ? `<button class='sb-btn' type='button' onclick='openMasterHostLogs()'>Host Logs</button>` : ''}
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' ${store.master.debug ? 'checked' : ''} onchange="setMasterBool('debug', this.checked)"> Debug</label>
           </div>
@@ -7286,6 +7378,8 @@
         html = renderVpsTaskLogView();
       } else if (store.view === 'vps-host-logs') {
         html = renderVpsHostLogsView();
+      } else if (store.view === 'master-host-logs') {
+        html = renderMasterHostLogsView();
       } else if (store.view === 'vps') {
         html = renderVpsView();
       } else if (store.view === 'vps-setup') {
@@ -7299,7 +7393,7 @@
       }
       const viewRoot = document.getElementById('viewRoot');
       const main = document.getElementById('main');
-      const isLogView = store.view === 'master-task-log' || store.view === 'vps-task-log' || store.view === 'vps-host-logs';
+      const isLogView = store.view === 'master-task-log' || store.view === 'vps-task-log' || store.view === 'vps-host-logs' || store.view === 'master-host-logs';
       viewRoot.classList.toggle('log-view-root', isLogView);
       main.classList.toggle('log-view-active', isLogView);
       viewRoot.innerHTML = html;
@@ -7328,6 +7422,7 @@
       renderView(!!opts.forceView);
       syncTaskLogViewer();
       syncVpsLogViewer();
+      syncMasterHostLogViewer();
       refreshCurrentViewLive();
       refreshLocalInteractiveState();
       scheduleVpsSecretSyncPasses();

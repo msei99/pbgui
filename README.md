@@ -313,6 +313,10 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Added: FastAPI `VPS Manager` Master view now has a `Host Logs` sidebar button that opens a browseable live log viewer for local system logs (PBRun, PBRemote, PBGui, etc.) and any running v7 bot instances on the master, consistent with the existing VPS `Host Logs` button.
+- Fixed: FastAPI `VPS Manager` Master `Host Logs` navigation now writes and restores the `#master/host-logs` URL hash consistently, so reload and browser navigation keep the same view.
+- Fixed: FastAPI `VPS Manager` Master `Host Logs` now switches from the local file list to the selected VPS service list correctly when you change the host dropdown away from `local`.
+- Added: FastAPI `VPS Manager` Master view now has a `Task Logs` sidebar button that opens a browseable list of all `MasterAction:*` task logs, consistent with the existing VPS `Task Logs` button.
 - Fixed: FastAPI `VPS Manager` PB7 branch management now clears stale custom-remote branch/commit caches when the selected remote changes, can load commit history for a manually entered fork/PR branch directly from the selected remote URL, and clarifies in the UI that a manual commit performs a branch reset to that commit instead of a detached checkout.
 - Changed: FastAPI `VPS Manager` PB7 branch management now shows an expandable list of the commits missing from the current local branch head when it is behind `origin`, and each missing commit gets a direct GitHub details link when the tracked remote points at GitHub.
 - Changed: FastAPI `VPS Manager` missing-commit entries in PB7 branch management can now lazy-load a GitHub-style inline commit preview inside PBGui, including the full commit message, per-file stats, and patch hunks from the GitHub commit API, cached per commit so you can inspect it without leaving the page.

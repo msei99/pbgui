@@ -1124,7 +1124,8 @@ class LogViewerPanel {
     }
 
     _getServices() {
-        if (this._serviceListOverride && this._host !== 'local') {
+        if (this._serviceListOverride) {
+            /* Allow local overrides; return [] to fall back to built-in host-specific services. */
             var overridden = this._serviceListOverride(this._host, this._vpState);
             if (Array.isArray(overridden) && overridden.length) {
                 var next = Array.from(new Set(overridden.filter(function(item) { return !!item; })));
