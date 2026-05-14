@@ -4,8 +4,8 @@
 # 1. Fetch from origin
 # 2. Check for uncommitted changes (fail if found)
 # 3. Checkout specified branch
-# 4. Optionally checkout specific commit (detached HEAD)
-# 5. Pull if on branch HEAD (not detached)
+# 4. Optionally hard-reset the checked out branch to a specific commit
+# 5. Otherwise hard-reset the checked out branch to the selected remote head
 # 6. Restart pbgui services
 
 - hosts: "{{ hostname }}"

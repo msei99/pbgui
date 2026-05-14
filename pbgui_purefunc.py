@@ -698,6 +698,90 @@ def list_remote_git_branches(remote_url: str, timeout_sec: int = 20) -> list[str
     return sorted(set(branches))
 
 
+def list_remote_git_branch_commits(remote_url: str, branch_name: str, limit: int = 50, timeout_sec: int = 30) -> list[dict]:
+    """Return commit history for a branch from a remote URL.
+
+    This uses a local remote-helper style git invocation and does not require the
+    target remote to be configured inside an existing repository.
+    """
+    remote_url = (remote_url or "").strip()
+    branch_name = (branch_name or "").strip()
+    if not remote_url or not branch_name:
+        return []
+
+    try:
+        ls_remote = subprocess.run(
+            ["git", "ls-remote", "--heads", remote_url, branch_name],
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"Timeout fetching remote commit history ({timeout_sec}s).") from e
+    except Exception as e:
+        raise RuntimeError("Failed to run git to fetch remote commit history.") from e
+
+    if ls_remote.returncode != 0:
+        msg = (ls_remote.stderr or "").strip() or "git ls-remote failed"
+        raise RuntimeError(msg)
+
+    commit_hash = ""
+    ref_name = f"refs/heads/{branch_name}"
+    for line in (ls_remote.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == ref_name:
+            commit_hash = parts[0].strip()
+            break
+    if not commit_hash:
+        return []
+
+    try:
+        log_result = subprocess.run(
+            [
+                "git",
+                "log",
+                commit_hash,
+                "-n",
+                str(max(int(limit), 1)),
+                "--pretty=format:%h|%H|%an|%ar|%at|%B%x00",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"Timeout reading remote commit log ({timeout_sec}s).") from e
+    except Exception as e:
+        raise RuntimeError("Failed to run git log for remote commit history.") from e
+
+    if log_result.returncode != 0:
+        msg = (log_result.stderr or "").strip() or "git log failed"
+        raise RuntimeError(msg)
+
+    commits: list[dict] = []
+    for block in (log_result.stdout or "").split("\x00"):
+        row = block.strip()
+        if not row:
+            continue
+        parts = row.split("|", 5)
+        if len(parts) != 6:
+            continue
+        short_hash, full_hash, author, relative_date, timestamp_raw, message = parts
+        commits.append(
+            {
+                "short": short_hash.strip(),
+                "full": full_hash.strip(),
+                "author": author.strip(),
+                "date": relative_date.strip(),
+                "timestamp": int(timestamp_raw.strip()) if str(timestamp_raw).strip().isdigit() else 0,
+                "message": message.strip(),
+            }
+        )
+    return commits
+
+
 def list_git_remotes(repo_dir: str, timeout_sec: int = 10) -> list[str]:
     """List git remote names for a local repo directory."""
     repo_dir = (repo_dir or "").strip()

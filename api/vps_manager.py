@@ -204,6 +204,18 @@ async def ws_vps_manager(websocket: WebSocket):
                 elif cmd == "load_remote_branches":
                     branches = await asyncio.to_thread(service.load_remote_branches, str(msg.get("remote_url") or ""))
                     await websocket.send_json({"type": "remote_branches", "remote_url": str(msg.get("remote_url") or ""), "branches": branches})
+                elif cmd == "load_remote_branch_commits":
+                    remote_url = str(msg.get("remote_url") or "")
+                    branch_name = str(msg.get("branch") or "")
+                    limit = int(msg.get("limit") or 50)
+                    commits = await asyncio.to_thread(service.load_remote_branch_commits, remote_url, branch_name, limit)
+                    await websocket.send_json({
+                        "type": "remote_branch_commits",
+                        "remote_url": remote_url,
+                        "branch": branch_name,
+                        "limit": limit,
+                        "commits": commits,
+                    })
                 elif cmd == "run_master_command":
                     await asyncio.to_thread(
                         service.run_master_command,

@@ -18,7 +18,7 @@ from master.async_monitor import INSTANCE_COLLECT_SCRIPT, MONITOR_CACHE_VERSION
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from PBRemote import PBRemote
-from pbgui_purefunc import get_git_remote_url, list_git_remotes, list_remote_git_branches, load_ini, save_ini
+from pbgui_purefunc import get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, save_ini
 from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir
 
 SERVICE = "VPSManagerApi"
@@ -1451,6 +1451,11 @@ class VPSManagerService:
         if not remote_url:
             return []
         return list_remote_git_branches(remote_url)
+
+    def load_remote_branch_commits(self, remote_url: str, branch_name: str, limit: int = 50) -> list[dict[str, Any]]:
+        if not remote_url or not branch_name:
+            return []
+        return list_remote_git_branch_commits(remote_url, branch_name, limit=int(limit))
 
     def run_master_command(self, *, command: str, command_text: str, debug: bool = False, sudo_pw: str | None = None, extra_vars: dict[str, Any] | None = None) -> None:
         self.vpsmanager.command = command

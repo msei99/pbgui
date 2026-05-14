@@ -312,6 +312,11 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 # Changelog
 
 ## v1.78 (unreleased)
+
+- Fixed: FastAPI `VPS Manager` PB7 branch management now clears stale custom-remote branch/commit caches when the selected remote changes, can load commit history for a manually entered fork/PR branch directly from the selected remote URL, and clarifies in the UI that a manual commit performs a branch reset to that commit instead of a detached checkout.
+- Changed: FastAPI `VPS Manager` PB7 branch management now shows an expandable list of the commits missing from the current local branch head when it is behind `origin`, and each missing commit gets a direct GitHub details link when the tracked remote points at GitHub.
+- Changed: FastAPI `VPS Manager` missing-commit entries in PB7 branch management can now lazy-load a GitHub-style inline commit preview inside PBGui, including the full commit message, per-file stats, and patch hunks from the GitHub commit API, cached per commit so you can inspect it without leaving the page.
+- Fixed: opening the nested GitHub commit preview expander inside the PB7 missing-commits panel no longer triggers a full view re-render, so the outer expander stays open and the inner preview loads on the first click instead of only after reopening the outer panel.
 - PBRun: only recalculate runtime `dynamic_ignore` lists when new CoinMarketCap metadata arrived (`metadata.json`), throttle those recalculations to at most once per minute instead of reevaluating them every 5 seconds, and keep bootstrap failures contained so bots stay in a logged waiting state instead of aborting the loop on exceptions.
 - PBCoinData/PBRun: on slave nodes (VPS), keep coin-data refresh idle while no `dynamic_ignore` V7 bot is running, but let PBRun bootstrap the required CoinMarketCap/CCXT data once when such a bot is about to start so it can generate fresh ignore lists and then continue with normal configured refresh intervals while the bot is running.
 - VPS Manager: fix the broken Guide initialization after the shared-help migration by aligning the page's help HTML/CSS with the shared `pbgui_nav.js` expectations, so the page no longer throws missing-element JS errors and the rest of the UI can finish loading.
