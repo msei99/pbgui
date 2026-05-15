@@ -68,6 +68,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 - Log viewing: always use shared `LogViewerPanel` from `frontend/js/log_viewer_panel.js`.
 - Navigation: `pbgui_nav.js` via `PBGUI_NAV_CONFIG` + `window.TOKEN`.
 - Cache busting: use `?v=N` on JS/CSS asset URLs, increment when file changes.
+- **Confirm dialogs**: never use native `window.confirm()` / `window.alert()` for security prompts or destructive actions. Use the page's shared modal system (e.g., `openConfirmModal(title, message, onConfirm)`) so the UI stays visually consistent and testable.
 
 ### Streamlit Patterns (Legacy)
 - `st.html(unsafe_allow_javascript=True)` for dynamic height content.

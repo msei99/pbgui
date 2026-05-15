@@ -165,6 +165,12 @@ async def ws_vps_manager(websocket: WebSocket):
                 elif cmd == "init_vps":
                     data = await asyncio.to_thread(service.init_vps, token, msg.get("form") or {}, debug=bool(msg.get("debug")))
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "check_bucket":
+                    data = await asyncio.to_thread(service.check_bucket, str(msg.get("bucket") or ""))
+                    await websocket.send_json({"type": "bucket_check_result", "data": data})
+                elif cmd == "check_cmc_api_key":
+                    data = await asyncio.to_thread(service.check_cmc_api_key, str(msg.get("api_key") or ""))
+                    await websocket.send_json({"type": "cmc_check_result", "data": data})
                 elif cmd == "setup_vps":
                     data = await asyncio.to_thread(
                         service.setup_vps,
@@ -274,6 +280,21 @@ async def ws_vps_manager(websocket: WebSocket):
                         "bot_name": str(msg.get("bot_name") or ""),
                         "data": data,
                     })
+                elif cmd == "browse_files":
+                    path = str(msg.get("path") or "")
+                    data = await asyncio.to_thread(service.browse_files, path)
+                    await websocket.send_json({"type": "browse_result", "data": data})
+                elif cmd == "check_vps_ready":
+                    data = await asyncio.to_thread(service.check_vps_ready, dict(msg.get("form") or {}))
+                    await websocket.send_json({"type": "vps_ready_result", "data": data})
+                elif cmd == "write_hosts_entry":
+                    data = await asyncio.to_thread(
+                        service.write_hosts_entry,
+                        str(msg.get("ip") or ""),
+                        str(msg.get("hostname") or ""),
+                        str(msg.get("sudo_pw") or ""),
+                    )
+                    await websocket.send_json({"type": "write_hosts_result", "data": data})
                 elif cmd == "get_metric_history":
                     data = await asyncio.to_thread(
                         service.get_metric_history,

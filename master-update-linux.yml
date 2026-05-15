@@ -1,0 +1,77 @@
+---
+# Update local Linux packages on localhost
+# Supported: Debian / Ubuntu family
+
+- hosts: localhost
+  gather_facts: true
+
+  vars:
+    ansible_become_password: "{{ user_pw }}"
+    needs_become: "{{ (ansible_facts.user_id | default(ansible_user_id | default(''))) != 'root' }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: fail on unsupported distribution family
+      fail:
+        msg: >-
+          Update Linux is currently supported only for Debian/Ubuntu systems.
+          Detected os_family={{ ansible_facts.os_family | default('unknown') }}
+          distribution={{ ansible_facts.distribution | default('unknown') }}.
+      when: ansible_facts.os_family | default('') != 'Debian'
+
+    - name: probe sudo availability when root is required
+      command: sudo -S -p '' true
+      args:
+        stdin: "{{ (user_pw | default('')) ~ '\n' }}"
+      register: sudo_probe
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: needs_become | bool
+
+    - name: fail when sudo is blocked by container no-new-privileges
+      fail:
+        msg: >-
+          Update Linux cannot run here because sudo is blocked by the current runtime
+          (`no_new_privileges` / `NoNewPrivileges`).
+          Run PBGui without that restriction or execute the update directly on the host.
+      when:
+        - needs_become | bool
+        - sudo_probe.rc | default(0) != 0
+        - >-
+          ('no new privileges' in ((sudo_probe.stderr | default('')) | lower)) or
+          ('keine neuen privilegien' in ((sudo_probe.stderr | default('')) | lower))
+
+    - name: fail when sudo authentication is unavailable
+      fail:
+        msg: >-
+          Update Linux requires working sudo access for the current local user.
+          Please verify the sudo password and local sudo permissions.
+      when:
+        - needs_become | bool
+        - sudo_probe.rc | default(0) != 0
+
+    - name: update apt cache and upgrade packages
+      apt:
+        update_cache: true
+        upgrade: dist
+        autoremove: true
+      become: "{{ needs_become | bool }}"
+
+    - name: check if reboot is required
+      stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+
+    - name: reboot localhost after Linux update
+      reboot:
+        msg: "Reboot initiated by PBGui after Linux update"
+        reboot_timeout: 1800
+      become: "{{ needs_become | bool }}"
+      when:
+        - reboot_requested | default(false) | bool
+        - reboot_required_file.stat.exists | default(false)

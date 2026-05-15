@@ -29,31 +29,6 @@ It has the following functions:
 - Streamlit 1.54.0
 - Linux
 
-### Migration (Python 3.10 -> 3.12)
-
-PBGui and PB7 use Python 3.12 by default.
-
-If you already have an older PBGui installation running on Python 3.10, you can upgrade in a few clicks:
-
-Master (recommended):
-- Open the VPS Manager on your Master.
-- **PBGui**
-  - Click "Update/Install PBGui venv" to prepare the new Python 3.12 environment.
-  - Then run the switch script:
-    - `pbgui/setup/mig_py312.sh`
-  - Rollback (only if something goes wrong):
-    - `pbgui/setup/mig_py310.sh`
-- **PB7**
-  - Update PB7 by clicking "Update PB7 venv".
-
-VPS:
-- Open the VPS Manager for the selected VPS.
-- **PBGui**
-  - Click "Update PBGui venv" (this will recreate the PBGui Python environment on that VPS; PBGui services will be restarted).
-- **PB7**
-  - Click "Update PB7 venv" if you also run PB7 on that VPS.
-- Recommended (especially on small VPS): After the update, click "Cleanup VPS" once to free disk space.
-
 ### Recommendation
 
 - Master Server: Linux with 32GB of memory and 8 CPUs.
@@ -61,11 +36,12 @@ VPS:
 
 ### Get your VPS for running passivbot
 
-I recommend the provider IONOS, as their smallest VPS plan is available for only 1 Euro \
-I have been using their services for over a year without any outages \
-Please use my [referral link](https://aklam.io/esMFvG) to obtain a VPS from IONOS \
-RackNerd has also nice small VPS for 11$ year. Please use my [referral link](https://my.racknerd.com/aff.php?aff=15714)
-A good alternative is a VPS from Contabo. Please use my [referral link](https://www.tkqlhce.com/click-101296145-12454592)
+I currently recommend [IONOS](https://aklam.io/CBA3zSaZ) or [Servitro](https://my.servitro.com/aff.php?aff=186).
+For IONOS open `Server` -> `vServer (VPS)` -> `Linux VPS`.
+For normal VPS bots I currently suggest `VPS S+` with 2 vCores CPU, 2 GB RAM and 80 GB NVMe.
+For a remote master I currently suggest `VPS M+` with 4 vCores CPU, 4 GB RAM and 120 GB NVMe.
+Servitro current pick: `Virtual-1` with 1 vCore, 4 GB DDR4 RAM, 25 GB SSD, 10 Gbps port, 1 TB traffic, 1x IPv4 and 1x IPv6 /64.
+Use coupon code `S8KQX51KF6` to get the Servitro plan for `$20/year`.
 
 ### Support:
 If you like to support pbgui, please join one of my copytradings:\
@@ -76,10 +52,11 @@ Here are all my copytradings and statistics of them: https://manicpt.streamlit.a
 
 ### Install PBGui Master on a vps (Best Option)
 
-Step 1: Get a Linux VPS from IONOS. Please use my [referral link](https://aklam.io/esMFvG)
-- Select Server Linux VPS
-- For the beginning the VPS S is good for running a few bots, the dashboard and some backtests
-- For optimization you need a bigger system like VPS XL, XXL or a dedicated server.
+Step 1: Get a Linux VPS from IONOS. Please use my [referral link](https://aklam.io/CBA3zSaZ)
+- Select `Server` -> `vServer (VPS)` -> `Linux VPS`
+- For normal VPS bots I currently suggest `VPS S+` with 2 vCores CPU, 2 GB RAM and 80 GB NVMe
+- For a remote master I currently suggest `VPS M+` with 4 vCores CPU, 4 GB RAM and 120 GB NVMe
+- For optimization you need a bigger system like `VPS XL+`, `VPS XXL+` or a dedicated server.
 - Install the VPS with Ubuntu 24.04
 
 Step 2: Connect to your new VPS and run Initial Setup
@@ -313,10 +290,79 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Fixed: FastAPI `VPS Manager` Add VPS `PBRemote bucket` pre-flight check now runs the same real `rclone ls` connectivity test as the PBRemote service bucket test instead of only comparing the entered bucket name to the locally configured one, so valid edited bucket names no longer fail with a false `Bucket mismatch` error.
+- Changed: FastAPI `VPS Manager` Add VPS `CoinData API key` pre-flight check now returns the same detailed CoinMarketCap key-status data as the settings service and shows monthly/day credit usage, remaining credits, and reset time directly in the pre-flight card instead of only a generic `API key OK` result.
+- Changed: FastAPI `VPS Manager` Add VPS now treats `Allowed SSH IPs` as a pre-flight validation card instead of a generic status-detail field, and the redundant `Swap size` status card was removed because the dropdown already constrains that input to valid choices.
+- Fixed: FastAPI `VPS Manager` `Setup VPS` now re-enables correctly after interrupted setup runs when the VPS user password is still only stored as a session secret, and the setup view now re-renders when late-loaded swap options arrive so the `Swap Size` dropdown no longer gets stuck showing only `0` until you leave and reopen the page.
+- Fixed: FastAPI `VPS Manager` VPS setup still had one remaining old local-refresh gate that could disable `Setup VPS` again after render, and the VPS user-password eye button now reveals stored session secrets through safe host/field arguments instead of a broken inline function literal.
+- Fixed: FastAPI `VPS Manager` `vps-setup` now also syncs browser/autofill/revealed password values from the visible password input back into the local form state, so `Setup VPS` no longer stays disabled just because the password was present in the DOM but missing from `ui.form`.
+- Fixed: FastAPI `VPS Manager` no longer adds a VPS to `vps_monitor.enabled_hosts` before setup has actually succeeded, so fresh hosts do not get stuck red/offline in the async VPS monitor from early pre-setup SSH/auth failures; hosts are now auto-added only after a successful `Setup VPS` finish callback.
+- Changed: FastAPI `VPS Manager` now opens the VPS task log immediately when `Initialize & Setup VPS` or `Setup VPS` is started, and when auto-setup begins after a successful init it shows a success toast and automatically switches from the init log to the setup log instead of returning to the host status page.
+- Changed: FastAPI `VPS Manager` now also shows a `Setup successful.` toast and automatically returns from the VPS setup log to the host main view once the setup run finishes successfully.
+- Fixed: FastAPI `VPS Manager` `Reboot Master` no longer uses Ansible's local `reboot` module path that refuses to reboot the control node; the localhost playbook now uses the same sudo-runtime guards as `Update Linux` and schedules the reboot via a detached local `shutdown -r now` command instead.
 - Added: FastAPI `VPS Manager` Master view now has a `Host Logs` sidebar button that opens a browseable live log viewer for local system logs (PBRun, PBRemote, PBGui, etc.) and any running v7 bot instances on the master, consistent with the existing VPS `Host Logs` button.
 - Fixed: FastAPI `VPS Manager` Master `Host Logs` navigation now writes and restores the `#master/host-logs` URL hash consistently, so reload and browser navigation keep the same view.
 - Fixed: FastAPI `VPS Manager` Master `Host Logs` now switches from the local file list to the selected VPS service list correctly when you change the host dropdown away from `local`.
+- Changed: FastAPI `VPS Manager` Master branch management now uses dedicated `PBGui Branch` and `PB7 Branch` sidebar views like the VPS flow, and the branch panels were removed from the Master overview.
 - Added: FastAPI `VPS Manager` Master view now has a `Task Logs` sidebar button that opens a browseable list of all `MasterAction:*` task logs, consistent with the existing VPS `Task Logs` button.
+- Fixed: FastAPI `VPS Manager` branch panels no longer report `behind origin` just because the cached branch history head differs from the current commit; the warning now only appears when the current commit is actually present behind the loaded branch head.
+- Fixed: FastAPI `VPS Manager` branch panels no longer treat `HEAD (latest)` as an implicit commit switch when the loaded branch history is stale and does not contain the current local commit.
+- Fixed: FastAPI `VPS Manager` PB7 branch management now defaults the selected remote to the branch's actual configured tracking remote when available, instead of blindly preferring `fork` or `origin`.
+- Fixed: FastAPI `VPS Manager` PB7 branch management now updates the displayed remote URL immediately when you switch the selected remote name, instead of falling back to the previous default remote URL.
+- Fixed: FastAPI `VPS Manager` PB7 remote-name changes now immediately load the matching configured remote URL from the current branch state for both Master and VPS views, so choosing `fork` no longer leaves the previous `origin` URL visible.
+- Fixed: FastAPI `VPS Manager` PB7 branch management now renders its remote and branch input handlers with safe HTML quoting, so selecting a different remote in the dropdown actually triggers the intended setter instead of silently leaving the old URL on screen.
+- Fixed: FastAPI `VPS Manager` PB7 `Switch to upstream master` now also updates the visible remote selection in the UI to `origin`, and the branch view re-syncs its default remote from fresh detail data again when no custom remote branch workflow is active.
+- Fixed: FastAPI `VPS Manager` PB7 branch management no longer forces the selected remote back to the default on every render, so manual switches like `origin` -> `fork` now stay selected until you change them again.
+- Changed: FastAPI `VPS Manager` PB7 branch management now separates `Remote Source` from the `Local Branch Target` section and uses clearer action/field labels, so fork/upstream selection is easier to understand without extra explanatory UI text.
+- Changed: FastAPI `VPS Manager` PB7 remote workflow now auto-loads remote branches when you switch the selected remote and auto-loads remote commits when you pick or enter a remote branch, so the extra `Load remote commits` button is no longer needed.
+- Changed: FastAPI `VPS Manager` PB7 remote workflow now also reloads its remote branches and branch commits automatically when the page is refreshed, so the manual `Load remote branches` button is no longer needed either.
+- Fixed: FastAPI `VPS Manager` PB7 branch management now keeps the selected remote branch highlighted in the dropdown after view re-renders and page refreshes, so the visible branch selection stays in sync with the loaded remote commit history.
+- Changed: FastAPI `VPS Manager` PB7 branch management now resolves an explicit source/target mapping, so `Remote Branch` is the source branch, `Local Branch` is the target branch, and the panel shows the resulting sync direction directly.
+- Fixed: FastAPI `VPS Manager` PB7 `Remote Branch` dropdown no longer closes itself immediately when async remote-branch data arrives, because branch/commit refreshes now wait until the current dropdown interaction finishes before re-rendering the view.
+- Fixed: FastAPI `VPS Manager` PB7 `Remote Branch` dropdown now also ignores the periodic master/VPS detail refresh re-render while the select is open, so reopening the branch list right after one selection no longer gets interrupted by the 3-second live refresh cycle.
+- Fixed: FastAPI `VPS Manager` PB7 `Local Branch` dropdown now uses the same interaction guard as the remote-branch selector, so reopening the local branch list is no longer interrupted by background re-renders from the live detail refresh.
+- Changed: FastAPI `VPS Manager` PB7 local branch selection now auto-switches `Selected Remote` to that branch's configured tracking remote when one exists, so choosing a local branch like `pr-561` can automatically move the source remote from `origin` to `fork` instead of leaving a misleading remote selection in place.
+- Fixed: FastAPI `VPS Manager` PB7 branch switching now blocks invalid sync attempts when the resolved source branch does not exist on the selected remote, instead of only failing later inside the checkout/reset task.
+- Fixed: FastAPI `VPS Manager` PB7 remote-source text inputs now apply on commit instead of on every keystroke, so editing the remote URL or manual remote branch no longer triggers failing auto-load requests against incomplete values like half-typed GitHub URLs.
+- Fixed: FastAPI `VPS Manager` PB7 branch messaging no longer claims it will switch to a local target branch when the resolved source branch is missing on the selected remote; it now shows a direct `Cannot sync` warning instead.
+- Changed: FastAPI `VPS Manager` PB7 `Remote Commit` is now a dropdown of the loaded source-branch commit history instead of a free text field, and that source-branch history now auto-loads even when `Remote Branch` is left on `Use local branch target`.
+- Fixed: FastAPI `VPS Manager` PB7 source-commit autoload now resolves the effective source branch from `Remote Branch` or `Local Branch`, so opening the PB7 branch view no longer shows a false `Please provide a remote URL and manual branch first.` warning when `Remote Branch` is left on `Use local branch target`.
+- Fixed: FastAPI `VPS Manager` PB7 remote commit loader now preserves the real git stderr when fetch/log setup fails, instead of collapsing backend-raised errors into the generic `Failed to run git to fetch remote commit history.` message.
+- Fixed: FastAPI `VPS Manager` PB7 local-branch changes no longer auto-request remote commit history for source branches that are already known to be missing on the selected remote, so the panel now stays on the inline `Cannot sync` warning instead of raising a backend fetch error on the second branch selection.
+- Changed: FastAPI `VPS Manager` PB7 remote-branch selection now also pre-fills `Local Branch` with the same branch name, so choosing a source branch like `docker` immediately targets local `docker` unless you intentionally change the local target afterwards.
+- Fixed: FastAPI `VPS Manager` PB7 no longer falls the local target branch back to the current branch just because the chosen target is not yet present in the local branch cache, so remote-only targets like `docker` now stay selected instead of snapping back to `master`.
+- Fixed: FastAPI `VPS Manager` PB7 `Local Branch` now also shows the currently chosen target branch in the dropdown even before it exists in the local branch cache, so the visible select value stays aligned with the `Source`/`Target` preview and the action that will run.
+- Changed: FastAPI `VPS Manager` PB7 remote source selection now uses the `Remote Branch` dropdown as the only visible branch-source control, and the redundant `Remote Branch Name` text field was removed from the main panel.
+- Changed: FastAPI `VPS Manager` PB7 remote-sync mode now removes the separate `Local Commit` selector from the main panel, so commit selection comes only from the remote source side instead of mixing remote and local commit targets in one action.
+- Changed: FastAPI `VPS Manager` PB7 remote-sync mode now also removes the old `+50 local commits` and `All local commits` actions from the main panel, because that local-history expansion flow no longer belongs in the remote-source branch switch UI.
+- Changed: FastAPI `VPS Manager` PB7 remote-sync mode now also removes the leftover `Reload` action from the main panel, because remote branch and commit state already refresh automatically and the button no longer had a clear purpose.
+- Fixed: FastAPI `VPS Manager` PB7 no longer reports `Already on branch ... at the latest commit` just because the local and target branch names match; when a selected remote branch head differs from the current local commit, the action now stays enabled and the panel treats that as a pending reset/update instead of an on-target state.
+- Fixed: FastAPI `VPS Manager` PB7 now shows how many commits the current local branch is behind when the selected remote source is the same branch name but a newer head, instead of only showing the target commit hash.
+- Changed: FastAPI `VPS Manager` Master sidebar no longer shows the old standalone `Update PB7 venv` and `Install PBGui venv` actions, because those local master venv maintenance buttons were legacy leftovers.
+- Changed: Removed the obsolete local-master venv playbooks `master-pbgui-python312.yml` and `master-pb7-python312.yml`, and cleaned up the remaining log-viewer/setup references that still mentioned those retired actions.
+- Changed: Removed the obsolete Python 3.10 -> 3.12 migration scripts `setup/mig_py312.sh` and `setup/mig_py310.sh`, and cleaned the old migration documentation/help text that still referenced that one-time upgrade path.
+- Changed: FastAPI `VPS Manager` Master sidebar now follows the VPS sidebar structure more closely: `Home` was renamed to `Overview`, update actions use live status-based button classes, `Tasks` and `Tools` separators were added, and the duplicate `Sudo password` field was removed from the main Master status panel.
+- Changed: FastAPI `VPS Manager` Master `Install rustup` and `Install rclone` now prompt for the sudo password only when started, and the persistent Master sidebar sudo-password field was removed to match the VPS task flow more closely.
+- Changed: FastAPI `VPS Manager` Master `Install rclone` is now shown as a neutral `Install or Update rclone` tool action instead of a warning-colored install-only button, because the underlying playbook can also act as a reinstall/update path when rclone is already present.
+- Changed: FastAPI `VPS Manager` Master `Install rustup` is now also shown as a neutral `Install or Update rustup` tool action, because the underlying playbook updates the rust toolchain as well and is not only for first-time installation.
+- Changed: FastAPI `VPS Manager` Master sidebar now also offers `Update Linux` with the same task-log flow and optional reboot toggle as the VPS sidebar, while the local localhost playbook currently fails fast with a clear message on unsupported non-Debian systems.
+- Changed: FastAPI `VPS Manager` Master now also has a dedicated `Reboot Master` sidebar action, and `Update Linux` no longer stays in warning state just because only a reboot is still pending after packages are already current.
+- Fixed: FastAPI `VPS Manager` Master sidebar action buttons now re-render when local master update/reboot state changes, so `Update Linux` no longer stays green after the Master detail cards already show pending package updates or reboot-required state.
+- Fixed: `master-update-linux.yml` now skips sudo when the local Ansible run is already `root`, and otherwise fails with a clear PBGui message when localhost sudo is blocked by container `no_new_privileges` restrictions instead of surfacing a raw Ansible become stream error.
+- Fixed: FastAPI `VPS Manager` Master status now reports when localhost Linux update tasks are blocked by the current API runtime privilege model (`NoNewPrivs`), and the Master sidebar disables `Update Linux` with the explicit reason instead of offering a task that cannot escalate locally.
+- Fixed: FastAPI `VPS Manager` Master also applies the same local sudo-runtime guard to `Install or Update rustup` and `Install or Update rclone`, so those localhost sudo actions are disabled together with `Update Linux` when the API process cannot escalate locally.
+- Fixed: FastAPI `VPS Manager` Master now refreshes localhost package-update and reboot-required state on every master detail refresh, so `Update Linux` immediately clears stale pending-update counts after a local Linux update instead of waiting for the next hourly full refresh.
+- Changed: FastAPI `VPS Manager` Master now shows only one short runtime-warning notice for blocked localhost sudo tasks, instead of repeating longer warnings around the individual Linux/tool actions.
+- Changed: FastAPI `VPS Manager` Master now places the `Reboot after Linux update` checkbox before `Update Linux`, matching the VPS sidebar action ordering exactly.
+- Changed: FastAPI `VPS Manager` Add VPS sidebar no longer shows a redundant `Refresh` action, and the provider recommendation copy now points only to `IONOS` and `Servitro`, including the IONOS affiliate link plus the concrete `Linux VPS` -> `VPS S+` / `VPS M+` specs and the current Servitro `Virtual-1` coupon recommendation; the README provider recommendations were updated to the same two current options.
+- Changed: FastAPI `VPS Manager` Add VPS now also shows a `Status Details` card grid for the init form, so you can see init readiness and which required IP/hostname/user/credential fields are still missing before running `Init VPS`.
+- Fixed: FastAPI `VPS Manager` Add VPS now pre-fills `VPS user name` from the local configured user and refreshes the new init `Status Details` cards live while you type, so fields like `VPS IP` no longer stay stale on `Missing` until a later full re-render.
+- Changed: FastAPI `VPS Manager` Add VPS now only shows `Remove user from VPS after init` when the init method is `password` or `private_key`, matching the original Streamlit init form behavior.
+- Added: FastAPI `VPS Manager` Add VPS now has a `Browse` button for the private key file path field, opening a server-side directory navigator similar to the original Streamlit file selector.
+- Changed: FastAPI `VPS Manager` Master main view now mirrors the VPS main view text more closely by using the same `Status Details` title and removing redundant helper copy from the Master status/progress panels.
+- Changed: FastAPI `VPS Manager` Master main view no longer shows a separate `Progress` panel, because the real task output already lives in the shared log viewer and the extra summary block did not add useful information.
+- Changed: FastAPI `VPS Manager` Master `Status Details` now renders exactly five equal-width cards in one row for `Last update`, `Last command`, `Online`, `Rclone Ready`, and `CoinData Ready`, instead of mixing different card groups and stacked layouts.
+- Fixed: FastAPI `VPS Manager` PB7 remote branch commit loading now fetches the selected remote branch into a temporary git object store before reading its log, so choosing an `origin` branch no longer fails with `fatal: bad object <hash>` for remote-only commits.
 - Fixed: FastAPI `VPS Manager` PB7 branch management now clears stale custom-remote branch/commit caches when the selected remote changes, can load commit history for a manually entered fork/PR branch directly from the selected remote URL, and clarifies in the UI that a manual commit performs a branch reset to that commit instead of a detached checkout.
 - Changed: FastAPI `VPS Manager` PB7 branch management now shows an expandable list of the commits missing from the current local branch head when it is behind `origin`, and each missing commit gets a direct GitHub details link when the tracked remote points at GitHub.
 - Changed: FastAPI `VPS Manager` missing-commit entries in PB7 branch management can now lazy-load a GitHub-style inline commit preview inside PBGui, including the full commit message, per-file stats, and patch hunks from the GitHub commit API, cached per commit so you can inspect it without leaving the page.
@@ -558,6 +604,30 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Fixed: The shared FastAPI top navigation now keeps protected menu groups disabled while the browser is logged out, preventing guest clicks from ending on raw `Missing authentication token` API errors.
 - Fixed: Streamlit now restarts a stale PBApiServer automatically when the running API process is missing the newer `/api/auth/*` welcome routes, and the Streamlit `Market Data` entry now points cleanly to the FastAPI page instead of the removed legacy target.
 - Changed: PB7 config imports are now loaded lazily with a dedicated configuration error, so a broken `pb7dir` no longer prevents `PBApiServer.py` from starting and the UI can surface the problem cleanly.
+- Fixed: FastAPI `VPS Manager` Add VPS init method switch now updates the visible credential fields immediately when you change the dropdown, instead of waiting for the next periodic state refresh.
+- Fixed: FastAPI `VPS Manager` Add VPS file browser now updates the `private_key_file` input field immediately after selecting a file, instead of leaving the old path visible until the next full re-render.
+- Fixed: FastAPI `VPS Manager` Add VPS init method switch no longer breaks the Step 4 form layout when fields update dynamically.
+- Added: FastAPI `VPS Manager` Add VPS now shows a `Pre-flight Checks` panel with two status cards under Step 3: the first verifies that the IP and hostname exist in local `/etc/hosts`, and the second tests SSH connectivity using the entered init credentials as soon as the first check passes.
+- Added: FastAPI `VPS Manager` Add VPS `Pre-flight Checks` now shows an `Add to local /etc/hosts` button when IP and hostname are entered but missing from `/etc/hosts`; clicking it prompts for the local sudo password and writes the entry directly, then re-runs the checks.
+- Fixed: FastAPI `VPS Manager` Add VPS `Pre-flight Checks` SSH card now clearly states `Add IP/hostname to /etc/hosts first` instead of the ambiguous `Waiting for /etc/hosts check` when the hosts entry is still missing.
+- Fixed: FastAPI `VPS Manager` Add VPS `Add to local /etc/hosts` no longer creates duplicate entries; it now updates the existing hostname line if present and preserves any other aliases on that line, and appends only if the hostname did not exist.
+- Changed: FastAPI `VPS Manager` Add VPS `Pre-flight Checks` now detects when the hostname already exists in `/etc/hosts` but with a different IP, shows the mismatch explicitly in the hosts card, changes the button to `Replace in /etc/hosts`, and prompts for confirmation before overwriting the existing entry.
+- Fixed: FastAPI `VPS Manager` Add VPS `Replace in /etc/hosts` now uses the shared `openConfirmModal` dialog instead of a native browser `confirm()` popup, matching the project's custom modal pattern.
+- Fixed: FastAPI `VPS Manager` VPS deletion confirmation (`confirmDeleteVps`) now also uses `openConfirmModal` instead of a native browser `confirm()` popup.
+- Added: FastAPI `VPS Manager` Add VPS now validates that passwords do not contain `{{` or `}}` (Jinja2 delimiters) both in the frontend status cards and in the backend form handlers, preventing Ansible playbook failures when passwords include those character sequences.
+- Changed: FastAPI `VPS Manager` Add VPS flow now combines init and setup into a single step: the form collects all init credentials and setup fields (swap, bucket, CoinMarketCap API key, firewall) together, the button is now `Initialize & Setup VPS`, and the separate `Save VPS Entry` panel was removed.
+- Changed: FastAPI `VPS Manager` Add VPS `canInitForm()` now also validates setup fields, and `renderAddStatusDetails()` shows status cards for swap size, PBRemote bucket, and CoinData API key readiness.
+- Changed: FastAPI `VPS Manager` backend `init_vps()` now applies setup form fields before starting init and passes `auto_setup=True` to `VPSManager.init_vps()`, so the init callback automatically starts the setup playbook when init succeeds.
+- Changed: FastAPI `VPS Manager` Add VPS `PBRemote Bucket` and `CoinMarketCap API Key` fields are now read-only and automatically pre-filled from the local runtime config (`pbremote.bucket` and `PBCoinData.api_key`).
+- Changed: FastAPI `VPS Manager` Add VPS `ensureAddFormDefaults()` now injects the auto-configured bucket and API key into the form if they are missing.
+- Changed: FastAPI `VPS Manager` `build_state()` now includes `bucket` and `coinmarketcap_api_key` in the `config` payload so the frontend can pre-fill setup fields without user input.
+- Changed: FastAPI `VPS Manager` Add VPS `PBRemote Bucket` and `CoinMarketCap API Key` fields are now editable (not read-only) again; the CoinMarketCap key uses the shared visibility toggle with the eye icon.
+- Added: FastAPI `VPS Manager` Add VPS now validates `PBRemote Bucket` and `CoinMarketCap API Key` live: debounced WebSocket checks run 600ms after typing stops, and the `Status Details` cards show `Checking...`, `OK`, or the actual error from the backend.
+- Added: FastAPI `VPS Manager` backend `check_bucket()` verifies the bucket name against the local `pbremote.bucket` and that rclone is installed; `check_cmc_api_key()` validates the key via `PBCoinData.fetch_api_status()`.
+- Changed: FastAPI `VPS Manager` Add VPS `canInitForm()` now requires both the bucket check and the CoinMarketCap API key check to pass before the `Initialize & Setup VPS` button is enabled.
+- Changed: FastAPI `VPS Manager` Add VPS `PBRemote bucket` and `CoinData API key` status cards moved from the `Status Details` panel into the `Pre-flight Checks` panel, so all external dependency checks live in one place.
+- Added: FastAPI `VPS Manager` Add VPS now validates `Allowed SSH IPs` on every keystroke; the `Firewall IPs` status card shows `Invalid IPv4: x.x.x.x` when a comma-separated list contains a bad address, and the `Initialize & Setup VPS` button stays disabled until the list is valid.
+- Fixed: FastAPI `VPS Manager` Add VPS live checks (`/etc/hosts`, SSH, bucket, CoinData API key) no longer get stuck in a perpetual 600ms debounce loop because `renderAddView()` was re-triggering them on every background state refresh; checks are now started from `selectView('add')` and `setAddField()` only, and `ensureAddFormDefaults()` triggers bucket/CMC checks when it auto-fills values from the incoming runtime config.
 
 ## v1.77 (03-05-2026)
 - Changed: the README `Docker (Any OS)` section now points to the actively maintained community project `dreamelite96/pbgui-docker` instead of the previous Docker link.

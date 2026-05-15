@@ -562,6 +562,12 @@
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     }
 
+    .master-status-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+
     .status-item {
       padding: 12px;
       border-radius: 14px;
@@ -2554,6 +2560,19 @@
     </div>
   </div>
 
+  <div id='fileBrowserOverlay' style='display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.5)'>
+    <div style='position:absolute;inset:0;display:flex;align-items:center;justify-content:center'>
+      <div style='background:var(--shell-bg,#0f1724);border:1px solid rgba(255,255,255,0.1);border-radius:12px;width:520px;max-height:70vh;display:flex;flex-direction:column'>
+        <div style='padding:14px 18px;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center'>
+          <div style='font-weight:700;font-size:var(--fs-base)'>Select Private Key File</div>
+          <button class='close-btn' type='button' onclick='closeFileBrowser()'>&times;</button>
+        </div>
+        <div id='fileBrowserCwd' style='padding:8px 18px;font-size:var(--fs-sm);color:var(--text-muted);word-break:break-all'></div>
+        <div id='fileBrowserList' style='flex:1;overflow-y:auto;padding:0 18px 14px;max-height:50vh'></div>
+      </div>
+    </div>
+  </div>
+
   <div id='page-body'>
     <aside id='sidebar'>
       <div id='sidebar-resize'></div>
@@ -2614,10 +2633,15 @@
       hostname: '',
       addDebug: false,
       addForm: defaultAddForm(),
+      addVpsReady: { hostsOk: false, sshOk: false, sshError: '', loading: false },
+      addBucketCheck: { ok: false, error: '', loading: false },
+      addCmcCheck: { ok: false, error: '', loading: false, credit_limit_monthly: null, credits_used_day: null, credits_used_month: null, credits_left: null, credit_limit_monthly_reset_timestamp: null },
+      pendingAutoSetupSwitch: null,
       master: defaultMasterUi(),
       taskLog: defaultTaskLog(),
       vps: {},
       sidebarSelectInteracting: false,
+      pb7BranchSelectInteracting: false,
       helpLang: 'en',
       helpTopics: [],
       helpTopicIndex: -1,
@@ -2672,6 +2696,7 @@
         initialized: false,
         debug: false,
         sudoPw: '',
+        updateReboot: true,
         pbguiBranch: '',
         pbguiCommit: 'HEAD',
         pb7Branch: '',
@@ -2679,7 +2704,9 @@
         pb7RemoteName: '',
         pb7RemoteUrl: '',
         pb7ManualBranch: '',
-        pb7ManualCommit: ''
+        pb7ManualCommit: '',
+        pb7RemoteBranchesKey: '',
+        pb7RemoteCommitsKey: ''
       };
     }
 
@@ -2710,7 +2737,9 @@
         pb7RemoteName: '',
         pb7RemoteUrl: '',
         pb7ManualBranch: '',
-        pb7ManualCommit: ''
+        pb7ManualCommit: '',
+        pb7RemoteBranchesKey: '',
+        pb7RemoteCommitsKey: ''
       };
     }
 
@@ -2718,17 +2747,22 @@
       if (!uiState) return;
       uiState.remoteBranches = [];
       uiState.pb7RemoteCommits = {};
+      uiState.pb7RemoteBranchesKey = '';
+      uiState.pb7RemoteCommitsKey = '';
     }
 
     function setPb7RemoteName(scope, value) {
       if (scope === 'master') {
+        const state = store.detail && store.detail.kind === 'master' ? (store.detail.branches.pb7 || {}) : {};
         store.master.pb7RemoteName = value;
-        store.master.pb7RemoteUrl = '';
+        store.master.pb7RemoteUrl = String((state.remote_urls || {})[value] || '');
         clearPb7RemoteCache(store.master);
       } else {
+        const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === scope ? store.detail : null;
+        const state = detail ? (detail.branches.pb7 || {}) : {};
         const ui = ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
         ui.pb7RemoteName = value;
-        ui.pb7RemoteUrl = '';
+        ui.pb7RemoteUrl = String((state.remote_urls || {})[value] || '');
         clearPb7RemoteCache(ui);
       }
       renderUi({ forceView: true });
@@ -2746,24 +2780,87 @@
       refreshLocalInteractiveState();
     }
 
-    function setPb7ManualBranch(scope, value) {
-      if (scope === 'master') {
-        store.master.pb7ManualBranch = value;
-        store.master.pb7ManualCommit = '';
+    function setPb7LocalBranch(scope, value) {
+      const nextBranch = String(value || '');
+      const isMaster = scope === 'master';
+      const detail = store.detail && ((isMaster && store.detail.kind === 'master') || (!isMaster && store.detail.kind === 'vps' && store.detail.hostname === scope)) ? store.detail : null;
+      const state = detail ? (detail.branches.pb7 || {}) : {};
+      const trackingRemotes = state.branch_tracking_remotes || {};
+      const trackingRemoteName = String(trackingRemotes[nextBranch] || '');
+      const remoteUrls = state.remote_urls || {};
+      if (isMaster) {
+        store.master.pb7Branch = nextBranch;
+        if (trackingRemoteName) {
+          store.master.pb7RemoteName = trackingRemoteName;
+          store.master.pb7RemoteUrl = String(remoteUrls[trackingRemoteName] || '');
+          clearPb7RemoteCache(store.master);
+        }
       } else {
-        const ui = ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
-        ui.pb7ManualBranch = value;
-        ui.pb7ManualCommit = '';
+        const ui = ensureVpsUi(scope, detail);
+        ui.pb7Branch = nextBranch;
+        if (trackingRemoteName) {
+          ui.pb7RemoteName = trackingRemoteName;
+          ui.pb7RemoteUrl = String(remoteUrls[trackingRemoteName] || '');
+          clearPb7RemoteCache(ui);
+        }
       }
       renderUi({ forceView: true });
     }
 
+    function setPb7ManualBranch(scope, value) {
+      const nextBranch = String(value || '');
+      if (scope === 'master') {
+        store.master.pb7ManualBranch = nextBranch;
+        store.master.pb7ManualCommit = '';
+        if (nextBranch) {
+          store.master.pb7Branch = nextBranch;
+          store.master.pb7Commit = 'HEAD';
+        }
+      } else {
+        const ui = ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
+        ui.pb7ManualBranch = nextBranch;
+        ui.pb7ManualCommit = '';
+        if (nextBranch) {
+          ui.pb7Branch = nextBranch;
+          ui.pb7Commit = 'HEAD';
+        }
+      }
+      renderUi({ forceView: true });
+    }
+
+    function syncPb7RemoteLoads(scope, uiState, state) {
+      if (!uiState || !state) return;
+      const remoteName = String(uiState.pb7RemoteName || state.default_remote_name || '');
+      const remoteUrl = String(uiState.pb7RemoteUrl || (state.remote_urls || {})[remoteName] || '');
+      const sourceBranch = String(uiState.pb7ManualBranch || uiState.pb7Branch || state.current_branch || '');
+      const remoteBranches = Array.isArray(uiState.remoteBranches) ? uiState.remoteBranches : [];
+      const branchesKey = remoteUrl ? (remoteName + '|' + remoteUrl) : '';
+      if (branchesKey && uiState.pb7RemoteBranchesKey !== branchesKey) {
+        uiState.pb7RemoteBranchesKey = branchesKey;
+        uiState.pb7RemoteCommitsKey = '';
+        loadRemoteBranches(scope);
+      }
+      const canLoadCommits = remoteUrl && sourceBranch && (!remoteBranches.length || remoteBranches.indexOf(sourceBranch) >= 0);
+      const commitsKey = canLoadCommits ? (branchesKey + '|' + sourceBranch) : '';
+      if (commitsKey && uiState.pb7RemoteCommitsKey !== commitsKey) {
+        uiState.pb7RemoteCommitsKey = commitsKey;
+        loadRemoteBranchCommits(scope);
+      }
+      if (!commitsKey) {
+        uiState.pb7RemoteCommitsKey = '';
+      }
+    }
+
     function isMasterContextView() {
-      return store.view === 'master' || store.view === 'master-task-log' || store.view === 'master-host-logs';
+      return store.view === 'master' || store.view === 'master-task-log' || store.view === 'master-host-logs' || store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch';
     }
 
     function isVpsContextView() {
       return !!store.hostname && (store.view === 'vps' || store.view === 'vps-task-log' || store.view === 'vps-host-logs' || store.view === 'vps-setup' || store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch');
+    }
+
+    function isPb7BranchView() {
+      return store.view === 'master-pb7-branch' || store.view === 'vps-pb7-branch';
     }
 
     function isVpsTaskLogAlias(file, hostname) {
@@ -2827,7 +2924,17 @@
         });
       }
       if (isMasterContextView()) {
-        return stableStringify({ view: store.view });
+        const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
+        const st = (detail && detail.status) || {};
+        return stableStringify({
+          view: store.view,
+          pbgui_up: !!st.pbgui_update_available,
+          pb7_up: !!st.pb7_update_available,
+          pending_updates: st.pending_updates == null ? '' : String(st.pending_updates),
+          reboot_required: !!((st.summary_row || {}).reboot_required),
+          debug: !!store.master.debug,
+          update_reboot: !!store.master.updateReboot
+        });
       }
       if (store.view === 'overview') {
         return stableStringify({
@@ -2894,6 +3001,40 @@
           remoteBranches: Array.isArray(store.master.remoteBranches) ? store.master.remoteBranches : []
         });
       }
+      if (store.view === 'master-pbgui-branch') {
+        const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
+        const state = detail && detail.branches ? (detail.branches.pbgui || {}) : {};
+        return stableStringify({
+          view: 'master-pbgui-branch',
+          ready: !!detail,
+          selectedBranch: store.master.pbguiBranch || '',
+          selectedCommit: store.master.pbguiCommit || 'HEAD',
+          currentBranch: state.current_branch || '',
+          currentCommit: state.current_commit || '',
+          availableBranches: Array.isArray(state.available_branches) ? state.available_branches : [],
+          commitCount: Array.isArray(state.commits) ? state.commits.length : 0
+        });
+      }
+      if (store.view === 'master-pb7-branch') {
+        const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
+        const state = detail && detail.branches ? (detail.branches.pb7 || {}) : {};
+        return stableStringify({
+          view: 'master-pb7-branch',
+          ready: !!detail,
+          selectedBranch: store.master.pb7Branch || '',
+          selectedCommit: store.master.pb7Commit || 'HEAD',
+          remoteName: store.master.pb7RemoteName || '',
+          remoteUrl: store.master.pb7RemoteUrl || '',
+          manualBranch: store.master.pb7ManualBranch || '',
+          manualCommit: store.master.pb7ManualCommit || '',
+          currentBranch: state.current_branch || '',
+          currentCommit: state.current_commit || '',
+          availableBranches: Array.isArray(state.available_branches) ? state.available_branches : [],
+          remoteBranches: Array.isArray(store.master.remoteBranches) ? store.master.remoteBranches : [],
+          remoteCommitKeys: Object.keys(store.master.pb7RemoteCommits || {}),
+          localCommitCount: Array.isArray(state.commits) ? state.commits.length : 0
+        });
+      }
       if (store.view === 'master-task-log') {
         return stableStringify({
           view: 'master-task-log',
@@ -2906,6 +3047,8 @@
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
         const monitor = detail && detail.monitor ? detail.monitor : {};
         const ui = store.hostname && store.vps[store.hostname] ? store.vps[store.hostname] : null;
+        const config = ((store.state || {}).config) || {};
+        const secretStatus = (((detail || {}).config || {}).secret_status) || {};
         return stableStringify({
           view: store.view,
           hostname: store.hostname || '',
@@ -2913,6 +3056,13 @@
           hasServerMetrics: store.view === 'vps' ? !!monitor.server : false,
           hasV7Rows: store.view === 'vps' ? (Array.isArray(monitor.v7) && monitor.v7.length > 0) : false,
           hasV7Fallback: store.view === 'vps' ? (Array.isArray(monitor.v7_running) && monitor.v7_running.length > 0) : false,
+          swapOptions: store.view === 'vps-setup' ? (Array.isArray(config.swap_options) ? config.swap_options : []) : [],
+          uiSwap: store.view === 'vps-setup' && ui && ui.form ? String(ui.form.swap || '') : '',
+          uiBucket: store.view === 'vps-setup' && ui && ui.form ? String(ui.form.bucket || '') : '',
+          uiCmc: store.view === 'vps-setup' && ui && ui.form ? String(ui.form.coinmarketcap_api_key || '') : '',
+          uiFirewallIps: store.view === 'vps-setup' && ui && ui.form ? String(ui.form.firewall_ssh_ips || '') : '',
+          userPwStored: store.view === 'vps-setup' ? !!(((secretStatus.user_pw) || {}).stored) : false,
+          userPwRemaining: store.view === 'vps-setup' ? Number((((secretStatus.user_pw) || {}).remaining_seconds) || 0) : 0,
           remoteBranches: ui && Array.isArray(ui.remoteBranches) ? ui.remoteBranches : [],
           taskLogFile: store.taskLog.file || '',
           taskLogTitle: store.taskLog.title || '',
@@ -3146,15 +3296,22 @@
         <span class='tag ${status.coindata_ok ? 'ok' : 'warning'}'>CoinData ${status.coindata_ok ? 'Ready' : 'Missing'}</span>`;
     }
 
-    function renderMasterStatusFields(status, summary) {
+    function renderMasterStatusCards(status) {
+      function masterFlagCard(key, label, ok, sub) {
+        return `<div class='status-item' data-flag='${escAttr(key)}'><div class='status-label'>${esc(label)}</div><div class='status-value'>${boolDot(ok)}</div><div class='status-sub'>${esc(sub)}</div></div>`;
+      }
+      const coindataSub = status.coindata_ok
+        ? ((status.cmc_credits !== null && status.cmc_credits !== undefined && String(status.cmc_credits).trim() !== '')
+            ? asCountLabel(status.cmc_credits, 'credit left', 'credits left')
+            : 'CoinData API OK')
+        : 'CoinData API missing/invalid';
       return `
-        <div class='field span-2' data-field='last-command'>
-          <label>Last command</label>
-          <div class='field-static code'>${esc(status.last_command || '-')}</div>
-        </div>
-        <div class='field' data-field='last-update'>
-          <label>Last update</label>
-          <div class='field-static'>${esc(status.last_update || '-')}</div>
+        <div class='master-status-grid'>
+          <div class='status-item' data-field='last-update'><div class='status-label'>Last update</div><div class='status-value'>${esc(status.last_update || '-')}</div></div>
+          <div class='status-item' data-field='last-command'><div class='status-label'>Last command</div><div class='status-value code'>${esc(status.last_command || '-')}</div></div>
+          ${masterFlagCard('online', 'Online', !!status.online, status.online ? 'Live telemetry received' : 'No current live telemetry')}
+          ${masterFlagCard('rclone_ok', 'Rclone Ready', !!status.rclone_ok, status.rclone_ok ? 'PBRemote bucket available' : 'PBRemote bucket missing')}
+          ${masterFlagCard('coindata_ok', 'CoinData Ready', !!status.coindata_ok, coindataSub)}
         </div>`;
     }
 
@@ -3179,7 +3336,7 @@
     }
 
     function syncCurrentVpsSecretsFromDom() {
-      if (store.view !== 'vps' || !store.hostname) return false;
+      if ((store.view !== 'vps' && store.view !== 'vps-setup') || !store.hostname) return false;
       const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
       const ui = ensureVpsUi(store.hostname, detail);
       const inputs = Array.from(document.querySelectorAll('.pw-wrap input[oninput]'));
@@ -3209,7 +3366,7 @@
       const ui = ensureVpsUi(hostname, detail);
       const localValue = String((((ui || {}).form || {}).user_pw) || '');
       if (localValue.trim()) return localValue;
-      if (store.view === 'vps' && store.hostname === hostname && syncCurrentVpsSecretsFromDom()) {
+      if ((store.view === 'vps' || store.view === 'vps-setup') && store.hostname === hostname && syncCurrentVpsSecretsFromDom()) {
         return String((((ui || {}).form || {}).user_pw) || '');
       }
       return '';
@@ -3298,10 +3455,6 @@
       const addInitBtn = document.getElementById('add-init-btn');
       if (addInitBtn) addInitBtn.disabled = !canInitForm(store.addForm);
 
-      const masterNeedsSudo = !store.master.sudoPw;
-      document.querySelectorAll('[data-master-sudo-required="true"]').forEach(function (btn) {
-        btn.disabled = masterNeedsSudo;
-      });
       if (store.view === 'vps' && store.hostname) {
         const syncedSecrets = syncCurrentVpsSecretsFromDom();
         const ui = ensureVpsUi(store.hostname, store.detail && store.detail.hostname === store.hostname ? store.detail : null);
@@ -3317,14 +3470,18 @@
           btn.disabled = !canRunRemote;
         });
         const setupBtn = document.getElementById('vps-setup-btn');
-        if (setupBtn) setupBtn.disabled = !(canSetupForm(ui.form || {}) || (hasSessionSecret(store.hostname, 'user_pw') && ui.form.swap && ui.form.bucket && ui.form.coinmarketcap_api_key));
+        if (setupBtn) setupBtn.disabled = !canSetupForm(Object.assign({ hostname: store.hostname }, ui.form || {}));
       }
       if (store.view === 'vps-setup' && store.hostname) {
+        const syncedSecrets = syncCurrentVpsSecretsFromDom();
         const ui = ensureVpsUi(store.hostname, store.detail && store.detail.hostname === store.hostname ? store.detail : null);
+        if (syncedSecrets && store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname) {
+          setHtmlIfChanged('vps-status-flags', renderStatusFlags(store.detail.status || {}));
+        }
         const saveBtn = document.getElementById('vps-save-btn');
         if (saveBtn) saveBtn.disabled = !canSaveForm(ui.form || {}, ui.savedForm);
         const setupBtn = document.getElementById('vps-setup-btn');
-        if (setupBtn) setupBtn.disabled = !(canSetupForm(ui.form || {}) || (hasSessionSecret(store.hostname, 'user_pw') && ui.form.swap && ui.form.bucket && ui.form.coinmarketcap_api_key));
+        if (setupBtn) setupBtn.disabled = !canSetupForm(Object.assign({ hostname: store.hostname }, ui.form || {}));
       }
     }
 
@@ -3515,11 +3672,9 @@
         setHtmlIfChanged('master-reboot-banner', renderRebootBanner(status));
         const mRtd = detail.monitor && detail.monitor.server ? detail.monitor.server.rtd : null;
         syncSystemHeader('master-system-header', status, summary, true, mRtd);
-        _liveUpdateStatusFields('master-status-fields', status, summary, true);
-        _liveUpdateStatusFlags('master-status-flags', status);
+        setHtmlIfChanged('master-status-cards', renderMasterStatusCards(status));
         _liveUpdateServiceRows('master-monitor-live', (detail.monitor || {}).v7 || []);
         _liveUpdateTelemetry((detail.monitor || {}).server || null);
-        setHtmlIfChanged('master-progress-live', renderMasterProgress(detail.progress || {}));
         return;
       }
       if (store.view === 'vps') {
@@ -3803,24 +3958,24 @@
       return JSON.stringify(value == null ? '' : String(value));
     }
 
-    function renderVisibilityInput(type, value, oninput, title, visibilityKey, revealAction) {
+    function renderVisibilityInput(type, value, oninput, title, visibilityKey, revealHost, revealField) {
       const isVisible = type === 'password' && isFieldVisible(visibilityKey);
       const inputType = isVisible ? 'text' : type;
       const buttonLabel = isVisible ? '&#128584;' : '&#128065;';
       return `
         <div class='pw-wrap'>
           <input type='${inputType}' value='${escAttr(value)}' oninput="${oninput}">
-          <button type='button' class='pw-eye-btn' onclick='togglePwVisible(this, ${js(visibilityKey || '')}, ${revealAction || 'null'})' tabindex='-1' title='${escAttr(title || 'Show or hide value')}' aria-label='${escAttr(title || 'Show or hide value')}'>${buttonLabel}</button>
+          <button type='button' class='pw-eye-btn' onclick='togglePwVisible(this, ${js(visibilityKey || '')}, ${js(revealHost || '')}, ${js(revealField || '')})' tabindex='-1' title='${escAttr(title || 'Show or hide value')}' aria-label='${escAttr(title || 'Show or hide value')}'>${buttonLabel}</button>
         </div>`;
     }
 
-    function togglePwVisible(btn, visibilityKey, revealAction) {
+    function togglePwVisible(btn, visibilityKey, revealHost, revealField) {
       const wrap = btn && btn.parentElement;
       const input = wrap ? wrap.querySelector('input') : null;
       if (!input) return;
       if (input.type === 'password') {
-        if (!String(input.value || '').trim() && typeof revealAction === 'function') {
-          revealAction(input, btn, visibilityKey);
+        if (!String(input.value || '').trim() && revealHost && revealField) {
+          requestSecretReveal(revealHost, revealField, visibilityKey);
           return;
         }
         input.type = 'text';
@@ -4002,7 +4157,15 @@
       return date.toLocaleString();
     }
 
+    function formatCount(value) {
+      if (value == null || value === '') return 'n/a';
+      const num = Number(value);
+      if (!Number.isFinite(num)) return String(value);
+      return num.toLocaleString();
+    }
+
     function boolDot(ok) {
+      if (ok === 'pending') return `<span class='dot warning'></span>Checking`;
       return `<span class='dot ${ok ? 'ok' : 'error'}'></span>${ok ? 'OK' : 'Missing'}`;
     }
 
@@ -4048,6 +4211,31 @@
     function closeAlertModal() {
       document.getElementById('alertModalOverlay').classList.remove('visible');
       resetAlertModalWindow();
+    }
+
+    let fileBrowserPath = '';
+
+    function openFileBrowser() {
+      fileBrowserPath = store.addForm.private_key_file || '';
+      document.getElementById('fileBrowserOverlay').style.display = 'block';
+      send({ cmd: 'browse_files', path: fileBrowserPath || '' });
+    }
+
+    function closeFileBrowser() {
+      document.getElementById('fileBrowserOverlay').style.display = 'none';
+    }
+
+    function browseTo(path) {
+      send({ cmd: 'browse_files', path: path });
+    }
+
+    function browseSelectFile(path) {
+      store.addForm.private_key_file = path;
+      closeFileBrowser();
+      if (store.view === 'add') {
+        setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+        setHtmlIfChanged('add-init-dynamic', renderAddInitDynamic());
+      }
     }
 
     const ALERT_MODAL_MARGIN = 16;
@@ -4228,6 +4416,55 @@
           });
         }
       }, 100);
+    }
+
+    function openMasterPasswordPrompt(onConfirm) {
+      document.getElementById('alertModalTitle').textContent = 'Master sudo password required';
+      const box = document.getElementById('alertModalBody');
+      box.className = 'notice';
+      box.innerHTML = '<div style="margin-bottom:10px">Enter the master sudo password to run this command:</div><div class="pw-wrap"><input type="password" id="master-pw-prompt-input" class="pw-input" placeholder="Master sudo password" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none"><button type="button" id="master-pw-prompt-eye" class="pw-eye" onclick="toggleMasterPwPromptVisibility()" title="Show or hide password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px;padding:4px">👁</button></div>';
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class=\'btn ghost\' type=\'button\' onclick=\'closeAlertModal()\'>Cancel</button> <button class=\'btn primary\' type=\'button\' id=\'master-pw-prompt-confirm\'>Confirm</button>';
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      document.getElementById('master-pw-prompt-confirm').onclick = null;
+      document.getElementById('master-pw-prompt-confirm').addEventListener('click', function () {
+        const pw = document.getElementById('master-pw-prompt-input').value;
+        if (!pw) return;
+        store.master.sudoPw = pw;
+        closeAlertModal();
+        if (typeof onConfirm === 'function') onConfirm();
+      });
+      setTimeout(function () {
+        const input = document.getElementById('master-pw-prompt-input');
+        if (input) {
+          input.focus();
+          input.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') document.getElementById('master-pw-prompt-confirm').click();
+          });
+        }
+      }, 100);
+    }
+
+    function openConfirmModal(title, message, onConfirm) {
+      document.getElementById('alertModalTitle').textContent = esc(title);
+      const box = document.getElementById('alertModalBody');
+      box.className = 'notice';
+      box.innerHTML = '<div style="margin-bottom:10px">' + esc(message) + '</div>';
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class=\'btn ghost\' type=\'button\' onclick=\'closeAlertModal()\'>Cancel</button> <button class=\'btn primary\' type=\'button\' id=\'confirm-modal-ok\'>Confirm</button>';
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      document.getElementById('confirm-modal-ok').onclick = null;
+      document.getElementById('confirm-modal-ok').addEventListener('click', function () {
+        closeAlertModal();
+        if (typeof onConfirm === 'function') onConfirm();
+      });
+    }
+
+    function toggleMasterPwPromptVisibility() {
+      const input = document.getElementById('master-pw-prompt-input');
+      const btn = document.getElementById('master-pw-prompt-eye');
+      if (!input || !btn) return;
+      const showing = input.type === 'text';
+      input.type = showing ? 'password' : 'text';
+      btn.textContent = showing ? '👁' : '🙈';
     }
 
     function openSwapResizePrompt(hostname) {
@@ -4585,7 +4822,7 @@
           store._pendingHostname = '';
         }
         sendContext();
-        if (store.view === 'master') {
+        if (isMasterContextView()) {
           scheduleMasterDetailFetch();
         }
         if (isVpsContextView() && store.hostname) {
@@ -4683,7 +4920,7 @@
       store._detailTimer = 0;
       store._detailTimer = setTimeout(function () {
         store._detailTimer = 0;
-        if (store.view !== 'master') return;
+        if (!isMasterContextView()) return;
         fetchMasterDetail();
       }, 3000);
     }
@@ -4710,6 +4947,32 @@
         store.detail = msg.data || null;
         if (store.detail && store.detail.kind === 'vps') {
           ensureVpsUi(store.detail.hostname, store.detail);
+          const progress = store.detail.progress || {};
+          const pending = store.pendingAutoSetupSwitch;
+          if (pending && pending.hostname === store.detail.hostname) {
+            const initStatus = String(progress.init_status || '');
+            const setupStatus = String(progress.setup_status || '');
+            if (!pending.initSeenSuccess && initStatus === 'successful') {
+              pending.initSeenSuccess = true;
+              toast('Initialization finished. Starting VPS setup...', 'success');
+            }
+            if (pending.initSeenSuccess && !pending.setupSeenRunning && setupStatus && setupStatus !== 'none') {
+              pending.setupSeenRunning = true;
+              switchToVpsTaskLog(store.detail.hostname, 'vps-setup', 'Setup VPS');
+            }
+            if (pending.setupSeenRunning && setupStatus === 'successful') {
+              store.pendingAutoSetupSwitch = null;
+              toast('Setup successful.', 'success');
+              store.hostname = store.detail.hostname;
+              store.view = 'vps';
+              sendContext();
+              renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+              return;
+            }
+            if (pending.setupSeenRunning && ['failed', 'error', 'timeout', 'canceled', 'cancelled'].includes(setupStatus)) {
+              store.pendingAutoSetupSwitch = null;
+            }
+          }
         }
         renderUi();
         return;
@@ -4776,7 +5039,86 @@
           ui.pb7RemoteUrl = url;
           ui.pb7RemoteCommits = {};
         }
-        renderUi();
+        if (!store.pb7BranchSelectInteracting) {
+          renderUi();
+        }
+        return;
+      }
+      if (msg.type === 'browse_result') {
+        const data = msg.data || {};
+        const cwd = String(data.cwd || '');
+        const parent = String(data.parent || '');
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        document.getElementById('fileBrowserCwd').textContent = cwd;
+        let html = '';
+        if (parent && parent !== cwd) {
+          html += '<div style="padding:6px 10px;cursor:pointer;border-radius:6px;margin-bottom:2px" onclick="browseTo(\'' + escAttr(parent) + '\')" class="side-button"><span style="color:var(--text-muted)">..</span></div>';
+        }
+        entries.forEach(function (entry) {
+          const name = String(entry.name || '');
+          const isDir = entry.type === 'dir';
+          const click = isDir
+            ? "browseTo('" + escAttr(cwd + '/' + name) + "')"
+            : "browseSelectFile('" + escAttr(cwd + '/' + name) + "')";
+          const icon = isDir ? '&#128193; ' : '';
+          html += '<div style="padding:6px 10px;cursor:pointer;border-radius:6px;margin-bottom:2px" onclick="' + click + '" class="side-button">' + icon + esc(name) + '</div>';
+        });
+        if (!entries.length) {
+          html += '<div style="padding:12px;color:var(--text-muted)">Empty directory</div>';
+        }
+        document.getElementById('fileBrowserList').innerHTML = html;
+        return;
+      }
+      if (msg.type === 'vps_ready_result') {
+        const data = msg.data || {};
+        store.addVpsReady = {
+          hostsOk: !!data.hosts_ok,
+          hostsHasHostname: !!data.hosts_has_hostname,
+          hostsCurrentIp: String(data.hosts_current_ip || ''),
+          sshOk: !!data.ssh_ok,
+          sshError: String(data.ssh_error || ''),
+          loading: false
+        };
+        if (store.view === 'add') {
+          setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
+        }
+        return;
+      }
+      if (msg.type === 'write_hosts_result') {
+        const data = msg.data || {};
+        if (data.ok) {
+          toast('Added to /etc/hosts successfully.', 'success');
+          scheduleVpsReadyCheck();
+        } else {
+          toast('Failed to add to /etc/hosts: ' + String(data.error || ''), 'error');
+        }
+        return;
+      }
+      if (msg.type === 'bucket_check_result') {
+        const data = msg.data || {};
+        store.addBucketCheck = { ok: !!data.ok, error: String(data.error || ''), loading: false };
+        if (store.view === 'add') {
+          setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
+          setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+        }
+        return;
+      }
+      if (msg.type === 'cmc_check_result') {
+        const data = msg.data || {};
+        store.addCmcCheck = {
+          ok: !!data.ok,
+          error: String(data.error || ''),
+          loading: false,
+          credit_limit_monthly: data.credit_limit_monthly == null ? null : data.credit_limit_monthly,
+          credits_used_day: data.credits_used_day == null ? null : data.credits_used_day,
+          credits_used_month: data.credits_used_month == null ? null : data.credits_used_month,
+          credits_left: data.credits_left == null ? null : data.credits_left,
+          credit_limit_monthly_reset_timestamp: data.credit_limit_monthly_reset_timestamp == null ? null : data.credit_limit_monthly_reset_timestamp
+        };
+        if (store.view === 'add') {
+          setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
+          setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+        }
         return;
       }
       if (msg.type === 'remote_branch_commits') {
@@ -4793,7 +5135,9 @@
           ui.pb7RemoteCommits = ui.pb7RemoteCommits || {};
           ui.pb7RemoteCommits[branch] = commits;
         }
-        renderUi({ forceView: true });
+        if (!store.pb7BranchSelectInteracting) {
+          renderUi({ forceView: true });
+        }
         return;
       }
       if (msg.type === 'bot_log_matches') {
@@ -4827,14 +5171,24 @@
         toast('Initialization started.', 'success');
         const hostname = store.addForm.hostname || store.hostname;
         if (hostname) {
-          store.hostname = hostname;
-          store.view = 'vps';
-          sendContext();
-          scheduleVpsDetailFetch(store.hostname);
+          store.pendingAutoSetupSwitch = {
+            hostname: hostname,
+            initSeenSuccess: false,
+            setupSeenRunning: false
+          };
+          openVpsTaskLog(hostname, 'vps-init', 'Initialize');
+          scheduleVpsDetailFetch(hostname);
           needsForceView = true;
         }
       } else if (cmd === 'setup_vps') {
         toast('Setup started.', 'success');
+        const hostname = store.hostname || ((msg.data || {}).hostname || '');
+        if (hostname) {
+          store.pendingAutoSetupSwitch = null;
+          openVpsTaskLog(hostname, 'vps-setup', 'Setup VPS');
+          scheduleVpsDetailFetch(hostname);
+          needsForceView = true;
+        }
       } else if (cmd === 'refresh') {
         toast('Refreshed.', 'info');
       } else if (cmd === 'sync_api') {
@@ -4865,11 +5219,12 @@
 
     function ensureMasterUi(detail) {
       if (!detail || !detail.branches) return store.master;
+      const pb7State = detail.branches.pb7 || {};
       if (!store.master.initialized) {
         store.master.pbguiBranch = detail.branches.pbgui.current_branch || '';
-        store.master.pb7Branch = detail.branches.pb7.current_branch || '';
-        store.master.pb7RemoteName = detail.branches.pb7.default_remote_name || '';
-        store.master.pb7RemoteUrl = (detail.branches.pb7.remote_urls || {})[store.master.pb7RemoteName] || '';
+        store.master.pb7Branch = pb7State.current_branch || '';
+        store.master.pb7RemoteName = pb7State.default_remote_name || '';
+        store.master.pb7RemoteUrl = (pb7State.remote_urls || {})[store.master.pb7RemoteName] || '';
         store.master.initialized = true;
       }
       return store.master;
@@ -4900,6 +5255,8 @@
     function viewHash(view, hostname) {
       if (view === 'master') return '#master';
       if (view === 'master-host-logs') return '#master/host-logs';
+      if (view === 'master-pbgui-branch') return '#master/pbgui-branch';
+      if (view === 'master-pb7-branch') return '#master/pb7-branch';
       if (hostname) {
         if (view === 'vps') return '#vps/' + encodeURIComponent(hostname);
         if (view === 'vps-setup') return '#vps/' + encodeURIComponent(hostname) + '/setup';
@@ -4920,6 +5277,10 @@
       }
       if (view === 'add') {
         store.detail = null;
+        ensureAddFormDefaults();
+        scheduleVpsReadyCheck();
+        scheduleBucketCheck();
+        scheduleCmcCheck();
       }
       if (view !== 'master-task-log' && view !== 'vps-task-log') {
         store.taskLog = defaultTaskLog();
@@ -4929,7 +5290,7 @@
       }
       sendContext();
       renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
-      if (view === 'master') {
+      if (isMasterContextView()) {
         scheduleMasterDetailFetch();
       }
       if (isVpsContextView() && hostname) {
@@ -4946,6 +5307,14 @@
       }
       if (hash === 'master/host-logs') {
         selectView('master-host-logs');
+        return;
+      }
+      if (hash === 'master/pbgui-branch') {
+        selectView('master-pbgui-branch');
+        return;
+      }
+      if (hash === 'master/pb7-branch') {
+        selectView('master-pb7-branch');
         return;
       }
       const m = hash.match(/^vps\/([^/]+)(?:\/(.+))?/);
@@ -5000,10 +5369,11 @@
 
     function applyPreparedImport(data) {
       const payload = data || {};
+      const config = ((store.state || {}).config) || {};
       store.addForm = Object.assign(defaultAddForm(), store.addForm, {
         hostname: payload.hostname || '',
         ip: payload.ip || '',
-        user: store.addForm.user || payload.user || ''
+        user: store.addForm.user || payload.user || config.local_user || ''
       });
       closeAlertModal();
       selectView('add');
@@ -5012,10 +5382,141 @@
 
     function setAddField(name, value) {
       store.addForm[name] = value;
+      if (store.view === 'add') {
+        setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+        if (name === 'init_methode') {
+          setHtmlIfChanged('add-init-dynamic', renderAddInitDynamic());
+        }
+      }
+      if (['ip', 'hostname', 'init_methode', 'initial_root_pw', 'root_pw', 'user_sudo', 'user_sudo_pw', 'private_key_user', 'private_key_file'].indexOf(name) >= 0) {
+        scheduleVpsReadyCheck();
+      }
+      if (name === 'bucket') {
+        scheduleBucketCheck();
+      }
+      if (name === 'coinmarketcap_api_key') {
+        scheduleCmcCheck();
+      }
+      if (name === 'firewall_ssh_ips') {
+        if (store.view === 'add') {
+          setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+        }
+      }
+      refreshLocalInteractiveState();
     }
 
     function setAddBool(name, checked) {
       store.addForm[name] = !!checked;
+      if (store.view === 'add') {
+        setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+      }
+      refreshLocalInteractiveState();
+    }
+
+    let addVpsReadyTimer = 0;
+
+    function scheduleVpsReadyCheck() {
+      if (addVpsReadyTimer) clearTimeout(addVpsReadyTimer);
+      addVpsReadyTimer = setTimeout(function () {
+        addVpsReadyTimer = 0;
+        if (store.view !== 'add') return;
+        const form = store.addForm;
+        const ip = String(form.ip || '').trim();
+        const hostname = String(form.hostname || '').trim();
+        if (!ip || !hostname) {
+          store.addVpsReady = { hostsOk: false, hostsHasHostname: false, hostsCurrentIp: '', sshOk: false, sshError: '', loading: false };
+          setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
+          return;
+        }
+        store.addVpsReady = Object.assign({}, store.addVpsReady, { loading: true, sshError: '' });
+        setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
+        send({ cmd: 'check_vps_ready', form: Object.assign({}, form) });
+      }, 600);
+    }
+
+    let addBucketCheckTimer = 0;
+
+    function scheduleBucketCheck() {
+      if (addBucketCheckTimer) clearTimeout(addBucketCheckTimer);
+      addBucketCheckTimer = setTimeout(function () {
+        addBucketCheckTimer = 0;
+        if (store.view !== 'add') return;
+        const bucket = String(store.addForm.bucket || '').trim();
+        if (!bucket) {
+          store.addBucketCheck = { ok: false, error: '', loading: false };
+          setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+          return;
+        }
+        store.addBucketCheck = { ok: false, error: '', loading: true };
+        setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+        send({ cmd: 'check_bucket', bucket: bucket });
+      }, 600);
+    }
+
+    let addCmcCheckTimer = 0;
+
+    function scheduleCmcCheck() {
+      if (addCmcCheckTimer) clearTimeout(addCmcCheckTimer);
+      addCmcCheckTimer = setTimeout(function () {
+        addCmcCheckTimer = 0;
+        if (store.view !== 'add') return;
+        const key = String(store.addForm.coinmarketcap_api_key || '').trim();
+        if (!key) {
+          store.addCmcCheck = { ok: false, error: '', loading: false, credit_limit_monthly: null, credits_used_day: null, credits_used_month: null, credits_left: null, credit_limit_monthly_reset_timestamp: null };
+          setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+          return;
+        }
+        store.addCmcCheck = { ok: false, error: '', loading: true, credit_limit_monthly: null, credits_used_day: null, credits_used_month: null, credits_left: null, credit_limit_monthly_reset_timestamp: null };
+        setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+        send({ cmd: 'check_cmc_api_key', api_key: key });
+      }, 600);
+    }
+
+    function addHostsEntryAction() {
+      const ip = String(store.addForm.ip || '').trim();
+      const hostname = String(store.addForm.hostname || '').trim();
+      if (!ip || !hostname) return;
+      const ready = store.addVpsReady || {};
+      const isReplace = !!ready.hostsHasHostname;
+      if (isReplace) {
+        const currentIp = String(ready.hostsCurrentIp || '');
+        openConfirmModal(
+          'Replace /etc/hosts entry',
+          'Replace existing /etc/hosts entry for ' + hostname + '?\nCurrent: ' + currentIp + ' → New: ' + ip,
+          function () {
+            openMasterPasswordPrompt(function () {
+              send({ cmd: 'write_hosts_entry', ip: ip, hostname: hostname, sudo_pw: store.master.sudoPw || '' });
+            });
+          }
+        );
+        return;
+      }
+      openMasterPasswordPrompt(function () {
+        send({ cmd: 'write_hosts_entry', ip: ip, hostname: hostname, sudo_pw: store.master.sudoPw || '' });
+      });
+    }
+
+    function ensureAddFormDefaults() {
+      const config = ((store.state || {}).config) || {};
+      let changed = false;
+      if (!String(store.addForm.user || '').trim() && String(config.local_user || '').trim()) {
+        store.addForm.user = String(config.local_user || '').trim();
+        changed = true;
+      }
+      if (!String(store.addForm.bucket || '').trim() && String(config.bucket || '').trim()) {
+        store.addForm.bucket = String(config.bucket || '').trim();
+        changed = true;
+      }
+      if (!String(store.addForm.coinmarketcap_api_key || '').trim() && String(config.coinmarketcap_api_key || '').trim()) {
+        store.addForm.coinmarketcap_api_key = String(config.coinmarketcap_api_key || '').trim();
+        changed = true;
+      }
+      if (changed && store.view === 'add') {
+        setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
+        setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+        scheduleBucketCheck();
+        scheduleCmcCheck();
+      }
     }
 
     function setMasterField(name, value) {
@@ -5033,7 +5534,7 @@
     function setVpsField(hostname, name, value) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
       ui.form[name] = value;
-      if (store.view === 'vps' && store.hostname === hostname && name === 'user_pw') {
+      if ((store.view === 'vps' || store.view === 'vps-setup') && store.hostname === hostname && name === 'user_pw') {
         renderSidebarActions();
         if (store.detail && store.detail.kind === 'vps' && store.detail.hostname === hostname) {
           setHtmlIfChanged('vps-status-flags', renderStatusFlags(store.detail.status || {}));
@@ -5133,6 +5634,34 @@
       runMaster(command, commandText, extraVars);
     }
 
+    function masterActionWithSudo(command, commandText, extraVars) {
+      const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
+      const st = (detail && detail.status) || {};
+      if (st.local_sudo_supported === false) {
+        toast(String(st.local_sudo_blocked_reason || 'Local sudo unavailable.'), 'warning');
+        return;
+      }
+      if (store.master.sudoPw) {
+        runMasterWithLog(command, commandText, extraVars);
+      } else {
+        openMasterPasswordPrompt(function () {
+          runMasterWithLog(command, commandText, extraVars);
+        });
+      }
+    }
+
+    function updateLinuxMasterAction() {
+      const rebootRequested = !!store.master.updateReboot;
+      masterActionWithSudo('master-update-linux', 'Update Linux', {
+        reboot: rebootRequested,
+        reboot_requested: rebootRequested
+      });
+    }
+
+    function rebootMasterAction() {
+      masterActionWithSudo('master-reboot', 'Reboot Master');
+    }
+
     function runVps(hostname, command, commandText, extraVars, saveConfigFirst) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
       if (saveConfigFirst !== false) {
@@ -5149,6 +5678,23 @@
     }
 
     function openVpsTaskLog(hostname, command, commandText) {
+      store.taskLog = {
+        scope: 'vps',
+        hostname: hostname || '',
+        command: command || '',
+        title: commandText || 'VPS command log',
+        file: getVpsTaskLogFile(hostname || '', command || ''),
+        browse: false,
+        runKey: String(Date.now()),
+        startEmpty: true
+      };
+      store.hostname = hostname || store.hostname;
+      store.view = 'vps-task-log';
+      sendContext();
+      renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+    }
+
+    function switchToVpsTaskLog(hostname, command, commandText) {
       store.taskLog = {
         scope: 'vps',
         hostname: hostname || '',
@@ -5216,6 +5762,29 @@
       });
     }
 
+    function isValidIPv4(ip) {
+      if (!ip || typeof ip !== 'string') return false;
+      const parts = ip.split('.');
+      if (parts.length !== 4) return false;
+      return parts.every(function (part) {
+        const n = Number.parseInt(part, 10);
+        return String(n) === part && n >= 0 && n <= 255;
+      });
+    }
+
+    function validateFirewallIps(value) {
+      if (!value || !String(value).trim()) return { ok: true, error: '' };
+      const parts = String(value).split(',');
+      for (let i = 0; i < parts.length; i++) {
+        const ip = parts[i].trim();
+        if (!ip) continue;
+        if (!isValidIPv4(ip)) {
+          return { ok: false, error: 'Invalid IPv4: ' + ip };
+        }
+      }
+      return { ok: true, error: '' };
+    }
+
     function runVpsWithLog(hostname, command, commandText, extraVars, saveConfigFirst) {
       openVpsTaskLog(hostname, command, commandText);
       runVps(hostname, command, commandText, extraVars, saveConfigFirst);
@@ -5254,25 +5823,55 @@
     }
 
     function confirmDeleteVps(hostname) {
-      const ok = window.confirm('Delete VPS ' + hostname + '? This removes the saved VPS Manager record.');
-      if (!ok) return;
-      send({ cmd: 'delete_vps', hostname: hostname });
+      openConfirmModal(
+        'Delete VPS',
+        'Delete VPS ' + hostname + '? This removes the saved VPS Manager record.',
+        function () {
+          send({ cmd: 'delete_vps', hostname: hostname });
+        }
+      );
+    }
+
+    function hasInvalidPasswordChars(value) {
+      if (!value) return false;
+      const str = String(value);
+      return str.indexOf('{{') >= 0 || str.indexOf('}}') >= 0;
     }
 
     function canInitForm(form) {
       const hasBase = !!(form && form.ip && form.user && form.user_pw);
       if (!hasBase) return false;
+      if (hasInvalidPasswordChars(form.user_pw)) return false;
       if (form.init_methode === 'private_key') {
-        return !!((form.private_key_user && form.private_key_file) || (hasSessionSecret(form.hostname, 'private_key_user') && hasSessionSecret(form.hostname, 'private_key_file')));
+        if (hasInvalidPasswordChars(form.private_key_user)) return false;
+        if (!((form.private_key_user && form.private_key_file) || (hasSessionSecret(form.hostname, 'private_key_user') && hasSessionSecret(form.hostname, 'private_key_file')))) return false;
+      } else if (form.init_methode === 'password') {
+        if (hasInvalidPasswordChars(form.user_sudo_pw)) return false;
+        if (!(form.user_sudo && form.user_sudo_pw)) return false;
+      } else {
+        if (hasInvalidPasswordChars(form.initial_root_pw) || hasInvalidPasswordChars(form.root_pw)) return false;
+        if (!(form.initial_root_pw && form.root_pw)) return false;
       }
-      if (form.init_methode === 'password') {
-        return !!(form.user_sudo && form.user_sudo_pw);
-      }
-      return !!(form.initial_root_pw && form.root_pw);
+      const hasSwap = !!String(form.swap || '').trim();
+      const hasBucket = !!String(form.bucket || '').trim();
+      const hasCmc = !!String(form.coinmarketcap_api_key || '').trim();
+      if (!hasSwap || !hasBucket || !hasCmc) return false;
+      const bucketCheckOk = !!(store.addBucketCheck || {}).ok;
+      const cmcCheckOk = !!(store.addCmcCheck || {}).ok;
+      if (!bucketCheckOk || !cmcCheckOk) return false;
+      const fwCheck = validateFirewallIps(form.firewall_ssh_ips);
+      return fwCheck.ok;
     }
 
     function canSetupForm(form) {
-      return !!(form && form.user_pw && form.swap && form.bucket && form.coinmarketcap_api_key);
+      if (!form) return false;
+      const hostname = String(form.hostname || store.hostname || '');
+      const hasUserPw = !!String(form.user_pw || '').trim() || !!String(hostname ? getEffectiveVpsUserPw(hostname) : '').trim() || (hostname ? hasSessionSecret(hostname, 'user_pw') : false);
+      const hasSwap = !!String(form.swap || '').trim();
+      const hasBucket = !!String(form.bucket || '').trim();
+      const hasCmc = !!String(form.coinmarketcap_api_key || '').trim();
+      const fwCheck = validateFirewallIps(form.firewall_ssh_ips);
+      return hasUserPw && hasSwap && hasBucket && hasCmc && fwCheck.ok;
     }
 
     function canSaveForm(form, savedForm) {
@@ -5344,26 +5943,38 @@
       const currentCommit = String(state && state.current_commit || '');
       const branchKey = repo === 'pb7' ? 'pb7Branch' : 'pbguiBranch';
       const commitKey = repo === 'pb7' ? 'pb7Commit' : 'pbguiCommit';
-      const availableBranches = Object.keys(branches);
+      let availableBranches = Object.keys(branches);
       let selectedBranch = String(uiState[branchKey] || currentBranch || availableBranches[0] || '');
       if (selectedBranch && availableBranches.length && availableBranches.indexOf(selectedBranch) < 0) {
-        selectedBranch = availableBranches.indexOf(currentBranch) >= 0 ? currentBranch : availableBranches[0];
+        if (repo !== 'pb7') {
+          selectedBranch = availableBranches.indexOf(currentBranch) >= 0 ? currentBranch : availableBranches[0];
+        }
+      }
+      if (repo === 'pb7' && selectedBranch && availableBranches.indexOf(selectedBranch) < 0) {
+        availableBranches = [selectedBranch].concat(availableBranches);
       }
       uiState[branchKey] = selectedBranch;
       let selectedCommit = String(uiState[commitKey] || 'HEAD');
       const commits = Array.isArray(branches[selectedBranch]) ? branches[selectedBranch] : [];
       const headCommit = commits.length ? String(commits[0].full || '') : currentCommit;
+      const currentCommitIndex = commits.findIndex(function (item) { return String(item.full || '') === currentCommit; });
       let targetCommit = selectedCommit === 'HEAD' ? headCommit || currentCommit : selectedCommit;
       const branchChanged = !!selectedBranch && selectedBranch !== currentBranch;
       let isBehindOrigin = false;
       let commitsBehind = 0;
       if (!branchChanged && selectedBranch && commits.length && currentCommit && (selectedCommit === 'HEAD' || targetCommit === currentCommit)) {
         if (headCommit && headCommit !== currentCommit) {
-          isBehindOrigin = true;
-          targetCommit = headCommit;
-          commitsBehind = commits.findIndex(function (item) { return String(item.full || '') === currentCommit; });
-          if (commitsBehind < 0) commitsBehind = 0;
+          commitsBehind = currentCommitIndex;
+          if (commitsBehind > 0) {
+            isBehindOrigin = true;
+            targetCommit = headCommit;
+          } else {
+            commitsBehind = 0;
+          }
         }
+      }
+      if (!branchChanged && selectedCommit === 'HEAD' && !isBehindOrigin && currentCommitIndex < 0) {
+        targetCommit = currentCommit;
       }
       const commitChanged = !!targetCommit && targetCommit !== currentCommit && !isBehindOrigin;
       const onTarget = !!selectedBranch && selectedBranch === currentBranch && !commitChanged && !isBehindOrigin;
@@ -5392,20 +6003,34 @@
       }, uiState, 'pb7');
       const manualBranch = String(uiState.pb7ManualBranch || '');
       const manualCommit = String(uiState.pb7ManualCommit || '');
-      const effectiveBranch = manualBranch || model.selectedBranch;
+      const targetBranch = String(model.selectedBranch || '');
+      const sourceBranch = String(manualBranch || targetBranch || '');
+      const remoteBranches = Array.isArray(uiState.remoteBranches) ? uiState.remoteBranches : [];
+      const sourceBranchKnown = !!sourceBranch && remoteBranches.length > 0;
+      const sourceBranchExists = !!sourceBranch && remoteBranches.indexOf(sourceBranch) >= 0;
       const remoteCommitMap = uiState.pb7RemoteCommits || {};
-      const remoteCommits = effectiveBranch && Array.isArray(remoteCommitMap[effectiveBranch]) ? remoteCommitMap[effectiveBranch] : [];
+      const remoteCommits = sourceBranch && Array.isArray(remoteCommitMap[sourceBranch]) ? remoteCommitMap[sourceBranch] : [];
       const commits = manualBranch ? remoteCommits : model.commits;
       const headCommit = commits.length ? String(commits[0].full || '') : '';
-      const effectiveCommit = manualCommit || (manualBranch ? headCommit : ((uiState.pb7Commit !== 'HEAD' ? model.targetCommit : '') || model.targetCommit));
-      const branchChanged = !!effectiveBranch && effectiveBranch !== model.currentBranch;
+      const remoteHeadCommit = remoteCommits.length ? String(remoteCommits[0].full || '') : '';
+      const remoteCurrentCommitIndex = remoteCommits.findIndex(function (item) { return String(item.full || '') === model.currentCommit; });
+      const selectedRemoteCommit = manualCommit || 'HEAD';
+      const effectiveCommit = selectedRemoteCommit !== 'HEAD' ? selectedRemoteCommit : (manualBranch ? headCommit : ((uiState.pb7Commit !== 'HEAD' ? model.targetCommit : '') || model.targetCommit));
+      const branchChanged = !!targetBranch && targetBranch !== model.currentBranch;
       const isBehindOrigin = !manualBranch && model.isBehindOrigin;
-      const commitsBehind = !manualBranch ? model.commitsBehind : 0;
+      const commitsBehind = !manualBranch ? model.commitsBehind : (selectedRemoteCommit === 'HEAD' && targetBranch === model.currentBranch && sourceBranch === targetBranch && remoteCurrentCommitIndex > 0 ? remoteCurrentCommitIndex : 0);
       const commitChanged = !!effectiveCommit && effectiveCommit !== model.currentCommit && !isBehindOrigin;
-      const onTarget = effectiveBranch === model.currentBranch && !manualCommit && !isBehindOrigin && (uiState.pb7Commit || 'HEAD') === 'HEAD';
+      const onTarget = targetBranch === model.currentBranch && !commitChanged && !isBehindOrigin && selectedRemoteCommit === 'HEAD';
       return Object.assign({}, model, {
-        effectiveBranch: effectiveBranch,
+        effectiveBranch: targetBranch,
         effectiveCommit: effectiveCommit,
+        targetBranch: targetBranch,
+        sourceBranch: sourceBranch,
+        sourceBranchKnown: sourceBranchKnown,
+        sourceBranchExists: sourceBranchExists,
+        remoteCommits: remoteCommits,
+        selectedRemoteCommit: selectedRemoteCommit,
+        remoteHeadCommit: remoteHeadCommit,
         commits: commits,
         selectedCommit: manualCommit ? manualCommit : model.selectedCommit,
         targetCommit: effectiveCommit,
@@ -5435,6 +6060,9 @@
       if (!model.availableBranches.length) {
         return `<div class='notice warning'>No branch history loaded yet. Use Refresh or Load More to pull branch data into the local cache.</div>`;
       }
+      if (model.sourceBranchKnown && !model.sourceBranchExists) {
+        return `<div class='notice warning'>Cannot sync: source branch <span class='code'>${esc(model.sourceBranch || '-')}</span> is missing on the selected remote.</div>`;
+      }
       if (model.onTarget) {
         if (!model.selectedCommit || model.selectedCommit === 'HEAD') {
           return `<div class='notice'>Already on ${noun} <span class='code'>${esc(model.selectedBranch)}</span> at the latest commit.</div>`;
@@ -5449,6 +6077,9 @@
         return `<div class='notice warning'>This will switch from <span class='code'>${esc(model.currentBranch)}</span> to <span class='code'>${esc(model.selectedBranch)}</span>.</div>`;
       }
       if (model.commitChanged) {
+        if (model.commitsBehind > 0) {
+          return `<div class='notice warning'>Local ${noun} <span class='code'>${esc(model.selectedBranch)}</span> is ${model.commitsBehind} commit(s) behind the selected source. Running the action updates to commit <span class='code'>${esc(shortHash(model.targetCommit))}</span>.</div>`;
+        }
         return `<div class='notice warning'>This will switch to commit <span class='code'>${esc(shortHash(model.targetCommit))}</span>.</div>`;
       }
       return '';
@@ -5532,23 +6163,25 @@
       const uiState = isMaster ? store.master : ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
       const manualBranch = String(uiState.pb7ManualBranch || '');
       const manualCommit = String(uiState.pb7ManualCommit || '');
-      if (manualBranch) {
-        uiState.pb7Branch = manualBranch;
-      }
       const model = pb7BranchModel(state, uiState);
       const effectiveBranch = model.effectiveBranch;
+      const sourceBranch = model.sourceBranch;
       const effectiveCommit = model.effectiveCommit;
-      const actionLabel = model.isBehindOrigin ? 'Update' : effectiveBranch !== model.currentBranch ? 'Switch Branch' : (manualCommit || model.selectedCommit !== 'HEAD') ? 'Switch Commit' : 'Already Selected';
+      const usingCustomRemote = !!manualBranch;
+      const actionLabel = model.isBehindOrigin ? 'Update Local Branch' : effectiveBranch !== model.currentBranch ? 'Switch Local Branch' : model.commitChanged ? 'Reset Local Branch' : 'Already Selected';
       const remoteUrls = state.remote_urls || {};
-      const derivedRemoteUrl = uiState.pb7RemoteUrl || remoteUrls[uiState.pb7RemoteName || state.default_remote_name || ''] || '';
+      const selectedRemoteName = String(uiState.pb7RemoteName || state.default_remote_name || '');
+      const derivedRemoteUrl = uiState.pb7RemoteUrl || remoteUrls[selectedRemoteName] || '';
       const upstreamRepoUrl = state.upstream_remote_url || remoteUrls[state.upstream_remote_name || 'origin'] || remoteUrls.origin || '';
       const remoteBranches = Array.isArray(uiState.remoteBranches) ? uiState.remoteBranches : [];
-      const branchFieldSetter = isMaster ? `setMasterField('pb7Branch', this.value); renderUi({ forceView: true });` : `setVpsUiField(${js(scope)}, 'pb7Branch', this.value); renderUi({ forceView: true });`;
-      const commitFieldSetter = isMaster ? `setMasterField('pb7Commit', this.value); renderUi({ forceView: true });` : `setVpsUiField(${js(scope)}, 'pb7Commit', this.value); renderUi({ forceView: true });`;
+      const sourceRef = selectedRemoteName && sourceBranch ? (selectedRemoteName + '/' + sourceBranch) : sourceBranch;
+      const targetRef = effectiveBranch ? ('local ' + effectiveBranch) : 'local branch';
+      const sourceMissing = model.sourceBranchKnown && !model.sourceBranchExists;
+      const remoteCommitSetter = isMaster ? `setMasterField('pb7ManualCommit', this.value); renderUi({ forceView: true });` : `setVpsUiField(${js(scope)}, 'pb7ManualCommit', this.value); renderUi({ forceView: true });`;
+      const branchFieldSetter = `setPb7LocalBranch(${js(scope)}, this.value)`;
       const remoteNameSetter = `setPb7RemoteName(${js(scope)}, this.value)`;
       const remoteUrlSetter = `setPb7RemoteUrl(${js(scope)}, this.value)`;
       const manualBranchSetter = `setPb7ManualBranch(${js(scope)}, this.value)`;
-      const manualCommitSetter = isMaster ? `setMasterField('pb7ManualCommit', this.value)` : `setVpsUiField(${js(scope)}, 'pb7ManualCommit', this.value)`;
       return `
         <div class='panel'>
           <div class='panel-head'>
@@ -5561,73 +6194,78 @@
             <div class='panel'>
               <div class='panel-head'>
                 <div>
-                  <div class='panel-title'>Custom Remote</div>
-                  <div class='panel-sub'>Optional fork/PR workflow without touching the legacy Streamlit page.</div>
+                  <div class='panel-title'>Remote Source</div>
+                  <div class='panel-sub'>Choose which repository the branch list and optional remote branch come from.</div>
                 </div>
               </div>
               <div class='panel-body'>
                 <div class='button-row'>
-                  <button class='btn ghost' type='button' onclick='switchPb7ToUpstream(${js(scope)})'>Switch to upstream master</button>
-                  <button class='btn ghost' type='button' ${derivedRemoteUrl ? '' : 'disabled'} onclick='loadRemoteBranches(${js(scope)})'>Load branches from URL</button>
-                  <button class='btn ghost' type='button' ${(derivedRemoteUrl && manualBranch) ? '' : 'disabled'} onclick='loadRemoteBranchCommits(${js(scope)})'>Load commits for branch</button>
+                  <button class='btn ghost' type='button' onclick='switchPb7ToUpstream(${js(scope)})'>Use upstream master</button>
                 </div>
                 <div class='field-grid'>
                   <div class='field'>
-                    <label>Remote Name</label>
-                    <select onchange="${remoteNameSetter}">
+                    <label>Selected Remote</label>
+                    <select onchange='${remoteNameSetter}'>
                       ${(Array.isArray(state.known_remotes) ? state.known_remotes : []).map(function (remoteName) {
-                        const selected = remoteName === (uiState.pb7RemoteName || state.default_remote_name || '') ? ' selected' : '';
+                        const selected = remoteName === selectedRemoteName ? ' selected' : '';
                         return `<option value='${escAttr(remoteName)}'${selected}>${esc(remoteName)}</option>`;
                       }).join('')}
                     </select>
                   </div>
                   <div class='field span-2'>
-                    <label>Remote URL</label>
-                    <input type='text' value='${escAttr(derivedRemoteUrl)}' oninput="${remoteUrlSetter}" placeholder='https://github.com/&lt;user&gt;/passivbot.git'>
+                    <label>Selected Remote URL</label>
+                    <input type='text' value='${escAttr(derivedRemoteUrl)}' onchange='${remoteUrlSetter}' placeholder='https://github.com/&lt;user&gt;/passivbot.git'>
                   </div>
                   <div class='field'>
-                    <label>Remote Branch Pick</label>
-                    <select onchange="${manualBranchSetter}">
-                      <option value=''>Pick branch from URL</option>
+                    <label>Remote Branch</label>
+                    <select onfocus='store.pb7BranchSelectInteracting = true' onmousedown='store.pb7BranchSelectInteracting = true' onblur='store.pb7BranchSelectInteracting = false; renderUi({ forceView: true })' onchange='store.pb7BranchSelectInteracting = false; ${manualBranchSetter}'>
+                      <option value=''>Use local branch target</option>
                       ${remoteBranches.map(function (branch) {
-                        return `<option value='${escAttr(branch)}'>${esc(branch)}</option>`;
+                        return `<option value='${escAttr(branch)}'${branch === manualBranch ? ' selected' : ''}>${esc(branch)}</option>`;
                       }).join('')}
                     </select>
                   </div>
                   <div class='field'>
-                    <label>Manual Branch</label>
-                    <input type='text' value='${escAttr(manualBranch)}' oninput="${manualBranchSetter}" placeholder='feature/name'>
-                  </div>
-                  <div class='field'>
-                    <label>Manual Commit</label>
-                    <input type='text' value='${escAttr(manualCommit)}' oninput="${manualCommitSetter}" placeholder='Optional full hash on selected branch'>
+                    <label>Remote Commit</label>
+                    <select onchange='${remoteCommitSetter}'>
+                      <option value='HEAD'${model.selectedRemoteCommit === 'HEAD' ? ' selected' : ''}>HEAD (latest remote)</option>
+                      ${model.remoteCommits.map(function (commit) {
+                        const hash = String(commit.full || '');
+                        const selected = model.selectedRemoteCommit === hash ? ' selected' : '';
+                        const firstLine = String(commit.message || '').split('\n')[0];
+                        const label = `${commit.short || shortHash(hash)} | ${firstLine.slice(0, 50)} | ${commit.date || ''} | ${commit.author || ''}`;
+                        return `<option value='${escAttr(hash)}'${selected}>${esc(label)}</option>`;
+                      }).join('')}
+                    </select>
                   </div>
                 </div>
-                ${derivedRemoteUrl ? `<div class='field-help'>Effective remote URL: <span class='code'>${esc(derivedRemoteUrl)}</span></div>` : `<div class='field-help'>Leave the URL empty to use the selected remote from the local pb7dir git config.</div>`}
-                ${manualBranch ? `<div class='field-help'>Custom remote branch mode uses branch names from the selected remote URL and can load commit history for that branch on demand.</div>` : ''}
               </div>
             </div>
-            <div class='two-col'>
-              <div class='field'>
-                <label>Target Branch</label>
-                <select onchange="${branchFieldSetter}">
-                  ${model.availableBranches.map(function (branch) {
-                    return `<option value='${escAttr(branch)}'${branch === model.selectedBranch ? ' selected' : ''}>${esc(branch)}</option>`;
-                  }).join('')}
-                </select>
+            <div class='panel'>
+              <div class='panel-head'>
+                <div>
+                  <div class='panel-title'>${usingCustomRemote ? 'Local Branch Target from Remote Source' : 'Local Branch Target'}</div>
+                  <div class='panel-sub'>${usingCustomRemote ? `Apply branch data from <span class='code'>${esc(selectedRemoteName || 'remote')}</span>.` : 'Select what the local PB7 checkout should point to.'}</div>
+                </div>
               </div>
-              <div class='field'>
-                <label>Target Commit (${esc(model.commits.length)} loaded - optional, leave at HEAD for latest)</label>
-                <select onchange="${commitFieldSetter}">
-                  ${renderCommitOptions(model)}
-                </select>
+              <div class='panel-body'>
+                <div class='field'>
+                  <label>${usingCustomRemote ? 'Local Branch Name' : 'Local Branch'}</label>
+                  <select onfocus='store.pb7BranchSelectInteracting = true' onmousedown='store.pb7BranchSelectInteracting = true' onblur='store.pb7BranchSelectInteracting = false; renderUi({ forceView: true })' onchange='store.pb7BranchSelectInteracting = false; ${branchFieldSetter}'>
+                    ${model.availableBranches.map(function (branch) {
+                      return `<option value='${escAttr(branch)}'${branch === model.selectedBranch ? ' selected' : ''}>${esc(branch)}</option>`;
+                    }).join('')}
+                  </select>
+                </div>
               </div>
+            </div>
+            <div class='notice${sourceMissing ? ' warning' : ''}'>
+              <div><strong>Source:</strong> <span class='code'>${esc(sourceRef || '-')}</span></div>
+              <div><strong>Target:</strong> <span class='code'>${esc(targetRef)}</span></div>
+              ${sourceMissing ? `<div>Selected remote does not currently provide branch <span class='code'>${esc(sourceBranch)}</span>. Choose another remote or set a different remote branch before switching.</div>` : ''}
             </div>
             <div class='button-row'>
-              <button class='btn ghost' type='button' onclick='refreshState()'>Reload</button>
-              <button class='btn ghost' type='button' ${manualBranch ? 'disabled' : ''} onclick='send({ cmd: "load_more_commits", repo: "pb7", branch: ${js(model.selectedBranch)}, limit: ${Math.max((model.commits || []).length + 50, 50)} })'>+50</button>
-              <button class='btn ghost' type='button' ${manualBranch ? 'disabled' : ''} onclick='send({ cmd: "load_more_commits", repo: "pb7", branch: ${js(model.selectedBranch)}, limit: 999999 })'>All</button>
-              <button class='btn primary' type='button' ${(effectiveBranch === model.currentBranch && !manualCommit && !model.isBehindOrigin && (uiState.pb7Commit || 'HEAD') === 'HEAD') ? 'disabled' : ''} onclick='triggerPb7BranchAction(${js(scope)})'>${esc(actionLabel)}</button>
+              <button class='btn primary' type='button' ${model.onTarget || sourceMissing ? 'disabled' : ''} onclick='triggerPb7BranchAction(${js(scope)})'>${esc(actionLabel)}</button>
             </div>
             ${renderBranchMessage({
               availableBranches: model.availableBranches,
@@ -5640,10 +6278,13 @@
               commitChanged: !!effectiveCommit && effectiveCommit !== model.currentCommit && !model.isBehindOrigin,
               isBehindOrigin: !manualBranch && model.isBehindOrigin,
               commitsBehind: model.commitsBehind,
-              onTarget: effectiveBranch === model.currentBranch && !manualCommit && !model.isBehindOrigin && (uiState.pb7Commit || 'HEAD') === 'HEAD'
+              onTarget: model.onTarget,
+              sourceBranch: sourceBranch,
+              sourceBranchKnown: model.sourceBranchKnown,
+              sourceBranchExists: model.sourceBranchExists
             }, 'branch')}
             ${renderMissingCommitsPanel(model, upstreamRepoUrl)}
-            ${manualBranch && !manualCommit && !model.commits.length ? `<div class='notice'>No commit history loaded yet for remote branch <span class='code'>${esc(effectiveBranch)}</span>. Use <span class='code'>Load commits for branch</span> or enter a full commit hash manually.</div>` : (!manualCommit ? renderCommitDetails(model) : `<div class='notice'><div>Manual commit selected.</div><div>This resets branch <span class='code'>${esc(effectiveBranch || model.currentBranch)}</span> to the specified commit.</div><div class='code'>${esc(manualCommit)}</div></div>`)}
+            ${!manualCommit ? renderCommitDetails(Object.assign({}, model, { commits: model.remoteCommits, selectedCommit: model.selectedRemoteCommit === 'HEAD' ? 'HEAD' : model.selectedRemoteCommit })) : `<div class='notice'><div>Remote commit selected.</div><div>This resets local branch <span class='code'>${esc(effectiveBranch || model.currentBranch)}</span> to the specified commit.</div><div class='code'>${esc(manualCommit)}</div></div>`}
           </div>
         </div>`;
     }
@@ -5678,16 +6319,18 @@
       const state = detail.branches.pb7;
       const model = pb7BranchModel(state, uiState);
       const effectiveBranch = String(model.effectiveBranch || '');
+      const sourceBranch = String(model.sourceBranch || effectiveBranch || '');
       const effectiveCommit = String(model.effectiveCommit || '');
       const extraVars = { pb7_branch: effectiveBranch };
       const remoteName = String(uiState.pb7RemoteName || state.default_remote_name || '');
       const remoteUrl = String(uiState.pb7RemoteUrl || (state.remote_urls || {})[remoteName] || '');
+      if (sourceBranch) extraVars.pb7_source_branch = sourceBranch;
       if (effectiveCommit) extraVars.pb7_commit = effectiveCommit;
       if (remoteUrl) {
         extraVars.pb7_remote_name = remoteName || 'fork';
         extraVars.pb7_remote_url = remoteUrl;
       }
-      const label = 'Switch PB7 to ' + effectiveBranch + (effectiveCommit ? ' @ ' + shortHash(effectiveCommit) : '');
+      const label = 'Sync ' + (remoteName ? (remoteName + '/') : '') + sourceBranch + ' -> ' + effectiveBranch + (effectiveCommit ? ' @ ' + shortHash(effectiveCommit) : '');
       if (isMaster) {
         runMasterWithLog('master-switch-pb7-branch', label, extraVars);
       } else {
@@ -5706,12 +6349,16 @@
         store.master.pb7ManualBranch = '';
         store.master.pb7ManualCommit = '';
         store.master.pb7Branch = 'master';
+        store.master.pb7RemoteName = 'origin';
+        store.master.pb7RemoteUrl = 'https://github.com/enarjord/passivbot.git';
         runMasterWithLog('master-switch-pb7-branch', label, extraVars);
       } else {
         const ui = ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
         ui.pb7ManualBranch = '';
         ui.pb7ManualCommit = '';
         ui.pb7Branch = 'master';
+        ui.pb7RemoteName = 'origin';
+        ui.pb7RemoteUrl = 'https://github.com/enarjord/passivbot.git';
         runVpsWithLog(scope, 'vps-switch-pb7-branch', label, extraVars, false);
       }
     }
@@ -5747,9 +6394,9 @@
       const state = detail.branches.pb7;
       const remoteName = String(uiState.pb7RemoteName || state.default_remote_name || '');
       const remoteUrl = String(uiState.pb7RemoteUrl || (state.remote_urls || {})[remoteName] || '');
-      const branchName = String(uiState.pb7ManualBranch || '');
+      const branchName = String(uiState.pb7ManualBranch || uiState.pb7Branch || state.current_branch || '');
       if (!remoteUrl || !branchName) {
-        toast('Please provide a remote URL and manual branch first.', 'warning');
+        toast('Please provide a remote URL and source branch first.', 'warning');
         return;
       }
       send({ cmd: 'load_remote_branch_commits', remote_url: remoteUrl, branch: branchName, limit: 50 });
@@ -5773,25 +6420,47 @@
 
       let html = '';
       if (isMasterContextView()) {
+        const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
+        const st = (detail && detail.status) || {};
+        const masterPbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
+        const masterPb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : 'sb-btn ok';
+        const masterBothBtnClass = (st.pbgui_update_available || st.pb7_update_available) ? 'sb-btn warning' : 'sb-btn ok';
+        const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
+        const hasLinuxUpdates = String(pendingSrc || '').trim() && String(pendingSrc).trim() !== '0' && String(pendingSrc).trim() !== 'N/A';
+        const needsReboot = !!(st.summary_row || {}).reboot_required;
+        const masterLinuxBtnClass = hasLinuxUpdates ? 'sb-btn warning' : 'sb-btn ok';
+        const masterRebootBtnClass = needsReboot ? 'sb-btn warning' : 'sb-btn ok';
+        const localSudoSupported = st.local_sudo_supported !== false;
+        const localSudoBlockedReason = String(st.local_sudo_blocked_reason || '').trim();
+        const linuxUpdateSupported = st.linux_update_supported !== false;
+        const linuxUpdateBlockedReason = String(st.linux_update_blocked_reason || '').trim();
+        const blockedTasksNotice = !localSudoSupported
+          ? localSudoBlockedReason
+          : (!linuxUpdateSupported ? linuxUpdateBlockedReason : '');
         html = `
-          <button class='sb-btn' type='button' onclick='refreshState()'>Refresh</button>
-          <button class='sb-btn' type='button' onclick='selectView("overview")'>Home</button>
-          ${store.view === 'master-task-log' || store.view === 'master-host-logs' ? `<button class='sb-btn' type='button' onclick='selectView("master")'>Back to Master Overview</button>` : `<button class='sb-btn' type='button' onclick='openMasterTaskLogs()'>Task Logs</button>`}
-          ${store.view !== 'master-host-logs' ? `<button class='sb-btn' type='button' onclick='openMasterHostLogs()'>Host Logs</button>` : ''}
+          <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>
+          ${store.view !== 'master' ? `<button class='sb-btn' type='button' onclick='selectView("master")'>Back to Master Overview</button>` : ''}
+          <button class='sb-btn' type='button' onclick='openMasterTaskLogs()'>Task Logs</button>
+          <button class='sb-btn' type='button' onclick='openMasterHostLogs()'>Host Logs</button>
+          <button class='sb-btn' type='button' onclick='selectView("master-pbgui-branch")'>PBGui Branch</button>
+          <button class='sb-btn' type='button' onclick='selectView("master-pb7-branch")'>PB7 Branch</button>
+          <div class='sb-separator'>Tasks</div>
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' ${store.master.debug ? 'checked' : ''} onchange="setMasterBool('debug', this.checked)"> Debug</label>
           </div>
+          <button class='${masterBothBtnClass} primary' type='button' onclick='runMasterWithLog("master-update-pb", "Update PBGui and PB7")'>Update PBGui and PB7</button>
+          <button class='${masterPbguiBtnClass}' type='button' onclick='runMasterWithLog("master-update-pbgui", "Update PBGui")'>Update PBGui</button>
+          <button class='${masterPb7BtnClass}' type='button' onclick='runMasterWithLog("master-update-pb7", "Update PB7")'>Update PB7</button>
           <div class='sb-field'>
-            <label class='sb-label'>sudo password</label>
-            ${renderVisibilityInput('password', store.master.sudoPw, "setMasterField('sudoPw', this.value)", 'Show or hide sudo password', 'master.sidebar.sudoPw')}
+            <label class='sb-toggle'><input type='checkbox' ${store.master.updateReboot ? 'checked' : ''} ${linuxUpdateSupported ? '' : 'disabled'} onchange="setMasterBool('updateReboot', this.checked)"> Reboot after Linux update</label>
           </div>
-          <button class='sb-btn primary' type='button' onclick='runMasterWithLog("master-update-pb", "Update PBGui and PB7")'>Update PBGui and PB7</button>
-          <button class='sb-btn' type='button' onclick='runMasterWithLog("master-update-pbgui", "Update PBGui")'>Update PBGui</button>
-          <button class='sb-btn' type='button' onclick='runMasterWithLog("master-update-pb7", "Update PB7")'>Update PB7</button>
-          <button class='sb-btn warning' data-master-sudo-required='true' type='button' ${store.master.sudoPw ? '' : 'disabled'} onclick='runMasterWithLog("master-install-rustup", "Install rustup")'>Install rustup</button>
-          <button class='sb-btn warning' data-master-sudo-required='true' type='button' ${store.master.sudoPw ? '' : 'disabled'} onclick='runMasterWithLog("master-install-rclone", "Install rclone")'>Install rclone</button>
-          <button class='sb-btn warning' data-master-sudo-required='true' type='button' ${store.master.sudoPw ? '' : 'disabled'} onclick='runMasterWithLog("master-pb7-python312", "Update PB7 venv")'>Update PB7 venv</button>
-          <button class='sb-btn warning' data-master-sudo-required='true' type='button' ${store.master.sudoPw ? '' : 'disabled'} onclick='runMasterWithLog("master-pbgui-python312", "Install PBGui venv (Python 3.12)")'>Install PBGui venv</button>`;
+          <button class='${masterLinuxBtnClass}' type='button' ${linuxUpdateSupported ? '' : 'disabled'} onclick='updateLinuxMasterAction()'>Update Linux</button>
+          <button class='${masterRebootBtnClass}' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='rebootMasterAction()'>Reboot Master</button>
+          ${blockedTasksNotice ? `<div class='notice warning'>${esc(blockedTasksNotice)}</div>` : ''}
+          <div class='sb-separator'>Tools</div>
+          <button class='sb-btn' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='masterActionWithSudo("master-install-rustup", "Install or Update rustup")'>Install or Update rustup</button>
+          <button class='sb-btn' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='masterActionWithSudo("master-install-rclone", "Install or Update rclone")'>Install or Update rclone</button>
+          `;
       } else if (isVpsContextView()) {
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
         const ui = ensureVpsUi(store.hostname, detail);
@@ -5839,8 +6508,7 @@
           <button class='sb-btn' type='button' onclick='openCoinDataPrompt(${js(selectedHost)})'>Update CoinData API</button>`;
       } else if (store.view === 'add') {
         html = `
-          <button class='sb-btn' type='button' onclick='refreshState()'>Refresh</button>
-          <button class='sb-btn' type='button' onclick='selectView("overview")'>Home</button>
+          <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>
           <button class='sb-btn info' type='button' onclick='saveAddVps()'>Save VPS</button>`;
       } else {
         const apiBtnClass = running ? 'warning' : (unsyncedHosts.length ? 'danger' : 'ok');
@@ -5967,13 +6635,165 @@
           </div>
           <div class='field'>
             <label>private_key /path/filename.pem</label>
-            <input type='text' value='${escAttr(form.private_key_file)}' oninput="setAddField('private_key_file', this.value)">
+            <div style='display:flex;gap:6px;align-items:start'>
+              <input type='text' value='${escAttr(form.private_key_file)}' oninput="setAddField('private_key_file', this.value)" style='flex:1'>
+              <button class='btn ghost' type='button' onclick='openFileBrowser()'>Browse</button>
+            </div>
           </div>`;
       }
       return extra;
     }
 
+    function renderAddInitDynamic() {
+      const form = store.addForm;
+      const state = store.state || {};
+      const config = state.config || {};
+      const initMethods = Array.isArray(config.init_methods) ? config.init_methods : ['root', 'password', 'private_key'];
+      return `
+        <div class='field'>
+          <label>Init methode</label>
+          <select onchange="setAddField('init_methode', this.value)">
+            ${initMethods.map(function (method) {
+              return `<option value='${escAttr(method)}'${method === form.init_methode ? ' selected' : ''}>${esc(method)}</option>`;
+            }).join('')}
+          </select>
+        </div>
+        ${form.init_methode !== 'root' ? `<div class='field'><label>&nbsp;</label><label class='checkbox-row'><input type='checkbox' ${form.remove_user ? 'checked' : ''} onchange="setAddBool('remove_user', this.checked)"> Remove user from VPS after init</label></div>` : ''}
+        ${renderInitFields()}`;
+    }
+
+    function renderAddPreflightChecks() {
+      const ready = store.addVpsReady || {};
+      const loading = !!ready.loading;
+      const hostsOk = !!ready.hostsOk;
+      const hostsHasHostname = !!ready.hostsHasHostname;
+      const hostsCurrentIp = String(ready.hostsCurrentIp || '');
+      const sshOk = !!ready.sshOk;
+      const sshError = String(ready.sshError || '');
+      const ip = String(store.addForm.ip || '').trim();
+      const hostname = String(store.addForm.hostname || '').trim();
+
+      let hostsLabel = '/etc/hosts check';
+      let hostsValue;
+      let hostsSub;
+      if (loading && !hostsOk) {
+        hostsValue = boolDot('pending');
+        hostsSub = 'Checking local /etc/hosts...';
+      } else if (hostsOk) {
+        hostsValue = boolDot(true);
+        hostsSub = 'IP and hostname found';
+      } else if (hostsHasHostname && hostsCurrentIp) {
+        hostsValue = boolDot(false);
+        hostsSub = 'Hostname found with IP ' + hostsCurrentIp + ' (expected ' + ip + ')';
+      } else {
+        hostsValue = boolDot(false);
+        hostsSub = !ip || !hostname ? 'Enter IP and hostname' : 'IP/hostname not found in /etc/hosts';
+      }
+
+      let sshLabel = 'SSH connectivity check';
+      let sshValue;
+      let sshSub;
+      if (!ip || !hostname) {
+        sshValue = boolDot('pending');
+        sshSub = 'Enter IP and hostname first';
+      } else if (!hostsOk) {
+        sshValue = boolDot('pending');
+        sshSub = 'Fix /etc/hosts entry first';
+      } else if (loading) {
+        sshValue = boolDot('pending');
+        sshSub = 'Testing SSH connectivity...';
+      } else if (sshOk) {
+        sshValue = boolDot(true);
+        sshSub = 'SSH connection successful';
+      } else {
+        sshValue = boolDot(false);
+        sshSub = sshError || 'SSH connection failed';
+      }
+
+      const showAddHostsBtn = !!ip && !!hostname && !hostsOk;
+      const addHostsBtnText = hostsHasHostname ? 'Replace in /etc/hosts' : 'Add to local /etc/hosts';
+
+      const hostsBtn = showAddHostsBtn
+        ? `<div style='position:absolute;right:12px;top:50%;transform:translateY(-50%)'><button class='btn primary' type='button' onclick='addHostsEntryAction()'>${esc(addHostsBtnText)}</button></div>`
+        : '';
+
+      const bucketCheck = store.addBucketCheck || {};
+      const cmcCheck = store.addCmcCheck || {};
+      const hasBucket = !!String(store.addForm.bucket || '').trim();
+      const hasCmc = !!String(store.addForm.coinmarketcap_api_key || '').trim();
+      const bucketOk = hasBucket && bucketCheck.ok;
+      const cmcOk = hasCmc && cmcCheck.ok;
+      const bucketLoading = !!bucketCheck.loading;
+      const cmcLoading = !!cmcCheck.loading;
+      const bucketError = String(bucketCheck.error || '');
+      const cmcError = String(cmcCheck.error || '');
+      const cmcLimit = cmcCheck.credit_limit_monthly;
+      const cmcUsedDay = cmcCheck.credits_used_day;
+      const cmcUsedMonth = cmcCheck.credits_used_month;
+      const cmcLeft = cmcCheck.credits_left;
+      const cmcResetTs = cmcCheck.credit_limit_monthly_reset_timestamp;
+      const fwCheck = validateFirewallIps(store.addForm.firewall_ssh_ips);
+      const fwOk = fwCheck.ok;
+      const fwValue = boolDot(fwOk);
+      const fwSub = fwOk
+        ? (String(store.addForm.firewall_ssh_ips || '').trim() || 'Empty (any IP)')
+        : (fwCheck.error || 'Invalid IP list');
+
+      let bucketLabel = 'PBRemote bucket';
+      let bucketValue;
+      let bucketSub;
+      if (!hasBucket) {
+        bucketValue = boolDot(false);
+        bucketSub = 'Missing bucket';
+      } else if (bucketLoading) {
+        bucketValue = boolDot('pending');
+        bucketSub = 'Checking bucket...';
+      } else if (bucketOk) {
+        bucketValue = boolDot(true);
+        bucketSub = 'Bucket OK';
+      } else {
+        bucketValue = boolDot(false);
+        bucketSub = bucketError || 'Bucket check failed';
+      }
+
+      let cmcLabel = 'CoinData API key';
+      let cmcValue;
+      let cmcSub;
+      if (!hasCmc) {
+        cmcValue = boolDot(false);
+        cmcSub = 'Missing API key';
+      } else if (cmcLoading) {
+        cmcValue = boolDot('pending');
+        cmcSub = 'Checking API key...';
+      } else if (cmcOk) {
+        cmcValue = boolDot(true);
+        cmcSub = 'Month ' + formatCount(cmcUsedMonth) + ' / ' + formatCount(cmcLimit) + ' credits, left ' + formatCount(cmcLeft);
+      } else {
+        cmcValue = boolDot(false);
+        cmcSub = cmcError || 'API key check failed';
+      }
+
+      const cmcMeta = cmcOk
+        ? `<div class='status-sub'>Day used: ${esc(formatCount(cmcUsedDay))}</div><div class='status-sub'>Month reset: ${esc(formatTs(cmcResetTs))}</div>`
+        : '';
+
+      return `
+        <div class='status-grid'>
+          <div class='status-item' style='position:relative'>
+            <div class='status-label'>${esc(hostsLabel)}</div>
+            <div class='status-value'>${hostsValue}</div>
+            <div class='status-sub'>${esc(hostsSub)}</div>
+            ${hostsBtn}
+          </div>
+          <div class='status-item'><div class='status-label'>${esc(sshLabel)}</div><div class='status-value'>${sshValue}</div><div class='status-sub'>${esc(sshSub)}</div></div>
+          <div class='status-item'><div class='status-label'>Allowed SSH IPs</div><div class='status-value'>${fwValue}</div><div class='status-sub'>${esc(fwSub)}</div></div>
+          <div class='status-item'><div class='status-label'>${esc(bucketLabel)}</div><div class='status-value'>${bucketValue}</div><div class='status-sub'>${esc(bucketSub)}</div></div>
+          <div class='status-item'><div class='status-label'>${esc(cmcLabel)}</div><div class='status-value'>${cmcValue}</div><div class='status-sub'>${esc(cmcSub)}</div>${cmcMeta}</div>
+        </div>`;
+    }
+
     function renderAddView() {
+      ensureAddFormDefaults();
       const form = store.addForm;
       const state = store.state || {};
       const config = state.config || {};
@@ -5987,12 +6807,27 @@
         <div class='panel'>
           <div class='panel-head'>
             <div>
+              <div class='panel-title'>Status Details</div>
+            </div>
+          </div>
+          <div class='panel-body'>
+            <div id='add-status-details'>${renderAddStatusDetails(form)}</div>
+          </div>
+        </div>
+        <div class='panel'>
+          <div class='panel-head'>
+            <div>
               <div class='panel-title'>Step 1: Get your VPS</div>
             </div>
           </div>
           <div class='panel-body'>
             <ul class='page-copy-list'>
-              <li>I can recommend small Ubuntu VPS plans from IONOS, RackNerd or Contabo depending on how many bots you want to run.</li>
+              <li>I currently recommend <a href='https://aklam.io/CBA3zSaZ' target='_blank' rel='noopener noreferrer'>IONOS</a> or <a href='https://my.servitro.com/aff.php?aff=186' target='_blank' rel='noopener noreferrer'>Servitro</a>.</li>
+              <li>For IONOS: open <span class='code'>Server</span> -> <span class='code'>vServer (VPS)</span> -> <span class='code'>Linux VPS</span>.</li>
+              <li>IONOS VPS for normal VPS bots: <span class='code'>VPS S+</span> with 2 vCores CPU, 2 GB RAM and 80 GB NVMe.</li>
+              <li>IONOS VPS for a remote master: <span class='code'>VPS M+</span> with 4 vCores CPU, 4 GB RAM and 120 GB NVMe.</li>
+              <li>Servitro current pick: <span class='code'>Virtual-1</span> with 1 vCore, 4 GB DDR4 RAM, 25 GB SSD, 10 Gbps port, 1 TB traffic, 1x IPv4 and 1x IPv6 /64.</li>
+              <li>Use coupon code <span class='code'>S8KQX51KF6</span> to get the Servitro plan for <span class='code'>$20/year</span>.</li>
               <li>Use Ubuntu 24.04 and prepare the box before you start the bootstrap below.</li>
             </ul>
           </div>
@@ -6027,24 +6862,23 @@
         <div class='panel'>
           <div class='panel-head'>
             <div>
-              <div class='panel-title'>Step 4: Initial setup of your VPS</div>
-              <div class='panel-sub'>Run only one time after installation.</div>
+              <div class='panel-title'>Pre-flight Checks</div>
+            </div>
+          </div>
+          <div class='panel-body'>
+            <div id='add-preflight-checks'>${renderAddPreflightChecks()}</div>
+          </div>
+        </div>
+        <div class='panel'>
+          <div class='panel-head'>
+            <div>
+              <div class='panel-title'>Step 4: Initialize &amp; Setup your VPS</div>
+              <div class='panel-sub'>Run only one time after installation. Init creates the user, changes the root password, and installs the SSH key. Setup configures swap, firewall, rclone, and CoinData.</div>
             </div>
           </div>
           <div class='panel-body'>
             <div class='field-grid'>
-              <div class='field'>
-                <label>Init methode</label>
-                <select onchange="setAddField('init_methode', this.value); renderUi({ forceView: true });">
-                  ${initMethods.map(function (method) {
-                    return `<option value='${escAttr(method)}'${method === form.init_methode ? ' selected' : ''}>${esc(method)}</option>`;
-                  }).join('')}
-                </select>
-              </div>
-              <div class='field'>
-                <label>&nbsp;</label>
-                <label class='checkbox-row'><input type='checkbox' ${form.remove_user ? 'checked' : ''} onchange="setAddBool('remove_user', this.checked)"> Remove user from VPS after init</label>
-              </div>
+              <div id='add-init-dynamic' style='display:contents'>${renderAddInitDynamic()}</div>
               <div class='field'>
                 <label>VPS IPv4</label>
                 <input type='text' value='${escAttr(form.ip)}' oninput="setAddField('ip', this.value)" placeholder='203.0.113.10'>
@@ -6053,7 +6887,6 @@
                 <label>VPS hostname</label>
                 <input type='text' value='${escAttr(form.hostname)}' oninput="setAddField('hostname', this.value)">
               </div>
-              ${renderInitFields()}
               <div class='field'>
                 <label>VPS user name</label>
                 <input type='text' value='${escAttr(form.user)}' oninput="setAddField('user', this.value)">
@@ -6062,22 +6895,6 @@
                 <label>VPS user password</label>
                 ${renderVisibilityInput('password', form.user_pw, "setAddField('user_pw', this.value)", 'Show or hide VPS user password', 'add.user_pw')}
               </div>
-            </div>
-            <div class='button-row'>
-              <label class='checkbox-row'><input type='checkbox' ${store.addDebug ? 'checked' : ''} onchange='store.addDebug = this.checked'> Debug</label>
-              <button class='btn ok' id='add-init-btn' type='button' ${canInit ? '' : 'disabled'} onclick='initAddVps()'>Init VPS</button>
-            </div>
-          </div>
-        </div>
-        <div class='panel'>
-          <div class='panel-head'>
-            <div>
-              <div class='panel-title'>Save VPS Entry</div>
-              <div class='panel-sub'>Store the post-setup defaults so the new host appears in the normal VPS sidebar list.</div>
-            </div>
-          </div>
-          <div class='panel-body'>
-            <div class='field-grid'>
               <div class='field'>
                 <label>Swap Size</label>
                 <select onchange="setAddField('swap', this.value)">
@@ -6088,11 +6905,11 @@
               </div>
               <div class='field'>
                 <label>PBRemote Bucket</label>
-                <input type='text' value='${escAttr(form.bucket || config.master_name || '')}' oninput="setAddField('bucket', this.value)">
+                <input type='text' value='${escAttr(form.bucket || config.bucket || config.master_name || '')}' oninput="setAddField('bucket', this.value)">
               </div>
               <div class='field'>
                 <label>CoinMarketCap API Key</label>
-                ${renderVisibilityInput('password', form.coinmarketcap_api_key, "setAddField('coinmarketcap_api_key', this.value)", 'Show or hide CoinMarketCap API key', 'add.coinmarketcap_api_key')}
+                ${renderVisibilityInput('password', form.coinmarketcap_api_key || config.coinmarketcap_api_key || '', "setAddField('coinmarketcap_api_key', this.value)", 'Show or hide CoinMarketCap API key', 'add.coinmarketcap_api_key')}
               </div>
               <div class='field'>
                 <label>Firewall SSH Port</label>
@@ -6108,10 +6925,80 @@
               </div>
             </div>
             <div class='button-row'>
+              <label class='checkbox-row'><input type='checkbox' ${store.addDebug ? 'checked' : ''} onchange='store.addDebug = this.checked'> Debug</label>
               <button class='btn ghost' type='button' onclick='store.addForm = defaultAddForm(); store.addDebug = false; renderUi({ forceView: true });'>Reset</button>
-              <button class='btn primary' type='button' onclick='saveAddVps()'>Save VPS</button>
+              <button class='btn ok' id='add-init-btn' type='button' ${canInit ? '' : 'disabled'} onclick='initAddVps()'>Initialize &amp; Setup VPS</button>
             </div>
           </div>
+        </div>`;
+    }
+
+    function renderAddStatusDetails(form) {
+      const currentForm = form || store.addForm || {};
+      const canInit = canInitForm(currentForm);
+      function addStatusCard(label, ok, sub) {
+        return `<div class='status-item'><div class='status-label'>${esc(label)}</div><div class='status-value'>${boolDot(ok)}</div><div class='status-sub'>${esc(sub)}</div></div>`;
+      }
+      const rawIp = String(currentForm.ip || '').trim();
+      const validIp = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(rawIp) && rawIp.split('.').every(function (part) { return Number(part) >= 0 && Number(part) <= 255; });
+      const hasIp = !!rawIp && validIp;
+      const hasHostname = !!String(currentForm.hostname || '').trim();
+      const hasUser = !!String(currentForm.user || '').trim();
+      const hasUserPw = !!String(currentForm.user_pw || '').trim();
+      const initMethod = String(currentForm.init_methode || 'root');
+      let initMethodReady = false;
+      let initMethodLabel = 'Init method';
+      let initMethodSub = 'Missing init credentials';
+      if (initMethod === 'private_key') {
+        initMethodReady = !!String(currentForm.private_key_user || '').trim() && !!String(currentForm.private_key_file || '').trim();
+        initMethodLabel = 'Private key access';
+        initMethodSub = initMethodReady ? 'SSH user and key file set' : 'Private key user or key file missing';
+      } else if (initMethod === 'password') {
+        initMethodReady = !!String(currentForm.user_sudo || '').trim() && !!String(currentForm.user_sudo_pw || '').trim();
+        initMethodLabel = 'Sudo access';
+        initMethodSub = initMethodReady ? 'Sudo user and password set' : 'Sudo user or password missing';
+      } else {
+        initMethodReady = !!String(currentForm.initial_root_pw || '').trim() && !!String(currentForm.root_pw || '').trim();
+        initMethodLabel = 'Root access';
+        initMethodSub = initMethodReady ? 'Current and new root password set' : 'Root password or new root password missing';
+      }
+      const userPwInvalid = hasInvalidPasswordChars(currentForm.user_pw);
+      const initPwInvalid = initMethod === 'password' ? hasInvalidPasswordChars(currentForm.user_sudo_pw) : (initMethod === 'private_key' ? false : (hasInvalidPasswordChars(currentForm.initial_root_pw) || hasInvalidPasswordChars(currentForm.root_pw)));
+      const bucketCheck = store.addBucketCheck || {};
+      const cmcCheck = store.addCmcCheck || {};
+      const hasBucket = !!String(currentForm.bucket || '').trim();
+      const hasCmc = !!String(currentForm.coinmarketcap_api_key || '').trim();
+      const bucketOk = hasBucket && bucketCheck.ok;
+      const cmcOk = hasCmc && cmcCheck.ok;
+      const fwCheck = validateFirewallIps(currentForm.firewall_ssh_ips);
+      const fwOk = fwCheck.ok;
+      const setupReady = bucketOk && cmcOk && fwOk;
+      let initReadySub;
+      if (canInit) {
+        initReadySub = 'All required fields are set';
+      } else if (userPwInvalid || initPwInvalid) {
+        initReadySub = 'Password contains invalid characters {{ or }}';
+      } else if (!setupReady) {
+        if (!bucketOk) {
+          initReadySub = String(bucketCheck.error || '') || 'PBRemote bucket check failed';
+        } else if (!cmcOk) {
+          initReadySub = String(cmcCheck.error || '') || 'CoinMarketCap API key check failed';
+        } else if (!fwOk) {
+          initReadySub = fwCheck.error || 'Invalid firewall IP';
+        } else {
+          initReadySub = 'Fill all required init fields';
+        }
+      } else {
+        initReadySub = 'Fill all required init fields';
+      }
+      return `
+        <div class='status-grid'>
+          ${addStatusCard('Init ready', canInit, initReadySub)}
+          ${addStatusCard('VPS IP', hasIp, hasIp ? rawIp : (rawIp ? 'Invalid IPv4 address' : 'Missing VPS IPv4'))}
+          ${addStatusCard('Hostname', hasHostname, hasHostname ? String(currentForm.hostname).trim() : 'Missing VPS hostname')}
+          ${addStatusCard('VPS user', hasUser, hasUser ? String(currentForm.user).trim() : 'Missing VPS user name')}
+          ${addStatusCard('VPS user password', hasUserPw && !userPwInvalid, hasUserPw ? (userPwInvalid ? 'Contains invalid characters {{ or }}' : 'User password set') : 'Missing VPS user password')}
+          ${addStatusCard(initMethodLabel, initMethodReady && !initPwInvalid, initMethodReady ? (initPwInvalid ? 'Contains invalid characters {{ or }}' : initMethodSub) : initMethodSub)}
         </div>`;
     }
 
@@ -6836,7 +7723,6 @@
       ensureMasterUi(detail);
       const status = detail.status || {};
       const summary = status.summary_row || {};
-      const progress = detail.progress || {};
       const masterRtd = detail.monitor && detail.monitor.server ? detail.monitor.server.rtd : null;
       return `
 
@@ -6847,44 +7733,29 @@
         <div class='panel'>
           <div class='panel-head'>
             <div>
-              <div class='panel-title'>Master Status</div>
-              <div class='panel-sub'>Use the sidebar for update and install actions.</div>
+              <div class='panel-title'>Status Details</div>
             </div>
           </div>
           <div class='panel-body'>
-            <div class='field-grid'>
-              <div id='master-status-fields' class='render-contents'>${renderMasterStatusFields(status, summary)}</div>
-              <div class='field'>
-                <label>Sudo password</label>
-                ${renderVisibilityInput('password', store.master.sudoPw, "setMasterField('sudoPw', this.value)", 'Show or hide sudo password', 'master.main.sudoPw')}
-              </div>
-            </div>
-            <div id='master-status-flags'>${renderStatusFlags(status)}</div>
+            <div id='master-status-cards'>${renderMasterStatusCards(status)}</div>
           </div>
         </div>
-        ${renderPbguiBranchPanel('master', detail.branches.pbgui || {})}
-        ${renderPb7BranchPanel('master', detail.branches.pb7 || {})}
-        <div id='master-monitor-live'>${renderMonitorPanel(detail.monitor || {}, true, status)}</div>
-        <div id='master-progress-live'>${renderMasterProgress(progress)}</div>`;
+        <div id='master-monitor-live'>${renderMonitorPanel(detail.monitor || {}, true, status)}</div>`;
     }
 
-    function renderMasterProgress(progress) {
-      const statusClass = String(progress.status || '').toLowerCase();
-      const tagClass = statusClass.indexOf('success') >= 0 ? 'ok' : statusClass.indexOf('fail') >= 0 || statusClass.indexOf('error') >= 0 ? 'error' : statusClass ? 'warning' : 'warning';
+    function renderMasterBranchView(repo) {
+      const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
+      if (!detail) {
+        sendContext();
+        return `<div class='empty-state'>Waiting for master detail...</div>`;
+      }
+      ensureMasterUi(detail);
+      const label = repo === 'pbgui' ? 'PBGui' : 'PB7';
+      const panel = repo === 'pbgui' ? renderPbguiBranchPanel('master', detail.branches.pbgui || {}) : renderPb7BranchPanel('master', detail.branches.pb7 || {});
       return `
-        <div class='panel'>
-          <div class='panel-head'>
-            <div>
-              <div class='panel-title'>Progress</div>
-              <div class='panel-sub'>Master runner status and latest ansible output.</div>
-            </div>
-            <div class='tag ${tagClass}'>${esc(progress.status || 'idle')}</div>
-          </div>
-          <div class='panel-body'>
-            <div class='notice'>Command: <span class='code'>${esc(progress.command_text || progress.command || '-')}</span> | Last update: ${esc(progress.last_update || '-')}</div>
-            <div class='field-help'>Use the sidebar action buttons to open the shared command log viewer for full ansible output.</div>
-          </div>
-        </div>`;
+
+        <h2 class='page-section-title'>Master - ${esc(label)} Branch</h2>
+        ${panel}`;
     }
 
     function renderMasterTaskLogView() {
@@ -6951,7 +7822,7 @@
       const ui = ensureVpsUi(detail.hostname, detail);
       const status = detail.status || {};
       const summary = status.summary_row || {};
-      const canSetup = canSetupForm(ui.form || {}) || (hasSessionSecret(detail.hostname, 'user_pw') && ui.form.swap && ui.form.bucket && ui.form.coinmarketcap_api_key);
+      const canSetup = canSetupForm(Object.assign({ hostname: detail.hostname }, ui.form || {}));
       const canSave = canSaveForm(ui.form || {}, ui.savedForm);
       const vpsUserPwVisibilityKey = 'vps:' + detail.hostname + ':user_pw';
       const vpsCoinmarketcapKeyVisibilityKey = 'vps:' + detail.hostname + ':coinmarketcap_api_key';
@@ -6981,7 +7852,7 @@
             <div class='field-grid'>
               <div class='field'>
                 <label>VPS User Password</label>
-                ${renderVisibilityInput('password', ui.form.user_pw || '', `setVpsField(${js(detail.hostname)}, 'user_pw', this.value)`, 'Show or hide VPS user password', vpsUserPwVisibilityKey, `function(input, btn, visibilityKey){ requestSecretReveal(${js(detail.hostname)}, 'user_pw', visibilityKey); }`)}
+                ${renderVisibilityInput('password', ui.form.user_pw || '', `setVpsField(${js(detail.hostname)}, 'user_pw', this.value)`, 'Show or hide VPS user password', vpsUserPwVisibilityKey, detail.hostname, 'user_pw')}
                 ${renderSecretHint(detail.hostname, 'user_pw')}
               </div>
               <div class='field'>
@@ -7372,6 +8243,10 @@
         html = renderAddView();
       } else if (store.view === 'master-task-log') {
         html = renderMasterTaskLogView();
+      } else if (store.view === 'master-pbgui-branch') {
+        html = renderMasterBranchView('pbgui');
+      } else if (store.view === 'master-pb7-branch') {
+        html = renderMasterBranchView('pb7');
       } else if (store.view === 'master') {
         html = renderMasterView();
       } else if (store.view === 'vps-task-log') {
@@ -7419,7 +8294,15 @@
         renderSidebarList();
       }
       renderSummaryBar();
-      renderView(!!opts.forceView);
+      const holdPb7BranchView = store.pb7BranchSelectInteracting && isPb7BranchView();
+      if (!holdPb7BranchView) {
+        renderView(!!opts.forceView);
+      }
+      if (!holdPb7BranchView && store.view === 'master-pb7-branch' && store.detail && store.detail.kind === 'master') {
+        syncPb7RemoteLoads('master', store.master, (store.detail.branches || {}).pb7 || {});
+      } else if (!holdPb7BranchView && store.view === 'vps-pb7-branch' && store.hostname && store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname) {
+        syncPb7RemoteLoads(store.hostname, ensureVpsUi(store.hostname, store.detail), (store.detail.branches || {}).pb7 || {});
+      }
       syncTaskLogViewer();
       syncVpsLogViewer();
       syncMasterHostLogViewer();

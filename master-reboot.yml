@@ -1,0 +1,56 @@
+---
+# Reboot local Linux host
+
+- hosts: localhost
+  gather_facts: true
+
+  vars:
+    ansible_become_password: "{{ user_pw }}"
+    needs_become: "{{ (ansible_facts.user_id | default(ansible_user_id | default(''))) != 'root' }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: probe sudo availability when root is required
+      command: sudo -S -p '' true
+      args:
+        stdin: "{{ (user_pw | default('')) ~ '\n' }}"
+      register: sudo_probe
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: needs_become | bool
+
+    - name: fail when sudo is blocked by container no-new-privileges
+      fail:
+        msg: >-
+          Reboot Master cannot run here because sudo is blocked by the current runtime
+          (`no_new_privileges` / `NoNewPrivileges`).
+          Run PBGui without that restriction or reboot the host directly.
+      when:
+        - needs_become | bool
+        - sudo_probe.rc | default(0) != 0
+        - >-
+          ('no new privileges' in ((sudo_probe.stderr | default('')) | lower)) or
+          ('keine neuen privilegien' in ((sudo_probe.stderr | default('')) | lower))
+
+    - name: fail when sudo authentication is unavailable
+      fail:
+        msg: >-
+          Reboot Master requires working sudo access for the current local user.
+          Please verify the sudo password and local sudo permissions.
+      when:
+        - needs_become | bool
+        - sudo_probe.rc | default(0) != 0
+
+    - name: schedule local reboot
+      shell: >-
+        nohup sh -c 'sleep 2; shutdown -r now "Reboot initiated by PBGui"' >/dev/null 2>&1 &
+      args:
+        executable: /bin/bash
+      async: 1
+      poll: 0
+      become: "{{ needs_become | bool }}"

@@ -5,6 +5,7 @@ import configparser
 import os
 import platform
 import time as _time
+import tempfile
 from pathlib import Path, PurePath
 import subprocess
 import re
@@ -701,8 +702,8 @@ def list_remote_git_branches(remote_url: str, timeout_sec: int = 20) -> list[str
 def list_remote_git_branch_commits(remote_url: str, branch_name: str, limit: int = 50, timeout_sec: int = 30) -> list[dict]:
     """Return commit history for a branch from a remote URL.
 
-    This uses a local remote-helper style git invocation and does not require the
-    target remote to be configured inside an existing repository.
+    This fetches the target branch into a temporary bare repository so git has
+    access to the required objects before reading the commit log.
     """
     remote_url = (remote_url or "").strip()
     branch_name = (branch_name or "").strip()
@@ -710,51 +711,58 @@ def list_remote_git_branch_commits(remote_url: str, branch_name: str, limit: int
         return []
 
     try:
-        ls_remote = subprocess.run(
-            ["git", "ls-remote", "--heads", remote_url, branch_name],
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
-            check=False,
-        )
+        with tempfile.TemporaryDirectory(prefix="pbgui-remote-log-") as temp_dir:
+            init_result = subprocess.run(
+                ["git", "init", "--bare", temp_dir],
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+                check=False,
+            )
+            if init_result.returncode != 0:
+                msg = (init_result.stderr or "").strip() or "git init --bare failed"
+                raise RuntimeError(msg)
+
+            fetch_result = subprocess.run(
+                [
+                    "git",
+                    f"--git-dir={temp_dir}",
+                    "fetch",
+                    "--depth",
+                    str(max(int(limit), 1)),
+                    remote_url,
+                    f"refs/heads/{branch_name}:refs/heads/{branch_name}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+                check=False,
+            )
+            if fetch_result.returncode != 0:
+                msg = (fetch_result.stderr or "").strip() or "git fetch failed"
+                raise RuntimeError(msg)
+
+            log_result = subprocess.run(
+                [
+                    "git",
+                    f"--git-dir={temp_dir}",
+                    "log",
+                    f"refs/heads/{branch_name}",
+                    "-n",
+                    str(max(int(limit), 1)),
+                    "--pretty=format:%h|%H|%an|%ar|%at|%B%x00",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+                check=False,
+            )
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"Timeout fetching remote commit history ({timeout_sec}s).") from e
+    except RuntimeError:
+        raise
     except Exception as e:
         raise RuntimeError("Failed to run git to fetch remote commit history.") from e
-
-    if ls_remote.returncode != 0:
-        msg = (ls_remote.stderr or "").strip() or "git ls-remote failed"
-        raise RuntimeError(msg)
-
-    commit_hash = ""
-    ref_name = f"refs/heads/{branch_name}"
-    for line in (ls_remote.stdout or "").splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and parts[1] == ref_name:
-            commit_hash = parts[0].strip()
-            break
-    if not commit_hash:
-        return []
-
-    try:
-        log_result = subprocess.run(
-            [
-                "git",
-                "log",
-                commit_hash,
-                "-n",
-                str(max(int(limit), 1)),
-                "--pretty=format:%h|%H|%an|%ar|%at|%B%x00",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"Timeout reading remote commit log ({timeout_sec}s).") from e
-    except Exception as e:
-        raise RuntimeError("Failed to run git log for remote commit history.") from e
 
     if log_result.returncode != 0:
         msg = (log_result.stderr or "").strip() or "git log failed"
@@ -822,6 +830,40 @@ def get_git_remote_url(repo_dir: str, remote_name: str, timeout_sec: int = 10) -
     if res.returncode != 0:
         return ""
     return (res.stdout or "").strip()
+
+
+def get_git_branch_remote(repo_dir: str, branch_name: str, timeout_sec: int = 10) -> str:
+    """Get the configured tracking remote name for a local branch."""
+    repo_dir = (repo_dir or "").strip()
+    branch_name = (branch_name or "").strip()
+    if not repo_dir or not branch_name:
+        return ""
+    try:
+        res = subprocess.run(
+            ["git", "-C", repo_dir, "config", "--get", f"branch.{branch_name}.remote"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except Exception:
+        return ""
+    if res.returncode != 0:
+        return ""
+    return (res.stdout or "").strip()
+
+
+def get_git_branch_remotes(repo_dir: str, branch_names: list[str], timeout_sec: int = 10) -> dict[str, str]:
+    """Get configured tracking remote names for a set of local branches."""
+    remotes: dict[str, str] = {}
+    for branch_name in branch_names or []:
+        branch = str(branch_name or "").strip()
+        if not branch:
+            continue
+        remote_name = get_git_branch_remote(repo_dir, branch, timeout_sec=timeout_sec)
+        if remote_name:
+            remotes[branch] = remote_name
+    return remotes
 
 
 def pb7_suite_preflight_errors(config: dict) -> list[str]:

@@ -17,7 +17,7 @@ import getpass
 import paramiko
 
 from logging_helpers import human_log as _log
-from pbgui_purefunc import load_ini, pb7dir, pb7venv
+from pbgui_purefunc import load_ini, pb7dir, pb7venv, save_ini
 
 PBGDIR = Path.cwd()
 PB7DIR = pb7dir()
@@ -70,6 +70,19 @@ def _task_log_stem(task_name: str | None, fallback: str) -> str:
     raw_value = str(task_name or fallback or "").strip().lower()
     normalized = re.sub(r"[^a-z0-9_-]+", "-", raw_value).strip("-")
     return normalized or fallback
+
+
+def _set_vps_monitor_enabled(hostname: str, *, enabled: bool) -> None:
+    hostname = str(hostname or "").strip()
+    if not hostname:
+        return
+    current = str(load_ini("vps_monitor", "enabled_hosts") or "")
+    hosts = {item.strip() for item in current.split(",") if item.strip()}
+    if enabled:
+        hosts.add(hostname)
+    else:
+        hosts.discard(hostname)
+    save_ini("vps_monitor", "enabled_hosts", ",".join(sorted(hosts)))
 
 
 def _coerce_bool(value) -> bool:
@@ -640,6 +653,8 @@ class VPS:
     def setup_finished(self, runner_config=None):
         del runner_config
         self.last_setup = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if str(self.setup_status or "") == "successful":
+            _set_vps_monitor_enabled(self.hostname, enabled=True)
         self.save()
         shutil.rmtree(f"{self.path}/tmp", ignore_errors=True)
 
@@ -782,7 +797,7 @@ class VPSManager:
     def add_vps(self):
         return VPS()
 
-    def init_vps(self, vps: VPS, debug=False):
+    def init_vps(self, vps: VPS, debug=False, auto_setup=False):
         vps.command = "vps-init"
         vps.command_text = "Initialize"
         vps.setup_status = None
@@ -796,6 +811,15 @@ class VPSManager:
         else:
             tags = None
             verbosity = 1
+
+        def _on_init_finished(runner_config=None):
+            vps.init_finished(runner_config)
+            if auto_setup and getattr(vps, "init_status", None) == "successful":
+                try:
+                    self.setup_vps(vps, debug=debug)
+                except Exception:
+                    pass
+
         try:
             ansible_runner.run_async(
                 playbook=str(PurePath(f"{PBGDIR}/vps-init.yml")),
@@ -819,7 +843,7 @@ class VPSManager:
                 private_data_dir=vps.privat_data_dir,
                 event_handler=vps.init_event_handler,
                 status_handler=vps.init_status_handler,
-                finished_callback=vps.init_finished,
+                finished_callback=_on_init_finished,
             )
         except Exception:
             shutil.rmtree(vps.privat_data_dir, ignore_errors=True)

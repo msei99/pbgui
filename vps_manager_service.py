@@ -18,7 +18,7 @@ from master.async_monitor import INSTANCE_COLLECT_SCRIPT, MONITOR_CACHE_VERSION
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from PBRemote import PBRemote
-from pbgui_purefunc import get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, save_ini
+from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, save_ini
 from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir
 
 SERVICE = "VPSManagerApi"
@@ -75,6 +75,19 @@ def _truthy(value: Any) -> bool:
 def _status_running(status: str | None) -> bool:
     normalized = str(status or "").strip().lower()
     return normalized not in {"", "none", "successful", "failed", "error", "timeout", "canceled", "cancelled"}
+
+
+def _local_no_new_privileges() -> bool:
+    try:
+        status_path = Path("/proc/self/status")
+        if not status_path.exists():
+            return False
+        for line in status_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("NoNewPrivs:"):
+                return line.split(":", 1)[1].strip() == "1"
+    except Exception:
+        return False
+    return False
 
 
 def _metric_level(value: float, warning: float, error: float, *, inverse: bool = False) -> str:
@@ -329,6 +342,15 @@ class VPSManagerService:
         except Exception as exc:
             _log(SERVICE, f"refresh local versions failed: {exc}", level="WARNING")
 
+        # Package update and reboot state should refresh on every master detail
+        # fetch so localhost maintenance actions immediately reflect the new
+        # pending-update count instead of waiting for the next full refresh.
+        try:
+            local_run.has_upgrades()
+            local_run.has_reboot()
+        except Exception as exc:
+            _log(SERVICE, f"refresh package status failed: {exc}", level="WARNING")
+
         stale = (_now_ts() - int(getattr(pbremote, "systemts", 0) or 0)) > 3600
         full_refresh = force or stale or not self._first_refresh_done
         if full_refresh:
@@ -352,11 +374,6 @@ class VPSManagerService:
                     local_run.load_pb7_branches_history()
             except Exception as exc:
                 _log(SERVICE, f"refresh branch history failed: {exc}", level="WARNING")
-            try:
-                local_run.has_upgrades()
-                local_run.has_reboot()
-            except Exception as exc:
-                _log(SERVICE, f"refresh package status failed: {exc}", level="WARNING")
             pbremote.systemts = _now_ts()
 
         self._first_refresh_done = True
@@ -512,12 +529,16 @@ class VPSManagerService:
         pbremote = self._ensure_pbremote()
         monitor_state = self._get_monitor_state()
         overview_rows = self._build_overview_rows(pbremote, monitor_state)
+        coindata = self._ensure_coindata()
+        cmc_api_key = coindata.api_key or ""
         return {
             "config": {
                 "master_name": getattr(pbremote, "name", "local"),
                 "local_user": getpass.getuser(),
                 "swap_options": SWAP_OPTIONS,
                 "init_methods": INIT_METHODS,
+                "bucket": getattr(pbremote, "bucket", "") or "",
+                "coinmarketcap_api_key": cmc_api_key,
             },
             "errors": self._build_errors(pbremote),
             "overview": {
@@ -795,6 +816,8 @@ class VPSManagerService:
     def _build_master_status(self, pbremote: PBRemote, coindata_ok: bool) -> dict[str, Any]:
         summary_row = self._build_master_overview_row(pbremote)
         local_coindata = getattr(pbremote.local_run, "coindata", None)
+        local_no_new_privs = _local_no_new_privileges()
+        local_sudo_blocked_reason = "Local sudo blocked by runtime (`NoNewPrivs`)." if local_no_new_privs else ""
         return {
             "name": pbremote.name,
             "online": pbremote.is_online(),
@@ -806,6 +829,10 @@ class VPSManagerService:
             "cmc_credits": getattr(local_coindata, "credits_left", None),
             "last_command": self.vpsmanager.command_text,
             "last_update": self.vpsmanager.last_update,
+            "local_sudo_supported": not local_no_new_privs,
+            "local_sudo_blocked_reason": local_sudo_blocked_reason,
+            "linux_update_supported": not local_no_new_privs,
+            "linux_update_blocked_reason": local_sudo_blocked_reason,
             "summary_row": summary_row,
         }
 
@@ -1256,18 +1283,22 @@ class VPSManagerService:
         local_run = pbremote.local_run
         current_branch, current_commit = local_run.get_current_pb7_status()
         repo_dir = getattr(local_run, "pb7dir", "")
+        branches = getattr(local_run, "pb7_branches_data", {}) or {}
         known_remotes = list_git_remotes(repo_dir) if repo_dir else []
         for opt in ("origin", "fork"):
             if opt not in known_remotes:
                 known_remotes.append(opt)
         remote_urls = {name: get_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir}
-        default_remote_name = "fork" if "fork" in known_remotes else ("origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else ""))
+        tracking_remote_name = get_git_branch_remote(repo_dir, current_branch or "") if repo_dir else ""
+        branch_tracking_remotes = get_git_branch_remotes(repo_dir, list(branches.keys())) if repo_dir else {}
+        default_remote_name = tracking_remote_name if tracking_remote_name in known_remotes else ("fork" if "fork" in known_remotes else ("origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else "")))
         return {
             "current_branch": current_branch or getattr(local_run, "pb7_branch", "unknown"),
             "current_commit": current_commit or getattr(local_run, "pb7_commit", ""),
-            "branches": getattr(local_run, "pb7_branches_data", {}) or {},
+            "branches": branches,
             "known_remotes": known_remotes,
             "remote_urls": remote_urls,
+            "branch_tracking_remotes": branch_tracking_remotes,
             "default_remote_name": default_remote_name,
             "upstream_remote_name": PB7_UPSTREAM_REMOTE_NAME,
             "upstream_remote_url": PB7_UPSTREAM_REMOTE_URL,
@@ -1288,19 +1319,25 @@ class VPSManagerService:
         local_run = pbremote.local_run
         meta = self._host_meta(host_state)
         repo_dir = getattr(local_run, "pb7dir", "")
+        branches = getattr(local_run, "pb7_branches_data", {}) or {}
         known_remotes = list_git_remotes(repo_dir) if repo_dir else []
         for opt in ("origin", "fork"):
             if opt not in known_remotes:
                 known_remotes.append(opt)
         remote_urls = {name: get_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir}
+        current_branch = str(meta.get("pb7b") or "unknown")
+        tracking_remote_name = get_git_branch_remote(repo_dir, current_branch or "") if repo_dir else ""
+        branch_tracking_remotes = get_git_branch_remotes(repo_dir, list(branches.keys())) if repo_dir else {}
+        default_remote_name = tracking_remote_name if tracking_remote_name in known_remotes else ("origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else ""))
         return {
             "hostname": hostname,
-            "current_branch": str(meta.get("pb7b") or "unknown"),
+            "current_branch": current_branch,
             "current_commit": str(meta.get("pb7c") or ""),
-            "branches": getattr(local_run, "pb7_branches_data", {}) or {},
+            "branches": branches,
             "known_remotes": known_remotes,
             "remote_urls": remote_urls,
-            "default_remote_name": "origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else ""),
+            "branch_tracking_remotes": branch_tracking_remotes,
+            "default_remote_name": default_remote_name,
             "upstream_remote_name": PB7_UPSTREAM_REMOTE_NAME,
             "upstream_remote_url": PB7_UPSTREAM_REMOTE_URL,
         }
@@ -1493,7 +1530,6 @@ class VPSManagerService:
         vps, is_new = self._hydrate_vps_from_form(token, form, allow_create=True)
         self._apply_vps_setup_form(token, vps, form)
         vps.save()
-        self._set_vps_monitor_enabled(vps.hostname, enabled=True)
         if is_new:
             self.vpsmanager.vpss.append(vps)
             self.vpsmanager.vpss.sort(key=lambda item: item.hostname or "")
@@ -1522,16 +1558,17 @@ class VPSManagerService:
         vps = self._require_vps(hostname)
         self._apply_vps_setup_form(token, vps, form)
         vps.save()
-        self._set_vps_monitor_enabled(vps.hostname, enabled=True)
         return self._build_vps_config(token, vps)
 
     def init_vps(self, token: str, form: dict[str, Any], *, debug: bool = False) -> dict[str, Any]:
         vps, is_new = self._hydrate_vps_from_form(token, form, allow_create=True)
+        self._apply_vps_setup_form(token, vps, form)
         self._apply_session_secrets_to_vps(token, vps)
         if not vps.has_init_parameters():
             raise ValueError("Init parameters are incomplete.")
-        self._set_vps_monitor_enabled(vps.hostname, enabled=True)
-        self.vpsmanager.init_vps(vps, debug=debug)
+        if not vps.has_setup_parameters():
+            raise ValueError("Setup parameters are incomplete.")
+        self.vpsmanager.init_vps(vps, debug=debug, auto_setup=True)
         if is_new:
             self.vpsmanager.vpss.append(vps)
             self.vpsmanager.vpss.sort(key=lambda item: item.hostname or "")
@@ -1632,3 +1669,210 @@ class VPSManagerService:
         vps.firewall_ssh_port = _safe_int(form.get("firewall_ssh_port"), 22)
         vps.firewall_ssh_ips = firewall_ips
         vps.save()
+
+    def browse_files(self, path: str) -> dict[str, Any]:
+        import os
+        start = str(Path.home()) if not path else os.path.expanduser(path)
+        if not os.path.isdir(start):
+            start = os.path.dirname(start) or str(Path.home())
+        entries: list[dict[str, str]] = []
+        try:
+            for name in sorted(os.listdir(start)):
+                full = os.path.join(start, name)
+                entries.append({"name": name, "type": "dir" if os.path.isdir(full) else "file"})
+        except PermissionError:
+            pass
+        return {"cwd": start, "parent": os.path.dirname(start) or start, "entries": entries}
+
+    def check_vps_ready(self, form: dict[str, Any]) -> dict[str, Any]:
+        import socket
+        import paramiko
+
+        ip = str(form.get("ip") or "").strip()
+        hostname = str(form.get("hostname") or "").strip()
+        init_method = str(form.get("init_methode") or "root")
+
+        result = {"hosts_ok": False, "hosts_has_hostname": False, "hosts_current_ip": "", "ssh_ok": False, "ssh_error": ""}
+
+        if not ip or not hostname:
+            result["ssh_error"] = "IP and hostname required"
+            return result
+
+        try:
+            with open("/etc/hosts", "r") as f:
+                for line in f:
+                    line = line.split("#")[0].strip()
+                    if not line:
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        line_ip = parts[0]
+                        hosts = parts[1:]
+                        if hostname in hosts:
+                            result["hosts_has_hostname"] = True
+                            result["hosts_current_ip"] = line_ip
+                            if line_ip == ip:
+                                result["hosts_ok"] = True
+                                break
+        except Exception:
+            pass
+
+        if not result["hosts_ok"]:
+            if result["hosts_has_hostname"]:
+                result["ssh_error"] = f"Hostname found with IP {result['hosts_current_ip']} instead of {ip}"
+            else:
+                result["ssh_error"] = "IP/hostname not found in local /etc/hosts"
+            return result
+
+        ssh_user = None
+        ssh_pw = None
+        ssh_key = None
+
+        if init_method == "root":
+            ssh_user = "root"
+            ssh_pw = str(form.get("initial_root_pw") or "").strip() or None
+        elif init_method == "password":
+            ssh_user = str(form.get("user_sudo") or "").strip() or None
+            ssh_pw = str(form.get("user_sudo_pw") or "").strip() or None
+        elif init_method == "private_key":
+            ssh_user = str(form.get("private_key_user") or "").strip() or None
+            ssh_key = str(form.get("private_key_file") or "").strip() or None
+
+        if not ssh_user:
+            result["ssh_error"] = "SSH user not configured"
+            return result
+        if init_method == "private_key" and not ssh_key:
+            result["ssh_error"] = "Private key file not selected"
+            return result
+        if init_method != "private_key" and not ssh_pw:
+            result["ssh_error"] = "SSH password not entered"
+            return result
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            kwargs = {"hostname": ip, "username": ssh_user, "timeout": 8, "banner_timeout": 8, "auth_timeout": 8}
+            if init_method == "private_key":
+                kwargs["key_filename"] = ssh_key
+            else:
+                kwargs["password"] = ssh_pw
+            ssh.connect(**kwargs)
+            result["ssh_ok"] = True
+        except paramiko.AuthenticationException:
+            result["ssh_error"] = "Authentication failed"
+        except (paramiko.SSHException, socket.timeout, OSError) as exc:
+            result["ssh_error"] = str(exc) or "SSH connection failed"
+        finally:
+            try:
+                ssh.close()
+            except Exception:
+                pass
+
+        return result
+
+    def write_hosts_entry(self, ip: str, hostname: str, sudo_pw: str) -> dict[str, Any]:
+        import subprocess
+        ip = str(ip or "").strip()
+        hostname = str(hostname or "").strip()
+        pw = str(sudo_pw or "").strip()
+        if not ip or not hostname:
+            return {"ok": False, "error": "IP and hostname required"}
+        if not pw:
+            return {"ok": False, "error": "Sudo password required"}
+
+        try:
+            with open("/etc/hosts", "r") as f:
+                raw_lines = f.readlines()
+        except Exception as exc:
+            return {"ok": False, "error": f"Cannot read /etc/hosts: {exc}"}
+
+        new_lines: list[str] = []
+        ip_line_index = -1
+        for i, line in enumerate(raw_lines):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                new_lines.append(line)
+                continue
+            parts = stripped.split()
+            if len(parts) < 2:
+                new_lines.append(line)
+                continue
+            line_ip = parts[0]
+            hosts = parts[1:]
+            if hostname in hosts:
+                hosts = [h for h in hosts if h != hostname]
+            if not hosts:
+                continue
+            new_line = f"{line_ip}\t{' '.join(hosts)}\n"
+            new_lines.append(new_line)
+            if line_ip == ip:
+                ip_line_index = len(new_lines) - 1
+
+        if ip_line_index >= 0:
+            existing = new_lines[ip_line_index].rstrip("\n").split()
+            if hostname not in existing:
+                existing.append(hostname)
+                new_lines[ip_line_index] = f"{'\t'.join(existing)}\n"
+        else:
+            new_lines.append(f"{ip}\t{hostname}\n")
+
+        content = "".join(new_lines)
+        try:
+            proc = subprocess.Popen(
+                ["sudo", "-S", "tee", "/etc/hosts"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            _, err = proc.communicate(input=pw + "\n" + content, timeout=15)
+            if proc.returncode != 0:
+                return {"ok": False, "error": err.strip() or "sudo tee failed"}
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "sudo tee timed out"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "error": ""}
+
+    def check_bucket(self, bucket_name: str) -> dict[str, Any]:
+        pbremote = self._ensure_pbremote()
+        bucket = str(bucket_name or "").strip()
+        if not bucket:
+            return {"ok": False, "error": "Bucket name is empty"}
+        rclone_installed = getattr(pbremote, "rclone_installed", False)
+        if not rclone_installed:
+            return {"ok": False, "error": "rclone not installed locally"}
+        old_bucket = getattr(pbremote, "bucket", "")
+        try:
+            pbremote.bucket = bucket if bucket.endswith(":") else f"{bucket}:"
+            ok, output = pbremote.test_bucket()
+            return {"ok": bool(ok), "error": "" if ok else str(output or "Bucket check failed")}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        finally:
+            pbremote.bucket = old_bucket
+
+    def check_cmc_api_key(self, api_key: str) -> dict[str, Any]:
+        key = str(api_key or "").strip()
+        if not key:
+            return {"ok": False, "error": "API key is empty"}
+        coindata = self._ensure_coindata()
+        old_key = coindata.api_key
+        try:
+            coindata.api_key = key
+            ok = coindata.fetch_api_status()
+            if not ok:
+                return {"ok": False, "error": getattr(coindata, "api_error", "CoinMarketCap API key is invalid")}
+            return {
+                "ok": True,
+                "error": "",
+                "credit_limit_monthly": getattr(coindata, "credit_limit_monthly", None),
+                "credits_used_day": getattr(coindata, "credits_used_day", None),
+                "credits_used_month": getattr(coindata, "credits_used_month", None),
+                "credits_left": getattr(coindata, "credits_left", None),
+                "credit_limit_monthly_reset_timestamp": getattr(coindata, "credit_limit_monthly_reset_timestamp", None),
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        finally:
+            coindata.api_key = old_key

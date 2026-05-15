@@ -18,6 +18,7 @@
     pb7dir: "{{ pb7dir }}"
     pb7venv: "{{ pb7venv }}"
     target_branch: "{{ pb7_branch }}"
+    source_branch: "{{ pb7_source_branch | default(pb7_branch) }}"
     target_commit: "{{ pb7_commit | default('') }}"
     remote_name: "{{ pb7_remote_name | default('origin') }}"
     remote_url: "{{ pb7_remote_url | default('') }}"
@@ -70,8 +71,21 @@
       failed_when: false
       changed_when: false
 
+    - name: Check if source branch exists on selected remote
+      command: git show-ref --verify --quiet "refs/remotes/{{ remote_name }}/{{ source_branch }}"
+      args:
+        chdir: "{{ pb7dir }}"
+      register: source_branch_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Fail if source branch is missing on selected remote
+      fail:
+        msg: "Remote branch {{ remote_name }}/{{ source_branch }} does not exist. Please choose a valid source branch before switching PB7."
+      when: source_branch_exists.rc != 0
+
     - name: Create and checkout local branch from remote if it doesn't exist
-      command: git checkout -b "{{ target_branch }}" --track "{{ remote_name }}/{{ target_branch }}"
+      command: git checkout -b "{{ target_branch }}" --track "{{ remote_name }}/{{ source_branch }}"
       args:
         chdir: "{{ pb7dir }}"
       when: branch_exists.rc != 0
@@ -93,7 +107,7 @@
       notify: restart pb7
 
     - name: Reset to latest remote HEAD (only if no specific commit provided)
-      command: git reset --hard "{{ remote_name }}/{{ target_branch }}"
+      command: git reset --hard "{{ remote_name }}/{{ source_branch }}"
       args:
         chdir: "{{ pb7dir }}"
       when: target_commit == ""
@@ -103,7 +117,8 @@
     - name: Display checkout result
       debug:
         msg: |
-          PB7 Branch: {{ target_branch }}
+          PB7 Target Branch: {{ target_branch }}
+          PB7 Source Branch: {{ remote_name }}/{{ source_branch }}
           PB7 Commit: {{ target_commit if target_commit != '' else 'HEAD' }}
           Status: Switched successfully
       tags: debug,never

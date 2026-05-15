@@ -1769,18 +1769,9 @@ install_pbgui_venv = """
     - Creates/updates: ~/software/venv_pbgui312
     - Installs dependencies from: <pbgui>/requirements.txt
 
-    What it does NOT do:
-    - It does not switch the running PBGui/Streamlit instance to Python 3.12.
-
-    Next step (manual):
-    - Run: pbgui/setup/mig_py312.sh
-
-    Rollback (manual):
-    - Run: pbgui/setup/mig_py310.sh
-
     Notes:
     - requirements.txt is the default (Python 3.12)
-    - requirements310.txt remains only for legacy rollback and migration paths
+    - This prepares the PBGui Python 3.12 environment used by the current install/update flow
     ```"""
 
 update_pb7_venv = """
@@ -2374,4 +2365,3 @@ add_scenario_override_button = """
 add_scenario_button = """
     Add new scenario to the suite.
     Scenarios allow testing the same config across different market conditions."""
-

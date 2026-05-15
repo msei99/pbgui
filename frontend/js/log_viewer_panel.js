@@ -852,10 +852,8 @@ class LogViewerPanel {
             'master-update-pb': 'Update PBGui and PB7',
             'master-update-pbgui': 'Update PBGui',
             'master-update-pb7': 'Update PB7',
-            'master-install-rustup': 'Install rustup',
-            'master-install-rclone': 'Install rclone',
-            'master-pb7-python312': 'Update PB7 venv',
-            'master-pbgui-python312': 'Install PBGui venv'
+            'master-install-rustup': 'Install or Update rustup',
+            'master-install-rclone': 'Install or Update rclone'
         };
         var label = labels[command] || command
             .replace(/^vps[-_]/, '')
