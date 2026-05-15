@@ -623,29 +623,35 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
 
 @router.get("/pbremote/info")
 def get_pbremote_info(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    """Return PBRemote config plus remote host state using SSH monitor metadata."""
+    """Return PBRemote config plus remote host state using worker-based API sync status."""
     try:
         from PBRemote import PBRemote
         obj = PBRemote()
         if obj.error:
             return {"error": obj.error, "configured": False}
+        api_keys_mod = __import__("api.api_keys", fromlist=["_file_sync_worker"])
+        fs_worker = getattr(api_keys_mod, "_file_sync_worker", None)
+        if fs_worker is None:
+            return {"error": "FileSyncWorker not initialized", "configured": False}
+        sync_status = fs_worker.get_status()
         monitor_state = get_monitor_state_snapshot()
         connections = ((monitor_state.get("connections") or {}).get("connections") or {})
         system_state = monitor_state.get("system") or {}
         host_meta = monitor_state.get("host_meta") or {}
-        local_md5 = str(obj.api_md5 or "")
+        sync_hosts = sync_status.get("hosts") or {}
         servers = []
-        unsynced_hosts: list[str] = []
-        for hostname in sorted({*connections.keys(), *host_meta.keys()}):
+        connected_hosts = set(sync_status.get("connected_hosts") or [])
+        api_synced = True
+        for hostname in sorted({*connections.keys(), *host_meta.keys(), *connected_hosts, *sync_hosts.keys()}):
             conn = connections.get(hostname) or {}
             meta = host_meta.get(hostname) or {}
             system = system_state.get(hostname) or {}
             status = str(conn.get("status") or "")
             online = status == "connected"
-            remote_md5 = str(meta.get("api_md5") or "")
-            in_sync = None if not remote_md5 else (remote_md5 == local_md5)
-            if online and in_sync is False:
-                unsynced_hosts.append(hostname)
+            sync_info = sync_hosts.get(hostname) or {}
+            in_sync = sync_info.get("in_sync")
+            if hostname in connected_hosts and in_sync is False:
+                api_synced = False
             last_seen_ts = float(system.get("timestamp") or 0)
             servers.append({
                 "name": hostname,
@@ -653,13 +659,14 @@ def get_pbremote_info(session: SessionToken = Depends(require_auth)) -> Dict[str
                 "online": online,
                 "last_seen_s": (max(int(time.time() - last_seen_ts), 0) if last_seen_ts else None),
                 "pbgui_version": str(meta.get("pbgv") or "N/A"),
+                "api_in_sync": in_sync,
             })
         return {
             "configured": True,
             "error": None,
             "role": obj.role,
             "bucket": obj.bucket or "",
-            "api_synced": len(unsynced_hosts) == 0,
+            "api_synced": api_synced,
             "servers": servers,
         }
     except Exception as e:
@@ -669,7 +676,7 @@ def get_pbremote_info(session: SessionToken = Depends(require_auth)) -> Dict[str
 
 @router.post("/pbremote/api-sync")
 async def trigger_pbremote_api_sync(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    """Push local api-keys.json to connected VPS via SSH and report sync state."""
+    """Push local api-keys.json to connected VPS via SSH and report worker-based sync state."""
     try:
         api_keys_mod = __import__("api.api_keys", fromlist=["_file_sync_worker"])
         fs_worker = getattr(api_keys_mod, "_file_sync_worker", None)
@@ -679,7 +686,8 @@ async def trigger_pbremote_api_sync(session: SessionToken = Depends(require_auth
         if isinstance(results, dict) and "error" in results and len(results) == 1:
             raise HTTPException(status_code=400, detail=results["error"])
         status = fs_worker.get_status()
-        synced = all(bool((status.get("hosts") or {}).get(hostname, {}).get("in_sync")) for hostname in (status.get("connected_hosts") or []))
+        connected_hosts = status.get("connected_hosts") or []
+        synced = all((status.get("hosts") or {}).get(hostname, {}).get("in_sync") is not False for hostname in connected_hosts)
         return {"ok": True, "configured": True, "api_synced": synced}
     except HTTPException:
         raise

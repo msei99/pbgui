@@ -31,7 +31,7 @@ REMOTE_PBGUI_DIR = "software/pbgui"
 
 # Minimal Python inotify watcher — uses ctypes to call Linux inotify syscalls
 # directly, no packages needed beyond stdlib.
-# ONE-SHOT variant: waits for the first IN_CLOSE_WRITE event, prints the
+# ONE-SHOT variant: waits for the first relevant file event, prints the
 # affected filepath to stdout, then exits with code 0.
 # _watcher_loop restarts it in a loop via pool.run().
 # Watches DIRECTORIES (not files) to avoid inode-change issues:
@@ -44,6 +44,11 @@ _INOTIFY_WATCHER_SCRIPT = """
 import ctypes, struct, os, sys, select
 libc = ctypes.CDLL('libc.so.6', use_errno=True)
 IN_CLOSE_WRITE = 0x8
+IN_MOVED_TO = 0x80
+IN_MOVED_FROM = 0x40
+IN_CREATE = 0x100
+IN_DELETE = 0x200
+WATCH_MASK = IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_CREATE | IN_DELETE
 fd = libc.inotify_init()
 if fd < 0:
     errno = ctypes.get_errno()
@@ -54,7 +59,7 @@ failed = 0
 for p in sys.argv[1:]:
     d = os.path.dirname(p)
     f = os.path.basename(p)
-    wd = libc.inotify_add_watch(fd, d.encode(), IN_CLOSE_WRITE)
+    wd = libc.inotify_add_watch(fd, d.encode(), WATCH_MASK)
     if wd >= 0:
         if wd in watches:
             watches[wd][1].add(f)
@@ -78,7 +83,7 @@ while True:
             wid, mask, cookie, nlen = struct.unpack_from('iIII', buf, o)
             name = buf[o+16:o+16+nlen].rstrip(b'\\x00').decode(errors='replace')
             o += 16 + nlen
-            if mask & IN_CLOSE_WRITE and wid in watches:
+            if mask & WATCH_MASK and wid in watches:
                 d, targets = watches[wid]
                 if name in targets:
                     print(os.path.join(d, name), flush=True)
@@ -196,10 +201,19 @@ class FileSyncWorker:
             _log(SERVICE, "Local api-keys.json not found", level="ERROR")
             return {"error": "Local api-keys.json not found"}
 
-        targets = hostnames or self.pool.connected_hosts()
+        local_md5 = self._compute_local_md5()
+        if hostnames is None:
+            targets = []
+            for hostname in self.pool.connected_hosts():
+                entry = self.pool.get_connection(hostname)
+                in_sync = self._check_in_sync(hostname, local_md5, entry)
+                if in_sync is not True:
+                    targets.append(hostname)
+        else:
+            targets = hostnames
         if not targets:
-            _log(SERVICE, "No connected VPS to push to", level="WARNING")
-            return {"error": "No connected VPS"}
+            _log(SERVICE, "No out-of-sync connected VPS to push to", level="WARNING")
+            return {"error": "No out-of-sync connected VPS"}
 
         # Prepare content: read current file, update only push metadata
         api_data = self._prepare_push_content(no_propagate)
@@ -739,6 +753,9 @@ class FileSyncWorker:
             self._remote_md5s[hostname] = md5s
             if remote_serial is not None:
                 self._remote_serials[hostname] = remote_serial
+            else:
+                self._remote_serials.pop(hostname, None)
+                self._remote_content.pop(hostname, None)
 
             in_sync = self._check_in_sync(hostname, local_md5, entry)
             local_serial = self._read_local_serial()
@@ -892,6 +909,9 @@ class FileSyncWorker:
         self._remote_md5s[hostname] = md5s
         if remote_serial is not None:
             self._remote_serials[hostname] = remote_serial
+        else:
+            self._remote_serials.pop(hostname, None)
+            self._remote_content.pop(hostname, None)
 
         in_sync = self._check_in_sync(hostname, local_md5, entry)
         local_serial = self._read_local_serial()
@@ -981,15 +1001,17 @@ class FileSyncWorker:
             return None
         if not entry:
             entry = self.pool.get_connection(hostname)
-        if not entry:
+        pb7dir = entry.data.get("pb7dir") if entry else None
+        if pb7dir is None and "pb7" not in md5s:
             return None
-        pb7dir = entry.data.get("pb7dir")
-        pb7_ok = (md5s.get("pb7") == local_md5) if pb7dir else True
+        pb7_ok = (md5s.get("pb7") == local_md5) if md5s.get("pb7") else None
+        if pb7_ok is None:
+            return None
         return pb7_ok
 
     # ── Status ───────────────────────────────────────────────
 
-    def get_status(self) -> dict:
+    def get_status(self, managed_hostnames: list[str] | None = None) -> dict:
         """Build status dict for the REST API."""
         watchers = {
             h: not t.done()
@@ -1022,9 +1044,29 @@ class FileSyncWorker:
                     "md5_detail": md5_detail,
                 }
 
+        summary_hostnames = list(managed_hostnames or self.pool.hostnames())
+        summary_hosts = {}
+        for h in summary_hostnames:
+            entry = self.pool.get_connection(h)
+            md5s = self._remote_md5s.get(h, {})
+            summary_hosts[h] = {
+                "pb7dir": (entry.data.get("pb7dir") if entry else None),
+                "pbname": (entry.data.get("pbname") if entry else None),
+                "watcher_active": watchers.get(h, False),
+                "remote_serial": self._remote_serials.get(h),
+                "in_sync": self._check_in_sync(h, local_md5, entry),
+                "md5_detail": {
+                    "pb7": (md5s.get("pb7") == local_md5) if md5s.get("pb7") else None,
+                },
+                "connected": h in connected,
+                "disconnected": h not in connected,
+            }
+
         return {
             "connected_hosts": connected,
             "hosts": hosts,
+            "summary_hostnames": summary_hostnames,
+            "summary_hosts": summary_hosts,
             "local_serial": local_serial,
             "local_hostname": self._local_hostname,
             "last_push": self._last_push,

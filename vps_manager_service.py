@@ -133,7 +133,6 @@ class VPSManagerService:
         self.coindata: CoinData | None = None
         self.monitor_config = MonitorConfig()
         self._first_refresh_done = False
-        self._api_sync_task: asyncio.Task | None = None
         self._vps_package_status_cache: dict[str, dict[str, Any]] = {}
         # Quick detail is pushed every second. Any status that requires a slower
         # validation step must reuse the last full-detail result instead of
@@ -150,15 +149,7 @@ class VPSManagerService:
         self._vps_coindata_status_cache: dict[str, bool] = {}
         self._vps_ssh_ok_cache: dict[str, bool] = {}
         self._session_secrets: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
-        self.api_sync_state: dict[str, Any] = {
-            "running": False,
-            "remaining": 0,
-            "unsynced_hosts": [],
-            "started_at": 0,
-            "deadline": 0,
-            "error": "",
-            "success": False,
-        }
+        self._setup_api_sync_done: dict[str, str] = {}
 
     def _ensure_pbremote(self, *, force_reinit: bool = False) -> PBRemote:
         if self.pbremote is None or force_reinit:
@@ -413,117 +404,6 @@ class VPSManagerService:
     def _host_meta(self, host_state: dict[str, Any] | None) -> dict[str, Any]:
         return (host_state or {}).get("meta") or {}
 
-    async def _refresh_remote_api_md5s(self, hostnames: list[str] | None = None) -> None:
-        monitor = get_monitor()
-        if not monitor:
-            return
-        targets = [name for name in (hostnames or [item.hostname for item in self.vpsmanager.vpss if item.hostname]) if name]
-        if not targets:
-            return
-        results = await asyncio.gather(
-            *(monitor.collect_host_meta_now(hostname) for hostname in targets),
-            return_exceptions=True,
-        )
-        for hostname, result in zip(targets, results):
-            if isinstance(result, Exception):
-                _log(SERVICE, f"API sync metadata refresh failed for {hostname}: {result}", level="WARNING")
-
-    async def start_api_sync(self) -> None:
-        pbremote = self._ensure_pbremote()
-        if self.api_sync_state.get("running"):
-            return
-        if pbremote.error:
-            self.api_sync_state = {
-                "running": False,
-                "remaining": 0,
-                "unsynced_hosts": [],
-                "started_at": _now_ts(),
-                "deadline": 0,
-                "error": str(pbremote.error),
-                "success": False,
-            }
-            return
-        file_sync_worker = _get_file_sync_worker()
-        if file_sync_worker is None:
-            self.api_sync_state = {
-                "running": False,
-                "remaining": 0,
-                "unsynced_hosts": [],
-                "started_at": _now_ts(),
-                "deadline": 0,
-                "error": "FileSyncWorker not initialized",
-                "success": False,
-            }
-            return
-        results = await file_sync_worker.push_api_keys(dry_run=False, no_propagate=False)
-        if isinstance(results, dict) and "error" in results and len(results) == 1:
-            self.api_sync_state = {
-                "running": False,
-                "remaining": 0,
-                "unsynced_hosts": [],
-                "started_at": _now_ts(),
-                "deadline": 0,
-                "error": str(results["error"]),
-                "success": False,
-            }
-            return
-        await self._refresh_remote_api_md5s()
-        started = _now_ts()
-        self.api_sync_state = {
-            "running": True,
-            "remaining": len(self._unsynced_api_hosts(pbremote, self._get_monitor_state())),
-            "unsynced_hosts": self._unsynced_api_hosts(pbremote),
-            "started_at": started,
-            "deadline": started + 180,
-            "error": "",
-            "success": False,
-        }
-        self._api_sync_task = asyncio.create_task(self._api_sync_loop(), name="vps-manager-api-sync")
-
-    async def _api_sync_loop(self) -> None:
-        try:
-            while self.api_sync_state.get("running"):
-                targets = list(self.api_sync_state.get("unsynced_hosts") or [])
-                await self._refresh_remote_api_md5s(targets)
-                monitor_state = self._get_monitor_state()
-                unsynced_hosts = self._unsynced_api_hosts(monitor_state=monitor_state)
-                remaining = len(unsynced_hosts)
-                self.api_sync_state["remaining"] = remaining
-                self.api_sync_state["unsynced_hosts"] = unsynced_hosts
-                if remaining == 0:
-                    self.api_sync_state["running"] = False
-                    self.api_sync_state["success"] = True
-                    return
-                if _now_ts() >= int(self.api_sync_state.get("deadline") or 0):
-                    self.api_sync_state["running"] = False
-                    self.api_sync_state["success"] = False
-                    self.api_sync_state["error"] = "API sync timed out"
-                    return
-                await asyncio.sleep(1)
-        finally:
-            self._api_sync_task = None
-
-    def _unsynced_api_hosts(self, pbremote: PBRemote | None = None,
-                            monitor_state: dict[str, Any] | None = None) -> list[str]:
-        pbremote = pbremote or self._ensure_pbremote()
-        monitor_state = monitor_state or self._get_monitor_state()
-        local_api_md5 = str(pbremote.api_md5 or "")
-        hosts: list[str] = []
-        try:
-            for item in self.vpsmanager.vpss:
-                hostname = str(item.hostname or "")
-                if not hostname:
-                    continue
-                host_state = self._get_host_telemetry(monitor_state, hostname)
-                if not self._host_online(host_state):
-                    continue
-                api_md5 = str(self._host_meta(host_state).get("api_md5") or "")
-                if api_md5 and api_md5 != local_api_md5:
-                    hosts.append(hostname)
-        except Exception as exc:
-            _log(SERVICE, f"unsynced host check failed: {exc}", level="WARNING")
-        return hosts
-
     def build_state(self) -> dict[str, Any]:
         self.refresh(force=False)
         pbremote = self._ensure_pbremote()
@@ -543,7 +423,6 @@ class VPSManagerService:
             "errors": self._build_errors(pbremote),
             "overview": {
                 "rows": overview_rows,
-                "api_sync": self._build_api_sync_state(pbremote, monitor_state),
             },
         }
 
@@ -652,24 +531,7 @@ class VPSManagerService:
         out: list[str] = []
         if pbremote.error:
             out.append(str(pbremote.error))
-        if self.api_sync_state.get("error"):
-            out.append(str(self.api_sync_state["error"]))
         return out
-
-    def _build_api_sync_state(self, pbremote: PBRemote,
-                              monitor_state: dict[str, Any]) -> dict[str, Any]:
-        unsynced_hosts = self._unsynced_api_hosts(pbremote, monitor_state)
-        in_sync = len(unsynced_hosts) == 0 and not self.api_sync_state.get("running")
-        return {
-            "running": bool(self.api_sync_state.get("running")),
-            "in_sync": in_sync,
-            "remaining": int(self.api_sync_state.get("remaining") or len(unsynced_hosts)),
-            "unsynced_hosts": unsynced_hosts if not self.api_sync_state.get("running") else list(self.api_sync_state.get("unsynced_hosts") or []),
-            "started_at": int(self.api_sync_state.get("started_at") or 0),
-            "deadline": int(self.api_sync_state.get("deadline") or 0),
-            "error": str(self.api_sync_state.get("error") or ""),
-            "success": bool(self.api_sync_state.get("success")),
-        }
 
     def _build_overview_rows(self, pbremote: PBRemote,
                              monitor_state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -708,7 +570,6 @@ class VPSManagerService:
             "pb7": f"{pbremote.pb7_version}{'' if getattr(pbremote, 'pb7_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(pbremote, 'pb7_python'))}",
             "pb7_branch": f"{master_pb7_branch} ({_short_commit(master_pb7_commit)})",
             "pb7_github": self._build_master_pb7_github_status(pbremote, master_pb7_branch, master_pb7_commit),
-            "api_sync": "✅",
         }
 
     def _build_vps_overview_row(self, pbremote: PBRemote,
@@ -721,13 +582,6 @@ class VPSManagerService:
             role_icon = "🧠"
         else:
             role_icon = "💻"
-        api_md5 = str(meta.get("api_md5") or "")
-        if api_md5 and api_md5 == pbremote.api_md5:
-            api_sync = "✅"
-        elif api_md5:
-            api_sync = "❌"
-        else:
-            api_sync = "-"
         boot = _safe_int(meta.get("boot"))
         return {
             "name": hostname,
@@ -745,7 +599,6 @@ class VPSManagerService:
             "pb7": f"{meta.get('pb7v', 'N/A')}{'' if meta.get('pb7py', 'N/A') in (None, '', 'N/A') else ' /' + str(meta.get('pb7py'))}",
             "pb7_branch": f"{meta.get('pb7b', 'unknown')} ({_short_commit(meta.get('pb7c'))})",
             "pb7_github": self._build_remote_pb7_github_status(pbremote, host_state),
-            "api_sync": api_sync,
             "rtd": min(self._build_remote_rtd(host_state), 9999),
         }
 
@@ -888,6 +741,40 @@ class VPSManagerService:
             "server_metrics": self._build_remote_server_metrics(vps.hostname, host_state),
         }
 
+    def _maybe_auto_sync_api_after_setup(self, vps: VPS) -> None:
+        hostname = str(vps.hostname or "").strip()
+        last_setup = str(vps.last_setup or "").strip()
+        if not hostname or not last_setup or str(vps.setup_status or "") != "successful":
+            return
+        if self._setup_api_sync_done.get(hostname) == last_setup:
+            return
+        file_sync_worker = _get_file_sync_worker()
+        if file_sync_worker is None:
+            return
+        entry = file_sync_worker.pool.get_connection(hostname)
+        if not entry:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._setup_api_sync_done[hostname] = last_setup
+
+        async def _push_new_host() -> None:
+            try:
+                results = await file_sync_worker.push_api_keys(hostnames=[hostname], dry_run=False, no_propagate=False)
+                result = results.get(hostname) if isinstance(results, dict) else None
+                if result and result.get("success"):
+                    _log(SERVICE, f"Auto-synced API keys to newly setup VPS {hostname}", level="INFO")
+                    return
+                self._setup_api_sync_done.pop(hostname, None)
+                _log(SERVICE, f"Auto-sync API keys failed for newly setup VPS {hostname}: {result}", level="WARNING")
+            except Exception as exc:
+                self._setup_api_sync_done.pop(hostname, None)
+                _log(SERVICE, f"Auto-sync API keys failed for newly setup VPS {hostname}: {exc}", level="WARNING")
+
+        loop.create_task(_push_new_host())
+
     def build_vps_status_with_session(self, token: str, hostname: str, *, quick: bool = False) -> dict[str, Any]:
         vps = self._require_vps(hostname)
         self._apply_session_secrets_to_vps(token, vps)
@@ -895,6 +782,8 @@ class VPSManagerService:
         pbremote = self._ensure_pbremote()
         host_state = self._get_host_telemetry(monitor_state, hostname)
         coindata_ok = bool(self._vps_coindata_status_cache.get(hostname, False)) if quick else False
+        if quick:
+            self._maybe_auto_sync_api_after_setup(vps)
         return self._build_vps_status(vps, host_state, pbremote, coindata_ok, quick=quick)
 
     def _get_live_vps_package_status(self, vps: VPS, host_state: dict[str, Any]) -> dict[str, Any] | None:

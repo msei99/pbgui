@@ -30,7 +30,7 @@ Left sidebar:
 | **Add VPS** | Open the add / initialize form |
 | **Refresh** | Reload all VPS status and version data |
 | **Master** | Open the local Master management view |
-| **API in sync / API not in sync** | Show API sync state and push API credentials to remotes that are out of sync |
+| **API Sync Status** | Shows the shared API sync state (`API Sync`, `API X/Y out of sync`, `API all in sync`) and pushes API credentials to connected VPS when clicked |
 | **Managed VPS** cards | Open the per-VPS management view |
 | **Import Host** | Open the manual hostname import dialog; the hostname must already resolve via local `/etc/hosts` |
 
@@ -153,5 +153,5 @@ The reveal state is preserved during live updates, so opening an eye button does
 
 ### Check API key sync
 - Overview table column **API Sync**: ❌ means VPS keys are out of date
-- Look at the bottom of the sidebar: a **🔴 API not in sync** button appears when keys are out of date — click it to push updated keys with a live progress counter
+- Look at the bottom of the sidebar: the shared **API Sync** button shows **API X/Y out of sync** or **API all in sync** based on the connected VPS state — click it to push updated keys via the new SSH API sync flow
 - Per-VPS: open the VPS detail → **Update CoinData API**

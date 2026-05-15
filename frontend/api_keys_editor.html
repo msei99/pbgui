@@ -569,6 +569,7 @@
         .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
     </style>
     <script src="/app/js/log_viewer_panel.js?v=21"></script>
+    <script src="/app/js/api_sync_status.js?v=2"></script>
 </head>
 <body>
 
@@ -630,10 +631,9 @@
                 <button class="sb-btn" onclick="toggleComments()" id="btnComments">Comments</button>
                 <button class="sb-btn" onclick="toggleBackups()" id="btnBackups">&#x1F5C4; Backups</button>
                 <hr class="sb-sep">
-                <button class="sb-btn" id="btnSSHQuick" onclick="quickSshSync()">&#x2601; SSH Sync</button>
-                <button class="sb-btn" id="btnSSHSync" onclick="toggleSSHSync()">Advanced Sync</button>
+                <button class="sb-btn" id="btnSSHQuick" onclick="quickApiSync()">API Sync</button>
+                <button class="sb-btn" id="btnSSHSync" onclick="toggleSSHSync()">Advanced API Sync</button>
                 <button class="sb-btn" id="btnLogs" onclick="toggleLogPanel()">&#128203; Logs</button>
-                <button class="sb-btn danger" id="btnApiSync" onclick="triggerApiSync()" style="display:none;">🔴 API not in sync (rclone)</button>
             </div>
         </div>
         <div id="sidebar-resize"></div>
@@ -970,12 +970,12 @@
             </div>
         </div>
 
-        <!-- SSH API Sync panel -->
+        <!-- Advanced API Sync panel -->
         <div id="sshSyncPanel" class="hl-expiry-panel" style="display:none;">
             <!-- Header -->
             <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
                 <button onclick="backToList()" style="width:auto; flex-shrink:0; padding:6px 14px; border-radius:5px; border:1px solid #26a69a; background:transparent; color:#26a69a; font-size:var(--fs-sm); cursor:pointer; font-weight:600;">&#8592; Back</button>
-                <h3 style="margin:0;">SSH API Sync</h3>
+                <h3 style="margin:0;">Advanced API Sync</h3>
                 <span style="flex:1"></span>
                 <label style="font-size:var(--fs-sm); color:#94a3b8; display:flex; align-items:center; gap:6px; cursor:pointer;">
                     <input type="checkbox" id="sshDryRun"> Dry Run (preview only)
@@ -1160,9 +1160,8 @@
             await loadUsers();
             setTimeout(() => { const f = document.getElementById("userFilter"); if (f) f.focus(); }, 50);
         }
-        await checkSyncStatus();
-        await checkSshSyncStatus();
-        setInterval(checkSyncStatus, 30000);
+        await apiSyncController.refresh();
+        apiSyncController.openStream();
     });
 
     // ── API helpers ─────────────────────────────────────────
@@ -1864,7 +1863,6 @@
             delete bybitExpiryData[savedName];
             cancelEdit();
             await loadUsers();
-            await checkSyncStatus();
             await checkSshSyncStatus();
             // Background HL expiry refresh: when a private key was submitted (new or
             // changed), automatically fetch the real expiry so the table shows it
@@ -2632,191 +2630,35 @@
         }
     }
 
-    // ── API Sync (rclone / VPS distribution) ───────────────
-    let _syncPollTimer = null;
-
-    async function checkSyncStatus() {
-        try {
-            const data = await apiFetch("/sync/status");
-            const btn = document.getElementById("btnApiSync");
-            if (!data.configured || data.total_servers === 0) {
-                btn.style.display = "none";
-                return;
-            }
-            btn.style.display = "";
-            if (data.synced) {
-                btn.className = "sb-btn";
-                btn.style.opacity = "0.6";
-                btn.style.cursor = "default";
-                btn.textContent = "🟢 API in sync (rclone)";
-                btn.disabled = true;
-            } else {
-                const names = (data.unsynced_servers || []).join(", ");
-                btn.className = "sb-btn danger";
-                btn.style.opacity = "";
-                btn.style.cursor = "pointer";
-                btn.textContent = "🔴 API not in sync (rclone)";
-                btn.title = "Not in sync: " + names + " — Click to push.";
-                btn.disabled = false;
-            }
-        } catch (_) {
-            // PBRemote not configured — hide button silently
-            document.getElementById("btnApiSync").style.display = "none";
-        }
-    }
-
-    async function triggerApiSync() {
-        const btn = document.getElementById("btnApiSync");
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Syncing...';
-
-        try {
-            await apiFetch("/sync/push", { method: "POST" });
-            showToast("API keys pushed to remote storage", "success");
-        } catch (e) {
-            showToast("Sync failed: " + e.message, "error");
-            btn.disabled = false;
-            await checkSyncStatus();
-            return;
-        }
-
-        // Poll until synced (max 90s)
-        let attempts = 0;
-        const MAX = 45;
-        if (_syncPollTimer) clearInterval(_syncPollTimer);
-        _syncPollTimer = setInterval(async () => {
-            attempts++;
-            try {
-                const data = await apiFetch("/sync/status");
-                const remaining = data.unsynced_servers ? data.unsynced_servers.length : 0;
-                btn.innerHTML = '<span class="spinner"></span> Syncing… (' + remaining + ' left)';
-                if (data.synced || attempts >= MAX) {
-                    clearInterval(_syncPollTimer);
-                    _syncPollTimer = null;
-                    if (data.synced) {
-                        showToast("API keys synced ✅", "success");
-                    } else {
-                        showToast("Sync timed out — some servers may still be updating", "warning");
-                    }
-                    await checkSyncStatus();
-                }
-            } catch (_) {
-                clearInterval(_syncPollTimer);
-                _syncPollTimer = null;
-                await checkSyncStatus();
-            }
-        }, 2000);
-    }
-
-    // ── SSH API Sync ─────────────────────────────────────────
+    // ── API Sync ─────────────────────────────────────────────
     let sshSyncVisible = false;
-    var _sshStatusES = null;  // EventSource for live serial updates
-    var _sshSyncState = {};    // hostname → true/false/null (in-sync tracking)
-    var _sshSyncInfo = {};     // hostname → {remote_serial, local_serial, in_sync, md5_detail}
+    var apiSyncController = createApiSyncStatusController({
+        apiFetch: apiFetch,
+        showToast: showToast,
+        getButton: function () { return document.getElementById("btnSSHQuick"); },
+        getSerialCell: function (hostname) { return document.getElementById("ssh-ser-" + hostname); },
+        updateLastPushCell: function (hostname, lp) { _updateLpCell(hostname, lp); },
+        buildStreamUrl: function () {
+            var url = API_BASE + "/sync/ssh-status/stream";
+            if (TOKEN) url += "?token=" + encodeURIComponent(TOKEN);
+            return url;
+        }
+    });
 
     function _sshHostLabel(hostname) {
         var info = _sshHostMap[hostname] || {};
         return info.pbname ? info.pbname + " (" + hostname + ")" : hostname;
     }
 
-    function _describeSshSyncReason(hostname) {
-        var info = _sshSyncInfo[hostname] || {};
-        var parts = [_sshHostLabel(hostname)];
-        if (info.md5_detail && "pb7" in info.md5_detail) {
-            if (info.md5_detail.pb7 === false) parts.push("PB7 MD5 mismatch");
-            else if (info.md5_detail.pb7 == null) parts.push("PB7 status unknown");
-        }
-        if (info.remote_serial == null) {
-            parts.push("remote serial unavailable");
-        } else if (info.local_serial != null && info.remote_serial !== info.local_serial) {
-            parts.push("serial " + info.remote_serial + " != local " + info.local_serial);
-        }
-        return parts.join(" — ");
-    }
-
-    async function checkSshSyncStatus() {
-        try {
-            var data = await apiFetch("/sync/ssh-status");
-            var hosts = data.connected_hosts || [];
-            hosts.forEach(function(h) {
-                var info = data.hosts[h] || {};
-                _sshHostMap[h] = Object.assign({}, _sshHostMap[h] || {}, info);
-                _sshSyncState[h] = info.in_sync != null ? info.in_sync : null;
-                _sshSyncInfo[h] = {
-                    remote_serial: info.remote_serial != null ? info.remote_serial : null,
-                    local_serial: data.local_serial != null ? data.local_serial : null,
-                    in_sync: info.in_sync != null ? info.in_sync : null,
-                    md5_detail: info.md5_detail || {},
-                };
-            });
-            _updateSshSyncButton();
-        } catch (_) { /* ssh sync not configured or unreachable */ }
-    }
-
-    function _updateSshSyncButton() {
-        var btn = document.getElementById("btnSSHQuick");
-        if (!btn) return;
-        var hosts = Object.keys(_sshSyncState);
-        if (hosts.length === 0) {
-            btn.className = "sb-btn";
-            btn.textContent = "\u2601 SSH Sync";
-            btn.title = "";
-            return;
-        }
-        var outOfSync = hosts.filter(function(h) { return _sshSyncState[h] === false; });
-        var unknown   = hosts.filter(function(h) { return _sshSyncState[h] == null; });
-        if (outOfSync.length > 0) {
-            btn.className = "sb-btn danger";
-            btn.textContent = "\uD83D\uDD34 SSH " + outOfSync.length + "/" + hosts.length + " out of sync";
-            btn.title = outOfSync.map(_describeSshSyncReason).join("\n");
-        } else if (unknown.length === hosts.length) {
-            btn.className = "sb-btn";
-            btn.textContent = "\u2601 SSH Sync";
-            btn.title = "SSH sync status not available yet.";
-        } else {
-            btn.className = "sb-btn";
-            btn.textContent = "\uD83D\uDFE2 SSH all in sync";
-            btn.title = hosts.length + " host(s) in sync.";
-        }
-    }
-
     function _md5Tooltip(md5_detail) {
         if (!md5_detail || Object.keys(md5_detail).length === 0) return "";
         var parts = [];
-        if ("pb7" in md5_detail) parts.push("PB7: " + (md5_detail.pb7 === true ? "\u2705" : md5_detail.pb7 === false ? "\u274C mismatch" : "\u2753 unknown"));
+        if ("pb7" in md5_detail) parts.push("api-keys.json: " + (md5_detail.pb7 === true ? "\u2705" : md5_detail.pb7 === false ? "\u274C mismatch" : "\u2753 not installed"));
         return parts.join(" | ");
     }
 
     function _updateSerialCell(hostname, remote_serial, local_serial, in_sync, md5_detail) {
-        var cell = document.getElementById("ssh-ser-" + hostname);
-        _sshSyncInfo[hostname] = {
-            remote_serial: remote_serial != null ? remote_serial : null,
-            local_serial: local_serial != null ? local_serial : null,
-            in_sync: in_sync != null ? in_sync : (remote_serial != null && local_serial != null ? remote_serial === local_serial : null),
-            md5_detail: md5_detail || {},
-        };
-        if (remote_serial == null) {
-            _sshSyncState[hostname] = null;
-            if (cell) {
-                cell.textContent = "\u2014";
-                cell.style.cssText = "color:#64748b; font-size:var(--fs-sm); text-align:right;";
-            }
-        } else {
-            var synced = in_sync != null ? in_sync : (remote_serial === local_serial);
-            _sshSyncState[hostname] = synced;
-            if (cell) {
-                if (synced) {
-                    cell.textContent = remote_serial;
-                    cell.style.cssText = "color:#86efac; font-size:var(--fs-sm); text-align:right;";
-                    cell.title = "In sync (MD5 match)" + (md5_detail ? " \u2014 " + _md5Tooltip(md5_detail) : "");
-                } else {
-                    cell.innerHTML = '<span style="background:#991b1b; color:#fecaca; padding:1px 6px; border-radius:3px; font-weight:700; font-size:var(--fs-sm);">' + remote_serial + ' \u2716</span>';
-                    cell.style.cssText = "text-align:right;";
-                    cell.title = "Out of sync" + (md5_detail ? " \u2014 " + _md5Tooltip(md5_detail) : "");
-                }
-            }
-        }
-        _updateSshSyncButton();
+        apiSyncController.updateSerialCell(hostname, remote_serial, local_serial, in_sync, md5_detail);
     }
 
     function _updateLpCell(hostname, lp) {
@@ -2826,35 +2668,11 @@
     }
 
     function _openSshSSE() {
-        _closeSshSSE();
-        var url = API_BASE + "/sync/ssh-status/stream";
-        if (TOKEN) url += "?token=" + encodeURIComponent(TOKEN);
-        _sshStatusES = new EventSource(url);
-        _sshStatusES.onmessage = function(ev) {
-            try {
-                var d = JSON.parse(ev.data);
-                if (d.type === "init") {
-                    var ls = d.local_serial || 0;
-                    Object.keys(d.hosts || {}).forEach(function(h) {
-                        var hi = d.hosts[h] || {};
-                        _updateSerialCell(h, hi.remote_serial, ls, hi.in_sync, hi.md5_detail);
-                        if (d.last_push && d.last_push[h]) {
-                            _updateLpCell(h, d.last_push[h]);
-                        }
-                    });
-                } else if (d.type === "serial_update") {
-                    _updateSerialCell(d.hostname, d.remote_serial, d.local_serial, d.in_sync, d.md5_detail);
-                    if (d.last_push) _updateLpCell(d.hostname, d.last_push);
-                }
-            } catch (ex) { /* ignore parse errors */ }
-        };
-        _sshStatusES.onerror = function() {
-            // Browser will auto-reconnect; no action needed
-        };
+        apiSyncController.openStream();
     }
 
     function _closeSshSSE() {
-        if (_sshStatusES) { _sshStatusES.close(); _sshStatusES = null; }
+        apiSyncController.closeStream();
     }
 
     async function toggleSSHSync() {
@@ -2877,27 +2695,14 @@
         _openSshSSE();
     }
 
-    async function quickSshSync() {
-        var btn = document.getElementById("btnSSHQuick");
-        if (btn) { btn.disabled = true; btn.textContent = "…"; }
+    async function checkSshSyncStatus() {
         try {
-            var data = await apiFetch("/sync/push-ssh", {
-                method: "POST",
-                body: JSON.stringify({ dry_run: false, no_propagate: false })
-            });
-            if (data.error) { showToast("SSH Sync: " + data.error, "error"); return; }
-            var results = data.results || {};
-            var total = Object.keys(results).length;
-            var ok = Object.values(results).filter(function(r) { return r.success; }).length;
-            if (ok === total && total > 0) showToast("SSH Sync: " + ok + "/" + total + " OK", "success");
-            else if (total === 0) showToast("SSH Sync: no VPS connected", "warning");
-            else showToast("SSH Sync: " + ok + "/" + total + " succeeded", ok > 0 ? "warning" : "error");
-        } catch (e) {
-            showToast("SSH Sync failed: " + e.message, "error");
-        } finally {
-            if (btn) btn.disabled = false;
-            await checkSshSyncStatus();
-        }
+            await apiSyncController.refresh();
+        } catch (_) { /* sync status not configured or unreachable */ }
+    }
+
+    async function quickApiSync() {
+        await apiSyncController.quickSync({ dry_run: false, no_propagate: false });
     }
 
     // ── State ────────────────────────────────────────────────
@@ -2992,21 +2797,25 @@
         statusLine.textContent = "Loading…";
         try {
             var data = await apiFetch("/sync/ssh-status");
-            var hosts = data.connected_hosts || [];
+            var hosts = Array.isArray(data.summary_hostnames) ? data.summary_hostnames : (data.connected_hosts || []);
             var lastPushAll = data.last_push || {};
             _sshHosts = []; _sshHostMap = {};
             hosts.forEach(function(h) {
-                var hInfo = data.hosts[h] || {};
+                var hInfo = (data.summary_hosts && data.summary_hosts[h]) ? data.summary_hosts[h] : ((data.hosts && data.hosts[h]) || {});
                 var label = hInfo.pbname ? hInfo.pbname + " (" + h + ")" : h;
                 hInfo.last_push = lastPushAll[h] || null;
                 _sshHosts.push({ hostname: h, label: label });
                 _sshHostMap[h] = hInfo;
             });
             var watcherCount = hosts.filter(function(h) {
-                return data.hosts[h] && data.hosts[h].watcher_active;
+                return _sshHostMap[h] && _sshHostMap[h].watcher_active;
+            }).length;
+            var connectedCount = hosts.filter(function(h) {
+                return _sshHostMap[h] && _sshHostMap[h].connected;
             }).length;
             statusLine.innerHTML =
-                '<strong>' + hosts.length + '</strong> VPS connected' +
+                '<strong>' + hosts.length + '</strong> managed VPS' +
+                ' &middot; <strong>' + connectedCount + '</strong> connected' +
                 ' &middot; <strong>' + watcherCount + '</strong> watcher(s) active' +
                 ' &middot; Serial: <strong>' + (data.local_serial || '?') + '</strong>' +
                 ' &middot; Master: <strong>' + (data.local_hostname || '?') + '</strong>';
@@ -3097,13 +2906,20 @@
             var noPropagate = document.getElementById("sshNoPropagate").checked;
             var body = { dry_run: dryRun, hostnames: hostnames, no_propagate: noPropagate };
             var data = await apiFetch("/sync/push-ssh", { method: "POST", body: JSON.stringify(body) });
-            if (data.error) { showToast("SSH Sync: " + data.error, "error"); return; }
+            if (data.error) { showToast("API Sync: " + data.error, "error"); return; }
             var results = data.results || {};
             var ok = 0, total = 0;
+            var okHosts = [];
+            var failedHosts = [];
             for (var h in results) {
                 total++;
                 var r = results[h];
-                if (r.success || r.dry_run) ok++;
+                if (r.success || r.dry_run) {
+                    ok++;
+                    okHosts.push(h);
+                } else {
+                    failedHosts.push(h);
+                }
                 var lpEl  = document.getElementById("ssh-lp-"  + h);
                 var serEl = document.getElementById("ssh-ser-" + h);
                 if (lpEl) {
@@ -3138,8 +2954,14 @@
                     '<th style="text-align:right">Serial</th><th style="text-align:right">Bots</th>' +
                     '</tr></thead><tbody>' + rows + '</tbody></table>' +
                     '<p style="color:#475569;font-size:var(--fs-xs);margin:8px 0 0">No files were written. Uncheck Dry Run to apply.</p>');
-            } else if (ok === total) showToast("Synced " + ok + "/" + total, "success");
-            else showToast("Sync: " + ok + "/" + total + " succeeded", ok > 0 ? "warning" : "error");
+            } else if (ok === total) {
+                showToast("Synced " + ok + "/" + total + " - " + okHosts.join(", "), "success");
+            } else {
+                var details = [];
+                if (okHosts.length) details.push("OK: " + okHosts.join(", "));
+                if (failedHosts.length) details.push("Failed: " + failedHosts.join(", "));
+                showToast("Sync: " + ok + "/" + total + " succeeded" + (details.length ? " - " + details.join(" | ") : ""), ok > 0 ? "warning" : "error");
+            }
         } catch (e) {
             showToast("SSH sync failed: " + e.message, "error");
         } finally {
@@ -3316,7 +3138,7 @@
             showToast("Restored from: " + filename, "success");
             backToList();
             await loadUsers();
-            await checkSyncStatus();
+            await checkSshSyncStatus();
         } catch (e) {
             showToast("Restore failed: " + e.message, "error");
         }

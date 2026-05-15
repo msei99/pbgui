@@ -145,9 +145,6 @@ async def ws_vps_manager(websocket: WebSocket):
                 elif cmd == "refresh":
                     await asyncio.to_thread(service.refresh, force=True)
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True})
-                elif cmd == "sync_api":
-                    await service.start_api_sync()
-                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True})
                 elif cmd == "save_vps":
                     data = await asyncio.to_thread(service.save_vps, token, msg.get("form") or {})
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})

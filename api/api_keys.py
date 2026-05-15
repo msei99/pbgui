@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from api.auth import SessionToken, require_auth
+from api.vps_manager import _get_service as _get_vps_manager_service
 from api_key_state import (
     RUNTIME_STATE_KEYS,
     clear_user_state,
@@ -1654,13 +1655,6 @@ def tradfi_yfinance_uninstall(
         return {"success": False, "message": f"Uninstall failed: {msg}"}
     except Exception as e:
         return {"success": False, "message": str(e)}
-
-
-class TradFiTestRequest(BaseModel):
-    provider: str
-    api_key: str = ""
-    api_secret: str = ""
-
 # (tradfi/test route registered earlier, before /{name}/test — see above)
 
 
@@ -1683,66 +1677,7 @@ def tradfi_get_profiles(
     }
 
 
-# ── API Sync (legacy routes backed by SSH/FileSync status) ───
-
-
-@router.get("/sync/status")
-def get_sync_status(
-    session: SessionToken = Depends(require_auth),
-) -> dict:
-    """Check whether api-keys.json is in sync with all connected VPS via SSH metadata.
-
-    Returns:
-      - configured: False when the sync worker is not initialized
-      - synced: True if all online servers have the same API key MD5
-      - unsynced_servers: names of servers that are out of sync
-      - total_servers: count of connected VPS
-    """
-    try:
-        if not _file_sync_worker:
-            return {"configured": False, "synced": True, "unsynced_servers": [], "total_servers": 0, "error": "FileSyncWorker not initialized"}
-        status = _file_sync_worker.get_status()
-        connected_hosts = list(status.get("connected_hosts") or [])
-        local_md5 = _file_sync_worker._compute_local_md5()
-        monitor_state = get_monitor_state_snapshot()
-        host_meta = monitor_state.get("host_meta") or {}
-        unsynced = []
-        for hostname in connected_hosts:
-            api_md5 = str((host_meta.get(hostname) or {}).get("api_md5") or "")
-            if api_md5 and api_md5 != local_md5:
-                unsynced.append(hostname)
-        return {
-            "configured": True,
-            "synced": len(unsynced) == 0,
-            "unsynced_servers": unsynced,
-            "total_servers": len(connected_hosts),
-        }
-    except Exception as e:
-        _log(SERVICE, f"sync/status error: {e}", level="WARNING", meta={"traceback": traceback.format_exc()})
-        return {"configured": False, "synced": True, "unsynced_servers": [], "total_servers": 0, "error": str(e)}
-
-
-@router.post("/sync/push")
-def push_sync(
-    session: SessionToken = Depends(require_auth),
-) -> dict:
-    """Push current api-keys.json to connected VPS via SSH/SFTP."""
-    try:
-        if not _file_sync_worker:
-            return {"success": False, "configured": False, "error": "FileSyncWorker not initialized"}
-        results = asyncio.run(_file_sync_worker.push_api_keys(dry_run=False, no_propagate=False))
-        if isinstance(results, dict) and "error" in results and len(results) == 1:
-            raise HTTPException(status_code=400, detail=results["error"])
-        _log(SERVICE, "API keys pushed to connected VPS via SSH")
-        return {"success": True, "configured": True}
-    except HTTPException:
-        raise
-    except Exception as e:
-        _log(SERVICE, f"sync/push error: {e}", level="ERROR", meta={"traceback": traceback.format_exc()})
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── SSH API Sync (direct SFTP push via AsyncSSHPool) ─────────
+# ── API Sync (direct SFTP push via AsyncSSHPool) ─────────────
 
 class SSHPushRequest(BaseModel):
     hostnames: Optional[list[str]] = None
@@ -1794,7 +1729,12 @@ async def get_ssh_sync_status(
     if not _file_sync_worker:
         raise HTTPException(status_code=503,
                             detail="FileSyncWorker not initialized")
-    return _file_sync_worker.get_status()
+    managed_hostnames = [
+        str(item.hostname or "")
+        for item in _get_vps_manager_service().vpsmanager.vpss
+        if str(item.hostname or "")
+    ]
+    return _file_sync_worker.get_status(managed_hostnames=managed_hostnames)
 
 
 @router.get("/sync/ssh-status/stream")
@@ -1811,7 +1751,12 @@ async def stream_ssh_sync_status(
         import json
         try:
             # Send initial state so the client can populate all serial cells
-            status = _file_sync_worker.get_status()
+            managed_hostnames = [
+                str(item.hostname or "")
+                for item in _get_vps_manager_service().vpsmanager.vpss
+                if str(item.hostname or "")
+            ]
+            status = _file_sync_worker.get_status(managed_hostnames=managed_hostnames)
             yield f"data: {json.dumps({'type': 'init', **status})}\n\n"
             while True:
                 try:

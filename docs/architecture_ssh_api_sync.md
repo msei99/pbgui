@@ -1,4 +1,4 @@
-# Architecture: SSH API Sync
+# Architecture: API Sync
 
 > Replaces the rclone-based API key distribution with a direct SSH/SFTP approach.
 > First use-case: `api-keys.json` sync to all VPS.
@@ -58,7 +58,7 @@ Every push writes these underscore-prefixed metadata fields at the top level of 
 ## 3. End-to-End Push Flow
 
 ```
-User clicks "SSH API Sync"
+User clicks "API Sync"
          │
          ▼
 ┌──────────────────────┐
@@ -212,16 +212,11 @@ VPS configuration persisted at `data/vpsmanager/hosts/{hostname}/{hostname}.json
 
 **`fetch_vps_info()`**: Reads remote `software/pbgui/pbgui.ini` via Paramiko SFTP. Currently only extracts `pbdir` (PB6). **We do NOT extend VPSManager** — it is scheduled for deprecation. Instead, remote path discovery and ini access are handled by the new `read_remote_ini()` / `write_remote_ini()` methods on `AsyncSSHPool` (see Section 6.2).
 
-### `PBRemote.py` — Legacy rclone sync
+### `PBRemote.py` — Remaining legacy duties
 
-`sync_api_up()` copies `api-keys.json` to `data/cmd/` for rclone distribution. Called from 4 explicit UI sites only (never in daemon loop):
+`PBRemote.py` still handles bucket-based fallback sync for bot config/status data in the older remote-storage flows.
 
-1. `pbgui_func.py:385` — Legacy Streamlit sync button
-2. `navi/system_services.py:260` — Service monitoring UI red sync button
-3. `api/api_keys.py:1754` — `POST /sync/push` REST endpoint
-4. `frontend/vps_manager.html` / FastAPI VPS Manager compatibility sync action during migration
-
-**No conflict with SSH sync** — old buttons trigger rclone, new "SSH API Sync" button triggers the new FileSyncWorker. Both can coexist during migration.
+It no longer distributes or installs `api-keys.json`. The active API key distribution path is now exclusively the FileSyncWorker-based `API Sync` flow.
 
 ---
 
@@ -292,7 +287,7 @@ backup_min_versions = 10
 - **Shared across Masters**: Since config lives on VPS, every connecting Master reads the same values. No config drift between Masters.
 - **Per-VPS customizable**: Each VPS can have different retention settings (e.g. VPS with limited disk → shorter retention).
 - **Defaults used if section missing**: If a VPS's `pbgui.ini` has no `[filesync]` section, defaults (180 / 10) apply.
-- **Editable via UI**: The SSH API Sync panel shows the current retention settings per VPS (read from cached ini). Admin can adjust `backup_retention_days` and `backup_min_versions` directly — changes are written to the VPS's `pbgui.ini` via `set_remote_ini_value()` and the cache is refreshed.
+- **Editable via UI**: The Advanced API Sync panel shows the current retention settings per VPS (read from cached ini). Admin can adjust `backup_retention_days` and `backup_min_versions` directly — changes are written to the VPS's `pbgui.ini` via `set_remote_ini_value()` and the cache is refreshed.
 
 ### 6.3 `master/file_sync.py` — FileSyncWorker (NEW)
 
@@ -348,7 +343,7 @@ GET /sync/ssh-status
 
 ### 6.5 `frontend/api_keys_editor.html` — UI additions
 
-- **"SSH API Sync" button** in the header area
+- **"API Sync" button** in the header area
 - **VPS selectbox** with "All" as default + individual VPS hostnames
 - **Dry-run toggle**
 - **Status display**: per-VPS results (success/failure, backup status, MD5 match, bots killed)
@@ -371,7 +366,7 @@ api/
 └── serial.txt             # bumped on API changes
 
 frontend/
-└── api_keys_editor.html   # + SSH API Sync UI section
+└── api_keys_editor.html   # + API Sync UI section
 ```
 
 ### VPS-side file layout (after push)
@@ -433,9 +428,9 @@ Log entries include: hostname, operation, serial, success/failure, MD5 hashes, t
 
 ## 10. Migration Path
 
-1. **Phase 1** (this implementation): SSH sync coexists with rclone. Both buttons work. No rclone removal.
-2. **Phase 2** (future): Once SSH sync proven stable, remove rclone-based `sync_api_up()` calls and `POST /sync/push` endpoint.
-3. **Phase 3** (future): Extend `FileSyncWorker` to sync PB7 configs (same pattern, different file paths).
+1. **Initial rollout**: SSH sync coexisted with rclone during migration.
+2. **Completed cleanup**: the old FastAPI rclone compatibility path and the PBRemote `api-keys.json` staging/install path have been removed.
+3. **Future**: Extend `FileSyncWorker` to sync PB7 configs (same pattern, different file paths).
 
 ---
 
@@ -447,7 +442,7 @@ Log entries include: hostname, operation, serial, success/failure, MD5 hashes, t
 | 2 | `master/async_pool.py` | On-connect auto-read of remote `pbgui.ini` → cache in `VPSConnection.data` |
 | 3 | `master/file_sync.py` | Create `FileSyncWorker` (push, pull, backup, retention, watcher) |
 | 4 | `api/api_keys.py` | New endpoints: `POST /sync/push-ssh`, `GET /sync/ssh-status` |
-| 5 | `frontend/api_keys_editor.html` | SSH API Sync UI (button, selectbox, dry-run, status) |
+| 5 | `frontend/api_keys_editor.html` | API Sync UI (button, selectbox, dry-run, status) |
 | 6 | `api/serial.txt` | Increment (API change) |
 | 7 | `README.md` | Changelog entry |
 

@@ -15,15 +15,15 @@ Die Seite läuft als eigenständige FastAPI-Seite mit vollständiger Topnav zur 
 | **+ Add User** | Öffnet das Formular zum Anlegen eines neuen Exchange-Users |
 | **HL Expiry Check** | Prüft den Key-Ablauf aller Hyperliquid-User (Bulk) |
 | **Bybit Expiry Check** | Prüft den Key-Ablauf + IP-Whitelist aller Bybit-User (Bulk) |
-| **☁ SSH Sync** | Überträgt `api-keys.json` per SSH an alle verbundenen VPS |
-| **Advanced Sync** | Öffnet das vollständige SSH-Sync-Panel (pro VPS, Dry-Run, Retention) |
+| **API Sync** | Überträgt `api-keys.json` an alle verbundenen VPS |
+| **Advanced API Sync** | Öffnet das vollständige API-Sync-Panel (pro VPS, Dry-Run, Retention) |
 | **Comments** | Öffnet das Kommentar-Panel |
 | **HL Warning Config** | Konfiguriert den Schwellenwert für Hyperliquid-Ablaufwarnungen via Telegram |
 | **TradFi** | Öffnet das TradFi-Data-Provider-Panel |
 | **🗄 Backups** | Öffnet den Backup-Browser mit Diff-Viewer |
 | **📋 Logs** | Öffnet den Live-Log-Viewer (streamt `ApiKeys.log` und weitere Logs) |
 | **Refresh** | Lädt die User-Liste neu von der Festplatte |
-| **🔴 API not in sync** | Sichtbar, wenn ein rclone-Sync aussteht; Klick löst ihn aus |
+| **API X/Y out of sync** | Sichtbar, wenn ein oder mehrere verbundene VPS nicht synchron sind; Klick löst den Push aus |
 | **🟠 Restart** | Sichtbar, wenn der API-Server ausstehende Code-Änderungen hat; Klick startet neu |
 
 ---
@@ -109,19 +109,19 @@ Beliebige zwei Einträge nebeneinander oder unified vergleichen:
 
 ---
 
-## SSH Sync
+## API Sync
 
 Verteilt `api-keys.json` per SSH/SFTP an alle VPS-Server.
 
-### Schnell-Sync (☁ SSH Sync)
+### Schnell-Sync (API Sync)
 
 Ein Klick überträgt an alle verbundenen VPS — kein Panel nötig. Ein 🔴/🟢-Indikator neben dem Button zeigt den Live-Sync-Status (aktualisiert via SSE).
 
 Wenn der Quick-Button rot ist, zeigt ein Hover an, welche VPS nicht synchron sind und ob der Grund eine abweichende Serial oder ein MD5-Mismatch der übertragenen `api-keys.json` ist.
 
-### Advanced-Sync-Panel
+### Advanced-API-Sync-Panel
 
-Öffnen über **Advanced Sync** in der Sidebar. Zeigt eine vereinheitlichte VPS-Tabelle:
+Öffnen über **Advanced API Sync** in der Sidebar. Zeigt eine vereinheitlichte VPS-Tabelle:
 
 | Spalte | Beschreibung |
 |---|---|
@@ -152,7 +152,7 @@ Wenn der Quick-Button rot ist, zeigt ein Hover an, welche VPS nicht synchron sin
 Wenn PBGui auf mehreren Servern läuft (ein primärer + ein oder mehrere sekundäre), erhalten sekundäre Master die Keys **nicht** direkt vom primären Master. Stattdessen holen sie die Keys automatisch vom gemeinsamen VPS:
 
 **Wie es funktioniert:**
-1. Der primäre Master pusht `api-keys.json` wie gewohnt via SSH Sync an den/die VPS
+1. Der primäre Master pusht `api-keys.json` wie gewohnt via API Sync an den/die VPS
 2. Jeder sekundäre Master überwacht dieselben VPS mit einem inotify-Watcher. Sobald ein höherer `_api_serial` erkannt wird (höher als die lokale Version), **pullt** der sekundäre Master `api-keys.json` automatisch vom VPS auf seine lokale Festplatte
 3. Der Sekundäre ist damit sofort aktuell — kein manueller Eingriff nötig
 
@@ -164,7 +164,7 @@ Wenn PBGui auf mehreren Servern läuft (ein primärer + ein oder mehrere sekund�
 Die API-Keys-Seite liest `api-keys.json` live von der Festplatte. Nach dem automatischen Pull ist der Sekundäre sofort aktuell — ein Neustart von PBGui oder des API-Servers ist nicht erforderlich.
 
 **Propagation an sekundäre Master verhindern:**
-In Advanced Sync die Option **"Don't sync to other masters"** aktivieren, bevor Sync Keys geklickt wird. Dadurch wird ein `_sync_lock`-Flag in die gepushte Datei gesetzt — sekundäre Master überspringen diesen Push und pullen ihn nicht.
+In Advanced API Sync die Option **"Don't sync to other masters"** aktivieren, bevor Sync Keys geklickt wird. Dadurch wird ein `_sync_lock`-Flag in die gepushte Datei gesetzt - sekundäre Master überspringen diesen Push und pullen ihn nicht.
 
 ---
 
@@ -199,7 +199,7 @@ Streamt Logdateien in Echtzeit via WebSocket.
 | **Suchfeld** | Live-Suche / Filter; Checkbox **Filter** blendet nicht passende Zeilen aus; ▲▼ navigiert zwischen Treffern |
 
 Wichtige Logdateien:
-- `ApiKeys.log` — gesamte API-Key- und SSH-Sync-Aktivität
+- `ApiKeys.log` — gesamte API-Key- und API-Sync-Aktivität
 - `VPSMonitor.log` — VPS-Monitoring
 - `PBGui.log` — allgemeine UI-Aktivität
 

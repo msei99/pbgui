@@ -2594,6 +2594,7 @@
   </div>
 
   <script src='/app/js/log_viewer_panel.js?v=21'></script>
+  <script src="/app/js/api_sync_status.js?v=2"></script>
   <script>
     const TOKEN = "%%TOKEN%%";
     const API_BASE = "%%API_BASE%%";
@@ -2911,7 +2912,6 @@
 
     function getSidebarActionsSignature() {
       const overview = ((store.state || {}).overview) || {};
-      const sync = overview.api_sync || {};
       if (isVpsContextView()) {
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
         const st = (detail && detail.status) || {};
@@ -2937,10 +2937,12 @@
         });
       }
       if (store.view === 'overview') {
+        const apiButtonModel = getOverviewApiSyncButtonModel();
         return stableStringify({
           view: 'overview',
-          running: !!sync.running,
-          unsyncedHosts: Array.isArray(sync.unsynced_hosts) ? sync.unsynced_hosts : []
+          api_sync_text: apiButtonModel.text,
+          api_sync_class: apiButtonModel.statusClass,
+          api_sync_title: apiButtonModel.title
         });
       }
       return stableStringify({ view: store.view });
@@ -2967,8 +2969,7 @@
             name: row.name,
             online: !!row.online,
             pbgui_branch: row.pbgui_branch,
-            pb7_branch: row.pb7_branch,
-            api_sync: row.api_sync
+            pb7_branch: row.pb7_branch
           };
         })
       });
@@ -3101,6 +3102,16 @@
       if (node.className !== className) node.className = className;
     }
 
+    function getOverviewApiSyncLabel(row) {
+      if (!row || row.nav !== 'vps') return row && row.nav === 'master' ? 'local' : '-';
+      const hostname = String(row.hostname || '');
+      const syncState = (window.overviewApiSyncController && window.overviewApiSyncController.state.syncInfo[hostname]) || {};
+      if (syncState.in_sync === true) return 'OK';
+      if (syncState.in_sync === false) return syncState.disconnected ? 'Out/off' : 'Out';
+      if (syncState.disconnected) return 'Off';
+      return '-';
+    }
+
     function computeUptime(startStr) {
       if (!startStr) return null;
       const ts = Date.parse(startStr);
@@ -3148,7 +3159,7 @@
       const pb7Ver = String(summary.pb7 || '-');
       const pbguiBranch = String(summary.pbgui_branch || '-');
       const pb7Branch = String(summary.pb7_branch || '-');
-      const apiSync = String(summary.api_sync || '-');
+      const apiSync = getOverviewApiSyncLabel(summary);
       function verTone(github, ver) {
         const g = String(github || '');
         if (g.indexOf('✅') >= 0 || g.indexOf('✓') >= 0) return 'ok';
@@ -4198,6 +4209,16 @@
       }, safeType === 'error' ? 4200 : 2600);
     }
 
+    async function apiKeysFetch(path, options) {
+      const response = await fetch(API_BASE.replace('/api/vps-manager', '/api/api-keys') + path + '?token=' + encodeURIComponent(TOKEN), Object.assign({
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin'
+      }, options || {}));
+      const data = await response.json().catch(function () { return {}; });
+      if (!response.ok) throw new Error(data && data.detail ? data.detail : 'Request failed');
+      return data;
+    }
+
     function openAlertModal(title, body, kind) {
       resetAlertModalWindow();
       document.getElementById('alertModalTitle').textContent = title || 'Notice';
@@ -5191,8 +5212,6 @@
         }
       } else if (cmd === 'refresh') {
         toast('Refreshed.', 'info');
-      } else if (cmd === 'sync_api') {
-        toast('API sync started.', 'info');
       } else if (cmd === 'read_vps_settings') {
         if (isVpsContextView() && store.hostname && msg.data) {
           const ui = ensureVpsUi(store.hostname, store.detail && store.detail.hostname === store.hostname ? store.detail : null);
@@ -5332,8 +5351,16 @@
       send({ cmd: 'refresh' });
     }
 
+    function getOverviewApiSyncButtonModel() {
+      if (!window.overviewApiSyncController) return { text: 'API Sync', title: '', statusClass: 'ok' };
+      return window.overviewApiSyncController.getButtonModel();
+    }
+
     function startApiSync() {
-      send({ cmd: 'sync_api' });
+      if (!window.overviewApiSyncController) return;
+      window.overviewApiSyncController.quickSync().then(function () {
+        refreshState();
+      }).catch(function () {});
     }
 
     function openManualImportPrompt() {
@@ -5929,7 +5956,7 @@
                     <td>${esc(row.pb7 || '-')}</td>
                     <td>${esc(row.pb7_branch || '-')}</td>
                     <td>${esc(row.pb7_github || '-')}</td>
-                    <td>${esc(row.api_sync || '-')}</td>
+                    <td>${esc(getOverviewApiSyncLabel(row))}</td>
                   </tr>`;
               }).join('')}
             </tbody>
@@ -6403,11 +6430,7 @@
     }
 
     function renderSidebarActions() {
-      const overview = ((store.state || {}).overview) || {};
       const managedRows = getManagedRows();
-      const sync = overview.api_sync || {};
-      const running = !!sync.running;
-      const unsyncedHosts = Array.isArray(sync.unsynced_hosts) ? sync.unsynced_hosts : [];
       const sidebarActions = document.getElementById('sidebar-actions');
       const sidebarCount = document.getElementById('sidebarCount');
       if (sidebarCount) {
@@ -6511,14 +6534,13 @@
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>
           <button class='sb-btn info' type='button' onclick='saveAddVps()'>Save VPS</button>`;
       } else {
-        const apiBtnClass = running ? 'warning' : (unsyncedHosts.length ? 'danger' : 'ok');
-        const apiBtnLabel = running ? 'API sync running' : (unsyncedHosts.length ? 'API not in sync' : 'API in sync');
+        const apiModel = getOverviewApiSyncButtonModel();
         html = `
           <div class='sb-icon-row'>
             <button class='sb-icon-btn' type='button' title='Refresh' aria-label='Refresh' onclick='refreshState()'>↻</button>
             <button class='sb-icon-btn' type='button' title='Add VPS' aria-label='Add VPS' onclick='selectView("add")'>+</button>
           </div>
-          <button class='sb-status-btn ${apiBtnClass}' type='button' ${running || !unsyncedHosts.length ? 'disabled' : ''} onclick='startApiSync()'>${apiBtnLabel}</button>`;
+          <button class='sb-status-btn ${apiModel.statusClass}' id='overview-api-sync-btn' type='button' title='${escAttr(apiModel.title || '')}' onclick='startApiSync()'>${esc(apiModel.text)}</button>`;
       }
       if (sidebarActions.innerHTML !== html) sidebarActions.innerHTML = html;
     }
@@ -6544,7 +6566,7 @@
               <div class='side-button-title'>${esc(row.name)}</div>
               <div class='tag ${row.online ? 'ok' : 'error'}'>${row.online ? 'Online' : 'Offline'}</div>
             </div>
-            <div class='side-button-sub'>${esc(row.pbgui_branch || '-')} | ${esc(row.pb7_branch || '-')} | API ${esc(row.api_sync || '-')}</div>
+            <div class='side-button-sub'>${esc(row.pbgui_branch || '-')} | ${esc(row.pb7_branch || '-')} | API ${esc(getOverviewApiSyncLabel(row))}</div>
           </button>`;
       }).join('');
       const masterButton = masterRow ? `
@@ -8343,6 +8365,25 @@
     document.addEventListener('click', handleCpuHistoryInteraction, true);
 
     restoreViewFromHash();
+    window.overviewApiSyncController = createApiSyncStatusController({
+      apiFetch: apiKeysFetch,
+      buildStreamUrl: function () {
+        return API_BASE.replace('/api/vps-manager', '/api/api-keys') + '/sync/ssh-status/stream?token=' + encodeURIComponent(TOKEN);
+      },
+      getButton: function () {
+        return document.getElementById('overview-api-sync-btn');
+      },
+      showToast: toast,
+      onStateChange: function () {
+        renderSidebarActions();
+        renderSidebarList();
+        if (store.view === 'overview' || store.view === 'master' || isVpsContextView()) {
+          refreshCurrentViewLive();
+        }
+      }
+    });
+    window.overviewApiSyncController.refresh().catch(function () {});
+    window.overviewApiSyncController.openStream();
     renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
     initSidebarResize();
     initAlertModalInteractions();

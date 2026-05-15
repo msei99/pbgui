@@ -15,15 +15,15 @@ The page runs as a standalone FastAPI page with a full topnav for navigating to 
 | **+ Add User** | Opens the create form for a new exchange user |
 | **HL Expiry Check** | Bulk-checks Hyperliquid key expiry for all HL users |
 | **Bybit Expiry Check** | Bulk-checks Bybit API key expiry + IP whitelist for all Bybit users |
-| **☁ SSH Sync** | Pushes `api-keys.json` to all connected VPS in one click |
-| **Advanced Sync** | Opens the full SSH sync panel (per-VPS control, dry-run, retention) |
+| **API Sync** | Pushes `api-keys.json` to all connected VPS in one click |
+| **Advanced API Sync** | Opens the full API sync panel (per-VPS control, dry-run, retention) |
 | **Comments** | Opens the comment management panel |
 | **HL Warning Config** | Configures the Hyperliquid expiry Telegram warning threshold |
 | **TradFi** | Opens the TradFi Data Provider panel |
 | **🗄 Backups** | Opens the backup browser and diff viewer |
 | **📋 Logs** | Opens the live log viewer (streams `ApiKeys.log` and other logs) |
 | **Refresh** | Reloads the user list from disk |
-| **🔴 API not in sync** | Visible when rclone sync is pending; click to trigger |
+| **API X/Y out of sync** | Shows when one or more connected VPS are out of sync; click to push |
 | **🟠 Restart** | Visible when the API server has pending code changes; click to restart |
 
 ---
@@ -109,19 +109,19 @@ Compare any two entries side-by-side or unified:
 
 ---
 
-## SSH Sync
+## API Sync
 
 Distribute `api-keys.json` to all VPS servers via SSH/SFTP.
 
-### Quick sync (☁ SSH Sync)
+### Quick sync (API Sync)
 
 Pushes to all connected VPS with one click — no panel needed. A 🔴/🟢 indicator next to the button shows live sync status (updated via SSE).
 
 When the quick button is red, hover it to see which VPS are out of sync and whether the mismatch comes from differing serials or an MD5 mismatch of the pushed `api-keys.json`.
 
-### Advanced Sync panel
+### Advanced API Sync panel
 
-Open via **Advanced Sync** in the sidebar. Provides a unified VPS table:
+Open via **Advanced API Sync** in the sidebar. Provides a unified VPS table:
 
 | Column | Description |
 |---|---|
@@ -152,7 +152,7 @@ Open via **Advanced Sync** in the sidebar. Provides a unified VPS table:
 If you run PBGui on multiple servers (one primary and one or more secondaries), secondary masters do **not** receive keys directly from the primary master. Instead they pick them up automatically from the shared VPS:
 
 **How it works:**
-1. The primary master pushes `api-keys.json` to the VPS(es) via SSH Sync (as usual)
+1. The primary master pushes `api-keys.json` to the VPS(es) via API Sync (as usual)
 2. Each secondary master runs an inotify watcher on the same VPS(es). When it detects a new `_api_serial` (higher than its own local version), it automatically **pulls** `api-keys.json` from the VPS to its local disk
 3. The secondary is then immediately up to date — no manual action needed
 
@@ -164,7 +164,7 @@ If you run PBGui on multiple servers (one primary and one or more secondaries), 
 The API Keys page reads `api-keys.json` live from disk. After the automatic pull completes, the secondary is immediately up to date — no restart of PBGui or the API server is needed.
 
 **Preventing propagation to secondary masters:**
-In Advanced Sync, check **"Don't sync to other masters"** before clicking Sync Keys. This sets a `_sync_lock` flag in the pushed file so secondary masters skip this particular push and do not pull it.
+In Advanced API Sync, check **"Don't sync to other masters"** before clicking Sync Keys. This sets a `_sync_lock` flag in the pushed file so secondary masters skip this particular push and do not pull it.
 
 ---
 
@@ -199,7 +199,7 @@ Streams log files in real time via WebSocket.
 | **Search box** | Live search / filter; **Filter** checkbox hides non-matching lines; ▲▼ navigate matches |
 
 Key log files:
-- `ApiKeys.log` — all API-key and SSH sync activity
+- `ApiKeys.log` — all API-key and API sync activity
 - `VPSMonitor.log` — VPS monitoring
 - `PBGui.log` — general UI activity
 

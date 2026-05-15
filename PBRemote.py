@@ -1,9 +1,4 @@
-"""
-PBRemote manages cloud storage synchronization for v7 passivbot instances.
-
-RemoteServer() imports remote cmd/status data from storage.
-PBRemote() exports v7 configs and status data to remote storage.
-"""
+"""PBRemote manages fallback cloud storage sync for PB config/status data."""
 import psutil
 import subprocess
 import configparser
@@ -18,7 +13,6 @@ import platform
 from PBRun import PBRun
 from Status import InstancesStatus
 import shutil
-import hashlib
 import traceback
 from logging_helpers import human_log as _log
 
@@ -34,7 +28,6 @@ class RemoteServer():
         self._edit = False
         self._path = path
         self._unique = []
-        self._api_md5 = None
         self._pb7dir = None
         self._bucket = None
         self._role = None
@@ -48,8 +41,6 @@ class RemoteServer():
     def edit(self): return self._edit
     @property
     def path(self): return self._path
-    @property
-    def api_md5(self): return self._api_md5
     @property
     def pb7dir(self): return self._pb7dir
     @property
@@ -78,30 +69,12 @@ class RemoteServer():
         if self._bucket != new_bucket:
             self._bucket = new_bucket
 
-    def is_api_md5_same(self, api_md5: str):
-        """
-        Check if the API MD5 hash is the same as the stored one.
-
-        Args:
-            api_md5 (str): The API MD5 hash to compare.
-
-        Returns:
-            bool: True if the API MD5 hash is the same, False otherwise.
-        """
-        if self.api_md5 == api_md5:
-            return True
-        return False
-
     def load(self):
         """
         Load the server's configuration.
         """
         self._name = PurePath(self._path).name[4:]
-        self._api_md5 = None
         self._role = None
-        api_file = Path(self._path) / 'api-keys.json'
-        if api_file.exists():
-            self._api_md5 = self.calculate_md5(api_file)
 
     def sync_v7_down(self, role: str):
         """Sync v7 configs from remote storage to local machine."""
@@ -124,44 +97,6 @@ class RemoteServer():
             status_ts = self.instances_status_v7.status_ts
             self.instances_status_v7.update_status()
             _log('PBRemote', f'Update status_v7 ts: {self.name} old: {status_ts} new: {self.instances_status_v7.status_ts}', level='INFO')
-
-    def sync_api(self):
-        """
-        Sync the API keys from the remote storage to the local machine.
-        """
-        api_file = Path(f'{self._path}/api-keys.json')
-        if api_file.exists():
-            if self.pb7dir:
-                api_keys = Path(f'{self._pb7dir}/api-keys.json')
-                self.update_api(api_file, api_keys)
-
-    def update_api(self, api_file: Path, api_keys: Path):
-        """
-        Checks if the api-keys.json from pbgui (self._path) is different from api-keys.json from passivbot.
-        If different, It creates a backup of the passivbot api-keys.json to pbgui/data/backup, and then copy the new api-keys.json file to the passivbot directory.
-        """
-        if self.calculate_md5(api_file) != self.calculate_md5(api_keys):
-            _log('PBRemote', f'Install new API Keys from: {self.name} to {api_keys}', level='INFO')
-            # Backup api-keys
-            date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            pbgdir = Path.cwd()
-            destination = Path(f'{pbgdir}/data/backup/api-keys_v7/{date}')
-            if not destination.exists():
-                destination.mkdir(parents=True)
-            if api_keys.exists():
-                shutil.copy(api_keys, destination)
-            # Copy new api-keys atomically (write to temp, then rename)
-            tmp = api_keys.with_suffix('.tmp')
-            shutil.copy(api_file, tmp)
-            tmp.replace(api_keys)
-
-    def calculate_md5(self, file: Path):
-        """Checks if the two API files have the same hash using md5 protocol."""
-        if file.exists():
-            with open(file, 'rb') as file_obj:
-                file_contents = file_obj.read()
-            return hashlib.md5(file_contents).hexdigest()
-        return None
 
     def delete_server(self):
         """
@@ -288,20 +223,6 @@ class PBRemote():
     @property
     def pb7_commit(self):
         return self.local_run.pb7_commit
-    #unsynced api
-    @property
-    def unsynced_api(self):
-        unsynced = 0
-        for server in self.remote_servers:
-            server.load()
-            if not server.is_api_md5_same(self.api_md5):
-                unsynced += 1
-        return unsynced
-
-    # api_md5
-    @property
-    def api_md5(self): return self.calculate_api_md5()
-
     def __iter__(self):
         return iter(self.remote_servers)
 
@@ -347,7 +268,6 @@ class PBRemote():
         Synchronise between local server and remote storage.
         
         Supported sync paths:
-            up/cmd: api-keys.json
             up/status_v7: status_v7.json
             up/run_v7: *.json (v7 configs)
             down/master: all except own cmd, instances, multi, run_v7
@@ -359,9 +279,7 @@ class PBRemote():
         """
         pbgdir = Path.cwd()
         cmd = None
-        if direction == 'up' and spath == 'cmd':
-            cmd = ['rclone', 'sync', '-v', '--include', f'{{api-keys.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
-        elif direction == 'up' and spath == 'status_v7':
+        if direction == 'up' and spath == 'status_v7':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{status_v7.json}}', PurePath(f'{pbgdir}/data/cmd'), f'{self.bucket_dir}/cmd_{self.name}']
         elif direction == 'up' and spath == 'run_v7':
             cmd = ['rclone', 'sync', '-v', '--include', f'{{*.json}}', PurePath(f'{pbgdir}/data/{spath}'), f'{self.bucket_dir}/{spath}_{self.name}']
@@ -403,36 +321,6 @@ class PBRemote():
             self.sync('up', 'run_v7')
             _log('PBRemote', f'Sync status_v7.json up: {self.name}', level='INFO')
             self.sync('up', 'status_v7')
-
-    def sync_api_up(self):
-        """Takes the api-keys.json from passivbot folder to sync it to other remotes by putting it in data/cmd/api-keys.json."""
-        pbgdir = Path.cwd()
-        api_file = Path(f'{pbgdir}/data/cmd/api-keys.json')
-        source = Path(f'{self.pb7dir}/api-keys.json') if self.pb7dir else None
-        if source and source.exists():
-            _log('PBRemote', 'Sync api-keys.json to all remote servers', level='INFO')
-            shutil.copy(source, api_file)
-    
-    def check_if_api_synced(self):
-        """Verify that the API keys are the same in PBGUI and PB folders and deletes PBGUI folder's file if api are synced."""
-        for server in self.remote_servers:
-            server.load()
-            if not server.is_api_md5_same(self.api_md5):
-                return False
-        pbgdir = Path.cwd()
-        api_file = Path(f'{pbgdir}/data/cmd/api-keys.json')
-        if api_file.exists():
-            api_file.unlink(missing_ok=True)
-        return True
-
-    def calculate_api_md5(self):
-        """Makes a md5 hash from the api-keys.json in passivbot v7 folder."""
-        file = Path(f'{self.pb7dir}/api-keys.json') if self.pb7dir else None
-        if file and file.exists():
-            with open(file, 'rb') as file_obj:
-                file_contents = file_obj.read()
-            return hashlib.md5(file_contents).hexdigest()
-        return None
 
     def cleanup_legacy_alive_once(self):
         pbgdir = Path.cwd()
@@ -711,7 +599,7 @@ class PBRemote():
 
 def main():
     """
-    Main function of PBRemote, responsible for sharing data from one server to another.
+    Main function of PBRemote, responsible for fallback config/status sync.
 
     ### Usage : 
     - Run PBRemote and save its process ID to pbremote.pid.
@@ -734,17 +622,14 @@ def main():
             for s in remote.remote_servers:
                 s.load()
             server.sync_v7_down(remote.role)
-            server.sync_api()
 
     remote.sync_status_down()
     _apply_remote_updates()
 
     local_sync_interval = 5.0
     remote_sync_interval = 15.0
-    api_check_interval = 15.0
     next_local_sync = monotonic() + local_sync_interval
     next_remote_sync = monotonic() + remote_sync_interval
-    next_api_check = monotonic() + api_check_interval
 
     while True:
         try:
@@ -753,11 +638,6 @@ def main():
             if now >= next_local_sync:
                 remote.sync_v7_up()
                 next_local_sync = now + local_sync_interval
-
-            cmd_api_file = Path(f'{remote.cmd_path}/api-keys.json')
-            if cmd_api_file.exists() and now >= next_api_check:
-                remote.check_if_api_synced()
-                next_api_check = now + api_check_interval
 
             if now >= next_remote_sync:
                 if not remote.is_sync_running():

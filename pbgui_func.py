@@ -645,30 +645,6 @@ def st_file_selector(st_placeholder, path='.', label='Select a file/folder', key
     st_placeholder.write(os.path.abspath(selected_path))
     return selected_path
 
-def sync_api():
-    pbremote = st.session_state.pbremote
-    if not pbremote.check_if_api_synced():
-        st.warning('API not in sync')
-        if st.button("Sync API"):
-            pbremote.sync_api_up()
-            timeout = 180
-            with st.spinner(text=f'syncing...'):
-                with st.empty():
-                    while not pbremote.check_if_api_synced():
-                        st.text(f'{timeout} sec ({pbremote.unsynced_api} server to go)')
-                        sleep(1)
-                        timeout -= 1
-                        if timeout == 0:
-                            break
-                    st.text(f'{timeout} sec ({pbremote.unsynced_api} server to go)')
-                st.text(f'')
-                if timeout == 0:
-                    error_popup("Syncing API failed")
-                else:
-                    info_popup("API synced")
-    else:
-        st.success('API in sync')
-
 @st.dialog("Error", width="large")
 def error_popup(message):
     st.error(f'{message}', icon="⚠️")

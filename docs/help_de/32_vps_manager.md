@@ -31,7 +31,7 @@ Linke Sidebar:
 | **Master** | Lokale Master-Verwaltung öffnen |
 | **Refresh** | Alle VPS-Status- und Versionsdaten neu laden |
 | **Managed VPS** Karten | Per-VPS-Verwaltungsansicht öffnen |
-| **API in sync / API not in sync** | API-Sync-Status anzeigen und API-Zugangsdaten auf nicht synchronisierte Remotes übertragen |
+| **API Sync Status** | Zeigt den gemeinsamen API-Sync-Status (`API Sync`, `API X/Y out of sync`, `API all in sync`) an und pusht API-Zugangsdaten bei Klick an verbundene VPS |
 | **Import Host** | Den manuellen Hostname-Import öffnen; der Hostname muss bereits lokal über `/etc/hosts` auflösbar sein |
 
 Die Übersicht nutzt jetzt die normale gemeinsame PBGui-FastAPI-Shell. Beim Wechsel zu **Master** oder zu einem konkreten **VPS** wird die linke Sidebar wie auf der alten Seite zu einer kontextabhängigen Aktionsliste umgeschaltet. Der Hauptbereich der Übersicht bleibt dabei auf die Tabelle fokussiert, während der Host-Import als manuelle Hostname-Aktion in der Sidebar verfügbar bleibt.
@@ -153,5 +153,5 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
 
 ### API-Key-Synchronisation prüfen
 - Spalte **API Sync** in der Übersicht: ❌ bedeutet, dass VPS-Keys veraltet sind
-- Sidebar-Ende: erscheint eine **🔴 API not in sync** Schaltfläche, klicken um Keys mit Live-Fortschrittszähler zu synchronisieren
+- Am unteren Ende der Sidebar zeigt die gemeinsame **API Sync** Schaltfläche je nach verbundenen VPS **API X/Y out of sync** oder **API all in sync** an - ein Klick pusht die aktualisierten Keys über den neuen SSH-API-Sync-Flow
 - Pro VPS: VPS-Detailansicht öffnen → **Update CoinData API**

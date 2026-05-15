@@ -1949,7 +1949,7 @@ window.PBGUI_NAV_CONFIG = {
       return;
     }
     var syncCls = data.api_synced ? 'color:#4ade80' : 'color:#fca5a5';
-    var syncLbl = data.api_synced ? '&#10003; In sync' : '&#10007; Out of sync';
+    var syncLbl = data.api_synced ? '&#10003; API all in sync' : '&#10007; API out of sync';
     var roleColor = data.role === 'master' ? '#fcd34d' : '#93c5fd';
     var html = '<div class="form-row" style="margin-bottom:1rem;">';
     html += '<div class="fetch-stat"><div class="fetch-stat-label">Role</div><div class="fetch-stat-val" style="color:' + roleColor + '">' + _esc(data.role || '\u2014') + '</div></div>';
@@ -1957,7 +1957,7 @@ window.PBGUI_NAV_CONFIG = {
     html += '</div>';
     html += '<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1.25rem;">';
     html += '<span style="font-size:var(--fs-sm);' + syncCls + '">' + syncLbl + '</span>';
-    html += '<button class="form-btn" id="pbremote-sync-btn" onclick="triggerApiSync(this)">&#8635; Push API keys</button>';
+    html += '<button class="form-btn" id="pbremote-sync-btn" onclick="triggerApiSync(this)">&#8635; API Sync</button>';
     html += '<span class="inline-msg" id="pbremote-sync-msg"></span>';
     html += '</div>';
     html += '<hr class="form-divider">';
@@ -2141,7 +2141,7 @@ window.PBGUI_NAV_CONFIG = {
           loadPBRemoteInfo();
           return;
         }
-        _flash('pbremote-sync-msg', d.api_synced ? 'In sync' : 'Pushed \u2014 not yet synced', !d.api_synced);
+        _flash('pbremote-sync-msg', d.api_synced ? 'API all in sync' : 'Pushed - not yet synced', !d.api_synced);
         loadPBRemoteInfo();
       })
       .catch(function (e) { btn.disabled = false; _flash('pbremote-sync-msg', 'Error', true); });
