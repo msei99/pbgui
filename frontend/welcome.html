@@ -692,7 +692,7 @@
             text-align: center;
         }
 
-        #section-password[hidden] {
+        .page-section[hidden] {
             display: none;
         }
 
@@ -729,10 +729,9 @@
                 </div>
                 <div id="sidebar-toolbar">
                     <button class="sb-btn active" data-section-target="overview">Overview</button>
-                    <button class="sb-btn" data-section-target="setup">PB7 Setup</button>
-                    <button class="sb-btn" data-section-target="status">Runtime Status</button>
+                    <button class="sb-btn" data-section-target="setup">Setup</button>
                     <hr class="sb-sep">
-                    <button class="sb-btn" id="sidebar-password-btn" disabled>Change Password</button>
+                    <button class="sb-btn" id="sidebar-password-btn" disabled>Password</button>
                 </div>
             </div>
             <div id="sidebar-resize"></div>
@@ -771,9 +770,18 @@
                         </div>
                     </div>
                 </div>
+                <div class="section-heading">
+                    <span class="section-kicker">Runtime</span>
+                    <p class="section-copy">Import readiness keeps the API server up. Full readiness also requires a valid PB7 interpreter.</p>
+                </div>
+                <div class="panel">
+                    <h2 class="panel-title">Runtime Status</h2>
+                    <div class="status-list" id="status-list"></div>
+                    <div class="issues" id="issues"></div>
+                </div>
             </section>
 
-            <section id="section-setup" class="page-section" data-section="setup">
+            <section id="section-setup" class="page-section" data-section="setup" hidden>
                 <div class="section-heading">
                     <span class="section-kicker">Configuration</span>
                     <p class="section-copy">These values are read from pbgui.ini and used by both Streamlit and FastAPI paths.</p>
@@ -844,17 +852,7 @@
                 </div>
             </section>
 
-            <section id="section-status" class="page-section" data-section="status">
-                <div class="section-heading">
-                    <span class="section-kicker">Runtime</span>
-                    <p class="section-copy">Import readiness keeps the API server up. Full readiness also requires a valid PB7 interpreter.</p>
-                </div>
-                <div class="panel">
-                    <h2 class="panel-title">Runtime Status</h2>
-                    <div class="status-list" id="status-list"></div>
-                    <div class="issues" id="issues"></div>
-                </div>
-            </section>
+
         </div>
     </div>
 
@@ -976,10 +974,14 @@
         }
 
         function focusSection(name) {
-            var section = document.getElementById("section-" + name);
-            if (!section || section.hidden) return;
+            var target = document.getElementById("section-" + name);
+            if (!target) return;
+            document.querySelectorAll(".page-section[data-section]").forEach(function (section) {
+                section.hidden = true;
+            });
+            target.hidden = false;
             setActiveSection(name);
-            section.scrollIntoView({ behavior: "smooth", block: "start" });
+            document.getElementById("main-content").scrollTop = 0;
         }
 
         function fileBrowserTitle() {
@@ -1085,7 +1087,7 @@
             var auth = (state.bootstrap && state.bootstrap.auth) || {};
             if (!auth.authenticated) {
                 setBanner("Log in before browsing server paths.", "error");
-                focusSection("access");
+                focusSection("overview");
                 return;
             }
 
@@ -1121,7 +1123,7 @@
         function navigateTo(path) {
             if (!TOKEN) {
                 setBanner("Login required before leaving the welcome page.", "error");
-                focusSection("access");
+                focusSection("overview");
                 return;
             }
             var nextUrl = new URL(path, window.location.origin);
@@ -1219,16 +1221,15 @@
             document.getElementById("sb-auth-state").textContent = auth.authenticated ? "Authenticated" : "Guest";
             document.getElementById("sb-ready-state").textContent = setup.ready ? "PB7 ready" : (setup.import_ready ? "Import only" : "PB7 blocked");
 
-            var passwordSection = document.getElementById("section-password");
             if (!auth.authenticated) {
                 state.passwordOpen = false;
-                passwordSection.hidden = true;
                 document.getElementById("current-password").value = "";
                 document.getElementById("new-password").value = "";
                 resetPasswordFieldVisibility("current-password");
                 resetPasswordFieldVisibility("new-password");
-            } else {
-                passwordSection.hidden = !state.passwordOpen;
+                if (state.activeSection === "password") {
+                    focusSection("overview");
+                }
             }
 
             if (auth.error) {
