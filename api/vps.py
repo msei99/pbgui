@@ -17,9 +17,9 @@ import time
 import traceback
 from datetime import date, datetime
 from time import mktime
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, Request
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, Request, HTTPException
 from fastapi.responses import HTMLResponse
 
 from api.auth import validate_token, require_auth, SessionToken
@@ -178,6 +178,16 @@ def get_monitor_state_snapshot() -> dict:
     return _monitor.store.get_full_state(conn_summary, local_logs)
 
 
+def get_alert_snapshot() -> dict[str, Any]:
+    if not _monitor:
+        return {"items": [], "history": [], "summary": {"new_count": 0, "ack_count": 0, "total_active": 0}}
+    return {
+        "items": _monitor.list_active_alerts(gui_only=True),
+        "history": _monitor.list_alert_history(gui_only=True, limit=20),
+        "summary": _monitor.get_alert_summary(),
+    }
+
+
 def get_metric_history_snapshot(hostname: str, *, bot_name: str = "", metric: str = "cpu") -> dict:
     """Return on-demand 24h metric history for a host or bot."""
     bot_name = str(bot_name or "").strip()
@@ -215,6 +225,36 @@ def get_metric_history_snapshot(hostname: str, *, bot_name: str = "", metric: st
 def get_cpu_history_snapshot(hostname: str, *, bot_name: str = "") -> dict:
     """Backward-compatible CPU-only history accessor."""
     return get_metric_history_snapshot(hostname, bot_name=bot_name, metric="cpu")
+
+
+@router.get("/api/vps/alerts")
+def get_active_alerts(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    return get_alert_snapshot()
+
+
+@router.post("/api/vps/alerts/ack")
+async def acknowledge_alert(request: Request, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    if not _monitor:
+        raise HTTPException(status_code=503, detail="monitor not available")
+    body = await request.json()
+    alert_id = str(body.get("id") or "").strip()
+    if not alert_id:
+        raise HTTPException(status_code=400, detail="alert id required")
+    ok = _monitor.acknowledge_alert(alert_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="alert not found")
+    return {"ok": True, **get_alert_snapshot()}
+
+
+@router.post("/api/vps/alerts/ack-all")
+def acknowledge_all_alerts(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    if not _monitor:
+        raise HTTPException(status_code=503, detail="monitor not available")
+    updated = _monitor.acknowledge_all_alerts()
+    payload = get_alert_snapshot()
+    payload["ok"] = True
+    payload["updated"] = updated
+    return payload
 
 
 # ── Allowed UI setting keys (whitelist) ──────────────────────
@@ -530,9 +570,9 @@ async def _cmd_restart_service(request: dict) -> dict:
 # ── Service name mapping: LogViewer name → services API id ──
 _SVC_NAME_MAP = {
     "PBRun": "pbrun", "PBRemote": "pbremote", "PBCoinData": "pbcoindata",
-    "PBData": "pbdata", "PBMon": "pbmon",
+    "PBData": "pbdata",
     "pbrun": "pbrun", "pbremote": "pbremote", "pbcoindata": "pbcoindata",
-    "pbdata": "pbdata", "pbmon": "pbmon",
+    "pbdata": "pbdata",
 }
 
 

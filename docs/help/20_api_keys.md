@@ -173,7 +173,7 @@ In Advanced API Sync, check **"Don't sync to other masters"** before clicking Sy
 Open via **HL Warning Config** in the sidebar.
 
 - If `hl_expiry.telegram_warning_days` is already present in `pbgui.ini`, the panel shows it as **configured**.
-- If the INI entry is still missing, the panel now shows **Not configured** and makes it explicit that PBMon currently falls back to the default **7-day** warning window.
+- If the INI entry is still missing, the panel now shows **Not configured** and makes it explicit that PBAPIServer currently falls back to the default **7-day** warning window.
 - Clicking **Save** writes the chosen threshold to `pbgui.ini` and switches the panel state to configured.
 
 ---

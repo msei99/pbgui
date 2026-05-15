@@ -91,7 +91,8 @@ while True:
 """.strip()
 
 # Persist last-push state across API restarts
-_LAST_PUSH_FILE = Path(PBGDIR) / "data" / "ssh_sync_status.json"
+_LAST_PUSH_FILE = Path(PBGDIR) / "data" / "state" / "file_sync" / "ssh_sync_status.json"
+_LEGACY_LAST_PUSH_FILE = Path(PBGDIR) / "data" / "ssh_sync_status.json"
 
 # Defaults when [filesync] section missing from VPS pbgui.ini
 DEFAULT_RETENTION_DAYS = 180
@@ -147,8 +148,9 @@ class FileSyncWorker:
     def _load_state() -> dict:
         """Load persisted state (last_push + remote_serials) from disk."""
         try:
-            if _LAST_PUSH_FILE.exists():
-                data = json.loads(_LAST_PUSH_FILE.read_text(encoding="utf-8"))
+            state_path = _LAST_PUSH_FILE if _LAST_PUSH_FILE.exists() else _LEGACY_LAST_PUSH_FILE
+            if state_path.exists():
+                data = json.loads(state_path.read_text(encoding="utf-8"))
                 # Migrate old flat format ({hostname: {...}}) to new format
                 if data and "last_push" not in data:
                     return {"last_push": data, "remote_serials": {}}

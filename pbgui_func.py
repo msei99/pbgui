@@ -21,8 +21,6 @@ from pbgui_purefunc import (
     streamlit_secrets_path,
 )
 # LogHandler removed: centralized debuglog removed per user request
-from MonitorConfig import MonitorConfig
-from master.async_monitor import collect_alerts_from_snapshot, load_alert_snapshot
 from typing import Optional, Callable, Literal
 
 
@@ -201,10 +199,6 @@ def set_page_config(page : str = "Start"):
         margin-top: 0.25rem !important;
     }
 </style>""", unsafe_allow_html=True)
-    # Check VPS Errors
-    if str(page) != "VPS Monitor":
-        has_vps_errors()
-    
     with st.sidebar:
         st.write(f"### {page} Options")
         
@@ -656,19 +650,6 @@ def info_popup(message):
     st.info(f'{message}', icon="✅")
     if st.button(":green[OK]"):
         st.rerun()
-
-def has_vps_errors():
-    errors = collect_alerts_from_snapshot(load_alert_snapshot(), MonitorConfig())
-    if errors:
-        with st.expander("VPS Errors", expanded=True):
-            for error in errors:
-                if error["name"] == "offline":
-                    st.error(f'Server: {error["server"]} is offline')
-                elif error["name"] == "system":
-                    st.warning(f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} Swap: {error["swap"]} CPU: {error["cpu"]} Disk: {error["disk"]}')
-                else:
-                    st.warning(f'Server: {error["server"]} Instance: {error["name"]} Mem: {error["mem"]} Swap: {error["swap"]} CPU: {error["cpu"]} Error: {error["error"]} Traceback: {error["traceback"]}')
-
 
 # ── Log Viewer component ─────────────────────────────────────────────────────
 

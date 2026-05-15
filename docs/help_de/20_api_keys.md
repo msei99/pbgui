@@ -173,7 +173,7 @@ In Advanced API Sync die Option **"Don't sync to other masters"** aktivieren, be
 Öffnen über **HL Warning Config** in der Sidebar.
 
 - Wenn `hl_expiry.telegram_warning_days` bereits in `pbgui.ini` vorhanden ist, zeigt das Panel den Wert als **configured** an.
-- Wenn der INI-Eintrag noch fehlt, zeigt das Panel jetzt **Not configured** und weist explizit darauf hin, dass PBMon aktuell mit dem Default von **7 Tagen** arbeitet.
+- Wenn der INI-Eintrag noch fehlt, zeigt das Panel jetzt **Not configured** und weist explizit darauf hin, dass PBAPIServer aktuell mit dem Default von **7 Tagen** arbeitet.
 - Ein Klick auf **Save** schreibt den gewählten Schwellenwert in `pbgui.ini` und der Panel-Status wechselt auf configured.
 
 ---

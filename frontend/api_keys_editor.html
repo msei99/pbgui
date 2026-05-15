@@ -2339,10 +2339,10 @@
         if (!status) return;
 
         if (configured) {
-            status.textContent = "Configured in pbgui.ini. PBMon warns " + days + " day" + (days === 1 ? "" : "s") + " before expiry.";
+            status.textContent = "Configured in pbgui.ini. PBAPIServer warns " + days + " day" + (days === 1 ? "" : "s") + " before expiry.";
             status.style.color = "#26a69a";
         } else {
-            status.textContent = "Not configured in pbgui.ini. PBMon currently uses the default 7-day warning window until you save a value here.";
+            status.textContent = "Not configured in pbgui.ini. PBAPIServer currently uses the default 7-day warning window until you save a value here.";
             status.style.color = "#ecc94b";
         }
     }

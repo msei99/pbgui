@@ -464,9 +464,6 @@
       <button class="sb-btn" data-panel="pbremote">
         <span class="sb-dot" id="dot-pbremote"></span>PBRemote
       </button>
-      <button class="sb-btn" data-panel="pbmon">
-        <span class="sb-dot" id="dot-pbmon"></span>PBMon
-      </button>
       <button class="sb-btn" data-panel="pbdata">
         <span class="sb-dot" id="dot-pbdata"></span>PBData
       </button>
@@ -555,45 +552,6 @@
       <div id="pbremote-tab-settings" class="tab-pane">
         <div class="settings-wrap" id="pbremote-settings-wrap">
           <div style="color:#4a5568;font-style:italic;">Loading&#8230;</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- PBMon panel -->
-    <div id="panel-pbmon" class="svc-panel">
-      <div class="ctrl-strip">
-        <span class="ctrl-title">PBMon</span>
-        <div class="ctrl-status">
-          <div class="status-dot" id="cs-pbmon"></div>
-          <span class="status-label" id="sl-pbmon">checking…</span>
-        </div>
-        <span id="ctrl-btns-pbmon"></span>
-      </div>
-      <div class="tab-bar">
-        <button class="tab-btn active" data-svc="pbmon" data-tab="log" onclick="switchTab(this)">&#128203; Log</button>
-        <button class="tab-btn" data-svc="pbmon" data-tab="settings" onclick="switchTab(this)">&#9881; Settings</button>
-      </div>
-      <div id="pbmon-tab-log" class="tab-pane active log-wrap">
-        <div id="log-pbmon" style="height:100%;"></div>
-      </div>
-      <div id="pbmon-tab-settings" class="tab-pane">
-        <div class="settings-wrap">
-          <div class="form-section-title">Telegram</div>
-          <div class="form-row">
-            <div class="form-field">
-              <span class="form-label">Bot Token</span>
-              <div class="pw-wrap">
-                <input class="form-input wide" type="password" id="pbmon-token" placeholder="Paste token…" autocomplete="off" style="width:370px;">
-                <button class="pw-eye" type="button" onclick="togglePw('pbmon-token', this)" title="Show/hide">&#128065;</button>
-              </div>
-            </div>
-            <div class="form-field">
-              <span class="form-label">Chat ID</span>
-              <input class="form-input medium" type="text" id="pbmon-chat-id" placeholder="e.g. -1001234567">
-            </div>
-          </div>
-          <button class="form-btn save" onclick="savePBMonSettings()">&#128190; Save</button>
-          <span class="inline-msg" id="pbmon-save-msg"></span>
         </div>
       </div>
     </div>
@@ -733,6 +691,22 @@
             <div class="multiselect-wrap" id="vps-hosts-select"></div>
           </div>
           <div id="apiserver-monitor-config-wrap"></div>
+          <hr class="form-divider">
+          <div class="form-section-title">Alerts / Telegram</div>
+          <div class="form-row">
+            <div class="form-field">
+              <span class="form-label">Bot Token</span>
+              <div class="pw-wrap">
+                <input class="form-input wide" type="password" id="apiserver-telegram-token" placeholder="Paste token…" autocomplete="off" style="width:370px;">
+                <button class="pw-eye" type="button" onclick="togglePw('apiserver-telegram-token', this)" title="Show/hide">&#128065;</button>
+              </div>
+            </div>
+            <div class="form-field">
+              <span class="form-label">Chat ID</span>
+              <input class="form-input medium" type="text" id="apiserver-telegram-chat-id" placeholder="e.g. -1001234567">
+            </div>
+          </div>
+          <div id="apiserver-alert-routing-wrap"></div>
           <div style="margin-top:1rem;">
             <button class="form-btn save" onclick="saveApiServerSettings()">&#128190; Save</button>
             <span class="inline-msg" id="apiserver-save-msg"></span>
@@ -990,7 +964,6 @@ window.PBGUI_NAV_CONFIG = {
   var SERVICES = [
     { id: 'pbrun',      label: 'PBRun',       logFile: 'PBRun.log',       isApiServer: false, guideKeyword: 'pbrun_service'      },
     { id: 'pbremote',   label: 'PBRemote',    logFile: 'PBRemote.log',    isApiServer: false, guideKeyword: 'pbremote_service'   },
-    { id: 'pbmon',      label: 'PBMon',       logFile: 'PBMon.log',       isApiServer: false, guideKeyword: 'pbmon_service'      },
     { id: 'pbdata',     label: 'PBData',      logFile: 'PBData.log',      isApiServer: false, guideKeyword: 'pbdata'             },
     { id: 'pbcoindata', label: 'PBCoinData',  logFile: 'PBCoinData.log',  isApiServer: false, guideKeyword: 'pbcoindata_service' },
     { id: 'api-server', label: 'PBAPIServer', logFile: 'PBApiServer.log', isApiServer: true,  guideKeyword: 'pbapiserver'        },
@@ -1474,7 +1447,7 @@ window.PBGUI_NAV_CONFIG = {
   /* ── Settings loaders ──────────────────────────────────── */
   function loadSettings(svcId) {
     _settingsLoaded[svcId] = true;
-    var ep = { pbmon: '/settings/pbmon', pbcoindata: '/settings/pbcoindata', pbdata: '/settings/pbdata', 'api-server': '/settings/api-server' }[svcId];
+    var ep = { pbcoindata: '/settings/pbcoindata', pbdata: '/settings/pbdata', 'api-server': '/settings/api-server' }[svcId];
     if (!ep) return;
     fetch(API_BASE + ep + '?token=' + TOKEN)
       .then(function (r) { return r.json(); })
@@ -1483,10 +1456,6 @@ window.PBGUI_NAV_CONFIG = {
   }
 
   function applySettings(svcId, data) {
-    if (svcId === 'pbmon') {
-      _setVal('pbmon-token', data.telegram_token || '');
-      _setVal('pbmon-chat-id', data.telegram_chat_id || '');
-    }
     if (svcId === 'pbcoindata') {
       _setVal('coindata-api-key', data.api_key || '');
       _setVal('coindata-fetch-interval', data.fetch_interval || 24);
@@ -1505,6 +1474,9 @@ window.PBGUI_NAV_CONFIG = {
       renderVpsHosts(data.available_hosts || [], data.enabled_hosts || []);
       var monitorWrap = document.getElementById('apiserver-monitor-config-wrap');
       if (monitorWrap) monitorWrap.innerHTML = renderMonitorSettingsFields(data.monitor_config || {});
+      _setVal('apiserver-telegram-token', data.telegram_token || '');
+      _setVal('apiserver-telegram-chat-id', data.telegram_chat_id || '');
+      applyAlertRoutingSettings(data);
     }
   }
 
@@ -1717,6 +1689,90 @@ window.PBGUI_NAV_CONFIG = {
       html += '</div></div>';
     });
     return html;
+  }
+
+  function renderAlertRoutingSettings(data) {
+    var groups = [
+      {
+        title: 'Offline Hosts',
+        gui: { id: 'offline_gui', label: 'Show active alarms in GUI' },
+        telegram: [
+          { id: 'ssh_lost_telegram', label: 'SSH lost' },
+          { id: 'ssh_recovered_telegram', label: 'SSH recovered' }
+        ]
+      },
+      {
+        title: 'Services',
+        gui: { id: 'service_gui', label: 'Show active alarms in GUI' },
+        telegram: [
+          { id: 'service_down_telegram', label: 'Service down' },
+          { id: 'service_restart_started_telegram', label: 'Restart initiated' },
+          { id: 'service_recovered_telegram', label: 'Service recovered' }
+        ]
+      },
+      {
+        title: 'System Thresholds',
+        gui: { id: 'system_gui', label: 'Show active alarms in GUI' },
+        telegram: [
+          { id: 'system_problem_telegram', label: 'System problem' },
+          { id: 'system_recovered_telegram', label: 'System recovered' }
+        ]
+      },
+      {
+        title: 'Instance Thresholds',
+        gui: { id: 'instance_gui', label: 'Show active alarms in GUI' },
+        telegram: [
+          { id: 'instance_problem_telegram', label: 'Instance problem' },
+          { id: 'instance_recovered_telegram', label: 'Instance recovered' }
+        ]
+      }
+    ];
+
+    function renderCheckbox(id, label, checked, suffix) {
+      return '<label style="display:flex;align-items:center;gap:0.6rem;color:#94a3b8;font-size:var(--fs-sm);cursor:pointer;">'
+           + '<input type="checkbox" id="' + id + '"' + (checked ? ' checked' : '') + ' style="accent-color:#4da6ff;cursor:pointer;width:15px;height:15px;">'
+           + '<span>' + _esc(label) + (suffix ? ' <span style="color:#4a5568;">' + _esc(suffix) + '</span>' : '') + '</span>'
+           + '</label>';
+    }
+
+    var html = '';
+    groups.forEach(function (group) {
+      html += '<div style="margin-top:1rem;border:1px solid #1e2736;border-radius:8px;background:#111827;overflow:hidden;">';
+      html += '<div style="padding:0.55rem 0.85rem;border-bottom:1px solid #1e2736;font-size:var(--fs-sm);color:#93c5fd;font-weight:600;">' + _esc(group.title) + '</div>';
+      html += '<div style="display:grid;grid-template-columns:minmax(220px,280px) minmax(280px,1fr);gap:1rem;padding:0.85rem;align-items:start;">';
+      html += '<div style="display:grid;gap:0.35rem;">';
+      html += '<div style="font-size:var(--fs-xs);color:#4a5568;text-transform:uppercase;letter-spacing:0.04em;">GUI</div>';
+      html += renderCheckbox(group.gui.id, group.gui.label, data[group.gui.id] !== false, 'Active alerts only');
+      html += '</div>';
+      html += '<div style="display:grid;gap:0.45rem;">';
+      html += '<div style="font-size:var(--fs-xs);color:#4a5568;text-transform:uppercase;letter-spacing:0.04em;">Telegram</div>';
+      group.telegram.forEach(function (row) {
+        html += renderCheckbox(row.id, row.label, data[row.id] !== false, '-> Telegram');
+      });
+      html += '</div></div>';
+    });
+    return html;
+  }
+
+  function applyAlertRoutingSettings(data) {
+    var wrap = document.getElementById('apiserver-alert-routing-wrap');
+    if (wrap) wrap.innerHTML = renderAlertRoutingSettings(data || {});
+  }
+
+  function collectAlertRoutingFromForm() {
+    var ids = [
+      'offline_gui', 'service_gui', 'system_gui', 'instance_gui',
+      'ssh_lost_telegram', 'ssh_recovered_telegram',
+      'service_down_telegram', 'service_restart_started_telegram', 'service_recovered_telegram',
+      'system_problem_telegram', 'system_recovered_telegram',
+      'instance_problem_telegram', 'instance_recovered_telegram'
+    ];
+    var body = {};
+    ids.forEach(function (id) {
+      var el = document.getElementById(id);
+      body[id] = !!(el && el.checked);
+    });
+    return body;
   }
 
   function collectMonitorConfigFromForm() {
@@ -2556,13 +2612,6 @@ window.PBGUI_NAV_CONFIG = {
   window.loadCmcKeyStatus = loadCmcKeyStatus;
 
 
-  window.savePBMonSettings = function () {
-    _post('/settings/pbmon', {
-      telegram_token:   _val('pbmon-token'),
-      telegram_chat_id: _val('pbmon-chat-id'),
-    }, 'pbmon-save-msg');
-  };
-
   window.saveCoinDataSettings = function () {
     _post('/settings/pbcoindata', {
       api_key:            _val('coindata-api-key'),
@@ -2604,13 +2653,17 @@ window.PBGUI_NAV_CONFIG = {
   window.saveApiServerSettings = function () {
     var hosts = [];
     document.querySelectorAll('#vps-hosts-select .tag:not(.inactive)').forEach(function (el) { hosts.push(el.getAttribute('data-host')); });
-    _post('/settings/api-server', {
+    var body = {
       host:         _val('apiserver-host') || '0.0.0.0',
       port:         parseInt(_val('apiserver-port') || '8000', 10),
       auto_restart: !!(document.getElementById('apiserver-auto-restart') || {}).checked,
       enabled_hosts: hosts,
       monitor_config: collectMonitorConfigFromForm(),
-    }, 'apiserver-save-msg');
+      telegram_token: _val('apiserver-telegram-token'),
+      telegram_chat_id: _val('apiserver-telegram-chat-id')
+    };
+    Object.assign(body, collectAlertRoutingFromForm());
+    _post('/settings/api-server', body, 'apiserver-save-msg');
   };
 
   function _post(ep, body, msgId) {

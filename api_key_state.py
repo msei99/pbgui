@@ -10,7 +10,8 @@ from pbgui_purefunc import PBGDIR
 
 SERVICE = "ApiKeyState"
 RUNTIME_STATE_KEYS: frozenset[str] = frozenset({"hl_valid_until", "bybit_expires_at", "bybit_ips"})
-_STATE_FILE = Path(PBGDIR) / "data" / "api_key_state.json"
+_STATE_FILE = Path(PBGDIR) / "data" / "state" / "api_keys" / "api_key_state.json"
+_LEGACY_STATE_FILE = Path(PBGDIR) / "data" / "api_key_state.json"
 _STATE_LOCK = threading.Lock()
 
 
@@ -41,12 +42,13 @@ def _normalize_state(data: Any) -> dict[str, Any]:
 
 
 def _load_state_unlocked() -> dict[str, Any]:
-    if not _STATE_FILE.exists():
+    state_path = _STATE_FILE if _STATE_FILE.exists() else _LEGACY_STATE_FILE
+    if not state_path.exists():
         return _default_state()
     try:
-        return _normalize_state(json.loads(_STATE_FILE.read_text(encoding="utf-8")))
+        return _normalize_state(json.loads(state_path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
-        _log(SERVICE, f"Failed to read { _STATE_FILE.name }: {exc}", level="WARNING")
+        _log(SERVICE, f"Failed to read {state_path.name}: {exc}", level="WARNING")
         return _default_state()
 
 

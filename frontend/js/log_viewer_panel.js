@@ -1131,7 +1131,7 @@ class LogViewerPanel {
                 return next;
             }
         }
-        var svcs = ['PBRun', 'PBRemote', 'PBCoinData', 'PBData', 'PBMon', 'PBGui', 'PBApiServer', 'FastAPI', 'VPSMonitor', 'VPSManagerApi', 'data/logs/sync.log'];
+        var svcs = ['PBRun', 'PBRemote', 'PBCoinData', 'PBData', 'PBGui', 'PBApiServer', 'FastAPI', 'VPSMonitor', 'VPSManagerApi', 'data/logs/sync.log'];
         if (this._vpState && this._host !== 'local') {
             var meta = (this._vpState.host_meta || {})[this._host] || {};
             var available = meta.available_logs;
@@ -1402,7 +1402,6 @@ class LogViewerPanel {
     static _LOCAL_SVC_MAP = {
         'PBRun.log': 'PBRun', 'PBRemote.log': 'PBRemote',
         'PBCoinData.log': 'PBCoinData', 'PBData.log': 'PBData',
-        'PBMon.log': 'PBMon',
     };
 
     _restartableService() {

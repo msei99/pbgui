@@ -90,6 +90,25 @@ def _is_transient_error(e: Exception) -> bool:
     ))
 
 
+def _summarize_command(command: str, max_len: int = 180) -> str:
+    """Return a single-line command summary safe for logs."""
+    text = str(command or "")
+    inline_match = re.search(r"\bpython(?:3)?\s+(?:-u\s+)?-c\b", text)
+    if inline_match:
+        env_names = re.findall(r"\b([A-Z_][A-Z0-9_]*)=", text[:inline_match.start()])
+        env_prefix = " ".join(f"{name}=..." for name in env_names[:3])
+        if len(env_names) > 3:
+            env_prefix = f"{env_prefix} ..." if env_prefix else "..."
+        python_cmd = " ".join(text[inline_match.start():].split()[:3])
+        summary = f"{env_prefix} {python_cmd} <inline script>".strip()
+        return summary[:max_len]
+
+    summary = " ".join(text.split())
+    if len(summary) > max_len:
+        return f"{summary[:max_len - 3]}..."
+    return summary
+
+
 class AsyncSSHPool:
     """
     Async SSH connection pool.
@@ -337,14 +356,15 @@ class AsyncSSHPool:
             except asyncssh.ProcessError:
                 raise  # Let caller handle
             except Exception as e:
+                command_summary = _summarize_command(command)
                 if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
-                    _log(SERVICE, f"[cmd] {hostname}: '{command}' failed "
+                    _log(SERVICE, f"[cmd] {hostname}: '{command_summary}' failed "
                          f"(attempt {attempt}): {e} — reconnecting",
                          level="WARNING")
                     await self.disconnect(hostname)
                     await asyncio.sleep(SFTP_RETRY_DELAY)
                     continue
-                _log(SERVICE, f"[cmd] {hostname}: '{command}' failed: {e}",
+                _log(SERVICE, f"[cmd] {hostname}: '{command_summary}' failed: {e}",
                      level="ERROR")
                 return None
         return None

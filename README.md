@@ -290,6 +290,27 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Changed VPS monitor system alert summaries to use clearer threshold labels such as `memory free`, `swap free`, and `disk free` instead of shorter internal names.
+- Fixed VPS monitor system alerts and recoveries to carry structured threshold names, so both active and recovered messages now state exactly which thresholds triggered and still include the full current values.
+- Fixed VPS monitor service alerts to carry a structured restart flag instead of inferring restart events from the human-readable details text.
+- Fixed VPS monitor instance alerts to use stable fallback names for missing bot usernames so alert IDs remain unique and per-instance acknowledgements do not collide.
+- Removed dead helper functions from `async_monitor.py` that were no longer used by the alert pipeline.
+- Fixed VPS monitor stream diagnostics to keep the last real stream error visible in UI state instead of clearing it immediately in the stream cleanup path.
+- Fixed VPS monitor alert settings to reuse cached alert routes between requests and refresh them on INI changes instead of rereading the INI file on every alert snapshot.
+- Removed the dead Streamlit `has_vps_errors()` hook from `set_page_config()` now that VPS alert UI is handled elsewhere.
+
+- Fixed: Resolved entries in the shared nav `VPSMonitor Alerts` history now show both when the alert first appeared and when it was resolved, instead of only the resolved timestamp.
+- Changed: The shared nav `VPSMonitor Alerts` window now behaves like the other floating PBGui windows, with drag and resize handles instead of a fixed centered modal.
+- Changed: Telegram alerts from `VPSMonitor` now include the local sender hostname as a prefix, so alerts forwarded from different PBGui/API systems can be distinguished immediately in the same chat.
+- Changed: Runtime JSON state files are now grouped under `data/state/` instead of being scattered directly under `data/`; VPS alert state/cache/history now live in `data/state/vps_monitor/`, file-sync state in `data/state/file_sync/`, API-key runtime state in `data/state/api_keys/`, and the PBRemote cleanup marker in `data/state/pbremote/`.
+- Fixed: SSH command failures in `VPSMonitor` now log a short single-line command summary instead of dumping full inline `python -c` collector scripts and large env payloads into `data/logs/VPSMonitor.log`.
+- Fixed: The new VPS alert sync path now imports `MonitorConfig` correctly again, so `/api/vps/alerts`, nav history, and GUI/Telegram alert state stay in sync instead of failing the main monitor loop with `NameError: MonitorConfig is not defined`.
+- Fixed: A VPS reboot or abrupt SSH stream drop now marks the host disconnected as soon as the monitor stream ends, so the shared nav shield can raise the `offline` alert immediately instead of staying at `0/0` until a later keepalive timeout.
+- Fixed: FastAPI `Welcome` now cache-busts the shared `pbgui_nav.js` asset like the other standalone pages, so the global nav shows the current shared controls such as the VPS alert shield instead of serving an older cached navbar copy.
+- Fixed: The global VPS alert overlay now follows the shared modal rule and no longer closes when clicking the backdrop; it must be dismissed explicitly via the close button or `Esc`.
+- Changed: VPS monitoring alerting now runs fully inside `PBAPIServer`/`VPSMonitor`, with grouped but fine-grained Telegram routing settings under `PBAPIServer -> VPS Monitoring`, a new global nav alert indicator with `new/ack` counts, and in-app acknowledge actions for active alarms.
+- Changed: The global VPS alert overlay now also shows recent alert history below the active problems, separated by a divider so current issues and cleared episodes stay easy to scan.
+- Removed: `PBMon` and the old persisted `vps_monitor_state.json` bridge were dropped; VPS alerts now stay in the API process, while GUI and Telegram routing use the same live alert state.
 - Changed: FastAPI Welcome page sidebar simplified: `Runtime Status` button removed, `PB7 Setup` renamed to `Setup`, `Change Password` renamed to `Password`; Runtime Status content merged into `Overview` section so Overview now displays both summary cards and runtime status.
 - Changed: API sync status now uses the shared SSH file-sync worker UI across FastAPI pages, so `API Keys`, `VPS Manager`, and `Services Monitor` all show the same worker-based `API Sync` state and quick-push action instead of mixed legacy rclone/MD5 buttons.
 - Removed: FastAPI `API Keys` no longer shows the old `API not in sync (rclone)` button, and `VPS Manager` no longer uses the legacy `api_md5`/`api_sync_state` status path that could report green even when new worker-based hosts had no old MD5 metadata.
@@ -440,7 +461,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Changed: `vps_manager_service.py` no longer keeps the dead FastAPI fallback that read per-host bot rows from `PBRemote.server.monitor` / legacy `monitor.json`; active VPS Manager monitor payloads now use only the SSH monitor snapshot or the local collector path.
 - Fixed: the shared top navigation now forces its own flat button shape and hover behavior in `pbgui_nav.js`, so the active menu underline stays consistent across pages including Welcome without page-specific overrides.
 - Improved: VPS Manager bot tables now keep the CPU history click target on the CPU tag itself, widen the CPU column for the `60s CPU` subline, shorten the error/traceback/PNL column titles, and color PNL values green for profit and red for loss.
-- Changed: `VPSMonitor` now keeps a compact 24-hour per-minute `cpu_60s` history for both hosts and bots in `data/monitor_history/` using a small persisted binary ringbuffer, so CPU charts can be loaded on demand without bloating the 1-second full-state payload.
+- Changed: `VPSMonitor` now keeps a compact 24-hour per-minute `cpu_60s` history for both hosts and bots in `data/state/vps_monitor/history/` using a small persisted binary ringbuffer, so CPU charts can be loaded on demand without bloating the 1-second full-state payload.
 - Added: FastAPI VPS monitor and VPS Manager backends now expose on-demand host or bot `cpu_60s` history fetch paths, providing a shared history source for the upcoming CPU chart overlays in both pages.
 - Changed: VPS system CPU alerts now use a true 60-second `/proc/stat` SSH collector CPU window from the persisted monitor snapshot, while the VPS Manager telemetry keeps the fast live CPU reading and also shows the separate 60-second CPU status.
 - Changed: `PBMon` instance CPU alerts now also require a confirmed 60-second per-bot CPU window from the SSH collector snapshot, so brief single-bot spikes no longer trigger noisy bot CPU warnings.

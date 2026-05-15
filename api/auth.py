@@ -561,4 +561,8 @@ def main_page(
     html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
     html = html.replace('%%SERIAL%%', PBGUI_SERIAL)
 
+    nav_js = _frontend_template_path("pbgui_nav.js")
+    nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION
+    html = html.replace('%%NAV_HASH%%', nav_hash)
+
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})

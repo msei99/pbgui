@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import socket
 import time
 import traceback
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from typing import Any, Optional
 
 import asyncssh
 
+from MonitorConfig import MonitorConfig
 from pbgui_purefunc import PBGDIR, load_ini, save_ini
 from logging_helpers import human_log as _log
 from ini_watcher import IniWatcher
@@ -66,10 +68,151 @@ BOT_HISTORY_SOURCES = {
 }
 
 PNL_HISTORY_VERSION = 1
+ALERT_STATE_VERSION = 1
+
+ALERT_KIND_OFFLINE = "offline"
+ALERT_KIND_SERVICE = "service"
+ALERT_KIND_SYSTEM = "system"
+ALERT_KIND_INSTANCE = "instance"
+
+ALERT_ROUTE_GUI_DEFAULTS = {
+    ALERT_KIND_OFFLINE: True,
+    ALERT_KIND_SERVICE: True,
+    ALERT_KIND_SYSTEM: True,
+    ALERT_KIND_INSTANCE: True,
+}
+
+ALERT_ROUTE_TELEGRAM_DEFAULTS = {
+    "ssh_lost": True,
+    "ssh_recovered": True,
+    "service_down": True,
+    "service_restart_started": True,
+    "service_recovered": True,
+    "system_problem": True,
+    "system_recovered": True,
+    "instance_problem": True,
+    "instance_recovered": True,
+}
+
+ALERT_ROUTE_GUI_KEYS = {
+    ALERT_KIND_OFFLINE: "offline_gui",
+    ALERT_KIND_SERVICE: "service_gui",
+    ALERT_KIND_SYSTEM: "system_gui",
+    ALERT_KIND_INSTANCE: "instance_gui",
+}
+
+ALERT_ROUTE_TELEGRAM_KEYS = {
+    "ssh_lost": "ssh_lost_telegram",
+    "ssh_recovered": "ssh_recovered_telegram",
+    "service_down": "service_down_telegram",
+    "service_restart_started": "service_restart_started_telegram",
+    "service_recovered": "service_recovered_telegram",
+    "system_problem": "system_problem_telegram",
+    "system_recovered": "system_recovered_telegram",
+    "instance_problem": "instance_problem_telegram",
+    "instance_recovered": "instance_recovered_telegram",
+}
+
+
+def _read_ini_bool(section: str, key: str, default: bool) -> bool:
+    raw = str(load_ini(section, key) or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _alert_id(kind: str, host: str, name: str = "") -> str:
+    base = f"{kind}:{host}"
+    return f"{base}:{name}" if name else base
+
+
+def _severity_rank(level: str) -> int:
+    return {"critical": 3, "error": 2, "warning": 1}.get(str(level or "").lower(), 0)
+
+
+def _bool_to_ini(value: bool) -> str:
+    return "true" if value else "false"
+
+
+@dataclass
+class AlertRecord:
+    id: str
+    kind: str
+    host: str
+    name: str
+    severity: str
+    summary: str
+    details: str
+    was_restarted: bool = False
+    triggered_thresholds: list[str] | None = None
+    active: bool = True
+    acknowledged: bool = False
+    first_seen_ts: float = 0.0
+    last_seen_ts: float = 0.0
+    episode: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "host": self.host,
+            "name": self.name,
+            "severity": self.severity,
+            "summary": self.summary,
+            "details": self.details,
+            "was_restarted": bool(self.was_restarted),
+            "triggered_thresholds": list(self.triggered_thresholds or []),
+            "active": bool(self.active),
+            "acknowledged": bool(self.acknowledged),
+            "first_seen_ts": float(self.first_seen_ts or 0.0),
+            "last_seen_ts": float(self.last_seen_ts or 0.0),
+            "episode": int(self.episode or 1),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "AlertRecord":
+        return cls(
+            id=str(payload.get("id") or ""),
+            kind=str(payload.get("kind") or ""),
+            host=str(payload.get("host") or ""),
+            name=str(payload.get("name") or ""),
+            severity=str(payload.get("severity") or "warning"),
+            summary=str(payload.get("summary") or ""),
+            details=str(payload.get("details") or ""),
+            was_restarted=bool(payload.get("was_restarted", False)),
+            triggered_thresholds=[str(item) for item in (payload.get("triggered_thresholds") or []) if str(item).strip()],
+            active=bool(payload.get("active", True)),
+            acknowledged=bool(payload.get("acknowledged", False)),
+            first_seen_ts=float(payload.get("first_seen_ts") or 0.0),
+            last_seen_ts=float(payload.get("last_seen_ts") or 0.0),
+            episode=max(1, int(payload.get("episode") or 1)),
+        )
 
 
 def _utc_day_from_ts(ts_val: int) -> int:
     return int(ts_val // 86400)
+
+
+def _system_threshold_labels(thresholds: list[str] | None) -> str:
+    label_map = {
+        "memory": "memory free",
+        "swap": "swap free",
+        "disk": "disk free",
+        "cpu": "cpu",
+    }
+    items = [
+        label_map.get(str(item).strip().lower(), str(item).strip().lower())
+        for item in (thresholds or [])
+        if str(item).strip()
+    ]
+    return ", ".join(items) if items else "system"
 
 
 def _iso_day_label(day: int) -> str:
@@ -139,9 +282,12 @@ def build_alert_snapshot(*,
 
 
 def load_alert_snapshot() -> dict[str, Any]:
-    """Load the persisted VPS monitor snapshot for PBMon/Streamlit consumers."""
-    path = Path(PBGDIR) / 'data' / 'vps_monitor_state.json'
+    """Load the persisted VPS monitor snapshot for legacy snapshot consumers."""
+    path = Path(PBGDIR) / 'data' / 'state' / 'vps_monitor' / 'snapshot.json'
+    legacy_path = Path(PBGDIR) / 'data' / 'vps_monitor_state.json'
     try:
+        if not path.exists() and legacy_path.exists():
+            path = legacy_path
         if not path.exists():
             return build_alert_snapshot(
                 connections={},
@@ -298,6 +444,139 @@ def collect_alerts_from_snapshot(snapshot: dict[str, Any], monitor_config) -> li
                     'traceback': f':{color_traceback}[{tracebacks_today}]',
                 })
     return errors
+
+
+def collect_live_alerts(connections: dict[str, Any], system_state: dict[str, Any],
+                        instances: dict[str, Any], services: dict[str, Any],
+                        monitor_config) -> list[dict[str, Any]]:
+    alerts: list[dict[str, Any]] = []
+
+    for hostname in sorted({*connections.keys(), *system_state.keys(), *instances.keys(), *services.keys()}):
+        conn = connections.get(hostname) or {}
+        status = str(conn.get("status") or "")
+        if status and status != ConnectionStatus.CONNECTED.value:
+            alerts.append({
+                "id": _alert_id(ALERT_KIND_OFFLINE, hostname),
+                "kind": ALERT_KIND_OFFLINE,
+                "host": hostname,
+                "name": "offline",
+                "severity": "critical",
+                "summary": f"SSH connection lost to {hostname}",
+                "details": f"Host {hostname} is currently disconnected from the VPS monitor.",
+            })
+            continue
+
+        host_services = services.get(hostname) or {}
+        for svc_name, check in sorted(host_services.items()):
+            status_val = str((check or {}).get("status") or "")
+            if status_val != ServiceStatus.STOPPED.value:
+                continue
+            was_restarted = bool((check or {}).get("was_restarted"))
+            summary = f"{svc_name} is down on {hostname}"
+            details = summary + (" Restart was initiated." if was_restarted else ".")
+            alerts.append({
+                "id": _alert_id(ALERT_KIND_SERVICE, hostname, svc_name),
+                "kind": ALERT_KIND_SERVICE,
+                "host": hostname,
+                "name": svc_name,
+                "severity": "error",
+                "summary": summary,
+                "details": details,
+                "was_restarted": was_restarted,
+            })
+
+        metrics = system_state.get(hostname) or {}
+        mem_available_mb = float(metrics.get('mem_available') or 0) / 1024 / 1024
+        swap_free_mb = float(metrics.get('swap_free') or 0) / 1024 / 1024
+        disk_free_mb = float(metrics.get('disk_free') or 0) / 1024 / 1024
+        cpu_live = float(metrics.get('cpu') or 0)
+        cpu_60s = float(metrics.get('cpu_60s') or 0)
+        cpu_60s_window = float(metrics.get('cpu_60s_window') or 0)
+        cpu_confirmed = cpu_60s_window >= 60
+        cpu = cpu_60s if cpu_confirmed else cpu_live
+        has_system_metrics = any(metrics.get(key) not in (None, 0, 0.0) for key in ('mem_total', 'disk_total', 'swap_total', 'timestamp'))
+        if has_system_metrics and (
+            mem_available_mb <= monitor_config.mem_error_server
+            or swap_free_mb <= monitor_config.swap_error_server
+            or disk_free_mb <= monitor_config.disk_error_server
+            or (cpu_confirmed and cpu >= monitor_config.cpu_error_server)
+        ):
+            triggered_thresholds: list[str] = []
+            triggered_parts: list[str] = []
+            if mem_available_mb <= monitor_config.mem_error_server:
+                triggered_thresholds.append("memory")
+                triggered_parts.append(
+                    f"memory free {int(mem_available_mb)}MB <= {int(monitor_config.mem_error_server)}MB"
+                )
+            if swap_free_mb <= monitor_config.swap_error_server:
+                triggered_thresholds.append("swap")
+                triggered_parts.append(
+                    f"swap free {int(swap_free_mb)}MB <= {int(monitor_config.swap_error_server)}MB"
+                )
+            if disk_free_mb <= monitor_config.disk_error_server:
+                triggered_thresholds.append("disk")
+                triggered_parts.append(
+                    f"disk free {int(disk_free_mb)}MB <= {int(monitor_config.disk_error_server)}MB"
+                )
+            if cpu_confirmed and cpu >= monitor_config.cpu_error_server:
+                triggered_thresholds.append("cpu")
+                triggered_parts.append(
+                    f"CPU {cpu:.1f}% >= {monitor_config.cpu_error_server:.1f}%"
+                )
+            current_text = (
+                f"Current: mem free {int(mem_available_mb)}MB, swap free {int(swap_free_mb)}MB, "
+                f"disk free {int(disk_free_mb)}MB, CPU {cpu:.1f}%"
+            )
+            details = f"Triggered: {'; '.join(triggered_parts)}\n{current_text}"
+            threshold_label = _system_threshold_labels(triggered_thresholds)
+            alerts.append({
+                "id": _alert_id(ALERT_KIND_SYSTEM, hostname),
+                "kind": ALERT_KIND_SYSTEM,
+                "host": hostname,
+                "name": "system",
+                "severity": "error",
+                "summary": (
+                    f"System threshold exceeded on {hostname}: {threshold_label}"
+                    if len(triggered_thresholds) == 1
+                    else f"System thresholds exceeded on {hostname}: {threshold_label}"
+                ),
+                "details": details,
+                "triggered_thresholds": triggered_thresholds,
+            })
+
+        for idx, monitor in enumerate(instances.get(hostname) or [], start=1):
+            metrics_list = monitor.get('m') or []
+            swap_value = metrics_list[9] / 1024 / 1024 if len(metrics_list) == 10 and metrics_list[9] else 0.0
+            memory_mb = metrics_list[0] / 1024 / 1024 if metrics_list else 0.0
+            cpu_live = float(monitor.get('c') or 0)
+            cpu_60s = float(monitor.get('cpu_60s') or 0)
+            cpu_60s_window = float(monitor.get('cpu_60s_window') or 0)
+            cpu_confirmed = cpu_60s_window >= 60
+            cpu_value = cpu_60s if cpu_confirmed else cpu_live
+            errors_today = int(monitor.get('et') or 0)
+            tracebacks_today = int(monitor.get('tt') or 0)
+            if (
+                memory_mb > monitor_config.mem_error_v7
+                or swap_value > monitor_config.swap_error_v7
+                or (cpu_confirmed and cpu_value > monitor_config.cpu_error_v7)
+                or errors_today > monitor_config.error_error_v7
+                or tracebacks_today > monitor_config.traceback_error_v7
+            ):
+                bot_name = str(monitor.get("u") or monitor.get("name") or f"unknown-{idx}")
+                details = (
+                    f"Memory {round(memory_mb, 1)}MB, swap {round(swap_value, 1)}MB, "
+                    f"CPU {cpu_value:.1f}%, errors today {errors_today}, tracebacks today {tracebacks_today}"
+                )
+                alerts.append({
+                    "id": _alert_id(ALERT_KIND_INSTANCE, hostname, bot_name),
+                    "kind": ALERT_KIND_INSTANCE,
+                    "host": hostname,
+                    "name": bot_name,
+                    "severity": "error",
+                    "summary": f"Instance thresholds exceeded for {bot_name} on {hostname}",
+                    "details": details,
+                })
+    return alerts
 
 
 def _cpu_history_encode(value: Any, *, confirmed: bool) -> int:
@@ -2099,10 +2378,14 @@ class VPSMonitor:
         self._telegram_token = ""
         self._telegram_chat_id = ""
 
-        # Alert dedup
-        self._connection_alerts: set[str] = set()
-        self._service_alerts: set[str] = set()
-        self._connection_alerts_enabled_at: float = 0.0
+        # Alert state
+        self._alert_state_path = Path(PBGDIR) / 'data' / 'state' / 'vps_monitor' / 'alerts.json'
+        self._legacy_alert_state_path = Path(PBGDIR) / 'data' / 'vps_alert_state.json'
+        self._alerts: dict[str, AlertRecord] = {}
+        self._alert_gui_routes: dict[str, bool] = dict(ALERT_ROUTE_GUI_DEFAULTS)
+        self._alert_telegram_routes: dict[str, bool] = dict(ALERT_ROUTE_TELEGRAM_DEFAULTS)
+        self._alert_routes_loaded = False
+        self._hl_expiry_last_warned: dict[str, str] = {}
 
         # Restart rate limiting
         self._restart_history: dict[str, dict[str, list[datetime]]] = {}
@@ -2114,10 +2397,10 @@ class VPSMonitor:
         self._last_package_status_collect: dict[str, float] = {}
 
         # Monitor cache (persisted across restarts, per-host per-bot GZ state)
-        self._cache_path = Path(PBGDIR) / 'data' / 'monitor_cache.json'
+        self._cache_path = Path(PBGDIR) / 'data' / 'state' / 'vps_monitor' / 'cache.json'
+        self._legacy_cache_path = Path(PBGDIR) / 'data' / 'monitor_cache.json'
         self._monitor_cache: dict[str, dict[str, dict]] = {}
-        self._state_snapshot_path = Path(PBGDIR) / 'data' / 'vps_monitor_state.json'
-        history_dir = Path(PBGDIR) / 'data' / 'monitor_history'
+        history_dir = Path(PBGDIR) / 'data' / 'state' / 'vps_monitor' / 'history'
         self._host_metric_history = {
             'cpu': CpuHistoryStore(history_dir, 'hosts_cpu_24h'),
             'memory': CpuHistoryStore(history_dir, 'hosts_memory_24h'),
@@ -2201,6 +2484,312 @@ class VPSMonitor:
             self._telegram_chat_id = load_ini("main", "telegram_chat_id") or ""
         return self._telegram_chat_id
 
+    def _load_alert_routes(self, *, force: bool = False) -> None:
+        if self._alert_routes_loaded and not force:
+            return
+        self._alert_gui_routes = {
+            kind: _read_ini_bool("vps_monitor_alerts", key, default)
+            for kind, default in ALERT_ROUTE_GUI_DEFAULTS.items()
+            for key in [ALERT_ROUTE_GUI_KEYS[kind]]
+        }
+        self._alert_telegram_routes = {
+            event: _read_ini_bool("vps_monitor_alerts", key, default)
+            for event, default in ALERT_ROUTE_TELEGRAM_DEFAULTS.items()
+            for key in [ALERT_ROUTE_TELEGRAM_KEYS[event]]
+        }
+        self._alert_routes_loaded = True
+
+    def get_alert_settings(self) -> dict[str, Any]:
+        self._load_alert_routes(force=True)
+        return {
+            "telegram_token": self.telegram_token,
+            "telegram_chat_id": self.telegram_chat_id,
+            **{ALERT_ROUTE_GUI_KEYS[k]: bool(v) for k, v in self._alert_gui_routes.items()},
+            **{ALERT_ROUTE_TELEGRAM_KEYS[k]: bool(v) for k, v in self._alert_telegram_routes.items()},
+        }
+
+    def save_alert_settings(self, settings: dict[str, Any]) -> None:
+        if "telegram_token" in settings:
+            self._telegram_token = str(settings.get("telegram_token") or "").strip()
+            save_ini("main", "telegram_token", self._telegram_token)
+        if "telegram_chat_id" in settings:
+            self._telegram_chat_id = str(settings.get("telegram_chat_id") or "").strip()
+            save_ini("main", "telegram_chat_id", self._telegram_chat_id)
+        for kind, ini_key in ALERT_ROUTE_GUI_KEYS.items():
+            if ini_key in settings:
+                save_ini("vps_monitor_alerts", ini_key, _bool_to_ini(bool(settings.get(ini_key))))
+        for event, ini_key in ALERT_ROUTE_TELEGRAM_KEYS.items():
+            if ini_key in settings:
+                save_ini("vps_monitor_alerts", ini_key, _bool_to_ini(bool(settings.get(ini_key))))
+        self._load_alert_routes()
+
+    def _load_alert_state(self) -> None:
+        self._alerts = {}
+        self._hl_expiry_last_warned = {}
+        try:
+            state_path = self._alert_state_path
+            if not state_path.exists() and self._legacy_alert_state_path.exists():
+                state_path = self._legacy_alert_state_path
+            if not state_path.exists():
+                return
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return
+            alerts = payload.get("alerts") or {}
+            if isinstance(alerts, dict):
+                for alert_id, item in alerts.items():
+                    if not isinstance(item, dict):
+                        continue
+                    alert = AlertRecord.from_dict(item)
+                    alert.id = str(alert_id or alert.id)
+                    if alert.id:
+                        alert.active = False
+                        self._alerts[alert.id] = alert
+            warned = payload.get("hl_expiry_last_warned") or {}
+            if isinstance(warned, dict):
+                self._hl_expiry_last_warned = {str(k): str(v) for k, v in warned.items() if str(k).strip()}
+        except Exception as e:
+            _log(SERVICE, f"[alerts] failed to load alert state: {e}", level="WARNING")
+
+    def _save_alert_state(self) -> None:
+        payload = {
+            "version": ALERT_STATE_VERSION,
+            "alerts": {alert_id: alert.to_dict() for alert_id, alert in self._alerts.items()},
+            "hl_expiry_last_warned": dict(self._hl_expiry_last_warned),
+        }
+        try:
+            _write_json_atomic(self._alert_state_path, payload)
+        except Exception as e:
+            _log(SERVICE, f"[alerts] failed to save alert state: {e}", level="WARNING")
+
+    def list_active_alerts(self, *, gui_only: bool = False) -> list[dict[str, Any]]:
+        self._load_alert_routes()
+        items = []
+        for alert in self._alerts.values():
+            if not alert.active:
+                continue
+            if gui_only and not self._alert_gui_routes.get(alert.kind, True):
+                continue
+            items.append(alert.to_dict())
+        items.sort(key=lambda item: (
+            item.get("acknowledged", False),
+            -_severity_rank(str(item.get("severity") or "")),
+            str(item.get("host") or ""),
+            str(item.get("name") or ""),
+        ))
+        return items
+
+    def list_alert_history(self, *, gui_only: bool = False, limit: int = 20) -> list[dict[str, Any]]:
+        self._load_alert_routes()
+        items = []
+        for alert in self._alerts.values():
+            if alert.active:
+                continue
+            if gui_only and not self._alert_gui_routes.get(alert.kind, True):
+                continue
+            payload = alert.to_dict()
+            payload["resolved_ts"] = float(alert.last_seen_ts or 0.0)
+            items.append(payload)
+        items.sort(key=lambda item: item.get("resolved_ts") or 0.0, reverse=True)
+        if limit > 0:
+            return items[:limit]
+        return items
+
+    def get_alert_summary(self) -> dict[str, int]:
+        items = self.list_active_alerts(gui_only=True)
+        new_count = sum(1 for item in items if not item.get("acknowledged"))
+        ack_count = sum(1 for item in items if item.get("acknowledged"))
+        return {
+            "new_count": new_count,
+            "ack_count": ack_count,
+            "total_active": len(items),
+        }
+
+    def acknowledge_alert(self, alert_id: str) -> bool:
+        alert = self._alerts.get(str(alert_id or ""))
+        if not alert or not alert.active:
+            return False
+        if alert.acknowledged:
+            return True
+        alert.acknowledged = True
+        alert.last_seen_ts = time.time()
+        self._save_alert_state()
+        self.store.changed.set()
+        return True
+
+    def acknowledge_all_alerts(self) -> int:
+        updated = 0
+        for alert in self._alerts.values():
+            if alert.active and self._alert_gui_routes.get(alert.kind, True) and not alert.acknowledged:
+                alert.acknowledged = True
+                alert.last_seen_ts = time.time()
+                updated += 1
+        if updated:
+            self._save_alert_state()
+            self.store.changed.set()
+        return updated
+
+    async def _send_alert_event(self, event_name: str, message: str) -> None:
+        self._load_alert_routes()
+        if not self._alert_telegram_routes.get(event_name, True):
+            return
+        await self._send_alert(message)
+
+    async def _sync_live_alerts(self) -> None:
+        self._load_alert_routes()
+        conn_summary = self.pool.get_status_summary().get("connections") or {}
+        monitor_config = MonitorConfig()
+        live_alerts = collect_live_alerts(conn_summary, {h: m.to_dict() for h, m in self.store.system.items()}, self.store.instances, self.store.services, monitor_config)
+        now = time.time()
+        live_map = {str(item.get("id") or ""): item for item in live_alerts if str(item.get("id") or "")}
+        changed = False
+
+        for alert_id, payload in live_map.items():
+            existing = self._alerts.get(alert_id)
+            was_active = bool(existing and existing.active)
+            if existing:
+                existing.kind = str(payload.get("kind") or existing.kind)
+                existing.host = str(payload.get("host") or existing.host)
+                existing.name = str(payload.get("name") or existing.name)
+                existing.severity = str(payload.get("severity") or existing.severity)
+                existing.summary = str(payload.get("summary") or existing.summary)
+                existing.details = str(payload.get("details") or existing.details)
+                existing.was_restarted = bool(payload.get("was_restarted", existing.was_restarted))
+                existing.triggered_thresholds = [
+                    str(item) for item in (payload.get("triggered_thresholds") or existing.triggered_thresholds or []) if str(item).strip()
+                ]
+                existing.last_seen_ts = now
+                existing.active = True
+                if not was_active:
+                    existing.episode += 1
+                    existing.first_seen_ts = now
+                    existing.acknowledged = False
+                    changed = True
+                else:
+                    changed = True
+            else:
+                existing = AlertRecord(
+                    id=alert_id,
+                    kind=str(payload.get("kind") or ""),
+                    host=str(payload.get("host") or ""),
+                    name=str(payload.get("name") or ""),
+                    severity=str(payload.get("severity") or "warning"),
+                    summary=str(payload.get("summary") or ""),
+                    details=str(payload.get("details") or ""),
+                    was_restarted=bool(payload.get("was_restarted", False)),
+                    triggered_thresholds=[str(item) for item in (payload.get("triggered_thresholds") or []) if str(item).strip()],
+                    active=True,
+                    acknowledged=False,
+                    first_seen_ts=now,
+                    last_seen_ts=now,
+                    episode=1,
+                )
+                self._alerts[alert_id] = existing
+                was_active = False
+                changed = True
+
+            if not was_active:
+                await self._emit_problem_event(existing)
+
+        for alert_id, alert in list(self._alerts.items()):
+            if alert_id in live_map:
+                continue
+            if alert.active:
+                alert.active = False
+                alert.last_seen_ts = now
+                changed = True
+                await self._emit_recovery_event(alert)
+
+        if changed:
+            self._save_alert_state()
+            self.store.changed.set()
+
+    async def _emit_problem_event(self, alert: AlertRecord) -> None:
+        if alert.kind == ALERT_KIND_OFFLINE:
+            await self._send_alert_event("ssh_lost", f"⚠️ *VPSMonitor*: SSH connection lost to *{alert.host}*")
+            return
+        if alert.kind == ALERT_KIND_SERVICE:
+            restart_hint = " Restart initiated." if alert.was_restarted else ""
+            await self._send_alert_event("service_down", f"❌ *VPSMonitor*: {alert.name} is down on *{alert.host}*{restart_hint}")
+            if alert.was_restarted:
+                await self._send_alert_event("service_restart_started", f"🔄 *VPSMonitor*: {alert.name} restart initiated on *{alert.host}*")
+            return
+        if alert.kind == ALERT_KIND_SYSTEM:
+            await self._send_alert_event("system_problem", f"⚠️ *VPSMonitor*: {alert.summary}\n{alert.details}")
+            return
+        if alert.kind == ALERT_KIND_INSTANCE:
+            await self._send_alert_event("instance_problem", f"⚠️ *VPSMonitor*: {alert.summary}\n{alert.details}")
+
+    async def _emit_recovery_event(self, alert: AlertRecord) -> None:
+        if alert.kind == ALERT_KIND_OFFLINE:
+            await self._send_alert_event("ssh_recovered", f"✅ *VPSMonitor*: SSH reconnected to *{alert.host}*")
+            return
+        if alert.kind == ALERT_KIND_SERVICE:
+            await self._send_alert_event("service_recovered", f"✅ *VPSMonitor*: {alert.name} is running on *{alert.host}*")
+            return
+        if alert.kind == ALERT_KIND_SYSTEM:
+            threshold_label = _system_threshold_labels(alert.triggered_thresholds)
+            headline = (
+                f"✅ *VPSMonitor*: System recovered on *{alert.host}*: {threshold_label}"
+                if len(alert.triggered_thresholds or []) == 1
+                else f"✅ *VPSMonitor*: System recovered on *{alert.host}*: {threshold_label}"
+            )
+            current_text = str(alert.details or "").split("\n", 1)[1] if "\n" in str(alert.details or "") else str(alert.details or "")
+            recovered_from = str(alert.details or "").split("\n", 1)[0].replace("Triggered:", "Recovered from:", 1)
+            await self._send_alert_event("system_recovered", f"{headline}\n{recovered_from}\n{current_text}")
+            return
+        if alert.kind == ALERT_KIND_INSTANCE:
+            await self._send_alert_event("instance_recovered", f"✅ *VPSMonitor*: Instance recovered for *{alert.name}* on *{alert.host}*")
+
+    async def check_hl_expiry(self) -> None:
+        from api_key_state import get_user_state
+        from User import Users
+
+        warning_days_raw = load_ini("hl_expiry", "telegram_warning_days")
+        warning_days = 7
+        if warning_days_raw:
+            try:
+                warning_days = int(warning_days_raw)
+            except ValueError:
+                warning_days = 7
+        if warning_days < 1 or not self.telegram_token or not self.telegram_chat_id:
+            return
+
+        today_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+        warnings: list[str] = []
+        try:
+            users = Users()
+        except Exception as e:
+            _log(SERVICE, f"[alerts] HL expiry check failed to load users: {e}", level="WARNING")
+            return
+
+        for user in users:
+            if getattr(user, "exchange", "") != "hyperliquid":
+                continue
+            vu = get_user_state(user.name).get("hl_valid_until")
+            if vu is None:
+                continue
+            try:
+                expiry_dt = datetime.fromtimestamp(int(vu) / 1000, tz=timezone.utc)
+                days = (expiry_dt - datetime.now(tz=timezone.utc)).days
+            except Exception:
+                continue
+            if days > warning_days:
+                continue
+            if self._hl_expiry_last_warned.get(user.name) == today_str:
+                continue
+            self._hl_expiry_last_warned[user.name] = today_str
+            if days < 0:
+                warnings.append(f"⚠️ *{user.name}*: HL key EXPIRED ({-days}d ago)")
+            elif days == 0:
+                warnings.append(f"⚠️ *{user.name}*: HL key expires TODAY")
+            else:
+                warnings.append(f"⚠️ *{user.name}*: HL key expires in {days}d ({expiry_dt.strftime('%Y-%m-%d')})")
+
+        if warnings:
+            await self._send_alert("🔑 *HL API Key Expiry Warning*\n" + "\n".join(warnings))
+            self._save_alert_state()
+
     # ── Lifecycle ───────────────────────────────────────────
 
     async def start(self):
@@ -2209,12 +2798,13 @@ class VPSMonitor:
             return
         self._running = True
         _log(SERVICE, "Starting VPS monitor...")
-        self._connection_alerts_enabled_at = time.time() + 90.0
 
         self.pool.load_vps_configs()
         self.store.load_ui_settings()
         self._ini_watcher.start()
         self._load_monitor_cache()
+        self._load_alert_routes()
+        self._load_alert_state()
         for store in self._host_metric_history.values():
             store.load()
         self._bot_cpu_history.load()
@@ -2223,7 +2813,6 @@ class VPSMonitor:
         for store in self._bot_count_history.values():
             store.load()
         self._bot_pnl_history.load()
-        self._save_state_snapshot()
 
         enabled = self.enabled_hosts
         if not enabled:
@@ -2247,6 +2836,9 @@ class VPSMonitor:
         # Launch main loop as background task
         self._tasks.append(asyncio.create_task(
             self._main_loop(), name="vps-main-loop"
+        ))
+        self._tasks.append(asyncio.create_task(
+            self._hl_expiry_loop(), name="vps-hl-expiry-loop"
         ))
 
         _log(SERVICE, "VPS monitor started")
@@ -2310,6 +2902,16 @@ class VPSMonitor:
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
 
+    async def _hl_expiry_loop(self):
+        while self._running:
+            try:
+                await self.check_hl_expiry()
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                _log(SERVICE, f"[alerts] HL expiry loop failed: {e}", level="WARNING", meta={'traceback': traceback.format_exc()})
+            await asyncio.sleep(60)
+
     async def _loop_iteration(self, loop_count: int):
         """Single iteration of the main loop."""
         # Config changes
@@ -2324,7 +2926,6 @@ class VPSMonitor:
         # 1. Health check
         status = self.pool.health_check()
         enabled_status = {h: s for h, s in status.items() if h in enabled}
-        self._handle_connection_changes(enabled_status)
 
         # 2. Reconnect lost
         reconnected = await self.pool.reconnect_lost(enabled)
@@ -2335,26 +2936,6 @@ class VPSMonitor:
                 self._start_metrics_stream(hostname)
                 self._last_host_meta_collect.pop(hostname, None)
                 self._last_package_status_collect.pop(hostname, None)
-                alert_key = f"conn:{hostname}"
-                if alert_key in self._connection_alerts:
-                    self._connection_alerts.discard(alert_key)
-                    newly_reconnected.append(hostname)
-
-        # Send reconnect alerts (batched if mass reconnect)
-        if newly_reconnected and time.time() >= self._connection_alerts_enabled_at:
-            if len(newly_reconnected) >= max(2, len(enabled) * 0.5):
-                hosts_str = ", ".join(sorted(newly_reconnected))
-                await self._send_alert(
-                    f"✅ *VPSMonitor*: Network recovered — "
-                    f"SSH reconnected to *{len(newly_reconnected)}* "
-                    f"hosts ({hosts_str})"
-                )
-            else:
-                for hostname in newly_reconnected:
-                    await self._send_alert(
-                        f"✅ *VPSMonitor*: SSH reconnected to "
-                        f"*{hostname}*"
-                    )
 
         # 3. Restart dead metric streams
         self._restart_dead_streams()
@@ -2375,6 +2956,8 @@ class VPSMonitor:
                 results = await self._check_and_heal_services(connected)
                 self.store.update_services(results)
 
+        await self._sync_live_alerts()
+
     # ── Config reload ───────────────────────────────────────
 
     async def _apply_config_changes(self):
@@ -2383,6 +2966,9 @@ class VPSMonitor:
         self._enabled_hosts = None
         self._auto_restart = None
         self._debug_logging = None
+        self._telegram_token = ""
+        self._telegram_chat_id = ""
+        self._alert_routes_loaded = False
         enabled = self.enabled_hosts
 
         newly_disabled = prev_enabled - enabled
@@ -2395,7 +2981,6 @@ class VPSMonitor:
                 await self.pool.disconnect(h)
                 self.pool.remove_host(h)
                 self.store.remove_host(h)
-            self._save_state_snapshot()
 
         if newly_enabled:
             _log(SERVICE, f"Hosts newly enabled: "
@@ -2408,7 +2993,6 @@ class VPSMonitor:
                 if h in self.pool.hostnames():
                     if await self.pool.connect(h):
                         self._start_metrics_stream(h)
-        self._save_state_snapshot()
 
     # ── Metric streams ──────────────────────────────────────
 
@@ -2442,6 +3026,8 @@ class VPSMonitor:
     async def _metrics_stream(self, hostname: str):
         """Read system metrics from SSH stdout (JSON per line, 1/s)."""
         proc = None
+        cancelled = False
+        stream_error: str | None = None
         try:
             proc = await self.pool.start_process(hostname, MONITOR_AGENT_SCRIPT)
             if not proc:
@@ -2475,7 +3061,6 @@ class VPSMonitor:
                     for store in self._bot_count_history.values():
                         store.maybe_flush(now_ts=metrics.timestamp)
                     self._bot_pnl_history.maybe_flush(now_ts=metrics.timestamp)
-                    self._save_state_snapshot()
                     self.store.update_stream_info(hostname, {
                         "alive": True,
                         "active": True,
@@ -2486,12 +3071,13 @@ class VPSMonitor:
                     continue
 
         except asyncio.CancelledError:
-            pass
+            cancelled = True
         except Exception as e:
+            stream_error = str(e)
             _log(SERVICE, f"[metrics] Stream error for {hostname}: {e}",
                  level="WARNING")
             self.store.update_stream_info(hostname, {
-                "alive": False, "active": False, "error": str(e),
+                "alive": False, "active": False, "error": stream_error,
             })
         finally:
             if proc is not None:
@@ -2500,7 +3086,9 @@ class VPSMonitor:
                 except Exception:
                     pass
             self.store.update_stream_info(hostname, {
-                "alive": False, "active": False, "error": None,
+                "alive": False,
+                "active": False,
+                "error": None if cancelled else stream_error,
             })
             for store in self._host_metric_history.values():
                 store.maybe_flush(force=True)
@@ -2510,7 +3098,10 @@ class VPSMonitor:
             for store in self._bot_count_history.values():
                 store.maybe_flush(force=True)
             self._bot_pnl_history.maybe_flush(force=True)
-            self._save_state_snapshot()
+            if not cancelled and self._running and hostname in self.enabled_hosts:
+                entry = self.pool.get_connection(hostname)
+                if entry and entry.status == ConnectionStatus.CONNECTED:
+                    await self.pool.disconnect(hostname)
             _log(SERVICE, f"[metrics] Stream ended for {hostname}")
 
     def _record_host_metric_history(self, hostname: str, metrics: SystemMetrics) -> None:
@@ -2878,7 +3469,6 @@ class VPSMonitor:
                         self.store.update_instances(hostname, enriched_monitors)
                         self.store.update_v7_instances(hostname, v7_list)
                         self.store.update_bot_logs(hostname, bot_logs if isinstance(bot_logs, dict) else {})
-                        self._save_state_snapshot()
                         if isinstance(new_host_cache, dict):
                             self._monitor_cache[hostname] = new_host_cache
                             self._save_monitor_cache()
@@ -2892,17 +3482,18 @@ class VPSMonitor:
                 if isinstance(parsed, list) and len(parsed) == 2:
                     self.store.update_instances(hostname, parsed[0])
                     self.store.update_v7_instances(hostname, parsed[1])
-                    self._save_state_snapshot()
                 else:
                     self.store.update_instances(hostname, parsed)
-                    self._save_state_snapshot()
             except json.JSONDecodeError:
                 pass
 
     def _load_monitor_cache(self) -> None:
         try:
-            if self._cache_path.exists():
-                loaded = json.loads(self._cache_path.read_text())
+            cache_path = self._cache_path
+            if not cache_path.exists() and self._legacy_cache_path.exists():
+                cache_path = self._legacy_cache_path
+            if cache_path.exists():
+                loaded = json.loads(cache_path.read_text())
                 if not isinstance(loaded, dict):
                     self._monitor_cache = {}
                     return
@@ -3004,7 +3595,6 @@ class VPSMonitor:
                     if isinstance(parsed, dict):
                         self.store.update_host_meta(hostname, parsed)
                         self._last_host_meta_collect[hostname] = now
-                        self._save_state_snapshot()
                         if self.debug_logging:
                             _log(SERVICE, f"[host-meta] Collected metadata for {hostname}",
                                  level="DEBUG")
@@ -3020,7 +3610,6 @@ class VPSMonitor:
                     if isinstance(package_data, dict):
                         self.store.update_host_meta(hostname, package_data)
                         self._last_package_status_collect[hostname] = now
-                        self._save_state_snapshot()
                 except json.JSONDecodeError:
                     pass
 
@@ -3147,7 +3736,6 @@ class VPSMonitor:
                 check = await self._check_service(hostname, svc_info)
 
                 status_val = check["status"]
-                alert_key = f"svc:{hostname}:{svc_name}"
 
                 if status_val == ServiceStatus.STOPPED.value and self.auto_restart:
                     _log(SERVICE, f"[service] {svc_name} down on {hostname}, "
@@ -3157,48 +3745,9 @@ class VPSMonitor:
                     if restarted:
                         check["status"] = ServiceStatus.RESTARTING.value
 
-                # Alerts
-                if status_val == ServiceStatus.STOPPED.value:
-                    if alert_key not in self._service_alerts:
-                        self._service_alerts.add(alert_key)
-                        if check.get("was_restarted"):
-                            await self._send_alert(
-                                f"🔄 *VPSMonitor*: {svc_name} was down on "
-                                f"*{hostname}*, restart initiated"
-                            )
-                        else:
-                            await self._send_alert(
-                                f"❌ *VPSMonitor*: {svc_name} is down on "
-                                f"*{hostname}*"
-                            )
-                elif status_val == ServiceStatus.RUNNING.value:
-                    if alert_key in self._service_alerts:
-                        self._service_alerts.discard(alert_key)
-                        await self._send_alert(
-                            f"✅ *VPSMonitor*: {svc_name} is running on "
-                            f"*{hostname}*"
-                        )
-
                 host_svc[svc_name] = check
             all_results[hostname] = host_svc
         return all_results
-
-    def _save_state_snapshot(self) -> None:
-        try:
-            conn_summary = self.pool.get_status_summary()
-            snapshot = build_alert_snapshot(
-                connections=(conn_summary.get('connections') or {}),
-                system={h: m.to_dict() for h, m in self.store.system.items()},
-                instances=self.store.instances,
-                host_meta=self.store.host_meta,
-            )
-            tmp = self._state_snapshot_path.with_suffix('.json.tmp')
-            tmp.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps(snapshot), encoding='utf-8')
-            tmp.replace(self._state_snapshot_path)
-        except Exception as e:
-            if self.debug_logging:
-                _log(SERVICE, f"[snapshot] Failed to persist alert snapshot: {e}", level="WARNING")
 
     # ── Restart rate limiting ───────────────────────────────
 
@@ -3216,50 +3765,13 @@ class VPSMonitor:
             service_name, []
         ).append(datetime.now())
 
-    # ── Connection alerts ───────────────────────────────────
-
-    def _handle_connection_changes(self, status: dict[str, ConnectionStatus]):
-        newly_disconnected: list[str] = []
-        for hostname, conn_status in status.items():
-            alert_key = f"conn:{hostname}"
-            if conn_status == ConnectionStatus.DISCONNECTED:
-                if alert_key not in self._connection_alerts:
-                    self._connection_alerts.add(alert_key)
-                    newly_disconnected.append(hostname)
-            elif conn_status == ConnectionStatus.CONNECTED:
-                self._connection_alerts.discard(alert_key)
-
-        if not newly_disconnected:
-            return
-
-        if time.time() < self._connection_alerts_enabled_at:
-            if self.debug_logging:
-                _log(
-                    SERVICE,
-                    f"[conn] suppressing startup disconnect alerts for {len(newly_disconnected)} host(s)",
-                    level="DEBUG",
-                )
-            return
-
-        total_hosts = len(status)
-        # Mass disconnect: ≥50% of monitored hosts lost simultaneously
-        if len(newly_disconnected) >= max(2, total_hosts * 0.5):
-            hosts_str = ", ".join(sorted(newly_disconnected))
-            asyncio.create_task(self._send_alert(
-                f"⚠️ *VPSMonitor*: Network blip — SSH lost to "
-                f"*{len(newly_disconnected)}* hosts ({hosts_str})"
-            ))
-        else:
-            for hostname in newly_disconnected:
-                asyncio.create_task(self._send_alert(
-                    f"⚠️ *VPSMonitor*: SSH connection lost to "
-                    f"*{hostname}*"
-                ))
 
     async def _send_alert(self, message: str):
         """Send Telegram alert."""
+        sender_host = socket.gethostname().strip() or "unknown-host"
+        formatted_message = f"[{sender_host}]\n{message}"
         if not self.telegram_token or not self.telegram_chat_id:
-            _log(SERVICE, f"[alert] No Telegram config: {message}",
+            _log(SERVICE, f"[alert] No Telegram config: {formatted_message}",
                  level="WARNING")
             return
         try:
@@ -3268,10 +3780,10 @@ class VPSMonitor:
             async with bot:
                 await bot.send_message(
                     chat_id=self.telegram_chat_id,
-                    text=message,
+                    text=formatted_message,
                     parse_mode='Markdown',
                 )
-            _log(SERVICE, f"[alert] Sent: {message}")
+            _log(SERVICE, f"[alert] Sent: {formatted_message}")
         except Exception as e:
             _log(SERVICE, f"[alert] Failed: {e}", level="ERROR")
 

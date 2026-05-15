@@ -1,80 +1,79 @@
-# PBMon Service
+# VPS Monitoring Alerts
 
-PBMon ist ein schlanker Hintergrunddienst, der deine PBRemote-Server und laufende
-Passivbot-Instanzen überwacht. Bei einem Problem sendet er dir sofort eine Telegram-Nachricht,
-damit du reagieren kannst — ohne die UI manuell prüfen zu müssen.
+Die VPS-Monitoring-Alarme laufen jetzt innerhalb des **PBAPIServer** zusammen
+mit dem Live-VPS-Monitor. Einen separaten `PBMon`-Daemon gibt es nicht mehr.
 
-## Was PBMon überwacht
+## Was überwacht wird
 
-PBMon ruft alle 60 Sekunden die Fehlerprüfung von PBRemote ab und prüft auf:
+Der API-Server hält den VPS-Monitor verbunden und bewertet aktive Alarmzustände
+direkt aus dem Live-In-Memory-State.
 
 | Alarmtyp | Wird ausgelöst wenn |
 |----------|----------------------|
-| **Server offline** | Ein entfernter VPS nicht erreichbar ist |
-| **Systemressource** | Ein Server den konfigurierten Speicher-, CPU-, Swap- oder Disk-Schwellenwert überschreitet |
-| **Instanzfehler** | Eine laufende Passivbot-Instanz einen Fehler oder unerwarteten Stopp meldet |
-| **HL API-Key-Ablauf** | Ein Hyperliquid API-Key bald abläuft (konfigurierbare Warntage in `pbgui.ini`) |
+| **Offline Host** | Die SSH-Verbindung zu einem überwachten VPS verloren geht |
+| **Service-Problem** | Ein überwachter VPS-Service down ist oder ein Neustart angestoßen wurde |
+| **System-Schwellenwert** | Ein Host konfigurierte Speicher-, CPU-, Swap- oder Disk-Grenzen überschreitet |
+| **Instanz-Schwellenwert** | Eine überwachte Passivbot-Instanz konfigurierte Limits überschreitet |
+| **HL API-Key-Ablauf** | Ein Hyperliquid API-Key bald abläuft |
 
-Jeder Alarm wird **einmalig** pro Fehlerereignis gesendet. PBMon merkt sich, welche Fehler
-bereits gemeldet wurden, und sendet nur dann eine neue Nachricht, wenn ein zuvor behobener
-Fehler erneut auftritt. HL-Key-Ablauf-Warnungen werden auf einmal pro User pro Tag dedupliziert.
+Aktive Alarme werden in der Navigationsleiste als eigener Alarm-Indikator
+angezeigt. Das Badge zeigt die Zähler `new/ack`.
 
-## Einrichtung: Telegram-Bot anlegen
+## Wo es konfiguriert wird
 
-1. Öffne Telegram und chatte mit **[@BotFather](https://t.me/botfather)**
-2. Sende `/newbot` und folge den Anweisungen — kopiere den **Bot Token**
-3. Starte eine Unterhaltung mit deinem neuen Bot (sende `/start`)
-4. Finde deine **Chat ID** heraus — am einfachsten über **[@userinfobot](https://t.me/userinfobot)**
-5. Trage beide Werte in den PBMon-Einstellungen ein (siehe unten) und speichere
+Öffnen:
 
-> **Wichtig:** Der Bot kann dir keine Nachrichten schicken, bis du ihm mindestens eine
-> Nachricht gesendet hast. Der Befehl `/start` genügt.
+1. **System -> Services**
+2. **PBAPIServer** auswählen
+3. Den Tab **Settings** öffnen
+4. Zum Bereich **VPS Monitoring** gehen
 
-## PBMon-Detail-Panel — Log-Tab (Standard)
+Im Block `Alerts / Telegram` kannst du konfigurieren:
 
-Klicke auf die PBMon-Kachel in der Services-Übersicht (oder nutze die Sidebar), um das Detail-Panel zu öffnen.
-Der **Log**-Tab lädt standardmäßig und zeigt einen Live-Stream von `PBMon.log`.
+- **Telegram Bot Token**
+- **Telegram Chat ID**
+- Welche aktiven Alarmgruppen im GUI sichtbar sind
+- Welche Problem- und Recovery-Ereignisse an Telegram gesendet werden
 
-- Nutze die **Level-Filter**-Buttons (DBG / INF / WRN / ERR / CRT), um relevante Zeilen zu fokussieren
-- Nutze **Search**, um einen bestimmten Servernamen oder Fehlertext zu finden
-- Öffne die **Files**-Sidebar, um zu rotierten Log-Archiven (`.1`, `.old`) zu wechseln, falls vorhanden
+Die Einstellungen sind gruppiert nach:
 
-## PBMon-Detail-Panel — Settings-Tab
+- **Offline Hosts**
+- **Services**
+- **System Thresholds**
+- **Instance Thresholds**
 
-Wechsle zum **Settings**-Tab, um Telegram-Benachrichtigungen zu konfigurieren.
+So bleibt die UI kompakt, während Telegram trotzdem sehr gezielt steuerbar ist.
 
-| Feld | Beschreibung |
-|------|--------------|
-| **Telegram Bot Token** | Token von @BotFather (gespeichert in `pbgui.ini`) |
-| **Telegram Chat ID** | Deine persönliche oder Gruppen-Chat-ID |
+## Verhalten im GUI
 
-Klicke **Save** zum Speichern.
+- Das GUI zeigt **nur aktuell aktive Probleme**
+- Behobene Alarme verschwinden automatisch
+- Wenn ein Problem später wieder auftritt, wird es wieder **new/unacknowledged**
+- Einzelne Alarme oder alle sichtbaren Alarme lassen sich im Nav-Overlay quittieren
 
-> Änderungen wirken beim **nächsten Überwachungszyklus** (innerhalb von 60 Sekunden) —
-> kein Neustart erforderlich.
+## Telegram einrichten
 
-## PBMon starten und stoppen
+1. In Telegram mit **[@BotFather](https://t.me/botfather)** chatten
+2. `/newbot` senden und den **Bot Token** kopieren
+3. Mit dem Bot per `/start` eine Unterhaltung beginnen
+4. Die **Chat ID** herausfinden, z. B. über **[@userinfobot](https://t.me/userinfobot)**
+5. Beide Werte unter **PBAPIServer -> Settings -> VPS Monitoring** speichern
 
-Nutze die **Start**- / **Stop**-Buttons im Control-Strip oben im PBMon-Detail-Panel oder die Buttons auf der PBMon-Übersichtskachel.
+> Der Bot kann dir erst Nachrichten senden, nachdem du ihm mindestens eine Nachricht geschickt hast.
 
-- **Start** → startet PBMon als abgekoppelten Hintergrundprozess
-- **Stop** → stoppt den Prozess sauber
+## Logs
 
-## Log-Format
+Alarm-Routing und VPS-Monitoring-Aktivität werden über die API-Server- und
+VPS-Monitor-Logs protokolliert, hauptsächlich:
 
-PBMon nutzt den zentralen PBGui-Logger. Jede Zeile folgt dem Format:
-
-```
-2026-03-01T12:55:50.123 [PBMon] [INFO] Start: PBMon
-2026-03-01T12:55:52.456 [PBMon] [INFO] Send Message: Server: *myVPS* is offline
-2026-03-01T12:58:00.789 [PBMon] [ERROR] Something went wrong, but continue: ...
-```
+- `PBApiServer.log`
+- `VPSMonitor.log`
 
 ## Fehlerbehebung
 
 | Symptom | Prüfen |
 |---------|--------|
-| Keine Telegram-Alarme | Token und Chat ID in den Settings prüfen · `PBMon.log` auf `[ERROR]`-Zeilen durchsuchen |
-| Fehler „Chat not found" | Sicherstellen, dass du `/start` an den Bot gesendet hast, bevor PBMon das erste Mal lief |
-| PBMon startet nicht | Möglicherweise läuft eine weitere Instanz — `data/pid/pbmon.pid` prüfen |
-| Alarme hören auf | PBMon könnte abgestürzt sein — Status im Overview-Tab prüfen |
+| Keine Telegram-Alarme | Bot Token und Chat ID in den PBAPIServer-Settings prüfen · `PBApiServer.log` und `VPSMonitor.log` kontrollieren |
+| Alarm-Badge bleibt leer | Prüfen, ob die Alarmgruppe für GUI-Sichtbarkeit aktiviert ist und der VPS in den überwachten Hosts enthalten ist |
+| „Chat not found" | Dem Bot vor dem Testen von Alarmen `/start` senden |
+| Alarme verschwinden nach Recovery | Erwartet: Im GUI werden nur aktive Probleme angezeigt |

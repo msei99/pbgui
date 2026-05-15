@@ -112,6 +112,7 @@
     '#nav-spacer{flex:1;}',
 
     '#nav-right{display:flex;align-items:center;gap:0.25rem;padding-right:0.5rem;}',
+    '.nav-divider{width:1px;height:18px;background:#1e2736;margin:0 0.15rem;}',
     '.nav-action-btn{display:flex;align-items:center;gap:0.35rem;padding:0.3rem 0.75rem;',
     'border-radius:6px;background:transparent;border:1px solid transparent;',
     'color:#64748b;font-size:var(--fs-sm);font-weight:500;cursor:pointer;',
@@ -128,6 +129,10 @@
     '@keyframes nav-blink{0%,100%{opacity:1;}50%{opacity:.3;}}',
     '.nav-action-btn.notify{color:#64748b;}',
     '.nav-action-btn.notify:hover{color:#e2e8f0;}',
+    '.nav-action-btn.alerts{color:#f59e0b;border-color:rgba(245,158,11,.24);background:rgba(245,158,11,.05);display:inline-flex;}',
+    '.nav-action-btn.alerts:hover{color:#fcd34d;border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.12);}',
+    '.nav-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 0.35rem;border-radius:999px;font-size:10px;font-weight:700;line-height:1;background:#243047;color:#cbd5e1;}',
+    '.nav-badge.has-new{background:#b91c1c;color:#fff;}',
     '.nav-action-btn.logout{color:#94a3b8;}',
     '.nav-action-btn.logout:hover{color:#f8fafc;}',
 
@@ -143,6 +148,30 @@
     '#pbgui-notify-close{background:none;border:none;color:var(--text-dim,#64748b);cursor:pointer;font-size:var(--fs-lg,1.15rem);}',
     '#pbgui-notify-close:hover{color:var(--text,#e2e8f0);}',
     '#pbgui-notify-target{flex:1;min-height:0;overflow:hidden;}',
+    '#pbgui-alert-ovl{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:3060;backdrop-filter:blur(2px);}',
+    '#pbgui-alert-ovl.visible{display:flex;}',
+    '#pbgui-alert-box{position:absolute;background:#131b2b;border:1px solid #2d3748;border-radius:14px;box-shadow:0 20px 70px rgba(0,0,0,.9);overflow:hidden;width:min(880px,94vw);max-width:94vw;height:min(640px,78vh);max-height:90vh;min-width:320px;min-height:220px;display:flex;flex-direction:column;}',
+    '#pbgui-alert-body{display:flex;flex-direction:column;gap:0.8rem;padding:1rem 1.1rem 1.1rem;min-height:0;}',
+    '#pbgui-alert-toolbar{display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;}',
+    '#pbgui-alert-summary{font-size:var(--fs-sm);color:#94a3b8;}',
+    '#pbgui-alert-list{display:flex;flex-direction:column;gap:0.65rem;overflow:auto;min-height:0;padding-right:0.2rem;}',
+    '.pbgui-alert-section-sep{height:1px;background:#1e2736;margin:0.35rem 0 0.2rem;}',
+    '.pbgui-alert-history-title{font-size:var(--fs-xs);letter-spacing:0.05em;text-transform:uppercase;color:#64748b;margin-top:0.2rem;}',
+    '.pbgui-alert-item{border:1px solid #243047;border-radius:10px;background:#0f1724;padding:0.8rem 0.9rem;display:grid;gap:0.45rem;}',
+    '.pbgui-alert-item.new{border-color:rgba(239,68,68,.45);}',
+    '.pbgui-alert-item.history{background:#0d1420;border-color:#1a2537;}',
+    '.pbgui-alert-head{display:flex;align-items:flex-start;justify-content:space-between;gap:0.75rem;}',
+    '.pbgui-alert-title{font-size:var(--fs-base);font-weight:600;color:#e2e8f0;}',
+    '.pbgui-alert-meta{display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap;font-size:var(--fs-xs);color:#64748b;}',
+    '.pbgui-alert-pill{display:inline-flex;align-items:center;justify-content:center;padding:0.18rem 0.45rem;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:0.02em;text-transform:uppercase;}',
+    '.pbgui-alert-pill.new{background:rgba(239,68,68,.18);color:#fca5a5;}',
+    '.pbgui-alert-pill.ack{background:rgba(99,179,237,.15);color:#93c5fd;}',
+    '.pbgui-alert-pill.kind{background:rgba(148,163,184,.12);color:#cbd5e1;}',
+    '.pbgui-alert-details{font-size:var(--fs-sm);line-height:1.45;color:#94a3b8;}',
+    '.pbgui-alert-actions{display:flex;align-items:center;justify-content:flex-end;gap:0.5rem;}',
+    '.pbgui-alert-empty{padding:1rem 0.2rem;color:#64748b;font-size:var(--fs-sm);text-align:center;}',
+    '.pbgui-alert-link{display:inline-flex;align-items:center;justify-content:center;height:var(--btn-h);padding:0 var(--sp-md);border-radius:8px;border:1px solid rgba(99,179,237,.25);font-size:var(--fs-base);font-weight:600;color:#e2e8f0;background:rgba(99,179,237,.08);cursor:pointer;transition:background .15s,border-color .15s,color .15s;text-decoration:none;}',
+    '.pbgui-alert-link:hover{background:rgba(99,179,237,.16);border-color:#63b3ed;}',
     '.pnr{position:absolute;z-index:2;}',
     '.pnr-n{top:-4px;left:6px;right:6px;height:8px;cursor:n-resize;}',
     '.pnr-s{bottom:-4px;left:6px;right:6px;height:8px;cursor:s-resize;}',
@@ -287,6 +316,8 @@
     html += '<div id="nav-right">'
           + '<button class="nav-action-btn restart" id="pbgui-restart-btn"><span class="nav-restart-dot"></span>Restart</button>'
           + '<button class="nav-action-btn notify" id="pbgui-notify-btn" title="Notification log">&#128276;</button>'
+          + '<span class="nav-divider" aria-hidden="true"></span>'
+          + '<button class="nav-action-btn alerts" id="pbgui-alert-btn" title="VPSMonitor alerts">&#128737; <span class="nav-badge" id="pbgui-alert-badge">0/0</span></button>'
           + '<button class="nav-action-btn accent" id="pbgui-guide-btn">&#128218; Guide</button>'
           + '<button class="nav-action-btn" id="pbgui-about-btn">&#x2139;&#xFE0F; About</button>'
           + '<button class="nav-action-btn icon-only logout" id="pbgui-logout-btn" title="Logout" aria-label="Logout">'
@@ -305,6 +336,8 @@
      NOTIFICATION LOG PANEL
      ════════════════════════════════════ */
   var _notifyViewer = null;
+  var _navAlerts = { items: [], history: [], summary: { new_count: 0, ack_count: 0, total_active: 0 } };
+  var _alertsTimer = null;
   var _navConfirmResolve = null;
   var _navConfirmReturnFocus = null;
 
@@ -380,12 +413,262 @@
     if (_notifyViewer) { _notifyViewer.close(); _notifyViewer = null; }
   }
 
-  function _bindNotifyDrag(panel) {
-    var hdr = document.getElementById('pbgui-notify-hdr');
+  function buildAlertOverlay() {
+    if (document.getElementById('pbgui-alert-ovl')) return;
+    var wrapper = document.createElement('div');
+    wrapper.innerHTML = ''
+      + '<div id="pbgui-alert-ovl" aria-hidden="true">'
+      +   '<div id="pbgui-alert-box" role="dialog" aria-modal="true" aria-labelledby="pbgui-alert-title">'
+      +     '<div class="pnr pnr-n" data-dir="n"></div>'
+      +     '<div class="pnr pnr-s" data-dir="s"></div>'
+      +     '<div class="pnr pnr-w" data-dir="w"></div>'
+      +     '<div class="pnr pnr-e" data-dir="e"></div>'
+      +     '<div class="pnr pnr-nw" data-dir="nw"></div>'
+      +     '<div class="pnr pnr-ne" data-dir="ne"></div>'
+      +     '<div class="pnr pnr-sw" data-dir="sw"></div>'
+      +     '<div class="pnr pnr-se" data-dir="se"></div>'
+      +     '<div class="pbgui-ovl-header" id="pbgui-alert-hdr">'
+      +       '<span class="pbgui-ovl-title" id="pbgui-alert-title">VPSMonitor Alerts</span>'
+      +       '<button class="pbgui-ovl-close" id="pbgui-alert-close">&#x2715;</button>'
+      +     '</div>'
+      +     '<div id="pbgui-alert-body">'
+      +       '<div id="pbgui-alert-toolbar">'
+      +         '<div id="pbgui-alert-summary"></div>'
+      +         '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">'
+      +           '<button type="button" class="pbgui-modal-btn secondary" id="pbgui-alert-ack-all">Ack all</button>'
+      +           '<a class="pbgui-alert-link" id="pbgui-alert-open-monitor" href="#">Open VPS Monitor</a>'
+      +         '</div>'
+      +       '</div>'
+      +       '<div id="pbgui-alert-list"></div>'
+      +     '</div>'
+      +   '</div>'
+      + '</div>';
+    document.body.appendChild(wrapper.firstChild);
+    var ovl = document.getElementById('pbgui-alert-ovl');
+    var box = document.getElementById('pbgui-alert-box');
+    var closeBtn = document.getElementById('pbgui-alert-close');
+    var ackAllBtn = document.getElementById('pbgui-alert-ack-all');
+    if (closeBtn) closeBtn.addEventListener('click', closeAlertOverlay);
+    if (ackAllBtn) ackAllBtn.addEventListener('click', function () { ackAllAlerts(); });
+    if (box) {
+      _bindPanelDrag(box, 'pbgui-alert-hdr', ['pbgui-alert-close']);
+      _bindPanelResize(box, 320, 220);
+    }
+  }
+
+  function closeAlertOverlay() {
+    var ovl = document.getElementById('pbgui-alert-ovl');
+    if (!ovl) return;
+    ovl.classList.remove('visible');
+    ovl.setAttribute('aria-hidden', 'true');
+  }
+
+  function openAlertOverlay() {
+    buildAlertOverlay();
+    renderAlertOverlay();
+    var ovl = document.getElementById('pbgui-alert-ovl');
+    var box = document.getElementById('pbgui-alert-box');
+    if (!ovl) return;
+    if (box && !box.dataset.positioned) {
+      var width = Math.min(Math.max(Math.round(window.innerWidth * 0.78), 320), 880);
+      var height = Math.min(Math.max(Math.round(window.innerHeight * 0.78), 220), 640);
+      box.style.width = width + 'px';
+      box.style.height = height + 'px';
+      box.style.left = Math.max(16, Math.round((window.innerWidth - width) / 2)) + 'px';
+      box.style.top = Math.max(16, Math.round((window.innerHeight - height) / 2)) + 'px';
+      box.dataset.positioned = 'true';
+    }
+    ovl.classList.add('visible');
+    ovl.setAttribute('aria-hidden', 'false');
+  }
+
+  function _alertKindLabel(kind) {
+    return ({ offline: 'Offline', service: 'Service', system: 'System', instance: 'Instance' })[String(kind || '')] || 'Alert';
+  }
+
+  function _formatTs(ts) {
+    var value = Number(ts || 0);
+    if (!value) return 'n/a';
+    try { return new Date(value * 1000).toLocaleString(); } catch (_) { return 'n/a'; }
+  }
+
+  function renderAlertOverlay() {
+    var summaryEl = document.getElementById('pbgui-alert-summary');
+    var listEl = document.getElementById('pbgui-alert-list');
+    var openMonitor = document.getElementById('pbgui-alert-open-monitor');
+    if (openMonitor) {
+      openMonitor.onclick = function (e) {
+        e.preventDefault();
+        closeAlertOverlay();
+        var c = cfg();
+        var apiOrigin = '';
+        if (c.apiBase) {
+          var m = c.apiBase.match(/^(https?:\/\/[^/]+)/);
+          if (m) apiOrigin = m[1];
+        }
+        if (!apiOrigin) apiOrigin = window.location.origin;
+        var url = apiOrigin + '/api/vps/main_page?token=' + encodeURIComponent(c.token || '') + '&st_base=' + encodeURIComponent(c.stBase || '');
+        window.location.href = url;
+      };
+    }
+    if (summaryEl) {
+      var s = _navAlerts.summary || { new_count: 0, ack_count: 0, total_active: 0 };
+      summaryEl.textContent = s.total_active + ' active alerts, ' + s.new_count + ' new, ' + s.ack_count + ' acknowledged';
+    }
+    if (!listEl) return;
+    var items = Array.isArray(_navAlerts.items) ? _navAlerts.items : [];
+    var history = Array.isArray(_navAlerts.history) ? _navAlerts.history : [];
+    var html = '';
+    if (!items.length) {
+      html += '<div class="pbgui-alert-empty">No active VPSMonitor alerts.</div>';
+    }
+    items.forEach(function (item) {
+      var ack = !!item.acknowledged;
+      var host = esc(item.host || '');
+      var title = esc(item.summary || 'Alert');
+      var details = esc(item.details || '');
+      html += '<div class="pbgui-alert-item' + (ack ? '' : ' new') + '">';
+      html +=   '<div class="pbgui-alert-head">';
+      html +=     '<div>';
+      html +=       '<div class="pbgui-alert-title">' + title + '</div>';
+      html +=       '<div class="pbgui-alert-meta">';
+      html +=         '<span class="pbgui-alert-pill kind">' + esc(_alertKindLabel(item.kind)) + '</span>';
+      html +=         '<span class="pbgui-alert-pill ' + (ack ? 'ack' : 'new') + '">' + (ack ? 'ACK' : 'NEW') + '</span>';
+      html +=         '<span>' + host + (item.name ? ' / ' + esc(item.name) : '') + '</span>';
+      html +=         '<span>Seen ' + esc(_formatTs(item.first_seen_ts)) + '</span>';
+      html +=       '</div>';
+      html +=     '</div>';
+      if (!ack) {
+        html +=   '<div class="pbgui-alert-actions"><button type="button" class="pbgui-modal-btn secondary" data-alert-ack="' + escAttr(item.id) + '">Ack</button></div>';
+      }
+      html +=   '</div>';
+      html +=   '<div class="pbgui-alert-details">' + details + '</div>';
+      html += '</div>';
+    });
+    if (history.length) {
+      html += '<div class="pbgui-alert-section-sep"></div>';
+      html += '<div class="pbgui-alert-history-title">History</div>';
+      history.forEach(function (item) {
+        var host = esc(item.host || '');
+        var title = esc(item.summary || 'Alert');
+        var details = esc(item.details || '');
+        var seenTs = esc(_formatTs(item.first_seen_ts));
+        var resolvedTs = esc(_formatTs(item.resolved_ts || item.last_seen_ts));
+        html += '<div class="pbgui-alert-item history">';
+        html +=   '<div class="pbgui-alert-head">';
+        html +=     '<div>';
+        html +=       '<div class="pbgui-alert-title">' + title + '</div>';
+        html +=       '<div class="pbgui-alert-meta">';
+        html +=         '<span class="pbgui-alert-pill kind">' + esc(_alertKindLabel(item.kind)) + '</span>';
+        html +=         '<span class="pbgui-alert-pill ack">' + (item.acknowledged ? 'ACK' : 'DONE') + '</span>';
+        html +=         '<span>' + host + (item.name ? ' / ' + esc(item.name) : '') + '</span>';
+        html +=         '<span>Seen ' + seenTs + '</span>';
+        html +=         '<span>Resolved ' + resolvedTs + '</span>';
+        html +=       '</div>';
+        html +=     '</div>';
+        html +=   '</div>';
+        html +=   '<div class="pbgui-alert-details">' + details + '</div>';
+        html += '</div>';
+      });
+    }
+    listEl.innerHTML = html;
+    listEl.querySelectorAll('[data-alert-ack]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        ackAlert(btn.getAttribute('data-alert-ack') || '');
+      });
+    });
+  }
+
+  function updateAlertButton() {
+    var btn = document.getElementById('pbgui-alert-btn');
+    var badge = document.getElementById('pbgui-alert-badge');
+    if (!btn || !badge) return;
+    var summary = _navAlerts.summary || { new_count: 0, ack_count: 0, total_active: 0 };
+    badge.textContent = String(summary.new_count || 0) + '/' + String(summary.ack_count || 0);
+    badge.classList.toggle('has-new', !!summary.new_count);
+  }
+
+  function fetchAlerts() {
+    var c = cfg();
+    if (!c.token) return;
+    var apiOrigin = '';
+    if (c.apiBase) {
+      var m = c.apiBase.match(/^(https?:\/\/[^/]+)/);
+      if (m) apiOrigin = m[1];
+    }
+    if (!apiOrigin) apiOrigin = window.location.origin;
+    fetch(apiOrigin + '/api/vps/alerts?token=' + encodeURIComponent(c.token), { cache: 'no-store' })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error('alerts failed');
+        return resp.json();
+      })
+      .then(function (data) {
+        _navAlerts = data || { items: [], history: [], summary: { new_count: 0, ack_count: 0, total_active: 0 } };
+        updateAlertButton();
+        var ovl = document.getElementById('pbgui-alert-ovl');
+        if (ovl && ovl.classList.contains('visible')) renderAlertOverlay();
+      })
+      .catch(function () {});
+  }
+
+  function scheduleAlerts() {
+    clearInterval(_alertsTimer);
+    _alertsTimer = setInterval(fetchAlerts, 10000);
+  }
+
+  function ackAlert(alertId) {
+    var c = cfg();
+    var apiOrigin = '';
+    if (c.apiBase) {
+      var m = c.apiBase.match(/^(https?:\/\/[^/]+)/);
+      if (m) apiOrigin = m[1];
+    }
+    if (!apiOrigin) apiOrigin = window.location.origin;
+    fetch(apiOrigin + '/api/vps/alerts/ack?token=' + encodeURIComponent(c.token || ''), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: alertId })
+    })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error('ack failed');
+        return resp.json();
+      })
+      .then(function (data) {
+        _navAlerts = data || _navAlerts;
+        updateAlertButton();
+        renderAlertOverlay();
+      })
+      .catch(function () {});
+  }
+
+  function ackAllAlerts() {
+    var c = cfg();
+    var apiOrigin = '';
+    if (c.apiBase) {
+      var m = c.apiBase.match(/^(https?:\/\/[^/]+)/);
+      if (m) apiOrigin = m[1];
+    }
+    if (!apiOrigin) apiOrigin = window.location.origin;
+    fetch(apiOrigin + '/api/vps/alerts/ack-all?token=' + encodeURIComponent(c.token || ''), { method: 'POST' })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error('ack-all failed');
+        return resp.json();
+      })
+      .then(function (data) {
+        _navAlerts = data || _navAlerts;
+        updateAlertButton();
+        renderAlertOverlay();
+      })
+      .catch(function () {});
+  }
+
+  function _bindPanelDrag(panel, headerId, closeIds) {
+    var hdr = document.getElementById(headerId);
     if (!hdr || hdr._dragBound) return;
     hdr._dragBound = true;
+    var ignoreIds = Array.isArray(closeIds) ? closeIds : [];
     hdr.addEventListener('mousedown', function(e) {
-      if (e.target.id === 'pbgui-notify-close') return;
+      if (ignoreIds.indexOf(e.target.id) >= 0) return;
       var rect = panel.getBoundingClientRect();
       panel.style.left = rect.left + 'px'; panel.style.top = rect.top + 'px';
       panel.style.right = 'auto'; panel.style.bottom = 'auto';
@@ -404,9 +687,11 @@
     });
   }
 
-  function _bindNotifyResize(panel) {
+  function _bindPanelResize(panel, minWidth, minHeight) {
     if (panel._resizeBound) return;
     panel._resizeBound = true;
+    var minW = Number(minWidth || 240);
+    var minH = Number(minHeight || 150);
     panel.querySelectorAll('.pnr').forEach(function(handle) {
       handle.addEventListener('mousedown', function(e) {
         e.preventDefault(); e.stopPropagation();
@@ -424,8 +709,12 @@
           if (dir.indexOf('e') >= 0) { nW = sW + dx; }
           if (dir.indexOf('n') >= 0) { nT = sT + dy; nH = sH - dy; }
           if (dir.indexOf('s') >= 0) { nH = sH + dy; }
-          if (nW < 240) { if (dir.indexOf('w') >= 0) nL = sL + sW - 240; nW = 240; }
-          if (nH < 150) { if (dir.indexOf('n') >= 0) nT = sT + sH - 150; nH = 150; }
+          if (nW < minW) { if (dir.indexOf('w') >= 0) nL = sL + sW - minW; nW = minW; }
+          if (nH < minH) { if (dir.indexOf('n') >= 0) nT = sT + sH - minH; nH = minH; }
+          nL = Math.max(0, Math.min(nL, window.innerWidth - minW));
+          nT = Math.max(0, Math.min(nT, window.innerHeight - minH));
+          nW = Math.min(nW, window.innerWidth - nL);
+          nH = Math.min(nH, window.innerHeight - nT);
           panel.style.left = nL + 'px'; panel.style.top = nT + 'px';
           panel.style.width = nW + 'px'; panel.style.height = nH + 'px';
         }
@@ -437,6 +726,14 @@
         document.addEventListener('mouseup', onUp);
       });
     });
+  }
+
+  function _bindNotifyDrag(panel) {
+    _bindPanelDrag(panel, 'pbgui-notify-hdr', ['pbgui-notify-close']);
+  }
+
+  function _bindNotifyResize(panel) {
+    _bindPanelResize(panel, 240, 150);
   }
 
   function buildAbout() {
@@ -780,6 +1077,11 @@
     if (notifyBtn) notifyBtn.addEventListener('click', function () { toggleNotifyPanel(); });
     var notifyClose = document.getElementById('pbgui-notify-close');
     if (notifyClose) notifyClose.addEventListener('click', function () { closeNotifyPanel(); });
+    buildAlertOverlay();
+    var alertBtn = document.getElementById('pbgui-alert-btn');
+    if (alertBtn) alertBtn.addEventListener('click', function () { openAlertOverlay(); });
+    fetchAlerts();
+    scheduleAlerts();
 
     /* About button → show overlay */
     var aboutBtn = document.getElementById('pbgui-about-btn');
@@ -805,6 +1107,11 @@
       if (e.key === 'Escape') {
         if (confirmOvl && confirmOvl.classList.contains('visible')) {
           closeNavConfirm(false);
+          return;
+        }
+        var alertOvl = document.getElementById('pbgui-alert-ovl');
+        if (alertOvl && alertOvl.classList.contains('visible')) {
+          closeAlertOverlay();
           return;
         }
         if (aboutOvl) aboutOvl.classList.remove('visible');

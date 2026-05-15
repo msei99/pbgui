@@ -18,11 +18,10 @@ The Overview also includes a dedicated **Workers** card. It opens the admin-only
 |---|---|
 | **PBRun** | Starts/stops local Passivbot bot processes and manages dynamic coin filters |
 | **PBRemote** | Syncs instances and commands between local and remote VPS servers via a cloud bucket |
-| **PBMon** | Monitors running bots and sends Telegram alerts for unusual behavior |
 | **PBStat** | Collects spot trade statistics for the legacy v6 single bot only |
 | **PBData** | Fetches account data (balances, positions, orders, history, executions) via REST and live prices via public WebSocket |
 | **PBCoinData** | Fetches CoinMarketCap data and builds exchange symbol mappings for dynamic filters |
-| **PBAPIServer** | Runs the FastAPI backend (REST + WebSocket) that powers the Dashboard, VPS Monitor, Job Queue, and all real-time features |
+| **PBAPIServer** | Runs the FastAPI backend (REST + WebSocket) that powers the Dashboard, VPS Monitor, Job Queue, live alert handling, and all real-time features |
 
 ## Starting and stopping services
 
@@ -72,7 +71,7 @@ A healthy setup usually starts services in this order:
 4. **PBStat** — collects spot trade statistics (v6 single bot only)
 5. **PBAPIServer** — enables Dashboard, VPS Monitor, Job Queue, and real-time features
 6. **PBRemote** — connects to remote VPS (if used)
-7. **PBMon** — enables monitoring and Telegram alerts (if used)
+7. **PBAPIServer VPS Monitoring Alerts** — configure Telegram routing and in-GUI alert visibility inside the API server settings when needed
 
 ## Troubleshooting
 

@@ -199,7 +199,6 @@ pbrun = """
     cd ${pbgui}
     python PBRun.py
     # python PBRemote.py
-    # python PBMon.py
     # python PBStat.py
     # python PBShare.py
     # python PBData.py
@@ -240,31 +239,13 @@ pbremote = """
 
 pbmon = """
     ```
-    This is the Monitoring Manager from PBGUI.
-    Enable, to start monitoring your Bots.
-    To start the Monitoring Manager after reboot your server, you have to
-    start PBMon.py when your Server starts.
-    This can be done in your crontab with @reboot
+    VPS monitoring alerts now run inside PBAPIServer together with the live
+    VPS monitor. There is no separate PBMon daemon anymore.
 
-    Example crontab
-    @reboot ~/software/pbgui/start.sh
+    Configure Telegram routing and in-GUI alert visibility under:
+    Services -> PBAPIServer -> Settings -> VPS Monitoring
 
-    Example start.sh
-    #!/usr/bin/bash
-    venv=~/software/venv_pb39       #Path to python venv
-    pbgui=~/software/pbgui          #path to pbgui installation
-    source ${venv}/bin/activate
-    cd ${pbgui}
-    # python PBRun.py
-    # python PBRemote.py
-    python PBMon.py
-    # python PBStat.py
-    # python PBShare.py
-    # python PBData.py
-    # python PBCoinData.py
-
-    Run "chmod 755 start.sh" and change the path to your needs
-    Run "crontab -e" and add the @reboot with your path
+    The navigation bar shows a dedicated alert indicator with new/ack counts.
     ```"""
 
 vps_settings = """
@@ -278,7 +259,7 @@ vps_settings = """
     Requirements:
     - SSH keys must be installed on VPS (via VPS Manager)
     - VPS must be registered in VPS Manager
-    - Telegram config (shared with PBMon) for alerts
+    - Telegram config in PBAPIServer VPS Monitoring alerts
     - API Server must be running
 
     Only relevant on the Master node.
@@ -339,7 +320,6 @@ pbstat = """
     cd ${pbgui}
     # python PBRun.py
     # python PBRemote.py
-    # python PBMon.py
     python PBStat.py
     # python PBShare.py
     # python PBData.py
@@ -369,7 +349,6 @@ pbdata = """
     cd ${pbgui}
     # python PBRun.py
     # python PBRemote.py
-    # python PBMon.py
     # python PBStat.py
     # python PBShare.py
     python PBData.py
@@ -403,7 +382,6 @@ pbcoindata = """
     cd ${pbgui}
     # python PBRun.py
     # python PBRemote.py
-    # python PBMon.py
     # python PBStat.py
     # python PBShare.py
     # python PBData.py
@@ -1931,7 +1909,7 @@ coin_flags_lev = """
 
 pbmon_telegram_token = """
     ```
-    Your Telegram Bot Token
+    Telegram Bot Token used by PBAPIServer VPS Monitoring alerts.
 
     Create a Telegram bot and obtain its API key. You can do this by talking to the BotFather in Telegram. To do this:
     Open the Telegram app on your smartphone or desktop.
@@ -1942,7 +1920,7 @@ pbmon_telegram_token = """
 
 pbmon_telegram_chat_id = """
     ```
-    Your Telegram Chat ID
+    Telegram Chat ID used by PBAPIServer VPS Monitoring alerts.
     ```"""
 
 archive_name = """

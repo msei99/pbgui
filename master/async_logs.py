@@ -31,7 +31,6 @@ SERVICE_LOGS: dict[str, str] = {
     "PBRemote":  "data/logs/PBRemote.log",
     "PBCoinData": "data/logs/PBCoinData.log",
     "PBData":    "data/logs/PBData.log",
-    "PBMon":     "data/logs/PBMon.log",
     "PBGui":     "data/logs/PBGui.log",
     "PBApiServer": "data/logs/PBApiServer.log",
     "FastAPI":   "data/logs/FastAPI.log",

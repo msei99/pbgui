@@ -18,11 +18,10 @@ Die Übersicht enthält jetzt auch eine eigene **Workers**-Kachel. Sie öffnet d
 |---|---|
 | **PBRun** | Startet/stoppt lokale Passivbot-Prozesse und verwaltet dynamische Coin-Filter |
 | **PBRemote** | Synchronisiert Instanzen und Befehle zwischen lokalem Rechner und Remote-VPS über einen Cloud-Bucket |
-| **PBMon** | Überwacht laufende Bots und sendet Telegram-Alarme bei ungewöhnlichem Verhalten |
 | **PBStat** | Sammelt Spot-Handelsstatistiken – nur für den alten v6 Single Bot |
 | **PBData** | Lädt Account-Daten (Balances, Positionen, Orders, History, Executions) via REST und Live-Preise über öffentliche WebSockets |
 | **PBCoinData** | Ruft CoinMarketCap-Daten ab und erstellt Exchange-Symbol-Mappings für dynamische Filter |
-| **PBAPIServer** | Betreibt das FastAPI-Backend (REST + WebSocket), das Dashboard, VPS Monitor, Job Queue und alle Echtzeit-Features versorgt |
+| **PBAPIServer** | Betreibt das FastAPI-Backend (REST + WebSocket), das Dashboard, VPS Monitor, Job Queue, Live-Alarmierung und alle Echtzeit-Features versorgt |
 
 ## Services starten und stoppen
 
@@ -72,7 +71,7 @@ Ein stabiles Setup startet die Dienste üblicherweise in dieser Reihenfolge:
 4. **PBStat** — sammelt Spot-Handelsstatistiken (nur v6 Single Bot)
 5. **PBAPIServer** — aktiviert Dashboard, VPS Monitor, Job Queue und Echtzeit-Features
 6. **PBRemote** — verbindet mit Remote-VPS (wenn genutzt)
-7. **PBMon** — aktiviert Monitoring und Telegram-Alarme (wenn genutzt)
+7. **PBAPIServer VPS Monitoring Alerts** — konfiguriert Telegram-Routing und die GUI-Sichtbarkeit der Alarme direkt in den API-Server-Einstellungen, wenn genutzt
 
 ## Schnelle Fehlersuche
 

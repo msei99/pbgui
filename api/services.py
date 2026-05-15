@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from api.auth import require_auth, SessionToken
-from api.vps import get_monitor_state_snapshot
+from api.vps import get_monitor, get_monitor_state_snapshot
 from pbgui_purefunc import PBGDIR, load_ini, save_ini
 from logging_helpers import human_log as _log
 
@@ -29,7 +29,7 @@ SERVICE = "Services"
 
 router = APIRouter()
 
-_SERVICES = ["pbrun", "pbremote", "pbmon", "pbdata", "pbcoindata", "api-server"]
+_SERVICES = ["pbrun", "pbremote", "pbdata", "pbcoindata", "api-server"]
 
 
 def _get_service(name: str):
@@ -40,9 +40,6 @@ def _get_service(name: str):
     if name == "pbremote":
         from PBRemote import PBRemote
         return PBRemote()
-    if name == "pbmon":
-        from PBMon import PBMon
-        return PBMon()
     if name == "pbdata":
         from PBData import PBData
         obj = PBData.__new__(PBData)
@@ -906,38 +903,6 @@ def save_monitor_config(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Settings: PBMon ──────────────────────────────────────────
-
-@router.get("/settings/pbmon")
-def get_pbmon_settings(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    from PBMon import PBMon
-    obj = PBMon()
-    return {
-        "telegram_token": obj.telegram_token or "",
-        "telegram_chat_id": obj.telegram_chat_id or "",
-    }
-
-
-class PBMonSettings(BaseModel):
-    telegram_token: str = ""
-    telegram_chat_id: str = ""
-
-
-@router.post("/settings/pbmon")
-def save_pbmon_settings(
-    body: PBMonSettings, session: SessionToken = Depends(require_auth)
-) -> Dict[str, Any]:
-    try:
-        from PBMon import PBMon
-        obj = PBMon()
-        obj.telegram_token = body.telegram_token
-        obj.telegram_chat_id = body.telegram_chat_id
-        return {"ok": True}
-    except Exception as e:
-        _log(SERVICE, f"save pbmon settings: {e}", level="ERROR")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 # ── Settings: PBCoinData ─────────────────────────────────────
 
 @router.get("/settings/pbcoindata/key-status")
@@ -1026,6 +991,7 @@ def _available_vps_hosts() -> List[str]:
 def get_api_server_settings(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
     mod = importlib.import_module("PBApiServer")
     obj = mod.PBApiServer()
+    monitor = get_monitor()
 
     auto_restart_val = load_ini("vps_monitor", "auto_restart")
     auto_restart = auto_restart_val.lower() == "true" if auto_restart_val else True
@@ -1042,6 +1008,23 @@ def get_api_server_settings(session: SessionToken = Depends(require_auth)) -> Di
         "enabled_hosts": enabled_hosts,
         "available_hosts": _available_vps_hosts(),
         "monitor_config": _load_monitor_config_values(),
+        **(monitor.get_alert_settings() if monitor else {
+            "telegram_token": load_ini("main", "telegram_token") or "",
+            "telegram_chat_id": load_ini("main", "telegram_chat_id") or "",
+            "offline_gui": True,
+            "service_gui": True,
+            "system_gui": True,
+            "instance_gui": True,
+            "ssh_lost_telegram": True,
+            "ssh_recovered_telegram": True,
+            "service_down_telegram": True,
+            "service_restart_started_telegram": True,
+            "service_recovered_telegram": True,
+            "system_problem_telegram": True,
+            "system_recovered_telegram": True,
+            "instance_problem_telegram": True,
+            "instance_recovered_telegram": True,
+        }),
     }
 
 
@@ -1051,6 +1034,21 @@ class APIServerSettings(BaseModel):
     auto_restart: bool = True
     enabled_hosts: List[str] = []
     monitor_config: Dict[str, float] = Field(default_factory=dict)
+    telegram_token: str = ""
+    telegram_chat_id: str = ""
+    offline_gui: bool = True
+    service_gui: bool = True
+    system_gui: bool = True
+    instance_gui: bool = True
+    ssh_lost_telegram: bool = True
+    ssh_recovered_telegram: bool = True
+    service_down_telegram: bool = True
+    service_restart_started_telegram: bool = True
+    service_recovered_telegram: bool = True
+    system_problem_telegram: bool = True
+    system_recovered_telegram: bool = True
+    instance_problem_telegram: bool = True
+    instance_recovered_telegram: bool = True
 
 
 @router.post("/settings/api-server")
@@ -1065,6 +1063,12 @@ def save_api_server_settings(
         save_ini("vps_monitor", "auto_restart", str(body.auto_restart))
         save_ini("vps_monitor", "enabled_hosts", ",".join(sorted(body.enabled_hosts)))
         _save_monitor_config_values(body.monitor_config)
+        monitor = get_monitor()
+        if monitor:
+            monitor.save_alert_settings(body.model_dump())
+        else:
+            save_ini("main", "telegram_token", body.telegram_token)
+            save_ini("main", "telegram_chat_id", body.telegram_chat_id)
         return {"ok": True}
     except Exception as e:
         _log(SERVICE, f"save api-server settings: {e}", level="ERROR")

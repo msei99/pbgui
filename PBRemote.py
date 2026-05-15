@@ -324,7 +324,10 @@ class PBRemote():
 
     def cleanup_legacy_alive_once(self):
         pbgdir = Path.cwd()
-        marker = Path(f'{pbgdir}/data/pbremote_legacy_alive_cleanup.json')
+        marker = Path(f'{pbgdir}/data/state/pbremote/pbremote_legacy_alive_cleanup.json')
+        legacy_marker = Path(f'{pbgdir}/data/pbremote_legacy_alive_cleanup.json')
+        if not marker.exists() and legacy_marker.exists():
+            marker = legacy_marker
         if marker.exists():
             return
 
@@ -359,6 +362,7 @@ class PBRemote():
         if cleanup_failed:
             return
 
+        marker.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = marker.with_suffix('.tmp')
         with tmp_path.open('w', encoding='utf-8') as f:
             json.dump(
