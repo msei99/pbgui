@@ -36,12 +36,10 @@ It has the following functions:
 
 ### Get your VPS for running passivbot
 
-I currently recommend [IONOS](https://aklam.io/CBA3zSaZ) or [Servitro](https://my.servitro.com/aff.php?aff=186).
+I currently recommend [IONOS](https://aklam.io/CBA3zSaZ).
 For IONOS open `Server` -> `vServer (VPS)` -> `Linux VPS`.
 For normal VPS bots I currently suggest `VPS S+` with 2 vCores CPU, 2 GB RAM and 80 GB NVMe.
 For a remote master I currently suggest `VPS M+` with 4 vCores CPU, 4 GB RAM and 120 GB NVMe.
-Servitro current pick: `Virtual-1` with 1 vCore, 4 GB DDR4 RAM, 25 GB SSD, 10 Gbps port, 1 TB traffic, 1x IPv4 and 1x IPv6 /64.
-Use coupon code `S8KQX51KF6` to get the Servitro plan for `$20/year`.
 
 ### Support:
 If you like to support pbgui, please join one of my copytradings:\
@@ -290,6 +288,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Changed the VPS provider recommendation copy in the README and VPS init flow to recommend only `IONOS`.
 - Changed VPS monitor system alert summaries to use clearer threshold labels such as `memory free`, `swap free`, and `disk free` instead of shorter internal names.
 - Fixed VPS monitor system alerts and recoveries to carry structured threshold names, so both active and recovered messages now state exactly which thresholds triggered and still include the full current values.
 - Fixed VPS monitor service alerts to carry a structured restart flag instead of inferring restart events from the human-readable details text.
@@ -394,7 +393,7 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 - Fixed: FastAPI `VPS Manager` Master now refreshes localhost package-update and reboot-required state on every master detail refresh, so `Update Linux` immediately clears stale pending-update counts after a local Linux update instead of waiting for the next hourly full refresh.
 - Changed: FastAPI `VPS Manager` Master now shows only one short runtime-warning notice for blocked localhost sudo tasks, instead of repeating longer warnings around the individual Linux/tool actions.
 - Changed: FastAPI `VPS Manager` Master now places the `Reboot after Linux update` checkbox before `Update Linux`, matching the VPS sidebar action ordering exactly.
-- Changed: FastAPI `VPS Manager` Add VPS sidebar no longer shows a redundant `Refresh` action, and the provider recommendation copy now points only to `IONOS` and `Servitro`, including the IONOS affiliate link plus the concrete `Linux VPS` -> `VPS S+` / `VPS M+` specs and the current Servitro `Virtual-1` coupon recommendation; the README provider recommendations were updated to the same two current options.
+- Changed: FastAPI `VPS Manager` Add VPS sidebar no longer shows a redundant `Refresh` action, and the provider recommendation copy now points only to `IONOS`, including the affiliate link plus the concrete `Linux VPS` -> `VPS S+` / `VPS M+` specs; the README provider recommendation was updated accordingly.
 - Changed: FastAPI `VPS Manager` Add VPS now also shows a `Status Details` card grid for the init form, so you can see init readiness and which required IP/hostname/user/credential fields are still missing before running `Init VPS`.
 - Fixed: FastAPI `VPS Manager` Add VPS now pre-fills `VPS user name` from the local configured user and refreshes the new init `Status Details` cards live while you type, so fields like `VPS IP` no longer stay stale on `Missing` until a later full re-render.
 - Changed: FastAPI `VPS Manager` Add VPS now only shows `Remove user from VPS after init` when the init method is `password` or `private_key`, matching the original Streamlit init form behavior.
