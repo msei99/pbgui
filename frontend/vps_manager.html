@@ -2650,6 +2650,8 @@
       pendingConfirm: null,
       pendingSecretReveal: {},
       githubCommitDetails: {},
+      githubCommitDetailsOpen: {},
+      missingCommitsOpen: {},
       visibleFields: {},
       renderSignatures: {
         sidebarActions: '',
@@ -2766,7 +2768,7 @@
         ui.pb7RemoteUrl = String((state.remote_urls || {})[value] || '');
         clearPb7RemoteCache(ui);
       }
-      renderUi({ forceView: true });
+      syncBranchViewPanel();
     }
 
     function setPb7RemoteUrl(scope, value) {
@@ -2805,7 +2807,7 @@
           clearPb7RemoteCache(ui);
         }
       }
-      renderUi({ forceView: true });
+      syncBranchViewPanel();
     }
 
     function setPb7ManualBranch(scope, value) {
@@ -2826,7 +2828,7 @@
           ui.pb7Commit = 'HEAD';
         }
       }
-      renderUi({ forceView: true });
+      syncBranchViewPanel();
     }
 
     function syncPb7RemoteLoads(scope, uiState, state) {
@@ -3004,36 +3006,16 @@
       }
       if (store.view === 'master-pbgui-branch') {
         const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
-        const state = detail && detail.branches ? (detail.branches.pbgui || {}) : {};
         return stableStringify({
           view: 'master-pbgui-branch',
-          ready: !!detail,
-          selectedBranch: store.master.pbguiBranch || '',
-          selectedCommit: store.master.pbguiCommit || 'HEAD',
-          currentBranch: state.current_branch || '',
-          currentCommit: state.current_commit || '',
-          availableBranches: Array.isArray(state.available_branches) ? state.available_branches : [],
-          commitCount: Array.isArray(state.commits) ? state.commits.length : 0
+          ready: !!detail
         });
       }
       if (store.view === 'master-pb7-branch') {
         const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
-        const state = detail && detail.branches ? (detail.branches.pb7 || {}) : {};
         return stableStringify({
           view: 'master-pb7-branch',
-          ready: !!detail,
-          selectedBranch: store.master.pb7Branch || '',
-          selectedCommit: store.master.pb7Commit || 'HEAD',
-          remoteName: store.master.pb7RemoteName || '',
-          remoteUrl: store.master.pb7RemoteUrl || '',
-          manualBranch: store.master.pb7ManualBranch || '',
-          manualCommit: store.master.pb7ManualCommit || '',
-          currentBranch: state.current_branch || '',
-          currentCommit: state.current_commit || '',
-          availableBranches: Array.isArray(state.available_branches) ? state.available_branches : [],
-          remoteBranches: Array.isArray(store.master.remoteBranches) ? store.master.remoteBranches : [],
-          remoteCommitKeys: Object.keys(store.master.pb7RemoteCommits || {}),
-          localCommitCount: Array.isArray(state.commits) ? state.commits.length : 0
+          ready: !!detail
         });
       }
       if (store.view === 'master-task-log') {
@@ -3042,6 +3024,14 @@
           file: store.taskLog.file || '',
           title: store.taskLog.title || '',
           browse: !!store.taskLog.browse
+        });
+      }
+      if (store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch') {
+        const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
+        return stableStringify({
+          view: store.view,
+          hostname: store.hostname || '',
+          ready: !!detail
         });
       }
       if (isVpsContextView()) {
@@ -3675,6 +3665,10 @@
         setHtmlIfChanged('overview-table-live', renderOverviewTable(getOverviewRows()));
         return;
       }
+      if (store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch' || store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch') {
+        syncBranchViewPanel();
+        return;
+      }
       if (store.view === 'master') {
         const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
         if (!detail) return;
@@ -4076,6 +4070,7 @@
       if (!apiUrl) return '';
       const key = githubCommitCacheKey(remoteUrl, commitHash);
       const entry = store.githubCommitDetails[key] || null;
+      const isOpen = !!store.githubCommitDetailsOpen[key];
       let body = `<div class='field-help'>Open to load GitHub commit details inside PBGui.</div>`;
       if (entry && entry.loading) {
         body = `<div class='field-help'>Loading GitHub details...</div>`;
@@ -4085,7 +4080,7 @@
         body = renderGithubCommitPreview(entry.data, commitHash);
       }
       return `
-        <details class='commit-inline-details' ontoggle='handleGithubCommitDetailsToggle(this, ${js(remoteUrl)}, ${js(commitHash)})'>
+        <details class='commit-inline-details' data-github-commit-key='${escAttr(key)}'${isOpen ? ' open' : ''} ontoggle='handleGithubCommitDetailsToggle(this, ${js(remoteUrl)}, ${js(commitHash)})'>
           <summary>Show commit preview here</summary>
           <div class='commit-inline-body' data-github-commit-body='${escAttr(key)}'>${body}</div>
         </details>`;
@@ -4099,10 +4094,16 @@
     }
 
     function handleGithubCommitDetailsToggle(node, remoteUrl, commitHash) {
-      if (!node || !node.open) return;
+      if (!node) return;
+      const key = githubCommitCacheKey(remoteUrl, commitHash);
+      if (node.open) {
+        store.githubCommitDetailsOpen[key] = true;
+      } else {
+        delete store.githubCommitDetailsOpen[key];
+        return;
+      }
       const apiUrl = githubCommitApiUrl(remoteUrl, commitHash);
       if (!apiUrl) return;
-      const key = githubCommitCacheKey(remoteUrl, commitHash);
       const existing = store.githubCommitDetails[key];
       if (existing && (existing.loading || existing.data || existing.error)) return;
       store.githubCommitDetails[key] = { loading: true };
@@ -4138,8 +4139,10 @@
       if (currentIndex <= 0) return '';
       const missing = model.commits.slice(0, currentIndex);
       if (!missing.length) return '';
+      const panelKey = githubCommitCacheKey(remoteUrl || '', model.currentCommit || '');
+      const isOpen = !!store.missingCommitsOpen[panelKey];
       return `
-        <details class='notice missing-commits'>
+        <details class='notice missing-commits' data-missing-commits-key='${escAttr(panelKey)}'${isOpen ? ' open' : ''} ontoggle='handleMissingCommitsToggle(this)'>
           <summary>Show ${esc(String(missing.length))} missing commit(s)</summary>
           <div class='missing-commits-list'>
             ${missing.map(function (commit) {
@@ -4156,6 +4159,17 @@
             }).join('')}
           </div>
         </details>`;
+    }
+
+    function handleMissingCommitsToggle(node) {
+      if (!node) return;
+      const key = String(node.getAttribute('data-missing-commits-key') || '');
+      if (!key) return;
+      if (node.open) {
+        store.missingCommitsOpen[key] = true;
+      } else {
+        delete store.missingCommitsOpen[key];
+      }
     }
 
     function formatTs(value) {
@@ -5059,7 +5073,7 @@
           ui.pb7RemoteCommits = {};
         }
         if (!store.pb7BranchSelectInteracting) {
-          renderUi();
+          syncBranchViewPanel();
         }
         return;
       }
@@ -5155,7 +5169,7 @@
           ui.pb7RemoteCommits[branch] = commits;
         }
         if (!store.pb7BranchSelectInteracting) {
-          renderUi({ forceView: true });
+          syncBranchViewPanel();
         }
         return;
       }
@@ -6138,7 +6152,7 @@
       const branchSelect = `
         <div class='field'>
           <label>Target Branch</label>
-          <select onchange='${isMaster ? 'setMasterField' : 'setVpsUiField'}(${isMaster ? js('pbguiBranch') + ', this.value' : js(scope) + ', ' + js('pbguiBranch') + ', this.value'}); renderUi({ forceView: true });'>
+          <select onchange='${isMaster ? 'setMasterField' : 'setVpsUiField'}(${isMaster ? js('pbguiBranch') + ', this.value' : js(scope) + ', ' + js('pbguiBranch') + ', this.value'}); syncBranchViewPanel();'>
             ${model.availableBranches.map(function (branch) {
               return `<option value='${escAttr(branch)}'${branch === model.selectedBranch ? ' selected' : ''}>${esc(branch)}</option>`;
             }).join('')}
@@ -6147,7 +6161,7 @@
       const commitSelect = `
         <div class='field'>
           <label>Target Commit</label>
-          <select onchange='${isMaster ? 'setMasterField' : 'setVpsUiField'}(${isMaster ? js('pbguiCommit') + ', this.value' : js(scope) + ', ' + js('pbguiCommit') + ', this.value'}); renderUi({ forceView: true });'>
+          <select onchange='${isMaster ? 'setMasterField' : 'setVpsUiField'}(${isMaster ? js('pbguiCommit') + ', this.value' : js(scope) + ', ' + js('pbguiCommit') + ', this.value'}); syncBranchViewPanel();'>
             ${renderCommitOptions(model)}
           </select>
         </div>`;
@@ -6171,7 +6185,7 @@
               ${branchSelect}
               <div class='field'>
                 <label>Target Commit (${esc(model.commits.length)} loaded - optional, leave at HEAD for latest)</label>
-                <select onchange='${isMaster ? 'setMasterField' : 'setVpsUiField'}(${isMaster ? js('pbguiCommit') + ', this.value' : js(scope) + ', ' + js('pbguiCommit') + ', this.value'}); renderUi({ forceView: true });'>
+                <select onchange='${isMaster ? 'setMasterField' : 'setVpsUiField'}(${isMaster ? js('pbguiCommit') + ', this.value' : js(scope) + ', ' + js('pbguiCommit') + ', this.value'}); syncBranchViewPanel();'>
                   ${renderCommitOptions(model)}
                 </select>
               </div>
@@ -6202,7 +6216,7 @@
       const sourceRef = selectedRemoteName && sourceBranch ? (selectedRemoteName + '/' + sourceBranch) : sourceBranch;
       const targetRef = effectiveBranch ? ('local ' + effectiveBranch) : 'local branch';
       const sourceMissing = model.sourceBranchKnown && !model.sourceBranchExists;
-      const remoteCommitSetter = isMaster ? `setMasterField('pb7ManualCommit', this.value); renderUi({ forceView: true });` : `setVpsUiField(${js(scope)}, 'pb7ManualCommit', this.value); renderUi({ forceView: true });`;
+      const remoteCommitSetter = isMaster ? `setMasterField('pb7ManualCommit', this.value); syncBranchViewPanel();` : `setVpsUiField(${js(scope)}, 'pb7ManualCommit', this.value); syncBranchViewPanel();`;
       const branchFieldSetter = `setPb7LocalBranch(${js(scope)}, this.value)`;
       const remoteNameSetter = `setPb7RemoteName(${js(scope)}, this.value)`;
       const remoteUrlSetter = `setPb7RemoteUrl(${js(scope)}, this.value)`;
@@ -6243,7 +6257,7 @@
                   </div>
                   <div class='field'>
                     <label>Remote Branch</label>
-                    <select onfocus='store.pb7BranchSelectInteracting = true' onmousedown='store.pb7BranchSelectInteracting = true' onblur='store.pb7BranchSelectInteracting = false; renderUi({ forceView: true })' onchange='store.pb7BranchSelectInteracting = false; ${manualBranchSetter}'>
+                    <select onfocus='store.pb7BranchSelectInteracting = true' onmousedown='store.pb7BranchSelectInteracting = true' onblur='store.pb7BranchSelectInteracting = false; syncBranchViewPanel()' onchange='store.pb7BranchSelectInteracting = false; ${manualBranchSetter}'>
                       <option value=''>Use local branch target</option>
                       ${remoteBranches.map(function (branch) {
                         return `<option value='${escAttr(branch)}'${branch === manualBranch ? ' selected' : ''}>${esc(branch)}</option>`;
@@ -6276,7 +6290,7 @@
               <div class='panel-body'>
                 <div class='field'>
                   <label>${usingCustomRemote ? 'Local Branch Name' : 'Local Branch'}</label>
-                  <select onfocus='store.pb7BranchSelectInteracting = true' onmousedown='store.pb7BranchSelectInteracting = true' onblur='store.pb7BranchSelectInteracting = false; renderUi({ forceView: true })' onchange='store.pb7BranchSelectInteracting = false; ${branchFieldSetter}'>
+                  <select onfocus='store.pb7BranchSelectInteracting = true' onmousedown='store.pb7BranchSelectInteracting = true' onblur='store.pb7BranchSelectInteracting = false; syncBranchViewPanel()' onchange='store.pb7BranchSelectInteracting = false; ${branchFieldSetter}'>
                     ${model.availableBranches.map(function (branch) {
                       return `<option value='${escAttr(branch)}'${branch === model.selectedBranch ? ' selected' : ''}>${esc(branch)}</option>`;
                     }).join('')}
@@ -6489,6 +6503,7 @@
         const canRunRemote = !!String(getEffectiveVpsUserPw(selectedHost) || '').trim() || hasSessionSecret(selectedHost, 'user_pw') || !!(detail && detail.status && detail.status.update_ready);
         const st = (detail && detail.status) || {};
         const pbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
+        const pb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : 'sb-btn ok';
         const bothBtnClass = (st.pbgui_update_available || st.pb7_update_available) ? 'sb-btn warning' : 'sb-btn ok';
         const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
         const hasLinuxUpdates = String(pendingSrc || '').trim() && String(pendingSrc).trim() !== '0' && String(pendingSrc).trim() !== 'N/A';
@@ -6517,6 +6532,7 @@
             <label class='sb-toggle'><input type='checkbox' ${ui.debug ? 'checked' : ''} onchange="setVpsUiField(${js(selectedHost)}, 'debug', this.checked)"> Debug</label>
           </div>
           <button class='${pbguiBtnClass}' type='button' onclick='runVpsWithLog(${js(selectedHost)}, "vps-update-pbgui", "Update PBGui")'>Update PBGui</button>
+          <button class='${pb7BtnClass}' type='button' onclick='runVpsWithLog(${js(selectedHost)}, "vps-update-pb7", "Update PB7")'>Update PB7</button>
           <button class='${bothBtnClass}' type='button' onclick='runVpsWithLog(${js(selectedHost)}, "vps-update-pb", "Update PBGui and PB7")'>Update PBGui and PB7</button>
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' data-update-reboot-toggle=${js(selectedHost)} ${ui.updateReboot ? 'checked' : ''} onchange="setVpsUiField(${js(selectedHost)}, 'updateReboot', this.checked)"> Reboot after Linux update</label>
@@ -6564,7 +6580,6 @@
               <div class='side-button-title'>${esc(row.name)}</div>
               <div class='tag ${row.online ? 'ok' : 'error'}'>${row.online ? 'Online' : 'Offline'}</div>
             </div>
-            <div class='side-button-sub'>${esc(row.pbgui_branch || '-')} | ${esc(row.pb7_branch || '-')} | API ${esc(getOverviewApiSyncLabel(row))}</div>
           </button>`;
       }).join('');
       const masterButton = masterRow ? `
@@ -6575,7 +6590,6 @@
               <div class='side-button-title'>${esc(masterRow.name)}</div>
               <div class='tag ${masterRow.online ? 'ok' : 'error'}'>${masterRow.online ? 'Online' : 'Offline'}</div>
             </div>
-            <div class='side-button-sub'>${esc(masterRow.pbgui_branch || '-')} | ${esc(masterRow.pb7_branch || '-')}</div>
           </button>
         </div>` : '';
       const html = `
@@ -7769,11 +7783,10 @@
       }
       ensureMasterUi(detail);
       const label = repo === 'pbgui' ? 'PBGui' : 'PB7';
-      const panel = repo === 'pbgui' ? renderPbguiBranchPanel('master', detail.branches.pbgui || {}) : renderPb7BranchPanel('master', detail.branches.pb7 || {});
       return `
 
         <h2 class='page-section-title'>Master - ${esc(label)} Branch</h2>
-        ${panel}`;
+        <div id='master-branch-panel'>${renderBranchPanelForCurrentView()}</div>`;
     }
 
     function renderMasterTaskLogView() {
@@ -7918,11 +7931,40 @@
         return `<div class='empty-state'>Waiting for VPS detail for ${esc(store.hostname || 'selected host')}...</div>`;
       }
       const label = repo === 'pbgui' ? 'PBGui' : 'PB7';
-      const panel = repo === 'pbgui' ? renderPbguiBranchPanel(detail.hostname, detail.branches.pbgui || {}) : renderPb7BranchPanel(detail.hostname, detail.branches.pb7 || {});
       return `
 
         <h2 class='page-section-title'>${esc(detail.hostname)} &mdash; ${label} Branch</h2>
-        ${panel}`;
+        <div id='vps-branch-panel'>${renderBranchPanelForCurrentView()}</div>`;
+    }
+
+    function renderBranchPanelForCurrentView() {
+      if (store.view === 'master-pbgui-branch') {
+        const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
+        return detail ? renderPbguiBranchPanel('master', (detail.branches || {}).pbgui || {}) : '';
+      }
+      if (store.view === 'master-pb7-branch') {
+        const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
+        return detail ? renderPb7BranchPanel('master', (detail.branches || {}).pb7 || {}) : '';
+      }
+      if (store.view === 'vps-pbgui-branch') {
+        const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
+        return detail ? renderPbguiBranchPanel(detail.hostname, (detail.branches || {}).pbgui || {}) : '';
+      }
+      if (store.view === 'vps-pb7-branch') {
+        const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
+        return detail ? renderPb7BranchPanel(detail.hostname, (detail.branches || {}).pb7 || {}) : '';
+      }
+      return '';
+    }
+
+    function syncBranchViewPanel() {
+      if (store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch') {
+        setHtmlIfChanged('master-branch-panel', renderBranchPanelForCurrentView());
+        return;
+      }
+      if (store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch') {
+        setHtmlIfChanged('vps-branch-panel', renderBranchPanelForCurrentView());
+      }
     }
 
     function renderVpsTaskLogView() {

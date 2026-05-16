@@ -29,10 +29,10 @@ Linke Sidebar:
 |--------|--------|
 | **Add VPS** | Formular zum Hinzufügen / Initialisieren öffnen |
 | **Master** | Lokale Master-Verwaltung öffnen |
-| **Refresh** | Alle VPS-Status- und Versionsdaten neu laden |
-| **Managed VPS** Karten | Per-VPS-Verwaltungsansicht öffnen |
-| **API Sync Status** | Zeigt den gemeinsamen API-Sync-Status (`API Sync`, `API X/Y out of sync`, `API all in sync`) an und pusht API-Zugangsdaten bei Klick an verbundene VPS |
-| **Import Host** | Den manuellen Hostname-Import öffnen; der Hostname muss bereits lokal über `/etc/hosts` auflösbar sein |
+| **Refresh** | Alle VPS-Status- und Versionsdaten über das Refresh-Icon neu laden |
+| **Managed VPS** Karten | Per-VPS-Verwaltungsansicht öffnen; jede Karte zeigt nur Hostnamen und aktuellen Online-/Offline-Status |
+| **API Sync** | Zeigt den gemeinsamen API-Sync-Status (`API Sync`, `API X/Y out of sync`, `API all in sync`) an und pusht API-Zugangsdaten bei Klick an verbundene VPS |
+| **Import by Hostname** | Den manuellen Hostname-Import aus dem Sidebar-Bereich **Import Host** öffnen; der Hostname muss bereits lokal über `/etc/hosts` auflösbar sein |
 
 Die Übersicht nutzt jetzt die normale gemeinsame PBGui-FastAPI-Shell. Beim Wechsel zu **Master** oder zu einem konkreten **VPS** wird die linke Sidebar wie auf der alten Seite zu einer kontextabhängigen Aktionsliste umgeschaltet. Der Hauptbereich der Übersicht bleibt dabei auf die Tabelle fokussiert, während der Host-Import als manuelle Hostname-Aktion in der Sidebar verfügbar bleibt.
 
@@ -52,13 +52,19 @@ Sidebar-Aktionen:
 
 | Schaltfläche | Aktion |
 |--------|--------|
+| **Overview** | Zur Hauptübersicht des VPS Managers zurückkehren |
+| **Back to Master Overview** | Von Branch-/Log-Unteransichten zurück zur normalen Master-Detailansicht |
+| **Task Logs** | Den dedizierten Shared-Log-Viewer für gespeicherte Master-Playbook-Logs öffnen |
+| **Host Logs** | Den dedizierten Shared-Log-Viewer für lokale Service-Logs und dateibasierte Ziele öffnen |
+| **PBGui Branch** | Die PBGui-Branch-Verwaltung öffnen |
+| **PB7 Branch** | Die PB7-Branch-Verwaltung öffnen |
 | **Update PBGui and PB7** | Alle Komponenten aktualisieren |
 | **Update PBGui** | Nur PBGui aktualisieren |
 | **Update PB7** | Nur PB7 aktualisieren |
-| **Install rustup** | Rust-Toolchain installieren (benötigt sudo-Passwort) |
-| **Install rclone** | rclone installieren (benötigt sudo-Passwort) |
-| **Update PB7 venv** | PB7 Python-3.12-Venv neu erstellen (benötigt sudo-Passwort) |
-| **Install PBGui venv** | PBGui Python-3.12-Venv neu erstellen (benötigt sudo-Passwort) |
+| **Update Linux** | Linux-Paketupdates ausführen (optionale Reboot-Checkbox) |
+| **Reboot Master** | Den lokalen Server neu starten |
+| **Install or Update rustup** | Rust-Toolchain installieren oder aktualisieren |
+| **Install or Update rclone** | rclone installieren oder aktualisieren |
 
 Der **Master**-Inhaltsbereich enthält zusätzlich:
 - ein Live-Statusraster für PBRemote / CoinData / letzten Command
@@ -77,22 +83,23 @@ Sidebar-Aktionen:
 
 | Schaltfläche | Aktion |
 |--------|--------|
-| **Read settings from VPS** | Aktuelle Konfiguration per SSH vom VPS abrufen |
+| **Overview** | Zur Hauptübersicht des VPS Managers zurückkehren |
+| **Hostname selector** | Direkt zwischen gespeicherten VPS-Hosts wechseln, ohne den VPS-Kontext zu verlassen |
+| **Back** | Von Branch-/Log-/Setup-Unteransichten zurück zur normalen VPS-Detailansicht |
+| **Task Logs** | Den dedizierten Shared-Log-Viewer für alle gespeicherten VPS-Playbook-Logs inklusive Historie öffnen |
+| **Host Logs** | Den dedizierten Shared-Log-Viewer für VPS-Service-Logs und dateibasierte Ziele öffnen |
+| **Setup VPS** | Die VPS-Setup-/Konfigurationsansicht öffnen |
+| **PBGui Branch** | Die PBGui-Branch-Verwaltung öffnen |
+| **PB7 Branch** | Die PB7-Branch-Verwaltung öffnen |
 | **Initialize** | Ersteinrichtungs-Assistent starten |
-| **Save VPS** | Aktuelle Setup-Felder im VPS-Manager-JSON speichern |
-| **Setup VPS** | Setup-Playbook mit den aktuellen Setup-Feldern ausführen |
 | **Delete VPS** | Diesen VPS aus PBGui entfernen |
 | **Update PBGui** | PBGui auf diesem VPS aktualisieren |
 | **Update PBGui and PB7** | Alle Komponenten aktualisieren |
-| **Update PB7 venv** | PB7 Python-3.12-Venv neu erstellen |
-| **Update PBGui venv** | PBGui Python-3.12-Venv neu erstellen |
 | **Update Linux** | `apt upgrade` ausführen (optionale Reboot-Checkbox) |
 | **Reboot VPS** | VPS neu starten |
 | **Cleanup VPS** | Alte Pakete und Logs entfernen |
 | **Resize Swap** | Swap-Datei auf konfigurierte Größe anpassen |
 | **Update Firewall Settings** | ufw-Firewall-Regeln anwenden |
-| **Task Logs** | Den dedizierten Shared-Log-Viewer für alle gespeicherten VPS-Playbook-Logs inklusive Historie öffnen |
-| **Host Logs** | Den dedizierten Shared-Log-Viewer für VPS-Service-Logs und dateibasierte Ziele öffnen |
 | **Update CoinData API** | Aktualisierten CoinMarketCap-API-Key übertragen |
 
 Der **VPS**-Inhaltsbereich enthält zusätzlich:
@@ -102,11 +109,11 @@ Der **VPS**-Inhaltsbereich enthält zusätzlich:
 - einen **Progress**-Bereich mit getrennten Status-Buckets für Init-, Setup- und Update-Läufe; für die vollständige Ansible-Ausgabe werden die Sidebar-Aktionsknöpfe auf den gemeinsamen **Command Log Viewer** umgeschaltet
 
 Die Sidebar trennt die Log-Workflows jetzt bewusst von der normalen Host-Ansicht:
-- Utility-Aktionen wie **Task Logs**, **Host Logs**, **Read settings from VPS**, **Initialize** oder **Delete VPS** bleiben oberhalb eines Trenners, während die ausführbaren Ansible-Playbook-Knöpfe darunter gruppiert sind
+- Utility-Aktionen wie **Task Logs**, **Host Logs**, **Setup VPS**, **Initialize** oder **Delete VPS** bleiben oberhalb eines Trenners, während die ausführbaren Ansible-Playbook-Knöpfe darunter gruppiert sind
 - **Task Logs** öffnet einen eigenen gefilterten Viewer für alle gespeicherten Playbook-Logs des ausgewählten VPS inklusive rotierter Historie
 - Aktionen wie **Initialize**, **Setup VPS**, **Update PBGui**, **Update PBGui and PB7**, **Update Linux**, **Cleanup VPS** oder **Update CoinData API** schalten die Hauptfläche automatisch auf den gemeinsamen **Command Log Viewer** um
 - **Host Logs** öffnet einen eigenen **Host Log Viewer** für Service-Logs, laufende Bot-Logs und dateibasierte Ziele wie `sync.log`
-- **Back to Host Overview** bringt von beiden Log-Screens zurück in die normale VPS-Detailansicht, ohne den gewählten Host-Kontext zu verlieren
+- **Back** bringt von Branch-, Setup- oder Log-Screens zurück in die normale VPS-Detailansicht, ohne den gewählten Host-Kontext zu verlieren
 - jeder aufrufbare VPS-Manager-Task bekommt jetzt sein eigenes aktuelles Log plus rotierte Historie im gemeinsamen Viewer; standardmäßig bleiben 10 Historien-Dateien erhalten, konfigurierbar über `[vps_manager] task_log_history` in `pbgui.ini`
 - wenn die Ansible-Ausgabe bereits Terminal-ANSI-Farben enthält, übernimmt der gemeinsame Viewer diese Farben jetzt auch im Browser, statt nur über Textmuster zu raten
 - Ansible-Task-Logs mit verklebten Ergebnis-Markern oder escaped Payload-Steuerzeichen wie `\n` / `\r` werden jetzt im gemeinsamen Viewer in lesbare getrennte Anzeigezeilen aufgelöst
@@ -128,16 +135,16 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
 
 ## Neuen VPS hinzufügen
 
-1. **Add VPS** in der linken Sidebar klicken oder **Import Host** verwenden, um das Add-Formular aus einem bereits lokal in `/etc/hosts` eingetragenen Hostnamen vorzubelegen.
+1. **Add VPS** in der linken Sidebar klicken oder **Import by Hostname** aus dem Bereich **Import Host** verwenden, um das Add-Formular aus einem bereits lokal in `/etc/hosts` eingetragenen Hostnamen vorzubelegen.
 2. Die Schritt-Karten oben auf der Seite durchgehen:
    - Ubuntu-VPS vorbereiten
    - Hostname in die lokale `/etc/hosts` eintragen
    - VPS-Eintrag zuerst speichern
-   - **Init VPS** ausführen und danach **Setup VPS** in der Detailseite abschließen
-3. Das Formular **Step 4: Initial setup of your VPS** und die **Save VPS Entry**-Vorgaben ausfüllen.
+   - **Initialize & Setup VPS** in der Add-Ansicht ausführen oder den Host später öffnen und **Setup VPS** in der Detailseite abschließen
+3. Das Formular **Step 4: Initialize & Setup your VPS** und die **Save VPS Entry**-Vorgaben ausfüllen.
 4. Mit **Save VPS** den Eintrag anlegen oder aktualisieren.
-5. Mit **Init VPS** den Bootstrap-Lauf starten.
-6. Nach erfolgreicher Initialisierung die VPS-Detailseite öffnen und **Setup VPS** klicken.
+5. Mit **Initialize & Setup VPS** den Bootstrap-Lauf direkt aus der Add-Ansicht starten.
+6. Nach erfolgreicher Initialisierung die VPS-Detailseite öffnen und **Setup VPS** klicken, wenn das gespeicherte Setup erneut ausgeführt werden soll.
 
 ---
 

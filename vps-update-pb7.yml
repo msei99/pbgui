@@ -1,0 +1,277 @@
+---
+# Update pb7 on VPS
+# Steps:
+# 1. Update rust toolchain
+# 2. Clone/update passivbot repository for pb7
+# 3. Restart all pb7 bots if pb7 repository was updated
+
+- hosts: "{{ hostname }}"
+  gather_facts: yes
+
+  vars:
+    user: "{{ user }}"
+    install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: Measure pb7 disk footprint at playbook start
+      shell: |
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        install_dir="{{ install_dir }}"
+        echo "free_mb=$(df -Pm "$install_dir" | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb "$install_dir/venv_pb7")"
+        echo "rust_target_mb=$(path_mb "$install_dir/pb7/passivbot-rust/target")"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
+      args:
+        executable: /bin/bash
+      register: pb7_disk_playbook_start
+      changed_when: false
+
+    - name: remove stable toolchain if exists
+      shell: |
+        source ~/.profile || source ~/.bashrc || true
+        rustup toolchain uninstall stable 1.78.0
+      args:
+        executable: /bin/bash
+      ignore_errors: yes
+
+    - name: Update rust
+      shell: |
+        source ~/.profile || source ~/.bashrc || true
+        rustup update 1.90.0
+      args:
+        executable: /bin/bash
+      register: update_rust
+
+    - name: print update_rust
+      debug:
+        var: update_rust
+      tags: debug,never
+
+    - name: Measure pb7 disk footprint after rust update
+      shell: |
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        install_dir="{{ install_dir }}"
+        echo "free_mb=$(df -Pm "$install_dir" | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb "$install_dir/venv_pb7")"
+        echo "rust_target_mb=$(path_mb "$install_dir/pb7/passivbot-rust/target")"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
+      args:
+        executable: /bin/bash
+      register: pb7_disk_after_rust_update
+      changed_when: false
+
+    - name: Get current pb7 branch
+      command: git rev-parse --abbrev-ref HEAD
+      args:
+        chdir: "{{ install_dir }}/pb7"
+      register: current_pb7_branch
+      changed_when: false
+
+    - name: clone passivbot repository for pb7
+      git:
+        repo: https://github.com/enarjord/passivbot.git
+        dest: "{{ install_dir }}/pb7"
+        version: "{{ current_pb7_branch.stdout }}"
+        update: yes
+        force: yes
+      register: pb7_repo
+      notify: restart pb7
+
+    - name: print pb7_repo
+      debug:
+        var: pb7_repo
+      tags: debug,never
+
+  handlers:
+    - name: Measure pb7 disk footprint before update
+      shell: |
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        echo "free_mb=$(df -Pm '{{ install_dir }}' | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb '{{ install_dir }}/venv_pb7')"
+        echo "rust_target_mb=$(path_mb '{{ install_dir }}/pb7/passivbot-rust/target')"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
+      args:
+        executable: /bin/bash
+      register: pb7_disk_before
+      changed_when: false
+      listen: "restart pb7"
+
+    - name: Install pb7 requirements
+      pip:
+        virtualenv: "{{ install_dir }}/venv_pb7"
+        requirements: "{{ install_dir }}/pb7/requirements-live.txt"
+        extra_args: --no-cache-dir
+      environment:
+        PIP_NO_CACHE_DIR: "1"
+        PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      listen: "restart pb7"
+
+    - name: Remove pip cache directory after pb7 install
+      file:
+        path: "{{ install_dir | dirname }}/.cache/pip"
+        state: absent
+      listen: "restart pb7"
+
+    - name: Measure pb7 disk footprint after requirements install
+      shell: |
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        echo "free_mb=$(df -Pm '{{ install_dir }}' | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb '{{ install_dir }}/venv_pb7')"
+        echo "rust_target_mb=$(path_mb '{{ install_dir }}/pb7/passivbot-rust/target')"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
+      args:
+        executable: /bin/bash
+      register: pb7_disk_after_deps
+      changed_when: false
+      listen: "restart pb7"
+
+    - name: Build passivbot-rust with maturin
+      shell: |
+        source ~/.profile || source ~/.bashrc || true
+        source "{{ install_dir }}/venv_pb7/bin/activate"
+        maturin develop --release
+      args:
+        chdir: "{{ install_dir }}/pb7/passivbot-rust"
+        executable: /bin/bash
+      register: maturin_result
+      listen: "restart pb7"
+
+    - name: Write rust source stamp after maturin build
+      shell: |
+        source "{{ install_dir }}/venv_pb7/bin/activate"
+        python - <<'PY'
+        import sys
+        sys.path.insert(0, 'src')
+        from rust_utils import stamp_compiled_extensions, source_fingerprint
+        stamp_compiled_extensions(source_fingerprint())
+        print('Rust source stamp updated.')
+        PY
+      args:
+        chdir: "{{ install_dir }}/pb7"
+        executable: /bin/bash
+      listen: "restart pb7"
+
+    - name: Measure pb7 disk footprint after Rust build
+      shell: |
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        echo "free_mb=$(df -Pm '{{ install_dir }}' | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb '{{ install_dir }}/venv_pb7')"
+        echo "rust_target_mb=$(path_mb '{{ install_dir }}/pb7/passivbot-rust/target')"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
+      args:
+        executable: /bin/bash
+      register: pb7_disk_after_build
+      changed_when: false
+      listen: "restart pb7"
+
+    - name: Remove rustup downloads directory after pb7 build
+      file:
+        path: "{{ install_dir | dirname }}/.rustup/downloads"
+        state: absent
+      listen: "restart pb7"
+
+    - name: Remove rustup tmp directory after pb7 build
+      file:
+        path: "{{ install_dir | dirname }}/.rustup/tmp"
+        state: absent
+      listen: "restart pb7"
+
+    - name: Measure pb7 disk footprint after cleanup
+      shell: |
+        path_mb() {
+          if [ -e "$1" ]; then
+            du -sm "$1" 2>/dev/null | awk '{print $1}'
+          else
+            echo 0
+          fi
+        }
+        echo "free_mb=$(df -Pm '{{ install_dir }}' | awk 'NR==2 {print $4}')"
+        echo "venv_pb7_mb=$(path_mb '{{ install_dir }}/venv_pb7')"
+        echo "rust_target_mb=$(path_mb '{{ install_dir }}/pb7/passivbot-rust/target')"
+        echo rustup_downloads_mb="$(path_mb "$HOME/.rustup/downloads")"
+        echo rustup_tmp_mb="$(path_mb "$HOME/.rustup/tmp")"
+      args:
+        executable: /bin/bash
+      register: pb7_disk_after_cleanup
+      changed_when: false
+      listen: "restart pb7"
+
+    - name: Print pb7 disk usage summary
+      debug:
+        msg:
+          - "playbook_start: {{ pb7_disk_playbook_start.stdout_lines | join(', ') }}"
+          - "after_rust_update: {{ pb7_disk_after_rust_update.stdout_lines | join(', ') }}"
+          - "before_pb7_handlers: {{ pb7_disk_before.stdout_lines | join(', ') }}"
+          - "after_deps: {{ pb7_disk_after_deps.stdout_lines | join(', ') }}"
+          - "after_build: {{ pb7_disk_after_build.stdout_lines | join(', ') }}"
+          - "after_cleanup: {{ pb7_disk_after_cleanup.stdout_lines | join(', ') }}"
+          - "usage_mb: rustup_update={{ free_playbook_start_mb - free_after_rust_update_mb }}, pre_handler={{ free_after_rust_update_mb - free_before_mb }}, deps={{ free_before_mb - free_after_deps_mb }}, build={{ free_after_deps_mb - free_after_build_mb }}, cleanup_reclaimed={{ free_after_cleanup_mb - free_after_build_mb }}, net_from_start={{ free_playbook_start_mb - free_after_cleanup_mb }}"
+      vars:
+        free_playbook_start_mb: "{{ (pb7_disk_playbook_start.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
+        free_after_rust_update_mb: "{{ (pb7_disk_after_rust_update.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
+        free_before_mb: "{{ (pb7_disk_before.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
+        free_after_deps_mb: "{{ (pb7_disk_after_deps.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
+        free_after_build_mb: "{{ (pb7_disk_after_build.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
+        free_after_cleanup_mb: "{{ (pb7_disk_after_cleanup.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
+      listen: "restart pb7"
+
+    - name: kill all pb7 processes
+      shell: |
+        pids="$(ps -ef | grep "{{ install_dir }}/pb7/src/main.py" | grep -v grep | awk '{print $2}')"
+        if [ -n "$pids" ]; then
+          kill $pids
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      listen: "restart pb7"
+      ignore_errors: yes
+
+    - name: Make sure PBRun ist running
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -s PBRun
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+      listen: "restart pb7"

@@ -288,6 +288,10 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+ - Added a dedicated `Update PB7` action to FastAPI VPS Manager for remote VPS hosts, including a new `vps-update-pb7.yml` playbook so VPS management now matches the local master update split.
+ - Fixed the Master and VPS branch-management views to update only their branch panels instead of fully rerendering the whole view on branch/commit changes or remote commit loads; both the missing-commits and commit-preview expanders now stay open on first click.
+- Updated the English and German VPS Manager guides to match the current FastAPI UI labels, sidebar actions, and the reduced hostname-only sidebar cards.
+- Changed the VPS Manager sidebar cards to show only the host name and online state; branch/API detail lines now remain only in the main overview list.
 - Changed the VPS provider recommendation copy in the README and VPS init flow to recommend only `IONOS`.
 - Changed VPS monitor system alert summaries to use clearer threshold labels such as `memory free`, `swap free`, and `disk free` instead of shorter internal names.
 - Fixed VPS monitor system alerts and recoveries to carry structured threshold names, so both active and recovered messages now state exactly which thresholds triggered and still include the full current values.

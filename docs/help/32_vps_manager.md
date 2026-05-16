@@ -28,11 +28,11 @@ Left sidebar:
 | Button | Action |
 |--------|--------|
 | **Add VPS** | Open the add / initialize form |
-| **Refresh** | Reload all VPS status and version data |
+| **Refresh** | Reload all VPS status and version data via the refresh icon |
 | **Master** | Open the local Master management view |
-| **API Sync Status** | Shows the shared API sync state (`API Sync`, `API X/Y out of sync`, `API all in sync`) and pushes API credentials to connected VPS when clicked |
-| **Managed VPS** cards | Open the per-VPS management view |
-| **Import Host** | Open the manual hostname import dialog; the hostname must already resolve via local `/etc/hosts` |
+| **API Sync** | Shows the shared API sync state (`API Sync`, `API X/Y out of sync`, `API all in sync`) and pushes API credentials to connected VPS when clicked |
+| **Managed VPS** cards | Open the per-VPS management view; each card shows only the hostname and current online/offline state |
+| **Import by Hostname** | Open the manual hostname import dialog from the **Import Host** sidebar section; the hostname must already resolve via local `/etc/hosts` |
 
 The overview uses the normal shared PBGui FastAPI shell. When you switch to **Master** or a specific **VPS**, the left sidebar changes into the view-specific action list just like the old page. The main overview area now stays focused on the table, while host import stays available from the sidebar as a manual hostname-based action.
 
@@ -52,13 +52,19 @@ Sidebar actions:
 
 | Button | Action |
 |--------|--------|
+| **Overview** | Return to the main VPS Manager overview |
+| **Back to Master Overview** | Return from branch/log subviews to the normal Master detail view |
+| **Task Logs** | Open the dedicated shared log-viewer screen for stored Master playbook logs |
+| **Host Logs** | Open the dedicated shared log-viewer screen for local service logs and file targets |
+| **PBGui Branch** | Open the PBGui branch management view |
+| **PB7 Branch** | Open the PB7 branch management view |
 | **Update PBGui and PB7** | Update all components |
 | **Update PBGui** | Update only PBGui |
 | **Update PB7** | Update only PB7 |
-| **Install rustup** | Install Rust toolchain (requires sudo password) |
-| **Install rclone** | Install rclone (requires sudo password) |
-| **Update PB7 venv** | Recreate PB7 Python 3.12 venv (requires sudo password) |
-| **Install PBGui venv** | Recreate PBGui Python 3.12 venv (requires sudo password) |
+| **Update Linux** | Run Linux package updates (optional reboot checkbox) |
+| **Reboot Master** | Restart the local server |
+| **Install or Update rustup** | Install or refresh the Rust toolchain |
+| **Install or Update rclone** | Install or refresh rclone |
 
 The **Master** content area also contains:
 - a live status grid for PBRemote / CoinData / last command state
@@ -77,22 +83,23 @@ Sidebar actions:
 
 | Button | Action |
 |--------|--------|
-| **Read settings from VPS** | Fetch current config from VPS via SSH |
+| **Overview** | Return to the main VPS Manager overview |
+| **Hostname selector** | Switch directly between saved VPS hosts without leaving the VPS context |
+| **Back** | Return from branch/log/setup subviews to the normal VPS detail view |
+| **Task Logs** | Open the dedicated shared log-viewer screen for all stored VPS playbook logs and their history |
+| **Host Logs** | Open the dedicated shared log-viewer screen for VPS service logs and file targets |
+| **Setup VPS** | Open the VPS setup/configuration view |
+| **PBGui Branch** | Open the PBGui branch management view |
+| **PB7 Branch** | Open the PB7 branch management view |
 | **Initialize** | Run initial VPS setup wizard |
-| **Save VPS** | Persist the current setup fields to the VPS Manager JSON entry |
-| **Setup VPS** | Run the setup playbook with the current setup fields |
 | **Delete VPS** | Remove this VPS from PBGui |
 | **Update PBGui** | Update PBGui on this VPS |
 | **Update PBGui and PB7** | Update all components |
-| **Update PB7 venv** | Recreate PB7 Python 3.12 venv |
-| **Update PBGui venv** | Recreate PBGui Python 3.12 venv |
 | **Update Linux** | Run `apt upgrade` (optional reboot checkbox) |
 | **Reboot VPS** | Restart the VPS |
 | **Cleanup VPS** | Remove old packages and logs |
 | **Resize Swap** | Resize swap file to configured size |
 | **Update Firewall Settings** | Apply ufw firewall rules |
-| **Task Logs** | Open the dedicated shared log-viewer screen for all stored VPS playbook logs and their history |
-| **Host Logs** | Open the dedicated shared log-viewer screen for VPS service logs and file targets |
 | **Update CoinData API** | Push updated CoinMarketCap API key |
 
 The **VPS** content area also contains:
@@ -102,11 +109,11 @@ The **VPS** content area also contains:
 - a **Progress** section with separate status buckets for init, setup and update runs; use the sidebar action buttons to open the shared **Command Log Viewer** whenever you need the full ansible output
 
 The sidebar keeps the detailed log workflows separate from the normal host overview:
-- utility actions such as **Task Logs**, **Host Logs**, **Read settings from VPS**, **Initialize**, or **Delete VPS** stay above a divider, while the executable ansible playbook buttons are grouped below it
+- utility actions such as **Task Logs**, **Host Logs**, **Setup VPS**, **Initialize**, or **Delete VPS** stay above a divider, while the executable ansible playbook buttons are grouped below it
 - **Task Logs** opens a dedicated filtered viewer for all stored playbook logs of the selected VPS, including rotated history files
 - actions such as **Initialize**, **Setup VPS**, **Update PBGui**, **Update PBGui and PB7**, **Update Linux**, **Cleanup VPS**, or **Update CoinData API** switch the main pane to the shared **Command Log Viewer** automatically
 - **Host Logs** opens a dedicated **Host Log Viewer** screen for service logs, running bot logs, and file-style targets such as `sync.log`
-- **Back to Host Overview** returns from either log screen to the normal VPS detail view without losing the selected host context
+- **Back** returns from branch, setup, or log screens to the normal VPS detail view without losing the selected host context
 - every callable VPS Manager task now keeps its own current log plus rotated history entries in the shared viewer; the retention defaults to 10 history files and can be changed via `[vps_manager] task_log_history` in `pbgui.ini`
 - when ansible output already contains terminal ANSI colors, the shared viewer now preserves those colors in the browser instead of relying only on text-pattern guesses
 - ansible task logs with glued result markers or escaped payload control sequences like `\n` / `\r` are now expanded into readable separate display lines inside the shared viewer
@@ -128,16 +135,16 @@ The reveal state is preserved during live updates, so opening an eye button does
 
 ## Adding a new VPS
 
-1. Click **Add VPS** in the left sidebar, or use **Import Host** to prefill the Add form from a hostname already mapped in local `/etc/hosts`.
+1. Click **Add VPS** in the left sidebar, or use **Import by Hostname** from the **Import Host** section to prefill the Add form from a hostname already mapped in local `/etc/hosts`.
 2. Follow the step cards at the top of the page:
    - prepare an Ubuntu VPS
    - add the hostname to your local `/etc/hosts`
    - save the VPS record first
-   - run **Init VPS**, then finish with **Setup VPS** from the detail page
-3. Fill the **Step 4: Initial setup of your VPS** form and the **Save VPS Entry** defaults.
+   - run **Initialize & Setup VPS** from the Add view, or open the host later and finish with **Setup VPS** from the detail page
+3. Fill the **Step 4: Initialize & Setup your VPS** form and the **Save VPS Entry** defaults.
 4. Click **Save VPS** to create or update the stored record.
-5. Click **Init VPS** to start the bootstrap run.
-6. After initialisation succeeds, open the VPS detail page and click **Setup VPS**.
+5. Click **Initialize & Setup VPS** to start the bootstrap run directly from the Add view.
+6. After initialization succeeds, open the VPS detail page and click **Setup VPS** whenever you want to rerun the saved setup.
 
 ---
 
