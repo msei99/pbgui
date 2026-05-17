@@ -288,6 +288,10 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Fixed FastAPI `VPS Manager` `Update Linux` SSH host-key validation so the sudo pre-check now prefers the VPS hostname alias over the raw IP for `known_hosts` matching, and the Overview password flow now asks for confirmation before accepting and storing an unknown host key.
+
+- Fixed FastAPI `VPS Manager` `Update Linux` sudo validation regression so the temporary SSH pre-check now accepts first-seen host keys like the rest of the VPS Manager again, instead of failing unknown hosts on missing `known_hosts` entries.
+
 - Changed repo-local tooling ignores so `.claude/`, `.opencode/`, and `CLAUDE.md` now stay out of git status and commits, while the intentional EOF-normalization updates in `BacktestV7.py` and `OptimizeV7.py` remain part of the tracked repo state.
 
 - Fixed FastAPI `VPS Manager` Overview live state after the new log-tail helper so the backend now imports `strip_ansi` correctly again instead of failing the WebSocket push loop and leaving the Overview empty.

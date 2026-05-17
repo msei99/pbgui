@@ -3249,6 +3249,7 @@
       if (entryId) {
         send({ cmd: 'finalize_vps_deploy_session', entry_id: entryId });
       }
+      flow.pending_password = '';
       store.pendingOverviewDeploy = null;
       if (!opts.silent) {
         if (validatedCount > 0) {
@@ -3305,6 +3306,7 @@
           if (!activeFlow || String(activeFlow.prompt_host || '') !== nextHost) {
             return false;
           }
+          activeFlow.pending_password = String(password || '');
           activeFlow.validating = true;
           setPasswordPromptStatus('', 'error');
           setPasswordPromptBusy(true, 'Validating...');
@@ -3312,12 +3314,13 @@
             cmd: 'validate_and_stage_vps_deploy_host',
             hostnames: Array.isArray(activeFlow.hostnames) ? activeFlow.hostnames.slice() : [],
             hostname: nextHost,
-            password: String(password || ''),
+            password: activeFlow.pending_password,
             command: String(activeFlow.command || 'vps-update'),
             mode: String(activeFlow.mode || 'parallel'),
             debug: !!activeFlow.debug,
             extra_vars: activeFlow.extra_vars || null,
-            entry_id: String(activeFlow.entry_id || '')
+            entry_id: String(activeFlow.entry_id || ''),
+            accept_unknown_host: !!activeFlow.accept_unknown_host
           });
           return false;
         }, {
@@ -3345,6 +3348,8 @@
         debug: !!debug,
         extra_vars: extraVars || null,
         entry_id: '',
+        accept_unknown_host: false,
+        pending_password: '',
         prompt_host: '',
         prompt_open: false,
         validating: false,
@@ -6141,6 +6146,46 @@
         toast(msg.error || 'Unknown error', 'error');
         return;
       }
+      if (msg.type === 'confirm_unknown_host_key') {
+        const flow = store.pendingOverviewDeploy;
+        if (!flow) {
+          toast(String(msg.error || 'Unknown SSH host key.'), 'warning');
+          return;
+        }
+        const pendingPassword = String(flow.pending_password || '');
+        if (!pendingPassword) {
+          flow.validating = false;
+          flow.prompt_open = true;
+          setPasswordPromptBusy(false, 'Validate and Start');
+          setPasswordPromptStatus('Please enter the VPS user password again before trusting the new SSH host key.', 'error');
+          return;
+        }
+        flow.validating = false;
+        flow.prompt_open = true;
+        flow.closing_from_result = false;
+        setPasswordPromptBusy(false, 'Validate and Start');
+        openConfirmModal(
+          'Unknown SSH Host Key',
+          'The SSH host key for ' + String(msg.ssh_host || msg.hostname || '') + (String(msg.ip || '').trim() ? ' (' + String(msg.ip || '') + ')' : '') + ' is not in known_hosts yet. Add it and continue with Update Linux?',
+          function () {
+            flow.accept_unknown_host = true;
+            flow.validating = true;
+            send({
+              cmd: 'validate_and_stage_vps_deploy_host',
+              hostnames: Array.isArray(flow.hostnames) ? flow.hostnames.slice() : [],
+              hostname: String(flow.prompt_host || msg.hostname || ''),
+              password: pendingPassword,
+              command: String(flow.command || 'vps-update'),
+              mode: String(flow.mode || 'parallel'),
+              debug: !!flow.debug,
+              extra_vars: flow.extra_vars || null,
+              entry_id: String(flow.entry_id || ''),
+              accept_unknown_host: true
+            });
+          }
+        );
+        return;
+      }
       if (msg.type === 'log_preview') {
         if (store.detail && store.detail.kind === 'vps' && store.detail.hostname === msg.hostname) {
           store.detail.log_preview = msg.data || null;
@@ -6338,6 +6383,8 @@
           return;
         }
         flow.validating = false;
+        flow.accept_unknown_host = false;
+        flow.pending_password = '';
         flow.prompt_open = false;
         if (msg.data && msg.data.entry) {
           const entry = msg.data.entry;

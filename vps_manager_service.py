@@ -75,6 +75,15 @@ DEPLOY_RUN_APPEAR_TIMEOUT_SECONDS = 30
 _PLAYBOOK_TASK_CACHE: dict[str, tuple[str, ...]] = {}
 
 
+class UnknownHostKeyError(ValueError):
+    def __init__(self, *, hostname: str, ssh_host: str, ip: str) -> None:
+        self.hostname = str(hostname or "")
+        self.ssh_host = str(ssh_host or "")
+        self.ip = str(ip or "")
+        target = self.ssh_host or self.ip or self.hostname
+        super().__init__(f"Server '{target}' not found in known_hosts")
+
+
 def _now_ts() -> int:
     return round(datetime.now().timestamp())
 
@@ -2237,13 +2246,21 @@ class VPSManagerService:
             except Exception as exc:
                 _log(SERVICE, f"deploy session failed to start {next_host}: {exc}", level="WARNING")
 
-    def _validate_vps_user_password(self, hostname: str, password: str, *, timeout: int = 10) -> None:
+    def _validate_vps_user_password(
+        self,
+        hostname: str,
+        password: str,
+        *,
+        timeout: int = 10,
+        accept_unknown_host: bool = False,
+    ) -> None:
         password_value = str(password or "")
         if not password_value:
             raise ValueError("VPS sudo password is required.")
         vps = self._require_vps(hostname)
         if not str(vps.ip or "").strip() or not str(vps.user or "").strip():
             raise ValueError(f"Cannot validate {hostname}: missing SSH host or username.")
+        ssh_host = str(getattr(vps, "hostname", "") or "").strip() or str(vps.ip or "").strip()
         use_private_key = bool(
             str(getattr(vps, "init_methode", "") or "").strip() == "private_key"
             and str(getattr(vps, "private_key_file", "") or "").strip()
@@ -2252,10 +2269,10 @@ class VPSManagerService:
 
         ssh = paramiko.SSHClient()
         ssh.load_system_host_keys()
-        ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy() if accept_unknown_host else paramiko.RejectPolicy())
         try:
             connect_kwargs = {
-                "hostname": vps.ip,
+                "hostname": ssh_host,
                 "username": vps.user,
                 "timeout": timeout,
                 "banner_timeout": timeout,
@@ -2292,6 +2309,10 @@ class VPSManagerService:
             if use_private_key:
                 raise ValueError(f"Cannot connect to {hostname} via SSH with the configured private key.")
             raise ValueError(f"Cannot connect to {hostname} via SSH with the supplied password.")
+        except paramiko.SSHException as exc:
+            if not accept_unknown_host and "not found in known_hosts" in str(exc):
+                raise UnknownHostKeyError(hostname=hostname, ssh_host=ssh_host, ip=str(vps.ip or "")) from exc
+            raise ValueError(f"Failed to validate sudo password on {hostname}: {exc}") from exc
         except ValueError:
             raise
         except Exception as exc:
@@ -2505,6 +2526,7 @@ class VPSManagerService:
         debug: bool = False,
         extra_vars: dict[str, Any] | None = None,
         entry_id: str | None = None,
+        accept_unknown_host: bool = False,
     ) -> dict[str, Any]:
         normalized_command = _normalize_vps_deploy_command(command)
         normalized_mode = _normalize_vps_deploy_mode(mode)
@@ -2522,7 +2544,7 @@ class VPSManagerService:
         if normalized_command != COMMAND_VPS_UPDATE:
             raise ValueError("Password validation staging is only supported for Update Linux.")
 
-        self._validate_vps_user_password(clean_hostname, password)
+        self._validate_vps_user_password(clean_hostname, password, accept_unknown_host=accept_unknown_host)
         self._store_session_secrets(token, clean_hostname, {"user_pw": str(password or "")})
 
         deploy_settings = self.get_vps_deploy_settings()

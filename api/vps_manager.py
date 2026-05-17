@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from api.auth import SessionToken, require_auth, validate_token
 from api.vps import get_bot_log_matches
 from logging_helpers import human_log as _log
-from vps_manager_service import VPSManagerService
+from vps_manager_service import UnknownHostKeyError, VPSManagerService
 
 DetailPayload = dict[str, object]
 
@@ -268,19 +268,30 @@ async def ws_vps_manager(websocket: WebSocket):
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "validate_and_stage_vps_deploy_host":
-                    data = await asyncio.to_thread(
-                        service.validate_and_stage_vps_deploy_host,
-                        token,
-                        hostnames=msg.get("hostnames") or [],
-                        hostname=str(msg.get("hostname") or ""),
-                        password=str(msg.get("password") or ""),
-                        command=str(msg.get("command") or ""),
-                        mode=str(msg.get("mode") or ""),
-                        debug=bool(msg.get("debug")),
-                        extra_vars=msg.get("extra_vars") or None,
-                        entry_id=str(msg.get("entry_id") or "") or None,
-                    )
-                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                    try:
+                        data = await asyncio.to_thread(
+                            service.validate_and_stage_vps_deploy_host,
+                            token,
+                            hostnames=msg.get("hostnames") or [],
+                            hostname=str(msg.get("hostname") or ""),
+                            password=str(msg.get("password") or ""),
+                            command=str(msg.get("command") or ""),
+                            mode=str(msg.get("mode") or ""),
+                            debug=bool(msg.get("debug")),
+                            extra_vars=msg.get("extra_vars") or None,
+                            entry_id=str(msg.get("entry_id") or "") or None,
+                            accept_unknown_host=bool(msg.get("accept_unknown_host")),
+                        )
+                        await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                    except UnknownHostKeyError as exc:
+                        await websocket.send_json({
+                            "type": "confirm_unknown_host_key",
+                            "cmd": cmd,
+                            "hostname": exc.hostname,
+                            "ssh_host": exc.ssh_host,
+                            "ip": exc.ip,
+                            "error": str(exc),
+                        })
                 elif cmd == "finalize_vps_deploy_session":
                     data = await asyncio.to_thread(service.finalize_vps_deploy_session, str(msg.get("entry_id") or ""))
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
