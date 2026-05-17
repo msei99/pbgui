@@ -3981,9 +3981,15 @@
       return '-';
     }
 
-    function computeUptime(startStr) {
-      if (!startStr) return null;
-      const ts = Date.parse(startStr);
+    function computeUptime(startValue) {
+      if (startValue == null || startValue === '') return null;
+      let ts = null;
+      if (typeof startValue === 'number' && Number.isFinite(startValue) && startValue > 0) {
+        ts = startValue * 1000;
+      } else {
+        const parsed = Date.parse(String(startValue || ''));
+        ts = Number.isFinite(parsed) ? parsed : null;
+      }
       if (!ts) return null;
       const diffMs = Date.now() - ts;
       if (diffMs < 0) return null;
@@ -4019,7 +4025,7 @@
       const online = !!status.online;
       const rtdLabel = rtd != null ? formatLatency(rtd) : null;
       const bootTime = String(summary.start || '-');
-      const uptime = computeUptime(summary.start);
+      const uptime = computeUptime(summary.start_ts || summary.start);
       const updatesCount = Number.parseInt(String(summary.updates == null ? '' : summary.updates).trim(), 10);
       const updatesNum = Number.isFinite(updatesCount) ? updatesCount : 0;
       const updatesTone = updatesNum === 0 ? 'ok' : 'error';

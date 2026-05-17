@@ -21,6 +21,22 @@ router = APIRouter()
 
 _service: VPSManagerService | None = None
 
+MASTER_CONTEXT_VIEWS = {
+    "master",
+    "master-task-log",
+    "master-host-logs",
+    "master-pbgui-branch",
+    "master-pb7-branch",
+}
+VPS_CONTEXT_VIEWS = {
+    "vps",
+    "vps-task-log",
+    "vps-host-logs",
+    "vps-setup",
+    "vps-pbgui-branch",
+    "vps-pb7-branch",
+}
+
 
 def _get_service() -> VPSManagerService:
     global _service
@@ -409,9 +425,9 @@ async def _push_loop(websocket: WebSocket, service: VPSManagerService, context: 
 
 def _build_detail_for_context(service: VPSManagerService, context: dict[str, str]) -> DetailPayload | None:
     view = str(context.get("view") or "overview")
-    if view == "master":
+    if view in MASTER_CONTEXT_VIEWS:
         return service.build_master_detail()
-    if view == "vps":
+    if view in VPS_CONTEXT_VIEWS:
         hostname = str(context.get("hostname") or "")
         if hostname:
             return service.build_vps_detail(str(context.get("token") or ""), hostname)
@@ -420,9 +436,9 @@ def _build_detail_for_context(service: VPSManagerService, context: dict[str, str
 
 def _build_quick_detail_for_context(service: VPSManagerService, context: dict[str, str]) -> DetailPayload | None:
     view = str(context.get("view") or "overview")
-    if view == "master":
+    if view in MASTER_CONTEXT_VIEWS:
         return service.build_master_detail_quick()
-    if view == "vps":
+    if view in VPS_CONTEXT_VIEWS:
         hostname = str(context.get("hostname") or "")
         if hostname:
             return service.build_vps_detail(str(context.get("token") or ""), hostname, quick=True)

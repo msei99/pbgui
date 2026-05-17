@@ -1122,6 +1122,7 @@ class VPSManagerService:
         master_pb7_branch, master_pb7_commit = local_run.get_current_pb7_status()
         master_pb7_branch = master_pb7_branch or "unknown"
         master_pb7_commit = master_pb7_commit or getattr(local_run, "pb7_commit", "")
+        boot_ts = int(getattr(pbremote, "boot", 0) or 0)
         return {
             "name": f"{pbremote.name} (local)",
             "hostname": pbremote.name,
@@ -1129,7 +1130,8 @@ class VPSManagerService:
             "online": pbremote.is_running(),
             "role": "master",
             "role_icon": "🧠",
-            "start": datetime.fromtimestamp(getattr(pbremote, "boot", 0)).strftime("%Y-%m-%d %H:%M:%S"),
+            "start": datetime.fromtimestamp(boot_ts).strftime("%Y-%m-%d %H:%M:%S"),
+            "start_ts": boot_ts,
             "reboot_required": bool(getattr(local_run, "reboot", False)),
             "updates": getattr(local_run, "upgrades", "N/A"),
             "running_bots": "-",
@@ -1169,7 +1171,7 @@ class VPSManagerService:
             for instance in (host_state or {}).get("v7_instances") or []
             if _truthy((instance or {}).get("running")) and str((instance or {}).get("name") or "").strip()
         )
-        return {
+        row = {
             "name": hostname,
             "hostname": hostname,
             "nav": "vps",
@@ -1177,6 +1179,7 @@ class VPSManagerService:
             "role": role,
             "role_icon": role_icon,
             "start": datetime.fromtimestamp(boot).strftime("%Y-%m-%d %H:%M:%S") if boot else "",
+            "start_ts": boot,
             "reboot_required": bool(meta.get("reboot", False)),
             "updates": meta.get("upgrades", "N/A"),
             "running_bots": len(running_v7_names),
@@ -1201,6 +1204,13 @@ class VPSManagerService:
             "task_current_label": str(task_progress.get("current_label") or ""),
             "task_phase": task_phase,
         }
+        if vps:
+            live_package_status = self._get_live_vps_package_status(vps, host_state)
+            if live_package_status:
+                if live_package_status.get("upgrades") not in (None, ""):
+                    row["updates"] = live_package_status.get("upgrades")
+                row["reboot_required"] = bool(live_package_status.get("reboot", False))
+        return row
 
     def _build_master_pbgui_github_status(self, pbremote: PBRemote, current_branch: str, current_commit: str) -> str:
         local_run = pbremote.local_run

@@ -288,6 +288,12 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Fixed FastAPI `VPS Manager` uptime rendering so the system header now computes uptime from a numeric boot timestamp instead of reparsing the formatted boot-time string in the browser; VPS and master uptime therefore no longer drift with browser/server timezone differences.
+
+- Fixed FastAPI `VPS Manager` Overview live package status after `Update Linux` so the VPS rows now apply the same cached/live package-status overlay as the detail view; pending update counts and reboot flags therefore clear automatically without waiting for slower host-meta telemetry to catch up.
+
+- Fixed FastAPI `VPS Manager` live detail updates for VPS and master subviews so task-log, host-log, setup, and branch views now keep receiving the same background detail refreshes as the main status pages; PBGui/PB7 status indicators therefore switch automatically after updates without requiring a manual page reload.
+
 - Fixed FastAPI `VPS Manager` `Update Linux` SSH host-key validation so the sudo pre-check now prefers the VPS hostname alias over the raw IP for `known_hosts` matching, and the Overview password flow now asks for confirmation before accepting and storing an unknown host key.
 
 - Fixed FastAPI `VPS Manager` `Update Linux` sudo validation regression so the temporary SSH pre-check now accepts first-seen host keys like the rest of the VPS Manager again, instead of failing unknown hosts on missing `known_hosts` entries.
