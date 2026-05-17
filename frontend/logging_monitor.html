@@ -328,7 +328,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
           <label>Max file size (MB)</label>
           <input type="number" id="def-max-mb" min="1" max="10240" value="10">
           <label style="min-width:auto">Rotated copies</label>
-          <input type="number" id="def-backup-count" min="1" max="20" value="1">
+          <input type="number" id="def-backup-count" min="0" max="20" value="0">
           <button class="settings-btn primary" onclick="saveDefault()">Save</button>
           <span class="settings-msg" id="def-msg"></span>
         </div>
@@ -337,7 +337,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
       <div class="settings-section">
         <h3>Per-Log Rotation</h3>
         <p style="font-size:var(--fs-sm);color:#a0a4ab;margin-bottom:12px;">
-          Each log file can override the default size and number of rotated copies.
+          Each log file can override the default size and number of rotated copies. Set copies to `0` to keep a single capped log file with no rotated generations.
         </p>
         <table class="per-service-table" id="per-svc-table">
           <thead>
@@ -394,6 +394,32 @@ function apiPost(path, body) {
     headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   }).then(function(r) { return r.json(); });
+}
+
+function htmlEscape(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function jsStringEscape(value) {
+  return String(value == null ? '' : value)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'");
+}
+
+function numberOrDefault(value, fallback, minValue) {
+  var parsed = parseInt(value, 10);
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+  if (typeof minValue === 'number' && parsed < minValue) {
+    return minValue;
+  }
+  return parsed;
 }
 
 /* ── State ──────────────────────────────────────────────── */
@@ -505,15 +531,16 @@ function showView(view) {
 
 function loadRotationSettings() {
   var loading = document.getElementById('per-svc-loading');
+  var tbody = document.getElementById('per-svc-body');
   if (loading) loading.style.display = 'block';
+  if (loading) loading.textContent = 'Loading…';
+  if (tbody) tbody.innerHTML = '';
 
   apiGet('/rotation').then(function(data) {
     var def = data.default || {};
-    document.getElementById('def-max-mb').value       = def.max_mb       || 10;
-    document.getElementById('def-backup-count').value = def.backup_count || 1;
+    document.getElementById('def-max-mb').value = numberOrDefault(def.max_mb, 10, 1);
+    document.getElementById('def-backup-count').value = numberOrDefault(def.backup_count, 0, 0);
 
-    var tbody = document.getElementById('per-svc-body');
-    tbody.innerHTML = '';
     var services = Object.keys(data.per_service || {}).sort();
     if (services.length === 0) {
       var tr = document.createElement('tr');
@@ -522,25 +549,30 @@ function loadRotationSettings() {
     } else {
       services.forEach(function(svc) {
         var s = data.per_service[svc];
+        var svcHtml = htmlEscape(svc);
+        var svcJs = jsStringEscape(svc);
+        var serviceMaxMb = numberOrDefault(s.max_mb, 10, 1);
+        var serviceBackupCount = numberOrDefault(s.backup_count, 0, 0);
         var tr = document.createElement('tr');
         tr.innerHTML =
-          '<td class="per-svc-name">' + esc(svc) + '</td>' +
-          '<td><input class="per-svc-input" type="number" id="svc-mb-' + esc(svc) + '" min="1" max="10240" value="' + (s.max_mb || 10) + '"></td>' +
-          '<td><input class="per-svc-input" type="number" id="svc-bc-' + esc(svc) + '" min="1" max="20"   value="' + (s.backup_count || 1) + '"></td>' +
-          '<td><button class="per-svc-save" onclick="saveService(\'' + esc(svc) + '\')">Save</button></td>' +
-          '<td><span class="per-svc-msg" id="svc-msg-' + esc(svc) + '">✓ Saved</span></td>';
+          '<td class="per-svc-name">' + svcHtml + '</td>' +
+          '<td><input class="per-svc-input" type="number" id="svc-mb-' + svcHtml + '" min="1" max="10240" value="' + serviceMaxMb + '"></td>' +
+          '<td><input class="per-svc-input" type="number" id="svc-bc-' + svcHtml + '" min="0" max="20" value="' + serviceBackupCount + '"></td>' +
+          '<td><button class="per-svc-save" onclick="saveService(\'' + svcJs + '\')">Save</button></td>' +
+          '<td><span class="per-svc-msg" id="svc-msg-' + svcHtml + '">✓ Saved</span></td>';
         tbody.appendChild(tr);
       });
     }
     if (loading) loading.style.display = 'none';
-  }).catch(function() {
+  }).catch(function(err) {
+    console.error('Failed to load rotation settings', err);
     if (loading) loading.textContent = 'Failed to load settings.';
   });
 }
 
 function saveDefault() {
-  var maxMb = parseInt(document.getElementById('def-max-mb').value, 10) || 10;
-  var bc    = parseInt(document.getElementById('def-backup-count').value, 10) || 1;
+  var maxMb = numberOrDefault(document.getElementById('def-max-mb').value, 10, 1);
+  var bc    = numberOrDefault(document.getElementById('def-backup-count').value, 0, 0);
   var msg   = document.getElementById('def-msg');
   apiPost('/rotation', { scope: 'default', max_mb: maxMb, backup_count: bc })
     .then(function(data) {
@@ -555,8 +587,8 @@ function saveDefault() {
 }
 
 function saveService(svc) {
-  var maxMb = parseInt(document.getElementById('svc-mb-' + svc).value, 10) || 10;
-  var bc    = parseInt(document.getElementById('svc-bc-' + svc).value, 10) || 1;
+  var maxMb = numberOrDefault(document.getElementById('svc-mb-' + svc).value, 10, 1);
+  var bc    = numberOrDefault(document.getElementById('svc-bc-' + svc).value, 0, 0);
   var msgEl = document.getElementById('svc-msg-' + svc);
   apiPost('/rotation', { scope: svc, max_mb: maxMb, backup_count: bc })
     .then(function(data) {

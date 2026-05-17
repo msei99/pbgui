@@ -7,19 +7,21 @@ import os
 import re
 import shlex
 import subprocess
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+import yaml
 
 from api.vps import get_monitor, get_monitor_state_snapshot, get_metric_history_snapshot
 from logging_helpers import human_log as _log
-from master.async_monitor import INSTANCE_COLLECT_SCRIPT, MONITOR_CACHE_VERSION
+from master.async_monitor import INSTANCE_COLLECT_SCRIPT, MONITOR_CACHE_VERSION, load_alert_snapshot
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from PBRemote import PBRemote
-from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, save_ini
-from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir
+from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, save_ini, save_ini_section
+from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, strip_ansi
 
 SERVICE = "VPSManagerApi"
 
@@ -41,6 +43,36 @@ SECRET_FIELDS = (
 )
 
 ROLLING_PEAK_WINDOW_SECONDS = 60.0
+VPS_LOGGING_SERVICES = ("PBRun", "PBRemote", "PBCoinData", "sync", "vps_cleanup", "tradfi_sync")
+VPS_LOGGING_DEFAULT_MB = 1
+VPS_LOGGING_CLEANUP_MB = 64 / 1024
+VPS_LOGGING_DEPLOY_HISTORY_FILE = Path(PBGDIR) / "data" / "vpsmanager" / "vps_logging_deploy_history.json"
+VPS_LOGGING_DEPLOY_HISTORY_LIMIT = 20
+VPS_DEPLOY_SECTION = "vps_deploy"
+COMMAND_VPS_DEPLOY_LOGGING = "vps-deploy-logging"
+COMMAND_VPS_UPDATE = "vps-update"
+COMMAND_VPS_UPDATE_PBGUI = "vps-update-pbgui"
+COMMAND_VPS_UPDATE_PB7 = "vps-update-pb7"
+COMMAND_VPS_UPDATE_PB = "vps-update-pb"
+COMMAND_VPS_CLEANUP = "vps-cleanup"
+VPS_DEPLOY_DEFAULT_ACTION = COMMAND_VPS_DEPLOY_LOGGING
+VPS_DEPLOY_DEFAULT_MODE = "parallel"
+VPS_DEPLOY_MODES = ("parallel", "sequential")
+VPS_DEPLOY_ACTION_TEXT = {
+    COMMAND_VPS_DEPLOY_LOGGING: "Deploy Settings",
+    COMMAND_VPS_UPDATE: "Update Linux",
+    COMMAND_VPS_UPDATE_PBGUI: "Update PBGui",
+    COMMAND_VPS_UPDATE_PB7: "Update PB7",
+    COMMAND_VPS_UPDATE_PB: "Update PBGui and PB7",
+    COMMAND_VPS_CLEANUP: "Cleanup VPS",
+}
+VPS_DEPLOY_ACTIONS = tuple(VPS_DEPLOY_ACTION_TEXT.keys())
+VPS_DEPLOY_HISTORY_FILE = VPS_LOGGING_DEPLOY_HISTORY_FILE
+VPS_DEPLOY_HISTORY_LIMIT = VPS_LOGGING_DEPLOY_HISTORY_LIMIT
+DEPLOY_PROGRESS_LOG_TAIL_BYTES = 64 * 1024
+DEPLOY_PROGRESS_CACHE_LIMIT = 256
+DEPLOY_RUN_APPEAR_TIMEOUT_SECONDS = 30
+_PLAYBOOK_TASK_CACHE: dict[str, tuple[str, ...]] = {}
 
 
 def _now_ts() -> int:
@@ -75,6 +107,48 @@ def _truthy(value: Any) -> bool:
 def _status_running(status: str | None) -> bool:
     normalized = str(status or "").strip().lower()
     return normalized not in {"", "none", "successful", "failed", "error", "timeout", "canceled", "cancelled"}
+
+
+def _playbook_task_names(command: str | None) -> tuple[str, ...]:
+    task_name = str(command or "").strip()
+    if not task_name:
+        return ()
+    cached = _PLAYBOOK_TASK_CACHE.get(task_name)
+    if cached is not None:
+        return cached
+
+    playbook_path = Path(PBGDIR) / f"{task_name}.yml"
+    tasks: list[str] = []
+    try:
+        payload = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
+        plays = payload if isinstance(payload, list) else [payload]
+        for play in plays:
+            if not isinstance(play, dict):
+                continue
+            if bool(play.get("gather_facts", False)):
+                tasks.append("Gathering Facts")
+            for section in ("pre_tasks", "tasks", "post_tasks", "handlers"):
+                for item in play.get(section) or []:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name") or "").strip()
+                    if name:
+                        tasks.append(name)
+    except Exception as exc:
+        _log(SERVICE, f"failed to load playbook tasks for {task_name}: {exc}", level="WARNING")
+        _PLAYBOOK_TASK_CACHE[task_name] = ()
+        return ()
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in tasks:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    result = tuple(deduped)
+    _PLAYBOOK_TASK_CACHE[task_name] = result
+    return result
 
 
 def _local_no_new_privileges() -> bool:
@@ -118,12 +192,245 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _safe_float_str(value: Any, default: float) -> float:
+    try:
+        return float(str(value or "").strip())
+    except Exception:
+        return default
+
+
+def _normalize_vps_deploy_command(value: Any) -> str:
+    command = str(value or VPS_DEPLOY_DEFAULT_ACTION).strip()
+    if command not in VPS_DEPLOY_ACTIONS:
+        return VPS_DEPLOY_DEFAULT_ACTION
+    return command
+
+
+def _normalize_vps_deploy_mode(value: Any) -> str:
+    mode = str(value or VPS_DEPLOY_DEFAULT_MODE).strip().lower()
+    if mode not in VPS_DEPLOY_MODES:
+        return VPS_DEPLOY_DEFAULT_MODE
+    return mode
+
+
+def _vps_deploy_command_text(command: Any) -> str:
+    normalized = _normalize_vps_deploy_command(command)
+    return VPS_DEPLOY_ACTION_TEXT.get(normalized, normalized)
+
+
 def _get_file_sync_worker():
     try:
         from api.api_keys import _file_sync_worker
         return _file_sync_worker
     except Exception:
         return None
+
+
+def _load_json_list(path: Path) -> list[dict[str, Any]]:
+    try:
+        if not path.exists():
+            return []
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, dict)]
+    except Exception:
+        _log(SERVICE, f"Failed to load deploy history from {path}", level="warning")
+        return []
+
+
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _read_text_tail(path: Path, *, max_bytes: int = DEPLOY_PROGRESS_LOG_TAIL_BYTES) -> str:
+    try:
+        if not path.exists():
+            return ""
+        limit = max(1, int(max_bytes))
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            if size <= 0:
+                return ""
+            start = max(size - limit, 0)
+            handle.seek(start, os.SEEK_SET)
+            data = handle.read(limit)
+        if start > 0:
+            newline = data.find(b"\n")
+            if newline != -1 and newline + 1 < len(data):
+                data = data[newline + 1:]
+        return data.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _read_vps_update_log_tail(vps: VPS) -> str:
+    candidates = [
+        vps._task_log_path(vps.command, COMMAND_VPS_UPDATE),
+        vps._task_log_alias_path(vps.command, COMMAND_VPS_UPDATE),
+    ]
+    for path in candidates:
+        log_text = _read_text_tail(path)
+        if log_text:
+            return strip_ansi(log_text)
+    return strip_ansi(str(getattr(vps, "update_log", "") or ""))
+
+
+def _extract_playbook_run_started_at(log_text: str) -> str:
+    text = str(log_text or "")
+    if not text:
+        return ""
+    match = re.search(r"^=== PLAYBOOK RUN START\s+(.+?)\s+===$", text, flags=re.MULTILINE)
+    return str(match.group(1) or "").strip() if match else ""
+
+
+def _read_playbook_run_started_at(path: Path) -> str:
+    try:
+        if not path.exists():
+            return ""
+        with path.open("rb") as handle:
+            header = handle.read(512)
+        return _extract_playbook_run_started_at(header.decode("utf-8", errors="ignore"))
+    except Exception:
+        return ""
+
+
+def _parse_ansible_task_progress(hostname: str, log_text: str, *, command: str | None = None) -> dict[str, Any]:
+    host = str(hostname or "").strip()
+    text = str(log_text or "")
+    playbook_tasks = _playbook_task_names(command)
+    started_at = _extract_playbook_run_started_at(text)
+    if not host or not text:
+        return {
+            "started_at": started_at,
+            "step": "",
+            "step_kind": "",
+            "result": "",
+            "recap": None,
+            "current_index": 0,
+            "total_steps": len(playbook_tasks),
+            "current_label": "",
+        }
+
+    normalized = text.replace("\r", "\n")
+    task_matches = list(re.finditer(r"(TASK|RUNNING HANDLER) \[(.*?)\]", normalized))
+    step_kind = ""
+    step = ""
+    tail = normalized
+    if task_matches:
+        last_task = task_matches[-1]
+        step_kind = str(last_task.group(1) or "").strip().lower()
+        step = str(last_task.group(2) or "").strip()
+        tail = normalized[last_task.start():]
+
+    host_pattern = re.escape(host)
+    result = ""
+    result_patterns = (
+        ("failed", rf"(?:fatal|failed): \[{host_pattern}\]"),
+        ("unreachable", rf"unreachable: \[{host_pattern}\]"),
+        ("changed", rf"changed: \[{host_pattern}\]"),
+        ("ok", rf"ok: \[{host_pattern}\]"),
+        ("skipping", rf"skipping: \[{host_pattern}\]"),
+    )
+    for label, pattern in result_patterns:
+        if re.search(pattern, tail):
+            result = label
+            break
+
+    recap = None
+    recap_match = re.search(
+        rf"^{host_pattern}\s*:\s*ok=(\d+)\s+changed=(\d+)\s+unreachable=(\d+)\s+failed=(\d+)\s+skipped=(\d+)\s+rescued=(\d+)\s+ignored=(\d+)",
+        normalized,
+        flags=re.MULTILINE,
+    )
+    if recap_match:
+        recap = {
+            "ok": int(recap_match.group(1)),
+            "changed": int(recap_match.group(2)),
+            "unreachable": int(recap_match.group(3)),
+            "failed": int(recap_match.group(4)),
+            "skipped": int(recap_match.group(5)),
+            "rescued": int(recap_match.group(6)),
+            "ignored": int(recap_match.group(7)),
+        }
+
+    total_steps = len(playbook_tasks)
+    current_index = 0
+    if recap:
+        current_index = total_steps
+    elif step:
+        try:
+            current_index = playbook_tasks.index(step)
+        except ValueError:
+            current_index = 0
+
+    return {
+        "started_at": started_at,
+        "step": step,
+        "step_kind": step_kind,
+        "result": result,
+        "recap": recap,
+        "current_index": current_index,
+        "total_steps": total_steps,
+        "current_label": step,
+    }
+
+
+def _build_vps_logging_phase(task_progress: dict[str, Any], task_status: str) -> dict[str, Any]:
+    step = str((task_progress or {}).get("step") or "").strip().lower()
+    status = str(task_status or "").strip().lower()
+
+    phases = [
+        {"key": "config", "label": "Write config"},
+        {"key": "cap", "label": "Force single-file"},
+        {"key": "restart_core", "label": "Restart PBRun/PBRemote"},
+        {"key": "restart_coindata", "label": "Restart PBCoinData"},
+    ]
+
+    current_key = ""
+    if "write vps logging section values" in step:
+        current_key = "config"
+    elif "force single-file capped logging on vps" in step:
+        current_key = "cap"
+    elif "restart pbrun and pbremote after logging deploy" in step:
+        current_key = "restart_core"
+    elif "restart pbcoindata after logging deploy" in step:
+        current_key = "restart_coindata"
+
+    if status == "successful":
+        current_index = len(phases)
+    elif current_key:
+        current_index = next((idx + 1 for idx, item in enumerate(phases) if item["key"] == current_key), 1)
+    elif status in {"failed", "error", "timeout", "cancelled", "canceled"}:
+        current_index = 1
+    elif status:
+        current_index = 1
+    else:
+        current_index = 0
+
+    return {
+        "current": current_index,
+        "total": len(phases),
+        "label": "Done" if status == "successful" else next((item["label"] for item in phases if item["key"] == current_key), "Waiting"),
+        "steps": [
+            {
+                "key": item["key"],
+                "label": item["label"],
+                "state": "done" if idx < current_index else "current" if idx + 1 == current_index and status != "successful" else "pending",
+            }
+            for idx, item in enumerate(phases)
+        ],
+    }
 
 
 class VPSManagerService:
@@ -150,6 +457,12 @@ class VPSManagerService:
         self._vps_ssh_ok_cache: dict[str, bool] = {}
         self._session_secrets: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
         self._setup_api_sync_done: dict[str, str] = {}
+        self._deploy_threads: dict[str, threading.Thread] = {}
+        self._deploy_sessions: dict[str, dict[str, Any]] = {}
+        self._deploy_sessions_lock = threading.Lock()
+        self._deploy_history_lock = threading.Lock()
+        self._deploy_progress_cache_lock = threading.Lock()
+        self._deploy_progress_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     def _ensure_pbremote(self, *, force_reinit: bool = False) -> PBRemote:
         if self.pbremote is None or force_reinit:
@@ -371,7 +684,51 @@ class VPSManagerService:
 
     def _get_monitor_state(self) -> dict[str, Any]:
         try:
-            return get_monitor_state_snapshot()
+            live_state = get_monitor_state_snapshot()
+            connections = ((live_state.get("connections") or {}).get("connections") or {})
+            has_live_data = bool(
+                connections
+                or (live_state.get("system") or {})
+                or (live_state.get("instances") or {})
+                or (live_state.get("v7_instances") or {})
+                or (live_state.get("host_meta") or {})
+                or (live_state.get("streams") or {})
+            )
+            if has_live_data:
+                return live_state
+
+            snapshot = load_alert_snapshot()
+            snapshot_connections = snapshot.get("connections") or {}
+            snapshot_system = snapshot.get("system") or {}
+            snapshot_instances = snapshot.get("instances") or {}
+            snapshot_host_meta = snapshot.get("host_meta") or {}
+            has_snapshot_data = bool(
+                snapshot_connections or snapshot_system or snapshot_instances or snapshot_host_meta
+            )
+            if not has_snapshot_data:
+                return live_state
+
+            connected_count = 0
+            auth_failed_count = 0
+            for payload in snapshot_connections.values():
+                status = str((payload or {}).get("status") or "")
+                if status == "connected":
+                    connected_count += 1
+                elif status == "auth_failed":
+                    auth_failed_count += 1
+            return {
+                **live_state,
+                "connections": {
+                    "total": len(snapshot_connections),
+                    "connected": connected_count,
+                    "disconnected": max(len(snapshot_connections) - connected_count - auth_failed_count, 0),
+                    "auth_failed": auth_failed_count,
+                    "connections": snapshot_connections,
+                },
+                "system": snapshot_system,
+                "instances": snapshot_instances,
+                "host_meta": snapshot_host_meta,
+            }
         except Exception as exc:
             _log(SERVICE, f"monitor snapshot failed: {exc}", level="WARNING")
             return {
@@ -411,6 +768,10 @@ class VPSManagerService:
         overview_rows = self._build_overview_rows(pbremote, monitor_state)
         coindata = self._ensure_coindata()
         cmc_api_key = coindata.api_key or ""
+        vps_logging = self.get_vps_logging_config()
+        deploy_settings = self.get_vps_deploy_settings()
+        deploy_history = self.get_vps_deploy_history()
+        deploy_progress_rows = self._build_deploy_progress_rows(overview_rows, deploy_history)
         return {
             "config": {
                 "master_name": getattr(pbremote, "name", "local"),
@@ -419,12 +780,210 @@ class VPSManagerService:
                 "init_methods": INIT_METHODS,
                 "bucket": getattr(pbremote, "bucket", "") or "",
                 "coinmarketcap_api_key": cmc_api_key,
+                "vps_logging": vps_logging,
+                "vps_deploy": deploy_settings,
             },
             "errors": self._build_errors(pbremote),
             "overview": {
                 "rows": overview_rows,
             },
+            "deploys": {
+                "history": deploy_history,
+                "vps_logging_history": deploy_history,
+                "progress_rows": deploy_progress_rows,
+                "vps_logging_progress_rows": deploy_progress_rows,
+            },
         }
+
+    def _progress_payload(self, status: str, current_index: int, total_steps: int) -> dict[str, Any]:
+        normalized_status = str(status or "").strip().lower()
+        safe_current = max(0, int(current_index or 0))
+        safe_total = max(0, int(total_steps or 0))
+        if normalized_status == "successful":
+            done = safe_total or safe_current
+            total = safe_total or safe_current
+            percent = 100 if total else 0
+            return {"done": done, "total": total, "percent": percent}
+        done = safe_current
+        total = safe_total
+        percent = max(0, min(100, (done / total) * 100)) if total else 0
+        return {"done": done, "total": total, "percent": percent}
+
+    def _prune_deploy_progress_cache(self, active_keys: set[tuple[str, str, str]] | None = None) -> None:
+        active = set(active_keys or set())
+        with self._deploy_progress_cache_lock:
+            if active:
+                stale_keys = [key for key in list(self._deploy_progress_cache.keys()) if key not in active]
+                for key in stale_keys:
+                    self._deploy_progress_cache.pop(key, None)
+            if len(self._deploy_progress_cache) <= DEPLOY_PROGRESS_CACHE_LIMIT:
+                return
+            overflow = len(self._deploy_progress_cache) - DEPLOY_PROGRESS_CACHE_LIMIT
+            for key in list(self._deploy_progress_cache.keys())[:overflow]:
+                self._deploy_progress_cache.pop(key, None)
+
+    def _status_from_task_progress(self, task_progress: dict[str, Any]) -> str:
+        progress = task_progress or {}
+        recap = progress.get("recap")
+        if isinstance(recap, dict):
+            if int(recap.get("failed") or 0) > 0 or int(recap.get("unreachable") or 0) > 0:
+                return "failed"
+            return "successful"
+        result = str(progress.get("result") or "").strip().lower()
+        if result in {"failed", "unreachable"}:
+            return result
+        if str(progress.get("step") or "").strip() or str(progress.get("started_at") or "").strip():
+            return "running"
+        return ""
+
+    def _build_deploy_progress_rows(self, overview_rows: list[dict[str, Any]], deploy_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not deploy_history:
+            return []
+        if not isinstance(deploy_history[0], dict):
+            _log(SERVICE, "deploy progress skipped: latest history entry is invalid", level="WARNING")
+            return []
+        latest_entry = deploy_history[0]
+        latest_command = str(latest_entry.get("command") or "vps-deploy-logging")
+        latest_command_text = str(latest_entry.get("command_text") or _vps_deploy_command_text(latest_command))
+        latest_started_at = str(latest_entry.get("started_at") or "")
+        latest_host_logs = latest_entry.get("host_logs") if isinstance(latest_entry.get("host_logs"), dict) else {}
+        deploy_hosts = [str(host).strip() for host in latest_entry.get("hostnames") or [] if str(host).strip()]
+        if not deploy_hosts:
+            return []
+
+        by_hostname = {
+            str((row or {}).get("hostname") or "").strip(): row
+            for row in overview_rows or []
+            if str((row or {}).get("hostname") or "").strip()
+        }
+        progress_rows: list[dict[str, Any]] = []
+        active_cache_keys: set[tuple[str, str, str]] = set()
+        for hostname in deploy_hosts:
+            base_row = dict(by_hostname.get(hostname) or {"hostname": hostname, "name": hostname})
+            host_log_meta = latest_host_logs.get(hostname) if isinstance(latest_host_logs.get(hostname), dict) else {}
+            expected_started_at = str(host_log_meta.get("started_at") or latest_started_at or "").strip()
+            expected_run_id = str(host_log_meta.get("run_id") or "").strip()
+            file_alias = str(host_log_meta.get("file_alias") or "").strip()
+            filename = str(host_log_meta.get("filename") or "").strip()
+
+            parsed_progress: dict[str, Any] | None = None
+            parsed_status = ""
+            if filename:
+                log_path = Path(PBGDIR) / "data" / "vpsmanager" / "hosts" / hostname / filename
+                cache_key = (hostname, filename, latest_command)
+                active_cache_keys.add(cache_key)
+                with self._deploy_progress_cache_lock:
+                    cache_entry = dict(self._deploy_progress_cache.get(cache_key) or {}) or None
+                stat_signature: tuple[int, int] | None = None
+                try:
+                    stat = log_path.stat()
+                    stat_signature = (int(stat.st_mtime_ns), int(stat.st_size))
+                except Exception:
+                    stat_signature = None
+                if cache_entry and cache_entry.get("stat_signature") == stat_signature:
+                    parsed_progress = dict(cache_entry.get("parsed_progress") or {}) or None
+                    parsed_status = str(cache_entry.get("parsed_status") or "")
+                elif stat_signature is not None:
+                    log_text = _read_text_tail(log_path)
+                    if log_text:
+                        parsed_progress = _parse_ansible_task_progress(hostname, log_text, command=latest_command)
+                        parsed_started_at = str(parsed_progress.get("started_at") or "").strip()
+                        if not parsed_started_at:
+                            parsed_started_at = _read_playbook_run_started_at(log_path)
+                            if parsed_started_at:
+                                parsed_progress["started_at"] = parsed_started_at
+                        if parsed_started_at and (not expected_started_at or parsed_started_at == expected_started_at):
+                            parsed_status = self._status_from_task_progress(parsed_progress)
+                            with self._deploy_progress_cache_lock:
+                                self._deploy_progress_cache[cache_key] = {
+                                    "stat_signature": stat_signature,
+                                    "parsed_progress": dict(parsed_progress),
+                                    "parsed_status": parsed_status,
+                                }
+                        else:
+                            parsed_progress = None
+                            parsed_status = ""
+                    else:
+                        with self._deploy_progress_cache_lock:
+                            self._deploy_progress_cache.pop(cache_key, None)
+                else:
+                    with self._deploy_progress_cache_lock:
+                        self._deploy_progress_cache.pop(cache_key, None)
+
+            live_command = str(base_row.get("task_command") or "").strip()
+            live_run_id = str(base_row.get("task_run_id") or "").strip()
+            live_status = str(base_row.get("task_status") or "").strip().lower()
+            live_matches_latest_run = bool(live_command == latest_command and expected_run_id and live_run_id == expected_run_id)
+            live_is_terminal = live_status in {"successful", "failed", "error", "timeout", "canceled", "cancelled", "unreachable"}
+
+            if parsed_progress is not None:
+                current_index = int(parsed_progress.get("current_index") or 0)
+                total_steps = int(parsed_progress.get("total_steps") or 0)
+                row = {
+                    **base_row,
+                    "task_command": latest_command,
+                    "task_command_text": latest_command_text,
+                    "task_status": parsed_status,
+                    "task_started": str(parsed_progress.get("started_at") or expected_started_at or latest_started_at),
+                    "task_step": str(parsed_progress.get("step") or ""),
+                    "task_step_kind": str(parsed_progress.get("step_kind") or ""),
+                    "task_result": str(parsed_progress.get("result") or ""),
+                    "task_recap": parsed_progress.get("recap"),
+                    "task_current_index": current_index,
+                    "task_total_steps": total_steps,
+                    "task_current_label": str(parsed_progress.get("current_label") or parsed_progress.get("step") or ""),
+                    "task_progress": self._progress_payload(parsed_status, current_index, total_steps),
+                    "task_log_file": file_alias,
+                    "task_log_filename": filename,
+                }
+                progress_rows.append(row)
+                continue
+
+            if live_matches_latest_run:
+                safe_live_status = "starting" if live_is_terminal else str(base_row.get("task_status") or "starting")
+                current_index = int(base_row.get("task_current_index") or 0)
+                total_steps = int(base_row.get("task_total_steps") or 0)
+                row = {
+                    **base_row,
+                    "task_command": latest_command,
+                    "task_command_text": latest_command_text,
+                    "task_status": safe_live_status,
+                    "task_started": str(base_row.get("task_started") or expected_started_at or latest_started_at),
+                    "task_step": str(base_row.get("task_step") or ""),
+                    "task_step_kind": str(base_row.get("task_step_kind") or ""),
+                    "task_result": str(base_row.get("task_result") or ""),
+                    "task_recap": base_row.get("task_recap"),
+                    "task_current_index": current_index,
+                    "task_total_steps": total_steps,
+                    "task_current_label": str(base_row.get("task_current_label") or base_row.get("task_step") or ""),
+                    "task_progress": self._progress_payload(safe_live_status, current_index, total_steps),
+                    "task_log_file": file_alias,
+                    "task_log_filename": filename,
+                }
+                progress_rows.append(row)
+                continue
+
+            progress_rows.append(
+                {
+                    **base_row,
+                    "task_command": latest_command,
+                    "task_command_text": latest_command_text,
+                    "task_status": "",
+                    "task_started": expected_started_at or latest_started_at,
+                    "task_step": "",
+                    "task_step_kind": "",
+                    "task_result": "",
+                    "task_recap": None,
+                    "task_current_index": 0,
+                    "task_total_steps": 0,
+                    "task_current_label": "",
+                    "task_progress": {"done": 0, "total": 0, "percent": 0},
+                    "task_log_file": file_alias,
+                    "task_log_filename": filename,
+                }
+            )
+        self._prune_deploy_progress_cache(active_cache_keys)
+        return progress_rows
 
     def build_master_detail(self) -> dict[str, Any]:
         self.refresh(force=False)
@@ -564,6 +1123,7 @@ class VPSManagerService:
             "start": datetime.fromtimestamp(getattr(pbremote, "boot", 0)).strftime("%Y-%m-%d %H:%M:%S"),
             "reboot_required": bool(getattr(local_run, "reboot", False)),
             "updates": getattr(local_run, "upgrades", "N/A"),
+            "running_bots": "-",
             "pbgui": f"{pbremote.pbgui_version}{'' if getattr(pbremote, 'pbgui_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(pbremote, 'pbgui_python'))}",
             "pbgui_branch": f"{master_branch} ({_short_commit(master_commit)})",
             "pbgui_github": self._build_master_pbgui_github_status(pbremote, master_branch, master_commit),
@@ -575,6 +1135,13 @@ class VPSManagerService:
     def _build_vps_overview_row(self, pbremote: PBRemote,
                                 hostname: str,
                                 host_state: dict[str, Any]) -> dict[str, Any]:
+        vps = self.vpsmanager.find_vps_by_hostname(hostname)
+        task_progress = _parse_ansible_task_progress(
+            hostname,
+            _read_vps_update_log_tail(vps) if vps else "",
+            command=str(getattr(vps, "command", "") or "") if vps else "",
+        )
+        task_phase = _build_vps_logging_phase(task_progress, str(getattr(vps, "update_status", "") or "") if vps else "")
         online = self._host_online(host_state)
         meta = self._host_meta(host_state)
         role = str(meta.get("role") or "slave")
@@ -583,6 +1150,16 @@ class VPSManagerService:
         else:
             role_icon = "💻"
         boot = _safe_int(meta.get("boot"))
+        running_v7_names = {
+            str((monitor or {}).get("u") or "").strip()
+            for monitor in (host_state or {}).get("instances") or []
+            if str((monitor or {}).get("u") or "").strip()
+        }
+        running_v7_names.update(
+            str((instance or {}).get("name") or "").strip()
+            for instance in (host_state or {}).get("v7_instances") or []
+            if _truthy((instance or {}).get("running")) and str((instance or {}).get("name") or "").strip()
+        )
         return {
             "name": hostname,
             "hostname": hostname,
@@ -593,6 +1170,7 @@ class VPSManagerService:
             "start": datetime.fromtimestamp(boot).strftime("%Y-%m-%d %H:%M:%S") if boot else "",
             "reboot_required": bool(meta.get("reboot", False)),
             "updates": meta.get("upgrades", "N/A"),
+            "running_bots": len(running_v7_names),
             "pbgui": f"{meta.get('pbgv', 'N/A')}{'' if meta.get('pbgpy', 'N/A') in (None, '', 'N/A') else ' /' + str(meta.get('pbgpy'))}",
             "pbgui_branch": f"{meta.get('pbgb', 'unknown')} ({_short_commit(meta.get('pbgc'))})",
             "pbgui_github": self._build_remote_pbgui_github_status(pbremote, host_state),
@@ -600,6 +1178,19 @@ class VPSManagerService:
             "pb7_branch": f"{meta.get('pb7b', 'unknown')} ({_short_commit(meta.get('pb7c'))})",
             "pb7_github": self._build_remote_pb7_github_status(pbremote, host_state),
             "rtd": min(self._build_remote_rtd(host_state), 9999),
+            "task_command": str(getattr(vps, "command", "") or "") if vps else "",
+            "task_command_text": str(getattr(vps, "command_text", "") or "") if vps else "",
+            "task_run_id": str(getattr(vps, "command_run_id", "") or "") if vps else "",
+            "task_status": str(getattr(vps, "update_status", "") or "") if vps else "",
+            "task_started": str(getattr(vps, "last_update", "") or "") if vps else "",
+            "task_step": str(task_progress.get("step") or ""),
+            "task_step_kind": str(task_progress.get("step_kind") or ""),
+            "task_result": str(task_progress.get("result") or ""),
+            "task_recap": task_progress.get("recap"),
+            "task_current_index": int(task_progress.get("current_index") or 0),
+            "task_total_steps": int(task_progress.get("total_steps") or 0),
+            "task_current_label": str(task_progress.get("current_label") or ""),
+            "task_phase": task_phase,
         }
 
     def _build_master_pbgui_github_status(self, pbremote: PBRemote, current_branch: str, current_commit: str) -> str:
@@ -1275,6 +1866,800 @@ class VPSManagerService:
             "secret_status": secret_status,
         }
 
+    def _default_vps_logging_limits_mb(self) -> dict[str, float]:
+        limits = {service: float(VPS_LOGGING_DEFAULT_MB) for service in VPS_LOGGING_SERVICES}
+        limits["vps_cleanup"] = float(VPS_LOGGING_CLEANUP_MB)
+        return limits
+
+    def _default_vps_deploy_settings(self) -> dict[str, Any]:
+        return {
+            "action": VPS_DEPLOY_DEFAULT_ACTION,
+            "action_text": _vps_deploy_command_text(VPS_DEPLOY_DEFAULT_ACTION),
+            "mode": VPS_DEPLOY_DEFAULT_MODE,
+            "debug": False,
+            "reboot_requested": False,
+            "selected_hosts": [],
+            "actions": [
+                {
+                    "command": command,
+                    "command_text": _vps_deploy_command_text(command),
+                }
+                for command in VPS_DEPLOY_ACTIONS
+            ],
+            "modes": list(VPS_DEPLOY_MODES),
+        }
+
+    def _vps_deploy_extra_vars(self, command: str, settings: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        normalized = _normalize_vps_deploy_command(command)
+        if normalized == COMMAND_VPS_DEPLOY_LOGGING:
+            return {
+                "vps_logging_services": self.get_vps_logging_config().get("services") or [],
+            }
+        if normalized == COMMAND_VPS_UPDATE:
+            reboot_requested = bool((settings or {}).get("reboot_requested"))
+            return {
+                "reboot": reboot_requested,
+                "reboot_requested": reboot_requested,
+            }
+        return None
+
+    def _normalize_vps_deploy_host_logs(
+        self,
+        item: dict[str, Any],
+        *,
+        command: str,
+        legacy_host_offsets: dict[str, int] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        hostnames = [str(host).strip() for host in item.get("hostnames") or [] if str(host).strip()]
+        raw_host_logs = item.get("host_logs") if isinstance(item.get("host_logs"), dict) else {}
+        host_logs: dict[str, dict[str, Any]] = {}
+        offsets = legacy_host_offsets if legacy_host_offsets is not None else {}
+        is_legacy_entry = not str(item.get("id") or "").strip() and item.get("host_count") is None and item.get("service_count") is None
+        for hostname, payload in raw_host_logs.items():
+            clean_host = str(hostname or "").strip()
+            if not clean_host or not isinstance(payload, dict):
+                continue
+            entry_command = _normalize_vps_deploy_command(payload.get("command") or item.get("command") or command)
+            host_logs[clean_host] = {
+                "command": entry_command,
+                "command_text": str(payload.get("command_text") or _vps_deploy_command_text(entry_command)),
+                "started_at": str(payload.get("started_at") or item.get("started_at") or ""),
+                "run_id": str(payload.get("run_id") or ""),
+                "filename": str(payload.get("filename") or ""),
+                "file_alias": str(payload.get("file_alias") or ""),
+            }
+        for hostname in hostnames:
+            if hostname in host_logs and host_logs[hostname].get("file_alias"):
+                continue
+            if not is_legacy_entry:
+                continue
+            host_offset = int(offsets.get(hostname, 0) or 0)
+            entry_command = _normalize_vps_deploy_command(item.get("command") or command)
+            action = entry_command if host_offset <= 0 else f"{entry_command}.{host_offset}"
+            filename = f"{entry_command}.log" if host_offset <= 0 else f"{entry_command}.log.{host_offset}"
+            host_logs[hostname] = {
+                "command": entry_command,
+                "command_text": _vps_deploy_command_text(entry_command),
+                "started_at": str(item.get("started_at") or ""),
+                "run_id": "",
+                "filename": filename,
+                "file_alias": f"VPSAction:{hostname}:{action}",
+            }
+            offsets[hostname] = host_offset + 1
+        return host_logs
+
+    def _record_vps_deploy(
+        self,
+        *,
+        command: str,
+        mode: str,
+        hostnames: list[str],
+        host_logs: dict[str, dict[str, Any]],
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_command = _normalize_vps_deploy_command(command)
+        normalized_mode = _normalize_vps_deploy_mode(mode)
+        clean_options = dict(options or {})
+        entry = {
+            "id": f"vps-deploy-{int(time.time() * 1000)}",
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "command": normalized_command,
+            "command_text": _vps_deploy_command_text(normalized_command),
+            "mode": normalized_mode,
+            "hostnames": list(hostnames),
+            "options": clean_options,
+            "services": [str((item or {}).get("service") or "").strip() for item in (self.get_vps_logging_config().get("services") or []) if str((item or {}).get("service") or "").strip()] if normalized_command == COMMAND_VPS_DEPLOY_LOGGING else [],
+            "host_logs": host_logs,
+        }
+        with self._deploy_history_lock:
+            history = _load_json_list(VPS_DEPLOY_HISTORY_FILE)
+            history.insert(0, entry)
+            history = history[:VPS_DEPLOY_HISTORY_LIMIT]
+            _atomic_write_json(VPS_DEPLOY_HISTORY_FILE, history)
+        return {
+            "id": str(entry["id"]),
+            "started_at": str(entry["started_at"]),
+            "command": str(entry["command"]),
+            "command_text": str(entry["command_text"]),
+            "mode": str(entry["mode"]),
+            "options": dict(entry["options"]),
+            "hostnames": list(entry["hostnames"]),
+            "services": list(entry["services"]),
+            "host_logs": dict(entry["host_logs"]),
+            "host_count": len(entry["hostnames"]),
+            "service_count": len(entry["services"]),
+        }
+
+    def get_vps_deploy_settings(self) -> dict[str, Any]:
+        section = load_ini_section(VPS_DEPLOY_SECTION)
+        defaults = self._default_vps_deploy_settings()
+        selected_hosts = [item.strip() for item in str(section.get("selected_hosts", "")).split(",") if item.strip()]
+        action = _normalize_vps_deploy_command(section.get("action"))
+        mode = _normalize_vps_deploy_mode(section.get("mode"))
+        debug = _truthy(section.get("debug"))
+        reboot_requested = _truthy(section.get("reboot_requested"))
+        return {
+            "action": action,
+            "action_text": _vps_deploy_command_text(action),
+            "mode": mode,
+            "debug": debug,
+            "reboot_requested": reboot_requested,
+            "selected_hosts": selected_hosts,
+            "actions": defaults["actions"],
+            "modes": defaults["modes"],
+        }
+
+    def save_vps_deploy_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        incoming = payload if isinstance(payload, dict) else {}
+        selected_hosts: list[str] = []
+        seen_hosts: set[str] = set()
+        for raw_host in incoming.get("selected_hosts") or []:
+            hostname = str(raw_host or "").strip()
+            if not hostname or hostname in seen_hosts:
+                continue
+            self._require_vps(hostname)
+            seen_hosts.add(hostname)
+            selected_hosts.append(hostname)
+        values = {
+            "action": _normalize_vps_deploy_command(incoming.get("action")),
+            "mode": _normalize_vps_deploy_mode(incoming.get("mode")),
+            "debug": "1" if _truthy(incoming.get("debug")) else "0",
+            "reboot_requested": "1" if _truthy(incoming.get("reboot_requested")) else "0",
+            "selected_hosts": ",".join(selected_hosts),
+        }
+        save_ini_section(VPS_DEPLOY_SECTION, values)
+        return self.get_vps_deploy_settings()
+
+    def get_vps_deploy_history(self) -> list[dict[str, Any]]:
+        history = _load_json_list(VPS_DEPLOY_HISTORY_FILE)
+        cleaned: list[dict[str, Any]] = []
+        legacy_host_offsets: dict[str, int] = {}
+        for item in history[:VPS_DEPLOY_HISTORY_LIMIT]:
+            command = _normalize_vps_deploy_command(item.get("command"))
+            hostnames = [str(host).strip() for host in item.get("hostnames") or [] if str(host).strip()]
+            services = [str(service).strip() for service in item.get("services") or [] if str(service).strip()]
+            cleaned.append({
+                "id": str(item.get("id") or ""),
+                "started_at": str(item.get("started_at") or ""),
+                "command": command,
+                "command_text": str(item.get("command_text") or _vps_deploy_command_text(command)),
+                "mode": _normalize_vps_deploy_mode(item.get("mode")),
+                "options": dict(item.get("options") or {}),
+                "hostnames": hostnames,
+                "services": services,
+                "host_logs": self._normalize_vps_deploy_host_logs(item, command=command, legacy_host_offsets=legacy_host_offsets),
+                "host_count": len(hostnames),
+                "service_count": len(services),
+            })
+        return cleaned
+
+    def _wait_for_vps_command_finish(self, hostname: str, run_id: str, *, timeout_seconds: int = 3600) -> None:
+        target_run_id = str(run_id or "").strip()
+        if not target_run_id:
+            raise ValueError(f"Missing deploy run id for {hostname}.")
+        deadline = time.time() + max(1, int(timeout_seconds))
+        run_appear_deadline = time.time() + DEPLOY_RUN_APPEAR_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            vps = self._require_vps(hostname)
+            current_run_id = str(getattr(vps, "command_run_id", "") or "")
+            current_status = str(getattr(vps, "update_status", "") or "")
+            if current_run_id != target_run_id:
+                if time.time() >= run_appear_deadline:
+                    raise TimeoutError(f"Timed out waiting for {hostname} to start deploy run {target_run_id}.")
+                time.sleep(0.5)
+                continue
+            if current_status in {"successful", "failed", "error", "timeout", "canceled", "cancelled"}:
+                return
+            time.sleep(1)
+        raise TimeoutError(f"Timed out waiting for {hostname} to finish {target_run_id}.")
+
+    def _deploy_entry_options(self, command: str, extra_vars: dict[str, Any] | None = None) -> dict[str, Any]:
+        normalized_command = _normalize_vps_deploy_command(command)
+        options: dict[str, Any] = {}
+        merged_extra_vars = dict(extra_vars or {})
+        if normalized_command == COMMAND_VPS_UPDATE:
+            reboot_requested = bool(merged_extra_vars.get("reboot_requested") or merged_extra_vars.get("reboot"))
+            options["reboot_requested"] = reboot_requested
+        return options
+
+    def _get_vps_deploy_entry(self, entry_id: str) -> dict[str, Any]:
+        target_id = str(entry_id or "").strip()
+        if not target_id:
+            raise ValueError("Deploy session id is required.")
+        for item in self.get_vps_deploy_history():
+            if str(item.get("id") or "") == target_id:
+                return item
+        raise ValueError("Deploy session not found.")
+
+    def _update_vps_deploy_entry(self, entry_id: str, *, host_logs: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+        target_id = str(entry_id or "").strip()
+        if not target_id:
+            raise ValueError("Deploy session id is required.")
+        with self._deploy_history_lock:
+            history = _load_json_list(VPS_DEPLOY_HISTORY_FILE)
+            updated = False
+            for index, item in enumerate(history):
+                if str(item.get("id") or "") != target_id:
+                    continue
+                next_item = dict(item)
+                merged_host_logs = dict(next_item.get("host_logs") or {})
+                for hostname, payload in (host_logs or {}).items():
+                    clean_host = str(hostname or "").strip()
+                    if not clean_host or not isinstance(payload, dict):
+                        continue
+                    merged_host_logs[clean_host] = dict(payload)
+                next_item["host_logs"] = merged_host_logs
+                history[index] = next_item
+                updated = True
+                break
+            if not updated:
+                raise ValueError("Deploy session not found.")
+            _atomic_write_json(VPS_DEPLOY_HISTORY_FILE, history[:VPS_DEPLOY_HISTORY_LIMIT])
+        return self._get_vps_deploy_entry(target_id)
+
+    def _start_vps_deploy_host(
+        self,
+        token: str,
+        *,
+        hostname: str,
+        command: str,
+        debug: bool,
+        extra_vars: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        normalized_command = _normalize_vps_deploy_command(command)
+        vps = self._require_vps(hostname)
+        self._apply_session_secrets_to_vps(token, vps)
+        if normalized_command == COMMAND_VPS_UPDATE and not getattr(vps, "user_pw", None):
+            raise ValueError(f"VPS user password missing for {hostname}.")
+        vps.command = normalized_command
+        vps.command_text = _vps_deploy_command_text(normalized_command)
+        self.vpsmanager.update_vps(vps, debug=debug, extra_vars=extra_vars or None)
+        task_log_name = vps._task_log_path(vps.command, COMMAND_VPS_UPDATE).name
+        return {
+            "command": normalized_command,
+            "command_text": _vps_deploy_command_text(normalized_command),
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "run_id": str(vps.command_run_id or ""),
+            "filename": task_log_name,
+            "file_alias": f"VPSAction:{hostname}:{task_log_name}",
+        }
+
+    def _ensure_vps_deploy_session_worker(self, entry_id: str) -> None:
+        target_id = str(entry_id or "").strip()
+        if not target_id:
+            return
+        thread: threading.Thread | None = None
+        with self._deploy_sessions_lock:
+            session = self._deploy_sessions.get(target_id)
+            if not session:
+                return
+            thread = session.get("worker")
+            if thread is not None and thread.is_alive():
+                return
+            thread = threading.Thread(
+                target=self._run_vps_deploy_session_worker,
+                kwargs={"entry_id": target_id},
+                daemon=True,
+                name=f"vps-deploy-session-{target_id}",
+            )
+            session["worker"] = thread
+        thread.start()
+
+    def _run_vps_deploy_session_worker(self, *, entry_id: str) -> None:
+        target_id = str(entry_id or "").strip()
+        while True:
+            with self._deploy_sessions_lock:
+                session = self._deploy_sessions.get(target_id)
+                if not session:
+                    return
+                current_host = str(session.get("current_host") or "")
+                current_run_id = str(session.get("current_run_id") or "")
+                wake_event = session.get("wake_event")
+            if current_host and current_run_id:
+                try:
+                    self._wait_for_vps_command_finish(current_host, current_run_id)
+                except Exception as exc:
+                    _log(SERVICE, f"deploy session wait failed for {current_host}: {exc}", level="WARNING")
+                finally:
+                    with self._deploy_sessions_lock:
+                        session = self._deploy_sessions.get(target_id)
+                        if session and str(session.get("current_host") or "") == current_host and str(session.get("current_run_id") or "") == current_run_id:
+                            session["current_host"] = ""
+                            session["current_run_id"] = ""
+                continue
+
+            next_host = ""
+            session_snapshot: dict[str, Any] | None = None
+            with self._deploy_sessions_lock:
+                session = self._deploy_sessions.get(target_id)
+                if not session:
+                    return
+                pending = session.get("pending") or []
+                if pending:
+                    next_host = str(pending.pop(0) or "").strip()
+                    session["pending"] = pending
+                    session_snapshot = {
+                        "token": str(session.get("token") or ""),
+                        "command": str(session.get("command") or ""),
+                        "debug": bool(session.get("debug")),
+                        "extra_vars": dict(session.get("extra_vars") or {}),
+                    }
+                elif session.get("finalized"):
+                    self._deploy_sessions.pop(target_id, None)
+                    return
+                elif isinstance(wake_event, threading.Event):
+                    wake_event.clear()
+            if not next_host:
+                if isinstance(wake_event, threading.Event):
+                    wake_event.wait(timeout=0.5)
+                else:
+                    time.sleep(0.5)
+                continue
+            if not session_snapshot:
+                continue
+            try:
+                host_log = self._start_vps_deploy_host(
+                    str(session_snapshot.get("token") or ""),
+                    hostname=next_host,
+                    command=str(session_snapshot.get("command") or ""),
+                    debug=bool(session_snapshot.get("debug")),
+                    extra_vars=dict(session_snapshot.get("extra_vars") or {}),
+                )
+                self._update_vps_deploy_entry(target_id, host_logs={next_host: host_log})
+                with self._deploy_sessions_lock:
+                    session = self._deploy_sessions.get(target_id)
+                    if session:
+                        started = set(session.get("started") or set())
+                        started.add(next_host)
+                        session["started"] = started
+                        session["current_host"] = next_host
+                        session["current_run_id"] = str(host_log.get("run_id") or "")
+            except Exception as exc:
+                _log(SERVICE, f"deploy session failed to start {next_host}: {exc}", level="WARNING")
+
+    def _validate_vps_user_password(self, hostname: str, password: str, *, timeout: int = 10) -> None:
+        password_value = str(password or "")
+        if not password_value:
+            raise ValueError("VPS sudo password is required.")
+        vps = self._require_vps(hostname)
+        if not str(vps.ip or "").strip() or not str(vps.user or "").strip():
+            raise ValueError(f"Cannot validate {hostname}: missing SSH host or username.")
+        use_private_key = bool(
+            str(getattr(vps, "init_methode", "") or "").strip() == "private_key"
+            and str(getattr(vps, "private_key_file", "") or "").strip()
+        )
+        import paramiko
+
+        ssh = paramiko.SSHClient()
+        ssh.load_system_host_keys()
+        ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+        try:
+            connect_kwargs = {
+                "hostname": vps.ip,
+                "username": vps.user,
+                "timeout": timeout,
+                "banner_timeout": timeout,
+                "auth_timeout": timeout,
+                "allow_agent": False,
+                "look_for_keys": False,
+            }
+            if use_private_key:
+                connect_kwargs["key_filename"] = str(vps.private_key_file)
+            else:
+                connect_kwargs["password"] = password_value
+            ssh.connect(**connect_kwargs)
+            stdin, stdout, stderr = ssh.exec_command("sudo -k -S -p '' -v", timeout=timeout, get_pty=False)
+            stdin.write(password_value + "\n")
+            stdin.flush()
+            stdout_text = stdout.read().decode(errors="ignore")
+            stderr_text = stderr.read().decode(errors="ignore")
+            exit_status = stdout.channel.recv_exit_status()
+            combined = "\n".join([stdout_text, stderr_text]).strip()
+            lowered = combined.lower()
+            wrong_password_markers = (
+                "incorrect password",
+                "sorry, try again",
+                "no password was provided",
+                "a password is required",
+                "1 incorrect password attempt",
+            )
+            if any(marker in lowered for marker in wrong_password_markers):
+                raise ValueError(f"Incorrect VPS sudo password for {hostname}.")
+            if exit_status != 0:
+                detail = combined.splitlines()[0].strip() if combined else "sudo -v failed"
+                raise ValueError(f"Failed to validate sudo access on {hostname}: {detail}")
+        except paramiko.AuthenticationException:
+            if use_private_key:
+                raise ValueError(f"Cannot connect to {hostname} via SSH with the configured private key.")
+            raise ValueError(f"Cannot connect to {hostname} via SSH with the supplied password.")
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"Failed to validate sudo password on {hostname}: {exc}") from exc
+        finally:
+            try:
+                ssh.close()
+            except Exception:
+                pass
+
+    def _run_vps_deploy_batch(
+        self,
+        *,
+        token: str,
+        command: str,
+        mode: str,
+        hostnames: list[str],
+        debug: bool,
+        extra_vars: dict[str, Any] | None,
+        entry_id: str,
+    ) -> None:
+        try:
+            if mode == "sequential":
+                for hostname in hostnames:
+                    host_log = self._start_vps_deploy_host(
+                        token,
+                        hostname=hostname,
+                        command=command,
+                        debug=debug,
+                        extra_vars=extra_vars,
+                    )
+                    self._update_vps_deploy_entry(entry_id, host_logs={hostname: host_log})
+                    run_id = str(host_log.get("run_id") or "").strip()
+                    self._wait_for_vps_command_finish(hostname, run_id)
+        except Exception as exc:
+            _log(SERVICE, f"vps deploy batch failed for {command}: {exc}", level="WARNING")
+        finally:
+            self._deploy_threads.pop(entry_id, None)
+
+    def get_vps_logging_config(self) -> dict[str, Any]:
+        section = load_ini_section("vps_logging")
+        default_limits = self._default_vps_logging_limits_mb()
+        services: list[dict[str, Any]] = []
+        for service in VPS_LOGGING_SERVICES:
+            default_mb = float(default_limits.get(service, VPS_LOGGING_DEFAULT_MB))
+            raw_value = section.get(f"{service.lower()}_max_mb", "")
+            max_mb = _safe_float_str(raw_value, default_mb)
+            if max_mb <= 0:
+                max_mb = default_mb
+            services.append({
+                "service": service,
+                "max_mb": round(max_mb, 4),
+                "default_max_mb": round(default_mb, 4),
+                "backup_count": 0,
+            })
+        return {
+            "services": services,
+            "selected_hosts": [item.strip() for item in str(section.get("selected_hosts", "")).split(",") if item.strip()],
+        }
+
+    def save_vps_logging_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        incoming = payload if isinstance(payload, dict) else {}
+        default_limits = self._default_vps_logging_limits_mb()
+        selected_hosts: list[str] = []
+        seen_hosts: set[str] = set()
+        for raw_host in incoming.get("selected_hosts") or []:
+            hostname = str(raw_host or "").strip()
+            if not hostname or hostname in seen_hosts:
+                continue
+            self._require_vps(hostname)
+            seen_hosts.add(hostname)
+            selected_hosts.append(hostname)
+        service_values: dict[str, str] = {"selected_hosts": ",".join(selected_hosts)}
+        incoming_services = incoming.get("services") or []
+        by_name = {
+            str((item or {}).get("service") or "").strip(): item
+            for item in incoming_services
+            if isinstance(item, dict)
+        }
+        for service in VPS_LOGGING_SERVICES:
+            default_mb = float(default_limits.get(service, VPS_LOGGING_DEFAULT_MB))
+            raw_value = ((by_name.get(service) or {}).get("max_mb"))
+            max_mb = _safe_float_str(raw_value, default_mb)
+            if max_mb <= 0:
+                raise ValueError(f"{service} max_mb must be greater than 0.")
+            service_values[f"{service.lower()}_max_mb"] = str(round(max_mb, 4)).rstrip("0").rstrip(".")
+        save_ini_section("vps_logging", service_values)
+        return self.get_vps_logging_config()
+
+    def get_vps_logging_deploy_history(self) -> list[dict[str, Any]]:
+        return [item for item in self.get_vps_deploy_history() if str(item.get("command") or "") == COMMAND_VPS_DEPLOY_LOGGING]
+
+    def _record_vps_logging_deploy(self, hostnames: list[str], services: list[dict[str, Any]], host_logs: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        return self._record_vps_deploy(
+            command=COMMAND_VPS_DEPLOY_LOGGING,
+            mode=VPS_DEPLOY_DEFAULT_MODE,
+            hostnames=hostnames,
+            host_logs=host_logs,
+            options={},
+        )
+
+    def run_vps_deploy(
+        self,
+        token: str,
+        hostnames: list[Any],
+        *,
+        command: str,
+        mode: str,
+        debug: bool = False,
+        extra_vars: dict[str, Any] | None = None,
+        record_history: bool = True,
+    ) -> dict[str, Any]:
+        normalized_command = _normalize_vps_deploy_command(command)
+        normalized_mode = _normalize_vps_deploy_mode(mode)
+        unique_hosts: list[str] = []
+        seen: set[str] = set()
+        for raw_host in hostnames or []:
+            hostname = str(raw_host or "").strip()
+            if not hostname or hostname in seen:
+                continue
+            seen.add(hostname)
+            unique_hosts.append(hostname)
+        if not unique_hosts:
+            raise ValueError("Select at least one VPS.")
+
+        deploy_settings = self.get_vps_deploy_settings()
+        base_extra_vars = self._vps_deploy_extra_vars(normalized_command, deploy_settings) or {}
+        if extra_vars:
+            base_extra_vars.update(extra_vars)
+
+        host_logs: dict[str, dict[str, Any]] = {}
+        if normalized_mode == "parallel" or (normalized_mode == "sequential" and len(unique_hosts) == 1):
+            for hostname in unique_hosts:
+                vps = self._require_vps(hostname)
+                self._apply_session_secrets_to_vps(token, vps)
+                if normalized_command == COMMAND_VPS_UPDATE and not getattr(vps, "user_pw", None):
+                    raise ValueError(f"VPS sudo password missing for {hostname}. Validate it before starting Update Linux.")
+                vps.command = normalized_command
+                vps.command_text = _vps_deploy_command_text(normalized_command)
+                self.vpsmanager.update_vps(vps, debug=debug, extra_vars=base_extra_vars or None)
+                task_log_name = vps._task_log_path(vps.command, COMMAND_VPS_UPDATE).name
+                host_logs[hostname] = {
+                    "command": normalized_command,
+                    "command_text": _vps_deploy_command_text(normalized_command),
+                    "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "run_id": str(vps.command_run_id or ""),
+                    "filename": task_log_name,
+                    "file_alias": f"VPSAction:{hostname}:{task_log_name}",
+                }
+
+        options: dict[str, Any] = {}
+        if normalized_command == COMMAND_VPS_UPDATE:
+            reboot_requested = bool(base_extra_vars.get("reboot_requested") or base_extra_vars.get("reboot"))
+            options["reboot_requested"] = reboot_requested
+        entry = self._record_vps_deploy(
+            command=normalized_command,
+            mode=normalized_mode,
+            hostnames=unique_hosts,
+            host_logs=host_logs,
+            options=options,
+        ) if record_history else {
+            "id": "",
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "command": normalized_command,
+            "command_text": _vps_deploy_command_text(normalized_command),
+            "mode": normalized_mode,
+            "options": options,
+            "hostnames": list(unique_hosts),
+            "services": [],
+            "host_logs": host_logs,
+            "host_count": len(unique_hosts),
+            "service_count": 0,
+        }
+
+        if normalized_mode == "sequential" and len(unique_hosts) > 1 and record_history:
+            thread = threading.Thread(
+                target=self._run_vps_deploy_batch,
+                kwargs={
+                    "token": token,
+                    "command": normalized_command,
+                    "mode": normalized_mode,
+                    "hostnames": unique_hosts,
+                    "debug": debug,
+                    "extra_vars": base_extra_vars or None,
+                    "entry_id": str(entry.get("id") or ""),
+                },
+                daemon=True,
+                name=f"vps-deploy-{entry.get('id') or int(time.time())}",
+            )
+            self._deploy_threads[str(entry.get("id") or "")] = thread
+            thread.start()
+
+        return {
+            "command": normalized_command,
+            "command_text": _vps_deploy_command_text(normalized_command),
+            "mode": normalized_mode,
+            "hostnames": unique_hosts,
+            "count": len(unique_hosts),
+            "entry": entry,
+        }
+
+    def validate_and_stage_vps_deploy_host(
+        self,
+        token: str,
+        *,
+        hostnames: list[Any],
+        hostname: str,
+        password: str,
+        command: str,
+        mode: str,
+        debug: bool = False,
+        extra_vars: dict[str, Any] | None = None,
+        entry_id: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_command = _normalize_vps_deploy_command(command)
+        normalized_mode = _normalize_vps_deploy_mode(mode)
+        unique_hosts: list[str] = []
+        seen: set[str] = set()
+        for raw_host in hostnames or []:
+            clean_host = str(raw_host or "").strip()
+            if not clean_host or clean_host in seen:
+                continue
+            seen.add(clean_host)
+            unique_hosts.append(clean_host)
+        clean_hostname = str(hostname or "").strip()
+        if not clean_hostname or clean_hostname not in unique_hosts:
+            raise ValueError("Selected VPS host is not part of this deploy.")
+        if normalized_command != COMMAND_VPS_UPDATE:
+            raise ValueError("Password validation staging is only supported for Update Linux.")
+
+        self._validate_vps_user_password(clean_hostname, password)
+        self._store_session_secrets(token, clean_hostname, {"user_pw": str(password or "")})
+
+        deploy_settings = self.get_vps_deploy_settings()
+        base_extra_vars = self._vps_deploy_extra_vars(normalized_command, deploy_settings) or {}
+        if extra_vars:
+            base_extra_vars.update(extra_vars)
+        options = self._deploy_entry_options(normalized_command, base_extra_vars)
+
+        target_entry_id = str(entry_id or "").strip()
+        entry: dict[str, Any]
+        with self._deploy_sessions_lock:
+            session = self._deploy_sessions.get(target_entry_id) if target_entry_id else None
+        if not target_entry_id:
+            entry = self._record_vps_deploy(
+                command=normalized_command,
+                mode=normalized_mode,
+                hostnames=unique_hosts,
+                host_logs={},
+                options=options,
+            )
+            target_entry_id = str(entry.get("id") or "")
+            with self._deploy_sessions_lock:
+                self._deploy_sessions[target_entry_id] = {
+                    "token": token,
+                    "command": normalized_command,
+                    "mode": normalized_mode,
+                    "debug": bool(debug),
+                    "extra_vars": dict(base_extra_vars or {}),
+                    "hostnames": list(unique_hosts),
+                    "started": set(),
+                    "pending": [],
+                    "current_host": "",
+                    "current_run_id": "",
+                    "finalized": False,
+                    "wake_event": threading.Event(),
+                    "worker": None,
+                }
+        else:
+            if session is None:
+                raise ValueError("Deploy session not found.")
+            entry = self._get_vps_deploy_entry(target_entry_id)
+
+        started = False
+        queued = False
+        with self._deploy_sessions_lock:
+            session = self._deploy_sessions.get(target_entry_id)
+            if not session:
+                raise ValueError("Deploy session not found.")
+            started_hosts = set(session.get("started") or set())
+            pending_hosts = [str(item or "").strip() for item in (session.get("pending") or []) if str(item or "").strip()]
+            current_host = str(session.get("current_host") or "")
+            if clean_hostname in started_hosts or clean_hostname in pending_hosts or clean_hostname == current_host:
+                return {
+                    "command": normalized_command,
+                    "command_text": _vps_deploy_command_text(normalized_command),
+                    "mode": normalized_mode,
+                    "hostnames": unique_hosts,
+                    "count": len(unique_hosts),
+                    "hostname": clean_hostname,
+                    "started": False,
+                    "queued": clean_hostname in pending_hosts,
+                    "entry_id": target_entry_id,
+                    "entry": entry,
+                }
+            start_now = normalized_mode == "parallel" or (not current_host and not pending_hosts)
+            if not start_now:
+                pending_hosts.append(clean_hostname)
+                session["pending"] = pending_hosts
+                wake_event = session.get("wake_event")
+                if isinstance(wake_event, threading.Event):
+                    wake_event.set()
+                queued = True
+
+        if start_now:
+            host_log = self._start_vps_deploy_host(
+                token,
+                hostname=clean_hostname,
+                command=normalized_command,
+                debug=debug,
+                extra_vars=base_extra_vars or None,
+            )
+            entry = self._update_vps_deploy_entry(target_entry_id, host_logs={clean_hostname: host_log})
+            started = True
+            with self._deploy_sessions_lock:
+                session = self._deploy_sessions.get(target_entry_id)
+                if session:
+                    started_hosts = set(session.get("started") or set())
+                    started_hosts.add(clean_hostname)
+                    session["started"] = started_hosts
+                    if normalized_mode == "sequential":
+                        session["current_host"] = clean_hostname
+                        session["current_run_id"] = str(host_log.get("run_id") or "")
+            if normalized_mode == "sequential":
+                self._ensure_vps_deploy_session_worker(target_entry_id)
+        else:
+            entry = self._get_vps_deploy_entry(target_entry_id)
+
+        return {
+            "command": normalized_command,
+            "command_text": _vps_deploy_command_text(normalized_command),
+            "mode": normalized_mode,
+            "hostnames": unique_hosts,
+            "count": len(unique_hosts),
+            "hostname": clean_hostname,
+            "started": started,
+            "queued": queued,
+            "entry_id": target_entry_id,
+            "entry": entry,
+        }
+
+    def finalize_vps_deploy_session(self, entry_id: str) -> dict[str, Any]:
+        target_entry_id = str(entry_id or "").strip()
+        if not target_entry_id:
+            raise ValueError("Deploy session id is required.")
+        with self._deploy_sessions_lock:
+            session = self._deploy_sessions.get(target_entry_id)
+            if not session:
+                return {"entry_id": target_entry_id, "finalized": True}
+            if str(session.get("mode") or "") == "parallel":
+                self._deploy_sessions.pop(target_entry_id, None)
+            else:
+                session["finalized"] = True
+                wake_event = session.get("wake_event")
+                if isinstance(wake_event, threading.Event):
+                    wake_event.set()
+        return {"entry_id": target_entry_id, "finalized": True}
+
+    def deploy_vps_logging(self, token: str, hostnames: list[Any], *, debug: bool = False) -> dict[str, Any]:
+        settings = self.get_vps_deploy_settings()
+        return self.run_vps_deploy(
+            token,
+            hostnames,
+            command=COMMAND_VPS_DEPLOY_LOGGING,
+            mode=str(settings.get("mode") or VPS_DEPLOY_DEFAULT_MODE),
+            debug=debug,
+        )
+
     def _build_monitor_payload(self, host_state: dict[str, Any], hostname: str | None = None) -> dict[str, Any]:
         if hostname is None:
             return self._empty_monitor_payload()
@@ -1481,7 +2866,7 @@ class VPSManagerService:
         self._apply_session_secrets_to_vps(token, vps)
         if not vps.has_setup_parameters():
             raise ValueError("Setup parameters are incomplete.")
-        self.vpsmanager.setup_vps(vps, debug=debug)
+        self.vpsmanager.setup_vps(vps, debug=debug, extra_vars={"vps_logging_services": self.get_vps_logging_config().get("services") or []})
         return self._build_vps_progress(vps, include_logs=True)
 
     def fetch_vps_log(self, hostname: str, *, filename: str, size_kb: int, reverse: bool = True, debug: bool = False) -> dict[str, Any]:

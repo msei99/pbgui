@@ -76,6 +76,8 @@ def _task_log_filename_from_action(action: str, prefix: str,
     raw_action = action.strip()
     if raw_action in legacy_action_files:
         return legacy_action_files[raw_action]
+    if raw_action.endswith('.log'):
+        return raw_action
     match = _TASK_LOG_ALIAS_RE.fullmatch(raw_action)
     if not match:
         return None
@@ -135,6 +137,8 @@ def _resolve_vps_action_log_path(filename: str) -> Optional[Path]:
         hostname = parts[1].strip()
         action = parts[2].strip()
         resolved_name = _task_log_filename_from_action(action, "vps-", action_files)
+        if not resolved_name and action.endswith(".log"):
+            resolved_name = action
         if not hostname or not resolved_name:
             return None
         fp = root / "data" / "vpsmanager" / "hosts" / hostname / resolved_name

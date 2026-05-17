@@ -99,6 +99,25 @@ def save_ini(section : str, parameter : str, value : str):
     pb_config.set(section, parameter, _normalize_ini_value(parameter, value))
     _write_ini_config(pb_config)
 
+def save_ini_section(section: str, values: dict[str, str]) -> None:
+    pb_config = configparser.ConfigParser()
+    pb_config.read(pbgui_ini_path())
+    if not pb_config.has_section(section):
+        pb_config.add_section(section)
+    for parameter, value in (values or {}).items():
+        pb_config.set(section, str(parameter), _normalize_ini_value(str(parameter), str(value)))
+    _write_ini_config(pb_config)
+
+def load_ini_section(section: str) -> dict[str, str]:
+    pb_config = configparser.ConfigParser()
+    pb_config.read(pbgui_ini_path())
+    if not pb_config.has_section(section):
+        return {}
+    return {
+        key: _normalize_ini_value(key, value)
+        for key, value in pb_config.items(section)
+    }
+
 def load_ini(section : str, parameter : str):
     pb_config = configparser.ConfigParser()
     pb_config.read(pbgui_ini_path())

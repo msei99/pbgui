@@ -1,0 +1,58 @@
+---
+- hosts: "{{ hostname }}"
+  gather_facts: yes
+
+  vars:
+    ansible_ssh_pass: "{{ user_pw }}"
+    ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+
+  tasks:
+    - name: determine remote home and install dir
+      set_fact:
+        remote_home: "{{ ansible_facts['env']['HOME'] }}"
+        install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
+
+    - name: ensure pbgui.ini exists
+      stat:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+      register: pbgui_ini_stat
+
+    - name: fail when pbgui.ini is missing
+      fail:
+        msg: "Missing {{ install_dir }}/pbgui/pbgui.ini on target host."
+      when: not pbgui_ini_stat.stat.exists
+
+    - name: write VPS logging section values
+      ini_file:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        section: logging
+        option: "rotate_{{ (item.service | lower | regex_replace('[^a-z0-9]+', '_') | trim('_')) }}_max_bytes"
+        value: "{{ ((item.max_mb | float) * 1024 * 1024) | round(0, 'floor') | int }}"
+        no_extra_spaces: true
+      loop: "{{ vps_logging_services | default([]) }}"
+
+    - name: force single-file capped logging on VPS
+      ini_file:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        section: logging
+        option: "rotate_{{ (item.service | lower | regex_replace('[^a-z0-9]+', '_') | trim('_')) }}_backup_count"
+        value: "0"
+        no_extra_spaces: true
+      loop: "{{ vps_logging_services | default([]) }}"
+
+    - name: restart PBRun and PBRemote after logging deploy
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -r PBRun PBRemote
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"
+
+    - name: restart PBCoinData after logging deploy
+      shell: |
+        source "{{ install_dir }}/venv_pbgui/bin/activate"
+        python "{{ install_dir }}/pbgui/starter.py" -r PBCoinData
+      args:
+        executable: /bin/bash
+        chdir: "{{ install_dir }}/pbgui"

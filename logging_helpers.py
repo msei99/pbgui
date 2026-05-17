@@ -62,6 +62,16 @@ def _parse_positive_int(value, default_value: int) -> int:
     return int(default_value)
 
 
+def _parse_nonnegative_int(value, default_value: int) -> int:
+    try:
+        parsed = int(value)
+        if parsed >= 0:
+            return parsed
+    except Exception:
+        pass
+    return int(default_value)
+
+
 def get_rotate_defaults() -> tuple[int, int]:
     """Return default rotation settings (max_bytes, backup_count)."""
     try:
@@ -70,7 +80,7 @@ def get_rotate_defaults() -> tuple[int, int]:
             cfg.get('logging', 'rotate_default_max_bytes', fallback=str(DEFAULT_ROTATE_MAX_BYTES)),
             DEFAULT_ROTATE_MAX_BYTES,
         )
-        backup_count = _parse_positive_int(
+        backup_count = _parse_nonnegative_int(
             cfg.get('logging', 'rotate_default_backup_count', fallback=str(DEFAULT_ROTATE_BACKUP_COUNT)),
             DEFAULT_ROTATE_BACKUP_COUNT,
         )
@@ -83,7 +93,7 @@ def set_rotate_defaults(max_bytes: int, backup_count: int):
     """Persist default rotation settings in pbgui.ini under [logging]."""
     cfg = _read_rotate_ini()
     cfg.set('logging', 'rotate_default_max_bytes', str(_parse_positive_int(max_bytes, DEFAULT_ROTATE_MAX_BYTES)))
-    cfg.set('logging', 'rotate_default_backup_count', str(_parse_positive_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)))
+    cfg.set('logging', 'rotate_default_backup_count', str(_parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)))
     with open('pbgui.ini', 'w', encoding='utf-8') as f:
         cfg.write(f)
 
@@ -112,7 +122,7 @@ def get_rotate_settings(service: str = None, logfile: str = None) -> tuple[int, 
             cfg.get('logging', f'rotate_{key}_max_bytes', fallback=str(default_max_bytes)),
             default_max_bytes,
         )
-        backup_count = _parse_positive_int(
+        backup_count = _parse_nonnegative_int(
             cfg.get('logging', f'rotate_{key}_backup_count', fallback=str(default_backup_count)),
             default_backup_count,
         )
@@ -126,9 +136,35 @@ def set_rotate_settings(service: str, max_bytes: int, backup_count: int):
     key = _normalize_rotate_key(service)
     cfg = _read_rotate_ini()
     cfg.set('logging', f'rotate_{key}_max_bytes', str(_parse_positive_int(max_bytes, DEFAULT_ROTATE_MAX_BYTES)))
-    cfg.set('logging', f'rotate_{key}_backup_count', str(_parse_positive_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)))
+    cfg.set('logging', f'rotate_{key}_backup_count', str(_parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)))
     with open('pbgui.ini', 'w', encoding='utf-8') as f:
         cfg.write(f)
+
+
+def trim_logfile_to_max_bytes(path: str, max_bytes: int = DEFAULT_ROTATE_MAX_BYTES):
+    """Trim `path` in place to the last `max_bytes` bytes, aligned to a newline."""
+    try:
+        p = Path(path)
+        if not p.exists():
+            return
+        max_bytes = _parse_positive_int(max_bytes, DEFAULT_ROTATE_MAX_BYTES)
+        try:
+            size = p.stat().st_size
+        except Exception:
+            return
+        if size <= max_bytes:
+            return
+
+        data = p.read_bytes()
+        tail = data[-max_bytes:]
+        newline = tail.find(b'\n')
+        if newline != -1 and newline + 1 < len(tail):
+            tail = tail[newline + 1:]
+        tmp = p.with_suffix(p.suffix + '.tmp')
+        tmp.write_bytes(tail)
+        tmp.replace(p)
+    except Exception:
+        pass
 
 
 def set_service_min_level(service: str, level: Optional[str]):
@@ -232,7 +268,11 @@ def rotate_logfile_if_oversize(path: str, max_bytes: int = DEFAULT_ROTATE_MAX_BY
             return
         if size <= int(max_bytes):
             return
-        backup_count = _parse_positive_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)
+        backup_count = _parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)
+
+        if backup_count <= 0:
+            trim_logfile_to_max_bytes(path, max_bytes)
+            return
 
         # Drop oldest generation first if present
         oldest = Path(str(path) + f'.{backup_count}')

@@ -791,6 +791,7 @@ def _preload_job_payload(job: dict[str, Any]) -> dict[str, Any]:
 
 def _cleanup_preload_jobs() -> None:
     cutoff = _utc_ms() - (_PRELOAD_JOB_TTL_SECONDS * 1000)
+    stale_paths: list[Path] = []
     with _PRELOAD_LOCK:
         stale_ids = []
         for job_id, job in _PRELOAD_JOBS.items():
@@ -798,7 +799,19 @@ def _cleanup_preload_jobs() -> None:
             if finished_at and finished_at < cutoff:
                 stale_ids.append(job_id)
         for job_id in stale_ids:
-            _PRELOAD_JOBS.pop(job_id, None)
+            job = _PRELOAD_JOBS.pop(job_id, None)
+            if not job:
+                continue
+            for key in ("config_path", "log_path"):
+                raw_path = str(job.get(key) or "").strip()
+                if raw_path:
+                    stale_paths.append(Path(raw_path))
+
+    for stale_path in stale_paths:
+        try:
+            stale_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def _prepare_runtime_config(raw_config: dict[str, Any]) -> dict[str, Any]:
@@ -815,6 +828,12 @@ def _write_preload_config(job_id: str, config: dict[str, Any]) -> Path:
     config_path = work_dir / f"preload_{job_id}.json"
     save_pb7_config(config, config_path)
     return config_path
+
+
+def _preload_log_path(job_id: str) -> Path:
+    log_dir = Path(PBGDIR) / "data" / "ohlcv_preload" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / f"preload_{job_id}.log"
 
 
 def _preload_command(config_path: Path) -> list[str]:
@@ -1192,7 +1211,7 @@ def start_ohlcv_preload_job(raw_config: dict[str, Any]) -> dict[str, Any]:
     target_end_ms = _derive_target_end_ms_from_config(config)
     job_id = uuid.uuid4().hex[:12]
     config_path = _write_preload_config(job_id, config)
-    log_path = Path(PBGDIR) / "data" / "logs" / f"ohlcv_preload_{job_id}.log"
+    log_path = _preload_log_path(job_id)
     job = {
         "job_id": job_id,
         "status": "queued",

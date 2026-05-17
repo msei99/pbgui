@@ -110,6 +110,25 @@ def _task_log_path(base_dir: Path, task_name: str | None, fallback: str) -> Path
     return base_dir / f"{_task_log_stem(task_name, fallback)}.log"
 
 
+def _task_run_log_path(base_dir: Path, task_name: str | None, run_id: str | None, fallback: str) -> Path:
+    stem = _task_log_stem(task_name, fallback)
+    clean_run_id = re.sub(r"[^a-z0-9_-]+", "-", str(run_id or "").strip().lower()).strip("-")
+    if not clean_run_id:
+        return _task_log_path(base_dir, task_name, fallback)
+    return base_dir / f"{stem}--{clean_run_id}.log"
+
+
+def _task_log_header(*, task_name: str | None, fallback: str, target: str) -> str:
+    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    command = _task_log_stem(task_name, fallback)
+    return (
+        f"=== PLAYBOOK RUN START {started_at} ===\n"
+        f"Target: {target}\n"
+        f"Task: {command}\n"
+        "========================================\n"
+    )
+
+
 def _rotated_task_log_path(path: Path, index: int) -> Path:
     return path.with_name(f"{path.name}.{index}")
 
@@ -161,6 +180,7 @@ class VPS:
         self.update_status = None
         self.command = "unknown"
         self.command_text = "unknown"
+        self.command_run_id = None
         self.reboot = False
         self.init_log = ""
         self.setup_log = ""
@@ -186,16 +206,37 @@ class VPS:
 
     def _task_log_path(self, task_name: str | None = None, fallback: str = "vps-update") -> Path:
         base_dir = self.path or Path(f"{PBGDIR}/data/vpsmanager/hosts/{self.hostname}")
+        return _task_run_log_path(base_dir, task_name or self.command, self.command_run_id, fallback)
+
+    def _task_log_alias_path(self, task_name: str | None = None, fallback: str = "vps-update") -> Path:
+        base_dir = self.path or Path(f"{PBGDIR}/data/vpsmanager/hosts/{self.hostname}")
         return _task_log_path(base_dir, task_name or self.command, fallback)
 
     def _rotate_task_log(self, task_name: str | None = None, fallback: str = "vps-update") -> None:
-        _rotate_task_log(self._task_log_path(task_name, fallback), _task_log_history_limit())
+        _rotate_task_log(self._task_log_alias_path(task_name, fallback), _task_log_history_limit())
 
     def _append_task_log(self, dump: str, *, task_name: str | None = None, fallback: str, buffer_attr: str) -> None:
         log = self._task_log_path(task_name, fallback)
+        alias_log = self._task_log_alias_path(task_name, fallback)
         with open(log, "a", encoding="utf-8") as logfile:
             logfile.write(dump)
+        try:
+            shutil.copyfile(log, alias_log)
+        except Exception:
+            pass
         setattr(self, buffer_attr, getattr(self, buffer_attr) + dump)
+
+    def _start_task_log(self, task_name: str | None = None, fallback: str = "vps-update") -> None:
+        log = self._task_log_path(task_name, fallback)
+        alias_log = self._task_log_alias_path(task_name, fallback)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        header = _task_log_header(task_name=task_name or self.command, fallback=fallback, target=str(self.hostname or "unknown"))
+        with open(log, "w", encoding="utf-8") as logfile:
+            logfile.write(header)
+        try:
+            shutil.copyfile(log, alias_log)
+        except Exception:
+            pass
 
     def load(self, file_path):
         with open(file_path, "r", encoding="utf-8") as handle:
@@ -235,6 +276,8 @@ class VPS:
             self.command = config["command"]
         if "command_text" in config:
             self.command_text = config["command_text"]
+        if "command_run_id" in config:
+            self.command_run_id = config["command_run_id"]
         if "init_methode" in config:
             self.init_methode = config["init_methode"]
         if "remove_user" in config:
@@ -625,12 +668,15 @@ class VPS:
 
     def remove_init_log(self):
         self._rotate_task_log(task_name="vps-init", fallback="vps-init")
+        self._start_task_log(task_name="vps-init", fallback="vps-init")
 
     def remove_setup_log(self):
         self._rotate_task_log(task_name="vps-setup", fallback="vps-setup")
+        self._start_task_log(task_name="vps-setup", fallback="vps-setup")
 
     def remove_update_log(self):
         self._rotate_task_log(task_name=self.command, fallback="vps-update")
+        self._start_task_log(task_name=self.command, fallback="vps-update")
 
     def init_status_handler(self, status_data, runner_config):
         del runner_config
@@ -687,6 +733,16 @@ class VPS:
         return strip_ansi(self.setup_log)
 
     def get_update_log_text(self):
+        candidates = [
+            self._task_log_path(self.command, "vps-update"),
+            self._task_log_alias_path(self.command, "vps-update"),
+        ]
+        for path in candidates:
+            try:
+                if path.exists():
+                    return strip_ansi(path.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+                continue
         return strip_ansi(self.update_log)
 
     def save(self):
@@ -716,6 +772,7 @@ class VPS:
                 "firewall_ssh_ips": self.firewall_ssh_ips,
                 "command": self.command,
                 "command_text": self.command_text,
+                "command_run_id": self.command_run_id,
                 "init_methode": self.init_methode,
                 "remove_user": self.remove_user,
                 "remote_pbgui_dir": self.remote_pbgui_dir,
@@ -754,6 +811,13 @@ class VPSManager:
             logfile.write(dump)
         setattr(self, buffer_attr, getattr(self, buffer_attr) + dump)
 
+    def _start_task_log(self, task_name: str | None = None, fallback: str = "master-update-pb") -> None:
+        log = self._task_log_path(task_name, fallback)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        header = _task_log_header(task_name=task_name or self.command, fallback=fallback, target="master")
+        with open(log, "w", encoding="utf-8") as logfile:
+            logfile.write(header)
+
     def update_event_handler(self, event):
         if dump := event.get("stdout"):
             self._append_task_log(dump, task_name=self.command, fallback="master-update-pb", buffer_attr="update_log")
@@ -770,6 +834,7 @@ class VPSManager:
 
     def remove_update_log(self):
         self._rotate_task_log(task_name=self.command, fallback="master-update-pb")
+        self._start_task_log(task_name=self.command, fallback="master-update-pb")
 
     def get_update_log_text(self):
         return strip_ansi(self.update_log)
@@ -800,6 +865,7 @@ class VPSManager:
     def init_vps(self, vps: VPS, debug=False, auto_setup=False):
         vps.command = "vps-init"
         vps.command_text = "Initialize"
+        vps.init_status = "starting"
         vps.setup_status = None
         vps.save()
         vps.privat_data_dir = _prepare_runner_private_data_dir(vps.path)
@@ -849,9 +915,10 @@ class VPSManager:
             shutil.rmtree(vps.privat_data_dir, ignore_errors=True)
             raise
 
-    def setup_vps(self, vps: VPS, debug=False):
+    def setup_vps(self, vps: VPS, debug=False, extra_vars=None):
         vps.command = "vps-setup"
         vps.command_text = "Setup VPS"
+        vps.setup_status = "starting"
         vps.save()
         vps.privat_data_dir = _prepare_runner_private_data_dir(vps.path)
         vps.remove_setup_log()
@@ -862,23 +929,27 @@ class VPSManager:
         else:
             tags = None
             verbosity = 1
+        ansible_extravars = {
+            "hostname": vps.hostname,
+            "user": vps.user,
+            "user_pw": vps.user_pw,
+            "swap_size": vps.swap,
+            "bucket": vps.bucket,
+            "coinmarketcap_api_key": vps.coinmarketcap_api_key,
+            "firewall": vps.firewall,
+            "firewall_ssh_port": vps.firewall_ssh_port,
+            "firewall_ssh_ips": vps.firewall_ssh_ips.split(","),
+            "debug": debug,
+            "install_dir": _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user),
+            "vps_logging_services": [],
+        }
+        if extra_vars:
+            ansible_extravars.update(extra_vars)
         try:
             ansible_runner.run_async(
                 playbook=str(PurePath(f"{PBGDIR}/vps-setup.yml")),
                 inventory=vps.hostname,
-                extravars={
-                    "hostname": vps.hostname,
-                    "user": vps.user,
-                    "user_pw": vps.user_pw,
-                    "swap_size": vps.swap,
-                    "bucket": vps.bucket,
-                    "coinmarketcap_api_key": vps.coinmarketcap_api_key,
-                    "firewall": vps.firewall,
-                    "firewall_ssh_port": vps.firewall_ssh_port,
-                    "firewall_ssh_ips": vps.firewall_ssh_ips.split(","),
-                    "debug": debug,
-                    "install_dir": _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user),
-                },
+                extravars=ansible_extravars,
                 quiet=True,
                 envvars=_ansible_envvars(),
                 tags=tags,
@@ -893,7 +964,9 @@ class VPSManager:
             raise
 
     def update_vps(self, vps: VPS, debug=False, extra_vars=None):
-        vps.update_status = None
+        vps.update_status = "starting"
+        vps.last_update = None
+        vps.command_run_id = f"run-{int(datetime.now().timestamp() * 1000)}"
         vps.save()
         vps.privat_data_dir = _prepare_runner_private_data_dir(vps.path)
         vps.remove_update_log()

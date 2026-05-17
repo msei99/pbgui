@@ -117,7 +117,7 @@ def save_rotation(
 ) -> dict:
     """Save rotation settings for 'default' or a specific service/log-stem."""
     max_bytes = max(1, int(body.max_mb)) * 1024 * 1024
-    backup_count = max(1, int(body.backup_count))
+    backup_count = max(0, int(body.backup_count))
 
     if body.scope == "default":
         set_rotate_defaults(max_bytes, backup_count)

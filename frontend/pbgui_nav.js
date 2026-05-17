@@ -218,7 +218,7 @@
 
     /* shared confirm overlay */
     '#pbgui-confirm-ovl{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);',
-    'z-index:3050;align-items:center;justify-content:center;backdrop-filter:blur(2px);}',
+    'z-index:7000;align-items:center;justify-content:center;backdrop-filter:blur(2px);}',
     '#pbgui-confirm-ovl.visible{display:flex;}',
     '#pbgui-confirm-box{background:#131b2b;border:1px solid #2d3748;border-radius:14px;',
     'box-shadow:0 20px 70px rgba(0,0,0,.9);overflow:hidden;width:min(460px,92vw);}',

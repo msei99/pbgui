@@ -1023,8 +1023,136 @@
       z-index: 1;
     }
 
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+    }
+
+    th.sortable:hover {
+      color: var(--text);
+    }
+
+    .th-sort-indicator {
+      color: var(--text-dim);
+      font-size: 11px;
+    }
+
+    .th-sort {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .th-sort-main {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .th-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: auto;
+    }
+
+    .th-icon-btn {
+      border: 0;
+      background: transparent;
+      color: var(--text-dim);
+      padding: 0;
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1;
+    }
+
+    .th-icon-btn:hover {
+      color: var(--text);
+    }
+
+    th.reset-col,
+    td.reset-col {
+      width: 36px;
+      min-width: 36px;
+      text-align: center;
+      padding-left: 6px;
+      padding-right: 6px;
+    }
+
     tbody tr:hover {
       background: rgba(21, 35, 57, 0.72);
+    }
+
+    .deploy-progress-table {
+      table-layout: fixed;
+    }
+
+    .deploy-progress-table th:nth-child(1),
+    .deploy-progress-table td:nth-child(1) {
+      width: 140px;
+    }
+
+    .deploy-progress-table th:nth-child(2),
+    .deploy-progress-table td:nth-child(2) {
+      width: 240px;
+    }
+
+    .deploy-progress-table th:nth-child(3),
+    .deploy-progress-table td:nth-child(3) {
+      width: 520px;
+    }
+
+    .deploy-progress-table th:nth-child(4),
+    .deploy-progress-table td:nth-child(4) {
+      width: 180px;
+    }
+
+    .deploy-progress-table th:nth-child(5),
+    .deploy-progress-table td:nth-child(5) {
+      width: 120px;
+    }
+
+    .deploy-status-cell {
+      min-width: 0;
+    }
+
+    .deploy-status-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .deploy-status-meta {
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .deploy-status-recap {
+      flex: 1;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: right;
+    }
+
+    tr.selectable-row {
+      cursor: pointer;
+    }
+
+    tr.selectable-row.selected {
+      background: rgba(19, 55, 92, 0.78);
+      box-shadow: inset 3px 0 0 rgba(93, 196, 255, 0.78);
+    }
+
+    tr.selectable-row.selected:hover {
+      background: rgba(23, 66, 110, 0.84);
     }
 
     .table-button {
@@ -1208,12 +1336,95 @@
       justify-content: center;
       background: rgba(3, 6, 10, 0.72);
       backdrop-filter: blur(4px);
-      z-index: 3000;
+      z-index: 6000;
     }
 
     #alertModalOverlay.visible,
     #cpuHistoryOverlay.visible {
       display: flex;
+    }
+
+    #alertModalOverlay.deploy-log-overlay {
+      background: rgba(3, 6, 10, 0.18);
+      backdrop-filter: none;
+    }
+
+    #deployLogWindowsLayer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 4800;
+    }
+
+    .deploy-log-window {
+      position: fixed;
+      width: min(1100px, calc(100vw - 32px));
+      height: min(760px, calc(100vh - 32px));
+      min-width: min(520px, calc(100vw - 32px));
+      min-height: min(320px, calc(100vh - 32px));
+      max-width: calc(100vw - 32px);
+      max-height: calc(100vh - 32px);
+      border-radius: 18px;
+      background: rgba(12, 21, 34, 0.98);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.54);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      pointer-events: auto;
+    }
+
+    .deploy-log-window-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(17, 29, 47, 0.94);
+      cursor: move;
+      user-select: none;
+      touch-action: none;
+    }
+
+    .deploy-log-window-body {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      gap: 12px;
+      overflow: hidden;
+    }
+
+    .deploy-log-window-shell {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .deploy-log-window-resize {
+      display: block;
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 18px;
+      height: 18px;
+      cursor: nwse-resize;
+      touch-action: none;
+      opacity: 0.7;
+      z-index: 1;
+    }
+
+    .deploy-log-window-resize::before {
+      content: '';
+      position: absolute;
+      right: 4px;
+      bottom: 4px;
+      width: 10px;
+      height: 10px;
+      border-right: 2px solid rgba(255, 255, 255, 0.45);
+      border-bottom: 2px solid rgba(255, 255, 255, 0.45);
     }
 
     .modal-box,
@@ -1934,6 +2145,16 @@
       line-height: 1.45;
     }
 
+    .sb-button-row {
+      display: flex;
+      gap: 0.45rem;
+    }
+
+    .sb-button-row .sb-btn {
+      flex: 1;
+      text-align: center;
+    }
+
     .sb-btn,
     .side-button {
       width: 100%;
@@ -2322,6 +2543,21 @@
       margin-top: 0.25rem;
     }
 
+    .deploy-progress-bar {
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+      margin: 6px 0 4px;
+    }
+
+    .deploy-progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: background 0.25s ease;
+    }
+
     .page-header {
       margin-bottom: 1rem;
     }
@@ -2513,6 +2749,8 @@
     </div>
   </div>
 
+  <div id='deployLogWindowsLayer'></div>
+
   <div id='cpuHistoryOverlay'>
     <div class='cpu-history-box' id='cpuHistoryBox'>
       <div class='cpu-history-resize-handle side-top' data-resize='top'></div>
@@ -2640,6 +2878,8 @@
       pendingAutoSetupSwitch: null,
       master: defaultMasterUi(),
       taskLog: defaultTaskLog(),
+      deployLogWindows: [],
+      pendingOverviewDeploy: null,
       vps: {},
       sidebarSelectInteracting: false,
       pb7BranchSelectInteracting: false,
@@ -2649,6 +2889,15 @@
       helpCache: {},
       pendingConfirm: null,
       pendingSecretReveal: {},
+      selectedOverviewHosts: [],
+      selectedOverviewHostsHydrated: false,
+      vpsLoggingDeployHosts: [],
+      vpsLoggingDeployHistory: [],
+      suppressNextVpsLoggingSaveToast: false,
+      suppressNextVpsDeploySaveToast: false,
+      overviewSelectionAnchor: '',
+      overviewSelectionMode: '',
+      overviewSelectionDragging: false,
       githubCommitDetails: {},
       githubCommitDetailsOpen: {},
       missingCommitsOpen: {},
@@ -2658,8 +2907,26 @@
         sidebarList: '',
         view: ''
       },
-      botSort: { field: 'name', dir: 'asc' }
+      botSort: { field: 'name', dir: 'asc' },
+      overviewSort: { field: 'name', dir: 'asc' },
+      overviewVisibleColumns: {}
     };
+
+    const OVERVIEW_PREFS_STORAGE_KEY = 'pbgui_vps_manager_overview_prefs_v1';
+    const OVERVIEW_COLUMNS = [
+      { key: 'name', label: 'Name', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).name || ''); } },
+      { key: 'role', label: 'Role', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).role || ''); } },
+      { key: 'online', label: 'Online', defaultVisible: true, sortable: true, getValue: function (row) { return !!((row || {}).online); } },
+      { key: 'running_bots', label: 'Bots', defaultVisible: true, sortable: true, getValue: function (row) { return Number((row || {}).running_bots); } },
+      { key: 'start', label: 'Started', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).start || ''); } },
+      { key: 'updates', label: 'Updates', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).updates || ''); } },
+      { key: 'pbgui', label: 'PBGui', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pbgui || ''); } },
+      { key: 'pbgui_branch', label: 'PBGui Branch', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pbgui_branch || ''); } },
+      { key: 'pbgui_github', label: 'PBGui GitHub', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pbgui_github || ''); } },
+      { key: 'pb7', label: 'PB7', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pb7 || ''); } },
+      { key: 'pb7_branch', label: 'PB7 Branch', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pb7_branch || ''); } },
+      { key: 'pb7_github', label: 'PB7 GitHub', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pb7_github || ''); } }
+    ];
 
     let vpsLogViewer = null;
     let vpsLogViewerHost = '';
@@ -2668,6 +2935,9 @@
     let taskLogViewer = null;
     let taskLogViewerFile = '';
     let taskLogViewerKey = '';
+    let deployLogWindowCounter = 0;
+    let deployLogWindowZIndex = 4800;
+    const deployLogViewers = {};
     let masterHostLogViewer = null;
     let masterHostLogViewerKey = '';
 
@@ -2744,6 +3014,378 @@
         pb7RemoteBranchesKey: '',
         pb7RemoteCommitsKey: ''
       };
+    }
+
+    function defaultVpsLoggingConfig() {
+      return {
+        services: []
+      };
+    }
+
+    function defaultVpsDeployConfig() {
+      return {
+        action: 'vps-deploy-logging',
+        action_text: 'Deploy Settings',
+        mode: 'parallel',
+        debug: false,
+        reboot_requested: false,
+        selected_hosts: [],
+        actions: [],
+        modes: ['parallel', 'sequential']
+      };
+    }
+
+    function getVpsLoggingConfig() {
+      const cfg = (((store.state || {}).config || {}).vps_logging) || {};
+      const base = defaultVpsLoggingConfig();
+      base.services = Array.isArray(cfg.services) ? cfg.services.map(function (item) {
+        return {
+          service: String((item || {}).service || ''),
+          max_mb: Number((item || {}).max_mb) || 0,
+          default_max_mb: Number((item || {}).default_max_mb) || 0,
+          backup_count: 0
+        };
+      }) : [];
+      return base;
+    }
+
+    function getVpsDeployConfig() {
+      const cfg = (((store.state || {}).config || {}).vps_deploy) || {};
+      const base = defaultVpsDeployConfig();
+      base.action = String(cfg.action || base.action || 'vps-deploy-logging');
+      base.action_text = String(cfg.action_text || base.action_text || 'Deploy Settings');
+      base.mode = String(cfg.mode || base.mode || 'parallel');
+      base.debug = !!cfg.debug;
+      base.reboot_requested = !!cfg.reboot_requested;
+      base.selected_hosts = Array.isArray(cfg.selected_hosts) ? cfg.selected_hosts.map(function (item) { return String(item || ''); }).filter(Boolean) : [];
+      base.actions = Array.isArray(cfg.actions) ? cfg.actions.map(function (item) {
+        return {
+          command: String((item || {}).command || ''),
+          command_text: String((item || {}).command_text || (item || {}).command || '')
+        };
+      }).filter(function (item) { return item.command; }) : [];
+      base.modes = Array.isArray(cfg.modes) && cfg.modes.length ? cfg.modes.map(function (item) { return String(item || ''); }).filter(Boolean) : base.modes;
+      return base;
+    }
+
+    function getSelectedOverviewHosts() {
+      const managed = new Set(getManagedRows().map(function (row) { return String(row.hostname || ''); }));
+      return (store.selectedOverviewHosts || []).filter(function (hostname) { return managed.has(String(hostname || '')); });
+    }
+
+    function setSelectedOverviewHosts(hostnames) {
+      store.selectedOverviewHosts = Array.from(new Set((hostnames || []).map(function (item) { return String(item || '').trim(); }).filter(Boolean)));
+      store.selectedOverviewHostsHydrated = true;
+      renderUi({ forceSidebarActions: true, forceView: store.view === 'overview' || isOverviewSettingsView() });
+    }
+
+    function toggleOverviewHostSelection(hostname) {
+      hostname = String(hostname || '').trim();
+      if (!hostname) return;
+      const current = getSelectedOverviewHosts();
+      if (current.indexOf(hostname) >= 0) {
+        setSelectedOverviewHosts(current.filter(function (item) { return item !== hostname; }));
+      } else {
+        current.push(hostname);
+        setSelectedOverviewHosts(current);
+      }
+    }
+
+    function getOverviewSelectableHosts() {
+      return getManagedRows().map(function (row) { return String(row.hostname || ''); }).filter(Boolean);
+    }
+
+    function setOverviewSelectionRange(anchorHost, targetHost, mode) {
+      const hosts = getOverviewSelectableHosts();
+      const anchorIndex = hosts.indexOf(String(anchorHost || ''));
+      const targetIndex = hosts.indexOf(String(targetHost || ''));
+      if (anchorIndex < 0 || targetIndex < 0) return;
+      const start = Math.min(anchorIndex, targetIndex);
+      const end = Math.max(anchorIndex, targetIndex);
+      const range = hosts.slice(start, end + 1);
+      if (mode === 'remove') {
+        setSelectedOverviewHosts(getSelectedOverviewHosts().filter(function (item) { return range.indexOf(item) < 0; }));
+        return;
+      }
+      if (mode === 'replace') {
+        setSelectedOverviewHosts(range);
+        return;
+      }
+      const merged = getSelectedOverviewHosts().slice();
+      range.forEach(function (item) {
+        if (merged.indexOf(item) < 0) merged.push(item);
+      });
+      setSelectedOverviewHosts(merged);
+    }
+
+    function startOverviewSelection(hostname, event) {
+      hostname = String(hostname || '').trim();
+      if (!hostname) return;
+      const alreadySelected = getSelectedOverviewHosts().indexOf(hostname) >= 0;
+      store.overviewSelectionAnchor = hostname;
+      store.overviewSelectionDragging = true;
+      store.overviewSelectionMode = alreadySelected ? 'remove' : 'add';
+      setOverviewSelectionRange(hostname, hostname, alreadySelected ? 'remove' : 'add');
+      if (event && event.target && typeof event.target.closest === 'function' && event.target.closest('.table-button')) {
+        store.overviewSelectionDragging = false;
+        store.overviewSelectionAnchor = '';
+        store.overviewSelectionMode = '';
+        return;
+      }
+      if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    }
+
+    function moveOverviewSelection(hostname) {
+      if (!store.overviewSelectionDragging) return;
+      hostname = String(hostname || '').trim();
+      if (!hostname || !store.overviewSelectionAnchor) return;
+      setOverviewSelectionRange(store.overviewSelectionAnchor, hostname, store.overviewSelectionMode || 'add');
+    }
+
+    function endOverviewSelection() {
+      store.overviewSelectionDragging = false;
+      store.overviewSelectionAnchor = '';
+      store.overviewSelectionMode = '';
+    }
+
+    function setVpsLoggingValue(serviceName, value) {
+      const config = getVpsLoggingConfig();
+      const nextValue = Number(value);
+      config.services = config.services.map(function (item) {
+        if (String(item.service || '') !== String(serviceName || '')) return item;
+        return Object.assign({}, item, { max_mb: nextValue });
+      });
+      if (store.state && store.state.config) {
+        store.state.config.vps_logging = config;
+      }
+      refreshLocalInteractiveState();
+    }
+
+    function saveVpsLoggingConfig(options) {
+      const opts = options || {};
+      store.suppressNextVpsLoggingSaveToast = !!opts.silent;
+      send({
+        cmd: 'save_vps_logging_config',
+        data: {
+          services: getVpsLoggingConfig().services
+        }
+      });
+    }
+
+    function setVpsDeployAction(value) {
+      const config = getVpsDeployConfig();
+      const nextAction = String(value || '').trim() || 'vps-deploy-logging';
+      const nextActionMeta = (config.actions || []).find(function (item) {
+        return String(item.command || '') === nextAction;
+      }) || null;
+      config.action = nextAction;
+      config.action_text = String((nextActionMeta && nextActionMeta.command_text) || nextAction || 'Deploy Settings');
+      if (store.state && store.state.config) {
+        store.state.config.vps_deploy = config;
+      }
+      renderUi({ forceSidebarActions: true, forceView: isOverviewSettingsView() || store.view === 'overview' });
+      refreshLocalInteractiveState();
+    }
+
+    function setVpsDeployMode(value) {
+      const config = getVpsDeployConfig();
+      config.mode = String(value || '').trim() || 'parallel';
+      if (store.state && store.state.config) {
+        store.state.config.vps_deploy = config;
+      }
+      renderUi({ forceSidebarActions: true, forceView: isOverviewSettingsView() || store.view === 'overview' });
+      refreshLocalInteractiveState();
+      saveVpsDeploySettings({ silent: true });
+    }
+
+    function setVpsDeployDebug(checked) {
+      const config = getVpsDeployConfig();
+      config.debug = !!checked;
+      if (store.state && store.state.config) {
+        store.state.config.vps_deploy = config;
+      }
+      renderUi({ forceSidebarActions: true, forceView: isOverviewSettingsView() || store.view === 'overview' });
+      refreshLocalInteractiveState();
+      saveVpsDeploySettings({ silent: true });
+    }
+
+    function setVpsDeployRebootRequested(checked) {
+      const config = getVpsDeployConfig();
+      config.reboot_requested = !!checked;
+      if (store.state && store.state.config) {
+        store.state.config.vps_deploy = config;
+      }
+      renderUi({ forceSidebarActions: true, forceView: isOverviewSettingsView() || store.view === 'overview' });
+      refreshLocalInteractiveState();
+      saveVpsDeploySettings({ silent: true });
+    }
+
+    function saveVpsDeploySettings(options) {
+      const opts = options || {};
+      store.suppressNextVpsDeploySaveToast = !!opts.silent;
+      const config = getVpsDeployConfig();
+      send({
+        cmd: 'save_vps_deploy_settings',
+        data: {
+          action: config.action,
+          mode: config.mode,
+          debug: !!config.debug,
+          reboot_requested: !!config.reboot_requested
+        }
+      });
+    }
+
+    function overviewDeployNeedsPassword(command) {
+      return String(command || '').trim() === 'vps-update';
+    }
+
+    function cancelOverviewDeployPasswordFlow(options) {
+      const flow = store.pendingOverviewDeploy;
+      if (!flow) return;
+      const opts = options || {};
+      const entryId = String(flow.entry_id || '');
+      const validatedCount = Array.isArray(flow.started_hosts) ? flow.started_hosts.length : 0;
+      const totalCount = Array.isArray(flow.hostnames) ? flow.hostnames.length : 0;
+      if (entryId) {
+        send({ cmd: 'finalize_vps_deploy_session', entry_id: entryId });
+      }
+      store.pendingOverviewDeploy = null;
+      if (!opts.silent) {
+        if (validatedCount > 0) {
+          toast(String(flow.command_text || 'Update Linux') + ' continues for ' + validatedCount + ' of ' + totalCount + ' selected host' + (totalCount === 1 ? '' : 's') + '.', 'info');
+        } else {
+          toast(String(flow.command_text || 'Update Linux') + ' cancelled.', 'info');
+        }
+      }
+    }
+
+    function processOverviewDeployPasswordFlow() {
+      const flow = store.pendingOverviewDeploy;
+      if (!flow || flow.validating || flow.prompt_open || flow.finalizing) {
+        return;
+      }
+      flow.remaining_hosts = Array.isArray(flow.remaining_hosts)
+        ? flow.remaining_hosts.map(function (item) { return String(item || '').trim(); }).filter(Boolean)
+        : [];
+      if (!flow.remaining_hosts.length) {
+        const validatedCount = Array.isArray(flow.started_hosts) ? flow.started_hosts.length : 0;
+        const totalCount = Array.isArray(flow.hostnames) ? flow.hostnames.length : 0;
+        if (!flow.summary_toast_shown) {
+          flow.summary_toast_shown = true;
+          if (validatedCount === totalCount && totalCount > 0) {
+            toast(String(flow.command_text || 'Update Linux') + ' started for ' + validatedCount + ' host' + (validatedCount === 1 ? '' : 's') + '.', 'success');
+          } else if (validatedCount > 0) {
+            toast(String(flow.command_text || 'Update Linux') + ' started for ' + validatedCount + ' of ' + totalCount + ' selected host' + (totalCount === 1 ? '' : 's') + '.', 'info');
+          } else {
+            toast(String(flow.command_text || 'Update Linux') + ' cancelled.', 'info');
+          }
+        }
+        if (String(flow.entry_id || '').trim()) {
+          flow.finalizing = true;
+          send({ cmd: 'finalize_vps_deploy_session', entry_id: flow.entry_id });
+        } else {
+          store.pendingOverviewDeploy = null;
+        }
+        renderUi({ forceView: true });
+        return;
+      }
+      const nextHost = String(flow.remaining_hosts[0] || '').trim();
+      if (!nextHost) {
+        flow.remaining_hosts.shift();
+        processOverviewDeployPasswordFlow();
+        return;
+      }
+      const totalCount = Array.isArray(flow.hostnames) ? flow.hostnames.length : flow.remaining_hosts.length;
+      const hostIndex = Math.max(1, (flow.hostnames || []).indexOf(nextHost) + 1);
+      flow.prompt_open = true;
+      flow.prompt_host = nextHost;
+      setTimeout(function () {
+        openPasswordPrompt(nextHost, function (password) {
+          const activeFlow = store.pendingOverviewDeploy;
+          if (!activeFlow || String(activeFlow.prompt_host || '') !== nextHost) {
+            return false;
+          }
+          activeFlow.validating = true;
+          setPasswordPromptStatus('', 'error');
+          setPasswordPromptBusy(true, 'Validating...');
+          send({
+            cmd: 'validate_and_stage_vps_deploy_host',
+            hostnames: Array.isArray(activeFlow.hostnames) ? activeFlow.hostnames.slice() : [],
+            hostname: nextHost,
+            password: String(password || ''),
+            command: String(activeFlow.command || 'vps-update'),
+            mode: String(activeFlow.mode || 'parallel'),
+            debug: !!activeFlow.debug,
+            extra_vars: activeFlow.extra_vars || null,
+            entry_id: String(activeFlow.entry_id || '')
+          });
+          return false;
+        }, {
+          title: 'Validate VPS User Password',
+          message: 'Enter the VPS user password for ' + nextHost + ' to run ' + String(flow.command_text || 'Update Linux') + '. Host ' + hostIndex + ' of ' + totalCount + '.',
+          confirmLabel: 'Validate and Start',
+          persistToForm: false
+        });
+      }, 0);
+    }
+
+    function startOverviewDeployPasswordFlow(hostnames, command, commandText, mode, debug, extraVars) {
+      const selectedHosts = Array.isArray(hostnames) ? hostnames.map(function (item) { return String(item || '').trim(); }).filter(Boolean) : [];
+      if (!selectedHosts.length) {
+        toast('Select at least one VPS in Overview first.', 'warning');
+        return;
+      }
+      store.pendingOverviewDeploy = {
+        command: String(command || 'vps-update'),
+        command_text: String(commandText || 'Update Linux'),
+        hostnames: selectedHosts.slice(),
+        remaining_hosts: selectedHosts.slice(),
+        started_hosts: [],
+        mode: String(mode || 'parallel'),
+        debug: !!debug,
+        extra_vars: extraVars || null,
+        entry_id: '',
+        prompt_host: '',
+        prompt_open: false,
+        validating: false,
+        finalizing: false,
+        closing_from_result: false,
+        summary_toast_shown: false
+      };
+      selectView('deploys-vps-logging');
+      processOverviewDeployPasswordFlow();
+    }
+
+    function deploySelectedVpsAction(command, commandText) {
+      const selected = getSelectedOverviewHosts();
+      if (!selected.length) {
+        toast('Select at least one VPS in Overview first.', 'warning');
+        return;
+      }
+      if (store.pendingOverviewDeploy) {
+        toast('Finish the current Update Linux password flow first.', 'info');
+        return;
+      }
+      const deployConfig = getVpsDeployConfig();
+      const nextCommand = String(command || deployConfig.action || 'vps-deploy-logging');
+      const nextCommandText = String(commandText || deployConfig.action_text || 'Deploy Settings');
+      const mode = String(deployConfig.mode || 'parallel');
+      const extraVars = nextCommand === 'vps-update'
+        ? { reboot: !!deployConfig.reboot_requested, reboot_requested: !!deployConfig.reboot_requested }
+        : null;
+      store.vpsLoggingDeployHosts = selected.slice();
+      if (store.state && store.state.config) {
+        store.state.config.vps_deploy = Object.assign({}, deployConfig, {
+          action: nextCommand,
+          action_text: nextCommandText
+        });
+      }
+      if (overviewDeployNeedsPassword(nextCommand)) {
+        startOverviewDeployPasswordFlow(selected, nextCommand, nextCommandText, mode, !!deployConfig.debug, extraVars);
+        return;
+      }
+      selectView('deploys-vps-logging');
+      send({ cmd: 'run_vps_deploy', hostnames: selected, command: nextCommand, mode: mode, extra_vars: extraVars, debug: !!deployConfig.debug });
     }
 
     function clearPb7RemoteCache(uiState) {
@@ -2862,6 +3504,60 @@
       return !!store.hostname && (store.view === 'vps' || store.view === 'vps-task-log' || store.view === 'vps-host-logs' || store.view === 'vps-setup' || store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch');
     }
 
+    function isOverviewSettingsView() {
+      return store.view === 'settings-vps-logging';
+    }
+
+    function isDeploysView() {
+      return store.view === 'deploys-vps-logging';
+    }
+
+    function getVpsLoggingDeployHistory() {
+      const deploysState = (((store.state || {}).deploys) || {});
+      const stateHistory = deploysState.history || deploysState.vps_logging_history;
+      return Array.isArray(stateHistory) ? stateHistory : (Array.isArray(store.vpsLoggingDeployHistory) ? store.vpsLoggingDeployHistory : []);
+    }
+
+    function getCurrentVpsLoggingDeployHosts() {
+      const history = getVpsLoggingDeployHistory();
+      if (!history.length) return [];
+      return Array.isArray(history[0].hostnames) ? history[0].hostnames.filter(Boolean) : [];
+    }
+
+    function getLatestVpsLoggingDeployEntry() {
+      const history = getVpsLoggingDeployHistory();
+      return history.length ? history[0] : null;
+    }
+
+    function getDeployLogFileForEntry(entry, hostname, command, options) {
+      const host = String(hostname || '');
+      const cmd = String(command || ((entry || {}).command) || 'vps-deploy-logging');
+      const opts = options || {};
+      const hostLogs = entry && entry.host_logs && typeof entry.host_logs === 'object' ? entry.host_logs : null;
+      const hostEntry = hostLogs ? hostLogs[host] : null;
+      if (hostEntry && hostEntry.file_alias) {
+        return String(hostEntry.file_alias);
+      }
+      if (opts.empty_until_started) {
+        return '';
+      }
+      return getVpsTaskLogFile(host, cmd);
+    }
+
+    function getDeployLogFile(hostname, command) {
+      const entry = getLatestVpsLoggingDeployEntry();
+      if (!entry) return '';
+      return getDeployLogFileForEntry(entry, hostname, command, {
+        empty_until_started: String(entry.mode || '') === 'sequential'
+      });
+    }
+
+    function getDeployProgressRows() {
+      const deploysState = (((store.state || {}).deploys) || {});
+      const rows = deploysState.progress_rows || deploysState.vps_logging_progress_rows;
+      return Array.isArray(rows) ? rows : [];
+    }
+
     function isPb7BranchView() {
       return store.view === 'master-pb7-branch' || store.view === 'vps-pb7-branch';
     }
@@ -2903,6 +3599,134 @@
       return JSON.stringify(value == null ? null : value);
     }
 
+    function defaultOverviewVisibleColumns() {
+      const visible = {};
+      OVERVIEW_COLUMNS.forEach(function (column) {
+        if (column.defaultVisible !== false) {
+          visible[column.key] = true;
+        }
+      });
+      return visible;
+    }
+
+    function normalizeOverviewSort(input) {
+      const fallback = { field: 'name', dir: 'asc' };
+      const sort = input && typeof input === 'object' ? input : {};
+      const field = String(sort.field || fallback.field);
+      const known = OVERVIEW_COLUMNS.some(function (column) { return column.key === field && column.sortable !== false; });
+      return {
+        field: known ? field : fallback.field,
+        dir: String(sort.dir || fallback.dir).toLowerCase() === 'desc' ? 'desc' : 'asc'
+      };
+    }
+
+    function normalizeOverviewVisibleColumns(input) {
+      const defaults = defaultOverviewVisibleColumns();
+      const source = input && typeof input === 'object' ? input : {};
+      OVERVIEW_COLUMNS.forEach(function (column) {
+        if (source[column.key] === false) {
+          defaults[column.key] = false;
+        }
+      });
+      const visibleCount = OVERVIEW_COLUMNS.filter(function (column) { return defaults[column.key] !== false; }).length;
+      if (!visibleCount) {
+        defaults.name = true;
+      }
+      return defaults;
+    }
+
+    function saveOverviewPrefs() {
+      try {
+        window.localStorage.setItem(OVERVIEW_PREFS_STORAGE_KEY, JSON.stringify({
+          sort: normalizeOverviewSort(store.overviewSort),
+          visible_columns: normalizeOverviewVisibleColumns(store.overviewVisibleColumns)
+        }));
+      } catch (error) {
+        void error;
+      }
+    }
+
+    function loadOverviewPrefs() {
+      let payload = null;
+      try {
+        payload = JSON.parse(window.localStorage.getItem(OVERVIEW_PREFS_STORAGE_KEY) || 'null');
+      } catch (error) {
+        payload = null;
+      }
+      store.overviewSort = normalizeOverviewSort(payload && payload.sort);
+      store.overviewVisibleColumns = normalizeOverviewVisibleColumns(payload && payload.visible_columns);
+    }
+
+    function isOverviewColumnVisible(key) {
+      return normalizeOverviewVisibleColumns(store.overviewVisibleColumns)[key] !== false;
+    }
+
+    function setOverviewColumnVisible(key, visible) {
+      if (!key) return;
+      const next = normalizeOverviewVisibleColumns(store.overviewVisibleColumns);
+      next[key] = !!visible;
+      const visibleCount = OVERVIEW_COLUMNS.filter(function (column) { return next[column.key] !== false; }).length;
+      if (!visibleCount) {
+        next.name = true;
+      }
+      store.overviewVisibleColumns = next;
+      saveOverviewPrefs();
+      renderUi({ forceSidebarActions: true, forceView: true });
+    }
+
+    function resetOverviewPreferences() {
+      store.overviewSort = normalizeOverviewSort(null);
+      store.overviewVisibleColumns = defaultOverviewVisibleColumns();
+      saveOverviewPrefs();
+      closeAlertModal();
+      renderUi({ forceSidebarActions: true, forceView: true });
+      toast('Overview columns and sorting reset.', 'success');
+    }
+
+    function toggleOverviewSort(field) {
+      const normalized = normalizeOverviewSort(store.overviewSort);
+      if (normalized.field === field) {
+        normalized.dir = normalized.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        normalized.field = field;
+        normalized.dir = 'asc';
+      }
+      store.overviewSort = normalized;
+      saveOverviewPrefs();
+      renderUi({ forceView: true, forceSidebarActions: true });
+    }
+
+    function compareOverviewValues(a, b) {
+      if (typeof a === 'boolean' || typeof b === 'boolean') {
+        return Number(!!a) - Number(!!b);
+      }
+      const aNum = typeof a === 'number' ? a : Number.NaN;
+      const bNum = typeof b === 'number' ? b : Number.NaN;
+      if (Number.isFinite(aNum) && Number.isFinite(bNum)) {
+        return aNum - bNum;
+      }
+      return String(a == null ? '' : a).localeCompare(String(b == null ? '' : b), undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    function getSortedOverviewRows(rows) {
+      const list = Array.isArray(rows) ? rows.slice() : [];
+      const sort = normalizeOverviewSort(store.overviewSort);
+      const column = OVERVIEW_COLUMNS.find(function (item) { return item.key === sort.field; }) || OVERVIEW_COLUMNS[0];
+      return list.sort(function (left, right) {
+        const leftMaster = left && left.nav === 'master';
+        const rightMaster = right && right.nav === 'master';
+        if (leftMaster !== rightMaster) {
+          return leftMaster ? -1 : 1;
+        }
+        const direction = sort.dir === 'desc' ? -1 : 1;
+        const result = compareOverviewValues(column.getValue(left), column.getValue(right));
+        if (result !== 0) {
+          return result * direction;
+        }
+        return String((left || {}).name || '').localeCompare(String((right || {}).name || ''), undefined, { numeric: true, sensitivity: 'base' });
+      });
+    }
+
     function getOverviewRows() {
       const overview = ((store.state || {}).overview) || {};
       return Array.isArray(overview.rows) ? overview.rows : [];
@@ -2938,13 +3762,17 @@
           update_reboot: !!store.master.updateReboot
         });
       }
-      if (store.view === 'overview') {
+      if (store.view === 'overview' || isOverviewSettingsView() || isDeploysView()) {
         const apiButtonModel = getOverviewApiSyncButtonModel();
         return stableStringify({
-          view: 'overview',
+          view: store.view,
           api_sync_text: apiButtonModel.text,
           api_sync_class: apiButtonModel.statusClass,
-          api_sync_title: apiButtonModel.title
+          api_sync_title: apiButtonModel.title,
+          selected_hosts: getSelectedOverviewHosts(),
+          vps_deploy: (((store.state || {}).config || {}).vps_deploy) || null,
+          vps_logging: (((store.state || {}).config || {}).vps_logging) || null,
+          deploy_history: getVpsLoggingDeployHistory()
         });
       }
       return stableStringify({ view: store.view });
@@ -2979,8 +3807,15 @@
 
     function getViewShellSignature() {
       const config = ((store.state || {}).config) || {};
-      if (store.view === 'overview') {
-        return stableStringify({ view: 'overview' });
+      if (store.view === 'overview' || isOverviewSettingsView() || isDeploysView()) {
+        return stableStringify({
+          view: store.view,
+          selected_hosts: getSelectedOverviewHosts(),
+          vps_deploy: (((store.state || {}).config || {}).vps_deploy) || null,
+          vps_logging: (((store.state || {}).config || {}).vps_logging) || null,
+          deploy_history: getVpsLoggingDeployHistory(),
+          deploy_rows: isDeploysView() ? getDeployProgressRows() : []
+        });
       }
       if (store.view === 'add') {
         return stableStringify({
@@ -3092,9 +3927,48 @@
       if (node.className !== className) node.className = className;
     }
 
-    function getOverviewApiSyncLabel(row) {
-      if (!row || row.nav !== 'vps') return row && row.nav === 'master' ? 'local' : '-';
-      const hostname = String(row.hostname || '');
+    function getOverviewVersionCore(ver) {
+      return String(ver || '-').split(' /')[0].trim() || '-';
+    }
+
+    function getOverviewVersionTone(github, ver) {
+      const g = String(github || '');
+      const value = getOverviewVersionCore(ver);
+      if (g.indexOf('✅') >= 0 || g.indexOf('✓') >= 0) return 'ok';
+      if (g.indexOf('❌') >= 0) return 'error';
+      if (value && value !== '-') return 'warning';
+      return 'info';
+    }
+
+    function renderOverviewVersionCell(version, github) {
+      const value = getOverviewVersionCore(version);
+      const tone = getOverviewVersionTone(github, value);
+      if ((tone === 'error' || tone === 'warning') && value !== '-') {
+        return `${esc(value)} <span class='tag warning'>⚠</span>`;
+      }
+      return esc(value);
+    }
+
+    function renderOverviewGithubCell(value) {
+      const text = String(value || '-').trim();
+      if (!text || text === '-') return '-';
+      if (text.indexOf('✅') === 0 || text.indexOf('✓') === 0) {
+        return `<span class='tag ok'>✓</span>`;
+      }
+      if (text.indexOf('❌') === 0 || text.indexOf('x') === 0 || text.indexOf('X') === 0) {
+        const body = text.replace(/^[❌xX]\s*/, '').trim();
+        return `<span class='tag error'>✕</span>${body ? ' ' + esc(body) : ''}`;
+      }
+      if (text.indexOf('⚠') === 0) {
+        const body = text.replace(/^⚠️?\s*/, '').trim();
+        return `<span class='tag warning'>⚠</span>${body ? ' ' + esc(body) : ''}`;
+      }
+      return esc(text);
+    }
+
+    function getDetailApiSyncLabel(summary) {
+      if (!summary || summary.nav !== 'vps') return summary && summary.nav === 'master' ? 'local' : '-';
+      const hostname = String(summary.hostname || '');
       const syncState = (window.overviewApiSyncController && window.overviewApiSyncController.state.syncInfo[hostname]) || {};
       if (syncState.in_sync === true) return 'OK';
       if (syncState.in_sync === false) return syncState.disconnected ? 'Out/off' : 'Out';
@@ -3149,16 +4023,9 @@
       const pb7Ver = String(summary.pb7 || '-');
       const pbguiBranch = String(summary.pbgui_branch || '-');
       const pb7Branch = String(summary.pb7_branch || '-');
-      const apiSync = getOverviewApiSyncLabel(summary);
-      function verTone(github, ver) {
-        const g = String(github || '');
-        if (g.indexOf('✅') >= 0 || g.indexOf('✓') >= 0) return 'ok';
-        if (g.indexOf('❌') >= 0) return 'error';
-        if (ver && ver !== '-') return 'warning';
-        return 'info';
-      }
-      const pbguiTone = verTone(summary.pbgui_github, summary.pbgui);
-      const pb7Tone = verTone(summary.pb7_github, summary.pb7);
+      const apiSync = getDetailApiSyncLabel(summary);
+      const pbguiTone = getOverviewVersionTone(summary.pbgui_github, summary.pbgui);
+      const pb7Tone = getOverviewVersionTone(summary.pb7_github, summary.pb7);
       const tags = [];
       if (!isMaster) {
         tags.push(`<span class='tag ${online ? 'ok' : 'error'}'>${online ? 'Online' : 'Offline'}</span>`);
@@ -3663,6 +4530,12 @@
     function refreshCurrentViewLive() {
       if (store.view === 'overview') {
         setHtmlIfChanged('overview-table-live', renderOverviewTable(getOverviewRows()));
+        return;
+      }
+      if (store.view === 'deploys-vps-logging') {
+        const progressHtml = renderOverviewDeployProgress([]) || `<div class='panel'><div class='panel-body'><div class='empty-state'>No active deploy selected. Start a deploy or update from Overview to track it here.</div></div></div>`;
+        setHtmlIfChanged('deploys-progress-live', progressHtml);
+        setHtmlIfChanged('deploys-history-live', renderVpsLoggingDeployHistory());
         return;
       }
       if (store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch' || store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch') {
@@ -4197,6 +5070,149 @@
       return `<span class='tag ${cls}'>${esc(label)}</span>`;
     }
 
+    function getOverviewTaskStatusLevel(status) {
+      const normalized = String(status || '').toLowerCase();
+      if (!normalized || normalized === 'none' || normalized === 'idle') return 'warning';
+      if (normalized.indexOf('success') >= 0) return 'ok';
+      if (normalized.indexOf('fail') >= 0 || normalized.indexOf('error') >= 0) return 'error';
+      return 'warning';
+    }
+
+    function getOverviewTaskStatusLabel(status) {
+      const normalized = String(status || '').toLowerCase();
+      if (!normalized || normalized === 'none') return 'idle';
+      return normalized;
+    }
+
+    function formatOverviewTaskKind(kind) {
+      const normalized = String(kind || '').toLowerCase();
+      if (normalized === 'running handler') return 'Handler';
+      if (normalized === 'task') return 'Task';
+      return '';
+    }
+
+    function formatDeployTaskRecap(recap) {
+      if (!recap || typeof recap !== 'object') return '';
+      const ok = Math.max(0, Number(recap.ok || 0));
+      const changed = Math.max(0, Number(recap.changed || 0));
+      const failed = Math.max(0, Number(recap.failed || 0));
+      const unreachable = Math.max(0, Number(recap.unreachable || 0));
+      const rescued = Math.max(0, Number(recap.rescued || 0));
+      const ignored = Math.max(0, Number(recap.ignored || 0));
+      const parts = [`ok=${ok}`, `changed=${changed}`, `failed=${failed}`];
+      if (unreachable) parts.push(`unreachable=${unreachable}`);
+      if (rescued) parts.push(`rescued=${rescued}`);
+      if (ignored) parts.push(`ignored=${ignored}`);
+      return parts.join(' ');
+    }
+
+    function getDeployProgressModel(row) {
+      const status = String(row.task_status || '').toLowerCase();
+      const step = String(row.task_current_label || row.task_step || '').trim();
+      const progressState = row && row.task_progress && typeof row.task_progress === 'object'
+        ? row.task_progress
+        : { done: 0, total: 0, percent: 0 };
+      if (status.indexOf('success') >= 0) {
+        return { percent: 100, color: 'var(--ok)', label: 'Completed' };
+      }
+      if (status.indexOf('fail') >= 0 || status.indexOf('error') >= 0 || status.indexOf('unreachable') >= 0) {
+        return { percent: 100, color: 'var(--danger)', label: step || 'Failed' };
+      }
+      if (step) {
+        return { percent: Number(progressState.percent || 0), color: 'var(--accent)', label: step };
+      }
+      if (status && status !== 'none' && status !== 'idle') {
+        return { percent: 0, color: 'var(--warning)', label: 'Starting...' };
+      }
+      return { percent: 0, color: 'rgba(255, 255, 255, 0.18)', label: 'Waiting' };
+    }
+
+    function renderOverviewDeployStatusCell(row) {
+      const isActiveDeploy = !!String(row.task_command || '').trim();
+      const statusValue = isActiveDeploy ? (row.task_status || 'waiting') : 'waiting';
+      const statusLabel = getOverviewTaskStatusLabel(statusValue);
+      const statusLevel = isActiveDeploy ? getOverviewTaskStatusLevel(statusValue) : 'warning';
+      const progress = getDeployProgressModel(row);
+      const kind = formatOverviewTaskKind(row.task_step_kind || '');
+      const step = String(progress.label || '');
+      const currentIndex = Math.max(0, Number(row.task_current_index || 0));
+      const totalSteps = Math.max(0, Number(row.task_total_steps || 0));
+      const taskMeta = totalSteps ? (currentIndex >= totalSteps ? `${totalSteps}/${totalSteps}` : `${currentIndex + 1}/${totalSteps}`) : '';
+      const recapSummary = formatDeployTaskRecap(row.task_recap);
+      return `
+        <div class='stack deploy-status-cell'>
+          <div class='deploy-status-head'>
+            <div>${levelTag(statusLevel, statusLabel)}</div>
+            ${recapSummary ? `<div class='field-help deploy-status-recap'>Recap: ${esc(recapSummary)}</div>` : ''}
+          </div>
+          <div class='deploy-progress-bar'><div class='deploy-progress-fill' style='width:${escAttr(String(progress.percent))}%;background:${escAttr(progress.color)}'></div></div>
+          ${step ? `<div class='field-help deploy-status-meta'>${esc((kind ? kind + ': ' : '') + step)}${taskMeta ? ' (' + esc(taskMeta) + ')' : ''}</div>` : ''}
+        </div>`;
+    }
+
+    function renderOverviewDeployProgress(rows) {
+      const items = getDeployProgressRows();
+      if (!items.length) return '';
+      const latestEntry = getLatestVpsLoggingDeployEntry();
+      const latestCommand = latestEntry ? String(latestEntry.command || 'vps-deploy-logging') : 'vps-deploy-logging';
+      const latestCommandText = latestEntry ? String(latestEntry.command_text || latestCommand || 'Deploy Settings') : 'Deploy Settings';
+      const relevant = items.filter(function (row) {
+        return String(row.task_command || '') === latestCommand;
+      });
+      const runningCount = relevant.filter(function (row) {
+        const status = String(row.task_status || '').toLowerCase();
+        return status && status !== 'none' && status !== 'successful' && status.indexOf('fail') < 0 && status.indexOf('error') < 0;
+      }).length;
+      const successCount = relevant.filter(function (row) {
+        return String(row.task_status || '').toLowerCase().indexOf('success') >= 0;
+      }).length;
+      const failedCount = relevant.filter(function (row) {
+        const status = String(row.task_status || '').toLowerCase();
+        return status.indexOf('fail') >= 0 || status.indexOf('error') >= 0;
+      }).length;
+      return `
+        <div class='panel'>
+          <div class='panel-head'>
+            <div>
+              <div class='panel-title'>Deploy Progress</div>
+              <div class='panel-sub'>Live per-host status for the latest ${esc(latestCommandText)} run.</div>
+            </div>
+          </div>
+          <div class='panel-body'>
+            <div class='notice info'>Running: ${esc(String(runningCount))}, Successful: ${esc(String(successCount))}, Failed: ${esc(String(failedCount))}. Click a host to open its deploy log.</div>
+            <div class='table-wrap'>
+              <table class='deploy-progress-table'>
+                <thead>
+                  <tr>
+                    <th>Host</th>
+                    <th>Command</th>
+                    <th>Status</th>
+                    <th>Updated</th>
+                    <th>Log</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${items.map(function (row) {
+                    const hostname = String(row.hostname || row.name || '');
+                    const command = String(row.task_command || latestCommand || 'vps-deploy-logging');
+                    const commandText = String(row.task_command_text || row.task_command || latestCommandText || 'Deploy Settings');
+                    const logFile = String(row.task_log_file || getDeployLogFile(hostname, command) || '');
+                    return `
+                      <tr>
+                        <td>${esc(hostname)}</td>
+                        <td>${esc(commandText || 'Idle')}</td>
+                        <td>${renderOverviewDeployStatusCell(row)}</td>
+                        <td>${esc(row.task_started ? formatTs(row.task_started || '') : '-')}</td>
+                        <td><button class='table-button' type='button' ${logFile ? '' : 'disabled'} onclick='openDeployLogWindow(${js(hostname)}, ${js(command)}, ${js(commandText)})'>Open Log</button></td>
+                      </tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>`;
+    }
+
     function toast(message, type) {
       const safeType = ['success', 'info', 'warning', 'error'].includes(type) ? type : 'info';
       fetch('/api/notify_log', {
@@ -4242,7 +5258,17 @@
     }
 
     function closeAlertModal() {
-      document.getElementById('alertModalOverlay').classList.remove('visible');
+      const flow = store.pendingOverviewDeploy;
+      if (flow && flow.validating) {
+        setPasswordPromptStatus('Wait until password validation finishes for ' + String(flow.prompt_host || 'the current host') + '.', 'warning');
+        return;
+      }
+      if (flow && flow.prompt_open && !flow.closing_from_result) {
+        cancelOverviewDeployPasswordFlow({ silent: false });
+      }
+      const overlay = document.getElementById('alertModalOverlay');
+      overlay.classList.remove('visible');
+      overlay.classList.remove('deploy-log-overlay');
       resetAlertModalWindow();
     }
 
@@ -4424,22 +5450,34 @@
       });
     }
 
-    function openPasswordPrompt(hostname, onConfirm) {
-      document.getElementById('alertModalTitle').textContent = 'VPS User Password Required';
+    function openPasswordPrompt(hostname, onConfirm, options) {
+      const opts = options || {};
+      const title = String(opts.title || 'VPS User Password Required');
+      const message = String(opts.message || 'Enter the VPS user password to run this command:');
+      const confirmLabel = String(opts.confirmLabel || 'Confirm');
+      const persistToForm = opts.persistToForm !== false;
+      document.getElementById('alertModalTitle').textContent = title;
       const box = document.getElementById('alertModalBody');
       box.className = 'notice';
-      box.innerHTML = '<div style="margin-bottom:10px">Enter the VPS user password to run this command:</div><div class="pw-wrap"><input type="password" id="pw-prompt-input" class="pw-input" placeholder="VPS user password" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none"><button type="button" id="pw-prompt-eye" class="pw-eye" onclick="togglePwPromptVisibility()" title="Show or hide password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px;padding:4px">👁</button></div>';
-      document.getElementById('alertModalBtnRow').innerHTML = '<button class=\'btn ghost\' type=\'button\' onclick=\'closeAlertModal()\'>Cancel</button> <button class=\'btn primary\' type=\'button\' id=\'pw-prompt-confirm\'>Confirm</button>';
+      box.innerHTML = '<div style="display:grid;gap:10px"><div>' + esc(message) + '</div><div id="pw-prompt-error" class="field-sub error" style="display:none"></div><div class="pw-wrap"><input type="password" id="pw-prompt-input" class="pw-input" placeholder="VPS user password" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none"><button type="button" id="pw-prompt-eye" class="pw-eye" onclick="togglePwPromptVisibility()" title="Show or hide password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px;padding:4px">👁</button></div></div>';
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class=\'btn ghost\' type=\'button\' id=\'pw-prompt-cancel\' onclick=\'closeAlertModal()\'>Cancel</button> <button class=\'btn primary\' type=\'button\' id=\'pw-prompt-confirm\'>' + esc(confirmLabel) + '</button>';
       document.getElementById('alertModalOverlay').classList.add('visible');
-      document.getElementById('pw-prompt-confirm').onclick = null;
-      document.getElementById('pw-prompt-confirm').addEventListener('click', function () {
+      document.getElementById('pw-prompt-confirm').onclick = function () {
         const pw = document.getElementById('pw-prompt-input').value;
-        if (!pw) return;
-        const ui = ensureVpsUi(hostname, null);
-        ui.form.user_pw = pw;
-        closeAlertModal();
-        if (typeof onConfirm === 'function') onConfirm();
-      });
+        if (!pw) {
+          setPasswordPromptStatus('Enter the VPS user password first.', 'error');
+          return;
+        }
+        setPasswordPromptStatus('', 'error');
+        if (persistToForm) {
+          const ui = ensureVpsUi(hostname, null);
+          ui.form.user_pw = pw;
+        }
+        const shouldClose = typeof onConfirm === 'function' ? onConfirm(pw) : true;
+        if (shouldClose !== false) {
+          closeAlertModal();
+        }
+      };
       setTimeout(function () {
         const input = document.getElementById('pw-prompt-input');
         if (input) {
@@ -4449,6 +5487,38 @@
           });
         }
       }, 100);
+    }
+
+    function setPasswordPromptStatus(message, kind) {
+      const node = document.getElementById('pw-prompt-error');
+      if (!node) return;
+      const text = String(message || '').trim();
+      if (!text) {
+        node.textContent = '';
+        node.style.display = 'none';
+        node.className = 'field-sub error';
+        return;
+      }
+      node.textContent = text;
+      node.style.display = 'block';
+      node.className = 'field-sub ' + String(kind || 'error');
+    }
+
+    function setPasswordPromptBusy(isBusy, confirmLabel) {
+      const busy = !!isBusy;
+      const input = document.getElementById('pw-prompt-input');
+      const confirm = document.getElementById('pw-prompt-confirm');
+      const cancel = document.getElementById('pw-prompt-cancel');
+      const close = document.querySelector('#alertModalHead .close-btn');
+      if (input) input.disabled = busy;
+      if (confirm) {
+        confirm.disabled = busy;
+        if (confirmLabel !== undefined) {
+          confirm.textContent = String(confirmLabel || 'Confirm');
+        }
+      }
+      if (cancel) cancel.disabled = busy;
+      if (close) close.disabled = busy;
     }
 
     function openMasterPasswordPrompt(onConfirm) {
@@ -4973,6 +6043,14 @@
       if (!msg || typeof msg !== 'object') return;
       if (msg.type === 'state') {
         store.state = msg.data || null;
+        const deploysState = (((store.state || {}).deploys) || {});
+        const deployHistory = deploysState.history || deploysState.vps_logging_history;
+        if (Array.isArray(deployHistory)) {
+          store.vpsLoggingDeployHistory = deployHistory.slice();
+        }
+        store.state.deploys = store.state.deploys || {};
+        store.state.deploys.progress_rows = store.state.deploys.progress_rows || store.state.deploys.vps_logging_progress_rows || [];
+        store.state.deploys.vps_logging_progress_rows = store.state.deploys.vps_logging_progress_rows || store.state.deploys.progress_rows || [];
         renderUi();
         return;
       }
@@ -5044,6 +6122,22 @@
         return;
       }
       if (msg.type === 'error') {
+        if (msg.cmd === 'validate_and_stage_vps_deploy_host') {
+          const flow = store.pendingOverviewDeploy;
+          if (flow) {
+            flow.validating = false;
+            flow.prompt_open = true;
+            flow.closing_from_result = false;
+            setPasswordPromptBusy(false, 'Validate and Start');
+            setPasswordPromptStatus(String(msg.error || 'Password validation failed.'), 'error');
+            const input = document.getElementById('pw-prompt-input');
+            if (input) {
+              input.focus();
+              input.select();
+            }
+            return;
+          }
+        }
         toast(msg.error || 'Unknown error', 'error');
         return;
       }
@@ -5200,6 +6294,82 @@
           const ui = store.vps[store.hostname];
           ui.savedForm = Object.assign({}, ui.form);
         }
+      } else if (cmd === 'save_vps_logging_config') {
+        if (store.state && store.state.config && msg.data) {
+          store.state.config.vps_logging = msg.data;
+        }
+        if (store.suppressNextVpsLoggingSaveToast) {
+          store.suppressNextVpsLoggingSaveToast = false;
+        } else {
+          toast('VPS logging settings saved in PBGui.', 'success');
+        }
+      } else if (cmd === 'save_vps_deploy_settings') {
+        if (store.state && store.state.config && msg.data) {
+          store.state.config.vps_deploy = msg.data;
+        }
+        if (store.suppressNextVpsDeploySaveToast) {
+          store.suppressNextVpsDeploySaveToast = false;
+        } else {
+          toast('Deploy settings saved in PBGui.', 'success');
+        }
+      } else if (cmd === 'deploy_vps_logging' || cmd === 'run_vps_deploy') {
+        store.vpsLoggingDeployHosts = Array.isArray((msg.data || {}).hostnames) ? msg.data.hostnames.slice() : store.vpsLoggingDeployHosts;
+        if (msg.data && msg.data.entry) {
+          const entry = msg.data.entry;
+          const history = getVpsLoggingDeployHistory().filter(function (item) { return String(item.id || '') !== String(entry.id || ''); });
+          store.vpsLoggingDeployHistory = [entry].concat(history).slice(0, 20);
+          if (store.state) {
+            store.state.deploys = store.state.deploys || {};
+            store.state.deploys.history = store.vpsLoggingDeployHistory.slice();
+            store.state.deploys.vps_logging_history = store.vpsLoggingDeployHistory.slice();
+            store.state.deploys.progress_rows = [];
+            store.state.deploys.vps_logging_progress_rows = [];
+          }
+        }
+        const count = Number(((msg.data || {}).count) || 0);
+        const commandText = String((((msg.data || {}).entry || {}).command_text) || (msg.data || {}).command_text || 'Deploy');
+        toast(commandText + ' started for ' + count + ' host' + (count === 1 ? '' : 's') + '.', 'success');
+        if (store.view === 'overview' || isDeploysView()) {
+          renderUi({ forceView: true });
+        }
+      } else if (cmd === 'validate_and_stage_vps_deploy_host') {
+        const flow = store.pendingOverviewDeploy;
+        if (!flow) {
+          return;
+        }
+        flow.validating = false;
+        flow.prompt_open = false;
+        if (msg.data && msg.data.entry) {
+          const entry = msg.data.entry;
+          flow.entry_id = String((msg.data || {}).entry_id || entry.id || flow.entry_id || '');
+          const history = getVpsLoggingDeployHistory().filter(function (item) { return String(item.id || '') !== String(entry.id || ''); });
+          store.vpsLoggingDeployHistory = [entry].concat(history).slice(0, 20);
+          if (store.state) {
+            store.state.deploys = store.state.deploys || {};
+            store.state.deploys.history = store.vpsLoggingDeployHistory.slice();
+            store.state.deploys.vps_logging_history = store.vpsLoggingDeployHistory.slice();
+            store.state.deploys.progress_rows = [];
+            store.state.deploys.vps_logging_progress_rows = [];
+          }
+        }
+        const startedHost = String(((msg.data || {}).hostname) || '');
+        if (startedHost) {
+          flow.remaining_hosts = (flow.remaining_hosts || []).filter(function (item) { return String(item || '') !== startedHost; });
+          flow.started_hosts = Array.isArray(flow.started_hosts) ? flow.started_hosts : [];
+          if (flow.started_hosts.indexOf(startedHost) < 0) {
+            flow.started_hosts.push(startedHost);
+          }
+        }
+        flow.closing_from_result = true;
+        closeAlertModal();
+        flow.closing_from_result = false;
+        flow.prompt_host = '';
+        renderUi({ forceView: true });
+        processOverviewDeployPasswordFlow();
+      } else if (cmd === 'finalize_vps_deploy_session') {
+        if (store.pendingOverviewDeploy && String((msg.data || {}).entry_id || '') === String(store.pendingOverviewDeploy.entry_id || '')) {
+          store.pendingOverviewDeploy = null;
+        }
       } else if (cmd === 'init_vps') {
         toast('Initialization started.', 'success');
         const hostname = store.addForm.hostname || store.hostname;
@@ -5285,6 +6455,8 @@
 
     function viewHash(view, hostname) {
       if (view === 'master') return '#master';
+      if (view === 'settings-vps-logging') return '#settings/vps-logging';
+      if (view === 'deploys-vps-logging') return '#deploys';
       if (view === 'master-host-logs') return '#master/host-logs';
       if (view === 'master-pbgui-branch') return '#master/pbgui-branch';
       if (view === 'master-pb7-branch') return '#master/pb7-branch';
@@ -5334,6 +6506,14 @@
       if (!hash || hash === 'overview') return;
       if (hash === 'master') {
         selectView('master');
+        return;
+      }
+      if (hash === 'settings/vps-logging') {
+        selectView('settings-vps-logging');
+        return;
+      }
+      if (hash === 'deploys') {
+        selectView('deploys-vps-logging');
         return;
       }
       if (hash === 'master/host-logs') {
@@ -5733,6 +6913,323 @@
       renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
     }
 
+    function openDeployLogWindow(hostname, command, commandText) {
+      const file = getDeployLogFile(hostname || '', command || 'vps-deploy-logging');
+      if (!String(file || '').trim()) {
+        toast('No deploy log yet for this host. The run has not started yet.', 'info');
+        return;
+      }
+      openDeployLogWindowForFile(hostname, file, commandText);
+    }
+
+    function getDeployLogWindowLimits() {
+      return {
+        minWidth: Math.min(520, Math.max(360, window.innerWidth - 32)),
+        minHeight: Math.min(320, Math.max(240, window.innerHeight - 32)),
+        maxWidth: Math.max(360, window.innerWidth - 32),
+        maxHeight: Math.max(240, window.innerHeight - 32)
+      };
+    }
+
+    function clampDeployLogWindowRect(rect) {
+      const limits = getDeployLogWindowLimits();
+      const width = Math.min(Math.max(Number(rect.width) || 1100, limits.minWidth), limits.maxWidth);
+      const height = Math.min(Math.max(Number(rect.height) || 760, limits.minHeight), limits.maxHeight);
+      const maxLeft = Math.max(16, window.innerWidth - width - 16);
+      const maxTop = Math.max(16, window.innerHeight - height - 16);
+      return {
+        left: Math.min(Math.max(Number(rect.left) || 16, 16), maxLeft),
+        top: Math.min(Math.max(Number(rect.top) || 16, 16), maxTop),
+        width: width,
+        height: height
+      };
+    }
+
+    function applyDeployLogWindowRect(windowId, rect) {
+      const win = (store.deployLogWindows || []).find(function (item) { return String(item.id || '') === String(windowId || ''); });
+      if (!win) return;
+      win.rect = clampDeployLogWindowRect(rect || {});
+      const node = document.querySelector('[data-deploy-log-window-id=' + JSON.stringify(String(windowId || '')) + ']');
+      if (!node) return;
+      node.style.left = win.rect.left + 'px';
+      node.style.top = win.rect.top + 'px';
+      node.style.width = win.rect.width + 'px';
+      node.style.height = win.rect.height + 'px';
+    }
+
+    function focusDeployLogWindow(windowId) {
+      const windows = store.deployLogWindows || [];
+      const targetId = String(windowId || '');
+      const win = windows.find(function (item) { return String(item.id || '') === targetId; });
+      if (!win) return;
+      deployLogWindowZIndex += 1;
+      win.z_index = deployLogWindowZIndex;
+      const node = document.querySelector('[data-deploy-log-window-id=' + JSON.stringify(targetId) + ']');
+      if (node) {
+        node.style.zIndex = String(win.z_index);
+      }
+    }
+
+    function closeDeployLogWindow(windowId) {
+      const targetId = String(windowId || '');
+      const viewer = deployLogViewers[targetId] || null;
+      if (viewer) {
+        viewer.close();
+        delete deployLogViewers[targetId];
+      }
+      store.deployLogWindows = (store.deployLogWindows || []).filter(function (item) {
+        return String(item.id || '') !== targetId;
+      });
+      syncDeployLogViewers();
+    }
+
+    function openDeployLogWindowForFile(hostname, file, commandText) {
+      const requestedFile = String(file || '').trim();
+      if (!requestedFile) {
+        toast('No deploy log yet for this host. The run has not started yet.', 'info');
+        return;
+      }
+      const existingWindow = (store.deployLogWindows || []).find(function (item) {
+        return String(item.file || '').trim() === requestedFile;
+      });
+      if (existingWindow) {
+        focusDeployLogWindow(String(existingWindow.id || ''));
+        return;
+      }
+      const title = (commandText || 'Deploy') + ' - ' + String(hostname || '');
+      const windowId = 'deploy-log-window-' + String(++deployLogWindowCounter);
+      deployLogWindowZIndex += 1;
+      const offset = (store.deployLogWindows || []).length * 28;
+      store.deployLogWindows = (store.deployLogWindows || []).concat([{
+        id: windowId,
+        hostname: hostname || '',
+        file: requestedFile,
+        title: title,
+        z_index: deployLogWindowZIndex,
+        rect: clampDeployLogWindowRect({
+          left: Math.round((window.innerWidth - 1100) / 2) + offset,
+          top: Math.round((window.innerHeight - 760) / 2) + offset,
+          width: 1100,
+          height: 760
+        })
+      }]);
+      syncDeployLogViewers();
+      focusDeployLogWindow(windowId);
+    }
+
+    function syncDeployLogViewers() {
+      const layer = document.getElementById('deployLogWindowsLayer');
+      if (!layer) return;
+      const windows = Array.isArray(store.deployLogWindows) ? store.deployLogWindows.slice() : [];
+      layer.style.display = windows.length ? 'block' : 'none';
+      if (!windows.length) {
+        layer.innerHTML = '';
+        Object.keys(deployLogViewers).forEach(function (key) {
+          const viewer = deployLogViewers[key];
+          if (viewer) viewer.close();
+          delete deployLogViewers[key];
+        });
+        return;
+      }
+      const existingNodes = Array.from(layer.querySelectorAll('[data-deploy-log-window-id]'));
+      existingNodes.forEach(function (node) {
+        const nodeId = String(node.getAttribute('data-deploy-log-window-id') || '');
+        const exists = windows.some(function (item) { return String(item.id || '') === nodeId; });
+        if (!exists) {
+          node.remove();
+        }
+      });
+      windows.forEach(function (item) {
+        const rect = clampDeployLogWindowRect(item.rect || {});
+        item.rect = rect;
+        let node = layer.querySelector('[data-deploy-log-window-id=' + JSON.stringify(String(item.id || '')) + ']');
+        if (!node) {
+          node = document.createElement('div');
+          node.className = 'deploy-log-window';
+          node.setAttribute('data-deploy-log-window-id', String(item.id || ''));
+          node.innerHTML = `
+            <div class='deploy-log-window-head' data-deploy-log-head='${escAttr(item.id)}'>
+              <div class='panel-title'></div>
+              <button class='close-btn' type='button' data-deploy-log-close='${escAttr(item.id)}'>&times;</button>
+            </div>
+            <div class='deploy-log-window-body'>
+              <div id='deploy-log-viewer-target-${escAttr(item.id)}' class='deploy-log-window-shell'></div>
+            </div>
+            <div class='deploy-log-window-resize' data-deploy-log-resize='${escAttr(item.id)}' aria-hidden='true'></div>`;
+          layer.appendChild(node);
+        }
+        node.style.left = String(rect.left) + 'px';
+        node.style.top = String(rect.top) + 'px';
+        node.style.width = String(rect.width) + 'px';
+        node.style.height = String(rect.height) + 'px';
+        node.style.zIndex = String(item.z_index || 4800);
+        const titleNode = node.querySelector('.panel-title');
+        if (titleNode && titleNode.textContent !== String(item.title || 'Deploy Log')) {
+          titleNode.textContent = String(item.title || 'Deploy Log');
+        }
+      });
+      Object.keys(deployLogViewers).forEach(function (key) {
+        const exists = windows.some(function (item) { return String(item.id || '') === key; });
+        if (!exists) {
+          deployLogViewers[key].close();
+          delete deployLogViewers[key];
+        }
+      });
+      windows.forEach(function (item) {
+        const containerId = 'deploy-log-viewer-target-' + String(item.id || '');
+        const requestedFile = String(item.file || '');
+        const deployHost = String(item.hostname || '');
+        const viewer = deployLogViewers[item.id];
+        if (!requestedFile) return;
+        if (!viewer || !document.getElementById(containerId + '-lvp-sidebar')) {
+          if (viewer) viewer.close();
+          deployLogViewers[item.id] = new LogViewerPanel({
+            containerId: containerId,
+            wsBase: WS_BASE,
+            token: TOKEN,
+            defaultHost: 'local',
+            defaultFile: requestedFile,
+            startLocalAtEnd: false,
+            localFileFilter: deployHost ? function(file) {
+              return isVpsTaskLogAlias(file, deployHost);
+            } : null,
+            presets: 'system',
+            showRestart: false
+          });
+          deployLogViewers[item.id].open();
+          if (requestedFile && deployLogViewers[item.id].currentFile !== requestedFile) {
+            deployLogViewers[item.id].setFile(requestedFile);
+          }
+        } else if (viewer.currentFile !== requestedFile) {
+          deployLogViewers[item.id].setFile(requestedFile);
+        }
+      });
+      initDeployLogWindowInteractions();
+    }
+
+    function initDeployLogWindowInteractions() {
+      const layer = document.getElementById('deployLogWindowsLayer');
+      if (!layer || layer.dataset.bound === '1') return;
+      let drag = null;
+      let resize = null;
+
+      function releasePointer(target, pointerId) {
+        try { target.releasePointerCapture(pointerId); } catch (error) {}
+      }
+
+      layer.addEventListener('pointerdown', function (event) {
+        const closeBtn = event.target && event.target.closest('[data-deploy-log-close]');
+        if (closeBtn) {
+          closeDeployLogWindow(String(closeBtn.getAttribute('data-deploy-log-close') || ''));
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        const resizeHandle = event.target && event.target.closest('[data-deploy-log-resize]');
+        if (resizeHandle) {
+          if (event.button !== 0) return;
+          const windowId = String(resizeHandle.getAttribute('data-deploy-log-resize') || '');
+          const node = resizeHandle.closest('[data-deploy-log-window-id]');
+          if (!windowId || !node) return;
+          focusDeployLogWindow(windowId);
+          const rect = node.getBoundingClientRect();
+          resize = {
+            pointerId: event.pointerId,
+            handle: resizeHandle,
+            id: windowId,
+            startX: event.clientX,
+            startY: event.clientY,
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height
+          };
+          resizeHandle.setPointerCapture(event.pointerId);
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        const head = event.target && event.target.closest('[data-deploy-log-head]');
+        if (!head) return;
+        if (event.button !== 0) return;
+        if (event.target && event.target.closest('.close-btn')) return;
+        const windowId = String(head.getAttribute('data-deploy-log-head') || '');
+        const node = head.closest('[data-deploy-log-window-id]');
+        if (!windowId || !node) return;
+        focusDeployLogWindow(windowId);
+        const rect = node.getBoundingClientRect();
+        drag = {
+          pointerId: event.pointerId,
+          handle: head,
+          id: windowId,
+          dx: event.clientX - rect.left,
+          dy: event.clientY - rect.top,
+          width: rect.width,
+          height: rect.height
+        };
+        head.setPointerCapture(event.pointerId);
+        event.preventDefault();
+      });
+
+      layer.addEventListener('pointermove', function (event) {
+        if (drag && drag.pointerId === event.pointerId) {
+          applyDeployLogWindowRect(drag.id, {
+            left: event.clientX - drag.dx,
+            top: event.clientY - drag.dy,
+            width: drag.width,
+            height: drag.height
+          });
+          return;
+        }
+        if (resize && resize.pointerId === event.pointerId) {
+          applyDeployLogWindowRect(resize.id, {
+            left: resize.left,
+            top: resize.top,
+            width: resize.width + (event.clientX - resize.startX),
+            height: resize.height + (event.clientY - resize.startY)
+          });
+        }
+      });
+
+      layer.addEventListener('pointerup', function (event) {
+        if (drag && drag.pointerId === event.pointerId) {
+          releasePointer(drag.handle, event.pointerId);
+          drag = null;
+          return;
+        }
+        if (resize && resize.pointerId === event.pointerId) {
+          releasePointer(resize.handle, event.pointerId);
+          resize = null;
+        }
+      });
+
+      layer.addEventListener('pointercancel', function (event) {
+        if (drag && drag.pointerId === event.pointerId) {
+          releasePointer(drag.handle, event.pointerId);
+          drag = null;
+          return;
+        }
+        if (resize && resize.pointerId === event.pointerId) {
+          releasePointer(resize.handle, event.pointerId);
+          resize = null;
+        }
+      });
+
+      layer.addEventListener('mousedown', function (event) {
+        const node = event.target && event.target.closest('[data-deploy-log-window-id]');
+        if (!node) return;
+        focusDeployLogWindow(String(node.getAttribute('data-deploy-log-window-id') || ''));
+      });
+
+      window.addEventListener('resize', function () {
+        (store.deployLogWindows || []).forEach(function (item) {
+          applyDeployLogWindowRect(String(item.id || ''), item.rect || {});
+        });
+      });
+
+      layer.dataset.bound = '1';
+    }
+
     function switchToVpsTaskLog(hostname, command, commandText) {
       store.taskLog = {
         scope: 'vps',
@@ -5925,50 +7422,63 @@
     }
 
     function renderOverviewTable(rows) {
-      if (!Array.isArray(rows) || !rows.length) {
+      const sortedRows = getSortedOverviewRows(rows);
+      if (!sortedRows.length) {
         return `<div class='empty-state'>No VPS state available yet.</div>`;
+      }
+      const selectedHosts = new Set(getSelectedOverviewHosts());
+      const visibleColumns = OVERVIEW_COLUMNS.filter(function (column) { return isOverviewColumnVisible(column.key); });
+      const sort = normalizeOverviewSort(store.overviewSort);
+      function headerCell(column) {
+        const isActive = sort.field === column.key;
+        const indicator = isActive ? (sort.dir === 'asc' ? '▲' : '▼') : '↕';
+        const canHide = visibleColumns.length > 1;
+        return `<th class='${column.sortable === false ? '' : 'sortable'}'${column.sortable === false ? '' : ` onclick='toggleOverviewSort(${js(column.key)})'`}><span class='th-sort'><span class='th-sort-main'>${esc(column.label)}${column.sortable === false ? '' : ` <span class='th-sort-indicator'>${esc(indicator)}</span>`}</span><span class='th-actions'>${canHide ? `<button class='th-icon-btn' type='button' title='Hide column' aria-label='Hide column ${escAttr(column.label)}' onclick='event.stopPropagation(); setOverviewColumnVisible(${js(column.key)}, false)'>✕</button>` : ''}</span></span></th>`;
+      }
+      function renderCell(row, column) {
+        if (column.key === 'name') {
+          let target = esc(row.name);
+          if (row.nav === 'master') {
+            target = `<button class='table-button' type='button' onclick='selectView("master")'>${esc(row.name)}</button>`;
+          } else if (row.nav === 'vps') {
+            target = `<button class='table-button' type='button' onmousedown='event.stopPropagation()' onmouseup='event.stopPropagation()' onclick='event.stopPropagation(); selectView("vps", ${js(row.hostname)})'>${esc(row.name)}</button>`;
+          }
+          return target;
+        }
+        if (column.key === 'role') return `${esc(row.role_icon || '')} ${esc(row.role || '')}`;
+        if (column.key === 'online') return row.online ? levelTag('ok', 'Online') : levelTag('error', 'Offline');
+        if (column.key === 'running_bots') return esc(row.running_bots == null ? '-' : String(row.running_bots));
+        if (column.key === 'start') return esc(row.start || '-');
+        if (column.key === 'updates') return `${esc(row.updates || '-')} ${row.reboot_required ? levelTag('warning', 'Reboot') : ''}`;
+        if (column.key === 'pbgui') return renderOverviewVersionCell(row.pbgui, row.pbgui_github);
+        if (column.key === 'pbgui_branch') return esc(row.pbgui_branch || '-');
+        if (column.key === 'pbgui_github') return renderOverviewGithubCell(row.pbgui_github);
+        if (column.key === 'pb7') return renderOverviewVersionCell(row.pb7, row.pb7_github);
+        if (column.key === 'pb7_branch') return esc(row.pb7_branch || '-');
+        if (column.key === 'pb7_github') return renderOverviewGithubCell(row.pb7_github);
+        return esc(column.getValue(row));
       }
       return `
         <div class='table-wrap'>
           <table>
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Role</th>
-                <th>Online</th>
-                <th>Started</th>
-                <th>Updates</th>
-                <th>PBGui</th>
-                <th>PBGui Branch</th>
-                <th>PBGui GitHub</th>
-                <th>PB7</th>
-                <th>PB7 Branch</th>
-                <th>PB7 GitHub</th>
-                <th>API</th>
+                ${visibleColumns.map(headerCell).join('')}
+                <th class='reset-col'><button class='th-icon-btn' type='button' title='Reset view' aria-label='Reset view' onclick='resetOverviewPreferences()'>↺</button></th>
               </tr>
             </thead>
             <tbody>
-              ${rows.map(function (row) {
-                let target = esc(row.name);
-                if (row.nav === 'master') {
-                  target = `<button class='table-button' type='button' onclick='selectView("master")'>${esc(row.name)}</button>`;
-                } else if (row.nav === 'vps') {
-                  target = `<button class='table-button' type='button' onclick='selectView("vps", ${js(row.hostname)})'>${esc(row.name)}</button>`;
+              ${sortedRows.map(function (row) {
+                let rowClass = '';
+                let rowAttrs = '';
+                if (row.nav === 'vps') {
+                  rowClass = 'selectable-row' + (selectedHosts.has(String(row.hostname || '')) ? ' selected' : '');
+                  rowAttrs = ` data-overview-host='${escAttr(row.hostname)}' onmousedown='startOverviewSelection(${js(row.hostname)}, event)' onmouseenter='moveOverviewSelection(${js(row.hostname)})'`;
                 }
                 return `
-                  <tr>
-                    <td>${target}</td>
-                    <td>${esc(row.role_icon || '')} ${esc(row.role || '')}</td>
-                    <td>${row.online ? levelTag('ok', 'Online') : levelTag('error', 'Offline')}</td>
-                    <td>${esc(row.start || '-')}</td>
-                    <td>${esc(row.updates || '-')} ${row.reboot_required ? levelTag('warning', 'Reboot') : ''}</td>
-                    <td>${esc(row.pbgui || '-')}</td>
-                    <td>${esc(row.pbgui_branch || '-')}</td>
-                    <td>${esc(row.pbgui_github || '-')}</td>
-                    <td>${esc(row.pb7 || '-')}</td>
-                    <td>${esc(row.pb7_branch || '-')}</td>
-                    <td>${esc(row.pb7_github || '-')}</td>
-                    <td>${esc(getOverviewApiSyncLabel(row))}</td>
+                  <tr class='${rowClass}'${rowAttrs}>
+                    ${visibleColumns.map(function (column) { return `<td>${renderCell(row, column)}</td>`; }).join('')}
+                    <td class='reset-col'></td>
                   </tr>`;
               }).join('')}
             </tbody>
@@ -6547,14 +8057,50 @@
         html = `
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>
           <button class='sb-btn info' type='button' onclick='saveAddVps()'>Save VPS</button>`;
-      } else {
+      } else if (store.view === 'overview' || isOverviewSettingsView() || isDeploysView()) {
         const apiModel = getOverviewApiSyncButtonModel();
+        const selectedHosts = getSelectedOverviewHosts();
+        const deployConfig = getVpsDeployConfig();
+        const hasSelectedHosts = selectedHosts.length > 0;
+        const disabledAttr = hasSelectedHosts ? '' : 'disabled';
+        const selectedLabel = hasSelectedHosts
+          ? (selectedHosts.length === 1 ? ('Selected VPS: ' + selectedHosts[0]) : ('Selected VPS: ' + selectedHosts.length + ' hosts'))
+          : 'Select VPS rows in Overview to enable deploy and update actions.';
+        const settingsBtnClass = isOverviewSettingsView() ? 'sb-btn active' : 'sb-btn';
+        const deployHistoryBtnClass = isDeploysView() ? 'sb-btn active' : 'sb-btn';
+        const parallelBtnClass = String(deployConfig.mode || 'parallel') === 'parallel' ? 'sb-btn active' : 'sb-btn';
+        const sequentialBtnClass = String(deployConfig.mode || 'parallel') === 'sequential' ? 'sb-btn active' : 'sb-btn';
         html = `
           <div class='sb-icon-row'>
             <button class='sb-icon-btn' type='button' title='Refresh' aria-label='Refresh' onclick='refreshState()'>↻</button>
             <button class='sb-icon-btn' type='button' title='Add VPS' aria-label='Add VPS' onclick='selectView("add")'>+</button>
           </div>
-          <button class='sb-status-btn ${apiModel.statusClass}' id='overview-api-sync-btn' type='button' title='${escAttr(apiModel.title || '')}' onclick='startApiSync()'>${esc(apiModel.text)}</button>`;
+          <button class='sb-status-btn ${apiModel.statusClass}' id='overview-api-sync-btn' type='button' title='${escAttr(apiModel.title || '')}' onclick='startApiSync()'>${esc(apiModel.text)}</button>
+          ${store.view !== 'overview' ? `<button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>` : ''}
+          <button class='${settingsBtnClass}' type='button' onclick='selectView("settings-vps-logging")'>Settings</button>
+          <button class='${deployHistoryBtnClass}' type='button' onclick='selectView("deploys-vps-logging")'>History</button>
+          <div class='sb-note'>${esc(selectedLabel)}</div>
+          <div class='sb-field'>
+            <div class='sb-label'>Rollout</div>
+            <div class='sb-button-row'>
+              <button class='${parallelBtnClass}' type='button' onclick='setVpsDeployMode("parallel")'>Parallel</button>
+              <button class='${sequentialBtnClass}' type='button' onclick='setVpsDeployMode("sequential")'>Sequential</button>
+            </div>
+          </div>
+          <div class='sb-field'>
+            <label class='sb-toggle'><input type='checkbox' ${deployConfig.debug ? 'checked' : ''} onchange='setVpsDeployDebug(this.checked)'> Debug</label>
+          </div>
+          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-deploy-logging", "Deploy Settings")'>Deploy Settings</button>
+          <div class='sb-field'>
+            <label class='sb-toggle'><input type='checkbox' ${deployConfig.reboot_requested ? 'checked' : ''} onchange='setVpsDeployRebootRequested(this.checked)'> Reboot after Linux update</label>
+          </div>
+          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update", "Update Linux")'>Update Linux</button>
+          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pbgui", "Update PBGui")'>Update PBGui</button>
+          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pb7", "Update PB7")'>Update PB7</button>
+          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pb", "Update PBGui and PB7")'>Update PBGui and PB7</button>
+          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>`;
+      } else {
+        html = '';
       }
       if (sidebarActions.innerHTML !== html) sidebarActions.innerHTML = html;
     }
@@ -6566,38 +8112,12 @@
     }
 
     function renderSidebarList() {
-      const rows = getOverviewRows();
-      const masterRow = rows.find(function (row) { return row.nav === 'master'; }) || null;
       const sidebarList = document.getElementById('sidebar-list');
-      if (isMasterContextView() || isVpsContextView()) {
+      if (isMasterContextView() || isVpsContextView() || store.view === 'overview' || isOverviewSettingsView() || isDeploysView() || store.view === 'add') {
         if (sidebarList && sidebarList.innerHTML) sidebarList.innerHTML = '';
         return;
       }
-      const serverButtons = rows.filter(function (row) { return row.nav === 'vps'; }).map(function (row) {
-        return `
-          <button class='side-button ${store.view === 'vps' && store.hostname === row.hostname ? 'active' : ''}' type='button' onclick='selectView("vps", ${js(row.hostname)})'>
-            <div class='side-button-row'>
-              <div class='side-button-title'>${esc(row.name)}</div>
-              <div class='tag ${row.online ? 'ok' : 'error'}'>${row.online ? 'Online' : 'Offline'}</div>
-            </div>
-          </button>`;
-      }).join('');
-      const masterButton = masterRow ? `
-        <div class='side-group'>
-          <div class='side-group-title'>Navigation</div>
-          <button class='side-button' type='button' onclick='selectView("master")'>
-            <div class='side-button-row'>
-              <div class='side-button-title'>${esc(masterRow.name)}</div>
-              <div class='tag ${masterRow.online ? 'ok' : 'error'}'>${masterRow.online ? 'Online' : 'Offline'}</div>
-            </div>
-          </button>
-        </div>` : '';
       const html = `
-        ${masterButton}
-        <div class='side-group'>
-          <div class='side-group-title'>Managed VPS</div>
-          ${serverButtons || `<div class='empty-state'>No saved VPS entries yet.</div>`}
-        </div>
         <div class='side-group'>
           <div class='side-group-title'>Import Host</div>
           <button class='side-button' type='button' onclick='openManualImportPrompt()'>
@@ -6629,13 +8149,111 @@
       const state = store.state || {};
       const overview = state.overview || {};
       const rows = Array.isArray(overview.rows) ? overview.rows : [];
+      const selected = getSelectedOverviewHosts();
       return `
 
         <h2 class='page-section-title'>Overview</h2>
         <div class='panel'>
           <div class='panel-body'><div id='overview-table-live'>${renderOverviewTable(rows)}</div></div>
         </div>
-        <div class='notice info'>Select your VPS in the sidebar to get a detailed VPS report.</div>`;
+        <div class='notice info'>${selected.length ? `${esc(String(selected.length))} VPS selected. Use the sidebar actions to deploy settings or start updates for the selected hosts.` : 'Click and drag across VPS rows to select deploy and update targets, or click a host name to open its detailed report.'}</div>`;
+    }
+
+    function renderVpsLoggingDeployHistory() {
+      const history = getVpsLoggingDeployHistory();
+      if (!history.length) {
+        return `<div class='empty-state'>No deploy or update runs recorded yet.</div>`;
+      }
+      return `
+        <div class='table-wrap'>
+          <table>
+            <thead>
+              <tr>
+                <th>Started</th>
+                <th>Action</th>
+                <th>Mode</th>
+                <th>Hosts</th>
+                <th>Services</th>
+                <th>Targets</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${history.map(function (item) {
+                const hosts = Array.isArray(item.hostnames) ? item.hostnames : [];
+                const hostLogs = item && item.host_logs && typeof item.host_logs === 'object' ? item.host_logs : {};
+                const useEmptyUntilStarted = String(item.mode || '') === 'sequential';
+                return `
+                  <tr>
+                    <td>${esc(formatTs(item.started_at || ''))}</td>
+                    <td>${esc(String(item.command_text || item.command || '-'))}</td>
+                    <td>${esc(String(item.mode || '-'))}</td>
+                    <td>${esc(String(item.host_count != null ? item.host_count : hosts.length))}</td>
+                    <td>${esc(String(item.service_count != null ? item.service_count : ((item.services || []).length)))}</td>
+                    <td>${hosts.length ? hosts.map(function (hostname) {
+                      const host = String(hostname || '');
+                      const logInfo = hostLogs[host] || null;
+                      const fileAlias = getDeployLogFileForEntry(item, host, String(item.command || 'vps-deploy-logging'), {
+                        empty_until_started: useEmptyUntilStarted
+                      });
+                      const commandText = String((logInfo && logInfo.command_text) || item.command_text || item.command || 'Deploy');
+                      return `<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px'><span>${esc(host)}</span><button class='table-button' type='button' ${fileAlias ? '' : 'disabled'} onclick='openDeployLogWindowForFile(${js(host)}, ${js(fileAlias)}, ${js(commandText)})'>Open Log</button></div>`;
+                    }).join('') : '-'}</td>
+                  </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`;
+    }
+
+    function renderVpsLoggingDeploysView() {
+      const state = store.state || {};
+      const overview = state.overview || {};
+      const rows = Array.isArray(overview.rows) ? overview.rows : [];
+      return `
+        <h2 class='page-section-title'>Deploy Progress</h2>
+        <div id='deploys-progress-live'>${renderOverviewDeployProgress(rows) || `<div class='panel'><div class='panel-body'><div class='empty-state'>No active deploy selected. Start a deploy or update from Overview to track it here.</div></div></div>`}</div>
+        <div class='panel'>
+          <div class='panel-head'>
+            <div>
+              <div class='panel-title'>Recent Runs</div>
+              <div class='panel-sub'>Latest deploy and update runs so you can reopen logs and review prior actions.</div>
+            </div>
+          </div>
+          <div class='panel-body'>
+            <div id='deploys-history-live'>${renderVpsLoggingDeployHistory()}</div>
+          </div>
+        </div>`;
+    }
+
+    function renderVpsLoggingSettingsView() {
+      const selected = getSelectedOverviewHosts();
+      const logging = getVpsLoggingConfig();
+      return `
+        <h2 class='page-section-title'>Settings</h2>
+        <div class='panel'>
+          <div class='panel-head'>
+            <div>
+              <div class='panel-title'>VPS Logging</div>
+              <div class='panel-sub'>Manage single-file capped log sizes for VPS services. Use the sidebar actions to deploy these settings or run updates on the selected VPS.</div>
+            </div>
+          </div>
+          <div class='panel-body'>
+            <div class='notice info'>${selected.length ? `${esc(String(selected.length))} VPS currently selected in Overview.` : 'No VPS currently selected. Select hosts in Overview before starting a deploy or update action.'}</div>
+            <div class='field-grid'>
+              ${logging.services.map(function (item) {
+                return `
+                  <div class='field'>
+                    <label>${esc(item.service)} Max Size (MB)</label>
+                    <input type='number' min='0.0625' step='0.0625' value='${escAttr(item.max_mb)}' oninput='setVpsLoggingValue(${js(item.service)}, this.value)'>
+                    <div class='field-help'>Default: ${esc(String(item.default_max_mb))} MB, single file only.</div>
+                  </div>`;
+              }).join('')}
+            </div>
+            <div class='button-row'>
+              <button class='btn' type='button' onclick='saveVpsLoggingConfig()'>Save Log Settings</button>
+            </div>
+          </div>
+        </div>`;
     }
 
     function renderInitFields() {
@@ -8323,6 +9941,10 @@
         html = renderVpsBranchView('pbgui');
       } else if (store.view === 'vps-pb7-branch') {
         html = renderVpsBranchView('pb7');
+      } else if (store.view === 'settings-vps-logging') {
+        html = renderVpsLoggingSettingsView();
+      } else if (store.view === 'deploys-vps-logging') {
+        html = renderVpsLoggingDeploysView();
       } else {
         html = renderOverview();
       }
@@ -8364,6 +9986,7 @@
         syncPb7RemoteLoads(store.hostname, ensureVpsUi(store.hostname, store.detail), (store.detail.branches || {}).pb7 || {});
       }
       syncTaskLogViewer();
+      syncDeployLogViewers();
       syncVpsLogViewer();
       syncMasterHostLogViewer();
       refreshCurrentViewLive();
@@ -8385,6 +10008,12 @@
     });
 
     document.addEventListener('pointerdown', handleCpuHistoryInteraction, true);
+    document.addEventListener('mouseup', function () {
+      endOverviewSelection();
+    });
+    document.addEventListener('mouseleave', function () {
+      endOverviewSelection();
+    });
     window.addEventListener('resize', function () {
       const overlay = document.getElementById('cpuHistoryOverlay');
       const box = document.getElementById('cpuHistoryBox');
@@ -8402,6 +10031,7 @@
     });
     document.addEventListener('click', handleCpuHistoryInteraction, true);
 
+    loadOverviewPrefs();
     restoreViewFromHash();
     window.overviewApiSyncController = createApiSyncStatusController({
       apiFetch: apiKeysFetch,

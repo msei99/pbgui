@@ -358,6 +358,24 @@
         - { regexp: '<username>', replace: "{{ user }}" }
         - { regexp: '<bucket_name>:', replace: "{{ bucket_name }}" }
         - { regexp: '<api_key>', replace: "{{ api_key }}" }
+
+    - name: apply VPS logging max bytes
+      ini_file:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        section: logging
+        option: "rotate_{{ (item.service | lower | regex_replace('[^a-z0-9]+', '_') | trim('_')) }}_max_bytes"
+        value: "{{ ((item.max_mb | float) * 1024 * 1024) | round(0, 'floor') | int }}"
+        no_extra_spaces: true
+      loop: "{{ vps_logging_services | default([]) }}"
+
+    - name: apply VPS logging backup count
+      ini_file:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        section: logging
+        option: "rotate_{{ (item.service | lower | regex_replace('[^a-z0-9]+', '_') | trim('_')) }}_backup_count"
+        value: "0"
+        no_extra_spaces: true
+      loop: "{{ vps_logging_services | default([]) }}"
     
     - name: copy rclone config from local to remote
       copy:

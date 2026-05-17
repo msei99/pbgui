@@ -14,27 +14,33 @@ Die Hauptansicht zeigt eine Tabelle mit allen Servern (Master + VPS) und ihrem a
 | Spalte | Beschreibung |
 |--------|-------------|
 | **Name** | Server-Hostname (Master wird als lokal angezeigt) |
-| **Online** | ✅ erreichbar / ❌ offline |
 | **Role** | 🧠 Master / 💻 VPS |
-| **Start** | Letzter Boot-Zeitpunkt |
-| **Reboot** | ✅ kein Reboot nötig / ❌ Reboot erforderlich |
+| **Online** | ✅ erreichbar / ❌ offline |
+| **Bots** | Anzahl eindeutig laufender Bots, die aktuell für diesen VPS per Telemetrie gemeldet werden |
+| **Started** | Letzter Boot-Zeitpunkt |
 | **Updates** | Ausstehende Linux-Paket-Updates |
-| **PBGui / PBGui Branch / PBGui github** | Installierte Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
-| **PB7 / PB7 Branch / PB7 github** | PB7-Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
-| **API Sync** | ✅ API-Keys synchron mit Master / ❌ nicht synchron |
+| **PBGui / PBGui Branch / PBGui GitHub** | Installierte Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
+| **PB7 / PB7 Branch / PB7 GitHub** | PB7-Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
+
+Interaktionen in der Übersicht:
+
+- Klick auf einen Spaltenkopf sortiert nach dieser Spalte; ein zweiter Klick dreht die Sortierrichtung um.
+- Jeder sichtbare Spaltenkopf hat ein kleines Ausblend-Icon, mit dem sich genau diese Spalte direkt aus der Tabelle entfernen lässt.
+- Ganz rechts im Tabellenkopf setzt ein einzelnes kleines Reset-Icon die Standardspalten und die Standard-Sortierung wieder her.
+- Spaltensichtbarkeit und Sortierung werden lokal im Browser gespeichert.
+- Durch Klicken und Ziehen über VPS-Zeilen lassen sich mehrere Deploy-Ziele direkt in der Übersicht markieren.
 
 Linke Sidebar:
 
 | Schaltfläche | Aktion |
 |--------|--------|
 | **Add VPS** | Formular zum Hinzufügen / Initialisieren öffnen |
-| **Master** | Lokale Master-Verwaltung öffnen |
 | **Refresh** | Alle VPS-Status- und Versionsdaten über das Refresh-Icon neu laden |
-| **Managed VPS** Karten | Per-VPS-Verwaltungsansicht öffnen; jede Karte zeigt nur Hostnamen und aktuellen Online-/Offline-Status |
 | **API Sync** | Zeigt den gemeinsamen API-Sync-Status (`API Sync`, `API X/Y out of sync`, `API all in sync`) an und pusht API-Zugangsdaten bei Klick an verbundene VPS |
+| **Overview / Settings / History** | Zwischen Live-Übersicht, gemeinsamen Deploy-Einstellungen und letzter Deploy-Historie wechseln |
 | **Import by Hostname** | Den manuellen Hostname-Import aus dem Sidebar-Bereich **Import Host** öffnen; der Hostname muss bereits lokal über `/etc/hosts` auflösbar sein |
 
-Die Übersicht nutzt jetzt die normale gemeinsame PBGui-FastAPI-Shell. Beim Wechsel zu **Master** oder zu einem konkreten **VPS** wird die linke Sidebar wie auf der alten Seite zu einer kontextabhängigen Aktionsliste umgeschaltet. Der Hauptbereich der Übersicht bleibt dabei auf die Tabelle fokussiert, während der Host-Import als manuelle Hostname-Aktion in der Sidebar verfügbar bleibt.
+Die Übersicht nutzt jetzt die normale gemeinsame PBGui-FastAPI-Shell. Beim Wechsel zu **Master** oder zu einem konkreten **VPS** wird die linke Sidebar zu einer kontextabhängigen Aktionsliste umgeschaltet. Der Hauptbereich der Übersicht bleibt dabei auf die Tabelle fokussiert, während der Host-Import als manuelle Hostname-Aktion in der Sidebar verfügbar bleibt.
 
 Die Seite hält eine Live-WebSocket-Verbindung für Übersicht, Fortschritt, Branch-Status und API-Sync-Fortschritt offen.
 
@@ -159,6 +165,5 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
 2. **Branch Management** aufklappen → Zielbranch auswählen → **Switch Branch** klicken
 
 ### API-Key-Synchronisation prüfen
-- Spalte **API Sync** in der Übersicht: ❌ bedeutet, dass VPS-Keys veraltet sind
 - Am unteren Ende der Sidebar zeigt die gemeinsame **API Sync** Schaltfläche je nach verbundenen VPS **API X/Y out of sync** oder **API all in sync** an - ein Klick pusht die aktualisierten Keys über den neuen SSH-API-Sync-Flow
 - Pro VPS: VPS-Detailansicht öffnen → **Update CoinData API**

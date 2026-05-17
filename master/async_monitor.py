@@ -2187,16 +2187,30 @@ def read_pbgui_version(root):
 def read_pb7_version(pb7dir):
     if not pb7dir:
         return 'N/A'
-    version_file = Path(pb7dir) / 'src' / 'passivbot_version.py'
-    if not version_file.exists():
-        return 'N/A'
+    root = Path(pb7dir)
+    version_file = root / 'src' / 'passivbot_version.py'
     try:
-        content = version_file.read_text(encoding='utf-8', errors='ignore')
-        match = re.search(r'__version__\s*=\s*[\"\']([^\"\']+)[\"\']', content)
-        if match:
-            return 'v' + match.group(1)
+        if version_file.exists():
+            content = version_file.read_text(encoding='utf-8', errors='ignore')
+            match = re.search(r'__version__\s*=\s*[\"\']([^\"\']+)[\"\']', content)
+            if match:
+                return 'v' + match.group(1)
     except Exception:
         pass
+    git_dir = root / '.git'
+    if git_dir.exists():
+        described = run(['git', '--git-dir', str(git_dir), 'describe', '--tags', '--always'], timeout=10)
+        if described:
+            return described if described.startswith('v') else 'v' + described
+    readme = root / 'README.md'
+    if readme.exists():
+        try:
+            for line in readme.read_text(encoding='utf-8', errors='ignore').splitlines()[:30]:
+                match = re.search(r'v[0-9.]+', line)
+                if match:
+                    return match.group(0)
+        except Exception:
+            pass
     return 'N/A'
 
 
@@ -2312,7 +2326,7 @@ try:
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
-        timeout=20,
+        timeout=60,
         env=env,
     )
     if res.returncode == 0:
@@ -3603,11 +3617,15 @@ class VPSMonitor:
 
         if collect_package_status:
             package_result = await self.pool.run(hostname, PACKAGE_STATUS_SCRIPT,
-                                                 timeout=30)
+                                                 timeout=75)
             if package_result and package_result.exit_status == 0 and package_result.stdout:
                 try:
                     package_data = json.loads(package_result.stdout.strip())
                     if isinstance(package_data, dict):
+                        current_meta = dict(self.store.host_meta.get(hostname, {}))
+                        # Keep the last known package count when a slow probe falls back to N/A.
+                        if package_data.get('upgrades') == 'N/A' and current_meta.get('upgrades') not in (None, '', 'N/A'):
+                            package_data['upgrades'] = current_meta.get('upgrades')
                         self.store.update_host_meta(hostname, package_data)
                         self._last_package_status_collect[hostname] = now
                 except json.JSONDecodeError:

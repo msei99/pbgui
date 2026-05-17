@@ -23,7 +23,7 @@ import uuid
 import copy as copy_module
 from Status import InstanceStatus, InstancesStatus
 from PBCoinData import CoinData
-from logging_helpers import human_log as _log
+from logging_helpers import human_log as _log, get_rotate_settings, rotate_logfile_if_oversize
 import re
 
 
@@ -590,14 +590,9 @@ class RunV7():
             sleep(1)
 
     def clean_log(self):
-        # passivbot_err.log: rotate at 1MB (stderr is minimal)
         err_log = Path(f'{self.path}/passivbot_err.log')
-        if err_log.exists():
-            if err_log.stat().st_size >= 1_048_576:
-                err_log_old = Path(f'{str(err_log)}.old')
-                copy(err_log, err_log_old)
-                with open(err_log, 'r+') as file:
-                    file.truncate()
+        max_bytes, backup_count = get_rotate_settings(logfile=err_log)
+        rotate_logfile_if_oversize(str(err_log), max_bytes, backup_count)
         # delete old passivbot.log files (no longer used)
         for old in (Path(f'{self.path}/passivbot.log'), Path(f'{self.path}/passivbot.log.old')):
             try:

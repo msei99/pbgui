@@ -13,6 +13,8 @@ from api.vps import get_bot_log_matches
 from logging_helpers import human_log as _log
 from vps_manager_service import VPSManagerService
 
+DetailPayload = dict[str, object]
+
 SERVICE = "VPSManagerApi"
 
 router = APIRouter()
@@ -159,6 +161,12 @@ async def ws_vps_manager(websocket: WebSocket):
                         msg.get("form") or {},
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "save_vps_logging_config":
+                    data = await asyncio.to_thread(service.save_vps_logging_config, msg.get("data") or {})
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "save_vps_deploy_settings":
+                    data = await asyncio.to_thread(service.save_vps_deploy_settings, msg.get("data") or {})
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "init_vps":
                     data = await asyncio.to_thread(service.init_vps, token, msg.get("form") or {}, debug=bool(msg.get("debug")))
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
@@ -240,6 +248,42 @@ async def ws_vps_manager(websocket: WebSocket):
                         extra_vars=msg.get("extra_vars") or None,
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True})
+                elif cmd == "deploy_vps_logging":
+                    data = await asyncio.to_thread(
+                        service.deploy_vps_logging,
+                        token,
+                        msg.get("hostnames") or [],
+                        debug=bool(msg.get("debug")),
+                    )
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "run_vps_deploy":
+                    data = await asyncio.to_thread(
+                        service.run_vps_deploy,
+                        token,
+                        msg.get("hostnames") or [],
+                        command=str(msg.get("command") or ""),
+                        mode=str(msg.get("mode") or ""),
+                        debug=bool(msg.get("debug")),
+                        extra_vars=msg.get("extra_vars") or None,
+                    )
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "validate_and_stage_vps_deploy_host":
+                    data = await asyncio.to_thread(
+                        service.validate_and_stage_vps_deploy_host,
+                        token,
+                        hostnames=msg.get("hostnames") or [],
+                        hostname=str(msg.get("hostname") or ""),
+                        password=str(msg.get("password") or ""),
+                        command=str(msg.get("command") or ""),
+                        mode=str(msg.get("mode") or ""),
+                        debug=bool(msg.get("debug")),
+                        extra_vars=msg.get("extra_vars") or None,
+                        entry_id=str(msg.get("entry_id") or "") or None,
+                    )
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "finalize_vps_deploy_session":
+                    data = await asyncio.to_thread(service.finalize_vps_deploy_session, str(msg.get("entry_id") or ""))
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "fetch_bot_log_matches":
                     bucket = str(msg.get("bucket") or "").strip()
                     if bucket != "today":
@@ -352,7 +396,7 @@ async def _push_loop(websocket: WebSocket, service: VPSManagerService, context: 
         _log(SERVICE, f"push loop failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
 
 
-def _build_detail_for_context(service: VPSManagerService, context: dict[str, str]):
+def _build_detail_for_context(service: VPSManagerService, context: dict[str, str]) -> DetailPayload | None:
     view = str(context.get("view") or "overview")
     if view == "master":
         return service.build_master_detail()
@@ -363,7 +407,7 @@ def _build_detail_for_context(service: VPSManagerService, context: dict[str, str
     return None
 
 
-def _build_quick_detail_for_context(service: VPSManagerService, context: dict[str, str]):
+def _build_quick_detail_for_context(service: VPSManagerService, context: dict[str, str]) -> DetailPayload | None:
     view = str(context.get("view") or "overview")
     if view == "master":
         return service.build_master_detail_quick()

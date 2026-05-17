@@ -14,14 +14,21 @@ The main view shows a table with all servers (Master + VPS) and their current st
 | Column | Description |
 |--------|-------------|
 | **Name** | Server hostname (Master shown as local) |
-| **Online** | ✅ reachable / ❌ offline |
 | **Role** | 🧠 Master / 💻 VPS |
-| **Start** | Last boot time |
-| **Reboot** | ✅ no reboot needed / ❌ reboot required |
+| **Online** | ✅ reachable / ❌ offline |
+| **Bots** | Count of unique running bots currently reported for that VPS |
+| **Started** | Last boot time |
 | **Updates** | Pending Linux package updates |
-| **PBGui / PBGui Branch / PBGui github** | Installed version, branch, and whether it matches GitHub origin |
-| **PB7 / PB7 Branch / PB7 github** | PB7 version, branch, and whether it matches GitHub origin |
-| **API Sync** | ✅ API keys in sync with Master / ❌ out of sync |
+| **PBGui / PBGui Branch / PBGui GitHub** | Installed version, branch, and whether it matches GitHub origin |
+| **PB7 / PB7 Branch / PB7 GitHub** | PB7 version, branch, and whether it matches GitHub origin |
+
+Overview interactions:
+
+- Click a column header to sort by that column; click the same header again to reverse the sort order.
+- Each visible column header includes a small hide icon so you can remove that column directly from the table.
+- A single small reset icon at the far right of the header row restores the default Overview columns and default sorting.
+- Column visibility and sorting are saved locally in the browser.
+- Click and drag across VPS rows to select multiple deploy targets from the Overview table.
 
 Left sidebar:
 
@@ -29,12 +36,11 @@ Left sidebar:
 |--------|--------|
 | **Add VPS** | Open the add / initialize form |
 | **Refresh** | Reload all VPS status and version data via the refresh icon |
-| **Master** | Open the local Master management view |
 | **API Sync** | Shows the shared API sync state (`API Sync`, `API X/Y out of sync`, `API all in sync`) and pushes API credentials to connected VPS when clicked |
-| **Managed VPS** cards | Open the per-VPS management view; each card shows only the hostname and current online/offline state |
+| **Overview / Settings / History** | Switch between the live Overview table, shared deploy settings, and recent deploy history |
 | **Import by Hostname** | Open the manual hostname import dialog from the **Import Host** sidebar section; the hostname must already resolve via local `/etc/hosts` |
 
-The overview uses the normal shared PBGui FastAPI shell. When you switch to **Master** or a specific **VPS**, the left sidebar changes into the view-specific action list just like the old page. The main overview area now stays focused on the table, while host import stays available from the sidebar as a manual hostname-based action.
+The overview uses the normal shared PBGui FastAPI shell. When you switch to **Master** or a specific **VPS**, the left sidebar changes into the view-specific action list. The main overview area stays focused on the table, while host import stays available from the sidebar as a manual hostname-based action.
 
 The page keeps a live WebSocket connection for overview rows, progress logs, branch state, and API sync progress.
 
@@ -159,6 +165,5 @@ The reveal state is preserved during live updates, so opening an eye button does
 2. Expand **Branch Management** → select the target branch → click **Switch Branch**
 
 ### Check API key sync
-- Overview table column **API Sync**: ❌ means VPS keys are out of date
 - Look at the bottom of the sidebar: the shared **API Sync** button shows **API X/Y out of sync** or **API all in sync** based on the connected VPS state — click it to push updated keys via the new SSH API sync flow
 - Per-VPS: open the VPS detail → **Update CoinData API**

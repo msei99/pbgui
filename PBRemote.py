@@ -14,7 +14,16 @@ from PBRun import PBRun
 from Status import InstancesStatus
 import shutil
 import traceback
-from logging_helpers import human_log as _log
+from logging_helpers import (
+    human_log as _log,
+    get_rotate_settings,
+    rotate_logfile_if_oversize,
+)
+
+
+def _prepare_sync_log(logfile: Path) -> None:
+    max_bytes, backup_count = get_rotate_settings(logfile=logfile)
+    rotate_logfile_if_oversize(str(logfile), max_bytes, backup_count)
 
 class RemoteServer():
     def __init__(self, path: str):
@@ -291,10 +300,8 @@ class PBRemote():
             _log('PBRemote', f'sync() called with unknown combination: direction={direction!r} spath={spath!r}', level='ERROR')
             return
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
-        if logfile.exists():
-            if logfile.stat().st_size >= 10485760:
-                logfile.replace(f'{pbgdir}/data/logs/sync.log.old')
-                logfile = Path(f'{pbgdir}/data/logs/sync.log')
+        logfile.parent.mkdir(parents=True, exist_ok=True)
+        _prepare_sync_log(logfile)
         with open(logfile, "ab") as log:
             if platform.system() == "Windows":
                 creationflags = subprocess.CREATE_NO_WINDOW
@@ -349,6 +356,8 @@ class PBRemote():
 
         cmd = ['rclone', 'delete', '-v', '--include', 'cmd_*/alive_*.cmd*', f'{self.bucket_dir}']
         logfile = Path(f'{pbgdir}/data/logs/sync.log')
+        logfile.parent.mkdir(parents=True, exist_ok=True)
+        _prepare_sync_log(logfile)
         with open(logfile, 'ab') as log:
             if platform.system() == 'Windows':
                 creationflags = subprocess.CREATE_NO_WINDOW

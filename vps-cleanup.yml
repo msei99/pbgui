@@ -23,23 +23,76 @@
         var: ansible_facts
       tags: debug,never
 
-    - name: get remote home and install_dir
-      shell: printf '%s' "$HOME"
+    - name: detect remote pbgui dir
+      shell: |
+        python3 - <<'PY'
+        from pathlib import Path
+
+        home = Path.home().resolve()
+        preferred = [
+            home / 'software' / 'pbgui',
+            home / 'pbgui',
+        ]
+        seen = set()
+
+        def is_pbgui_root(path: Path) -> bool:
+            return (
+                (path / 'pbgui.ini').is_file()
+                and (path / 'setup' / 'vps_cleanup_job.sh').is_file()
+                and (path / 'starter.py').is_file()
+            )
+
+        for candidate in preferred:
+            resolved = candidate.resolve()
+            if str(resolved) in seen:
+                continue
+            seen.add(str(resolved))
+            if is_pbgui_root(resolved):
+                print(resolved)
+                raise SystemExit(0)
+
+        max_depth = 4
+        for path in home.rglob('pbgui.ini'):
+            try:
+                root = path.parent.resolve()
+            except Exception:
+                continue
+            if str(root) in seen:
+                continue
+            seen.add(str(root))
+            try:
+                depth = len(root.relative_to(home).parts)
+            except Exception:
+                continue
+            if depth > max_depth:
+                continue
+            if is_pbgui_root(root):
+                print(root)
+                raise SystemExit(0)
+
+        raise SystemExit(1)
+        PY
       args:
         executable: /bin/bash
-      register: remote_home_result
+      register: remote_pbgui_dir_result
       changed_when: false
 
-    - name: set install_dir
+    - name: fail when remote pbgui dir is missing
+      fail:
+        msg: "Could not detect remote PBGui install directory"
+      when: remote_pbgui_dir_result.stdout | trim == ""
+
+    - name: set pbgui paths
       set_fact:
-        install_dir: "{{ remote_home_result.stdout + '/software' }}"
+        pbgui_dir: "{{ remote_pbgui_dir_result.stdout | trim }}"
+        install_dir: "{{ (remote_pbgui_dir_result.stdout | trim) | dirname }}"
 
     - name: install daily user cleanup cron job
       cron:
         name: "pbgui-cleanup-user"
         minute: "17"
         hour: "4"
-        job: '"{{ install_dir }}/pbgui/setup/vps_cleanup_job.sh" >/dev/null 2>&1'
+        job: 'PBGUI_DIR="{{ pbgui_dir }}" "{{ pbgui_dir }}/setup/vps_cleanup_job.sh"'
 
     - name: install daily journal cleanup cron job
       cron:
@@ -52,6 +105,8 @@
 
     - name: run local user-space cleanup job
       script: setup/vps_cleanup_job.sh
+      environment:
+        PBGUI_DIR: "{{ pbgui_dir }}"
       register: local_cleanup_result
       changed_when: "'changed=1' in local_cleanup_result.stdout"
 
