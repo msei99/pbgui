@@ -35,3 +35,7 @@ live_bt_diagnose.py
 # Local scratch/work directory (do not commit)
 .local-work/
 backup/
+.gitnexus/
+.claude/
+.opencode/
+CLAUDE.md

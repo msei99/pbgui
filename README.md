@@ -288,6 +288,8 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 
 ## v1.78 (unreleased)
 
+- Changed repo-local tooling ignores so `.claude/`, `.opencode/`, and `CLAUDE.md` now stay out of git status and commits, while the intentional EOF-normalization updates in `BacktestV7.py` and `OptimizeV7.py` remain part of the tracked repo state.
+
 - Fixed FastAPI `VPS Manager` Overview live state after the new log-tail helper so the backend now imports `strip_ansi` correctly again instead of failing the WebSocket push loop and leaving the Overview empty.
 
 - Fixed FastAPI `VPS Manager` `Update Linux` validation for private-key hosts so the SSH pre-check now uses the host's configured key-based login when applicable, while still validating `sudo -v` with the supplied sudo password.
