@@ -4,7 +4,7 @@
 
 These three steps are REQUIRED after every change, no exception:
 
-1. **Changelog** — Add entry to `README.md` under `# Changelog` → current `(unreleased)` version. NEVER skip, even for small fixes.
+1. **Changelog** — Add entry to `releases/unreleased.md`. NEVER skip, even for small fixes.
 2. **serial.txt** — If ANY file under `api/`, `PBApiServer.py`, or any module imported at API startup was changed: increment `api/serial.txt` by 1.
 3. **Commit/push** — ALWAYS ask user before committing or pushing.
 
@@ -16,8 +16,9 @@ Failure to do steps 1–2 is a bug, not an oversight.
 
 - Release steps are in `RELEASING.md`.
 - For each release `vX.YY`:
-  - `README.md`: bump `# vX.YY` and add a new top entry under `# Changelog`.
-  - `pbgui_func.py`: bump the `About` string.
+  - `pbgui_purefunc.py`: bump `PBGUI_VERSION`.
+  - Move `releases/unreleased.md` notes into `releases/vX.YY.md` and update `CHANGELOG.md`.
+  - `pbgui_func.py`: the About string updates automatically from `PBGUI_VERSION`.
   - Commit: `Release vX.YY`, tag `vX.YY`, push branch + tags.
 
 ## Project conventions
@@ -58,9 +59,9 @@ Failure to do steps 1–2 is a bug, not an oversight.
 - **st.html vs iframe embedding rule**: Use `st.html(unsafe_allow_javascript=True)` when the component needs dynamic height (collapsible sections, expandable content). Use `st.components.v1.iframe()` when the component has a fixed/known height (tables, dashboards). **Critical**: `st.html` passes through DOMPurify with `SAFE_FOR_XML=true` (Streamlit 1.54+), which checks `/<[/\w!]/.test(scriptElement.innerHTML)` and **removes the entire `<script>` element** if it matches. Therefore: all `<` and `>` inside JS string literals in `st.html` components MUST be escaped as `\x3C` / `\x3E`. Comparison operators must be spaced (`a < b`, not `a<b`). iframe-loaded components (e.g. `jobs_monitor.html`) are NOT affected — they run as standalone pages via FastAPI without DOMPurify. When migrating to pure FastAPI, bulk-replace `\x3C`→`<` and `\x3E`→`>`.
 - **st.html JS validation rule**: When creating or editing `st.html` components with `<script>` blocks, always validate the JS first by extracting the script content and running `node --check` on it. Common pitfall: `\x3C`/`\x3E` hex escapes are only valid inside JS **string literals** — using them as comparison operators (e.g. `v \x3C 100`) causes a silent `SyntaxError` that kills the entire script block without any visible error. Operators must use real `<` `>` (with spaces for DOMPurify safety).
 - **API server restart detection via `api/serial.txt`**: The file `api/serial.txt` contains a single integer (e.g. `1`). The running server reads it at startup and compares via inotify/SSE. **Whenever you change FastAPI code that requires a server restart** (any file under `api/`, `PBApiServer.py`, or any module imported at startup), you MUST increment the number in `api/serial.txt` by 1. This triggers the orange "Restart" button in the nav bar for all connected users. Never forget to bump the serial after API-level changes.
-- **Changelog discipline**: After every feature or bugfix, immediately add an entry to the `# Changelog` section in `README.md` under the current unreleased version. Never finish a task without updating the changelog. Do NOT use a separate `CHANGELOG.md` file.
-- **Changelog versioning rule**: Once a version entry in `README.md # Changelog` has a date (e.g. `## v1.68 (23-03-2026)`), never add new entries to it unless the user explicitly requests it. Instead, create a new version section above it with `(unreleased)` (e.g. `## v1.69 (unreleased)`) and add new entries there. When releasing, the `(unreleased)` label gets replaced with the release date.
-- **Release version heading**: When releasing a version, always update the standalone version heading `# vX.YY` in `README.md` (around line 10). NEVER add a version number to the main title `# GUI for Passivbot` — that line stays version-free.
+- **Changelog discipline**: After every feature or bugfix, immediately add an entry to `releases/unreleased.md`. Never finish a task without updating the changelog.
+- **Changelog versioning rule**: Keep unreleased work only in `releases/unreleased.md`. When releasing, move those notes into a dedicated `releases/vX.YY.md` file and update `CHANGELOG.md`.
+- **README rule**: `README.md` is no longer the release-history source. Keep release notes in `CHANGELOG.md` and `releases/`, and keep the technical version in `pbgui_purefunc.py`.
 - **Log viewer integration pattern**: All log viewing in FastAPI pages MUST use the shared `LogViewerPanel` class (`frontend/js/log_viewer_panel.js`). Include via `<script src="/app/js/log_viewer_panel.js?v=N"></script>`. Create with `new LogViewerPanel({containerId, wsBase, token, defaultHost, defaultFile, defaultService, presets, showRestart, height, onFileChange})`. Public API: `open()`, `close()`, `setHost(h)`, `setService(s)`, `setFile(f)`, `fetchFile(f)`. Supports local file mode (host=`'local'`) and VPS service mode (host=hostname). For rotated log files (`.1`, `.2`, etc.), use the `onFileChange` callback to load rotation data via the logging API and offer a version dropdown; switch via `fetchFile(rotatedName)`. Never write inline log viewer code in individual pages.
 - **Always use `pb7_config.py` for passivbot configs**: Loading and saving any passivbot config (backtest, optimizer, live) MUST go through `load_pb7_config` / `save_pb7_config` from `pb7_config.py`. Never read or write config JSON files with raw `json.load`/`json.dump` alone. The pattern is: **Load**: `json.load()` once to extract `pbgui` section, then `load_prepared_config()` for passivbot normalization/migration, `strip_config_metadata()` to remove `_raw`/`_transform_log`, re-attach `pbgui`. **Save**: `json.dump()` the full dict (passivbot + pbgui sections) as-is — passivbot normalizes on next load. **Exception — Override config files (COIN.json)**: These are sparse diffs containing only override params (`bot.long`/`bot.short` + `live`). **Load**: `json.load()` then `prepare_config()` (from `config.load`) with `live: {}` injected if missing, then `strip_config_metadata()`. **Save**: raw `json.dump()` — write exactly what the frontend sends (sparse override dict). Do NOT use `load_pb7_config`/`save_pb7_config` for override files.
 
@@ -208,7 +209,7 @@ Failure to do steps 1–2 is a bug, not an oversight.
 
 ## ⛔ REMINDER — BEFORE YOU FINISH (check this every single time)
 
-1. ✅ **Changelog** added to `README.md` → `# Changelog` → `(unreleased)` section?
+1. ✅ **Changelog** added to `releases/unreleased.md`?
 2. ✅ **`api/serial.txt`** incremented if `api/`, `PBApiServer.py`, or frontend files changed?
 3. ✅ **Not committing/pushing** without explicit user confirmation?
 

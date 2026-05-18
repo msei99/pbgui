@@ -92,7 +92,7 @@
     var p = new URLSearchParams(window.location.search);
     p.set('_dbe_rows', rows);
     p.set('_dbe_cols', cols);
-    window.history.replaceState({}, '', '?' + p.toString());
+    window.history.replaceState({}, '', window.location.pathname + '?' + p.toString() + window.location.hash);
   }
 
   function sync() {

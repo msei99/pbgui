@@ -5,6 +5,7 @@ from time import sleep
 from pbgui_func import error_popup, info_popup
 from MonitorConfig import MonitorConfig
 from master.async_monitor import load_alert_snapshot
+from pbgui_purefunc import PBGUI_VERSION
 
 class Monitor():
     def __init__(self):
@@ -47,7 +48,7 @@ class Monitor():
         if server.is_online():
             color = "green"
         else: color = "red"
-        st.markdown(f'### Remote Server: :{color}[{server.name}] ({server.rtd}s) PBGui: {server.pbgui_version}')
+        st.markdown(f'### Remote Server: :{color}[{server.name}] ({server.rtd}s) PBGui: {PBGUI_VERSION}')
         if not server.mem or not server.disk or not server.swap:
             st.warning("Server is not online or not responding", icon="⚠️")
             return

@@ -444,7 +444,7 @@ Log entries include: hostname, operation, serial, success/failure, MD5 hashes, t
 | 4 | `api/api_keys.py` | New endpoints: `POST /sync/push-ssh`, `GET /sync/ssh-status` |
 | 5 | `frontend/api_keys_editor.html` | API Sync UI (button, selectbox, dry-run, status) |
 | 6 | `api/serial.txt` | Increment (API change) |
-| 7 | `README.md` | Changelog entry |
+| 7 | `releases/unreleased.md` | Changelog entry |
 
 ---
 

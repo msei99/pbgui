@@ -1108,7 +1108,7 @@ function selectPanel(id) {
   document.querySelectorAll('.ctx-actions').forEach(function(c) {
     c.style.display = c.id === 'ctx-' + id ? '' : 'none';
   });
-  history.replaceState(null, '', '#' + id);
+  history.replaceState(null, '', window.location.pathname + window.location.search + '#' + id);
   // Lazy-load data when switching panels
   if (id === 'configs') {
     if (configs.length === 0) loadConfigs(); else renderConfigs();

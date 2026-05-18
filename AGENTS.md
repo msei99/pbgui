@@ -2,7 +2,7 @@
 
 ## Before Finishing ANY Task
 
-1. **Changelog** — Add entry to `README.md` → `# Changelog` → current `(unreleased)` section. Never skip.
+1. **Changelog** — Add entry to `releases/unreleased.md`. Never skip.
 2. **serial.txt** — If any file under `api/`, `PBApiServer.py`, or a module imported at API startup changed: increment `api/serial.txt` by 1.
 3. **Commit** — Always ask before committing or pushing. Never commit without explicit user confirmation.
 
@@ -124,7 +124,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 
 ### Release Workflow
 - Steps in `RELEASING.md`.
-- Per release: bump `README.md` version + changelog, bump `pbgui_func.py` About string.
+- Per release: bump `pbgui_purefunc.py` `PBGUI_VERSION`, move `releases/unreleased.md` notes into a dedicated `releases/vX.YY.md` file, keep `CHANGELOG.md` index updated. The `pbgui_func.py` About string uses `PBGUI_VERSION` automatically.
 - Commit: `Release vX.YY`, tag `vX.YY`, push branch + tags.
 
 ## Testing

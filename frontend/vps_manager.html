@@ -2883,6 +2883,7 @@
       vps: {},
       sidebarSelectInteracting: false,
       pb7BranchSelectInteracting: false,
+      pbguiBranchSelectInteracting: false,
       helpLang: 'en',
       helpTopics: [],
       helpTopicIndex: -1,
@@ -3565,6 +3566,10 @@
 
     function isPb7BranchView() {
       return store.view === 'master-pb7-branch' || store.view === 'vps-pb7-branch';
+    }
+
+    function isPbguiBranchView() {
+      return store.view === 'master-pbgui-branch' || store.view === 'vps-pbgui-branch';
     }
 
     function isVpsTaskLogAlias(file, hostname) {
@@ -4550,6 +4555,9 @@
         return;
       }
       if (store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch' || store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch') {
+        if ((store.pbguiBranchSelectInteracting && isPbguiBranchView()) || (store.pb7BranchSelectInteracting && isPb7BranchView())) {
+          return;
+        }
         syncBranchViewPanel();
         return;
       }
@@ -6326,6 +6334,7 @@
     function handleResult(msg) {
       const cmd = msg.cmd || '';
       let needsForceView = false;
+      let shouldForceRefresh = false;
       if (cmd === 'prepare_import') {
         applyPreparedImport(msg.data || {});
         return;
@@ -6464,8 +6473,14 @@
         needsForceView = true;
       } else if (cmd === 'run_master_command' || cmd === 'run_vps_command') {
         toast('Command started.', 'success');
+        if (cmd === 'run_master_command') {
+          shouldForceRefresh = true;
+        }
       } else if (cmd === 'load_more_commits') {
         toast('More commits loaded.', 'info');
+      }
+      if (shouldForceRefresh) {
+        send({ cmd: 'refresh' });
       }
       renderUi({ forceSidebarActions: !!needsForceView, forceView: needsForceView || undefined });
     }
@@ -6521,6 +6536,10 @@
       return '#overview';
     }
 
+    function viewUrl(view, hostname) {
+      return window.location.pathname + window.location.search + viewHash(view, hostname);
+    }
+
     function selectView(view, hostname) {
       clearTimeout(store._detailTimer);
       store._detailTimer = 0;
@@ -6541,7 +6560,7 @@
         store.taskLog = defaultTaskLog();
       }
       if (view !== 'vps-task-log' && view !== 'vps-host-logs') {
-        history.replaceState(null, '', viewHash(view, hostname));
+        history.replaceState(null, '', viewUrl(view, hostname));
       }
       sendContext();
       renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
@@ -7714,7 +7733,7 @@
       const branchSelect = `
         <div class='field'>
           <label>Target Branch</label>
-          <select onchange='${isMaster ? 'setMasterField' : 'setVpsUiField'}(${isMaster ? js('pbguiBranch') + ', this.value' : js(scope) + ', ' + js('pbguiBranch') + ', this.value'}); syncBranchViewPanel();'>
+          <select onfocus='store.pbguiBranchSelectInteracting = true' onmousedown='store.pbguiBranchSelectInteracting = true' onblur='store.pbguiBranchSelectInteracting = false; syncBranchViewPanel()' onchange='store.pbguiBranchSelectInteracting = false; ${isMaster ? 'setMasterField' : 'setVpsUiField'}(${isMaster ? js('pbguiBranch') + ', this.value' : js(scope) + ', ' + js('pbguiBranch') + ', this.value'}); syncBranchViewPanel();'>
             ${model.availableBranches.map(function (branch) {
               return `<option value='${escAttr(branch)}'${branch === model.selectedBranch ? ' selected' : ''}>${esc(branch)}</option>`;
             }).join('')}
@@ -9628,6 +9647,12 @@
     }
 
     function syncBranchViewPanel() {
+      if (store.pbguiBranchSelectInteracting && isPbguiBranchView()) {
+        return;
+      }
+      if (store.pb7BranchSelectInteracting && isPb7BranchView()) {
+        return;
+      }
       if (store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch') {
         setHtmlIfChanged('master-branch-panel', renderBranchPanelForCurrentView());
         return;
@@ -10029,12 +10054,13 @@
       }
       renderSummaryBar();
       const holdPb7BranchView = store.pb7BranchSelectInteracting && isPb7BranchView();
-      if (!holdPb7BranchView) {
+      const holdPbguiBranchView = store.pbguiBranchSelectInteracting && isPbguiBranchView();
+      if (!holdPb7BranchView && !holdPbguiBranchView) {
         renderView(!!opts.forceView);
       }
-      if (!holdPb7BranchView && store.view === 'master-pb7-branch' && store.detail && store.detail.kind === 'master') {
+      if (!holdPb7BranchView && !holdPbguiBranchView && store.view === 'master-pb7-branch' && store.detail && store.detail.kind === 'master') {
         syncPb7RemoteLoads('master', store.master, (store.detail.branches || {}).pb7 || {});
-      } else if (!holdPb7BranchView && store.view === 'vps-pb7-branch' && store.hostname && store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname) {
+      } else if (!holdPb7BranchView && !holdPbguiBranchView && store.view === 'vps-pb7-branch' && store.hostname && store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname) {
         syncPb7RemoteLoads(store.hostname, ensureVpsUi(store.hostname, store.detail), (store.detail.branches || {}).pb7 || {});
       }
       syncTaskLogViewer();

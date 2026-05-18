@@ -1831,7 +1831,7 @@ Warning:
 pb7_version_venv_python = """
 PB7 column
 
-Shows the PB7 version from README.md.
+Shows the detected PB7 version.
 
 If available, the suffix "/3.12" indicates the Python major.minor of the configured PB7 venv interpreter (pb7venv).
 """

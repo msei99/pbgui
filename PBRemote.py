@@ -25,6 +25,28 @@ def _prepare_sync_log(logfile: Path) -> None:
     max_bytes, backup_count = get_rotate_settings(logfile=logfile)
     rotate_logfile_if_oversize(str(logfile), max_bytes, backup_count)
 
+
+def _python_major_minor(executable: str | None) -> str:
+    candidate = str(executable or "").strip()
+    if not candidate:
+        return "N/A"
+    path = Path(candidate)
+    if not path.exists():
+        return "N/A"
+    try:
+        res = subprocess.run(
+            [candidate, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return "N/A"
+    if res.returncode != 0:
+        return "N/A"
+    return str(res.stdout or "").strip() or "N/A"
+
 class RemoteServer():
     def __init__(self, path: str):
         """
@@ -138,7 +160,6 @@ class PBRemote():
         self.remote_servers = []
         self.local_run = PBRun()
         self.index = 0
-        self.systemts = 0
         pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
@@ -196,15 +217,8 @@ class PBRemote():
         self.load_remote()
 
     @property
-    def pbgui_version(self):
-        return self.local_run.pbgui_version
-    @property
-    def pbgui_commit(self):
-        return self.local_run.pbgui_commit
-
-    @property
     def pbgui_python(self):
-        return getattr(self.local_run, 'pbgui_python', 'N/A')
+        return f"{sys.version_info.major}.{sys.version_info.minor}"
     @property
     def mem(self):
         return psutil.virtual_memory()
@@ -222,16 +236,14 @@ class PBRemote():
         return psutil.boot_time()
     @property
     def pb7_version(self):
-        return self.local_run.pb7_version
+        return "N/A"
 
     @property
     def pb7_python(self):
-        if hasattr(self.local_run, 'update_pb7_python_version'):
-            self.local_run.update_pb7_python_version()
-        return getattr(self.local_run, 'pb7_python', 'N/A')
+        return _python_major_minor(getattr(self.local_run, 'pb7venv', None))
     @property
     def pb7_commit(self):
-        return self.local_run.pb7_commit
+        return ""
     def __iter__(self):
         return iter(self.remote_servers)
 

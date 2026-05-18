@@ -1335,7 +1335,7 @@ window.PBGUI_NAV_CONFIG = {
     /* persist position in URL hash */
     var hash = panelId;
     if (tab) hash += '/' + tab;
-    history.replaceState(null, '', '#' + hash);
+    history.replaceState(null, '', window.location.pathname + window.location.search + '#' + hash);
   }
 
   document.querySelectorAll('.sb-btn').forEach(function (btn) {
@@ -1368,7 +1368,7 @@ window.PBGUI_NAV_CONFIG = {
     }
     if (tab === 'info' && svc === 'pbremote') loadPBRemoteInfo();
     /* persist panel + tab in URL hash */
-    history.replaceState(null, '', '#' + svc + '/' + tab);
+    history.replaceState(null, '', window.location.pathname + window.location.search + '#' + svc + '/' + tab);
   };
 
   /* ── Restore panel/tab from URL hash on load ───────────── */

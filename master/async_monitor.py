@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+from pbgui_release import read_local_pbgui_version
 from typing import Any, Optional
 
 import asyncssh
@@ -2187,14 +2188,13 @@ def run(cmd, timeout=10):
 
 
 def read_pbgui_version(root):
-    readme = Path(root) / 'README.md'
-    if not readme.exists():
-        return 'N/A'
+    version_file = Path(root) / 'pbgui_purefunc.py'
     try:
-        for line in readme.read_text(encoding='utf-8', errors='ignore').splitlines()[:20]:
-            match = re.search(r'v[0-9.]+', line)
+        if version_file.exists():
+            content = version_file.read_text(encoding='utf-8', errors='ignore')
+            match = re.search(r'PBGUI_VERSION\s*=\s*["\']([^"\']+)["\']', content)
             if match:
-                return match.group(0)
+                return match.group(1)
     except Exception:
         pass
     return 'N/A'
