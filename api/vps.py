@@ -183,7 +183,7 @@ def get_alert_snapshot() -> dict[str, Any]:
         return {"items": [], "history": [], "summary": {"new_count": 0, "ack_count": 0, "total_active": 0}}
     return {
         "items": _monitor.list_active_alerts(gui_only=True),
-        "history": _monitor.list_alert_history(gui_only=True, limit=20),
+        "history": _monitor.list_alert_history(gui_only=True),
         "summary": _monitor.get_alert_summary(),
     }
 

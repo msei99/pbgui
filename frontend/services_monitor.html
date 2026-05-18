@@ -738,6 +738,7 @@ window.PBGUI_NAV_CONFIG = {
 };
 </script>
 <script src="/app/js/pbgui_dialogs.js?v=1"></script>
+<script src="/app/js/shared_help_overlay.js?v=3"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <!-- Guide button override — must run AFTER pbgui_nav.js DOMContentLoaded handler -->
 <script>
@@ -931,28 +932,10 @@ window.PBGUI_NAV_CONFIG = {
   /* Public opener — called by guide button; uses current panel's keyword */
   window._openServicesHelp = function() {
     var kw = window._servicesGuideKeyword || 'services_overview';
-    helpOvl.classList.add('visible');
-    if (helpTopics.length === 0) { loadHelpIndex(kw); return; }
-    var kl = kw.toLowerCase();
-    for (var i = 0; i < helpTopics.length; i++) {
-      if (helpTopics[i].title.toLowerCase().indexOf(kl) !== -1 ||
-          (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(kl) !== -1)) {
-        loadTopic(i); return;
-      }
-    }
-    loadTopic(0);
+    if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+    window.PBGuiSharedHelp.open(kw, { token: TOKEN });
   };
-
-  document.addEventListener('DOMContentLoaded', function() {
-    var btn = document.getElementById('pbgui-guide-btn');
-    if (btn) {
-      var fresh = btn.cloneNode(true);
-      btn.parentNode.replaceChild(fresh, btn);
-      fresh.addEventListener('click', function() {
-        if (typeof window._openServicesHelp === 'function') window._openServicesHelp();
-      });
-    }
-  });
+  window.PBGUI_HELP_OPENER = window._openServicesHelp;
 }());
 </script>
 <!-- Main logic -->

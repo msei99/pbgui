@@ -551,7 +551,7 @@
     var ST_BASE = _query.get('st_base') || '%%ST_BASE%%';
     var PBGUI_VERSION = '%%VERSION%%';
     var PBGUI_SERIAL = '%%SERIAL%%';
-
+    var TOPIC = _query.get('topic') || '';
     function hasInjectedPlaceholder(value) {
       return typeof value === 'string' && value.indexOf('%%') !== -1;
     }
@@ -885,7 +885,66 @@
 
       function setOverlayVisible(visible) {
         helpOvl.classList.toggle('visible', visible);
-        helpBackdrop.classList.toggle('visible', visible);
+        if (helpBackdrop) helpBackdrop.classList.toggle('visible', visible);
+      }
+
+      function syncMaximizeButton() {
+        var maxBtn = document.getElementById('help-maximize');
+        if (!maxBtn) return;
+        var isMaximized = helpOvl.classList.contains('is-maximized');
+        maxBtn.setAttribute('aria-pressed', isMaximized ? 'true' : 'false');
+        maxBtn.setAttribute('title', isMaximized ? 'Restore window size' : 'Fit to browser window');
+        maxBtn.textContent = isMaximized ? '❐' : '⛶';
+      }
+
+      function setMaximized(nextValue) {
+        var shouldMaximize = !!nextValue;
+        var isMaximized = helpOvl.classList.contains('is-maximized');
+        if (shouldMaximize === isMaximized) {
+          syncMaximizeButton();
+          return;
+        }
+        if (shouldMaximize) {
+          helpOvl._pbguiHelpRestoreBounds = {
+            left: helpOvl.style.left || '',
+            top: helpOvl.style.top || '',
+            right: helpOvl.style.right || '',
+            bottom: helpOvl.style.bottom || '',
+            width: helpOvl.style.width || '',
+            height: helpOvl.style.height || '',
+            transform: helpOvl.style.transform || ''
+          };
+          helpOvl.classList.add('is-maximized');
+          if (window.innerWidth <= 720) {
+            helpOvl.style.left = '7px';
+            helpOvl.style.top = '59px';
+            helpOvl.style.right = '7px';
+            helpOvl.style.bottom = '7px';
+          } else {
+            helpOvl.style.left = '12px';
+            helpOvl.style.top = '64px';
+            helpOvl.style.right = '12px';
+            helpOvl.style.bottom = '12px';
+          }
+          helpOvl.style.width = 'auto';
+          helpOvl.style.height = 'auto';
+          helpOvl.style.transform = 'none';
+        } else {
+          helpOvl.classList.remove('is-maximized');
+          var saved = helpOvl._pbguiHelpRestoreBounds || {};
+          helpOvl.style.left = saved.left || '';
+          helpOvl.style.top = saved.top || '';
+          helpOvl.style.right = saved.right || '';
+          helpOvl.style.bottom = saved.bottom || '';
+          helpOvl.style.width = saved.width || '';
+          helpOvl.style.height = saved.height || '';
+          helpOvl.style.transform = saved.transform || '';
+        }
+        syncMaximizeButton();
+      }
+
+      function closeLocalHelp() {
+        setOverlayVisible(false);
       }
 
       function openHelp(keyword) {
@@ -961,11 +1020,20 @@
       });
 
       document.getElementById('help-close').addEventListener('click', function () {
-        setOverlayVisible(false);
+        closeLocalHelp();
       });
 
+      var helpMaximize = document.getElementById('help-maximize');
+      if (helpMaximize && !helpMaximize.dataset.pbguiHelpMaxBound) {
+        helpMaximize.dataset.pbguiHelpMaxBound = '1';
+        helpMaximize.addEventListener('click', function (event) {
+          event.preventDefault();
+          setMaximized(!helpOvl.classList.contains('is-maximized'));
+        });
+      }
+
       document.addEventListener('keydown', function (event) {
-        if (event.key === 'Escape') setOverlayVisible(false);
+        if (event.key === 'Escape') closeLocalHelp();
       });
 
       (function () {
@@ -1005,8 +1073,9 @@
       window.PBGUI_HELP_OPENER = function () { openHelp(); };
 
       setLanguageButtons();
+      syncMaximizeButton();
       ensurePageMeta();
-      openHelp();
+      openHelp(TOPIC || 'overview');
     }());
   </script>
 

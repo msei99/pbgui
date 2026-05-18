@@ -1414,20 +1414,8 @@ html, body {
 
     /* Expose opener for the shared Guide button handler */
     window._openDashboardHelp = function () {
-      helpOvl.classList.add('visible');
-      if (helpTopics.length === 0) {
-        helpDefaultTopic = 'dashboard';
-        loadHelpIndex();
-      } else {
-        var kw = 'dashboard';
-        for (var i = 0; i < helpTopics.length; i++) {
-          if (helpTopics[i].title.toLowerCase().indexOf(kw) !== -1 ||
-              (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(kw) !== -1)) {
-            loadTopic(i); return;
-          }
-        }
-        loadTopic(0);
-      }
+      if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+      window.PBGuiSharedHelp.open('dashboard', { token: _NAV_TOKEN });
     };
     window.PBGUI_HELP_OPENER = window._openDashboardHelp;
   }());
@@ -1452,6 +1440,7 @@ html, body {
     serial:   _NAV_SERIAL
   };
 </script>
+<script src="/app/js/shared_help_overlay.js?v=3"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

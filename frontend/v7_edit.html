@@ -2845,6 +2845,7 @@ window.PBGUI_NAV_CONFIG = {
   });
 })();
 </script>
+<script src="/app/js/shared_help_overlay.js?v=3"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- Guide overlay JS -->
@@ -3032,6 +3033,9 @@ document.addEventListener('DOMContentLoaded', function () {
     })(inp.id);
   });
 
-  window.PBGUI_HELP_OPENER = function () { openHelp('pbv7 run'); };
+  window.PBGUI_HELP_OPENER = function () {
+    if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+    window.PBGuiSharedHelp.open('pbv7 run', { token: TOKEN });
+  };
 });
 </script>

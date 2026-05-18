@@ -2519,13 +2519,10 @@ initMetricTooltipHandlers();
     });
   }());
   window._openVpsHelp = function() {
-    helpOvl.classList.add('visible');
-    if (helpTopics.length === 0) { loadHelpIndex('vps_monitor'); return; }
-    for (var i = 0; i < helpTopics.length; i++) {
-      if (helpTopics[i].title.toLowerCase().indexOf('vps') !== -1 || (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf('vps') !== -1)) { loadTopic(i); return; }
-    }
-    loadTopic(0);
+    if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+    window.PBGuiSharedHelp.open('vps_monitor', { token: TOKEN });
   };
+  window.PBGUI_HELP_OPENER = window._openVpsHelp;
 }());
 </script>
 
@@ -2540,16 +2537,9 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
+<script src="/app/js/shared_help_overlay.js?v=3"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
-<!-- Guide button override: must run AFTER pbgui_nav.js DOMContentLoaded handler
-     (pbgui_nav.js registers its DOMContentLoaded listener first, then ours runs second,
-      so by the time ours fires the button already exists and nav.js handler is attached) -->
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-  var btn = document.getElementById('pbgui-guide-btn');
-  if (btn) { var fresh = btn.cloneNode(true); btn.parentNode.replaceChild(fresh, btn); fresh.addEventListener('click', function() { if (typeof window._openVpsHelp === 'function') window._openVpsHelp(); }); }
-});
-
 document.addEventListener('click', handleCpuHistoryInteraction, true);
 window.addEventListener('resize', function () {
   const overlay = document.getElementById('cpu-history-ovl');

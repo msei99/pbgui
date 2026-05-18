@@ -69,6 +69,7 @@ BOT_HISTORY_SOURCES = {
 
 PNL_HISTORY_VERSION = 1
 ALERT_STATE_VERSION = 1
+ALERT_HISTORY_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
 ALERT_KIND_OFFLINE = "offline"
 ALERT_KIND_SERVICE = "service"
@@ -131,6 +132,21 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 def _alert_id(kind: str, host: str, name: str = "") -> str:
     base = f"{kind}:{host}"
     return f"{base}:{name}" if name else base
+
+
+def _alert_history_id(alert: AlertRecord | dict[str, Any], episode: int | None = None) -> str:
+    if isinstance(alert, AlertRecord):
+        kind = alert.kind
+        host = alert.host
+        name = alert.name
+        current_episode = int(alert.episode or 1)
+    else:
+        kind = str(alert.get("kind") or "")
+        host = str(alert.get("host") or "")
+        name = str(alert.get("name") or "")
+        current_episode = int(alert.get("episode") or 1)
+    base = _alert_id(kind, host, name)
+    return f"{base}#episode:{max(1, int(episode or current_episode))}"
 
 
 def _severity_rank(level: str) -> int:
@@ -2576,6 +2592,19 @@ class VPSMonitor:
         except Exception as e:
             _log(SERVICE, f"[alerts] failed to save alert state: {e}", level="WARNING")
 
+    def _prune_alert_history(self, now_ts: float | None = None) -> bool:
+        cutoff = float(now_ts or time.time()) - ALERT_HISTORY_RETENTION_SECONDS
+        removed = False
+        for alert_id, alert in list(self._alerts.items()):
+            if alert.active:
+                continue
+            resolved_ts = float(alert.last_seen_ts or 0.0)
+            if resolved_ts <= 0.0 or resolved_ts >= cutoff:
+                continue
+            self._alerts.pop(alert_id, None)
+            removed = True
+        return removed
+
     def list_active_alerts(self, *, gui_only: bool = False) -> list[dict[str, Any]]:
         self._load_alert_routes()
         items = []
@@ -2593,8 +2622,9 @@ class VPSMonitor:
         ))
         return items
 
-    def list_alert_history(self, *, gui_only: bool = False, limit: int = 20) -> list[dict[str, Any]]:
+    def list_alert_history(self, *, gui_only: bool = False, limit: int = 0) -> list[dict[str, Any]]:
         self._load_alert_routes()
+        pruned = self._prune_alert_history()
         items = []
         for alert in self._alerts.values():
             if alert.active:
@@ -2602,9 +2632,12 @@ class VPSMonitor:
             if gui_only and not self._alert_gui_routes.get(alert.kind, True):
                 continue
             payload = alert.to_dict()
+            payload["id"] = _alert_history_id(alert)
             payload["resolved_ts"] = float(alert.last_seen_ts or 0.0)
             items.append(payload)
         items.sort(key=lambda item: item.get("resolved_ts") or 0.0, reverse=True)
+        if pruned:
+            self._save_alert_state()
         if limit > 0:
             return items[:limit]
         return items
@@ -2655,6 +2688,7 @@ class VPSMonitor:
         monitor_config = MonitorConfig()
         live_alerts = collect_live_alerts(conn_summary, {h: m.to_dict() for h, m in self.store.system.items()}, self.store.instances, self.store.services, monitor_config)
         now = time.time()
+        self._prune_alert_history(now)
         live_map = {str(item.get("id") or ""): item for item in live_alerts if str(item.get("id") or "")}
         changed = False
 
@@ -2709,6 +2743,12 @@ class VPSMonitor:
             if alert_id in live_map:
                 continue
             if alert.active:
+                history_key = _alert_history_id(alert)
+                self._alerts[history_key] = AlertRecord.from_dict({
+                    **alert.to_dict(),
+                    "id": history_key,
+                    "active": False,
+                })
                 alert.active = False
                 alert.last_seen_ts = now
                 changed = True
@@ -3112,10 +3152,9 @@ class VPSMonitor:
             for store in self._bot_count_history.values():
                 store.maybe_flush(force=True)
             self._bot_pnl_history.maybe_flush(force=True)
-            if not cancelled and self._running and hostname in self.enabled_hosts:
-                entry = self.pool.get_connection(hostname)
-                if entry and entry.status == ConnectionStatus.CONNECTED:
-                    await self.pool.disconnect(hostname)
+            # A dead metrics subprocess does not necessarily mean SSH died.
+            # Keep the connection alive so the loop can restart the stream
+            # without generating a spurious offline/recovered alert pair.
             _log(SERVICE, f"[metrics] Stream ended for {hostname}")
 
     def _record_host_metric_history(self, hostname: str, metrics: SystemMetrics) -> None:

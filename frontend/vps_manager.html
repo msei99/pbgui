@@ -5903,20 +5903,8 @@
       }());
 
       window.PBGUI_HELP_OPENER = function () {
-        helpOvl.classList.add('visible');
-        if (!helpTopics.length) {
-          loadHelpIndex(helpDefaultTopic);
-          return;
-        }
-        for (var i = 0; i < helpTopics.length; i += 1) {
-          var title = String((helpTopics[i] || {}).title || '').toLowerCase();
-          var file = String((helpTopics[i] || {}).file || '').toLowerCase();
-          if (title.indexOf('vps manager') !== -1 || file.indexOf('vps_manager') !== -1) {
-            loadTopic(i);
-            return;
-          }
-        }
-        loadTopic(0);
+        if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+        window.PBGuiSharedHelp.open(helpDefaultTopic, { token: TOKEN });
       };
     }());
 
@@ -5991,10 +5979,21 @@
     function fetchVpsDetail(hostname) {
       return fetch(API_BASE + '/detail/' + encodeURIComponent(hostname) + '?token=' + encodeURIComponent(TOKEN))
         .then(function (r) {
-          if (!r.ok) throw new Error('detail fetch failed');
+          if (!r.ok) {
+            if (r.status === 404 && store.hostname === hostname) {
+              store.hostname = '';
+              store.view = 'overview';
+              store.detail = null;
+              sendContext();
+              renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+              return null;
+            }
+            throw new Error('detail fetch failed');
+          }
           return r.json();
         })
         .then(function (data) {
+          if (!data) return;
           if (!data || data.kind !== 'vps' || data.hostname !== hostname) return;
           if (store.hostname !== hostname) return;
           var hadDetail = !!(store.detail && store.detail.kind === 'vps' && store.detail.hostname === hostname);
@@ -10113,6 +10112,7 @@
       restoreViewFromHash();
     });
   </script>
+  <script src="/app/js/shared_help_overlay.js?v=3"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

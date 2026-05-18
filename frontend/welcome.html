@@ -918,6 +918,13 @@
             };
         }
 
+        function initWelcomeHelp() {
+            window.PBGUI_HELP_OPENER = function () {
+                if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== "function") return;
+                window.PBGuiSharedHelp.open("welcome", { token: TOKEN });
+            };
+        }
+
         syncNavConfig();
 
         function authHeaders(jsonBody) {
@@ -1351,6 +1358,7 @@
         document.addEventListener("keydown", function (event) {
             if (event.key === "Escape" && state.fileBrowser.open) {
                 closeFileBrowser();
+                return;
             }
         });
         document.getElementById("file-browser-modal").addEventListener("click", function (event) {
@@ -1385,6 +1393,11 @@
 
         loadBootstrap();
     </script>
+    <script>
+        initWelcomeHelp();
+    </script>
+
+    <script src="/app/js/shared_help_overlay.js?v=3"></script>
 
     <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>

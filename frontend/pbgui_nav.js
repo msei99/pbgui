@@ -880,14 +880,20 @@
     'v7_balance_calc':    '/api/balance-calc/main_page'
   };
 
-  function syncHelpOverlayState(helpOvl) {
-    document.body.classList.toggle('pbgui-help-open', !!(helpOvl && helpOvl.classList.contains('visible')));
+  function syncHelpOverlayState() {
+    var legacyHelpOvl = document.getElementById('help-ovl');
+    var sharedHelpOvl = document.getElementById('pbgui-shared-help-ovl');
+    var isVisible = !!(
+      (legacyHelpOvl && legacyHelpOvl.classList.contains('visible')) ||
+      (sharedHelpOvl && sharedHelpOvl.classList.contains('visible'))
+    );
+    document.body.classList.toggle('pbgui-help-open', isVisible);
   }
 
   function ensureSharedHelpOverlay() {
     var helpOvl = document.getElementById('help-ovl');
     if (!helpOvl) {
-      document.body.classList.remove('pbgui-help-open');
+      syncHelpOverlayState();
       return null;
     }
 
@@ -973,12 +979,12 @@
     if (!helpOvl.dataset.pbguiHelpStateObserved) {
       helpOvl.dataset.pbguiHelpStateObserved = '1';
       new MutationObserver(function () {
-        syncHelpOverlayState(helpOvl);
+        syncHelpOverlayState();
       }).observe(helpOvl, { attributes: true, attributeFilter: ['class'] });
     }
 
     syncMaximizeButton();
-    syncHelpOverlayState(helpOvl);
+    syncHelpOverlayState();
     return helpOvl;
   }
 
@@ -1237,6 +1243,10 @@
   /* ── html escape helper ── */
   function esc(s) {
     return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function escAttr(s) {
+    return esc(s).replace(/'/g, '&#39;');
   }
 
   /* ════════════════════════════════════

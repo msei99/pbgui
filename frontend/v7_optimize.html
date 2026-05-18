@@ -11141,20 +11141,8 @@ init().catch(handleError);
   }());
 
   window._openOptimizeHelp = function() {
-    helpOvl.classList.add('visible');
-    if (helpTopics.length === 0) {
-      loadHelpIndex('optimize');
-      return;
-    }
-    var kw = 'optimize';
-    for (var i = 0; i < helpTopics.length; i++) {
-      if (helpTopics[i].title.toLowerCase().indexOf(kw) !== -1 ||
-          (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(kw) !== -1)) {
-        loadTopic(i);
-        return;
-      }
-    }
-    loadTopic(0);
+    if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+    window.PBGuiSharedHelp.open('optimize', { token: TOKEN });
   };
   window.PBGUI_HELP_OPENER = window._openOptimizeHelp;
 }());
@@ -11169,6 +11157,7 @@ window.PBGUI_NAV_CONFIG = {
   serial: PBGUI_SERIAL
 };
 </script>
+<script src="/app/js/shared_help_overlay.js?v=3"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

@@ -3044,6 +3044,7 @@
       serial: PBGUI_SERIAL
     };
   </script>
+  <script src="/app/js/shared_help_overlay.js?v=3"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
   <script src="/app/js/log_viewer_panel.js?v=21"></script>
   <script src="/app/js/pbgui_dialogs.js?v=1"></script>
@@ -3391,20 +3392,8 @@
         }());
 
         window._openMarketDataHelp = function () {
-          helpOvl.classList.add('visible');
-          if (!helpTopics.length) {
-            loadHelpIndex(helpDefaultTopic);
-            return;
-          }
-          var search = helpDefaultTopic.toLowerCase();
-          for (var i = 0; i < helpTopics.length; i += 1) {
-            if (helpTopics[i].title.toLowerCase().indexOf(search) !== -1 ||
-                (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(search.replace(/\s+/g, '_')) !== -1)) {
-              loadHelpTopic(i);
-              return;
-            }
-          }
-          loadHelpTopic(0);
+          if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+          window.PBGuiSharedHelp.open(helpDefaultTopic, { token: TOKEN });
         };
         window.PBGUI_HELP_OPENER = window._openMarketDataHelp;
       }

@@ -7268,6 +7268,7 @@ window.PBGUI_NAV_CONFIG = {
 })();
 </script>
 <script src="/app/js/log_viewer_panel.js?v=21"></script>
+<script src="/app/js/shared_help_overlay.js?v=3"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- ── Sidebar resize ──────────────────────────── -->
@@ -7504,19 +7505,8 @@ window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize
   }());
 
   window._openBacktestHelp = function() {
-    helpOvl.classList.add('visible');
-    if (helpTopics.length === 0) {
-      loadHelpIndex('backtest');
-    } else {
-      var kw = 'backtest';
-      for (var i = 0; i < helpTopics.length; i++) {
-        if (helpTopics[i].title.toLowerCase().indexOf(kw) !== -1 ||
-            (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf(kw) !== -1)) {
-          loadTopic(i); return;
-        }
-      }
-      loadTopic(0);
-    }
+    if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+    window.PBGuiSharedHelp.open('backtest', { token: TOKEN });
   };
   window.PBGUI_HELP_OPENER = window._openBacktestHelp;
 }());

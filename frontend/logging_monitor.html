@@ -372,6 +372,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
 </script>
 <script src="/app/js/log_viewer_panel.js?v=21"></script>
 <script src="/app/js/pbgui_dialogs.js?v=1"></script>
+<script src="/app/js/shared_help_overlay.js?v=3"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- ═══════════════════════════════════════════════════════════
@@ -797,17 +798,10 @@ loadRotationData();
     });
   }());
   window._openLoggingHelp = function() {
-    helpOvl.classList.add('visible');
-    if (helpTopics.length === 0) { loadHelpIndex('logging'); return; }
-    for (var i = 0; i < helpTopics.length; i++) {
-      if (helpTopics[i].title.toLowerCase().indexOf('logging') !== -1 || (helpTopics[i].file && helpTopics[i].file.toLowerCase().indexOf('logging') !== -1)) { loadTopic(i); return; }
-    }
-    loadTopic(0);
+    if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+    window.PBGuiSharedHelp.open('logging', { token: TOKEN });
   };
-  document.addEventListener('DOMContentLoaded', function() {
-    var btn = document.getElementById('pbgui-guide-btn');
-    if (btn) { var fresh = btn.cloneNode(true); btn.parentNode.replaceChild(fresh, btn); fresh.addEventListener('click', function() { if (typeof window._openLoggingHelp === 'function') window._openLoggingHelp(); }); }
-  });
+  window.PBGUI_HELP_OPENER = window._openLoggingHelp;
 }());
 </script>
 </body>
