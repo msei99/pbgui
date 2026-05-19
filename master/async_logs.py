@@ -20,6 +20,7 @@ from typing import Optional
 
 from master.async_pool import AsyncSSHPool, REMOTE_PBGUI_DIR
 from logging_helpers import human_log as _log
+from pbgui_purefunc import pb7dir
 
 SERVICE = "VPSMonitor"
 
@@ -55,6 +56,27 @@ def resolve_bot_log_path(instance_name: str, pb_version: str) -> str:
     return f"software/pb7/logs/{instance_name}.log"
 
 
+def resolve_local_bot_log_path(instance_name: str) -> Path:
+    """Resolve a local bot instance to the native passivbot log path."""
+    configured_pb7dir = str(pb7dir() or "").strip()
+    if configured_pb7dir:
+        return Path(configured_pb7dir) / "logs" / f"{instance_name}.log"
+    return Path.home() / "software" / "pb7" / "logs" / f"{instance_name}.log"
+
+
+def local_pb7_logs_dir() -> Path:
+    """Return the configured local PB7 logs directory."""
+    configured_pb7dir = str(pb7dir() or "").strip()
+    if configured_pb7dir:
+        return Path(configured_pb7dir) / "logs"
+    return Path.home() / "software" / "pb7" / "logs"
+
+
+def resolve_local_bot_err_log_path(instance_name: str) -> Path:
+    """Resolve a local bot instance to the legacy stderr log path."""
+    return _project_root() / "data" / "run_v7" / instance_name / "passivbot_err.log"
+
+
 # ── Local log helpers ─────────────────────────────────────────
 
 def _project_root() -> Path:
@@ -69,6 +91,7 @@ def local_logs_dir() -> Path:
 
 _TASK_LOG_ALIAS_RE = re.compile(r"^(?P<stem>[A-Za-z0-9_-]+)(?:\.(?P<history>\d+))?$")
 _TASK_LOG_FILE_RE = re.compile(r"^(?P<stem>[A-Za-z0-9_-]+)\.log(?:\.(?P<history>\d+))?$")
+_PB7_ARCHIVE_LOG_RE = re.compile(r"^\d{8}_\d{6}__.*_config_run\..*\.log$")
 
 
 def _task_log_filename_from_action(action: str, prefix: str,
@@ -163,8 +186,9 @@ def _resolve_vps_action_log_path(filename: str) -> Optional[Path]:
 def resolve_local_log_path(filename: str) -> Optional[Path]:
     """Resolve a local log identifier to its absolute path.
 
-    Handles both regular log files (e.g. 'PBRun.log') and
-    instance log entries (e.g. 'Bot:bybit_SANDUSDT').
+    Handles regular log files (e.g. 'PBRun.log'), native bot logs
+    (e.g. 'Bot:bybit_SANDUSDT'), and legacy bot stderr logs
+    (e.g. 'BotErr:bybit_SANDUSDT').
     Returns None if the resolved path escapes allowed directories.
     """
     root = _project_root()
@@ -173,7 +197,20 @@ def resolve_local_log_path(filename: str) -> Optional[Path]:
         return action_log
     if filename.startswith("Bot:"):
         instance_name = filename[4:]
-        fp = root / "data" / "run_v7" / instance_name / "passivbot.log"
+        fp = resolve_local_bot_log_path(instance_name)
+        logs_root = local_pb7_logs_dir().resolve()
+        if not fp.resolve().is_relative_to(logs_root):
+            return None
+        return fp
+    if filename.startswith("pb7/logs/") or filename.startswith("software/pb7/logs/"):
+        relative_name = Path(filename).name
+        fp = local_pb7_logs_dir() / relative_name
+        if not fp.resolve().is_relative_to(local_pb7_logs_dir().resolve()):
+            return None
+        return fp
+    if filename.startswith("BotErr:"):
+        instance_name = filename[7:]
+        fp = resolve_local_bot_err_log_path(instance_name)
         run_v7_root = (root / "data" / "run_v7").resolve()
         if not fp.resolve().is_relative_to(run_v7_root):
             return None
@@ -532,9 +569,9 @@ class AsyncLogStreamer:
     def list_local_logs() -> list[str]:
         """Return sorted list of log identifiers.
 
-        Includes daemon logs from data/logs/ and instance logs
-        from data/run_v7/*/passivbot.log — only for instances that are
-        actually running (checked via ps aux, same logic as v7_instances.py).
+        Includes daemon logs from data/logs/, native instance logs from
+        pb7/logs/*.log, and legacy instance stderr logs from
+        data/run_v7/*/passivbot_err.log.
         """
         result: list[str] = []
         d = local_logs_dir()
@@ -543,25 +580,25 @@ class AsyncLogStreamer:
                 sorted(p.name for p in d.glob("*.log") if p.is_file())
             )
         result.extend(_list_vps_task_log_aliases())
+        pb7_logs = local_pb7_logs_dir()
+        if pb7_logs.exists():
+            for p in sorted(pb7_logs.glob("*.log")):
+                if not p.is_file():
+                    continue
+                if _PB7_ARCHIVE_LOG_RE.match(p.name):
+                    result.append(f"pb7/logs/{p.name}")
+                else:
+                    result.append(f"Bot:{p.stem}")
         run_v7 = _project_root() / "data" / "run_v7"
         if run_v7.exists():
-            # detect running instances via process list
-            running_dirs: set[str] = set()
-            try:
-                out = subprocess.check_output(["ps", "aux"], text=True, timeout=5)
-                for line in out.splitlines():
-                    if "main.py" in line and "config_run.json" in line:
-                        for part in line.split():
-                            if part.endswith("/config_run.json"):
-                                running_dirs.add(str(Path(part).parent))
-            except Exception:
-                pass
             result.extend(sorted(
-                f"Bot:{p.parent.name}"
-                for p in run_v7.glob("*/passivbot.log")
-                if p.is_file() and str(p.parent) in running_dirs
+                f"BotErr:{p.parent.name}"
+                for p in run_v7.glob("*/passivbot_err.log")
+                if p.is_file()
             ))
         return list(dict.fromkeys(result))
+
+    resolve_local_log_path = staticmethod(resolve_local_log_path)
 
     @staticmethod
     def get_local_logs(filename: str, lines: int = 200) -> tuple[list[str], int]:

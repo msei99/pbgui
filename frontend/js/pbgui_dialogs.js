@@ -13,7 +13,7 @@
     style.id = STYLE_ID;
     style.textContent = [
       ':root{--fs-xs:11px;--fs-sm:13px;--fs-base:14px;--fs-md:15px;--fs-lg:18px;--sp-xs:4px;--sp-sm:8px;--sp-md:12px;--sp-lg:20px;--input-h:32px;--btn-h:32px;}',
-      '#' + OVERLAY_ID + '{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:4100;align-items:center;justify-content:center;backdrop-filter:blur(2px);padding:var(--sp-lg);}',
+      '#' + OVERLAY_ID + '{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:20000;align-items:center;justify-content:center;backdrop-filter:blur(2px);padding:var(--sp-lg);}',
       '#' + OVERLAY_ID + '.visible{display:flex;}',
       '#pbgui-dialog-box{background:#131b2b;border:1px solid #2d3748;border-radius:14px;box-shadow:0 20px 70px rgba(0,0,0,.9);overflow:hidden;width:min(480px,92vw);max-width:92vw;}',
       '#pbgui-dialog-header{display:flex;justify-content:space-between;align-items:center;gap:var(--sp-sm);padding:.85rem 1.1rem;border-bottom:1px solid #1e2736;background:#111827;}',

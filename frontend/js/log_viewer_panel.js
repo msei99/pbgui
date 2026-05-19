@@ -925,6 +925,9 @@ class LogViewerPanel {
 
     _orderedFileList() {
         var files = this._fileList.slice();
+        if (!this._taskBrowseMode) {
+            return this._serviceEntries(files).map(function(entry) { return entry.value; });
+        }
         if (this._taskBrowseMode) {
             var mode = this._taskListSortMode || 'newest';
             if (mode === 'alphabetical') {
@@ -959,6 +962,10 @@ class LogViewerPanel {
         var f = file || '';
         if (!f) return '';
         if (f.indexOf('Bot:') === 0) return '\ud83e\udd16 ' + f.substring(4);
+        if (f.indexOf('BotErr:') === 0) return '\u26a0\ufe0f ' + f.substring(7) + ' error';
+        if (f.indexOf('pb7/logs/') === 0 || f.indexOf('software/pb7/logs/') === 0) {
+            return this._svcLabel(f);
+        }
         if (f.indexOf('VPSAction:') === 0) {
             var vpsParts = f.split(':');
             var host = vpsParts[1] || 'VPS';
@@ -993,16 +1000,16 @@ class LogViewerPanel {
         list.innerHTML = '';
         var me = this;
         var files = this._orderedFileList();
-        for (var i = 0; i < files.length; i++) {
-            (function(f) {
+        var entries = this._serviceEntries(files);
+        for (var i = 0; i < entries.length; i++) {
+            (function(entry) {
                 var btn = document.createElement('button');
-                btn.className = 'lvp-item-btn' + (f === me._file ? ' lvp-active' : '');
-                var label = me._fileLabel(f);
-                btn.textContent = label;
-                btn.title = f;
-                btn.addEventListener('click', function() { me._selectItem(f); });
+                btn.className = 'lvp-item-btn' + (entry.value === me._file ? ' lvp-active' : '') + (entry.className ? ' ' + entry.className : '');
+                btn.textContent = entry.label;
+                btn.title = entry.title || entry.value;
+                btn.addEventListener('click', function() { me._selectItem(entry.value); });
                 list.appendChild(btn);
-            })(files[i]);
+            })(entries[i]);
         }
     }
 
@@ -1027,6 +1034,7 @@ class LogViewerPanel {
         for (var i = 0; i < services.length; i++) {
             var svc = String(services[i] || '');
             if (svc.indexOf('Bot:') === 0) add(svc.substring(4).split(':')[0]);
+            else if (svc.indexOf('BotErr:') === 0) add(svc.substring(7));
         }
 
         if (this._vpState && this._host !== 'local') {
@@ -1081,6 +1089,14 @@ class LogViewerPanel {
 
     _botErrorLogMeta(path) {
         var svc = String(path || '');
+        var aliasMatch = svc.match(/^BotErr:([^:]+)$/);
+        if (aliasMatch) {
+            return {
+                bot: aliasMatch[1],
+                filename: 'passivbot_err.log',
+                isOld: false,
+            };
+        }
         var match = svc.match(/^data\/run_v7\/([^/]+)\/(passivbot_err\.log(?:\.old)?)$/);
         if (!match) return null;
         return {
@@ -1237,6 +1253,7 @@ class LogViewerPanel {
     }
 
     _svcLabel(s) {
+        if (s.indexOf('BotErr:') === 0) return '\u26a0\ufe0f ' + s.substring(7) + ' error';
         if (s.indexOf('Bot:') === 0) {
             var parts = s.substring(4).split(':');
             return '\ud83e\udd16 ' + parts[0];

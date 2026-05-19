@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from pbgui_purefunc import load_ini, save_ini
 from logging_helpers import human_log as _log
+from master.async_logs import AsyncLogStreamer
 
 if TYPE_CHECKING:
     from PBMaster import PBMaster
@@ -478,13 +479,8 @@ class WSServer:
     # ── Local log commands ──────────────────────────────────
 
     async def _cmd_list_local_logs(self, websocket, _request: dict):
-        """Return sorted list of *.log filenames in data/logs/ (top-level only).
-
-        Job logs in data/logs/jobs/ are intentionally excluded — they are served
-        on-demand via get/subscribe commands when the viewer preselects them.
-        """
-        d = _local_logs_dir()
-        files = sorted(p.name for p in d.glob("*.log") if p.is_file()) if d.exists() else []
+        """Return sorted list of local log identifiers for the viewer."""
+        files = AsyncLogStreamer.list_local_logs()
         await websocket.send(json.dumps({"type": "local_logs_list", "files": files}))
 
     async def _cmd_get_local_logs(self, websocket, request: dict):
@@ -492,16 +488,10 @@ class WSServer:
         filename = request.get("file", "")
         lines_n = int(request.get("lines", 200))
         sid = request.get("sid")
-        fp = _local_logs_dir() / filename
-        logs_root = _local_logs_dir().resolve()
-        if not filename or not fp.resolve().is_relative_to(logs_root):
+        if not filename:
             await websocket.send(json.dumps({"type": "error", "error": "Local log file not found"}))
             return
-        content = _tail_file(fp, lines_n) if fp.exists() else []
-        try:
-            file_size = fp.stat().st_size
-        except Exception:
-            file_size = 0
+        content, file_size = AsyncLogStreamer.get_local_logs(filename, lines_n)
         resp: dict = {"type": "local_logs", "file": filename, "lines": content, "file_size": file_size}
         if sid is not None:
             resp["sid"] = sid
@@ -512,21 +502,18 @@ class WSServer:
         filename = request.get("file", "")
         lines_n = int(request.get("lines", 200))
         sid = request.get("sid")
-        fp = _local_logs_dir() / filename
-        logs_root = _local_logs_dir().resolve()
-        # Security check: path must be within logs_root even if file doesn't exist yet
-        if not filename or not fp.resolve().is_relative_to(logs_root):
+        if not filename:
             await websocket.send(json.dumps({"type": "error", "error": "Local log file not found"}))
             return
         ws_id = id(websocket)
         # Cancel previous local sub for this client
         self._local_log_subs.pop(ws_id, None)
+        fp = AsyncLogStreamer.resolve_local_log_path(filename)
+        if fp is None:
+            await websocket.send(json.dumps({"type": "error", "error": "Local log file not found"}))
+            return
         # Send initial content (empty if file not yet created)
-        content = _tail_file(fp, lines_n) if fp.exists() else []
-        try:
-            file_size = fp.stat().st_size
-        except Exception:
-            file_size = 0
+        content, file_size = AsyncLogStreamer.get_local_logs(filename, lines_n)
         resp: dict = {"type": "local_logs", "file": filename, "lines": content, "streaming": True, "file_size": file_size}
         if sid is not None:
             resp["sid"] = sid
@@ -828,8 +815,7 @@ class WSServer:
         services = self._last_services
 
         # Local log files available on this machine
-        d = _local_logs_dir()
-        local_logs = sorted(p.name for p in d.glob("*.log") if p.is_file()) if d.exists() else []
+        local_logs = AsyncLogStreamer.list_local_logs()
 
         return {
             "connections": conn_summary,
