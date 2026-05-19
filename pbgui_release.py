@@ -67,6 +67,19 @@ def _read_origin_version(repo_dir: Path, ref: str = "origin/main") -> str:
     return "N/A"
 
 
+def _read_local_version(repo_dir: Path) -> str:
+    version_file = repo_dir / "pbgui_purefunc.py"
+    try:
+        if version_file.exists():
+            content = version_file.read_text(encoding="utf-8", errors="ignore")
+            match = re.search(r'PBGUI_VERSION\s*=\s*["\']([^"\']+)["\']', content)
+            if match:
+                return str(match.group(1) or "").strip() or "N/A"
+    except Exception:
+        pass
+    return PBGUI_VERSION
+
+
 def get_current_pbgui_status(repo_dir: Path | None = None) -> tuple[str, str]:
     root = Path(repo_dir or PBGDIR)
     current_commit = _run_git(["rev-parse", "HEAD"], root)
@@ -172,7 +185,7 @@ def build_local_pbgui_release_info(repo_dir: Path | None = None) -> dict[str, ob
     version_origin = load_pbgui_origin_version(root)
     branches = load_pbgui_branch_history(root)
     return {
-        "version": PBGUI_VERSION,
+        "version": _read_local_version(root),
         "current_branch": current_branch or "unknown",
         "current_commit": current_commit or "",
         "origin_commit": origin_commit or "",
@@ -181,5 +194,5 @@ def build_local_pbgui_release_info(repo_dir: Path | None = None) -> dict[str, ob
     }
 
 
-def read_local_pbgui_version(_: str | Path | None = None) -> str:
-    return PBGUI_VERSION
+def read_local_pbgui_version(repo_dir: str | Path | None = None) -> str:
+    return _read_local_version(Path(repo_dir or PBGDIR))

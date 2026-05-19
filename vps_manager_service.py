@@ -537,7 +537,111 @@ class VPSManagerService:
         self._deploy_history_lock = threading.Lock()
         self._deploy_progress_cache_lock = threading.Lock()
         self._deploy_progress_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._bucket_cleanup_indicator_lock = threading.Lock()
+        self._bucket_cleanup_indicator_running = False
+        self._bucket_cleanup_indicator: dict[str, Any] = {
+            "state": "unknown",
+            "count": 0,
+            "hostnames": [],
+            "checked_at": 0,
+            "error": "",
+        }
         self._recover_interrupted_vps_runs()
+
+    def _invalidate_bucket_cleanup_indicator(self) -> None:
+        with self._bucket_cleanup_indicator_lock:
+            self._bucket_cleanup_indicator_running = False
+            self._bucket_cleanup_indicator = {
+                "state": "unknown",
+                "count": 0,
+                "hostnames": [],
+                "checked_at": 0,
+                "error": "",
+            }
+
+    def get_bucket_cleanup_indicator(self, *, force: bool = False) -> dict[str, Any]:
+        with self._bucket_cleanup_indicator_lock:
+            cached = dict(self._bucket_cleanup_indicator or {})
+            if self._bucket_cleanup_indicator_running:
+                cached["running"] = True
+                return cached
+            if not force and str(cached.get("state") or "unknown") != "unknown":
+                cached["running"] = False
+                return cached
+            self._bucket_cleanup_indicator_running = True
+
+        result = {
+            "state": "error",
+            "count": 0,
+            "hostnames": [],
+            "checked_at": _now_ts(),
+            "error": "Bucket cleanup indicator failed.",
+        }
+        try:
+            pbremote = self._ensure_pbremote()
+            bucket = str(getattr(pbremote, "bucket", "") or "").strip()
+            if not bucket:
+                result = {
+                    "state": "error",
+                    "count": 0,
+                    "hostnames": [],
+                    "checked_at": _now_ts(),
+                    "error": "PBRemote bucket is not configured.",
+                }
+            elif not getattr(pbremote, "rclone_installed", False):
+                result = {
+                    "state": "error",
+                    "count": 0,
+                    "hostnames": [],
+                    "checked_at": _now_ts(),
+                    "error": "rclone is not installed locally.",
+                }
+            else:
+                ok, entries = pbremote.list_bucket_entries()
+                if not ok:
+                    result = {
+                        "state": "error",
+                        "count": 0,
+                        "hostnames": [],
+                        "checked_at": _now_ts(),
+                        "error": str(entries or "Failed to list bucket entries."),
+                    }
+                else:
+                    hostnames: set[str] = set()
+                    for raw_entry in entries or []:
+                        entry = str(raw_entry or "").strip().rstrip("/")
+                        if entry.startswith("cmd_"):
+                            hostname = entry[4:].split("/", 1)[0].strip()
+                            if hostname:
+                                hostnames.add(hostname)
+                        elif entry.startswith("run_v7_"):
+                            hostname = entry[7:].split("/", 1)[0].strip()
+                            if hostname:
+                                hostnames.add(hostname)
+                    ordered = sorted(hostnames)
+                    result = {
+                        "state": "dirty" if ordered else "clean",
+                        "count": len(ordered),
+                        "hostnames": ordered,
+                        "checked_at": _now_ts(),
+                        "error": "",
+                    }
+        except Exception as exc:
+            result = {
+                "state": "error",
+                "count": 0,
+                "hostnames": [],
+                "checked_at": _now_ts(),
+                "error": str(exc) or "Bucket cleanup indicator failed.",
+            }
+        finally:
+            with self._bucket_cleanup_indicator_lock:
+                self._bucket_cleanup_indicator = result
+                self._bucket_cleanup_indicator_running = False
+                result = dict(self._bucket_cleanup_indicator)
+
+        result["running"] = False
+        return result
 
     def _is_vps_playbook_process_running(self, vps: VPS) -> bool:
         if not self._should_treat_vps_process_as_active(vps):
@@ -1131,7 +1235,7 @@ class VPSManagerService:
                 "dry_run_matches": dry_run_matches,
                 "operations": list(cleanup_result.get("operations") or []),
             })
-        return {
+        payload = {
             "bucket": str(getattr(pbremote, "bucket", "") or ""),
             "results": results,
             "summary": {
@@ -1140,6 +1244,8 @@ class VPSManagerService:
                 "failed": sum(1 for item in results if not item.get("ok")),
             },
         }
+        self._invalidate_bucket_cleanup_indicator()
+        return payload
 
     def dry_run_bucket_cleanup(self, hostnames: list[Any]) -> dict[str, Any]:
         pbremote = self._ensure_pbremote()
@@ -3245,6 +3351,7 @@ class VPSManagerService:
         vps.delete()
         self.vpsmanager.vpss = [item for item in self.vpsmanager.vpss if item.hostname != hostname]
         self._set_vps_monitor_enabled(hostname, enabled=False)
+        self._invalidate_bucket_cleanup_indicator()
 
     def read_vps_settings(self, token: str, hostname: str) -> dict[str, Any]:
         pbremote = self._ensure_pbremote()
@@ -3327,6 +3434,7 @@ class VPSManagerService:
         if not vps.has_setup_parameters():
             raise ValueError("Setup parameters are incomplete.")
         self.vpsmanager.setup_vps(vps, debug=debug, extra_vars={"vps_logging_services": self.get_vps_logging_config().get("services") or []})
+        self._invalidate_bucket_cleanup_indicator()
         return self._build_vps_progress(vps, include_logs=True)
 
     def fetch_vps_log(self, hostname: str, *, filename: str, size_kb: int, reverse: bool = True, debug: bool = False) -> dict[str, Any]:
@@ -3566,7 +3674,42 @@ class VPSManagerService:
             return {"ok": False, "error": "sudo tee timed out"}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
-        return {"ok": True, "error": ""}
+
+    def validate_local_sudo_password(self, sudo_pw: str) -> dict[str, Any]:
+        import subprocess
+
+        pw = str(sudo_pw or "").strip()
+        if not pw:
+            return {"ok": False, "error": "Sudo password required"}
+
+        try:
+            proc = subprocess.Popen(
+                ["sudo", "-S", "-p", "", "true"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            _, err = proc.communicate(input=pw + "\n", timeout=15)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "Local sudo validation timed out"}
+        except Exception as exc:
+            return {"ok": False, "error": f"Failed to validate local sudo access: {exc}"}
+
+        stderr_text = str(err or "").strip()
+        stderr_lower = stderr_text.lower()
+        if proc.returncode == 0:
+            return {"ok": True}
+        if "no new privileges" in stderr_lower or "keine neuen privilegien" in stderr_lower:
+            return {
+                "ok": False,
+                "blocked": True,
+                "error": "Local sudo is blocked by the current runtime (`NoNewPrivs`).",
+            }
+        return {
+            "ok": False,
+            "error": stderr_text or "Incorrect sudo password or local sudo unavailable",
+        }
 
     def check_bucket(self, bucket_name: str) -> dict[str, Any]:
         pbremote = self._ensure_pbremote()

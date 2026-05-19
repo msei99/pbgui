@@ -2896,6 +2896,7 @@
       helpTopicIndex: -1,
       helpCache: {},
       pendingConfirm: null,
+      pendingLocalSudoAction: null,
       pendingSecretReveal: {},
       selectedOverviewHosts: [],
       selectedOverviewHostsHydrated: false,
@@ -2988,6 +2989,8 @@
         pb7ManualCommit: '',
         pb7RemoteBranchesKey: '',
         pb7RemoteCommitsKey: '',
+        bucketCleanupIndicator: { state: 'unknown', count: 0, hostnames: [], error: '', checked_at: 0, running: false },
+        bucketCleanupIndicatorRequested: false,
         bucketCleanupPreview: null,
         bucketCleanupPreviewRefreshOnly: false
       };
@@ -3772,12 +3775,14 @@
       if (isMasterContextView()) {
         const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
         const st = (detail && detail.status) || {};
+        const bucketIndicator = store.master.bucketCleanupIndicator || { state: 'unknown' };
         return stableStringify({
           view: store.view,
           pbgui_up: !!st.pbgui_update_available,
           pb7_up: !!st.pb7_update_available,
           pending_updates: st.pending_updates == null ? '' : String(st.pending_updates),
           reboot_required: !!((st.summary_row || {}).reboot_required),
+          bucket_cleanup_state: String(bucketIndicator.state || 'unknown'),
           debug: !!store.master.debug,
           update_reboot: !!store.master.updateReboot
         });
@@ -5314,6 +5319,9 @@
       if (flow && flow.prompt_open && !flow.closing_from_result) {
         cancelOverviewDeployPasswordFlow({ silent: false });
       }
+      if (store.pendingLocalSudoAction) {
+        store.pendingLocalSudoAction = null;
+      }
       const overlay = document.getElementById('alertModalOverlay');
       overlay.classList.remove('visible');
       overlay.classList.remove('deploy-log-overlay');
@@ -5569,11 +5577,12 @@
       if (close) close.disabled = busy;
     }
 
-    function openMasterPasswordPrompt(onConfirm) {
+    function openMasterPasswordPrompt(onConfirm, commandText) {
+      const actionLabel = String(commandText || 'this command');
       document.getElementById('alertModalTitle').textContent = 'Master sudo password required';
       const box = document.getElementById('alertModalBody');
       box.className = 'notice';
-      box.innerHTML = '<div style="margin-bottom:10px">Enter the master sudo password to run this command:</div><div class="pw-wrap"><input type="password" id="master-pw-prompt-input" class="pw-input" placeholder="Master sudo password" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none"><button type="button" id="master-pw-prompt-eye" class="pw-eye" onclick="toggleMasterPwPromptVisibility()" title="Show or hide password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px;padding:4px">👁</button></div>';
+      box.innerHTML = '<div style="margin-bottom:10px">Enter the master sudo password to run <strong>' + esc(actionLabel) + '</strong>:</div><div class="pw-wrap"><input type="password" id="master-pw-prompt-input" class="pw-input" placeholder="Master sudo password" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none"><button type="button" id="master-pw-prompt-eye" class="pw-eye" onclick="toggleMasterPwPromptVisibility()" title="Show or hide password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px;padding:4px">👁</button></div>';
       document.getElementById('alertModalBtnRow').innerHTML = '<button class=\'btn ghost\' type=\'button\' onclick=\'closeAlertModal()\'>Cancel</button> <button class=\'btn primary\' type=\'button\' id=\'master-pw-prompt-confirm\'>Confirm</button>';
       document.getElementById('alertModalOverlay').classList.add('visible');
       document.getElementById('master-pw-prompt-confirm').onclick = null;
@@ -5593,6 +5602,24 @@
           });
         }
       }, 100);
+    }
+
+    function runPendingLocalSudoAction() {
+      const pending = store.pendingLocalSudoAction;
+      if (!pending) return;
+      runMasterWithLog(String(pending.command || ''), String(pending.commandText || ''), pending.extraVars || null);
+      store.pendingLocalSudoAction = null;
+    }
+
+    function promptForMasterSudoAction(command, commandText, extraVars) {
+      store.pendingLocalSudoAction = {
+        command: command,
+        commandText: commandText,
+        extraVars: extraVars || null
+      };
+      openMasterPasswordPrompt(function () {
+        runPendingLocalSudoAction();
+      }, commandText);
     }
 
     function openConfirmModal(title, message, onConfirm) {
@@ -5709,6 +5736,25 @@
 
     function openBucketCleanupPreview() {
       send({ cmd: 'preview_bucket_cleanup' });
+    }
+
+    function requestBucketCleanupIndicator(force) {
+      if (!store.master) return;
+      if (!store.ws || store.ws.readyState !== WebSocket.OPEN) return;
+      const current = store.master.bucketCleanupIndicator || {};
+      if (current.running) return;
+      store.master.bucketCleanupIndicatorRequested = true;
+      store.master.bucketCleanupIndicator = Object.assign({}, current, { running: true });
+      send({ cmd: 'bucket_cleanup_indicator', force: !!force });
+    }
+
+    function resetBucketCleanupIndicator(options) {
+      const opts = options || {};
+      store.master.bucketCleanupIndicatorRequested = false;
+      store.master.bucketCleanupIndicator = { state: 'unknown', count: 0, hostnames: [], error: '', checked_at: 0, running: false };
+      if (opts.refreshNow) {
+        requestBucketCleanupIndicator(true);
+      }
     }
 
     function getBucketCleanupSelectedHosts() {
@@ -6352,6 +6398,36 @@
         handleResult(msg);
         return;
       }
+      if (msg.type === 'bucket_cleanup_indicator_result') {
+        const data = msg.data || {};
+        store.master.bucketCleanupIndicator = {
+          state: String(data.state || 'unknown'),
+          count: Number(data.count || 0),
+          hostnames: Array.isArray(data.hostnames) ? data.hostnames.slice() : [],
+          error: String(data.error || ''),
+          checked_at: Number(data.checked_at || 0),
+          running: !!data.running
+        };
+        renderUi({ forceSidebarActions: true });
+        return;
+      }
+      if (msg.type === 'local_sudo_validation_result') {
+        const pending = store.pendingLocalSudoAction;
+        const data = msg.data || {};
+        if (!pending) return;
+        if (data.ok) {
+          runPendingLocalSudoAction();
+          return;
+        }
+        store.master.sudoPw = '';
+        if (data.blocked) {
+          store.pendingLocalSudoAction = null;
+          toast(String(data.error || 'Local sudo unavailable.'), 'warning');
+          return;
+        }
+        promptForMasterSudoAction(String(pending.command || ''), String(pending.commandText || ''), pending.extraVars || null);
+        return;
+      }
       if (msg.type === 'error') {
         if (msg.cmd === 'validate_and_stage_vps_deploy_host') {
           const flow = store.pendingOverviewDeploy;
@@ -6727,6 +6803,7 @@
         toast('Setup started.', 'success');
         const hostname = store.hostname || ((msg.data || {}).hostname || '');
         if (hostname) {
+          resetBucketCleanupIndicator();
           store.pendingAutoSetupSwitch = null;
           openVpsTaskLog(hostname, 'vps-setup', 'Setup VPS');
           scheduleVpsDetailFetch(hostname);
@@ -6735,6 +6812,7 @@
       } else if (cmd === 'refresh') {
         toast('Refreshed.', 'info');
       } else if (cmd === 'run_bucket_cleanup') {
+        resetBucketCleanupIndicator({ refreshNow: true });
         return;
       } else if (cmd === 'read_vps_settings') {
         if (isVpsContextView() && store.hostname && msg.data) {
@@ -6748,6 +6826,7 @@
         toast('VPS settings refreshed.', 'success');
       } else if (cmd === 'delete_vps') {
         toast('VPS deleted.', 'success');
+        resetBucketCleanupIndicator();
         store.view = 'overview';
         store.hostname = '';
         store.detail = null;
@@ -6842,6 +6921,9 @@
       }
       if (view !== 'vps-task-log' && view !== 'vps-host-logs') {
         history.replaceState(null, '', viewUrl(view, hostname));
+      }
+      if (view === 'overview' && !store.master.bucketCleanupIndicatorRequested) {
+        requestBucketCleanupIndicator(false);
       }
       sendContext();
       renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
@@ -7212,13 +7294,20 @@
         toast(String(st.local_sudo_blocked_reason || 'Local sudo unavailable.'), 'warning');
         return;
       }
-      if (store.master.sudoPw) {
-        runMasterWithLog(command, commandText, extraVars);
-      } else {
-        openMasterPasswordPrompt(function () {
-          runMasterWithLog(command, commandText, extraVars);
-        });
+      if (store.pendingLocalSudoAction) {
+        toast('Finish the current master sudo action first.', 'info');
+        return;
       }
+      store.pendingLocalSudoAction = {
+        command: command,
+        commandText: commandText,
+        extraVars: extraVars || null
+      };
+      if (store.master.sudoPw) {
+        send({ cmd: 'validate_local_sudo_password', sudo_pw: store.master.sudoPw || '' });
+        return;
+      }
+      promptForMasterSudoAction(command, commandText, extraVars);
     }
 
     function updateLinuxMasterAction() {
@@ -8355,7 +8444,6 @@
           <button class='${masterRebootBtnClass}' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='rebootMasterAction()'>Reboot Master</button>
           ${blockedTasksNotice ? `<div class='notice warning'>${esc(blockedTasksNotice)}</div>` : ''}
           <div class='sb-separator'>Tools</div>
-          <button class='sb-btn warning' type='button' onclick='openBucketCleanupPreview()'>Cleanup Bucket</button>
           <button class='sb-btn' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='masterActionWithSudo("master-install-rustup", "Install or Update rustup")'>Install or Update rustup</button>
           <button class='sb-btn' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='masterActionWithSudo("master-install-rclone", "Install or Update rclone")'>Install or Update rclone</button>
           `;
@@ -8412,6 +8500,10 @@
           <button class='sb-btn info' type='button' onclick='saveAddVps()'>Save VPS</button>`;
       } else if (store.view === 'overview' || isOverviewSettingsView() || isDeploysView()) {
         const apiModel = getOverviewApiSyncButtonModel();
+        const bucketIndicator = store.master.bucketCleanupIndicator || { state: 'unknown' };
+        const bucketCleanupBtnClass = bucketIndicator.state === 'dirty'
+          ? 'sb-btn warning'
+          : (bucketIndicator.state === 'clean' ? 'sb-btn ok' : 'sb-btn');
         const selectedHosts = getSelectedOverviewHosts();
         const deployConfig = getVpsDeployConfig();
         const hasSelectedHosts = selectedHosts.length > 0;
@@ -8452,7 +8544,7 @@
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pb7", "Update PB7")'>Update PB7</button>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pb", "Update PBGui and PB7")'>Update PBGui and PB7</button>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
-          <button class='sb-btn warning' type='button' onclick='openBucketCleanupPreview()'>Cleanup Bucket</button>`;
+          <button class='${bucketCleanupBtnClass}' type='button' onclick='openBucketCleanupPreview()'>Cleanup Bucket</button>`;
       } else {
         html = '';
       }

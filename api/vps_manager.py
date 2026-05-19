@@ -196,6 +196,9 @@ async def ws_vps_manager(websocket: WebSocket):
                 elif cmd == "preview_bucket_cleanup":
                     data = await asyncio.to_thread(service.preview_bucket_cleanup)
                     await websocket.send_json({"type": "bucket_cleanup_preview", "data": data})
+                elif cmd == "bucket_cleanup_indicator":
+                    data = await asyncio.to_thread(service.get_bucket_cleanup_indicator, force=bool(msg.get("force")))
+                    await websocket.send_json({"type": "bucket_cleanup_indicator_result", "data": data})
                 elif cmd == "run_bucket_cleanup":
                     data = await asyncio.to_thread(service.cleanup_bucket, msg.get("hostnames") or [])
                     await websocket.send_json({"type": "bucket_cleanup_result", "cmd": cmd, "success": True, "data": data})
@@ -376,6 +379,12 @@ async def ws_vps_manager(websocket: WebSocket):
                         str(msg.get("sudo_pw") or ""),
                     )
                     await websocket.send_json({"type": "write_hosts_result", "data": data})
+                elif cmd == "validate_local_sudo_password":
+                    data = await asyncio.to_thread(
+                        service.validate_local_sudo_password,
+                        str(msg.get("sudo_pw") or ""),
+                    )
+                    await websocket.send_json({"type": "local_sudo_validation_result", "data": data})
                 elif cmd == "get_metric_history":
                     data = await asyncio.to_thread(
                         service.get_metric_history,

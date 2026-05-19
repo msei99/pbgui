@@ -67,10 +67,13 @@
         path: /var/run/reboot-required
       register: reboot_required_file
 
-    - name: reboot localhost after Linux update
-      reboot:
-        msg: "Reboot initiated by PBGui after Linux update"
-        reboot_timeout: 1800
+    - name: schedule local reboot after Linux update
+      shell: >-
+        nohup sh -c 'sleep 2; shutdown -r now "Reboot initiated by PBGui after Linux update"' >/dev/null 2>&1 &
+      args:
+        executable: /bin/bash
+      async: 1
+      poll: 0
       become: "{{ needs_become | bool }}"
       when:
         - reboot_requested | default(false) | bool
