@@ -1133,6 +1133,19 @@
     var restartBtn = document.getElementById('pbgui-restart-btn');
     if (restartBtn) {
       restartBtn.addEventListener('click', function () {
+        var blocked = restartBtn.getAttribute('data-restart-blocked') === '1';
+        var blockReason = restartBtn.getAttribute('data-restart-block-reason') || '';
+        if (blocked) {
+          showNavConfirm({
+            title: 'Restart blocked',
+            message: 'The PBGui API server cannot restart while VPS tasks are still running.',
+            detail: blockReason || 'Wait until the active VPS task finishes or is marked interrupted.',
+            confirmText: 'OK',
+            cancelText: '',
+            hideCancel: true
+          });
+          return;
+        }
         showNavConfirm({
           title: 'Restart API server',
           message: 'Restart the PBGui API server now?',
@@ -1148,10 +1161,23 @@
             method: 'POST',
             headers: { 'Authorization': 'Bearer ' + c2.token, 'Content-Type': 'application/json' },
             body: JSON.stringify({ token: c2.token })
-          }).then(function() {
+          }).then(function(resp) {
+            if (!resp.ok) {
+              return resp.json().catch(function () { return {}; }).then(function (data) {
+                var detail = (data && data.detail) ? String(data.detail) : 'Restart failed.';
+                throw new Error(detail);
+              });
+            }
             showRestartOverlay(origin2, c2.token);
-          }).catch(function() {
-            showRestartOverlay(origin2, c2.token);
+          }).catch(function(err) {
+            showNavConfirm({
+              title: 'Restart failed',
+              message: 'The PBGui API server restart request was rejected.',
+              detail: err && err.message ? err.message : 'Restart failed.',
+              confirmText: 'OK',
+              cancelText: '',
+              hideCancel: true
+            });
           });
         });
       });
@@ -1204,9 +1230,18 @@
     setTimeout(probe, 4000);
   }
 
-  function updateRestartBtnVisible(visible) {
+  function updateRestartButtonState(state) {
     var btn = document.getElementById('pbgui-restart-btn');
-    if (btn) btn.style.display = visible ? 'flex' : 'none';
+    if (!btn) return;
+    var visible = !!(state && state.needs_restart);
+    var blocked = !!(state && state.restart_blocked);
+    var reason = state && state.restart_block_reason ? String(state.restart_block_reason) : '';
+    btn.style.display = visible ? 'flex' : 'none';
+    btn.setAttribute('data-restart-blocked', blocked ? '1' : '0');
+    btn.setAttribute('data-restart-block-reason', reason);
+    btn.disabled = blocked;
+    btn.classList.toggle('disabled', blocked);
+    btn.title = blocked ? ('Restart blocked: ' + (reason || 'Active VPS tasks are still running.')) : 'Restart API server';
   }
 
   function fetchRestartStatus(token, apiOrigin) {
@@ -1217,7 +1252,7 @@
         return resp.json();
       })
       .then(function (data) {
-        updateRestartBtnVisible(!!(data && data.needs_restart));
+        updateRestartButtonState(data || {});
       })
       .catch(function () {});
   }
@@ -1229,7 +1264,7 @@
     es.onmessage = function (e) {
       try {
         var data = JSON.parse(e.data);
-        updateRestartBtnVisible(!!data.needs_restart);
+        updateRestartButtonState(data || {});
       } catch (_) {}
     };
     es.onerror = function () {

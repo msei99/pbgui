@@ -2,8 +2,8 @@
 import psutil
 import subprocess
 import configparser
-import sys
 import os
+import sys
 from pathlib import Path, PurePath
 from time import monotonic, sleep
 import glob
@@ -26,27 +26,6 @@ def _prepare_sync_log(logfile: Path) -> None:
     rotate_logfile_if_oversize(str(logfile), max_bytes, backup_count)
 
 
-def _python_major_minor(executable: str | None) -> str:
-    candidate = str(executable or "").strip()
-    if not candidate:
-        return "N/A"
-    path = Path(candidate)
-    if not path.exists():
-        return "N/A"
-    try:
-        res = subprocess.run(
-            [candidate, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=5,
-        )
-    except Exception:
-        return "N/A"
-    if res.returncode != 0:
-        return "N/A"
-    return str(res.stdout or "").strip() or "N/A"
-
 class RemoteServer():
     def __init__(self, path: str):
         """
@@ -59,7 +38,6 @@ class RemoteServer():
         self._edit = False
         self._path = path
         self._unique = []
-        self._pb7dir = None
         self._bucket = None
         self._role = None
         self.pbname = None
@@ -72,8 +50,6 @@ class RemoteServer():
     def edit(self): return self._edit
     @property
     def path(self): return self._path
-    @property
-    def pb7dir(self): return self._pb7dir
     @property
     def bucket(self): return self._bucket
     @property
@@ -91,10 +67,6 @@ class RemoteServer():
     def path(self, new_path):
         if self._path != new_path:
             self._path = new_path
-    @pb7dir.setter
-    def pb7dir(self, new_pb7dir):
-        if self._pb7dir != new_pb7dir:
-            self._pb7dir = new_pb7dir
     @bucket.setter
     def bucket(self, new_bucket):
         if self._bucket != new_bucket:
@@ -173,14 +145,6 @@ class PBRemote():
             self.role = pb_config.get("main", "role")
         else:
             self.role = "slave"
-        # Init pb7dir
-        self.pb7dir = None
-        if pb_config.has_option("main", "pb7dir"):
-            self.pb7dir = pb_config.get("main", "pb7dir")
-        if not self.pb7dir:
-            _log('PBRemote', 'Error: No passivbot v7 directory configured in pbgui.ini', level='ERROR')
-            self.error = "No passivbot v7 directory configured in pbgui.ini"
-            return
         self.cmd_path = f'{pbgdir}/data/cmd'
         self.remote_path = f'{pbgdir}/data/remote'
         if not Path(self.cmd_path).exists():
@@ -217,9 +181,6 @@ class PBRemote():
         self.load_remote()
 
     @property
-    def pbgui_python(self):
-        return f"{sys.version_info.major}.{sys.version_info.minor}"
-    @property
     def mem(self):
         return psutil.virtual_memory()
     @property
@@ -237,10 +198,6 @@ class PBRemote():
     @property
     def pb7_version(self):
         return "N/A"
-
-    @property
-    def pb7_python(self):
-        return _python_major_minor(getattr(self.local_run, 'pb7venv', None))
     @property
     def pb7_commit(self):
         return ""
@@ -341,22 +298,23 @@ class PBRemote():
             _log('PBRemote', f'Sync status_v7.json up: {self.name}', level='INFO')
             self.sync('up', 'status_v7')
 
-    def cleanup_legacy_alive_once(self):
+    def cleanup_legacy_cmd_artifacts_once(self):
         pbgdir = Path.cwd()
-        marker = Path(f'{pbgdir}/data/state/pbremote/pbremote_legacy_alive_cleanup.json')
-        legacy_marker = Path(f'{pbgdir}/data/pbremote_legacy_alive_cleanup.json')
+        marker = Path(f'{pbgdir}/data/state/pbremote/pbremote_legacy_cmd_cleanup.json')
+        legacy_marker = Path(f'{pbgdir}/data/pbremote_legacy_cmd_cleanup.json')
         if not marker.exists() and legacy_marker.exists():
             marker = legacy_marker
         if marker.exists():
             return
 
-        _log('PBRemote', 'Run one-time cleanup for legacy alive files', level='INFO')
+        _log('PBRemote', 'Run one-time cleanup for legacy cmd artifacts', level='INFO')
         local_removed = 0
         cleanup_failed = False
 
         for pattern in (
             f'{pbgdir}/data/cmd/alive_*.cmd*',
-            f'{pbgdir}/data/remote/cmd_*/alive_*.cmd*',
+            f'{pbgdir}/data/cmd/status.json',
+            f'{pbgdir}/data/cmd/status_single.json',
         ):
             for alive_path in glob.glob(pattern):
                 try:
@@ -364,21 +322,7 @@ class PBRemote():
                     local_removed += 1
                 except Exception:
                     cleanup_failed = True
-                    _log('PBRemote', f'Failed to remove legacy alive file: {alive_path}', level='ERROR', meta={'traceback': traceback.format_exc()})
-
-        cmd = ['rclone', 'delete', '-v', '--include', 'cmd_*/alive_*.cmd*', f'{self.bucket_dir}']
-        logfile = Path(f'{pbgdir}/data/logs/sync.log')
-        logfile.parent.mkdir(parents=True, exist_ok=True)
-        _prepare_sync_log(logfile)
-        with open(logfile, 'ab') as log:
-            if platform.system() == 'Windows':
-                creationflags = subprocess.CREATE_NO_WINDOW
-                result = subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True, creationflags=creationflags)
-            else:
-                result = subprocess.run(cmd, stdout=log, stderr=log, cwd=pbgdir, text=True)
-        if result.returncode != 0:
-            cleanup_failed = True
-            _log('PBRemote', 'Legacy alive bucket cleanup failed; will retry on next startup', level='ERROR')
+                    _log('PBRemote', f'Failed to remove legacy cmd artifact: {alive_path}', level='ERROR', meta={'traceback': traceback.format_exc()})
 
         if cleanup_failed:
             return
@@ -395,7 +339,7 @@ class PBRemote():
                 indent=4,
             )
         tmp_path.replace(marker)
-        _log('PBRemote', f'Finished one-time legacy alive cleanup (local_removed={local_removed})', level='INFO')
+        _log('PBRemote', f'Finished one-time legacy cmd cleanup (local_removed={local_removed})', level='INFO')
 
     def load_remote(self):
         """
@@ -407,7 +351,6 @@ class PBRemote():
         found_remote = glob.glob(p)
         for remote in found_remote:
             rserver = RemoteServer(remote)
-            rserver.pb7dir = self.pb7dir
             rserver.bucket = self.bucket_dir
             rserver.pbname = self.name
             rserver.load()
@@ -423,7 +366,6 @@ class PBRemote():
         found_remote = glob.glob(p)
         for remote in found_remote:
             rserver = RemoteServer(remote)
-            rserver.pb7dir = self.pb7dir
             rserver.bucket = self.bucket_dir
             rserver.pbname = self.name
             rserver.load()
@@ -609,6 +551,96 @@ class PBRemote():
                 return False, result.stderr
         except Exception as e:
             return False, f'Error: {e}'
+
+    def list_bucket_entries(self):
+        """List top-level bucket entries using rclone lsf."""
+        target = self.bucket_dir if getattr(self, 'bucket_dir', None) else self.bucket
+        cmd = ['rclone', 'lsf', target]
+        try:
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+            if result.returncode == 0:
+                entries = [line.strip().rstrip('/') for line in str(result.stdout or '').splitlines() if line.strip()]
+                return True, entries
+            return False, result.stderr
+        except Exception as e:
+            return False, f'Error: {e}'
+
+    def cleanup_bucket_host_entries(self, hostname: str):
+        """Delete fallback bucket entries for a single host."""
+        host = str(hostname or '').strip()
+        if not host:
+            return {"ok": False, "hostname": host, "error": "Hostname is required.", "deleted": [], "operations": []}
+        target = self.bucket_dir if getattr(self, 'bucket_dir', None) else self.bucket
+        deleted = []
+        errors = []
+        operations = []
+        for prefix in (f'cmd_{host}/**', f'run_v7_{host}/**'):
+            cmd = ['rclone', 'delete', '-v', target, '--include', prefix]
+            try:
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+                stdout_text = str(result.stdout or '').strip()
+                stderr_text = str(result.stderr or '').strip()
+                operations.append({
+                    "prefix": prefix,
+                    "command": list(cmd),
+                    "returncode": int(result.returncode),
+                    "stdout": stdout_text,
+                    "stderr": stderr_text,
+                    "ok": result.returncode == 0,
+                })
+                if result.returncode == 0:
+                    deleted.append(prefix)
+                else:
+                    detail = stderr_text or stdout_text or 'rclone delete failed'
+                    errors.append(f'{prefix}: {detail}')
+            except Exception as e:
+                operations.append({
+                    "prefix": prefix,
+                    "command": list(cmd),
+                    "returncode": None,
+                    "stdout": "",
+                    "stderr": str(e),
+                    "ok": False,
+                })
+                errors.append(f'{prefix}: {e}')
+        return {
+            "ok": not errors,
+            "hostname": host,
+            "deleted": deleted,
+            "error": ' | '.join(errors),
+            "operations": operations,
+        }
+
+    def cleanup_bucket_host_entries_dry_run(self, hostname: str):
+        """Preview bucket objects matched by the cleanup rules for one host."""
+        host = str(hostname or '').strip()
+        if not host:
+            return {"ok": False, "hostname": host, "error": "Hostname is required.", "matches": []}
+        target = self.bucket_dir if getattr(self, 'bucket_dir', None) else self.bucket
+        matches: list[str] = []
+        errors: list[str] = []
+        for prefix in (f'cmd_{host}/**', f'run_v7_{host}/**'):
+            cmd = ['rclone', 'lsf', target, '--recursive', '--include', prefix]
+            try:
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+                if result.returncode != 0:
+                    detail = str(result.stderr or result.stdout or '').strip() or 'rclone dry-run failed'
+                    errors.append(f'{prefix}: {detail}')
+                    continue
+                for line in str(result.stdout or '').splitlines():
+                    entry = str(line or '').strip()
+                    if not entry:
+                        continue
+                    matches.append(entry.rstrip('/'))
+            except Exception as e:
+                errors.append(f'{prefix}: {e}')
+        deduped = sorted(dict.fromkeys(matches))
+        return {
+            "ok": not errors,
+            "hostname": host,
+            "matches": deduped,
+            "error": ' | '.join(errors),
+        }
     
     def delete_bucket(self):
         """Deletes the bucket configuration by running 'rclone config delete' as a process."""
@@ -639,7 +671,7 @@ def main():
         sys.exit(1)
     _log('PBRemote', f'Start: PBRemote {remote.bucket}', level='INFO')
     remote.save_pid()
-    remote.cleanup_legacy_alive_once()
+    remote.cleanup_legacy_cmd_artifacts_once()
 
     def _apply_remote_updates():
         remote.update_remote_servers()

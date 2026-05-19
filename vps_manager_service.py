@@ -4,9 +4,11 @@ import asyncio
 import getpass
 import json
 import os
+import psutil
 import re
 import shlex
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime
@@ -16,13 +18,13 @@ import yaml
 
 from api.vps import get_monitor, get_monitor_state_snapshot, get_metric_history_snapshot
 from logging_helpers import human_log as _log
-from master.async_monitor import INSTANCE_COLLECT_SCRIPT, MONITOR_CACHE_VERSION, load_alert_snapshot
+from master.async_monitor import INSTANCE_COLLECT_SCRIPT, MONITOR_CACHE_VERSION
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from PBRemote import PBRemote
 from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits
 from pbgui_release import build_local_pbgui_release_info, load_more_pbgui_commits
-from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, save_ini, save_ini_section
+from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, pb7dir as configured_pb7dir, save_ini, save_ini_section
 from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, strip_ansi
 
 SERVICE = "VPSManagerApi"
@@ -117,7 +119,7 @@ def _truthy(value: Any) -> bool:
 
 def _status_running(status: str | None) -> bool:
     normalized = str(status or "").strip().lower()
-    return normalized not in {"", "none", "successful", "failed", "error", "timeout", "canceled", "cancelled"}
+    return normalized not in {"", "none", "successful", "failed", "error", "timeout", "canceled", "cancelled", "interrupted"}
 
 
 def _playbook_task_names(command: str | None) -> tuple[str, ...]:
@@ -210,6 +212,57 @@ def _safe_float_str(value: Any, default: float) -> float:
         return default
 
 
+def _python_major_minor(executable: str | None) -> str:
+    candidate = str(executable or "").strip()
+    if not candidate:
+        return "N/A"
+    path = Path(candidate)
+    if not path.exists():
+        return "N/A"
+    try:
+        res = subprocess.run(
+            [candidate, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return "N/A"
+    if res.returncode != 0:
+        return "N/A"
+    return str(res.stdout or "").strip() or "N/A"
+
+
+def _configured_pb7dir() -> str:
+    return str(configured_pb7dir() or "").strip()
+
+
+def _parse_pbgui_release_number(version: str | None) -> tuple[int, ...]:
+    text = str(version or "").strip()
+    match = re.search(r"v?(\d+(?:\.\d+)*)", text)
+    if not match:
+        return ()
+    parts: list[int] = []
+    for item in match.group(1).split('.'):
+        try:
+            parts.append(int(item))
+        except Exception:
+            return ()
+    return tuple(parts)
+
+
+def _version_gte(version: str | None, minimum: str) -> bool:
+    current = _parse_pbgui_release_number(version)
+    target = _parse_pbgui_release_number(minimum)
+    if not current or not target:
+        return False
+    max_len = max(len(current), len(target))
+    current = current + (0,) * (max_len - len(current))
+    target = target + (0,) * (max_len - len(target))
+    return current >= target
+
+
 def _normalize_vps_deploy_command(value: Any) -> str:
     command = str(value or VPS_DEPLOY_DEFAULT_ACTION).strip()
     if command not in VPS_DEPLOY_ACTIONS:
@@ -227,6 +280,11 @@ def _normalize_vps_deploy_mode(value: Any) -> str:
 def _vps_deploy_command_text(command: Any) -> str:
     normalized = _normalize_vps_deploy_command(command)
     return VPS_DEPLOY_ACTION_TEXT.get(normalized, normalized)
+
+
+def _vps_deploy_requires_user_password(command: Any) -> bool:
+    normalized = _normalize_vps_deploy_command(command)
+    return normalized in {COMMAND_VPS_UPDATE, COMMAND_VPS_CLEANUP}
 
 
 def _get_file_sync_worker():
@@ -479,6 +537,160 @@ class VPSManagerService:
         self._deploy_history_lock = threading.Lock()
         self._deploy_progress_cache_lock = threading.Lock()
         self._deploy_progress_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._recover_interrupted_vps_runs()
+
+    def _is_vps_playbook_process_running(self, vps: VPS) -> bool:
+        if not self._should_treat_vps_process_as_active(vps):
+            return False
+        host_tmp_dir = str((Path(vps.path) / "tmp").resolve()) if vps.path else ""
+        inventory_path = str((Path(host_tmp_dir) / "inventory" / "hosts").resolve()) if host_tmp_dir else ""
+        playbook_path = str((Path(PBGDIR) / f"{str(vps.command or '').strip()}.yml").resolve())
+        if not host_tmp_dir:
+            return False
+        try:
+            for proc in psutil.process_iter(["cmdline"]):
+                try:
+                    cmdline = [str(part or "") for part in (proc.info.get("cmdline") or [])]
+                except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
+                    continue
+                if not cmdline:
+                    continue
+                normalized = {part for part in cmdline if part}
+                if not any("ansible-playbook" in part or "ansible-runner" in part for part in normalized):
+                    continue
+                if any(part.startswith(f"{host_tmp_dir}/") or part == host_tmp_dir for part in normalized):
+                    return True
+                if inventory_path in normalized and playbook_path in normalized:
+                    return True
+            return False
+        except Exception as exc:
+            _log(SERVICE, f"failed to inspect VPS playbook processes for {vps.hostname}: {exc}", level="WARNING")
+            return False
+
+    def _should_treat_vps_process_as_active(self, vps: VPS) -> bool:
+        if _status_running(getattr(vps, "init_status", None)) or _status_running(getattr(vps, "setup_status", None)):
+            return True
+        if not _status_running(getattr(vps, "update_status", None)):
+            return False
+        log_text = _read_vps_update_log_tail(vps)
+        if not log_text:
+            return True
+        parsed_progress = _parse_ansible_task_progress(str(vps.hostname or ""), log_text, command=vps.command)
+        return self._status_from_task_progress(parsed_progress) not in {"successful", "failed", "unreachable"}
+
+    def _is_master_playbook_process_running(self) -> bool:
+        if not self._should_treat_master_process_as_active():
+            return False
+        master_tmp_dir = str((Path(PBGDIR) / "data" / "vpsmanager" / "tmp").resolve())
+        playbook_path = str((Path(PBGDIR) / f"{str(getattr(self.vpsmanager, 'command', '') or '').strip()}.yml").resolve())
+        try:
+            for proc in psutil.process_iter(["cmdline"]):
+                try:
+                    cmdline = [str(part or "") for part in (proc.info.get("cmdline") or [])]
+                except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
+                    continue
+                if not cmdline:
+                    continue
+                normalized = {part for part in cmdline if part}
+                if not any("ansible-playbook" in part or "ansible-runner" in part for part in normalized):
+                    continue
+                if any(part.startswith(f"{master_tmp_dir}/") or part == master_tmp_dir for part in normalized):
+                    return True
+                if playbook_path in normalized:
+                    return True
+            return False
+        except Exception as exc:
+            _log(SERVICE, f"failed to inspect master playbook processes: {exc}", level="WARNING")
+            return False
+
+    def _should_treat_master_process_as_active(self) -> bool:
+        if not _status_running(getattr(self.vpsmanager, "update_status", None)):
+            return False
+        log_text = strip_ansi(str(getattr(self.vpsmanager, "update_log", "") or ""))
+        command = str(getattr(self.vpsmanager, "command", "") or "").strip()
+        hostname = str(getattr(self.vpsmanager, "hostname", "local") or "local").strip() or "local"
+        if not log_text:
+            return True
+        parsed_progress = _parse_ansible_task_progress(hostname, log_text, command=command)
+        return self._status_from_task_progress(parsed_progress) not in {"successful", "failed", "unreachable"}
+
+    def _recover_interrupted_vps_runs(self) -> None:
+        recovered_hosts: list[str] = []
+        interrupted_hosts: list[str] = []
+        for vps in self.vpsmanager.vpss:
+            if not str(vps.hostname or "").strip() or not _status_running(vps.update_status):
+                continue
+            log_text = _read_vps_update_log_tail(vps)
+            parsed_progress = _parse_ansible_task_progress(str(vps.hostname or ""), log_text, command=vps.command)
+            parsed_status = self._status_from_task_progress(parsed_progress)
+            if parsed_status in {"successful", "failed", "unreachable"}:
+                vps.update_status = "failed" if parsed_status == "unreachable" else parsed_status
+                if not str(vps.last_update or "").strip():
+                    vps.last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                vps.save()
+                recovered_hosts.append(str(vps.hostname))
+                continue
+            if self._is_vps_playbook_process_running(vps):
+                continue
+            vps.update_status = "interrupted"
+            vps.save()
+            interrupted_hosts.append(str(vps.hostname))
+        if recovered_hosts:
+            _log(SERVICE, f"recovered completed VPS deploy state for: {', '.join(sorted(recovered_hosts))}", level="WARNING")
+        if interrupted_hosts:
+            _log(SERVICE, f"marked interrupted VPS deploys after API restart/crash: {', '.join(sorted(interrupted_hosts))}", level="WARNING")
+
+    def has_active_vps_deploys(self) -> bool:
+        for vps in self.vpsmanager.vpss:
+            if _status_running(vps.init_status) or _status_running(vps.setup_status) or _status_running(vps.update_status):
+                return True
+            if self._is_vps_playbook_process_running(vps):
+                return True
+        if _status_running(getattr(self.vpsmanager, "update_status", None)) or self._is_master_playbook_process_running():
+            return True
+        return False
+
+    def active_vps_deploy_summary(self) -> dict[str, Any]:
+        items: list[dict[str, str]] = []
+        for vps in self.vpsmanager.vpss:
+            hostname = str(vps.hostname or "").strip()
+            if not hostname:
+                continue
+            for phase, status, command_text in (
+                ("init", str(vps.init_status or "").strip(), "Initialize"),
+                ("setup", str(vps.setup_status or "").strip(), "Setup VPS"),
+                ("update", str(vps.update_status or "").strip(), str(vps.command_text or _vps_deploy_command_text(vps.command))),
+            ):
+                if not _status_running(status):
+                    continue
+                items.append({
+                    "hostname": hostname,
+                    "phase": phase,
+                    "status": status,
+                    "command_text": command_text,
+                })
+            if self._is_vps_playbook_process_running(vps) and not any(
+                item["hostname"] == hostname for item in items
+            ):
+                items.append({
+                    "hostname": hostname,
+                    "phase": "process",
+                    "status": "running",
+                    "command_text": str(vps.command_text or _vps_deploy_command_text(vps.command) or "Ansible Task"),
+                })
+        master_status = str(getattr(self.vpsmanager, "update_status", "") or "").strip()
+        if _status_running(master_status) or self._is_master_playbook_process_running():
+            items.append({
+                "hostname": "local",
+                "phase": "master",
+                "status": master_status or "running",
+                "command_text": str(getattr(self.vpsmanager, "command_text", "") or "Master Task"),
+            })
+        return {
+            "active": bool(items),
+            "items": items,
+            "summary": ", ".join(f"{item['hostname']} {item['command_text']} ({item['status']})" for item in items[:5]),
+        }
 
     def _ensure_pbremote(self, *, force_reinit: bool = False) -> PBRemote:
         if self.pbremote is None or force_reinit:
@@ -693,14 +905,13 @@ class VPSManagerService:
     def refresh(self, *, force: bool = False) -> None:
         self._sync_vps_inventory()
         pbremote = self._ensure_pbremote(force_reinit=force and self.pbremote is not None and bool(self.pbremote.error))
-        local_run = getattr(pbremote, "local_run", None)
-        if local_run is None:
+        if getattr(pbremote, "local_run", None) is None:
             self._first_refresh_done = True
             return
 
         try:
             self._refresh_pbgui_release()
-            self._refresh_pb7_release(getattr(local_run, "pb7dir", None))
+            self._refresh_pb7_release(_configured_pb7dir())
         except Exception as exc:
             _log(SERVICE, f"refresh local versions failed: {exc}", level="WARNING")
 
@@ -720,7 +931,7 @@ class VPSManagerService:
             except Exception as exc:
                 _log(SERVICE, f"refresh git origin failed: {exc}", level="WARNING")
             try:
-                self._refresh_pb7_release(getattr(local_run, "pb7dir", None))
+                self._refresh_pb7_release(_configured_pb7dir())
             except Exception as exc:
                 _log(SERVICE, f"refresh local commit data failed: {exc}", level="WARNING")
 
@@ -729,64 +940,18 @@ class VPSManagerService:
     def _get_monitor_state(self) -> dict[str, Any]:
         try:
             live_state = get_monitor_state_snapshot()
-            snapshot = load_alert_snapshot()
             connections = ((live_state.get("connections") or {}).get("connections") or {})
-            live_host_meta = live_state.get("host_meta") or {}
-            snapshot_host_meta = snapshot.get("host_meta") or {}
             has_live_data = bool(
                 connections
                 or (live_state.get("system") or {})
                 or (live_state.get("instances") or {})
                 or (live_state.get("v7_instances") or {})
-                or live_host_meta
+                or (live_state.get("host_meta") or {})
                 or (live_state.get("streams") or {})
             )
             if has_live_data:
-                if snapshot_host_meta:
-                    merged_host_meta = dict(snapshot_host_meta)
-                    for hostname, payload in live_host_meta.items():
-                        current = dict(merged_host_meta.get(hostname) or {})
-                        if isinstance(payload, dict):
-                            current.update(payload)
-                        else:
-                            current = payload
-                        merged_host_meta[hostname] = current
-                    return {
-                        **live_state,
-                        "host_meta": merged_host_meta,
-                    }
                 return live_state
-
-            snapshot_connections = snapshot.get("connections") or {}
-            snapshot_system = snapshot.get("system") or {}
-            snapshot_instances = snapshot.get("instances") or {}
-            has_snapshot_data = bool(
-                snapshot_connections or snapshot_system or snapshot_instances or snapshot_host_meta
-            )
-            if not has_snapshot_data:
-                return live_state
-
-            connected_count = 0
-            auth_failed_count = 0
-            for payload in snapshot_connections.values():
-                status = str((payload or {}).get("status") or "")
-                if status == "connected":
-                    connected_count += 1
-                elif status == "auth_failed":
-                    auth_failed_count += 1
-            return {
-                **live_state,
-                "connections": {
-                    "total": len(snapshot_connections),
-                    "connected": connected_count,
-                    "disconnected": max(len(snapshot_connections) - connected_count - auth_failed_count, 0),
-                    "auth_failed": auth_failed_count,
-                    "connections": snapshot_connections,
-                },
-                "system": snapshot_system,
-                "instances": snapshot_instances,
-                "host_meta": snapshot_host_meta,
-            }
+            return live_state
         except Exception as exc:
             _log(SERVICE, f"monitor snapshot failed: {exc}", level="WARNING")
             return {
@@ -818,6 +983,200 @@ class VPSManagerService:
 
     def _host_meta(self, host_state: dict[str, Any] | None) -> dict[str, Any]:
         return (host_state or {}).get("meta") or {}
+
+    def _refresh_host_meta_now(self, hostname: str, *, include_package_status: bool = True) -> None:
+        monitor = get_monitor()
+        if monitor is None:
+            return
+        host = str(hostname or "").strip()
+        if not host:
+            return
+        try:
+            loop = getattr(monitor, "loop", None)
+            if loop is None or loop.is_closed():
+                _log(SERVICE, f"immediate host-meta refresh skipped for {host}: monitor loop unavailable", level="WARNING")
+                return
+            asyncio.run_coroutine_threadsafe(
+                monitor.collect_host_meta_now(host, include_package_status=include_package_status),
+                loop,
+            ).result(timeout=30)
+        except Exception as exc:
+            _log(SERVICE, f"immediate host-meta refresh failed for {host}: {exc}", level="WARNING")
+
+    def _bucket_cleanup_preview_rows(self) -> list[dict[str, Any]]:
+        pbremote = self._ensure_pbremote()
+        bucket = str(getattr(pbremote, "bucket", "") or "").strip()
+        local_hostname = str(getattr(pbremote, "name", "") or "").strip()
+        if not bucket:
+            raise ValueError("PBRemote bucket is not configured.")
+        if not getattr(pbremote, "rclone_installed", False):
+            raise ValueError("rclone is not installed locally.")
+        ok, result = pbremote.list_bucket_entries()
+        if not ok:
+            raise ValueError(str(result or "Failed to list bucket entries."))
+
+        monitor_state = self._get_monitor_state()
+        by_hostname = {str(vps.hostname or "").strip(): vps for vps in self.vpsmanager.vpss if str(vps.hostname or "").strip()}
+        if local_hostname:
+            by_hostname.setdefault(local_hostname, pbremote)
+        bucket_hosts: dict[str, dict[str, Any]] = {}
+        for raw_entry in result or []:
+            entry = str(raw_entry or "").strip().rstrip("/")
+            if entry.startswith("cmd_"):
+                hostname = entry[4:]
+                if hostname:
+                    bucket_hosts.setdefault(hostname, {"cmd": False, "run_v7": False})["cmd"] = True
+            elif entry.startswith("run_v7_"):
+                hostname = entry[7:]
+                if hostname:
+                    bucket_hosts.setdefault(hostname, {"cmd": False, "run_v7": False})["run_v7"] = True
+
+        rows: list[dict[str, Any]] = []
+        for hostname in sorted(bucket_hosts.keys()):
+            host_state = self._get_host_telemetry(monitor_state, hostname)
+            meta = self._host_meta(host_state)
+            if not meta and hostname == local_hostname:
+                meta = {"role": "master"}
+            role = str(meta.get("role") or "unknown").strip().lower() or "unknown"
+            version = str(meta.get("pbgv") or "N/A")
+            known = hostname in by_hostname
+            eligible = known and role == "slave" and _version_gte(version, "v1.78")
+            if eligible:
+                category = "eligible"
+                reason = "Eligible: slave with PBGui >= v1.78"
+            elif known:
+                category = "known"
+                reasons: list[str] = []
+                if role != "slave":
+                    reasons.append(f"role={role or 'unknown'}")
+                if hostname != local_hostname and not _version_gte(version, "v1.78"):
+                    reasons.append(f"PBGui {version or 'unknown'} < v1.78")
+                reason = ", ".join(reasons) if reasons else "Known VPS but not eligible"
+            else:
+                category = "orphaned"
+                reason = "Bucket entry has no matching VPS Manager record"
+            rows.append({
+                "hostname": hostname,
+                "cmd": bool(bucket_hosts[hostname].get("cmd")),
+                "run_v7": bool(bucket_hosts[hostname].get("run_v7")),
+                "known": known,
+                "role": role,
+                "pbgui_version": version,
+                "eligible": eligible,
+                "category": category,
+                "reason": reason,
+            })
+        return rows
+
+    def preview_bucket_cleanup(self) -> dict[str, Any]:
+        pbremote = self._ensure_pbremote()
+        rows = self._bucket_cleanup_preview_rows()
+        return {
+            "bucket": str(getattr(pbremote, "bucket", "") or ""),
+            "rows": rows,
+            "summary": {
+                "total": len(rows),
+                "eligible": sum(1 for item in rows if item.get("category") == "eligible"),
+                "known": sum(1 for item in rows if item.get("category") == "known"),
+                "orphaned": sum(1 for item in rows if item.get("category") == "orphaned"),
+            },
+        }
+
+    def cleanup_bucket(self, hostnames: list[Any]) -> dict[str, Any]:
+        pbremote = self._ensure_pbremote()
+        selected: list[str] = []
+        seen: set[str] = set()
+        for raw_host in hostnames or []:
+            hostname = str(raw_host or "").strip()
+            if not hostname or hostname in seen:
+                continue
+            seen.add(hostname)
+            selected.append(hostname)
+        if not selected:
+            raise ValueError("Select at least one bucket entry to delete.")
+
+        preview_rows = {str(item.get("hostname") or ""): item for item in self._bucket_cleanup_preview_rows()}
+        results: list[dict[str, Any]] = []
+        for hostname in selected:
+            preview = dict(preview_rows.get(hostname) or {"hostname": hostname, "category": "orphaned", "eligible": False, "reason": "Selected manually"})
+            dry_run_info = pbremote.cleanup_bucket_host_entries_dry_run(hostname)
+            dry_run_ok = bool(dry_run_info.get("ok"))
+            dry_run_matches = [str(item or '').strip().rstrip('/') for item in (dry_run_info.get("matches") or []) if str(item or '').strip()]
+            allowed_prefixes = (f'cmd_{hostname}', f'run_v7_{hostname}')
+            if not dry_run_ok:
+                results.append({
+                    **preview,
+                    "ok": False,
+                    "deleted": [],
+                    "error": str(dry_run_info.get("error") or "Bucket dry-run failed."),
+                    "dry_run_matches": dry_run_matches,
+                })
+                continue
+            unexpected = [item for item in dry_run_matches if item not in allowed_prefixes and not item.startswith((f'{allowed_prefixes[0]}/', f'{allowed_prefixes[1]}/'))]
+            if unexpected:
+                results.append({
+                    **preview,
+                    "ok": False,
+                    "deleted": [],
+                    "error": f"Bucket dry-run matched unexpected paths: {', '.join(unexpected[:5])}",
+                    "dry_run_matches": dry_run_matches,
+                })
+                continue
+            cleanup_result = pbremote.cleanup_bucket_host_entries(hostname)
+            results.append({
+                **preview,
+                "ok": bool(cleanup_result.get("ok")),
+                "deleted": list(cleanup_result.get("deleted") or []),
+                "error": str(cleanup_result.get("error") or ""),
+                "dry_run_matches": dry_run_matches,
+                "operations": list(cleanup_result.get("operations") or []),
+            })
+        return {
+            "bucket": str(getattr(pbremote, "bucket", "") or ""),
+            "results": results,
+            "summary": {
+                "requested": len(selected),
+                "deleted": sum(1 for item in results if item.get("ok")),
+                "failed": sum(1 for item in results if not item.get("ok")),
+            },
+        }
+
+    def dry_run_bucket_cleanup(self, hostnames: list[Any]) -> dict[str, Any]:
+        pbremote = self._ensure_pbremote()
+        selected: list[str] = []
+        seen: set[str] = set()
+        for raw_host in hostnames or []:
+            hostname = str(raw_host or "").strip()
+            if not hostname or hostname in seen:
+                continue
+            seen.add(hostname)
+            selected.append(hostname)
+        if not selected:
+            raise ValueError("Select at least one bucket entry first.")
+
+        preview_rows = {str(item.get("hostname") or ""): item for item in self._bucket_cleanup_preview_rows()}
+        results: list[dict[str, Any]] = []
+        for hostname in selected:
+            preview = dict(preview_rows.get(hostname) or {"hostname": hostname, "category": "orphaned", "eligible": False, "reason": "Selected manually"})
+            dry_run = pbremote.cleanup_bucket_host_entries_dry_run(hostname)
+            matches = [str(item or '').strip().rstrip('/') for item in (dry_run.get("matches") or []) if str(item or '').strip()]
+            results.append({
+                **preview,
+                "ok": bool(dry_run.get("ok")),
+                "matches": matches,
+                "match_count": len(matches),
+                "error": str(dry_run.get("error") or ""),
+            })
+        return {
+            "bucket": str(getattr(pbremote, "bucket", "") or ""),
+            "results": results,
+            "summary": {
+                "requested": len(selected),
+                "ok": sum(1 for item in results if item.get("ok")),
+                "failed": sum(1 for item in results if not item.get("ok")),
+                "matches": sum(int(item.get("match_count") or 0) for item in results),
+            },
+        }
 
     def build_state(self) -> dict[str, Any]:
         self.refresh(force=False)
@@ -1085,6 +1444,8 @@ class VPSManagerService:
             self.refresh(force=False)
         pbremote = self._ensure_pbremote()
         vps = self._require_vps(hostname)
+        if not quick and str(getattr(vps, "update_status", "") or "").strip().lower() in {"successful", "failed", "error", "timeout", "canceled", "cancelled", "unreachable"}:
+            self._refresh_host_meta_now(hostname)
         self._apply_session_secrets_to_vps(token, vps)
         monitor_state = self._get_monitor_state()
         host_state = self._get_host_telemetry(monitor_state, hostname)
@@ -1167,6 +1528,8 @@ class VPSManagerService:
         pbgui_release = self._get_pbgui_release()
         pb7_release = self._get_pb7_release()
         local_package_status = self._get_local_package_status()
+        local_pbgui_python = f"{sys.version_info.major}.{sys.version_info.minor}"
+        local_pb7_python = _python_major_minor(load_ini("main", "pb7venv"))
         master_branch = str(pbgui_release.get("current_branch") or "unknown")
         master_commit = str(pbgui_release.get("current_commit") or "")
         master_pb7_branch = str(pb7_release.get("current_branch") or "unknown")
@@ -1184,10 +1547,10 @@ class VPSManagerService:
             "reboot_required": bool(local_package_status.get("reboot", False)),
             "updates": local_package_status.get("upgrades", "N/A"),
             "running_bots": "-",
-            "pbgui": f"{str(pbgui_release.get('version') or 'N/A')}{'' if getattr(pbremote, 'pbgui_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(pbremote, 'pbgui_python'))}",
+            "pbgui": f"{str(pbgui_release.get('version') or 'N/A')}{'' if local_pbgui_python in (None, '', 'N/A') else ' /' + str(local_pbgui_python)}",
             "pbgui_branch": f"{master_branch} ({_short_commit(master_commit)})",
             "pbgui_github": self._build_master_pbgui_github_status(pbremote, master_branch, master_commit),
-            "pb7": f"{str(pb7_release.get('version') or 'N/A')}{'' if getattr(pbremote, 'pb7_python', 'N/A') in (None, '', 'N/A') else ' /' + str(getattr(pbremote, 'pb7_python'))}",
+            "pb7": f"{str(pb7_release.get('version') or 'N/A')}{'' if local_pb7_python in (None, '', 'N/A') else ' /' + str(local_pb7_python)}",
             "pb7_branch": f"{master_pb7_branch} ({_short_commit(master_pb7_commit)})",
             "pb7_github": self._build_master_pb7_github_status(pbremote, master_pb7_branch, master_pb7_commit),
         }
@@ -1832,7 +2195,7 @@ class VPSManagerService:
         }
 
     def _build_master_pb7_branch_state(self, pbremote: PBRemote) -> dict[str, Any]:
-        repo_dir = getattr(pbremote.local_run, "pb7dir", "")
+        repo_dir = _configured_pb7dir()
         release_info = self._get_pb7_release()
         current_branch = str(release_info.get("current_branch") or "unknown")
         current_commit = str(release_info.get("current_commit") or "")
@@ -1870,7 +2233,7 @@ class VPSManagerService:
                                     host_state: dict[str, Any],
                                     hostname: str) -> dict[str, Any]:
         meta = self._host_meta(host_state)
-        repo_dir = getattr(pbremote.local_run, "pb7dir", "")
+        repo_dir = _configured_pb7dir()
         branches = self._get_pb7_release().get("branches") or {}
         known_remotes = list_git_remotes(repo_dir) if repo_dir else []
         for opt in ("origin", "fork"):
@@ -2201,7 +2564,7 @@ class VPSManagerService:
         normalized_command = _normalize_vps_deploy_command(command)
         vps = self._require_vps(hostname)
         self._apply_session_secrets_to_vps(token, vps)
-        if normalized_command == COMMAND_VPS_UPDATE and not getattr(vps, "user_pw", None):
+        if _vps_deploy_requires_user_password(normalized_command) and not getattr(vps, "user_pw", None):
             raise ValueError(f"VPS user password missing for {hostname}.")
         vps.command = normalized_command
         vps.command_text = _vps_deploy_command_text(normalized_command)
@@ -2511,8 +2874,8 @@ class VPSManagerService:
             for hostname in unique_hosts:
                 vps = self._require_vps(hostname)
                 self._apply_session_secrets_to_vps(token, vps)
-                if normalized_command == COMMAND_VPS_UPDATE and not getattr(vps, "user_pw", None):
-                    raise ValueError(f"VPS sudo password missing for {hostname}. Validate it before starting Update Linux.")
+                if _vps_deploy_requires_user_password(normalized_command) and not getattr(vps, "user_pw", None):
+                    raise ValueError(f"VPS sudo password missing for {hostname}. Validate it before starting {_vps_deploy_command_text(normalized_command)}.")
                 vps.command = normalized_command
                 vps.command_text = _vps_deploy_command_text(normalized_command)
                 self.vpsmanager.update_vps(vps, debug=debug, extra_vars=base_extra_vars or None)
@@ -2604,8 +2967,8 @@ class VPSManagerService:
         clean_hostname = str(hostname or "").strip()
         if not clean_hostname or clean_hostname not in unique_hosts:
             raise ValueError("Selected VPS host is not part of this deploy.")
-        if normalized_command != COMMAND_VPS_UPDATE:
-            raise ValueError("Password validation staging is only supported for Update Linux.")
+        if not _vps_deploy_requires_user_password(normalized_command):
+            raise ValueError("Password validation staging is only supported for commands that require VPS sudo access.")
 
         self._validate_vps_user_password(clean_hostname, password, accept_unknown_host=accept_unknown_host)
         self._store_session_secrets(token, clean_hostname, {"user_pw": str(password or "")})
@@ -2845,7 +3208,7 @@ class VPSManagerService:
                 release_info["branches"] = branches
                 self._pbgui_release = release_info
         elif repo == "pb7":
-            commits = load_more_pb7_commits(branch_name, getattr(pbremote.local_run, "pb7dir", None), int(limit))
+            commits = load_more_pb7_commits(branch_name, _configured_pb7dir(), int(limit))
             if commits:
                 release_info = dict(self._get_pb7_release())
                 branches = dict(release_info.get("branches") or {})

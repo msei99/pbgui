@@ -1423,8 +1423,27 @@ window.PBGUI_NAV_CONFIG = {
     if (btn) { btn.disabled = true; btn.textContent = 'Restarting\u2026'; }
     var origin = API_BASE.replace(/\/api\/services$/, '');
     fetch(API_BASE + '/api-server/restart?token=' + TOKEN, { method: 'POST' })
-      .then(function () { if (typeof showRestartOverlay === 'function') showRestartOverlay(origin, TOKEN); })
-      .catch(function () { if (typeof showRestartOverlay === 'function') showRestartOverlay(origin, TOKEN); });
+      .then(function (resp) {
+        if (!resp.ok) {
+          return resp.json().catch(function () { return {}; }).then(function (data) {
+            var detail = (data && data.detail) ? String(data.detail) : 'Restart failed.';
+            throw new Error(detail);
+          });
+        }
+        if (typeof showRestartOverlay === 'function') showRestartOverlay(origin, TOKEN);
+      })
+      .catch(function (err) {
+        _resultPopup(
+          'Restart blocked',
+          'The API server restart was rejected.',
+          err && err.message ? err.message : 'Restart failed.',
+          false,
+          false
+        );
+      })
+      .finally(function () {
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Restart'; }
+      });
   };
 
   /* ── Settings loaders ──────────────────────────────────── */

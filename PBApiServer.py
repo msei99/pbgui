@@ -969,10 +969,21 @@ async def server_status_stream(token: str = ""):
 async def server_status(session: SessionToken = Depends(require_auth)):
     """Return current restart-detector state for nav fallback checks."""
     current_serial = _read_serial()
+    restart_blocked = False
+    restart_block_reason = ""
+    try:
+        from api.vps_manager import get_service_instance as get_vps_manager_service
+        deploy_state = get_vps_manager_service().active_vps_deploy_summary()
+        restart_blocked = bool(deploy_state.get("active"))
+        restart_block_reason = str(deploy_state.get("summary") or "") if restart_blocked else ""
+    except Exception as exc:
+        _log(SERVICE, f"[server-status] failed to inspect active VPS deploys: {exc}", level="WARNING")
     return {
         "needs_restart": _refresh_restart_state(),
         "startup_serial": _startup_serial,
         "current_serial": current_serial,
+        "restart_blocked": restart_blocked,
+        "restart_block_reason": restart_block_reason,
     }
 
 
@@ -1004,6 +1015,16 @@ async def server_restart(request: Request):
             pass
     if not validate_token(token):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    try:
+        from api.vps_manager import get_service_instance as get_vps_manager_service
+        deploy_state = get_vps_manager_service().active_vps_deploy_summary()
+    except Exception as exc:
+        _log(SERVICE, f"[restart] failed to inspect active VPS deploys: {exc}", level="WARNING")
+        deploy_state = {"active": False, "summary": "", "items": []}
+    if deploy_state.get("active"):
+        detail = str(deploy_state.get("summary") or "Active VPS deploys are still running.")
+        raise HTTPException(status_code=409, detail=f"Cannot restart API server while VPS tasks are running: {detail}")
 
     _log(SERVICE, "[restart] restart requested by user", level="WARNING")
 

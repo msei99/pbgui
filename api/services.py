@@ -578,6 +578,11 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
     import time
 
     try:
+        from api.vps_manager import get_service_instance as get_vps_manager_service
+        deploy_state = get_vps_manager_service().active_vps_deploy_summary()
+        if deploy_state.get("active"):
+            detail = str(deploy_state.get("summary") or "Active VPS deploys are still running.")
+            raise HTTPException(status_code=409, detail=f"Cannot restart API server while VPS tasks are running: {detail}")
         pbgdir = Path(PBGDIR)
         venv_python: Optional[str] = None
         for candidate in [

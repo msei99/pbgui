@@ -282,187 +282,6 @@ def _shell_quote(value: str) -> str:
     return "'" + str(value or '').replace("'", "'\"'\"'") + "'"
 
 
-def build_alert_snapshot(*,
-                         connections: dict[str, Any],
-                         system: dict[str, Any],
-                         instances: dict[str, Any],
-                         host_meta: dict[str, Any]) -> dict[str, Any]:
-    """Build the persisted subset used by non-FastAPI alert consumers."""
-    return {
-        "version": STATE_SNAPSHOT_VERSION,
-        "timestamp": time.time(),
-        "connections": connections,
-        "system": system,
-        "instances": instances,
-        "host_meta": host_meta,
-    }
-
-
-def load_alert_snapshot() -> dict[str, Any]:
-    """Load the persisted VPS monitor snapshot for legacy snapshot consumers."""
-    path = Path(PBGDIR) / 'data' / 'state' / 'vps_monitor' / 'snapshot.json'
-    legacy_path = Path(PBGDIR) / 'data' / 'vps_monitor_state.json'
-    try:
-        if not path.exists() and legacy_path.exists():
-            path = legacy_path
-        if not path.exists():
-            return build_alert_snapshot(
-                connections={},
-                system={},
-                instances={},
-                host_meta={},
-            )
-        payload = json.loads(path.read_text(encoding='utf-8'))
-        if not isinstance(payload, dict):
-            raise ValueError('snapshot payload is not a dict')
-        snapshot = build_alert_snapshot(
-            connections=(payload.get('connections') or {}),
-            system=(payload.get('system') or {}),
-            instances=(payload.get('instances') or {}),
-            host_meta=(payload.get('host_meta') or {}),
-        )
-        snapshot['timestamp'] = float(payload.get('timestamp') or 0)
-        return snapshot
-    except Exception as e:
-        _log(SERVICE, f"[snapshot] Failed to load alert snapshot: {e}", level="WARNING")
-        return build_alert_snapshot(
-            connections={},
-            system={},
-            instances={},
-            host_meta={},
-        )
-
-
-def collect_alerts_from_snapshot(snapshot: dict[str, Any], monitor_config) -> list[dict[str, Any]]:
-    """Return alert rows for offline hosts, system pressure, and v7 counters."""
-    errors: list[dict[str, Any]] = []
-    connections = snapshot.get('connections') or {}
-    system_state = snapshot.get('system') or {}
-    instances = snapshot.get('instances') or {}
-
-    for hostname in sorted({*connections.keys(), *system_state.keys(), *instances.keys()}):
-        conn = connections.get(hostname) or {}
-        status = str(conn.get('status') or '')
-        if status and status != ConnectionStatus.CONNECTED.value:
-            errors.append({
-                'server': hostname,
-                'name': 'offline',
-                'mem': 0,
-                'cpu': 0,
-                'error': 0,
-                'traceback': 0,
-            })
-            continue
-
-        metrics = system_state.get(hostname) or {}
-        mem_available_mb = float(metrics.get('mem_available') or 0) / 1024 / 1024
-        swap_free_mb = float(metrics.get('swap_free') or 0) / 1024 / 1024
-        disk_free_mb = float(metrics.get('disk_free') or 0) / 1024 / 1024
-        cpu_live = float(metrics.get('cpu') or 0)
-        cpu_60s = float(metrics.get('cpu_60s') or 0)
-        cpu_60s_window = float(metrics.get('cpu_60s_window') or 0)
-        cpu_confirmed = cpu_60s_window >= 60
-        cpu = cpu_60s if cpu_confirmed else cpu_live
-        has_system_metrics = any(metrics.get(key) not in (None, 0, 0.0) for key in ('mem_total', 'disk_total', 'swap_total', 'timestamp'))
-        if has_system_metrics and (
-            mem_available_mb <= monitor_config.mem_error_server
-            or swap_free_mb <= monitor_config.swap_error_server
-            or disk_free_mb <= monitor_config.disk_error_server
-            or (cpu_confirmed and cpu >= monitor_config.cpu_error_server)
-        ):
-            if mem_available_mb <= monitor_config.mem_error_server:
-                color_mem = 'red'
-            elif mem_available_mb <= monitor_config.mem_warning_server:
-                color_mem = 'orange'
-            else:
-                color_mem = 'green'
-            if swap_free_mb <= monitor_config.swap_error_server:
-                color_swap = 'red'
-            elif swap_free_mb <= monitor_config.swap_warning_server:
-                color_swap = 'orange'
-            else:
-                color_swap = 'green'
-            if disk_free_mb <= monitor_config.disk_error_server:
-                color_disk = 'red'
-            elif disk_free_mb <= monitor_config.disk_warning_server:
-                color_disk = 'orange'
-            else:
-                color_disk = 'green'
-            if cpu_confirmed and cpu >= monitor_config.cpu_error_server:
-                color_cpu = 'red'
-            elif cpu_confirmed and cpu >= monitor_config.cpu_warning_server:
-                color_cpu = 'orange'
-            else:
-                color_cpu = 'green'
-            errors.append({
-                'server': hostname,
-                'name': 'system',
-                'mem': f':{color_mem}[{int(mem_available_mb)}]',
-                'cpu': f':{color_cpu}[{cpu}]',
-                'swap': f':{color_swap}[{int(swap_free_mb)}]',
-                'disk': f':{color_disk}[{int(disk_free_mb)}]',
-            })
-
-        for monitor in instances.get(hostname) or []:
-            metrics_list = monitor.get('m') or []
-            swap_value = metrics_list[9] / 1024 / 1024 if len(metrics_list) == 10 and metrics_list[9] else 0.0
-            memory_mb = metrics_list[0] / 1024 / 1024 if metrics_list else 0.0
-            cpu_live = float(monitor.get('c') or 0)
-            cpu_60s = float(monitor.get('cpu_60s') or 0)
-            cpu_60s_window = float(monitor.get('cpu_60s_window') or 0)
-            cpu_confirmed = cpu_60s_window >= 60
-            cpu_value = cpu_60s if cpu_confirmed else cpu_live
-            errors_today = int(monitor.get('et') or 0)
-            tracebacks_today = int(monitor.get('tt') or 0)
-            if (
-                memory_mb > monitor_config.mem_error_v7
-                or swap_value > monitor_config.swap_error_v7
-                or (cpu_confirmed and cpu_value > monitor_config.cpu_error_v7)
-                or errors_today > monitor_config.error_error_v7
-                or tracebacks_today > monitor_config.traceback_error_v7
-            ):
-                if memory_mb > monitor_config.mem_error_v7:
-                    color_mem = 'red'
-                elif memory_mb > monitor_config.mem_warning_v7:
-                    color_mem = 'orange'
-                else:
-                    color_mem = 'green'
-                if swap_value > monitor_config.swap_error_v7:
-                    color_swap = 'red'
-                elif swap_value > monitor_config.swap_warning_v7:
-                    color_swap = 'orange'
-                else:
-                    color_swap = 'green'
-                if cpu_confirmed and cpu_value > monitor_config.cpu_error_v7:
-                    color_cpu = 'red'
-                elif cpu_confirmed and cpu_value > monitor_config.cpu_warning_v7:
-                    color_cpu = 'orange'
-                else:
-                    color_cpu = 'green'
-                if errors_today > monitor_config.error_error_v7:
-                    color_error = 'red'
-                elif errors_today > monitor_config.error_warning_v7:
-                    color_error = 'orange'
-                else:
-                    color_error = 'green'
-                if tracebacks_today > monitor_config.traceback_error_v7:
-                    color_traceback = 'red'
-                elif tracebacks_today > monitor_config.traceback_warning_v7:
-                    color_traceback = 'orange'
-                else:
-                    color_traceback = 'green'
-                errors.append({
-                    'server': f':blue[{hostname}]',
-                    'name': f':blue[{monitor.get("u", "")}]',
-                    'mem': f':{color_mem}[{round(memory_mb, 1)}]',
-                    'swap': f':{color_swap}[{round(swap_value, 1)}]',
-                    'cpu': f':{color_cpu}[{cpu_value}]',
-                    'error': f':{color_error}[{errors_today}]',
-                    'traceback': f':{color_traceback}[{tracebacks_today}]',
-                })
-    return errors
-
-
 def collect_live_alerts(connections: dict[str, Any], system_state: dict[str, Any],
                         instances: dict[str, Any], services: dict[str, Any],
                         monitor_config) -> list[dict[str, Any]]:
@@ -2162,7 +1981,7 @@ print(json.dumps({'monitors': monitors, 'v7': v7, 'cache': new_cache,
 
 
 
-HOST_META_SCRIPT = r'''python3 -u -c "
+HOST_META_SCRIPT = r'''python3 -u - <<'PY'
 import configparser, hashlib, json, os, re, subprocess, sys
 from pathlib import Path
 
@@ -2325,7 +2144,7 @@ if os.path.isdir(logs_dir):
 result['available_logs'] = available
 
 print(json.dumps(result))
-"'''
+PY'''
 
 PACKAGE_STATUS_SCRIPT = r'''python3 -u -c "
 import json, os, re, subprocess
@@ -2399,6 +2218,7 @@ class VPSMonitor:
     def __init__(self):
         self.pool = AsyncSSHPool()
         self.store = VPSStore()
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Config
         self._auto_restart: Optional[bool] = None
@@ -2850,6 +2670,7 @@ class VPSMonitor:
         """Initialize and start all monitoring tasks."""
         if self._running:
             return
+        self.loop = asyncio.get_running_loop()
         self._running = True
         _log(SERVICE, "Starting VPS monitor...")
 
@@ -2928,6 +2749,7 @@ class VPSMonitor:
             store.maybe_flush(force=True)
         self._bot_pnl_history.maybe_flush(force=True)
         await self.pool.disconnect_all()
+        self.loop = None
         _log(SERVICE, "VPS monitor stopped")
 
     # ── Main loop ───────────────────────────────────────────
@@ -3652,7 +3474,21 @@ class VPSMonitor:
                             _log(SERVICE, f"[host-meta] Collected metadata for {hostname}",
                                  level="DEBUG")
                 except json.JSONDecodeError:
-                    pass
+                    _log(SERVICE,
+                         f"[host-meta] Invalid JSON from {hostname}: "
+                         f"{(result.stdout or '').strip()[:400]}",
+                         level="WARNING")
+            elif result is None:
+                _log(SERVICE, f"[host-meta] Command failed for {hostname}: no SSH result",
+                     level="WARNING")
+            else:
+                _log(
+                    SERVICE,
+                    f"[host-meta] Command failed for {hostname}: exit={getattr(result, 'exit_status', 'n/a')} "
+                    f"stdout={(getattr(result, 'stdout', '') or '').strip()[:200]} "
+                    f"stderr={(getattr(result, 'stderr', '') or '').strip()[:200]}",
+                    level="WARNING",
+                )
 
         if collect_package_status:
             package_result = await self.pool.run(hostname, PACKAGE_STATUS_SCRIPT,

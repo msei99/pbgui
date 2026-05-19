@@ -1511,6 +1511,13 @@
       white-space: normal;
     }
 
+    .bucket-cleanup-body {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      white-space: normal;
+    }
+
     .log-matches-pre {
       margin: 0;
       white-space: pre-wrap;
@@ -2831,7 +2838,7 @@
     </main>
   </div>
 
-  <script src='/app/js/log_viewer_panel.js?v=21'></script>
+  <script src='/app/js/log_viewer_panel.js?v=22'></script>
   <script src="/app/js/api_sync_status.js?v=2"></script>
   <script>
     const TOKEN = "%%TOKEN%%";
@@ -2980,7 +2987,9 @@
         pb7ManualBranch: '',
         pb7ManualCommit: '',
         pb7RemoteBranchesKey: '',
-        pb7RemoteCommitsKey: ''
+        pb7RemoteCommitsKey: '',
+        bucketCleanupPreview: null,
+        bucketCleanupPreviewRefreshOnly: false
       };
     }
 
@@ -3237,7 +3246,8 @@
     }
 
     function overviewDeployNeedsPassword(command) {
-      return String(command || '').trim() === 'vps-update';
+      const normalized = String(command || '').trim();
+      return normalized === 'vps-update' || normalized === 'vps-cleanup';
     }
 
     function cancelOverviewDeployPasswordFlow(options) {
@@ -4812,6 +4822,8 @@
           token: TOKEN,
           defaultHost: 'local',
           defaultFile: requestedFile,
+          taskBrowseMode: browseMode,
+          taskListSortMode: 'newest',
           startLocalAtEnd: !!(store.taskLog && store.taskLog.startEmpty),
           localFileFilter: browseMode ? function(file) {
             if (store.taskLog && store.taskLog.scope === 'master') {
@@ -5166,6 +5178,23 @@
           </div>
           <div class='deploy-progress-bar'><div class='deploy-progress-fill' style='width:${escAttr(String(progress.percent))}%;background:${escAttr(progress.color)}'></div></div>
           ${step ? `<div class='field-help deploy-status-meta'>${esc((kind ? kind + ': ' : '') + step)}${taskMeta ? ' (' + esc(taskMeta) + ')' : ''}</div>` : ''}
+        </div>`;
+    }
+
+    function renderOverviewTaskSummary(row) {
+      const status = String(row.task_status || '').toLowerCase();
+      if (!status || status === 'none' || status === 'idle' || status.indexOf('success') >= 0 || status.indexOf('fail') >= 0 || status.indexOf('error') >= 0 || status.indexOf('unreachable') >= 0 || status.indexOf('cancel') >= 0 || status.indexOf('interrupt') >= 0) {
+        return '';
+      }
+      const commandText = String(row.task_command_text || row.task_command || 'Task').trim();
+      const step = String(row.task_current_label || row.task_step || '').trim();
+      const currentIndex = Math.max(0, Number(row.task_current_index || 0));
+      const totalSteps = Math.max(0, Number(row.task_total_steps || 0));
+      const taskMeta = totalSteps ? (currentIndex >= totalSteps ? `${totalSteps}/${totalSteps}` : `${currentIndex + 1}/${totalSteps}`) : '';
+      return `
+        <div class='field-help' style='display:grid;gap:4px;margin-top:6px'>
+          <div>${levelTag('warning', 'Task Running')} <span class='code'>${esc(commandText)}</span></div>
+          ${step ? `<div>${esc(step)}${taskMeta ? ' (' + esc(taskMeta) + ')' : ''}</div>` : ''}
         </div>`;
     }
 
@@ -5678,6 +5707,162 @@
       }, 100);
     }
 
+    function openBucketCleanupPreview() {
+      send({ cmd: 'preview_bucket_cleanup' });
+    }
+
+    function getBucketCleanupSelectedHosts() {
+      const checked = document.querySelectorAll('[data-bucket-cleanup-host]:checked');
+      return Array.from(checked).map(function (node) {
+        return String(node.getAttribute('data-bucket-cleanup-host') || '').trim();
+      }).filter(Boolean);
+    }
+
+    function setBucketCleanupActionLoading(isLoading) {
+      const dryRunBtn = document.getElementById('bucket-cleanup-dry-run');
+      const confirmBtn = document.getElementById('bucket-cleanup-confirm');
+      if (dryRunBtn) {
+        dryRunBtn.disabled = !!isLoading;
+        dryRunBtn.textContent = isLoading ? 'Dry Run Running...' : 'Dry Run Selected';
+      }
+      if (confirmBtn) {
+        confirmBtn.disabled = !!isLoading;
+      }
+    }
+
+    function renderBucketCleanupDryRunResults(data) {
+      const payload = data || {};
+      const summary = payload.summary || {};
+      const results = Array.isArray(payload.results) ? payload.results : [];
+      const readyCount = results.filter(function (row) { return !!row.ok; }).length;
+      if (!results.length) {
+        return '<div class="notice info">No dry-run results available.</div>';
+      }
+      return `
+        <div style='display:grid;gap:12px'>
+          <div>
+            <div><strong>Bucket:</strong> <span class='code'>${esc(String(payload.bucket || ''))}</span></div>
+            <div><strong>Summary:</strong> ${esc(String(summary.requested || 0))} selected, ${esc(String(summary.ok || 0))} ok, ${esc(String(summary.failed || 0))} failed, ${esc(String(summary.matches || 0))} matched paths.</div>
+            <div class='field-sub info'>${esc(String(readyCount))} host${readyCount === 1 ? '' : 's'} passed dry run and can be deleted directly from this dialog.</div>
+          </div>
+          ${results.map(function (row) {
+            const hostname = String(row.hostname || '');
+            const matches = Array.isArray(row.matches) ? row.matches : [];
+            const rowClass = row.ok ? 'notice success' : 'notice warning';
+            return `
+              <div class='${rowClass}' style='display:grid;gap:8px'>
+                <div><strong>${esc(hostname)}</strong> ${row.ok ? '' : '<span class="tag danger">failed</span>'}</div>
+                <div>Matched paths: <strong>${esc(String(row.match_count || 0))}</strong></div>
+                ${row.error ? `<div>${esc(String(row.error || ''))}</div>` : ''}
+                <pre class='log-matches-pre' style='max-height:260px;overflow:auto'>${esc(matches.join('\n') || '(no matches)')}</pre>
+              </div>`;
+          }).join('')}
+        </div>`;
+    }
+
+    function renderBucketCleanupDeleteResults(data) {
+      const payload = data || {};
+      const summary = payload.summary || {};
+      const results = Array.isArray(payload.results) ? payload.results : [];
+      if (!results.length) {
+        return '<div class="notice info">No cleanup results available.</div>';
+      }
+      return `
+        <div style='display:grid;gap:12px'>
+          <div>
+            <div><strong>Bucket:</strong> <span class='code'>${esc(String(payload.bucket || ''))}</span></div>
+            <div><strong>Summary:</strong> ${esc(String(summary.requested || 0))} requested, ${esc(String(summary.deleted || 0))} ok, ${esc(String(summary.failed || 0))} failed.</div>
+          </div>
+          ${results.map(function (row) {
+            const hostname = String(row.hostname || '');
+            const operations = Array.isArray(row.operations) ? row.operations : [];
+            const deleted = Array.isArray(row.deleted) ? row.deleted : [];
+            const dryRunMatches = Array.isArray(row.dry_run_matches) ? row.dry_run_matches : [];
+            const rowClass = row.ok ? 'notice success' : 'notice warning';
+            return `
+              <div class='${rowClass}' style='display:grid;gap:8px'>
+                <div><strong>${esc(hostname)}</strong> ${row.ok ? '<span class="tag ok">ok</span>' : '<span class="tag danger">failed</span>'}</div>
+                <div>Deleted prefixes: <span class='code'>${esc(deleted.join(', ') || '(none)')}</span></div>
+                ${row.error ? `<div>${esc(String(row.error || ''))}</div>` : ''}
+                <div><strong>Dry-run matches</strong></div>
+                <pre class='log-matches-pre' style='max-height:180px;overflow:auto'>${esc(dryRunMatches.join('\n') || '(no matches)')}</pre>
+                <div><strong>Delete operations</strong></div>
+                <pre class='log-matches-pre' style='max-height:280px;overflow:auto'>${esc(operations.map(function (op) {
+                  const parts = [
+                    '[' + String(op.ok ? 'ok' : 'failed') + '] ' + String(op.prefix || ''),
+                    'command: ' + String(Array.isArray(op.command) ? op.command.join(' ') : ''),
+                    'returncode: ' + String(op.returncode == null ? 'n/a' : op.returncode),
+                    'stdout: ' + String(op.stdout || '(empty)'),
+                    'stderr: ' + String(op.stderr || '(empty)')
+                  ];
+                  return parts.join('\n');
+                }).join('\n\n') || '(no operation log)')}</pre>
+              </div>`;
+          }).join('')}
+        </div>`;
+    }
+
+    function renderBucketCleanupRows(rows) {
+      const items = Array.isArray(rows) ? rows : [];
+      if (!items.length) {
+        return '<div class="notice info">No matching bucket entries found.</div>';
+      }
+      return items.map(function (row) {
+        const hostname = String(row.hostname || '');
+        const category = String(row.category || 'known');
+        const checked = row.eligible ? 'checked' : '';
+        const rowClass = category === 'orphaned' ? 'notice warning' : (category === 'eligible' ? 'notice success' : 'notice');
+        const badge = category === 'eligible' ? 'Eligible' : (category === 'orphaned' ? 'Orphaned' : 'Known but skipped');
+        return `
+          <div class='${rowClass}' style='display:grid;gap:8px;margin-bottom:10px'>
+            <label class='checkbox-row'><input type='checkbox' data-bucket-cleanup-host='${escAttr(hostname)}' ${checked}> Delete bucket entries for <strong>${esc(hostname)}</strong></label>
+            <div><strong>${esc(badge)}</strong></div>
+            <div>Entries: ${row.cmd ? '<span class="tag ok">cmd</span>' : '<span class="tag">cmd</span>'} ${row.run_v7 ? '<span class="tag ok">run_v7</span>' : '<span class="tag">run_v7</span>'}</div>
+            <div>Role: <span class='code'>${esc(String(row.role || 'unknown'))}</span> | PBGui: <span class='code'>${esc(String(row.pbgui_version || 'N/A'))}</span></div>
+            <div>${esc(String(row.reason || ''))}</div>
+          </div>`;
+      }).join('');
+    }
+
+    function openBucketCleanupModal(preview) {
+      prepareAlertModalWindow(980, 820);
+      const data = preview || store.master.bucketCleanupPreview || {};
+      const summary = data.summary || {};
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      document.getElementById('alertModalTitle').textContent = 'Cleanup Bucket';
+      const box = document.getElementById('alertModalBody');
+      box.className = 'notice bucket-cleanup-body';
+      box.innerHTML = `
+        <div style='display:grid;gap:12px'>
+          <div>
+            <div><strong>Bucket:</strong> <span class='code'>${esc(String(data.bucket || ''))}</span></div>
+            <div class='field-sub info'>Eligible entries are preselected. Known-but-skipped and orphaned entries are unchecked by default. Orphaned entries are highlighted.</div>
+          </div>
+          <div><strong>Summary:</strong> ${esc(String(summary.total || 0))} total, ${esc(String(summary.eligible || 0))} eligible, ${esc(String(summary.known || 0))} known but skipped, ${esc(String(summary.orphaned || 0))} orphaned.</div>
+          <div>${renderBucketCleanupRows(rows)}</div>
+        </div>`;
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn ghost" type="button" id="bucket-cleanup-dry-run">Dry Run Selected</button> <button class="btn primary" type="button" id="bucket-cleanup-confirm">Delete Selected</button>';
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      setTimeout(function() { box.scrollTop = 0; }, 0);
+      document.getElementById('bucket-cleanup-dry-run').onclick = function () {
+        const hostnames = getBucketCleanupSelectedHosts();
+        if (!hostnames.length) {
+          toast('Select at least one bucket entry first.', 'warning');
+          return;
+        }
+        setBucketCleanupActionLoading(true);
+        send({ cmd: 'dry_run_bucket_cleanup', hostnames: hostnames });
+      };
+      document.getElementById('bucket-cleanup-confirm').onclick = function () {
+        const hostnames = getBucketCleanupSelectedHosts();
+        if (!hostnames.length) {
+          toast('Select at least one bucket entry first.', 'warning');
+          return;
+        }
+        send({ cmd: 'run_bucket_cleanup', hostnames: hostnames });
+      };
+    }
+
     function openBotLog(hostname, botName, pbVersion) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
       ui.log.filename = 'software/pb7/logs/' + botName + '.log';
@@ -6057,10 +6242,38 @@
       }, 3000);
     }
 
+    function isTerminalTaskStatus(status) {
+      const normalized = String(status || '').toLowerCase();
+      return ['successful', 'failed', 'error', 'timeout', 'canceled', 'cancelled', 'unreachable'].indexOf(normalized) >= 0;
+    }
+
+    function maybeRefreshCompletedVpsTask(nextState) {
+      const hostname = String(store.hostname || '');
+      if (!hostname || !isVpsContextView()) return;
+      const previousRows = ((((store.state || {}).overview) || {}).rows) || [];
+      const nextRows = ((((nextState || {}).overview) || {}).rows) || [];
+      const previousRow = previousRows.find(function (row) { return String((row || {}).hostname || '') === hostname; }) || null;
+      const nextRow = nextRows.find(function (row) { return String((row || {}).hostname || '') === hostname; }) || null;
+      if (!previousRow || !nextRow) return;
+      const previousStatus = String(previousRow.task_status || '').toLowerCase();
+      const nextStatus = String(nextRow.task_status || '').toLowerCase();
+      if (previousStatus === nextStatus) return;
+      if (!previousStatus || isTerminalTaskStatus(previousStatus)) return;
+      if (!isTerminalTaskStatus(nextStatus)) return;
+      if (store._completedTaskRefreshHost === hostname && store._completedTaskRefreshStatus === nextStatus) return;
+      store._completedTaskRefreshHost = hostname;
+      store._completedTaskRefreshStatus = nextStatus;
+      send({ cmd: 'refresh' });
+      scheduleVpsDetailFetch(hostname);
+    }
+
     function handleMessage(msg) {
       if (!msg || typeof msg !== 'object') return;
       if (msg.type === 'state') {
-        store.state = msg.data || null;
+        const previousState = store.state;
+        const nextState = msg.data || null;
+        maybeRefreshCompletedVpsTask(nextState);
+        store.state = nextState;
         const deploysState = (((store.state || {}).deploys) || {});
         const deployHistory = deploysState.history || deploysState.vps_logging_history;
         if (Array.isArray(deployHistory)) {
@@ -6155,6 +6368,9 @@
             }
             return;
           }
+        }
+        if (msg.cmd === 'dry_run_bucket_cleanup' || msg.cmd === 'run_bucket_cleanup') {
+          setBucketCleanupActionLoading(false);
         }
         toast(msg.error || 'Unknown error', 'error');
         return;
@@ -6286,6 +6502,69 @@
           setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
           setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
         }
+        return;
+      }
+      if (msg.type === 'bucket_cleanup_preview') {
+        store.master.bucketCleanupPreview = msg.data || null;
+        if (store.master.bucketCleanupPreviewRefreshOnly) {
+          store.master.bucketCleanupPreviewRefreshOnly = false;
+          return;
+        }
+        openBucketCleanupModal(msg.data || null);
+        return;
+      }
+      if (msg.type === 'bucket_cleanup_result') {
+        setBucketCleanupActionLoading(false);
+        const data = msg.data || {};
+        const summary = data.summary || {};
+        const deleted = Number(summary.deleted || 0);
+        const failed = Number(summary.failed || 0);
+        store.master.bucketCleanupPreview = null;
+        prepareAlertModalWindow(980, 820);
+        document.getElementById('alertModalTitle').textContent = 'Cleanup Bucket Result';
+        const box = document.getElementById('alertModalBody');
+        box.className = 'notice bucket-cleanup-body';
+        box.innerHTML = renderBucketCleanupDeleteResults(data);
+        document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Close</button>';
+        document.getElementById('alertModalOverlay').classList.add('visible');
+        setTimeout(function() { box.scrollTop = 0; }, 0);
+        if (failed <= 0) {
+          toast('Bucket cleanup finished for ' + deleted + ' host' + (deleted === 1 ? '' : 's') + '.', 'success');
+        }
+        store.master.bucketCleanupPreviewRefreshOnly = true;
+        send({ cmd: 'preview_bucket_cleanup' });
+        return;
+      }
+      if (msg.type === 'bucket_cleanup_dry_run') {
+        setBucketCleanupActionLoading(false);
+        const data = msg.data || {};
+        const readyHostnames = (Array.isArray(data.results) ? data.results : []).filter(function (row) {
+          return !!(row && row.ok && String(row.hostname || '').trim());
+        }).map(function (row) {
+          return String(row.hostname || '').trim();
+        });
+        prepareAlertModalWindow(980, 820);
+        document.getElementById('alertModalTitle').textContent = 'Cleanup Bucket Dry Run';
+        const box = document.getElementById('alertModalBody');
+        box.className = 'notice bucket-cleanup-body';
+        box.innerHTML = renderBucketCleanupDryRunResults(data);
+        document.getElementById('alertModalBtnRow').innerHTML = readyHostnames.length
+          ? '<button class="btn ghost" type="button" onclick="closeAlertModal()">Close</button> <button class="btn primary" type="button" id="bucket-cleanup-dry-run-confirm">Delete Selected</button>'
+          : '<button class="btn ghost" type="button" onclick="closeAlertModal()">Close</button>';
+        document.getElementById('alertModalOverlay').classList.add('visible');
+        const confirmBtn = document.getElementById('bucket-cleanup-dry-run-confirm');
+        if (confirmBtn) {
+          confirmBtn.onclick = function () {
+            if (!readyHostnames.length) {
+              toast('No successful dry-run entries are available for deletion.', 'warning');
+              return;
+            }
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = 'Deleting...';
+            send({ cmd: 'run_bucket_cleanup', hostnames: readyHostnames });
+          };
+        }
+        setTimeout(function() { box.scrollTop = 0; }, 0);
         return;
       }
       if (msg.type === 'cmc_check_result') {
@@ -6455,6 +6734,8 @@
         }
       } else if (cmd === 'refresh') {
         toast('Refreshed.', 'info');
+      } else if (cmd === 'run_bucket_cleanup') {
+        return;
       } else if (cmd === 'read_vps_settings') {
         if (isVpsContextView() && store.hostname && msg.data) {
           const ui = ensureVpsUi(store.hostname, store.detail && store.detail.hostname === store.hostname ? store.detail : null);
@@ -7514,7 +7795,7 @@
           } else if (row.nav === 'vps') {
             target = `<button class='table-button' type='button' onmousedown='event.stopPropagation()' onmouseup='event.stopPropagation()' onclick='event.stopPropagation(); selectView("vps", ${js(row.hostname)})'>${esc(row.name)}</button>`;
           }
-          return target;
+          return `${target}${row.nav === 'vps' ? renderOverviewTaskSummary(row) : ''}`;
         }
         if (column.key === 'role') return `${esc(row.role_icon || '')} ${esc(row.role || '')}`;
         if (column.key === 'online') return row.online ? levelTag('ok', 'Online') : levelTag('error', 'Offline');
@@ -8074,6 +8355,7 @@
           <button class='${masterRebootBtnClass}' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='rebootMasterAction()'>Reboot Master</button>
           ${blockedTasksNotice ? `<div class='notice warning'>${esc(blockedTasksNotice)}</div>` : ''}
           <div class='sb-separator'>Tools</div>
+          <button class='sb-btn warning' type='button' onclick='openBucketCleanupPreview()'>Cleanup Bucket</button>
           <button class='sb-btn' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='masterActionWithSudo("master-install-rustup", "Install or Update rustup")'>Install or Update rustup</button>
           <button class='sb-btn' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='masterActionWithSudo("master-install-rclone", "Install or Update rclone")'>Install or Update rclone</button>
           `;
@@ -8120,7 +8402,7 @@
           </div>
           <button class='${linuxUpdateBtnClass}' type='button' onclick='updateLinuxVpsAction(${js(selectedHost)})'>Update Linux</button>
           <button class='${rebootBtnClass}' type='button' onclick='vpsActionWithPw(${js(selectedHost)}, "vps-reboot", "Reboot VPS")'>Reboot VPS</button>
-          <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='runVpsWithLog(${js(selectedHost)}, "vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
+          <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='vpsActionWithPw(${js(selectedHost)}, "vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
           <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='openSwapResizePrompt(${js(selectedHost)})'>Resize Swap</button>
           <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='openFirewallSettingsPrompt(${js(selectedHost)})'>Update Firewall Settings</button>
           <button class='sb-btn' type='button' onclick='openCoinDataPrompt(${js(selectedHost)})'>Update CoinData API</button>`;
@@ -8169,7 +8451,8 @@
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pbgui", "Update PBGui")'>Update PBGui</button>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pb7", "Update PB7")'>Update PB7</button>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pb", "Update PBGui and PB7")'>Update PBGui and PB7</button>
-          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>`;
+          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
+          <button class='sb-btn warning' type='button' onclick='openBucketCleanupPreview()'>Cleanup Bucket</button>`;
       } else {
         html = '';
       }

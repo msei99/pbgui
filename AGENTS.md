@@ -128,6 +128,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 - Commit: `Release vX.YY`, tag `vX.YY`, push branch + tags.
 
 ## Testing
+- Never run verification steps or tests that can delete, mutate, or overwrite real user/runtime data unless the user explicitly asked for that destructive action. Prefer dry runs, read-only inspection, mocks, or isolated test data.
 - Run: `/home/mani/software/venv_pbgui/bin/python -m pytest tests/`
 - Pytest 7.0+, discovery: `test_*.py`, `Test*` classes, `test_*` functions.
 - Use `@pytest.mark.parametrize` for multiple cases.

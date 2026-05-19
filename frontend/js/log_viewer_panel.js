@@ -72,17 +72,24 @@ class LogViewerPanel {
     user-select:none;
 }
 .lvp-sidebar-header{
-    padding:4px 6px 4px 0;border-bottom:1px solid #1e293b;
-    flex-shrink:0;white-space:nowrap;
+    padding:4px 10px;border-bottom:1px solid #1e293b;
+    flex-shrink:0;white-space:nowrap;display:flex;align-items:center;gap:6px;
 }
 .lvp-sb-hdr-toggle{
-    display:inline-flex;align-items:center;gap:4px;width:100%;padding:4px 10px;
+    display:inline-flex;align-items:center;gap:4px;flex:1;min-width:0;padding:4px 0;
     background:none;border:none;color:#64748b;
     font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;
     cursor:pointer;text-align:left;transition:color .15s;user-select:none;
 }
 .lvp-sb-hdr-toggle:hover{color:#e2e8f0}
 .lvp-sb-hdr-toggle-arrow{font-size:9px;margin-left:auto;opacity:.6}
+.lvp-sort-btn{
+    display:inline-flex;align-items:center;justify-content:center;
+    min-width:18px;height:18px;padding:0 4px;
+    background:#1e293b;border:1px solid #334155;border-radius:4px;
+    color:#94a3b8;font-size:10px;cursor:pointer;transition:all .15s;
+}
+.lvp-sort-btn:hover{border-color:#64748b;color:#e2e8f0}
 .lvp-item-list{flex:1;overflow-y:auto;padding:4px 0}
 .lvp-item-btn{
     display:block;width:100%;text-align:left;padding:5px 10px;
@@ -264,6 +271,8 @@ class LogViewerPanel {
         this._localFileFilter = typeof opts.localFileFilter === 'function' ? opts.localFileFilter : null;
         this._startLocalAtEnd = !!opts.startLocalAtEnd;
         this._serviceListOverride = typeof opts.serviceListOverride === 'function' ? opts.serviceListOverride : null;
+        this._taskBrowseMode = !!opts.taskBrowseMode;
+        this._taskListSortMode = opts.taskListSortMode || 'newest';
 
         /* runtime state */
         this._ws           = null;
@@ -394,6 +403,7 @@ class LogViewerPanel {
       '<button class="lvp-sb-hdr-toggle" id="' + p + 'sb-hdr-toggle">' +
         'Files <span class="lvp-sb-hdr-toggle-arrow">&#9664;</span>' +
       '</button>' +
+      '<button class="lvp-sort-btn lvp-hidden" type="button" id="' + p + 'sort-btn" title="Toggle sort order" aria-label="Toggle sort order">&#8595;</button>' +
     '</div>' +
     '<div class="lvp-item-list" id="' + p + 'item-list"></div>' +
     '<div class="lvp-sidebar-resize" id="' + p + 'sidebar-resize"></div>' +
@@ -491,6 +501,7 @@ class LogViewerPanel {
         this._q('ln-btn').addEventListener('click',      function() { me._toggleLineNums(); });
         this._q('sb-toggle').addEventListener('click',   function() { me._toggleSidebar(); });
         this._q('sb-hdr-toggle').addEventListener('click', function() { me._toggleSidebar(); });
+        this._q('sort-btn').addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); me._toggleTaskListSort(); });
         this._q('sidebar-resize').addEventListener('mousedown', function(e) { me._initResize(e); });
         this._q('preset').addEventListener('change',     function() { me._onPresetChange(); });
         this._q('search').addEventListener('input',      function() { me._onSearchInput(); });
@@ -830,6 +841,9 @@ class LogViewerPanel {
         var match = action.match(/^(.*?)(?:\.(\d+))?$/);
         var command = match ? (match[1] || '') : action;
         var history = match && match[2] ? parseInt(match[2], 10) : 0;
+        var runMatch = command.match(/^(.*?)(?:--run[-_](\d+)|\s+Run\s+(\d+))$/i);
+        var runId = runMatch ? parseInt(runMatch[2] || runMatch[3] || '0', 10) : 0;
+        if (runMatch) command = runMatch[1] || command;
         var labels = {
             'init': 'Initialize',
             'setup': 'Setup VPS',
@@ -867,6 +881,7 @@ class LogViewerPanel {
         return {
             command: command,
             history: history,
+            runId: runId,
             label: label || 'Task'
         };
     }
@@ -889,6 +904,17 @@ class LogViewerPanel {
     _taskHistoryIndex(file) {
         var f = file || '';
         if (f.indexOf('VPSAction:') === 0) {
+            return this._taskLabel(f.split(':').slice(2).join(':')).runId;
+        }
+        if (f.indexOf('MasterAction:') === 0) {
+            return this._taskLabel(f.split(':').slice(1).join(':')).runId;
+        }
+        return 0;
+    }
+
+    _taskHistoryTieBreaker(file) {
+        var f = file || '';
+        if (f.indexOf('VPSAction:') === 0) {
             return this._taskLabel(f.split(':').slice(2).join(':')).history;
         }
         if (f.indexOf('MasterAction:') === 0) {
@@ -899,6 +925,24 @@ class LogViewerPanel {
 
     _orderedFileList() {
         var files = this._fileList.slice();
+        if (this._taskBrowseMode) {
+            var mode = this._taskListSortMode || 'newest';
+            if (mode === 'alphabetical') {
+                return files.sort(function(a, b) {
+                    return String(this._fileLabel(a) || a).localeCompare(String(this._fileLabel(b) || b));
+                }.bind(this));
+            }
+            files.sort(function(a, b) {
+                var ai = this._taskHistoryIndex(a);
+                var bi = this._taskHistoryIndex(b);
+                if (ai !== bi) return mode === 'oldest' ? ai - bi : bi - ai;
+                var at = this._taskHistoryTieBreaker(a);
+                var bt = this._taskHistoryTieBreaker(b);
+                if (at !== bt) return mode === 'oldest' ? at - bt : bt - at;
+                return String(this._fileLabel(a) || a).localeCompare(String(this._fileLabel(b) || b));
+            }.bind(this));
+            return files;
+        }
         var base = this._taskHistoryBase(this._file);
         if (!base) return files;
         var me = this;
@@ -934,7 +978,18 @@ class LogViewerPanel {
 
     _buildFileList() {
         var list = this._q('item-list');
+        var sortBtn = this._q('sort-btn');
         if (!list) return;
+        if (sortBtn) {
+            if (this._taskBrowseMode) {
+                sortBtn.classList.remove('lvp-hidden');
+                sortBtn.textContent = this._taskListSortMode === 'alphabetical' ? 'A' : (this._taskListSortMode === 'oldest' ? '\u2191' : '\u2193');
+                sortBtn.title = 'Sort: ' + (this._taskListSortMode || 'newest');
+                sortBtn.setAttribute('aria-label', 'Sort: ' + (this._taskListSortMode || 'newest'));
+            } else {
+                sortBtn.classList.add('lvp-hidden');
+            }
+        }
         list.innerHTML = '';
         var me = this;
         var files = this._orderedFileList();
@@ -949,6 +1004,14 @@ class LogViewerPanel {
                 list.appendChild(btn);
             })(files[i]);
         }
+    }
+
+    _toggleTaskListSort() {
+        if (!this._taskBrowseMode) return;
+        var modes = ['newest', 'oldest', 'alphabetical'];
+        var current = modes.indexOf(this._taskListSortMode || 'newest');
+        this._taskListSortMode = modes[(current + 1) % modes.length];
+        this._buildFileList();
     }
 
     _collectKnownBotNames(services) {

@@ -267,17 +267,22 @@ def _strip_legacy_unsupported_optimize_bounds(config: dict) -> list[str]:
 
 
 def _restore_raw_backtest_end_date(config: dict, raw_config: dict | None) -> dict:
-    """Preserve semantic backtest end_date tokens PB7 materializes during load."""
+    """Preserve raw config values PB7 materializes away during load."""
     if not isinstance(config, dict) or not isinstance(raw_config, dict):
         return config
 
     raw_backtest = raw_config.get("backtest")
-    if not isinstance(raw_backtest, dict):
-        return config
+    if isinstance(raw_backtest, dict):
+        raw_end_date = raw_backtest.get("end_date")
+        if isinstance(raw_end_date, str) and raw_end_date.strip().lower() == "now":
+            config.setdefault("backtest", {})["end_date"] = "now"
 
-    raw_end_date = raw_backtest.get("end_date")
-    if isinstance(raw_end_date, str) and raw_end_date.strip().lower() == "now":
-        config.setdefault("backtest", {})["end_date"] = "now"
+    raw_live = raw_config.get("live")
+    live = config.get("live")
+    if isinstance(raw_live, dict) and isinstance(live, dict):
+        raw_price_distance_threshold = raw_live.get("price_distance_threshold")
+        if raw_price_distance_threshold is not None and live.get("price_distance_threshold") is None:
+            live["price_distance_threshold"] = raw_price_distance_threshold
     return config
 
 
