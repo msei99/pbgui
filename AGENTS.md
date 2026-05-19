@@ -124,7 +124,8 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 
 ### Release Workflow
 - Steps in `RELEASING.md`.
-- Per release: bump `pbgui_purefunc.py` `PBGUI_VERSION`, move `releases/unreleased.md` notes into a dedicated `releases/vX.YY.md` file, keep `CHANGELOG.md` index updated. The `pbgui_func.py` About string uses `PBGUI_VERSION` automatically.
+- Per release: bump `pbgui_purefunc.py` `PBGUI_VERSION`, move `releases/unreleased.md` notes into a dedicated `releases/vX.YY.md` file, keep `CHANGELOG.md` index updated.
+- Per release: verify the Streamlit/About version display also shows the new release correctly, and if fixing that display still requires a process restart, bump `api/serial.txt` so the UI makes the restart need visible.
 - Commit: `Release vX.YY`, tag `vX.YY`, push branch + tags.
 
 ## Testing
@@ -137,7 +138,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **pbgui** (20243 symbols, 42316 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **pbgui** (20675 symbols, 42987 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

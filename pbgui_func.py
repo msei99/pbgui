@@ -1,6 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as _st_components
 import json
+import re
 
 import hjson
 import pprint
@@ -168,6 +169,15 @@ def set_page_config(page : str = "Start"):
         migrate_ini_sections()
         st.session_state._ini_migrated = True
     st.session_state.page = page
+    about_version = PBGUI_VERSION
+    version_file = PBGDIR / "pbgui_purefunc.py"
+    try:
+        version_text = version_file.read_text(encoding="utf-8")
+        match = re.search(r'PBGUI_VERSION\s*=\s*["\']([^"\']+)["\']', version_text)
+        if match:
+            about_version = str(match.group(1) or "").strip() or about_version
+    except OSError:
+        pass
     st.set_page_config(
         page_title=f"PBGUI - {page}",
         page_icon=":screwdriver:",
@@ -175,7 +185,7 @@ def set_page_config(page : str = "Start"):
         initial_sidebar_state="expanded",
         menu_items={
             'Get help': 'https://github.com/msei99/pbgui/#readme',
-            'About': f"Passivbot GUI {__import__('pbgui_purefunc').PBGUI_VERSION} | API Serial {(PBGDIR / 'api' / 'serial.txt').read_text().strip()} [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
+            'About': f"Passivbot GUI {about_version} | API Serial {(PBGDIR / 'api' / 'serial.txt').read_text().strip()} [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)"
         }
     )
     # Global layout CSS — applied on every page
