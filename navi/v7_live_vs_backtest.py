@@ -2885,10 +2885,10 @@ def live_vs_backtest_page():
         except Exception:
             pass
 
-        with st.expander("Missed fills / price_distance_threshold", expanded=True):
+        with st.expander("Missed fills / initial entry distance gate", expanded=True):
             st.caption(
-                "Visualize how close price action was to the ideal initial entry, and when the "
-                "price_distance_threshold gate could only have opened briefly (dip-only)."
+                "Approximate when the planned initial entry was within PB7's executor-side "
+                "market-distance gate, including minutes where the gate may only have opened briefly."
             )
             if not bt_cfg:
                 st.info("Select a finished backtest result (with config.json) to enable this view.")
@@ -2951,7 +2951,7 @@ def live_vs_backtest_page():
 
                 if symbol_sel:
                     live_cfg = bt_cfg.get("live", {}) if isinstance(bt_cfg, dict) else {}
-                    default_thr = float(live_cfg.get("price_distance_threshold", 0.002) or 0.002)
+                    default_thr = float(live_cfg.get("initial_entry_exec_max_market_dist_pct", 0.005) or 0.005)
 
                     # Row 1: core parameters
                     r1c1, r1c2, r1c3, r1c4 = st.columns([1.1, 1.3, 1.2, 1.1], vertical_alignment="center")
@@ -2965,14 +2965,14 @@ def live_vs_backtest_page():
                         )
                     with r1c2:
                         thr = st.number_input(
-                            "price_distance_threshold",
+                            "initial_entry_exec_max_market_dist_pct",
                             min_value=0.0,
                             max_value=0.25,
                             step=0.001,
                             value=float(default_thr),
                             format="%.4f",
                             key="v7_lvbt_missed_thr",
-                            help="price_distance_threshold used for gating initial entries",
+                            help="Approximate executor-side market-distance gate used for initial entry posting.",
                         )
                     with r1c3:
                         use_prev = st.toggle(

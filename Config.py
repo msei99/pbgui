@@ -2679,7 +2679,7 @@ class Live:
         self._minimum_coin_age_days = 30.0
         self._order_match_tolerance_pct = 0.0002
         self._pnls_max_lookback_days = 30.0
-        self._price_distance_threshold = 0.002
+        self._initial_entry_exec_max_market_dist_pct = 0.005
         self._recv_window_ms = 5000
         self._time_in_force = "good_till_cancelled"
         self._warmup_jitter_seconds = 30.0
@@ -2716,7 +2716,7 @@ class Live:
             "minimum_coin_age_days": self._minimum_coin_age_days,
             "order_match_tolerance_pct": self._order_match_tolerance_pct,
             "pnls_max_lookback_days": self._pnls_max_lookback_days,
-            "price_distance_threshold": self._price_distance_threshold,
+            "initial_entry_exec_max_market_dist_pct": self._initial_entry_exec_max_market_dist_pct,
             "recv_window_ms": self._recv_window_ms,
             "time_in_force": self._time_in_force,
             "warmup_jitter_seconds": self._warmup_jitter_seconds,
@@ -2779,8 +2779,8 @@ class Live:
             self.order_match_tolerance_pct = new_live["order_match_tolerance_pct"]
         if "pnls_max_lookback_days" in new_live:
             self.pnls_max_lookback_days = new_live["pnls_max_lookback_days"]
-        if "price_distance_threshold" in new_live:
-            self.price_distance_threshold = new_live["price_distance_threshold"]
+        if "initial_entry_exec_max_market_dist_pct" in new_live:
+            self.initial_entry_exec_max_market_dist_pct = new_live["initial_entry_exec_max_market_dist_pct"]
         if "recv_window_ms" in new_live:
             self.recv_window_ms = new_live["recv_window_ms"]
         if "time_in_force" in new_live:
@@ -2849,7 +2849,7 @@ class Live:
     @property
     def pnls_max_lookback_days(self): return self._pnls_max_lookback_days
     @property
-    def price_distance_threshold(self): return self._price_distance_threshold
+    def initial_entry_exec_max_market_dist_pct(self): return self._initial_entry_exec_max_market_dist_pct
     @property
     def recv_window_ms(self): return self._recv_window_ms
     @property
@@ -2957,10 +2957,10 @@ class Live:
     def pnls_max_lookback_days(self, new_pnls_max_lookback_days):
         self._pnls_max_lookback_days = new_pnls_max_lookback_days
         self._live["pnls_max_lookback_days"] = self._pnls_max_lookback_days
-    @price_distance_threshold.setter
-    def price_distance_threshold(self, new_price_distance_threshold):
-        self._price_distance_threshold = new_price_distance_threshold
-        self._live["price_distance_threshold"] = self._price_distance_threshold
+    @initial_entry_exec_max_market_dist_pct.setter
+    def initial_entry_exec_max_market_dist_pct(self, new_initial_entry_exec_max_market_dist_pct):
+        self._initial_entry_exec_max_market_dist_pct = new_initial_entry_exec_max_market_dist_pct
+        self._live["initial_entry_exec_max_market_dist_pct"] = self._initial_entry_exec_max_market_dist_pct
     @recv_window_ms.setter
     def recv_window_ms(self, new_recv_window_ms):
         self._recv_window_ms = new_recv_window_ms

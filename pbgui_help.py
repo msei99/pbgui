@@ -7,12 +7,12 @@ assigned_balance = """
     So wallet balance and position must be simulated by looking in past user
     trade history.
     ```"""
-price_distance_threshold = """
+initial_entry_exec_max_market_dist_pct = """
     ```
-    only create limit orders closer to price than threshold. default=0.5 (50%)
-    The grid is exactly the same it just does not place the buy/sell orders
-    which are far away from the current price. When the price moves in that
-    direction and gets into the threshold's % range it will place those orders too.
+    Executor-side distance gate for initial entry limit orders.
+    PB7 keeps the planned initial entry price, but only posts it when that price
+    is close enough to the current market price. Larger values allow posting
+    farther-from-market initial entries. Default: 0.005 (0.5%).
     ```"""
 mode = """
     ```

@@ -81,7 +81,7 @@ Unter **Details / Diagnostics** findest du Tools um *wo* die Abweichung beginnt 
 
 Wichtigste Features:
 - **Deviation Day Inspector**: springe Tag-für-Tag durch die grössten Abweichungen.
-- **Missed fills / price_distance_threshold**: zeigt, wann das Initial-Entry-Gating nur kurz offen war (Dip-only Minutes) und kann **Backtest `entry_initial` Fills** überlagern.
+- **Missed fills / initial entry distance gate**: approximiert, wann der geplante Initial Entry innerhalb von PB7s executor-seitigem Market-Distance-Gate lag, inklusive Dip-only Minutes, und kann **Backtest `entry_initial` Fills** überlagern.
 - Tabs pro Tag/Scope:
 	- **Live income rows**
 	- **Backtest fills**

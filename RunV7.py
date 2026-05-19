@@ -292,13 +292,21 @@ class V7Instance():
         st.text_input("note", key="edit_run_v7_note", help=pbgui_help.instance_note)
 
     @st.fragment
-    def fragment_price_distance_threshold(self):
-        if "edit_run_v7_price_distance_threshold" in st.session_state:
-            if st.session_state.edit_run_v7_price_distance_threshold != self.config.live.price_distance_threshold:
-                self.config.live.price_distance_threshold = st.session_state.edit_run_v7_price_distance_threshold
+    def fragment_initial_entry_exec_max_market_dist_pct(self):
+        if "edit_run_v7_initial_entry_exec_max_market_dist_pct" in st.session_state:
+            if st.session_state.edit_run_v7_initial_entry_exec_max_market_dist_pct != self.config.live.initial_entry_exec_max_market_dist_pct:
+                self.config.live.initial_entry_exec_max_market_dist_pct = st.session_state.edit_run_v7_initial_entry_exec_max_market_dist_pct
         else:
-            st.session_state.edit_run_v7_price_distance_threshold = self.config.live.price_distance_threshold
-        st.number_input("price_distance_threshold", min_value=0.0, max_value=1.0, step=0.001, format="%.3f", key="edit_run_v7_price_distance_threshold", help=pbgui_help.price_distance_threshold)
+            st.session_state.edit_run_v7_initial_entry_exec_max_market_dist_pct = self.config.live.initial_entry_exec_max_market_dist_pct
+        st.number_input(
+            "initial_entry_exec_max_market_dist_pct",
+            min_value=0.0,
+            max_value=1.0,
+            step=0.001,
+            format="%.3f",
+            key="edit_run_v7_initial_entry_exec_max_market_dist_pct",
+            help=pbgui_help.initial_entry_exec_max_market_dist_pct,
+        )
 
     @st.fragment
     def fragment_execution_delay_seconds(self):
@@ -714,7 +722,7 @@ class V7Instance():
             self.fragment_note()
         col1, col2, col3, col4 = st.columns([1,1,1,1], vertical_alignment="bottom")
         with col1:
-            self.fragment_price_distance_threshold()
+            self.fragment_initial_entry_exec_max_market_dist_pct()
         with col2:
             self.fragment_execution_delay_seconds()
         with col3:

@@ -81,7 +81,7 @@ Open **Details / Diagnostics** to debug *where* the curves start to diverge.
 
 Key tools inside:
 - **Deviation day inspector**: jump day-by-day through periods with large Live↔Backtest differences.
-- **Missed fills / price_distance_threshold**: visualizes when initial-entry gating could only open briefly (dip-only minutes), and can overlay **backtest `entry_initial` fills**.
+- **Missed fills / initial entry distance gate**: approximates when the planned initial entry was within PB7's executor-side market-distance gate, including dip-only minutes, and can overlay **backtest `entry_initial` fills**.
 - Tabs for the selected day/scope:
 	- **Live income rows**
 	- **Backtest fills**

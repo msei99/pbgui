@@ -358,11 +358,12 @@ def compute_pb7_entry_gating_ohlcv_df(
     threshold_override: float | None = None,
     use_prev_minute_entry: bool = True,
 ):
-    """Compute an OHLCV-based entry + price_distance_threshold gating series.
+    """Approximate PB7's initial-entry executor distance gate from 1m OHLCV.
 
-    This is meant for PBGui diagnostics and visualization of 'dip-only' opportunities.
-    It intentionally uses 1m OHLCV bounds (open/close + favorable extreme) as a
-    proxy for what the live bot might have seen as last_mprice.
+    This is meant for PBGui diagnostics and visualization of minutes where the
+    planned initial entry was close enough to market for the live executor gate
+    to allow posting. It intentionally uses 1m OHLCV bounds (open/close +
+    favorable extreme) as an approximation of the market price seen by PB7.
 
     Returns a pandas.DataFrame with UTC timestamps and columns:
       time, open, high, low, close,
@@ -401,7 +402,7 @@ def compute_pb7_entry_gating_ohlcv_df(
     threshold = (
         float(threshold_override)
         if threshold_override is not None
-        else float(live.get("price_distance_threshold", 0.0) or 0.0)
+        else float(live.get("initial_entry_exec_max_market_dist_pct", 0.0) or 0.0)
     )
     if threshold < 0.0:
         threshold = 0.0

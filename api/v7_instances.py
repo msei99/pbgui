@@ -7,7 +7,7 @@ Endpoints:
     POST   /activate-all                → SSH-push all instances that need activation
     DELETE /instances/{name}             → backup + delete instance locally + on VPS
     GET    /backups                      → list all instance backups
-    POST   /restore/{name}/{timestamp}   → restore instance from backup + SSH activate
+    POST   /restore/{name}/{timestamp}   → restore/rollback instance from backup + SSH activate
     DELETE /backups/{name}/{timestamp}    → delete a specific backup
     GET    /main_page                    → serve the standalone HTML page
 """
@@ -641,27 +641,127 @@ def _validate_name(name: str) -> None:
         raise HTTPException(status_code=400, detail="Invalid name")
 
 
+def _iter_backup_json_files(instance_dir: Path) -> list[Path]:
+    """Return syncable JSON config files for backup/restore."""
+    return sorted(
+        [
+            item for item in instance_dir.iterdir()
+            if item.is_file() and item.suffix == ".json" and item.name not in (
+                "config.json.tmp", "ignored_coins.json", "approved_coins.json",
+                "config_run.json",
+            )
+        ],
+        key=lambda item: item.name,
+    )
+
+
+def _next_backup_dir(name: str, suffix: str = "") -> Path:
+    """Create a unique backup dir path for ad-hoc backups."""
+    backup_root = Path(PBGDIR) / "data" / "backup" / "v7" / name
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    candidate = f"{stamp}{suffix}"
+    backup_dir = backup_root / candidate
+    counter = 2
+    while backup_dir.exists():
+        backup_dir = backup_root / f"{candidate}_{counter}"
+        counter += 1
+    return backup_dir
+
+
+def _load_backup_payload(backup_dir: Path) -> list[tuple[str, bytes]]:
+    """Read all restoreable config files from a backup directory."""
+    payload = []
+    for item in _iter_backup_json_files(backup_dir):
+        try:
+            payload.append((item.name, item.read_bytes()))
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to read backup file '{item.name}': {exc}") from exc
+    if not payload:
+        raise HTTPException(status_code=500, detail=f"Backup '{backup_dir.name}' contains no restoreable config files")
+    return payload
+
+
+def _write_restore_payload(target_dir: Path, payload: list[tuple[str, bytes]]) -> None:
+    """Atomically write restored config files into an instance dir."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for filename, content in payload:
+        tmp_path = target_dir / f"{filename}.restore_tmp"
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+        os.replace(tmp_path, target_dir / filename)
+
+
+def _bump_restored_instance_version(target_dir: Path, previous_version: int) -> int | None:
+    """Keep restore content but advance config version so activation detects it."""
+    config_path = target_dir / "config.json"
+    if not config_path.is_file():
+        return None
+    try:
+        cfg = load_pb7_config(config_path, neutralize_added=False)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Restore failed: invalid restored config.json: {exc}") from exc
+
+    cfg.setdefault("pbgui", {})["version"] = previous_version + 1
+    try:
+        save_pb7_config(cfg, config_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Restore failed: could not write updated config version: {exc}") from exc
+    return cfg["pbgui"]["version"]
+
+
+def _highest_backup_version(name: str) -> int:
+    """Return the highest numeric backup version for an instance."""
+    backup_root = Path(PBGDIR) / "data" / "backup" / "v7" / name
+    if not backup_root.is_dir():
+        return 0
+    highest = 0
+    for entry in backup_root.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            highest = max(highest, int(entry.name))
+        except ValueError:
+            continue
+    return highest
+
+
 @router.get("/backups")
 def list_backups(session: SessionToken = Depends(require_auth)):
     """List all v7 instance backups grouped by instance name."""
     backup_root = Path(PBGDIR) / "data" / "backup" / "v7"
     if not backup_root.is_dir():
         return {"backups": []}
+    instance_status = {
+        inst["name"]: inst for inst in _enrich_with_vps_data(_load_local_instances())
+    }
     result = []
     for inst_dir in sorted(backup_root.iterdir()):
         if not inst_dir.is_dir():
             continue
-        timestamps = sorted(
-            [d.name for d in inst_dir.iterdir() if d.is_dir()],
-            reverse=True,
-        )
-        if timestamps:
-            # Check if instance currently exists in run_v7
+        backup_items = []
+        for backup_dir in inst_dir.iterdir():
+            if not backup_dir.is_dir():
+                continue
+            try:
+                created_ts = backup_dir.stat().st_mtime
+            except OSError:
+                continue
+            backup_items.append({
+                "id": backup_dir.name,
+                "created_at": datetime.fromtimestamp(created_ts).strftime("%Y-%m-%d %H:%M:%S"),
+                "created_ts": created_ts,
+            })
+        backup_items.sort(key=lambda item: item["created_ts"], reverse=True)
+        if backup_items:
             exists = (Path(PBGDIR) / "data" / "run_v7" / inst_dir.name).is_dir()
+            running_on = instance_status.get(inst_dir.name, {}).get("running_on", [])
             result.append({
                 "name": inst_dir.name,
-                "timestamps": timestamps,
+                "timestamps": [item["id"] for item in backup_items],
+                "backup_items": backup_items,
                 "currently_exists": exists,
+                "running_on": running_on,
+                "can_restore": not running_on,
             })
     return {"backups": result}
 
@@ -672,7 +772,7 @@ async def restore_instance(
     timestamp: str,
     session: SessionToken = Depends(require_auth),
 ):
-    """Restore a v7 instance from backup."""
+    """Restore a v7 instance from backup, or rollback an existing stopped one."""
     _validate_name(name)
     _validate_name(timestamp)
 
@@ -683,20 +783,50 @@ async def restore_instance(
             detail=f"Backup '{name}/{timestamp}' not found",
         )
 
+    restore_payload = _load_backup_payload(backup_dir)
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
-    if instance_dir.is_dir():
-        raise HTTPException(
-            status_code=409,
-            detail=f"Instance '{name}' already exists — delete it first or choose a different name",
-        )
+    rollback = instance_dir.is_dir()
+    previous_version = _highest_backup_version(name)
+    if rollback:
+        instances = _enrich_with_vps_data(_load_local_instances())
+        inst = next((item for item in instances if item["name"] == name), None)
+        if inst and inst.get("running_on"):
+            hosts = ", ".join(inst["running_on"])
+            raise HTTPException(
+                status_code=409,
+                detail=f"Instance '{name}' is running on {hosts} — stop it first",
+            )
 
-    # Copy backup to run_v7
+    # Create a safety snapshot before overwriting an existing instance.
     try:
-        shutil.copytree(backup_dir, instance_dir)
+        if rollback:
+            config_path = instance_dir / "config.json"
+            if config_path.is_file():
+                try:
+                    current_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+                    previous_version = max(
+                        previous_version,
+                        int(current_cfg.get("pbgui", {}).get("version", 0) or 0),
+                    )
+                except (json.JSONDecodeError, OSError, ValueError):
+                    pass
+            pre_restore_dir = _next_backup_dir(name, "_pre-restore")
+            pre_restore_dir.mkdir(parents=True, exist_ok=True)
+            for item in _iter_backup_json_files(instance_dir):
+                shutil.copy2(str(item), str(pre_restore_dir / item.name))
+            for item in _iter_backup_json_files(instance_dir):
+                item.unlink(missing_ok=True)
+        _write_restore_payload(instance_dir, restore_payload)
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Restore failed: {e}")
 
-    _log(SERVICE, f"Restored '{name}' from backup {timestamp}")
+    restored_version = _bump_restored_instance_version(instance_dir, previous_version)
+
+    _log(
+        SERVICE,
+        f"{'Rolled back' if rollback else 'Restored'} '{name}' from backup {timestamp}"
+        + (f" as version {restored_version}" if restored_version is not None else ""),
+    )
 
     # Push restored config to all VPS
     result = await _ssh_sync_instance(name)
@@ -704,6 +834,8 @@ async def restore_instance(
         "ok": True,
         "name": name,
         "timestamp": timestamp,
+        "rollback": rollback,
+        "version": restored_version,
         "activate": result,
     }
 
@@ -852,7 +984,11 @@ async def save_instance_config(
             for fname in referenced:
                 src_file = bt_src_dir / fname
                 if src_file.is_file():
-                    shutil.copy2(str(src_file), str(instance_dir / fname))
+                    try:
+                        normalized_override = load_pb7_config(src_file, neutralize_added=False)
+                        save_pb7_config(normalized_override, instance_dir / fname)
+                    except Exception:
+                        shutil.copy2(str(src_file), str(instance_dir / fname))
                     copied.append(fname)
             if copied:
                 _log(SERVICE, f"Copied {len(copied)} coin override file(s) from backtest config '{from_bt_config}' to instance '{name}'")
@@ -895,6 +1031,27 @@ async def save_instance_config(
             pass  # backup failure must never block the save
 
     save_pb7_config(cfg, config_path)
+
+    # Keep referenced per-coin override files on the current PB7 schema even when
+    # the instance save did not edit them directly.
+    referenced_override_files = {
+        Path(ov["override_config_path"]).name
+        for ov in cfg.get("coin_overrides", {}).values()
+        if isinstance(ov, dict) and ov.get("override_config_path")
+    }
+    for fname in referenced_override_files:
+        override_path = instance_dir / fname
+        if not override_path.is_file():
+            continue
+        try:
+            normalized_override = load_pb7_config(override_path, neutralize_added=False)
+            save_pb7_config(normalized_override, override_path)
+        except Exception as exc:
+            _log(
+                SERVICE,
+                f"Failed to normalize override config '{fname}' for instance '{name}': {exc}",
+                level="WARNING",
+            )
 
     version = cfg["pbgui"]["version"]
 
@@ -1257,10 +1414,9 @@ def get_instance_override_config(
     if not coin_file.is_file():
         raise HTTPException(status_code=404, detail=f"Override config '{filename}' not found")
     try:
-        with open(coin_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = load_pb7_config(coin_file, neutralize_added=False)
         return {"config": {"bot": data.get("bot", {})}}
-    except (OSError, json.JSONDecodeError) as exc:
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error reading override config: {exc}")
 
 
@@ -1288,21 +1444,14 @@ async def save_instance_override_config(
     full: dict = {}
     if coin_file.is_file():
         try:
-            with open(coin_file, "r", encoding="utf-8") as f:
-                full = json.load(f)
-        except (json.JSONDecodeError, OSError):
+            full = load_pb7_config(coin_file, neutralize_added=False)
+        except Exception:
             full = {}
     full["bot"] = body.get("bot", {})
-    tmp = coin_file.with_suffix(".tmp")
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(full, f, indent=4)
-            f.write("\n")
-        os.replace(str(tmp), str(coin_file))
-    except Exception:
-        if tmp.exists():
-            tmp.unlink(missing_ok=True)
-        raise
+        save_pb7_config(full, coin_file)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error saving override config: {exc}") from exc
     return {"ok": True}
 
 

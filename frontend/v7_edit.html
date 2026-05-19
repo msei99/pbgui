@@ -585,8 +585,8 @@ Example: 0.05 blocks closes once balance would fall below 95% of peak.">max_real
   </div>
   <!-- Row 3: Execution & Flags  1+1+1+1+2+2 = 8 -->
   <div class="form-group">
-    <label><span data-tip="Only create limit orders closer to price than threshold. Default 0.5 (50%)">price_distance_threshold</span></label>
-    <input type="number" id="f-price-dist" min="0" max="1" step="0.001" value="0.5">
+    <label><span data-tip="Executor-side market-distance gate for initial entry posting. Initial entry limit orders are only posted when they are close enough to market. Default 0.005 (0.5%).">initial_entry_exec_max_market_dist_pct</span></label>
+    <input type="number" id="f-price-dist" min="0" max="1" step="0.001" value="0.005">
   </div>
   <div class="form-group">
     <label><span data-tip="Wait x seconds after executing to exchange">execution_delay_seconds</span></label>
@@ -999,7 +999,7 @@ var _symbolsAndTagsLoadSeq = 0;
 var KNOWN_LIVE_PARAMS = new Set([
   'user', 'leverage', 'margin_mode_preference',
   'minimum_coin_age_days', 'pnls_max_lookback_days', 'warmup_ratio', 'max_realized_loss_pct',
-  'price_distance_threshold', 'execution_delay_seconds', 'market_order_near_touch_threshold',
+  'initial_entry_exec_max_market_dist_pct', 'execution_delay_seconds', 'market_order_near_touch_threshold',
   'filter_by_min_effective_cost', 'market_orders_allowed', 'auto_gs', 'hedge_mode',
   'approved_coins', 'ignored_coins', 'empty_means_all_approved',
   'max_n_cancellations_per_batch', 'max_n_creations_per_batch',
@@ -1560,7 +1560,7 @@ function buildDefaultConfig(user) {
       minimum_coin_age_days: 0,
       pnls_max_lookback_days: 30,
       warmup_ratio: 0,
-      price_distance_threshold: 0.5,
+      initial_entry_exec_max_market_dist_pct: 0.005,
       execution_delay_seconds: 2,
       filter_by_min_effective_cost: true,
       market_orders_allowed: true,
@@ -1733,7 +1733,7 @@ function populateForm(opts) {
   setVal('f-note', pbgui.note || '');
 
   // Row 3
-  setVal('f-price-dist', live.price_distance_threshold != null ? live.price_distance_threshold : 0.5);
+  setVal('f-price-dist', live.initial_entry_exec_max_market_dist_pct != null ? live.initial_entry_exec_max_market_dist_pct : 0.005);
   setVal('f-exec-delay', live.execution_delay_seconds || 2);
   setVal('f-market-order-threshold', live.market_order_near_touch_threshold != null ? live.market_order_near_touch_threshold : 0.001);
   setChk('f-filter-min-cost', live.filter_by_min_effective_cost);
@@ -2025,7 +2025,7 @@ function collectConfig() {
       pnls_max_lookback_days: getNum('f-pnls-lookback'),
       warmup_ratio: getNum('f-warmup-ratio'),
       max_realized_loss_pct: getNum('f-max-loss-pct'),
-      price_distance_threshold: getNum('f-price-dist'),
+      initial_entry_exec_max_market_dist_pct: getNum('f-price-dist'),
       execution_delay_seconds: getNum('f-exec-delay'),
       market_order_near_touch_threshold: getNum('f-market-order-threshold'),
       filter_by_min_effective_cost: getChk('f-filter-min-cost'),
@@ -2212,6 +2212,17 @@ function openLogPanel() {
   var badge = document.getElementById('log-panel-host');
   var svc = 'Bot:' + INSTANCE_NAME + ':7';
 
+  function isLocalBotLogFile(file) {
+    var value = String(file || '');
+    if (!value) return false;
+    if (value === 'PBRun.log') return true;
+    if (value === ('Bot:' + INSTANCE_NAME)) return true;
+    if (value === ('BotErr:' + INSTANCE_NAME)) return true;
+    if (value === ('data/run_v7/' + INSTANCE_NAME + '/passivbot_err.log')) return true;
+    if (value === ('data/run_v7/' + INSTANCE_NAME + '/passivbot_err.log.old')) return true;
+    return value.indexOf('pb7/logs/') === 0 && value.indexOf(INSTANCE_NAME) >= 0;
+  }
+
   function _initViewer(host) {
     if (_v7LogViewer) { _v7LogViewer.close(); _v7LogViewer = null; }
     var isLocal = (!host || host === 'local');
@@ -2222,6 +2233,7 @@ function openLogPanel() {
       defaultHost: isLocal ? 'local' : host,
       defaultService: isLocal ? 'PBRun' : svc,
       defaultFile: isLocal ? ('Bot:' + INSTANCE_NAME) : '',
+      localFileFilter: isLocal ? isLocalBotLogFile : null,
       presets: 'trading',
       showRestart: true,
       height: '100%'
@@ -2788,7 +2800,7 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/log_viewer_panel.js?v=21"></script>
+<script src="/app/js/log_viewer_panel.js?v=22"></script>
 <script src="/app/js/coin_overrides_editor.js?v=8"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */
