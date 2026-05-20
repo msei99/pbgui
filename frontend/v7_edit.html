@@ -173,6 +173,12 @@ body {
 .expander.open .expander-header .arrow { transform: rotate(90deg); }
 .expander-body { display: none; padding: var(--sp-md); }
 .expander.open .expander-body { display: block; }
+.subsection-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--accent);
+  margin: var(--sp-sm) 0 var(--sp-sm);
+}
 
 /* ─── Table ────────────────────────────────────────────────── */
 .tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-base); user-select: none; }
@@ -625,8 +631,8 @@ Example: 0.05 blocks closes once balance would fall below 95% of peak.">max_real
     <span class="arrow">▶</span> Advanced Settings
   </div>
   <div class="expander-body">
-    <div class="form-row cols-8" style="margin-bottom:0">
-    <!-- Row 1: Modes & Policies  2+2+1+2+1 = 8 -->
+    <div class="subsection-title">Modes &amp; Policies</div>
+    <div class="form-row cols-8">
     <div class="form-group" style="grid-column:span 2">
       <label><span data-tip="Force all long positions to same mode.
 n=normal  m=manual  gs=graceful_stop
@@ -683,13 +689,16 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
         <option value="post_only">post_only</option>
       </select>
     </div>
-    <!-- Row 2: Order Execution  1+1+1+1+1+1+1+1 = 8 -->
+    </div>
+
+    <div class="subsection-title">Execution &amp; Exchange Sync</div>
+    <div class="form-row cols-8">
     <div class="form-group">
-      <label><span data-tip="Cancels up to n open orders per execution cycle.">max_n_cancellations_per_batch</span></label>
+      <label><span data-tip="Cancels up to n open orders per execution cycle. Must always be greater than max_n_creations_per_batch, and the editor keeps the two fields within a valid range automatically.">max_n_cancellations_per_batch</span></label>
       <input type="number" id="f-max-cancel" min="0" max="100" step="1" value="5">
     </div>
     <div class="form-group">
-      <label><span data-tip="Creates up to n new orders per execution cycle.">max_n_creations_per_batch</span></label>
+      <label><span data-tip="Creates up to n new orders per execution cycle. Must always stay below max_n_cancellations_per_batch, and the editor limits the value automatically to prevent invalid combinations.">max_n_creations_per_batch</span></label>
       <input type="number" id="f-max-create" min="0" max="100" step="1" value="3">
     </div>
     <div class="form-group">
@@ -697,7 +706,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
       <input type="number" id="f-max-restarts" min="0" max="100" step="1" value="10">
     </div>
     <div class="form-group">
-      <label><span data-tip="Millisecond tolerance for authenticated REST calls (default 5000). Increase if the exchange rejects requests with recv_window errors due to clock drift.">recv_window_ms</span></label>
+      <label><span data-tip="Millisecond tolerance for authenticated REST calls (default 10000). Increase if the exchange rejects requests with recv_window errors due to clock drift.">recv_window_ms</span></label>
       <input type="number" id="f-recv-window" min="1000" max="60000" step="1000" value="5000">
     </div>
     <div class="form-group">
@@ -705,20 +714,21 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
       <input type="number" id="f-order-match-tol" min="0" max="0.01" step="0.0001" value="0.0002">
     </div>
     <div class="form-group">
+      <label><span data-tip="How many minutes of recent fill history to overlap when fetching incremental fills. Increase if the exchange returns fills late or out of order.">fills_recent_overlap_minutes</span></label>
+      <input type="number" id="f-fills-recent-overlap" min="0" step="1" value="10">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="How many minutes of fill history to re-check when confirming that recent fills were fully observed. Higher values trade more API work for safer reconciliation.">fills_confirmation_overlap_minutes</span></label>
+      <input type="number" id="f-fills-confirm-overlap" min="0" step="1" value="60">
+    </div>
+    <div class="form-group">
       <label><span data-tip="Optional global live REST concurrency cap. Leave 0 to use exchange/default behaviour; set a positive integer to throttle authenticated and public request fan-out more aggressively.">max_concurrent_api_requests</span></label>
       <input type="number" id="f-max-api-req" min="0" step="1" value="0">
     </div>
-    <div class="form-group"></div>
-    <div class="form-group"></div>
-    <!-- Row 3: Balance, Warmup & Logging  1*7+1 = 8 -->
-    <div class="form-group">
-      <label><span data-tip="0 = disabled (uses exchange balance)">balance_override</span></label>
-      <input type="number" id="f-bal-override" min="0" step="100" value="0">
     </div>
-    <div class="form-group">
-      <label><span data-tip="Hysteresis snap percentage applied to balance updates to reduce noise from small fluctuations. Set 0.0 to disable.">balance_hysteresis_snap_pct</span></label>
-      <input type="number" id="f-bal-hyst" min="0" max="0.5" step="0.01" value="0.02">
-    </div>
+
+    <div class="subsection-title">Warmup &amp; Candle Fetch</div>
+    <div class="form-row cols-8">
     <div class="form-group">
       <label><span data-tip="Hard ceiling for the historical warm-up window (minutes). Use 0 to disable the cap; values above 0 clamp the per-symbol warmup calculated from EMA spans.">max_warmup_minutes</span></label>
       <input type="number" id="f-max-warmup-min" min="0" step="100" value="0">
@@ -731,16 +741,55 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
       <label><span data-tip="Concurrency cap for live warm-up tasks. 0 = auto-select; positive values limit how many symbols warm up in parallel.">warmup_concurrency</span></label>
       <input type="number" id="f-warmup-conc" min="0" step="1" value="0">
     </div>
-    <div class="form-group">
-      <label><span data-tip="Interval (minutes) between memory telemetry log entries (RSS, cache footprint, asyncio task counts). Default 30.">memory_snapshot_interval_min</span></label>
-      <input type="number" id="f-mem-snapshot" min="1" step="5" value="30">
+    <div class="form-group" style="justify-content:flex-end">
+      <div class="chk-row">
+        <input type="checkbox" id="f-defer-broad-candle-warmup">
+        <label for="f-defer-broad-candle-warmup"><span data-tip="Delay the broad multi-symbol candle warmup pass until it is actually needed. Keeps startup lighter when the bot can begin with narrower warmup data.">defer_broad_candle_warmup</span></label>
+      </div>
+    </div>
+    <div class="form-group" style="justify-content:flex-end">
+      <div class="chk-row">
+        <input type="checkbox" id="f-archive-fetch">
+        <label for="f-archive-fetch"><span data-tip="Enables the archive-candle fallback path in live mode. Keep disabled unless you want the live bot to supplement its local candle state from exchange archive endpoints.">enable_archive_candle_fetch</span></label>
+      </div>
     </div>
     <div class="form-group">
-      <label><span data-tip="Minimum duration (seconds) a bulk volume-EMA refresh must take before it is promoted to an INFO log entry. Set 0 to log every refresh at INFO.">volume_refresh_info_threshold_s</span></label>
-      <input type="number" id="f-vol-refresh" min="0" step="5" value="30">
+      <label><span data-tip="Live OHLCV/network budget for candle-backed indicators (forager ranking, warm-up). Set lower to reduce REST pressure; 0 = rely only on cached data.">max_ohlcv_fetches_per_minute</span></label>
+      <input type="number" id="f-max-ohlcv-fetches" min="0" step="1" value="3">
     </div>
-    <div class="form-group"></div>
-    <!-- Row 4: Candle Data  1*6+1+1 = 8 -->
+    <div class="form-group">
+      <label><span data-tip="Seconds to wait for candle fetch lock when multiple bots share the same cache directory. Increase to avoid spurious timeouts.">candle_lock_timeout_seconds</span></label>
+      <input type="number" id="f-candle-lock" min="1" max="300" step="1" value="10">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Choose how market snapshots fetch tickers. auto lets PB7 choose per exchange, bulk uses multi-symbol ticker endpoints, symbols fetches one symbol at a time.">market_snapshot_ticker_strategy</span></label>
+      <select id="f-market-snapshot-strategy">
+        <option value="auto">auto</option>
+        <option value="bulk">bulk</option>
+        <option value="symbols">symbols</option>
+      </select>
+    </div>
+    </div>
+
+    <div class="subsection-title">Forager</div>
+    <div class="form-row cols-8">
+    <div class="form-group">
+      <label><span data-tip="Hysteresis applied to forager scores so PB7 does not swap symbols too eagerly on tiny ranking changes.">forager_score_hysteresis_pct</span></label>
+      <input type="number" id="f-forager-hysteresis" min="0" step="0.001" value="0.02">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Optional cap for how stale forager candidate candles may be before PB7 refreshes them. Leave blank to let PB7 derive the cap from its normal runtime defaults.">max_forager_candle_staleness_minutes</span></label>
+      <input type="number" id="f-max-forager-stale" min="0" step="1" value="" placeholder="auto">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Refresh target for forager candles in seconds. Lower values keep rankings fresher but increase fetch pressure.">max_forager_candle_refresh_seconds</span></label>
+      <input type="number" id="f-max-forager-refresh" min="1" step="1" value="45">
+    </div>
+    <div class="form-group" style="grid-column:span 5"></div>
+    </div>
+
+    <div class="subsection-title">Storage, Freshness &amp; Runtime</div>
+    <div class="form-row cols-8" style="margin-bottom:0">
     <div class="form-group">
       <label><span data-tip="Maximum candles persisted on disk per symbol and timeframe. Oldest shards are pruned once this limit is hit. Default 2,000,000.">max_disk_candles_per_symbol_per_tf</span></label>
       <input type="number" id="f-max-disk-candles" min="0" step="10000" value="1000000">
@@ -753,21 +802,26 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
       <label><span data-tip="How long (minutes) 1m candles for inactive symbols may stay in RAM before the live bot refreshes them. Lower values keep symbols fresher at the cost of more network/disk activity.">inactive_coin_candle_ttl_minutes</span></label>
       <input type="number" id="f-inactive-ttl" min="0" step="1" value="0">
     </div>
-    <div class="form-group" style="grid-column:span 2; justify-content:flex-end">
-      <div class="chk-row">
-        <input type="checkbox" id="f-archive-fetch">
-        <label for="f-archive-fetch"><span data-tip="Enables the archive-candle fallback path in live mode. Keep disabled unless you want the live bot to supplement its local candle state from exchange archive endpoints.">enable_archive_candle_fetch</span></label>
-      </div>
+    <div class="form-group">
+      <label><span data-tip="Maximum acceptable gap, in minutes, for the active-symbol candle tail before PB7 refreshes or treats it as stale.">max_active_candle_tail_gap_minutes</span></label>
+      <input type="number" id="f-max-active-tail-gap" min="1" step="1" value="10">
     </div>
     <div class="form-group">
-      <label><span data-tip="Live OHLCV/network budget for candle-backed indicators (forager ranking, warm-up). Set lower to reduce REST pressure; 0 = rely only on cached data.">max_ohlcv_fetches_per_minute</span></label>
-      <input type="number" id="f-max-ohlcv-fetches" min="1" step="1" value="3">
+      <label><span data-tip="0 = disabled (uses exchange balance)">balance_override</span></label>
+      <input type="number" id="f-bal-override" min="0" step="100" value="0">
     </div>
     <div class="form-group">
-      <label><span data-tip="Seconds to wait for candle fetch lock when multiple bots share the same cache directory. Increase to avoid spurious timeouts.">candle_lock_timeout_seconds</span></label>
-      <input type="number" id="f-candle-lock" min="1" max="300" step="1" value="10">
+      <label><span data-tip="Hysteresis snap percentage applied to balance updates to reduce noise from small fluctuations. Set 0.0 to disable.">balance_hysteresis_snap_pct</span></label>
+      <input type="number" id="f-bal-hyst" min="0" max="0.5" step="0.01" value="0.02">
     </div>
-    <div class="form-group"></div>
+    <div class="form-group">
+      <label><span data-tip="Interval (minutes) between memory telemetry log entries (RSS, cache footprint, asyncio task counts). Default 30.">memory_snapshot_interval_min</span></label>
+      <input type="number" id="f-mem-snapshot" min="1" step="5" value="30">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Minimum duration (seconds) a bulk volume-EMA refresh must take before it is promoted to an INFO log entry. Set 0 to log every refresh at INFO.">volume_refresh_info_threshold_s</span></label>
+      <input type="number" id="f-vol-refresh" min="0" step="5" value="30">
+    </div>
     </div>
   </div>
 </div>
@@ -847,13 +901,14 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
   <div class="form-group">
     <div class="chk-row">
       <input type="checkbox" id="f-dynamic-ignore">
-      <label for="f-dynamic-ignore">dynamic_ignore</label>
+      <label for="f-dynamic-ignore"><span data-tip="Use the current filters and notices to auto-build ignored symbols dynamically at runtime.">dynamic_ignore</span></label>
     </div>
   </div>
   <div class="form-group"></div>
   <div class="form-group"></div>
   <div class="form-group"></div>
 </div>
+
 <div id="dynamic-ignore-preview" style="display:none; margin-bottom:var(--sp-md);">
   <div style="font-size:var(--fs-sm); color:var(--text-dim); margin-bottom:4px;">Dynamic ignore preview:</div>
   <pre id="di-approved" style="font-size:var(--fs-xs); color:var(--green); margin-bottom:4px; white-space:pre-wrap;"></pre>
@@ -1001,7 +1056,7 @@ var KNOWN_LIVE_PARAMS = new Set([
   'minimum_coin_age_days', 'pnls_max_lookback_days', 'warmup_ratio', 'max_realized_loss_pct',
   'initial_entry_exec_max_market_dist_pct', 'execution_delay_seconds', 'market_order_near_touch_threshold',
   'filter_by_min_effective_cost', 'market_orders_allowed', 'auto_gs', 'hedge_mode',
-  'approved_coins', 'ignored_coins', 'empty_means_all_approved',
+  'approved_coins', 'ignored_coins',
   'max_n_cancellations_per_batch', 'max_n_creations_per_batch',
   'forced_mode_long', 'forced_mode_short', 'hsl_signal_mode', 'hsl_position_during_cooldown_policy',
   'max_n_restarts_per_day', 'max_disk_candles_per_symbol_per_tf', 'max_memory_candles_per_symbol',
@@ -1010,6 +1065,10 @@ var KNOWN_LIVE_PARAMS = new Set([
   'warmup_jitter_seconds', 'warmup_concurrency', 'max_warmup_minutes',
   'max_concurrent_api_requests', 'candle_lock_timeout_seconds',
   'enable_archive_candle_fetch', 'max_ohlcv_fetches_per_minute',
+  'defer_broad_candle_warmup', 'fills_recent_overlap_minutes', 'fills_confirmation_overlap_minutes',
+  'market_snapshot_ticker_strategy', 'max_active_candle_tail_gap_minutes',
+  'max_forager_candle_staleness_minutes', 'max_forager_candle_refresh_seconds',
+  'forager_score_hysteresis_pct',
 ]);
 
 /* ─── Helpers ──────────────────────────────────────────────── */
@@ -1354,6 +1413,36 @@ function ensureStructuredJsonFieldsValidForSave() {
   return false;
 }
 
+function validateExecutionSyncFieldsForSave() {
+  var maxCancel = getInt('f-max-cancel');
+  var maxCreate = getInt('f-max-create');
+  if (maxCancel > maxCreate) return true;
+
+  var expander = document.getElementById('exp-advanced');
+  if (expander) expander.classList.add('open');
+  var field = document.getElementById('f-max-cancel');
+  if (field && typeof field.focus === 'function') field.focus();
+  toast('max_n_cancellations_per_batch must be greater than max_n_creations_per_batch. Fix it before saving.', 'err');
+  return false;
+}
+
+function syncExecutionSyncFieldBounds(changedId) {
+  var cancelEl = document.getElementById('f-max-cancel');
+  var createEl = document.getElementById('f-max-create');
+  if (!cancelEl || !createEl) return;
+
+  var cancelVal = getInt('f-max-cancel');
+  var createVal = getInt('f-max-create');
+  cancelEl.min = String(createVal + 1);
+  createEl.max = String(Math.max(0, cancelVal - 1));
+
+  if (changedId === 'f-max-cancel' && cancelVal <= createVal) {
+    cancelEl.value = String(createVal + 1);
+  } else if (changedId === 'f-max-create' && createVal >= cancelVal) {
+    createEl.value = String(Math.max(0, cancelVal - 1));
+  }
+}
+
 function ensureRawJsonValidForSave() {
   var rawEl = document.getElementById('cfg-raw-json');
   var validation = validateRawJson(rawEl ? rawEl.value : '');
@@ -1380,6 +1469,7 @@ function goBack() {
 function goBacktest() {
   if (!ensureRawJsonValidForSave()) return;
   if (!ensureStructuredJsonFieldsValidForSave()) return;
+  if (!validateExecutionSyncFieldsForSave()) return;
   window.PBGuiEditorShared.clearFixedValidationStatus();
   var config = collectConfig();
   apiFetch('/draft', {
@@ -1562,6 +1652,7 @@ function buildDefaultConfig(user) {
       warmup_ratio: 0,
       initial_entry_exec_max_market_dist_pct: 0.005,
       execution_delay_seconds: 2,
+      market_order_near_touch_threshold: 0.001,
       filter_by_min_effective_cost: true,
       market_orders_allowed: true,
       auto_gs: true,
@@ -1570,14 +1661,19 @@ function buildDefaultConfig(user) {
       ignored_coins: { long: [], short: [] },
       max_n_cancellations_per_batch: 5,
       max_n_creations_per_batch: 3,
+      fills_recent_overlap_minutes: 10,
+      fills_confirmation_overlap_minutes: 60,
       forced_mode_long: '',
       forced_mode_short: '',
+      hsl_signal_mode: 'unified',
+      hsl_position_during_cooldown_policy: 'panic',
       max_n_restarts_per_day: 10,
       max_disk_candles_per_symbol_per_tf: 1000000,
-      max_memory_candles_per_symbol: 5000,
+      max_memory_candles_per_symbol: 200000,
       time_in_force: 'good_till_cancelled',
-      inactive_coin_candle_ttl_minutes: 0,
-      recv_window_ms: 5000,
+      inactive_coin_candle_ttl_minutes: 10,
+      max_active_candle_tail_gap_minutes: 10,
+      recv_window_ms: 10000,
       order_match_tolerance_pct: 0.0002,
       balance_override: null,
       balance_hysteresis_snap_pct: 0.02,
@@ -1585,8 +1681,14 @@ function buildDefaultConfig(user) {
       warmup_concurrency: 0,
       max_warmup_minutes: 0,
       max_concurrent_api_requests: 0,
+      defer_broad_candle_warmup: true,
       enable_archive_candle_fetch: false,
-      max_ohlcv_fetches_per_minute: 3,
+      max_ohlcv_fetches_per_minute: 24,
+      candle_lock_timeout_seconds: 10,
+      market_snapshot_ticker_strategy: 'auto',
+      max_forager_candle_staleness_minutes: null,
+      max_forager_candle_refresh_seconds: 45,
+      forager_score_hysteresis_pct: 0.02,
     },
     logging: { level: 1, memory_snapshot_interval_minutes: 30, volume_refresh_info_threshold_seconds: 30 },
     pbgui: {
@@ -1750,11 +1852,13 @@ function populateForm(opts) {
   setVal('f-hsl-cooldown-policy', live.hsl_position_during_cooldown_policy || 'panic');
   setVal('f-max-restarts', live.max_n_restarts_per_day || 10);
   setVal('f-max-disk-candles', live.max_disk_candles_per_symbol_per_tf || 1000000);
-  setVal('f-max-mem-candles', live.max_memory_candles_per_symbol || 5000);
+  setVal('f-max-mem-candles', live.max_memory_candles_per_symbol || 200000);
   setVal('f-time-in-force', live.time_in_force || 'good_till_cancelled');
-  setVal('f-inactive-ttl', live.inactive_coin_candle_ttl_minutes || 0);
-  setVal('f-recv-window', live.recv_window_ms || 5000);
+  setVal('f-inactive-ttl', live.inactive_coin_candle_ttl_minutes != null ? live.inactive_coin_candle_ttl_minutes : 10);
+  setVal('f-recv-window', live.recv_window_ms || 10000);
   setVal('f-order-match-tol', live.order_match_tolerance_pct != null ? live.order_match_tolerance_pct : 0.0002);
+  setVal('f-fills-recent-overlap', live.fills_recent_overlap_minutes != null ? live.fills_recent_overlap_minutes : 10);
+  setVal('f-fills-confirm-overlap', live.fills_confirmation_overlap_minutes != null ? live.fills_confirmation_overlap_minutes : 60);
   setVal('f-bal-hyst', live.balance_hysteresis_snap_pct != null ? live.balance_hysteresis_snap_pct : 0.02);
   setVal('f-bal-override', live.balance_override || 0);
   setVal('f-max-warmup-min', live.max_warmup_minutes || 0);
@@ -1762,10 +1866,17 @@ function populateForm(opts) {
   setVal('f-vol-refresh', logging.volume_refresh_info_threshold_seconds || 30);
   setVal('f-warmup-jitter', live.warmup_jitter_seconds || 0);
   setVal('f-warmup-conc', live.warmup_concurrency || 0);
+  setChk('f-defer-broad-candle-warmup', live.defer_broad_candle_warmup !== false);
   setChk('f-archive-fetch', live.enable_archive_candle_fetch);
-  setVal('f-max-ohlcv-fetches', live.max_ohlcv_fetches_per_minute || 3);
+  setVal('f-max-ohlcv-fetches', live.max_ohlcv_fetches_per_minute || 24);
   setVal('f-max-api-req', live.max_concurrent_api_requests || 0);
   setVal('f-candle-lock', live.candle_lock_timeout_seconds != null ? live.candle_lock_timeout_seconds : 10);
+  setVal('f-market-snapshot-strategy', live.market_snapshot_ticker_strategy || 'auto');
+  setVal('f-max-active-tail-gap', live.max_active_candle_tail_gap_minutes != null ? live.max_active_candle_tail_gap_minutes : 10);
+  setVal('f-forager-hysteresis', live.forager_score_hysteresis_pct != null ? live.forager_score_hysteresis_pct : 0.02);
+  setVal('f-max-forager-stale', live.max_forager_candle_staleness_minutes != null ? live.max_forager_candle_staleness_minutes : '');
+  setVal('f-max-forager-refresh', live.max_forager_candle_refresh_seconds != null ? live.max_forager_candle_refresh_seconds : 45);
+  syncExecutionSyncFieldBounds();
 
   // Filters
   setVal('f-market-cap', pbgui.market_cap || 0);
@@ -1874,6 +1985,12 @@ function setChk(id, v) {
 function getVal(id) { return document.getElementById(id).value; }
 function getNum(id) { return parseFloat(document.getElementById(id).value) || 0; }
 function getInt(id) { return parseInt(document.getElementById(id).value, 10) || 0; }
+function getOptionalNum(id) {
+  var raw = document.getElementById(id).value;
+  if (raw == null || String(raw).trim() === '') return null;
+  var parsed = parseFloat(raw);
+  return isNaN(parsed) ? null : parsed;
+}
 function getChk(id) { return document.getElementById(id).checked; }
 
 function captureRawEditorAnchor() {
@@ -2036,6 +2153,8 @@ function collectConfig() {
       ignored_coins: { long: ignoredLong, short: ignoredShort },
       max_n_cancellations_per_batch: getInt('f-max-cancel'),
       max_n_creations_per_batch: getInt('f-max-create'),
+      fills_recent_overlap_minutes: getNum('f-fills-recent-overlap'),
+      fills_confirmation_overlap_minutes: getNum('f-fills-confirm-overlap'),
       forced_mode_long: getVal('f-forced-long'),
       forced_mode_short: getVal('f-forced-short'),
       hsl_signal_mode: getVal('f-hsl-signal-mode'),
@@ -2053,9 +2172,15 @@ function collectConfig() {
       warmup_concurrency: getInt('f-warmup-conc'),
       max_warmup_minutes: getInt('f-max-warmup-min'),
       max_concurrent_api_requests: getInt('f-max-api-req'),
+      defer_broad_candle_warmup: getChk('f-defer-broad-candle-warmup'),
       candle_lock_timeout_seconds: getInt('f-candle-lock'),
       enable_archive_candle_fetch: getChk('f-archive-fetch'),
       max_ohlcv_fetches_per_minute: getInt('f-max-ohlcv-fetches'),
+      market_snapshot_ticker_strategy: getVal('f-market-snapshot-strategy'),
+      max_active_candle_tail_gap_minutes: getInt('f-max-active-tail-gap'),
+      max_forager_candle_staleness_minutes: getOptionalNum('f-max-forager-stale'),
+      max_forager_candle_refresh_seconds: getInt('f-max-forager-refresh'),
+      forager_score_hysteresis_pct: getNum('f-forager-hysteresis'),
     }),
     logging: Object.assign({}, baseLogging, {
       level: getInt('f-logging-level'),
@@ -2080,7 +2205,6 @@ function collectConfig() {
     backtest: baseBacktest,
     optimize: baseOptimize,
   });
-  if (result.live && typeof result.live === 'object') delete result.live.empty_means_all_approved;
   return result;
 }
 
@@ -2092,6 +2216,7 @@ async function saveConfig() {
   try {
     if (!ensureRawJsonValidForSave()) return;
     if (!ensureStructuredJsonFieldsValidForSave()) return;
+    if (!validateExecutionSyncFieldsForSave()) return;
     var config = collectConfig();
     var name = IS_NEW === 'true' ? config.live.user : INSTANCE_NAME;
 
@@ -2317,6 +2442,14 @@ async function fetchDynamicIgnorePreview() {
 }
 
 document.getElementById('f-dynamic-ignore').addEventListener('change', updateDynamicIgnorePreview);
+['f-max-cancel', 'f-max-create'].forEach(function(id) {
+  document.getElementById(id).addEventListener('input', function() {
+    syncExecutionSyncFieldBounds(id);
+  });
+  document.getElementById(id).addEventListener('change', function() {
+    syncExecutionSyncFieldBounds(id);
+  });
+});
 
 // Auto-refresh dynamic ignore preview when any filter setting changes
 var _diDebounceTimer = null;

@@ -125,7 +125,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 ### Release Workflow
 - Steps in `RELEASING.md`.
 - Per release: bump `pbgui_purefunc.py` `PBGUI_VERSION`, move `releases/unreleased.md` notes into a dedicated `releases/vX.YY.md` file, keep `CHANGELOG.md` index updated.
-- Per release: verify the Streamlit/About version display also shows the new release correctly, and if fixing that display still requires a process restart, bump `api/serial.txt` so the UI makes the restart need visible.
+- Per release: verify the Streamlit/About version display also shows the new release correctly, and bump `api/serial.txt` so the UI makes the restart requirement visible for already running processes. Treat the serial bump as a normal release-prep step; do not rely on remembering it ad hoc.
 - Commit: `Release vX.YY`, tag `vX.YY`, push branch + tags.
 
 ## Testing
