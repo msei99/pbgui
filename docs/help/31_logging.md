@@ -91,9 +91,9 @@ Contains messages from all GUI helper components:
 | Instance | Bot instance load/save, symbol info |
 | Config | Config load/save errors |
 | Multi | Multi-bot config operations |
-| Backtest / BacktestV7 | Backtest result loading, corrupted files |
+| Backtest / PBv7 Backtest | Backtest result loading, corrupted files |
 | BacktestMulti | Multi-symbol backtest operations |
-| Optimize / OptimizeV7 / OptimizeMulti | Optimizer operations |
+| Optimize / PBv7 Optimize / OptimizeMulti | Optimizer operations |
 | ParetoDataLoader | Pareto result loading |
 | Status | Status page events |
 | HyperliquidAWS | Hyperliquid AWS integration |

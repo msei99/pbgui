@@ -27,8 +27,8 @@ LOG_GROUPS: dict[str, str] = {
     'ParetoDataLoader':'PBGui',
     'Status':          'PBGui',
     'HyperliquidAWS':  'PBGui',
-    'BacktestV7':      'PBGui',
-    'OptimizeV7':      'PBGui',
+    'BacktestQueueAPI': 'PBGui',
+    'OptimizeQueueAPI': 'PBGui',
 }
 
 

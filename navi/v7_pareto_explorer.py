@@ -1,7 +1,53 @@
 import streamlit as st
 from pathlib import Path
-from pbgui_func import is_session_state_not_initialized, is_authenticted, set_page_config, render_header_with_guide
+from pbgui_func import is_session_state_not_initialized, is_authenticted, set_page_config, render_header_with_guide, _start_fastapi_server_if_needed
 from ParetoExplorer import ParetoExplorer
+
+
+def _redirect_to_fastapi_optimize_paretos() -> None:
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    url = (
+        f"http://{browser_host}:{api_port}/api/optimize-v7/main_page"
+        f"?token={token}"
+        f"&st_base={st_base}#paretos"
+    )
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
 
 
 # ── Guide helpers ──────────────────────────────────────────
@@ -80,8 +126,7 @@ if "pareto_explorer_path" not in st.session_state:
     st.error("❌ No optimization result selected")
     st.info("Please go to **PBv7 → Optimize → Results** and click the **🎯 Pareto Explorer** button")
     if st.button("← Back to Optimize"):
-        st.session_state.view = "optimize"
-        st.rerun()
+        _redirect_to_fastapi_optimize_paretos()
     st.stop()
 
 # Navigation sidebar
@@ -112,7 +157,7 @@ with st.sidebar:
     if st.button("← Back to Optimize Results", width='stretch'):
         if "pareto_explorer_path" in st.session_state:
             del st.session_state.pareto_explorer_path
-        st.switch_page("navi/v7_optimize.py")
+        _redirect_to_fastapi_optimize_paretos()
 
 # Page header with Guide button (top-right)
 render_header_with_guide(
@@ -139,4 +184,4 @@ except Exception as e:
     if st.button("← Back"):
         if "pareto_explorer_path" in st.session_state:
             del st.session_state.pareto_explorer_path
-        st.switch_page("navi/v7_optimize.py")
+        _redirect_to_fastapi_optimize_paretos()

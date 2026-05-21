@@ -1688,22 +1688,9 @@ class ParetoExplorer:
                     st.success(f"✅ Optimize config created: {preset_file.name}")
 
                     if switch_to_optimize:
-                        from OptimizeV7 import OptimizeV7Item
+                        from pbgui_func import redirect_to_fastapi_v7_optimize_draft
 
-                        # Clear other optimize views so v7_optimize opens the editor
-                        for k in [
-                            "opt_v7_results",
-                            "opt_v7_queue",
-                            "opt_v7_pareto",
-                            "opt_v7_pareto_name",
-                            "opt_v7_pareto_directory",
-                            "opt_v7_list",
-                        ]:
-                            if k in st.session_state:
-                                del st.session_state[k]
-
-                        st.session_state.opt_v7 = OptimizeV7Item(str(preset_file))
-                        st.switch_page(get_navi_paths()["V7_OPTIMIZE"])
+                        redirect_to_fastapi_v7_optimize_draft(preset_config, safe_name)
 
                 except Exception as e:
                     st.error(f"❌ Failed to create preset: {e}")

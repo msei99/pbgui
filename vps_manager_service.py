@@ -1801,6 +1801,8 @@ class VPSManagerService:
         local_coindata = getattr(pbremote.local_run, "coindata", None)
         local_no_new_privs = _local_no_new_privileges()
         local_sudo_blocked_reason = "Local sudo blocked by runtime (`NoNewPrivs`)." if local_no_new_privs else ""
+        pbgui_github = str(summary_row.get("pbgui_github") or "")
+        pb7_github = str(summary_row.get("pb7_github") or "")
         return {
             "name": pbremote.name,
             "online": pbremote.is_online(),
@@ -1817,6 +1819,8 @@ class VPSManagerService:
             "linux_update_supported": not local_no_new_privs,
             "linux_update_blocked_reason": local_sudo_blocked_reason,
             "summary_row": summary_row,
+            "pbgui_update_available": pbgui_github.startswith("❌"),
+            "pb7_update_available": pb7_github.startswith("❌"),
         }
 
     def _build_vps_status(self, vps: VPS, host_state: dict[str, Any],

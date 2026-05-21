@@ -49,7 +49,7 @@ from logging_helpers import human_log as _log
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, pb7dir, pb7venv
 
-SERVICE = "BacktestV7API"
+SERVICE = "BacktestQueueAPI"
 ARCHIVE_SERVICE = "ArchiveSync"
 CLEANUP_SERVICE = "HLCVSCleanup"
 
@@ -2245,7 +2245,7 @@ def add_config_to_archive(name: str, body: dict,
 
 @router.get("/archives/settings")
 def get_archive_settings(session: SessionToken = Depends(require_auth)):
-    """Get archive configuration from INI (same section/keys as Streamlit BacktestV7.py)."""
+    """Get archive configuration from INI using the legacy config_archive keys."""
     section = "config_archive"
     return {
         "my_archive":        load_ini(section, "my_archive") or "",
@@ -2259,7 +2259,7 @@ def get_archive_settings(session: SessionToken = Depends(require_auth)):
 
 @router.post("/archives/settings")
 def save_archive_settings(body: dict, session: SessionToken = Depends(require_auth)):
-    """Save archive configuration to INI (same section/keys as Streamlit BacktestV7.py)."""
+    """Save archive configuration to INI using the legacy config_archive keys."""
     section = "config_archive"
     mapping = {
         "my_archive":      "my_archive",
@@ -2278,5 +2278,3 @@ def save_archive_settings(body: dict, session: SessionToken = Depends(require_au
             interval = 0
         save_ini(section, "auto_pull_interval", str(interval))
     return {"ok": True}
-
-

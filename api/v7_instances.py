@@ -949,7 +949,7 @@ async def save_instance_config(
 ):
     """Save config.json for a v7 instance via pb7_config pipeline.
 
-    Applies the same logic as RunV7.save():
+    Applies the same legacy instance-save logic as the removed Streamlit editor:
       - Strips _pbgui_param_status before writing
       - Increments pbgui.version
       - Sets backtest.exchange from user→exchange mapping

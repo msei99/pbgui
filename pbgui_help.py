@@ -2250,7 +2250,7 @@ stats_aggregation_help = """
 
 stats_value_help = """Aggregated metric value across all scenarios"""
 
-# Additional OptimizeV7 help texts
+# Additional optimize help texts
 exchanges = """
     Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing.
     The template ships with ['binance', 'bybit']; additional exchanges can be wired up

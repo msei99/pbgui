@@ -170,7 +170,7 @@ async def _get_backtest_worker_item() -> dict[str, Any]:
             _worker_stat("Autostart", "On" if autostart else "Off"),
             _worker_stat("CPU limit", cpu),
         ],
-        log_file="BacktestV7API.log",
+        log_file="BacktestQueueAPI.log",
     )
 
 
@@ -205,7 +205,7 @@ async def _get_optimize_worker_item() -> dict[str, Any]:
             _worker_stat("Autostart CPU", cpu),
             _worker_stat("CPU override", "On" if cpu_override else "Off"),
         ],
-        log_file="OptimizeV7API.log",
+        log_file="OptimizeQueueAPI.log",
     )
 
 

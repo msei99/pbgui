@@ -4,7 +4,6 @@ from pbgui_func import check_password, set_page_config, change_ini, is_pb7_insta
 from pbgui_purefunc import load_ini, save_ini, pb7_runtime_status, streamlit_secrets_path
 import pbgui_help
 from Services import Services
-from RunV7 import V7Instances
 from User import Users
 from PBCoinData import CoinData
 import toml
@@ -41,8 +40,6 @@ def _relay_mini_init():
 
     if "users" not in st.session_state:
         st.session_state.users = Users()
-    if "v7_instances" not in st.session_state:
-        st.session_state.v7_instances = V7Instances()
     if "services" not in st.session_state:
         st.session_state.services = Services()
     # pbcoindata is set by the Services() constructor
@@ -228,10 +225,6 @@ def do_init():
                 with st.expander("Details"):
                     st.code(traceback.format_exc())
                 st.stop()
-    # Init V7 Instances
-    if 'v7_instances' not in st.session_state:
-        with st.spinner('Initializing v7 Instances...'):
-            st.session_state.v7_instances = V7Instances()
     # Init Services
     if 'services' not in st.session_state:
         with st.spinner('Initializing Services...'):

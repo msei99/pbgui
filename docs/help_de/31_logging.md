@@ -91,9 +91,9 @@ Enthält Meldungen aller GUI-Hilfskomponenten:
 | Instance | Bot-Instanz laden/speichern, Symbol-Infos |
 | Config | Fehler beim Laden/Speichern von Konfigurationen |
 | Multi | Multi-Bot-Konfigurationen |
-| Backtest / BacktestV7 | Backtest-Ergebnisse laden, beschädigte Dateien |
+| Backtest / PBv7 Backtest | Backtest-Ergebnisse laden, beschädigte Dateien |
 | BacktestMulti | Multi-Symbol-Backtest-Operationen |
-| Optimize / OptimizeV7 / OptimizeMulti | Optimizer-Operationen |
+| Optimize / PBv7 Optimize / OptimizeMulti | Optimizer-Operationen |
 | ParetoDataLoader | Pareto-Ergebnisse laden |
 | Status | Status-Seiten-Ereignisse |
 | HyperliquidAWS | Hyperliquid AWS-Integration |

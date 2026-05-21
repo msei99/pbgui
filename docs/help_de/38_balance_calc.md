@@ -52,6 +52,6 @@ Die Berechnung verwendet die Coin-Liste aus `approved_coins` in der Config, gefi
 
 ## Fehlerbehebung
 
-- **„Missing exchange context"**: Balance Calculator nicht direkt über die Navigation öffnen — die Schaltfläche in RunV7 oder BacktestV7 verwenden.
+- **„Missing exchange context"**: Balance Calculator nicht direkt über die Navigation öffnen — die Schaltfläche im PBv7-Run- oder PBv7-Backtest-Flow verwenden.
 - **CoinData nicht konfiguriert**: CoinMarketCap-API-Schlüssel unter **System → API Keys** einrichten.
 - **Unerwartete Coin-Liste**: Bei aktiviertem Dynamic Ignore wird die Coin-Liste durch CoinData-Einstellungen gefiltert (Marktkapitalisierung, Volumen, Tags).

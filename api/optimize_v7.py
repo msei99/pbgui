@@ -53,7 +53,7 @@ from logging_helpers import human_log as _log
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
 from pbgui_purefunc import PBGDIR, pb7_suite_preflight_errors, pb7dir, pb7venv, save_ini
 
-SERVICE = "OptimizeV7API"
+SERVICE = "OptimizeQueueAPI"
 
 router = APIRouter()
 

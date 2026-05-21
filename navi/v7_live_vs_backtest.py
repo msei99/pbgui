@@ -11,7 +11,7 @@ import requests as _requests
 import streamlit as st
 import pbgui_help
 
-from BacktestV7 import BacktestV7Item
+from Config import ConfigV7
 from Database import Database
 from pbgui_func import (
     PBGDIR,
@@ -28,7 +28,7 @@ from pbgui_func import (
 from pbgui_purefunc import coin_from_symbol_code, compute_pb7_entry_gating_ohlcv_df
 
 
-def _enqueue_saved_backtest_via_api(config_name: str) -> tuple[bool, str]:
+def _enqueue_saved_backtest_via_api(config_name: str, config: dict | None = None) -> tuple[bool, str]:
     try:
         api_host, api_port, ok = _start_fastapi_server_if_needed()
         if not ok:
@@ -46,9 +46,12 @@ def _enqueue_saved_backtest_via_api(config_name: str) -> tuple[bool, str]:
             ).token
 
         token = st.session_state["api_token"]
+        payload = {"name": str(config_name)}
+        if isinstance(config, dict):
+            payload["config"] = config
         resp = _requests.post(
             f"http://{api_host}:{api_port}/api/backtest-v7/queue",
-            json={"name": str(config_name)},
+            json=payload,
             headers={"Authorization": f"Bearer {token}"},
             timeout=30,
         )
@@ -420,6 +423,40 @@ def _normalize_coin_list(items: list) -> list[str]:
         if c and c not in out:
             out.append(c)
     return out
+
+
+def _build_compare_backtest_config(
+    *,
+    run_cfg_path: Path,
+    config_name: str,
+    exchange: str,
+    start_date: date,
+    end_date: date,
+    starting_balance: float | None,
+    use_pbgui_ohlcv: bool,
+) -> ConfigV7:
+    bt = ConfigV7(str(run_cfg_path))
+    bt.load_config()
+    bt.backtest.exchanges = [exchange]
+
+    try:
+        bt.live.approved_coins.long = _normalize_coin_list(bt.live.approved_coins.long)
+        bt.live.approved_coins.short = _normalize_coin_list(bt.live.approved_coins.short)
+        bt.live.ignored_coins.long = _normalize_coin_list(bt.live.ignored_coins.long)
+        bt.live.ignored_coins.short = _normalize_coin_list(bt.live.ignored_coins.short)
+    except Exception:
+        pass
+
+    bt.backtest.start_date = start_date.strftime("%Y-%m-%d")
+    bt.backtest.end_date = end_date.strftime("%Y-%m-%d")
+    if starting_balance is not None:
+        try:
+            bt.backtest.starting_balance = float(starting_balance)
+        except Exception:
+            pass
+    bt.backtest.ohlcv_source_dir = str(PBGDIR / "data" / "ohlcv") if use_pbgui_ohlcv else None
+    bt.backtest.base_dir = f"backtests/pbgui/{config_name}"
+    return bt
 
 
 def _extract_quote_from_symbol(sym: str) -> str | None:
@@ -1592,48 +1629,27 @@ def live_vs_backtest_page():
             if not run_cfg.exists():
                 st.error(f"No run_v7 config found at {run_cfg}")
             else:
-                bt = BacktestV7Item(str(run_cfg))
-                bt.config.backtest.exchanges = [compare_exchange]
+                mode = str(st.session_state.get(ohlcv_source_mode_key) or "Default (PB7)")
+                bt = _build_compare_backtest_config(
+                    run_cfg_path=run_cfg,
+                    config_name=single_user,
+                    exchange=compare_exchange,
+                    start_date=compare_start_date,
+                    end_date=compare_end_date,
+                    starting_balance=st.session_state.get(sb_override_key),
+                    use_pbgui_ohlcv=mode == "Use PBGui OHLCV data",
+                )
                 # Run per-exchange backtests (avoid combined dataset runs).
-
-                # Normalize approved/ignored coins to base coin names for BacktestV7 UI
-                try:
-                    bt.config.live.approved_coins.long = _normalize_coin_list(bt.config.live.approved_coins.long)
-                    bt.config.live.approved_coins.short = _normalize_coin_list(bt.config.live.approved_coins.short)
-                    bt.config.live.ignored_coins.long = _normalize_coin_list(bt.config.live.ignored_coins.long)
-                    bt.config.live.ignored_coins.short = _normalize_coin_list(bt.config.live.ignored_coins.short)
-                except Exception:
-                    pass
-
-                bt.config.backtest.start_date = compare_start_date.strftime("%Y-%m-%d")
-                bt.config.backtest.end_date = compare_end_date.strftime("%Y-%m-%d")
-
-                # Use the (possibly overridden) starting balance input
-                try:
-                    bt.config.backtest.starting_balance = float(st.session_state.get(sb_override_key))
-                except Exception:
-                    pass
-
-                # Optional OHLCV source override for started comparison backtest
-                try:
-                    mode = str(st.session_state.get(ohlcv_source_mode_key) or "Default (PB7)")
-                    if mode == "Use PBGui OHLCV data":
-                        bt.config.backtest.ohlcv_source_dir = str(PBGDIR / "data" / "ohlcv")
-                    else:
-                        bt.config.backtest.ohlcv_source_dir = None
-                except Exception:
-                    pass
 
                 # Prevent queueing Hyperliquid jobs when required local source OHLCV data is missing.
                 try:
-                    mode = str(st.session_state.get(ohlcv_source_mode_key) or "Default (PB7)")
                     if str(compare_exchange).lower() == "hyperliquid" and mode == "Use PBGui OHLCV data":
                         precheck_coins = _infer_coins_for_coin_sources(
-                            bt.config,
+                            bt,
                             fallback_symbols=symbols_in_range,
                         )
                         ok, msg = _precheck_hyperliquid_ohlcv_source(
-                            source_root=Path(str(bt.config.backtest.ohlcv_source_dir or "")),
+                            source_root=Path(str(bt.backtest.ohlcv_source_dir or "")),
                             coins=precheck_coins,
                             start_date=compare_start_date,
                             end_date=compare_end_date,
@@ -1649,8 +1665,7 @@ def live_vs_backtest_page():
                 # Optional info for debugging/calibration
                 latest_balance_info = st.session_state.get(sb_calc_info_key)
 
-                bt.save()
-                queued, queue_error = _enqueue_saved_backtest_via_api(bt.name)
+                queued, queue_error = _enqueue_saved_backtest_via_api(single_user, bt.config)
                 if queued:
                     st.success("Backtest enqueued.")
                 else:

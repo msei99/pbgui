@@ -345,6 +345,16 @@ def build_navigation():
 
     paths = get_navi_paths()
 
+    def _balance_calc_page() -> None:
+        if not is_authenticted() or is_session_state_not_initialized():
+            st.switch_page(paths["SYSTEM_LOGIN"])
+            st.stop()
+        redirect_to_fastapi_balance_calc()
+        set_page_config("PBv7 Balance Calculator")
+        st.error(
+            "⚠️ FastAPI server unavailable. Please start it via **System → Services → API Server**."
+        )
+
     # Single Pages
     pM1 = st.Page(paths["SYSTEM_LOGIN"], title="Welcome", icon=":material/logout:")
     pM2 = st.Page(paths["SYSTEM_API_KEYS"], title="API-Keys", icon=":material/key:")
@@ -363,7 +373,7 @@ def build_navigation():
     p72 = st.Page(paths["V7_BACKTEST"], title="Backtest", icon=":material/history:")
     p73 = st.Page(paths["V7_OPTIMIZE"], title="Optimize", icon=":material/tune:")
     p74 = st.Page(paths["V7_STRATEGY_EXPLORER"], title="Strategy Explorer", icon=":material/remove_red_eye:")
-    p75 = st.Page(paths["V7_BALANCE_CALC"], title="Balance Calculator", icon=":material/attach_money:")
+    p75 = st.Page(_balance_calc_page, title="Balance Calculator", icon=":material/attach_money:", url_path="v7_balance_calc")
     p76 = st.Page(paths["V7_PARETO_EXPLORER"], title="🎯 Pareto Explorer", icon=":material/analytics:")
     p77 = st.Page(paths["V7_LIVE_VS_BACKTEST"], title="Live vs Backtest", icon=":material/swap_horiz:")
        
@@ -1104,6 +1114,116 @@ def redirect_to_fastapi_vps_manager() -> None:
     st.stop()
 
 
+def redirect_to_fastapi_balance_calc() -> None:
+    """Redirect the browser to the standalone FastAPI Balance Calculator page."""
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    url = (
+        f"http://{browser_host}:{api_port}/api/balance-calc/main_page"
+        f"?token={token}"
+        f"&st_base={st_base}"
+    )
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
+
+
+def redirect_to_fastapi_balance_calc_draft(config_dict: dict, exchange: str = "") -> None:
+    """POST a config draft and redirect browser to the FastAPI Balance Calculator page."""
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    try:
+        resp = requests.post(
+            f"http://{api_host}:{api_port}/api/balance-calc/draft",
+            json={"config": config_dict},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        draft_id = resp.json().get("draft_id", "")
+    except Exception as e:
+        st.error(f"Failed to create balance calculator draft: {e}")
+        return
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    url = (
+        f"http://{browser_host}:{api_port}/api/balance-calc/main_page"
+        f"?token={token}"
+        f"&st_base={st_base}"
+        f"&draft_id={draft_id}"
+    )
+    if exchange:
+        url += f"&exchange={requests.utils.quote(str(exchange).lower(), safe='')}"
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
+
+
 def redirect_to_fastapi_v7_backtest() -> None:
     """Redirect the browser to the standalone FastAPI PBv7 Backtest page."""
     from api.auth import generate_token
@@ -1209,6 +1329,71 @@ def redirect_to_fastapi_v7_optimize() -> None:
         f"?token={token}"
         f"&st_base={st_base}"
         f"{''.join(extra_params)}"
+    )
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
+
+
+def redirect_to_fastapi_v7_optimize_draft(config_dict: dict, draft_name: str = "") -> None:
+    """POST an optimize seed config as draft and open the FastAPI Optimize editor."""
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    try:
+        resp = requests.post(
+            f"http://{api_host}:{api_port}/api/backtest-v7/optimize-draft",
+            json={"config": config_dict},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        draft_id = resp.json().get("draft_id", "")
+    except Exception as e:
+        st.error(f"Failed to create optimize draft: {e}")
+        return
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    draft_name_q = ""
+    if draft_name:
+        draft_name_q = f"&draft_name={requests.utils.quote(str(draft_name), safe='')}"
+    url = (
+        f"http://{browser_host}:{api_port}/api/optimize-v7/main_page"
+        f"?token={token}"
+        f"&st_base={st_base}"
+        f"&opt_draft_id={draft_id}"
+        f"{draft_name_q}"
     )
     st.html(
         f'<script>window.location.replace("{url}");</script>',
@@ -1343,6 +1528,49 @@ def redirect_to_fastapi_v7_backtest_queue_draft(items: list[dict]) -> None:
     st.stop()
 
 
+def redirect_instance_to_fastapi_v7_backtest(instance_name: str) -> None:
+    """Load a v7 instance config and open the FastAPI Backtest page as a draft."""
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    try:
+        resp = requests.get(
+            f"http://{api_host}:{api_port}/api/v7/instances/{requests.utils.quote(str(instance_name), safe='')}/config",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as e:
+        st.error(f"Failed to load instance config for backtest: {e}")
+        return
+
+    config = payload.get("config") if isinstance(payload, dict) else None
+    if not isinstance(config, dict):
+        st.error(f"Instance '{instance_name}' did not return a valid config")
+        return
+
+    redirect_to_fastapi_v7_backtest_draft(config, str(instance_name))
+
+
 def redirect_to_fastapi_v7_run() -> None:
     """Redirect the browser to the standalone FastAPI PBv7 Run page."""
     from api.auth import generate_token
@@ -1383,6 +1611,57 @@ def redirect_to_fastapi_v7_run() -> None:
         f"?token={token}"
         f"&st_base={st_base}"
     )
+    st.html(
+        f'<script>window.location.replace("{url}");</script>',
+        unsafe_allow_javascript=True,
+    )
+    st.stop()
+
+
+def redirect_to_fastapi_v7_edit(name: str = "", *, is_new: bool = False) -> None:
+    """Redirect the browser to the standalone FastAPI PBv7 edit page."""
+    from api.auth import generate_token
+
+    api_host, api_port, success = _start_fastapi_server_if_needed()
+    if not success:
+        st.error(
+            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
+            "Please check **System → Services → API Server** or start manually: "
+            "`python PBApiServer.py`"
+        )
+        return
+
+    if "api_token" not in st.session_state:
+        user_id = (
+            st.session_state.get("user", {}).get("id")
+            or st.session_state.get("user")
+            or "anonymous"
+        )
+        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
+
+    token = st.session_state["api_token"]
+
+    browser_host = "127.0.0.1"
+    st_port = 8501
+    try:
+        req_host = st.context.headers.get("Host", "")
+        if req_host:
+            browser_host = req_host.split(":")[0] or "127.0.0.1"
+            if ":" in req_host:
+                st_port = int(req_host.split(":")[1])
+    except Exception:
+        pass
+
+    st_base = f"http://{browser_host}:{st_port}"
+    url = (
+        f"http://{browser_host}:{api_port}/api/v7/edit_page"
+        f"?token={token}"
+        f"&st_base={st_base}"
+    )
+    if is_new:
+        url += "&new=1"
+    elif name:
+        url += f"&name={requests.utils.quote(str(name), safe='')}"
     st.html(
         f'<script>window.location.replace("{url}");</script>',
         unsafe_allow_javascript=True,
