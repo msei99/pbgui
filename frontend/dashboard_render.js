@@ -285,6 +285,15 @@
 
     function tweColor(v)  { return v < 100 ? '#22c55e' : v < 200 ? '#f59e0b' : '#ef4444'; }
     function upnlColor(v) { return v >= 0  ? '#22c55e' : '#ef4444'; }
+
+    function positionEntryColor(lastPrice, entryPrice, side) {
+        if (!entryPrice) return '#a0aec0';
+        var normalizedSide = String(side || 'long').toLowerCase();
+        var isProfit = normalizedSide === 'short'
+            ? lastPrice <= entryPrice
+            : lastPrice >= entryPrice;
+        return isProfit ? '#48bb78' : '#f56565';
+    }
     function tweBarPct(v) { return Math.min(100, (v / 300) * 100).toFixed(1); }
     function signedFmt(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); }
 
@@ -2261,7 +2270,7 @@
         var pos = data.position;
         var _lastClose = candles[candles.length - 1].c;
         if (pos && pos.entry) {
-            var posColor = _lastClose >= pos.entry ? '#48bb78' : '#f56565';
+            var posColor = positionEntryColor(_lastClose, pos.entry, pos.side);
             _entryLine = series.createPriceLine({
                 price: pos.entry,
                 color: posColor,
@@ -2385,7 +2394,7 @@
                 /* Update entry line color based on latest close vs entry */
                 if (_entryLine && pos && pos.entry) {
                     _entryLine.applyOptions({
-                        color: candle[4] >= pos.entry ? '#48bb78' : '#f56565'
+                        color: positionEntryColor(candle[4], pos.entry, pos.side)
                     });
                 }
             },
@@ -2396,7 +2405,8 @@
                     _entryLine = null;
                 }
                 if (posData && posData.entry && posData.entry > 0) {
-                    var pc = _lastClose >= posData.entry ? '#48bb78' : '#f56565';
+                    pos = posData;
+                    var pc = positionEntryColor(_lastClose, posData.entry, posData.side);
                     _entryLine = series.createPriceLine({
                         price: posData.entry,
                         color: pc,
@@ -2408,8 +2418,11 @@
                     });
                 }
             },
-            updateOrders: function (ordersList) {
+            updateOrders: function (ordersList, ordersUnknown) {
                 /* ordersList: [{price, amount, side}, ...] */
+                if (typeof _statusSpan !== 'undefined' && _statusSpan) {
+                    _statusSpan.textContent = ordersUnknown ? ' · Orders: unknown' : '';
+                }
                 /* Remove all existing order lines */
                 for (var i = 0; i < _orderLines.length; i++) {
                     try { series.removePriceLine(_orderLines[i]); } catch (_) {}

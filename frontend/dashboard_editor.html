@@ -1954,6 +1954,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       var url = API_BASE + '/dashboard/orders_data'
         + '?user='      + encodeURIComponent(selectedPosition.user)
         + '&symbol='    + encodeURIComponent(selectedPosition.symbol)
+        + '&side='      + encodeURIComponent(selectedPosition.side || 'long')
         + '&timeframe=' + encodeURIComponent(currentTimeframe)
         + '&limit='     + _tfLimit(currentTimeframe);
       fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
@@ -1970,6 +1971,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                 var tfUrl = API_BASE + '/dashboard/orders_data'
                   + '?user='      + encodeURIComponent(selectedPosition.user)
                   + '&symbol='    + encodeURIComponent(selectedPosition.symbol)
+                  + '&side='      + encodeURIComponent(selectedPosition.side || 'long')
                   + '&timeframe=' + encodeURIComponent(tf)
                   + '&limit='     + _tfLimit(tf);
                 fetch(tfUrl, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
@@ -1991,6 +1993,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                 var moreUrl = API_BASE + '/dashboard/orders_data'
                   + '?user='      + encodeURIComponent(selectedPosition.user)
                   + '&symbol='    + encodeURIComponent(selectedPosition.symbol)
+                  + '&side='      + encodeURIComponent(selectedPosition.side || 'long')
                   + '&timeframe=' + encodeURIComponent(fetchTf)
                   + '&since='     + since
                   + '&limit=300';

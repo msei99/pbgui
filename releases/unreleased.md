@@ -1,1 +1,23 @@
 # Unreleased
+
+- Fix VPS manager local master sidebar update buttons so PBGui and PB7 turn orange when updates are available.
+- Reduce legacy `navi/v7_balance_calc.py` to a FastAPI redirect fallback and remove its old Streamlit calculator view.
+- Route legacy Streamlit Run/Backtest/Results balance actions through FastAPI balance-calc drafts instead of `Config.BalanceCalculator` session state.
+- Remove the now-unused legacy `Config.BalanceCalculator` class and its old `bc_*` Streamlit session-state flow.
+- Register the Streamlit Balance Calculator nav item directly as a callable page with the same `v7_balance_calc` URL path.
+- Keep `navi/v7_balance_calc.py` as a minimal redirect fallback while the Streamlit nav item itself is registered as a callable redirect page.
+- Reduce `navi/v7_run.py` to an auth/query relay that redirects to FastAPI `main_page` or `edit_page`, removing its direct `RunV7` Streamlit editor dependency.
+- Reduce `navi/v7_backtest.py` to an auth/session relay that redirects to FastAPI backtest pages, removing its direct `BacktestV7`/`RunV7` Streamlit editor dependency.
+- Reduce `navi/v7_optimize.py` to an auth/query relay that redirects to FastAPI optimize, and move legacy Backtest/Pareto optimize handoffs onto FastAPI draft redirects.
+- Remove the unused legacy `BacktestV7.py` and `OptimizeV7.py` modules after switching the last live compare backtest trigger to direct FastAPI queue payloads.
+- Rename the remaining legacy Backtest/Optimize labels in services/logging/help text and bump `api/serial.txt` after the API-facing cleanup.
+- Rename the FastAPI backtest/optimize service labels consistently so service status, logs, and grouped logging still point at the same files.
+- Remove the unused legacy optimize-config helper cluster: `MultiBounds.py`, `OptimizeConfig.py`, `OptimizeScore.py`, `NeatGrid.py`, `RecursiveGrid.py`, and `Clock.py`.
+- Remove the unused legacy `VPSManager.py` Streamlit module now that the navigation already points to `system_vps_manager_fastapi.py`.
+- Remove the unused legacy `RunV7.py` Streamlit editor module after confirming `navi/v7_run.py` and `api/v7_instances.py` fully cover the active run/edit flows.
+- Refresh user-facing help text so Balance Calculator and logging docs no longer refer to removed `RunV7`/`BacktestV7`/`OptimizeV7` page names.
+- Remove the obsolete `V7Instances` initialization/import from `navi/system_login.py` now that session init no longer depends on it.
+- Fix dashboard position `Next DCA` and `Next TP` values for short positions by classifying open buy/sell orders with the correct side-aware logic and nearest-price selection in both snapshot and live API paths.
+- Fix the dashboard orders chart entry-line profit/loss color for short positions so it no longer uses long-only price-vs-entry comparisons.
+- Add regression tests covering long/short dashboard order classification so nearest DCA/TP price selection stays correct for both snapshot and live API helpers.
+- Make the dashboard Orders widget hedge-aware without a DB migration by sending the selected position side through `/ws/candles` and `/dashboard/orders_data`, showing `Orders: unknown` for hedged DB snapshots, and replacing that placeholder once live exchange order metadata can identify the correct leg.

@@ -63,6 +63,35 @@ def _broadcast(key: str, msg: str) -> None:
             pass
 
 
+def _classify_position_orders(orders: list, side: str) -> tuple[int, float, float]:
+    """Return DCA count, next DCA price, and next TP price for a position side."""
+    side = str(side).lower()
+    dca_side = "buy"
+    tp_side = "sell"
+    prefer_higher_dca = True
+    prefer_lower_tp = True
+    if side == "short":
+        dca_side = "sell"
+        tp_side = "buy"
+        prefer_higher_dca = False
+        prefer_lower_tp = False
+
+    dca = 0
+    next_dca = 0.0
+    next_tp = 0.0
+    for order in orders:
+        order_side = str(order[5]).lower()
+        order_price = order[4]
+        if order_side == dca_side:
+            dca += 1
+            if next_dca == 0 or (prefer_higher_dca and next_dca < order_price) or (not prefer_higher_dca and next_dca > order_price):
+                next_dca = order_price
+        elif order_side == tp_side:
+            if next_tp == 0 or (prefer_lower_tp and next_tp > order_price) or (not prefer_lower_tp and next_tp < order_price):
+                next_tp = order_price
+    return dca, next_dca, next_tp
+
+
 # ── Watcher lifecycle ──────────────────────────────────────────────────────────
 
 async def _ensure_watcher(user_name: str, kind: str, queue: asyncio.Queue) -> None:
@@ -137,17 +166,12 @@ async def _db_poll_loop(user: Any, kind: str, db: Any) -> None:
                 for pos in positions_rows:
                     symbol = pos[1]
                     price  = price_map.get(symbol, 0.0)
+                    side = pos[7] if len(pos) > 7 else "long"
                     orders = await asyncio.to_thread(db.fetch_orders_by_symbol, user.name, symbol) or []
-                    dca = 0; next_tp = 0.0; next_dca = 0.0
-                    for order in orders:
-                        if order[5] == "buy":
-                            dca += 1
-                            if next_dca < order[4]: next_dca = order[4]
-                        elif order[5] == "sell":
-                            if next_tp == 0 or next_tp > order[4]: next_tp = order[4]
+                    dca, next_dca, next_tp = _classify_position_orders(orders, side)
                     result.append({
                         "user": user.name, "symbol": symbol,
-                        "side": pos[7] if len(pos) > 7 else "long",
+                        "side": side,
                         "size": pos[3], "upnl": round(pos[4], 8),
                         "entry": pos[5], "price": price,
                         "dca": dca, "next_dca": next_dca, "next_tp": next_tp,
@@ -302,18 +326,11 @@ def _normalize_positions(user: Any, raw: list, db: Any) -> list:
 
             # Orders (dca/tp) — still from DB; refreshed every 60 s by background poller
             dca = 0
-            next_tp  = 0.0
+            next_tp = 0.0
             next_dca = 0.0
             try:
                 orders = db.fetch_orders_by_symbol(user.name, symbol) or []
-                for order in orders:
-                    if order[5] == "buy":
-                        dca += 1
-                        if next_dca < order[4]:
-                            next_dca = order[4]
-                    elif order[5] == "sell":
-                        if next_tp == 0 or next_tp > order[4]:
-                            next_tp = order[4]
+                dca, next_dca, next_tp = _classify_position_orders(orders, side)
             except Exception:
                 pass
 

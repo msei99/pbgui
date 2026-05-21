@@ -35,6 +35,154 @@ _pending_full_configs: dict[str, dict[str, Any]] = {}
 _exchange_cache: dict[str, Any] = {}
 
 
+def _classify_position_orders(orders: list, side: str) -> tuple[int, float, float]:
+    """Return DCA count, next DCA price, and next TP price for a position side."""
+    side = str(side).lower()
+    dca_side = "buy"
+    tp_side = "sell"
+    prefer_higher_dca = True
+    prefer_lower_tp = True
+    if side == "short":
+        dca_side = "sell"
+        tp_side = "buy"
+        prefer_higher_dca = False
+        prefer_lower_tp = False
+
+    dca = 0
+    next_dca = 0.0
+    next_tp = 0.0
+    for order in orders:
+        order_side = str(order[5]).lower()
+        order_price = order[4]
+        if order_side == dca_side:
+            dca += 1
+            if next_dca == 0 or (prefer_higher_dca and next_dca < order_price) or (not prefer_higher_dca and next_dca > order_price):
+                next_dca = order_price
+        elif order_side == tp_side:
+            if next_tp == 0 or (prefer_lower_tp and next_tp > order_price) or (not prefer_lower_tp and next_tp < order_price):
+                next_tp = order_price
+    return dca, next_dca, next_tp
+
+
+def _normalize_position_side(value: Any) -> str:
+    """Normalize a raw order/position side value to long/short/both."""
+    if value is None:
+        return ""
+    normalized = str(value).strip().lower()
+    if normalized in {"long", "short", "both"}:
+        return normalized
+    if normalized in {"1", "1.0", "buy"}:
+        return "long"
+    if normalized in {"2", "2.0", "sell"}:
+        return "short"
+    if normalized in {"net", "net_mode"}:
+        return "both"
+    return ""
+
+
+def _extract_order_position_side(order: dict) -> str:
+    """Best-effort leg detection from live exchange order payloads."""
+    if not isinstance(order, dict):
+        return ""
+
+    sources = [order]
+    info = order.get("info", {})
+    if isinstance(info, dict):
+        sources.append(info)
+
+    for source in sources:
+        for key in ("position_side", "positionSide", "posSide"):
+            value = _normalize_position_side(source.get(key))
+            if value:
+                return value
+        if "positionIdx" in source:
+            value = _normalize_position_side(source.get("positionIdx"))
+            if value:
+                return value
+
+    for source in sources:
+        for key in (
+            "clientOrderId",
+            "client_order_id",
+            "orderLinkId",
+            "order_link_id",
+            "clientOid",
+            "client_oid",
+            "clOrdId",
+        ):
+            raw_value = source.get(key)
+            if not raw_value:
+                continue
+            value = str(raw_value).lower()
+            if value.endswith("_long") or "long" in value or "lng" in value:
+                return "long"
+            if value.endswith("_short") or "short" in value or "shrt" in value:
+                return "short"
+
+    reduce_only = None
+    for source in sources:
+        for key in ("reduceOnly", "reduce_only"):
+            if key not in source:
+                continue
+            raw_value = source.get(key)
+            if isinstance(raw_value, bool):
+                reduce_only = raw_value
+            elif isinstance(raw_value, str):
+                reduce_only = raw_value.strip().lower() in {"true", "1", "yes", "y"}
+            else:
+                reduce_only = bool(raw_value)
+            break
+        if reduce_only is not None:
+            break
+
+    side = str(order.get("side", "")).strip().lower()
+    if reduce_only is not None and side in {"buy", "sell"}:
+        if side == "buy":
+            return "short" if reduce_only else "long"
+        return "long" if reduce_only else "short"
+
+    return ""
+
+
+def _has_hedged_symbol_positions(positions: list, symbol: str) -> bool:
+    """Return True when both long and short legs are open for a symbol."""
+    sides = set()
+    for pos in positions:
+        if pos[1] != symbol:
+            continue
+        try:
+            size = float(pos[3])
+        except (TypeError, ValueError):
+            size = 0.0
+        if size == 0.0:
+            continue
+        sides.add(str(pos[7] if len(pos) > 7 else "long").lower())
+    return "long" in sides and "short" in sides
+
+
+def _build_order_line(order: dict) -> dict[str, Any]:
+    """Normalize a live order into the lightweight chart payload shape."""
+    return {
+        "price": order.get("price", 0),
+        "amount": order.get("amount", order.get("qty", 0)),
+        "side": order.get("side", "buy"),
+    }
+
+
+def _filter_live_orders_for_side(orders: list[dict], side: str) -> tuple[list[dict], bool]:
+    """Return live orders for a leg plus whether any order stayed ambiguous."""
+    normalized_side = str(side or "").lower()
+    filtered = []
+    has_ambiguous = False
+    for order in orders or []:
+        order_side = _extract_order_position_side(order)
+        if order_side == normalized_side:
+            filtered.append(_build_order_line(order))
+        elif not order_side or order_side == "both":
+            has_ambiguous = True
+    return filtered, has_ambiguous
+
+
 def _get_exchange(user_obj):
     """Return a cached, connected Exchange instance for the given user object."""
     from Exchange import Exchange
@@ -173,12 +321,12 @@ def _set_event_loop(loop: _asyncio.AbstractEventLoop):
 _candle_subscribers: dict[tuple[str, str, str], set] = {}
 _candle_sub_lock = threading.Lock()
 
-# Position subscribers: key = (user_name, symbol)
-_position_subscribers: dict[tuple[str, str], set] = {}
+# Position subscribers: key = (user_name, symbol, side)
+_position_subscribers: dict[tuple[str, str, str], set] = {}
 _position_sub_lock = threading.Lock()
 
-# Order subscribers: key = (user_name, symbol)
-_order_subscribers: dict[tuple[str, str], set] = {}
+# Order subscribers: key = (user_name, symbol, side)
+_order_subscribers: dict[tuple[str, str, str], set] = {}
 _order_sub_lock = threading.Lock()
 
 
@@ -213,11 +361,11 @@ def _notify_candle_update(user_name: str, symbol: str, tf: str, candle: list,
         _push_to_subs(subs, msg, from_thread=from_thread)
 
 
-def _notify_position_update(user_name: str, symbol: str, position_data: dict | None,
+def _notify_position_update(user_name: str, symbol: str, side: str, position_data: dict | None,
                             from_thread: bool = False):
     """Push a position update to subscribers watching (user, symbol)."""
     msg = {"type": "position", "position": position_data}
-    key = (user_name, symbol)
+    key = (user_name, symbol, str(side or "long").lower())
     with _position_sub_lock:
         subs = _position_subscribers.get(key)
         if not subs:
@@ -225,11 +373,12 @@ def _notify_position_update(user_name: str, symbol: str, position_data: dict | N
         _push_to_subs(subs, msg, from_thread=from_thread)
 
 
-def _notify_order_update(user_name: str, symbol: str, orders_data: list,
+def _notify_order_update(user_name: str, symbol: str, side: str, orders_data: list,
+                         unknown: bool = False,
                          from_thread: bool = False):
     """Push an orders update to subscribers watching (user, symbol)."""
-    msg = {"type": "orders", "orders": orders_data}
-    key = (user_name, symbol)
+    msg = {"type": "orders", "orders": orders_data, "orders_unknown": bool(unknown)}
+    key = (user_name, symbol, str(side or "long").lower())
     with _order_sub_lock:
         subs = _order_subscribers.get(key)
         if not subs:
@@ -252,24 +401,25 @@ def refresh_positions_for_user(user_name: str):
             return
         db = _get_db()
         positions = db.fetch_positions(user_obj) or []
-        # Build a dict: symbol -> position_data (only open positions)
-        open_pos: dict[str, dict] = {}
+        # Build a dict: (symbol, side) -> position_data (only open positions)
+        open_pos: dict[tuple[str, str], dict] = {}
         for pos in positions:
             sym = pos[1]
             if pos[3]:  # size != 0 means open
-                open_pos[sym] = {
+                side = str(pos[7] if len(pos) > 7 else "long").lower()
+                open_pos[(sym, side)] = {
                     "entry": pos[5],
                     "size":  pos[3],
                     "upnl":  pos[4],
-                    "side":  pos[7] if len(pos) > 7 else "long",
+                    "side":  side,
                 }
         # Notify all chart subscribers for this user
         with _position_sub_lock:
             sub_keys = [k for k in _position_subscribers if k[0] == user_name]
         for key in sub_keys:
-            _, sym = key
-            pos_data = open_pos.get(sym, None)  # None = position closed
-            _notify_position_update(user_name, sym, pos_data, from_thread=True)
+            _, sym, side = key
+            pos_data = open_pos.get((sym, side), None)  # None = position closed
+            _notify_position_update(user_name, sym, side, pos_data, from_thread=True)
     except Exception:
         pass
 
@@ -341,15 +491,15 @@ async def _watch_positions_stream(user_name: str):
                 positions = await ws_client.watchPositions()
                 if not positions:
                     continue
-                # Push matching position to each (user, symbol) subscriber
+                # Push matching position to each (user, symbol, side) subscriber
                 with _position_sub_lock:
                     sub_keys = [k for k in _position_subscribers if k[0] == user_name]
                 for key in sub_keys:
-                    _, sym = key
+                    _, sym, wanted_side = key
                     sym_ccxt = _symbol_to_ccxt(sym)
                     pos_data = None
                     for p in positions:
-                        if p.get("symbol") == sym_ccxt:
+                        if p.get("symbol") == sym_ccxt and str(p.get("side", "long")).lower() == wanted_side:
                             pos_data = {
                                 "entry": p.get("entryPrice", 0),
                                 "size": p.get("contracts", 0),
@@ -357,7 +507,7 @@ async def _watch_positions_stream(user_name: str):
                                 "side": p.get("side", "long"),
                             }
                             break
-                    _notify_position_update(user_name, sym, pos_data)
+                    _notify_position_update(user_name, sym, wanted_side, pos_data)
             except _asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -399,18 +549,16 @@ async def _watch_orders_stream(user_name: str):
                     if o.get("status") != "open":
                         continue
                     sym_ccxt = o.get("symbol", "")
-                    by_symbol.setdefault(sym_ccxt, []).append({
-                        "price": o.get("price", 0),
-                        "amount": o.get("amount", 0),
-                        "side": o.get("side", "buy"),
-                    })
+                    by_symbol.setdefault(sym_ccxt, []).append(o)
                 with _order_sub_lock:
                     sub_keys = [k for k in _order_subscribers if k[0] == user_name]
                 for key in sub_keys:
-                    _, sym = key
+                    _, sym, wanted_side = key
                     sym_ccxt = _symbol_to_ccxt(sym)
-                    sym_orders = by_symbol.get(sym_ccxt, [])
-                    _notify_order_update(user_name, sym, sym_orders)
+                    sym_orders, orders_unknown = _filter_live_orders_for_side(
+                        by_symbol.get(sym_ccxt, []), wanted_side
+                    )
+                    _notify_order_update(user_name, sym, wanted_side, sym_orders, unknown=orders_unknown)
             except _asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -421,7 +569,7 @@ async def _watch_orders_stream(user_name: str):
         _log("Dashboard", f"watchOrders stopped: {user_name}")
 
 
-async def register_chart_client(user_name: str, symbol: str, tf: str,
+async def register_chart_client(user_name: str, symbol: str, tf: str, side: str,
                                 q: _asyncio.Queue):
     """Register a WS client queue for candle/position/order updates.
 
@@ -430,7 +578,8 @@ async def register_chart_client(user_name: str, symbol: str, tf: str,
     """
     from logging_helpers import human_log as _log
     candle_key = (user_name, symbol, tf)
-    pos_key = (user_name, symbol)
+    normalized_side = str(side or "long").lower()
+    pos_key = (user_name, symbol, normalized_side)
 
     # Register in subscriber dicts
     with _candle_sub_lock:
@@ -453,7 +602,7 @@ async def register_chart_client(user_name: str, symbol: str, tf: str,
             positions = _get_db().fetch_positions(user_obj) or []
             pos_data = None
             for pos in positions:
-                if pos[1] == symbol and pos[3]:  # size != 0
+                if pos[1] == symbol and pos[3] and str(pos[7] if len(pos) > 7 else "long").lower() == normalized_side:
                     pos_data = {
                         "entry": pos[5], "size": pos[3],
                         "upnl":  pos[4], "side": pos[7] if len(pos) > 7 else "long",
@@ -500,11 +649,11 @@ async def register_chart_client(user_name: str, symbol: str, tf: str,
     _start_ohlcv_poller()
 
 
-async def unregister_chart_client(user_name: str, symbol: str, tf: str,
+async def unregister_chart_client(user_name: str, symbol: str, tf: str, side: str,
                                   q: _asyncio.Queue):
     """Remove a WS client queue and stop streams if no subscribers left."""
     candle_key = (user_name, symbol, tf)
-    pos_key = (user_name, symbol)
+    pos_key = (user_name, symbol, str(side or "long").lower())
 
     with _candle_sub_lock:
         subs = _candle_subscribers.get(candle_key)
@@ -1364,18 +1513,9 @@ def get_positions_data(
         for pos in positions:
             symbol = pos[1]
             uname = pos[6]
+            side = pos[7] if len(pos) > 7 else "long"
             orders = db.fetch_orders_by_symbol(uname, symbol) or []
-            dca = 0
-            next_tp = 0.0
-            next_dca = 0.0
-            for order in orders:
-                if order[5] == "buy":
-                    dca += 1
-                    if next_dca < order[4]:
-                        next_dca = order[4]
-                elif order[5] == "sell":
-                    if next_tp == 0 or next_tp > order[4]:
-                        next_tp = order[4]
+            dca, next_dca, next_tp = _classify_position_orders(orders, side)
             price = 0.0
             for p in prices:
                 if p[1] == symbol:
@@ -1384,7 +1524,7 @@ def get_positions_data(
             all_positions.append({
                 "user":     uname,
                 "symbol":   symbol,
-                "side":     pos[7] if len(pos) > 7 else "long",
+                "side":     side,
                 "size":     pos[3],
                 "upnl":     round(pos[4], 8),
                 "entry":    pos[5],
@@ -1405,6 +1545,7 @@ def get_positions_data(
 def get_orders_data(
     user:      str = Query(...),
     symbol:    str = Query(...),
+    side:      str = Query(default="long"),
     timeframe: str = Query(default="4h"),
     since:     int = Query(default=None),
     limit:     int = Query(default=500),
@@ -1460,7 +1601,11 @@ def get_orders_data(
         candles = [{"t": c[0], "o": c[1], "h": c[2],
                     "l": c[3], "c": c[4], "v": c[5]} for c in (ohlcv or [])]
 
-    db_orders = db.fetch_orders_by_symbol(user, symbol) or []
+    normalized_side = str(side or "long").lower()
+    positions = db.fetch_positions(user_obj) or []
+    hedged_symbol = _has_hedged_symbol_positions(positions, symbol)
+
+    db_orders = [] if hedged_symbol else (db.fetch_orders_by_symbol(user, symbol) or [])
     orders_list = []
     for o in sorted(db_orders, key=lambda x: x[4], reverse=True):
         orders_list.append({"price": o[4], "amount": o[3], "side": o[5]})
@@ -1471,10 +1616,9 @@ def get_orders_data(
         if p[1] == symbol:
             current_price = p[3]
 
-    positions = db.fetch_positions(user_obj) or []
     position_data = None
     for pos in positions:
-        if pos[1] == symbol:
+        if pos[1] == symbol and str(pos[7] if len(pos) > 7 else "long").lower() == normalized_side:
             position_data = {
                 "entry": pos[5], "size": pos[3],
                 "upnl":  pos[4], "side": pos[7] if len(pos) > 7 else "long",
@@ -1488,5 +1632,6 @@ def get_orders_data(
         "current_price": current_price,
         "user":          user,
         "symbol":        symbol,
+        "orders_unknown": hedged_symbol,
         "timeframe":     timeframe,
     }

@@ -548,11 +548,11 @@ async def websocket_dashboard(websocket: WebSocket):
 async def websocket_candles(websocket: WebSocket):
     """WebSocket endpoint for live chart updates (Phase 2).
 
-    Clients subscribe by connecting with ?token=...&user=...&symbol=...&tf=...
+    Clients subscribe by connecting with ?token=...&user=...&symbol=...&tf=...&side=...
     They receive pre-formatted messages:
       {"type": "candle",   "candle":   [t,o,h,l,c,v]}
       {"type": "position", "position": {entry,size,upnl,side} | null}
-      {"type": "orders",   "orders":   [{price,amount,side}, ...]}
+      {"type": "orders",   "orders":   [{price,amount,side}, ...], "orders_unknown": bool}
     Data comes from ccxt.pro live streams when available, with polling fallback.
     """
     from api.auth import validate_token
@@ -566,6 +566,7 @@ async def websocket_candles(websocket: WebSocket):
     user = websocket.query_params.get("user", "")
     symbol = websocket.query_params.get("symbol", "")
     tf = websocket.query_params.get("tf", "4h")
+    side = websocket.query_params.get("side", "long")
 
     if not user or not symbol:
         await websocket.close(code=4002)
@@ -578,7 +579,7 @@ async def websocket_candles(websocket: WebSocket):
 
     # One unified asyncio.Queue receives candle, position, and order messages
     q: asyncio.Queue = asyncio.Queue(maxsize=200)
-    await register_chart_client(user, symbol, tf, q)
+    await register_chart_client(user, symbol, tf, side, q)
 
     try:
         while True:
@@ -598,7 +599,7 @@ async def websocket_candles(websocket: WebSocket):
     except Exception as e:
         _log(SERVICE, f"[ws/candles] Error: {e}", level="ERROR")
     finally:
-        await unregister_chart_client(user, symbol, tf, q)
+        await unregister_chart_client(user, symbol, tf, side, q)
 
 
 @app.post("/api/internal/notify/balance")
