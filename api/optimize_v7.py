@@ -1397,6 +1397,22 @@ def _iter_result_dirs(base: Path):
             yield result_dir
 
 
+def _result_modified_timestamp(result_dir: Path) -> datetime.datetime:
+    """Return a stable result timestamp that ignores cache-file churn."""
+    all_results_path = result_dir / "all_results.bin"
+    if all_results_path.exists():
+        return datetime.datetime.fromtimestamp(all_results_path.stat().st_mtime)
+
+    pareto_dir = result_dir / "pareto"
+    if pareto_dir.exists():
+        pareto_files = [path for path in pareto_dir.glob("*.json") if path.is_file()]
+        if pareto_files:
+            newest = max(pareto_files, key=lambda path: path.stat().st_mtime)
+            return datetime.datetime.fromtimestamp(newest.stat().st_mtime)
+
+    return datetime.datetime.fromtimestamp(result_dir.stat().st_mtime)
+
+
 def _result_name_from_pareto(path: Path) -> str:
     try:
         data = _load_pareto_json(path)
@@ -2671,7 +2687,7 @@ def list_results(session: SessionToken = Depends(require_auth)):
                 "pareto_count": len(pareto_files),
                 "mode": mode,
                 "scenario_count": scenario_count,
-                "modified": datetime.datetime.fromtimestamp(result_dir.stat().st_mtime).isoformat(),
+                "modified": _result_modified_timestamp(result_dir).isoformat(),
             }
         )
     return {"results": results}

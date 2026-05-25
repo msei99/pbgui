@@ -2074,10 +2074,12 @@ textarea.json-invalid:focus {
       </div>
 
       <div id="ctx-results" class="ctx-actions" style="display:none">
+        <button class="sb-btn" id="btn-open-pareto-explorer-results">🎯 Pareto Explorer</button>
         <button class="sb-btn danger" id="btn-delete-selected-results">🗑 Delete Selected</button>
       </div>
 
       <div id="ctx-paretos" class="ctx-actions" style="display:none">
+        <button class="sb-btn" id="btn-open-pareto-explorer-paretos">🎯 Pareto Explorer</button>
         <button class="sb-btn" id="btn-backtest-selected-paretos">🔄 Backtest</button>
         <button class="sb-btn" id="btn-seed-selected-paretos">🧬 Seed Selected</button>
         <button class="sb-btn" id="btn-seed-whole-result">📂 Seed Whole Result</button>
@@ -8573,6 +8575,47 @@ function openParetoExplorer(resultPath) {
   window.location.href = url;
 }
 
+function openFastApiParetoExplorer(resultPath) {
+  var path = String(resultPath || '').trim();
+  if (!path) {
+    toast('Select an optimize result first.', 'warn');
+    return;
+  }
+  var apiRoot = String(API_BASE || '').replace(/\/api\/optimize-v7\/?$/, '');
+  if (!apiRoot) {
+    toast('Pareto Explorer route is unavailable.', 'err');
+    return;
+  }
+  var params = new URLSearchParams();
+  params.set('token', TOKEN);
+  params.set('result_path', path);
+  if (ST_BASE) params.set('st_base', ST_BASE);
+  window.location.href = apiRoot + '/api/pareto-explorer/main_page?' + params.toString();
+}
+
+function getSingleSelectedResult() {
+  var selected = Array.from(state.selectedResults || []);
+  if (selected.length === 1) {
+    return state.results.find(function(result) {
+      return result.path === selected[0];
+    }) || null;
+  }
+  if (state.selectedResultPath) {
+    return state.results.find(function(result) {
+      return result.path === state.selectedResultPath;
+    }) || null;
+  }
+  return null;
+}
+
+function syncSelectedResultFromSelection() {
+  var selected = getSingleSelectedResult();
+  if (!selected) return null;
+  state.selectedResultPath = selected.path;
+  state.selectedResultName = selected.name || selected.result || state.selectedResultName;
+  return selected;
+}
+
 async function launchResult3dPlot(path, name) {
   var response = await apiFetch('/results/3d-plot', {
     method: 'POST',
@@ -9406,7 +9449,7 @@ function renderResults() {
     tr.innerHTML = ''
       + '<td><strong>' + escapeHtml(result.name || result.result) + '</strong></td>'
       + '<td class="mono ellipsis">' + escapeHtml(result.result || '-') + '</td>'
-      + '<td>' + escapeHtml(String(result.pareto_count || 0)) + '</td>'
+      + '<td class="result-pareto-count" title="Double-click to open the new FastAPI Pareto Explorer">' + escapeHtml(String(result.pareto_count || 0)) + '</td>'
       + '<td class="result-mode-cell">' + resultModeMarkup(result) + '</td>'
       + '<td class="muted">' + escapeHtml(formatIso(result.modified)) + '</td>'
       + '<td class="actions-cell">'
@@ -9427,9 +9470,11 @@ function updateResultSelectionUi(filteredResults) {
   var results = filteredResults || filterResults();
   pruneSelectionSet('selectedResults', state.results.map(function(result) { return result.path; }));
   var selectedCount = state.selectedResults.size;
+  var selected = selectedCount === 1 ? syncSelectedResultFromSelection() : null;
   el('result-selection-summary').textContent = selectedCount
     ? selectedCount + ' result' + (selectedCount === 1 ? '' : 's') + ' selected.'
     : 'No results selected.';
+  el('btn-open-pareto-explorer-results').disabled = !selected;
 }
 
 function renderParetos() {
@@ -9484,6 +9529,7 @@ function updateParetoSelectionUi() {
   el('pareto-selection-summary').textContent = selectedCount
     ? selectedCount + ' pareto' + (selectedCount === 1 ? '' : 's') + ' selected.'
     : 'No paretos selected.';
+  el('btn-open-pareto-explorer-paretos').disabled = !state.selectedResultPath;
   el('btn-backtest-selected-paretos').disabled = selectedCount === 0;
   el('btn-seed-selected-paretos').disabled = selectedCount === 0;
   el('btn-seed-whole-result').disabled = !state.selectedResultPath;
@@ -10564,6 +10610,20 @@ function attachEventHandlers() {
     if (target.classList.contains('result-config')) return openResultConfig(path, target.dataset.name).catch(handleError);
   });
 
+  el('results-tbody').addEventListener('dblclick', function(event) {
+    var cell = event.target.closest('td.result-pareto-count');
+    if (!cell) return;
+    event.preventDefault();
+    event.stopPropagation();
+    var row = cell.closest('tr[data-path]');
+    if (!row) return;
+    var path = row.getAttribute('data-path') || '';
+    var nameNode = row.querySelector('td strong');
+    state.selectedResultPath = path;
+    state.selectedResultName = nameNode ? nameNode.textContent : state.selectedResultName;
+    openFastApiParetoExplorer(path);
+  });
+
   el('paretos-tbody').addEventListener('click', function(event) {
     var target = event.target.closest('button');
     if (!target || !event.currentTarget.contains(target)) return;
@@ -10634,6 +10694,23 @@ function initSelections() {
   });
   initRowSelection('paretos-tbody', 'selectedParetos', 'data-path', function() {
     updateParetoSelectionUi();
+  });
+
+  el('btn-open-pareto-explorer-results').addEventListener('click', function() {
+    var selected = syncSelectedResultFromSelection();
+    if (!selected) {
+      toast('Select exactly one result first.', 'warn');
+      return;
+    }
+    openFastApiParetoExplorer(selected.path);
+  });
+
+  el('btn-open-pareto-explorer-paretos').addEventListener('click', function() {
+    if (!state.selectedResultPath) {
+      toast('Choose a result set first.', 'warn');
+      return;
+    }
+    openFastApiParetoExplorer(state.selectedResultPath);
   });
 }
 

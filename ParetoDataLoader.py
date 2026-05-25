@@ -2074,6 +2074,7 @@ class ParetoDataLoader:
         """Populate scenario_metrics/metric_stats/robustness_scores (expensive)."""
         if config.details_loaded:
             return
+        was_pareto = bool(getattr(config, 'is_pareto', False))
         config_data = self.raw_configs_cache.get(config.config_index)
         if not isinstance(config_data, dict):
             return
@@ -2094,7 +2095,10 @@ class ParetoDataLoader:
         config.scenario_details = full.scenario_details
         config.metric_stats = full.metric_stats
         config.config_hash = full.config_hash
-        config.is_pareto = full.is_pareto
+        # Preserve already-known Pareto membership from the initial load.
+        # Some lazy full-detail parses do not reliably reconstruct the same
+        # Pareto flag that the initial loader established from the persisted set.
+        config.is_pareto = bool(full.is_pareto or was_pareto)
         config.overall_robustness = full.overall_robustness
         config.details_loaded = True
     

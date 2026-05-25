@@ -1,5 +1,8 @@
 # Unreleased
 
+- Add the FastAPI Pareto Explorer `Create PBv7 Optimize Preset from this Config` expander with the Streamlit preset controls, live scoring/limits/bounds previews, and create flow that reuses the existing Optimize config save and Optimize draft-open endpoints.
+- Fix the Pareto Explorer preset generator `Near-edge expansion (%)` slider so dragging it fully left keeps and submits `0%` instead of falling back to the default `25%`.
+- Add a streamlit-free Pareto optimize preset generator plus PB7 bridge metric-set helper, keeping PB7 metric metadata access centralized in `api.pb7_bridge` and documenting current PB7 integration touchpoints for future compatibility checks.
 - Keep the Deep Intelligence `Top N Parameters` slider stable by clamping its own 10–40 range instead of reusing the general max-config normalization, and remove the extra lower parameter-bound list so the tab focuses on the aggregate charts.
 - Hide the whole `selected-config-detail` section (not just the inner grid) when the Parameters tab is active, so the charts can fill the full width on first load.
 - Move the `selected-config-detail` section after `stage-deep-intelligence` in the DOM so it renders at the bottom for Scenarios and Evolution tabs (Config Preview below the chart), while Parameters and Correlations tabs hide it completely.

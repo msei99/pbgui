@@ -52,6 +52,7 @@ from api.backtest_v7 import router as backtest_v7_router
 from api.backtest_v7 import startup as bt7_startup, shutdown as bt7_shutdown
 from api.optimize_v7 import router as optimize_v7_router
 from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
+from api.pareto_explorer import router as pareto_explorer_router
 from logging_helpers import human_log as _log
 from pb7_config import PB7ConfigurationError
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, PBGUI_SERIAL, PBGUI_VERSION
@@ -337,6 +338,7 @@ app.include_router(balance_calc_router, prefix="/api/balance-calc", tags=["balan
 app.include_router(coin_data_router, prefix="/api/coin-data", tags=["coin-data"])
 app.include_router(backtest_v7_router, prefix="/api/backtest-v7", tags=["backtest-v7"])
 app.include_router(optimize_v7_router, prefix="/api/optimize-v7", tags=["optimize-v7"])
+app.include_router(pareto_explorer_router, prefix="/api/pareto-explorer", tags=["pareto-explorer"])
 
 
 @app.exception_handler(PB7ConfigurationError)

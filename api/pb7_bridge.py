@@ -203,11 +203,11 @@ def _metric_type_help_text(groups: list[str]) -> str:
 
 def get_optimize_limits_meta_payload() -> dict[str, Any]:
     limits_mod = _import_pb7_module("config.limits")
-    metrics_mod = _import_pb7_module("config.metrics")
     scoring_mod = _import_pb7_module("config.scoring")
 
-    currency_metrics = sorted(set(metrics_mod.CURRENCY_METRICS))
-    shared_metrics = sorted(set(metrics_mod.SHARED_METRICS).union(_LIMIT_ONLY_SHARED_METRICS))
+    metric_sets = get_optimize_metric_sets()
+    currency_metrics = metric_sets["currency_metrics"]
+    shared_metrics = metric_sets["shared_metrics"]
     all_base_metrics = sorted(set(currency_metrics).union(shared_metrics))
     grouped_metrics = _grouped_metric_options(all_base_metrics)
     groups = [group for group in _OPTIMIZE_METRIC_GROUP_ORDER if group in grouped_metrics]
@@ -260,4 +260,13 @@ def get_optimize_limits_meta_payload() -> dict[str, Any]:
         "range_low_help": pbgui_help.limit_range_low,
         "range_high_help": pbgui_help.limit_range_high,
         "add_button_help": pbgui_help.add_limit_button,
+    }
+
+
+def get_optimize_metric_sets() -> dict[str, list[str]]:
+    """Return PB7 optimize metric sets without importing PBGui's Streamlit config."""
+    metrics_mod = _import_pb7_module("config.metrics")
+    return {
+        "currency_metrics": sorted(set(metrics_mod.CURRENCY_METRICS)),
+        "shared_metrics": sorted(set(metrics_mod.SHARED_METRICS).union(_LIMIT_ONLY_SHARED_METRICS)),
     }

@@ -468,16 +468,6 @@ textarea.json-invalid:focus {
                    border: 1px solid var(--border); color: var(--text-dim); cursor: pointer;
                    font-size: 11px; border-radius: 3px; padding: 1px 5px; line-height: 1.4; }
 .chart-close-btn:hover { color: var(--red); border-color: var(--red); background: rgba(255,75,75,.15); }
-/* JSON panels (Config / Analysis) */
-.json-panel-wrap { position: relative; margin-top: var(--sp-md); background: var(--bg2);
-                   border: 1px solid var(--border); border-radius: 6px; padding: var(--sp-md); padding-bottom: 0; overflow: hidden; }
-.json-panel-hdr { display: flex; align-items: center; gap: var(--sp-sm); margin-bottom: var(--sp-sm); }
-.json-panel-hdr .sb-label { margin: 0; }
-.json-panel-close { background: none; border: none; color: var(--text-dim); cursor: pointer;
-                    font-size: 13px; margin-left: auto; padding: 0 4px; line-height: 1; }
-.json-panel-close:hover { color: var(--red); }
-.json-pre { font-size: var(--fs-xs); background: var(--bg); padding: var(--sp-md); border-radius: 4px;
-            overflow-y: auto; height: 400px; min-height: 80px; color: var(--green); margin: 0; }
 /* ── Results detail ────────────────────────────── */
 .result-detail { margin-top: var(--sp-lg); }
 .metrics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--sp-sm); margin-bottom: var(--sp-lg); }
@@ -908,6 +898,7 @@ textarea.json-invalid:focus {
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=10"></script>
+<script src="/app/js/json_panel.js?v=1"></script>
 <script>
 /* ════════════════════════════════════════════════
    GLOBALS (injected by server)
@@ -5120,36 +5111,26 @@ function onResultActionsChanged() {
     if (showAnalysis) {
       var awrapId = 'analysis-wrap-' + idx;
       var apreId = 'analysis-json-' + idx;
-      html += '\x3Cdiv class="json-panel-wrap" id="' + awrapId + '">' +
-        '\x3Cdiv class="json-panel-hdr">' +
-          '\x3Cspan class="sb-label">Analysis\x3C/span>' +
-          '\x3Cbutton class="act-btn" onclick="copyJsonPanel(\'' + apreId + '\',this)" title="Copy to clipboard" style="font-size:var(--fs-xs);padding:2px 8px">\u29c9 Copy\x3C/button>' +
-          '\x3Cbutton class="act-btn" onclick="expandJsonPanel(\'' + apreId + '\',this)" title="Expand / Collapse" style="font-size:var(--fs-xs);padding:2px 8px">\u2b0c Expand\x3C/button>' +
-          '\x3Cbutton class="act-btn" onclick="zoomJsonPanel(\'' + apreId + '\',-1)" title="Smaller font" style="font-size:var(--fs-xs);padding:2px 6px">A\u2212\x3C/button>' +
-          '\x3Cbutton class="act-btn" onclick="zoomJsonPanel(\'' + apreId + '\',1)" title="Larger font" style="font-size:var(--fs-xs);padding:2px 6px">A+\x3C/button>' +
-          '\x3Cbutton class="json-panel-close" onclick="closeAnalysisSection(' + idx + ')" title="Close">\u2715\x3C/button>' +
-        '\x3C/div>' +
-        '\x3Cpre id="' + apreId + '" class="json-pre">\x3C/pre>' +
-        '\x3Cdiv class="chart-resize-handle" onmousedown="startJsonResize(event,\'' + apreId + '\')" title="Drag to resize">\x3Cspan>\x3C/span>\x3C/div>' +
-        '\x3C/div>';
+      html += window.PBGuiJsonPanel.createPanelHtml({
+        wrapId: awrapId,
+        preId: apreId,
+        title: 'Analysis',
+        closeOnclick: 'closeAnalysisSection(' + idx + ')',
+        resizeHandler: 'startJsonResize(event,\'' + apreId + '\')'
+      });
       chartDivs.push({ id: apreId, type: 'analysis_json', path: r.path, result: r, idx: idx });
     }
 
     if (showConfig) {
       var cwrapId = 'config-wrap-' + idx;
       var cpreId = 'config-json-' + idx;
-      html += '\x3Cdiv class="json-panel-wrap" id="' + cwrapId + '">' +
-        '\x3Cdiv class="json-panel-hdr">' +
-          '\x3Cspan class="sb-label">Config\x3C/span>' +
-          '\x3Cbutton class="act-btn" onclick="copyJsonPanel(\'' + cpreId + '\',this)" title="Copy to clipboard" style="font-size:var(--fs-xs);padding:2px 8px">\u29c9 Copy\x3C/button>' +
-          '\x3Cbutton class="act-btn" onclick="expandJsonPanel(\'' + cpreId + '\',this)" title="Expand / Collapse" style="font-size:var(--fs-xs);padding:2px 8px">\u2b0c Expand\x3C/button>' +
-          '\x3Cbutton class="act-btn" onclick="zoomJsonPanel(\'' + cpreId + '\',-1)" title="Smaller font" style="font-size:var(--fs-xs);padding:2px 6px">A\u2212\x3C/button>' +
-          '\x3Cbutton class="act-btn" onclick="zoomJsonPanel(\'' + cpreId + '\',1)" title="Larger font" style="font-size:var(--fs-xs);padding:2px 6px">A+\x3C/button>' +
-          '\x3Cbutton class="json-panel-close" onclick="closeConfigSection(' + idx + ')" title="Close">\u2715\x3C/button>' +
-        '\x3C/div>' +
-        '\x3Cpre id="' + cpreId + '" class="json-pre">\x3C/pre>' +
-        '\x3Cdiv class="chart-resize-handle" onmousedown="startJsonResize(event,\'' + cpreId + '\')" title="Drag to resize">\x3Cspan>\x3C/span>\x3C/div>' +
-        '\x3C/div>';
+      html += window.PBGuiJsonPanel.createPanelHtml({
+        wrapId: cwrapId,
+        preId: cpreId,
+        title: 'Config',
+        closeOnclick: 'closeConfigSection(' + idx + ')',
+        resizeHandler: 'startJsonResize(event,\'' + cpreId + '\')'
+      });
       chartDivs.push({ id: cpreId, type: 'config_json', path: r.path, result: r, idx: idx });
     }
 
@@ -5188,7 +5169,7 @@ function onResultActionsChanged() {
       pre.style.height = s.h || 'auto';
       var hdr = pre.closest('.json-panel-wrap');
       if (hdr) {
-        var expandBtn = hdr.querySelector('.act-btn[onclick*="expandJsonPanel"]');
+        var expandBtn = hdr.querySelector('.json-panel-expand-btn');
         if (expandBtn) expandBtn.textContent = '\u2b0d Collapse';
       }
     } else if (s.h) {
@@ -5214,39 +5195,6 @@ function onResultActionsChanged() {
       loadFillsImages(cd);
     }
   });
-}
-
-/* ── JSON panel helpers ── */
-function copyJsonPanel(preId, btn) {
-  var el = document.getElementById(preId);
-  if (!el) return;
-  navigator.clipboard.writeText(el.textContent).then(function() {
-    var orig = btn.textContent;
-    btn.textContent = '\u2713 Copied';
-    setTimeout(function() { btn.textContent = orig; }, 1400);
-  }).catch(function() { toast('Copy failed', 'err'); });
-}
-function expandJsonPanel(preId, btn) {
-  var el = document.getElementById(preId);
-  if (!el) return;
-  if (el.dataset.expanded === '1') {
-    el.style.height = '400px';
-    el.dataset.expanded = '0';
-    btn.textContent = '\u2b0c Expand';
-  } else {
-    el.style.height = 'auto';
-    el.dataset.expanded = '1';
-    btn.textContent = '\u2b0d Collapse';
-  }
-}
-
-function zoomJsonPanel(preId, dir) {
-  var el = document.getElementById(preId);
-  if (!el) return;
-  var cur = parseFloat(el.dataset.fontSize) || parseFloat(getComputedStyle(el).fontSize) || 11;
-  var next = Math.min(24, Math.max(8, cur + dir));
-  el.style.fontSize = next + 'px';
-  el.dataset.fontSize = next;
 }
 
 /* ── Balance & Equity chart (matches Streamlit view_chart_be) ── */
@@ -5684,16 +5632,12 @@ function loadAnalysis(cd) {
   var el = document.getElementById('analysis-json-' + cd.idx);
   if (!el) return;
   if (cd.result.analysis) {
-    el.textContent = JSON.stringify(cd.result.analysis, null, 4);
-    el.style.height = 'auto';
-    el.dataset.expanded = '1';
+    window.PBGuiJsonPanel.setContent(el.id, cd.result.analysis);
   } else {
     apiFetch('/results/analysis?path=' + encodeURIComponent(cd.path))
       .then(function(d) {
         if (el.isConnected) {
-          el.textContent = JSON.stringify(d, null, 4);
-          el.style.height = 'auto';
-          el.dataset.expanded = '1';
+          window.PBGuiJsonPanel.setContent(el.id, d);
         }
       })
       .catch(function(e) { if (el.isConnected) el.textContent = 'Error: ' + e.message; });
@@ -5706,9 +5650,7 @@ function loadConfig(cd) {
   apiFetch('/results/config?path=' + encodeURIComponent(cd.path))
     .then(function(d) {
       if (el.isConnected) {
-        el.textContent = JSON.stringify(d, null, 4);
-        el.style.height = 'auto';
-        el.dataset.expanded = '1';
+        window.PBGuiJsonPanel.setContent(el.id, d);
       }
     })
     .catch(function(e) { if (el.isConnected) el.textContent = 'Error: ' + e.message; });

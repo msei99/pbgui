@@ -315,6 +315,38 @@ a:hover { text-decoration: underline; }
   line-height: 1.35;
 }
 
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--sp-md);
+  margin-top: 12px;
+}
+
+.preset-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+}
+
+.preset-preview-table th,
+.preset-preview-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.preset-code-preview {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--bg3);
+  color: var(--green);
+  font-size: var(--fs-xs);
+}
+
 .deep-scenarios-stats-grid {
   margin-top: 20px;
   display: block;
@@ -1479,6 +1511,86 @@ input[type="range"]::-moz-range-thumb {
             </div>
           </details>
         </section>
+        <section id="detail-preset-section" class="detail-block panel-card" style="display:none;">
+          <details class="expander-card" id="preset-generator-details">
+            <summary>🧩 Create PBv7 Optimize Preset from this Config</summary>
+            <p class="muted-line">Creates a new Optimize preset with bounds tightened around the selected config's parameters. Useful for a follow-up run focused on fine-tuning instead of broad exploration.</p>
+            <div class="preset-grid">
+              <div class="form-field wide">
+                <label for="preset-name">Preset name</label>
+                <input id="preset-name" type="text" maxlength="64" value="">
+              </div>
+              <div class="form-field">
+                <label for="preset-bounds-adjust">Bounds window adjustment</label>
+                <input id="preset-bounds-adjust" type="range" min="-50" max="50" step="1" value="0">
+                <div class="muted-line" id="preset-bounds-adjust-value">0</div>
+              </div>
+              <div class="form-field wide">
+                <label for="preset-direction">Optimization goal</label>
+                <select id="preset-direction">
+                  <option value="Balanced (keep run scoring)">Balanced (keep run scoring)</option>
+                  <option value="More profit (risk can be higher)">More profit (risk can be higher)</option>
+                  <option value="Safer (lower drawdowns)">Safer (lower drawdowns)</option>
+                  <option value="Smoother equity curve">Smoother equity curve</option>
+                  <option value="Fewer/shorter holds (faster turnover)">Fewer/shorter holds (faster turnover)</option>
+                  <option value="Lower exposure (safer sizing)">Lower exposure (safer sizing)</option>
+                </select>
+              </div>
+              <div class="form-field">
+                <label for="preset-risk-adjust">Risk adjustment</label>
+                <input id="preset-risk-adjust" type="range" min="-50" max="50" step="5" value="0">
+                <div class="muted-line" id="preset-risk-adjust-value">0</div>
+              </div>
+              <div class="form-field full">
+                <div class="muted-line" id="preset-bounds-window-hint">Bounds unchanged (set adjustment ≠ 0 to tighten/loosen).</div>
+              </div>
+              <div class="form-field full">
+                <div class="check-row"><input id="preset-show-near-bounds" type="checkbox"><label for="preset-show-near-bounds">Show parameters near bounds (Deep Intelligence)</label></div>
+              </div>
+              <div id="preset-near-bounds-options" class="form-field full" style="display:none;">
+                <div class="preset-grid" style="margin-top:0;">
+                  <div class="form-field">
+                    <label for="preset-near-bounds-tol">Near-bounds tolerance</label>
+                    <input id="preset-near-bounds-tol" type="range" min="1" max="25" step="1" value="10">
+                    <div class="muted-line" id="preset-near-bounds-tol-value">10%</div>
+                  </div>
+                  <div class="form-field wide">
+                    <label>&nbsp;</label>
+                    <div class="check-row"><input id="preset-expand-near-bounds" type="checkbox"><label for="preset-expand-near-bounds">Expand bounds for near-edge params</label></div>
+                    <div class="check-row"><input id="preset-hide-hard-limited-near" type="checkbox"><label for="preset-hide-hard-limited-near">Hide near-bounds limited by 0-clamp</label></div>
+                  </div>
+                  <div id="preset-expand-options" class="form-field" style="display:none;">
+                    <label for="preset-near-bounds-expand-pct">Near-edge expansion (%)</label>
+                    <input id="preset-near-bounds-expand-pct" type="range" min="0" max="100" step="5" value="25">
+                    <div class="muted-line" id="preset-near-bounds-expand-pct-value">25%</div>
+                  </div>
+                </div>
+              </div>
+              <div class="form-field full">
+                <div class="check-row"><input id="preset-open-optimize" type="checkbox" checked><label for="preset-open-optimize">Open PBv7 Optimize after creating preset</label></div>
+              </div>
+              <div class="form-field full">
+                <h4 style="margin:0;">Planned optimize defaults</h4>
+                <pre id="preset-preview-json" class="preset-code-preview">Select a config to build a preset preview.</pre>
+              </div>
+              <div class="form-field full">
+                <h4 style="margin:0;">Bounds changes preview</h4>
+                <div id="preset-bounds-preview" class="placeholder-panel">No preview loaded.</div>
+              </div>
+              <div id="preset-near-preview-block" class="form-field full" style="display:none;">
+                <h4 style="margin:0;">Parameters near bounds</h4>
+                <div id="preset-near-preview" class="placeholder-panel">No near-bounds preview loaded.</div>
+              </div>
+              <div class="form-field full">
+                <div class="button-row">
+                  <button class="btn primary" id="btn-create-preset" type="button">💾 Create Optimize Preset</button>
+                  <button class="ghost-btn" id="btn-refresh-preset-preview" type="button">Refresh Preview</button>
+                </div>
+                <div class="muted-line" id="preset-status" style="margin-top:8px;"></div>
+              </div>
+            </div>
+          </details>
+        </section>
       </div>
     </section>
   </main>
@@ -1528,6 +1640,8 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     deepPlotResizeTimer: null,
     playgroundRequestSeq: 0,
     detailRequestSeq: 0,
+    presetPreviewTimer: null,
+    presetPreviewRequestSeq: 0,
     persistDefaults: true,
     viewRange: null,
     pendingViewRange: null,
@@ -1743,6 +1857,22 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         opt_draft_id: draft && draft.draft_id ? draft.draft_id : '',
         draft_name: draftName || ''
       });
+    });
+  }
+
+  function optimizeApiFetch(path, options) {
+    options = options || {};
+    var headers = Object.assign({
+      'Authorization': 'Bearer ' + TOKEN,
+      'Content-Type': 'application/json'
+    }, options.headers || {});
+    return fetch(window.location.origin + '/api/optimize-v7' + path, Object.assign({}, options, { headers: headers })).then(function(res) {
+      if (!res.ok) {
+        return res.text().then(function(text) {
+          throw new Error(text || ('HTTP ' + res.status));
+        });
+      }
+      return res.json();
     });
   }
 
@@ -2803,6 +2933,183 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     });
   }
 
+  function presetDefaultName(detail) {
+    if (!detail || detail.config_index == null) return 'pareto_refine_cfg';
+    return 'pareto_refine_cfg_' + String(detail.config_index);
+  }
+
+  function syncPresetForm(detail) {
+    var section = el('detail-preset-section');
+    if (!section) return;
+    if (!detail || !detail.full_config) {
+      section.style.display = 'none';
+      return;
+    }
+    section.style.display = '';
+    var nameNode = el('preset-name');
+    var configKey = String(detail.config_index == null ? '' : detail.config_index);
+    if (nameNode.dataset.configIndex !== configKey) {
+      nameNode.value = presetDefaultName(detail);
+      nameNode.dataset.configIndex = configKey;
+      el('preset-bounds-adjust').value = '0';
+      el('preset-risk-adjust').value = '0';
+      el('preset-direction').value = 'Balanced (keep run scoring)';
+      el('preset-show-near-bounds').checked = false;
+      el('preset-expand-near-bounds').checked = false;
+      el('preset-hide-hard-limited-near').checked = false;
+      el('preset-near-bounds-tol').value = '10';
+      el('preset-near-bounds-expand-pct').value = '25';
+    }
+    updatePresetUiLabels();
+    if (el('preset-generator-details').open) schedulePresetPreview(0);
+  }
+
+  function updatePresetUiLabels() {
+    var boundsAdjust = parseInt(el('preset-bounds-adjust').value || '0', 10) || 0;
+    var riskAdjust = parseInt(el('preset-risk-adjust').value || '0', 10) || 0;
+    var nearTol = parseInt(el('preset-near-bounds-tol').value || '10', 10) || 10;
+    var expandPctRaw = parseInt(el('preset-near-bounds-expand-pct').value || '25', 10);
+    var expandPct = Number.isFinite(expandPctRaw) ? expandPctRaw : 25;
+    el('preset-bounds-adjust-value').textContent = String(boundsAdjust);
+    el('preset-risk-adjust-value').textContent = String(riskAdjust);
+    el('preset-near-bounds-tol-value').textContent = String(nearTol) + '%';
+    el('preset-near-bounds-expand-pct-value').textContent = String(expandPct) + '%';
+    el('preset-bounds-window-hint').textContent = boundsAdjust === 0
+      ? 'Bounds unchanged (set adjustment ≠ 0 to tighten/loosen).'
+      : 'Effective bounds window: ±' + String(Math.max(0, Math.min(100, 10 + boundsAdjust))) + '% around selected values (base 10%, adjustment ' + (boundsAdjust > 0 ? '+' : '') + String(boundsAdjust) + ').';
+    el('preset-near-bounds-options').style.display = el('preset-show-near-bounds').checked ? '' : 'none';
+    el('preset-expand-options').style.display = (el('preset-show-near-bounds').checked && el('preset-expand-near-bounds').checked) ? '' : 'none';
+    el('preset-near-preview-block').style.display = el('preset-show-near-bounds').checked ? '' : 'none';
+    ['preset-bounds-adjust', 'preset-risk-adjust', 'preset-near-bounds-tol', 'preset-near-bounds-expand-pct'].forEach(function(id) { updateRangeFill(el(id)); });
+  }
+
+  function buildPresetRequestBody() {
+    var detail = state.selectedDetail;
+    if (!detail || detail.config_index == null) throw new Error('No selected config is available.');
+    return {
+      result_path: state.resultPath,
+      config_index: detail.config_index,
+      load_strategy: state.loadStrategy,
+      max_configs: state.maxConfigs,
+      all_results_loaded: state.allResultsLoaded,
+      view_range: state.viewRange,
+      preset: {
+        preset_name: el('preset-name').value.trim() || presetDefaultName(detail),
+        bounds_adjust: parseInt(el('preset-bounds-adjust').value || '0', 10) || 0,
+        direction: el('preset-direction').value,
+        risk_adjust: parseInt(el('preset-risk-adjust').value || '0', 10) || 0,
+        show_near_bounds: !!el('preset-show-near-bounds').checked,
+        near_bounds_tol: (parseInt(el('preset-near-bounds-tol').value || '10', 10) || 10) / 100,
+        expand_near_bounds: !!el('preset-expand-near-bounds').checked,
+        near_bounds_expand_pct: (function() {
+          var value = parseInt(el('preset-near-bounds-expand-pct').value || '25', 10);
+          return Number.isFinite(value) ? value : 25;
+        }()),
+        hide_hard_limited_near: !!el('preset-hide-hard-limited-near').checked,
+        switch_to_optimize: !!el('preset-open-optimize').checked
+      }
+    };
+  }
+
+  function renderPresetRows(rootId, rows, emptyText, columns) {
+    var root = el(rootId);
+    if (!rows || !rows.length) {
+      root.className = 'placeholder-panel';
+      root.innerHTML = escapeHtml(emptyText);
+      return;
+    }
+    root.className = '';
+    var html = '<div style="overflow:auto; max-height:320px;"><table class="preset-preview-table"><thead><tr>';
+    columns.forEach(function(column) { html += '<th>' + escapeHtml(column.label) + '</th>'; });
+    html += '</tr></thead><tbody>';
+    rows.slice(0, 120).forEach(function(row) {
+      html += '<tr>';
+      columns.forEach(function(column) { html += '<td>' + escapeHtml(row[column.key] == null ? '' : row[column.key]) + '</td>'; });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    if (rows.length > 120) html += '<div class="muted-line" style="margin-top:6px;">Showing first 120 of ' + escapeHtml(String(rows.length)) + ' rows.</div>';
+    root.innerHTML = html;
+  }
+
+  function renderPresetPreview(payload) {
+    if (!payload || !payload.ok) {
+      el('preset-preview-json').textContent = 'No preset preview available.';
+      renderPresetRows('preset-bounds-preview', [], 'No bounds changes detected.', []);
+      renderPresetRows('preset-near-preview', [], 'No parameters near bounds detected (or data unavailable).', []);
+      return;
+    }
+    if (payload.preset_name) el('preset-name').value = String(payload.preset_name);
+    el('preset-preview-json').textContent = JSON.stringify({ scoring: payload.scoring || [], limits: payload.limits || [] }, null, 2);
+    renderPresetRows('preset-bounds-preview', payload.bounds_preview_rows || [], 'No bounds changes detected.', [
+      { key: 'param', label: 'Param' },
+      { key: 'change', label: 'Change' },
+      { key: 'before', label: 'Before' },
+      { key: 'expand', label: 'Expand' },
+      { key: 'window', label: 'Window' },
+      { key: 'risk', label: 'Risk' },
+      { key: 'result', label: 'Result' },
+      { key: 'expand_note', label: 'Note' }
+    ]);
+    renderPresetRows('preset-near-preview', payload.near_rows || [], 'No parameters near bounds detected (or data unavailable).', [
+      { key: 'param', label: 'Param' },
+      { key: 'edge', label: 'Edge' },
+      { key: 'value', label: 'Value' },
+      { key: 'bound', label: 'Bound' }
+    ]);
+  }
+
+  function loadPresetPreview() {
+    var seq = ++state.presetPreviewRequestSeq;
+    el('preset-status').textContent = 'Building preset preview...';
+    return apiFetch('/optimize-preset/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildPresetRequestBody())
+    }).then(function(data) {
+      if (seq !== state.presetPreviewRequestSeq) return data;
+      renderPresetPreview(data);
+      el('preset-status').textContent = '';
+      return data;
+    }).catch(function(err) {
+      if (seq === state.presetPreviewRequestSeq) el('preset-status').textContent = 'Preset preview failed: ' + err.message;
+      throw err;
+    });
+  }
+
+  function schedulePresetPreview(delay) {
+    if (!state.selectedDetail || !el('preset-generator-details').open) return;
+    if (state.presetPreviewTimer) window.clearTimeout(state.presetPreviewTimer);
+    state.presetPreviewTimer = window.setTimeout(function() {
+      state.presetPreviewTimer = null;
+      loadPresetPreview().catch(function() {});
+    }, delay == null ? 250 : delay);
+  }
+
+  function createOptimizePreset() {
+    loadPresetPreview().then(function(data) {
+      if (!data || !data.preset_config) throw new Error('Preset config was not generated.');
+      var name = String(data.preset_name || el('preset-name').value || '').trim();
+      if (!name) throw new Error('Preset name is required.');
+      el('preset-status').textContent = 'Saving optimize preset...';
+      return optimizeApiFetch('/configs/' + encodeURIComponent(name), {
+        method: 'PUT',
+        body: JSON.stringify(data.preset_config)
+      }).then(function() {
+        pushMessage('info', 'Optimize preset created: ' + name + '.json');
+        if (el('preset-open-optimize').checked) {
+          el('preset-status').textContent = 'Opening PBv7 Optimize...';
+          return openOptimizeSeedDraft(data.preset_config, name);
+        }
+        el('preset-status').textContent = 'Optimize preset created: ' + name + '.json';
+        return null;
+      });
+    }).catch(function(err) {
+      el('preset-status').textContent = 'Create preset failed: ' + err.message;
+      pushMessage('error', 'Create preset failed: ' + err.message);
+    });
+  }
+
   function renderPlayground(payload, options) {
     options = options || {};
     var followBestMatch = !!options.followBestMatch;
@@ -3310,6 +3617,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       el('detail-robustness-panel').innerHTML = '<div class="placeholder-panel" style="min-height:80px;">Robustness details will appear here.</div>';
       el('detail-all-metrics').innerHTML = '<div class="placeholder-panel" style="min-height:120px;">All suite metrics will be listed here for the selected config.</div>';
       renderScenarioMetrics({});
+      syncPresetForm(null);
       window.PBGuiJsonPanel.setContent('detail-full-config', 'No config selected.', { expanded: false });
       return;
     }
@@ -3340,6 +3648,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
     renderDetailList('detail-all-metrics', detail.all_metrics || [], 'No suite metrics available.', 24);
     renderScenarioMetrics(detail.has_scenarios ? (detail.scenario_metrics || {}) : {});
+    syncPresetForm(detail);
 
     window.PBGuiJsonPanel.setContent('detail-full-config', detail.full_config ? JSON.stringify(detail.full_config, null, 2) : 'Full config unavailable.', { expanded: false });
   }
@@ -3805,6 +4114,33 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     el('btn-command-load').addEventListener('click', function() {
       loadParetoData().catch(function() {});
     });
+    ['preset-bounds-adjust', 'preset-risk-adjust', 'preset-near-bounds-tol', 'preset-near-bounds-expand-pct'].forEach(function(id) {
+      el(id).addEventListener('input', function() {
+        updatePresetUiLabels();
+        schedulePresetPreview(250);
+      });
+      el(id).addEventListener('change', function() {
+        updatePresetUiLabels();
+        schedulePresetPreview(0);
+      });
+    });
+    ['preset-direction', 'preset-show-near-bounds', 'preset-expand-near-bounds', 'preset-hide-hard-limited-near'].forEach(function(id) {
+      el(id).addEventListener('change', function() {
+        updatePresetUiLabels();
+        schedulePresetPreview(0);
+      });
+    });
+    el('preset-name').addEventListener('change', function() {
+      schedulePresetPreview(0);
+    });
+    el('preset-generator-details').addEventListener('toggle', function() {
+      if (el('preset-generator-details').open) schedulePresetPreview(0);
+    });
+    el('btn-refresh-preset-preview').addEventListener('click', function() {
+      updatePresetUiLabels();
+      loadPresetPreview().catch(function() {});
+    });
+    el('btn-create-preset').addEventListener('click', createOptimizePreset);
     ['playground-perf-weight', 'playground-risk-weight', 'playground-robust-weight'].forEach(function(id) {
       el(id).addEventListener('input', function() {
         var perfWeight = parseInt(el('playground-perf-weight').value || '80', 10);
