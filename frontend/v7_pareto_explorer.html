@@ -1,0 +1,4152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PBGui - V7 Pareto Explorer</title>
+<link rel="stylesheet" href="/app/css/sidebar.css?v=4">
+<link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
+<script src="/static/plotly.min.js"></script>
+<script src="/app/js/sidebar_resize.js?v=1"></script>
+<style>
+:root {
+  --bg: #0e1117;
+  --bg2: #1a1d24;
+  --bg3: #262730;
+  --bg4: #151922;
+  --border: #333640;
+  --text: #fafafa;
+  --text-dim: #a0a4ab;
+  --accent: #4da6ff;
+  --blue: #1f77ff;
+  --green: #21c354;
+  --orange: #ff8c00;
+  --red: #ff4b4b;
+  --font: 'Source Sans Pro', -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  --fs-xs: 11px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 15px;
+  --fs-lg: 18px;
+  --fs-xl: 22px;
+  --sp-xs: 4px;
+  --sp-sm: 8px;
+  --sp-md: 12px;
+  --sp-lg: 20px;
+  --btn-h: 32px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  font-family: var(--font);
+  font-size: var(--fs-base);
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+}
+button, input, select, textarea { font: inherit; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+#page-body {
+  display: flex;
+  height: calc(100vh - 52px);
+  overflow: hidden;
+}
+
+#sidebar {
+  min-width: 0;
+  border-right: 1px solid var(--border);
+}
+
+#sidebar-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sm);
+}
+
+#main-content {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--sp-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-lg);
+}
+
+.panel-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg2);
+  padding: 14px;
+}
+
+.panel-card h3,
+.panel-card h4 {
+  margin-bottom: 8px;
+}
+
+.panel-card pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.panel-card pre.json-pre {
+  color: var(--green);
+}
+
+.page-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--sp-lg);
+}
+
+.page-title h1 {
+  font-size: var(--fs-xl);
+  margin-bottom: 4px;
+}
+
+.page-title p,
+.muted-line,
+.hint {
+  color: var(--text-dim);
+}
+
+.status-row,
+.toolbar,
+.deep-tabs,
+.button-row,
+.metric-grid,
+.stage-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sm);
+}
+
+.stage-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--sp-md);
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--sp-md);
+}
+
+#selected-config-detail {
+  position: relative;
+  z-index: 2;
+}
+
+.compact-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--sp-md);
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-md);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--sp-md);
+}
+
+.form-field {
+  grid-column: span 4;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-field.wide {
+  grid-column: span 8;
+}
+
+.form-field.full {
+  grid-column: span 12;
+}
+
+.form-field label {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+.form-field input,
+.form-field select {
+  min-height: var(--btn-h);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg3);
+  color: var(--text);
+  padding: 6px 10px;
+}
+
+.form-field input:focus,
+.form-field select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--btn-h);
+  color: var(--text-dim);
+}
+
+.check-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-md);
+  flex-wrap: wrap;
+}
+
+.inline-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  user-select: none;
+}
+
+.inline-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch-track {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.18);
+  border: 1px solid var(--border);
+  transition: background-color .18s ease, border-color .18s ease;
+  flex: 0 0 auto;
+}
+
+.switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .18s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+}
+
+.inline-switch input:checked + .switch-track {
+  background: rgba(35,153,255,0.35);
+  border-color: var(--accent);
+}
+
+.inline-switch input:checked + .switch-track::after {
+  transform: translateX(20px);
+}
+
+.inline-switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.stage-block {
+  grid-column: span 12;
+}
+
+.stage-block.half {
+  grid-column: span 6;
+}
+
+.detail-block {
+  grid-column: span 12;
+}
+
+.detail-block.half {
+  grid-column: span 6;
+}
+
+.detail-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--sp-md);
+  margin-bottom: 12px;
+}
+
+.detail-toolbar {
+  display: flex;
+  gap: var(--sp-sm);
+  flex-wrap: wrap;
+}
+
+.deep-chart-caption {
+  font-size: 0.78rem;
+  color: var(--text-muted, #8a8a8a);
+  margin-bottom: 5px;
+  line-height: 1.35;
+}
+
+.deep-scenarios-stats-grid {
+  margin-top: 20px;
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+.scenario-stats-columns {
+  display: grid;
+  grid-template-columns: repeat(var(--scenario-columns, 1), minmax(0, 1fr));
+  gap: var(--sp-md);
+  align-items: start;
+  justify-items: stretch;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#stage-deep-intelligence {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-md);
+}
+
+.scenario-stats-column {
+  display: grid;
+  gap: var(--sp-sm);
+  min-width: 0;
+}
+
+.scenario-stats-column .mini-metric {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.scenario-stats-column-title {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chip,
+.status-chip,
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+
+.chip,
+.badge {
+  background: rgba(160,164,171,.15);
+  color: var(--text-dim);
+}
+
+.status-chip.good { background: rgba(33,195,84,.15); color: var(--green); }
+.status-chip.warn { background: rgba(255,140,0,.15); color: var(--orange); }
+.status-chip.bad { background: rgba(255,75,75,.15); color: var(--red); }
+
+.sb-section,
+.sb-btn,
+.stage-btn,
+.deep-tab-btn,
+.btn {
+  border-radius: 8px;
+}
+
+.stage-btn,
+.deep-tab-btn,
+.btn,
+.ghost-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  height: var(--btn-h);
+  padding: 0 12px;
+  transition: all .15s;
+}
+
+.stage-btn:hover,
+.deep-tab-btn:hover,
+.btn:hover,
+.ghost-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.stage-btn.active,
+.deep-tab-btn.active,
+.btn.primary {
+  color: #fff;
+  background: var(--blue);
+  border-color: var(--blue);
+}
+
+.ghost-btn {
+  background: var(--bg3);
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr));
+  gap: var(--sp-md);
+}
+
+.metric-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--bg2);
+  min-width: 0;
+}
+
+.metric-card .label {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin-bottom: 6px;
+}
+
+.metric-card .value {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.metric-card.result-metric .value {
+  font-size: 16px;
+}
+
+.metric-inline-status {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.metric-inline-status .status-chip {
+  align-self: flex-start;
+}
+
+.metric-inline-status .load-status-text {
+  min-height: 34px;
+}
+
+.range-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.range-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--sp-md);
+}
+
+.range-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px 88px auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.range-slider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  --range-fill: 50%;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 8px;
+  background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--range-fill, 50%), rgba(255,255,255,0.22) var(--range-fill, 50%), rgba(255,255,255,0.22) 100%);
+  border-radius: 999px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+  margin-top: -5px;
+  box-shadow: 0 0 0 2px rgba(14,17,23,0.9);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 8px;
+  background: rgba(255,255,255,0.22);
+  border-radius: 999px;
+  border: 0;
+}
+
+input[type="range"]::-moz-range-progress {
+  height: 8px;
+  background: var(--accent);
+  border-radius: 999px;
+  border: 0;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+  box-shadow: 0 0 0 2px rgba(14,17,23,0.9);
+}
+
+.range-number {
+  min-height: var(--btn-h);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg3);
+  color: var(--text);
+  padding: 6px 10px;
+}
+
+.range-summary {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.placeholder-chart,
+.placeholder-panel {
+  min-height: 220px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-lg);
+  color: var(--text-dim);
+  background: rgba(255,255,255,0.01);
+  text-align: center;
+}
+
+.deep-plotly-chart {
+  min-height: 420px;
+  width: 100%;
+  overflow: hidden;
+}
+
+.deep-plotly-chart.pending-render {
+  opacity: 0;
+}
+
+#deep-correlations-chart {
+  height: 560px;
+  min-height: 560px;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.load-status-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(255,255,255,0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.load-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sm);
+}
+
+.load-status-text {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.load-status-progress {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  overflow: hidden;
+}
+
+.load-status-progress > div {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--blue), #8ec5ff);
+  transition: width .2s ease;
+}
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sm);
+}
+
+.message {
+  border-radius: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+}
+
+.message.warn {
+  background: rgba(255,140,0,.08);
+  border-color: rgba(255,140,0,.3);
+  color: #ffd08a;
+}
+
+.message.info {
+  background: rgba(77,166,255,.08);
+  border-color: rgba(77,166,255,.3);
+  color: #b8dbff;
+}
+
+.message.bad {
+  background: rgba(255,75,75,.08);
+  border-color: rgba(255,75,75,.3);
+  color: #ffc0c0;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-md);
+}
+
+.champion-list,
+.insight-list,
+.detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sm);
+}
+
+.champion-item,
+.insight-item,
+.detail-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.02);
+  padding: 10px;
+}
+
+.champion-item {
+  padding: 9px 10px;
+}
+
+.champion-item strong {
+  color: var(--text);
+  font-size: var(--fs-base);
+}
+
+.champion-item.active {
+  border-color: var(--accent);
+  background: rgba(77,166,255,.08);
+}
+
+.champion-head,
+.detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-md);
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.champion-meta,
+.detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.champion-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  margin-bottom: 4px;
+}
+
+.champion-style {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mini-metric {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(255,255,255,0.02);
+}
+
+.mini-metric .label {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.mini-metric .value {
+  font-weight: 700;
+}
+
+.inline-select {
+  width: 100%;
+  min-height: var(--btn-h);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg3);
+  color: var(--text);
+  padding: 6px 10px;
+}
+
+.expander-card summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.expander-card[open] summary {
+  margin-bottom: 12px;
+}
+
+.center-row {
+  display: flex;
+  justify-content: center;
+}
+
+.action-primary {
+  min-width: 280px;
+}
+
+.stats-table {
+  display: grid;
+  gap: 8px;
+}
+
+.stats-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.02);
+}
+
+.stats-key {
+  color: var(--text-dim);
+}
+
+.compact-two-col {
+  display: grid;
+  grid-template-columns: 1.1fr .9fr;
+  gap: var(--sp-md);
+}
+
+.compact-three-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr 340px;
+  gap: var(--sp-md);
+  align-items: start;
+}
+
+.chart-card {
+  min-width: 0;
+}
+
+.chart-wrap {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.chart-wrap:fullscreen {
+  background: #0e1117;
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-wrap:fullscreen .small-chart,
+.chart-wrap:fullscreen .placeholder-chart {
+  flex: 1;
+  height: 100% !important;
+  min-height: 0;
+}
+
+.chart-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-md);
+}
+
+.chart-stack.projections-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-md);
+  align-items: start;
+}
+
+.projection-wrap {
+  min-width: 0;
+  min-height: 420px;
+  height: 420px;
+}
+
+.projection-panel-title {
+  margin: 0 0 8px 0;
+  text-align: center;
+  color: #9fb3c8;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+@media (max-width: 1500px) {
+  .chart-stack.projections-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.small-chart {
+  min-height: 420px;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-md);
+}
+
+.dense-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dense-param {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.02);
+}
+
+.dense-param .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dense-param .value {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+}
+
+.overlay-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.62);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 3000;
+}
+
+.overlay-modal.open {
+  display: flex;
+}
+
+.overlay-card {
+  width: min(1200px, 96vw);
+  height: min(860px, 92vh);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg2);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.overlay-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-md);
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.overlay-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.overlay-body iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.mono { font-family: var(--mono); }
+
+@media (max-width: 1500px) {
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  #page-body {
+    flex-direction: column;
+    height: calc(100vh - 52px);
+  }
+  #sidebar {
+    width: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .detail-block.half {
+    grid-column: span 12;
+  }
+}
+
+@media (max-width: 900px) {
+  #sidebar {
+    display: none;
+  }
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+  .stage-block.half {
+    grid-column: span 12;
+  }
+  .detail-block,
+  .detail-block.half {
+    grid-column: span 12;
+  }
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+  .compact-two-col,
+  .compact-three-col,
+  .preview-grid,
+  .dense-list {
+    grid-template-columns: 1fr;
+  }
+  .range-controls {
+    grid-template-columns: 1fr;
+  }
+  .form-field,
+  .form-field.wide,
+  .form-field.full {
+    grid-column: span 12;
+  }
+}
+
+@media (max-width: 720px) {
+  #main-content { padding: 16px; }
+}
+</style>
+</head>
+<body>
+<nav id="topnav"></nav>
+
+<div id="page-body">
+  <div id="sidebar">
+    <div id="sidebar-inner">
+      <button class="sb-section active" data-stage="command_center" onclick="selectStage('command_center')">
+        <span class="sb-icon">🏛</span> Overview
+      </button>
+      <button class="sb-section" data-stage="pareto_playground" onclick="selectStage('pareto_playground')">
+        <span class="sb-icon">🎯</span> Explorer
+      </button>
+      <button class="sb-section" data-stage="deep_intelligence" onclick="selectStage('deep_intelligence')">
+        <span class="sb-icon">🧠</span> Deep Intelligence
+      </button>
+      <button class="sb-section" data-stage="settings" onclick="selectStage('settings')">
+        <span class="sb-icon">⚙️</span> Settings
+      </button>
+
+      <hr class="sb-sep">
+
+      <div class="ctx-actions" style="display:block">
+        <button class="sb-btn" id="btn-back-optimize">← Back to Optimize</button>
+        <button class="sb-btn" id="btn-run-backtest">🚀 Run Backtest</button>
+        <button class="sb-btn" id="btn-load-all-results">📂 Load all_results</button>
+        <button class="sb-btn" id="btn-load-pareto-only" style="display:none;">↩ Show Passivbot Paretos</button>
+      </div>
+    </div>
+    <div id="sidebar-resize"></div>
+  </div>
+
+  <main id="main-content">
+    <section class="page-title">
+      <div>
+        <h1>Pareto Explorer</h1>
+        <p id="page-subtitle">Standalone FastAPI migration preview for the PBv7 Pareto Explorer.</p>
+      </div>
+      <div class="status-row">
+        <span id="result-chip" class="chip">No result selected</span>
+        <span id="mode-chip" class="status-chip warn">Bootstrap only</span>
+      </div>
+    </section>
+
+    <section id="messages" class="messages"></section>
+
+    <section id="display-range-card" class="panel-card range-card" style="display:none;">
+      <div class="range-header">
+        <div>
+          <h3>Display Range</h3>
+          <p class="hint">Filter which ranked configs are visible. Pareto counts and preview stars follow the current visible range.</p>
+        </div>
+        <span id="display-range-total-chip" class="chip">Loaded: -</span>
+      </div>
+      <div class="range-controls">
+        <input id="display-range-end" class="range-slider" type="range" min="0" max="0" step="10" value="0">
+        <input id="display-range-start-input" class="range-number" type="number" min="0" step="10" value="0">
+        <input id="display-range-end-input" class="range-number" type="number" min="0" step="10" value="0">
+      </div>
+      <div id="display-range-summary" class="range-summary">Load all_results to enable Streamlit-style visible-range filtering.</div>
+    </section>
+
+    <section class="metric-grid" id="summary-metrics">
+      <div class="metric-card result-metric">
+        <div class="label">Result</div>
+        <div class="value" id="metric-result">-</div>
+      </div>
+      <div class="metric-card">
+        <div class="label">Pareto Front</div>
+        <div class="value" id="metric-paretos">-</div>
+      </div>
+      <div class="metric-card">
+        <div class="label">All Results</div>
+        <div class="value" id="metric-all-results-wrap"><span id="metric-all-results">-</span><span id="metric-full-load-chip" class="status-chip warn" style="display:none; margin-left:10px; vertical-align:middle;">Idle</span></div>
+        <div class="metric-inline-status" id="metric-full-load-panel" style="display:none;">
+          <div id="metric-full-load-text" class="load-status-text">Use `Load all_results` to load the full result set.</div>
+          <div class="load-status-progress"><div id="metric-full-load-bar"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="stage-settings" class="stage-view" style="display:none;">
+      <div class="stage-grid">
+        <div class="stage-block half panel-card">
+          <h3>Load Control</h3>
+          <div class="form-grid" style="margin-top: 12px;">
+            <div class="form-field wide">
+              <label for="result-path-input">Result Path</label>
+              <input id="result-path-input" type="text" placeholder="/path/to/optimize/result">
+            </div>
+            <div class="form-field">
+              <label for="max-configs-input">Max Configs</label>
+              <input id="max-configs-input" type="number" min="100" max="10000" step="100">
+            </div>
+            <div class="form-field wide">
+              <label for="load-strategy-select">Load Strategy</label>
+              <select id="load-strategy-select" multiple size="6">
+                <option value="performance">performance</option>
+                <option value="robustness">robustness</option>
+                <option value="sharpe">sharpe</option>
+                <option value="drawdown">drawdown</option>
+                <option value="calmar">calmar</option>
+                <option value="sortino">sortino</option>
+                <option value="omega">omega</option>
+                <option value="volatility">volatility</option>
+                <option value="recovery">recovery</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>&nbsp;</label>
+              <div class="check-row"><input id="all-results-toggle" type="checkbox"><label for="all-results-toggle">Load all_results.bin</label></div>
+            </div>
+            <div class="form-field">
+              <label>&nbsp;</label>
+              <div class="check-row"><input id="persist-defaults-toggle" type="checkbox" checked><label for="persist-defaults-toggle">Persist defaults</label></div>
+            </div>
+            <div class="form-field full">
+              <div class="button-row">
+                <button class="btn primary" id="btn-command-load">Load Result Context</button>
+              </div>
+            </div>
+            <div class="form-field full">
+              <div class="load-status-card" id="full-load-status-card">
+                <div class="load-status-head">
+                  <strong>Full Load Status</strong>
+                  <span id="full-load-status-chip" class="status-chip warn">Idle</span>
+                </div>
+                <div id="full-load-status-text" class="load-status-text">Use `Load all_results` to load the full result set instead of only pareto JSONs.</div>
+                <div class="load-status-progress"><div id="full-load-status-bar"></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="stage-block half panel-card">
+          <h3>Result Context</h3>
+          <pre id="result-meta-json">Waiting for session bootstrap...</pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="stage-command-center" class="stage-view">
+      <div class="stage-grid">
+        <div class="stage-block half panel-card">
+          <h3>Top Champions</h3>
+          <div id="champion-list" class="champion-list">
+            <div class="placeholder-panel">Load a result to inspect the first migrated champion shortlist.</div>
+          </div>
+        </div>
+        <div class="stage-block half panel-card">
+          <h3>Insights</h3>
+          <div id="insight-list" class="insight-list">
+            <div class="placeholder-panel">The migrated Command Center insights will appear here after loading result data.</div>
+          </div>
+        </div>
+        <div class="stage-block panel-card">
+          <h3>Pareto Front Preview</h3>
+          <div class="toolbar" style="margin-bottom:12px;">
+            <div class="check-row" style="max-width:280px;">
+              <input id="preview-use-weighted" type="checkbox" checked>
+              <label for="preview-use-weighted">Use weighted (_w) metrics</label>
+            </div>
+            <div class="check-row" style="max-width:260px;">
+              <input id="preview-show-all" type="checkbox">
+              <label for="preview-show-all">Show all configs</label>
+            </div>
+          </div>
+          <div class="preview-grid">
+            <div class="chart-card">
+              <p class="muted-line" id="preview-left-summary">Pareto preview chart will appear here.</p>
+              <div class="chart-wrap" id="preview-pareto-wrap">
+                <div class="placeholder-chart small-chart" id="preview-pareto-chart">Load a result to render the Pareto front preview.</div>
+              </div>
+            </div>
+            <div class="chart-card">
+              <p class="muted-line" id="preview-right-summary">Robustness preview chart will appear here.</p>
+              <div class="chart-wrap" id="preview-robustness-wrap">
+                <div class="placeholder-chart small-chart" id="preview-robustness-chart">Load a result to render the robustness preview.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <section id="stage-pareto-playground" class="stage-view" style="display:none;">
+      <div class="compact-three-col">
+        <div class="chart-card panel-card" style="grid-column: span 2;">
+          <div class="title-row">
+            <h3>Explorer</h3>
+            <label id="playground-projection-layout-wrap" class="inline-switch" style="display:none;">
+              <span>Side by side</span>
+              <input id="playground-projection-layout-row" type="checkbox" role="switch" aria-label="Show projections side by side">
+              <span class="switch-track" aria-hidden="true"></span>
+            </label>
+          </div>
+          <p class="muted-line" id="playground-metric-summary">This section mirrors the Streamlit explorer with multiple visualization modes.</p>
+          <div class="chart-wrap" id="playground-chart-wrap">
+            <div id="playground-chart" class="placeholder-chart small-chart">Load a result to render the explorer chart.</div>
+          </div>
+          <div id="playground-projections" class="chart-stack" style="display:none; margin-top:12px;">
+            <div class="projection-panel">
+              <div class="projection-panel-title">XY projection</div>
+              <div class="chart-wrap projection-wrap"><div id="playground-chart-proj-xy" class="placeholder-chart small-chart"></div></div>
+            </div>
+            <div class="projection-panel">
+              <div class="projection-panel-title">XZ projection</div>
+              <div class="chart-wrap projection-wrap"><div id="playground-chart-proj-xz" class="placeholder-chart small-chart"></div></div>
+            </div>
+            <div class="projection-panel">
+              <div class="projection-panel-title">YZ projection</div>
+              <div class="chart-wrap projection-wrap"><div id="playground-chart-proj-yz" class="placeholder-chart small-chart"></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="chart-card panel-card">
+          <h3>Chart Settings</h3>
+          <div class="form-grid" style="margin-top: 12px;">
+            <div class="form-field full">
+              <label for="playground-viz-type">Visualization</label>
+              <select id="playground-viz-type">
+                <option value="2D Scatter">2D Scatter</option>
+                <option value="3D Scatter">3D Scatter (WebGL)</option>
+                <option value="3D Projections">3D Projections (2D)</option>
+                <option value="Radar Chart">Radar Chart</option>
+              </select>
+            </div>
+            <div id="playground-show-all-wrap" class="form-field full">
+              <div class="check-row"><input id="playground-show-all" type="checkbox"><label for="playground-show-all">Show all configs</label></div>
+            </div>
+            <div id="playground-use-weighted-wrap" class="form-field full">
+              <div class="check-row"><input id="playground-use-weighted" type="checkbox" checked><label for="playground-use-weighted">Use Weighted Metrics</label></div>
+            </div>
+            <div id="playground-use-btc-wrap" class="form-field full">
+              <div class="check-row"><input id="playground-use-btc" type="checkbox"><label for="playground-use-btc">Use BTC instead of USD</label></div>
+            </div>
+            <div class="form-field full">
+              <label for="playground-quick-view">Quick Views</label>
+              <select id="playground-quick-view"></select>
+            </div>
+            <div id="playground-custom-controls" class="form-field full" style="display:none;">
+              <div class="load-status-card">
+                <div class="load-status-head">
+                  <strong>Custom Metrics</strong>
+                </div>
+                <div id="playground-custom-filters" class="stack" style="display:none; gap:8px;">
+                  <div class="check-row"><input id="playground-allow-mixed-weighted" type="checkbox"><label for="playground-allow-mixed-weighted">Allow Mixed Weighted</label></div>
+                  <div class="check-row"><input id="playground-allow-mixed-currency" type="checkbox"><label for="playground-allow-mixed-currency">Allow Mixed USD/BTC</label></div>
+                </div>
+                <div class="stack" style="gap:10px; margin-top:8px;">
+                  <div class="form-field full" style="gap:6px;">
+                    <label for="playground-custom-x-metric">X-Axis</label>
+                    <select id="playground-custom-x-metric"></select>
+                  </div>
+                  <div class="form-field full" style="gap:6px;">
+                    <label for="playground-custom-y-metric">Y-Axis</label>
+                    <select id="playground-custom-y-metric"></select>
+                  </div>
+                  <div id="playground-custom-z-wrap" class="form-field full" style="gap:6px; display:none;">
+                    <label for="playground-custom-z-metric">Z-Axis</label>
+                    <select id="playground-custom-z-metric"></select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div id="playground-color-metric-wrap" class="form-field full">
+              <label for="playground-color-metric">Color by</label>
+              <select id="playground-color-metric"><option value="None">None</option></select>
+            </div>
+            <div class="form-field full">
+              <label for="playground-perf-weight">Performance Priority</label>
+              <input id="playground-perf-weight" type="range" min="0" max="100" step="5" value="80">
+              <div class="muted-line" id="playground-perf-weight-value">80</div>
+            </div>
+            <div class="form-field full">
+              <label for="playground-risk-weight">Risk Aversion</label>
+              <input id="playground-risk-weight" type="range" min="0" max="100" step="5" value="60">
+              <div class="muted-line" id="playground-risk-weight-value">60</div>
+            </div>
+            <div class="form-field full">
+              <label for="playground-robust-weight">Robustness Importance</label>
+              <input id="playground-robust-weight" type="range" min="0" max="100" step="5" value="70">
+              <div class="muted-line" id="playground-robust-weight-value">70</div>
+            </div>
+            <div class="form-field full">
+              <div class="button-row">
+              </div>
+            </div>
+          </div>
+          <div style="margin-top:12px;">
+            <h4>Best Match</h4>
+            <p class="muted-line" id="playground-best-match">Load a result to compute the best match for your preferences.</p>
+          </div>
+          </div>
+        </div>
+    </section>
+
+    <section id="stage-deep-intelligence" class="stage-view" style="display:none;">
+      <div class="panel-card">
+        <div class="deep-tabs">
+          <button class="deep-tab-btn active" data-deep-tab="parameters" onclick="selectDeepTab('parameters')">Parameters</button>
+          <button class="deep-tab-btn" data-deep-tab="scenarios" onclick="selectDeepTab('scenarios')">Scenarios</button>
+          <button class="deep-tab-btn" data-deep-tab="evolution" onclick="selectDeepTab('evolution')">Evolution</button>
+          <button class="deep-tab-btn" data-deep-tab="correlations" onclick="selectDeepTab('correlations')">Correlations</button>
+        </div>
+        <p class="hint" id="deep-tab-description">Deep Intelligence tab shell for the FastAPI migration.</p>
+      </div>
+      <div class="panel-card" id="deep-tab-parameters-panel">
+        <div class="detail-summary-row">
+          <div>
+            <h3>Parameters Intelligence</h3>
+            <p class="muted-line" id="deep-parameters-summary">Load a result to inspect parameter influence and optimize-bound pressure.</p>
+          </div>
+          <div class="detail-toolbar">
+            <label for="deep-parameters-top-n" class="muted-line" style="align-self:center;">Top N Parameters</label>
+            <div class="form-field" style="min-width:220px; gap:6px; margin:0;">
+              <input id="deep-parameters-top-n" type="range" min="1" max="40" step="1" value="20">
+              <div class="muted-line" id="deep-parameters-top-n-value">20</div>
+            </div>
+          </div>
+        </div>
+        <div class="deep-chart-caption">Parameter Influence Heatmap — correlation between most variable parameters and performance metrics</div>
+        <div id="deep-parameters-heatmap" class="placeholder-chart deep-plotly-chart">Load a result to render the parameter influence heatmap.</div>
+        <div style="height:12px;"></div>
+        <div class="deep-chart-caption">Parameters Near Bounds — parameters within 10% of their optimization bounds (red &lt; 5%, orange 5–10%)</div>
+        <div id="deep-parameters-bounds-chart" class="placeholder-chart deep-plotly-chart">Load a result to render the near-bounds chart.</div>
+      </div>
+      <div class="panel-card" id="deep-tab-scenarios-panel" style="display:none;">
+        <div class="detail-summary-row">
+          <div>
+            <h3>Scenario Analysis</h3>
+            <p class="muted-line" id="deep-scenarios-summary">Compare Pareto configs across loaded backtest scenarios (aggregated over visible configs).</p>
+          </div>
+          <div class="detail-toolbar">
+            <label for="deep-scenarios-metric" class="muted-line" style="align-self:center;">Metric</label>
+            <select id="deep-scenarios-metric" class="inline-select">
+              <option value="">No metrics loaded</option>
+            </select>
+          </div>
+        </div>
+        <div id="deep-scenarios-chart" class="placeholder-chart deep-plotly-chart"></div>
+        <div id="deep-scenarios-stats" class="deep-scenarios-stats-grid">
+          <div class="placeholder-panel">Scenario statistics will appear here.</div>
+        </div>
+      </div>
+      <div class="panel-card" id="deep-tab-evolution-panel" style="display:none;">
+        <div class="detail-summary-row">
+          <div>
+            <h3>Optimization Evolution Timeline</h3>
+            <p class="muted-line" id="deep-evolution-summary">Track how a selected metric evolved over optimize iterations.</p>
+          </div>
+          <div class="detail-toolbar">
+            <div class="check-row"><input id="deep-evolution-show-all" type="checkbox"><label for="deep-evolution-show-all">Show all configs</label></div>
+            <div class="check-row"><input id="deep-evolution-hide-outliers" type="checkbox" checked><label for="deep-evolution-hide-outliers">Hide liquidation outliers</label></div>
+            <div class="check-row"><input id="deep-evolution-weighted" type="checkbox" checked><label for="deep-evolution-weighted">Use Weighted Metrics</label></div>
+            <div class="check-row"><input id="deep-evolution-btc" type="checkbox"><label for="deep-evolution-btc">Use BTC instead of USD</label></div>
+          </div>
+        </div>
+        <div class="form-grid" style="margin-bottom:12px;">
+          <div class="form-field wide">
+            <label for="deep-evolution-metric">Metric</label>
+            <select id="deep-evolution-metric"></select>
+          </div>
+          <div class="form-field">
+            <label for="deep-evolution-window">Smoothing Window (%)</label>
+            <input id="deep-evolution-window" type="range" min="1" max="25" step="1" value="5">
+            <div class="muted-line" id="deep-evolution-window-value">5%</div>
+          </div>
+        </div>
+        <div id="deep-evolution-chart" class="placeholder-chart deep-plotly-chart"></div>
+      </div>
+      <div class="panel-card" id="deep-tab-correlations-panel" style="display:none;">
+        <div class="detail-summary-row">
+          <div>
+            <h3>Multi-Metric Correlation</h3>
+            <p class="muted-line" id="deep-correlations-summary">Compare multiple configs side-by-side across normalized risk dimensions.</p>
+          </div>
+        </div>
+        <div class="form-grid" style="margin-bottom:12px;">
+          <div class="form-field">
+            <label for="deep-correlations-strategy">Selection Strategy</label>
+            <select id="deep-correlations-strategy">
+              <option value="Top Performers">Top Performers</option>
+              <option value="Diverse Styles">Diverse Styles</option>
+              <option value="Risk Spectrum">Risk Spectrum</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="deep-correlations-num">Configs</label>
+            <input id="deep-correlations-num" type="range" min="3" max="10" step="1" value="5">
+            <div class="muted-line" id="deep-correlations-num-value">5</div>
+          </div>
+          <div class="form-field">
+            <label>&nbsp;</label>
+            <div class="check-row"><input id="deep-correlations-weighted" type="checkbox" checked><label for="deep-correlations-weighted">Use Weighted Metrics</label></div>
+          </div>
+          <div class="form-field">
+            <label>&nbsp;</label>
+            <div class="check-row"><input id="deep-correlations-btc" type="checkbox"><label for="deep-correlations-btc">Use BTC instead of USD</label></div>
+          </div>
+          <div class="form-field">
+            <label>&nbsp;</label>
+            <div class="button-row"><button class="ghost-btn" id="btn-deep-correlations-refresh">Refresh</button></div>
+          </div>
+        </div>
+        <div id="deep-correlations-chart" class="placeholder-chart deep-plotly-chart">Load a result to render the risk-profile radar.</div>
+      </div>
+      <div class="panel-card" id="deep-tab-other-panel" style="display:none;">
+        <div class="placeholder-chart" id="deep-tab-placeholder">Parameters tab placeholder</div>
+      </div>
+    </section>
+
+    <section id="selected-config-detail" class="panel-card">
+      <div class="detail-summary-row">
+        <div>
+          <h3 id="detail-title" style="margin: 0;">No config selected</h3>
+        </div>
+      </div>
+
+      <div id="selected-config-section" class="detail-grid">
+        <section class="detail-block panel-card">
+          <div class="overview-grid">
+            <div>
+              <h4>Metrics</h4>
+              <div id="detail-top-metrics" class="mini-grid">
+                <div class="placeholder-panel" style="min-height:120px;">Select a champion to populate config metrics.</div>
+              </div>
+            </div>
+            <div>
+              <h4>Trading Style</h4>
+              <div id="detail-style-panel" class="detail-list">
+                <div class="placeholder-panel" style="min-height:120px;">Trading style details will appear here.</div>
+              </div>
+            </div>
+            <div>
+              <h4>Robustness</h4>
+              <div id="detail-risk-profile" class="mini-grid">
+                <div class="placeholder-panel" style="min-height:120px;">Risk metrics will appear here.</div>
+              </div>
+              <div id="detail-robustness-panel" class="detail-list" style="margin-top:8px;">
+                <div class="placeholder-panel" style="min-height:80px;">Robustness details will appear here.</div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section id="detail-scenario-section" class="detail-block half panel-card" style="display:none;">
+          <h4>Scenario Metrics</h4>
+          <div id="detail-scenario-metrics" class="detail-list">
+            <div class="placeholder-panel" style="min-height:120px;">Scenario metrics will appear here for the selected config.</div>
+          </div>
+        </section>
+        <section class="detail-block half panel-card">
+          <details class="expander-card">
+            <summary>Full Configuration</summary>
+            <div id="detail-full-config-panel" style="margin-top:12px;"></div>
+          </details>
+        </section>
+        <section class="detail-block half panel-card">
+          <details class="expander-card">
+            <summary>All Metrics & Statistics</summary>
+            <div id="detail-all-metrics" class="detail-list" style="margin-top: 12px;">
+              <div class="placeholder-panel" style="min-height:120px;">All suite metrics will be listed here for the selected config.</div>
+            </div>
+          </details>
+        </section>
+      </div>
+    </section>
+  </main>
+
+</div>
+
+<div id="overlay-modal" class="overlay-modal" aria-hidden="true">
+  <div class="overlay-card">
+    <div class="overlay-head">
+      <strong id="overlay-title">Viewer</strong>
+      <button class="ghost-btn" id="overlay-close">Close</button>
+    </div>
+    <div class="overlay-body">
+      <iframe id="overlay-frame" src="about:blank"></iframe>
+    </div>
+  </div>
+</div>
+
+<script src="/app/js/json_panel.js?v=1"></script>
+<script>
+window.TOKEN = "%%TOKEN%%";
+window.API_BASE = "%%API_BASE%%";
+window.WS_BASE = "%%WS_BASE%%";
+window.ST_BASE = "%%ST_BASE%%";
+window.INIT_RESULT_PATH = "%%RESULT_PATH%%";
+window.PBGUI_VERSION = "%%VERSION%%";
+window.PBGUI_SERIAL = "%%SERIAL%%";
+
+(function() {
+  'use strict';
+
+  var state = {
+    stage: 'command_center',
+    deepTab: 'parameters',
+    resultPath: String(window.INIT_RESULT_PATH || ''),
+    session: null,
+    loadStrategy: ['performance', 'robustness', 'sharpe'],
+    maxConfigs: 2000,
+    allResultsLoaded: false,
+    fullLoadPending: false,
+    fullLoadJobId: '',
+    fullLoadPollTimer: null,
+    fullLoadProgressDisplay: 0,
+    fullLoadProgressTarget: 0,
+    fullLoadProgressTimer: null,
+    playgroundRefreshTimer: null,
+    deepPlotResizeTimer: null,
+    playgroundRequestSeq: 0,
+    detailRequestSeq: 0,
+    persistDefaults: true,
+    viewRange: null,
+    pendingViewRange: null,
+    loadPayload: null,
+    commandCenter: null,
+    selectedConfigIndex: null,
+    selectedDetail: null,
+    plotSessionId: '',
+    plotSessionKind: '',
+    playground: {
+      perfWeight: 80,
+      riskWeight: 60,
+      robustWeight: 70,
+      showAll: false,
+      useWeighted: true,
+      useBtc: false,
+      vizType: '2D Scatter',
+      quickView: 'Profit vs Risk',
+      allowMixedWeighted: false,
+      allowMixedCurrency: false,
+      customXMetric: '',
+      customYMetric: '',
+      customZMetric: '',
+      projectionLayout: 'stacked',
+      colorMetric: 'None',
+      payload: null
+    },
+    previewUseWeighted: true,
+    previewShowAll: false,
+    deepParameters: null,
+    deepParametersTopN: 20,
+    deepScenarios: null,
+    deepScenariosMetric: '',
+    deepEvolution: null,
+    deepEvolutionMetric: '',
+    deepEvolutionShowAll: false,
+    deepEvolutionHideOutliers: true,
+    deepEvolutionUseWeighted: true,
+    deepEvolutionUseBtc: false,
+    deepEvolutionWindowPercent: 5,
+    deepCorrelations: null,
+    deepCorrelationsStrategy: 'Top Performers',
+    deepCorrelationsNumConfigs: 5,
+    deepCorrelationsUseWeighted: true,
+    deepCorrelationsUseBtc: false,
+    deepIntelligenceNeedsVisibleRender: false
+  };
+
+  function el(id) {
+    return document.getElementById(id);
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function apiFetch(path, options) {
+    options = options || {};
+    var headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, options.headers || {});
+    return fetch(API_BASE + path, Object.assign({}, options, { headers: headers })).then(function(res) {
+      if (!res.ok) {
+        return res.text().then(function(text) {
+          throw new Error(text || ('HTTP ' + res.status));
+        });
+      }
+      return res.json();
+    });
+  }
+
+  function readRouteState() {
+    var params = new URLSearchParams(window.location.search || '');
+    var stage = String(params.get('stage') || '').trim();
+    var deepTab = String(params.get('deep_tab') || '').trim();
+    if (['command_center', 'pareto_playground', 'deep_intelligence', 'settings'].indexOf(stage) >= 0) {
+      state.stage = stage;
+    }
+    if (['parameters', 'scenarios', 'evolution', 'correlations'].indexOf(deepTab) >= 0) {
+      state.deepTab = deepTab;
+    }
+  }
+
+  function openOverlayUrl(title, url, sessionId, sessionKind) {
+    state.plotSessionId = sessionId || '';
+    state.plotSessionKind = sessionKind || '';
+    el('overlay-title').textContent = title || 'Viewer';
+    el('overlay-frame').src = url || 'about:blank';
+    el('overlay-frame').style.display = '';
+    el('overlay-modal').classList.add('open');
+  }
+
+  function closeOverlay() {
+    if (state.plotSessionId && state.plotSessionKind === 'pareto-dash') {
+      fetch(window.location.origin + '/api/optimize-v7/results/pareto-dash/' + encodeURIComponent(state.plotSessionId), {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + TOKEN }
+      }).catch(function() {});
+    }
+    state.plotSessionId = '';
+    state.plotSessionKind = '';
+    el('overlay-frame').src = 'about:blank';
+    el('overlay-frame').style.display = '';
+    el('overlay-modal').classList.remove('open');
+  }
+
+  function downloadResponseBlob(response, fallbackFilename) {
+    var disposition = response.headers.get('Content-Disposition') || '';
+    var match = disposition.match(/filename="([^"]+)"/i);
+    var filename = match && match[1] ? match[1] : fallbackFilename;
+    return response.blob().then(function(blob) {
+      var url = window.URL.createObjectURL(blob);
+      var link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    });
+  }
+
+  function buildBacktestMainPageUrl(extraParams) {
+    var base = window.location.origin + '/api/backtest-v7/main_page';
+    var params = new URLSearchParams();
+    params.set('token', TOKEN);
+    params.set('st_base', ST_BASE);
+    Object.keys(extraParams || {}).forEach(function(key) {
+      var value = extraParams[key];
+      if (value != null && value !== '') params.set(key, String(value));
+    });
+    return base + '?' + params.toString();
+  }
+
+  function buildOptimizeMainPageUrl(extraParams) {
+    var base = window.location.origin + '/api/optimize-v7/main_page';
+    var params = new URLSearchParams();
+    params.set('token', TOKEN);
+    params.set('st_base', ST_BASE);
+    Object.keys(extraParams || {}).forEach(function(key) {
+      var value = extraParams[key];
+      if (value != null && value !== '') params.set(key, String(value));
+    });
+    return base + '?' + params.toString();
+  }
+
+  function extractConfigSections(raw) {
+    var out = {};
+    ['backtest', 'bot', 'live', 'optimize', 'pbgui', 'coin_overrides'].forEach(function(key) {
+      if (raw && Object.prototype.hasOwnProperty.call(raw, key)) out[key] = raw[key];
+    });
+    return out;
+  }
+
+  function suggestDraftName(config) {
+    var bt = config && config.backtest ? config.backtest : {};
+    var baseDir = String(bt.base_dir || '').trim();
+    if (baseDir) {
+      var parts = baseDir.split('/').filter(Boolean);
+      if (parts.length) return parts[parts.length - 1];
+    }
+    return 'pareto_config_' + String(state.selectedConfigIndex == null ? 'draft' : state.selectedConfigIndex);
+  }
+
+  function optimizeSeedPathFromResult(resultPath) {
+    var normalized = String(resultPath || '').replace(/[\\/]+$/, '');
+    return normalized ? normalized + '/pareto' : '';
+  }
+
+  function openBacktestDraft(config, draftName) {
+    return fetch(window.location.origin + '/api/backtest-v7/optimize-draft', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + TOKEN,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ config: extractConfigSections(config) })
+    }).then(function(res) {
+      if (!res.ok) {
+        return res.text().then(function(text) {
+          throw new Error(text || ('HTTP ' + res.status));
+        });
+      }
+      return res.json();
+    }).then(function(draft) {
+      window.location.href = buildBacktestMainPageUrl({
+        opt_draft_id: draft && draft.draft_id ? draft.draft_id : '',
+        draft_name: draftName || ''
+      });
+    });
+  }
+
+  function openOptimizeSeedDraft(config, draftName) {
+    return fetch(window.location.origin + '/api/backtest-v7/optimize-draft', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + TOKEN,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ config: extractConfigSections(config) })
+    }).then(function(res) {
+      if (!res.ok) {
+        return res.text().then(function(text) {
+          throw new Error(text || ('HTTP ' + res.status));
+        });
+      }
+      return res.json();
+    }).then(function(draft) {
+      window.location.href = buildOptimizeMainPageUrl({
+        opt_draft_id: draft && draft.draft_id ? draft.draft_id : '',
+        draft_name: draftName || ''
+      });
+    });
+  }
+
+  function setMessages(items) {
+    var root = el('messages');
+    root.innerHTML = '';
+    (items || []).forEach(function(item) {
+      var node = document.createElement('div');
+      node.className = 'message ' + (item.level === 'warning' ? 'warn' : item.level === 'error' ? 'bad' : 'info');
+      node.textContent = item.text || '';
+      root.appendChild(node);
+    });
+  }
+
+  function pushMessage(level, text) {
+    var current = state.session && Array.isArray(state.session.messages) ? state.session.messages.slice() : [];
+    current.unshift({ level: level, text: text });
+    if (state.session) state.session.messages = current;
+    setMessages(current);
+  }
+
+  function syncFormState() {
+    el('result-path-input').value = state.resultPath || '';
+    el('max-configs-input').value = String(state.maxConfigs || 2000);
+    el('all-results-toggle').checked = !!state.allResultsLoaded;
+    el('persist-defaults-toggle').checked = !!state.persistDefaults;
+    el('btn-load-pareto-only').style.display = state.allResultsLoaded ? '' : 'none';
+    Array.prototype.forEach.call(el('load-strategy-select').options, function(option) {
+      option.selected = state.loadStrategy.indexOf(option.value) >= 0;
+    });
+    el('playground-perf-weight').value = String(state.playground.perfWeight);
+    el('playground-risk-weight').value = String(state.playground.riskWeight);
+    el('playground-robust-weight').value = String(state.playground.robustWeight);
+    el('playground-show-all').checked = !!state.playground.showAll;
+    el('playground-use-weighted').checked = !!state.playground.useWeighted;
+    el('playground-use-btc').checked = !!state.playground.useBtc;
+    el('playground-viz-type').value = state.playground.vizType || '2D Scatter';
+    el('playground-projection-layout-row').checked = state.playground.projectionLayout === 'row';
+    el('playground-allow-mixed-weighted').checked = !!state.playground.allowMixedWeighted;
+    el('playground-allow-mixed-currency').checked = !!state.playground.allowMixedCurrency;
+    el('playground-perf-weight-value').textContent = String(state.playground.perfWeight);
+    el('playground-risk-weight-value').textContent = String(state.playground.riskWeight);
+    el('playground-robust-weight-value').textContent = String(state.playground.robustWeight);
+    el('preview-use-weighted').checked = !!state.previewUseWeighted;
+    el('preview-show-all').checked = !!state.previewShowAll;
+    el('deep-parameters-top-n').value = String(state.deepParametersTopN || 20);
+    el('deep-parameters-top-n-value').textContent = String(state.deepParametersTopN || 20);
+    if (state.deepScenariosMetric && el('deep-scenarios-metric')) {
+      el('deep-scenarios-metric').value = state.deepScenariosMetric;
+    }
+    el('deep-parameters-top-n').value = String(state.deepParametersTopN || 20);
+    el('deep-parameters-top-n-value').textContent = String(state.deepParametersTopN || 20);
+    if (el('deep-evolution-metric') && state.deepEvolutionMetric) el('deep-evolution-metric').value = state.deepEvolutionMetric;
+    el('deep-evolution-show-all').checked = !!state.deepEvolutionShowAll;
+    el('deep-evolution-hide-outliers').checked = !!state.deepEvolutionHideOutliers;
+    el('deep-evolution-weighted').checked = !!state.deepEvolutionUseWeighted;
+    el('deep-evolution-btc').checked = !!state.deepEvolutionUseBtc;
+    el('deep-evolution-window').value = String(state.deepEvolutionWindowPercent || 5);
+    el('deep-evolution-window-value').textContent = String(state.deepEvolutionWindowPercent || 5) + '%';
+    el('deep-correlations-strategy').value = String(state.deepCorrelationsStrategy || 'Top Performers');
+    el('deep-correlations-num').value = String(state.deepCorrelationsNumConfigs || 5);
+    el('deep-correlations-num-value').textContent = String(state.deepCorrelationsNumConfigs || 5);
+    el('deep-correlations-weighted').checked = !!state.deepCorrelationsUseWeighted;
+    el('deep-correlations-btc').checked = !!state.deepCorrelationsUseBtc;
+    updateAllRangeFills();
+  }
+
+  function selectedLoadStrategies() {
+    return Array.prototype.map.call(el('load-strategy-select').selectedOptions, function(option) {
+      return option.value;
+    });
+  }
+
+  function normalizeViewRange(range, totalConfigs) {
+    if (totalConfigs == null || totalConfigs <= 0 || !state.allResultsLoaded) return null;
+    var max = Math.max(0, parseInt(totalConfigs, 10) || 0);
+    var defaultEnd = Math.min(500, max);
+    var start = 0;
+    var end = defaultEnd;
+    if (range && typeof range === 'object') {
+      start = parseInt(range.start == null ? 0 : range.start, 10);
+      end = parseInt(range.end == null ? defaultEnd : range.end, 10);
+    }
+    if (!Number.isFinite(start)) start = 0;
+    if (!Number.isFinite(end)) end = defaultEnd;
+    start = Math.max(0, Math.min(start, max));
+    end = Math.max(start, Math.min(end, max));
+    return { start: start, end: end, max: max };
+  }
+
+  function currentRangeMax(load) {
+    if (load && load.view_range && load.view_range.max != null) return parseInt(load.view_range.max, 10) || 0;
+    if (load && load.load_stats && load.load_stats.selected_configs != null) return parseInt(load.load_stats.selected_configs, 10) || 0;
+    return 0;
+  }
+
+  function isWeightedMetricName(metric) {
+    var name = String(metric || '');
+    return name.indexOf('_w_') >= 0 || /_w_(usd|btc)$/.test(name) || /_w_(?!.*_w_)/.test(name);
+  }
+
+  function filterCustomMetrics(availableMetrics) {
+    var filtered = Array.isArray(availableMetrics) ? availableMetrics.slice() : [];
+    if (!state.playground.allowMixedCurrency) {
+      var currency = state.playground.useBtc ? '_btc' : '_usd';
+      filtered = filtered.filter(function(metric) {
+        return String(metric).endsWith(currency) || (!String(metric).endsWith('_usd') && !String(metric).endsWith('_btc'));
+      });
+    }
+    if (!state.playground.allowMixedWeighted) {
+      filtered = filtered.filter(function(metric) {
+        return state.playground.useWeighted ? isWeightedMetricName(metric) : !isWeightedMetricName(metric);
+      });
+    }
+    return filtered.length ? filtered : (Array.isArray(availableMetrics) ? availableMetrics.slice() : []);
+  }
+
+  function setSelectOptions(selectNode, metrics, selectedMetric, fallbackMetric) {
+    if (!selectNode) return '';
+    var options = Array.isArray(metrics) ? metrics.slice() : [];
+    [selectedMetric, fallbackMetric].forEach(function(metric) {
+      var normalized = String(metric || '').trim();
+      if (!normalized) return;
+      if (options.indexOf(normalized) >= 0) return;
+      options.unshift(normalized);
+    });
+    selectNode.innerHTML = '';
+    options.forEach(function(metric) {
+      var option = document.createElement('option');
+      option.value = metric;
+      option.textContent = metric;
+      selectNode.appendChild(option);
+    });
+    var nextValue = selectedMetric && options.indexOf(selectedMetric) >= 0 ? selectedMetric : '';
+    if (!nextValue && fallbackMetric && options.indexOf(fallbackMetric) >= 0) nextValue = fallbackMetric;
+    if (!nextValue && options.length) nextValue = options[0];
+    selectNode.value = nextValue || '';
+    return nextValue || '';
+  }
+
+  function updatePlaygroundCustomUi(payload) {
+    var customRoot = el('playground-custom-controls');
+    var customFilters = el('playground-custom-filters');
+    var customZWrap = el('playground-custom-z-wrap');
+    var showAllWrap = el('playground-show-all-wrap');
+    var useWeightedWrap = el('playground-use-weighted-wrap');
+    var useBtcWrap = el('playground-use-btc-wrap');
+    var colorMetricWrap = el('playground-color-metric-wrap');
+    var xNode = el('playground-custom-x-metric');
+    var yNode = el('playground-custom-y-metric');
+    var zNode = el('playground-custom-z-metric');
+    var isCustom = state.playground.quickView === 'Custom...';
+    var isRadar = state.playground.vizType === 'Radar Chart';
+    var is3d = state.playground.vizType === '3D Scatter' || state.playground.vizType === '3D Projections';
+    if (showAllWrap) showAllWrap.style.display = isRadar ? 'none' : '';
+    if (useWeightedWrap) useWeightedWrap.style.display = isRadar ? 'none' : '';
+    if (useBtcWrap) useBtcWrap.style.display = isRadar ? 'none' : '';
+    if (colorMetricWrap) colorMetricWrap.style.display = isRadar ? 'none' : '';
+    customRoot.style.display = isCustom && !isRadar ? '' : 'none';
+    customFilters.style.display = isCustom && !isRadar ? '' : 'none';
+    customZWrap.style.display = isCustom && is3d ? '' : 'none';
+    if (!isCustom || isRadar) return;
+
+    var available = filterCustomMetrics((payload && payload.available_metrics) || []);
+    state.playground.customXMetric = setSelectOptions(xNode, available, state.playground.customXMetric, (payload && payload.metrics && payload.metrics.x_metric) || '');
+    state.playground.customYMetric = setSelectOptions(yNode, available, state.playground.customYMetric, (payload && payload.metrics && payload.metrics.y_metric) || '');
+    state.playground.customZMetric = is3d ? setSelectOptions(zNode, available, state.playground.customZMetric, (payload && payload.metrics && payload.metrics.z_metric) || '') : '';
+  }
+
+  function updateProjectionLayoutUi() {
+    var wrap = el('playground-projection-layout-wrap');
+    var projectionRoot = el('playground-projections');
+    var show = state.playground.vizType === '3D Projections';
+    if (wrap) wrap.style.display = show ? '' : 'none';
+    if (!projectionRoot) return;
+    projectionRoot.classList.toggle('projections-row', show && state.playground.projectionLayout === 'row');
+  }
+
+  function ensureProjectionPanel(node, titleText) {
+    if (!node) return;
+    var wrap = node.closest('.chart-wrap');
+    if (!wrap) return;
+    var panel = wrap.parentElement;
+    if (!panel || !panel.classList || !panel.classList.contains('projection-panel')) {
+      panel = document.createElement('div');
+      panel.className = 'projection-panel';
+      wrap.parentNode.insertBefore(panel, wrap);
+      panel.appendChild(wrap);
+    }
+    var title = panel.querySelector('.projection-panel-title');
+    if (!title) {
+      title = document.createElement('div');
+      title.className = 'projection-panel-title';
+      panel.insertBefore(title, wrap);
+    }
+    title.textContent = String(titleText || '');
+    node.className = 'small-chart';
+    node.textContent = '';
+  }
+
+  function resizeProjectionCharts() {
+    ['playground-chart-proj-xy', 'playground-chart-proj-xz', 'playground-chart-proj-yz'].forEach(function(id) {
+      var node = el(id);
+      if (!node || !node.classList || !node.classList.contains('js-plotly-plot')) return;
+      fitChartToWrap(node);
+    });
+  }
+
+  function preserveCurrentCustomMetrics(payload) {
+    var metrics = payload && payload.metrics ? payload.metrics : null;
+    if (!metrics) return;
+    if (metrics.x_metric) state.playground.customXMetric = String(metrics.x_metric);
+    if (metrics.y_metric) state.playground.customYMetric = String(metrics.y_metric);
+    if (state.playground.vizType === '3D Scatter' || state.playground.vizType === '3D Projections') {
+      state.playground.customZMetric = metrics.z_metric ? String(metrics.z_metric) : '';
+    } else {
+      state.playground.customZMetric = '';
+    }
+  }
+
+  function updatePlaygroundWeightLabels() {
+    el('playground-perf-weight-value').textContent = String(state.playground.perfWeight);
+    el('playground-risk-weight-value').textContent = String(state.playground.riskWeight);
+    el('playground-robust-weight-value').textContent = String(state.playground.robustWeight);
+  }
+
+  function updateRangeFill(node) {
+    if (!node) return;
+    var min = parseFloat(node.min || '0');
+    var max = parseFloat(node.max || '100');
+    var value = parseFloat(node.value || '0');
+    var span = max - min;
+    var percent = span > 0 ? ((value - min) / span) * 100 : 0;
+    node.style.setProperty('--range-fill', String(Math.max(0, Math.min(100, percent))) + '%');
+  }
+
+  function updateAllRangeFills() {
+    Array.prototype.forEach.call(document.querySelectorAll('input[type="range"]'), function(node) {
+      updateRangeFill(node);
+    });
+  }
+
+  function schedulePlaygroundRefresh(delayMs) {
+    if (state.playgroundRefreshTimer) {
+      window.clearTimeout(state.playgroundRefreshTimer);
+      state.playgroundRefreshTimer = null;
+    }
+    state.playgroundRefreshTimer = window.setTimeout(function() {
+      state.playgroundRefreshTimer = null;
+      loadPlayground({ followBestMatch: true }).catch(function() {});
+    }, delayMs == null ? 120 : delayMs);
+  }
+
+  function resizePlaygroundCharts() {
+    ['playground-chart', 'playground-chart-proj-xy', 'playground-chart-proj-xz', 'playground-chart-proj-yz'].forEach(function(id) {
+      var node = el(id);
+      if (!node || !node.classList || node.classList.contains('placeholder-chart')) return;
+      if (typeof Plotly === 'undefined' || !Plotly.Plots || typeof Plotly.Plots.resize !== 'function') return;
+      try {
+        Plotly.Plots.resize(node);
+      } catch (err) {}
+    });
+  }
+
+  function resizePlotlyNodes(ids) {
+    if (typeof Plotly === 'undefined' || !Plotly.Plots || typeof Plotly.Plots.resize !== 'function') return;
+    (ids || []).forEach(function(id) {
+      var node = el(id);
+      if (!node || !node.classList || node.classList.contains('placeholder-chart')) return;
+      try {
+        Plotly.Plots.resize(node);
+      } catch (err) {}
+    });
+  }
+
+  function scheduleDeepPlotResize() {
+    if (state.deepPlotResizeTimer) {
+      window.clearTimeout(state.deepPlotResizeTimer);
+      state.deepPlotResizeTimer = null;
+    }
+    state.deepPlotResizeTimer = window.setTimeout(function() {
+      state.deepPlotResizeTimer = null;
+      resizePlotlyNodes(['deep-parameters-heatmap', 'deep-parameters-bounds-chart', 'deep-scenarios-chart', 'deep-evolution-chart', 'deep-correlations-chart']);
+      window.setTimeout(function() {
+        resizePlotlyNodes(['deep-parameters-heatmap', 'deep-parameters-bounds-chart', 'deep-scenarios-chart', 'deep-evolution-chart', 'deep-correlations-chart']);
+        alignScenarioStatsColumns();
+      }, 80);
+    }, 40);
+  }
+
+  function alignScenarioStatsColumns() {
+    var statsNode = el('deep-scenarios-stats');
+    var chartNode = el('deep-scenarios-chart');
+    if (!statsNode || !chartNode) return;
+    var columnsWrap = statsNode.querySelector('.scenario-stats-columns');
+    if (!columnsWrap || !columnsWrap.childElementCount) return;
+
+    var columnCount = columnsWrap.childElementCount;
+    var fullLayout = chartNode._fullLayout || chartNode.layout || {};
+    var margin = fullLayout.margin || {};
+    var leftPad = parseInt(margin.l || 80, 10) || 80;
+    var rightPad = parseInt(margin.r || 40, 10) || 40;
+    var availableWidth = (statsNode.clientWidth || 0) - leftPad - rightPad;
+    if (availableWidth > 0 && (availableWidth / columnCount) < 180) {
+      leftPad = 12;
+      rightPad = 12;
+    }
+
+    columnsWrap.style.setProperty('--scenario-columns', String(columnCount));
+    columnsWrap.style.paddingLeft = leftPad + 'px';
+    columnsWrap.style.paddingRight = rightPad + 'px';
+  }
+
+  function renderStableDeepPlot(node, traces, layout, done) {
+    if (!node) return Promise.resolve();
+    var hasExistingPlot = !!((node.data && node.layout) || node.querySelector('.plot-container'));
+    if (!hasExistingPlot) {
+      node.classList.add('pending-render');
+      node.textContent = '';
+    }
+    var targetHeight = parseInt((((layout || {}).height) || 0), 10) || 420;
+    node.style.height = targetHeight + 'px';
+    node.style.minHeight = targetHeight + 'px';
+    var measuredWidth = parseInt(node.clientWidth || node.offsetWidth || 0, 10) || 0;
+    if (!measuredWidth && node.parentElement) {
+      measuredWidth = parseInt(node.parentElement.clientWidth || node.parentElement.offsetWidth || 0, 10) || 0;
+    }
+    var stableLayout = darkPlotLayout(layout || {});
+    stableLayout.height = targetHeight;
+    if (measuredWidth) {
+      stableLayout.width = measuredWidth;
+      stableLayout.autosize = false;
+    }
+    var renderFn = hasExistingPlot && typeof Plotly.react === 'function' ? Plotly.react : Plotly.newPlot;
+    return renderFn(node, traces, stableLayout, { responsive: true, displaylogo: false }).then(function() {
+      return new Promise(function(resolve) {
+        window.requestAnimationFrame(function() {
+          resizePlotlyNodes([node.id]);
+          window.setTimeout(function() {
+            resizePlotlyNodes([node.id]);
+            if (!hasExistingPlot) {
+              node.classList.remove('pending-render');
+            }
+            if (typeof done === 'function') done();
+            resolve();
+          }, 80);
+        });
+      });
+    });
+  }
+
+  function syncViewRangeFromLoad(load) {
+    if (!state.allResultsLoaded) {
+      state.viewRange = null;
+      state.pendingViewRange = null;
+      return;
+    }
+    var total = currentRangeMax(load);
+    if (load && load.view_range) {
+      state.viewRange = normalizeViewRange(load.view_range, total);
+      state.pendingViewRange = state.viewRange ? Object.assign({}, state.viewRange) : null;
+      return;
+    }
+    state.viewRange = normalizeViewRange(state.pendingViewRange || state.viewRange, total);
+    state.pendingViewRange = state.viewRange ? Object.assign({}, state.viewRange) : null;
+  }
+
+  function renderDisplayRange(load) {
+    var card = el('display-range-card');
+    var slider = el('display-range-end');
+    var startInput = el('display-range-start-input');
+    var endInput = el('display-range-end-input');
+    var totalChip = el('display-range-total-chip');
+    var summary = el('display-range-summary');
+    if (!card || !slider || !startInput || !endInput || !totalChip || !summary) return;
+
+    var total = currentRangeMax(load);
+    var enabled = !!(state.allResultsLoaded && total > 0);
+    card.style.display = enabled ? '' : 'none';
+    if (!enabled) return;
+
+    var range = normalizeViewRange(state.pendingViewRange || state.viewRange || (load && load.view_range), total) || { start: 0, end: Math.min(500, total), max: total };
+    state.pendingViewRange = Object.assign({}, range);
+    if (!state.viewRange) state.viewRange = Object.assign({}, range);
+
+    slider.min = '0';
+    slider.max = String(total);
+    slider.step = '10';
+    slider.value = String(range.end);
+    startInput.min = '0';
+    startInput.max = String(total);
+    startInput.value = String(range.start);
+    endInput.min = '0';
+    endInput.max = String(total);
+    endInput.value = String(range.end);
+    totalChip.textContent = 'Loaded: ' + String(total);
+    summary.textContent = 'Showing ' + String(Math.max(0, range.end - range.start)) + ' configs (Rank ' + String(range.start + 1) + '-' + String(range.end) + ')';
+    updateRangeFill(slider);
+  }
+
+  function updatePendingDisplayRange(nextRange) {
+    var total = currentRangeMax(state.loadPayload);
+    var normalized = normalizeViewRange(nextRange, total);
+    if (!normalized) return;
+    state.pendingViewRange = normalized;
+    renderDisplayRange(state.loadPayload);
+  }
+
+  function applyDisplayRange() {
+    if (!state.resultPath || !state.allResultsLoaded) return Promise.resolve(null);
+    var total = currentRangeMax(state.loadPayload);
+    var normalized = normalizeViewRange(state.pendingViewRange, total);
+    if (!normalized) return Promise.resolve(null);
+    state.pendingViewRange = Object.assign({}, normalized);
+    return loadParetoData({ forceSynchronous: true }).then(function(data) {
+      state.viewRange = data && data.view_range ? normalizeViewRange(data.view_range, currentRangeMax(data)) : Object.assign({}, normalized);
+      state.pendingViewRange = state.viewRange ? Object.assign({}, state.viewRange) : null;
+      return data;
+    });
+  }
+
+  function setFullLoadStatus(stage, text, progress) {
+    var chip = el('full-load-status-chip');
+    var body = el('full-load-status-text');
+    var metricChip = el('metric-full-load-chip');
+    var metricText = el('metric-full-load-text');
+    var metricPanel = el('metric-full-load-panel');
+    var normalized = Math.max(0, Math.min(100, progress || 0));
+    var label = 'Idle';
+    var chipClass = 'status-chip warn';
+    if (stage === 'loading') {
+      label = 'Loading';
+      chipClass = 'status-chip warn';
+    } else if (stage === 'loaded') {
+      label = 'Loaded';
+      chipClass = 'status-chip good';
+    } else if (stage === 'error') {
+      label = 'Error';
+      chipClass = 'status-chip bad';
+    }
+    chip.textContent = label;
+    chip.className = chipClass;
+    body.textContent = text || '';
+    if (metricChip) {
+      metricChip.textContent = label;
+      metricChip.className = chipClass;
+      metricChip.style.display = stage === 'loaded' ? '' : 'none';
+    }
+    if (metricText) metricText.textContent = text || '';
+    if (metricPanel) metricPanel.style.display = (stage === 'loading' || stage === 'error') ? '' : 'none';
+    state.fullLoadProgressTarget = normalized;
+    if (stage === 'loaded' || stage === 'error' || normalized <= state.fullLoadProgressDisplay) {
+      state.fullLoadProgressDisplay = normalized;
+      el('full-load-status-bar').style.width = String(normalized) + '%';
+      if (el('metric-full-load-bar')) el('metric-full-load-bar').style.width = String(normalized) + '%';
+    }
+    ensureFullLoadProgressAnimation();
+    updateLoadStatusMirrors(text || '');
+  }
+
+  function updateLoadStatusMirrors(text) {
+    var summaryNode = el('preview-left-summary');
+    if (state.fullLoadPending && text && summaryNode) {
+      summaryNode.textContent = text;
+    }
+  }
+
+  function stopFullLoadProgressAnimation() {
+    if (state.fullLoadProgressTimer) {
+      window.clearInterval(state.fullLoadProgressTimer);
+      state.fullLoadProgressTimer = null;
+    }
+  }
+
+  function ensureFullLoadProgressAnimation() {
+    if (state.fullLoadProgressTimer) return;
+    state.fullLoadProgressTimer = window.setInterval(function() {
+      var bar = el('full-load-status-bar');
+      var metricBar = el('metric-full-load-bar');
+      if (!bar) {
+        stopFullLoadProgressAnimation();
+        return;
+      }
+      var diff = state.fullLoadProgressTarget - state.fullLoadProgressDisplay;
+      if (Math.abs(diff) < 0.2) {
+        state.fullLoadProgressDisplay = state.fullLoadProgressTarget;
+        bar.style.width = String(state.fullLoadProgressDisplay) + '%';
+        if (metricBar) metricBar.style.width = String(state.fullLoadProgressDisplay) + '%';
+        if (!state.fullLoadPending || state.fullLoadProgressDisplay >= 100 || state.fullLoadProgressDisplay <= 0) {
+          stopFullLoadProgressAnimation();
+        }
+        return;
+      }
+      var step = diff > 0 ? Math.max(0.4, diff * 0.18) : Math.min(-0.6, diff * 0.35);
+      state.fullLoadProgressDisplay = Math.max(0, Math.min(100, state.fullLoadProgressDisplay + step));
+      bar.style.width = String(state.fullLoadProgressDisplay) + '%';
+      if (metricBar) metricBar.style.width = String(state.fullLoadProgressDisplay) + '%';
+    }, 90);
+  }
+
+  function updateFullLoadPhase(phase, detail) {
+    var phases = {
+      command_center: { progress: 74, text: 'Refreshing Command Center...' },
+      command_center_detail: { progress: 80, text: 'Refreshing selected config details...' },
+      playground: { progress: 88, text: 'Refreshing Explorer and preview charts...' },
+      deep_intelligence: { progress: 94, text: 'Refreshing Deep Intelligence...' },
+      deep_intelligence_panel: { progress: 97, text: 'Refreshing current Deep Intelligence panel...' },
+      complete: { progress: 100, text: 'Full result load completed.' }
+    };
+    var meta = phases[phase] || phases.command_center;
+    var suffix = detail ? (' ' + detail) : '';
+    setFullLoadStatus(phase === 'complete' ? 'loaded' : 'loading', meta.text + suffix, meta.progress);
+  }
+
+  function clearFullLoadPoll() {
+    if (state.fullLoadPollTimer) {
+      window.clearTimeout(state.fullLoadPollTimer);
+      state.fullLoadPollTimer = null;
+    }
+  }
+
+  function waitForNextFullLoadPoll(delayMs) {
+    return new Promise(function(resolve) {
+      state.fullLoadPollTimer = window.setTimeout(function() {
+        state.fullLoadPollTimer = null;
+        resolve();
+      }, delayMs);
+    });
+  }
+
+  function pollFullLoadStatus() {
+    if (!state.fullLoadJobId) return Promise.resolve(null);
+    clearFullLoadPoll();
+    return apiFetch('/load-status?job_id=' + encodeURIComponent(state.fullLoadJobId)).then(function(data) {
+      var job = data && data.job ? data.job : null;
+      if (!job) throw new Error('Load status returned no job payload.');
+      if (data && data.status === 'loading') {
+        setFullLoadStatus('loading', job.message || 'Loading full result set...', job.progress || 0);
+        return waitForNextFullLoadPoll(350).then(function() {
+          return pollFullLoadStatus();
+        });
+      }
+      if (data && data.status === 'error') {
+        state.fullLoadPending = false;
+        state.fullLoadJobId = '';
+        clearFullLoadPoll();
+        throw new Error(job.error || job.message || 'Full load failed.');
+      }
+      if (!(data && data.payload)) {
+        setFullLoadStatus('loading', job.message || 'Finalizing full result payload...', Math.max(95, job.progress || 0));
+        return waitForNextFullLoadPoll(200).then(function() {
+          return pollFullLoadStatus();
+        });
+      }
+      state.fullLoadPending = false;
+      state.fullLoadJobId = '';
+      clearFullLoadPoll();
+      setFullLoadStatus('loading', job.message || 'Full load complete. Starting follow-up refreshes...', Math.max(70, job.progress || 100));
+      return data;
+    });
+  }
+
+  function renderLoadSummary(load, result) {
+    return;
+  }
+
+  function darkPlotLayout(layout) {
+    var base = Object.assign({}, layout || {});
+    base.paper_bgcolor = '#0e1117';
+    base.plot_bgcolor = '#0e1117';
+    base.font = Object.assign({ color: '#fafafa' }, base.font || {});
+    base.legend = Object.assign({ font: { color: '#fafafa' } }, base.legend || {});
+    base.margin = Object.assign({ l: 80, r: 40, t: 60, b: 70 }, base.margin || {});
+    if (Array.isArray(base.annotations)) {
+      base.annotations = base.annotations.map(function(annotation) {
+        return Object.assign({}, annotation || {}, {
+          font: Object.assign({ color: '#fafafa' }, (annotation && annotation.font) || {})
+        });
+      });
+    }
+    if (base.xaxis) {
+      base.xaxis = Object.assign({
+        color: '#fafafa',
+        gridcolor: 'rgba(255,255,255,0.12)',
+        zerolinecolor: 'rgba(255,255,255,0.18)'
+      }, base.xaxis);
+    }
+    if (base.yaxis) {
+      base.yaxis = Object.assign({
+        color: '#fafafa',
+        gridcolor: 'rgba(255,255,255,0.12)',
+        zerolinecolor: 'rgba(255,255,255,0.18)'
+      }, base.yaxis);
+    }
+    if (base.scene) {
+      base.scene = Object.assign({}, base.scene, {
+        bgcolor: '#0e1117',
+        xaxis: Object.assign({ backgroundcolor: '#0e1117', gridcolor: 'rgba(255,255,255,0.12)', color: '#fafafa' }, (base.scene || {}).xaxis || {}),
+        yaxis: Object.assign({ backgroundcolor: '#0e1117', gridcolor: 'rgba(255,255,255,0.12)', color: '#fafafa' }, (base.scene || {}).yaxis || {}),
+        zaxis: Object.assign({ backgroundcolor: '#0e1117', gridcolor: 'rgba(255,255,255,0.12)', color: '#fafafa' }, (base.scene || {}).zaxis || {})
+      });
+    }
+    if (base.polar) {
+      base.polar = Object.assign({}, base.polar, {
+        bgcolor: '#0e1117',
+        radialaxis: Object.assign({
+          color: '#fafafa',
+          gridcolor: 'rgba(255,255,255,0.16)',
+          linecolor: 'rgba(255,255,255,0.22)',
+          tickfont: { color: '#fafafa' }
+        }, (base.polar || {}).radialaxis || {}),
+        angularaxis: Object.assign({
+          color: '#fafafa',
+          gridcolor: 'rgba(255,255,255,0.16)',
+          linecolor: 'rgba(255,255,255,0.22)',
+          tickfont: { color: '#fafafa' }
+        }, (base.polar || {}).angularaxis || {})
+      });
+    }
+    if (base.coloraxis && base.coloraxis.colorbar) {
+      base.coloraxis = Object.assign({}, base.coloraxis, {
+        colorbar: Object.assign({}, base.coloraxis.colorbar, {
+          tickfont: Object.assign({ color: '#fafafa' }, (base.coloraxis.colorbar || {}).tickfont || {}),
+          title: Object.assign({}, (base.coloraxis.colorbar || {}).title || {}, {
+            font: Object.assign({ color: '#fafafa' }, (((base.coloraxis || {}).colorbar || {}).title || {}).font || {})
+          })
+        })
+      });
+    }
+    return base;
+  }
+
+  function projectionPlotLayout(layout, projectionLabel) {
+    var base = darkPlotLayout(layout || {});
+    var titleText = String(projectionLabel || '').trim();
+    var annotations = (base.annotations || []).filter(function(annotation) {
+      return !annotation || annotation.name !== 'projection-colorbar-title';
+    });
+    base.annotations = annotations;
+    base.margin = Object.assign({}, base.margin || {}, { l: 70, r: 95, t: 56, b: 64 });
+    base.title = {
+      text: titleText,
+      x: 0.5,
+      xanchor: 'center',
+      y: 0.98,
+      yanchor: 'top',
+      font: { color: '#9fb3c8', size: 13 }
+    };
+    if (base.xaxis && base.xaxis.title) {
+      base.xaxis.title = Object.assign({}, base.xaxis.title, { standoff: 10 });
+    }
+    if (base.yaxis && base.yaxis.title) {
+      base.yaxis.title = Object.assign({}, base.yaxis.title, { standoff: 10 });
+    }
+    if (base.coloraxis && base.coloraxis.colorbar) {
+      base.coloraxis = Object.assign({}, base.coloraxis, {
+        colorbar: Object.assign({}, base.coloraxis.colorbar, {
+          x: 1.01,
+          thickness: 14,
+          len: 0.78,
+          tickfont: Object.assign({ size: 10, color: '#fafafa' }, (base.coloraxis.colorbar || {}).tickfont || {})
+        })
+      });
+    }
+    return base;
+  }
+
+  var plotlyFullscreenIcon = {
+    width: 500,
+    height: 500,
+    path: 'M0,100 L0,0 L100,0 L100,25 L25,25 L25,100 Z M400,0 L500,0 L500,100 L425,100 L425,25 L400,25 Z M0,400 L0,500 L100,500 L100,425 L25,425 L25,400 Z M425,400 L500,400 L500,500 L400,500 L400,425 L425,425 Z'
+  };
+
+  var activeFullscreenWrap = null;
+
+  function rememberChartHeight(node) {
+    if (!node) return;
+    var height = 0;
+    try {
+      height = parseInt((node.layout && node.layout.height) || 0, 10) || 0;
+    } catch (err) {}
+    if (!height && node.offsetHeight) height = parseInt(node.offsetHeight, 10) || 0;
+    if (!height) return;
+    var wrap = node.closest('.chart-wrap');
+    if (!wrap || !wrap.dataset) return;
+    wrap.dataset.restoreHeight = String(height);
+    wrap.style.height = height + 'px';
+    node.style.height = height + 'px';
+  }
+
+  function plotlyConfig() {
+    return {
+      responsive: true,
+      displaylogo: false,
+      displayModeBar: true,
+      modeBarButtonsToAdd: [{
+        name: 'fullscreen',
+        title: 'Toggle Fullscreen',
+        icon: plotlyFullscreenIcon,
+        click: function(gd) {
+          var wrap = gd.closest('.chart-wrap');
+          if (!wrap) return;
+          if (!document.fullscreenElement) wrap.requestFullscreen().catch(function() {});
+          else document.exitFullscreen();
+        }
+      }]
+    };
+  }
+
+  function relayoutFullscreenChart(wrap) {
+    if (!wrap || !wrap.classList || !wrap.classList.contains('chart-wrap')) return;
+    var chartNode = wrap.querySelector('[id^="preview-"]') || wrap.querySelector('[id^="playground-chart"]');
+    if (!chartNode || typeof Plotly === 'undefined') return;
+    var restoreHeight = parseInt((wrap.dataset && wrap.dataset.restoreHeight) || '0', 10) || 0;
+    if (document.fullscreenElement === wrap) {
+      wrap.style.height = '';
+      chartNode.style.height = '';
+    } else if (restoreHeight) {
+      wrap.style.height = restoreHeight + 'px';
+      chartNode.style.height = restoreHeight + 'px';
+    }
+    var relayoutUpdate = document.fullscreenElement === wrap
+      ? { autosize: true, width: null, height: null }
+      : { autosize: true, width: null, height: restoreHeight || null };
+    window.setTimeout(function() {
+      try {
+        if (typeof Plotly.relayout === 'function') {
+          Plotly.relayout(chartNode, relayoutUpdate);
+        }
+        if (Plotly.Plots && typeof Plotly.Plots.resize === 'function') {
+          Plotly.Plots.resize(chartNode);
+        }
+      } catch (err) {}
+    }, 50);
+  }
+
+  function fitChartToWrap(node) {
+    if (!node) return;
+    var wrap = node.closest('.chart-wrap');
+    if (!wrap) return;
+    var wrapHeight = parseInt(wrap.clientHeight || wrap.offsetHeight || 0, 10) || 0;
+    if (wrapHeight) node.style.height = wrapHeight + 'px';
+    window.setTimeout(function() {
+      try {
+        if (typeof Plotly !== 'undefined' && typeof Plotly.relayout === 'function') {
+          Plotly.relayout(node, { autosize: true, width: null, height: wrapHeight || null });
+        }
+        if (typeof Plotly !== 'undefined' && Plotly.Plots && typeof Plotly.Plots.resize === 'function') {
+          Plotly.Plots.resize(node);
+        }
+      } catch (err) {}
+    }, 0);
+  }
+
+  document.addEventListener('fullscreenchange', function() {
+    var wrap = document.fullscreenElement;
+    if (wrap && wrap.classList && wrap.classList.contains('chart-wrap')) {
+      activeFullscreenWrap = wrap;
+      relayoutFullscreenChart(wrap);
+      return;
+    }
+    if (activeFullscreenWrap) {
+      relayoutFullscreenChart(activeFullscreenWrap);
+      activeFullscreenWrap = null;
+    }
+  });
+
+  function bindPlotClick(node, handler) {
+    if (!node || typeof handler !== 'function') return;
+    node.on('plotly_click', function(eventData) {
+      var points = eventData && Array.isArray(eventData.points) ? eventData.points : [];
+      if (!points.length) return;
+      var point = points[0];
+      var configIndex = null;
+
+      function parseConfigIndex(candidate) {
+        var parsed = parseInt(candidate, 10);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+
+      function extractConfigIndex(candidatePoint) {
+        if (!candidatePoint) return null;
+        var custom = candidatePoint.customdata;
+        if (Array.isArray(custom) && custom.length) return parseConfigIndex(custom[0]);
+        if (custom && typeof custom === 'object' && Object.prototype.hasOwnProperty.call(custom, 'config_index')) return parseConfigIndex(custom.config_index);
+        var data = candidatePoint.data;
+        var meta = data && data.meta;
+        if (meta && typeof meta === 'object' && Object.prototype.hasOwnProperty.call(meta, 'config_index')) return parseConfigIndex(meta.config_index);
+        if (candidatePoint.fullData && candidatePoint.fullData.meta && Object.prototype.hasOwnProperty.call(candidatePoint.fullData.meta, 'config_index')) return parseConfigIndex(candidatePoint.fullData.meta.config_index);
+        if (typeof data === 'object' && data && typeof data.name === 'string') {
+          var match = data.name.match(/Config\s+#?(\d+)/i);
+          if (match && match[1]) return parseConfigIndex(match[1]);
+          if (/Best Match/i.test(data.name) && state.playground && state.playground.payload && state.playground.payload.best_match) {
+            return parseConfigIndex(state.playground.payload.best_match.config_index);
+          }
+        }
+        if (candidatePoint.x != null) return parseConfigIndex(candidatePoint.x);
+        return null;
+      }
+
+      for (var i = 0; i < points.length; i += 1) {
+        configIndex = extractConfigIndex(points[i]);
+        if (configIndex != null) break;
+      }
+      if (configIndex == null) configIndex = extractConfigIndex(point);
+      var parsed = parseInt(configIndex, 10);
+      if (!Number.isFinite(parsed)) return;
+      handler(parsed);
+    });
+  }
+
+  function refreshPlaygroundFromSettings() {
+    if (!state.resultPath) return;
+    loadPlayground({ followBestMatch: true }).catch(function() {});
+  }
+
+  function loadAllResultsFromSidebar() {
+    if (!state.resultPath) {
+      pushMessage('error', 'No result path is available yet.');
+      return;
+    }
+    var requestedMaxConfigs = parseInt(el('max-configs-input').value || String(state.maxConfigs || 2000), 10) || 2000;
+    var requestedLoadStrategy = selectedLoadStrategies();
+    var loadedMaxConfigs = state.loadPayload && state.loadPayload.max_configs != null ? state.loadPayload.max_configs : null;
+    var loadedStrategy = state.loadPayload && Array.isArray(state.loadPayload.load_strategy) ? state.loadPayload.load_strategy.slice() : [];
+    var sameStrategy = requestedLoadStrategy.length === loadedStrategy.length && requestedLoadStrategy.every(function(item, index) {
+      return item === loadedStrategy[index];
+    });
+    var sameFullLoad = !!(state.allResultsLoaded
+      && !state.fullLoadPending
+      && state.loadPayload
+      && state.loadPayload.mode === 'full'
+      && state.resultPath === String((state.loadPayload.result || {}).path || state.resultPath)
+      && requestedMaxConfigs === loadedMaxConfigs
+      && sameStrategy);
+    if (sameFullLoad) {
+      pushMessage('info', 'all_results.bin is already loaded.');
+      return;
+    }
+    state.fullLoadPending = true;
+    state.fullLoadJobId = '';
+    state.allResultsLoaded = true;
+    state.loadStrategy = requestedLoadStrategy;
+    state.maxConfigs = requestedMaxConfigs;
+    el('all-results-toggle').checked = true;
+    el('btn-load-all-results').disabled = true;
+    el('btn-load-all-results').textContent = 'Loading all_results...';
+    el('mode-chip').textContent = 'Loading full result...';
+    el('mode-chip').className = 'status-chip warn';
+    setFullLoadStatus('loading', 'Starting full result load from all_results.bin...', 0);
+    pushMessage('info', 'Loading all_results.bin. This can take a moment for larger result sets.');
+    loadParetoData().catch(function() {});
+  }
+
+  function loadParetoOnlyFromSidebar() {
+    if (!state.resultPath) {
+      pushMessage('error', 'No result path is available yet.');
+      return;
+    }
+    if (!state.allResultsLoaded && !state.fullLoadPending) {
+      pushMessage('info', 'Already using Passivbot pareto-only mode.');
+      return;
+    }
+    state.fullLoadPending = false;
+    state.fullLoadJobId = '';
+    clearFullLoadPoll();
+    stopFullLoadProgressAnimation();
+    state.allResultsLoaded = false;
+    state.viewRange = null;
+    state.pendingViewRange = null;
+    el('all-results-toggle').checked = false;
+    el('btn-load-all-results').disabled = false;
+    el('btn-load-all-results').textContent = '📂 Load all_results';
+    el('mode-chip').textContent = 'Switching to fast mode...';
+    el('mode-chip').className = 'status-chip warn';
+    setFullLoadStatus('idle', 'Switching back to Passivbot pareto-only mode. The full all_results cache stays warm for quick return.', 0);
+    pushMessage('info', 'Switching back to the Passivbot pareto-only config set. The cached all_results loader will be reused when you switch back.');
+    loadParetoData({ forceSynchronous: true }).catch(function() {});
+  }
+
+  function refreshPreviewFromSettings() {
+    if (!state.resultPath) return;
+    loadPlayground().catch(function() {});
+  }
+
+  function renderPreview(payload) {
+    var leftSummary = el('preview-left-summary');
+    var rightSummary = el('preview-right-summary');
+    var leftChart = el('preview-pareto-chart');
+    var rightChart = el('preview-robustness-chart');
+    if (!payload) {
+      leftSummary.textContent = 'Pareto preview chart will appear here.';
+      rightSummary.textContent = 'Robustness preview chart will appear here.';
+      leftChart.className = 'placeholder-chart small-chart';
+      leftChart.textContent = 'Load a result to render the Pareto front preview.';
+      rightChart.className = 'placeholder-chart small-chart';
+      rightChart.textContent = 'Load a result to render the robustness preview.';
+      return;
+    }
+    var counts = payload.counts || {};
+    var previewConfigs = counts.configs || 0;
+    var totalConfigs = counts.total_configs != null ? counts.total_configs : previewConfigs;
+    var previewModeLabel = counts.show_all ? String(previewConfigs) + ' / ' + String(totalConfigs) + ' configs' : String(previewConfigs) + ' Pareto configs';
+    leftSummary.textContent = 'Pareto Analysis - Showing ' + previewModeLabel + ' | ' + String(counts.pareto || 0) + ' Pareto ⭐';
+    rightSummary.textContent = 'Robustness vs Performance - Showing ' + previewModeLabel + ' | ' + String(counts.pareto || 0) + ' Pareto ⭐';
+    leftChart.className = 'small-chart';
+    rightChart.className = 'small-chart';
+    leftChart.textContent = '';
+    rightChart.textContent = '';
+    var leftLayout = darkPlotLayout((payload.pareto_analysis && payload.pareto_analysis.layout) || {});
+    leftLayout.legend = Object.assign({}, leftLayout.legend || {}, {
+      orientation: 'h',
+      x: 0,
+      xanchor: 'left',
+      y: 1.14,
+      yanchor: 'bottom'
+    });
+    leftLayout.margin = Object.assign({}, leftLayout.margin || {}, { t: 110, r: 40 });
+    leftLayout.height = Math.max(Number(leftLayout.height) || 0, 750);
+    Plotly.newPlot(leftChart, (payload.pareto_analysis && payload.pareto_analysis.traces) || [], leftLayout, plotlyConfig()).then(function() {
+      rememberChartHeight(leftChart);
+      bindPlotClick(leftChart, function(configIndex) { loadConfigDetail(configIndex).catch(function() {}); });
+    });
+    var rightLayout = darkPlotLayout((payload.robustness && payload.robustness.layout) || {});
+    rightLayout.legend = Object.assign({}, rightLayout.legend || {}, {
+      orientation: 'h',
+      x: 0,
+      xanchor: 'left',
+      y: 1.14,
+      yanchor: 'bottom'
+    });
+    rightLayout.margin = Object.assign({}, rightLayout.margin || {}, { t: 110, r: 40 });
+    rightLayout.height = Math.max(Number(rightLayout.height) || 0, 750);
+    Plotly.newPlot(rightChart, (payload.robustness && payload.robustness.traces) || [], rightLayout, plotlyConfig()).then(function() {
+      rememberChartHeight(rightChart);
+      bindPlotClick(rightChart, function(configIndex) { loadConfigDetail(configIndex).catch(function() {}); });
+    });
+  }
+
+  function renderChampions(data) {
+    var root = el('champion-list');
+    var champions = data && Array.isArray(data.champions) ? data.champions : [];
+    root.innerHTML = '';
+    if (!champions.length) {
+      root.innerHTML = '<div class="placeholder-panel">No champions available for the current result.</div>';
+      return;
+    }
+    champions.forEach(function(item, index) {
+      var node = document.createElement('button');
+      node.type = 'button';
+      node.className = 'champion-item' + (state.selectedConfigIndex === item.config_index ? ' active' : '');
+      node.innerHTML = ''
+        + '<div class="champion-row">'
+        +   '<div class="champion-head"><strong>#' + escapeHtml(String(item.config_index)) + '</strong></div>'
+        +   '<div class="champion-style">' + escapeHtml(item.style || '') + '</div>'
+        +   '<span class="chip">Rank ' + escapeHtml(String(index + 1)) + '</span>'
+        + '</div>'
+        + '<div class="champion-meta">'
+        +   '<span class="chip">Score ' + escapeHtml(String(item.composite_score == null ? '-' : item.composite_score)) + '</span>'
+        +   '<span class="chip">Perf ' + escapeHtml(String(item.performance == null ? '-' : item.performance)) + '</span>'
+        +   '<span class="chip">Rob ' + escapeHtml(String(item.robustness == null ? '-' : item.robustness)) + '</span>'
+        +   '<span class="chip">Risk ' + escapeHtml(String(item.risk_overall == null ? '-' : item.risk_overall)) + '</span>'
+        + '</div>';
+      node.addEventListener('click', function() {
+        loadConfigDetail(item.config_index).catch(function() {});
+      });
+      root.appendChild(node);
+    });
+  }
+
+  function renderInsights(data) {
+    var root = el('insight-list');
+    var insights = data && Array.isArray(data.insights) ? data.insights : [];
+    root.innerHTML = '';
+    if (!insights.length) {
+      root.innerHTML = '<div class="placeholder-panel">No insights available for the current result.</div>';
+      return;
+    }
+    insights.forEach(function(item) {
+      var node = document.createElement('div');
+      var level = item.level === 'warning' ? 'warn' : item.level === 'success' ? 'good' : 'info';
+      node.className = 'insight-item';
+      node.innerHTML = '<div class="status-chip ' + level + '" style="margin-bottom:8px;">' + escapeHtml(String(item.level || 'info')) + '</div><div>' + escapeHtml(item.text || '') + '</div>';
+      root.appendChild(node);
+    });
+  }
+
+  function renderMiniMetricGrid(rootId, metrics) {
+    var root = el(rootId);
+    root.innerHTML = '';
+    if (!metrics || !metrics.length) {
+      root.innerHTML = '<div class="placeholder-panel" style="min-height:120px;">No data available.</div>';
+      return;
+    }
+    metrics.forEach(function(item) {
+      var node = document.createElement('div');
+      node.className = 'mini-metric';
+      node.innerHTML = '<div class="label">' + escapeHtml(String(item.name || item.label || '-')) + '</div><div class="value">' + escapeHtml(String(item.value == null ? '-' : item.value)) + '</div>';
+      root.appendChild(node);
+    });
+  }
+
+  function renderDetailList(rootId, metrics, emptyText, limit) {
+    var root = el(rootId);
+    root.innerHTML = '';
+    var items = Array.isArray(metrics) ? metrics.slice(0, limit || 999) : [];
+    if (!items.length) {
+      root.innerHTML = '<div class="placeholder-panel" style="min-height:120px;">' + escapeHtml(emptyText) + '</div>';
+      return;
+    }
+    items.forEach(function(item) {
+      var node = document.createElement('div');
+      node.className = 'detail-item';
+      node.innerHTML = '<div class="detail-head"><strong>' + escapeHtml(item.name || '-') + '</strong><span class="chip">' + escapeHtml(String(item.value == null ? '-' : item.value)) + '</span></div>';
+      root.appendChild(node);
+    });
+  }
+
+  function renderKeyValueList(rootId, values, emptyText, limit) {
+    var root = el(rootId);
+    root.innerHTML = '';
+    var entries = Object.keys(values || {}).sort().slice(0, limit || 999).map(function(key) {
+      return { key: key, value: values[key] };
+    });
+    if (!entries.length) {
+      root.innerHTML = '<div class="placeholder-panel" style="min-height:120px;">' + escapeHtml(emptyText) + '</div>';
+      return;
+    }
+    entries.forEach(function(item) {
+      var node = document.createElement('div');
+      node.className = 'dense-param';
+      node.innerHTML = '<span class="name">' + escapeHtml(item.key) + '</span><span class="value">' + escapeHtml(String(item.value == null ? '-' : item.value)) + '</span>';
+      root.appendChild(node);
+    });
+  }
+
+  function renderScenarioMetrics(scenarioMetrics) {
+    var root = el('detail-scenario-metrics');
+    var section = el('detail-scenario-section');
+    root.innerHTML = '';
+    var scenarioNames = Object.keys(scenarioMetrics || {}).sort();
+    if (!scenarioNames.length) {
+      if (section) section.style.display = 'none';
+      return;
+    }
+    if (section) section.style.display = '';
+    scenarioNames.slice(0, 8).forEach(function(name) {
+      var metrics = scenarioMetrics[name] || {};
+      var metricNames = Object.keys(metrics).sort().slice(0, 6);
+      var chips = metricNames.map(function(metricName) {
+        return '<span class="chip">' + escapeHtml(metricName) + ': ' + escapeHtml(String(metrics[metricName] == null ? '-' : metrics[metricName])) + '</span>';
+      }).join('');
+      var node = document.createElement('div');
+      node.className = 'detail-item';
+      node.innerHTML = '<div class="detail-head"><strong>' + escapeHtml(name) + '</strong><span class="chip">' + escapeHtml(String(metricNames.length)) + ' metrics shown</span></div>'
+        + '<div class="detail-meta">' + chips + '</div>';
+      root.appendChild(node);
+    });
+  }
+
+  function renderPlayground(payload, options) {
+    options = options || {};
+    var followBestMatch = !!options.followBestMatch;
+    state.playground.payload = payload || null;
+    var bestMatchNode = el('playground-best-match');
+    var metricNode = el('playground-metric-summary');
+    var chartNode = el('playground-chart');
+    var chartWrap = el('playground-chart-wrap');
+    var projectionWrap = el('playground-projections');
+    var projXY = el('playground-chart-proj-xy');
+    var projXZ = el('playground-chart-proj-xz');
+    var projYZ = el('playground-chart-proj-yz');
+    var quickViewNode = el('playground-quick-view');
+    var colorNode = el('playground-color-metric');
+    if (!payload) {
+      bestMatchNode.textContent = 'Load a result to compute the best match for your preferences.';
+      metricNode.textContent = 'This section mirrors the Streamlit explorer with multiple visualization modes.';
+      chartNode.className = 'placeholder-chart';
+      chartNode.textContent = 'Load a result to render the explorer chart.';
+      projectionWrap.style.display = 'none';
+      updatePlaygroundCustomUi(null);
+      return;
+    }
+
+    state.playground.vizType = payload.viz_type || state.playground.vizType;
+    state.playground.quickView = payload.quick_view || state.playground.quickView;
+    state.playground.customXMetric = (payload.metrics && payload.metrics.x_metric) || state.playground.customXMetric || '';
+    state.playground.customYMetric = (payload.metrics && payload.metrics.y_metric) || state.playground.customYMetric || '';
+    state.playground.customZMetric = (payload.metrics && payload.metrics.z_metric) || state.playground.customZMetric || '';
+    state.playground.colorMetric = (payload.metrics && payload.metrics.color_metric) || state.playground.colorMetric || 'None';
+
+    quickViewNode.innerHTML = '';
+    var quickOptions = state.playground.vizType === '2D Scatter'
+      ? ['Profit vs Risk', 'Risk-Adjusted', 'Profit vs Quality', 'Efficiency', 'Multi-Risk', 'Profit vs Recovery', 'Performance Ratios', 'Exposure Analysis', 'Custom...']
+      : state.playground.vizType === 'Radar Chart'
+        ? ['Top Comparison', 'Risk Profile']
+        : ['Risk-Reward Triangle', 'Recovery Performance', 'Trading Efficiency', 'Risk Spectrum', 'Stability Analysis', 'Trading Activity', 'Stress Test', 'Custom...'];
+    quickOptions.forEach(function(optionValue) {
+      var option = document.createElement('option');
+      option.value = optionValue;
+      option.textContent = optionValue;
+      if (optionValue === state.playground.quickView) option.selected = true;
+      quickViewNode.appendChild(option);
+    });
+
+    colorNode.innerHTML = '<option value="None">None</option>';
+    (payload.available_metrics || []).forEach(function(metric) {
+      var option = document.createElement('option');
+      option.value = metric;
+      option.textContent = metric;
+      if (metric === state.playground.colorMetric) option.selected = true;
+      colorNode.appendChild(option);
+    });
+    updatePlaygroundCustomUi(payload);
+
+    bestMatchNode.textContent = payload.best_match && payload.best_match.config_index != null
+      ? 'Best Match: Config #' + String(payload.best_match.config_index) + ' | Score: ' + String(payload.best_match.score == null ? '-' : payload.best_match.score) + ' | ' + String(payload.best_match.style || '')
+      : 'Could not determine a best match.';
+    if (followBestMatch && payload.best_match && payload.best_match.config_index != null && state.selectedConfigIndex !== payload.best_match.config_index) {
+      state.selectedConfigIndex = payload.best_match.config_index;
+      loadConfigDetail(payload.best_match.config_index, { skipPlaygroundRefresh: true }).catch(function() {});
+    }
+    metricNode.textContent = payload.viz_type === 'Radar Chart'
+      ? 'Radar Chart: ' + String(payload.quick_view || 'Top Comparison')
+      : String(payload.viz_type || '2D Scatter') + ': ' + String(((payload.metrics || {}).x_metric) || '-') + ' vs ' + String(((payload.metrics || {}).y_metric) || '-') + (((payload.metrics || {}).z_metric) ? (' vs ' + String(payload.metrics.z_metric)) : '') + (((payload.metrics || {}).color_metric) ? (' | Color: ' + String(payload.metrics.color_metric)) : '');
+
+    renderPreview(payload.visualizations ? payload.visualizations.preview : null);
+
+    chartNode.className = 'small-chart';
+    chartWrap.style.display = '';
+    projectionWrap.style.display = 'none';
+    updateProjectionLayoutUi();
+    if (payload.viz_type === '3D Projections') {
+      chartNode.className = 'placeholder-chart small-chart';
+      chartWrap.style.display = 'none';
+      projectionWrap.style.display = '';
+      ensureProjectionPanel(projXY, 'XY projection');
+      ensureProjectionPanel(projXZ, 'XZ projection');
+      ensureProjectionPanel(projYZ, 'YZ projection');
+      Plotly.newPlot(projXY, (((payload.visualizations || {}).projections || {}).xy || {}).traces || [], darkPlotLayout(((((payload.visualizations || {}).projections || {}).xy || {}).layout) || {}), plotlyConfig()).then(function() { fitChartToWrap(projXY); rememberChartHeight(projXY); bindPlotClick(projXY, function(configIndex) { loadConfigDetail(configIndex).catch(function() {}); }); });
+      Plotly.newPlot(projXZ, (((payload.visualizations || {}).projections || {}).xz || {}).traces || [], darkPlotLayout(((((payload.visualizations || {}).projections || {}).xz || {}).layout) || {}), plotlyConfig()).then(function() { fitChartToWrap(projXZ); rememberChartHeight(projXZ); bindPlotClick(projXZ, function(configIndex) { loadConfigDetail(configIndex).catch(function() {}); }); });
+      Plotly.newPlot(projYZ, (((payload.visualizations || {}).projections || {}).yz || {}).traces || [], darkPlotLayout(((((payload.visualizations || {}).projections || {}).yz || {}).layout) || {}), plotlyConfig()).then(function() { fitChartToWrap(projYZ); rememberChartHeight(projYZ); bindPlotClick(projYZ, function(configIndex) { loadConfigDetail(configIndex).catch(function() {}); }); });
+      return;
+    }
+    var vizPayload = payload.viz_type === '3D Scatter'
+      ? (payload.visualizations || {}).scatter_3d
+      : payload.viz_type === 'Radar Chart'
+        ? (payload.visualizations || {}).radar
+        : (payload.visualizations || {}).scatter_2d;
+    Plotly.newPlot(chartNode, (vizPayload && vizPayload.traces) || [], darkPlotLayout((vizPayload && vizPayload.layout) || {}), plotlyConfig()).then(function() {
+      rememberChartHeight(chartNode);
+      bindPlotClick(chartNode, function(configIndex) { loadConfigDetail(configIndex).catch(function() {}); });
+    });
+  }
+
+  function loadPlayground(options) {
+    options = options || {};
+    var followBestMatch = !!options.followBestMatch;
+    var requestSeq = state.playgroundRequestSeq + 1;
+    state.playgroundRequestSeq = requestSeq;
+    if (!state.resultPath) return Promise.resolve(null);
+    return apiFetch('/playground', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        result_path: state.resultPath,
+        load_strategy: state.loadStrategy,
+        max_configs: state.maxConfigs,
+        all_results_loaded: state.allResultsLoaded,
+        perf_weight: state.playground.perfWeight,
+        risk_weight: state.playground.riskWeight,
+        robust_weight: state.playground.robustWeight,
+        show_all: state.playground.showAll,
+        use_weighted: state.playground.useWeighted,
+        use_btc: state.playground.useBtc,
+        preview_use_weighted: state.previewUseWeighted,
+        preview_show_all: state.previewShowAll,
+        selected_config_index: followBestMatch ? null : state.selectedConfigIndex,
+        view_range: state.allResultsLoaded ? state.pendingViewRange || state.viewRange : null,
+        viz_type: state.playground.vizType,
+        quick_view: state.playground.quickView,
+        color_metric: state.playground.colorMetric,
+        custom_x_metric: state.playground.customXMetric,
+        custom_y_metric: state.playground.customYMetric,
+        custom_z_metric: state.playground.customZMetric
+      })
+    }).then(function(data) {
+      if (requestSeq !== state.playgroundRequestSeq) return data;
+      renderPlayground(data, { followBestMatch: followBestMatch });
+      if (!followBestMatch && data && data.best_match && data.best_match.config_index != null && state.selectedConfigIndex == null) {
+        return loadConfigDetail(data.best_match.config_index).then(function() { return data; });
+      }
+      return data;
+    }).catch(function(err) {
+      pushMessage('error', 'Playground load failed: ' + err.message);
+      throw err;
+    });
+  }
+
+  function renderDeepParameters(payload) {
+    state.deepParameters = payload || null;
+    var summaryNode = el('deep-parameters-summary');
+    var heatmapNode = el('deep-parameters-heatmap');
+    var boundsChartNode = el('deep-parameters-bounds-chart');
+    if (!payload) {
+      summaryNode.textContent = 'Load a result to inspect parameter influence and optimize-bound pressure.';
+      heatmapNode.className = 'placeholder-chart';
+      heatmapNode.textContent = 'Load a result to render the parameter influence heatmap.';
+      boundsChartNode.className = 'placeholder-chart';
+      boundsChartNode.textContent = 'Load a result to render the near-bounds chart.';
+      return;
+    }
+    summaryNode.textContent = payload.near_bounds_count
+      ? String(payload.near_bounds_count) + ' parameters are near bounds. Heatmap shows parameter-vs-metric correlation for the near-bound parameters only.'
+      : 'No parameters near bounds detected. Heatmap still shows the most influential available parameters.';
+
+    var effectiveTopN = parseInt(payload.top_n || state.deepParametersTopN || 20, 10) || 20;
+    var nearCount = parseInt(payload.near_bounds_count || 0, 10) || 0;
+    var sliderNode = el('deep-parameters-top-n');
+    sliderNode.max = String(Math.max(1, Math.min(40, nearCount || 40)));
+    sliderNode.value = String(Math.min(effectiveTopN, parseInt(sliderNode.max, 10) || effectiveTopN));
+    state.deepParametersTopN = parseInt(sliderNode.value || '20', 10) || 20;
+    el('deep-parameters-top-n-value').textContent = sliderNode.value;
+    updateRangeFill(sliderNode);
+
+    if (payload.heatmap && payload.heatmap.traces && payload.heatmap.traces.length) {
+      heatmapNode.className = 'deep-plotly-chart';
+      renderStableDeepPlot(heatmapNode, payload.heatmap.traces, payload.heatmap.layout || {});
+    } else {
+      heatmapNode.className = 'placeholder-chart deep-plotly-chart';
+      heatmapNode.textContent = (payload.heatmap && payload.heatmap.layout && payload.heatmap.layout.title) || 'No heatmap data available.';
+    }
+
+    if (payload.bounds_chart && payload.bounds_chart.traces && payload.bounds_chart.traces.length) {
+      boundsChartNode.className = 'deep-plotly-chart';
+      renderStableDeepPlot(boundsChartNode, payload.bounds_chart.traces, payload.bounds_chart.layout || {});
+    } else {
+      boundsChartNode.className = 'placeholder-chart deep-plotly-chart';
+      boundsChartNode.textContent = (payload.bounds_chart && payload.bounds_chart.layout && payload.bounds_chart.layout.title) || 'No bounds-chart data available.';
+    }
+
+  }
+
+  function loadDeepParameters() {
+    if (!state.resultPath) {
+      renderDeepParameters(null);
+      return Promise.resolve(null);
+    }
+    return apiFetch('/deep-intelligence/parameters', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        result_path: state.resultPath,
+        load_strategy: state.loadStrategy,
+        max_configs: state.maxConfigs,
+        all_results_loaded: state.allResultsLoaded,
+        top_n: state.deepParametersTopN
+      })
+    }).then(function(data) {
+      renderDeepParameters(data);
+      return data;
+    }).catch(function(err) {
+      pushMessage('error', 'Deep Intelligence parameters load failed: ' + err.message);
+      throw err;
+    });
+  }
+
+  function renderDeepScenarios(payload) {
+    state.deepScenarios = payload || null;
+    var summaryNode = el('deep-scenarios-summary');
+    var selectNode = el('deep-scenarios-metric');
+    var chartNode = el('deep-scenarios-chart');
+    var statsNode = el('deep-scenarios-stats');
+    if (!payload) {
+      summaryNode.textContent = 'Compare Pareto configs across loaded backtest scenarios (aggregated over visible configs).';
+      selectNode.innerHTML = '<option value="">No metrics loaded</option>';
+      chartNode.className = 'placeholder-chart deep-plotly-chart';
+      chartNode.textContent = '';
+      statsNode.innerHTML = '<div class="placeholder-panel">Scenario statistics will appear here.</div>';
+      return;
+    }
+
+    selectNode.innerHTML = '';
+    (payload.available_metrics || []).forEach(function(metric) {
+      var option = document.createElement('option');
+      option.value = metric;
+      option.textContent = metric;
+      if (metric === payload.selected_metric) option.selected = true;
+      selectNode.appendChild(option);
+    });
+    state.deepScenariosMetric = payload.selected_metric || '';
+
+    if (!payload.has_scenarios) {
+      summaryNode.textContent = 'No scenario data is available for this result.';
+      chartNode.className = 'placeholder-chart deep-plotly-chart';
+      chartNode.textContent = 'No scenario data available.';
+      statsNode.innerHTML = '<div class="placeholder-panel">No scenario statistics available.</div>';
+      return;
+    }
+
+    summaryNode.textContent = String((payload.scenario_labels || []).length) + ' scenarios loaded for metric ' + String(payload.selected_metric || '-') + ' (aggregated over visible configs).';
+    if (payload.chart && payload.chart.traces && payload.chart.traces.length) {
+      chartNode.className = 'deep-plotly-chart';
+      chartNode.textContent = '';
+      Plotly.newPlot(chartNode, payload.chart.traces, darkPlotLayout(payload.chart.layout || {}), { responsive: true, displaylogo: false }).then(function() {
+        scheduleDeepPlotResize();
+        alignScenarioStatsColumns();
+        window.setTimeout(alignScenarioStatsColumns, 80);
+      });
+    } else {
+      chartNode.className = 'placeholder-chart deep-plotly-chart';
+      chartNode.textContent = (payload.chart && payload.chart.layout && payload.chart.layout.title) || 'No scenario chart data available.';
+    }
+
+    statsNode.innerHTML = '';
+    if (!payload.statistics || !payload.statistics.length) {
+      statsNode.innerHTML = '<div class="placeholder-panel">No scenario statistics available.</div>';
+      return;
+    }
+    var statsByScenario = {};
+    (payload.statistics || []).forEach(function(item) {
+      var key = String((item && item.scenario) || '').toLowerCase();
+      if (!key) return;
+      statsByScenario[key] = item;
+    });
+    var scenarioOrder = (payload.scenario_labels || []).map(function(label) {
+      return String(label || '');
+    }).filter(function(label) {
+      return !!label;
+    });
+    if (!scenarioOrder.length) {
+      scenarioOrder = Object.keys(statsByScenario);
+    }
+
+    var columnsWrap = document.createElement('div');
+    columnsWrap.className = 'scenario-stats-columns';
+    columnsWrap.style.setProperty('--scenario-columns', String(Math.max(1, scenarioOrder.length)));
+    scenarioOrder.forEach(function(scenarioLabel) {
+      var lookupKey = String(scenarioLabel || '').toLowerCase();
+      var item = statsByScenario[lookupKey] || null;
+      if (!item) return;
+
+      var column = document.createElement('div');
+      column.className = 'scenario-stats-column';
+
+      var title = document.createElement('div');
+      title.className = 'scenario-stats-column-title';
+      title.textContent = String(scenarioLabel);
+      column.appendChild(title);
+
+      ['mean', 'std', 'min', 'max'].forEach(function(metricKey) {
+        var node = document.createElement('div');
+        node.className = 'mini-metric';
+        node.innerHTML = '<div class="label">' + escapeHtml(metricKey.toUpperCase()) + '</div>'
+          + '<div class="value">' + escapeHtml(String(item[metricKey] == null ? '-' : item[metricKey])) + '</div>';
+        column.appendChild(node);
+      });
+
+      columnsWrap.appendChild(column);
+    });
+
+    if (!columnsWrap.childElementCount) {
+      statsNode.innerHTML = '<div class="placeholder-panel">No scenario statistics available.</div>';
+      return;
+    }
+    statsNode.appendChild(columnsWrap);
+    alignScenarioStatsColumns();
+  }
+
+  function loadDeepScenarios() {
+    if (!state.resultPath) {
+      renderDeepScenarios(null);
+      return Promise.resolve(null);
+    }
+    return apiFetch('/deep-intelligence/scenarios', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        result_path: state.resultPath,
+        load_strategy: state.loadStrategy,
+        max_configs: state.maxConfigs,
+        all_results_loaded: state.allResultsLoaded,
+        metric: state.deepScenariosMetric
+      })
+    }).then(function(data) {
+      renderDeepScenarios(data);
+      return data;
+    }).catch(function(err) {
+      pushMessage('error', 'Deep Intelligence scenarios load failed: ' + err.message);
+      throw err;
+    });
+  }
+
+  function renderDeepEvolution(payload) {
+    state.deepEvolution = payload || null;
+    var summaryNode = el('deep-evolution-summary');
+    var metricNode = el('deep-evolution-metric');
+    var chartNode = el('deep-evolution-chart');
+    if (!payload) {
+      summaryNode.textContent = 'Track how a selected metric evolved over optimize iterations.';
+      metricNode.innerHTML = '<option value="">No metrics loaded</option>';
+      chartNode.className = 'placeholder-chart deep-plotly-chart';
+      chartNode.textContent = '';
+      return;
+    }
+
+    metricNode.innerHTML = '';
+    (payload.available_metrics || []).forEach(function(metric) {
+      var option = document.createElement('option');
+      option.value = metric;
+      option.textContent = metric;
+      if (metric === payload.selected_metric) option.selected = true;
+      metricNode.appendChild(option);
+    });
+    state.deepEvolutionMetric = payload.selected_metric || '';
+    state.deepEvolutionShowAll = !!payload.show_all;
+    state.deepEvolutionHideOutliers = payload.hide_outliers !== false;
+    state.deepEvolutionUseWeighted = !!payload.use_weighted;
+    state.deepEvolutionUseBtc = !!payload.use_btc;
+    state.deepEvolutionWindowPercent = payload.window_percent || state.deepEvolutionWindowPercent || 5;
+    syncFormState();
+
+    summaryNode.textContent = 'Tracking ' + String(payload.selected_metric || '-') + ' across ' + String(payload.displayed_configs || 0) + ' ' + (payload.show_all ? 'visible configs' : 'visible pareto configs') + ' with a rolling window of ' + String(payload.window || 0) + ' iterations.';
+    if (payload.chart && payload.chart.traces && payload.chart.traces.length) {
+      chartNode.className = 'deep-plotly-chart';
+      chartNode.textContent = '';
+      Plotly.newPlot(chartNode, payload.chart.traces, darkPlotLayout(payload.chart.layout || {}), { responsive: true, displaylogo: false }).then(function() {
+        scheduleDeepPlotResize();
+        chartNode.on('plotly_click', function(eventData) {
+          var point = eventData && eventData.points && eventData.points[0];
+          var custom = point && point.customdata ? point.customdata : null;
+          var configIndex = custom && Array.isArray(custom) ? custom[0] : null;
+          if (configIndex == null && point && point.x != null) configIndex = point.x;
+          var parsed = parseInt(configIndex, 10);
+          if (!Number.isFinite(parsed)) return;
+          loadConfigDetail(parsed).catch(function() {});
+        });
+      });
+    } else {
+      chartNode.className = 'placeholder-chart deep-plotly-chart';
+      chartNode.textContent = (payload.chart && payload.chart.layout && payload.chart.layout.title) || 'No evolution chart data available.';
+    }
+  }
+
+  function loadDeepEvolution() {
+    if (!state.resultPath) {
+      renderDeepEvolution(null);
+      return Promise.resolve(null);
+    }
+    return apiFetch('/deep-intelligence/evolution', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        result_path: state.resultPath,
+        load_strategy: state.loadStrategy,
+        max_configs: state.maxConfigs,
+        all_results_loaded: state.allResultsLoaded,
+        metric: state.deepEvolutionMetric,
+        show_all: state.deepEvolutionShowAll,
+        hide_outliers: state.deepEvolutionHideOutliers,
+        use_weighted: state.deepEvolutionUseWeighted,
+        use_btc: state.deepEvolutionUseBtc,
+        window_percent: state.deepEvolutionWindowPercent,
+        view_range: state.allResultsLoaded ? state.viewRange : null,
+      })
+    }).then(function(data) {
+      renderDeepEvolution(data);
+      return data;
+    }).catch(function(err) {
+      pushMessage('error', 'Deep Intelligence evolution load failed: ' + err.message);
+      throw err;
+    });
+  }
+
+  function renderDeepCorrelations(payload) {
+    state.deepCorrelations = payload || null;
+    var summaryNode = el('deep-correlations-summary');
+    var chartNode = el('deep-correlations-chart');
+    if (!payload) {
+      summaryNode.textContent = 'Compare multiple configs side-by-side across normalized risk dimensions.';
+      chartNode.className = 'placeholder-chart deep-plotly-chart';
+      chartNode.textContent = 'Load a result to render the risk-profile radar.';
+      return;
+    }
+    state.deepCorrelationsStrategy = payload.strategy || state.deepCorrelationsStrategy;
+    state.deepCorrelationsNumConfigs = payload.num_configs || state.deepCorrelationsNumConfigs;
+    state.deepCorrelationsUseWeighted = !!payload.use_weighted;
+    state.deepCorrelationsUseBtc = !!payload.use_btc;
+    syncFormState();
+    var summaryText = String((payload.selected_configs || []).length) + ' configs selected via ' + String(payload.strategy || '-') + '.';
+    if (payload.strategy === 'Diverse Styles') {
+      summaryText += ' ' + String(payload.available_style_count || 0) + ' style categories available.';
+    }
+    summaryNode.textContent = summaryText;
+    if (payload.chart && payload.chart.traces && payload.chart.traces.length) {
+      chartNode.className = 'deep-plotly-chart';
+      chartNode.textContent = '';
+      Plotly.newPlot(chartNode, payload.chart.traces, darkPlotLayout(payload.chart.layout || {}), { responsive: true, displaylogo: false }).then(function() {
+        scheduleDeepPlotResize();
+        chartNode.on('plotly_click', function(eventData) {
+          var point = eventData && eventData.points && eventData.points[0];
+          var custom = point && point.customdata ? point.customdata : null;
+          var configIndex = custom && Array.isArray(custom) ? custom[0] : null;
+          var parsed = parseInt(configIndex, 10);
+          if (!Number.isFinite(parsed)) return;
+          loadConfigDetail(parsed).catch(function() {});
+        });
+      });
+    } else {
+      chartNode.className = 'placeholder-chart deep-plotly-chart';
+      chartNode.textContent = (payload.chart && payload.chart.layout && payload.chart.layout.title) || 'No radar data available.';
+    }
+  }
+
+  function loadDeepCorrelations() {
+    if (!state.resultPath) {
+      renderDeepCorrelations(null);
+      return Promise.resolve(null);
+    }
+    return apiFetch('/deep-intelligence/correlations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        result_path: state.resultPath,
+        load_strategy: state.loadStrategy,
+        max_configs: state.maxConfigs,
+        all_results_loaded: state.allResultsLoaded,
+        strategy: state.deepCorrelationsStrategy,
+        num_configs: state.deepCorrelationsNumConfigs,
+        use_weighted: state.deepCorrelationsUseWeighted,
+        use_btc: state.deepCorrelationsUseBtc
+      })
+    }).then(function(data) {
+      renderDeepCorrelations(data);
+      return data;
+    }).catch(function(err) {
+      pushMessage('error', 'Deep Intelligence correlations load failed: ' + err.message);
+      throw err;
+    });
+  }
+
+  function refreshDeepIntelligence() {
+    if (state.deepTab === 'parameters') {
+      return loadDeepParameters();
+    }
+    if (state.deepTab === 'scenarios') {
+      return loadDeepScenarios();
+    }
+    if (state.deepTab === 'evolution') {
+      return loadDeepEvolution();
+    }
+    if (state.deepTab === 'correlations') {
+      return loadDeepCorrelations();
+    }
+    return Promise.resolve(null);
+  }
+
+  function renderDetail(detail) {
+    state.selectedDetail = detail || null;
+    if (!detail) {
+      el('detail-title').textContent = 'No config selected';
+      renderMiniMetricGrid('detail-top-metrics', []);
+      renderMiniMetricGrid('detail-risk-profile', []);
+      el('detail-style-panel').innerHTML = '<div class="placeholder-panel" style="min-height:120px;">Trading style details will appear here.</div>';
+      el('detail-robustness-panel').innerHTML = '<div class="placeholder-panel" style="min-height:80px;">Robustness details will appear here.</div>';
+      el('detail-all-metrics').innerHTML = '<div class="placeholder-panel" style="min-height:120px;">All suite metrics will be listed here for the selected config.</div>';
+      renderScenarioMetrics({});
+      window.PBGuiJsonPanel.setContent('detail-full-config', 'No config selected.', { expanded: false });
+      return;
+    }
+
+    el('detail-title').textContent = '#' + String(detail.config_index);
+
+    var topMetrics = (detail.top_metrics || []).map(function(item) {
+      return { name: item.name, value: item.value };
+    });
+    renderMiniMetricGrid('detail-top-metrics', topMetrics);
+
+    renderMiniMetricGrid('detail-risk-profile', Object.keys(detail.risk_profile || {}).map(function(key) {
+      return { name: key, value: detail.risk_profile[key] };
+    }));
+
+    var positionsPerDay = detail.all_metrics && detail.all_metrics.find ? detail.all_metrics.find(function(item) { return item.name === 'positions_held_per_day'; }) : null;
+    var holdHours = detail.all_metrics && detail.all_metrics.find ? detail.all_metrics.find(function(item) { return item.name === 'position_held_hours_mean'; }) : null;
+    el('detail-style-panel').innerHTML = ''
+      + '<div class="detail-item"><div class="detail-head"><strong>' + escapeHtml(detail.style || '-') + '</strong><span class="chip">Style</span></div></div>'
+      + '<div class="detail-item"><div class="detail-head"><strong>Positions/Day</strong><span class="chip">' + escapeHtml(String(positionsPerDay && positionsPerDay.value != null ? positionsPerDay.value : '-')) + '</span></div></div>'
+      + '<div class="detail-item"><div class="detail-head"><strong>Avg Hold Hours</strong><span class="chip">' + escapeHtml(String(holdHours && holdHours.value != null ? holdHours.value : '-')) + '</span></div></div>'
+      + '<div class="detail-item"><div class="detail-head"><strong>Explorer Score</strong><span class="chip">' + escapeHtml(String(detail.explorer_score == null ? '-' : detail.explorer_score)) + '</span></div></div>';
+
+    el('detail-robustness-panel').innerHTML = ''
+      + '<div class="stats-table">'
+      + '<div class="stats-row"><span class="stats-key">Robustness Score</span><strong>' + escapeHtml(String(detail.robustness == null ? '-' : detail.robustness)) + '</strong></div>'
+      + '</div>';
+
+    renderDetailList('detail-all-metrics', detail.all_metrics || [], 'No suite metrics available.', 24);
+    renderScenarioMetrics(detail.has_scenarios ? (detail.scenario_metrics || {}) : {});
+
+    window.PBGuiJsonPanel.setContent('detail-full-config', detail.full_config ? JSON.stringify(detail.full_config, null, 2) : 'Full config unavailable.', { expanded: false });
+  }
+
+  function renderSession(data) {
+    state.session = data || null;
+    var result = data && data.result ? data.result : null;
+    var valid = !!(data && data.result_valid);
+    var load = data && data.load ? data.load : null;
+
+    if (data && data.defaults) {
+      state.loadStrategy = Array.isArray(data.defaults.load_strategy) ? data.defaults.load_strategy.slice() : state.loadStrategy;
+      state.maxConfigs = data.defaults.max_configs || state.maxConfigs;
+      state.allResultsLoaded = !!data.defaults.all_results_loaded;
+      if (Object.prototype.hasOwnProperty.call(data.defaults, 'preview_show_all')) {
+        state.previewShowAll = !!data.defaults.preview_show_all;
+      }
+    }
+    if (load) state.loadPayload = load;
+    syncViewRangeFromLoad(load);
+
+    var totalResults = load && load.view_range && load.view_range.max != null
+      ? load.view_range.max
+      : load && load.load_stats && load.load_stats.selected_configs != null
+        ? load.load_stats.selected_configs
+        : load && load.summary
+          ? load.summary.visible_configs
+          : null;
+    var visibleResults = load && load.summary && load.summary.visible_configs != null
+      ? load.summary.visible_configs
+      : load && load.view_range && load.view_range.end != null && load.view_range.start != null
+        ? Math.max(0, (load.view_range.end || 0) - (load.view_range.start || 0))
+        : null;
+    var totalParetos = load && load.summary
+      ? load.summary.pareto_configs
+      : load && load.load_stats && load.load_stats.pareto_configs != null
+        ? load.load_stats.pareto_configs
+        : null;
+    var visibleEnd = load && load.view_range && load.view_range.end != null ? load.view_range.end : null;
+
+    el('metric-result').textContent = result ? result.name : '-';
+    el('metric-paretos').textContent = totalParetos != null ? String(totalParetos) : (result ? String(result.pareto_count) : '-');
+    el('metric-all-results').textContent = visibleResults != null && totalResults != null && visibleResults !== totalResults
+      ? (String(visibleResults) + ' / ' + String(totalResults))
+      : (totalResults != null ? String(totalResults) : (result ? (result.has_all_results ? 'yes' : 'no') : '-'));
+
+    el('result-chip').textContent = result ? result.name : 'No result selected';
+    el('mode-chip').textContent = valid
+      ? ((load && load.mode === 'full')
+          ? ('Full mode loaded' + (load.view_range && load.view_range.end != null && load.view_range.max != null ? ' (' + String(load.view_range.end) + '/' + String(load.view_range.max) + ' visible)' : ''))
+          : 'Fast mode loaded')
+      : 'Missing result path';
+    el('mode-chip').className = 'status-chip ' + (valid ? 'good' : 'warn');
+
+    if (!valid) {
+      setFullLoadStatus('error', 'No valid result path is currently loaded.', 0);
+    } else if (state.fullLoadPending) {
+      setFullLoadStatus('loading', 'Loading full result set...', Math.max(0, state.fullLoadProgressTarget || 0));
+    } else if (load && load.mode === 'full') {
+      setFullLoadStatus(
+        'loaded',
+        'Full result loaded: ' + String(totalResults == null ? '-' : totalResults) + ' configs, ' + String(totalParetos == null ? '-' : totalParetos) + ' paretos' + (visibleEnd != null && totalResults != null ? ' (' + String(visibleEnd) + '/' + String(totalResults) + ' visible in the current bootstrapped window).' : '.'),
+        100
+      );
+    } else {
+      setFullLoadStatus('idle', 'Currently using fast pareto-only mode. Use `Load all_results` to load the complete result set.', 0);
+    }
+
+    el('result-meta-json').textContent = JSON.stringify(result || { result_path: state.resultPath || '' }, null, 2);
+    syncFormState();
+    renderDisplayRange(load);
+    renderLoadSummary(load, result);
+    setMessages(data && data.messages ? data.messages : []);
+  }
+
+  function applyDeepTabUi(tab, allowRefresh) {
+    state.deepTab = tab;
+    Array.prototype.forEach.call(document.querySelectorAll('.deep-tab-btn[data-deep-tab]'), function(node) {
+      node.classList.toggle('active', node.getAttribute('data-deep-tab') === tab);
+    });
+    var isParameters = tab === 'parameters';
+    var isScenarios = tab === 'scenarios';
+    var isEvolution = tab === 'evolution';
+    var isCorrelations = tab === 'correlations';
+    if (state.stage === 'deep_intelligence') {
+      var showConfigDetail = isEvolution;
+      el('selected-config-detail').style.display = showConfigDetail ? 'block' : 'none';
+      el('selected-config-section').style.display = showConfigDetail ? 'grid' : 'none';
+    }
+    el('deep-tab-parameters-panel').style.display = isParameters ? '' : 'none';
+    el('deep-tab-scenarios-panel').style.display = isScenarios ? '' : 'none';
+    el('deep-tab-evolution-panel').style.display = isEvolution ? '' : 'none';
+    el('deep-tab-correlations-panel').style.display = isCorrelations ? '' : 'none';
+    el('deep-tab-other-panel').style.display = (!isParameters && !isScenarios && !isEvolution && !isCorrelations) ? '' : 'none';
+    el('deep-tab-description').textContent = isParameters
+      ? 'Surface parameter-bound pressure from the original optimize search space.'
+      : isScenarios
+        ? 'Compare Pareto configs across backtest scenarios and inspect per-scenario distribution statistics.'
+        : isEvolution
+          ? 'Track metric progression over optimization iterations and click timeline points to inspect configs.'
+          : isCorrelations
+            ? 'Compare selected configs across risk-profile dimensions using the migrated radar workflow.'
+        : 'Deep Intelligence tab shell for "' + tab + '".';
+    el('deep-tab-placeholder').textContent = tab.charAt(0).toUpperCase() + tab.slice(1) + ' tab placeholder';
+    if (allowRefresh && (isParameters || isScenarios || isEvolution || isCorrelations) && state.resultPath) {
+      refreshDeepIntelligence().catch(function() {});
+    }
+    if (isParameters || isScenarios || isEvolution || isCorrelations) {
+      resizePlotlyNodes(['deep-parameters-heatmap', 'deep-parameters-bounds-chart', 'deep-scenarios-chart', 'deep-evolution-chart', 'deep-correlations-chart']);
+      window.requestAnimationFrame(function() {
+        scheduleDeepPlotResize();
+      });
+    }
+    updateLocationState();
+  }
+
+  function loadCommandCenterData(options) {
+    options = options || {};
+    var skipPlaygroundRefresh = !!options.skipPlaygroundRefresh;
+    if (!state.resultPath) return Promise.resolve(null);
+    return apiFetch('/command-center', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        result_path: state.resultPath,
+        load_strategy: state.loadStrategy,
+        max_configs: state.maxConfigs,
+        all_results_loaded: state.allResultsLoaded,
+        view_range: state.allResultsLoaded ? state.pendingViewRange || state.viewRange : null
+      })
+    }).then(function(data) {
+      state.commandCenter = data || null;
+      renderChampions(data);
+      renderInsights(data);
+      var champions = data && Array.isArray(data.champions) ? data.champions : [];
+      if (champions.length && state.selectedConfigIndex == null) {
+        if (state.fullLoadPending) updateFullLoadPhase('command_center_detail');
+        return loadConfigDetail(champions[0].config_index, { skipPlaygroundRefresh: skipPlaygroundRefresh }).then(function() { return data; });
+      }
+      if (champions.length && state.selectedConfigIndex != null) {
+        if (state.fullLoadPending) updateFullLoadPhase('command_center_detail');
+        return loadConfigDetail(state.selectedConfigIndex, { skipPlaygroundRefresh: skipPlaygroundRefresh }).then(function() { return data; });
+      }
+      state.selectedConfigIndex = null;
+      renderDetail(state.selectedDetail);
+      return data;
+    }).catch(function(err) {
+      pushMessage('error', 'Command Center load failed: ' + err.message);
+      throw err;
+    });
+  }
+
+  function loadConfigDetail(configIndex, options) {
+    options = options || {};
+    var skipPlaygroundRefresh = !!options.skipPlaygroundRefresh;
+    var requestSeq = state.detailRequestSeq + 1;
+    state.detailRequestSeq = requestSeq;
+    if (!state.resultPath) return Promise.resolve(null);
+    state.selectedConfigIndex = configIndex;
+    return apiFetch('/config-detail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        result_path: state.resultPath,
+        config_index: configIndex,
+        load_strategy: state.loadStrategy,
+        max_configs: state.maxConfigs,
+        all_results_loaded: state.allResultsLoaded,
+        view_range: state.allResultsLoaded ? state.pendingViewRange || state.viewRange : null,
+        perf_weight: state.playground.perfWeight,
+        risk_weight: state.playground.riskWeight,
+        robust_weight: state.playground.robustWeight
+      })
+    }).then(function(data) {
+      if (requestSeq !== state.detailRequestSeq) return data;
+      renderDetail(data && data.detail ? data.detail : null);
+      renderChampions(state.commandCenter);
+      if (skipPlaygroundRefresh) return data;
+      return loadPlayground().then(function() { return data; });
+    }).catch(function(err) {
+      pushMessage('error', 'Config detail load failed: ' + err.message);
+      throw err;
+    });
+  }
+
+  function updateLocationState() {
+    var url = new URL(window.location.href);
+    if (state.resultPath) url.searchParams.set('result_path', state.resultPath);
+    else url.searchParams.delete('result_path');
+    url.searchParams.set('stage', state.stage);
+    url.searchParams.set('deep_tab', state.deepTab);
+    history.replaceState(null, '', url.toString());
+  }
+
+  window.selectStage = function(stage) {
+    state.stage = stage;
+    Array.prototype.forEach.call(document.querySelectorAll('.sb-section[data-stage], .stage-btn[data-stage-btn]'), function(node) {
+      var key = node.getAttribute('data-stage') || node.getAttribute('data-stage-btn');
+      node.classList.toggle('active', key === stage);
+    });
+    ['command_center', 'pareto_playground', 'deep_intelligence', 'settings'].forEach(function(key) {
+      el('stage-' + key.replace(/_/g, '-')).style.display = key === stage ? '' : 'none';
+    });
+    var showSharedDetail = stage === 'command_center' || stage === 'pareto_playground';
+    if (stage !== 'deep_intelligence') {
+      el('selected-config-detail').style.display = showSharedDetail ? 'block' : 'none';
+      el('selected-config-section').style.display = showSharedDetail ? 'grid' : 'none';
+    }
+    var desc = {
+      command_center: 'Phase 1 shell: this area will host the fully migrated stage content while the legacy Streamlit explorer remains available for comparison.',
+      pareto_playground: 'The Explorer will replace the Streamlit preference sliders and chart selection flows with native FastAPI + JS interactions.',
+      deep_intelligence: 'Deep Intelligence keeps its own tabset and will migrate the four existing analysis tabs one by one.',
+      settings: 'Settings centralizes result loading, defaults, and full-load status so the command workflow stays focused on analysis.'
+    };
+    if (el('stage-description')) el('stage-description').textContent = desc[stage] || '';
+    if (stage === 'pareto_playground') {
+      window.requestAnimationFrame(function() {
+        resizePlaygroundCharts();
+        window.setTimeout(resizePlaygroundCharts, 80);
+      });
+    } else if (stage === 'deep_intelligence') {
+      applyDeepTabUi(state.deepTab, false);
+      if (state.resultPath && state.deepIntelligenceNeedsVisibleRender) {
+        refreshDeepIntelligence().then(function() {
+          state.deepIntelligenceNeedsVisibleRender = false;
+        }).catch(function() {});
+      }
+    }
+    updateLocationState();
+  };
+
+  window.selectDeepTab = function(tab) {
+    applyDeepTabUi(tab, true);
+  };
+
+  function openGuide() {
+    if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+    window.PBGuiSharedHelp.open('pareto explorer', { token: TOKEN });
+  }
+
+  function runSelectedConfigBacktest() {
+    var detail = state.selectedDetail;
+    if (!detail || !detail.full_config) {
+      pushMessage('error', 'No selected config with full configuration is available yet.');
+      return;
+    }
+    openBacktestDraft(detail.full_config, suggestDraftName(detail.full_config)).catch(function(err) {
+      pushMessage('error', 'Run Backtest failed: ' + err.message);
+    });
+  }
+
+  function seedSelectedConfig() {
+    var detail = state.selectedDetail;
+    if (!detail || !detail.full_config) {
+      pushMessage('error', 'No selected config with full configuration is available yet.');
+      return;
+    }
+    openOptimizeSeedDraft(detail.full_config, suggestDraftName(detail.full_config)).catch(function(err) {
+      pushMessage('error', 'Seed Selected failed: ' + err.message);
+    });
+  }
+
+  function seedWholeResult() {
+    var resultPath = String(state.resultPath || '').trim();
+    if (!resultPath) {
+      pushMessage('error', 'No result path is available yet.');
+      return;
+    }
+    apiFetch('/config-detail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        result_path: resultPath,
+        config_index: 0,
+        load_strategy: state.loadStrategy,
+        max_configs: state.maxConfigs,
+        all_results_loaded: state.allResultsLoaded
+      })
+    }).then(function(data) {
+      var detail = data && data.detail ? data.detail : null;
+      if (!detail || !detail.full_config) {
+        throw new Error('No full result config is available yet.');
+      }
+      var config = extractConfigSections(detail.full_config);
+      config.pbgui = config.pbgui && typeof config.pbgui === 'object' ? config.pbgui : {};
+      config.optimize = config.optimize && typeof config.optimize === 'object' ? config.optimize : {};
+      config.pbgui.optimize_seed_mode = 'path';
+      config.pbgui.optimize_seed_path = optimizeSeedPathFromResult(resultPath);
+      config.pbgui.starting_config = false;
+      if (Object.prototype.hasOwnProperty.call(config.optimize, 'starting_config')) delete config.optimize.starting_config;
+      return openOptimizeSeedDraft(config, suggestDraftName(detail.full_config));
+    }).catch(function(err) {
+      pushMessage('error', 'Seed Whole Result failed: ' + err.message);
+    });
+  }
+
+  function exportDataFrame() {
+    if (!state.resultPath) {
+      pushMessage('error', 'No result path is available yet.');
+      return;
+    }
+    fetch(API_BASE + '/export.csv', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + TOKEN,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        result_path: state.resultPath,
+        load_strategy: state.loadStrategy,
+        max_configs: state.maxConfigs,
+        all_results_loaded: state.allResultsLoaded
+      })
+    }).then(function(res) {
+      if (!res.ok) {
+        return res.text().then(function(text) {
+          throw new Error(text || ('HTTP ' + res.status));
+        });
+      }
+      return downloadResponseBlob(res, 'pareto_analysis.csv');
+    }).catch(function(err) {
+      pushMessage('error', 'Export DataFrame failed: ' + err.message);
+    });
+  }
+
+  function openParetoDash() {
+    if (!state.resultPath) {
+      pushMessage('error', 'No result path is available yet.');
+      return;
+    }
+    fetch(window.location.origin + '/api/optimize-v7/results/pareto-dash', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + TOKEN,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ path: state.resultPath })
+    }).then(function(res) {
+      if (!res.ok) {
+        return res.text().then(function(text) {
+          throw new Error(text || ('HTTP ' + res.status));
+        });
+      }
+      return res.json();
+    }).then(function(data) {
+      if (!data || !data.url || !data.session_id) {
+        throw new Error('Pareto Dash launch returned no URL.');
+      }
+      openOverlayUrl('PB7 Pareto Dash - ' + ((state.session && state.session.result && state.session.result.name) || 'result'), data.url, data.session_id, 'pareto-dash');
+    }).catch(function(err) {
+      pushMessage('error', 'PB7 Pareto Dash failed: ' + err.message);
+    });
+  }
+
+  function open3dPlot() {
+    if (!state.resultPath) {
+      pushMessage('error', 'No result path is available yet.');
+      return;
+    }
+    fetch(window.location.origin + '/api/optimize-v7/results/3d-plot', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + TOKEN,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ path: state.resultPath })
+    }).then(function(res) {
+      if (!res.ok) {
+        return res.text().then(function(text) {
+          throw new Error(text || ('HTTP ' + res.status));
+        });
+      }
+      return res.json();
+    }).then(function(data) {
+      if (data && data.html) {
+        var blob = new Blob([data.html], { type: 'text/html' });
+        var url = window.URL.createObjectURL(blob);
+        openOverlayUrl('PB7 3D Plot - ' + ((state.session && state.session.result && state.session.result.name) || 'result'), url, '', 'plot-html');
+        return;
+      }
+      throw new Error((data && data.message) || 'PB7 3D plot returned no HTML.');
+    }).catch(function(err) {
+      pushMessage('error', 'PB7 3D Plot failed: ' + err.message);
+    });
+  }
+
+  function bindEvents() {
+    el('deep-parameters-top-n').addEventListener('change', function(event) {
+      var value = parseInt(event.target.value || '20', 10);
+      state.deepParametersTopN = Number.isFinite(value) ? value : 20;
+      syncFormState();
+      refreshDeepIntelligence().catch(function() {});
+    });
+    el('deep-parameters-top-n').addEventListener('input', function(event) {
+      var value = parseInt(event.target.value || '20', 10);
+      state.deepParametersTopN = Number.isFinite(value) ? value : 20;
+      el('deep-parameters-top-n-value').textContent = String(state.deepParametersTopN);
+      updateRangeFill(event.target);
+    });
+    el('deep-scenarios-metric').addEventListener('change', function(event) {
+      state.deepScenariosMetric = String(event.target.value || '');
+      syncFormState();
+      refreshDeepIntelligence().catch(function() {});
+    });
+    el('deep-evolution-show-all').addEventListener('change', function() {
+      state.deepEvolutionShowAll = !!el('deep-evolution-show-all').checked;
+      syncFormState();
+      refreshDeepIntelligence().catch(function() {});
+    });
+    el('deep-evolution-hide-outliers').addEventListener('change', function() {
+      state.deepEvolutionHideOutliers = !!el('deep-evolution-hide-outliers').checked;
+      syncFormState();
+      refreshDeepIntelligence().catch(function() {});
+    });
+    el('deep-evolution-weighted').addEventListener('change', function() {
+      state.deepEvolutionUseWeighted = !!el('deep-evolution-weighted').checked;
+      syncFormState();
+      refreshDeepIntelligence().catch(function() {});
+    });
+    el('deep-evolution-btc').addEventListener('change', function() {
+      state.deepEvolutionUseBtc = !!el('deep-evolution-btc').checked;
+      syncFormState();
+      refreshDeepIntelligence().catch(function() {});
+    });
+    el('deep-evolution-metric').addEventListener('change', function(event) {
+      state.deepEvolutionMetric = String(event.target.value || '');
+      syncFormState();
+      refreshDeepIntelligence().catch(function() {});
+    });
+    el('deep-evolution-window').addEventListener('input', function() {
+      state.deepEvolutionWindowPercent = parseInt(el('deep-evolution-window').value || '5', 10) || 5;
+      el('deep-evolution-window-value').textContent = String(state.deepEvolutionWindowPercent) + '%';
+      updateRangeFill(el('deep-evolution-window'));
+      syncFormState();
+    });
+    el('deep-evolution-window').addEventListener('change', function() {
+      state.deepEvolutionWindowPercent = parseInt(el('deep-evolution-window').value || '5', 10) || 5;
+      refreshDeepIntelligence().catch(function() {});
+    });
+    el('deep-correlations-strategy').addEventListener('change', function(event) {
+      state.deepCorrelationsStrategy = String(event.target.value || 'Top Performers');
+      syncFormState();
+      refreshDeepIntelligence().catch(function() {});
+    });
+    el('deep-correlations-num').addEventListener('input', function() {
+      state.deepCorrelationsNumConfigs = parseInt(el('deep-correlations-num').value || '5', 10) || 5;
+      el('deep-correlations-num-value').textContent = state.deepCorrelationsNumConfigs;
+      updateRangeFill(el('deep-correlations-num'));
+      syncFormState();
+      refreshDeepIntelligence().catch(function() {});
+    });
+    el('deep-correlations-weighted').addEventListener('change', function() {
+      state.deepCorrelationsUseWeighted = !!el('deep-correlations-weighted').checked;
+      syncFormState();
+    });
+    el('deep-correlations-btc').addEventListener('change', function() {
+      state.deepCorrelationsUseBtc = !!el('deep-correlations-btc').checked;
+      syncFormState();
+    });
+    el('btn-deep-correlations-refresh').addEventListener('click', function() {
+      refreshDeepIntelligence().catch(function() {});
+    });
+    el('btn-command-load').addEventListener('click', function() {
+      loadParetoData().catch(function() {});
+    });
+    ['playground-perf-weight', 'playground-risk-weight', 'playground-robust-weight'].forEach(function(id) {
+      el(id).addEventListener('input', function() {
+        var perfWeight = parseInt(el('playground-perf-weight').value || '80', 10);
+        var riskWeight = parseInt(el('playground-risk-weight').value || '60', 10);
+        var robustWeight = parseInt(el('playground-robust-weight').value || '70', 10);
+        state.playground.perfWeight = Number.isFinite(perfWeight) ? perfWeight : 80;
+        state.playground.riskWeight = Number.isFinite(riskWeight) ? riskWeight : 60;
+        state.playground.robustWeight = Number.isFinite(robustWeight) ? robustWeight : 70;
+        updateRangeFill(el(id));
+        updatePlaygroundWeightLabels();
+        schedulePlaygroundRefresh(120);
+      });
+    });
+    el('playground-show-all').addEventListener('change', function() {
+      state.playground.showAll = !!el('playground-show-all').checked;
+      refreshPlaygroundFromSettings();
+    });
+    el('playground-use-weighted').addEventListener('change', function() {
+      state.playground.useWeighted = !!el('playground-use-weighted').checked;
+      updatePlaygroundCustomUi(state.playground.payload || null);
+      refreshPlaygroundFromSettings();
+    });
+    el('playground-use-btc').addEventListener('change', function() {
+      state.playground.useBtc = !!el('playground-use-btc').checked;
+      updatePlaygroundCustomUi(state.playground.payload || null);
+      refreshPlaygroundFromSettings();
+    });
+    el('playground-viz-type').addEventListener('change', function() {
+      state.playground.vizType = String(el('playground-viz-type').value || '2D Scatter');
+      if (state.playground.vizType === 'Radar Chart' && ['Top Comparison', 'Risk Profile'].indexOf(state.playground.quickView) < 0) state.playground.quickView = 'Top Comparison';
+      syncFormState();
+      updateProjectionLayoutUi();
+      updatePlaygroundCustomUi(state.playground.payload || null);
+      refreshPlaygroundFromSettings();
+    });
+    el('playground-projection-layout-row').addEventListener('change', function() {
+      state.playground.projectionLayout = el('playground-projection-layout-row').checked ? 'row' : 'stacked';
+      syncFormState();
+      updateProjectionLayoutUi();
+      window.setTimeout(resizeProjectionCharts, 0);
+    });
+    el('playground-quick-view').addEventListener('change', function() {
+      var previousQuickView = state.playground.quickView;
+      state.playground.quickView = String(el('playground-quick-view').value || 'Profit vs Risk');
+      if (state.playground.quickView === 'Custom...' && previousQuickView !== 'Custom...') {
+        preserveCurrentCustomMetrics(state.playground.payload || null);
+      }
+      syncFormState();
+      updatePlaygroundCustomUi(state.playground.payload || null);
+      refreshPlaygroundFromSettings();
+    });
+    el('playground-color-metric').addEventListener('change', function() {
+      state.playground.colorMetric = String(el('playground-color-metric').value || 'None');
+      syncFormState();
+      refreshPlaygroundFromSettings();
+    });
+    el('playground-allow-mixed-weighted').addEventListener('change', function() {
+      state.playground.allowMixedWeighted = !!el('playground-allow-mixed-weighted').checked;
+      updatePlaygroundCustomUi(state.playground.payload || null);
+      if (state.playground.quickView === 'Custom...') refreshPlaygroundFromSettings();
+    });
+    el('playground-allow-mixed-currency').addEventListener('change', function() {
+      state.playground.allowMixedCurrency = !!el('playground-allow-mixed-currency').checked;
+      updatePlaygroundCustomUi(state.playground.payload || null);
+      if (state.playground.quickView === 'Custom...') refreshPlaygroundFromSettings();
+    });
+    el('playground-custom-x-metric').addEventListener('change', function() {
+      state.playground.customXMetric = String(el('playground-custom-x-metric').value || '');
+      if (state.playground.quickView === 'Custom...') refreshPlaygroundFromSettings();
+    });
+    el('playground-custom-y-metric').addEventListener('change', function() {
+      state.playground.customYMetric = String(el('playground-custom-y-metric').value || '');
+      if (state.playground.quickView === 'Custom...') refreshPlaygroundFromSettings();
+    });
+    el('playground-custom-z-metric').addEventListener('change', function() {
+      state.playground.customZMetric = String(el('playground-custom-z-metric').value || '');
+      if (state.playground.quickView === 'Custom...') refreshPlaygroundFromSettings();
+    });
+    el('preview-use-weighted').addEventListener('change', function() {
+      state.previewUseWeighted = !!el('preview-use-weighted').checked;
+      syncFormState();
+      refreshPreviewFromSettings();
+    });
+    el('preview-show-all').addEventListener('change', function() {
+      state.previewShowAll = !!el('preview-show-all').checked;
+      syncFormState();
+      refreshPreviewFromSettings();
+    });
+    el('display-range-end').addEventListener('input', function() {
+      updatePendingDisplayRange({
+        start: parseInt(el('display-range-start-input').value || '0', 10) || 0,
+        end: parseInt(el('display-range-end').value || '0', 10) || 0,
+        max: currentRangeMax(state.loadPayload)
+      });
+    });
+    el('display-range-end').addEventListener('change', function() {
+      applyDisplayRange().catch(function(err) {
+        pushMessage('error', 'Display range update failed: ' + err.message);
+      });
+    });
+    el('display-range-start-input').addEventListener('change', function() {
+      updatePendingDisplayRange({
+        start: parseInt(el('display-range-start-input').value || '0', 10) || 0,
+        end: parseInt(el('display-range-end-input').value || '0', 10) || 0,
+        max: currentRangeMax(state.loadPayload)
+      });
+      applyDisplayRange().catch(function(err) {
+        pushMessage('error', 'Display range update failed: ' + err.message);
+      });
+    });
+    el('display-range-end-input').addEventListener('change', function() {
+      updatePendingDisplayRange({
+        start: parseInt(el('display-range-start-input').value || '0', 10) || 0,
+        end: parseInt(el('display-range-end-input').value || '0', 10) || 0,
+        max: currentRangeMax(state.loadPayload)
+      });
+      applyDisplayRange().catch(function(err) {
+        pushMessage('error', 'Display range update failed: ' + err.message);
+      });
+    });
+    el('btn-run-backtest').addEventListener('click', runSelectedConfigBacktest);
+    el('btn-load-all-results').addEventListener('click', loadAllResultsFromSidebar);
+    el('btn-load-pareto-only').addEventListener('click', loadParetoOnlyFromSidebar);
+    el('btn-back-optimize').addEventListener('click', function() {
+      var target = window.location.origin + '/api/optimize-v7/main_page';
+      var params = new URLSearchParams();
+      params.set('token', TOKEN);
+      params.set('panel', 'results');
+      if (ST_BASE) params.set('st_base', ST_BASE);
+      window.location.href = target + '?' + params.toString() + '#results';
+    });
+    el('overlay-close').addEventListener('click', closeOverlay);
+    window.addEventListener('resize', function() {
+      scheduleDeepPlotResize();
+    }, { passive: true });
+    document.addEventListener('mouseup', function() {
+      scheduleDeepPlotResize();
+    });
+  }
+
+  function initSidebarResize() {
+    if (!window.PBGuiSidebarResize || typeof window.PBGuiSidebarResize.init !== 'function') return;
+    window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
+  }
+
+  function loadParetoData(options) {
+    options = options || {};
+    state.resultPath = String(el('result-path-input').value || '').trim();
+    state.loadStrategy = selectedLoadStrategies();
+    state.maxConfigs = parseInt(el('max-configs-input').value || '2000', 10) || 2000;
+    state.allResultsLoaded = !!el('all-results-toggle').checked;
+    state.persistDefaults = !!el('persist-defaults-toggle').checked;
+    if (!state.allResultsLoaded) {
+      state.viewRange = null;
+      state.pendingViewRange = null;
+    }
+    return apiFetch('/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        result_path: state.resultPath,
+        load_strategy: state.loadStrategy,
+        max_configs: state.maxConfigs,
+        all_results_loaded: state.allResultsLoaded,
+        background_full_load: options.forceSynchronous ? false : true,
+        persist_defaults: state.persistDefaults,
+        view_range: state.allResultsLoaded ? state.pendingViewRange || state.viewRange : null,
+        selected_config_index: state.selectedConfigIndex,
+        playground_perf_weight: state.playground.perfWeight,
+        playground_risk_weight: state.playground.riskWeight,
+        playground_robust_weight: state.playground.robustWeight,
+        playground_show_all: state.playground.showAll,
+        playground_use_weighted: state.playground.useWeighted,
+        playground_use_btc: state.playground.useBtc,
+        playground_viz_type: state.playground.vizType,
+        playground_quick_view: state.playground.quickView,
+        playground_color_metric: state.playground.colorMetric,
+        playground_custom_x_metric: state.playground.customXMetric,
+        playground_custom_y_metric: state.playground.customYMetric,
+        playground_custom_z_metric: state.playground.customZMetric,
+        preview_use_weighted: state.previewUseWeighted,
+        preview_show_all: state.previewShowAll,
+        deep_tab: state.deepTab,
+        deep_parameters_top_n: state.deepParametersTopN,
+        deep_scenarios_metric: state.deepScenariosMetric,
+        deep_evolution_metric: state.deepEvolutionMetric,
+        deep_evolution_show_all: state.deepEvolutionShowAll,
+        deep_evolution_hide_outliers: state.deepEvolutionHideOutliers,
+        deep_evolution_use_weighted: state.deepEvolutionUseWeighted,
+        deep_evolution_use_btc: state.deepEvolutionUseBtc,
+        deep_evolution_window_percent: state.deepEvolutionWindowPercent,
+        deep_correlations_strategy: state.deepCorrelationsStrategy,
+        deep_correlations_num_configs: state.deepCorrelationsNumConfigs,
+        deep_correlations_use_weighted: state.deepCorrelationsUseWeighted,
+        deep_correlations_use_btc: state.deepCorrelationsUseBtc
+      })
+    }).then(function(data) {
+      if (!options.forceSynchronous && state.allResultsLoaded && data && data.status === 'loading' && data.job && data.job.job_id) {
+        state.fullLoadJobId = data.job.job_id;
+        setFullLoadStatus('loading', (data.job && data.job.message) || 'Loading full result set...', (data.job && data.job.progress) || 0);
+        return pollFullLoadStatus().then(function(statusData) {
+          var payload = statusData && statusData.payload ? statusData.payload : null;
+          if (!payload) throw new Error('Full load completed without payload.');
+          return payload;
+        });
+      }
+      return data;
+    }).then(function(data) {
+      if (state.allResultsLoaded && data && data.cache_hit) {
+        setFullLoadStatus('loaded', 'Full result restored from cache.', 100);
+      }
+      state.loadPayload = data || null;
+      syncViewRangeFromLoad(data);
+      var bundle = data && data.refresh_bundle ? data.refresh_bundle : null;
+      state.commandCenter = bundle && bundle.command_center ? bundle.command_center : null;
+      state.selectedConfigIndex = bundle && bundle.selected_config_index != null ? bundle.selected_config_index : null;
+      state.selectedDetail = bundle && bundle.detail ? bundle.detail : null;
+      state.deepParameters = null;
+      state.deepScenarios = null;
+      state.deepEvolution = null;
+      state.deepCorrelations = null;
+      state.playground.payload = bundle && bundle.playground ? bundle.playground : null;
+      var sessionLike = Object.assign({}, state.session || {}, {
+        result: data && data.result ? data.result : null,
+        result_valid: !!(data && data.result),
+        result_path: state.resultPath,
+        load: data,
+        defaults: {
+          stage: state.stage,
+          deep_tab: state.deepTab,
+          all_results_loaded: state.allResultsLoaded,
+          load_strategy: state.loadStrategy.slice(),
+          max_configs: state.maxConfigs,
+          preview_show_all: state.previewShowAll,
+          show_timings: false
+        },
+        messages: data && data.messages ? data.messages : []
+      });
+      renderSession(sessionLike);
+      if (bundle) {
+        if (bundle.command_center) {
+          state.commandCenter = bundle.command_center;
+          renderChampions(bundle.command_center);
+          renderInsights(bundle.command_center);
+        }
+        renderDetail(bundle.detail || null);
+        if (bundle.playground) renderPlayground(bundle.playground);
+        if (bundle.deep_intelligence && bundle.deep_intelligence.payload) {
+          state.deepTab = bundle.deep_intelligence.tab || state.deepTab;
+          if (state.stage === 'deep_intelligence') {
+            applyDeepTabUi(state.deepTab, false);
+            if (state.deepTab === 'parameters') renderDeepParameters(bundle.deep_intelligence.payload);
+            else if (state.deepTab === 'scenarios') renderDeepScenarios(bundle.deep_intelligence.payload);
+            else if (state.deepTab === 'evolution') renderDeepEvolution(bundle.deep_intelligence.payload);
+            else if (state.deepTab === 'correlations') renderDeepCorrelations(bundle.deep_intelligence.payload);
+            state.deepIntelligenceNeedsVisibleRender = false;
+          } else {
+            state.deepIntelligenceNeedsVisibleRender = true;
+          }
+        }
+        syncFormState();
+        renderDisplayRange(data);
+        applyDeepTabUi(state.deepTab, false);
+      }
+      state.fullLoadPending = false;
+      el('btn-load-all-results').disabled = false;
+      el('btn-load-all-results').textContent = '📂 Load all_results';
+      renderSession(Object.assign({}, sessionLike));
+      if (state.allResultsLoaded) updateFullLoadPhase('complete', 'Server-side refresh pipeline completed.');
+      stopFullLoadProgressAnimation();
+      return data;
+    }).catch(function(err) {
+      if (state.fullLoadPending || state.allResultsLoaded) {
+        setFullLoadStatus('error', 'Full load failed: ' + err.message, 0);
+      }
+      state.fullLoadPending = false;
+      state.fullLoadJobId = '';
+      clearFullLoadPoll();
+      el('btn-load-all-results').disabled = false;
+      el('btn-load-all-results').textContent = '📂 Load all_results';
+      stopFullLoadProgressAnimation();
+      pushMessage('error', 'Load failed: ' + err.message);
+      throw err;
+    });
+  }
+
+  function bootstrapSession() {
+    var query = '?result_path=' + encodeURIComponent(state.resultPath || '');
+    return apiFetch('/session' + query).then(function(data) {
+      renderSession(data);
+      window.selectStage(state.stage);
+      applyDeepTabUi(state.deepTab, false);
+      updateLocationState();
+      return loadCommandCenterData().then(function() {
+        if (state.stage === 'deep_intelligence') {
+          return refreshDeepIntelligence().then(function() {
+            state.deepIntelligenceNeedsVisibleRender = false;
+            return data;
+          });
+        }
+        state.deepIntelligenceNeedsVisibleRender = !!state.resultPath;
+        return data;
+      });
+    }).catch(function(err) {
+      renderSession({
+        result_valid: false,
+        result: null,
+        load: null,
+        defaults: null,
+        messages: [{ level: 'error', text: 'Failed to bootstrap Pareto Explorer session: ' + err.message }]
+      });
+    });
+  }
+
+  window.PBGUI_HELP_OPENER = openGuide;
+
+  window.PBGUI_NAV_CONFIG = {
+    subtitle: 'PBv7 PARETO EXPLORER',
+    current: 'v7_pareto_explorer',
+    token: TOKEN,
+    stBase: ST_BASE,
+    apiBase: API_BASE,
+    version: PBGUI_VERSION,
+    serial: PBGUI_SERIAL
+  };
+
+  el('detail-full-config-panel').innerHTML = window.PBGuiJsonPanel.createPanelHtml({
+    wrapId: 'detail-full-config-wrap',
+    preId: 'detail-full-config',
+    title: 'Config',
+    collapsedHeight: '400px'
+  });
+  el('detail-full-config-wrap').style.marginTop = '0';
+  window.PBGuiJsonPanel.setContent('detail-full-config', 'No config selected.', { expanded: false });
+
+  readRouteState();
+  bindEvents();
+  initSidebarResize();
+  bootstrapSession();
+}());
+</script>
+<script src="/app/js/shared_help_overlay.js?v=3"></script>
+<script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+</body>
+</html>
