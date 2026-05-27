@@ -11,7 +11,7 @@ import copy
 import json
 from typing import Any
 
-from api.pb7_bridge import get_optimize_metric_sets
+from api.pb7_bridge import get_optimize_metric_sets, get_optimize_scoring_default_goals
 from ParetoDataLoader import _extract_scoring_metric_names
 
 
@@ -20,11 +20,46 @@ OPTIMIZE_PRESET_DIRECTIONS = [
     "More profit (risk can be higher)",
     "Safer (lower drawdowns)",
     "Smoother equity curve",
-    "Fewer/shorter holds (faster turnover)",
+    "Fewer/shorter holds (less time in market)",
     "Lower exposure (safer sizing)",
 ]
 
-DEFAULT_PRESET_SCORING = ["loss_profit_ratio", "mdg_w", "sharpe_ratio"]
+MAX_PRESET_OBJECTIVES = 8
+
+DEFAULT_PRESET_SCORING = [
+    "adg_strategy_eq",
+    "adg_strategy_eq_w",
+    "mdg_strategy_eq_w",
+    "sortino_ratio_strategy_eq",
+    "peak_recovery_days_strategy_eq",
+    "position_held_days_max",
+    "drawdown_worst_strategy_eq",
+    "drawdown_worst_mean_1pct_strategy_eq",
+]
+
+_PRESET_GOAL_FALLBACK_PREFIXES = (
+    "drawdown_",
+    "expected_shortfall_",
+    "equity_balance_diff_",
+    "trade_loss_",
+    "peak_recovery_",
+    "position_held_",
+    "position_unchanged_",
+    "positions_held_",
+    "high_exposure_",
+    "hard_stop_",
+    "equity_choppiness",
+    "equity_jerkiness",
+    "exponential_fit_error",
+)
+_PRESET_GOAL_FALLBACK_MIN = {
+    "loss_profit_ratio",
+    "paper_loss_ratio",
+    "paper_loss_mean_ratio",
+    "total_wallet_exposure_mean",
+    "position_held_days_max",
+    "peak_recovery_days_strategy_eq",
+}
 
 
 def _to_float(value: Any) -> float | None:
@@ -107,8 +142,103 @@ def _unique_keep_order(items: list[str]) -> list[str]:
     return out
 
 
-def _cap_objectives(items: list[str], max_n: int = 4) -> list[str]:
+def _cap_objectives(items: list[str], max_n: int = MAX_PRESET_OBJECTIVES) -> list[str]:
     return items[:max_n]
+
+
+def _scoring_metric_name(entry: Any) -> str | None:
+    if isinstance(entry, str):
+        return entry.strip() or None
+    if isinstance(entry, bytes):
+        return entry.decode("utf-8", errors="replace").strip() or None
+    if isinstance(entry, dict):
+        metric = entry.get("metric") or entry.get(b"metric")
+        if isinstance(metric, bytes):
+            metric = metric.decode("utf-8", errors="replace")
+        metric_name = str(metric or "").strip()
+        return metric_name or None
+    return None
+
+
+def _scoring_dict_entry(entry: dict[str, Any], default_goal_map: dict[str, str]) -> dict[str, Any] | None:
+    metric_name = _scoring_metric_name(entry)
+    if not metric_name:
+        return None
+
+    out: dict[str, Any] = {}
+    for key, value in entry.items():
+        key_name = key.decode("utf-8", errors="replace") if isinstance(key, bytes) else str(key)
+        out[key_name] = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+    out["metric"] = metric_name
+    if out.get("goal") is not None:
+        out["goal"] = str(out["goal"])
+    elif metric_name in default_goal_map:
+        out["goal"] = default_goal_map[metric_name]
+    else:
+        out["goal"] = _fallback_scoring_goal(metric_name)
+    return out
+
+
+def _dedupe_scoring_entries(entries: list[Any], max_n: int = MAX_PRESET_OBJECTIVES) -> list[Any]:
+    seen = set()
+    out = []
+    for entry in entries:
+        metric_name = _scoring_metric_name(entry)
+        if not metric_name or metric_name in seen:
+            continue
+        seen.add(metric_name)
+        out.append(entry)
+        if len(out) >= max_n:
+            break
+    return out
+
+
+def _scoring_entry(metric_name: str, default_goal_map: dict[str, str]) -> Any:
+    goal = default_goal_map.get(metric_name) or _fallback_scoring_goal(metric_name)
+    if goal:
+        return {"metric": metric_name, "goal": goal}
+    return metric_name
+
+
+def _fallback_scoring_goal(metric_name: str) -> str:
+    base = str(metric_name or "").strip()
+    if base.endswith(("_usd", "_btc")):
+        base = base[:-4]
+    if base in _PRESET_GOAL_FALLBACK_MIN or base.startswith(_PRESET_GOAL_FALLBACK_PREFIXES):
+        return "min"
+    return "max"
+
+
+def _scoring_entries(metric_names: list[str], default_goal_map: dict[str, str]) -> list[Any]:
+    return [_scoring_entry(metric, default_goal_map) for metric in _cap_objectives(_unique_keep_order(metric_names))]
+
+
+def _first_available_metric(candidates: list[str], suite_metrics: dict[str, Any]) -> str:
+    for metric_name in candidates:
+        if metric_name in suite_metrics:
+            return metric_name
+    return candidates[0]
+
+
+def _available_metrics(candidates: list[str], suite_metrics: dict[str, Any]) -> list[str]:
+    available = [metric_name for metric_name in candidates if metric_name in suite_metrics]
+    return available or candidates[:1]
+
+
+def _balanced_scoring_entries(base_scoring: list[Any], base_metric_names: list[str], default_goal_map: dict[str, str]) -> list[Any]:
+    if any(isinstance(entry, dict) for entry in base_scoring):
+        preserved = []
+        for entry in base_scoring:
+            if isinstance(entry, dict):
+                normalized = _scoring_dict_entry(entry, default_goal_map)
+                if normalized is not None:
+                    preserved.append(normalized)
+            else:
+                metric_name = _scoring_metric_name(entry)
+                if metric_name:
+                    preserved.append(_scoring_entry(metric_name, default_goal_map))
+        return _dedupe_scoring_entries(preserved)
+    return _scoring_entries(_unique_keep_order(list(base_metric_names)), default_goal_map)
 
 
 def _as_bound_tuple(bound_value: Any) -> tuple[float | None, float | None, float | None]:
@@ -367,7 +497,7 @@ def _build_scoring_and_limits(
     direction: str,
     risk_adjust: int,
     currency_metrics: set[str],
-) -> tuple[list[str], Any, str]:
+) -> tuple[list[Any], Any, str]:
     optimize_block = full_config_data.get("optimize", {}) if isinstance(full_config_data, dict) else {}
     base_scoring = optimize_block.get("scoring") if isinstance(optimize_block, dict) else None
     base_limits = optimize_block.get("limits") if isinstance(optimize_block, dict) else None
@@ -376,42 +506,73 @@ def _build_scoring_and_limits(
     if base_limits is None and isinstance(optimize_settings, dict):
         base_limits = optimize_settings.get("limits")
 
-    if isinstance(base_scoring, list) and base_scoring:
-        base_scoring = _extract_scoring_metric_names(base_scoring)
-    if not isinstance(base_scoring, list) or not base_scoring:
-        base_scoring = list(DEFAULT_PRESET_SCORING)
+    base_scoring_entries = list(base_scoring) if isinstance(base_scoring, list) and base_scoring else []
+    base_metric_names = _extract_scoring_metric_names(base_scoring_entries) if base_scoring_entries else []
+    if not base_metric_names:
+        base_metric_names = list(DEFAULT_PRESET_SCORING)
+        base_scoring_entries = list(base_metric_names)
     if base_limits is None:
         base_limits = []
 
-    scheme = _detect_metric_scheme(base_scoring)
+    scheme = _detect_metric_scheme(base_metric_names)
     metric = lambda name: _metric_name(name, scheme, currency_metrics)
-    profit_set = [metric("mdg_w"), metric("adg_w"), metric("gain")]
-    ratio_set = [metric("loss_profit_ratio"), metric("sharpe_ratio"), metric("sortino_ratio")]
-    risk_set = [metric("drawdown_worst"), metric("drawdown_worst_mean_1pct"), metric("expected_shortfall_1pct")]
-    smooth_set = [metric("equity_choppiness_w"), metric("equity_jerkiness_w"), metric("exponential_fit_error_w")]
-    turnover_set = [metric("positions_held_per_day"), metric("position_held_hours_mean"), metric("position_held_hours_max")]
+    profit_set = [
+        _first_available_metric(["mdg_strategy_eq_w", "mdg_strategy_eq", metric("mdg_w"), metric("mdg"), metric("gain")], suite_metrics),
+        _first_available_metric(["adg_strategy_eq_w", "adg_strategy_eq", metric("adg_w"), metric("adg"), metric("gain")], suite_metrics),
+        _first_available_metric(["gain_strategy_eq", metric("gain")], suite_metrics),
+    ]
+    ratio_set = [
+        _first_available_metric(["loss_profit_ratio", "loss_profit_ratio_w", metric("loss_profit_ratio")], suite_metrics),
+        _first_available_metric(["sortino_ratio_strategy_eq", "sharpe_ratio_strategy_eq", metric("sortino_ratio"), metric("sharpe_ratio")], suite_metrics),
+        _first_available_metric(["sharpe_ratio_strategy_eq", "sortino_ratio_strategy_eq", metric("sharpe_ratio"), metric("sortino_ratio")], suite_metrics),
+    ]
+    risk_set = [
+        _first_available_metric(["drawdown_worst_strategy_eq", metric("drawdown_worst")], suite_metrics),
+        _first_available_metric(["drawdown_worst_mean_1pct_strategy_eq", "expected_shortfall_1pct_strategy_eq", metric("drawdown_worst_mean_1pct"), metric("expected_shortfall_1pct")], suite_metrics),
+        _first_available_metric(["peak_recovery_days_strategy_eq", "peak_recovery_hours_strategy_eq", "peak_recovery_hours_equity"], suite_metrics),
+    ]
+    smooth_set = [
+        _first_available_metric([metric("equity_choppiness_w"), metric("equity_choppiness")], suite_metrics),
+        _first_available_metric([metric("equity_jerkiness_w"), metric("equity_jerkiness")], suite_metrics),
+        _first_available_metric([metric("exponential_fit_error_w"), metric("exponential_fit_error")], suite_metrics),
+    ]
+    turnover_set = [
+        _first_available_metric(["position_held_days_max", "position_held_hours_max", "position_unchanged_days_max", "position_unchanged_hours_max"], suite_metrics),
+        _first_available_metric(["position_held_days_mean", "position_held_days_median", "position_held_hours_mean", "position_held_hours_median"], suite_metrics),
+        _first_available_metric(["total_wallet_exposure_mean", "high_exposure_hours_mean_long", "high_exposure_hours_mean_short", "positions_held_per_day_w", "positions_held_per_day"], suite_metrics),
+    ]
+    exposure_set = _available_metrics([
+        metric("adg_w_per_exposure_long"),
+        metric("adg_w_per_exposure_short"),
+        "total_wallet_exposure_mean",
+        "high_exposure_hours_mean_long",
+        "high_exposure_hours_mean_short",
+    ], suite_metrics)
+    default_goal_map = get_optimize_scoring_default_goals(
+        _unique_keep_order(base_metric_names + profit_set + ratio_set + risk_set + smooth_set + turnover_set + exposure_set)
+    )
 
     if direction not in OPTIMIZE_PRESET_DIRECTIONS:
         direction = OPTIMIZE_PRESET_DIRECTIONS[0]
 
     limits_out: Any = list(base_limits) if isinstance(base_limits, list) else base_limits
     if direction == "Balanced (keep run scoring)":
-        scoring_out = _cap_objectives(_unique_keep_order(list(base_scoring)), 4)
+        scoring_out = _balanced_scoring_entries(base_scoring_entries, base_metric_names, default_goal_map)
         limits_out = base_limits
     elif direction == "More profit (risk can be higher)":
-        scoring_out = _cap_objectives(_unique_keep_order([profit_set[0], profit_set[1], ratio_set[1], ratio_set[0]]), 4)
+        scoring_out = _scoring_entries([profit_set[0], profit_set[1], ratio_set[1], ratio_set[0]], default_goal_map)
         limits_out = base_limits
     elif direction == "Safer (lower drawdowns)":
-        scoring_out = _cap_objectives(_unique_keep_order([risk_set[0], risk_set[1], ratio_set[1], ratio_set[0]]), 4)
+        scoring_out = _scoring_entries([risk_set[0], risk_set[1], ratio_set[1], ratio_set[0]], default_goal_map)
         limits_out = _risk_limits_pack_from_tolerance(limits_out, suite_metrics=suite_metrics, scheme=scheme, currency_metrics=currency_metrics, risk_adjust=risk_adjust) if risk_adjust != 0 else base_limits
     elif direction == "Smoother equity curve":
-        scoring_out = _cap_objectives(_unique_keep_order([smooth_set[0], smooth_set[1], ratio_set[1], profit_set[0]]), 4)
+        scoring_out = _scoring_entries([smooth_set[0], smooth_set[1], ratio_set[1], profit_set[0]], default_goal_map)
         limits_out = base_limits
-    elif direction == "Fewer/shorter holds (faster turnover)":
-        scoring_out = _cap_objectives(_unique_keep_order([turnover_set[1], turnover_set[2], profit_set[0], ratio_set[1]]), 4)
+    elif direction == "Fewer/shorter holds (less time in market)":
+        scoring_out = _scoring_entries([turnover_set[0], turnover_set[1], turnover_set[2], profit_set[0], ratio_set[1]], default_goal_map)
         limits_out = base_limits
     else:
-        scoring_out = _cap_objectives(_unique_keep_order([risk_set[0], ratio_set[0], profit_set[0], ratio_set[1]]), 4)
+        scoring_out = _scoring_entries(exposure_set + [risk_set[0], ratio_set[1], profit_set[0]], default_goal_map)
         limits_out = _risk_limits_pack_from_tolerance(limits_out, suite_metrics=suite_metrics, scheme=scheme, currency_metrics=currency_metrics, risk_adjust=risk_adjust) if risk_adjust != 0 else base_limits
 
     if isinstance(limits_out, list) and risk_adjust != 0:
@@ -431,7 +592,7 @@ def _build_scoring_and_limits(
         if entry is not None:
             limits_out = _upsert_limit(limits_out, entry)
 
-    return _cap_objectives(_unique_keep_order(scoring_out), 4), limits_out, scheme
+    return _dedupe_scoring_entries(scoring_out), limits_out, scheme
 
 
 def _build_new_bounds(
@@ -444,6 +605,7 @@ def _build_new_bounds(
     near_map: dict[str, dict[str, Any]],
     expand_near_bounds: bool,
     near_bounds_expand_pct: float,
+    only_near_bounds: bool = False,
     apply_risk_adjustments: bool = True,
     apply_window_adjustments: bool = True,
     apply_near_expansion: bool = True,
@@ -511,6 +673,9 @@ def _build_new_bounds(
         if name.startswith("short_") and short_enabled is False:
             new_bounds[param_name] = bound_value
             continue
+        if only_near_bounds and str(param_name) not in near_map:
+            new_bounds[param_name] = bound_value
+            continue
 
         is_risk_param = (
             "total_wallet_exposure_limit" in name
@@ -576,15 +741,21 @@ def build_optimize_preset(
     direction = str(params.get("direction") or OPTIMIZE_PRESET_DIRECTIONS[0]).strip() or OPTIMIZE_PRESET_DIRECTIONS[0]
     if direction not in OPTIMIZE_PRESET_DIRECTIONS:
         direction = OPTIMIZE_PRESET_DIRECTIONS[0]
-    bounds_adjust = _clamp_int(params.get("bounds_adjust"), 0, -50, 50)
+    if params.get("bounds_window_pct") is not None:
+        bounds_window_pct = _clamp_int(params.get("bounds_window_pct"), 0, 0, 100)
+    else:
+        legacy_bounds_adjust = _clamp_int(params.get("bounds_adjust"), 0, -50, 50)
+        # Legacy slider was centered around a 10% window; keep old API callers mapped to the direct percent control.
+        bounds_window_pct = 0 if legacy_bounds_adjust == 0 else max(0, min(100, 10 + legacy_bounds_adjust))
     risk_adjust = _clamp_int(params.get("risk_adjust"), 0, -50, 50)
-    window_pct = 0.0 if bounds_adjust == 0 else float(max(0, min(100, 10 + bounds_adjust)))
+    window_pct = float(bounds_window_pct)
     show_near_bounds = bool(params.get("show_near_bounds", False))
+    only_adjust_near_bounds = bool(params.get("only_adjust_near_bounds", False))
     expand_near_bounds = bool(params.get("expand_near_bounds", False))
     near_bounds_expand_pct = float(_clamp_int(params.get("near_bounds_expand_pct"), 25, 0, 100))
     hide_hard_limited_near = bool(params.get("hide_hard_limited_near", False))
 
-    near_map = _normalize_near_map(near_bounds) if show_near_bounds else {}
+    near_map = _normalize_near_map(near_bounds) if show_near_bounds or only_adjust_near_bounds else {}
     hidden_near_params: set[str] = set()
     if show_near_bounds and hide_hard_limited_near and near_map:
         if expand_near_bounds and near_bounds_expand_pct > 0:
@@ -598,6 +769,7 @@ def build_optimize_preset(
                 near_map=near_map,
                 expand_near_bounds=expand_near_bounds,
                 near_bounds_expand_pct=near_bounds_expand_pct,
+                only_near_bounds=False,
                 apply_risk_adjustments=False,
                 apply_window_adjustments=False,
                 apply_near_expansion=True,
@@ -631,6 +803,7 @@ def build_optimize_preset(
         near_map=near_map,
         expand_near_bounds=expand_near_bounds,
         near_bounds_expand_pct=near_bounds_expand_pct,
+        only_near_bounds=only_adjust_near_bounds,
         expand_notes_out=expand_notes,
     )
     expand_bounds = _build_new_bounds(
@@ -642,6 +815,7 @@ def build_optimize_preset(
         near_map=near_map,
         expand_near_bounds=expand_near_bounds,
         near_bounds_expand_pct=near_bounds_expand_pct,
+        only_near_bounds=only_adjust_near_bounds,
         apply_risk_adjustments=False,
         apply_window_adjustments=False,
         apply_near_expansion=True,
@@ -656,6 +830,7 @@ def build_optimize_preset(
         near_map=near_map,
         expand_near_bounds=expand_near_bounds,
         near_bounds_expand_pct=near_bounds_expand_pct,
+        only_near_bounds=only_adjust_near_bounds,
         apply_risk_adjustments=False,
         apply_window_adjustments=True,
         apply_near_expansion=False,
@@ -669,6 +844,7 @@ def build_optimize_preset(
         near_map=near_map,
         expand_near_bounds=expand_near_bounds,
         near_bounds_expand_pct=near_bounds_expand_pct,
+        only_near_bounds=only_adjust_near_bounds,
         apply_risk_adjustments=True,
         apply_window_adjustments=False,
         apply_near_expansion=False,
@@ -723,9 +899,11 @@ def build_optimize_preset(
         "bounds_preview_rows": rows,
         "near_rows": _build_near_rows(near_map) if show_near_bounds else [],
         "hidden_near_params": sorted(hidden_near_params),
+        "near_bounds_count": len(near_map),
+        "only_adjust_near_bounds": only_adjust_near_bounds,
         "expand_notes": expand_notes,
         "window_pct": window_pct,
-        "bounds_adjust": bounds_adjust,
+        "bounds_window_pct": bounds_window_pct,
         "risk_adjust": risk_adjust,
         "direction": direction,
     }

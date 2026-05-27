@@ -107,6 +107,7 @@ _OPT_LOG_RANGE_RE = re.compile(r"(?P<name>[a-zA-Z0-9_]+):\((?P<min>[^,]+),(?P<ma
 _OPT_LOG_OBJECTIVE_RE = re.compile(r"(?P<name>[a-zA-Z0-9_]+)=(?P<value>[^,\]]+)")
 _PARETO_DASH_PROXY_REQ_DROP = {"host", "content-length", "connection"}
 _PARETO_DASH_PROXY_RESP_DROP = {"content-length", "connection", "transfer-encoding", "content-encoding"}
+_PARETO_DASH_PROXY_TEXT_TYPES = ("text/html", "text/javascript", "application/javascript", "application/json")
 _pareto_dash_sessions: dict[str, dict] = {}
 _pareto_dash_lock = threading.RLock()
 
@@ -1578,8 +1579,8 @@ def _stop_pareto_dash_session(session_id: str) -> None:
     _log(SERVICE, f"Stopped Pareto Dash session {session_id}")
 
 
-def _wait_for_pareto_dash_ready(proc: subprocess.Popen, port: int, prefix: str, *, timeout: float = 8.0) -> tuple[bool, str]:
-    target_url = f"http://127.0.0.1:{port}{prefix}"
+def _wait_for_pareto_dash_ready(proc: subprocess.Popen, port: int, target_path: str = "/", *, timeout: float = 8.0) -> tuple[bool, str]:
+    target_url = f"http://127.0.0.1:{port}{target_path or '/'}"
     deadline = time.time() + timeout
     with httpx.Client(timeout=1.0, follow_redirects=False) as client:
         while time.time() < deadline:
@@ -1625,8 +1626,6 @@ def _launch_pareto_dash_session(session_id: str, result_dir: Path, pathname_pref
         "127.0.0.1",
         "--port",
         str(port),
-        "--pathname-prefix",
-        pathname_prefix,
     ]
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(pb7dir()) / "src")
@@ -1653,7 +1652,7 @@ def _launch_pareto_dash_session(session_id: str, result_dir: Path, pathname_pref
     finally:
         log_handle.close()
 
-    ready, message = _wait_for_pareto_dash_ready(proc, port, pathname_prefix)
+    ready, message = _wait_for_pareto_dash_ready(proc, port)
     if not ready:
         _terminate_process(proc)
         output = _read_text_excerpt(log_path)
@@ -1684,6 +1683,63 @@ def _get_pareto_dash_session(session_id: str) -> Optional[dict]:
         if session:
             session["last_seen_at"] = time.time()
         return session
+
+
+def _pareto_dash_proxy_path(proxy_root: str, path: str) -> str:
+    root = str(proxy_root or "/").rstrip("/")
+    suffix = str(path or "/")
+    if not suffix.startswith("/"):
+        suffix = f"/{suffix}"
+    return f"{root}{suffix}"
+
+
+def _rewrite_pareto_dash_location(location: str, *, upstream_base: str, proxy_root: str) -> str:
+    if not location:
+        return location
+    if location.startswith(upstream_base):
+        return _pareto_dash_proxy_path(proxy_root, location[len(upstream_base):] or "/")
+    if location.startswith("/"):
+        return _pareto_dash_proxy_path(proxy_root, location)
+    return location
+
+
+def _rewrite_pareto_dash_body(content: bytes, content_type: str, proxy_root: str) -> bytes:
+    if not content or not any(kind in str(content_type or "").lower() for kind in _PARETO_DASH_PROXY_TEXT_TYPES):
+        return content
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content
+    root = str(proxy_root or "/").rstrip("/")
+    root_with_slash = f"{root}/"
+    for key in ("requests_pathname_prefix", "url_base_pathname", "routes_pathname_prefix"):
+        text = re.sub(
+            rf'("{key}"\s*:\s*)"(?:/|\\/|\\u002[fF])"',
+            rf'\1"{root_with_slash}"',
+            text,
+        )
+        text = re.sub(
+            rf'("{key}"\s*:\s*)null',
+            rf'\1"{root_with_slash}"',
+            text,
+        )
+    replacements = {
+        'href="/': f'href="{root_with_slash}',
+        'src="/': f'src="{root_with_slash}',
+        'action="/': f'action="{root_with_slash}',
+        "href='/": f"href='{root_with_slash}",
+        "src='/": f"src='{root_with_slash}",
+        "action='/": f"action='{root_with_slash}",
+        '"/_dash-': f'"{root}/_dash-',
+        "'/_dash-": f"'{root}/_dash-",
+        '"/assets/': f'"{root}/assets/',
+        "'/assets/": f"'{root}/assets/",
+        '"/favicon.ico"': f'"{root}/favicon.ico"',
+        "'/favicon.ico'": f"'{root}/favicon.ico'",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text.encode("utf-8")
 
 
 class OptimizeStore:
@@ -2313,6 +2369,8 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)):
 def save_config(name: str, body: dict, source_name: str | None = None,
                 session: SessionToken = Depends(require_auth)):
     _validate_name(name)
+    if source_name:
+        _validate_name(source_name)
     cfg = dict(body or {})
     backtest = dict(cfg.get("backtest") or {})
     backtest["base_dir"] = f"backtests/pbgui/{name}"
@@ -2326,13 +2384,16 @@ def save_config(name: str, body: dict, source_name: str | None = None,
             optimize["n_cpus"] = multiprocessing.cpu_count()
         cfg["optimize"] = optimize
     cfg_file = _opt_configs_dir() / f"{name}.json"
+    source_file = _opt_configs_dir() / f"{source_name}.json" if source_name and source_name != name else None
     save_pb7_config(cfg, cfg_file)
     _update_queue_config_references(
-        [cfg_file],
+        [path for path in (source_file, cfg_file) if path is not None],
         target_path=cfg_file,
         target_name=name,
         config_snapshot=cfg,
     )
+    if source_file is not None and source_file.exists():
+        source_file.unlink()
     return {"ok": True, "name": name}
 
 
@@ -2771,7 +2832,7 @@ async def proxy_result_pareto_dash(
 
     prefix = str(launched["pathname_prefix"])
     suffix = dash_path.lstrip("/")
-    target_path = prefix if not suffix else f"{prefix}{suffix}"
+    target_path = "/" if not suffix else f"/{suffix}"
     query_string = request.url.query
     target_url = f"http://127.0.0.1:{launched['port']}{target_path}"
     if query_string:
@@ -2795,6 +2856,11 @@ async def proxy_result_pareto_dash(
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"Pareto Dash proxy request failed: {exc}") from exc
 
+    response_headers = {
+        key: value
+        for key, value in upstream.headers.items()
+        if key.lower() not in _PARETO_DASH_PROXY_RESP_DROP
+    }
     proxy_root = str(
         request.app.url_path_for(
             "optimize_result_pareto_dash_proxy_root",
@@ -2803,20 +2869,21 @@ async def proxy_result_pareto_dash(
         )
     )
     upstream_base = f"http://127.0.0.1:{launched['port']}"
-    response_headers = {
-        key: value
-        for key, value in upstream.headers.items()
-        if key.lower() not in _PARETO_DASH_PROXY_RESP_DROP
-    }
     location = response_headers.get("location")
     if location:
-        if location.startswith(upstream_base):
-            response_headers["location"] = location.replace(upstream_base, "", 1)
-        elif location.startswith(prefix):
-            response_headers["location"] = location.replace(prefix, proxy_root, 1)
+        response_headers["location"] = _rewrite_pareto_dash_location(
+            location,
+            upstream_base=upstream_base,
+            proxy_root=proxy_root,
+        )
+    content = _rewrite_pareto_dash_body(
+        upstream.content,
+        response_headers.get("content-type", ""),
+        proxy_root,
+    )
 
     return Response(
-        content=upstream.content,
+        content=content,
         status_code=upstream.status_code,
         headers=response_headers,
     )

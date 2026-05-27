@@ -176,6 +176,10 @@ a:hover { text-decoration: underline; }
   grid-column: span 8;
 }
 
+.form-field.half {
+  grid-column: span 6;
+}
+
 .form-field.full {
   grid-column: span 12;
 }
@@ -215,6 +219,37 @@ a:hover { text-decoration: underline; }
   width: 16px;
   height: 16px;
   accent-color: var(--accent);
+}
+
+[data-tip] {
+  cursor: help;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: #64748b;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+
+button[data-tip] {
+  text-decoration: none;
+}
+
+#data-tip-tooltip {
+  display: none;
+  position: fixed;
+  z-index: 9999;
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 5px;
+  font-size: var(--fs-xs);
+  font-weight: normal;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  max-width: 480px;
+  line-height: 1.5;
+  box-shadow: 0 4px 12px rgba(0,0,0,.5);
+  pointer-events: none;
 }
 
 .title-row {
@@ -337,14 +372,15 @@ a:hover { text-decoration: underline; }
 }
 
 .preset-code-preview {
-  max-height: 240px;
-  overflow: auto;
+  overflow: visible;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px;
   background: var(--bg3);
   color: var(--green);
   font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .deep-scenarios-stats-grid {
@@ -1036,6 +1072,7 @@ input[type="range"]::-moz-range-thumb {
     grid-template-columns: 1fr;
   }
   .form-field,
+  .form-field.half,
   .form-field.wide,
   .form-field.full {
     grid-column: span 12;
@@ -1096,7 +1133,7 @@ input[type="range"]::-moz-range-thumb {
       <div class="range-header">
         <div>
           <h3>Display Range</h3>
-          <p class="hint">Filter which ranked configs are visible. Pareto counts and preview stars follow the current visible range.</p>
+          <p class="hint"><span data-tip="Limits the ranked result slice used by Overview, Explorer, and Deep Intelligence. Pareto counts and preview stars are recalculated from the visible range.">Filter which ranked configs are visible. Pareto counts and preview stars follow the current visible range.</span></p>
         </div>
         <span id="display-range-total-chip" class="chip">Loaded: -</span>
       </div>
@@ -1133,15 +1170,15 @@ input[type="range"]::-moz-range-thumb {
           <h3>Load Control</h3>
           <div class="form-grid" style="margin-top: 12px;">
             <div class="form-field wide">
-              <label for="result-path-input">Result Path</label>
+              <label for="result-path-input"><span data-tip="Path to a PBv7 optimize result directory or pareto directory to load into the explorer.">Result Path</span></label>
               <input id="result-path-input" type="text" placeholder="/path/to/optimize/result">
             </div>
             <div class="form-field">
-              <label for="max-configs-input">Max Configs</label>
+              <label for="max-configs-input"><span data-tip="Upper limit for configs loaded into the fast Pareto Explorer session. Use Load all_results for a full-result background load.">Max Configs</span></label>
               <input id="max-configs-input" type="number" min="100" max="10000" step="100">
             </div>
             <div class="form-field wide">
-              <label for="load-strategy-select">Load Strategy</label>
+              <label for="load-strategy-select"><span data-tip="Ranking strategies used while selecting configs from the result set. Multiple strategies can be combined to keep a broader candidate mix.">Load Strategy</span></label>
               <select id="load-strategy-select" multiple size="6">
                 <option value="performance">performance</option>
                 <option value="robustness">robustness</option>
@@ -1156,15 +1193,11 @@ input[type="range"]::-moz-range-thumb {
             </div>
             <div class="form-field">
               <label>&nbsp;</label>
-              <div class="check-row"><input id="all-results-toggle" type="checkbox"><label for="all-results-toggle">Load all_results.bin</label></div>
-            </div>
-            <div class="form-field">
-              <label>&nbsp;</label>
-              <div class="check-row"><input id="persist-defaults-toggle" type="checkbox" checked><label for="persist-defaults-toggle">Persist defaults</label></div>
+              <div class="check-row"><input id="persist-defaults-toggle" type="checkbox" checked><label for="persist-defaults-toggle"><span data-tip="Save the current load and explorer defaults so the next Pareto Explorer session starts with the same choices.">Persist defaults</span></label></div>
             </div>
             <div class="form-field full">
               <div class="button-row">
-                <button class="btn primary" id="btn-command-load">Load Result Context</button>
+                <button class="btn primary" id="btn-command-load" data-tip="Reload the result with the current Settings values.">Load Result Context</button>
               </div>
             </div>
             <div class="form-field full">
@@ -1205,11 +1238,11 @@ input[type="range"]::-moz-range-thumb {
           <div class="toolbar" style="margin-bottom:12px;">
             <div class="check-row" style="max-width:280px;">
               <input id="preview-use-weighted" type="checkbox" checked>
-              <label for="preview-use-weighted">Use weighted (_w) metrics</label>
+              <label for="preview-use-weighted"><span data-tip="Prefer PB7 weighted metric variants where available for preview scoring and charts.">Use weighted (_w) metrics</span></label>
             </div>
             <div class="check-row" style="max-width:260px;">
               <input id="preview-show-all" type="checkbox">
-              <label for="preview-show-all">Show all configs</label>
+              <label for="preview-show-all"><span data-tip="Show all visible configs in the preview charts instead of Pareto configs only.">Show all configs</span></label>
             </div>
           </div>
           <div class="preview-grid">
@@ -1237,7 +1270,7 @@ input[type="range"]::-moz-range-thumb {
           <div class="title-row">
             <h3>Explorer</h3>
             <label id="playground-projection-layout-wrap" class="inline-switch" style="display:none;">
-              <span>Side by side</span>
+              <span data-tip="Show XY, XZ, and YZ projection charts next to each other instead of stacked vertically.">Side by side</span>
               <input id="playground-projection-layout-row" type="checkbox" role="switch" aria-label="Show projections side by side">
               <span class="switch-track" aria-hidden="true"></span>
             </label>
@@ -1265,7 +1298,7 @@ input[type="range"]::-moz-range-thumb {
           <h3>Chart Settings</h3>
           <div class="form-grid" style="margin-top: 12px;">
             <div class="form-field full">
-              <label for="playground-viz-type">Visualization</label>
+              <label for="playground-viz-type"><span data-tip="Choose the chart type used for tradeoff exploration: 2D scatter, 3D WebGL, 2D projections, or radar comparison.">Visualization</span></label>
               <select id="playground-viz-type">
                 <option value="2D Scatter">2D Scatter</option>
                 <option value="3D Scatter">3D Scatter (WebGL)</option>
@@ -1274,16 +1307,16 @@ input[type="range"]::-moz-range-thumb {
               </select>
             </div>
             <div id="playground-show-all-wrap" class="form-field full">
-              <div class="check-row"><input id="playground-show-all" type="checkbox"><label for="playground-show-all">Show all configs</label></div>
+              <div class="check-row"><input id="playground-show-all" type="checkbox"><label for="playground-show-all"><span data-tip="Show every config in the visible slice instead of only Pareto configs. Useful for checking whether a candidate still stands out in the broader cloud.">Show all configs</span></label></div>
             </div>
             <div id="playground-use-weighted-wrap" class="form-field full">
-              <div class="check-row"><input id="playground-use-weighted" type="checkbox" checked><label for="playground-use-weighted">Use Weighted Metrics</label></div>
+              <div class="check-row"><input id="playground-use-weighted" type="checkbox" checked><label for="playground-use-weighted"><span data-tip="Prefer PB7 weighted metric variants where available for axes, color, and scoring inputs.">Use Weighted Metrics</span></label></div>
             </div>
             <div id="playground-use-btc-wrap" class="form-field full">
-              <div class="check-row"><input id="playground-use-btc" type="checkbox"><label for="playground-use-btc">Use BTC instead of USD</label></div>
+              <div class="check-row"><input id="playground-use-btc" type="checkbox"><label for="playground-use-btc"><span data-tip="Use BTC-denominated metrics instead of USD-denominated metrics when matching metrics are available.">Use BTC instead of USD</span></label></div>
             </div>
             <div class="form-field full">
-              <label for="playground-quick-view">Quick Views</label>
+              <label for="playground-quick-view"><span data-tip="Prebuilt metric layouts for common decisions. Choose Custom to pick your own axes.">Quick Views</span></label>
               <select id="playground-quick-view"></select>
             </div>
             <div id="playground-custom-controls" class="form-field full" style="display:none;">
@@ -1292,41 +1325,41 @@ input[type="range"]::-moz-range-thumb {
                   <strong>Custom Metrics</strong>
                 </div>
                 <div id="playground-custom-filters" class="stack" style="display:none; gap:8px;">
-                  <div class="check-row"><input id="playground-allow-mixed-weighted" type="checkbox"><label for="playground-allow-mixed-weighted">Allow Mixed Weighted</label></div>
-                  <div class="check-row"><input id="playground-allow-mixed-currency" type="checkbox"><label for="playground-allow-mixed-currency">Allow Mixed USD/BTC</label></div>
+                  <div class="check-row"><input id="playground-allow-mixed-weighted" type="checkbox"><label for="playground-allow-mixed-weighted"><span data-tip="Allow custom axes to mix weighted and unweighted metric variants.">Allow Mixed Weighted</span></label></div>
+                  <div class="check-row"><input id="playground-allow-mixed-currency" type="checkbox"><label for="playground-allow-mixed-currency"><span data-tip="Allow custom axes to mix USD and BTC metric variants.">Allow Mixed USD/BTC</span></label></div>
                 </div>
                 <div class="stack" style="gap:10px; margin-top:8px;">
                   <div class="form-field full" style="gap:6px;">
-                    <label for="playground-custom-x-metric">X-Axis</label>
+                    <label for="playground-custom-x-metric"><span data-tip="Metric shown on the horizontal axis for Custom quick views.">X-Axis</span></label>
                     <select id="playground-custom-x-metric"></select>
                   </div>
                   <div class="form-field full" style="gap:6px;">
-                    <label for="playground-custom-y-metric">Y-Axis</label>
+                    <label for="playground-custom-y-metric"><span data-tip="Metric shown on the vertical axis for Custom quick views.">Y-Axis</span></label>
                     <select id="playground-custom-y-metric"></select>
                   </div>
                   <div id="playground-custom-z-wrap" class="form-field full" style="gap:6px; display:none;">
-                    <label for="playground-custom-z-metric">Z-Axis</label>
+                    <label for="playground-custom-z-metric"><span data-tip="Metric shown on the depth axis for 3D Custom quick views.">Z-Axis</span></label>
                     <select id="playground-custom-z-metric"></select>
                   </div>
                 </div>
               </div>
             </div>
             <div id="playground-color-metric-wrap" class="form-field full">
-              <label for="playground-color-metric">Color by</label>
+              <label for="playground-color-metric"><span data-tip="Metric used for point color. Use it as an extra visual dimension beyond the chart axes.">Color by</span></label>
               <select id="playground-color-metric"><option value="None">None</option></select>
             </div>
             <div class="form-field full">
-              <label for="playground-perf-weight">Performance Priority</label>
+              <label for="playground-perf-weight"><span data-tip="How strongly the Best Match helper should favor return/performance metrics.">Performance Priority</span></label>
               <input id="playground-perf-weight" type="range" min="0" max="100" step="5" value="80">
               <div class="muted-line" id="playground-perf-weight-value">80</div>
             </div>
             <div class="form-field full">
-              <label for="playground-risk-weight">Risk Aversion</label>
+              <label for="playground-risk-weight"><span data-tip="How strongly the Best Match helper should penalize drawdown, tail-risk, and other risk-pressure signals.">Risk Aversion</span></label>
               <input id="playground-risk-weight" type="range" min="0" max="100" step="5" value="60">
               <div class="muted-line" id="playground-risk-weight-value">60</div>
             </div>
             <div class="form-field full">
-              <label for="playground-robust-weight">Robustness Importance</label>
+              <label for="playground-robust-weight"><span data-tip="How strongly the Best Match helper should favor consistency and robust behavior over fragile outliers.">Robustness Importance</span></label>
               <input id="playground-robust-weight" type="range" min="0" max="100" step="5" value="70">
               <div class="muted-line" id="playground-robust-weight-value">70</div>
             </div>
@@ -1346,10 +1379,10 @@ input[type="range"]::-moz-range-thumb {
     <section id="stage-deep-intelligence" class="stage-view" style="display:none;">
       <div class="panel-card">
         <div class="deep-tabs">
-          <button class="deep-tab-btn active" data-deep-tab="parameters" onclick="selectDeepTab('parameters')">Parameters</button>
-          <button class="deep-tab-btn" data-deep-tab="scenarios" onclick="selectDeepTab('scenarios')">Scenarios</button>
-          <button class="deep-tab-btn" data-deep-tab="evolution" onclick="selectDeepTab('evolution')">Evolution</button>
-          <button class="deep-tab-btn" data-deep-tab="correlations" onclick="selectDeepTab('correlations')">Correlations</button>
+          <button class="deep-tab-btn active" data-deep-tab="parameters" onclick="selectDeepTab('parameters')" data-tip="Find parameters that influence performance and parameters sitting close to optimize bounds.">Parameters</button>
+          <button class="deep-tab-btn" data-deep-tab="scenarios" onclick="selectDeepTab('scenarios')" data-tip="Compare the visible config set across loaded backtest scenarios.">Scenarios</button>
+          <button class="deep-tab-btn" data-deep-tab="evolution" onclick="selectDeepTab('evolution')" data-tip="Track how a selected metric evolved over optimize iterations.">Evolution</button>
+          <button class="deep-tab-btn" data-deep-tab="correlations" onclick="selectDeepTab('correlations')" data-tip="Compare selected configs across normalized multi-metric risk dimensions.">Correlations</button>
         </div>
         <p class="hint" id="deep-tab-description">Deep Intelligence tab shell for the FastAPI migration.</p>
       </div>
@@ -1360,7 +1393,7 @@ input[type="range"]::-moz-range-thumb {
             <p class="muted-line" id="deep-parameters-summary">Load a result to inspect parameter influence and optimize-bound pressure.</p>
           </div>
           <div class="detail-toolbar">
-            <label for="deep-parameters-top-n" class="muted-line" style="align-self:center;">Top N Parameters</label>
+            <label for="deep-parameters-top-n" class="muted-line" style="align-self:center;"><span data-tip="Number of highest-variance / most relevant parameters to include in the influence and near-bounds charts.">Top N Parameters</span></label>
             <div class="form-field" style="min-width:220px; gap:6px; margin:0;">
               <input id="deep-parameters-top-n" type="range" min="1" max="40" step="1" value="20">
               <div class="muted-line" id="deep-parameters-top-n-value">20</div>
@@ -1380,7 +1413,7 @@ input[type="range"]::-moz-range-thumb {
             <p class="muted-line" id="deep-scenarios-summary">Compare Pareto configs across loaded backtest scenarios (aggregated over visible configs).</p>
           </div>
           <div class="detail-toolbar">
-            <label for="deep-scenarios-metric" class="muted-line" style="align-self:center;">Metric</label>
+            <label for="deep-scenarios-metric" class="muted-line" style="align-self:center;"><span data-tip="Metric used for the scenario boxplots and scenario statistics. Values are aggregated over the visible config set.">Metric</span></label>
             <select id="deep-scenarios-metric" class="inline-select">
               <option value="">No metrics loaded</option>
             </select>
@@ -1395,24 +1428,24 @@ input[type="range"]::-moz-range-thumb {
         <div class="detail-summary-row">
           <div>
             <h3>Optimization Evolution Timeline</h3>
-            <p class="muted-line" id="deep-evolution-summary">Track how a selected metric evolved over optimize iterations.</p>
+            <p class="muted-line" id="deep-evolution-summary">Track whether later optimize iterations still improve the selected metric.</p>
           </div>
           <div class="detail-toolbar">
-            <div class="check-row"><input id="deep-evolution-show-all" type="checkbox"><label for="deep-evolution-show-all">Show all configs</label></div>
-            <div class="check-row"><input id="deep-evolution-hide-outliers" type="checkbox" checked><label for="deep-evolution-hide-outliers">Hide liquidation outliers</label></div>
-            <div class="check-row"><input id="deep-evolution-weighted" type="checkbox" checked><label for="deep-evolution-weighted">Use Weighted Metrics</label></div>
-            <div class="check-row"><input id="deep-evolution-btc" type="checkbox"><label for="deep-evolution-btc">Use BTC instead of USD</label></div>
+            <div class="check-row"><input id="deep-evolution-show-all" type="checkbox"><label for="deep-evolution-show-all"><span data-tip="Show all configs in the visible range instead of only visible Pareto configs.">Show all configs</span></label></div>
+            <div class="check-row"><input id="deep-evolution-hide-outliers" type="checkbox" checked><label for="deep-evolution-hide-outliers"><span data-tip="Hide extreme liquidation-style values such as -1 so the chart scale remains readable.">Hide liquidation outliers</span></label></div>
+            <div class="check-row"><input id="deep-evolution-weighted" type="checkbox" checked><label for="deep-evolution-weighted"><span data-tip="Prefer weighted metric variants for the evolution metric selector.">Use Weighted Metrics</span></label></div>
+            <div class="check-row"><input id="deep-evolution-btc" type="checkbox"><label for="deep-evolution-btc"><span data-tip="Use BTC-denominated metric variants for the evolution metric selector where available.">Use BTC instead of USD</span></label></div>
           </div>
         </div>
         <div class="form-grid" style="margin-bottom:12px;">
           <div class="form-field wide">
-            <label for="deep-evolution-metric">Metric</label>
+            <label for="deep-evolution-metric"><span data-tip="Metric plotted over config index. The blue line shows the cumulative best-so-far value so you can see when later iterations stop improving materially. Click points in the timeline to inspect that config below.">Metric</span></label>
             <select id="deep-evolution-metric"></select>
           </div>
           <div class="form-field">
-            <label for="deep-evolution-window">Smoothing Window (%)</label>
-            <input id="deep-evolution-window" type="range" min="1" max="25" step="1" value="5">
-            <div class="muted-line" id="deep-evolution-window-value">5%</div>
+            <label for="deep-evolution-window"><span data-tip="Minimum relative improvement required to count as meaningful. This filters tiny best-so-far changes when estimating whether more iterations still helped.">Meaningful Improvement (%)</span></label>
+            <input id="deep-evolution-window" type="range" min="0" max="5" step="0.1" value="1">
+            <div class="muted-line" id="deep-evolution-window-value">1%</div>
           </div>
         </div>
         <div id="deep-evolution-chart" class="placeholder-chart deep-plotly-chart"></div>
@@ -1426,7 +1459,7 @@ input[type="range"]::-moz-range-thumb {
         </div>
         <div class="form-grid" style="margin-bottom:12px;">
           <div class="form-field">
-            <label for="deep-correlations-strategy">Selection Strategy</label>
+            <label for="deep-correlations-strategy"><span data-tip="How configs are selected for the radar comparison: top ranked, style-diverse, or across the risk spectrum.">Selection Strategy</span></label>
             <select id="deep-correlations-strategy">
               <option value="Top Performers">Top Performers</option>
               <option value="Diverse Styles">Diverse Styles</option>
@@ -1434,21 +1467,21 @@ input[type="range"]::-moz-range-thumb {
             </select>
           </div>
           <div class="form-field">
-            <label for="deep-correlations-num">Configs</label>
+            <label for="deep-correlations-num"><span data-tip="Number of configs to compare in the correlation radar.">Configs</span></label>
             <input id="deep-correlations-num" type="range" min="3" max="10" step="1" value="5">
             <div class="muted-line" id="deep-correlations-num-value">5</div>
           </div>
           <div class="form-field">
             <label>&nbsp;</label>
-            <div class="check-row"><input id="deep-correlations-weighted" type="checkbox" checked><label for="deep-correlations-weighted">Use Weighted Metrics</label></div>
+            <div class="check-row"><input id="deep-correlations-weighted" type="checkbox" checked><label for="deep-correlations-weighted"><span data-tip="Prefer weighted metric variants for correlation/radar dimensions where available.">Use Weighted Metrics</span></label></div>
           </div>
           <div class="form-field">
             <label>&nbsp;</label>
-            <div class="check-row"><input id="deep-correlations-btc" type="checkbox"><label for="deep-correlations-btc">Use BTC instead of USD</label></div>
+            <div class="check-row"><input id="deep-correlations-btc" type="checkbox"><label for="deep-correlations-btc"><span data-tip="Use BTC-denominated metric variants for correlation/radar dimensions where available.">Use BTC instead of USD</span></label></div>
           </div>
           <div class="form-field">
             <label>&nbsp;</label>
-            <div class="button-row"><button class="ghost-btn" id="btn-deep-correlations-refresh">Refresh</button></div>
+            <div class="button-row"><button class="ghost-btn" id="btn-deep-correlations-refresh" data-tip="Reload the radar after changing the selection strategy or metric options.">Refresh</button></div>
           </div>
         </div>
         <div id="deep-correlations-chart" class="placeholder-chart deep-plotly-chart">Load a result to render the risk-profile radar.</div>
@@ -1499,13 +1532,13 @@ input[type="range"]::-moz-range-thumb {
         </section>
         <section class="detail-block half panel-card">
           <details class="expander-card">
-            <summary>Full Configuration</summary>
+            <summary><span data-tip="Complete selected PBv7 config as JSON, with copy/expand controls.">Full Configuration</span></summary>
             <div id="detail-full-config-panel" style="margin-top:12px;"></div>
           </details>
         </section>
         <section class="detail-block half panel-card">
           <details class="expander-card">
-            <summary>All Metrics & Statistics</summary>
+            <summary><span data-tip="Full metric dump for the selected config, beyond the compact summary cards.">All Metrics & Statistics</span></summary>
             <div id="detail-all-metrics" class="detail-list" style="margin-top: 12px;">
               <div class="placeholder-panel" style="min-height:120px;">All suite metrics will be listed here for the selected config.</div>
             </div>
@@ -1513,78 +1546,63 @@ input[type="range"]::-moz-range-thumb {
         </section>
         <section id="detail-preset-section" class="detail-block panel-card" style="display:none;">
           <details class="expander-card" id="preset-generator-details">
-            <summary>🧩 Create PBv7 Optimize Preset from this Config</summary>
+            <summary><span data-tip="Build a follow-up Optimize preset from the selected config, reusing existing Optimize save/queue flows.">Create PBv7 Optimize Preset from this Config</span></summary>
             <p class="muted-line">Creates a new Optimize preset with bounds tightened around the selected config's parameters. Useful for a follow-up run focused on fine-tuning instead of broad exploration.</p>
             <div class="preset-grid">
-              <div class="form-field wide">
-                <label for="preset-name">Preset name</label>
-                <input id="preset-name" type="text" maxlength="64" value="">
-              </div>
-              <div class="form-field">
-                <label for="preset-bounds-adjust">Bounds window adjustment</label>
-                <input id="preset-bounds-adjust" type="range" min="-50" max="50" step="1" value="0">
-                <div class="muted-line" id="preset-bounds-adjust-value">0</div>
-              </div>
-              <div class="form-field wide">
-                <label for="preset-direction">Optimization goal</label>
+              <div class="form-field half">
+                <label for="preset-direction"><span data-tip="High-level scoring preset for the follow-up Optimize run. Balanced keeps the run scoring; the other goals choose PB7 metrics suited to profit, safety, smoothness, hold time, or exposure efficiency.">Optimization goal</span></label>
                 <select id="preset-direction">
                   <option value="Balanced (keep run scoring)">Balanced (keep run scoring)</option>
                   <option value="More profit (risk can be higher)">More profit (risk can be higher)</option>
                   <option value="Safer (lower drawdowns)">Safer (lower drawdowns)</option>
                   <option value="Smoother equity curve">Smoother equity curve</option>
-                  <option value="Fewer/shorter holds (faster turnover)">Fewer/shorter holds (faster turnover)</option>
+                  <option value="Fewer/shorter holds (less time in market)">Fewer/shorter holds (less time in market)</option>
                   <option value="Lower exposure (safer sizing)">Lower exposure (safer sizing)</option>
                 </select>
               </div>
-              <div class="form-field">
-                <label for="preset-risk-adjust">Risk adjustment</label>
+              <div class="form-field half">
+                <label for="preset-name"><span data-tip="Name of the new PBv7 Optimize preset. It will be saved as an Optimize config and used as the draft name when opening Optimize.">Preset name</span></label>
+                <input id="preset-name" type="text" maxlength="64" value="">
+              </div>
+              <div class="form-field full">
+                <div class="check-row"><input id="preset-only-near-bounds" type="checkbox" checked><label for="preset-only-near-bounds"><span data-tip="When enabled, bounds-window and risk-bound changes are applied only to parameters that are near their optimize search-space edge. Disable it to adjust all optimized parameters around the selected config.">Only adjust parameters near optimize bounds</span></label></div>
+              </div>
+              <div class="form-field half">
+                <label for="preset-bounds-window"><span data-tip="Direct bounds window around the selected config's parameter values. 0% leaves bounds unchanged; 5%, 10%, ... tighten bounds to that +/- window where possible.">Bounds window (%)</span></label>
+                <input id="preset-bounds-window" type="range" min="0" max="100" step="5" value="0">
+                <div class="muted-line" id="preset-bounds-window-value">0%</div>
+              </div>
+              <div class="form-field half">
+                <label for="preset-risk-adjust"><span data-tip="0 = neutral. Negative tightens risk-related bounds/limits; positive relaxes them. Affects exposure, position count, unstuck/enforcer parameters, and drawdown limits where applicable.">Risk adjustment</span></label>
                 <input id="preset-risk-adjust" type="range" min="-50" max="50" step="5" value="0">
                 <div class="muted-line" id="preset-risk-adjust-value">0</div>
               </div>
               <div class="form-field full">
-                <div class="muted-line" id="preset-bounds-window-hint">Bounds unchanged (set adjustment ≠ 0 to tighten/loosen).</div>
+                <div class="muted-line" id="preset-bounds-window-hint">Bounds unchanged.</div>
               </div>
               <div class="form-field full">
-                <div class="check-row"><input id="preset-show-near-bounds" type="checkbox"><label for="preset-show-near-bounds">Show parameters near bounds (Deep Intelligence)</label></div>
+                <h4 style="margin:0;">Preset summary</h4>
+                <div id="preset-summary" class="placeholder-panel">Select a config to build a preset preview.</div>
               </div>
-              <div id="preset-near-bounds-options" class="form-field full" style="display:none;">
-                <div class="preset-grid" style="margin-top:0;">
-                  <div class="form-field">
-                    <label for="preset-near-bounds-tol">Near-bounds tolerance</label>
-                    <input id="preset-near-bounds-tol" type="range" min="1" max="25" step="1" value="10">
-                    <div class="muted-line" id="preset-near-bounds-tol-value">10%</div>
+              <div class="form-field full">
+                <details class="expander-card" id="preset-advanced-preview">
+                  <summary><span data-tip="Inspect generated scoring, limits, and parameter-bound changes before creating the preset.">Advanced preview details</span></summary>
+                  <div class="preset-grid">
+                    <div class="form-field full">
+                      <h4 style="margin:0;">Planned optimize defaults</h4>
+                      <pre id="preset-preview-json" class="preset-code-preview">Select a config to build a preset preview.</pre>
+                    </div>
+                    <div class="form-field full">
+                      <h4 style="margin:0;">Bounds changes preview</h4>
+                      <div id="preset-bounds-preview" class="placeholder-panel">No preview loaded.</div>
+                    </div>
                   </div>
-                  <div class="form-field wide">
-                    <label>&nbsp;</label>
-                    <div class="check-row"><input id="preset-expand-near-bounds" type="checkbox"><label for="preset-expand-near-bounds">Expand bounds for near-edge params</label></div>
-                    <div class="check-row"><input id="preset-hide-hard-limited-near" type="checkbox"><label for="preset-hide-hard-limited-near">Hide near-bounds limited by 0-clamp</label></div>
-                  </div>
-                  <div id="preset-expand-options" class="form-field" style="display:none;">
-                    <label for="preset-near-bounds-expand-pct">Near-edge expansion (%)</label>
-                    <input id="preset-near-bounds-expand-pct" type="range" min="0" max="100" step="5" value="25">
-                    <div class="muted-line" id="preset-near-bounds-expand-pct-value">25%</div>
-                  </div>
-                </div>
-              </div>
-              <div class="form-field full">
-                <div class="check-row"><input id="preset-open-optimize" type="checkbox" checked><label for="preset-open-optimize">Open PBv7 Optimize after creating preset</label></div>
-              </div>
-              <div class="form-field full">
-                <h4 style="margin:0;">Planned optimize defaults</h4>
-                <pre id="preset-preview-json" class="preset-code-preview">Select a config to build a preset preview.</pre>
-              </div>
-              <div class="form-field full">
-                <h4 style="margin:0;">Bounds changes preview</h4>
-                <div id="preset-bounds-preview" class="placeholder-panel">No preview loaded.</div>
-              </div>
-              <div id="preset-near-preview-block" class="form-field full" style="display:none;">
-                <h4 style="margin:0;">Parameters near bounds</h4>
-                <div id="preset-near-preview" class="placeholder-panel">No near-bounds preview loaded.</div>
+                </details>
               </div>
               <div class="form-field full">
                 <div class="button-row">
-                  <button class="btn primary" id="btn-create-preset" type="button">💾 Create Optimize Preset</button>
-                  <button class="ghost-btn" id="btn-refresh-preset-preview" type="button">Refresh Preview</button>
+                  <button class="btn primary" id="btn-create-preset" type="button" data-tip="Save the generated Optimize config and open it in PBv7 Optimize.">💾 Create Optimize Preset</button>
+                  <button class="btn" id="btn-create-queue-preset" type="button" data-tip="Save the generated Optimize config and add it to the Optimize queue without opening Optimize.">📥 Create & Queue</button>
                 </div>
                 <div class="muted-line" id="preset-status" style="margin-top:8px;"></div>
               </div>
@@ -1608,6 +1626,8 @@ input[type="range"]::-moz-range-thumb {
     </div>
   </div>
 </div>
+
+<div id="data-tip-tooltip"></div>
 
 <script src="/app/js/json_panel.js?v=1"></script>
 <script>
@@ -1638,8 +1658,13 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     fullLoadProgressTimer: null,
     playgroundRefreshTimer: null,
     deepPlotResizeTimer: null,
+    loadRequestSeq: 0,
     playgroundRequestSeq: 0,
     detailRequestSeq: 0,
+    deepParametersRequestSeq: 0,
+    deepScenariosRequestSeq: 0,
+    deepEvolutionRequestSeq: 0,
+    deepCorrelationsRequestSeq: 0,
     presetPreviewTimer: null,
     presetPreviewRequestSeq: 0,
     persistDefaults: true,
@@ -1682,6 +1707,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     deepEvolutionUseWeighted: true,
     deepEvolutionUseBtc: false,
     deepEvolutionWindowPercent: 5,
+    deepEvolutionImprovementThresholdPct: 1,
     deepCorrelations: null,
     deepCorrelationsStrategy: 'Top Performers',
     deepCorrelationsNumConfigs: 5,
@@ -1751,22 +1777,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     el('overlay-modal').classList.remove('open');
   }
 
-  function downloadResponseBlob(response, fallbackFilename) {
-    var disposition = response.headers.get('Content-Disposition') || '';
-    var match = disposition.match(/filename="([^"]+)"/i);
-    var filename = match && match[1] ? match[1] : fallbackFilename;
-    return response.blob().then(function(blob) {
-      var url = window.URL.createObjectURL(blob);
-      var link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-    });
-  }
-
   function buildBacktestMainPageUrl(extraParams) {
     var base = window.location.origin + '/api/backtest-v7/main_page';
     var params = new URLSearchParams();
@@ -1807,11 +1817,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       if (parts.length) return parts[parts.length - 1];
     }
     return 'pareto_config_' + String(state.selectedConfigIndex == null ? 'draft' : state.selectedConfigIndex);
-  }
-
-  function optimizeSeedPathFromResult(resultPath) {
-    var normalized = String(resultPath || '').replace(/[\\/]+$/, '');
-    return normalized ? normalized + '/pareto' : '';
   }
 
   function openBacktestDraft(config, draftName) {
@@ -1897,7 +1902,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   function syncFormState() {
     el('result-path-input').value = state.resultPath || '';
     el('max-configs-input').value = String(state.maxConfigs || 2000);
-    el('all-results-toggle').checked = !!state.allResultsLoaded;
     el('persist-defaults-toggle').checked = !!state.persistDefaults;
     el('btn-load-pareto-only').style.display = state.allResultsLoaded ? '' : 'none';
     Array.prototype.forEach.call(el('load-strategy-select').options, function(option) {
@@ -1930,8 +1934,8 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     el('deep-evolution-hide-outliers').checked = !!state.deepEvolutionHideOutliers;
     el('deep-evolution-weighted').checked = !!state.deepEvolutionUseWeighted;
     el('deep-evolution-btc').checked = !!state.deepEvolutionUseBtc;
-    el('deep-evolution-window').value = String(state.deepEvolutionWindowPercent || 5);
-    el('deep-evolution-window-value').textContent = String(state.deepEvolutionWindowPercent || 5) + '%';
+    el('deep-evolution-window').value = String(state.deepEvolutionImprovementThresholdPct == null ? 1 : state.deepEvolutionImprovementThresholdPct);
+    el('deep-evolution-window-value').textContent = String(state.deepEvolutionImprovementThresholdPct == null ? 1 : state.deepEvolutionImprovementThresholdPct) + '%';
     el('deep-correlations-strategy').value = String(state.deepCorrelationsStrategy || 'Top Performers');
     el('deep-correlations-num').value = String(state.deepCorrelationsNumConfigs || 5);
     el('deep-correlations-num-value').textContent = String(state.deepCorrelationsNumConfigs || 5);
@@ -2436,7 +2440,26 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   }
 
   function renderLoadSummary(load, result) {
-    return;
+    var summary = {
+      result: result ? {
+        name: result.name || '',
+        path: result.path || state.resultPath || '',
+        has_all_results: !!result.has_all_results,
+        pareto_count: result.pareto_count == null ? null : result.pareto_count,
+        mtime: result.mtime || null
+      } : { path: state.resultPath || '' },
+      load: load ? {
+        mode: load.mode || 'fast',
+        load_strategy: load.load_strategy || state.loadStrategy,
+        max_configs: load.max_configs == null ? state.maxConfigs : load.max_configs,
+        view_range: load.view_range || null,
+        scoring_metrics: load.scoring_metrics || [],
+        scenario_labels: load.scenario_labels || [],
+        load_stats: load.load_stats || {},
+        summary: load.summary || {}
+      } : null
+    };
+    el('result-meta-json').textContent = JSON.stringify(summary, null, 2);
   }
 
   function darkPlotLayout(layout) {
@@ -2642,6 +2665,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   function bindPlotClick(node, handler) {
     if (!node || typeof handler !== 'function') return;
+    clearPlotClickHandlers(node);
     node.on('plotly_click', function(eventData) {
       var points = eventData && Array.isArray(eventData.points) ? eventData.points : [];
       if (!points.length) return;
@@ -2684,6 +2708,13 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     });
   }
 
+  function clearPlotClickHandlers(node) {
+    if (!node) return;
+    if (typeof node.removeAllListeners === 'function') {
+      node.removeAllListeners('plotly_click');
+    }
+  }
+
   function refreshPlaygroundFromSettings() {
     if (!state.resultPath) return;
     loadPlayground({ followBestMatch: true }).catch(function() {});
@@ -2717,7 +2748,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     state.allResultsLoaded = true;
     state.loadStrategy = requestedLoadStrategy;
     state.maxConfigs = requestedMaxConfigs;
-    el('all-results-toggle').checked = true;
     el('btn-load-all-results').disabled = true;
     el('btn-load-all-results').textContent = 'Loading all_results...';
     el('mode-chip').textContent = 'Loading full result...';
@@ -2738,12 +2768,12 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }
     state.fullLoadPending = false;
     state.fullLoadJobId = '';
+    state.loadRequestSeq += 1;
     clearFullLoadPoll();
     stopFullLoadProgressAnimation();
     state.allResultsLoaded = false;
     state.viewRange = null;
     state.pendingViewRange = null;
-    el('all-results-toggle').checked = false;
     el('btn-load-all-results').disabled = false;
     el('btn-load-all-results').textContent = '📂 Load all_results';
     el('mode-chip').textContent = 'Switching to fast mode...';
@@ -2951,39 +2981,28 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     if (nameNode.dataset.configIndex !== configKey) {
       nameNode.value = presetDefaultName(detail);
       nameNode.dataset.configIndex = configKey;
-      el('preset-bounds-adjust').value = '0';
+      el('preset-only-near-bounds').checked = true;
+      el('preset-bounds-window').value = '0';
       el('preset-risk-adjust').value = '0';
       el('preset-direction').value = 'Balanced (keep run scoring)';
-      el('preset-show-near-bounds').checked = false;
-      el('preset-expand-near-bounds').checked = false;
-      el('preset-hide-hard-limited-near').checked = false;
-      el('preset-near-bounds-tol').value = '10';
-      el('preset-near-bounds-expand-pct').value = '25';
     }
     updatePresetUiLabels();
     if (el('preset-generator-details').open) schedulePresetPreview(0);
   }
 
   function updatePresetUiLabels() {
-    var boundsAdjust = parseInt(el('preset-bounds-adjust').value || '0', 10) || 0;
+    var boundsWindowPct = parseInt(el('preset-bounds-window').value || '0', 10) || 0;
     var riskAdjust = parseInt(el('preset-risk-adjust').value || '0', 10) || 0;
-    var nearTol = parseInt(el('preset-near-bounds-tol').value || '10', 10) || 10;
-    var expandPctRaw = parseInt(el('preset-near-bounds-expand-pct').value || '25', 10);
-    var expandPct = Number.isFinite(expandPctRaw) ? expandPctRaw : 25;
-    el('preset-bounds-adjust-value').textContent = String(boundsAdjust);
+    el('preset-bounds-window-value').textContent = String(boundsWindowPct) + '%';
     el('preset-risk-adjust-value').textContent = String(riskAdjust);
-    el('preset-near-bounds-tol-value').textContent = String(nearTol) + '%';
-    el('preset-near-bounds-expand-pct-value').textContent = String(expandPct) + '%';
-    el('preset-bounds-window-hint').textContent = boundsAdjust === 0
-      ? 'Bounds unchanged (set adjustment ≠ 0 to tighten/loosen).'
-      : 'Effective bounds window: ±' + String(Math.max(0, Math.min(100, 10 + boundsAdjust))) + '% around selected values (base 10%, adjustment ' + (boundsAdjust > 0 ? '+' : '') + String(boundsAdjust) + ').';
-    el('preset-near-bounds-options').style.display = el('preset-show-near-bounds').checked ? '' : 'none';
-    el('preset-expand-options').style.display = (el('preset-show-near-bounds').checked && el('preset-expand-near-bounds').checked) ? '' : 'none';
-    el('preset-near-preview-block').style.display = el('preset-show-near-bounds').checked ? '' : 'none';
-    ['preset-bounds-adjust', 'preset-risk-adjust', 'preset-near-bounds-tol', 'preset-near-bounds-expand-pct'].forEach(function(id) { updateRangeFill(el(id)); });
+    el('preset-bounds-window-hint').textContent = boundsWindowPct === 0
+      ? 'Bounds unchanged.'
+      : 'Effective bounds window: ±' + String(boundsWindowPct) + '% around selected values' + (el('preset-only-near-bounds').checked ? ' for near-bound parameters only.' : '.');
+    ['preset-bounds-window', 'preset-risk-adjust'].forEach(function(id) { updateRangeFill(el(id)); });
   }
 
-  function buildPresetRequestBody() {
+  function buildPresetRequestBody(options) {
+    options = options || {};
     var detail = state.selectedDetail;
     if (!detail || detail.config_index == null) throw new Error('No selected config is available.');
     return {
@@ -2993,25 +3012,22 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       max_configs: state.maxConfigs,
       all_results_loaded: state.allResultsLoaded,
       view_range: state.viewRange,
+      include_config: !!options.includeConfig,
       preset: {
         preset_name: el('preset-name').value.trim() || presetDefaultName(detail),
-        bounds_adjust: parseInt(el('preset-bounds-adjust').value || '0', 10) || 0,
+        only_adjust_near_bounds: !!el('preset-only-near-bounds').checked,
+        bounds_window_pct: parseInt(el('preset-bounds-window').value || '0', 10) || 0,
         direction: el('preset-direction').value,
         risk_adjust: parseInt(el('preset-risk-adjust').value || '0', 10) || 0,
-        show_near_bounds: !!el('preset-show-near-bounds').checked,
-        near_bounds_tol: (parseInt(el('preset-near-bounds-tol').value || '10', 10) || 10) / 100,
-        expand_near_bounds: !!el('preset-expand-near-bounds').checked,
-        near_bounds_expand_pct: (function() {
-          var value = parseInt(el('preset-near-bounds-expand-pct').value || '25', 10);
-          return Number.isFinite(value) ? value : 25;
-        }()),
-        hide_hard_limited_near: !!el('preset-hide-hard-limited-near').checked,
-        switch_to_optimize: !!el('preset-open-optimize').checked
+        show_near_bounds: false,
+        expand_near_bounds: false,
+        hide_hard_limited_near: false
       }
     };
   }
 
-  function renderPresetRows(rootId, rows, emptyText, columns) {
+  function renderPresetRows(rootId, rows, emptyText, columns, options) {
+    options = options || {};
     var root = el(rootId);
     if (!rows || !rows.length) {
       root.className = 'placeholder-panel';
@@ -3019,27 +3035,69 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       return;
     }
     root.className = '';
-    var html = '<div style="overflow:auto; max-height:320px;"><table class="preset-preview-table"><thead><tr>';
+    var visibleRows = options.showAll ? rows : rows.slice(0, 120);
+    var html = options.fullHeight ? '<div>' : '<div style="overflow:auto; max-height:320px;">';
+    html += '<table class="preset-preview-table"><thead><tr>';
     columns.forEach(function(column) { html += '<th>' + escapeHtml(column.label) + '</th>'; });
     html += '</tr></thead><tbody>';
-    rows.slice(0, 120).forEach(function(row) {
+    visibleRows.forEach(function(row) {
       html += '<tr>';
       columns.forEach(function(column) { html += '<td>' + escapeHtml(row[column.key] == null ? '' : row[column.key]) + '</td>'; });
       html += '</tr>';
     });
     html += '</tbody></table></div>';
-    if (rows.length > 120) html += '<div class="muted-line" style="margin-top:6px;">Showing first 120 of ' + escapeHtml(String(rows.length)) + ' rows.</div>';
+    if (!options.showAll && rows.length > 120) html += '<div class="muted-line" style="margin-top:6px;">Showing first 120 of ' + escapeHtml(String(rows.length)) + ' rows.</div>';
+    root.innerHTML = html;
+  }
+
+  function presetScoringLabel(entry) {
+    if (entry && typeof entry === 'object') {
+      var metric = String(entry.metric || '');
+      var goal = String(entry.goal || '');
+      return goal ? metric + ' (' + goal + ')' : metric;
+    }
+    return String(entry == null ? '' : entry);
+  }
+
+  function renderPresetSummary(payload) {
+    var root = el('preset-summary');
+    if (!payload || !payload.ok) {
+      root.className = 'placeholder-panel';
+      root.innerHTML = 'No preset preview available.';
+      return;
+    }
+    var scoring = Array.isArray(payload.scoring) ? payload.scoring : [];
+    var limits = Array.isArray(payload.limits) ? payload.limits : [];
+    var boundsRows = payload.bounds_preview_rows || [];
+    var onlyNearBounds = !!payload.only_adjust_near_bounds;
+    var nearBoundsCount = parseInt(payload.near_bounds_count || 0, 10) || 0;
+    var rows = [
+      { label: 'Name', value: payload.preset_name || presetDefaultName(state.selectedDetail) },
+      { label: 'Goal', value: payload.direction || el('preset-direction').value },
+      { label: 'Bounds scope', value: onlyNearBounds ? ('near-bound parameters only' + (nearBoundsCount ? ' (' + String(nearBoundsCount) + ')' : ' (none detected)')) : 'all optimized parameters' },
+      { label: 'Bounds window', value: (payload.window_pct || 0) > 0 ? ('±' + String(payload.window_pct) + '%') : 'unchanged' },
+      { label: 'Scoring', value: scoring.map(presetScoringLabel).filter(Boolean).join(', ') || 'unchanged' },
+      { label: 'Limits', value: String(limits.length) + ' configured' },
+      { label: 'Bounds changes', value: String(boundsRows.length) }
+    ];
+    var html = '<table class="preset-preview-table"><tbody>';
+    rows.forEach(function(row) {
+      html += '<tr><th>' + escapeHtml(row.label) + '</th><td>' + escapeHtml(row.value) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    root.className = '';
     root.innerHTML = html;
   }
 
   function renderPresetPreview(payload) {
     if (!payload || !payload.ok) {
+      renderPresetSummary(null);
       el('preset-preview-json').textContent = 'No preset preview available.';
       renderPresetRows('preset-bounds-preview', [], 'No bounds changes detected.', []);
-      renderPresetRows('preset-near-preview', [], 'No parameters near bounds detected (or data unavailable).', []);
       return;
     }
     if (payload.preset_name) el('preset-name').value = String(payload.preset_name);
+    renderPresetSummary(payload);
     el('preset-preview-json').textContent = JSON.stringify({ scoring: payload.scoring || [], limits: payload.limits || [] }, null, 2);
     renderPresetRows('preset-bounds-preview', payload.bounds_preview_rows || [], 'No bounds changes detected.', [
       { key: 'param', label: 'Param' },
@@ -3051,21 +3109,25 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       { key: 'result', label: 'Result' },
       { key: 'expand_note', label: 'Note' }
     ]);
-    renderPresetRows('preset-near-preview', payload.near_rows || [], 'No parameters near bounds detected (or data unavailable).', [
-      { key: 'param', label: 'Param' },
-      { key: 'edge', label: 'Edge' },
-      { key: 'value', label: 'Value' },
-      { key: 'bound', label: 'Bound' }
-    ]);
   }
 
-  function loadPresetPreview() {
+  function loadPresetPreview(options) {
+    options = options || {};
     var seq = ++state.presetPreviewRequestSeq;
-    el('preset-status').textContent = 'Building preset preview...';
+    el('preset-status').textContent = options.includeConfig ? 'Building preset config...' : 'Building preset preview...';
     return apiFetch('/optimize-preset/build', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildPresetRequestBody())
+      body: JSON.stringify(buildPresetRequestBody({ includeConfig: !!options.includeConfig }))
+    }).then(function(data) {
+      return resolveBackgroundLoadResponse(data, function(payload) {
+        var detail = payload && payload.refresh_bundle ? payload.refresh_bundle.detail : null;
+        if (detail) {
+          state.selectedDetail = detail;
+          renderDetail(detail);
+        }
+        return loadPresetPreview(options);
+      });
     }).then(function(data) {
       if (seq !== state.presetPreviewRequestSeq) return data;
       renderPresetPreview(data);
@@ -3082,27 +3144,47 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     if (state.presetPreviewTimer) window.clearTimeout(state.presetPreviewTimer);
     state.presetPreviewTimer = window.setTimeout(function() {
       state.presetPreviewTimer = null;
-      loadPresetPreview().catch(function() {});
+      loadPresetPreview({ includeConfig: false }).catch(function() {});
     }, delay == null ? 250 : delay);
   }
 
-  function createOptimizePreset() {
-    loadPresetPreview().then(function(data) {
+  function saveOptimizePresetConfig(name, config) {
+    var encoded = encodeURIComponent(name);
+    return optimizeApiFetch('/configs/' + encoded, {
+      method: 'PUT',
+      body: JSON.stringify(config)
+    }).then(function() {
+      return optimizeApiFetch('/configs/' + encoded);
+    }).then(function(saved) {
+      if (!saved || !saved.config) throw new Error('Saved optimize config could not be reloaded.');
+      return saved.config;
+    });
+  }
+
+  function createOptimizePreset(options) {
+    options = options || {};
+    var queueAfter = !!options.queueAfter;
+    loadPresetPreview({ includeConfig: true }).then(function(data) {
       if (!data || !data.preset_config) throw new Error('Preset config was not generated.');
       var name = String(data.preset_name || el('preset-name').value || '').trim();
       if (!name) throw new Error('Preset name is required.');
       el('preset-status').textContent = 'Saving optimize preset...';
-      return optimizeApiFetch('/configs/' + encodeURIComponent(name), {
-        method: 'PUT',
-        body: JSON.stringify(data.preset_config)
-      }).then(function() {
+      return saveOptimizePresetConfig(name, data.preset_config).then(function(savedConfig) {
         pushMessage('info', 'Optimize preset created: ' + name + '.json');
-        if (el('preset-open-optimize').checked) {
-          el('preset-status').textContent = 'Opening PBv7 Optimize...';
-          return openOptimizeSeedDraft(data.preset_config, name);
+        if (queueAfter) {
+          el('preset-status').textContent = 'Queueing optimize preset...';
+          return optimizeApiFetch('/queue', {
+            method: 'POST',
+            body: JSON.stringify({ name: name })
+          }).then(function(queueData) {
+            var filename = queueData && queueData.filename ? ' (' + queueData.filename + ')' : '';
+            el('preset-status').textContent = 'Optimize preset queued: ' + name + '.json' + filename;
+            pushMessage('info', 'Optimize preset queued: ' + name + '.json');
+            return savedConfig;
+          });
         }
-        el('preset-status').textContent = 'Optimize preset created: ' + name + '.json';
-        return null;
+        el('preset-status').textContent = 'Opening PBv7 Optimize...';
+        return openOptimizeSeedDraft(savedConfig, name);
       });
     }).catch(function(err) {
       el('preset-status').textContent = 'Create preset failed: ' + err.message;
@@ -3237,6 +3319,10 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         custom_z_metric: state.playground.customZMetric
       })
     }).then(function(data) {
+      return resolveBackgroundLoadResponse(data, function(payload) {
+        return payload && payload.refresh_bundle ? payload.refresh_bundle.playground : null;
+      });
+    }).then(function(data) {
       if (requestSeq !== state.playgroundRequestSeq) return data;
       renderPlayground(data, { followBestMatch: followBestMatch });
       if (!followBestMatch && data && data.best_match && data.best_match.config_index != null && state.selectedConfigIndex == null) {
@@ -3298,6 +3384,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       renderDeepParameters(null);
       return Promise.resolve(null);
     }
+    var seq = ++state.deepParametersRequestSeq;
     return apiFetch('/deep-intelligence/parameters', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3306,12 +3393,19 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         load_strategy: state.loadStrategy,
         max_configs: state.maxConfigs,
         all_results_loaded: state.allResultsLoaded,
-        top_n: state.deepParametersTopN
+        top_n: state.deepParametersTopN,
+        view_range: state.allResultsLoaded ? state.viewRange : null
       })
     }).then(function(data) {
+      return resolveBackgroundLoadResponse(data, function(payload) {
+        return payload && payload.refresh_bundle && payload.refresh_bundle.deep_intelligence ? payload.refresh_bundle.deep_intelligence.payload : null;
+      });
+    }).then(function(data) {
+      if (seq !== state.deepParametersRequestSeq) return data;
       renderDeepParameters(data);
       return data;
     }).catch(function(err) {
+      if (seq !== state.deepParametersRequestSeq) return null;
       pushMessage('error', 'Deep Intelligence parameters load failed: ' + err.message);
       throw err;
     });
@@ -3424,6 +3518,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       renderDeepScenarios(null);
       return Promise.resolve(null);
     }
+    var seq = ++state.deepScenariosRequestSeq;
     return apiFetch('/deep-intelligence/scenarios', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3432,12 +3527,19 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         load_strategy: state.loadStrategy,
         max_configs: state.maxConfigs,
         all_results_loaded: state.allResultsLoaded,
-        metric: state.deepScenariosMetric
+        metric: state.deepScenariosMetric,
+        view_range: state.allResultsLoaded ? state.viewRange : null
       })
     }).then(function(data) {
+      return resolveBackgroundLoadResponse(data, function(payload) {
+        return payload && payload.refresh_bundle && payload.refresh_bundle.deep_intelligence ? payload.refresh_bundle.deep_intelligence.payload : null;
+      });
+    }).then(function(data) {
+      if (seq !== state.deepScenariosRequestSeq) return data;
       renderDeepScenarios(data);
       return data;
     }).catch(function(err) {
+      if (seq !== state.deepScenariosRequestSeq) return null;
       pushMessage('error', 'Deep Intelligence scenarios load failed: ' + err.message);
       throw err;
     });
@@ -3449,7 +3551,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     var metricNode = el('deep-evolution-metric');
     var chartNode = el('deep-evolution-chart');
     if (!payload) {
-      summaryNode.textContent = 'Track how a selected metric evolved over optimize iterations.';
+      summaryNode.textContent = 'Track whether later optimize iterations still improve the selected metric.';
       metricNode.innerHTML = '<option value="">No metrics loaded</option>';
       chartNode.className = 'placeholder-chart deep-plotly-chart';
       chartNode.textContent = '';
@@ -3470,23 +3572,39 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     state.deepEvolutionUseWeighted = !!payload.use_weighted;
     state.deepEvolutionUseBtc = !!payload.use_btc;
     state.deepEvolutionWindowPercent = payload.window_percent || state.deepEvolutionWindowPercent || 5;
+    state.deepEvolutionImprovementThresholdPct = payload.improvement_threshold_pct == null ? state.deepEvolutionImprovementThresholdPct : payload.improvement_threshold_pct;
     syncFormState();
 
-    summaryNode.textContent = 'Tracking ' + String(payload.selected_metric || '-') + ' across ' + String(payload.displayed_configs || 0) + ' ' + (payload.show_all ? 'visible configs' : 'visible pareto configs') + ' with a rolling window of ' + String(payload.window || 0) + ' iterations.';
+    if (payload.requires_full_mode) {
+      summaryNode.textContent = payload.message || 'Evolution requires full mode because Fast Mode does not know the original all_results config index.';
+      el('selected-config-detail').style.display = 'none';
+      el('selected-config-section').style.display = 'none';
+      chartNode.className = 'placeholder-chart deep-plotly-chart';
+      chartNode.textContent = (payload.chart && payload.chart.layout && payload.chart.layout.title) || 'Load all_results.bin to inspect when Pareto configs were found.';
+      return;
+    }
+
+    var best = payload.chart && payload.chart.best_so_far ? payload.chart.best_so_far : null;
+    var bestText = '';
+    if (best && best.best_config_index != null) {
+      bestText = ' Best ' + String(best.direction || 'max') + ' value: ' + String(best.best_value) + ' at config #' + String(best.best_config_index) + '.';
+      if (best.last_meaningful_improvement_config_index != null) {
+        bestText += ' Last meaningful improvement (≥' + String(best.improvement_threshold_pct) + '%): #' + String(best.last_meaningful_improvement_config_index) + '.';
+      }
+      if (best.tail_improvement_pct != null) {
+        bestText += ' Final 20% improvement: ' + String(best.tail_improvement_pct) + '%.';
+      }
+      if (best.suggested_min_iters != null) {
+        bestText += ' Suggested minimum next run: ~' + String(best.suggested_min_iters) + ' iters.';
+      }
+    }
+    summaryNode.textContent = 'Tracking ' + String(payload.selected_metric || '-') + ' across ' + String(payload.displayed_configs || 0) + ' ' + (payload.show_all ? 'visible configs' : 'visible pareto configs') + '. Blue line shows best-so-far.' + bestText;
     if (payload.chart && payload.chart.traces && payload.chart.traces.length) {
       chartNode.className = 'deep-plotly-chart';
       chartNode.textContent = '';
       Plotly.newPlot(chartNode, payload.chart.traces, darkPlotLayout(payload.chart.layout || {}), { responsive: true, displaylogo: false }).then(function() {
         scheduleDeepPlotResize();
-        chartNode.on('plotly_click', function(eventData) {
-          var point = eventData && eventData.points && eventData.points[0];
-          var custom = point && point.customdata ? point.customdata : null;
-          var configIndex = custom && Array.isArray(custom) ? custom[0] : null;
-          if (configIndex == null && point && point.x != null) configIndex = point.x;
-          var parsed = parseInt(configIndex, 10);
-          if (!Number.isFinite(parsed)) return;
-          loadConfigDetail(parsed).catch(function() {});
-        });
+        bindPlotClick(chartNode, function(configIndex) { loadConfigDetail(configIndex).catch(function() {}); });
       });
     } else {
       chartNode.className = 'placeholder-chart deep-plotly-chart';
@@ -3499,6 +3617,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       renderDeepEvolution(null);
       return Promise.resolve(null);
     }
+    var seq = ++state.deepEvolutionRequestSeq;
     return apiFetch('/deep-intelligence/evolution', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3513,12 +3632,19 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         use_weighted: state.deepEvolutionUseWeighted,
         use_btc: state.deepEvolutionUseBtc,
         window_percent: state.deepEvolutionWindowPercent,
+        improvement_threshold_pct: state.deepEvolutionImprovementThresholdPct,
         view_range: state.allResultsLoaded ? state.viewRange : null,
       })
     }).then(function(data) {
+      return resolveBackgroundLoadResponse(data, function(payload) {
+        return payload && payload.refresh_bundle && payload.refresh_bundle.deep_intelligence ? payload.refresh_bundle.deep_intelligence.payload : null;
+      });
+    }).then(function(data) {
+      if (seq !== state.deepEvolutionRequestSeq) return data;
       renderDeepEvolution(data);
       return data;
     }).catch(function(err) {
+      if (seq !== state.deepEvolutionRequestSeq) return null;
       pushMessage('error', 'Deep Intelligence evolution load failed: ' + err.message);
       throw err;
     });
@@ -3549,14 +3675,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       chartNode.textContent = '';
       Plotly.newPlot(chartNode, payload.chart.traces, darkPlotLayout(payload.chart.layout || {}), { responsive: true, displaylogo: false }).then(function() {
         scheduleDeepPlotResize();
-        chartNode.on('plotly_click', function(eventData) {
-          var point = eventData && eventData.points && eventData.points[0];
-          var custom = point && point.customdata ? point.customdata : null;
-          var configIndex = custom && Array.isArray(custom) ? custom[0] : null;
-          var parsed = parseInt(configIndex, 10);
-          if (!Number.isFinite(parsed)) return;
-          loadConfigDetail(parsed).catch(function() {});
-        });
+        bindPlotClick(chartNode, function(configIndex) { loadConfigDetail(configIndex).catch(function() {}); });
       });
     } else {
       chartNode.className = 'placeholder-chart deep-plotly-chart';
@@ -3569,6 +3688,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       renderDeepCorrelations(null);
       return Promise.resolve(null);
     }
+    var seq = ++state.deepCorrelationsRequestSeq;
     return apiFetch('/deep-intelligence/correlations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3580,12 +3700,19 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         strategy: state.deepCorrelationsStrategy,
         num_configs: state.deepCorrelationsNumConfigs,
         use_weighted: state.deepCorrelationsUseWeighted,
-        use_btc: state.deepCorrelationsUseBtc
+        use_btc: state.deepCorrelationsUseBtc,
+        view_range: state.allResultsLoaded ? state.viewRange : null
       })
     }).then(function(data) {
+      return resolveBackgroundLoadResponse(data, function(payload) {
+        return payload && payload.refresh_bundle && payload.refresh_bundle.deep_intelligence ? payload.refresh_bundle.deep_intelligence.payload : null;
+      });
+    }).then(function(data) {
+      if (seq !== state.deepCorrelationsRequestSeq) return data;
       renderDeepCorrelations(data);
       return data;
     }).catch(function(err) {
+      if (seq !== state.deepCorrelationsRequestSeq) return null;
       pushMessage('error', 'Deep Intelligence correlations load failed: ' + err.message);
       throw err;
     });
@@ -3717,7 +3844,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       setFullLoadStatus('idle', 'Currently using fast pareto-only mode. Use `Load all_results` to load the complete result set.', 0);
     }
 
-    el('result-meta-json').textContent = JSON.stringify(result || { result_path: state.resultPath || '' }, null, 2);
     syncFormState();
     renderDisplayRange(load);
     renderLoadSummary(load, result);
@@ -3734,7 +3860,8 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     var isEvolution = tab === 'evolution';
     var isCorrelations = tab === 'correlations';
     if (state.stage === 'deep_intelligence') {
-      var showConfigDetail = isEvolution;
+      var evolutionRequiresFullMode = !!(state.deepEvolution && state.deepEvolution.requires_full_mode);
+      var showConfigDetail = isEvolution && state.allResultsLoaded && !evolutionRequiresFullMode;
       el('selected-config-detail').style.display = showConfigDetail ? 'block' : 'none';
       el('selected-config-section').style.display = showConfigDetail ? 'grid' : 'none';
     }
@@ -3780,6 +3907,10 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         view_range: state.allResultsLoaded ? state.pendingViewRange || state.viewRange : null
       })
     }).then(function(data) {
+      return resolveBackgroundLoadResponse(data, function(payload) {
+        return payload && payload.refresh_bundle ? payload.refresh_bundle.command_center : null;
+      });
+    }).then(function(data) {
       state.commandCenter = data || null;
       renderChampions(data);
       renderInsights(data);
@@ -3823,6 +3954,10 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         robust_weight: state.playground.robustWeight
       })
     }).then(function(data) {
+      return resolveBackgroundLoadResponse(data, function(payload) {
+        return { ok: true, detail: payload && payload.refresh_bundle ? payload.refresh_bundle.detail : null };
+      });
+    }).then(function(data) {
       if (requestSeq !== state.detailRequestSeq) return data;
       renderDetail(data && data.detail ? data.detail : null);
       renderChampions(state.commandCenter);
@@ -3857,13 +3992,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       el('selected-config-detail').style.display = showSharedDetail ? 'block' : 'none';
       el('selected-config-section').style.display = showSharedDetail ? 'grid' : 'none';
     }
-    var desc = {
-      command_center: 'Phase 1 shell: this area will host the fully migrated stage content while the legacy Streamlit explorer remains available for comparison.',
-      pareto_playground: 'The Explorer will replace the Streamlit preference sliders and chart selection flows with native FastAPI + JS interactions.',
-      deep_intelligence: 'Deep Intelligence keeps its own tabset and will migrate the four existing analysis tabs one by one.',
-      settings: 'Settings centralizes result loading, defaults, and full-load status so the command workflow stays focused on analysis.'
-    };
-    if (el('stage-description')) el('stage-description').textContent = desc[stage] || '';
     if (stage === 'pareto_playground') {
       window.requestAnimationFrame(function() {
         resizePlaygroundCharts();
@@ -3886,7 +4014,15 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   function openGuide() {
     if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-    window.PBGuiSharedHelp.open('pareto explorer', { token: TOKEN });
+    var anchorByStage = {
+      pareto_playground: 'explorer',
+      settings: 'settings-and-loading'
+    };
+    var anchor = anchorByStage[state.stage] || '';
+    if (state.stage === 'deep_intelligence') {
+      anchor = 'deep-intelligence-' + String(state.deepTab || 'parameters').replace(/_/g, '-');
+    }
+    window.PBGuiSharedHelp.open('pareto explorer', { token: TOKEN, anchor: anchor });
   }
 
   function runSelectedConfigBacktest() {
@@ -3897,141 +4033,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }
     openBacktestDraft(detail.full_config, suggestDraftName(detail.full_config)).catch(function(err) {
       pushMessage('error', 'Run Backtest failed: ' + err.message);
-    });
-  }
-
-  function seedSelectedConfig() {
-    var detail = state.selectedDetail;
-    if (!detail || !detail.full_config) {
-      pushMessage('error', 'No selected config with full configuration is available yet.');
-      return;
-    }
-    openOptimizeSeedDraft(detail.full_config, suggestDraftName(detail.full_config)).catch(function(err) {
-      pushMessage('error', 'Seed Selected failed: ' + err.message);
-    });
-  }
-
-  function seedWholeResult() {
-    var resultPath = String(state.resultPath || '').trim();
-    if (!resultPath) {
-      pushMessage('error', 'No result path is available yet.');
-      return;
-    }
-    apiFetch('/config-detail', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        result_path: resultPath,
-        config_index: 0,
-        load_strategy: state.loadStrategy,
-        max_configs: state.maxConfigs,
-        all_results_loaded: state.allResultsLoaded
-      })
-    }).then(function(data) {
-      var detail = data && data.detail ? data.detail : null;
-      if (!detail || !detail.full_config) {
-        throw new Error('No full result config is available yet.');
-      }
-      var config = extractConfigSections(detail.full_config);
-      config.pbgui = config.pbgui && typeof config.pbgui === 'object' ? config.pbgui : {};
-      config.optimize = config.optimize && typeof config.optimize === 'object' ? config.optimize : {};
-      config.pbgui.optimize_seed_mode = 'path';
-      config.pbgui.optimize_seed_path = optimizeSeedPathFromResult(resultPath);
-      config.pbgui.starting_config = false;
-      if (Object.prototype.hasOwnProperty.call(config.optimize, 'starting_config')) delete config.optimize.starting_config;
-      return openOptimizeSeedDraft(config, suggestDraftName(detail.full_config));
-    }).catch(function(err) {
-      pushMessage('error', 'Seed Whole Result failed: ' + err.message);
-    });
-  }
-
-  function exportDataFrame() {
-    if (!state.resultPath) {
-      pushMessage('error', 'No result path is available yet.');
-      return;
-    }
-    fetch(API_BASE + '/export.csv', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + TOKEN,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        result_path: state.resultPath,
-        load_strategy: state.loadStrategy,
-        max_configs: state.maxConfigs,
-        all_results_loaded: state.allResultsLoaded
-      })
-    }).then(function(res) {
-      if (!res.ok) {
-        return res.text().then(function(text) {
-          throw new Error(text || ('HTTP ' + res.status));
-        });
-      }
-      return downloadResponseBlob(res, 'pareto_analysis.csv');
-    }).catch(function(err) {
-      pushMessage('error', 'Export DataFrame failed: ' + err.message);
-    });
-  }
-
-  function openParetoDash() {
-    if (!state.resultPath) {
-      pushMessage('error', 'No result path is available yet.');
-      return;
-    }
-    fetch(window.location.origin + '/api/optimize-v7/results/pareto-dash', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + TOKEN,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ path: state.resultPath })
-    }).then(function(res) {
-      if (!res.ok) {
-        return res.text().then(function(text) {
-          throw new Error(text || ('HTTP ' + res.status));
-        });
-      }
-      return res.json();
-    }).then(function(data) {
-      if (!data || !data.url || !data.session_id) {
-        throw new Error('Pareto Dash launch returned no URL.');
-      }
-      openOverlayUrl('PB7 Pareto Dash - ' + ((state.session && state.session.result && state.session.result.name) || 'result'), data.url, data.session_id, 'pareto-dash');
-    }).catch(function(err) {
-      pushMessage('error', 'PB7 Pareto Dash failed: ' + err.message);
-    });
-  }
-
-  function open3dPlot() {
-    if (!state.resultPath) {
-      pushMessage('error', 'No result path is available yet.');
-      return;
-    }
-    fetch(window.location.origin + '/api/optimize-v7/results/3d-plot', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + TOKEN,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ path: state.resultPath })
-    }).then(function(res) {
-      if (!res.ok) {
-        return res.text().then(function(text) {
-          throw new Error(text || ('HTTP ' + res.status));
-        });
-      }
-      return res.json();
-    }).then(function(data) {
-      if (data && data.html) {
-        var blob = new Blob([data.html], { type: 'text/html' });
-        var url = window.URL.createObjectURL(blob);
-        openOverlayUrl('PB7 3D Plot - ' + ((state.session && state.session.result && state.session.result.name) || 'result'), url, '', 'plot-html');
-        return;
-      }
-      throw new Error((data && data.message) || 'PB7 3D plot returned no HTML.');
-    }).catch(function(err) {
-      pushMessage('error', 'PB7 3D Plot failed: ' + err.message);
     });
   }
 
@@ -4079,13 +4080,15 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       refreshDeepIntelligence().catch(function() {});
     });
     el('deep-evolution-window').addEventListener('input', function() {
-      state.deepEvolutionWindowPercent = parseInt(el('deep-evolution-window').value || '5', 10) || 5;
-      el('deep-evolution-window-value').textContent = String(state.deepEvolutionWindowPercent) + '%';
+      state.deepEvolutionImprovementThresholdPct = parseFloat(el('deep-evolution-window').value || '1');
+      if (!Number.isFinite(state.deepEvolutionImprovementThresholdPct)) state.deepEvolutionImprovementThresholdPct = 1;
+      el('deep-evolution-window-value').textContent = String(state.deepEvolutionImprovementThresholdPct) + '%';
       updateRangeFill(el('deep-evolution-window'));
       syncFormState();
     });
     el('deep-evolution-window').addEventListener('change', function() {
-      state.deepEvolutionWindowPercent = parseInt(el('deep-evolution-window').value || '5', 10) || 5;
+      state.deepEvolutionImprovementThresholdPct = parseFloat(el('deep-evolution-window').value || '1');
+      if (!Number.isFinite(state.deepEvolutionImprovementThresholdPct)) state.deepEvolutionImprovementThresholdPct = 1;
       refreshDeepIntelligence().catch(function() {});
     });
     el('deep-correlations-strategy').addEventListener('change', function(event) {
@@ -4114,17 +4117,16 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     el('btn-command-load').addEventListener('click', function() {
       loadParetoData().catch(function() {});
     });
-    ['preset-bounds-adjust', 'preset-risk-adjust', 'preset-near-bounds-tol', 'preset-near-bounds-expand-pct'].forEach(function(id) {
+    ['preset-bounds-window', 'preset-risk-adjust'].forEach(function(id) {
       el(id).addEventListener('input', function() {
         updatePresetUiLabels();
-        schedulePresetPreview(250);
       });
       el(id).addEventListener('change', function() {
         updatePresetUiLabels();
         schedulePresetPreview(0);
       });
     });
-    ['preset-direction', 'preset-show-near-bounds', 'preset-expand-near-bounds', 'preset-hide-hard-limited-near'].forEach(function(id) {
+    ['preset-direction', 'preset-only-near-bounds'].forEach(function(id) {
       el(id).addEventListener('change', function() {
         updatePresetUiLabels();
         schedulePresetPreview(0);
@@ -4136,11 +4138,8 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     el('preset-generator-details').addEventListener('toggle', function() {
       if (el('preset-generator-details').open) schedulePresetPreview(0);
     });
-    el('btn-refresh-preset-preview').addEventListener('click', function() {
-      updatePresetUiLabels();
-      loadPresetPreview().catch(function() {});
-    });
-    el('btn-create-preset').addEventListener('click', createOptimizePreset);
+    el('btn-create-preset').addEventListener('click', function() { createOptimizePreset({ queueAfter: false }); });
+    el('btn-create-queue-preset').addEventListener('click', function() { createOptimizePreset({ queueAfter: true }); });
     ['playground-perf-weight', 'playground-risk-weight', 'playground-robust-weight'].forEach(function(id) {
       el(id).addEventListener('input', function() {
         var perfWeight = parseInt(el('playground-perf-weight').value || '80', 10);
@@ -4286,12 +4285,96 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
   }
 
+  function applyLoadData(data) {
+    if (state.allResultsLoaded && data && data.cache_hit) {
+      setFullLoadStatus('loaded', 'Full result restored from cache.', 100);
+    }
+    state.loadPayload = data || null;
+    syncViewRangeFromLoad(data);
+    var bundle = data && data.refresh_bundle ? data.refresh_bundle : null;
+    state.commandCenter = bundle && bundle.command_center ? bundle.command_center : null;
+    state.selectedConfigIndex = bundle && bundle.selected_config_index != null ? bundle.selected_config_index : null;
+    state.selectedDetail = bundle && bundle.detail ? bundle.detail : null;
+    state.deepParameters = null;
+    state.deepScenarios = null;
+    state.deepEvolution = null;
+    state.deepCorrelations = null;
+    state.playground.payload = bundle && bundle.playground ? bundle.playground : null;
+    var sessionLike = Object.assign({}, state.session || {}, {
+      result: data && data.result ? data.result : null,
+      result_valid: !!(data && data.result),
+      result_path: state.resultPath,
+      load: data,
+      defaults: {
+        stage: state.stage,
+        deep_tab: state.deepTab,
+        all_results_loaded: state.allResultsLoaded,
+        load_strategy: state.loadStrategy.slice(),
+        max_configs: state.maxConfigs,
+        preview_show_all: state.previewShowAll,
+        show_timings: false
+      },
+      messages: data && data.messages ? data.messages : []
+    });
+    renderSession(sessionLike);
+    if (bundle) {
+      if (bundle.command_center) {
+        state.commandCenter = bundle.command_center;
+        renderChampions(bundle.command_center);
+        renderInsights(bundle.command_center);
+      }
+      renderDetail(bundle.detail || null);
+      if (bundle.playground) renderPlayground(bundle.playground);
+      if (bundle.deep_intelligence && bundle.deep_intelligence.payload) {
+        state.deepTab = bundle.deep_intelligence.tab || state.deepTab;
+        if (state.stage === 'deep_intelligence') {
+          applyDeepTabUi(state.deepTab, false);
+          if (state.deepTab === 'parameters') renderDeepParameters(bundle.deep_intelligence.payload);
+          else if (state.deepTab === 'scenarios') renderDeepScenarios(bundle.deep_intelligence.payload);
+          else if (state.deepTab === 'evolution') renderDeepEvolution(bundle.deep_intelligence.payload);
+          else if (state.deepTab === 'correlations') renderDeepCorrelations(bundle.deep_intelligence.payload);
+          state.deepIntelligenceNeedsVisibleRender = false;
+        } else {
+          state.deepIntelligenceNeedsVisibleRender = true;
+        }
+      }
+      syncFormState();
+      renderDisplayRange(data);
+      applyDeepTabUi(state.deepTab, false);
+    }
+    state.fullLoadPending = false;
+    el('btn-load-all-results').disabled = false;
+    el('btn-load-all-results').textContent = '📂 Load all_results';
+    renderSession(Object.assign({}, sessionLike));
+    if (state.allResultsLoaded) updateFullLoadPhase('complete', 'Server-side refresh pipeline completed.');
+    stopFullLoadProgressAnimation();
+    return data;
+  }
+
+  function resolveBackgroundLoadResponse(data, extractPayload) {
+    if (!(data && data.status === 'loading' && data.job && data.job.job_id)) {
+      return Promise.resolve(data);
+    }
+    state.fullLoadJobId = data.job.job_id;
+    setFullLoadStatus('loading', (data.job && data.job.message) || 'Loading full result set...', (data.job && data.job.progress) || 0);
+    return pollFullLoadStatus().then(function(statusData) {
+      var payload = statusData && statusData.payload ? statusData.payload : null;
+      if (!payload) throw new Error('Full load completed without payload.');
+      applyLoadData(payload);
+      return typeof extractPayload === 'function' ? extractPayload(payload) : payload;
+    });
+  }
+
   function loadParetoData(options) {
     options = options || {};
+    var seq = ++state.loadRequestSeq;
+    state.deepParametersRequestSeq += 1;
+    state.deepScenariosRequestSeq += 1;
+    state.deepEvolutionRequestSeq += 1;
+    state.deepCorrelationsRequestSeq += 1;
     state.resultPath = String(el('result-path-input').value || '').trim();
     state.loadStrategy = selectedLoadStrategies();
     state.maxConfigs = parseInt(el('max-configs-input').value || '2000', 10) || 2000;
-    state.allResultsLoaded = !!el('all-results-toggle').checked;
     state.persistDefaults = !!el('persist-defaults-toggle').checked;
     if (!state.allResultsLoaded) {
       state.viewRange = null;
@@ -4305,7 +4388,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         load_strategy: state.loadStrategy,
         max_configs: state.maxConfigs,
         all_results_loaded: state.allResultsLoaded,
-        background_full_load: options.forceSynchronous ? false : true,
         persist_defaults: state.persistDefaults,
         view_range: state.allResultsLoaded ? state.pendingViewRange || state.viewRange : null,
         selected_config_index: state.selectedConfigIndex,
@@ -4332,16 +4414,18 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         deep_evolution_use_weighted: state.deepEvolutionUseWeighted,
         deep_evolution_use_btc: state.deepEvolutionUseBtc,
         deep_evolution_window_percent: state.deepEvolutionWindowPercent,
+        deep_evolution_improvement_threshold_pct: state.deepEvolutionImprovementThresholdPct,
         deep_correlations_strategy: state.deepCorrelationsStrategy,
         deep_correlations_num_configs: state.deepCorrelationsNumConfigs,
         deep_correlations_use_weighted: state.deepCorrelationsUseWeighted,
         deep_correlations_use_btc: state.deepCorrelationsUseBtc
       })
     }).then(function(data) {
-      if (!options.forceSynchronous && state.allResultsLoaded && data && data.status === 'loading' && data.job && data.job.job_id) {
+      if (state.allResultsLoaded && data && data.status === 'loading' && data.job && data.job.job_id) {
         state.fullLoadJobId = data.job.job_id;
         setFullLoadStatus('loading', (data.job && data.job.message) || 'Loading full result set...', (data.job && data.job.progress) || 0);
         return pollFullLoadStatus().then(function(statusData) {
+          if (seq !== state.loadRequestSeq) return null;
           var payload = statusData && statusData.payload ? statusData.payload : null;
           if (!payload) throw new Error('Full load completed without payload.');
           return payload;
@@ -4349,70 +4433,10 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       }
       return data;
     }).then(function(data) {
-      if (state.allResultsLoaded && data && data.cache_hit) {
-        setFullLoadStatus('loaded', 'Full result restored from cache.', 100);
-      }
-      state.loadPayload = data || null;
-      syncViewRangeFromLoad(data);
-      var bundle = data && data.refresh_bundle ? data.refresh_bundle : null;
-      state.commandCenter = bundle && bundle.command_center ? bundle.command_center : null;
-      state.selectedConfigIndex = bundle && bundle.selected_config_index != null ? bundle.selected_config_index : null;
-      state.selectedDetail = bundle && bundle.detail ? bundle.detail : null;
-      state.deepParameters = null;
-      state.deepScenarios = null;
-      state.deepEvolution = null;
-      state.deepCorrelations = null;
-      state.playground.payload = bundle && bundle.playground ? bundle.playground : null;
-      var sessionLike = Object.assign({}, state.session || {}, {
-        result: data && data.result ? data.result : null,
-        result_valid: !!(data && data.result),
-        result_path: state.resultPath,
-        load: data,
-        defaults: {
-          stage: state.stage,
-          deep_tab: state.deepTab,
-          all_results_loaded: state.allResultsLoaded,
-          load_strategy: state.loadStrategy.slice(),
-          max_configs: state.maxConfigs,
-          preview_show_all: state.previewShowAll,
-          show_timings: false
-        },
-        messages: data && data.messages ? data.messages : []
-      });
-      renderSession(sessionLike);
-      if (bundle) {
-        if (bundle.command_center) {
-          state.commandCenter = bundle.command_center;
-          renderChampions(bundle.command_center);
-          renderInsights(bundle.command_center);
-        }
-        renderDetail(bundle.detail || null);
-        if (bundle.playground) renderPlayground(bundle.playground);
-        if (bundle.deep_intelligence && bundle.deep_intelligence.payload) {
-          state.deepTab = bundle.deep_intelligence.tab || state.deepTab;
-          if (state.stage === 'deep_intelligence') {
-            applyDeepTabUi(state.deepTab, false);
-            if (state.deepTab === 'parameters') renderDeepParameters(bundle.deep_intelligence.payload);
-            else if (state.deepTab === 'scenarios') renderDeepScenarios(bundle.deep_intelligence.payload);
-            else if (state.deepTab === 'evolution') renderDeepEvolution(bundle.deep_intelligence.payload);
-            else if (state.deepTab === 'correlations') renderDeepCorrelations(bundle.deep_intelligence.payload);
-            state.deepIntelligenceNeedsVisibleRender = false;
-          } else {
-            state.deepIntelligenceNeedsVisibleRender = true;
-          }
-        }
-        syncFormState();
-        renderDisplayRange(data);
-        applyDeepTabUi(state.deepTab, false);
-      }
-      state.fullLoadPending = false;
-      el('btn-load-all-results').disabled = false;
-      el('btn-load-all-results').textContent = '📂 Load all_results';
-      renderSession(Object.assign({}, sessionLike));
-      if (state.allResultsLoaded) updateFullLoadPhase('complete', 'Server-side refresh pipeline completed.');
-      stopFullLoadProgressAnimation();
-      return data;
+      if (seq !== state.loadRequestSeq) return data;
+      return applyLoadData(data);
     }).catch(function(err) {
+      if (seq !== state.loadRequestSeq) return null;
       if (state.fullLoadPending || state.allResultsLoaded) {
         setFullLoadStatus('error', 'Full load failed: ' + err.message, 0);
       }
@@ -4482,7 +4506,39 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   bootstrapSession();
 }());
 </script>
-<script src="/app/js/shared_help_overlay.js?v=3"></script>
+<script>
+(function() {
+  var tip = document.getElementById('data-tip-tooltip');
+  if (!tip) return;
+  document.addEventListener('mouseover', function(e) {
+    var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+    if (!el) return;
+    var text = el.getAttribute('data-tip');
+    if (!text) return;
+    tip.textContent = text;
+    tip.style.display = 'block';
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (tip.style.display === 'none') return;
+    var x = e.clientX + 14;
+    var y = e.clientY + 14;
+    var tw = tip.offsetWidth;
+    var th = tip.offsetHeight;
+    if (x + tw > window.innerWidth - 8) x = e.clientX - tw - 10;
+    if (y + th > window.innerHeight - 8) y = e.clientY - th - 10;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+  });
+  document.addEventListener('mouseout', function(e) {
+    var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+    if (!el) return;
+    var next = e.relatedTarget;
+    if (next && el.contains(next)) return;
+    tip.style.display = 'none';
+  });
+}());
+</script>
+<script src="/app/js/shared_help_overlay.js?v=4"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

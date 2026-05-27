@@ -266,7 +266,24 @@ def get_optimize_limits_meta_payload() -> dict[str, Any]:
 def get_optimize_metric_sets() -> dict[str, list[str]]:
     """Return PB7 optimize metric sets without importing PBGui's Streamlit config."""
     metrics_mod = _import_pb7_module("config.metrics")
+    shared_metrics = set(metrics_mod.SHARED_METRICS)
+    shared_metrics.update(getattr(metrics_mod, "ANALYSIS_SHARED_KEYS", ()))
+    shared_metrics.update(_LIMIT_ONLY_SHARED_METRICS)
     return {
         "currency_metrics": sorted(set(metrics_mod.CURRENCY_METRICS)),
-        "shared_metrics": sorted(set(metrics_mod.SHARED_METRICS).union(_LIMIT_ONLY_SHARED_METRICS)),
+        "shared_metrics": sorted(shared_metrics),
     }
+
+
+def get_optimize_scoring_default_goals(metric_names: list[str]) -> dict[str, str]:
+    """Return PB7 default min/max goals for optimize scoring metrics."""
+    scoring_mod = _import_pb7_module("config.scoring")
+    goals: dict[str, str] = {}
+    for metric in metric_names:
+        metric_name = str(metric or "").strip()
+        if not metric_name:
+            continue
+        goal = scoring_mod.default_objective_goal(metric_name)
+        if goal is not None:
+            goals[metric_name] = str(goal)
+    return goals

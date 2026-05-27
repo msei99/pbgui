@@ -2074,7 +2074,12 @@ textarea.json-invalid:focus {
       </div>
 
       <div id="ctx-results" class="ctx-actions" style="display:none">
+        <button class="sb-btn" id="btn-open-result-paretos">🗂 Paretos</button>
         <button class="sb-btn" id="btn-open-pareto-explorer-results">🎯 Pareto Explorer</button>
+        <button class="sb-btn" id="btn-open-result-pareto-dash">PD Pareto Dash</button>
+        <button class="sb-btn" id="btn-open-result-3d">3D Plot</button>
+        <button class="sb-btn" id="btn-continue-result">🌱 Continue Optimize</button>
+        <button class="sb-btn" id="btn-open-result-config">📄 Config Draft</button>
         <button class="sb-btn danger" id="btn-delete-selected-results">🗑 Delete Selected</button>
       </div>
 
@@ -8553,28 +8558,6 @@ function clearOptimizeOhlcvSourceDir() {
   }
 }
 
-function buildStreamlitTargetUrl(target, extraParams) {
-  var base = String(ST_BASE || '').trim().replace(/\/+$/, '');
-  if (!base || !target) return '';
-  var params = new URLSearchParams();
-  params.set('target', String(target));
-  params.set('token', TOKEN);
-  Object.keys(extraParams || {}).forEach(function(key) {
-    var value = extraParams[key];
-    if (value != null && value !== '') params.set(key, String(value));
-  });
-  return base + '/?' + params.toString();
-}
-
-function openParetoExplorer(resultPath) {
-  var url = buildStreamlitTargetUrl('V7_PARETO_EXPLORER', { result_path: resultPath || '' });
-  if (!url) {
-    toast('Streamlit base URL is unavailable.', 'err');
-    return;
-  }
-  window.location.href = url;
-}
-
 function openFastApiParetoExplorer(resultPath) {
   var path = String(resultPath || '').trim();
   if (!path) {
@@ -9474,7 +9457,12 @@ function updateResultSelectionUi(filteredResults) {
   el('result-selection-summary').textContent = selectedCount
     ? selectedCount + ' result' + (selectedCount === 1 ? '' : 's') + ' selected.'
     : 'No results selected.';
+  el('btn-open-result-paretos').disabled = !selected;
   el('btn-open-pareto-explorer-results').disabled = !selected;
+  el('btn-open-result-pareto-dash').disabled = !selected;
+  el('btn-open-result-3d').disabled = !selected;
+  el('btn-continue-result').disabled = !selected || !selected.pareto_count;
+  el('btn-open-result-config').disabled = !selected;
 }
 
 function renderParetos() {
@@ -10603,7 +10591,7 @@ function attachEventHandlers() {
       setPanel('paretos');
       return loadParetos(path, target.dataset.name).catch(handleError);
     }
-    if (target.classList.contains('result-explorer')) return openParetoExplorer(path);
+    if (target.classList.contains('result-explorer')) return openFastApiParetoExplorer(path);
     if (target.classList.contains('result-dash')) return launchResultParetoDash(path, target.dataset.name).catch(handleError);
     if (target.classList.contains('result-3d')) return launchResult3dPlot(path, target.dataset.name).catch(handleError);
     if (target.classList.contains('result-continue')) return continueOptimizeFromResult(path, target.dataset.name).catch(handleError);
@@ -10696,6 +10684,18 @@ function initSelections() {
     updateParetoSelectionUi();
   });
 
+  el('btn-open-result-paretos').addEventListener('click', function() {
+    var selected = syncSelectedResultFromSelection();
+    if (!selected) {
+      toast('Select exactly one result first.', 'warn');
+      return;
+    }
+    state.selectedResultPath = selected.path;
+    state.selectedResultName = selected.name || selected.result || state.selectedResultName;
+    setPanel('paretos');
+    loadParetos(selected.path, state.selectedResultName).catch(handleError);
+  });
+
   el('btn-open-pareto-explorer-results').addEventListener('click', function() {
     var selected = syncSelectedResultFromSelection();
     if (!selected) {
@@ -10703,6 +10703,46 @@ function initSelections() {
       return;
     }
     openFastApiParetoExplorer(selected.path);
+  });
+
+  el('btn-open-result-pareto-dash').addEventListener('click', function() {
+    var selected = syncSelectedResultFromSelection();
+    if (!selected) {
+      toast('Select exactly one result first.', 'warn');
+      return;
+    }
+    launchResultParetoDash(selected.path, selected.name || selected.result).catch(handleError);
+  });
+
+  el('btn-open-result-3d').addEventListener('click', function() {
+    var selected = syncSelectedResultFromSelection();
+    if (!selected) {
+      toast('Select exactly one result first.', 'warn');
+      return;
+    }
+    launchResult3dPlot(selected.path, selected.name || selected.result).catch(handleError);
+  });
+
+  el('btn-continue-result').addEventListener('click', function() {
+    var selected = syncSelectedResultFromSelection();
+    if (!selected) {
+      toast('Select exactly one result first.', 'warn');
+      return;
+    }
+    if (!selected.pareto_count) {
+      toast('Selected result has no pareto seeds to continue from.', 'warn');
+      return;
+    }
+    continueOptimizeFromResult(selected.path, selected.name || selected.result).catch(handleError);
+  });
+
+  el('btn-open-result-config').addEventListener('click', function() {
+    var selected = syncSelectedResultFromSelection();
+    if (!selected) {
+      toast('Select exactly one result first.', 'warn');
+      return;
+    }
+    openResultConfig(selected.path, selected.name || selected.result).catch(handleError);
   });
 
   el('btn-open-pareto-explorer-paretos').addEventListener('click', function() {
@@ -11234,7 +11274,7 @@ window.PBGUI_NAV_CONFIG = {
   serial: PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/shared_help_overlay.js?v=3"></script>
+<script src="/app/js/shared_help_overlay.js?v=4"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

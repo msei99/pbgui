@@ -18,14 +18,14 @@ from collections import Counter
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse
 import numpy as np
 import pandas as pd
 
 from api.auth import SessionToken, require_auth
 from ParetoDataLoader import ParetoDataLoader
 from pareto_preset_generator import OPTIMIZE_PRESET_DIRECTIONS, build_optimize_preset
-from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION, load_ini, save_ini
+from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION, load_ini, pb7dir, save_ini
 
 router = APIRouter()
 
@@ -43,7 +43,7 @@ def _prune_load_jobs() -> None:
     stale_ids = []
     for job_id, job in _LOAD_JOBS.items():
         updated_at = float(job.get("updated_at") or 0.0)
-        if updated_at < cutoff and str(job.get("status") or "") in {"complete", "error"}:
+        if updated_at < cutoff and str(job.get("status") or "") in {"complete", "error", "loading"}:
             stale_ids.append(job_id)
     for job_id in stale_ids:
         _LOAD_JOBS.pop(job_id, None)
@@ -61,12 +61,12 @@ def _prune_loader_cache() -> None:
 
 
 def _loader_cache_key(*, result_dir: Path, all_results_loaded: bool, load_strategy: list[str], max_configs: int) -> str:
-    return "|".join([
+    return json.dumps([
         str(result_dir),
         "full" if all_results_loaded else "fast",
-        ",".join(load_strategy),
-        str(max_configs),
-    ])
+        list(load_strategy),
+        int(max_configs),
+    ], ensure_ascii=False, separators=(",", ":"))
 
 
 def _clone_loader(loader: ParetoDataLoader, *, visible_configs: list | None = None, view_range: dict | None = None) -> ParetoDataLoader:
@@ -200,6 +200,13 @@ def _get_load_job(job_id: str) -> dict | None:
         return dict(job) if job is not None else None
 
 
+def _optimize_result_roots() -> list[Path]:
+    try:
+        return [(Path(pb7dir()) / "optimize_results").expanduser().resolve()]
+    except Exception:
+        return []
+
+
 def _resolve_result_dir(path: str) -> Path | None:
     raw = str(path or "").strip()
     if not raw:
@@ -210,7 +217,96 @@ def _resolve_result_dir(path: str) -> Path | None:
         return None
     if not resolved.exists() or not resolved.is_dir():
         return None
+    if not any(resolved.is_relative_to(root) for root in _optimize_result_roots()):
+        return None
+    if not (resolved / "all_results.bin").is_file() and not (resolved / "pareto").is_dir():
+        return None
     return resolved
+
+
+def _refresh_options_from_body(body: dict | None, *, view_range: object = None) -> dict:
+    payload = body or {}
+    return {
+        "selected_config_index": payload.get("selected_config_index", payload.get("config_index")),
+        "playground_perf_weight": payload.get("playground_perf_weight", payload.get("perf_weight", 80)),
+        "playground_risk_weight": payload.get("playground_risk_weight", payload.get("risk_weight", 60)),
+        "playground_robust_weight": payload.get("playground_robust_weight", payload.get("robust_weight", 70)),
+        "playground_show_all": bool(payload.get("playground_show_all", payload.get("show_all", False))),
+        "playground_use_weighted": bool(payload.get("playground_use_weighted", payload.get("use_weighted", True))),
+        "playground_use_btc": bool(payload.get("playground_use_btc", payload.get("use_btc", False))),
+        "playground_viz_type": str(payload.get("playground_viz_type") or payload.get("viz_type") or "2D Scatter"),
+        "playground_quick_view": str(payload.get("playground_quick_view") or payload.get("quick_view") or "Profit vs Risk"),
+        "playground_color_metric": str(payload.get("playground_color_metric") or payload.get("color_metric") or ""),
+        "playground_custom_x_metric": str(payload.get("playground_custom_x_metric") or payload.get("custom_x_metric") or ""),
+        "playground_custom_y_metric": str(payload.get("playground_custom_y_metric") or payload.get("custom_y_metric") or ""),
+        "playground_custom_z_metric": str(payload.get("playground_custom_z_metric") or payload.get("custom_z_metric") or ""),
+        "preview_use_weighted": bool(payload.get("preview_use_weighted", True)),
+        "preview_show_all": bool(payload.get("preview_show_all", False)),
+        "deep_tab": str(payload.get("deep_tab") or "parameters"),
+        "deep_parameters_top_n": payload.get("deep_parameters_top_n", payload.get("top_n", 20)),
+        "deep_scenarios_metric": str(payload.get("deep_scenarios_metric") or payload.get("metric") or ""),
+        "deep_evolution_metric": str(payload.get("deep_evolution_metric") or payload.get("metric") or ""),
+        "deep_evolution_show_all": bool(payload.get("deep_evolution_show_all", payload.get("show_all", False))),
+        "deep_evolution_hide_outliers": bool(payload.get("deep_evolution_hide_outliers", payload.get("hide_outliers", True))),
+        "deep_evolution_use_weighted": bool(payload.get("deep_evolution_use_weighted", payload.get("use_weighted", True))),
+        "deep_evolution_use_btc": bool(payload.get("deep_evolution_use_btc", payload.get("use_btc", False))),
+        "deep_evolution_window_percent": payload.get("deep_evolution_window_percent", payload.get("window_percent", 5)),
+        "deep_evolution_improvement_threshold_pct": payload.get("deep_evolution_improvement_threshold_pct", payload.get("improvement_threshold_pct", 1)),
+        "deep_correlations_strategy": str(payload.get("deep_correlations_strategy") or payload.get("strategy") or "Top Performers"),
+        "deep_correlations_num_configs": payload.get("deep_correlations_num_configs", payload.get("num_configs", 5)),
+        "deep_correlations_use_weighted": bool(payload.get("deep_correlations_use_weighted", payload.get("use_weighted", True))),
+        "deep_correlations_use_btc": bool(payload.get("deep_correlations_use_btc", payload.get("use_btc", False))),
+        "view_range": view_range if view_range is not None else payload.get("view_range"),
+    }
+
+
+def _start_full_load_job(result_path: str, *, load_strategy: list[str], max_configs: int, refresh_options: dict | None = None) -> dict:
+    job = _create_load_job(result_path=result_path, load_strategy=load_strategy, max_configs=max_configs)
+    _update_load_job(job["job_id"], refresh_options=dict(refresh_options or {}))
+    thread = threading.Thread(target=_run_full_load_job, args=(job["job_id"],), daemon=True)
+    thread.start()
+    return job
+
+
+def _background_full_load_response(result_path: str, *, load_strategy: list[str], max_configs: int, body: dict | None = None) -> dict:
+    job = _start_full_load_job(
+        result_path,
+        load_strategy=load_strategy,
+        max_configs=max_configs,
+        refresh_options=_refresh_options_from_body(body, view_range=(body or {}).get("view_range")),
+    )
+    return {"ok": True, "status": "loading", "job": job}
+
+
+def _load_loader_or_background_response(
+    result_path: str,
+    *,
+    all_results_loaded: bool,
+    load_strategy: list[str],
+    max_configs: int,
+    body: dict | None = None,
+) -> tuple[ParetoDataLoader | None, dict | None]:
+    if all_results_loaded:
+        _result_dir, cached_loader = _get_cached_loader_for_options(
+            result_path,
+            all_results_loaded=True,
+            load_strategy=load_strategy,
+            max_configs=max_configs,
+        )
+        if cached_loader is None:
+            return None, _background_full_load_response(
+                result_path,
+                load_strategy=load_strategy,
+                max_configs=max_configs,
+                body=body,
+            )
+        return cached_loader, None
+    return _load_loader(
+        result_path,
+        all_results_loaded=False,
+        load_strategy=load_strategy,
+        max_configs=max_configs,
+    ), None
 
 
 def _result_meta(result_dir: Path) -> dict:
@@ -401,6 +497,9 @@ def _load_loader(
         ok = loader.load(load_strategy=list(load_strategy), max_configs=max_configs, progress_callback=progress_callback)
     else:
         ok = loader.load_pareto_jsons_only()
+        if not ok and not getattr(loader, "last_error", None):
+            loader = ParetoDataLoader(str(result_dir))
+            ok = loader.load(load_strategy=list(load_strategy), max_configs=max_configs, progress_callback=progress_callback)
 
     if not ok:
         raise HTTPException(status_code=422, detail=str(getattr(loader, "last_error", None) or "Failed to load pareto data"))
@@ -1723,7 +1822,7 @@ def _build_scenario_statistics(loader: ParetoDataLoader, *, metric: str) -> list
     return rows
 
 
-def _build_evolution_chart(loader: ParetoDataLoader, *, metric: str, window: int, show_all: bool, hide_outliers: bool) -> dict:
+def _build_evolution_chart(loader: ParetoDataLoader, *, metric: str, window: int, show_all: bool, hide_outliers: bool, improvement_threshold_pct: float = 1.0) -> dict:
     all_df = loader.to_dataframe(pareto_only=False)
     if all_df.empty or metric not in all_df.columns:
         return {"traces": [], "layout": {"title": "No data available"}}
@@ -1743,7 +1842,9 @@ def _build_evolution_chart(loader: ParetoDataLoader, *, metric: str, window: int
 
     df = df.sort_values("config_index")
     x_values = [_safe_number(value, digits=9) for value in df["config_index"].tolist()]
-    y_values = [_safe_number(value, digits=9) for value in pd.to_numeric(df[metric], errors="coerce").tolist()]
+    metric_series = pd.to_numeric(df[metric], errors="coerce")
+    y_values = [_safe_number(value, digits=9) for value in metric_series.tolist()]
+    improvement_threshold_pct = max(0.0, min(25.0, float(improvement_threshold_pct or 0.0)))
     if show_all:
         traces: list[dict] = [{
             "type": "scatter",
@@ -1766,33 +1867,71 @@ def _build_evolution_chart(loader: ParetoDataLoader, *, metric: str, window: int
             "hovertemplate": f"<b>STAR Pareto Config #%{{customdata[0]:.0f}}</b><br>Iteration: %{{x:.0f}}<br>{metric.replace('_', ' ').title()}: %{{y:.6f}}<br><i>Click to view details</i><extra></extra>",
         }]
 
-    if len(df) >= window:
-        # Avoid a misleading startup dip from tiny partial windows; start the
-        # rolling average only once a full smoothing window is available.
-        rolling_mean = pd.to_numeric(df[metric], errors="coerce").rolling(window=window, center=False, min_periods=window).mean()
+    lower_is_better = _metric_lower_is_better(metric)
+    best_values: list[float | None] = []
+    best_value: float | None = None
+    best_config_index: int | None = None
+    meaningful_best_value: float | None = None
+    last_meaningful_improvement_index: int | None = None
+    improvement_count = 0
+    meaningful_improvement_count = 0
+    best_at_80pct: float | None = None
+    max_config_index = int(max(df["config_index"].tolist())) if x_values else None
+    eighty_pct_index = int(max_config_index * 0.8) if max_config_index is not None else None
+    for config_index, value in zip(df["config_index"].tolist(), metric_series.tolist()):
+        try:
+            numeric_value = float(value)
+        except Exception:
+            best_values.append(best_value)
+            continue
+        if not math.isfinite(numeric_value):
+            best_values.append(best_value)
+            continue
+        improved = best_value is None or (numeric_value < best_value if lower_is_better else numeric_value > best_value)
+        if improved:
+            best_value = numeric_value
+            best_config_index = int(config_index)
+            improvement_count += 1
+            if _is_meaningful_improvement(numeric_value, meaningful_best_value, lower_is_better=lower_is_better, threshold_pct=improvement_threshold_pct):
+                meaningful_best_value = numeric_value
+                last_meaningful_improvement_index = int(config_index)
+                meaningful_improvement_count += 1
+        best_values.append(best_value)
+        if eighty_pct_index is not None and int(config_index) <= eighty_pct_index:
+            best_at_80pct = best_value
+
+    if any(value is not None for value in best_values):
+        direction_label = "lowest" if lower_is_better else "highest"
         traces.append({
             "type": "scatter",
             "mode": "lines",
             "x": x_values,
-            "y": [_safe_number(value, digits=9) for value in rolling_mean.tolist()],
+            "y": [_safe_number(value, digits=9) for value in best_values],
             "line": {"color": "blue", "width": 2},
-            "name": f"Rolling Avg ({window})",
-            "hovertemplate": f"<b>Iteration %{{x:.0f}}</b><br>Average: %{{y:.6f}}<br><i>{window}-iteration rolling mean</i><extra></extra>",
+            "name": f"Best So Far ({direction_label})",
+            "customdata": [[_safe_number(value, digits=9)] for value in df["config_index"].tolist()],
+            "hovertemplate": f"<b>Iteration %{{x:.0f}}</b><br>Best so far: %{{y:.6f}}<br><i>Cumulative {direction_label} {metric}</i><extra></extra>",
         })
 
-    if show_all and "is_pareto" in all_df.columns:
-        pareto_df = all_df[all_df["is_pareto"] == True]
-        if not pareto_df.empty:
-            traces.append({
-                "type": "scatter",
-                "mode": "markers",
-                "x": [_safe_number(value, digits=9) for value in pareto_df["config_index"].tolist()],
-                "y": [_safe_number(value, digits=9) for value in pd.to_numeric(pareto_df[metric], errors="coerce").tolist()],
-                "marker": {"size": 10, "color": "red", "symbol": "star", "line": {"width": 1, "color": "white"}},
-                "name": "Pareto Configs",
-                "customdata": [[_safe_number(value, digits=9)] for value in pareto_df["config_index"].tolist()],
-                "hovertemplate": f"<b>STAR Pareto Config #%{{customdata[0]:.0f}}</b><br>Iteration: %{{x:.0f}}<br>{metric.replace('_', ' ').title()}: %{{y:.6f}}<br><i>Click to view details</i><extra></extra>",
-            })
+    pareto_df = all_df[all_df["is_pareto"] == True] if "is_pareto" in all_df.columns else pd.DataFrame()
+    if show_all and not pareto_df.empty:
+        traces.append({
+            "type": "scatter",
+            "mode": "markers",
+            "x": [_safe_number(value, digits=9) for value in pareto_df["config_index"].tolist()],
+            "y": [_safe_number(value, digits=9) for value in pd.to_numeric(pareto_df[metric], errors="coerce").tolist()],
+            "marker": {"size": 10, "color": "red", "symbol": "star", "line": {"width": 1, "color": "white"}},
+            "name": "Pareto Configs",
+            "customdata": [[_safe_number(value, digits=9)] for value in pareto_df["config_index"].tolist()],
+            "hovertemplate": f"<b>STAR Pareto Config #%{{customdata[0]:.0f}}</b><br>Iteration: %{{x:.0f}}<br>{metric.replace('_', ' ').title()}: %{{y:.6f}}<br><i>Click to view details</i><extra></extra>",
+        })
+
+    tail_improvement_pct = _relative_improvement_pct(best_value, best_at_80pct, lower_is_better=lower_is_better)
+    suggested_min_iters = None
+    if last_meaningful_improvement_index is not None:
+        suggested_min_iters = int(math.ceil((last_meaningful_improvement_index * 1.05) / 1000) * 1000)
+        if max_config_index is not None:
+            suggested_min_iters = min(suggested_min_iters, max_config_index)
 
     return {
         "traces": traces,
@@ -1805,7 +1944,71 @@ def _build_evolution_chart(loader: ParetoDataLoader, *, metric: str, window: int
             "hovermode": "closest",
             "dragmode": "zoom",
         },
+        "best_so_far": {
+            "direction": "min" if lower_is_better else "max",
+            "best_config_index": best_config_index,
+            "best_value": _safe_number(best_value, digits=9),
+            "improvement_count": improvement_count,
+            "meaningful_improvement_count": meaningful_improvement_count,
+            "last_meaningful_improvement_config_index": last_meaningful_improvement_index,
+            "improvement_threshold_pct": _safe_number(improvement_threshold_pct, digits=3),
+            "best_at_80pct": _safe_number(best_at_80pct, digits=9),
+            "tail_improvement_pct": _safe_number(tail_improvement_pct, digits=3),
+            "suggested_min_iters": suggested_min_iters,
+            "max_config_index": max_config_index,
+        },
     }
+
+
+def _is_meaningful_improvement(value: float, reference: float | None, *, lower_is_better: bool, threshold_pct: float) -> bool:
+    if reference is None:
+        return True
+    delta = reference - value if lower_is_better else value - reference
+    if delta <= 0:
+        return False
+    threshold = abs(reference) * (max(0.0, threshold_pct) / 100.0)
+    return delta >= max(threshold, 1e-12)
+
+
+def _relative_improvement_pct(value: float | None, reference: float | None, *, lower_is_better: bool) -> float | None:
+    if value is None or reference is None:
+        return None
+    delta = reference - value if lower_is_better else value - reference
+    if abs(reference) <= 1e-12:
+        return None
+    return (delta / abs(reference)) * 100.0
+
+
+def _metric_lower_is_better(metric: str) -> bool:
+    name = str(metric or "").strip().lower()
+    if name.endswith(("_usd", "_btc")):
+        name = name[:-4]
+    lower_prefixes = (
+        "drawdown_",
+        "expected_shortfall_",
+        "equity_balance_diff_",
+        "loss_",
+        "trade_loss_",
+        "peak_recovery_",
+        "position_held_",
+        "position_unchanged_",
+        "positions_held_",
+        "high_exposure_",
+        "hard_stop_",
+    )
+    lower_names = {
+        "loss_profit_ratio",
+        "paper_loss_ratio",
+        "paper_loss_mean_ratio",
+        "total_wallet_exposure_mean",
+        "equity_choppiness",
+        "equity_choppiness_w",
+        "equity_jerkiness",
+        "equity_jerkiness_w",
+        "exponential_fit_error",
+        "exponential_fit_error_w",
+    }
+    return name in lower_names or name.startswith(lower_prefixes)
 
 
 def _find_metric_variant(available_metrics: set[str], base_name: str, *, use_weighted: bool, currency_suffix: str, need_currency: bool) -> str:
@@ -1828,7 +2031,11 @@ def _select_correlation_configs(loader: ParetoDataLoader, *, strategy: str, num_
         return [], []
 
     currency_suffix = "_btc" if use_btc else "_usd"
-    available_metrics = set((pareto_configs[0].suite_metrics or {}).keys()) if pareto_configs else set()
+    available_metrics: set[str] = set()
+    for config in pareto_configs:
+        suite_metrics = getattr(config, "suite_metrics", None)
+        if isinstance(suite_metrics, dict):
+            available_metrics.update(str(metric) for metric in suite_metrics.keys())
     selected_configs: list[int] = []
     labels: list[str] = []
 
@@ -1848,6 +2055,8 @@ def _select_correlation_configs(loader: ParetoDataLoader, *, strategy: str, num_
         candidates: list[tuple[object, str]] = []
         for base_name, maximize, need_currency, label_prefix, fmt in metric_defs:
             metric_name = _find_metric_variant(available_metrics, base_name, use_weighted=use_weighted, currency_suffix=currency_suffix, need_currency=need_currency)
+            if metric_name not in available_metrics:
+                continue
             if maximize:
                 best = max(pareto_configs, key=lambda cfg: cfg.suite_metrics.get(metric_name, float("-inf")), default=None)
             else:
@@ -2251,17 +2460,6 @@ def _run_full_load_job(job_id: str) -> None:
         )
 
 
-def _build_export_csv(result_path: str, *, all_results_loaded: bool, load_strategy: list[str], max_configs: int) -> str:
-    loader = _load_loader(
-        result_path,
-        all_results_loaded=all_results_loaded,
-        load_strategy=load_strategy,
-        max_configs=max_configs,
-    )
-    df = loader.to_dataframe(pareto_only=False)
-    return df.to_csv(index=False)
-
-
 def _build_load_messages(result_dir: Path, load_stats: dict, all_results_loaded: bool) -> list[dict]:
     messages: list[dict] = []
 
@@ -2501,10 +2699,12 @@ def _build_deep_scenarios_payload(loader: ParetoDataLoader, *, metric: str) -> d
 def _build_deep_evolution_payload(
     loader: ParetoDataLoader,
     *,
+    all_results_loaded: bool,
     metric: str,
     use_weighted: bool,
     use_btc: bool,
     window_percent: int,
+    improvement_threshold_pct: float,
     show_all: bool,
     hide_outliers: bool,
 ) -> dict:
@@ -2516,6 +2716,24 @@ def _build_deep_evolution_payload(
     visible_configs = len(loader.configs or [])
     displayed_configs = visible_configs if show_all else len(loader.get_pareto_configs() or [])
     window = max(10, int(displayed_configs * window_percent / 100)) if displayed_configs else 10
+    if not all_results_loaded:
+        return {
+            "ok": True,
+            "available_metrics": filtered_metrics,
+            "selected_metric": selected_metric,
+            "use_weighted": use_weighted,
+            "use_btc": use_btc,
+            "show_all": show_all,
+            "hide_outliers": hide_outliers,
+            "window_percent": window_percent,
+            "improvement_threshold_pct": _safe_number(improvement_threshold_pct, digits=3),
+            "window": window,
+            "total_configs": visible_configs,
+            "displayed_configs": displayed_configs,
+            "requires_full_mode": True,
+            "message": "Evolution requires full mode because pareto JSON files do not contain the original all_results config index.",
+            "chart": {"traces": [], "layout": {"title": "Load all_results.bin to inspect when Pareto configs were found."}},
+        }
     return {
         "ok": True,
         "available_metrics": filtered_metrics,
@@ -2525,10 +2743,12 @@ def _build_deep_evolution_payload(
         "show_all": show_all,
         "hide_outliers": hide_outliers,
         "window_percent": window_percent,
+        "improvement_threshold_pct": _safe_number(improvement_threshold_pct, digits=3),
         "window": window,
         "total_configs": visible_configs,
         "displayed_configs": displayed_configs,
-        "chart": _build_evolution_chart(loader, metric=selected_metric, window=window, show_all=show_all, hide_outliers=hide_outliers) if selected_metric else {"traces": [], "layout": {"title": "No evolution metric available"}},
+        "requires_full_mode": False,
+        "chart": _build_evolution_chart(loader, metric=selected_metric, window=window, show_all=show_all, hide_outliers=hide_outliers, improvement_threshold_pct=improvement_threshold_pct) if selected_metric else {"traces": [], "layout": {"title": "No evolution metric available"}},
     }
 
 
@@ -2564,17 +2784,19 @@ def _build_deep_correlations_payload(
     }
 
 
-def _build_deep_intelligence_payload(loader: ParetoDataLoader, *, deep_tab: str, options: dict) -> dict:
+def _build_deep_intelligence_payload(loader: ParetoDataLoader, *, deep_tab: str, options: dict, all_results_loaded: bool = True) -> dict:
     tab = str(deep_tab or "parameters").strip() or "parameters"
     if tab == "scenarios":
         payload = _build_deep_scenarios_payload(loader, metric=str(options.get("deep_scenarios_metric") or ""))
     elif tab == "evolution":
         payload = _build_deep_evolution_payload(
             loader,
+            all_results_loaded=all_results_loaded,
             metric=str(options.get("deep_evolution_metric") or ""),
             use_weighted=bool(options.get("deep_evolution_use_weighted", True)),
             use_btc=bool(options.get("deep_evolution_use_btc", False)),
             window_percent=max(1, min(25, int(options.get("deep_evolution_window_percent", 5) or 5))),
+            improvement_threshold_pct=max(0.0, min(25.0, float(options.get("deep_evolution_improvement_threshold_pct", 1) or 0.0))),
             show_all=bool(options.get("deep_evolution_show_all", False)),
             hide_outliers=bool(options.get("deep_evolution_hide_outliers", True)),
         )
@@ -2589,7 +2811,10 @@ def _build_deep_intelligence_payload(loader: ParetoDataLoader, *, deep_tab: str,
     else:
         tab = "parameters"
         requested_top_n = options.get("deep_parameters_top_n", 20)
-        top_n = _normalize_max_configs(requested_top_n or 20)
+        try:
+            top_n = int(requested_top_n or 20)
+        except Exception:
+            top_n = 20
         top_n = max(1, min(40, top_n))
         payload = _build_deep_parameters_payload(loader, top_n=top_n)
     return {"tab": tab, "payload": payload}
@@ -2670,6 +2895,7 @@ def _build_server_refresh_bundle(loader: ParetoDataLoader, *, all_results_loaded
             deep_loader,
             deep_tab=str(options.get("deep_tab") or "parameters"),
             options=options,
+            all_results_loaded=all_results_loaded,
         ),
     )
     return {
@@ -2813,12 +3039,15 @@ def get_command_center(body: dict, session: SessionToken = Depends(require_auth)
     load_strategy = _normalize_load_strategy((body or {}).get("load_strategy"))
     max_configs = _normalize_max_configs((body or {}).get("max_configs"))
     all_results_loaded = bool((body or {}).get("all_results_loaded"))
-    loader = _load_loader(
+    loader, loading_response = _load_loader_or_background_response(
         result_path,
         all_results_loaded=all_results_loaded,
         load_strategy=load_strategy,
         max_configs=max_configs,
+        body=body,
     )
+    if loading_response is not None:
+        return loading_response
     visible_loader, normalized_range = _visible_loader(loader, all_results_loaded=all_results_loaded, view_range=(body or {}).get("view_range"))
     payload = _build_command_center_payload(visible_loader)
     payload["view_range"] = normalized_range
@@ -2841,12 +3070,15 @@ def get_config_detail(body: dict, session: SessionToken = Depends(require_auth))
     perf_weight = _normalize_weight((body or {}).get("perf_weight", 80), 80)
     risk_weight = _normalize_weight((body or {}).get("risk_weight", 60), 60)
     robust_weight = _normalize_weight((body or {}).get("robust_weight", 70), 70)
-    loader = _load_loader(
+    loader, loading_response = _load_loader_or_background_response(
         result_path,
         all_results_loaded=all_results_loaded,
         load_strategy=load_strategy,
         max_configs=max_configs,
+        body=body,
     )
+    if loading_response is not None:
+        return loading_response
     visible_loader, normalized_range = _visible_loader(loader, all_results_loaded=all_results_loaded, view_range=(body or {}).get("view_range"))
     detail = _serialize_config_detail(
         loader,
@@ -2875,12 +3107,15 @@ def build_optimize_preset_preview(body: dict, session: SessionToken = Depends(re
     load_strategy = _normalize_load_strategy((body or {}).get("load_strategy"))
     max_configs = _normalize_max_configs((body or {}).get("max_configs"))
     all_results_loaded = bool((body or {}).get("all_results_loaded"))
-    loader = _load_loader(
+    loader, loading_response = _load_loader_or_background_response(
         result_path,
         all_results_loaded=all_results_loaded,
         load_strategy=load_strategy,
         max_configs=max_configs,
+        body=body,
     )
+    if loading_response is not None:
+        return loading_response
     config = loader.get_config_by_index(config_index)
     if config is None:
         raise HTTPException(status_code=404, detail="Config not found")
@@ -2898,7 +3133,7 @@ def build_optimize_preset_preview(body: dict, session: SessionToken = Depends(re
     default_name = f"pareto_refine_cfg_{config.config_index}"
     safe_name = _sanitize_preset_name(params.get("preset_name"), default=default_name)
     near_bounds = None
-    if bool(params.get("show_near_bounds", False)):
+    if bool(params.get("show_near_bounds", False)) or bool(params.get("only_adjust_near_bounds", False)):
         try:
             tolerance = float(params.get("near_bounds_tol", 0.10) or 0.10)
         except Exception:
@@ -2919,12 +3154,15 @@ def build_optimize_preset_preview(body: dict, session: SessionToken = Depends(re
         params=params,
         near_bounds=near_bounds,
     )
+    safe_payload = _json_safe(payload)
+    if not bool((body or {}).get("include_config", True)) and isinstance(safe_payload, dict):
+        safe_payload.pop("preset_config", None)
     return {
         "ok": True,
         "config_index": config.config_index,
         "preset_name": safe_name,
         "directions": OPTIMIZE_PRESET_DIRECTIONS,
-        **_json_safe(payload),
+        **safe_payload,
     }
 
 
@@ -2957,12 +3195,15 @@ def get_playground(body: dict, session: SessionToken = Depends(require_auth)):
     except Exception:
         selected_config_index = None
 
-    loader = _load_loader(
+    loader, loading_response = _load_loader_or_background_response(
         result_path,
         all_results_loaded=all_results_loaded,
         load_strategy=load_strategy,
         max_configs=max_configs,
+        body=body,
     )
+    if loading_response is not None:
+        return loading_response
     return _build_playground_payload(
         loader,
         all_results_loaded=all_results_loaded,
@@ -2999,13 +3240,23 @@ def get_deep_intelligence_parameters(body: dict, session: SessionToken = Depends
     except Exception:
         top_n = 20
     top_n = max(1, min(40, top_n))
-    loader = _load_loader(
+    loader, loading_response = _load_loader_or_background_response(
         result_path,
         all_results_loaded=all_results_loaded,
         load_strategy=load_strategy,
         max_configs=max_configs,
+        body=body,
     )
-    return _build_deep_parameters_payload(loader, top_n=top_n)
+    if loading_response is not None:
+        return loading_response
+    visible_loader, normalized_range = _visible_loader(
+        loader,
+        all_results_loaded=all_results_loaded,
+        view_range=(body or {}).get("view_range"),
+    )
+    payload = _build_deep_parameters_payload(visible_loader, top_n=top_n)
+    payload["view_range"] = normalized_range
+    return payload
 
 
 @router.post("/deep-intelligence/scenarios")
@@ -3017,13 +3268,23 @@ def get_deep_intelligence_scenarios(body: dict, session: SessionToken = Depends(
     load_strategy = _normalize_load_strategy((body or {}).get("load_strategy"))
     max_configs = _normalize_max_configs((body or {}).get("max_configs"))
     all_results_loaded = bool((body or {}).get("all_results_loaded"))
-    loader = _load_loader(
+    loader, loading_response = _load_loader_or_background_response(
         result_path,
         all_results_loaded=all_results_loaded,
         load_strategy=load_strategy,
         max_configs=max_configs,
+        body=body,
     )
-    return _build_deep_scenarios_payload(loader, metric=str((body or {}).get("metric") or ""))
+    if loading_response is not None:
+        return loading_response
+    visible_loader, normalized_range = _visible_loader(
+        loader,
+        all_results_loaded=all_results_loaded,
+        view_range=(body or {}).get("view_range"),
+    )
+    payload = _build_deep_scenarios_payload(visible_loader, metric=str((body or {}).get("metric") or ""))
+    payload["view_range"] = normalized_range
+    return payload
 
 
 @router.post("/deep-intelligence/evolution")
@@ -3041,12 +3302,15 @@ def get_deep_intelligence_evolution(body: dict, session: SessionToken = Depends(
     hide_outliers = bool((body or {}).get("hide_outliers", True))
     window_percent = max(1, min(25, int((body or {}).get("window_percent", 5) or 5)))
 
-    loader = _load_loader(
+    loader, loading_response = _load_loader_or_background_response(
         result_path,
         all_results_loaded=all_results_loaded,
         load_strategy=load_strategy,
         max_configs=max_configs,
+        body=body,
     )
+    if loading_response is not None:
+        return loading_response
     visible_loader, _normalized_range = _visible_loader(
         loader,
         all_results_loaded=all_results_loaded,
@@ -3054,10 +3318,12 @@ def get_deep_intelligence_evolution(body: dict, session: SessionToken = Depends(
     )
     return _build_deep_evolution_payload(
         visible_loader,
+        all_results_loaded=all_results_loaded,
         metric=str((body or {}).get("metric") or ""),
         use_weighted=use_weighted,
         use_btc=use_btc,
         window_percent=window_percent,
+        improvement_threshold_pct=max(0.0, min(25.0, float((body or {}).get("improvement_threshold_pct", 1) or 0.0))),
         show_all=show_all,
         hide_outliers=hide_outliers,
     )
@@ -3079,19 +3345,29 @@ def get_deep_intelligence_correlations(body: dict, session: SessionToken = Depen
     use_weighted = bool((body or {}).get("use_weighted", True))
     use_btc = bool((body or {}).get("use_btc", False))
 
-    loader = _load_loader(
+    loader, loading_response = _load_loader_or_background_response(
         result_path,
         all_results_loaded=all_results_loaded,
         load_strategy=load_strategy,
         max_configs=max_configs,
+        body=body,
     )
-    return _build_deep_correlations_payload(
+    if loading_response is not None:
+        return loading_response
+    visible_loader, normalized_range = _visible_loader(
         loader,
+        all_results_loaded=all_results_loaded,
+        view_range=(body or {}).get("view_range"),
+    )
+    payload = _build_deep_correlations_payload(
+        visible_loader,
         strategy=strategy,
         num_configs=num_configs,
         use_weighted=use_weighted,
         use_btc=use_btc,
     )
+    payload["view_range"] = normalized_range
+    return payload
 
 
 @router.post("/load")
@@ -3103,7 +3379,6 @@ def load_result_data(body: dict, session: SessionToken = Depends(require_auth)):
     load_strategy = _normalize_load_strategy((body or {}).get("load_strategy"))
     max_configs = _normalize_max_configs((body or {}).get("max_configs"))
     all_results_loaded = bool((body or {}).get("all_results_loaded"))
-    background_full_load = bool((body or {}).get("background_full_load", True))
     persist_defaults = bool((body or {}).get("persist_defaults"))
     view_range = (body or {}).get("view_range")
 
@@ -3113,6 +3388,7 @@ def load_result_data(body: dict, session: SessionToken = Depends(require_auth)):
 
     cached_result_dir = None
     cached_loader = None
+    refresh_options = _refresh_options_from_body(body, view_range=view_range)
     if all_results_loaded:
         cached_result_dir, cached_loader = _get_cached_loader_for_options(
             result_path,
@@ -3132,81 +3408,20 @@ def load_result_data(body: dict, session: SessionToken = Depends(require_auth)):
             payload["refresh_bundle"] = _build_server_refresh_bundle(
                 cached_loader,
                 all_results_loaded=True,
-                options={
-                    "selected_config_index": (body or {}).get("selected_config_index"),
-                    "playground_perf_weight": (body or {}).get("playground_perf_weight", 80),
-                    "playground_risk_weight": (body or {}).get("playground_risk_weight", 60),
-                    "playground_robust_weight": (body or {}).get("playground_robust_weight", 70),
-                    "playground_show_all": bool((body or {}).get("playground_show_all")),
-                    "playground_use_weighted": bool((body or {}).get("playground_use_weighted", True)),
-                    "playground_use_btc": bool((body or {}).get("playground_use_btc", False)),
-                    "playground_viz_type": str((body or {}).get("playground_viz_type") or "2D Scatter"),
-                    "playground_quick_view": str((body or {}).get("playground_quick_view") or "Profit vs Risk"),
-                    "playground_color_metric": str((body or {}).get("playground_color_metric") or ""),
-                    "preview_use_weighted": bool((body or {}).get("preview_use_weighted", True)),
-                    "deep_tab": str((body or {}).get("deep_tab") or "parameters"),
-                    "deep_parameters_top_n": (body or {}).get("deep_parameters_top_n", 20),
-                    "deep_scenarios_metric": str((body or {}).get("deep_scenarios_metric") or ""),
-                    "deep_evolution_metric": str((body or {}).get("deep_evolution_metric") or ""),
-                    "deep_evolution_show_all": bool((body or {}).get("deep_evolution_show_all", False)),
-                    "deep_evolution_hide_outliers": bool((body or {}).get("deep_evolution_hide_outliers", True)),
-                    "deep_evolution_use_weighted": bool((body or {}).get("deep_evolution_use_weighted", True)),
-                    "deep_evolution_use_btc": bool((body or {}).get("deep_evolution_use_btc", False)),
-                    "deep_evolution_window_percent": (body or {}).get("deep_evolution_window_percent", 5),
-                    "deep_correlations_strategy": str((body or {}).get("deep_correlations_strategy") or "Top Performers"),
-                    "deep_correlations_num_configs": (body or {}).get("deep_correlations_num_configs", 5),
-                    "deep_correlations_use_weighted": bool((body or {}).get("deep_correlations_use_weighted", True)),
-                    "deep_correlations_use_btc": bool((body or {}).get("deep_correlations_use_btc", False)),
-                    "view_range": view_range,
-                },
+                options=refresh_options,
             )
             payload["ok"] = True
             payload["status"] = "complete"
             payload["cache_hit"] = True
             return payload
 
-    if all_results_loaded and background_full_load:
-        job = _create_load_job(
-            result_path=result_path,
+    if all_results_loaded:
+        job = _start_full_load_job(
+            result_path,
             load_strategy=load_strategy,
             max_configs=max_configs,
+            refresh_options=refresh_options,
         )
-        _update_load_job(
-            job["job_id"],
-            refresh_options={
-                "selected_config_index": (body or {}).get("selected_config_index"),
-                "playground_perf_weight": (body or {}).get("playground_perf_weight", 80),
-                "playground_risk_weight": (body or {}).get("playground_risk_weight", 60),
-                "playground_robust_weight": (body or {}).get("playground_robust_weight", 70),
-                "playground_show_all": bool((body or {}).get("playground_show_all")),
-                "playground_use_weighted": bool((body or {}).get("playground_use_weighted", True)),
-                "playground_use_btc": bool((body or {}).get("playground_use_btc", False)),
-                "playground_viz_type": str((body or {}).get("playground_viz_type") or "2D Scatter"),
-                "playground_quick_view": str((body or {}).get("playground_quick_view") or "Profit vs Risk"),
-                "playground_color_metric": str((body or {}).get("playground_color_metric") or ""),
-                "playground_custom_x_metric": str((body or {}).get("playground_custom_x_metric") or ""),
-                "playground_custom_y_metric": str((body or {}).get("playground_custom_y_metric") or ""),
-                "playground_custom_z_metric": str((body or {}).get("playground_custom_z_metric") or ""),
-                "preview_use_weighted": bool((body or {}).get("preview_use_weighted", True)),
-                "preview_show_all": bool((body or {}).get("preview_show_all", False)),
-                "deep_tab": str((body or {}).get("deep_tab") or "parameters"),
-                "deep_parameters_top_n": (body or {}).get("deep_parameters_top_n", 20),
-                "deep_scenarios_metric": str((body or {}).get("deep_scenarios_metric") or ""),
-                "deep_evolution_metric": str((body or {}).get("deep_evolution_metric") or ""),
-                "deep_evolution_show_all": bool((body or {}).get("deep_evolution_show_all", False)),
-                "deep_evolution_hide_outliers": bool((body or {}).get("deep_evolution_hide_outliers", True)),
-                "deep_evolution_use_weighted": bool((body or {}).get("deep_evolution_use_weighted", True)),
-                "deep_evolution_use_btc": bool((body or {}).get("deep_evolution_use_btc", False)),
-                "deep_evolution_window_percent": (body or {}).get("deep_evolution_window_percent", 5),
-                "deep_correlations_strategy": str((body or {}).get("deep_correlations_strategy") or "Top Performers"),
-                "deep_correlations_num_configs": (body or {}).get("deep_correlations_num_configs", 5),
-                "deep_correlations_use_weighted": bool((body or {}).get("deep_correlations_use_weighted", True)),
-                "deep_correlations_use_btc": bool((body or {}).get("deep_correlations_use_btc", False)),
-                "view_range": view_range,
-            },
-        )
-        thread = threading.Thread(target=_run_full_load_job, args=(job["job_id"],), daemon=True)
-        thread.start()
         return {
             "ok": True,
             "status": "loading",
@@ -3228,37 +3443,7 @@ def load_result_data(body: dict, session: SessionToken = Depends(require_auth)):
             max_configs=max_configs,
         ),
         all_results_loaded=all_results_loaded,
-        options={
-            "selected_config_index": (body or {}).get("selected_config_index"),
-            "playground_perf_weight": (body or {}).get("playground_perf_weight", 80),
-            "playground_risk_weight": (body or {}).get("playground_risk_weight", 60),
-            "playground_robust_weight": (body or {}).get("playground_robust_weight", 70),
-            "playground_show_all": bool((body or {}).get("playground_show_all")),
-            "playground_use_weighted": bool((body or {}).get("playground_use_weighted", True)),
-            "playground_use_btc": bool((body or {}).get("playground_use_btc", False)),
-            "playground_viz_type": str((body or {}).get("playground_viz_type") or "2D Scatter"),
-            "playground_quick_view": str((body or {}).get("playground_quick_view") or "Profit vs Risk"),
-            "playground_color_metric": str((body or {}).get("playground_color_metric") or ""),
-            "playground_custom_x_metric": str((body or {}).get("playground_custom_x_metric") or ""),
-            "playground_custom_y_metric": str((body or {}).get("playground_custom_y_metric") or ""),
-            "playground_custom_z_metric": str((body or {}).get("playground_custom_z_metric") or ""),
-            "preview_use_weighted": bool((body or {}).get("preview_use_weighted", True)),
-            "preview_show_all": bool((body or {}).get("preview_show_all", False)),
-            "deep_tab": str((body or {}).get("deep_tab") or "parameters"),
-            "deep_parameters_top_n": (body or {}).get("deep_parameters_top_n", 20),
-            "deep_scenarios_metric": str((body or {}).get("deep_scenarios_metric") or ""),
-            "deep_evolution_metric": str((body or {}).get("deep_evolution_metric") or ""),
-            "deep_evolution_show_all": bool((body or {}).get("deep_evolution_show_all", False)),
-            "deep_evolution_hide_outliers": bool((body or {}).get("deep_evolution_hide_outliers", True)),
-            "deep_evolution_use_weighted": bool((body or {}).get("deep_evolution_use_weighted", True)),
-            "deep_evolution_use_btc": bool((body or {}).get("deep_evolution_use_btc", False)),
-            "deep_evolution_window_percent": (body or {}).get("deep_evolution_window_percent", 5),
-            "deep_correlations_strategy": str((body or {}).get("deep_correlations_strategy") or "Top Performers"),
-            "deep_correlations_num_configs": (body or {}).get("deep_correlations_num_configs", 5),
-            "deep_correlations_use_weighted": bool((body or {}).get("deep_correlations_use_weighted", True)),
-            "deep_correlations_use_btc": bool((body or {}).get("deep_correlations_use_btc", False)),
-            "view_range": view_range,
-        },
+        options=refresh_options,
     )
     payload["ok"] = True
     payload["status"] = "complete"
@@ -3280,27 +3465,3 @@ def get_load_status(job_id: str = Query(default="", description="Background full
         "job": _serialize_load_job(job),
         "payload": payload if status == "complete" else None,
     }
-
-
-@router.post("/export.csv")
-def export_csv(body: dict, session: SessionToken = Depends(require_auth)):
-    result_path = str((body or {}).get("result_path") or "").strip()
-    if not result_path:
-        raise HTTPException(status_code=400, detail="Missing result_path")
-
-    load_strategy = _normalize_load_strategy((body or {}).get("load_strategy"))
-    max_configs = _normalize_max_configs((body or {}).get("max_configs"))
-    all_results_loaded = bool((body or {}).get("all_results_loaded"))
-    csv_text = _build_export_csv(
-        result_path,
-        all_results_loaded=all_results_loaded,
-        load_strategy=load_strategy,
-        max_configs=max_configs,
-    )
-    result_dir = _resolve_result_dir(result_path)
-    filename = f"pareto_analysis_{(result_dir.name if result_dir else 'export')}.csv"
-    return Response(
-        content=csv_text,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )

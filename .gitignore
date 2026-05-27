@@ -15,6 +15,7 @@ pbgui.code-workspace
 Dashboard.py
 *.pyc
 test_results/
+test-results/
 .vscode/
 scripts/
 pytest.ini

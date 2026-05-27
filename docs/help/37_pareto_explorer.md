@@ -1,138 +1,146 @@
 # Pareto Explorer (PBv7)
 
-Pareto Explorer is an interactive UI for analyzing PB7 optimization results (multi-objective search). It helps you find robust configs, compare tradeoffs, and export candidates.
+Pareto Explorer helps you analyze PBv7 optimize results, compare tradeoffs, shortlist configs, and create follow-up Optimize presets. It is designed for multi-objective results where no single metric is the whole answer.
 
-## Where to open it
+## Where to Open It
 
-- PBGui: **PBv7 → Optimize → Results**
-- Click **🎯 Pareto Explorer** on an optimization result.
+- PBGui: **PBv7 -> Optimize -> Results**.
+- Open a result with **Pareto Explorer** from the Optimize results table or result sidebar.
+- The page can start in fast pareto-only mode and later load the full `all_results.bin` dataset from the sidebar.
 
-## What it needs
+## Core Idea
 
-A PB7 optimization results folder, typically containing:
+Every score, chart, and Pareto star is relative to the currently loaded and visible config set.
 
-- `pareto_front.json` (or similar Pareto JSONs)
-- `all_results.bin` (optional but recommended for full exploration)
+- Fast mode compares mainly the Passivbot pareto JSON candidates.
+- Full mode compares against the wider `all_results.bin` candidate set.
+- Display Range changes the visible slice, so rankings and visible Pareto stars can change.
+- Treat rank and score as shortlisting signals, not as final live-trading decisions.
 
-If `all_results.bin` is missing, Pareto Explorer will run in a **fast mode** with limited views.
+## Overview
 
-## How to use it
+Overview is the decision dashboard. Use it first after loading a result.
 
-### 1) Start in fast mode
-Fast mode loads only Pareto JSONs first, so the UI opens quickly.
-
-- Use it to spot promising configs early.
-- If you need the full dataset (all candidates), enable full load.
-
-### 2) Load all results (full mode)
-Full mode loads `all_results.bin`.
-
-- More configs available
-- More reliable filtering and selection
-- Can be slower depending on file size and disk speed
-
-### 3) Explore tradeoffs
-Common workflows:
-
-- Find configs with best **profit vs drawdown** tradeoff
-- Filter by **stuck time**, **exposure**, or other safety metrics
-- Compare a handful of top candidates
-
-## Overview page
-
-The first page in Pareto Explorer is **Overview**. Treat it as a quick decision page:
-
-- **Top Champions** gives you the current top 5 candidates for the loaded slice.
+- **Top Champions** shows the strongest candidates in the current visible slice.
 - **Insights** highlights obvious signals such as parameter-bound pressure or style diversity.
-- **Pareto Front Preview** helps you visually understand the shape of the current candidate set before drilling deeper.
+- **Pareto Front Preview** shows the shape of the current tradeoff frontier.
+- **Robustness vs Performance** shows whether return is supported by consistency.
+- The selected config details appear below the charts when a config is selected.
 
-For most runs, the normal flow is:
+Recommended flow:
 
-1. Scan the Top Champions list.
-2. Click a champion or a point in a chart.
-3. Read the selected config details below.
-4. Open the selected config in Backtest from the sidebar when it looks promising.
+1. Scan Top Champions.
+2. Click a champion or chart point.
+3. Review Metrics, Trading Style, Robustness, Scenario Metrics, and Full Configuration.
+4. Use **Run Backtest** before trusting a candidate.
+5. Use **Create PBv7 Optimize Preset from this Config** only after the config looks worth refining.
 
-## How to read Top Champions and scores
+## Explorer
 
-Top Champions is a **ranking helper**, not a guarantee that rank 1 is always the best config for your live goals.
+Explorer is for interactive tradeoff analysis.
 
-- **Score** is the explorer's composite ranking score for the currently visible slice.
-- Higher **Score** is better within the same loaded view.
-- The score is best used to shortlist candidates, not as a single final truth.
+- **Visualization** changes between 2D scatter, 3D scatter, 3D projections, and radar charts.
+- **Quick Views** pick useful metric combinations for common decisions.
+- **Custom** lets you choose X, Y, and optionally Z metrics manually.
+- **Color by** adds one more metric dimension through point color.
+- **Show all configs** compares the selected candidate against the full visible cloud instead of pareto points only.
+- **Performance Priority**, **Risk Aversion**, and **Robustness Importance** drive the Best Match helper.
 
-The supporting chips help you understand *why* a config ranks where it does:
+Use Explorer when you need to answer questions like:
 
-- **Perf**: return/performance strength. Higher is generally better.
-- **Rob**: robustness/consistency quality. Higher is generally better.
-- **Risk**: risk pressure from drawdown/choppiness/tail-risk style metrics. Lower is generally better.
+- Is this config really on a good frontier, or just good by one metric?
+- Which nearby config gives up little profit but reduces risk a lot?
+- Does a radar candidate have a balanced profile or one extreme strength hiding weaknesses?
 
-Practical rule:
+## Deep Intelligence Parameters
 
-- Start with the highest **Score** configs.
-- Prefer configs where **Perf** and **Rob** are both strong.
-- Be careful when a config wins mainly on performance but still shows clearly worse **Risk** than nearby alternatives.
+Parameters Intelligence explains how the optimize search behaved around parameter values.
 
-## How to read the preview charts
+- **Parameter Influence Heatmap** shows correlations between variable parameters and performance metrics.
+- **Parameters Near Bounds** shows parameters close to their optimize bounds.
+- **Top N Parameters** controls how many parameters are shown.
 
-The two charts on Overview are quick visual summaries of the currently visible config set.
+Use this tab before creating a follow-up preset. Parameters near bounds are good candidates for refinement because the optimizer may have wanted to search farther in that direction.
 
-### Pareto Front Preview (left)
+## Deep Intelligence Scenarios
 
-This chart plots two key metrics against each other for the currently visible configs.
+Scenario Analysis compares the visible config set across loaded backtest scenarios.
 
-- Each point is one config.
-- Star-marked points are Pareto members in the current visible slice.
-- The highlighted star marks the currently selected config.
-- The color scale is an extra metric, used to add another dimension at a glance.
+- The metric selector chooses the value used for the scenario boxplots and statistics.
+- The chart and statistic cards are aggregate views over the visible config set.
+- This tab does not represent a single selected config; it shows how the visible population behaves under different scenarios.
 
-How to interpret it:
+Use it to avoid selecting a config that only looks good in one narrow scenario.
 
-- Look for the outer edge/frontier of points rather than dense middle clusters.
-- A config on the frontier is interesting because improving one axis would usually worsen another.
-- Nearby frontier points are often your real decision candidates.
-- If one candidate is only slightly better on one axis but much worse on the other, it is usually not the better trade.
+## Deep Intelligence Evolution
 
-### Robustness vs Performance (right)
+Optimization Evolution shows whether the optimize run was still finding meaningfully better configs over time. It needs Full Mode because the fast pareto JSON files do not preserve the original `all_results.bin` config index.
 
-This chart answers a simpler decision question: how much performance are you getting for the amount of robustness?
+- **Metric** chooses the timeline value.
+- **Show all configs** switches between pareto-only points and all visible configs.
+- **Hide liquidation outliers** keeps extreme values from crushing the chart scale.
+- **Meaningful Improvement (%)** ignores tiny best-so-far changes so noise does not look like progress.
+- The blue **Best So Far** line shows the best value found up to each point.
+- Clicking a point in Full Mode selects that config for inspection below the chart.
 
-- **X axis**: performance metric. Further right is better.
-- **Y axis**: robustness score. Higher is better.
-- The dashed lines mark the current average split.
+In Fast Mode this tab shows a hint instead of a chart. Use the sidebar **Load all_results** button when you need the real timeline.
 
-Interpret the quadrants like this:
+Use the summary to decide whether another run is likely to help:
 
-- **Top right**: strong performance and strong robustness. Usually the best hunting ground.
-- **Top left**: stable but slower. Good when safety matters more than absolute returns.
-- **Bottom right**: fast but fragile. These need extra caution.
-- **Bottom left**: usually weak candidates unless they serve a very specific purpose.
+- **Last meaningful improvement** near the end suggests the search may still be productive.
+- **Final 20% improvement** near zero suggests the run was already flattening out.
+- **Suggested minimum iterations** gives a practical next-run target based on where the last meaningful improvement occurred.
 
-## Important scoring caveat
+## Deep Intelligence Correlations
 
-Scores and chart positions are always relative to the **currently loaded and currently visible** set.
+Multi-Metric Correlation compares several configs across normalized risk/profile dimensions.
 
-- In **fast mode**, you are mainly comparing Pareto JSON candidates.
-- In **full mode**, you are comparing against the larger `all_results.bin` sample.
-- When you change **Display Range**, rankings and visible Pareto stars can change because the comparison slice changed.
+- **Selection Strategy** chooses how configs are picked: Top Performers, Diverse Styles, or Risk Spectrum.
+- **Configs** controls how many traces appear in the radar.
+- Weighted and BTC toggles choose the preferred metric variants when available.
 
-So the right question is not only "Which config has the best score?" but also:
+Use it to compare candidate shapes quickly. A balanced radar is usually easier to validate than a config that wins one axis and loses several others.
 
-- "Does this config still look strong when I compare it against the wider loaded set?"
-- "Is it strong because it is balanced, or only because one metric dominates?"
+## Settings and Loading
 
-### 4) Export candidates
-Once you have a shortlist:
+Settings controls what data is loaded.
 
-- Export config JSONs to test them in backtests.
-- Keep notes on which filters/metrics produced the best candidates.
-- Use **Run Backtest** on a selected config to open that exact config directly in the FastAPI Backtest editor.
+- **Result Path** is the optimize result directory or pareto directory.
+- **Max Configs** limits the fast loaded subset.
+- **Load Strategy** controls how candidates are selected when loading a subset.
+- **Persist defaults** saves the current loading preferences.
+- Use the sidebar **Load all_results** button for full mode.
+- Use **Show Passivbot Paretos** to switch back to fast pareto-only mode.
 
-## Tips
+If the UI feels slow, reduce Max Configs or work in pareto-only mode until you know which part of the result is worth deeper inspection.
 
-- If the UI feels slow, reduce the number of displayed configs or filters.
-- Use consistent time ranges and exchanges when comparing multiple optimize runs.
+## Optimize Preset Refinement
+
+The preset panel creates a PBv7 Optimize config from the selected Pareto config.
+
+- Choose **Optimization goal** first. The default Balanced option keeps the run scoring.
+- Keep the generated **Preset name** unless you need a custom name.
+- Keep **Only adjust parameters near optimize bounds** enabled for normal refinement runs.
+- Use **Bounds window (%)** to tighten search bounds around selected values.
+- Use **Risk adjustment** to tighten or relax risk-related bounds and limits.
+- **Create Optimize Preset** saves the config and opens Optimize.
+- **Create & Queue** saves and queues it without opening Optimize.
+
+Use a small bounds window first. A tight window is useful for refinement, but too much tightening can hide better nearby regions.
+
+## Best Practices
+
+1. Start in Overview, not Deep Intelligence. First identify candidates worth studying.
+2. Load `all_results.bin` before making final decisions if it is available.
+3. Use Display Range intentionally. A config that is strong in the top 500 may look ordinary in the top 5000.
+4. Prefer balanced candidates with acceptable risk over the absolute highest profit point.
+5. Always validate selected configs in Backtest before using them as a live candidate.
+6. Use Deep Intelligence Parameters before creating a follow-up Optimize preset.
+7. For refinement presets, adjust near-bound parameters first and keep bounds changes modest.
+8. Compare at least two nearby alternatives before deciding. The best live candidate is often not the highest ranked point.
 
 ## Related
 
-- Strategy Explorer: great for visual debugging of a single config.
+- PBv7 Optimize: create and queue follow-up optimize runs.
+- PBv7 Backtest: validate a selected config before trusting it.
+- Strategy Explorer: inspect one config visually after narrowing the shortlist.

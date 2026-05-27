@@ -1,187 +1,44 @@
 import streamlit as st
 from pathlib import Path
-from pbgui_func import is_session_state_not_initialized, is_authenticted, set_page_config, render_header_with_guide, _start_fastapi_server_if_needed
-from ParetoExplorer import ParetoExplorer
+from pbgui_func import (
+    get_navi_paths,
+    is_authenticted,
+    is_session_state_not_initialized,
+    redirect_to_fastapi_pareto_explorer,
+    set_page_config,
+)
 
-
-def _redirect_to_fastapi_optimize_paretos() -> None:
-    from api.auth import generate_token
-
-    api_host, api_port, success = _start_fastapi_server_if_needed()
-    if not success:
-        st.error(
-            f"⚠️ FastAPI server could not be started on {api_host}:{api_port}. "
-            "Please check **System → Services → API Server** or start manually: "
-            "`python PBApiServer.py`"
-        )
-        return
-
-    if "api_token" not in st.session_state:
-        user_id = (
-            st.session_state.get("user", {}).get("id")
-            or st.session_state.get("user")
-            or "anonymous"
-        )
-        st.session_state["api_token"] = generate_token(str(user_id), expires_in_seconds=86400).token
-
-    token = st.session_state["api_token"]
-
-    browser_host = "127.0.0.1"
-    st_port = 8501
-    try:
-        req_host = st.context.headers.get("Host", "")
-        if req_host:
-            browser_host = req_host.split(":")[0] or "127.0.0.1"
-            if ":" in req_host:
-                st_port = int(req_host.split(":")[1])
-    except Exception:
-        pass
-
-    st_base = f"http://{browser_host}:{st_port}"
-    url = (
-        f"http://{browser_host}:{api_port}/api/optimize-v7/main_page"
-        f"?token={token}"
-        f"&st_base={st_base}#paretos"
-    )
-    st.html(
-        f'<script>window.location.replace("{url}");</script>',
-        unsafe_allow_javascript=True,
-    )
-    st.stop()
-
-
-# ── Guide helpers ──────────────────────────────────────────
-
-def _docs_index(lang: str) -> list[tuple[str, str]]:
-    folder = "help_de" if str(lang).strip().upper() == "DE" else "help"
-    docs_dir = Path(__file__).resolve().parents[1] / "docs" / folder
-    if not docs_dir.is_dir():
-        return []
-    out: list[tuple[str, str]] = []
-    for p in sorted(docs_dir.glob("*.md")):
-        label = p.name
-        try:
-            first = p.read_text(encoding="utf-8").splitlines()[0].strip()
-            if first.startswith("#"):
-                label = first.lstrip("#").strip() or p.name
-        except Exception:
-            pass
-        out.append((label, str(p)))
-    return out
-
-
-def _read_markdown(path: str) -> str:
-    try:
-        return Path(path).read_text(encoding="utf-8")
-    except Exception as e:
-        return f"Failed to read docs: {e}"
-
-
-@st.dialog("Help & Tutorials", width="large")
-def _help_modal(default_topic: str = "Pareto Explorer"):
-    lang = st.radio("Language", options=["EN", "DE"], horizontal=True, key="pareto_help_lang")
-    docs = _docs_index(str(lang))
-    if not docs:
-        st.info("No help docs found.")
-        return
-    labels = [d[0] for d in docs]
-    default_index = 0
-    target = str(default_topic or "").strip().lower()
-    if target:
-        for i, lbl in enumerate(labels):
-            if target in str(lbl).lower():
-                default_index = i
-                break
-    sel = st.selectbox(
-        "Select Topic",
-        options=list(range(len(labels))),
-        format_func=lambda i: labels[int(i)],
-        index=int(default_index),
-        key="pareto_help_sel",
-    )
-    st.markdown(_read_markdown(docs[int(sel)][1]), unsafe_allow_html=True)
 
 set_page_config("Pareto Explorer")
 
-# Authentication check
 if is_session_state_not_initialized() or not is_authenticted():
-    st.switch_page("navi/system_login.py")
-
-query_result_path = str(st.query_params.get("result_path") or "").strip()
-relay_result_path = st.session_state.pop("_relay_result_path", "")
-if isinstance(relay_result_path, list):
-    relay_result_path = relay_result_path[0] if relay_result_path else ""
-if relay_result_path and not query_result_path:
-    query_result_path = str(relay_result_path).strip()
-if query_result_path:
-    try:
-        candidate_result_dir = Path(query_result_path).expanduser().resolve()
-    except Exception:
-        candidate_result_dir = None
-    if candidate_result_dir and candidate_result_dir.exists() and (candidate_result_dir / "all_results.bin").exists():
-        st.session_state.pareto_explorer_path = str(candidate_result_dir)
-
-# Check if we have a path to analyze
-if "pareto_explorer_path" not in st.session_state:
-    st.error("❌ No optimization result selected")
-    st.info("Please go to **PBv7 → Optimize → Results** and click the **🎯 Pareto Explorer** button")
-    if st.button("← Back to Optimize"):
-        _redirect_to_fastapi_optimize_paretos()
+    st.switch_page(get_navi_paths()["SYSTEM_LOGIN"])
     st.stop()
 
-# Navigation sidebar
-with st.sidebar:
-    st.title("🎯 Pareto Explorer")
-    
-    # Extract directory name and show shortened version
-    result_path = st.session_state.pareto_explorer_path
-    result_name = Path(result_path).name
-    
-    # Extract meaningful parts: Date + Symbol (e.g., "2025-12-24 | DOGE")
-    parts = result_name.split('_')
-    if len(parts) >= 5:
-        # Format: YYYY-MM-DDTHH_MM_SS_exchange1_exchange2_XXXdays_SYMBOL_hash
-        date_part = parts[0].replace('T', ' ')  # "2025-12-24 07:04:00"
-        date_short = date_part.split()[0]  # Just the date "2025-12-24"
-        
-        # Find symbol (usually before the last part which is the hash)
-        symbol = parts[-2] if len(parts) > 1 else ""
-        
-        display_name = f"{date_short} | {symbol}"
-    else:
-        # Fallback to first 35 chars
-        display_name = result_name[:35] + ("..." if len(result_name) > 35 else "")
-    
-    st.caption(display_name, help=f"📂 {result_name}")
 
-    if st.button("← Back to Optimize Results", width='stretch'):
-        if "pareto_explorer_path" in st.session_state:
-            del st.session_state.pareto_explorer_path
-        _redirect_to_fastapi_optimize_paretos()
+def _first_query_value(value: object) -> str:
+    if isinstance(value, list):
+        return str(value[0] if value else "").strip()
+    return str(value or "").strip()
 
-# Page header with Guide button (top-right)
-render_header_with_guide(
-    "Pareto Explorer",
-    guide_callback=lambda: _help_modal("Pareto Explorer"),
-    guide_key="pareto_guide_btn",
+
+result_path = _first_query_value(st.query_params.get("result_path"))
+relay_result_path = st.session_state.pop("_relay_result_path", "")
+if not result_path:
+    result_path = _first_query_value(relay_result_path)
+if not result_path:
+    result_path = _first_query_value(st.session_state.pop("pareto_explorer_path", ""))
+
+if result_path:
+    try:
+        candidate_result_dir = Path(result_path).expanduser().resolve()
+        if not candidate_result_dir.exists():
+            result_path = ""
+    except Exception:
+        result_path = ""
+
+redirect_to_fastapi_pareto_explorer(result_path)
+
+st.error(
+    "⚠️ FastAPI server unavailable. Please start it via **System → Services → API Server**."
 )
-
-# Stage navigation (same pattern as Backtest / Optimize)
-_PARETO_TABS = ["Command Center", "Pareto Playground", "Deep Intelligence"]
-if "pareto_main_view" not in st.session_state:
-    st.session_state.pareto_main_view = "Command Center"
-_active_stage = st.segmented_control(
-    "", options=_PARETO_TABS, default="Command Center", key="pareto_main_view"
-) or "Command Center"
-
-# Run the Pareto Explorer
-try:
-    explorer = ParetoExplorer(st.session_state.pareto_explorer_path)
-    explorer.run(stage=_active_stage)
-except Exception as e:
-    st.error(f"❌ Error loading Pareto Explorer: {e}")
-    st.exception(e)
-    if st.button("← Back"):
-        if "pareto_explorer_path" in st.session_state:
-            del st.session_state.pareto_explorer_path
-        _redirect_to_fastapi_optimize_paretos()

@@ -9,12 +9,15 @@
     loaded: false,
     topicCache: {},
     rawHtml: null,
+    pendingAnchor: '',
     searchMarks: [],
     searchIndex: -1,
     searchTimer: null,
     globalMode: false,
     currentKeyword: 'overview',
-    depsPromise: null
+    depsPromise: null,
+    indexRequestSeq: 0,
+    topicRequestSeq: 0
   };
 
   function loadScript(src) {
@@ -179,6 +182,36 @@
     return String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
+  function slugifyText(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .trim()
+      .replace(/\s+/g, '-');
+  }
+
+  function scrollToAnchor(anchor) {
+    anchor = String(anchor || '').replace(/^#/, '').trim();
+    if (!anchor) return;
+    var content = dom('pbgui-shared-help-content');
+    if (!content) return;
+    var target = window.CSS && typeof window.CSS.escape === 'function'
+      ? content.querySelector('#' + window.CSS.escape(anchor))
+      : document.getElementById(anchor);
+    if (target && !content.contains(target)) target = null;
+    if (!target) {
+      Array.prototype.slice.call(content.querySelectorAll('h1,h2,h3,h4')).some(function (heading) {
+        if (slugifyText(heading.textContent) === anchor) {
+          target = heading;
+          return true;
+        }
+        return false;
+      });
+    }
+    if (!target) return;
+    target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+
   function syncLangButtons() {
     dom('pbgui-shared-help-lang-en').classList.toggle('active', state.lang === 'EN');
     dom('pbgui-shared-help-lang-de').classList.toggle('active', state.lang === 'DE');
@@ -332,7 +365,9 @@
     });
   }
 
-  function loadTopic(index) {
+  function loadTopic(index, options) {
+    options = options || {};
+    var requestSeq = ++state.topicRequestSeq;
     state.selectedIndex = index;
     renderToc();
     var topic = state.topics[index];
@@ -345,6 +380,8 @@
     fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + state.lang + '&token=' + encodeURIComponent(state.token))
       .then(function (response) { if (!response.ok) throw new Error('HTTP ' + response.status); return response.json(); })
       .then(function (data) {
+        if (requestSeq !== state.topicRequestSeq) return;
+        var anchor = options.anchor || state.pendingAnchor;
         state.rawHtml = renderMarkdown(data.content || '');
         state.topicCache[index] = state.rawHtml;
         dom('pbgui-shared-help-content').innerHTML = state.rawHtml;
@@ -352,18 +389,25 @@
         if (dom('pbgui-shared-help-search').value.trim() && !state.globalMode) {
           applySearch(dom('pbgui-shared-help-search').value.trim());
         }
+        state.pendingAnchor = '';
+        window.setTimeout(function () { scrollToAnchor(anchor); }, 0);
       })
       .catch(function () {
+        if (requestSeq !== state.topicRequestSeq) return;
         dom('pbgui-shared-help-content').innerHTML = '<div class="pbgui-shared-help-loading">Failed to load content.</div>';
       });
   }
 
-  function loadHelpIndex(keyword) {
+  function loadHelpIndex(keyword, anchor) {
+    var requestSeq = ++state.indexRequestSeq;
+    state.topicRequestSeq += 1;
     state.currentKeyword = String(keyword || 'overview');
+    state.pendingAnchor = String(anchor || '');
     dom('pbgui-shared-help-toc-list').innerHTML = '<div class="pbgui-shared-help-loading">Loading...</div>';
     fetch('/api/help/index?lang=' + state.lang + '&token=' + encodeURIComponent(state.token))
       .then(function (response) { if (!response.ok) throw new Error('HTTP ' + response.status); return response.json(); })
       .then(function (data) {
+        if (requestSeq !== state.indexRequestSeq) return;
         state.topics = data || [];
         renderToc();
         if (!state.topics.length) {
@@ -381,9 +425,10 @@
           }
         }
         state.loaded = true;
-        loadTopic(startIndex);
+        loadTopic(startIndex, { anchor: state.pendingAnchor });
       })
       .catch(function () {
+        if (requestSeq !== state.indexRequestSeq) return;
         dom('pbgui-shared-help-toc-list').innerHTML = '<div class="pbgui-shared-help-loading">Failed to load topics.</div>';
         dom('pbgui-shared-help-content').innerHTML = '<div class="pbgui-shared-help-loading">Failed to load content.</div>';
       });
@@ -396,7 +441,7 @@
     state.topicCache = {};
     state.selectedIndex = 0;
     syncLangButtons();
-    loadHelpIndex(state.currentKeyword);
+    loadHelpIndex(state.currentKeyword, state.pendingAnchor);
   }
 
   function bindDrag() {
@@ -497,7 +542,7 @@
       dom('pbgui-shared-help-ovl').classList.add('visible');
       dom('pbgui-shared-help-ovl').setAttribute('aria-hidden', 'false');
       document.body.classList.add('pbgui-help-open');
-      loadHelpIndex(keyword || 'overview');
+      loadHelpIndex(keyword || 'overview', options.anchor || '');
     });
   }
 
