@@ -245,40 +245,50 @@ stop_legacy_processes() {
 cleanup_crontab() {
     local current_cron=""
     local new_cron=""
+    local crontab_owner=""
+    local crontab_args=()
 
     if ! command -v crontab >/dev/null 2>&1; then
         warn "crontab command not found; skipping autostart cleanup."
         return
     fi
 
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        crontab_owner="$SUDO_USER"
+        crontab_args=(-u "$crontab_owner")
+        info "Running with sudo; checking crontab for user '$crontab_owner'."
+    else
+        crontab_owner="$(id -un)"
+    fi
+
     current_cron="$(mktemp)"
     new_cron="$(mktemp)"
 
-    if ! crontab -l > "$current_cron" 2>/dev/null; then
-        success "No user crontab found."
+    if ! crontab "${crontab_args[@]}" -l > "$current_cron" 2>/dev/null; then
+        success "No crontab found for user '$crontab_owner'."
         rm -f "$current_cron" "$new_cron"
         return
     fi
 
     if ! grep -Eiq 'streamlit|pbgui\.py' "$current_cron"; then
-        success "No legacy Streamlit/pbgui.py crontab entries found."
+        success "No legacy Streamlit/pbgui.py crontab entries found for user '$crontab_owner'."
         rm -f "$current_cron" "$new_cron"
         return
     fi
 
-    warn "Removing legacy crontab entries containing streamlit or pbgui.py."
+    warn "Removing legacy crontab entries containing streamlit or pbgui.py for user '$crontab_owner'."
     grep -Ei 'streamlit|pbgui\.py' "$current_cron" || true
     grep -Eiv 'streamlit|pbgui\.py' "$current_cron" > "$new_cron" || true
 
     if [ "$dry_run" -eq 1 ]; then
-        info "Dry run: user crontab was not changed."
+        info "Dry run: crontab for user '$crontab_owner' was not changed."
         rm -f "$current_cron" "$new_cron"
         return
     fi
 
-    crontab "$new_cron"
+    crontab "${crontab_args[@]}" "$new_cron"
     rm -f "$current_cron" "$new_cron"
-    success "Legacy crontab entries removed."
+    success "Legacy crontab entries removed for user '$crontab_owner'."
 }
 
 cleanup_ufw_8501() {
