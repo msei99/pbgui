@@ -118,9 +118,9 @@ Hyperliquid uses its own inline data-actions page instead of that shared iframe,
 
 Its action dialogs are styled in-page now as well: cancel, delete, retry, requeue, and bulk-delete confirmations no longer fall back to browser-native popup windows.
 
-The FastAPI `OHLCV Data` panel now follows the same parity goal. The selected exchange gets dataset buttons directly in the sidebar: `1m` and `PB7 cache` are always available, while Hyperliquid also shows `1m_api` and `l2Book`. The main panel then keeps the same workflow as Streamlit: summary metrics, a filterable inventory table, deletion tools for writable datasets, a coverage heatmap, a minute heatmap when available, and an optional OHLCV detail chart. `PB7 cache` remains read-only.
+The FastAPI `OHLCV Data` panel now keeps the full data-review workflow in one place. The selected exchange gets dataset buttons directly in the sidebar: `1m` and `PB7 cache` are always available, while Hyperliquid also shows `1m_api` and `l2Book`. The main panel then shows summary metrics, a filterable inventory table, deletion tools for writable datasets, a coverage heatmap, a minute heatmap when available, and an optional OHLCV detail chart. `PB7 cache` remains read-only.
 
-That FastAPI OHLCV detail chart now uses the same lazy zoom strategy as the Streamlit version. The initial iframe only ships coarse layers, so long histories open reliably again, and wheel zoom pulls finer candles on demand instead of trying to embed the full `15m` / `5m` / `1m` pyramid up front.
+That FastAPI OHLCV detail chart now uses lazy zoom loading. The initial iframe only ships coarse layers, so long histories open reliably again, and wheel zoom pulls finer candles on demand instead of trying to embed the full `15m` / `5m` / `1m` pyramid up front.
 
 The iframe template itself is now served as real HTML/JS again, so the chart no longer stalls on a blank `Loading chart...` panel because of escaped quote characters inside the embedded script.
 

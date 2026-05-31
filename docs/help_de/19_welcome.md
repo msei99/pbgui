@@ -36,7 +36,7 @@ Wichtige Felder:
 
 Mit den **Browse**-Buttons kannst du Verzeichnisse und den Python-Interpreter direkt aus dem Server-Dateisystem auswaehlen.
 
-Nach dem Speichern gelten die Aenderungen sofort und werden sowohl vom Streamlit- als auch vom FastAPI-Pfad verwendet.
+Nach dem Speichern gelten die Aenderungen sofort und werden von den PBGui-Laufzeitpfaden verwendet.
 
 ## Bereich Password
 

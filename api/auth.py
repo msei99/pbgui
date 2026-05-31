@@ -17,9 +17,10 @@ from pbgui_purefunc import (
     PBGDIR,
     PBGUI_SERIAL,
     PBGUI_VERSION,
+    legacy_auth_secrets_path,
     pb7_runtime_status,
+    pbgui_auth_secrets_path,
     save_ini,
-    streamlit_secrets_path,
 )
 
 router = APIRouter()
@@ -94,8 +95,8 @@ def get_tokens_dir() -> Path:
     return tokens_dir
 
 
-def _write_secrets_toml(secrets: dict) -> None:
-    secrets_path = streamlit_secrets_path()
+def _write_auth_secrets_toml(secrets: dict) -> None:
+    secrets_path = pbgui_auth_secrets_path()
     secrets_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = secrets_path.with_suffix(".tmp")
     with open(tmp_path, "w", encoding="utf-8") as handle:
@@ -103,16 +104,22 @@ def _write_secrets_toml(secrets: dict) -> None:
     os.replace(str(tmp_path), str(secrets_path))
 
 
-def _ensure_secrets_file() -> Path:
-    secrets_path = streamlit_secrets_path()
+def _ensure_auth_secrets_file() -> Path:
+    secrets_path = pbgui_auth_secrets_path()
     secrets_path.parent.mkdir(parents=True, exist_ok=True)
     if not secrets_path.exists():
-        _write_secrets_toml({"password": _DEFAULT_PASSWORD})
+        legacy_path = legacy_auth_secrets_path()
+        if legacy_path.exists():
+            tmp_path = secrets_path.with_suffix(".tmp")
+            tmp_path.write_bytes(legacy_path.read_bytes())
+            os.replace(str(tmp_path), str(secrets_path))
+        else:
+            _write_auth_secrets_toml({"password": _DEFAULT_PASSWORD})
     return secrets_path
 
 
-def _load_streamlit_secrets() -> tuple[dict, str | None]:
-    secrets_path = _ensure_secrets_file()
+def _load_auth_secrets() -> tuple[dict, str | None]:
+    secrets_path = _ensure_auth_secrets_file()
     try:
         return toml.load(secrets_path), None
     except toml.TomlDecodeError as exc:
@@ -120,7 +127,7 @@ def _load_streamlit_secrets() -> tuple[dict, str | None]:
 
 
 def _password_state() -> dict:
-    secrets, error = _load_streamlit_secrets()
+    secrets, error = _load_auth_secrets()
     password_value = str(secrets.get("password", "")) if not error else ""
     password_required = bool(password_value) and not error
     password_missing = (not password_required) and not error
@@ -143,34 +150,20 @@ def _request_origin(request: Request) -> str:
     return f"{scheme}://{host}" + (f":{port}" if port else "")
 
 
-def _effective_st_base(request: Request, st_base: str) -> str:
-    if st_base:
-        return st_base
-    host = request.url.hostname or "127.0.0.1"
-    return f"http://{host}:8501"
-
-
-def _main_page_url(token: str = "", st_base: str = "") -> str:
+def _main_page_url(token: str = "") -> str:
     params: dict[str, str] = {}
     if token:
         params["token"] = token
-    if st_base:
-        params["st_base"] = st_base
     query = urlencode(params)
     return "/api/auth/main_page" + (f"?{query}" if query else "")
 
 
-def _root_url(st_base: str = "") -> str:
-    params: dict[str, str] = {}
-    if st_base:
-        params["st_base"] = st_base
-    query = urlencode(params)
-    return "/" + (f"?{query}" if query else "")
+def _root_url() -> str:
+    return "/"
 
 
 def build_root_entry_response(
     request: Request,
-    st_base: str = "",
     session: SessionToken | None = None,
 ) -> HTMLResponse | RedirectResponse:
     """Return the public root response.
@@ -179,15 +172,13 @@ def build_root_entry_response(
     root login page first. Otherwise jump straight to the Welcome page.
     """
     auth_state = _password_state()
-    effective_st_base = _effective_st_base(request, st_base)
 
     if auth_state["error"] or session is not None or not auth_state["required"]:
         token = session.token if session else ""
-        return RedirectResponse(url=_main_page_url(token=token, st_base=effective_st_base))
+        return RedirectResponse(url=_main_page_url(token=token))
 
     html = _frontend_template_path("root_login.html").read_text(encoding="utf-8")
     html = html.replace('"%%API_ORIGIN%%"', json.dumps(_request_origin(request)))
-    html = html.replace('"%%ST_BASE%%"', json.dumps(effective_st_base))
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
 
@@ -213,7 +204,7 @@ def generate_token(user_id: str, expires_in_seconds: int = 86400) -> SessionToke
     """Generate a new API token for a user.
     
     Args:
-        user_id: User identifier (from Streamlit session)
+        user_id: User identifier
         expires_in_seconds: Token lifetime (default: 24 hours)
         
     Returns:
@@ -452,7 +443,7 @@ def logout(session: SessionToken = Depends(require_auth)) -> dict:
 
 @router.post("/change-password")
 def change_password(payload: PasswordChangeRequest, session: SessionToken = Depends(require_auth)) -> dict:
-    """Change the Streamlit password from the FastAPI welcome page."""
+    """Change the PBGui password from the FastAPI welcome page."""
     auth_state = _password_state()
     if auth_state["error"]:
         raise HTTPException(status_code=500, detail=auth_state["error"])
@@ -460,12 +451,12 @@ def change_password(payload: PasswordChangeRequest, session: SessionToken = Depe
     if auth_state["required"] and payload.current_password != auth_state["password"]:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
-    secrets, error = _load_streamlit_secrets()
+    secrets, error = _load_auth_secrets()
     if error:
         raise HTTPException(status_code=500, detail=error)
 
     secrets["password"] = payload.new_password
-    _write_secrets_toml(secrets)
+    _write_auth_secrets_toml(secrets)
 
     response = _bootstrap_payload(session)
     response["message"] = "Password updated"
@@ -538,14 +529,13 @@ def browse_files(
 @router.get("/main_page", response_class=HTMLResponse)
 def main_page(
     request: Request,
-    st_base: str = Query(default="", description="Browser-visible Streamlit base URL"),
     session: Optional[SessionToken] = Depends(optional_auth),
 ) -> Response:
     """Serve the standalone Welcome/Login page."""
     auth_state = _password_state()
     active_session = session
     if active_session is None and auth_state["required"] and not auth_state["error"]:
-        return RedirectResponse(url=_root_url(st_base=st_base))
+        return RedirectResponse(url=_root_url())
     if active_session is None and not auth_state["required"] and not auth_state["error"]:
         client_host = request.client.host if request.client else "local"
         active_session = generate_token(f"welcome:{client_host}", expires_in_seconds=86400)
@@ -555,7 +545,6 @@ def main_page(
 
     html = html.replace('"%%TOKEN%%"', json.dumps(active_session.token if active_session else ""))
     html = html.replace('"%%API_ORIGIN%%"', json.dumps(_request_origin(request)))
-    html = html.replace('"%%ST_BASE%%"', json.dumps(_effective_st_base(request, st_base)))
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace('%%VERSION%%', PBGUI_VERSION)
     html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))

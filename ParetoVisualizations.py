@@ -94,7 +94,6 @@ class ParetoVisualizations:
             return go.Figure().add_annotation(text="No data available", showarrow=False)
         
         # Check if required metrics exist
-        import streamlit as st
         sample_config = configs[0]
         missing_metrics = []
         for metric in [x_metric, y_metric, color_metric, size_metric]:
@@ -102,8 +101,6 @@ class ParetoVisualizations:
                 missing_metrics.append(metric)
         
         if missing_metrics:
-            st.error(f"❌ Metrics not found: {', '.join(missing_metrics)}")
-            st.info(f"Available metrics: {', '.join(list(sample_config.suite_metrics.keys()))}")
             return go.Figure().add_annotation(
                 text=f"Metrics not available: {', '.join(missing_metrics)}", 
                 showarrow=False
@@ -393,9 +390,6 @@ class ParetoVisualizations:
             import numpy as np
             from PIL import Image
         except ImportError as e:
-            import streamlit as st
-            st.error(f"PyVista not installed: {e}")
-            st.info("Install with: `pip install pyvista`")
             return None
         
         # Use provided configs_list for consistent ordering, or fall back to loader
@@ -460,16 +454,10 @@ class ParetoVisualizations:
             plotter = pv.Plotter(off_screen=True, window_size=[1080, 1080])
         except Exception as e:
             # Try with xvfb if available (for headless servers)
-            import streamlit as st
-            st.warning(f"Failed to create plotter: {e}")
-            st.info("Trying with xvfb...")
             try:
                 pv.start_xvfb()
                 plotter = pv.Plotter(off_screen=True, window_size=[1080, 1080])
             except Exception as e2:
-                st.error(f"Failed to initialize PyVista even with xvfb: {e2}")
-                st.info("On headless servers, install xvfb: `sudo apt-get install xvfb`")
-                st.code(f"Original error: {e}\nXvfb error: {e2}")
                 return None
         
         plotter.background_color = 'white'
@@ -833,7 +821,7 @@ class ParetoVisualizations:
         fig.add_annotation(x=max_perf * 0.9, y=mean_robust * 0.3,
                           text="🎲 High Risk", showarrow=False, font=dict(size=12, color="orange"))
         
-        # Point count removed - displayed outside chart in Streamlit
+        # Point count is displayed outside the chart.
         
         fig.update_layout(
             title=f"Robustness vs Performance: {performance_metric.replace('_', ' ').title()}",

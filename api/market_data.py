@@ -107,7 +107,6 @@ SETTINGS_EXCHANGES: dict[str, dict[str, Any]] = {
 @router.get("/main_page", response_class=HTMLResponse)
 def get_main_page(
     request: Request,
-    st_base: str = Query(default="", description="Browser-visible Streamlit base URL"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     html_path = PBGDIR / "frontend" / "market_data_main.html"
@@ -121,10 +120,6 @@ def get_main_page(
 
     html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
-
-    if not st_base:
-        st_base = f"http://{host}:8501"
-    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
 
     from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION
 

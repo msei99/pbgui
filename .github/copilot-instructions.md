@@ -18,15 +18,14 @@ Failure to do steps 1–2 is a bug, not an oversight.
 - For each release `vX.YY`:
   - `pbgui_purefunc.py`: bump `PBGUI_VERSION`.
   - Move `releases/unreleased.md` notes into `releases/vX.YY.md` and update `CHANGELOG.md`.
-  - `pbgui_func.py`: the About string updates automatically from `PBGUI_VERSION`.
+  - `api/serial.txt`: increment so running clients show the restart requirement.
   - Commit: `Release vX.YY`, tag `vX.YY`, push branch + tags.
 
 ## Project conventions
 
-- Streamlit/UI helpers live in `pbgui_func.py`. Pure helpers (no Streamlit) live in `pbgui_purefunc.py`.
+- FastAPI UI routes live under `api/`; pure helpers live in `pbgui_purefunc.py`.
 - Exchange operations (CCXT, market fetch, symbol info) belong in `Exchange.py`.
 - Database operations belong in `Database.py`.
-- Never open a dialog inside another dialog: within `@st.dialog` do not call `error_popup/info_popup/result_popup`; show errors inline (e.g. `st.error`).
 - Use `:material/...:` icon buttons for compact inline navigation (e.g. `:material/arrow_left:` / `:material/arrow_right:` for month navigation). Prefer material icons for concise controls consistent with existing UI.
 - When showing/exporting configs as JSON, use real JSON serialization (`json.dumps`) so `null/true/false` are preserved (avoid Python `None/True/False` formatting).
 
@@ -55,9 +54,7 @@ Failure to do steps 1–2 is a bug, not an oversight.
   - The service tag (e.g. `[VPSManager]`) is always embedded in each log entry → grep works even in a shared file.
   - All logs go to `data/logs/` — never to any other directory.
   - **No direct `print()` or `logging.xxx`** in GUI modules — exclusively use `_log('ServiceName', msg, level='...')` via `from logging_helpers import human_log as _log`.
-- **Migrate everything to FastAPI**: whenever code needs to be rewritten, always prefer a pure FastAPI + Vanilla JS approach (REST endpoints + WebSocket, no JS frameworks). We are gradually migrating away from Streamlit — no new Streamlit polling fragments, no `run_every`, no `st.components.v1.html()` iframes. Use `st.html(unsafe_allow_javascript=True)` only as the thin embedding shim; all logic, state, and updates go through FastAPI. Frontend is always plain Vanilla JS — no React, no Vue, no jQuery.
-- **st.html vs iframe embedding rule**: Use `st.html(unsafe_allow_javascript=True)` when the component needs dynamic height (collapsible sections, expandable content). Use `st.components.v1.iframe()` when the component has a fixed/known height (tables, dashboards). **Critical**: `st.html` passes through DOMPurify with `SAFE_FOR_XML=true` (Streamlit 1.54+), which checks `/<[/\w!]/.test(scriptElement.innerHTML)` and **removes the entire `<script>` element** if it matches. Therefore: all `<` and `>` inside JS string literals in `st.html` components MUST be escaped as `\x3C` / `\x3E`. Comparison operators must be spaced (`a < b`, not `a<b`). iframe-loaded components (e.g. `jobs_monitor.html`) are NOT affected — they run as standalone pages via FastAPI without DOMPurify. When migrating to pure FastAPI, bulk-replace `\x3C`→`<` and `\x3E`→`>`.
-- **st.html JS validation rule**: When creating or editing `st.html` components with `<script>` blocks, always validate the JS first by extracting the script content and running `node --check` on it. Common pitfall: `\x3C`/`\x3E` hex escapes are only valid inside JS **string literals** — using them as comparison operators (e.g. `v \x3C 100`) causes a silent `SyntaxError` that kills the entire script block without any visible error. Operators must use real `<` `>` (with spaces for DOMPurify safety).
+- **FastAPI-only UI**: new and rewritten GUI code must use FastAPI + Vanilla JS (REST endpoints + WebSocket, no JS frameworks). Do not reintroduce Streamlit pages, polling fragments, or custom components.
 - **API server restart detection via `api/serial.txt`**: The file `api/serial.txt` contains a single integer (e.g. `1`). The running server reads it at startup and compares via inotify/SSE. **Whenever you change FastAPI code that requires a server restart** (any file under `api/`, `PBApiServer.py`, or any module imported at startup), you MUST increment the number in `api/serial.txt` by 1. This triggers the orange "Restart" button in the nav bar for all connected users. Never forget to bump the serial after API-level changes.
 - **Changelog discipline**: After every feature or bugfix, immediately add an entry to `releases/unreleased.md`. Never finish a task without updating the changelog.
 - **Changelog versioning rule**: Keep unreleased work only in `releases/unreleased.md`. When releasing, move those notes into a dedicated `releases/vX.YY.md` file and update `CHANGELOG.md`.
@@ -76,15 +73,9 @@ Failure to do steps 1–2 is a bug, not an oversight.
   - `docs/help_de/` (DE)
 - The first Markdown line MUST be a `# Title` heading; the central Help index uses it as the label.
 
-- Any page that introduces a new guide/tutorial MUST add a persistent `📖 Guide` button in the page header (top-right), opening an in-page `@st.dialog("Help & Tutorials")` modal (Language toggle + Topic select).
+- Any page that introduces a new guide/tutorial MUST add a persistent `Guide` button in the page header (top-right), opening an in-page modal (Language toggle + Topic select).
 
-- Header placement MUST follow the existing pattern (copy it):
-  - Reference implementations:
-    - `navi/v7_strategy_explorer.py`
-    - `navi/system_api_keys.py`
-  - Use the same layout:
-    - `c_title, c_help = st.columns([0.95, 0.05], vertical_alignment="center")`
-    - Title/header in `c_title`, `st.button("📖 Guide", ...)` in `c_help`
+- Header placement MUST follow the existing FastAPI page-header pattern.
 
 - Topic preselection MUST be done via substring match (e.g. default_topic contains "PBData").
 
@@ -96,7 +87,7 @@ Failure to do steps 1–2 is a bug, not an oversight.
 - **Guide sync is mandatory for user-facing changes**:
   - If a page’s visible behavior, labels, workflow, defaults, or warnings change, update the matching guide(s) in the same task.
   - For pages with EN+DE guides, update both `docs/help/...` and `docs/help_de/...` together.
-  - This explicitly includes `navi/system_api_keys.py` and `20_api_keys.md` when API key or TradFi provider UX changes.
+  - This explicitly includes the API Keys page and `20_api_keys.md` when API key or TradFi provider UX changes.
   - Before finishing, verify guide parity by checking changed UI strings/options against guide text.
   - Do not leave placeholder-only translations when a full EN guide exists; provide a real DE update.
 
@@ -136,12 +127,10 @@ Failure to do steps 1–2 is a bug, not an oversight.
 
 ## Module responsibilities
 
-- `pbgui_func.py`: Streamlit/UI helpers
 - `pbgui_purefunc.py`: Pure helpers (no Streamlit)
 - `Exchange.py`: Exchange operations (CCXT, market fetch, symbol info)
 - `Database.py`: Database operations
 - `PBCoinData.py`: CMC API, symbol lists, dynamic ignore
-- `Config.py`: V6/V7 configurations, BalanceCalculator
 - `PBRun.py`: Live instances, bot status
 
 ## Data organization
@@ -156,21 +145,8 @@ Failure to do steps 1–2 is a bug, not an oversight.
 
 - `Multi.py`, `Backtest.py`, `BacktestMulti.py`, `Optimize.py`, `OptimizeMulti.py`
 - `Instance.py`
-- `navi/v6_multi_backtest.py`, `navi/v6_multi_optimize.py`, `navi/v6_multi_run.py`
-- `navi/v6_single_backtest.py`, `navi/v6_single_optimize.py`, `navi/v6_single_run.py`
-- `navi/v6_spot_view.py`
-
-## Session State patterns
-
-- Prefix with module/page name (e.g. `edit_multi_`, `bc_`, `v7_`)
-- Clean up state in navigation callbacks
-- Never modify session state directly in loops
-
 ## Error handling
 
-- `error_popup()`: only for critical user-blocking errors
-- `st.error()`: inline for non-critical validation
-- `st.warning()`: for hints/warnings
 - Always log exceptions before showing popup
 - Rate limiting: use `sleep()` between API calls
 - Retry only for transient errors (Network, Timeout)

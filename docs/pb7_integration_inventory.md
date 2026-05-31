@@ -6,7 +6,7 @@ This developer note tracks the PB7/PBGui boundary so PB7 upgrades can be checked
 
 - FastAPI code should use `api.pb7_bridge` for PB7 schema/metadata imports.
 - Config load/save must use `pb7_config.py` (`load_pb7_config`, `prepare_pb7_config_dict`, `save_pb7_config`).
-- Do not import `Config.py` from FastAPI/pure modules because it imports Streamlit.
+- Legacy `Config.py` has been removed; config load/save must stay on the `pb7_config.py` pipeline.
 - New direct PB7 module imports should be wrapped in `api.pb7_bridge` unless they are process launches or isolated OHLCV tooling.
 
 ## Current PB7 Touchpoints

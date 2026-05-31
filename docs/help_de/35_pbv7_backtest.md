@@ -2,7 +2,7 @@
 
 Die **PBv7 Backtest** Seite ermöglicht das Erstellen, Ausführen und Auswerten von Passivbot v7 Backtests.
 Es handelt sich um eine eigenständige FastAPI-Seite — kein Seitenneustart nötig. Queue-Updates kommen in Echtzeit per WebSocket.
-Draft-Übergaben aus den FastAPI-Seiten **Run** und **Optimize** landen jetzt ebenfalls direkt hier als FastAPI-Drafts, sodass der Wechsel zwischen diesen PBv7-Seiten keinen Legacy-Streamlit-Relay mehr benötigt.
+Draft-Übergaben aus den FastAPI-Seiten **Run** und **Optimize** landen jetzt ebenfalls direkt hier als FastAPI-Drafts, sodass der Wechsel zwischen diesen PBv7-Seiten keinen Legacy-Relay-Pfad mehr benötigt.
 
 Die Seite ist in fünf Panels gegliedert, die über die linke Sidebar gewechselt werden:
 
@@ -288,4 +288,3 @@ Dieses Panel ist sinnvoll, wenn ein Backtest auf Disk fertig vorliegt, aber im n
 2. **HLCVS Cache Cleanup** aktivieren, **Retention** und **Check interval** einstellen
 3. **🧹 Clean Now** für sofortige Bereinigung klicken — die Toast-Meldung zeigt die freigegebenen MB
 4. **Save** klicken, um den automatischen Zeitplan zu speichern
-

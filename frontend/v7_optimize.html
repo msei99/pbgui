@@ -2391,7 +2391,6 @@ textarea.json-invalid:focus {
 var TOKEN = "%%TOKEN%%";
 var API_BASE = "%%API_BASE%%";
 var WS_BASE = "%%WS_BASE%%";
-var ST_BASE = "%%ST_BASE%%";
 var LIMITS_META = %%LIMITS_META%%;
 var PBGUI_VERSION = "%%VERSION%%";
 var PBGUI_SERIAL = "%%SERIAL%%";
@@ -8572,7 +8571,6 @@ function openFastApiParetoExplorer(resultPath) {
   var params = new URLSearchParams();
   params.set('token', TOKEN);
   params.set('result_path', path);
-  if (ST_BASE) params.set('st_base', ST_BASE);
   window.location.href = apiRoot + '/api/pareto-explorer/main_page?' + params.toString();
 }
 
@@ -9748,7 +9746,6 @@ function buildBacktestMainPageUrl(extraParams) {
   var base = window.location.origin + '/api/backtest-v7/main_page';
   var params = new URLSearchParams();
   params.set('token', TOKEN);
-  params.set('st_base', ST_BASE);
   Object.keys(extraParams || {}).forEach(function(key) {
     var value = extraParams[key];
     if (value != null && value !== '') params.set(key, String(value));
@@ -11268,7 +11265,6 @@ window.PBGUI_NAV_CONFIG = {
   subtitle: 'PBv7 OPTIMIZE',
   current: 'v7_optimize',
   token: TOKEN,
-  stBase: ST_BASE,
   apiBase: API_BASE,
   version: PBGUI_VERSION,
   serial: PBGUI_SERIAL

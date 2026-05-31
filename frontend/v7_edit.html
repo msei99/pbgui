@@ -1027,7 +1027,6 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 var TOKEN          = "%%TOKEN%%";
 var API_BASE       = "%%API_BASE%%";
 var WS_BASE        = "%%WS_BASE%%";
-var ST_BASE        = "%%ST_BASE%%";
 var PBGUI_VERSION  = "%%VERSION%%";
 var PBGUI_SERIAL   = "%%SERIAL%%";
 var INSTANCE_NAME  = "%%INSTANCE%%";
@@ -1462,8 +1461,7 @@ function ensureRawJsonValidForSave() {
 /* ─── Navigation ───────────────────────────────────────────── */
 function goBack() {
   window.PBGuiEditorShared.clearFixedValidationStatus();
-  window.location.href = API_BASE + '/main_page?token=' + encodeURIComponent(TOKEN) +
-    '&st_base=' + encodeURIComponent(ST_BASE);
+  window.location.href = API_BASE + '/main_page?token=' + encodeURIComponent(TOKEN);
 }
 
 function goBacktest() {
@@ -1480,7 +1478,6 @@ function goBacktest() {
     return res.json();
   }).then(function(data) {
     var url = window.location.origin + '/api/backtest-v7/main_page?token=' + encodeURIComponent(TOKEN)
-      + '&st_base=' + encodeURIComponent(ST_BASE)
       + '&draft_id=' + encodeURIComponent(data.draft_id)
       + '&draft_name=' + encodeURIComponent(INSTANCE_NAME || config.live.user || 'draft');
     window.location.href = url;
@@ -1489,9 +1486,33 @@ function goBacktest() {
   });
 }
 
+function strategyExplorerApiBase() {
+  var match = String(API_BASE || '').match(/^(https?:\/\/[^/]+)/);
+  var origin = match ? match[1] : window.location.origin;
+  return origin + '/api/strategy-explorer';
+}
+
 function goStrategyExplorer() {
-  var url = ST_BASE + '/?target=V7_STRATEGY_EXPLORER&instance=' + encodeURIComponent(INSTANCE_NAME) + '&token=' + encodeURIComponent(TOKEN);
-  window.location.href = url;
+  if (!ensureRawJsonValidForSave()) return;
+  if (!ensureStructuredJsonFieldsValidForSave()) return;
+  if (!validateExecutionSyncFieldsForSave()) return;
+  window.PBGuiEditorShared.clearFixedValidationStatus();
+  var config = collectConfig();
+  var explorerBase = strategyExplorerApiBase();
+  fetch(explorerBase + '/draft', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config: config })
+  }).then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function(data) {
+    var url = explorerBase + '/main_page?token=' + encodeURIComponent(TOKEN)
+      + '&draft_id=' + encodeURIComponent(data.draft_id || '');
+    window.location.href = url;
+  }).catch(function(e) {
+    toast('Failed to open Strategy Explorer: ' + e.message, 'err');
+  });
 }
 
 function getSelectedUserExchange() {
@@ -1516,7 +1537,6 @@ async function goBalanceCalc() {
     await window.PBGuiEditorShared.openBalanceCalcPage({
       apiBase: API_BASE,
       token: TOKEN,
-      stBase: ST_BASE,
       config: collectConfig(),
       exchange: exchange,
     });
@@ -2927,7 +2947,6 @@ window.PBGUI_NAV_CONFIG = {
   subtitle: 'PBv7 EDIT',
   current:  'v7_run',
   token:    TOKEN,
-  stBase:   ST_BASE,
   apiBase:  API_BASE,
   version:  PBGUI_VERSION,
   serial:   PBGUI_SERIAL

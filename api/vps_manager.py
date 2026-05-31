@@ -52,7 +52,6 @@ def get_service_instance() -> VPSManagerService:
 @router.get("/main_page", response_class=HTMLResponse)
 def get_main_page(
     request: Request,
-    st_base: str = Query(default="", description="Browser-visible Streamlit base URL"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     html_path = Path(__file__).resolve().parent.parent / "frontend" / "vps_manager.html"
@@ -65,15 +64,11 @@ def get_main_page(
     api_base = origin + "/api/vps-manager"
     ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
 
-    if not st_base:
-        st_base = f"http://{host}:8501"
-
     html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
-    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
 
-    from pbgui_func import PBGUI_VERSION
+    from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL
 
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))

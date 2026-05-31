@@ -9,9 +9,8 @@
 ## Project Architecture
 
 ### Stack
-- **Backend**: FastAPI (migrating from Streamlit). All new features as FastAPI routes.
+- **Backend**: FastAPI. All new features as FastAPI routes.
 - **Frontend**: Vanilla JS + HTML (no React, Vue, jQuery). Served via FastAPI `/app/` static mount.
-- **Legacy UI**: Streamlit pages in `navi/` — do not add new Streamlit polling fragments.
 - **CSS**: Custom dark theme, CSS variables per page (`:root`), no Tailwind/Bootstrap.
 - **Python**: 3.12 default, 3.10 for PB6 legacy.
 
@@ -19,11 +18,9 @@
 | Path | Purpose |
 |------|---------|
 | `api/` | FastAPI route modules (auth, dashboard, vps, logging, market_data, etc.) |
-| `navi/` | Streamlit pages (legacy) |
 | `frontend/` | Vanilla JS HTML pages |
 | `frontend/js/` | Shared JS modules: `log_viewer_panel.js`, `pbgui_nav.js`, `pbgui_dialogs.js` |
 | `master/` | Async backend daemons: SSH pool, monitoring, log streaming, file sync |
-| `components/` | Streamlit custom components |
 | `tests/` | Pytest tests |
 | `docs/help/` | English guides |
 | `docs/help_de/` | German guides |
@@ -70,14 +67,6 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 - Cache busting: use `?v=N` on JS/CSS asset URLs, increment when file changes.
 - **Confirm dialogs**: never use native `window.confirm()` / `window.alert()` for security prompts or destructive actions. Use the page's shared modal system (e.g., `openConfirmModal(title, message, onConfirm)`) so the UI stays visually consistent and testable.
 
-### Streamlit Patterns (Legacy)
-- `st.html(unsafe_allow_javascript=True)` for dynamic height content.
-- `st.components.v1.iframe()` for fixed height.
-- DOMPurify constraint: `<`/`>` inside JS string literals in `st.html` must be `\x3C`/`\x3E`.
-- Session state: prefix with module name (e.g., `edit_multi_`, `bc_`, `v7_`).
-- Never open a dialog inside another dialog (`@st.dialog` → use `st.error` inline).
-- Guide button: `c_title, c_help = st.columns([0.95, 0.05])`, button in `c_help`.
-
 ### Logging
 - 3-tier model:
   - Tier 1: Daemon logs (own file, e.g. `PBRun.log`) — NOT in `LOG_GROUPS`.
@@ -103,7 +92,6 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 
 ### Error Handling
 - FastAPI: `raise HTTPException(status_code=..., detail=...)`.
-- Streamlit: `error_popup()` only for critical errors; `st.error()` inline for validation.
 - Always log exceptions before showing popup.
 - Retry only for transient errors (Network, Timeout).
 - Never blanket catch without logging.
@@ -112,7 +100,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 
 ### Do NOT Modify Without Approval
 - PB7/passivbot code (`pb7/` or upstream repo).
-- PB6 legacy modules: `Multi.py`, `Backtest.py`, `Optimize.py`, `BacktestMulti.py`, `OptimizeMulti.py`, `Instance.py`, all `navi/v6_*` files.
+- PB6 legacy modules: `Multi.py`, `Backtest.py`, `Optimize.py`, `BacktestMulti.py`, `OptimizeMulti.py`, `Instance.py`.
 - Do not deploy/copy files to manibot01 or any remote server without explicit permission.
 
 ### General Rules
@@ -125,7 +113,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 ### Release Workflow
 - Steps in `RELEASING.md`.
 - Per release: bump `pbgui_purefunc.py` `PBGUI_VERSION`, move `releases/unreleased.md` notes into a dedicated `releases/vX.YY.md` file, keep `CHANGELOG.md` index updated.
-- Per release: verify the Streamlit/About version display also shows the new release correctly, and bump `api/serial.txt` so the UI makes the restart requirement visible for already running processes. Treat the serial bump as a normal release-prep step; do not rely on remembering it ad hoc.
+- Per release: bump `api/serial.txt` so the UI makes the restart requirement visible for already running processes. Treat the serial bump as a normal release-prep step; do not rely on remembering it ad hoc.
 - Commit: `Release vX.YY`, tag `vX.YY`, push branch + tags.
 
 ## Testing
@@ -138,7 +126,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **pbgui** (19296 symbols, 38063 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **pbgui** (20360 symbols, 39599 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

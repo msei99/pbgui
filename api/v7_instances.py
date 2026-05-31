@@ -949,7 +949,7 @@ async def save_instance_config(
 ):
     """Save config.json for a v7 instance via pb7_config pipeline.
 
-    Applies the same legacy instance-save logic as the removed Streamlit editor:
+    Applies the same legacy instance-save logic as the previous editor:
       - Strips _pbgui_param_status before writing
       - Increments pbgui.version
       - Sets backtest.exchange from user→exchange mapping
@@ -1176,9 +1176,9 @@ def get_symbols(
 ):
     """Return normalized base coin names for a given exchange (active USDT linear perps).
 
-    Uses the same CoinData.filter_mapping() call as the Streamlit UI so that
+    Uses the same CoinData.filter_mapping() call as the UI so that
     normalization logic (multiplier prefixes, quote suffixes) stays in one place
-    and cannot diverge between the two frontends.
+    and cannot diverge between code paths.
     """
     from PBCoinData import CoinData
     cd = CoinData()
@@ -1519,7 +1519,6 @@ def delete_coin_config(
 @router.get("/main_page", response_class=HTMLResponse)
 def get_main_page(
     request: Request,
-    st_base: str = Query(default="", description="Streamlit base URL"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     """Serve the standalone v7 Run page."""
@@ -1537,11 +1536,7 @@ def get_main_page(
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
 
-    if not st_base:
-        st_base = f"http://{host}:8501"
-    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
-
-    from pbgui_func import PBGUI_VERSION
+    from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
@@ -1561,7 +1556,6 @@ def get_edit_page(
     name: str = Query(default="", description="Instance name to edit"),
     new: str = Query(default="", description="Set to '1' for new instance"),
     draft_id: str = Query(default="", description="Draft config ID to pre-load"),
-    st_base: str = Query(default="", description="Streamlit base URL"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     """Serve the standalone v7 Edit page."""
@@ -1579,16 +1573,12 @@ def get_edit_page(
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
 
-    if not st_base:
-        st_base = f"http://{host}:8501"
-    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
-
     is_new = "true" if new == "1" else "false"
     html = html.replace('"%%INSTANCE%%"', json.dumps(name))
     html = html.replace('"%%IS_NEW%%"', json.dumps(is_new))
     html = html.replace('"%%DRAFT_ID%%"', json.dumps(draft_id))
 
-    from pbgui_func import PBGUI_VERSION
+    from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)

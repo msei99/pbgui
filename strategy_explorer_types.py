@@ -1,11 +1,7 @@
-try:
-    import streamlit as st
-except ModuleNotFoundError:  # pragma: no cover
-    st = None  # type: ignore
 from enum import Enum
 from math import floor, ceil
 from dataclasses import dataclass, field, fields as dataclass_fields, replace
-from enum import Enum
+import copy
 import math
 
 # ----------------------------
@@ -113,6 +109,11 @@ class BotParams:
     ema_span_0: float = 0.0
     ema_span_1: float = 0.0
     entry_volatility_ema_span_hours: float = 0.0
+    forager_score_weights: dict[str, float] = field(default_factory=lambda: {"ema_readiness": 1.0, "volume": 0.0, "volatility": 0.0})
+    forager_volatility_ema_span: float = 0.0
+    forager_volume_drop_pct: float = 0.0
+    forager_volume_ema_span: float = 0.0
+    # Legacy aliases still used by the migrated local simulation helpers.
     filter_volatility_ema_span: float = 0.0
     filter_volatility_drop_pct: float = 0.0
     filter_volume_drop_pct: float = 0.0
@@ -134,65 +135,84 @@ class BotParams:
 
     risk_wel_enforcer_threshold: float = 1.0
     risk_twel_enforcer_threshold: float = 1.0
+    hsl_enabled: bool = False
+    hsl_red_threshold: float = 0.2
+    hsl_ema_span_minutes: float = 60.0
+    hsl_cooldown_minutes_after_red: float = 0.0
+    hsl_no_restart_drawdown_threshold: float = 1.0
+    hsl_tier_ratios: dict[str, float] = field(default_factory=lambda: {"orange": 0.75, "yellow": 0.5})
+    hsl_orange_tier_mode: str = "tp_only_with_active_entry_cancellation"
+    hsl_panic_close_order_type: str = "limit"
 
     @classmethod
     def from_dict(cls, d: dict) -> "BotParams":
-        """Create BotParams from a dict, ignoring unknown keys (e.g. v7.9 dict/string params)."""
-        known = {f.name for f in dataclass_fields(cls)}
+        """Create BotParams from a PB7 bot-side dict, preserving current dict/string/bool params."""
+        if not isinstance(d, dict):
+            return cls()
+        source = dict(d)
+        aliases = {
+            "filter_volatility_ema_span": "forager_volatility_ema_span",
+            "filter_volume_drop_pct": "forager_volume_drop_pct",
+            "filter_volume_ema_span": "forager_volume_ema_span",
+        }
+
+        def _alias_float(value: object) -> float:
+            try:
+                f = float(value)
+                return f if math.isfinite(f) else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+
+        for legacy_key, current_key in aliases.items():
+            current_present = current_key in source
+            legacy_present = legacy_key in source
+            if current_present and legacy_present:
+                current_value = source[current_key]
+                legacy_value = source[legacy_key]
+                if _alias_float(current_value) == 0.0 and _alias_float(legacy_value) != 0.0:
+                    source[current_key] = legacy_value
+                else:
+                    source[legacy_key] = current_value
+            elif current_present:
+                source[legacy_key] = source[current_key]
+            elif legacy_present:
+                source[current_key] = source[legacy_key]
+
+        def _bool(value: object) -> bool:
+            if isinstance(value, str):
+                return value.strip().lower() in {"1", "true", "yes", "on"}
+            return bool(value)
+
+        def _float(value: object) -> float:
+            try:
+                f = float(value)
+                return f if math.isfinite(f) else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+
+        fields_by_name = {f.name: f for f in dataclass_fields(cls)}
         filtered = {}
-        for k, v in d.items():
-            if k in known:
-                try:
-                    filtered[k] = float(v)
-                except (TypeError, ValueError):
-                    pass  # skip non-numeric values
+        defaults = cls()
+        for k, v in source.items():
+            if k not in fields_by_name:
+                continue
+            default = getattr(defaults, k)
+            if isinstance(default, bool):
+                filtered[k] = _bool(v)
+            elif isinstance(default, dict):
+                merged = copy.deepcopy(default)
+                if isinstance(v, dict):
+                    for sub_key, sub_value in v.items():
+                        merged[str(sub_key)] = _float(sub_value)
+                filtered[k] = merged
+            elif isinstance(default, str):
+                filtered[k] = str(v or default)
+            else:
+                filtered[k] = _float(v)
         return cls(**filtered)
 
     def clone(self):
-        return BotParams(
-            total_wallet_exposure_limit=self.total_wallet_exposure_limit,
-            n_positions=self.n_positions,
-            entry_initial_qty_pct=self.entry_initial_qty_pct,
-            entry_initial_ema_dist=self.entry_initial_ema_dist,
-            entry_grid_spacing_pct=self.entry_grid_spacing_pct,
-            entry_grid_spacing_we_weight=self.entry_grid_spacing_we_weight,
-            entry_grid_spacing_volatility_weight=self.entry_grid_spacing_volatility_weight,
-            entry_grid_double_down_factor=self.entry_grid_double_down_factor,
-            entry_trailing_threshold_pct=self.entry_trailing_threshold_pct,
-            entry_trailing_threshold_we_weight=self.entry_trailing_threshold_we_weight,
-            entry_trailing_threshold_volatility_weight=self.entry_trailing_threshold_volatility_weight,
-            entry_trailing_retracement_pct=self.entry_trailing_retracement_pct,
-            entry_trailing_retracement_we_weight=self.entry_trailing_retracement_we_weight,
-            entry_trailing_retracement_volatility_weight=self.entry_trailing_retracement_volatility_weight,
-            entry_trailing_double_down_factor=self.entry_trailing_double_down_factor,
-            entry_trailing_grid_ratio=self.entry_trailing_grid_ratio,
-
-            ema_span_0=self.ema_span_0,
-            ema_span_1=self.ema_span_1,
-            entry_volatility_ema_span_hours=self.entry_volatility_ema_span_hours,
-            filter_volatility_ema_span=self.filter_volatility_ema_span,
-            filter_volatility_drop_pct=self.filter_volatility_drop_pct,
-            filter_volume_drop_pct=self.filter_volume_drop_pct,
-            filter_volume_ema_span=self.filter_volume_ema_span,
-            unstuck_close_pct=self.unstuck_close_pct,
-            unstuck_ema_dist=self.unstuck_ema_dist,
-            unstuck_loss_allowance_pct=self.unstuck_loss_allowance_pct,
-            unstuck_threshold=self.unstuck_threshold,
-
-            risk_we_excess_allowance_pct=self.risk_we_excess_allowance_pct,
-
-            close_grid_markup_end=self.close_grid_markup_end,
-            close_grid_markup_start=self.close_grid_markup_start,
-            close_grid_qty_pct=self.close_grid_qty_pct,
-            close_trailing_threshold_pct=self.close_trailing_threshold_pct,
-            close_trailing_retracement_pct=self.close_trailing_retracement_pct,
-            close_trailing_qty_pct=self.close_trailing_qty_pct,
-            close_trailing_grid_ratio=self.close_trailing_grid_ratio,
-
-            risk_wel_enforcer_threshold=self.risk_wel_enforcer_threshold,
-            risk_twel_enforcer_threshold=self.risk_twel_enforcer_threshold,
-
-        )
+        return copy.deepcopy(self)
 
 @dataclass
 class ExchangeParams:
@@ -1850,4 +1870,3 @@ def calc_closes_short(
                 continue
         closes.append(close)
     return closes
-

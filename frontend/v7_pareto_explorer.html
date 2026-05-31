@@ -1119,7 +1119,7 @@ input[type="range"]::-moz-range-thumb {
     <section class="page-title">
       <div>
         <h1>Pareto Explorer</h1>
-        <p id="page-subtitle">Standalone FastAPI migration preview for the PBv7 Pareto Explorer.</p>
+        <p id="page-subtitle">Inspect PBv7 optimize results, pareto fronts, correlations, scenarios, and preset drafts.</p>
       </div>
       <div class="status-row">
         <span id="result-chip" class="chip">No result selected</span>
@@ -1142,7 +1142,7 @@ input[type="range"]::-moz-range-thumb {
         <input id="display-range-start-input" class="range-number" type="number" min="0" step="10" value="0">
         <input id="display-range-end-input" class="range-number" type="number" min="0" step="10" value="0">
       </div>
-      <div id="display-range-summary" class="range-summary">Load all_results to enable Streamlit-style visible-range filtering.</div>
+      <div id="display-range-summary" class="range-summary">Load all_results to enable visible-range filtering.</div>
     </section>
 
     <section class="metric-grid" id="summary-metrics">
@@ -1275,7 +1275,7 @@ input[type="range"]::-moz-range-thumb {
               <span class="switch-track" aria-hidden="true"></span>
             </label>
           </div>
-          <p class="muted-line" id="playground-metric-summary">This section mirrors the Streamlit explorer with multiple visualization modes.</p>
+          <p class="muted-line" id="playground-metric-summary">This section provides multiple visualization modes.</p>
           <div class="chart-wrap" id="playground-chart-wrap">
             <div id="playground-chart" class="placeholder-chart small-chart">Load a result to render the explorer chart.</div>
           </div>
@@ -1634,7 +1634,6 @@ input[type="range"]::-moz-range-thumb {
 window.TOKEN = "%%TOKEN%%";
 window.API_BASE = "%%API_BASE%%";
 window.WS_BASE = "%%WS_BASE%%";
-window.ST_BASE = "%%ST_BASE%%";
 window.INIT_RESULT_PATH = "%%RESULT_PATH%%";
 window.PBGUI_VERSION = "%%VERSION%%";
 window.PBGUI_SERIAL = "%%SERIAL%%";
@@ -1781,7 +1780,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     var base = window.location.origin + '/api/backtest-v7/main_page';
     var params = new URLSearchParams();
     params.set('token', TOKEN);
-    params.set('st_base', ST_BASE);
     Object.keys(extraParams || {}).forEach(function(key) {
       var value = extraParams[key];
       if (value != null && value !== '') params.set(key, String(value));
@@ -1793,7 +1791,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     var base = window.location.origin + '/api/optimize-v7/main_page';
     var params = new URLSearchParams();
     params.set('token', TOKEN);
-    params.set('st_base', ST_BASE);
     Object.keys(extraParams || {}).forEach(function(key) {
       var value = extraParams[key];
       if (value != null && value !== '') params.set(key, String(value));
@@ -3208,7 +3205,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     var colorNode = el('playground-color-metric');
     if (!payload) {
       bestMatchNode.textContent = 'Load a result to compute the best match for your preferences.';
-      metricNode.textContent = 'This section mirrors the Streamlit explorer with multiple visualization modes.';
+      metricNode.textContent = 'This section provides multiple visualization modes.';
       chartNode.className = 'placeholder-chart';
       chartNode.textContent = 'Load a result to render the explorer chart.';
       projectionWrap.style.display = 'none';
@@ -4268,7 +4265,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       var params = new URLSearchParams();
       params.set('token', TOKEN);
       params.set('panel', 'results');
-      if (ST_BASE) params.set('st_base', ST_BASE);
       window.location.href = target + '?' + params.toString() + '#results';
     });
     el('overlay-close').addEventListener('click', closeOverlay);
@@ -4485,7 +4481,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     subtitle: 'PBv7 PARETO EXPLORER',
     current: 'v7_pareto_explorer',
     token: TOKEN,
-    stBase: ST_BASE,
     apiBase: API_BASE,
     version: PBGUI_VERSION,
     serial: PBGUI_SERIAL

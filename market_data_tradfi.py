@@ -1,7 +1,7 @@
 """
 Pure tradfi (TradFi / stock-perp) helper functions.
 
-No Streamlit dependency — safe to import from FastAPI endpoints.
+No UI dependency — safe to import from FastAPI endpoints.
 """
 from __future__ import annotations
 

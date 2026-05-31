@@ -71,9 +71,9 @@ PYTHON_BIN="$DIR/venv_pbgui/bin/python"
 # Start scripts with nohup so they persist after cron exits
 nohup "\$PYTHON_BIN" PBRun.py &
 nohup "\$PYTHON_BIN" PBRemote.py &
-nohup "\$PYTHON_BIN" PBStat.py &
 nohup "\$PYTHON_BIN" PBData.py &
 nohup "\$PYTHON_BIN" PBCoinData.py &
+nohup "\$PYTHON_BIN" PBApiServer.py &
 EOF
 
 # Make start.sh executable
@@ -88,8 +88,7 @@ echo "role = master" >> pbgui/pbgui.ini
 # start pbgui
 cd pbgui
 echo ""
-echo "starting PBGui in background with command start_streamlit.sh"
 echo "starting PBGui Services in background with command start.sh"
 echo ""
 echo 'Login with password: PBGui$Bot!'
-./start_streamlit.sh
+./start.sh

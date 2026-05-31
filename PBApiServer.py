@@ -53,6 +53,7 @@ from api.backtest_v7 import startup as bt7_startup, shutdown as bt7_shutdown
 from api.optimize_v7 import router as optimize_v7_router
 from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
 from api.pareto_explorer import router as pareto_explorer_router
+from api.strategy_explorer import router as strategy_explorer_router
 from logging_helpers import human_log as _log
 from pb7_config import PB7ConfigurationError
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, PBGUI_SERIAL, PBGUI_VERSION
@@ -80,6 +81,25 @@ def _refresh_restart_state() -> bool:
     global _needs_restart
     _needs_restart = _read_serial() != _startup_serial
     return _needs_restart
+
+
+async def _restart_block_state() -> tuple[bool, str]:
+    """Return whether API restart should be blocked by active VPS tasks."""
+    try:
+        from api.vps_manager import get_service_instance as get_vps_manager_service
+        deploy_state = await asyncio.wait_for(
+            asyncio.to_thread(get_vps_manager_service().active_vps_deploy_summary),
+            timeout=2.0,
+        )
+    except asyncio.TimeoutError:
+        _log(SERVICE, "[restart] timed out while inspecting active VPS deploys", level="WARNING")
+        return False, ""
+    except Exception as exc:
+        _log(SERVICE, f"[restart] failed to inspect active VPS deploys: {exc}", level="WARNING")
+        return False, ""
+    restart_blocked = bool(deploy_state.get("active")) if isinstance(deploy_state, dict) else False
+    restart_block_reason = str(deploy_state.get("summary") or "") if restart_blocked and isinstance(deploy_state, dict) else ""
+    return restart_blocked, restart_block_reason
 
 
 async def _serial_watcher_loop() -> None:
@@ -149,7 +169,7 @@ async def _worker_watchdog_loop() -> None:
     This prevents the queue from silently stalling when the worker process
     crashes or is killed without cleanly transitioning its jobs back to
     pending state (e.g. SIGKILL). The fix mirrors the auto-restart logic
-    that exists in the old Streamlit polling panel but runs at the API-server
+    from the former polling panel but runs at the API-server
     level so it fires regardless of which UI is open.
     """
     from task_queue import list_jobs, read_worker_pid, is_pid_running, clear_worker_pid
@@ -339,6 +359,7 @@ app.include_router(coin_data_router, prefix="/api/coin-data", tags=["coin-data"]
 app.include_router(backtest_v7_router, prefix="/api/backtest-v7", tags=["backtest-v7"])
 app.include_router(optimize_v7_router, prefix="/api/optimize-v7", tags=["optimize-v7"])
 app.include_router(pareto_explorer_router, prefix="/api/pareto-explorer", tags=["pareto-explorer"])
+app.include_router(strategy_explorer_router, prefix="/api/strategy-explorer", tags=["strategy-explorer"])
 
 
 @app.exception_handler(PB7ConfigurationError)
@@ -684,9 +705,8 @@ async def nav_request(request: Request):
 
     Widget iframes POST ``{page: "...", params: {...}}`` here.
     The payload is broadcast as ``{type: "nav_request", ...}`` to all
-    ``/ws/dashboard`` WebSocket clients.  A tiny Streamlit component
-    (``nav_bridge``) listens for this message type and calls
-    ``st.switch_page()`` on the Python side.
+    ``/ws/dashboard`` WebSocket clients so the browser-side dashboard shell can
+    navigate without polling.
     """
     from api.auth import validate_token as _vt
 
@@ -905,11 +925,10 @@ def serve_plotly_js():
 @app.get("/", include_in_schema=False)
 def root(
     request: Request,
-    st_base: str = "",
     session: SessionToken | None = Depends(optional_auth),
 ):
     """UI root endpoint."""
-    return build_root_entry_response(request=request, st_base=st_base, session=session)
+    return build_root_entry_response(request=request, session=session)
 
 
 @app.get("/health")
@@ -972,15 +991,7 @@ async def server_status_stream(token: str = ""):
 async def server_status(session: SessionToken = Depends(require_auth)):
     """Return current restart-detector state for nav fallback checks."""
     current_serial = _read_serial()
-    restart_blocked = False
-    restart_block_reason = ""
-    try:
-        from api.vps_manager import get_service_instance as get_vps_manager_service
-        deploy_state = get_vps_manager_service().active_vps_deploy_summary()
-        restart_blocked = bool(deploy_state.get("active"))
-        restart_block_reason = str(deploy_state.get("summary") or "") if restart_blocked else ""
-    except Exception as exc:
-        _log(SERVICE, f"[server-status] failed to inspect active VPS deploys: {exc}", level="WARNING")
+    restart_blocked, restart_block_reason = await _restart_block_state()
     return {
         "needs_restart": _refresh_restart_state(),
         "startup_serial": _startup_serial,
@@ -1019,14 +1030,9 @@ async def server_restart(request: Request):
     if not validate_token(token):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    try:
-        from api.vps_manager import get_service_instance as get_vps_manager_service
-        deploy_state = get_vps_manager_service().active_vps_deploy_summary()
-    except Exception as exc:
-        _log(SERVICE, f"[restart] failed to inspect active VPS deploys: {exc}", level="WARNING")
-        deploy_state = {"active": False, "summary": "", "items": []}
-    if deploy_state.get("active"):
-        detail = str(deploy_state.get("summary") or "Active VPS deploys are still running.")
+    restart_blocked, restart_block_reason = await _restart_block_state()
+    if restart_blocked:
+        detail = restart_block_reason or "Active VPS deploys are still running."
         raise HTTPException(status_code=409, detail=f"Cannot restart API server while VPS tasks are running: {detail}")
 
     _log(SERVICE, "[restart] restart requested by user", level="WARNING")
@@ -1155,7 +1161,7 @@ class PBApiServer:
     def run(self):
         """Start the API server daemon in the background."""
         if not self.is_running():
-            # Small delay + re-check to avoid double-spawn on rapid Streamlit reruns
+            # Small delay + re-check to avoid double-spawn on rapid restart requests.
             sleep(0.3)
             if self.is_running():
                 return

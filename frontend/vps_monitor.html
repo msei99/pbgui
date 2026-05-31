@@ -930,7 +930,6 @@ let ws = null;
 let state = null;      // Latest full state from daemon
 let reconnectTimer = null;
 var TOKEN         = "%%TOKEN%%";
-var ST_BASE       = "%%ST_BASE%%";
 var WS_BASE       = "%%WS_BASE%%";
 var PBGUI_VERSION = "%%VERSION%%";
 var PBGUI_SERIAL  = "%%SERIAL%%";
@@ -2526,13 +2525,12 @@ initMetricTooltipHandlers();
 }());
 </script>
 
-<!-- ── Shared nav bar (must come after TOKEN/ST_BASE/WS_BASE/PBGUI_VERSION are set) ── -->
+<!-- ── Shared nav bar ── -->
 <script>
 window.PBGUI_NAV_CONFIG = {
   subtitle: 'VPS MONITOR',
   current:  'system_vps_monitor',
   token:    TOKEN,
-  stBase:   ST_BASE,
   version:  PBGUI_VERSION,
   serial:   PBGUI_SERIAL
 };

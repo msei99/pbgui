@@ -377,7 +377,6 @@ def get_draft(draft_id: str, session: SessionToken = Depends(require_auth)):
 @router.get("/main_page", response_class=HTMLResponse)
 def get_main_page(
     request: Request,
-    st_base: str = Query(default="", description="Browser-visible Streamlit base URL"),
     instance: str = Query(default="", description="Pre-select instance name"),
     draft_id: str = Query(default="", description="Draft config id to pre-load"),
     exchange: str = Query(default="", description="Pre-select exchange"),
@@ -400,11 +399,7 @@ def get_main_page(
     html = html.replace('"%%INIT_EXCHANGE%%"', json.dumps(exchange))
     html = html.replace('"%%EXCHANGES%%"', json.dumps(EXCHANGES))
 
-    if not st_base:
-        st_base = f"http://{host}:8501"
-    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
-
-    from pbgui_func import PBGUI_VERSION
+    from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)

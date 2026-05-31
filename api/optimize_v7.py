@@ -2154,7 +2154,6 @@ def shutdown() -> None:
 @router.get("/main_page", response_class=HTMLResponse)
 def main_page(
     request: Request,
-    st_base: str = Query(default="", description="Streamlit base URL"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     html_path = Path(__file__).resolve().parent.parent / "frontend" / "v7_optimize.html"
@@ -2173,10 +2172,6 @@ def main_page(
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
     html = html.replace("%%LIMITS_META%%", json.dumps(get_optimize_limits_meta_payload()))
-
-    if not st_base:
-        st_base = f"http://{host}:8501"
-    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
 
     from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))

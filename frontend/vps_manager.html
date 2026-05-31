@@ -2844,7 +2844,6 @@
     const TOKEN = "%%TOKEN%%";
     const API_BASE = "%%API_BASE%%";
     const WS_BASE = "%%WS_BASE%%";
-    const ST_BASE = "%%ST_BASE%%";
     const PBGUI_VERSION = "%%VERSION%%";
     const PBGUI_SERIAL = "%%SERIAL%%";
     if (TOKEN === "%%" + "TOKEN%%") throw new Error('TOKEN placeholder was not replaced');
@@ -2853,14 +2852,12 @@
     window.TOKEN = TOKEN;
     window.API_BASE = API_BASE;
     window.WS_BASE = WS_BASE;
-    window.ST_BASE = ST_BASE;
     window.PBGUI_VERSION = PBGUI_VERSION;
     window.PBGUI_SERIAL = PBGUI_SERIAL;
     window.PBGUI_NAV_CONFIG = {
       subtitle: 'VPS Manager',
       current: 'system_vps_manager_fastapi',
       token: TOKEN,
-      stBase: ST_BASE,
       apiBase: API_BASE,
       version: PBGUI_VERSION,
       serial: PBGUI_SERIAL
@@ -8217,7 +8214,7 @@
                   </div>
                   <div class='field'>
                     <label>Remote Commit</label>
-                    <select onchange='${remoteCommitSetter}'>
+                    <select onfocus='store.pb7BranchSelectInteracting = true' onmousedown='store.pb7BranchSelectInteracting = true' onblur='store.pb7BranchSelectInteracting = false; syncBranchViewPanel()' onchange='store.pb7BranchSelectInteracting = false; ${remoteCommitSetter}'>
                       <option value='HEAD'${model.selectedRemoteCommit === 'HEAD' ? ' selected' : ''}>HEAD (latest remote)</option>
                       ${model.remoteCommits.map(function (commit) {
                         const hash = String(commit.full || '');

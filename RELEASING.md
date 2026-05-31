@@ -5,7 +5,7 @@
 ### 1) Bump version strings
 
 - `pbgui_purefunc.py`: update `PBGUI_VERSION = "vX.YY"`
-- `pbgui_func.py`: no manual version bump needed; the About string uses `PBGUI_VERSION` automatically
+- `api/serial.txt`: increment so running clients show the restart requirement
 
 ### 2) Add changelog entry
 
@@ -16,7 +16,7 @@
 ### 3) Commit + tag + push
 
 ```bash
-git add CHANGELOG.md releases/ pbgui_purefunc.py README.md
+git add CHANGELOG.md releases/ pbgui_purefunc.py api/serial.txt README.md
 git commit -m "Release vX.YY"
 git tag vX.YY
 git push

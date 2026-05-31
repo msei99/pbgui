@@ -9,7 +9,7 @@ from time import sleep
 from datetime import datetime
 import platform
 import traceback
-from pbgui_func import PBGDIR
+from pbgui_purefunc import PBGDIR
 import json
 import re
 from pathlib import Path as _Path

@@ -129,7 +129,7 @@ Die Status-Kacheln oberhalb des Setup-Rasters sind jetzt direkte Operator-Hinwei
 - **Update Ready** wird sofort grün, sobald lokal ein VPS-User-Passwort eingetragen ist, und zeigt gleichzeitig die Anzahl ausstehender Linux-Updates.
 - **CoinData Ready** zeigt die verbleibenden CoinMarketCap-Credits, sobald dieser Wert über PBRemote verfügbar ist.
 - Ausstehende Linux-Updates und Reboot-Hinweise werden zusätzlich über eine Live-SSH-Paketstatus-Abfrage aktualisiert, sodass die Karten nicht mehr auf den langsameren stündlichen `PBRemote`-Alive-Refresh warten müssen.
-- Die Detailseite enthält außerdem wieder eine einzeilige Zusammenfassungstabelle plus einen Remote-Server-Ressourcenblock ähnlich zur alten Streamlit-Ansicht.
+- Die Detailseite enthält außerdem wieder eine einzeilige Zusammenfassungstabelle plus einen Remote-Server-Ressourcenblock ähnlich zur früheren Serveransicht.
 
 `Cleanup VPS` installiert oder aktualisiert jetzt zusätzlich zwei kleine tägliche Cleanup-Cronjobs auf der VPS: einen User-Job für Pip- und Rustup-Caches sowie einen Root-Job für `journalctl --vacuum-time=1d`. Die periodischen Jobs laufen still und behalten keine eigene Log-Historie.
 

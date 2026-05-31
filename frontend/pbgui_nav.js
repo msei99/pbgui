@@ -8,7 +8,7 @@
  *        </script>
  *        <script src="/app/pbgui_nav.js"></script>
  *   3. The following globals must be set anywhere before this script runs:
- *        TOKEN, ST_BASE, API_BASE, PBGUI_VERSION
+ *        TOKEN, API_BASE, PBGUI_VERSION
  *
  * The 'current' value in PBGUI_NAV_CONFIG must match a 'page' key in NAV_GROUPS below.
  * The active nav group is highlighted automatically.
@@ -25,7 +25,6 @@
     var c = window.PBGUI_NAV_CONFIG || {};
     return {
       token:    c.token    !== undefined ? c.token    : (window.TOKEN    || ''),
-      stBase:   c.stBase   !== undefined ? c.stBase   : (window.ST_BASE  || ''),
       apiBase:  c.apiBase  !== undefined ? c.apiBase  : (window.API_BASE || ''),
       version:  c.version  !== undefined ? c.version  : (window.PBGUI_VERSION || ''),
       serial:   c.serial   !== undefined ? c.serial   : (window.PBGUI_SERIAL  || ''),
@@ -55,7 +54,6 @@
     { id: 'pbv7', label: 'PBv7', items: [
       { page: 'v7_run',               icon: '&#9654;',   label: 'Run'               },
       { page: 'v7_backtest',          icon: '&#9194;',   label: 'Backtest'          },
-      { page: 'v7_live_vs_backtest',  icon: '&#8644;',   label: 'Live vs Backtest'  },
       { page: 'v7_optimize',          icon: '&#9881;',   label: 'Optimize'          },
       { page: 'v7_strategy_explorer', icon: '&#128065;', label: 'Strategy Explorer' },
       { page: 'v7_balance_calc',      icon: '&#128176;', label: 'Balance Calculator'},
@@ -507,7 +505,7 @@
           if (m) apiOrigin = m[1];
         }
         if (!apiOrigin) apiOrigin = window.location.origin;
-        var url = apiOrigin + '/api/vps/main_page?token=' + encodeURIComponent(c.token || '') + '&st_base=' + encodeURIComponent(c.stBase || '');
+        var url = apiOrigin + '/api/vps/main_page?token=' + encodeURIComponent(c.token || '');
         window.location.href = url;
       };
     }
@@ -860,7 +858,7 @@
 
   /* ════════════════════════════════════
      FASTAPI DIRECT ROUTES
-     Pages served directly by FastAPI — navigate without Streamlit detour.
+     Pages served directly by FastAPI.
      Key = nav page id, value = path under the API origin.
      ════════════════════════════════════ */
   var FASTAPI_PAGES = {
@@ -877,6 +875,8 @@
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',
+    'v7_pareto_explorer': '/api/pareto-explorer/main_page',
+    'v7_strategy_explorer': '/api/strategy-explorer/main_page',
     'v7_balance_calc':    '/api/balance-calc/main_page'
   };
 
@@ -994,7 +994,6 @@
   function setupHandlers() {
     var c = cfg();
     var TOKEN   = c.token;
-    var ST_BASE = c.stBase;
 
     /* Derive API origin (scheme + host + port) from apiBase or current location */
     var apiOrigin = '';
@@ -1013,26 +1012,20 @@
         return;
       }
 
-      /* Direct FastAPI page — navigate without Streamlit relay */
+      /* Direct FastAPI page */
       if (FASTAPI_PAGES[page] && apiOrigin) {
         var faUrl = apiOrigin + FASTAPI_PAGES[page]
-                  + '?token=' + encodeURIComponent(TOKEN)
-                  + '&st_base=' + encodeURIComponent(ST_BASE);
+                  + '?token=' + encodeURIComponent(TOKEN);
         window.location.href = faUrl;
         return;
       }
 
-      if (!ST_BASE) {
-        console.warn('[pbgui_nav] ST_BASE is empty — cannot navigate to Streamlit page "' + page + '".');
-        var msg = document.createElement('div');
-        msg.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:9999;background:#ef444480;color:#fff;padding:.6rem 1.2rem;border-radius:8px;font-size:.85rem;pointer-events:none;';
-        msg.textContent = 'Navigation unavailable — reload the page from the PBGui menu.';
-        document.body.appendChild(msg);
-        setTimeout(function() { msg.remove(); }, 4000);
-        return;
-      }
-      var pageKey = page === '/' ? 'SYSTEM_LOGIN' : page.toUpperCase();
-      window.location.href = ST_BASE + '/?target=' + pageKey + '&token=' + TOKEN;
+      console.warn('[pbgui_nav] Unknown PBGui page "' + page + '".');
+      var msg = document.createElement('div');
+      msg.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:9999;background:#ef444480;color:#fff;padding:.6rem 1.2rem;border-radius:8px;font-size:.85rem;pointer-events:none;';
+      msg.textContent = 'Navigation unavailable — page is not registered.';
+      document.body.appendChild(msg);
+      setTimeout(function() { msg.remove(); }, 4000);
     }
 
     /* nav item clicks */
@@ -1157,6 +1150,9 @@
           var origin2 = '';
           if (c2.apiBase) { var m2 = c2.apiBase.match(/^(https?:\/\/[^/]+)/); if (m2) origin2 = m2[1]; }
           if (!origin2) origin2 = window.location.origin;
+          restartBtn.disabled = true;
+          restartBtn.classList.add('disabled');
+          restartBtn.innerHTML = '<span class="nav-restart-dot"></span>Restarting...';
           fetch(origin2 + '/api/server-restart', {
             method: 'POST',
             headers: { 'Authorization': 'Bearer ' + c2.token, 'Content-Type': 'application/json' },
@@ -1170,6 +1166,10 @@
             }
             showRestartOverlay(origin2, c2.token);
           }).catch(function(err) {
+            restartBtn.disabled = false;
+            restartBtn.classList.remove('disabled');
+            restartBtn.innerHTML = '<span class="nav-restart-dot"></span>Restart';
+            fetchRestartStatus(c2.token, origin2);
             showNavConfirm({
               title: 'Restart failed',
               message: 'The PBGui API server restart request was rejected.',
@@ -1298,7 +1298,6 @@
     }
     if (!origin) origin = window.location.origin;
     var url = new URL(origin + '/');
-    if (c.stBase) url.searchParams.set('st_base', c.stBase);
     window.location.replace(url.toString());
   }
 
@@ -1313,7 +1312,6 @@
 
     var redirect = function () {
       var url = new URL(origin + '/');
-      if (c.stBase) url.searchParams.set('st_base', c.stBase);
       window.location.replace(url.toString());
     };
 

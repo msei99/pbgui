@@ -1,8 +1,6 @@
-<!-- Gap / Coverage Heatmap — embedded via st.html(unsafe_allow_javascript=True)
-     This HTML fragment is injected directly into the DOM (NOT iframed).
-     All CSS is scoped under .hm-root to avoid Streamlit style conflicts.
-     Variables are injected by Python into data-attributes on the root element.
-     DOMPurify constraint: ALL '<' in JS string literals must be \x3c -->
+<!-- Gap / Coverage Heatmap.
+     All CSS is scoped under .hm-root to avoid page style conflicts.
+     Variables are injected by Python into data-attributes on the root element. -->
 
 <style>
     /* ============================================================
@@ -877,7 +875,7 @@
         });
     });
 
-    // Cancel any in-flight minutes SSE when the page is unloaded / Streamlit rerenders
+    // Cancel any in-flight minutes SSE when the page is unloaded.
     window.addEventListener('beforeunload', function() { abortMinutes(); });
 
 })();

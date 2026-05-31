@@ -14,6 +14,7 @@ from time import sleep
 import glob
 import json
 import hjson
+import re
 from datetime import datetime, timedelta
 import platform
 from shutil import copy, copytree, rmtree, ignore_patterns
@@ -758,6 +759,160 @@ class PBRun():
             self.piddir.mkdir(parents=True)
         self.pidfile = Path(f'{self.piddir}/pbrun.pid')
         self.my_pid = None
+
+    @staticmethod
+    def _git_dir(repo_dir) -> Path | None:
+        """Return a repository .git directory when it exists."""
+        if not repo_dir:
+            return None
+        git_dir = Path(repo_dir) / ".git"
+        return git_dir if git_dir.exists() else None
+
+    @staticmethod
+    def _first_version_token(text: str, line_limit: int | None = 20) -> str:
+        """Extract the first vN.N-style version token from text."""
+        lines = str(text or "").splitlines()
+        if line_limit is not None:
+            lines = lines[: int(line_limit)]
+        for line in lines:
+            match = re.search(r"\bv\d+(?:\.\d+)+\b", line)
+            if match:
+                return match.group(0)
+        return "N/A"
+
+    @staticmethod
+    def _git_text(repo_dir, args: list[str], timeout: int = 20) -> str:
+        """Run a git command for a repo and return stdout or an empty string."""
+        git_dir = PBRun._git_dir(repo_dir)
+        if git_dir is None:
+            return ""
+        result = _run_subprocess(["git", "--git-dir", str(git_dir)] + list(args), timeout=timeout)
+        if not result or getattr(result, "returncode", 1) != 0:
+            return ""
+        return str(getattr(result, "stdout", "") or "").strip()
+
+    def get_current_pbgui_status(self) -> tuple[str, str]:
+        """Return the current PBGui git branch and commit hash."""
+        commit = self._git_text(self.pbgdir, ["rev-parse", "HEAD"])
+        branch = self._git_text(self.pbgdir, ["symbolic-ref", "--short", "HEAD"]) or "unknown"
+        return branch, commit
+
+    def get_current_pb7_status(self) -> tuple[str, str]:
+        """Return the current PB7 git branch and commit hash."""
+        commit = self._git_text(self.pb7dir, ["rev-parse", "HEAD"])
+        branch = self._git_text(self.pb7dir, ["symbolic-ref", "--short", "HEAD"]) or "unknown"
+        return branch, commit
+
+    def _load_branch_history(self, repo_dir, current_branch: str, limit: int = 50) -> dict[str, list[dict]]:
+        """Load git branch history for one repository."""
+        git_dir = self._git_dir(repo_dir)
+        if git_dir is None:
+            return {}
+        _run_subprocess(["git", "--git-dir", str(git_dir), "fetch", "origin"], timeout=20)
+        branches_result = _run_subprocess(["git", "--git-dir", str(git_dir), "branch", "-a"], timeout=15)
+        if not branches_result or getattr(branches_result, "returncode", 1) != 0:
+            return {}
+
+        branch_lines = str(getattr(branches_result, "stdout", "") or "").splitlines()
+        remote_branches: set[str] = set()
+        for line in branch_lines:
+            branch_raw = line.strip().lstrip("* ")
+            if branch_raw.startswith("remotes/origin/") and "HEAD ->" not in branch_raw:
+                remote_branches.add(branch_raw.replace("remotes/origin/", ""))
+
+        branches_data: dict[str, dict] = {}
+        for line in branch_lines:
+            branch_raw = line.strip().lstrip("* ")
+            if not branch_raw or "HEAD ->" in branch_raw:
+                continue
+            if branch_raw.startswith("remotes/origin/"):
+                branch_ref = branch_raw
+                branch_name = branch_raw.replace("remotes/origin/", "")
+            else:
+                branch_name = branch_raw
+                if branch_name in remote_branches:
+                    continue
+                branch_ref = branch_raw
+            if branch_name in branches_data:
+                continue
+            commits_result = _run_subprocess(
+                [
+                    "git", "--git-dir", str(git_dir), "log", branch_ref, "-n", str(limit),
+                    "--pretty=format:%h|%H|%an|%ar|%at|%B%x00",
+                ],
+                timeout=20,
+            )
+            if not commits_result or getattr(commits_result, "returncode", 1) != 0:
+                continue
+            commits, latest_ts = _parse_git_log_output(str(getattr(commits_result, "stdout", "") or ""), branch_name)
+            if commits:
+                branches_data[branch_name] = {"commits": commits, "latest_timestamp": latest_ts}
+
+        sorted_data = sorted(
+            branches_data.items(),
+            key=lambda item: item[1].get("latest_timestamp") or 0,
+            reverse=True,
+        )
+        return {name: data["commits"] for name, data in sorted_data}
+
+    def load_git_branches_history(self, limit: int = 50):
+        """Load PBGui and PB7 branch history into instance attributes."""
+        self.pbgui_branches_data = self._load_branch_history(self.pbgdir, getattr(self, "pbgui_branch", ""), limit=limit)
+        self.pb7_branches_data = self._load_branch_history(self.pb7dir, getattr(self, "pb7_branch", ""), limit=limit)
+
+    def load_more_commits(self, branch_name: str, limit: int = 50):
+        """Load more PBGui commits for the requested branch."""
+        git_dir = self._git_dir(self.pbgdir)
+        if git_dir is None or not branch_name:
+            return
+        _run_subprocess(["git", "--git-dir", str(git_dir), "fetch", "origin"], timeout=20)
+        current_branch = getattr(self, "pbgui_branch", "") or self.get_current_pbgui_status()[0]
+        branch_ref = f"remotes/origin/{branch_name}" if branch_name != current_branch else branch_name
+        commits_result = _run_subprocess(
+            ["git", "--git-dir", str(git_dir), "log", branch_ref, "-n", str(limit), "--pretty=format:%h|%H|%an|%ar|%at|%B%x00"],
+            timeout=20,
+        )
+        if not commits_result or getattr(commits_result, "returncode", 1) != 0:
+            return
+        commits, _ = _parse_git_log_output(str(getattr(commits_result, "stdout", "") or ""), branch_name)
+        self.pbgui_branches_data[branch_name] = commits
+
+    def load_git_commits(self):
+        """Load current local commit hashes without overwriting defaults on failure."""
+        pbgui_branch, pbgui_commit = self.get_current_pbgui_status()
+        pb7_branch, pb7_commit = self.get_current_pb7_status()
+        if pbgui_commit:
+            self.pbgui_branch = pbgui_branch
+            self.pbgui_commit = pbgui_commit
+        if pb7_commit:
+            self.pb7_branch = pb7_branch
+            self.pb7_commit = pb7_commit
+
+    def load_versions_origin(self):
+        """Load origin README versions for PBGui and PB7."""
+        pbgui_text = self._git_text(self.pbgdir, ["show", "origin/main:README.md"])
+        if pbgui_text:
+            version = self._first_version_token(pbgui_text, line_limit=None)
+            if version != "N/A":
+                self.pbgui_version_origin = version
+        pb7_text = self._git_text(self.pb7dir, ["show", "origin/master:README.md"])
+        if pb7_text:
+            version = self._first_version_token(pb7_text, line_limit=None)
+            if version != "N/A":
+                self.pb7_version_origin = version
+
+    def load_versions(self):
+        """Load local README versions for PBGui and PB7 from their first 20 lines."""
+        for attr, repo_dir in (("pbgui_version", self.pbgdir), ("pb7_version", self.pb7dir)):
+            try:
+                readme = Path(repo_dir) / "README.md"
+                if not readme.exists():
+                    continue
+                version = self._first_version_token(readme.read_text(encoding="utf-8", errors="ignore"), line_limit=20)
+                if version != "N/A":
+                    setattr(self, attr, version)
+            except Exception:
+                continue
 
     def _handle_bad_cmd_file(self, cfile: Path, command_kind: str, error: Exception):
         key = str(cfile)

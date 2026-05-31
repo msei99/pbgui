@@ -479,7 +479,6 @@ tr.row-inactive td  { opacity: 0.45; }
 var TOKEN          = "%%TOKEN%%";
 var API_BASE       = "%%API_BASE%%";
 var WS_BASE        = "%%WS_BASE%%";
-var ST_BASE        = "%%ST_BASE%%";
 var PBGUI_VERSION  = "%%VERSION%%";
 var PBGUI_SERIAL   = "%%SERIAL%%";
 
@@ -735,15 +734,13 @@ function esc(s) {
 
 /* ─── Edit (navigate to FastAPI edit page) ────────────────── */
 function editInstance(name) {
-  var url = API_BASE + '/edit_page?name=' + encodeURIComponent(name) + '&token=' + encodeURIComponent(TOKEN) +
-    '&st_base=' + encodeURIComponent(ST_BASE);
+  var url = API_BASE + '/edit_page?name=' + encodeURIComponent(name) + '&token=' + encodeURIComponent(TOKEN);
   window.location.href = url;
 }
 
 /* ─── Add Instance (navigate to FastAPI edit page) ────────── */
 function addInstance() {
-  var url = API_BASE + '/edit_page?new=1&token=' + encodeURIComponent(TOKEN) +
-    '&st_base=' + encodeURIComponent(ST_BASE);
+  var url = API_BASE + '/edit_page?new=1&token=' + encodeURIComponent(TOKEN);
   window.location.href = url;
 }
 
@@ -1177,13 +1174,12 @@ connectWS();      /* then switch to real-time WebSocket */
 window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
 </script>
 
-<!-- ── Shared nav bar (must come after var TOKEN/ST_BASE etc.) ── -->
+<!-- ── Shared nav bar ── -->
 <script>
 window.PBGUI_NAV_CONFIG = {
   subtitle: 'PBv7 RUN',
   current:  'v7_run',
   token:    TOKEN,
-  stBase:   ST_BASE,
   apiBase:  API_BASE,
   version:  PBGUI_VERSION,
   serial:   PBGUI_SERIAL

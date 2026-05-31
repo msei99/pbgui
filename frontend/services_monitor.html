@@ -723,7 +723,6 @@
   var TOKEN         = "%%TOKEN%%";
   var API_BASE      = "%%API_BASE%%";   /* http://host:port/api/services */
   var WS_BASE       = "%%WS_BASE%%";   /* ws://host:port                */
-  var ST_BASE       = "%%ST_BASE%%";
   var PBGUI_VERSION = "%%VERSION%%";
   var PBGUI_SERIAL  = "%%SERIAL%%";
 </script>
@@ -732,7 +731,6 @@ window.PBGUI_NAV_CONFIG = {
   subtitle: 'SERVICES',
   current:  'system_services',
   token:    TOKEN,
-  stBase:   ST_BASE,
   version:  PBGUI_VERSION,
   serial:   PBGUI_SERIAL
 };
@@ -1938,7 +1936,7 @@ window.PBGUI_NAV_CONFIG = {
 
   function _showMsg(id, msg, isError) { _flash(id, msg, isError); }
 
-  /* ── Result popup dialog (like old Streamlit result_popup) ── */
+  /* ── Result popup dialog ── */
   function _resultPopup(title, message, output, isOk, hideFoot) {
     var isNew = !document.getElementById('result-modal');
     var modal = document.getElementById('result-modal');

@@ -2,8 +2,8 @@
 WebSocket Server for PBMaster daemon.
 
 Runs an asyncio WebSocket server in a daemon thread inside the PBMaster
-process.  Browser clients (Custom Component) connect directly and receive
-real-time push updates — no Streamlit reruns, no polling.
+process.  Browser clients connect directly and receive real-time push updates
+without polling.
 
 Architecture
 ------------

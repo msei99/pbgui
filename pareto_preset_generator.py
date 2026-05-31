@@ -1,8 +1,7 @@
 """Pure PB7 optimize preset generation helpers for Pareto Explorer.
 
-This module intentionally has no Streamlit dependency. It mirrors the legacy
-ParetoExplorer preset generator calculations and returns plain dictionaries for
-FastAPI/JS callers.
+This module intentionally has no UI dependency. It mirrors the legacy
+ParetoExplorer preset generator calculations and returns plain dictionaries.
 """
 
 from __future__ import annotations

@@ -3,10 +3,7 @@
  * Shared rendering module for dashboard widgets.
  *
  * Served by FastAPI at /app/dashboard_render.js.
- * Loaded dynamically in dashboard_balance.html and dashboard_top.html
- * (via document.createElement('script')) to bypass DOMPurify.
- * Loaded via <script src=""> in dashboard_editor.html (no DOMPurify there on
- * the src attribute path — external src with empty body is not stripped).
+ * Loaded dynamically by dashboard widgets and directly by dashboard_editor.html.
  *
  * Exported as  window.DashRender = { ... }
  *
@@ -24,8 +21,7 @@
  * opts for renderTop / buildTop:
  *   { users, topN, period, height, displayModeBar, responsive }
  *
- * NOTE: This file is served as plain JavaScript — no DOMPurify constraints.
- *       Angle brackets in string literals do NOT need \x3C / \x3E escaping.
+ * NOTE: This file is served as plain JavaScript.
  */
 (function (global) {
     'use strict';
@@ -189,9 +185,6 @@
         '.dt-fs-close:hover{background:#e53e3e;border-color:#e53e3e;color:#fff;}',
 
         /* ── Income widget specific ── */
-        '.di-nav-btn{background:var(--db-surface2);color:var(--db-text);border:1px solid var(--db-surface3);border-radius:4px;',
-        '  padding:0.18rem 0.55rem;font-size:0.82rem;cursor:pointer;white-space:nowrap;flex-shrink:0;}',
-        '.di-nav-btn:hover{background:var(--db-surface3);border-color:var(--db-title);color:var(--db-title);}',
         '.di-table-wrap{overflow-x:auto;overflow-y:auto;flex:1;min-height:0;}',
         '.di-table{width:100%;border-collapse:collapse;font-size:0.78rem;}',
         '.di-table th{position:sticky;top:0;background:var(--db-surface);color:var(--db-text-muted);font-weight:600;',
@@ -723,25 +716,6 @@
 
     /* ──────────────────────── Income widget ────────────────────────────── */
 
-    /** Shared click handler factory for the Live vs BT nav button. */
-    function _makeNavHandler(opts) {
-        return function () {
-            var navUrl = (opts.apiBase || '') + '/nav/request';
-            fetch(navUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + (opts.token || '')
-                },
-                body: JSON.stringify({
-                    page:   'V7_LIVE_VS_BACKTEST',
-                    params: { v7_live_vs_backtest_prefill_user: opts.lvbUser },
-                    token:  opts.token || ''
-                })
-            });
-        };
-    }
-
     /**
      * Build a complete income widget DOM inside container.
      * Supports two modes:
@@ -819,18 +793,6 @@
             /* interactive controls */
             var metaDiv = document.createElement('div');
             metaDiv.className = 'dt-meta dt-meta-controls';
-            /* Live vs BT button — leftmost item, before Period */
-            if (opts.lvbUser) {
-                var navBtnI = document.createElement('button');
-                navBtnI.className = 'di-nav-btn';
-                navBtnI.title = 'Open Live vs Backtest';
-                navBtnI.textContent = '\u21C4 Live vs BT';
-                navBtnI.addEventListener('click', _makeNavHandler(opts));
-                metaDiv.appendChild(navBtnI);
-                var sepNav = document.createElement('span');
-                sepNav.className = 'dt-meta-sep'; sepNav.innerHTML = '&middot;';
-                metaDiv.appendChild(sepNav);
-            }
             if (opts.periodControl) {
                 var lPrd = document.createElement('span');
                 lPrd.className = 'dt-meta-lbl'; lPrd.textContent = 'Period';
@@ -909,19 +871,11 @@
                 : _rawPeriod;
             var metaSpan = document.createElement('span');
             metaSpan.className = 'dt-meta';
-            var metaHtml = '';
-            if (opts.lvbUser) {
-                metaHtml += '<button class="di-nav-btn di-nav-btn-static" title="Open Live vs Backtest">\u21C4 Live vs BT</button><span class="dt-meta-sep">&middot;</span>';
-            }
-            metaSpan.innerHTML = metaHtml +
+            metaSpan.innerHTML =
                 'Period:&nbsp;' + _periodDisplay +
                 '&nbsp;&middot;&nbsp;Last&nbsp;N:&nbsp;' + (opts.lastN || 0) +
                 '&nbsp;&middot;&nbsp;Filter:&nbsp;' + (opts.filterVal || 0) +
                 '&nbsp;&middot;&nbsp;Users:&nbsp;<span class="dt-meta-user">' + uLabel + '</span>';
-            if (opts.lvbUser) {
-                var _staticBtn = metaSpan.querySelector('.di-nav-btn-static');
-                if (_staticBtn) _staticBtn.addEventListener('click', _makeNavHandler(opts));
-            }
             hdr.appendChild(metaSpan);
         }
         _decorateHeader(hdr, opts.icon, titleSpan, opts.onDelete);

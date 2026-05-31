@@ -1387,6 +1387,12 @@ def _determine_stock_perp_improve_start(
     refetch: bool = False,
     timeout_s: float = 30.0,
 ) -> date:
+    profiles = _load_tradfi_profiles_from_ini()
+    tiingo_profile = profiles.get("tiingo") if isinstance(profiles, dict) else {}
+    tiingo_key = str((tiingo_profile or {}).get("api_key") or "").strip()
+    if not tiingo_key:
+        candidates = [candidate for candidate in earliest_candidates or [] if isinstance(candidate, date)]
+        return min(candidates) if candidates else d_end
     if tiingo_start_date is not None:
         return max(_IEX_FLOOR_DATE, tiingo_start_date)
     return _IEX_FLOOR_DATE

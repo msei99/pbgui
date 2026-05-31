@@ -784,7 +784,7 @@
             <section id="section-setup" class="page-section" data-section="setup" hidden>
                 <div class="section-heading">
                     <span class="section-kicker">Configuration</span>
-                    <p class="section-copy">These values are read from pbgui.ini and used by both Streamlit and FastAPI paths.</p>
+                    <p class="section-copy">These values are read from pbgui.ini and used by PBGui runtime paths.</p>
                 </div>
                 <div class="panel">
                     <h2 class="panel-title">PB7 Setup</h2>
@@ -873,13 +873,11 @@
 
     <script>
         var TOKEN = "%%TOKEN%%";
-        var ST_BASE = "%%ST_BASE%%";
         var API_ORIGIN = "%%API_ORIGIN%%";
         var PBGUI_VERSION = "%%VERSION%%";
         var PBGUI_SERIAL = "%%SERIAL%%";
 
         if (TOKEN === "%%" + "TOKEN%%") TOKEN = "";
-        if (ST_BASE === "%%" + "ST_BASE%%") ST_BASE = "";
         if (API_ORIGIN === "%%" + "API_ORIGIN%%") API_ORIGIN = window.location.origin;
         if (PBGUI_VERSION === "%%" + "VERSION%%") PBGUI_VERSION = "";
         if (PBGUI_SERIAL === "%%" + "SERIAL%%") PBGUI_SERIAL = "";
@@ -887,7 +885,6 @@
         var API_BASE = API_ORIGIN + "/api";
         var query = new URLSearchParams(window.location.search);
         if (!TOKEN) TOKEN = query.get("token") || "";
-        if (!ST_BASE) ST_BASE = query.get("st_base") || "";
         var NEXT_PATH = query.get("next") || "";
         if (NEXT_PATH && !NEXT_PATH.startsWith("/")) NEXT_PATH = "";
 
@@ -911,7 +908,6 @@
                 subtitle: "WELCOME",
                 current: "/",
                 token: TOKEN,
-                stBase: ST_BASE,
                 apiBase: API_BASE,
                 version: PBGUI_VERSION,
                 serial: PBGUI_SERIAL
@@ -966,8 +962,6 @@
             var nextUrl = new URL(window.location.href);
             if (TOKEN) nextUrl.searchParams.set("token", TOKEN);
             else nextUrl.searchParams.delete("token");
-            if (ST_BASE) nextUrl.searchParams.set("st_base", ST_BASE);
-            else nextUrl.searchParams.delete("st_base");
             if (NEXT_PATH) nextUrl.searchParams.set("next", NEXT_PATH);
             window.history.replaceState(null, "", nextUrl.toString());
             syncNavConfig();
@@ -1135,7 +1129,6 @@
             }
             var nextUrl = new URL(path, window.location.origin);
             nextUrl.searchParams.set("token", TOKEN);
-            if (ST_BASE) nextUrl.searchParams.set("st_base", ST_BASE);
             window.location.href = nextUrl.toString();
         }
 

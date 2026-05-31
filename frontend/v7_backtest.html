@@ -906,7 +906,6 @@ textarea.json-invalid:focus {
 var TOKEN         = "%%TOKEN%%";
 var API_BASE      = "%%API_BASE%%";
 var WS_BASE       = "%%WS_BASE%%";
-var ST_BASE       = "%%ST_BASE%%";
 var PBGUI_VERSION = "%%VERSION%%";
 var PBGUI_SERIAL  = "%%SERIAL%%";
 
@@ -1407,7 +1406,34 @@ function goEditorResults() {
 }
 
 function goStrategyExplorer() {
-  window.location.href = ST_BASE + '/?target=V7_STRATEGY_EXPLORER&token=' + TOKEN;
+  if (!ensureRawJsonValidForSave()) return;
+  if (!ensureStructuredJsonFieldsValidForSave()) return;
+  var explorerBase = strategyExplorerApiBase();
+  try {
+    var cfg = collectConfig();
+    fetch(explorerBase + '/draft', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: cfg })
+    }).then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }).then(function(data) {
+      var url = explorerBase + '/main_page?token=' + encodeURIComponent(TOKEN)
+        + '&draft_id=' + encodeURIComponent(data.draft_id || '');
+      window.location.href = url;
+    }).catch(function(e) {
+      toast('Failed to open Strategy Explorer: ' + e.message, 'err');
+    });
+  } catch (e) {
+    toast('Failed to prepare Strategy Explorer: ' + e.message, 'err');
+  }
+}
+
+function strategyExplorerApiBase() {
+  var match = String(API_BASE || '').match(/^(https?:\/\/[^/]+)/);
+  var origin = match ? match[1] : window.location.origin;
+  return origin + '/api/strategy-explorer';
 }
 
 function getConfigDefaultExchange(cfg) {
@@ -1420,7 +1446,6 @@ function openBalanceCalculatorWithConfig(cfg, defaultExchange) {
   return window.PBGuiEditorShared.openBalanceCalcPage({
     apiBase: API_BASE,
     token: TOKEN,
-    stBase: ST_BASE,
     config: cfg,
     exchange: defaultExchange || 'binance',
   });
@@ -4247,7 +4272,7 @@ function closeLogPanel() {
 }
 
 /* ════════════════════════════════════════════════
-   RESULTS VIEW — matching Streamlit BacktestV7Results
+   RESULTS VIEW
    ════════════════════════════════════════════════ */
 function _applyResultsData(resultItems, filterName) {
   results = resultItems || [];
@@ -5197,7 +5222,7 @@ function onResultActionsChanged() {
   });
 }
 
-/* ── Balance & Equity chart (matches Streamlit view_chart_be) ── */
+/* ── Balance & Equity chart ── */
 var _beCache = {}; /* path → parsed BE data */
 
 function loadAndRenderBEChart(cd) {
@@ -5216,7 +5241,7 @@ function loadAndRenderBEChart(cd) {
 }
 
 /* Normalize BE CSV to { time[], balance[], equity[], balance_btc[], equity_btc[] }
-   Mirrors Streamlit load_be() logic exactly */
+   Mirrors the previous load_be() timestamp handling exactly. */
 function normalizeBE(csv, result) {
   var rows = csv.rows;
   var headers = csv.headers.map(function(h) { return h.trim(); });
@@ -5325,7 +5350,7 @@ function _chartLayout(title, yTitle) {
   };
 }
 
-/* ── PnL per Symbol chart (matches Streamlit view_chart_symbol) ── */
+/* ── PnL per Symbol chart ── */
 var _fillsCache = {};
 
 function loadAndRenderPnlChart(cd) {
@@ -5354,7 +5379,7 @@ function renderPnlChart(cd, csv) {
   var coinCol = headers.indexOf('coin') >= 0 ? 'coin' : 'symbol';
   var pnlCol = 'pnl';
 
-  /* Resolve timestamps like Streamlit load_fills() */
+  /* Resolve timestamps with the historical load_fills() priority. */
   var r = cd.result;
   var times = resolveFilsTimes(rows, headers, r);
 
@@ -5382,9 +5407,9 @@ function renderPnlChart(cd, csv) {
   Plotly.newPlot(cd.id, traces, layout, _plotlyConf());
 }
 
-/* resolveFilsTimes — mirrors Streamlit load_fills() column priority:
+/* resolveFillsTimes — mirrors historical load_fills() column priority:
    1. time  (already a datetime string)
-   2. minute (offset from end_date, same as Streamlit)
+   2. minute (offset from end_date)
    3. timestamp (numeric ms/s  OR  datetime string like "2020-01-05 21:33:00")
 */
 function resolveFilsTimes(rows, headers, result) {
@@ -5397,7 +5422,7 @@ function resolveFilsTimes(rows, headers, result) {
   }
 
   if (headers.indexOf('minute') >= 0) {
-    /* Same as Streamlit: start_time = end_date_ts - max_minute * 60 */
+    /* Historical behavior: start_time = end_date_ts - max_minute * 60 */
     var endDate = result.end_date || '';
     var endTs = endDate ? new Date(endDate).getTime() : Date.now();
     var maxMin = 0;
@@ -5411,7 +5436,7 @@ function resolveFilsTimes(rows, headers, result) {
   }
 
   if (headers.indexOf('timestamp') >= 0) {
-    /* Numeric (ms if > 1e11, else seconds) OR datetime string — same as Streamlit */
+    /* Numeric (ms if > 1e11, else seconds) OR datetime string. */
     var firstVal = (rows[0] || {})['timestamp'] || '';
     var firstNum = parseFloat(firstVal);
     var isNumeric = !isNaN(firstNum);
@@ -5434,7 +5459,7 @@ function resolveFilsTimes(rows, headers, result) {
   return times;
 }
 
-/* ── TWE (Total Wallet Exposure) chart — mirrors Streamlit view_chart_twe ── */
+/* ── TWE (Total Wallet Exposure) chart ── */
 var _tweCache = {}; /* path → { fills CSV object } */
 
 function loadAndRenderTWEChart(cd) {
@@ -5558,7 +5583,7 @@ function renderTWEChart(cd, csv, resolution) {
     });
 
     /* Create COMPLETE time grid from minBucket to maxBucket, forward-fill empty slots.
-       Mirrors Streamlit: resample(...).max().ffill().fillna(0) */
+       Historical behavior: resample(...).max().ffill().fillna(0). */
     var allTs = timeline.map(function(e) { return new Date(e.time).getTime(); }).filter(function(t) { return !isNaN(t); });
     if (!allTs.length) return { times: [], twe: [], coins: {} };
     var minBk = Math.floor(Math.min.apply(null, allTs) / resMs) * resMs;
@@ -6236,7 +6261,7 @@ function addConfigToRunByName(name) {
       body: JSON.stringify({ config: cfgToSend })
     }).then(function(r) { return r.json(); }).then(function(d) {
       var editUrl = v7Base + '/edit_page?token=' + encodeURIComponent(TOKEN) +
-        '&new=1&draft_id=' + encodeURIComponent(d.draft_id) + '&st_base=' + encodeURIComponent(ST_BASE);
+        '&new=1&draft_id=' + encodeURIComponent(d.draft_id);
       window.location.href = editUrl;
     });
   }
@@ -6298,7 +6323,7 @@ function addToRun() {
       body: JSON.stringify({ config: cfgToSend })
     }).then(function(r) { return r.json(); }).then(function(d) {
       var editUrl = v7Base + '/edit_page?token=' + encodeURIComponent(TOKEN) +
-        '&new=1&draft_id=' + encodeURIComponent(d.draft_id) + '&st_base=' + encodeURIComponent(ST_BASE);
+        '&new=1&draft_id=' + encodeURIComponent(d.draft_id);
       window.location.href = editUrl;
     });
   }
@@ -6364,7 +6389,7 @@ function addToRunFromArchive() {
       body: JSON.stringify({ config: cfgToSend })
     }).then(function(r) { return r.json(); }).then(function(d) {
       var editUrl = v7Base + '/edit_page?token=' + encodeURIComponent(TOKEN) +
-        '&new=1&draft_id=' + encodeURIComponent(d.draft_id) + '&st_base=' + encodeURIComponent(ST_BASE);
+        '&new=1&draft_id=' + encodeURIComponent(d.draft_id);
       window.location.href = editUrl;
     });
   }
@@ -6418,7 +6443,7 @@ function addToRunFromLegacy() {
       body: JSON.stringify({ config: cfgToSend })
     }).then(function(r) { return r.json(); }).then(function(d) {
       var editUrl = v7Base + '/edit_page?token=' + encodeURIComponent(TOKEN) +
-        '&new=1&draft_id=' + encodeURIComponent(d.draft_id) + '&st_base=' + encodeURIComponent(ST_BASE);
+        '&new=1&draft_id=' + encodeURIComponent(d.draft_id);
       window.location.href = editUrl;
     });
   }
@@ -6491,7 +6516,26 @@ function deleteSelectedResults() {
 function strategyExplorerFromResult() {
   var sel = getSelectedResults();
   if (sel.length !== 1) { toast('Select exactly 1 result', 'err'); return; }
-  window.location.href = ST_BASE + '/?target=V7_STRATEGY_EXPLORER&token=' + TOKEN;
+  var path = sel[0];
+  var explorerBase = strategyExplorerApiBase();
+  toast('Opening Strategy Explorer…', 'ok');
+  apiFetch('/results/config?path=' + encodeURIComponent(path)).then(function(cfg) {
+    return fetch(explorerBase + '/draft', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: cfg })
+    });
+  }).then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function(data) {
+    var url = explorerBase + '/main_page?token=' + encodeURIComponent(TOKEN)
+      + '&draft_id=' + encodeURIComponent(data.draft_id || '')
+      + '&result_path=' + encodeURIComponent(path);
+    window.location.href = url;
+  }).catch(function(e) {
+    toast('Failed to open Strategy Explorer: ' + e.message, 'err');
+  });
 }
 
 function goBalanceCalculatorFromResult() {
@@ -6611,7 +6655,6 @@ function optimizeFromResult() {
     }
     var targetUrl = window.location.origin + '/api/optimize-v7/main_page'
       + '?token=' + encodeURIComponent(TOKEN)
-      + '&st_base=' + encodeURIComponent(ST_BASE)
       + '&opt_draft_id=' + encodeURIComponent(draft.draft_id || '');
     if (draftName) targetUrl += '&draft_name=' + encodeURIComponent(draftName);
     window.location.href = targetUrl;
@@ -7146,7 +7189,6 @@ window.PBGUI_NAV_CONFIG = {
   subtitle: 'PBv7 BACKTEST',
   current:  'v7_backtest',
   token:    TOKEN,
-  stBase:   ST_BASE,
   apiBase:  API_BASE,
   version:  PBGUI_VERSION,
   serial:   PBGUI_SERIAL

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!-- PBGui Dashboard — standalone FastAPI page.
-     Full dashboard view/edit experience without Streamlit chrome.
-     Injected placeholders: TOKEN, API_BASE, WS_BASE, ST_BASE, CURRENT, DASHBOARDS_JSON
+     Full dashboard view/edit experience with PBGui navigation.
+     Injected placeholders: TOKEN, API_BASE, WS_BASE, CURRENT, DASHBOARDS_JSON
 -->
 <html lang="en">
 <head>
@@ -789,7 +789,6 @@ html, body {
   var TOKEN      = "%%TOKEN%%";
   var API_BASE   = "%%API_BASE%%";
   var WS_BASE    = "%%WS_BASE%%";
-  var ST_BASE    = "%%ST_BASE%%";
   var VERSION    = "%%VERSION%%";
   var CURRENT    = "%%CURRENT%%";
   var DASHBOARDS = %%DASHBOARDS_JSON%%;
@@ -1426,7 +1425,6 @@ html, body {
 <!-- pbgui_nav.js config — separate script block at global scope so TOKEN is accessible -->
 <script>
   var _NAV_TOKEN   = "%%TOKEN%%";
-  var _NAV_ST_BASE = "%%ST_BASE%%";
   var _NAV_API     = "%%API_BASE%%";
   var _NAV_VER     = "%%VERSION%%";
   var _NAV_SERIAL  = "%%SERIAL%%";
@@ -1434,7 +1432,6 @@ html, body {
     subtitle: 'DASHBOARD',
     current:  'dashboards',
     token:    _NAV_TOKEN,
-    stBase:   _NAV_ST_BASE,
     apiBase:  _NAV_API,
     version:  _NAV_VER,
     serial:   _NAV_SERIAL

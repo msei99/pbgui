@@ -160,7 +160,7 @@ def main() -> int:
 
     root = Path.cwd()
     # require we are run from PBGUI_DIR (has PBRun.py etc)
-    if not (root / "pbgui.py").exists():
+    if not (root / "PBApiServer.py").exists():
         # try relative to this file
         root = Path(__file__).resolve().parent
 

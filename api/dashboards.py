@@ -26,7 +26,7 @@ _VALID_DASHBOARD_NAME = re.compile(r'^[^\x00-\x1f/\\]+$')
 # --------------------------------------------------------------------------- helpers
 
 def _dashboards_dir() -> Path:
-    from pbgui_func import PBGDIR
+    from pbgui_purefunc import PBGDIR
     d = Path(f"{PBGDIR}/data/dashboards")
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -72,7 +72,7 @@ def list_dashboards(
 #       routing "templates" as a {name} path parameter.
 
 def _templates_dir() -> Path:
-    from pbgui_func import PBGDIR
+    from pbgui_purefunc import PBGDIR
     d = Path(f"{PBGDIR}/data/dashboards/templates")
     d.mkdir(parents=True, exist_ok=True)
     return d

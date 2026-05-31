@@ -1,7 +1,6 @@
-<!-- Dashboard Sidebar — embedded via st.html(unsafe_allow_javascript=True).
+<!-- Dashboard Sidebar.
      Renders the dashboard list + toolbar (refresh/new/edit or save/cancel/delete).
-     Actions are sent via /api/nav/request and picked up by nav_bridge component.
-     All HTML inside JS strings uses \x3C / \x3E to survive DOMPurify. -->
+     Actions are sent via /api/nav/request. -->
 <div id="dash-sidebar-root"></div>
 <style>
 :root {
@@ -12,18 +11,6 @@
     --fs-lg: 18px;
     --fs-xl: 22px;
 }
-/* ── Override Streamlit sidebar background for this page ── */
-section[data-testid="stSidebar"] {
-  background: #0e1117 !important;
-}
-section[data-testid="stSidebar"] > div {
-  background: #0e1117 !important;
-}
-/* Hide the default "Dashboards Options" header Streamlit injects */
-section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
-  display: none !important;
-}
-
 #dash-sidebar-root {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: var(--fs-sm);
@@ -269,7 +256,7 @@ section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
     return el.innerHTML;
   }
 
-  /* Send action to FastAPI which broadcasts via WS to nav_bridge */
+  /* Send action to FastAPI which broadcasts via WebSocket. */
   function sendAction(action, params) {
     fetch(API_BASE + '/nav/request', {
       method: 'POST',
@@ -397,7 +384,7 @@ section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
   reportHeight();
   } /* end renderMain */
 
-  /* ── Template overlay (injected into parent Streamlit page) ── */
+  /* ── Template overlay (injected into parent dashboard page) ── */
   function openTemplateWindow() {
     var doc = window.parent.document;
     /* Remove any existing overlay */
@@ -540,14 +527,7 @@ section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
     }
   });
 
-  /* ── Report height ── */
   function reportHeight() {
-    try {
-      window.parent.postMessage(
-        {isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: root.scrollHeight + 8},
-        '*'
-      );
-    } catch(_) {}
   }
 
   renderMain();

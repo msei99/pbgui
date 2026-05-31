@@ -1,8 +1,7 @@
 <!-- Dashboard Orders — live view component.
-     Embedded via st.html(unsafe_allow_javascript=True).  NOTE: st.html is NOT iframed;
-     multiple instances share the same window/document.  Every DOM id and window.*
+     Multiple instances may share the same window/document.  Every DOM id and window.*
      variable MUST be scoped by POSITION to avoid collisions.
-     Config injected as JS variables (%%PLACEHOLDER%%) by Dashboard.py.
+     Config injected as JS variables (%%PLACEHOLDER%%).
      All rendering delegated to DashRender.buildOrders() — single source of truth.
      Listens for dash-pos-selected events from a linked Positions widget.
      Uses TradingView Lightweight Charts (Apache 2.0) for native candlestick rendering. -->
@@ -57,11 +56,6 @@
     }
 
     function reportHeight() {
-        try {
-            window.parent.postMessage(
-                { isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'
-            );
-        } catch (_) {}
     }
 
     /* Listen for position selection from linked Positions widget */

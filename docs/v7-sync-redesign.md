@@ -145,7 +145,6 @@ Master:
 | **`master/v7_config_sync.py`** | `delete_*.cmd` Code raus; status_v7 als inotify Watch-Pfad; Reconciliation-Callback (Merge + Pull config.json + Coin-Configs / Delete); Startup-Abgleich |
 | **`PBRemote.py`** | Master: config.json + Coin-Configs pro Instanz + status_v7 + alive syncen; Slave: nur alive + configs/status_v7 read-only |
 | **`RunV7.py`** | `save()`: auch status_v7 updaten; `activate()` für v7: entfällt komplett |
-| **`navi/v7_run.py`** | Activate-Button für v7: **entfernen** — Save erledigt alles |
 | **`frontend/v7_run.html`** | Activate-Button entfernen; Save-Logik ggf. anpassen |
 
 ## Wichtige Regeln

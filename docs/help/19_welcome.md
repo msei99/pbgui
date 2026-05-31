@@ -36,7 +36,7 @@ Important fields:
 
 Use the **Browse** buttons to pick directories and the Python interpreter from the server filesystem.
 
-Changes are applied immediately after saving and are used by both the Streamlit and FastAPI paths.
+Changes are applied immediately after saving and are used by the PBGui runtime paths.
 
 ## Password section
 

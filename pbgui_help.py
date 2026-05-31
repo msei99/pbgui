@@ -1970,7 +1970,7 @@ dashboard_filter = """
     In list view, you can use the filter to narrow down the displayed entries.
     ```"""
 
-# Help text for showing raw logfile (used in logging_view.py)
+# Help text for showing raw logfile.
 show_raw_log = """
     ```
     Show raw logfile (no filters applied). Use this to inspect the full
@@ -2255,14 +2255,6 @@ exchanges = """
     Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing.
     The template ships with ['binance', 'bybit']; additional exchanges can be wired up
     manually if you maintain your own archives."""
-
-compare_backtest_exchange_help = """
-        Select which exchange to use for the backtest in the Live vs Backtest comparison.
-
-        Hyperliquid behavior:
-        - If you choose 'hyperliquid' and press ▶ (Run Backtest), PBGui will force Binance candles via backtest.coin_sources.
-            The backtest will be stored under the 'combined' results folder
-            (PBGui still shows it when Exchange=hyperliquid)."""
 
 backtest_start_date = """
     Start date of backtest.

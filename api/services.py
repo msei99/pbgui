@@ -1344,7 +1344,6 @@ def get_poller_metrics(session: SessionToken = Depends(require_auth)) -> Dict[st
 @router.get("/main_page", response_class=HTMLResponse)
 def get_main_page(
     request: Request,
-    st_base: str = Query(default="", description="Browser-visible Streamlit base URL"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     """Serve the standalone Services Monitor page with token injected server-side."""
@@ -1362,11 +1361,7 @@ def get_main_page(
     html = html.replace('"%%API_BASE%%"', json.dumps(api_services_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
 
-    if not st_base:
-        st_base = f"http://{host}:8501"
-    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
-
-    from pbgui_func import PBGUI_VERSION  # local import to avoid circular
+    from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)

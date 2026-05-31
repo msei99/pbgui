@@ -122,10 +122,8 @@
 
     <script>
         var API_ORIGIN = "%%API_ORIGIN%%";
-        var ST_BASE = "%%ST_BASE%%";
 
         if (API_ORIGIN === "%%" + "API_ORIGIN%%") API_ORIGIN = window.location.origin;
-        if (ST_BASE === "%%" + "ST_BASE%%") ST_BASE = "";
 
         function setBanner(message) {
             var banner = document.getElementById("banner");
@@ -158,7 +156,6 @@
         function redirectToWelcome(token) {
             var target = new URL(API_ORIGIN + "/api/auth/main_page");
             if (token) target.searchParams.set("token", token);
-            if (ST_BASE) target.searchParams.set("st_base", ST_BASE);
             window.location.replace(target.toString());
         }
 

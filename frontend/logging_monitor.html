@@ -365,7 +365,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
      ════════════════════════════════════════════════════════ -->
 <script>
   var TOKEN          = "%%TOKEN%%";
-  var ST_BASE        = "%%ST_BASE%%";
   var API_BASE       = "%%API_BASE%%";    // e.g. http://127.0.0.1:8600/api/logging
   var PBGUI_VERSION  = "%%VERSION%%";
   var PBGUI_SERIAL   = "%%SERIAL%%";
@@ -380,7 +379,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
      ════════════════════════════════════════════════════════ -->
 <script>
 /* ── Nav config ─────────────────────────────────────────── */
-window.PBGUI_NAV_CONFIG = { subtitle: 'Logging', current: 'system_logging', token: TOKEN, stBase: ST_BASE, apiBase: API_BASE, version: PBGUI_VERSION, serial: PBGUI_SERIAL };
+window.PBGUI_NAV_CONFIG = { subtitle: 'Logging', current: 'system_logging', token: TOKEN, apiBase: API_BASE, version: PBGUI_VERSION, serial: PBGUI_SERIAL };
 
 
 /* ── HTTP helpers ────────────────────────────────────────── */

@@ -1,0 +1,2712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PBGui - Strategy Explorer</title>
+<link rel="stylesheet" href="/app/css/sidebar.css?v=4">
+<script src="/static/plotly.min.js"></script>
+<script src="/app/js/sidebar_resize.js?v=1"></script>
+<style>
+:root {
+  --bg: #0e1117;
+  --bg2: #1a1d24;
+  --bg3: #262730;
+  --bg4: #151922;
+  --border: #333640;
+  --text: #fafafa;
+  --text-dim: #a0a4ab;
+  --accent: #4da6ff;
+  --green: #21c354;
+  --orange: #ff8c00;
+  --red: #ff4b4b;
+  --purple: #b77dff;
+  --font: 'Source Sans Pro', -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  --fs-xs: 11px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-lg: 18px;
+  --fs-xl: 22px;
+  --sp-xs: 4px;
+  --sp-sm: 8px;
+  --sp-md: 12px;
+  --sp-lg: 20px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; color: var(--text); background: var(--bg); font: var(--fs-base)/1.45 var(--font); overflow: hidden; }
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; }
+#page-body { display: flex; height: calc(100vh - 52px); min-height: 0; }
+#sidebar { min-width: 0; border-right: 1px solid var(--border); }
+#sidebar-inner { display: flex; flex-direction: column; gap: var(--sp-sm); padding-bottom: var(--sp-lg); }
+#main-content { flex: 1; min-width: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: var(--sp-lg); display: flex; flex-direction: column; gap: var(--sp-lg); }
+.page-title { display: flex; justify-content: space-between; gap: var(--sp-lg); align-items: flex-start; }
+.page-title h1 { margin: 0 0 4px; font-size: var(--fs-xl); }
+.page-title p { margin: 6px 0 0; }
+.page-title p, .hint, .muted { color: var(--text-dim); }
+.panel-card { border: 1px solid var(--border); border-radius: 10px; background: var(--bg2); padding: 14px; }
+.panel-card h3, .panel-card h4 { margin: 0 0 10px; }
+.panel-card h4 { margin-top: 16px; color: var(--text-dim); }
+.control-group { border: 1px solid var(--border); border-radius: 8px; background: var(--bg4); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.control-group h4 { margin: 0; font-size: var(--fs-sm); color: var(--text); }
+.shared-controls { padding: 10px 12px; }
+.shared-controls-grid { display: grid; grid-template-columns: minmax(170px, 1.2fr) minmax(120px, .8fr) minmax(120px, .8fr) minmax(130px, .8fr) minmax(105px, .6fr) minmax(120px, .7fr) minmax(100px, .6fr) minmax(150px, .9fr); gap: var(--sp-sm); align-items: end; }
+.shared-controls .field { gap: 3px; }
+.shared-controls .field input, .shared-controls .field select { min-height: 30px; padding: 5px 8px; }
+.date-input-wrap { position: relative; }
+.date-input-wrap input { padding-right: 28px; }
+.calendar-trigger { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); background: transparent; border: 0; color: var(--text); padding: 0 3px; font-size: var(--fs-sm); line-height: 1; cursor: pointer; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { color: var(--text-dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .04em; }
+.field input, .field select { width: 100%; border: 1px solid var(--border); border-radius: 6px; background: #0b0e14; color: var(--text); padding: 7px 8px; min-height: 32px; }
+[data-tip] { cursor: help; text-decoration-line: underline; text-decoration-style: dotted; text-decoration-color: #64748b; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+#data-tip-tooltip { display: none; position: fixed; left: 0; top: 0; z-index: 9999; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 5px; font-size: var(--fs-xs); font-weight: normal; padding: 6px 10px; white-space: pre-wrap; max-width: 480px; line-height: 1.5; box-shadow: 0 4px 12px rgba(0,0,0,.5); pointer-events: none; will-change: transform; }
+.check-row { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: var(--fs-sm); }
+.check-row input { width: auto; }
+.num-stepper { display: flex; }
+.num-stepper input { border-radius: 0; min-width: 0; }
+.num-stepper button { width: 34px; border: 1px solid var(--border); background: var(--bg3); color: var(--text); }
+.num-stepper button:first-child { border-radius: 6px 0 0 6px; border-right: 0; }
+.num-stepper button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
+.source-note { color: var(--text-dim); font-size: var(--fs-xs); margin: 4px 0 10px; }
+.subtle-divider { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
+.tabs, .toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-sm); align-items: center; }
+.tab-btn, .action-btn, .stage-btn { border: 1px solid var(--border); border-radius: 7px; background: var(--bg3); color: var(--text); padding: 7px 11px; }
+.tab-btn.active, .stage-btn.active, .action-btn.primary, .action-btn.active-sim { border-color: var(--accent); background: rgba(77,166,255,.15); }
+.action-btn.danger { border-color: rgba(255,75,75,.4); color: #ffb3b3; }
+.grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--sp-md); }
+.third { grid-column: span 4; }
+.half { grid-column: span 6; }
+.full { grid-column: 1 / -1; }
+.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-md); }
+.metric-card { border: 1px solid var(--border); border-radius: 8px; background: var(--bg3); padding: 12px; min-width: 0; }
+.metric-card .label { color: var(--text-dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .05em; }
+.metric-card .value { margin-top: 4px; font-size: var(--fs-lg); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; background: var(--bg3); color: var(--text-dim); font-size: var(--fs-sm); }
+.chip.ok { color: var(--green); border-color: rgba(33,195,84,.35); }
+.chip.warn { color: var(--orange); border-color: rgba(255,140,0,.35); }
+.chip.err { color: #ffb3b3; border-color: rgba(255,75,75,.45); }
+.messages { display: flex; flex-direction: column; gap: 8px; }
+.message { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--bg2); color: var(--text-dim); }
+.message.info { border-color: rgba(77,166,255,.35); }
+.message.warning { border-color: rgba(255,140,0,.45); }
+.message.error { border-color: rgba(255,75,75,.45); color: #ffb3b3; }
+.info-banner { border: 1px solid rgba(77,166,255,.22); border-radius: 7px; background: rgba(77,166,255,.16); color: var(--accent); padding: 12px 14px; }
+.side-title { display: flex; justify-content: space-between; gap: var(--sp-md); align-items: center; margin-bottom: 10px; }
+.side-title h3 { margin: 0; }
+.orders { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.orders th, .orders td { border-bottom: 1px solid var(--border); padding: 7px 6px; text-align: right; }
+.orders th:first-child, .orders td:first-child, .orders th:nth-child(2), .orders td:nth-child(2) { text-align: left; }
+.orders th { color: var(--text-dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .04em; }
+.orders.compare-grid th, .orders.compare-grid td { border: 1px solid var(--border); }
+.orders.compare-grid tbody tr:nth-child(odd) { background: rgba(255,255,255,.018); }
+.orders.compare-grid th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+.plot { height: 520px; min-height: 360px; content-visibility: auto; contain-intrinsic-size: 520px; }
+#long-stats, #short-stats { content-visibility: auto; contain-intrinsic-size: 720px; }
+#main-content.is-scrolling .js-plotly-plot { pointer-events: none; }
+.plot:fullscreen { width: 100vw; height: 100vh !important; min-height: 100vh; background: var(--bg); padding: 8px; }
+.plot:fullscreen > div { height: 100% !important; }
+textarea, pre.debug-json { width: 100%; border: 1px solid var(--border); border-radius: 8px; background: #0b0e14; color: var(--text); font-family: var(--mono); font-size: var(--fs-xs); padding: 10px; overflow: auto; }
+textarea { min-height: 480px; resize: vertical; }
+#raw-config-panel .json-panel-wrap { margin-top: 0; }
+#raw-config-panel .json-pre[contenteditable="true"] { outline: none; cursor: text; }
+#raw-config-panel .json-pre.raw-invalid { border-color: rgba(255,75,75,.55); color: #ffb3b3; }
+.raw-config-status { margin-top: 8px; color: var(--text-dim); font-size: var(--fs-xs); }
+.raw-config-status.error { color: #ffb3b3; }
+pre.debug-json { max-height: 460px; white-space: pre-wrap; word-break: break-word; }
+.stage-view { display: none; }
+.stage-view.active { display: block; }
+.param-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.param-grid .field label { text-transform: none; letter-spacing: 0; }
+.main-layout { display: grid; grid-template-columns: repeat(2, minmax(520px, 1fr)); gap: var(--sp-md); align-items: start; }
+.sim-columns { display: grid; grid-template-columns: repeat(2, minmax(420px, 1fr)); gap: var(--sp-md); align-items: start; margin-top: var(--sp-md); }
+.main-column { display: flex; flex-direction: column; gap: var(--sp-md); min-width: 0; }
+.accordion-card { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg2); }
+.accordion-head { width: 100%; display: flex; align-items: center; gap: 10px; border: 0; background: var(--bg2); color: var(--text); padding: 10px 12px; text-align: left; }
+.accordion-head::before { content: '›'; transform: rotate(90deg); color: var(--text-dim); }
+.accordion-card.collapsed .accordion-head::before { transform: rotate(0deg); }
+.accordion-body { padding: 12px; border-top: 1px solid var(--border); }
+.accordion-card.collapsed .accordion-body { display: none; }
+.movie-layout { display: flex; flex-direction: column; gap: var(--sp-md); }
+.movie-config-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-md); align-items: end; }
+.movie-result-grid { display: grid; grid-template-columns: minmax(420px, 2fr) minmax(320px, 1fr); gap: var(--sp-md); align-items: start; }
+.movie-plot { height: 560px; min-height: 420px; content-visibility: auto; contain-intrinsic-size: 560px; }
+.movie-plot:fullscreen { width: 100vw; height: 100vh !important; min-height: 100vh; background: var(--bg); padding: 8px; }
+.movie-plot:fullscreen > div { height: 100% !important; }
+.movie-progress { margin-top: 10px; display: none; }
+.movie-progress.active { display: block; }
+.movie-progress-bar { height: 10px; border: 1px solid var(--border); border-radius: 999px; background: #0b0e14; overflow: hidden; }
+.movie-progress-fill { width: 0%; height: 100%; background: linear-gradient(90deg, var(--accent), var(--green)); transition: width .2s ease; }
+.movie-progress-text { margin-top: 6px; color: var(--text-dim); font-size: var(--fs-sm); }
+.movie-export-panel { margin-top: var(--sp-md); padding: var(--sp-md); border: 1px solid var(--border); border-radius: var(--radius); background: rgba(255,255,255,.025); }
+.movie-export-panel details { margin-top: var(--sp-sm); }
+.movie-export-download { display: none; justify-content: center; align-items: center; min-height: 36px; color: var(--green); text-decoration: none; border: 1px solid rgba(80, 200, 120, .45); border-radius: var(--radius-sm); padding: 0 12px; }
+.movie-export-download.active { display: inline-flex; }
+.guide-overlay { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 3000; width: min(920px, 95vw); height: min(680px, 88vh); min-width: 360px; min-height: 280px; background: #131b2b; border: 1px solid #2d3748; border-radius: 12px; box-shadow: 0 20px 70px rgba(0,0,0,.9); resize: both; overflow: hidden; }
+.guide-overlay.visible { display: flex; flex-direction: column; }
+#help-drag-handle { position: absolute; top: 0; left: 0; right: 48px; height: 46px; cursor: move; z-index: 2; }
+.guide-overlay .ovl-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.ovl-header { display: flex; align-items: center; justify-content: space-between; padding: .85rem 1.1rem .85rem 1.25rem; border-bottom: 1px solid #1e2736; background: #111827; }
+.ovl-header-title { font-size: var(--fs-sm); font-weight: 700; color: #e2e8f0; }
+.ovl-header-actions { display: flex; align-items: center; gap: .5rem; position: relative; z-index: 3; }
+.ovl-close, .ovl-tool { background: transparent; border: none; color: #94a3b8; font-size: var(--fs-md); cursor: pointer; padding: .2rem .35rem; border-radius: 5px; line-height: 1; }
+.ovl-close:hover, .ovl-tool:hover { color: #e2e8f0; background: rgba(255,255,255,.06); }
+.guide-body { overflow: auto; padding: 1.5rem 1.8rem; color: #cbd5e0; line-height: 1.65; }
+.guide-body h2 { margin: 0 0 .75rem; color: #e2e8f0; }
+.guide-body h3 { margin: 1.25rem 0 .35rem; color: #e2e8f0; }
+.guide-body p { margin: .45rem 0; }
+.guide-body ul { padding-left: 1.35rem; margin: .5rem 0; }
+.guide-body li { margin: .2rem 0; }
+.guide-body code { background: #1a202c; color: #f6ad55; padding: .1em .35em; border-radius: 3px; font-family: var(--mono); font-size: var(--fs-xs); }
+.segment-tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); border: 1px solid var(--border); border-radius: 7px; overflow: hidden; margin: 6px 0 10px; background: #0b0e14; }
+.segment-tabs button { min-width: 0; border: 0; border-right: 1px solid var(--border); background: transparent; color: var(--text-dim); padding: 6px 6px; font-size: var(--fs-xs); transition: color .15s, background .15s; }
+.segment-tabs button:last-child { border-right: 0; }
+.segment-tabs button:hover { color: var(--text); background: rgba(77,166,255,.08); }
+.segment-tabs button.active { color: #fff; background: rgba(77,166,255,.18); outline: 1px solid rgba(77,166,255,.75); outline-offset: -1px; }
+.slider-field { margin-bottom: 12px; }
+.slider-label { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: var(--fs-sm); }
+.slider-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slider-meta { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.slider-label .help { color: var(--text-dim); border: 1px solid var(--border); border-radius: 50%; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; }
+.slider-value { color: var(--accent); font-size: var(--fs-xs); font-weight: 700; padding-left: 0; font-family: var(--mono); }
+input.param-slider { -webkit-appearance: none; appearance: none; width: 100%; height: 14px; background: transparent; accent-color: var(--accent); cursor: pointer; }
+input.param-slider::-webkit-slider-runnable-track { height: 4px; background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--range-fill, 50%), rgba(255,255,255,.22) var(--range-fill, 50%), rgba(255,255,255,.22) 100%); border-radius: 999px; }
+input.param-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: 0; margin-top: -4px; box-shadow: 0 0 0 1px rgba(14,17,23,.95); }
+input.param-slider::-moz-range-track { height: 4px; background: rgba(255,255,255,.22); border-radius: 999px; border: 0; }
+input.param-slider::-moz-range-progress { height: 4px; background: var(--accent); border-radius: 999px; border: 0; }
+input.param-slider::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: 0; box-shadow: 0 0 0 1px rgba(14,17,23,.95); }
+.param-select { width: 100%; border: 1px solid var(--border); border-radius: 6px; background: #0b0e14; color: var(--text); padding: 7px 8px; min-height: 32px; margin-top: 6px; }
+.param-check { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--text-dim); font-size: var(--fs-sm); }
+.param-check input { width: auto; }
+.inline-note { color: var(--text-dim); font-size: var(--fs-xs); margin: -2px 0 10px; }
+@media (max-width: 1250px) {
+  .half, .third { grid-column: 1 / -1; }
+  .grid, .metric-grid { grid-template-columns: 1fr; }
+  .shared-controls-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .main-layout, .sim-columns { grid-template-columns: 1fr; }
+  .movie-config-grid, .movie-result-grid { grid-template-columns: 1fr; }
+  .page-title { flex-direction: column; }
+  .plot { height: 420px; }
+}
+@media (max-width: 760px) {
+  .shared-controls-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<nav id="topnav"></nav>
+<div id="data-tip-tooltip"></div>
+<div id="help-ovl" class="guide-overlay">
+  <div class="ovl-panel">
+    <div id="help-drag-handle"></div>
+    <div class="ovl-header">
+      <div class="ovl-header-title">Guide &amp; Help</div>
+      <div class="ovl-header-actions"><button class="ovl-close" id="help-close" type="button">&#x2715;</button></div>
+    </div>
+    <div class="guide-body">
+      <h2>Strategy Explorer Guide</h2>
+      <p>Use Strategy Explorer to inspect PB7 grid/trailing behavior, run local simulations, compare PBGui against PB7 output, and build replay movies from candle windows or backtest result folders.</p>
+      <h3>Analysis</h3>
+      <ul><li>Select the OHLCV source, market, analysis time, balance, and chart context.</li><li>Move sliders to tune LONG/SHORT parameters; valid changes recalculate the Rust-derived snapshot.</li><li>Use Raw Config for direct JSON edits when a field is not exposed as a slider.</li></ul>
+      <h3>Simulation And Compare</h3>
+      <ul><li>PBGui Simulation walks candles locally and can start flat or from a manual position.</li><li>PB7 Backtest Engine uses the Rust engine path for fill comparison.</li><li>Compare can use a PB7 result folder with <code>fills.csv</code> to align the tested time window.</li></ul>
+      <h3>Movie Builder</h3>
+      <ul><li>PB7 fills.csv mode replays an existing backtest result without recomputing fills.</li><li>Duration presets compute frame counts from the selected step size.</li><li>Export MP4 after generating frames, or export directly from the current settings.</li></ul>
+    </div>
+  </div>
+</div>
+<div id="page-body">
+  <aside id="sidebar">
+    <div id="sidebar-inner">
+      <button class="sb-section active" data-stage="analysis">Analysis</button>
+      <button class="sb-section" data-stage="exchange-state">Exchange / State</button>
+      <button class="sb-section" data-stage="raw">Raw Config</button>
+      <button class="sb-section" data-stage="simulation">Simulation</button>
+      <button class="sb-section" data-stage="compare">Compare</button>
+      <button class="sb-section" data-stage="movie">Movie Builder</button>
+    </div>
+    <div id="sidebar-resize"></div>
+  </aside>
+
+  <main id="main-content">
+    <section class="page-title">
+      <div>
+        <h1>Strategy Explorer</h1>
+        <p id="page-subtitle">Visual analysis of PB7 grid strategies using the PB7/Rust calculation path.</p>
+      </div>
+      <div class="toolbar">
+        <span id="source-chip" class="chip warn">Loading</span>
+        <span id="ohlcv-chip" class="chip">OHLCV: -</span>
+        <span id="engine-chip" class="chip">Engine: -</span>
+        <span id="market-chip" class="chip">Market: -</span>
+      </div>
+    </section>
+
+    <section id="messages" class="messages" hidden></section>
+
+    <section id="shared-analysis-controls" class="panel-card shared-controls">
+      <div class="shared-controls-grid">
+        <div class="field"><label for="ohlcv-source-select" data-tip="Select which local 1m OHLCV store should be used for the chart and candle-backed state injection.">OHLCV source</label><select id="ohlcv-source-select" data-tip="Select which local 1m OHLCV store should be used for the chart and candle-backed state injection."><option>PB7 cache/historical</option><option>Backtest ohlcv_source_dir</option><option>PBGui market_data</option></select></div>
+        <div class="field"><label for="exchange-select" data-tip="Exchange / market namespace used to load markets.json metadata and OHLCV candles.">Exchange</label><select id="exchange-select" data-tip="Exchange / market namespace used to load markets.json metadata and OHLCV candles."></select></div>
+        <div class="field"><label for="coin-select" data-tip="Coin symbol used for market metadata, candle loading, charts, and simulations.">Coin</label><select id="coin-select" data-tip="Coin symbol used for market metadata, candle loading, charts, and simulations."></select></div>
+        <div class="field"><label for="start-date-input" data-tip="Analysis start date. The chart and Rust state are initialized from the nearest candle at this date/time.">Start Date</label><div class="date-input-wrap"><input id="start-date-input" type="text" placeholder="YYYY-MM-DD" data-tip="Analysis start date. The chart and Rust state are initialized from the nearest candle at this date/time."><button type="button" class="calendar-trigger" data-dp="start-date-input" onclick="window.__dp.show('start-date-input', this)" title="Open calendar">📅</button></div></div>
+        <div class="field"><label for="start-time-input" data-tip="Analysis start time with minute precision.">Start Time</label><input id="start-time-input" type="time" value="00:00" data-tip="Analysis start time with minute precision."></div>
+        <div class="field"><label for="reference-price-input" data-tip="Fallback price used when no candles are available. Candle close price overrides this when OHLCV is loaded.">Reference Price</label><input id="reference-price-input" type="number" step="0.000001" value="100" data-tip="Fallback price used when no candles are available. Candle close price overrides this when OHLCV is loaded."></div>
+        <div class="field"><label for="balance-input" data-tip="Wallet balance used for state, order sizing, exposure budgets, and simulations.">Balance</label><input id="balance-input" type="number" step="1" value="1000" data-tip="Wallet balance used for state, order sizing, exposure budgets, and simulations."></div>
+        <div class="field"><label for="context-days-input" data-tip="Number of days shown from the selected analysis start time.">Chart Context</label><input id="context-days-input" type="range" min="0.5" max="60" step="0.5" value="5" data-tip="Number of days shown from the selected analysis start time."><span class="slider-value" id="context-days-value">5.00</span></div>
+        <div class="check-row" style="display:none"><input id="load-candles-toggle" type="checkbox" checked><label for="load-candles-toggle">Load candles</label></div>
+      </div>
+    </section>
+
+    <section id="stage-analysis" class="stage-view active">
+      <div class="main-layout">
+        <section class="main-column" id="long-workspace">
+          <div class="side-title"><h3>LONG</h3><span id="long-active-chip" class="chip">-</span></div>
+          <div id="long-tuning"></div>
+          <div id="plot-long" class="plot"></div>
+          <section class="panel-card" id="long-stats"></section>
+        </section>
+        <section class="main-column" id="short-workspace">
+          <div class="side-title"><h3>SHORT</h3><span id="short-active-chip" class="chip">-</span></div>
+          <div id="short-tuning"></div>
+          <div id="plot-short" class="plot"></div>
+          <section class="panel-card" id="short-stats"></section>
+        </section>
+      </div>
+    </section>
+
+    <section id="stage-exchange-state" class="stage-view">
+      <div class="panel-card">
+        <h3>Exchange / State</h3>
+        <div class="control-group">
+          <p class="muted" style="margin:0 0 8px">Exchange Parameters</p>
+          <div class="check-row"><input id="auto-exchange-params" type="checkbox" checked><label for="auto-exchange-params">Auto-fill exchange params (best-effort)</label></div>
+          <button class="action-btn" id="btn-reset-exchange-params" type="button">Reset ExchangeParams to market (clear overrides)</button>
+          <section class="accordion-card collapsed" style="margin-top:8px"><button class="accordion-head" type="button">Debug Data Sources (markets.json / OHLCV)</button><div class="accordion-body"><pre id="exchange-state-json" class="debug-json"></pre></div></section>
+          <div class="grid" style="margin-top:12px" id="exchange-state-controls"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="stage-raw" class="stage-view">
+      <div class="panel-card">
+        <div id="raw-config-panel"></div>
+      </div>
+    </section>
+
+    <section id="stage-simulation" class="stage-view">
+      <section class="panel-card">
+        <h3>Simulation</h3>
+        <div class="toolbar" style="margin-top:12px">
+          <button class="action-btn" id="btn-run-local-sim">Run PBGui Simulation</button>
+          <button class="action-btn" id="btn-run-pb7-engine">Run PB7 Backtest Engine</button>
+          <span class="muted">Requires local candles for the selected Exchange/Coin.</span>
+        </div>
+        <div class="grid" style="margin-top:var(--sp-md)">
+          <div class="field third"><label for="max-candles-input">Simulation Max Candles</label><input id="max-candles-input" type="number" min="50" max="20000" step="50" value="2000"></div>
+          <div class="field third"><label for="max-orders-input">Simulation Max Entry Fills</label><input id="max-orders-input" type="number" min="1" max="2000" step="1" value="200"></div>
+          <div class="field third"><label for="sim-start-state-select">Simulation Start State (PBGui)</label><select id="sim-start-state-select"><option value="flat">Flat (Compare)</option><option value="manual">Manual (custom)</option></select></div>
+        </div>
+        <div class="grid" id="sim-manual-start-grid" style="display:none;margin-top:var(--sp-md)">
+          <div class="field third"><label for="sim-start-balance-input">Start Balance</label><input id="sim-start-balance-input" type="number" min="0" step="10" value="1000"></div>
+          <div class="field third"><label for="sim-start-long-size-input">LONG Size (&gt;=0)</label><input id="sim-start-long-size-input" type="number" step="0.001" value="0"></div>
+          <div class="field third"><label for="sim-start-long-price-input">LONG Price</label><input id="sim-start-long-price-input" type="number" min="0" step="0.000001" value="0"></div>
+          <div class="field third"><label for="sim-start-short-size-input">SHORT Size (&lt;=0)</label><input id="sim-start-short-size-input" type="number" step="0.001" value="0"></div>
+          <div class="field third"><label for="sim-start-short-price-input">SHORT Price</label><input id="sim-start-short-price-input" type="number" min="0" step="0.000001" value="0"></div>
+        </div>
+        <div id="simulation-progress" class="movie-progress"><div class="movie-progress-bar"><div id="simulation-progress-fill" class="movie-progress-fill"></div></div><div id="simulation-progress-text" class="movie-progress-text">Waiting...</div></div>
+      </section>
+      <div class="sim-columns">
+        <section class="main-column" id="sim-long-workspace">
+          <div class="side-title"><h3>LONG</h3><span id="sim-long-active-chip" class="chip">-</span></div>
+          <div id="sim-long-tuning"></div>
+          <div id="sim-plot-long" class="plot"></div>
+          <section class="panel-card"><h4>LONG Fills</h4><div id="sim-long"></div></section>
+        </section>
+        <section class="main-column" id="sim-short-workspace">
+          <div class="side-title"><h3>SHORT</h3><span id="sim-short-active-chip" class="chip">-</span></div>
+          <div id="sim-short-tuning"></div>
+          <div id="sim-plot-short" class="plot"></div>
+          <section class="panel-card"><h4>SHORT Fills</h4><div id="sim-short"></div></section>
+        </section>
+      </div>
+    </section>
+
+    <section id="stage-compare" class="stage-view">
+      <section class="panel-card">
+        <h3>Compare</h3>
+        <div class="grid">
+          <div class="field full"><label>Compare mode</label><div class="toolbar"><label class="check-row"><input type="radio" name="compare-mode" value="pb7_b_c" checked>PB7 Backtest Result vs PBGui Simulation vs PB7 Backtest Engine</label><label class="check-row"><input type="radio" name="compare-mode" value="b_c">PBGui Simulation vs PB7 Backtest Engine</label></div></div>
+          <div class="field third"><label for="compare-max-candles">Compare max candles (1m)</label><input id="compare-max-candles" type="number" min="10" max="20000" step="50" value="10000"></div>
+          <div class="field full compare-pb7-only"><label for="compare-pb7-folder">PB7 backtest folder (contains fills.csv)</label><input id="compare-pb7-folder" type="text" placeholder="/path/to/backtest/result"></div>
+          <label class="check-row full compare-pb7-only"><input id="compare-use-fills-range" type="checkbox" checked>Use fills.csv time range for PBGui Simulation / PB7 Backtest Engine</label>
+          <label class="check-row full"><input id="compare-mismatches-only" type="checkbox" checked>Mismatches only</label>
+        </div>
+        <button class="action-btn primary" id="btn-run-compare" type="button" style="margin-top:14px;width:100%">Start Compare</button>
+      </section>
+      <section class="panel-card" style="margin-top:var(--sp-md)">
+        <h3>Compare Result</h3>
+        <div id="compare-summary" class="hint">Configure Compare and start a run.</div>
+        <div id="compare-progress" class="movie-progress"><div class="movie-progress-bar"><div id="compare-progress-fill" class="movie-progress-fill"></div></div><div id="compare-progress-text" class="movie-progress-text">Waiting...</div></div>
+        <div id="compare-result" style="margin-top:12px"></div>
+      </section>
+    </section>
+
+    <section id="stage-movie" class="stage-view">
+      <div class="movie-layout">
+        <section class="panel-card">
+          <h3>Movie Builder Config</h3>
+          <p class="hint" id="movie-status">Build replay frames from the selected candle window.</p>
+          <div class="movie-config-grid">
+            <div class="field"><label for="movie-engine-select" data-tip="PBGui Simulation shows local replay grids/fills. PB7 Backtest Engine uses PB7 Rust fills. PB7 fills.csv uses an existing result folder without recomputing fills.">Movie engine</label><select id="movie-engine-select"><option value="local_simulation">PBGui Simulation</option><option value="pb7_engine">PB7 Backtest Engine</option><option value="pb7_fills">PB7 fills.csv (from backtest)</option></select></div>
+            <div class="field"><label for="movie-side-select" data-tip="Side to display in the movie preview. Auto prefers Long.">Side</label><select id="movie-side-select"><option value="auto" selected>Auto</option><option value="long">Long</option><option value="short">Short</option></select></div>
+            <div class="field"><label for="movie-start-date-input" data-tip="Movie start date. Defaults to the Analysis start date but can be changed independently for Movie Builder.">Start Date</label><div style="position:relative"><input id="movie-start-date-input" type="text" placeholder="YYYY-MM-DD" style="padding-right:28px"><button type="button" data-dp="movie-start-date-input" onclick="window.__dp.show('movie-start-date-input', this)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:var(--text);padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅</button></div></div>
+            <div class="field"><label for="movie-start-time-input" data-tip="Movie start time with minute precision. Defaults to the Analysis start time.">Start Time</label><input id="movie-start-time-input" type="time" value="00:00"></div>
+            <div class="field"><label for="movie-step-select" data-tip="Distance between generated movie frames.">Step Size</label><select id="movie-step-select"><option value="1">1m</option><option value="5">5m</option><option value="15">15m</option><option value="60">1h</option><option value="240" selected>4h</option><option value="1440">1d</option></select></div>
+            <div class="field"><label for="movie-duration-select" data-tip="Duration presets depend on Step Size. Custom keeps the Frames value unchanged.">Duration</label><select id="movie-duration-select"></select></div>
+            <div class="field"><label for="movie-frames-input" data-tip="Number of frames to generate when Duration is Custom, or computed from Duration / Step Size.">Frames</label><input id="movie-frames-input" type="number" min="10" max="20000" step="1" value="200"></div>
+            <div class="field"><label for="movie-visible-input" data-tip="Number of candles shown in the moving viewport.">Visible candles</label><input id="movie-visible-input" type="number" min="10" max="500" step="5" value="60"></div>
+            <div class="field"><label for="movie-pb7-folder" data-tip="Backtest result folder containing fills.csv, used by the PB7 fills.csv engine.">PB7 backtest folder</label><input id="movie-pb7-folder" type="text" placeholder="/path/to/backtest/result"></div>
+            <div class="field"><label>&nbsp;</label><button class="action-btn primary" id="btn-build-movie">Generate Movie</button></div>
+            <div class="field"><label>&nbsp;</label><button class="action-btn danger" id="btn-stop-movie" type="button" disabled>Stop Movie Builder</button></div>
+          </div>
+        </section>
+        <section class="panel-card">
+          <h3>Movie Builder Result</h3>
+          <div id="movie-output" class="hint">Generate a movie to preview replay frames.</div>
+          <div id="movie-progress" class="movie-progress"><div class="movie-progress-bar"><div id="movie-progress-fill" class="movie-progress-fill"></div></div><div id="movie-progress-text" class="movie-progress-text">Waiting...</div></div>
+          <div class="movie-export-panel">
+            <div class="movie-config-grid">
+              <div class="field"><label for="movie-export-preset" data-tip="Video export preset. Advanced values switch the preset to Custom.">Export preset</label><select id="movie-export-preset"><option value="Fast">Fast</option><option value="Balanced" selected>Balanced</option><option value="Quality">Quality</option><option value="Custom">Custom</option></select></div>
+              <div class="field"><label>&nbsp;</label><button class="action-btn primary" id="btn-export-movie" type="button" disabled>Export MP4</button></div>
+              <div class="field"><label>&nbsp;</label><a id="movie-export-download" class="movie-export-download" href="#" download="movie.mp4">Download MP4</a></div>
+            </div>
+            <p class="hint" id="movie-export-info">Export directly, or generate a preview first.</p>
+            <details>
+              <summary>Advanced export settings</summary>
+              <div class="movie-config-grid" style="margin-top:var(--sp-sm)">
+                <div class="field"><label for="movie-export-codec" data-tip="Auto selects the best detected encoder. CPU codecs use the FFmpeg preset below.">Video Codec</label><select id="movie-export-codec"><option value="auto">Auto (detect best available)</option><option value="libx264">H.264 (libx264) - CPU software</option><option value="libx265">H.265/HEVC (libx265) - CPU software</option></select></div>
+                <div class="field"><label for="movie-export-width" data-tip="Export width in pixels. H.264 requires even dimensions.">Width</label><input id="movie-export-width" type="number" min="640" max="3840" step="20" value="1600"></div>
+                <div class="field"><label for="movie-export-height" data-tip="Export height in pixels. H.264 requires even dimensions.">Height</label><input id="movie-export-height" type="number" min="360" max="2160" step="20" value="800"></div>
+                <div class="field"><label for="movie-export-scale" data-tip="Kaleido render scale multiplier. Higher is sharper and slower.">Scale</label><input id="movie-export-scale" type="number" min="1" max="4" step="1" value="1"></div>
+                <div class="field"><label for="movie-export-crf" data-tip="Lower values improve quality and increase file size. Typical values are 16 to 23.">CRF / Quality</label><input id="movie-export-crf" type="number" min="0" max="51" step="1" value="18"></div>
+                <div class="field"><label for="movie-export-ffmpeg-preset" data-tip="Used by CPU software encoders such as libx264 and libx265.">FFmpeg preset</label><select id="movie-export-ffmpeg-preset"><option value="ultrafast">ultrafast</option><option value="superfast">superfast</option><option value="veryfast" selected>veryfast</option><option value="faster">faster</option><option value="fast">fast</option><option value="medium">medium</option><option value="slow">slow</option></select></div>
+              </div>
+            </details>
+          </div>
+          <div class="movie-result-grid" style="margin-top:var(--sp-md)">
+            <div><div id="movie-plot" class="movie-plot"></div></div>
+            <div id="movie-frame-details"></div>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="/app/js/json_panel.js?v=1"></script>
+<script>
+var TOKEN = "%%TOKEN%%";
+var API_BASE = "%%API_BASE%%";
+var WS_BASE = "%%WS_BASE%%";
+var DRAFT_ID = "%%DRAFT_ID%%";
+var RESULT_PATH = "%%RESULT_PATH%%";
+var PBGUI_VERSION = "%%VERSION%%";
+var PBGUI_SERIAL = "%%SERIAL%%";
+var state = { config: null, snapshot: null, markets: null, simulations: {}, activeSimulationMode: 'local_simulation', longSegment: 'entry_grid', shortSegment: 'entry_grid', source: 'default', exchangeParamOverrides: {}, stateParamOverrides: {}, autoExchangeParams: true, hslSignalModes: ['pside', 'unified'] };
+var movieAbortController = null;
+var movieExportAbortController = null;
+var movieProgressTimer = null;
+var movieProgressId = '';
+var compareProgressTimer = null;
+var compareProgressId = '';
+var simulationProgressTimer = null;
+var simulationProgressId = '';
+var lastMovieData = null;
+var lastMovieFigureSpec = null;
+var lastMovieExportUrl = '';
+var lastMovieOptionsKey = '';
+var movieCurrentFrame = 0;
+var MAX_PLOT_CANDLES = 900;
+var rawConfigDirty = false;
+var rawConfigTimer = null;
+var FIELD_TOOLTIPS = {
+  ohlcv_source: 'Select which local 1m OHLCV store should be used for the chart and candle-backed state injection.',
+  exchange: 'Exchange / market namespace used to load markets.json metadata and OHLCV candles.',
+  coin: 'Coin symbol used for market metadata, candle loading, charts, and simulations.',
+  start_date: 'Analysis start date. The chart and Rust state are initialized from the nearest candle at this date/time.',
+  start_time: 'Analysis start time with minute precision.',
+  reference_price: 'Fallback price used when no candles are available. Candle close price overrides this when OHLCV is loaded.',
+  balance: 'Wallet balance used for state, order sizing, exposure budgets, and simulations.',
+  context_days: 'Number of days shown from the selected analysis start time.',
+  min_cost: 'Minimum order cost accepted by the exchange. Used by Rust order quantity adjustment and min-effective-cost checks.',
+  price_step: 'Exchange price tick size. Orders are rounded to this price increment.',
+  min_qty: 'Minimum order quantity accepted by the exchange.',
+  qty_step: 'Exchange quantity step size. Orders are rounded to this quantity increment.',
+  c_mult: 'Contract multiplier. For USDT linear perps this is usually 1.',
+  state_balance: 'Current wallet balance in StateParams sent to Rust.',
+  state_volatility: 'entry_volatility_logrange_ema_1h injected from candles. Used only when volatility-weighted entry parameters are non-zero.'
+};
+var SEGMENTS = [
+  { key: 'entry_grid', label: 'Entry grid', fields: ['entry_initial_qty_pct','entry_initial_ema_dist','entry_grid_spacing_pct','entry_grid_spacing_we_weight','entry_grid_spacing_volatility_weight','entry_grid_double_down_factor','entry_volatility_ema_span_hours','ema_span_0','ema_span_1'] },
+  { key: 'entry_trailing', label: 'Entry trailing', fields: ['entry_trailing_threshold_pct','entry_trailing_retracement_pct','entry_trailing_grid_ratio','entry_trailing_double_down_factor','entry_trailing_threshold_we_weight','entry_trailing_threshold_volatility_weight','entry_trailing_retracement_we_weight','entry_trailing_retracement_volatility_weight'] },
+  { key: 'close_grid', label: 'Close grid', fields: ['close_grid_markup_end','close_grid_markup_start','close_grid_qty_pct','close_trailing_grid_ratio'] },
+  { key: 'close_trailing', label: 'Close trailing', fields: ['close_trailing_threshold_pct','close_trailing_retracement_pct','close_trailing_qty_pct','close_trailing_grid_ratio'] },
+  { key: 'risk_state', label: 'Risk/State', fields: ['total_wallet_exposure_limit','n_positions','risk_we_excess_allowance_pct','risk_wel_enforcer_threshold','risk_twel_enforcer_threshold'] },
+  { key: 'forager_unstuck', label: 'Forager/Unstuck', fields: ['forager_volatility_ema_span','forager_volume_ema_span','forager_volume_drop_pct','forager_score_weights.volume','forager_score_weights.volatility','forager_score_weights.ema_readiness','unstuck_close_pct','unstuck_ema_dist','unstuck_loss_allowance_pct','unstuck_threshold'] },
+  { key: 'hsl', label: 'HSL', fields: ['hsl_enabled','hsl_red_threshold','hsl_ema_span_minutes','hsl_cooldown_minutes_after_red','hsl_no_restart_drawdown_threshold','hsl_tier_ratios.yellow','hsl_tier_ratios.orange','hsl_orange_tier_mode','hsl_panic_close_order_type','live.hsl_signal_mode'] }
+];
+
+var PARAM_FIELD_META = {
+  hsl_enabled: { type: 'bool' },
+  hsl_orange_tier_mode: { type: 'select', options: ['tp_only_with_active_entry_cancellation', 'graceful_stop'] },
+  hsl_panic_close_order_type: { type: 'select', options: ['limit', 'market'] },
+  'live.hsl_signal_mode': { type: 'select', global: true, options: function() { return state.hslSignalModes && state.hslSignalModes.length ? state.hslSignalModes : ['pside', 'unified']; }, label: 'live.hsl_signal_mode (global)' }
+};
+
+function paramBounds(name, value) {
+  var v = Number(value || 0);
+  if (name === 'n_positions') return { min: 1, max: 50, step: 1 };
+  if (name === 'total_wallet_exposure_limit') return { min: 0, max: Math.max(10, v * 2 || 10), step: 0.05 };
+  if (name.indexOf('forager_score_weights.') === 0 || name.indexOf('hsl_tier_ratios.') === 0 || name === 'hsl_red_threshold' || name === 'hsl_no_restart_drawdown_threshold') return { min: 0, max: 1, step: 0.01 };
+  if (name === 'forager_volume_ema_span' || name === 'forager_volatility_ema_span' || name === 'entry_volatility_ema_span_hours') return { min: 0, max: Math.max(10000, v * 2 || 10000), step: 1 };
+  if (name === 'hsl_cooldown_minutes_after_red') return { min: 0, max: Math.max(10000, v * 2 || 10000), step: 1 };
+  if (name.indexOf('grid_ratio') >= 0 || name.indexOf('ema_dist') >= 0) return { min: -1, max: 1, step: 0.001 };
+  if (name.indexOf('threshold') >= 0 || name.indexOf('retracement') >= 0 || name.indexOf('markup') >= 0 || name.indexOf('qty_pct') >= 0 || name.indexOf('drop_pct') >= 0 || name.indexOf('loss_allowance') >= 0 || name.indexOf('close_pct') >= 0) return { min: name.indexOf('unstuck_close_pct') >= 0 || name.indexOf('unstuck_ema_dist') >= 0 ? -0.5 : 0, max: 1, step: 0.001 };
+  if (name.indexOf('span') >= 0) return { min: 1, max: Math.max(10000, v * 2 || 10000), step: 1 };
+  if (name.indexOf('volatility_weight') >= 0) return { min: 0, max: Math.max(400, v * 2 || 400), step: 1 };
+  if (name.indexOf('we_weight') >= 0 || name.indexOf('enforcer') >= 0 || name.indexOf('double_down') >= 0) return { min: 0, max: Math.max(20, v * 2 || 20), step: 0.01 };
+  return { min: 0, max: Math.max(10, v * 2 || 10), step: 0.001 };
+}
+function updateSliderFill(input) {
+  if (!input) return;
+  var min = Number(input.min || 0);
+  var max = Number(input.max || 0);
+  var value = Number(input.value || 0);
+  var pct = max > min ? Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100)) : 0;
+  input.style.setProperty('--range-fill', pct.toFixed(2) + '%');
+}
+
+function esc(value) {
+  return String(value === null || value === undefined ? '' : value).replace(/[&<>'"]/g, function(ch) {
+    return ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'})[ch];
+  });
+}
+function fmt(value, digits) {
+  var n = Number(value);
+  if (!isFinite(n)) return '-';
+  return n.toLocaleString(undefined, { maximumFractionDigits: digits === undefined ? 8 : digits });
+}
+function fmtFixed(value, digits) {
+  var n = Number(value);
+  if (!isFinite(n)) return '-';
+  return n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+function humanSize(bytes) {
+  var n = Number(bytes || 0);
+  if (!isFinite(n) || n <= 0) return '0 B';
+  var units = ['B', 'KB', 'MB', 'GB'];
+  var idx = 0;
+  while (n >= 1024 && idx < units.length - 1) { n /= 1024; idx += 1; }
+  return n.toFixed(idx === 0 ? 0 : 1) + ' ' + units[idx];
+}
+function parsePlotTime(value) {
+  if (value === null || value === undefined || value === '') return NaN;
+  if (typeof value === 'number') return value;
+  var n = Number(value);
+  if (isFinite(n) && String(value).trim() !== '') return n;
+  return Date.parse(value);
+}
+function plotCandleInfo(candles, rangeStart, rangeEnd) {
+  var source = Array.isArray(candles) ? candles : [];
+  if (isFinite(rangeStart) && isFinite(rangeEnd) && rangeEnd > rangeStart) {
+    source = source.filter(function(c) {
+      var ms = parsePlotTime(c && c.timestamp);
+      return isFinite(ms) && ms >= rangeStart && ms <= rangeEnd;
+    });
+  }
+  var rows = source.length;
+  if (rows <= MAX_PLOT_CANDLES) return { candles: source, bucketSize: 1, rows: rows };
+  var bucketSize = Math.max(1, Math.ceil(rows / MAX_PLOT_CANDLES));
+  var out = [];
+  for (var i = 0; i < rows; i += bucketSize) {
+    var first = source[i];
+    var last = first;
+    var high = Number(first && first.high);
+    var low = Number(first && first.low);
+    var volume = 0;
+    for (var j = i; j < Math.min(rows, i + bucketSize); j++) {
+      var c = source[j];
+      if (!c) continue;
+      var cHigh = Number(c.high);
+      var cLow = Number(c.low);
+      if (isFinite(cHigh)) high = isFinite(high) ? Math.max(high, cHigh) : cHigh;
+      if (isFinite(cLow)) low = isFinite(low) ? Math.min(low, cLow) : cLow;
+      volume += Number(c.volume || 0) || 0;
+      last = c;
+    }
+    if (!first || !last) continue;
+    out.push({ timestamp: first.timestamp, open: first.open, high: high, low: low, close: last.close, volume: volume });
+  }
+  return { candles: out, bucketSize: bucketSize, rows: out.length };
+}
+function plotCandlePayload(info) {
+  var candles = (info && info.candles) || [];
+  var bucketSize = (info && info.bucketSize) || 1;
+  return {
+    name: bucketSize > 1 ? 'Price (' + bucketSize + 'm display)' : 'Price (1m)',
+    x: candles.map(function(c) { return c.timestamp; }),
+    open: candles.map(function(c) { return c.open; }),
+    high: candles.map(function(c) { return c.high; }),
+    low: candles.map(function(c) { return c.low; }),
+    close: candles.map(function(c) { return c.close; })
+  };
+}
+function installCandleZoomHandler(target, candles) {
+  if (!target || !window.Plotly || !Array.isArray(candles) || !candles.length) return;
+  if (target._pbguiCandleRelayout && target.removeListener) target.removeListener('plotly_relayout', target._pbguiCandleRelayout);
+  var rafId = 0;
+  var pending = null;
+  function payloadKey(info, payload) {
+    var x = (payload && payload.x) || [];
+    return String((info && info.bucketSize) || 1) + ':' + x.length + ':' + (x[0] || '') + ':' + (x[x.length - 1] || '');
+  }
+  var initialInfo = plotCandleInfo(candles);
+  var currentKey = payloadKey(initialInfo, plotCandlePayload(initialInfo));
+  function applyRange(ev) {
+    rafId = 0;
+    var start = NaN;
+    var end = NaN;
+    if (ev && ev['xaxis.range[0]'] !== undefined && ev['xaxis.range[1]'] !== undefined) {
+      start = parsePlotTime(ev['xaxis.range[0]']);
+      end = parsePlotTime(ev['xaxis.range[1]']);
+    } else if (ev && Array.isArray(ev['xaxis.range']) && ev['xaxis.range'].length >= 2) {
+      start = parsePlotTime(ev['xaxis.range'][0]);
+      end = parsePlotTime(ev['xaxis.range'][1]);
+    }
+    var info = isFinite(start) && isFinite(end) && end > start ? plotCandleInfo(candles, start, end) : plotCandleInfo(candles);
+    if (!info.candles.length) return;
+    var payload = plotCandlePayload(info);
+    var key = payloadKey(info, payload);
+    if (key === currentKey) return;
+    currentKey = key;
+    Plotly.restyle(target, { x: [payload.x], open: [payload.open], high: [payload.high], low: [payload.low], close: [payload.close], name: [payload.name] }, [0]);
+  }
+  target._pbguiCandleRelayout = function(ev) {
+    pending = ev || {};
+    if (!rafId) rafId = requestAnimationFrame(function() { applyRange(pending); });
+  };
+  if (target.on) target.on('plotly_relayout', target._pbguiCandleRelayout);
+}
+function tooltip(key) { return FIELD_TOOLTIPS[key] || ''; }
+function paramTooltip(name) {
+  var specific = FIELD_TOOLTIPS[name];
+  if (specific) return specific;
+  if (name.indexOf('forager_score_weights.') === 0) return 'Forager coin-scoring weight. PB7 normalizes these weights and uses them when ranking eligible coins.';
+  if (name.indexOf('forager_') === 0) return 'Forager filter/scoring parameter used by PB7 coin selection and candidate ranking.';
+  if (name.indexOf('hsl_tier_ratios.') === 0) return 'Hard Stop Loss tier ratio. PB7 requires yellow < orange between 0 and 1.';
+  if (name.indexOf('hsl_') === 0) return 'Hard Stop Loss parameter used by PB7 backtests and live risk handling.';
+  if (name === 'live.hsl_signal_mode') return 'Global HSL signal mode. pside tracks each side independently; unified uses one account-level combined signal.';
+  if (name.indexOf('ema_span') >= 0) return 'EMA span used by PB7/Rust to build the entry EMA band.';
+  if (name.indexOf('volatility_weight') >= 0) return 'Multiplier applied to the injected LogRange EMA volatility when calculating this parameter.';
+  if (name.indexOf('we_weight') >= 0) return 'Wallet-exposure weight used to adjust this parameter as exposure changes.';
+  if (name.indexOf('grid_spacing') >= 0) return 'Spacing between grid entry orders.';
+  if (name.indexOf('trailing_threshold') >= 0) return 'Distance needed before trailing logic arms.';
+  if (name.indexOf('trailing_retracement') >= 0) return 'Retracement required after trailing has armed before an order can trigger.';
+  if (name.indexOf('double_down') >= 0) return 'Size multiplier for additional entry levels.';
+  if (name.indexOf('markup') >= 0) return 'Close grid markup distance from the position/reference price.';
+  if (name.indexOf('qty_pct') >= 0) return 'Order quantity as a fraction of the relevant exposure/position budget.';
+  if (name.indexOf('unstuck') >= 0) return 'Auto-unstuck parameter used when positions exceed configured risk thresholds.';
+  if (name.indexOf('risk_') === 0) return 'Risk control parameter used by PB7 exposure enforcement.';
+  if (name === 'total_wallet_exposure_limit') return 'Maximum total wallet exposure for this side.';
+  if (name === 'n_positions') return 'Maximum number of concurrently active positions for this side.';
+  return 'PB7 bot parameter: ' + name;
+}
+function apiFetch(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({'Authorization': 'Bearer ' + TOKEN}, opts.headers || {});
+  if (opts.body && !opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
+  return fetch(API_BASE + path, opts).then(function(res) {
+    if (!res.ok) return res.text().then(function(text) { throw new Error(text || ('HTTP ' + res.status)); });
+    return res.json();
+  });
+}
+function cfgDateValueToMs(value) {
+  var v = String(value || '').trim().toLowerCase();
+  if (!v) return null;
+  if (v === 'now') {
+    var now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  var d = new Date(v + 'T00:00:00');
+  if (isNaN(d)) return null;
+  return d.getTime();
+}
+!function() {
+  var _id = null, _y = 0, _m = 0, _anchor = null, _menu = '';
+  var MN = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var cssId = '__dp_css';
+  if (!document.getElementById(cssId)) {
+    var s = document.createElement('style'); s.id = cssId;
+    s.textContent = '#__dp .dp-day:hover{background:rgba(255,255,255,.15)!important}' +
+      '#__dp .dp-day{transition:background .1s}' +
+      '#__dp .dp-nav:hover{background:rgba(255,255,255,.15)!important}' +
+      '#__dp .dp-nav{transition:background .1s;border-radius:4px}' +
+      '#__dp .dp-ctl{transition:background .1s,border-color .1s;border-radius:4px}' +
+      '#__dp .dp-ctl:hover{background:rgba(255,255,255,.08)!important;border-color:var(--accent,#4a90d9)!important}' +
+      '#__dp .dp-dd{position:absolute;top:calc(100% + 4px);z-index:2;display:none;background:var(--bg3,#2a2d40);border:1px solid var(--border,#444);border-radius:6px;box-shadow:0 8px 18px rgba(0,0,0,.55);max-height:220px;overflow:auto;padding:4px}' +
+      '#__dp .dp-dd.open{display:block}' +
+      '#__dp .dp-dd-item{display:block;width:100%;text-align:left;background:transparent;border:none;color:var(--text,#ccc);font-size:var(--fs-xs);padding:6px 8px;border-radius:4px;cursor:pointer}' +
+      '#__dp .dp-dd-item:hover{background:rgba(255,255,255,.10)!important}' +
+      '#__dp .dp-dd-item.selected{background:var(--accent,#4a90d9);color:#fff}' +
+      '#__dp .dp-foot:hover{background:rgba(255,255,255,.15)!important}' +
+      '#__dp .dp-foot{transition:background .1s;border-radius:4px}';
+    document.head.appendChild(s);
+  }
+  function _el() {
+    var e = document.getElementById('__dp');
+    if (!e) {
+      e = document.createElement('div'); e.id = '__dp';
+      e.style.cssText = 'display:none;position:fixed;z-index:99999;background:var(--bg2,#1e2030);border:1px solid var(--border,#444);border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.7);user-select:none;min-width:220px;color-scheme:dark';
+      document.body.appendChild(e);
+      document.addEventListener('pointerdown', function(ev) {
+        if (!_id) return;
+        var b = ev.target.closest ? ev.target.closest('[data-dp]') : null;
+        if (b && b.getAttribute('data-dp') === _id) return;
+        if (!e.contains(ev.target)) _hide();
+      }, true);
+      window.addEventListener('resize', _reposition, { passive: true });
+    }
+    return e;
+  }
+  function _shiftMonth(y, m, delta) {
+    var nextY = y, nextM = m + delta;
+    while (nextM < 0) { nextM += 12; nextY--; }
+    while (nextM > 11) { nextM -= 12; nextY++; }
+    return { y: nextY, m: nextM };
+  }
+  function _yearMenu() {
+    var cur = new Date().getFullYear(), html = '';
+    for (var y = 2010; y <= cur + 2; y++) html += '<button type="button" class="dp-dd-item' + (y === _y ? ' selected' : '') + '" onclick="window.__dp.sy(' + y + ')">' + y + '</button>';
+    return html;
+  }
+  function _monthMenu() {
+    var html = '';
+    for (var i = 0; i < 12; i++) html += '<button type="button" class="dp-dd-item' + (i === _m ? ' selected' : '') + '" onclick="window.__dp.sm(' + i + ')">' + MN[i] + '</button>';
+    return html;
+  }
+  function _render() {
+    var e = _el(), d1 = new Date(_y, _m, 1), dim = new Date(_y, _m + 1, 0).getDate();
+    var sdow = (d1.getDay() + 6) % 7, td = new Date();
+    var inp = _id ? document.getElementById(_id) : null, sv = inp ? inp.value : '';
+    var sel = sv ? new Date(sv + 'T00:00:00') : null;
+    var selOk = sel && !isNaN(sel);
+    var prevMonth = _shiftMonth(_y, _m, -1), nextMonth = _shiftMonth(_y, _m, 1);
+    var btnS = 'background:none;border:none;color:var(--text,#ccc);cursor:pointer;font-size:1.3em;padding:0 6px;line-height:1';
+    var ctlS = 'background:var(--bg3,#2a2d40);border:1px solid var(--border,#444);color:var(--text,#ccc);border-radius:4px;padding:2px 6px;font-size:var(--fs-xs);cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px';
+    var h = '<div style="display:flex;align-items:center;gap:4px;margin-bottom:8px">' +
+      '<button type="button" class="dp-nav" onclick="window.__dp.pm()" style="' + btnS + '">&#8249;</button>' +
+      '<div style="position:relative;flex:1"><button type="button" class="dp-ctl" onclick="window.__dp.tm()" style="' + ctlS + ';width:100%">' + MN[_m] + '<span style="font-size:10px;opacity:.8">▾</span></button><div class="dp-dd' + (_menu === 'month' ? ' open' : '') + '" style="left:0;right:auto;min-width:140px">' + _monthMenu() + '</div></div>' +
+      '<div style="position:relative;width:72px"><button type="button" class="dp-ctl" onclick="window.__dp.ty()" style="' + ctlS + ';width:100%">' + _y + '<span style="font-size:10px;opacity:.8">▾</span></button><div class="dp-dd' + (_menu === 'year' ? ' open' : '') + '" style="right:0;left:auto;min-width:72px">' + _yearMenu() + '</div></div>' +
+      '<button type="button" class="dp-nav" onclick="window.__dp.nm()" style="' + btnS + '">&#8250;</button></div>';
+    h += '<div style="display:grid;grid-template-columns:repeat(7,30px);gap:2px;text-align:center">';
+    ['M','T','W','T','F','S','S'].forEach(function(d) { h += '<div style="color:var(--text-dim,#888);font-size:var(--fs-xs);padding-bottom:4px">' + d + '</div>'; });
+    for (var i = 0; i < sdow; i++) h += '<div></div>';
+    for (var day = 1; day <= dim; day++) {
+      var isT = td.getFullYear() === _y && td.getMonth() === _m && td.getDate() === day;
+      var isS = selOk && sel.getFullYear() === _y && sel.getMonth() === _m && sel.getDate() === day;
+      var bg = isS ? 'var(--accent,#4a90d9)' : isT ? 'rgba(255,255,255,.12)' : 'transparent';
+      h += '<div class="dp-day" onclick="window.__dp.pick(' + day + ')" style="cursor:pointer;border-radius:4px;padding:4px 0;background:' + bg + ';color:var(--text,#ccc);font-weight:' + ((isS || isT) ? '600' : '400') + ';font-size:var(--fs-sm)">' + day + '</div>';
+    }
+    h += '</div><div style="margin-top:8px;display:flex;justify-content:space-between"><button type="button" class="dp-foot" onclick="window.__dp.hide()" style="background:none;border:none;color:var(--text-dim,#888);cursor:pointer;font-size:var(--fs-xs);padding:2px 6px;border-radius:4px">Close</button><button type="button" class="dp-foot" onclick="window.__dp.today()" style="background:none;border:none;color:var(--accent,#4a90d9);cursor:pointer;font-size:var(--fs-xs);padding:2px 6px;border-radius:4px">Today</button></div>';
+    e.innerHTML = h;
+    _reposition();
+  }
+  function _reposition() { if (_id && _anchor) _pos(_anchor); }
+  function _pos(anchor) {
+    var e = _el(); e.style.display = 'block';
+    var r = anchor.getBoundingClientRect(), sw = window.innerWidth, sh = window.innerHeight;
+    var ew = e.offsetWidth || 240, eh = e.offsetHeight || 290;
+    var left = r.left, top = r.bottom + 4;
+    if (left + ew > sw - 8) left = sw - ew - 8;
+    if (top + eh > sh - 8) top = r.top - eh - 4;
+    e.style.left = left + 'px'; e.style.top = top + 'px';
+  }
+  function _hide() { _el().style.display = 'none'; _id = null; _anchor = null; _menu = ''; }
+  function _pick(day) {
+    var val = _y + '-' + String(_m + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+    var inp = _id ? document.getElementById(_id) : null;
+    if (inp) { inp.value = val; inp.dataset.prev = val; inp.dispatchEvent(new Event('change', { bubbles: true })); }
+    _hide();
+  }
+  window.__dp = {
+    show: function(id, anchor) {
+      var e = _el();
+      if (_id === id && e.style.display !== 'none') { _hide(); return; }
+      _id = id; _anchor = anchor || null; _menu = '';
+      var inp = document.getElementById(id), v = inp ? inp.value : '';
+      var d = v ? new Date(v + 'T00:00:00') : new Date();
+      if (isNaN(d)) d = new Date();
+      _y = d.getFullYear(); _m = d.getMonth();
+      _render(); _pos(anchor);
+    },
+    hide: _hide,
+    pm: function() { var prev = _shiftMonth(_y, _m, -1); _y = prev.y; _m = prev.m; _render(); },
+    nm: function() { var next = _shiftMonth(_y, _m, 1); _y = next.y; _m = next.m; _menu = ''; _render(); },
+    sm: function(m) { _m = m; _menu = ''; _render(); },
+    sy: function(y) { _y = y; _menu = ''; _render(); },
+    tm: function() { _menu = _menu === 'month' ? '' : 'month'; _render(); },
+    ty: function() { _menu = _menu === 'year' ? '' : 'year'; _render(); },
+    today: function() { var d = new Date(); _y = d.getFullYear(); _m = d.getMonth(); _menu = ''; _pick(d.getDate()); },
+    pick: _pick
+  };
+}();
+function setMessages(messages) {
+  var el = document.getElementById('messages');
+  var list = Array.isArray(messages) ? messages.filter(function(msg) {
+    var text = String((msg && (msg.text || msg.message)) || '');
+    return !(/^Loaded [\d,]+ OHLCV candles for chart context\.$/.test(text) && (!msg.level || msg.level === 'info'));
+  }) : [];
+  el.hidden = !list.length;
+  el.innerHTML = list.map(function(msg) {
+    return '<div class="message ' + esc(msg.level || 'info') + '">' + esc(msg.text || msg.message || '') + '</div>';
+  }).join('');
+}
+function deepGet(obj, path, fallback) {
+  var cur = obj;
+  for (var i = 0; i < path.length; i++) {
+    if (!cur || typeof cur !== 'object') return fallback;
+    cur = cur[path[i]];
+  }
+  return cur === undefined ? fallback : cur;
+}
+function deepEnsure(obj, path) {
+  var cur = obj;
+  for (var i = 0; i < path.length; i++) {
+    var key = path[i];
+    if (!cur[key] || typeof cur[key] !== 'object') cur[key] = {};
+    cur = cur[key];
+  }
+  return cur;
+}
+function firstConfigExchange(cfg) {
+  var exchanges = deepGet(cfg || {}, ['backtest', 'exchanges'], []);
+  return Array.isArray(exchanges) && exchanges.length ? String(exchanges[0] || '').trim() : '';
+}
+function firstConfigCoin(cfg) {
+  var approved = deepGet(cfg || {}, ['live', 'approved_coins'], {});
+  var sides = ['long', 'short'];
+  for (var i = 0; i < sides.length; i++) {
+    var coins = Array.isArray(approved) ? approved : deepGet(approved || {}, [sides[i]], []);
+    if (Array.isArray(coins) && coins.length) return String(coins[0] || '').trim();
+  }
+  return '';
+}
+function syncControlsFromConfig(cfg) {
+  cfg = cfg || {};
+  var balance = deepGet(cfg, ['backtest', 'starting_balance'], null);
+  if (balance !== null && balance !== undefined) {
+    document.getElementById('balance-input').value = balance;
+    var simBalance = document.getElementById('sim-start-balance-input');
+    if (simBalance && (!simBalance.value || Number(simBalance.value) <= 0)) simBalance.value = balance;
+  }
+  var sourceSelect = document.getElementById('ohlcv-source-select');
+  var configuredSourceDir = String(deepGet(cfg, ['backtest', 'ohlcv_source_dir'], '') || '').trim();
+  if (sourceSelect && configuredSourceDir && optionExists(sourceSelect, 'Backtest ohlcv_source_dir')) sourceSelect.value = 'Backtest ohlcv_source_dir';
+  var exchange = firstConfigExchange(cfg);
+  var coin = firstConfigCoin(cfg);
+  var exchangeEl = document.getElementById('exchange-select');
+  if (exchange && optionExists(exchangeEl, exchange)) {
+    exchangeEl.value = exchange;
+    updateCoinSelect(coin);
+  } else if (coin) {
+    updateCoinSelect(coin);
+  }
+}
+function selectedOptions() {
+  return {
+    ohlcv_source: document.getElementById('ohlcv-source-select').value || 'PB7 cache/historical',
+    exchange: document.getElementById('exchange-select').value || '',
+    coin: document.getElementById('coin-select').value || '',
+    start_date: document.getElementById('start-date-input').value || '',
+    start_time: document.getElementById('start-time-input').value || '00:00',
+    reference_price: Number(document.getElementById('reference-price-input').value || 100),
+    balance: Number(document.getElementById('balance-input').value || 1000),
+    auto_fill_exchange_params: state.autoExchangeParams !== false,
+    exchange_params: state.exchangeParamOverrides || {},
+    state_params: Object.assign({}, state.stateParamOverrides || {}, { balance: Number(document.getElementById('balance-input').value || 1000) }),
+    load_candles: true,
+    context_days: Number(document.getElementById('context-days-input').value || 5)
+  };
+}
+function syncOptionsFromConfig(snapshot) {
+  var cfg = snapshot.config || {};
+  var market = snapshot.market || {};
+  var sourceSelect = document.getElementById('ohlcv-source-select');
+  var configuredSourceDir = String(deepGet(cfg, ['backtest', 'ohlcv_source_dir'], '') || '').trim();
+  var metaSourceMode = String(deepGet(market, ['metadata', 'ohlcv_source'], '') || '').trim();
+  if (sourceSelect && metaSourceMode && optionExists(sourceSelect, metaSourceMode)) sourceSelect.value = metaSourceMode;
+  else if (sourceSelect && configuredSourceDir && optionExists(sourceSelect, 'Backtest ohlcv_source_dir')) sourceSelect.value = 'Backtest ohlcv_source_dir';
+  var selectedStart = deepGet(market, ['metadata', 'ohlcv', 'selected_start'], '');
+  if (selectedStart && !document.getElementById('start-date-input').value) {
+    document.getElementById('start-date-input').value = String(selectedStart).slice(0, 10);
+    document.getElementById('start-time-input').value = String(selectedStart).slice(11, 16) || '00:00';
+  }
+  if (selectedStart && !document.getElementById('movie-start-date-input').value) {
+    document.getElementById('movie-start-date-input').value = String(selectedStart).slice(0, 10);
+    document.getElementById('movie-start-time-input').value = String(selectedStart).slice(11, 16) || '00:00';
+  }
+  document.getElementById('reference-price-input').value = market.reference_price || 100;
+  document.getElementById('balance-input').value = deepGet(cfg, ['backtest', 'starting_balance'], 1000) || 1000;
+}
+function populateMarkets() {
+  return apiFetch('/markets', { method: 'POST', body: JSON.stringify({ config: state.config || {}, options: selectedOptions() }) }).then(function(data) {
+    state.markets = data;
+    var exchangeEl = document.getElementById('exchange-select');
+    var exchanges = data.exchanges || [];
+    exchangeEl.innerHTML = exchanges.map(function(ex) { return '<option value="' + esc(ex) + '">' + esc(ex) + '</option>'; }).join('');
+    updateCoinSelect();
+  }).catch(function(err) {
+    setMessages([{ level: 'warning', text: 'Failed to load market selectors: ' + err.message }]);
+  });
+}
+function updateCoinSelect(preferredCoin) {
+  var exchange = document.getElementById('exchange-select').value || '';
+  var coins = deepGet(state.markets || {}, ['coins_by_exchange', exchange], []);
+  var coinEl = document.getElementById('coin-select');
+  var current = coinEl.value;
+  coinEl.innerHTML = (coins || []).map(function(coin) { return '<option value="' + esc(coin) + '">' + esc(coin) + '</option>'; }).join('');
+  coinEl.disabled = !(coins || []).length;
+  if (preferredCoin && (coins || []).indexOf(preferredCoin) >= 0) coinEl.value = preferredCoin;
+  else if (current && (coins || []).indexOf(current) >= 0) coinEl.value = current;
+  else if ((coins || []).length) coinEl.value = coins[0];
+}
+function optionExists(selectEl, value) {
+  if (!selectEl || !value) return false;
+  for (var i = 0; i < selectEl.options.length; i++) {
+    if (selectEl.options[i].value === value) return true;
+  }
+  return false;
+}
+function inferInitialSelectors(snapshot) {
+  var market = snapshot.market || {};
+  var exchangeEl = document.getElementById('exchange-select');
+  if (optionExists(exchangeEl, market.exchange)) exchangeEl.value = market.exchange;
+  updateCoinSelect(market.coin);
+  applySelectedMarketToConfig();
+  syncRawFromState();
+}
+function applySelectedMarketToConfig() {
+  var exchange = document.getElementById('exchange-select').value || '';
+  var coin = document.getElementById('coin-select').value || '';
+  if (!state.config) state.config = {};
+  if (exchange) {
+    var bt = deepEnsure(state.config, ['backtest']);
+    bt.exchanges = [exchange];
+  }
+  if (coin) {
+    var live = deepEnsure(state.config, ['live']);
+    if (!live.approved_coins || typeof live.approved_coins !== 'object' || Array.isArray(live.approved_coins)) live.approved_coins = {};
+    live.approved_coins.long = [coin];
+    live.approved_coins.short = [coin];
+  }
+}
+function changeMarket() {
+  applySelectedMarketToConfig();
+  syncRawFromState();
+  recalculate();
+}
+function changeOhlcvSource() {
+  var coinEl = document.getElementById('coin-select');
+  document.getElementById('exchange-select').value = '';
+  coinEl.innerHTML = '';
+  coinEl.disabled = true;
+  populateMarkets().then(function() {
+    inferInitialSelectors(state.snapshot || { config: state.config || {}, market: {} });
+    changeMarket();
+  });
+}
+function orderRows(orders) {
+  if (!orders || !orders.length) return '<tr><td colspan="5" class="muted" style="text-align:left">None</td></tr>';
+  return orders.map(function(order) {
+    var idx = Number(order.index);
+    if (!isFinite(idx)) idx = 1;
+    return '<tr><td>' + esc(Math.max(0, idx - 1)) + '</td><td>' + fmtFixed(order.qty, 4) + '</td><td>' + fmtFixed(order.price, 4) + '</td><td>' + esc(order.max_twe_pct_after || 0) + '</td><td>' + esc(order.order_type || order.type) + '</td></tr>';
+  }).join('');
+}
+function eventRows(events) {
+  if (!events || !events.length) return '<table class="orders"><tbody><tr><td class="muted" style="text-align:left">No fills</td></tr></tbody></table>';
+  var rows = events.slice(0, 500).map(function(ev, idx) {
+    return '<tr><td>' + esc(idx + 1) + '</td><td>' + esc(ev.timestamp || ev.time || ev.date || '-') + '</td><td>' + esc(ev.event || ev.type || ev.order_type || '-') + '</td><td>' + fmt(ev.qty, 8) + '</td><td>' + fmt(ev.price, 8) + '</td><td>' + fmt(ev.pos_size, 8) + '</td></tr>';
+  }).join('');
+  return '<table class="orders"><thead><tr><th>#</th><th>Time</th><th>Event</th><th>Qty</th><th>Price</th><th>Pos Size</th></tr></thead><tbody>' + rows + '</tbody></table>';
+}
+function compareOptions() {
+  var selected = document.querySelector('input[name="compare-mode"]:checked');
+  return Object.assign(selectedOptions(), {
+    compare_mode: selected ? selected.value : 'pb7_b_c',
+    compare_max_candles: Number(document.getElementById('compare-max-candles').value || 2000),
+    compare_max_orders: 20000,
+    pb7_backtest_dir: document.getElementById('compare-pb7-folder').value || '',
+    use_fills_range: document.getElementById('compare-use-fills-range').checked,
+    mismatches_only: document.getElementById('compare-mismatches-only').checked
+  });
+}
+function updateCompareModeUi() {
+  var selected = document.querySelector('input[name="compare-mode"]:checked');
+  var isPb7Result = !selected || selected.value === 'pb7_b_c';
+  document.querySelectorAll('.compare-pb7-only').forEach(function(el) { el.style.display = isPb7Result ? '' : 'none'; });
+}
+function applyInitialResultPath(resultPath) {
+  var input = document.getElementById('compare-pb7-folder');
+  var movieInput = document.getElementById('movie-pb7-folder');
+  if ((!input && !movieInput) || !resultPath) return;
+  if (!/^(\/|~\/|[A-Za-z]:[\\/])/.test(String(resultPath)) && String(resultPath).indexOf('/') < 0 && String(resultPath).indexOf('\\') < 0) return;
+  if (input && !input.value) input.value = resultPath;
+  if (movieInput && !movieInput.value) movieInput.value = resultPath;
+}
+function compareStatusTable(summary) {
+  var sides = ['long', 'short'];
+  var statuses = ['match', 'pb7_only', 'b_only', 'c_only', 'pb7_and_b', 'pb7_and_c', 'b_and_c', 'mismatch'];
+  var labels = {
+    match: 'Match',
+    pb7_only: 'PB7 Result only',
+    b_only: 'PBGui Simulation only',
+    c_only: 'PB7 Backtest Engine only',
+    pb7_and_b: 'PB7 Result + PBGui',
+    pb7_and_c: 'PB7 Result + PB7 Backtest Engine',
+    b_and_c: 'PBGui Simulation + PB7 Backtest Engine',
+    mismatch: 'Mismatch'
+  };
+  var rows = sides.map(function(side) {
+    var counts = (summary || {})[side] || {};
+    return '<tr><td>' + side.toUpperCase() + '</td>' + statuses.map(function(status) { return '<td>' + esc(counts[status] || 0) + '</td>'; }).join('') + '</tr>';
+  }).join('');
+  return '<table class="orders"><thead><tr><th>Side</th>' + statuses.map(function(status) { return '<th>' + esc(labels[status] || status) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+function compareEventsTable(events) {
+  var labels = { pb7: 'PB7 Backtest Result', b: 'PBGui Simulation', c: 'PB7 Backtest Engine' };
+  var rows = Object.keys(events || {}).map(function(key) {
+    var item = events[key] || {};
+    return '<tr><td>' + esc(labels[key] || key) + '</td><td>' + esc(item.long || 0) + '</td><td>' + esc(item.short || 0) + '</td><td>' + esc(item.total || 0) + '</td></tr>';
+  }).join('');
+  return '<table class="orders"><thead><tr><th>Source</th><th>Long</th><th>Short</th><th>Total</th></tr></thead><tbody>' + rows + '</tbody></table>';
+}
+function compareRowsTable(rows) {
+  if (!rows || !rows.length) return '<table class="orders"><tbody><tr><td class="muted" style="text-align:left">No rows</td></tr></tbody></table>';
+  var statusLabels = { pb7_only: 'PB7 Result only', b_only: 'PBGui Simulation only', c_only: 'PB7 Backtest Engine only', pb7_and_b: 'PB7 Result + PBGui', pb7_and_c: 'PB7 Result + PB7 Backtest Engine', b_and_c: 'PBGui Simulation + PB7 Backtest Engine', match: 'Match', mismatch: 'Mismatch' };
+  var cols = [
+    ['idx', '#'], ['timestamp', 'timestamp'], ['order_type', 'order_type'], ['qty', 'qty'], ['price', 'price'], ['status', 'status'],
+    ['pb7_timestamp', 'pb7_timestamp'], ['pb7_order_type', 'pb7_order_type'], ['pb7_qty', 'pb7_qty'], ['pb7_price', 'pb7_price'], ['pb7_pos_size', 'pb7_pos_size'], ['pb7_pos_price', 'pb7_pos_price'], ['pb7_wallet_balance', 'pb7_wallet_balance'], ['pb7_pnl', 'pb7_pnl'], ['pb7_fee_paid', 'pb7_fee_paid'], ['pb7_wallet_exposure', 'pb7_wallet_exposure'],
+    ['b_timestamp', 'pbgui_timestamp'], ['b_order_type', 'pbgui_order_type'], ['b_qty', 'pbgui_qty'], ['b_price', 'pbgui_price'], ['b_pos_size', 'pbgui_pos_size'], ['b_pos_price', 'pbgui_pos_price'], ['b_wallet_balance', 'pbgui_wallet_balance'], ['b_pnl', 'pbgui_pnl'], ['b_fee_paid', 'pbgui_fee_paid'], ['b_wallet_exposure', 'pbgui_wallet_exposure'],
+    ['c_timestamp', 'engine_timestamp'], ['c_order_type', 'engine_order_type'], ['c_qty', 'engine_qty'], ['c_price', 'engine_price'], ['c_pos_size', 'engine_pos_size'], ['c_pos_price', 'engine_pos_price'], ['c_wallet_balance', 'engine_wallet_balance'], ['c_pnl', 'engine_pnl'], ['c_fee_paid', 'engine_fee_paid'], ['c_wallet_exposure', 'engine_wallet_exposure'],
+    ['in_pb7', 'in_pb7'], ['in_b', 'in_pbgui'], ['in_c', 'in_engine']
+  ];
+  function cell(row, key, idx) {
+    if (key === 'idx') return esc(row.compare_index || idx + 1);
+    var val = row[key];
+    if (key === 'status') val = statusLabels[val] || val;
+    if (val === null || val === undefined || val === '') return '';
+    if (typeof val === 'number') return fmt(val, Math.abs(val) < 1 ? 8 : 6);
+    if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
+    return esc(val);
+  }
+  return '<div style="overflow:auto"><table class="orders compare-grid"><thead><tr>' + cols.map(function(col) { return '<th>' + esc(col[1]) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows.map(function(row, idx) {
+    return '<tr>' + cols.map(function(col) { return '<td>' + cell(row, col[0], idx) + '</td>'; }).join('') + '</tr>';
+  }).join('') + '</tbody></table></div>';
+}
+function renderCompareResult(data) {
+  var summaryRoot = document.getElementById('compare-summary');
+  var resultRoot = document.getElementById('compare-result');
+  if (!summaryRoot || !resultRoot) return;
+  if (!data || !data.ok) {
+    summaryRoot.innerHTML = '<span class="muted">' + esc((data && data.message) || 'Compare failed.') + '</span>';
+    resultRoot.innerHTML = '';
+    return;
+  }
+  summaryRoot.innerHTML = compareEventsTable(deepGet(data, ['summary', 'events'], {})) + '<div style="margin-top:12px">' + compareStatusTable(data.summary || {}) + '</div>';
+  resultRoot.innerHTML = '<h4>LONG Compare Rows</h4>' + compareRowsTable(deepGet(data, ['rows', 'long'], [])) + '<h4>SHORT Compare Rows</h4>' + compareRowsTable(deepGet(data, ['rows', 'short'], []));
+}
+function debugBlock(title, value) {
+  return '<h4>' + esc(title) + '</h4><pre class="debug-json">' + esc(JSON.stringify(value || {}, null, 2)) + '</pre>';
+}
+function updateActiveChip(id, active) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'chip ' + (active ? 'ok' : 'warn');
+  el.textContent = active ? 'Active' : 'Inactive';
+}
+function renderStats(sideKey, snapshot) {
+  var side = (snapshot.sides || {})[sideKey] || {};
+  var summary = side.summary || {};
+  var card = document.getElementById(sideKey + '-stats');
+  updateActiveChip(sideKey + '-active-chip', side.active);
+  updateActiveChip('sim-' + sideKey + '-active-chip', side.active);
+  card.innerHTML = '<div class="side-title"><h3>' + sideKey.toUpperCase() + ' Statistics</h3><span class="chip">' + esc(deepGet(side, ['modes', 'entry'], '-')) + ' / ' + esc(deepGet(side, ['modes', 'close'], '-')) + '</span></div>'
+    + '<div class="metric-grid" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:12px">'
+    + '<div class="metric-card"><div class="label">Entry Orders</div><div class="value">' + esc(summary.entry_orders || 0) + '</div></div>'
+    + '<div class="metric-card"><div class="label">Entry Avg</div><div class="value">' + fmt(summary.entry_avg_price, 8) + '</div></div>'
+    + '<div class="metric-card"><div class="label">Entry Grid</div><div class="value">' + fmt(summary.entry_grid_pct, 2) + '%</div></div>'
+    + '<div class="metric-card"><div class="label">WEL / Pos</div><div class="value">' + fmt(summary.wallet_exposure_limit_per_position, 4) + '</div></div>'
+    + '</div>'
+    + '<h4>Entry Orders</h4><table class="orders"><thead><tr><th></th><th>Qty</th><th>Price</th><th>Max-TWE% After</th><th>Order Type</th></tr></thead><tbody>' + orderRows(deepGet(side, ['orders', 'entries'], [])) + '</tbody></table>'
+    + '<h4>Close Orders</h4><table class="orders"><thead><tr><th></th><th>Qty</th><th>Price</th><th>Max-TWE% After</th><th>Order Type</th></tr></thead><tbody>' + orderRows(deepGet(side, ['orders', 'closes'], [])) + '</tbody></table>'
+    + '<section class="accordion-card collapsed" style="margin-top:14px"><button class="accordion-head" type="button">Debug Rust Interface (' + esc(sideKey.toUpperCase()) + ')</button><div class="accordion-body">'
+    + debugBlock('Sent to Rust', deepGet(side, ['debug', 'entry_input'], {}))
+    + debugBlock('Received from Rust (Decoded)', deepGet(side, ['debug', 'entry_output_decoded'], []))
+    + debugBlock('GridOnly Entries (Decoded)', deepGet(side, ['debug', 'entry_gridonly_output_decoded'], []))
+    + debugBlock('GridFirst cutoff (from grid-only orders; approx trailing start)', deepGet(side, ['debug', 'potential_trailing'], {}))
+    + debugBlock('Next Entry (Current State)', deepGet(side, ['debug', 'next_entry_current'], {}))
+    + debugBlock('Trailing Chain (Forced Trigger, Debug)', deepGet(side, ['debug', 'forced_trailing_chain'], {}))
+    + (deepGet(side, ['debug', 'next_entry_error'], '') ? '<div class="message error">' + esc(deepGet(side, ['debug', 'next_entry_error'], '')) + '</div>' : '')
+    + '</div></section>';
+  card.querySelectorAll('.accordion-head').forEach(function(btn) { btn.addEventListener('click', function() { var cardEl = btn.closest('.accordion-card'); if (cardEl) cardEl.classList.toggle('collapsed'); }); });
+}
+function renderPlot(sideKey, snapshot, prefix) {
+  prefix = prefix || '';
+  var side = (snapshot.sides || {})[sideKey] || {};
+  var market = snapshot.market || {};
+  var traces = [];
+  var candles = snapshot.candles || [];
+  var plotInfo = plotCandleInfo(candles);
+  var plotCandles = plotInfo.candles;
+  if (plotCandles.length) {
+    var candlePayload = plotCandlePayload(plotInfo);
+    traces.push({
+      type: 'candlestick', name: candlePayload.name, x: candlePayload.x,
+      open: candlePayload.open, high: candlePayload.high,
+      low: candlePayload.low, close: candlePayload.close
+    });
+  }
+  var entries = deepGet(side, ['orders', 'entries'], []);
+  var closes = deepGet(side, ['orders', 'closes'], []);
+  var normalEntries = deepGet(side, ['orders', 'normal_entries'], entries);
+  var gridEntries = deepGet(side, ['orders', 'gridonly_entries'], normalEntries);
+  var gridCloses = deepGet(side, ['orders', 'gridonly_closes'], closes);
+  var trailingEntries = deepGet(side, ['orders', 'simulated_entry_trailing'], []);
+  var potentialTrailingPrices = deepGet(side, ['orders', 'potential_entry_trailing_prices'], []);
+  var params = side.params || {};
+  var stateParams = deepGet(side, ['debug', 'state_params'], {}) || {};
+  var trailingBundle = deepGet(side, ['debug', 'entry_input', 'tb'], {}) || {};
+  var entryMode = deepGet(side, ['modes', 'entry'], 'GridOnly');
+  var closeMode = deepGet(side, ['modes', 'close'], 'GridOnly');
+  var x0 = candles.length ? candles[0].timestamp : 0;
+  var x1 = candles.length ? candles[candles.length - 1].timestamp : 1;
+  var shapes = [];
+  var annotations = [];
+  var yValues = [];
+  var xHoverSamples = buildHoverSamples();
+
+  function num(value, fallback) {
+    var n = Number(value);
+    return isFinite(n) ? n : (fallback === undefined ? 0 : fallback);
+  }
+  var marketRef = num(market.reference_price, 100);
+  var ref = sideKey === 'long'
+    ? num(deepGet(stateParams, ['ema_bands', 'lower'], marketRef), marketRef)
+    : num(deepGet(stateParams, ['ema_bands', 'upper'], marketRef), marketRef);
+  if (!isFinite(ref) || ref <= 0) ref = marketRef;
+  function buildHoverSamples() {
+    if (!candles.length) return [x0, x1];
+    var count = Math.min(120, candles.length);
+    if (count <= 1) return [candles[0].timestamp];
+    var out = [];
+    for (var i = 0; i < count; i++) {
+      var idx = Math.round(i * (candles.length - 1) / (count - 1));
+      out.push(candles[idx].timestamp);
+    }
+    return out;
+  }
+  function orderPrices(orders) {
+    return (orders || []).map(function(o) { return num(o.price, NaN); }).filter(function(v) { return isFinite(v) && v > 0; });
+  }
+  function priceOrders(prices) {
+    return (prices || []).map(function(price, idx) { return { index: idx + 1, price: num(price, NaN) }; }).filter(function(o) { return isFinite(o.price) && o.price > 0; });
+  }
+  function addY(values) {
+    (values || []).forEach(function(v) {
+      var n = num(v, NaN);
+      if (isFinite(n) && n > 0) yValues.push(n);
+    });
+  }
+  function bounds(values) {
+    var nums = (values || []).filter(function(v) { return isFinite(num(v, NaN)) && num(v, NaN) > 0; }).map(Number);
+    if (!nums.length) return null;
+    return [Math.min.apply(null, nums), Math.max.apply(null, nums)];
+  }
+  function minValue(values, fallback) {
+    var b = bounds(values);
+    return b ? b[0] : fallback;
+  }
+  function maxValue(values, fallback) {
+    var b = bounds(values);
+    return b ? b[1] : fallback;
+  }
+  function rangeHasWidth(b) {
+    return b && Math.abs(num(b[1], NaN) - num(b[0], NaN)) > 1e-12;
+  }
+  function addBand(y0, y1, fill, opacity) {
+    y0 = num(y0, NaN); y1 = num(y1, NaN);
+    if (!isFinite(y0) || !isFinite(y1) || y0 <= 0 || y1 <= 0 || Math.abs(y1 - y0) <= 1e-12) return false;
+    shapes.push({ type: 'rect', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: Math.min(y0, y1), y1: Math.max(y0, y1), fillcolor: fill, opacity: opacity, layer: 'below', line: { width: 0 } });
+    addY([y0, y1]);
+    return true;
+  }
+  function addShapeLine(y, color, dash, width) {
+    y = num(y, NaN);
+    if (!isFinite(y) || y <= 0) return;
+    shapes.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: y, y1: y, line: { color: color, dash: dash || 'dash', width: width || 1 }, layer: 'above' });
+    addY([y]);
+  }
+  function legendLine(name, color, dash, width, group) {
+    traces.push({ x: [null], y: [null], mode: 'lines', name: name, line: { color: color, dash: dash || 'solid', width: width || 1 }, legendgroup: group, showlegend: true });
+  }
+  function legendBand(name, color, group) {
+    traces.push({ x: [null], y: [null], mode: 'lines', name: name, line: { color: color, width: 10 }, legendgroup: group, showlegend: true });
+  }
+  function lineTrace(orders, name, color, dash) {
+    var xs = [], ys = [], text = [];
+    orders.forEach(function(o) {
+      xs.push(x0, x1, null); ys.push(o.price, o.price, null); text.push(name + ' ' + o.index + ': ' + fmt(o.price, 8), name + ' ' + o.index + ': ' + fmt(o.price, 8), '');
+    });
+    return { x: xs, y: ys, text: text, mode: 'lines', name: name, line: { color: color, dash: dash || 'dash', width: 1 }, hovertemplate: '%{text}<extra></extra>' };
+  }
+  function hoverLineTrace(prices, name, group) {
+    var xs = [], ys = [], text = [];
+    (prices || []).forEach(function(price) {
+      var y = num(price, NaN);
+      if (!isFinite(y) || y <= 0) return;
+      xHoverSamples.forEach(function(x) {
+        xs.push(x); ys.push(y); text.push(name + ': ' + fmt(y, 8));
+      });
+      xs.push(null); ys.push(null); text.push('');
+    });
+    if (!ys.length) return null;
+    return { x: xs, y: ys, text: text, mode: 'markers', name: name + ' (hover)', showlegend: false, legendgroup: group, marker: { size: 8, color: 'rgba(0,0,0,0)' }, hovertemplate: '%{text}<extra></extra>' };
+  }
+  function addHoverLine(prices, name, group) {
+    var trace = hoverLineTrace(prices, name, group);
+    if (trace) traces.push(trace);
+  }
+  function fillTrace(events, tradeSide, name, color) {
+    var xs = [], ys = [], text = [], hover = [];
+    var firstMs = candles.length ? Date.parse(candles[0].timestamp) : NaN;
+    var lastMs = candles.length ? Date.parse(candles[candles.length - 1].timestamp) : NaN;
+    (events || []).forEach(function(ev, idx) {
+      var price = Number(ev.price || ev.fill_price);
+      var qty = Number(ev.qty || ev.fill_qty || 0);
+      var ts = ev.timestamp || ev.time || ev.date || ev.timestamp_ms;
+      if (!ts || !isFinite(price)) return;
+      if (typeof ts === 'number' || /^\d+$/.test(String(ts))) ts = new Date(Number(ts)).toISOString();
+      var ms = Date.parse(ts);
+      if (isFinite(firstMs) && isFinite(lastMs) && isFinite(ms) && (ms < firstMs || ms > lastMs)) return;
+      var isBuy = qty > 0;
+      if ((tradeSide === 'buy' && !isBuy) || (tradeSide === 'sell' && isBuy)) return;
+      xs.push(ts);
+      ys.push(price);
+      addY([price]);
+      text.push(isBuy ? 'B' : 'S');
+      hover.push('#' + (idx + 1) + ' ' + name + '<br>' + esc(ev.order_type || ev.event || ev.type || '-') + '<br>qty: ' + fmt(qty, 8) + '<br>price: ' + fmt(price, 8));
+    });
+    return {
+      x: xs,
+      y: ys,
+      text: text,
+      hovertext: hover,
+      mode: 'markers+text',
+      name: name,
+      marker: { color: color, size: 20, symbol: 'circle', opacity: 0.95, line: { color: '#020617', width: 2 } },
+      textfont: { color: '#ffffff', size: 11, family: 'Arial Black, Arial, sans-serif' },
+      textposition: 'middle center',
+      hovertemplate: '%{hovertext}<extra></extra>'
+    };
+  }
+  var entryPrices = orderPrices(normalEntries);
+  var closePrices = orderPrices(closes);
+  var gridEntryPrices = orderPrices(gridEntries);
+  var gridClosePrices = orderPrices(gridCloses);
+  var trailingEntryPrices = orderPrices(trailingEntries);
+  var shownTrailingOrders = (entryMode !== 'GridOnly' && trailingEntryPrices.length) ? trailingEntries : priceOrders(potentialTrailingPrices);
+  var shownTrailingPrices = orderPrices(shownTrailingOrders);
+  var shownTrailingName = (entryMode !== 'GridOnly' && trailingEntryPrices.length) ? 'Entry Trailing (Simulated Steps)' : 'Entry Trailing (Potential Zone)';
+  addY(candles.map(function(c) { return c.high; }));
+  addY(candles.map(function(c) { return c.low; }));
+  addY(entryPrices); addY(closePrices); addY(gridEntryPrices); addY(gridClosePrices); addY(shownTrailingPrices); addY([ref]);
+
+  var entryBounds = bounds(entryPrices);
+  var closeBounds = bounds(closePrices);
+  if (entryBounds) {
+    if (addBand(entryBounds[0], entryBounds[1], 'rgba(255, 0, 0, 0.16)', 1)) legendBand('Entry Grid (Range)', 'rgba(255,0,0,0.18)', 'entry_range');
+  }
+  if (closeBounds) {
+    if (addBand(closeBounds[0], closeBounds[1], 'rgba(0, 255, 0, 0.14)', 1)) legendBand('Close Grid (Area)', 'rgba(0,255,0,0.18)', 'close_range');
+  }
+
+  if (entryMode !== 'GridOnly') {
+    var fgEntryMin = minValue(gridEntryPrices, minValue(entryPrices, 0));
+    var fgEntryMax = maxValue(gridEntryPrices, maxValue(entryPrices, 0));
+    var nEntryMin = minValue(entryPrices, fgEntryMin);
+    var nEntryMax = maxValue(entryPrices, fgEntryMax);
+    var thresholdPct = num(params.entry_trailing_threshold_pct, 0);
+    var boundaryPrice = num(deepGet(side, ['debug', 'potential_trailing', 'gridfirst_cutoff_price'], 0), 0);
+    var entryTrailingBounds = null;
+    if (fgEntryMin > 0 && fgEntryMax > 0) {
+      if (entryMode === 'GridFirst' && sideKey === 'long') {
+        var startLong = boundaryPrice > 0 ? boundaryPrice : nEntryMin;
+        entryTrailingBounds = bounds([Math.min(fgEntryMin, startLong * (1 - thresholdPct)), startLong]);
+      } else if (entryMode === 'GridFirst') {
+        var startShort = boundaryPrice > 0 ? boundaryPrice : nEntryMax;
+        entryTrailingBounds = bounds([startShort, Math.max(fgEntryMax, startShort * (1 + thresholdPct))]);
+      } else if (entryMode === 'TrailingFirst' && sideKey === 'long') {
+        entryTrailingBounds = bounds([Math.min(fgEntryMin, ref * (1 - thresholdPct)), Math.max(fgEntryMax, ref)]);
+      } else if (entryMode === 'TrailingFirst') {
+        entryTrailingBounds = bounds([Math.min(fgEntryMin, ref), Math.max(fgEntryMax, ref * (1 + thresholdPct))]);
+      } else if (entryMode === 'TrailingOnly' && sideKey === 'long') {
+        entryTrailingBounds = bounds([Math.min(fgEntryMin, ref * (1 - thresholdPct)), Math.max(fgEntryMax, ref)]);
+      } else if (entryMode === 'TrailingOnly') {
+        entryTrailingBounds = bounds([Math.min(fgEntryMin, ref), Math.max(fgEntryMax, ref * (1 + thresholdPct))]);
+      }
+    }
+    if (rangeHasWidth(entryTrailingBounds)) {
+      if (addBand(entryTrailingBounds[0], entryTrailingBounds[1], 'rgba(200, 100, 0, 0.22)', 1)) legendBand('Entry Trailing (Conditional Zone)', 'rgba(200, 100, 0, 0.28)', 'entry_trailing');
+    }
+  }
+
+  if (closeMode !== 'GridOnly' && gridClosePrices.length && closePrices.length) {
+    var closeTrailingBounds = null;
+    if (sideKey === 'long') {
+      closeTrailingBounds = closeMode === 'GridFirst'
+        ? bounds([Math.max.apply(null, closePrices), Math.max.apply(null, gridClosePrices)])
+        : bounds([Math.min.apply(null, gridClosePrices), Math.min.apply(null, closePrices)]);
+    } else {
+      closeTrailingBounds = closeMode === 'GridFirst'
+        ? bounds([Math.min.apply(null, gridClosePrices), Math.min.apply(null, closePrices)])
+        : bounds([Math.max.apply(null, closePrices), Math.max.apply(null, gridClosePrices)]);
+    }
+    if (closeTrailingBounds) {
+      addBand(closeTrailingBounds[0], closeTrailingBounds[1], 'rgba(0, 0, 255, 0.18)', 1);
+      legendBand('Close Trailing (Conditional Zone)', 'rgba(0,0,255,0.22)', 'close_trailing');
+    }
+  }
+
+  traces.push(lineTrace(normalEntries, 'Entry Grid (Lines)', '#ff4b4b', 'dash'));
+  addHoverLine(entryPrices, 'Entry Grid', 'entry');
+  traces.push(lineTrace(closes, 'Close Grid (Lines)', '#21c354', 'dot'));
+  addHoverLine(closePrices, 'Close Grid', 'close');
+  if (entryMode !== 'GridOnly' && shownTrailingPrices.length) {
+    traces.push(lineTrace(shownTrailingOrders, shownTrailingName, '#ff8c00', 'dash'));
+    addHoverLine(shownTrailingPrices, shownTrailingName, 'entry_trailing');
+  }
+  addShapeLine(ref, '#b77dff', 'solid', 3);
+  legendLine('EMA Band', '#b77dff', 'solid', 3, 'ema');
+  addHoverLine([ref], 'EMA Band', 'ema');
+
+  var analysisTs = deepGet(market, ['metadata', 'ohlcv', 'selected_start'], '') || x1;
+  if (candles.length && analysisTs) {
+    shapes.push({ type: 'line', xref: 'x', x0: analysisTs, x1: analysisTs, yref: 'paper', y0: 0, y1: 1, line: { color: 'cyan', dash: 'dot', width: 2 }, layer: 'above' });
+    annotations.push({ x: analysisTs, y: 1, xref: 'x', yref: 'paper', text: 'Analysis Time', showarrow: false, xanchor: 'left', yanchor: 'bottom', font: { color: 'cyan', size: 11 } });
+  }
+
+  if (entryMode !== 'GridOnly') {
+    var entryRef = entryPrices.length ? entryPrices[0] : ref;
+    var eth = sideKey === 'long' ? entryRef * (1 - num(params.entry_trailing_threshold_pct, 0)) : entryRef * (1 + num(params.entry_trailing_threshold_pct, 0));
+    if (num(params.entry_trailing_threshold_pct, 0) > 0) {
+      addShapeLine(eth, 'rgba(255, 255, 0, 0.6)', 'dash', 1);
+      legendLine('Trailing Start (Threshold)', 'rgba(255, 255, 0, 0.6)', 'dash', 1, 'entry_trailing');
+      addHoverLine([eth], 'Trailing Start (Threshold)', 'entry_trailing');
+    }
+    if (num(params.entry_trailing_retracement_pct, 0) > 0) {
+      var retr = num(params.entry_trailing_threshold_pct, 0) > 0
+        ? (sideKey === 'long' ? entryRef * (1 - num(params.entry_trailing_threshold_pct, 0) + num(params.entry_trailing_retracement_pct, 0)) : entryRef * (1 + num(params.entry_trailing_threshold_pct, 0) - num(params.entry_trailing_retracement_pct, 0)))
+        : (sideKey === 'long' ? num(trailingBundle.min_since_open, entryRef) * (1 + num(params.entry_trailing_retracement_pct, 0)) : num(trailingBundle.max_since_open, entryRef) * (1 - num(params.entry_trailing_retracement_pct, 0)));
+      addShapeLine(retr, 'rgba(255, 255, 0, 0.35)', 'dot', 1);
+      legendLine('Trailing Trigger (Retracement, conditional)', 'rgba(255, 255, 0, 0.35)', 'dot', 1, 'entry_trailing');
+      addHoverLine([retr], 'Trailing Trigger (Retracement, conditional)', 'entry_trailing');
+      if (num(params.entry_trailing_threshold_pct, 0) > 0) {
+        addBand(eth, retr, 'rgba(255, 255, 0, 0.08)', 1);
+        legendBand('Entry Trailing (Conditional Trigger Zone)', 'rgba(255, 255, 0, 0.12)', 'entry_trailing');
+      }
+    }
+  }
+
+  if (closeMode !== 'GridOnly') {
+    var closeRef = num(deepGet(side, ['debug', 'position_close', 'price'], 0), 0) || ref;
+    if (num(params.close_trailing_threshold_pct, 0) > 0) {
+      var closeThr = sideKey === 'long' ? closeRef * (1 + num(params.close_trailing_threshold_pct, 0)) : closeRef * (1 - num(params.close_trailing_threshold_pct, 0));
+      addShapeLine(closeThr, 'rgba(0, 0, 255, 0.6)', 'dash', 1);
+      legendLine('Close Trailing Start (Threshold, conditional)', 'rgba(0, 0, 255, 0.6)', 'dash', 1, 'close_trailing');
+      addHoverLine([closeThr], 'Close Trailing Start (Threshold, conditional)', 'close_trailing');
+    }
+    if (num(params.close_trailing_retracement_pct, 0) > 0) {
+      var closeRetr = sideKey === 'long' ? num(trailingBundle.max_since_open, closeRef) * (1 - num(params.close_trailing_retracement_pct, 0)) : num(trailingBundle.min_since_open, closeRef) * (1 + num(params.close_trailing_retracement_pct, 0));
+      addShapeLine(closeRetr, 'rgba(0, 0, 255, 0.35)', 'dot', 1);
+      legendLine('Close Trailing Trigger (Retracement, conditional)', 'rgba(0, 0, 255, 0.35)', 'dot', 1, 'close_trailing');
+      addHoverLine([closeRetr], 'Close Trailing Trigger (Retracement, conditional)', 'close_trailing');
+    }
+  }
+
+  if (prefix === 'sim-') {
+    var simEvents = deepGet(state.simulations, [state.activeSimulationMode || 'local_simulation', 'events', sideKey], []);
+    traces.push(fillTrace(simEvents, 'buy', 'Buy Fills', '#16a34a'));
+    traces.push(fillTrace(simEvents, 'sell', 'Sell Fills', '#dc2626'));
+  }
+  var yRange = null;
+  if (yValues.length) {
+    var yMin = Math.min.apply(null, yValues);
+    var yMax = Math.max.apply(null, yValues);
+    var yPad = Math.max(Math.abs(yMax - yMin) * 0.05, Math.abs(yMax || 1) * 0.001);
+    yRange = [yMin - yPad, yMax + yPad];
+  }
+  var targetId = prefix + 'plot-' + sideKey;
+  var target = document.getElementById(targetId);
+  if (!target) return;
+  Plotly.react(targetId, traces, {
+    paper_bgcolor: '#1a1d24', plot_bgcolor: '#1a1d24', font: { color: '#fafafa' },
+    title: sideKey.toUpperCase() + ' Entry and Close Grids Visualization',
+    margin: { l: 55, r: 25, t: 45, b: 35 },
+    shapes: shapes,
+    annotations: annotations,
+    xaxis: { type: 'date', title: 'Date', gridcolor: '#333640', rangeslider: { visible: plotInfo.bucketSize <= 1, bgcolor: '#151922', bordercolor: '#333640', thickness: 0.16 } },
+    yaxis: { title: 'Price', gridcolor: '#333640', range: yRange || undefined },
+    hovermode: 'closest', hoverdistance: 30,
+    legend: { orientation: 'h', bgcolor: 'rgba(0,0,0,0)', bordercolor: 'rgba(0,0,0,0)' }
+  }, plotlyFullscreenConfig(targetId, 520)).then(function() { installCandleZoomHandler(target, candles); });
+}
+function syncRawFromState() {
+  var panel = document.getElementById('raw-config-panel');
+  if (!panel || !window.PBGuiJsonPanel) return;
+  if (!document.getElementById('raw-config-json')) {
+    panel.innerHTML = window.PBGuiJsonPanel.createPanelHtml({
+      wrapId: 'raw-config-wrap',
+      preId: 'raw-config-json',
+      title: 'Config',
+      collapsedHeight: 'calc(50vh - 30px)'
+    });
+    panel.insertAdjacentHTML('beforeend', '<div id="raw-config-status" class="raw-config-status">Edit JSON directly; valid changes recalculate automatically.</div>');
+    bindRawConfigEditor();
+  }
+  var pre = document.getElementById('raw-config-json');
+  if (!rawConfigDirty && document.activeElement !== pre) window.PBGuiJsonPanel.setContent('raw-config-json', state.config || {});
+}
+function setRawConfigStatus(message, error) {
+  var status = document.getElementById('raw-config-status');
+  var pre = document.getElementById('raw-config-json');
+  if (status) {
+    status.textContent = message || '';
+    status.classList.toggle('error', !!error);
+  }
+  if (pre) pre.classList.toggle('raw-invalid', !!error);
+}
+function bindRawConfigEditor() {
+  var pre = document.getElementById('raw-config-json');
+  if (!pre || pre.dataset.editableBound) return;
+  pre.contentEditable = 'true';
+  pre.spellcheck = false;
+  pre.dataset.editableBound = '1';
+  pre.addEventListener('input', function() {
+    rawConfigDirty = true;
+    setRawConfigStatus('Validating JSON...', false);
+    if (rawConfigTimer) clearTimeout(rawConfigTimer);
+    rawConfigTimer = setTimeout(function() {
+      try {
+        var parsed = JSON.parse(pre.textContent || '{}');
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Config JSON must be an object.');
+        state.config = parsed;
+        rawConfigDirty = false;
+        setRawConfigStatus('JSON valid. Updating market selectors...', false);
+        syncControlsFromConfig(state.config);
+        populateMarkets().then(function() {
+          syncControlsFromConfig(state.config);
+          setRawConfigStatus('JSON valid. Recalculating...', false);
+          return recalculate({ preserveConfig: true, reportError: true });
+        }).then(function() {
+          setRawConfigStatus('JSON valid. Snapshot updated.', false);
+        }).catch(function(err) {
+          setRawConfigStatus('JSON valid, but recalculation failed: ' + err.message, true);
+        });
+      } catch (err) {
+        setRawConfigStatus('Invalid JSON/config: ' + err.message, true);
+      }
+    }, 450);
+  });
+}
+function paramMeta(name) {
+  return PARAM_FIELD_META[name] || {};
+}
+function paramLabel(name) {
+  return paramMeta(name).label || name;
+}
+function paramValue(params, name) {
+  if (name.indexOf('live.') === 0) return deepGet(state.config || {}, name.split('.'), '');
+  return deepGet(params || {}, name.split('.'), undefined);
+}
+function setParamValue(sideKey, name, value) {
+  var path = name.split('.');
+  var rootPath = name.indexOf('live.') === 0 ? path.slice(0, -1) : ['bot', sideKey].concat(path.slice(0, -1));
+  var target = deepEnsure(state.config, rootPath);
+  target[path[path.length - 1]] = value;
+}
+function renderParamField(sideKey, valuePrefix, name, params) {
+  var meta = paramMeta(name);
+  var val = paramValue(params, name);
+  var tip = paramTooltip(name);
+  var label = paramLabel(name);
+  if (meta.type === 'bool') {
+    return '<div class="slider-field">'
+      + '<div class="slider-label"><span class="slider-name" data-tip="' + esc(tip) + '">' + esc(label) + '</span><span class="slider-meta"><span class="help" data-tip="' + esc(tip) + '">?</span></span></div>'
+      + '<label class="param-check"><input class="param-bool" data-param-side="' + esc(sideKey) + '" data-param-name="' + esc(name) + '" type="checkbox"' + (val ? ' checked' : '') + '>Enabled</label>'
+      + '</div>';
+  }
+  if (meta.type === 'select') {
+    var options = typeof meta.options === 'function' ? meta.options() : (meta.options || []);
+    options = Array.isArray(options) ? options.slice() : [];
+    if (val !== undefined && val !== null && String(val) !== '' && options.indexOf(String(val)) < 0) options.unshift(String(val));
+    return '<div class="slider-field">'
+      + '<div class="slider-label"><span class="slider-name" data-tip="' + esc(tip) + '">' + esc(label) + '</span><span class="slider-meta"><span class="slider-value">' + esc(val || '-') + '</span><span class="help" data-tip="' + esc(tip) + '">?</span></span></div>'
+      + '<select class="param-select" data-param-side="' + esc(sideKey) + '" data-param-name="' + esc(name) + '" data-tip="' + esc(tip) + '">'
+      + options.map(function(opt) { return '<option value="' + esc(opt) + '"' + (String(opt) === String(val) ? ' selected' : '') + '>' + esc(opt) + '</option>'; }).join('')
+      + '</select></div>';
+  }
+  var numVal = Number(val || 0);
+  var b = paramBounds(name, numVal);
+  var display = numVal.toFixed(b.step >= 1 ? 2 : 4);
+  return '<div class="slider-field">'
+    + '<div class="slider-label"><span class="slider-name" data-tip="' + esc(tip) + '">' + esc(label) + '</span><span class="slider-meta"><span class="slider-value" id="sv-' + esc(valuePrefix) + '-' + esc(name) + '">' + esc(display) + '</span><span class="help" data-tip="' + esc(tip) + '">?</span></span></div>'
+    + '<input class="param-slider" data-param-side="' + esc(sideKey) + '" data-param-name="' + esc(name) + '" type="range" min="' + esc(b.min) + '" max="' + esc(b.max) + '" step="' + esc(b.step) + '" value="' + esc(val === undefined ? 0 : val) + '" data-tip="' + esc(tip) + '">'
+    + '</div>';
+}
+function renderSideTuning(sideKey, snapshot, prefix) {
+  prefix = prefix || '';
+  var segmentKey = sideKey === 'long' ? state.longSegment : state.shortSegment;
+  var segment = SEGMENTS.filter(function(s) { return s.key === segmentKey; })[0] || SEGMENTS[0];
+  var params = deepGet(snapshot, ['sides', sideKey, 'params'], {});
+  var valuePrefix = prefix + sideKey;
+  var html = '<div class="field"><label>Segment</label></div><div class="segment-tabs">' + SEGMENTS.map(function(seg) {
+    return '<button type="button" class="' + (seg.key === segmentKey ? 'active' : '') + '" data-side-segment="' + esc(sideKey) + '" data-segment="' + esc(seg.key) + '">' + esc(seg.label) + '</button>';
+  }).join('') + '</div>';
+  html += (segment.fields || []).map(function(name) { return renderParamField(sideKey, valuePrefix, name, params); }).join('');
+  if (segmentKey === 'entry_grid') {
+    html += '<div class="inline-note">Theoretical Max Grid Orders: ' + esc(deepGet(snapshot, ['sides', sideKey, 'summary', 'entry_orders'], 0)) + ' (Reason: Wallet Limit) | Orders follow PB7/Rust output.</div>';
+  }
+  if (segmentKey === 'entry_grid' || segmentKey === 'entry_trailing') {
+    html += '<div class="inline-note">Injected <code>entry_volatility_logrange_ema_1h</code>: ' + esc(fmt(deepGet(snapshot, ['sides', sideKey, 'debug', 'state_params', 'entry_volatility_logrange_ema_1h'], 0), 8)) + '</div>';
+  }
+  var root = document.getElementById(prefix + sideKey + '-tuning');
+  if (!root) return;
+  root.innerHTML = html;
+  root.querySelectorAll('[data-side-segment]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      if (sideKey === 'long') state.longSegment = btn.dataset.segment;
+      else state.shortSegment = btn.dataset.segment;
+      renderSideTuning(sideKey, state.snapshot || snapshot, prefix);
+    });
+  });
+  root.querySelectorAll('.param-slider').forEach(function(input) {
+    updateSliderFill(input);
+    input.addEventListener('input', function() {
+      var val = Number(input.value || 0);
+      updateSliderFill(input);
+      var valueEl = document.getElementById('sv-' + valuePrefix + '-' + input.dataset.paramName);
+      if (valueEl) valueEl.textContent = val.toFixed(Number(input.step) >= 1 ? 2 : 4);
+      setParamValue(input.dataset.paramSide, input.dataset.paramName, val);
+      syncRawFromState();
+    });
+    input.addEventListener('change', recalculate);
+  });
+  root.querySelectorAll('.param-select').forEach(function(input) {
+    input.addEventListener('change', function() {
+      setParamValue(input.dataset.paramSide, input.dataset.paramName, input.value);
+      syncRawFromState();
+      recalculate();
+    });
+  });
+  root.querySelectorAll('.param-bool').forEach(function(input) {
+    input.addEventListener('change', function() {
+      setParamValue(input.dataset.paramSide, input.dataset.paramName, !!input.checked);
+      syncRawFromState();
+      recalculate();
+    });
+  });
+}
+function renderSimulationWorkspace(snapshot) {
+  renderSideTuning('long', snapshot, 'sim-');
+  renderSideTuning('short', snapshot, 'sim-');
+  updateActiveChip('sim-long-active-chip', deepGet(snapshot, ['sides', 'long', 'active'], false));
+  updateActiveChip('sim-short-active-chip', deepGet(snapshot, ['sides', 'short', 'active'], false));
+  if (document.getElementById('stage-simulation').classList.contains('active')) {
+    renderPlot('long', snapshot, 'sim-');
+    renderPlot('short', snapshot, 'sim-');
+  }
+}
+function renderNumberStepper(id, label, value, step, sourceText) {
+  var display = Number(value || 0);
+  var tipKey = ({
+    'ep-min-cost': 'min_cost',
+    'ep-price-step': 'price_step',
+    'ep-min-qty': 'min_qty',
+    'ep-qty-step': 'qty_step',
+    'ep-c-mult': 'c_mult',
+    'state-balance': 'state_balance',
+    'state-volatility': 'state_volatility'
+  })[id] || '';
+  var tip = tooltip(tipKey);
+  return '<div class="field half"><label for="' + esc(id) + '" data-tip="' + esc(tip) + '">' + esc(label) + '</label>'
+    + '<div class="num-stepper"><button type="button" data-step-target="' + esc(id) + '" data-step-dir="-1">−</button>'
+    + '<input id="' + esc(id) + '" type="number" step="' + esc(step) + '" value="' + esc(display) + '" data-tip="' + esc(tip) + '">'
+    + '<button type="button" data-step-target="' + esc(id) + '" data-step-dir="1">+</button></div>'
+    + '<div class="source-note">' + esc(sourceText || '') + '</div></div>';
+}
+function exchangeParamSource(metadata, key, value) {
+  var derived = deepGet(metadata, ['market_metadata', 'derived'], {}) || {};
+  var sourceKey = {
+    min_cost: 'min_cost_from_limits.cost.min',
+    price_step: 'price_step_from_precision.price',
+    min_qty: 'min_qty_from_limits.amount.min',
+    qty_step: 'qty_step_from_precision.amount',
+    c_mult: 'c_mult_from_contractSize'
+  }[key];
+  var raw = sourceKey ? derived[sourceKey] : undefined;
+  if (raw === undefined || raw === null || raw === '') return 'source: current (' + fmt(value, 8) + ')';
+  return 'source: market (' + raw + ')';
+}
+function renderExchangeState(snapshot) {
+  var root = document.getElementById('exchange-state-controls');
+  if (!root) return;
+  var metadata = deepGet(snapshot, ['market', 'metadata'], {}) || {};
+  var exchangeParams = deepGet(snapshot, ['sides', 'long', 'debug', 'exchange_params'], {}) || {};
+  var stateParams = deepGet(snapshot, ['sides', 'long', 'debug', 'state_params'], {}) || {};
+  var volatility = deepGet(stateParams, ['entry_volatility_logrange_ema_1h'], 0);
+  var balance = deepGet(stateParams, ['balance'], deepGet(snapshot, ['config', 'backtest', 'starting_balance'], 1000));
+  var html = '';
+  html += renderNumberStepper('ep-min-cost', 'min_cost', exchangeParams.min_cost, 0.01, exchangeParamSource(metadata, 'min_cost', exchangeParams.min_cost));
+  html += renderNumberStepper('ep-price-step', 'price_step', exchangeParams.price_step, 0.000001, exchangeParamSource(metadata, 'price_step', exchangeParams.price_step));
+  html += renderNumberStepper('ep-min-qty', 'min_qty', exchangeParams.min_qty, 0.000001, exchangeParamSource(metadata, 'min_qty', exchangeParams.min_qty));
+  html += renderNumberStepper('ep-qty-step', 'qty_step', exchangeParams.qty_step, 0.000001, exchangeParamSource(metadata, 'qty_step', exchangeParams.qty_step));
+  html += renderNumberStepper('ep-c-mult', 'c_mult', exchangeParams.c_mult, 0.000001, exchangeParamSource(metadata, 'c_mult', exchangeParams.c_mult));
+  html += '<hr class="subtle-divider full">';
+  html += renderNumberStepper('state-balance', 'Wallet Balance (State)', balance, 1, '');
+  html += renderNumberStepper('state-volatility', 'Vol (LogRange EMA)', volatility, 0.0001, '');
+  root.innerHTML = html;
+  var autoEl = document.getElementById('auto-exchange-params');
+  if (autoEl) autoEl.checked = state.autoExchangeParams !== false;
+  var map = {
+    'ep-min-cost': ['exchangeParamOverrides', 'min_cost'],
+    'ep-price-step': ['exchangeParamOverrides', 'price_step'],
+    'ep-min-qty': ['exchangeParamOverrides', 'min_qty'],
+    'ep-qty-step': ['exchangeParamOverrides', 'qty_step'],
+    'ep-c-mult': ['exchangeParamOverrides', 'c_mult'],
+    'state-balance': ['stateParamOverrides', 'balance'],
+    'state-volatility': ['stateParamOverrides', 'entry_volatility_logrange_ema_1h']
+  };
+  Object.keys(map).forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', function() {
+      var slot = map[id][0];
+      var key = map[id][1];
+      state[slot][key] = Number(el.value || 0);
+      if (id === 'state-balance') document.getElementById('balance-input').value = el.value;
+      recalculate();
+    });
+  });
+  root.querySelectorAll('[data-step-target]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var el = document.getElementById(btn.dataset.stepTarget);
+      if (!el) return;
+      var step = Number(el.step || 1) || 1;
+      el.value = Number(Number(el.value || 0) + step * Number(btn.dataset.stepDir || 1));
+      el.dispatchEvent(new Event('change'));
+    });
+  });
+}
+function renderSnapshot(snapshot) {
+  state.snapshot = snapshot;
+  state.config = JSON.parse(JSON.stringify(snapshot.config || {}));
+  var loadedRows = Number(deepGet(snapshot, ['market', 'metadata', 'ohlcv', 'rows'], 0) || 0);
+  var displayedRows = snapshot.candles && snapshot.candles.length ? snapshot.candles.length : 0;
+  var plotRows = plotCandleInfo(snapshot.candles || []).rows;
+  var ohlcvStatus = deepGet(snapshot, ['market', 'ohlcv_status'], 'Candles disabled');
+  var sourceChip = document.getElementById('source-chip');
+  var configName = snapshot.title || deepGet(snapshot, ['config', 'pbgui', 'note'], '') || deepGet(snapshot, ['market', 'coin'], '') || 'default';
+  sourceChip.textContent = 'Source: ' + configName;
+  sourceChip.title = 'Loaded from: ' + (snapshot.source || 'default');
+  sourceChip.className = 'chip ' + (snapshot.source === 'draft' ? 'ok' : 'warn');
+  var ohlcvChip = document.getElementById('ohlcv-chip');
+  ohlcvChip.textContent = 'OHLCV: ' + (loadedRows ? fmt(loadedRows, 0) : '-') + (displayedRows ? ' | Displaying: ' + fmt(displayedRows, 0) : '');
+  ohlcvChip.title = ohlcvStatus + (loadedRows ? ' - loaded ' + fmt(loadedRows, 0) + ' candles' : '') + (displayedRows ? ', window ' + fmt(displayedRows, 0) : '') + (plotRows && plotRows !== displayedRows ? ', plotting ' + fmt(plotRows, 0) + ' aggregated candles' : '');
+  ohlcvChip.className = 'chip ' + (loadedRows ? 'ok' : 'warn');
+  var engineStatus = deepGet(snapshot, ['market', 'engine_status'], '-');
+  document.getElementById('engine-chip').textContent = engineStatus;
+  document.getElementById('engine-chip').className = 'chip ' + (String(engineStatus).indexOf('failed') >= 0 ? 'err' : 'ok');
+  document.getElementById('reference-price-input').value = deepGet(snapshot, ['market', 'reference_price'], 100) || 100;
+  document.getElementById('market-chip').textContent = 'Market: ' + deepGet(snapshot, ['market', 'exchange'], '-') + ' / ' + deepGet(snapshot, ['market', 'coin'], '-') + ' @ ' + fmt(deepGet(snapshot, ['market', 'reference_price'], 0), 8);
+  renderStats('long', snapshot); renderStats('short', snapshot);
+  renderPlot('long', snapshot); renderPlot('short', snapshot);
+  renderSideTuning('long', snapshot); renderSideTuning('short', snapshot); renderExchangeState(snapshot); renderSimulationWorkspace(snapshot); syncRawFromState(); updateSimulationStartStateUi();
+  document.getElementById('exchange-state-json').textContent = JSON.stringify(deepGet(snapshot, ['market', 'metadata'], {}), null, 2);
+}
+function recalculate(options) {
+  options = options || {};
+  if (!options.preserveConfig) {
+    applySelectedMarketToConfig();
+    var bt = deepEnsure(state.config, ['backtest']);
+    bt.starting_balance = Number(document.getElementById('balance-input').value || 1000);
+  }
+  return apiFetch('/snapshot', { method: 'POST', body: JSON.stringify({ config: state.config, options: selectedOptions() }) }).then(function(snapshot) {
+    renderSnapshot(snapshot); setMessages(snapshot.messages || []);
+  }).catch(function(err) {
+    setMessages([{ level: 'error', text: 'Failed to calculate Strategy Explorer snapshot: ' + err.message }]);
+    if (options.reportError) throw err;
+  });
+}
+function simulationOptions() {
+  var opts = selectedOptions();
+  opts.load_candles = true;
+  opts.sim_max_candles = Number(document.getElementById('max-candles-input').value || 2000);
+  opts.sim_max_orders = Number(document.getElementById('max-orders-input').value || 200);
+  opts.sim_start_state = document.getElementById('sim-start-state-select').value || 'flat';
+  if (opts.sim_start_state === 'manual') {
+    opts.sim_start_balance = Number(document.getElementById('sim-start-balance-input').value || document.getElementById('balance-input').value || 1000);
+    opts.sim_start_long_size = Number(document.getElementById('sim-start-long-size-input').value || 0);
+    opts.sim_start_long_price = Number(document.getElementById('sim-start-long-price-input').value || 0);
+    opts.sim_start_short_size = Number(document.getElementById('sim-start-short-size-input').value || 0);
+    opts.sim_start_short_price = Number(document.getElementById('sim-start-short-price-input').value || 0);
+  }
+  return opts;
+}
+function inferredManualStartPrice() {
+  var price = Number(deepGet(state.snapshot || {}, ['market', 'reference_price'], 0) || 0);
+  if (price > 0) return price;
+  var candles = deepGet(state.snapshot || {}, ['candles'], []);
+  if (Array.isArray(candles) && candles.length) return Number(candles[0].close || candles[0].open || 0) || 0;
+  return Number(document.getElementById('reference-price-input').value || 0) || 0;
+}
+function updateSimulationStartStateUi() {
+  var select = document.getElementById('sim-start-state-select');
+  var grid = document.getElementById('sim-manual-start-grid');
+  if (!select || !grid) return;
+  var manual = select.value === 'manual';
+  grid.style.display = manual ? '' : 'none';
+  if (!manual) return;
+  var balanceEl = document.getElementById('sim-start-balance-input');
+  if (balanceEl && (!balanceEl.value || Number(balanceEl.value) <= 0)) balanceEl.value = document.getElementById('balance-input').value || 1000;
+  var px = inferredManualStartPrice();
+  ['sim-start-long-price-input', 'sim-start-short-price-input'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el && (!el.value || Number(el.value) <= 0) && px > 0) el.value = px;
+  });
+}
+function updateSimulationButtons() {
+  var localBtn = document.getElementById('btn-run-local-sim');
+  var pb7Btn = document.getElementById('btn-run-pb7-engine');
+  if (localBtn) localBtn.classList.toggle('active-sim', state.activeSimulationMode === 'local_simulation');
+  if (pb7Btn) pb7Btn.classList.toggle('active-sim', state.activeSimulationMode === 'pb7_engine');
+}
+function runSimulation(mode) {
+  stopSimulationProgressPolling();
+  var opts = simulationOptions();
+  state.activeSimulationMode = mode;
+  updateSimulationButtons();
+  simulationProgressId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : String(Date.now()) + '-' + String(Math.random()).slice(2);
+  opts.progress_id = simulationProgressId;
+  var localBtn = document.getElementById('btn-run-local-sim');
+  var pb7Btn = document.getElementById('btn-run-pb7-engine');
+  if (localBtn) localBtn.disabled = true;
+  if (pb7Btn) pb7Btn.disabled = true;
+  setMessages([]);
+  setSimulationProgress(0, 'Starting Simulation...');
+  startSimulationProgressPolling(simulationProgressId);
+  function finishSimulationButtons() {
+    if (localBtn) localBtn.disabled = false;
+    if (pb7Btn) pb7Btn.disabled = false;
+  }
+  apiFetch('/simulate', { method: 'POST', body: JSON.stringify({ config: state.config, options: opts, mode: mode, progress_id: simulationProgressId }) }).then(function(data) {
+    stopSimulationProgressPolling();
+    setSimulationProgress(1, data.message || 'Simulation finished.');
+    state.simulations[mode] = data;
+    state.activeSimulationMode = mode;
+    updateSimulationButtons();
+    document.getElementById('sim-long').innerHTML = eventRows(deepGet(data, ['events', 'long'], []));
+    document.getElementById('sim-short').innerHTML = eventRows(deepGet(data, ['events', 'short'], []));
+    if (state.snapshot) {
+      renderPlot('long', state.snapshot, 'sim-');
+      renderPlot('short', state.snapshot, 'sim-');
+    }
+    if (!data.ok) setMessages([{ level: 'warning', text: data.message || 'Simulation finished.' }]);
+    finishSimulationButtons();
+  }).catch(function(err) {
+    stopSimulationProgressPolling();
+    setSimulationProgress(1, 'Simulation failed: ' + err.message);
+    setMessages([{ level: 'error', text: 'Simulation failed: ' + err.message }]);
+    finishSimulationButtons();
+  });
+}
+function setSimulationProgress(progress, message) {
+  var wrap = document.getElementById('simulation-progress');
+  var fill = document.getElementById('simulation-progress-fill');
+  var text = document.getElementById('simulation-progress-text');
+  var pct = Math.max(0, Math.min(100, Math.round(Number(progress || 0) * 100)));
+  if (wrap) wrap.classList.add('active');
+  if (fill) fill.style.width = pct + '%';
+  if (text) text.textContent = pct + '% - ' + (message || 'Running Simulation...');
+}
+function stopSimulationProgressPolling() {
+  if (simulationProgressTimer) {
+    clearInterval(simulationProgressTimer);
+    simulationProgressTimer = null;
+  }
+}
+function startSimulationProgressPolling(progressId) {
+  stopSimulationProgressPolling();
+  simulationProgressTimer = setInterval(function() {
+    if (!progressId) return;
+    apiFetch('/simulate/progress/' + encodeURIComponent(progressId)).then(function(data) {
+      setSimulationProgress(Number(data.progress || 0), data.message || 'Running Simulation...');
+      if (data.done) stopSimulationProgressPolling();
+    }).catch(function() {});
+  }, 700);
+}
+function runCompare() {
+  stopCompareProgressPolling();
+  var opts = compareOptions();
+  var btn = document.getElementById('btn-run-compare');
+  var oldText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Compare running...'; }
+  compareProgressId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : String(Date.now()) + '-' + String(Math.random()).slice(2);
+  opts.progress_id = compareProgressId;
+  setMessages([{ level: 'info', text: 'Running Compare...' }]);
+  document.getElementById('compare-summary').innerHTML = '<span class="muted">Compare running...</span>';
+  document.getElementById('compare-result').innerHTML = '';
+  setCompareProgress(0, 'Starting Compare...');
+  startCompareProgressPolling(compareProgressId);
+  function finishCompareButton() {
+    if (btn) { btn.disabled = false; btn.textContent = oldText || 'Start Compare'; }
+  }
+  apiFetch('/compare', { method: 'POST', body: JSON.stringify({ config: state.config, options: opts, progress_id: compareProgressId }) }).then(function(data) {
+    stopCompareProgressPolling();
+    setCompareProgress(1, data.message || 'Compare finished.');
+    renderCompareResult(data);
+    setMessages([{ level: data.ok ? 'info' : 'warning', text: data.message || 'Compare finished.' }]);
+    finishCompareButton();
+  }).catch(function(err) {
+    stopCompareProgressPolling();
+    setCompareProgress(1, 'Compare failed: ' + err.message);
+    document.getElementById('compare-summary').innerHTML = '<span class="muted">Compare failed: ' + esc(err.message) + '</span>';
+    document.getElementById('compare-result').innerHTML = '';
+    setMessages([{ level: 'error', text: 'Compare failed: ' + err.message }]);
+    finishCompareButton();
+  });
+}
+function setCompareProgress(progress, message) {
+  var wrap = document.getElementById('compare-progress');
+  var fill = document.getElementById('compare-progress-fill');
+  var text = document.getElementById('compare-progress-text');
+  var pct = Math.max(0, Math.min(100, Math.round(Number(progress || 0) * 100)));
+  if (wrap) wrap.classList.add('active');
+  if (fill) fill.style.width = pct + '%';
+  if (text) text.textContent = pct + '% - ' + (message || 'Running Compare...');
+}
+function stopCompareProgressPolling() {
+  if (compareProgressTimer) {
+    clearInterval(compareProgressTimer);
+    compareProgressTimer = null;
+  }
+}
+function startCompareProgressPolling(progressId) {
+  stopCompareProgressPolling();
+  compareProgressTimer = setInterval(function() {
+    if (!progressId) return;
+    apiFetch('/compare/progress/' + encodeURIComponent(progressId)).then(function(data) {
+      setCompareProgress(Number(data.progress || 0), data.message || 'Running Compare...');
+      if (data.done) stopCompareProgressPolling();
+    }).catch(function() {});
+  }, 700);
+}
+function selectedMovieSideKey(events) {
+  var raw = document.getElementById('movie-side-select').value || 'auto';
+  if (raw === 'short') return 'short';
+  if (raw === 'long') return 'long';
+  events = events || (lastMovieData && lastMovieData.events) || {};
+  if (!(events.long || []).length && (events.short || []).length) return 'short';
+  if (state.snapshot && deepGet(state.snapshot, ['sides', 'long', 'active'], true) === false && deepGet(state.snapshot, ['sides', 'short', 'active'], false) === true) return 'short';
+  return 'long';
+}
+function movieRows(frames) {
+  if (!frames || !frames.length) return '<table class="orders"><tbody><tr><td class="muted" style="text-align:left">No frames</td></tr></tbody></table>';
+  return '<table class="orders"><thead><tr><th>#</th><th>Time</th><th>Close</th><th>Entry Orders</th><th>Close Orders</th></tr></thead><tbody>' + frames.slice(0, 500).map(function(frame) {
+    var sideKey = selectedMovieSideKey();
+    return '<tr><td>' + esc(frame.index) + '</td><td>' + esc(frame.timestamp) + '</td><td>' + fmt(deepGet(frame, ['candle', 'close'], 0), 8) + '</td><td>' + esc(deepGet(frame, [sideKey, 'summary', 'entry_orders'], 0)) + '</td><td>' + esc(deepGet(frame, [sideKey, 'summary', 'close_orders'], 0)) + '</td></tr>';
+  }).join('') + '</tbody></table>';
+}
+function movieStepLabel() {
+  var el = document.getElementById('movie-step-select');
+  return el && el.selectedOptions.length ? el.selectedOptions[0].textContent : '4h';
+}
+function movieDurationPresets(stepLabel) {
+  if (stepLabel === '1m') return [['Custom (Frames)', null, null], ['12h (00:00)', 720, 0], ['12h (12:00)', 720, 12], ['1 day (00:00)', 1440, 0], ['3 days (00:00)', 4320, 0], ['7 days (00:00)', 10080, 0]];
+  if (stepLabel === '5m') return [['Custom (Frames)', null, null], ['6h', 360, null], ['12h', 720, null], ['1 day', 1440, null], ['3 days', 4320, null], ['7 days', 10080, null], ['14 days', 20160, null]];
+  if (stepLabel === '15m') return [['Custom (Frames)', null, null], ['12h', 720, null], ['1 day', 1440, null], ['3 days', 4320, null], ['7 days', 10080, null], ['30 days', 43200, null]];
+  if (stepLabel === '1h') return [['Custom (Frames)', null, null], ['3 days', 4320, null], ['7 days', 10080, null], ['30 days', 43200, null], ['90 days', 129600, null]];
+  if (stepLabel === '4h') return [['Custom (Frames)', null, null], ['7 days', 10080, null], ['30 days', 43200, null], ['90 days', 129600, null], ['180 days', 259200, null]];
+  return [['Custom (Frames)', null, null], ['30 days', 43200, null], ['90 days', 129600, null], ['180 days', 259200, null], ['365 days', 525600, null]];
+}
+function syncMovieDurationOptions() {
+  var select = document.getElementById('movie-duration-select');
+  if (!select) return;
+  var previous = select.value || 'Custom (Frames)';
+  var presets = movieDurationPresets(movieStepLabel());
+  select.innerHTML = presets.map(function(item) {
+    var minutes = item[1] === null ? '' : String(item[1]);
+    var anchor = item[2] === null ? '' : String(item[2]);
+    return '<option value="' + esc(item[0]) + '" data-minutes="' + esc(minutes) + '" data-anchor="' + esc(anchor) + '">' + esc(item[0]) + '</option>';
+  }).join('');
+  var values = presets.map(function(item) { return item[0]; });
+  select.value = values.indexOf(previous) >= 0 ? previous : 'Custom (Frames)';
+}
+function selectedMovieDuration() {
+  var select = document.getElementById('movie-duration-select');
+  var opt = select && select.selectedOptions.length ? select.selectedOptions[0] : null;
+  if (!opt || opt.value === 'Custom (Frames)') return { custom: true, minutes: null, anchor: null };
+  var minutes = Number(opt.dataset.minutes || 0);
+  var anchor = opt.dataset.anchor === '' ? null : Number(opt.dataset.anchor);
+  return { custom: false, minutes: minutes, anchor: isFinite(anchor) ? anchor : null };
+}
+function updateMovieDurationFrames() {
+  var duration = selectedMovieDuration();
+  if (duration.custom || !duration.minutes) return;
+  var step = Math.max(1, Number(document.getElementById('movie-step-select').value || 1));
+  document.getElementById('movie-frames-input').value = Math.max(2, Math.floor(Number(duration.minutes) / step));
+}
+function movieStepLabelToMinutes(label) {
+  return ({ '1m': 1, '5m': 5, '15m': 15, '1h': 60, '4h': 240, '1d': 1440 })[label] || 240;
+}
+function chooseMovieHandoffWindow(spanMinutes) {
+  spanMinutes = Math.max(1, Math.floor(Number(spanMinutes) || 1));
+  var best = null;
+  ['1m', '5m', '15m', '1h', '4h', '1d'].forEach(function(stepLabel) {
+    var stepMin = movieStepLabelToMinutes(stepLabel);
+    movieDurationPresets(stepLabel).forEach(function(item) {
+      var durMin = item[1];
+      if (durMin === null || Number(durMin) < spanMinutes) return;
+      var frames = Math.max(2, Math.floor(Number(durMin) / stepMin));
+      if (frames > 20000) return;
+      var cand = { overshoot: Number(durMin) - spanMinutes, stepMin: stepMin, stepLabel: stepLabel, durationLabel: item[0], frames: frames };
+      if (!best || cand.overshoot < best.overshoot || (cand.overshoot === best.overshoot && cand.stepMin < best.stepMin)) best = cand;
+    });
+  });
+  if (best) return best;
+  var targetFrames = 1500;
+  var chosen = { stepMin: 1440, stepLabel: '1d' };
+  [{ stepMin: 1, stepLabel: '1m' }, { stepMin: 5, stepLabel: '5m' }, { stepMin: 15, stepLabel: '15m' }, { stepMin: 60, stepLabel: '1h' }, { stepMin: 240, stepLabel: '4h' }, { stepMin: 1440, stepLabel: '1d' }].some(function(choice) {
+    if (Math.ceil(spanMinutes / choice.stepMin) + 2 <= targetFrames) { chosen = choice; return true; }
+    return false;
+  });
+  return { overshoot: 0, stepMin: chosen.stepMin, stepLabel: chosen.stepLabel, durationLabel: 'Custom (Frames)', frames: Math.min(20000, Math.max(10, Math.ceil(spanMinutes / chosen.stepMin) + 2)) };
+}
+function applyBacktestHandoff(handoff, resultPath) {
+  handoff = handoff || {};
+  if (resultPath) applyInitialResultPath(resultPath);
+  if (!handoff.fill_start || !handoff.fill_end) return;
+  var engineEl = document.getElementById('movie-engine-select');
+  if (engineEl) engineEl.value = 'pb7_fills';
+  var fillStart = String(handoff.fill_start || '').replace(' ', 'T');
+  var fillEnd = String(handoff.fill_end || '').replace(' ', 'T');
+  if (fillStart.length >= 16) {
+    document.getElementById('movie-start-date-input').value = fillStart.slice(0, 10);
+    document.getElementById('movie-start-time-input').value = fillStart.slice(11, 16);
+  }
+  var startMs = new Date(fillStart).getTime();
+  var endMs = new Date(fillEnd).getTime();
+  var spanMinutes = isFinite(startMs) && isFinite(endMs) ? Math.max(1, Math.floor((endMs - startMs) / 60000)) : 1;
+  var choice = chooseMovieHandoffWindow(spanMinutes);
+  var stepEl = document.getElementById('movie-step-select');
+  if (stepEl) stepEl.value = String(choice.stepMin);
+  syncMovieDurationOptions();
+  var durationEl = document.getElementById('movie-duration-select');
+  if (durationEl && optionExists(durationEl, choice.durationLabel)) durationEl.value = choice.durationLabel;
+  else if (durationEl) durationEl.value = 'Custom (Frames)';
+  document.getElementById('movie-frames-input').value = choice.frames;
+}
+function applyMovieDurationAnchor(opts) {
+  var duration = selectedMovieDuration();
+  if (duration.custom || duration.anchor === null || !opts.start_date) return opts;
+  opts.start_time = String(duration.anchor).padStart(2, '0') + ':00';
+  return opts;
+}
+function selectedMovieOptions() {
+  var opts = selectedOptions();
+  var movieDate = document.getElementById('movie-start-date-input').value || document.getElementById('start-date-input').value || '';
+  var movieTime = document.getElementById('movie-start-time-input').value || document.getElementById('start-time-input').value || '00:00';
+  opts.start_date = movieDate;
+  opts.start_time = movieTime;
+  return applyMovieDurationAnchor(opts);
+}
+function setMovieProgress(progress, message) {
+  var wrap = document.getElementById('movie-progress');
+  var fill = document.getElementById('movie-progress-fill');
+  var text = document.getElementById('movie-progress-text');
+  var pct = Math.max(0, Math.min(100, Math.round(Number(progress || 0) * 100)));
+  if (wrap) wrap.classList.add('active');
+  if (fill) fill.style.width = pct + '%';
+  if (text) text.textContent = pct + '% - ' + (message || 'Generating movie...');
+}
+function hideMovieProgress() {
+  var wrap = document.getElementById('movie-progress');
+  if (wrap) wrap.classList.remove('active');
+}
+function stopMovieProgressPolling() {
+  if (movieProgressTimer) {
+    clearInterval(movieProgressTimer);
+    movieProgressTimer = null;
+  }
+}
+function startMovieProgressPolling(progressId) {
+  stopMovieProgressPolling();
+  movieProgressTimer = setInterval(function() {
+    if (!progressId) return;
+    apiFetch('/movie/progress/' + encodeURIComponent(progressId)).then(function(data) {
+      setMovieProgress(Number(data.progress || 0), data.message || 'Generating movie...');
+      if (data.done) stopMovieProgressPolling();
+    }).catch(function() {});
+  }, 700);
+}
+function stopMovieBuilder() {
+  var activeProgressId = movieProgressId;
+  var stoppingExport = !!movieExportAbortController;
+  if (activeProgressId) {
+    apiFetch('/movie/progress/' + encodeURIComponent(activeProgressId) + '/cancel', { method: 'POST' }).catch(function() {});
+  }
+  if (movieAbortController) {
+    movieAbortController.abort();
+    movieAbortController = null;
+  }
+  if (movieExportAbortController) {
+    movieExportAbortController.abort();
+    movieExportAbortController = null;
+  }
+  stopMovieProgressPolling();
+  var msg = stoppingExport ? 'Movie export stopped.' : 'Movie Builder stopped.';
+  setMovieProgress(1, msg);
+  document.getElementById('movie-output').innerHTML = '<span class="muted">' + esc(msg) + '</span>';
+  setMessages([{ level: 'warning', text: msg }]);
+}
+var MOVIE_FULLSCREEN_ICON = { width: 500, height: 500, path: 'M0,100 L0,0 L100,0 L100,25 L25,25 L25,100 Z M400,0 L500,0 L500,100 L425,100 L425,25 L400,25 Z M0,400 L0,500 L100,500 L100,425 L25,425 L25,400 Z M425,400 L500,400 L500,500 L400,500 L400,425 L425,425 Z' };
+function plotlyFullscreenConfig(target, normalHeight) {
+  return { responsive: true, displaylogo: false, displayModeBar: true, modeBarButtonsToAdd: [{ name: 'fullscreen', title: 'Toggle Fullscreen', icon: MOVIE_FULLSCREEN_ICON, click: function(gd) { var el = document.getElementById(target) || gd; if (!document.fullscreenElement) { if (el.requestFullscreen) el.requestFullscreen().catch(function() {}); } else { document.exitFullscreen(); } } }] };
+}
+function moviePlotlyConfig(target) {
+  return plotlyFullscreenConfig(target, 760);
+}
+function movieExportPresetValues(name) {
+  if (name === 'Fast') return { preset: 'Fast', width: 1280, height: 720, scale: 1, crf: 23, ffmpeg_preset: 'ultrafast', codec: 'auto' };
+  if (name === 'Quality') return { preset: 'Quality', width: 1920, height: 1080, scale: 1, crf: 16, ffmpeg_preset: 'fast', codec: 'auto' };
+  if (name === 'Balanced') return { preset: 'Balanced', width: 1600, height: 800, scale: 1, crf: 18, ffmpeg_preset: 'veryfast', codec: 'auto' };
+  return { preset: 'Custom' };
+}
+function setMovieExportInputs(vals) {
+  vals = vals || movieExportPresetValues('Balanced');
+  if (vals.preset && document.getElementById('movie-export-preset')) document.getElementById('movie-export-preset').value = vals.preset;
+  if (vals.width !== undefined) document.getElementById('movie-export-width').value = vals.width;
+  if (vals.height !== undefined) document.getElementById('movie-export-height').value = vals.height;
+  if (vals.scale !== undefined) document.getElementById('movie-export-scale').value = vals.scale;
+  if (vals.crf !== undefined) document.getElementById('movie-export-crf').value = vals.crf;
+  if (vals.ffmpeg_preset !== undefined) document.getElementById('movie-export-ffmpeg-preset').value = vals.ffmpeg_preset;
+  if (vals.codec !== undefined && document.getElementById('movie-export-codec')) document.getElementById('movie-export-codec').value = vals.codec;
+}
+function saveMovieExportSettings() {
+  try { window.localStorage.setItem('pbgui_strategy_explorer_movie_export', JSON.stringify(selectedMovieExportOptions(null))); } catch (err) {}
+}
+function applyMovieExportPreset() {
+  var preset = document.getElementById('movie-export-preset').value || 'Balanced';
+  if (preset !== 'Custom') setMovieExportInputs(movieExportPresetValues(preset));
+  saveMovieExportSettings();
+}
+function markMovieExportCustom() {
+  var preset = document.getElementById('movie-export-preset');
+  if (preset) preset.value = 'Custom';
+  saveMovieExportSettings();
+}
+function selectedMovieExportOptions(spec) {
+  function intValue(id, fallback) {
+    var value = Number(document.getElementById(id).value || fallback);
+    return isFinite(value) ? Math.floor(value) : fallback;
+  }
+  var duration = spec ? deepGet(spec, ['layout', 'updatemenus', 0, 'buttons', 0, 'args', 1, 'frame', 'duration'], 120) : 120;
+  var fps = 15;
+  if (Number(duration) > 0) fps = Math.max(1, Math.round(1000 / Number(duration)));
+  return {
+    preset: document.getElementById('movie-export-preset').value || 'Balanced',
+    width: intValue('movie-export-width', 1600),
+    height: intValue('movie-export-height', 800),
+    scale: intValue('movie-export-scale', 1),
+    crf: intValue('movie-export-crf', 18),
+    ffmpeg_preset: document.getElementById('movie-export-ffmpeg-preset').value || 'veryfast',
+    codec: document.getElementById('movie-export-codec').value || 'auto',
+    fps: fps,
+    filename: movieExportFilename()
+  };
+}
+function movieExportFilename() {
+  var meta = (lastMovieData && lastMovieData.metadata) || {};
+  var parts = [meta.exchange || '', meta.coin || '', lastMovieData ? lastMovieData.engine || '' : '', meta.start_time || ''];
+  var raw = parts.filter(Boolean).join('_') || 'movie';
+  raw = raw.replace(/[\\/:\x00\s]+/g, '_').replace(/[^A-Za-z0-9_.-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  return (raw || 'movie') + '.mp4';
+}
+function setMovieExportAvailable(available) {
+  var btn = document.getElementById('btn-export-movie');
+  if (btn) btn.disabled = false;
+}
+function clearMovieExportDownload() {
+  if (lastMovieExportUrl) {
+    try { URL.revokeObjectURL(lastMovieExportUrl); } catch (err) {}
+    lastMovieExportUrl = '';
+  }
+  var link = document.getElementById('movie-export-download');
+  if (link) {
+    link.classList.remove('active');
+    link.removeAttribute('href');
+  }
+}
+function loadMovieExportOptions() {
+  apiFetch('/movie/export/options').then(function(data) {
+    var select = document.getElementById('movie-export-codec');
+    if (select) {
+      var current = select.value || 'auto';
+      var codecs = data.codecs || [];
+      select.innerHTML = codecs.map(function(codec) { return '<option value="' + esc(codec.id) + '">' + esc(codec.label || codec.id) + '</option>'; }).join('');
+      select.value = codecs.some(function(codec) { return codec.id === current; }) ? current : 'auto';
+    }
+    var info = document.getElementById('movie-export-info');
+    if (info) info.textContent = deepGet(data, ['encoder', 'label'], 'Export directly, or generate a preview first.');
+    try {
+      var saved = JSON.parse(window.localStorage.getItem('pbgui_strategy_explorer_movie_export') || '{}');
+      if (saved && typeof saved === 'object') setMovieExportInputs(Object.assign({}, data.defaults || movieExportPresetValues('Balanced'), saved));
+    } catch (err) {
+      setMovieExportInputs(data.defaults || movieExportPresetValues('Balanced'));
+    }
+  }).catch(function(err) {
+    var info = document.getElementById('movie-export-info');
+    if (info) info.textContent = 'Movie export options unavailable: ' + err.message;
+  });
+}
+function renderMovieDetails(data) {
+  var frames = data.frames || [];
+  var events = data.events || {};
+  var sideKey = selectedMovieSideKey(events);
+  var sideEvents = events[sideKey] || [];
+  var meta = data.metadata || {};
+  document.getElementById('movie-frame-details').innerHTML = '<div class="metric-grid" style="grid-template-columns:1fr 1fr;margin-bottom:12px">'
+    + '<div class="metric-card"><div class="label">Frames</div><div class="value">' + esc(frames.length) + '</div></div>'
+    + '<div class="metric-card"><div class="label">Fills</div><div class="value">' + esc(sideEvents.length) + '</div></div>'
+    + '</div>'
+    + '<p class="hint">Engine: ' + esc(data.engine || '-') + ' | Market: ' + esc(meta.exchange || '') + ' ' + esc(meta.coin || '') + '</p>'
+    + '<h4>Frames</h4>' + movieRows(frames)
+    + '<h4>Fills</h4>' + eventRows(sideEvents);
+}
+function currentMovieFrameIndex() {
+  var plot = document.getElementById('movie-plot');
+  var frames = (lastMovieData && lastMovieData.frames) || [];
+  var rangeEnd = deepGet(plot, ['layout', 'xaxis', 'range', 1], null);
+  var rangeMs = rangeEnd ? new Date(rangeEnd).getTime() : NaN;
+  if (frames.length && isFinite(rangeMs)) {
+    var bestIdx = 0;
+    var bestDiff = Infinity;
+    frames.forEach(function(frame, idx) {
+      var ms = new Date(frame.timestamp).getTime();
+      if (!isFinite(ms)) return;
+      var diff = Math.abs(ms - rangeMs);
+      if (diff < bestDiff) { bestDiff = diff; bestIdx = idx; }
+    });
+    movieCurrentFrame = bestIdx;
+    return bestIdx;
+  }
+  var active = deepGet(plot, ['layout', 'sliders', 0, 'active'], movieCurrentFrame);
+  var idx = Number(active);
+  return isFinite(idx) ? Math.max(0, Math.floor(idx)) : Math.max(0, movieCurrentFrame || 0);
+}
+function buildMovieFigureSpec(data, initialFrameIdx) {
+  var frames = data.frames || [];
+  var events = data.events || {};
+  var sideKey = selectedMovieSideKey(events);
+  var sideEvents = events[sideKey] || [];
+  var sortedSideEvents = (sideEvents || []).slice().sort(function(a, b) {
+    return new Date(a.timestamp || a.time || a.date || '').getTime() - new Date(b.timestamp || b.time || b.date || '').getTime();
+  });
+  var target = 'movie-plot';
+  if (!frames.length) return null;
+  var xs = frames.map(function(f) { return f.timestamp; });
+  var candle = frames.map(function(f) { return f.candle || {}; });
+  var visible = Math.max(10, Number(document.getElementById('movie-visible-input').value || 60));
+  var traceCandles = { type: 'candlestick', name: 'Price', x: xs, open: candle.map(function(c) { return Number(c.open || 0); }), high: candle.map(function(c) { return Number(c.high || 0); }), low: candle.map(function(c) { return Number(c.low || 0); }), close: candle.map(function(c) { return Number(c.close || 0); }) };
+  var emaHigh = frames.map(function(f) { return Number(deepGet(f, [sideKey, 'debug', 'state_params', 'ema_bands', 'upper'], deepGet(f, ['candle', 'high'], 0))); });
+  var emaLow = frames.map(function(f) { return Number(deepGet(f, [sideKey, 'debug', 'state_params', 'ema_bands', 'lower'], deepGet(f, ['candle', 'low'], 0))); });
+  var traceEmaHigh = { type: 'scatter', mode: 'lines', name: 'EMA High', x: xs, y: emaHigh, line: { color: 'magenta', width: 1 } };
+  var traceEmaLow = { type: 'scatter', mode: 'lines', name: 'EMA Low', x: xs, y: emaLow, line: { color: 'cyan', width: 1, dash: 'dot' } };
+  function orderPrices(frame, kind) {
+    return (deepGet(frame, [sideKey, 'orders', kind], []) || []).map(function(order) { return Number(order.price || 0); }).filter(function(price) { return isFinite(price) && price > 0; });
+  }
+  function trailingPrice(frame, kind, closePrice) {
+    var orders = deepGet(frame, [sideKey, 'orders', kind], []) || [];
+    var prices = orders.filter(function(order) { return String(order.order_type || order.type || '').toLowerCase().indexOf('trail') >= 0; }).map(function(order) { return Number(order.price || 0); }).filter(function(price) { return isFinite(price) && price > 0; });
+    if (!prices.length) return null;
+    return prices.sort(function(a, b) { return Math.abs(a - closePrice) - Math.abs(b - closePrice); })[0];
+  }
+  function gridTrace(prices, color, name, x0, x1, width) {
+    var gx = [];
+    var gy = [];
+    (prices || []).forEach(function(price) { gx.push(x0, x1, null); gy.push(price, price, null); });
+    return { type: 'scatter', mode: 'lines', name: name, x: gx, y: gy, line: { color: color, width: width || 1, dash: 'dot' } };
+  }
+  function upcomingFillPrices(kind, frameTs) {
+    var isEntry = kind === 'entry';
+    var now = new Date(frameTs).getTime();
+    var sorted = sortedSideEvents;
+    var posEps = 1e-12;
+    var cycleId = new Array(sorted.length).fill(-1);
+    var cycleStart = {};
+    var cycleEnd = {};
+    var inCycle = false;
+    var cid = -1;
+    var curStart = -1;
+    for (var cidx = 0; cidx < sorted.length; cidx++) {
+      var ps = Number(sorted[cidx].pos_size || 0);
+      if (!inCycle && Math.abs(ps) > posEps) { inCycle = true; cid += 1; curStart = cidx; }
+      if (inCycle) {
+        cycleId[cidx] = cid;
+        if (Math.abs(ps) <= posEps) { cycleStart[cid] = curStart; cycleEnd[cid] = cidx; inCycle = false; curStart = -1; }
+      }
+    }
+    if (inCycle && curStart >= 0) { cycleStart[cid] = curStart; cycleEnd[cid] = sorted.length - 1; }
+
+    var k = -1;
+    for (var i = 0; i < sorted.length; i++) {
+      var ts = new Date(sorted[i].timestamp || sorted[i].time || sorted[i].date || '').getTime();
+      if (isFinite(ts) && ts <= now) k = i;
+      if (isFinite(ts) && ts > now) break;
+    }
+    var nextIdx = k + 1;
+    var curPos = k >= 0 ? Number(sorted[k].pos_size || 0) : 0;
+    var cand = [];
+    if (Math.abs(curPos) <= posEps) {
+      var j0 = nextIdx;
+      while (j0 < sorted.length && cycleId[j0] < 0) j0 += 1;
+      if (j0 < sorted.length) {
+        var nextCid = cycleId[j0];
+        var endFlat = cycleEnd[nextCid] === undefined ? sorted.length - 1 : cycleEnd[nextCid];
+        for (var a = j0; a <= endFlat; a++) cand.push(a);
+      }
+    } else {
+      var activeCid = k >= 0 ? cycleId[k] : -1;
+      if (activeCid < 0 && nextIdx < sorted.length) activeCid = cycleId[nextIdx];
+      if (activeCid >= 0) {
+        var startActive = Math.max(nextIdx, cycleStart[activeCid] === undefined ? nextIdx : cycleStart[activeCid]);
+        var endActive = cycleEnd[activeCid] === undefined ? sorted.length - 1 : cycleEnd[activeCid];
+        for (var b = startActive; b <= endActive; b++) cand.push(b);
+      }
+    }
+
+    var onlyEntries = Math.abs(curPos) <= posEps;
+    var out = [];
+    for (var ci = 0; ci < cand.length && out.length < 200; ci++) {
+      var ev = sorted[cand[ci]];
+      var evType = String(ev.event || '').toLowerCase();
+      if (isEntry && evType === 'entry') out.push(Number(ev.price || 0));
+      if (!isEntry && !onlyEntries && evType === 'close') out.push(Number(ev.price || 0));
+    }
+    var filtered = [];
+    var best = null;
+    out.forEach(function(price) {
+      if (best === null) { best = price; filtered.push(price); return; }
+      if (sideKey === 'long') {
+        if ((isEntry && price < best) || (!isEntry && price > best)) { best = price; filtered.push(price); }
+      } else {
+        if ((isEntry && price > best) || (!isEntry && price < best)) { best = price; filtered.push(price); }
+      }
+    });
+    return filtered;
+  }
+  function movieFrameState(frame, closePrice) {
+    var frameMs = new Date(frame.timestamp || '').getTime();
+    var last = null;
+    if (isFinite(frameMs)) {
+      for (var i = 0; i < sortedSideEvents.length; i++) {
+        var evMs = new Date(sortedSideEvents[i].timestamp || sortedSideEvents[i].time || sortedSideEvents[i].date || '').getTime();
+        if (!isFinite(evMs)) continue;
+        if (evMs <= frameMs) last = sortedSideEvents[i];
+        if (evMs > frameMs) break;
+      }
+    }
+    var balance = Number(last && last.wallet_balance);
+    if (!isFinite(balance) || balance <= 0) balance = Number(deepGet(frame, [sideKey, 'debug', 'state_params', 'balance'], document.getElementById('balance-input').value || 0));
+    var posSize = Number(last && last.pos_size);
+    if (!isFinite(posSize)) posSize = 0;
+    var posPrice = Number(last && last.pos_price);
+    if (!isFinite(posPrice) || posPrice <= 0) posPrice = null;
+    var walletExposure = Number(last && last.wallet_exposure);
+    if (!isFinite(walletExposure)) {
+      if (isFinite(balance) && balance > 0 && posPrice !== null) walletExposure = Math.abs(posSize * posPrice) / balance;
+      else if (isFinite(balance) && balance > 0 && isFinite(closePrice) && closePrice > 0) walletExposure = Math.abs(posSize * closePrice) / balance;
+      else walletExposure = null;
+    } else {
+      walletExposure = Math.abs(walletExposure);
+    }
+    return { balance: balance, posSize: posSize, posPrice: posPrice, walletExposure: walletExposure };
+  }
+  function fillsTrace(startIdx, endIdx, x0, x1) {
+    var fx = [];
+    var fy = [];
+    var text = [];
+    var colors = [];
+    var custom = [];
+    var stepMs = Math.max(1, Number(document.getElementById('movie-step-select').value || 1)) * 60000;
+    var start = new Date(x0).getTime() - stepMs;
+    var end = new Date(x1).getTime();
+    var frameTimes = xs.slice(startIdx, endIdx + 1).map(function(x) { return new Date(x).getTime(); });
+    var frameOffset = Math.max(0, startIdx);
+    var stackCounts = {};
+    var yStackCounts = {};
+    function plotDate(ms) {
+      var d = new Date(ms);
+      function pad(n, w) { return String(n).padStart(w || 2, '0'); }
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+    function stackStep(n) { if (n <= 0) return 0; var k = Math.floor((n + 1) / 2); return n % 2 === 1 ? k : -k; }
+    (sideEvents || []).forEach(function(ev, idx) {
+      var ts = new Date(ev.timestamp || ev.time || ev.date || '').getTime();
+      var price = Number(ev.price || 0);
+      var qty = Number(ev.qty || 0);
+      if (!isFinite(ts) || ts < start || ts > end || !isFinite(price) || price <= 0 || !isFinite(qty) || qty === 0) return;
+      var isBuy = qty > 0;
+      var snapped = ts;
+      var snapIdx = frameTimes.length ? frameTimes.length - 1 : 0;
+      for (var i = 0; i < frameTimes.length; i++) {
+        if (frameTimes[i] >= ts) { snapped = frameTimes[i]; snapIdx = i; break; }
+      }
+      if (snapped < new Date(x0).getTime()) snapped = new Date(x0).getTime();
+      if (snapped > end) snapped = end;
+      var candleIdx = Math.min(frames.length - 1, Math.max(0, frameOffset + snapIdx));
+      var c = frames[candleIdx] ? frames[candleIdx].candle || {} : {};
+      var low = Number(c.low || price);
+      var high = Number(c.high || price);
+      var y = price;
+      if (isFinite(low) && isFinite(high)) {
+        if (low > high) { var tmp = low; low = high; high = tmp; }
+        y = Math.min(Math.max(y, low), high);
+      }
+      var yKey = String(snapped) + ':' + String(Math.round(y * 1e12) / 1e12);
+      var yn = yStackCounts[yKey] || 0;
+      yStackCounts[yKey] = yn + 1;
+      if (yn > 0 && isFinite(low) && isFinite(high) && high > low) {
+        var mid = (low + high) / 2;
+        var yStep = Math.max((high - low) * 0.025, Math.abs(y) * 0.00025, 1e-12);
+        var yDir = y >= mid ? -1 : 1;
+        y = Math.min(Math.max(y + yDir * yn * yStep, low), high);
+      }
+      var key = String(snapped) + ':' + (isBuy ? 'B' : 'S');
+      var n = stackCounts[key] || 0;
+      stackCounts[key] = n + 1;
+      var offset = Math.max(-8, Math.min(8, (isBuy ? -1 : 1) + stackStep(n)));
+      var jitter = Math.max(1, stepMs * 0.002 / 1000);
+      fx.push(plotDate(snapped + offset * jitter * 1000));
+      fy.push(y);
+      text.push(isBuy ? 'B' : 'S');
+      colors.push(isBuy ? 'rgba(0, 200, 0, 1.0)' : 'rgba(220, 0, 0, 1.0)');
+      custom.push([idx + 1, Math.abs(qty), ev.event || ev.type || '', ev.order_type || '', ev.timestamp || ev.time || ev.date || '', price]);
+    });
+    return { type: 'scatter', mode: 'markers+text', name: 'Fills (B/S)', x: fx, y: fy, text: text, textposition: 'middle center', textfont: { color: 'white', size: 12 }, marker: { symbol: 'circle', size: 18, color: colors, line: { color: 'rgba(0, 0, 0, 0.7)', width: 1 } }, customdata: custom, hovertemplate: '%{text} #%{customdata[0]} (%{customdata[2]})<br>qty=%{customdata[1]:.6f}<br>price=%{customdata[5]:.6f}<br>type=%{customdata[3]}<br>%{customdata[4]}<extra></extra>' };
+  }
+  function dynamicFrame(frame, idx) {
+    var startIdx = Math.max(0, idx - visible + 1);
+    var x0 = xs[startIdx];
+    var x1 = frame.timestamp;
+    if (x0 === x1) {
+      var d0 = new Date(new Date(x1).getTime() - Math.max(1, Number(document.getElementById('movie-step-select').value || 1)) * 60000);
+      x0 = d0.getFullYear() + '-' + String(d0.getMonth() + 1).padStart(2, '0') + '-' + String(d0.getDate()).padStart(2, '0') + 'T' + String(d0.getHours()).padStart(2, '0') + ':' + String(d0.getMinutes()).padStart(2, '0') + ':' + String(d0.getSeconds()).padStart(2, '0');
+    }
+    var entryPrices = orderPrices(frame, 'entries');
+    var closePrices = orderPrices(frame, 'closes');
+    var closePrice = Number(deepGet(frame, ['candle', 'close'], 0));
+    var useFillPreview = data.engine === 'pb7_fills' || data.engine === 'pb7_engine';
+    var upcomingEntries = useFillPreview ? upcomingFillPrices('entry', frame.timestamp) : [];
+    var upcomingCloses = useFillPreview ? upcomingFillPrices('close', frame.timestamp) : [];
+    var trailEntry = trailingPrice(frame, 'entries', closePrice);
+    var trailClose = trailingPrice(frame, 'closes', closePrice);
+    var currentTrace = { type: 'scatter', mode: 'lines', name: 'Current Price', x: [x0, x1], y: [closePrice, closePrice], line: { color: '#f0c542', width: 2 } };
+    var traceEntries = useFillPreview ? gridTrace(upcomingEntries, 'rgba(255, 0, 0, 0.75)', 'Upcoming Entries', x0, x1, 2) : gridTrace(entryPrices, 'rgba(255, 0, 0, 0.6)', 'Entry Grid', x0, x1);
+    var traceCloses = useFillPreview ? gridTrace(upcomingCloses, 'rgba(0, 255, 0, 0.75)', 'Upcoming Closes', x0, x1, 2) : gridTrace(closePrices, 'rgba(0, 255, 0, 0.6)', 'Close Grid', x0, x1);
+    var traceTrailEntry = trailEntry === null ? { type: 'scatter', mode: 'lines', name: 'Next Trailing Entry', x: [], y: [] } : gridTrace([trailEntry], 'rgba(255, 165, 0, 0.9)', 'Next Trailing Entry', x0, x1, 3);
+    var traceTrailClose = trailClose === null ? { type: 'scatter', mode: 'lines', name: 'Next Trailing Close', x: [], y: [] } : gridTrace([trailClose], 'rgba(0, 255, 255, 0.9)', 'Next Trailing Close', x0, x1, 3);
+    var yVals = [];
+    for (var j = startIdx; j <= idx; j++) {
+      yVals.push(Number(deepGet(frames[j], ['candle', 'high'], 0)), Number(deepGet(frames[j], ['candle', 'low'], 0)), emaHigh[j], emaLow[j]);
+    }
+    yVals = yVals.concat(useFillPreview ? upcomingEntries : entryPrices, useFillPreview ? upcomingCloses : closePrices, [closePrice]);
+    if (trailEntry !== null) yVals.push(trailEntry);
+    if (trailClose !== null) yVals.push(trailClose);
+    var ft = fillsTrace(startIdx, idx, x0, x1);
+    yVals = yVals.concat((ft.y || []).map(Number));
+    yVals = yVals.filter(function(v) { return isFinite(v) && v > 0; });
+    var yMin = yVals.length ? Math.min.apply(null, yVals) * 0.995 : 0;
+    var yMax = yVals.length ? Math.max.apply(null, yVals) * 1.005 : 1;
+    var mstate = movieFrameState(frame, closePrice);
+    var annotationParts = ['Frame: ' + (idx + 1), 'Price: ' + fmt(closePrice, 8)];
+    if (isFinite(mstate.balance)) annotationParts.push('Wallet Balance: ' + fmtFixed(mstate.balance, 2));
+    if (mstate.walletExposure !== null && isFinite(mstate.walletExposure)) annotationParts.push('WE: ' + fmt(mstate.walletExposure, 6));
+    if (isFinite(mstate.posSize)) annotationParts.push('posSize: ' + fmt(mstate.posSize, 8));
+    if (mstate.posPrice !== null && isFinite(mstate.posPrice) && mstate.posPrice > 0) annotationParts.push('posPrice: ' + fmt(mstate.posPrice, 8));
+    var annotation = { x: 1.02, y: 1, xref: 'paper', yref: 'paper', xanchor: 'left', yanchor: 'top', text: annotationParts.join('<br>'), showarrow: false, align: 'left', bgcolor: 'rgba(0,0,0,0.5)', font: { size: 13, color: '#fafafa' } };
+    return { name: String(idx), data: [traceEntries, traceCloses, currentTrace, traceTrailEntry, traceTrailClose, ft], traces: [3, 4, 5, 6, 7, 8], layout: { xaxis: { range: [x0, x1] }, yaxis: { range: [yMin, yMax] }, annotations: [annotation] } };
+  }
+  var plotFrames = frames.map(function(f, idx) {
+    return dynamicFrame(f, idx);
+  });
+  var activeFrame = Math.max(0, Math.min(plotFrames.length - 1, Number(initialFrameIdx === undefined ? movieCurrentFrame : initialFrameIdx) || 0));
+  movieCurrentFrame = activeFrame;
+  var init = plotFrames[activeFrame] || plotFrames[0] || dynamicFrame(frames[0], 0);
+  var initData = [traceCandles, traceEmaHigh, traceEmaLow].concat(init.data || []);
+  var playFrameNames = plotFrames.slice(activeFrame).map(function(frame) { return frame.name; });
+  var layout = { title: 'Animation: ' + esc(deepGet(data, ['metadata', 'coin'], '')) + ' | Frames: ' + frames.length, paper_bgcolor: '#1a1d24', plot_bgcolor: '#1a1d24', font: { color: '#fafafa' }, height: 760, margin: { l: 55, r: 260, t: 60, b: 150 }, xaxis: { type: 'date', gridcolor: '#333640', rangeslider: { visible: false }, range: deepGet(init, ['layout', 'xaxis', 'range'], [xs[0], xs[0]]) }, yaxis: { title: 'Price', gridcolor: '#333640', autorange: false, range: deepGet(init, ['layout', 'yaxis', 'range'], [0, 1]) }, legend: { x: 1.02, y: 0.85, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(0,0,0,0.5)' }, annotations: deepGet(init, ['layout', 'annotations'], []), updatemenus: [{ type: 'buttons', direction: 'left', showactive: false, x: 0.01, y: -0.06, xanchor: 'left', yanchor: 'top', pad: { r: 10, t: 10 }, buttons: [{ label: 'Play', method: 'animate', args: [playFrameNames, { frame: { duration: 120, redraw: false }, fromcurrent: true, mode: 'immediate', transition: { duration: 0, easing: 'linear' } }] }, { label: 'Slow', method: 'animate', args: [playFrameNames, { frame: { duration: 240, redraw: false }, fromcurrent: true, mode: 'immediate', transition: { duration: 0, easing: 'linear' } }] }, { label: 'Very Slow', method: 'animate', args: [playFrameNames, { frame: { duration: 480, redraw: false }, fromcurrent: true, mode: 'immediate', transition: { duration: 0, easing: 'linear' } }] }, { label: 'Pause', method: 'animate', args: [[null], { frame: { duration: 0, redraw: false }, mode: 'immediate', transition: { duration: 0 } }] }] }], sliders: [{ active: activeFrame, steps: plotFrames.map(function(_, k) { return { method: 'animate', args: [[String(k)], { mode: 'immediate', frame: { duration: 0, redraw: false }, transition: { duration: 0 } }], label: String(k) }; }), transition: { duration: 0 }, x: 0.01, y: -0.15, currentvalue: { font: { size: 12 }, prefix: 'Frame: ', visible: true, xanchor: 'left' }, len: 0.99, pad: { b: 10, t: 10 } }] };
+  return { data: initData, layout: layout, frames: plotFrames, activeFrame: activeFrame };
+}
+function renderMoviePlot(data, initialFrameIdx) {
+  var target = 'movie-plot';
+  var spec = buildMovieFigureSpec(data, initialFrameIdx);
+  lastMovieFigureSpec = spec;
+  if (!spec || !window.Plotly) {
+    document.getElementById(target).innerHTML = '<p class="hint">No frames to plot.</p>';
+    return;
+  }
+  Plotly.purge(target);
+  Plotly.newPlot(target, spec.data, spec.layout, moviePlotlyConfig(target)).then(function() {
+    Plotly.addFrames(target, spec.frames);
+    var plot = document.getElementById(target);
+    if (plot && plot.on) {
+      plot.on('plotly_sliderchange', function(ev) {
+        var label = deepGet(ev || {}, ['step', 'label'], null);
+        var idx = Number(label);
+        if (isFinite(idx)) movieCurrentFrame = idx;
+      });
+      plot.on('plotly_animated', function() { movieCurrentFrame = currentMovieFrameIndex(); });
+    }
+  });
+}
+function selectedMovieFrameOptions(progressId) {
+  var opts = selectedMovieOptions();
+  opts.load_candles = true;
+  updateMovieDurationFrames();
+  opts.frames = Number(document.getElementById('movie-frames-input').value || 200);
+  opts.step_mins = Number(document.getElementById('movie-step-select').value || 240);
+  opts.visible_candles = Number(document.getElementById('movie-visible-input').value || 60);
+  opts.movie_engine = document.getElementById('movie-engine-select').value || 'local_simulation';
+  opts.movie_side = selectedMovieSideKey();
+  opts.pb7_backtest_dir = document.getElementById('movie-pb7-folder').value || document.getElementById('compare-pb7-folder').value || '';
+  opts.sim_max_candles = Math.max(10, opts.frames * opts.step_mins + 5);
+  opts.sim_max_orders = 20000;
+  opts.progress_id = progressId;
+  return opts;
+}
+function movieFrameOptionsKey(opts) {
+  opts = opts || {};
+  return JSON.stringify({
+    config: JSON.stringify(state.config || {}),
+    exchange: opts.exchange || '',
+    coin: opts.coin || '',
+    ohlcv_source: opts.ohlcv_source || '',
+    start_date: opts.start_date || '',
+    start_time: opts.start_time || '',
+    frames: Number(opts.frames || 0),
+    step_mins: Number(opts.step_mins || 0),
+    visible_candles: Number(opts.visible_candles || 0),
+    movie_engine: opts.movie_engine || '',
+    movie_side: selectedMovieSideKey(),
+    pb7_backtest_dir: opts.pb7_backtest_dir || ''
+  });
+}
+function applyMovieFrameResult(data) {
+  lastMovieData = data;
+  movieCurrentFrame = 0;
+  document.getElementById('movie-output').innerHTML = '<p class="hint">' + esc(data.message || '') + '</p>';
+  renderMovieDetails(data);
+  renderMoviePlot(data);
+  setMovieExportAvailable(true);
+  if (!data.ok || !(data.frames || []).length) throw new Error(data.message || 'No movie frames generated.');
+  return data;
+}
+function requestMovieFrames(progressId, signal) {
+  var opts = selectedMovieFrameOptions(progressId);
+  var optsKey = movieFrameOptionsKey(opts);
+  return apiFetch('/movie/frames', { method: 'POST', signal: signal, body: JSON.stringify({ config: state.config, options: opts, progress_id: progressId }) }).then(function(data) {
+    var result = applyMovieFrameResult(data);
+    lastMovieOptionsKey = optsKey;
+    return result;
+  });
+}
+function buildMovieFrames() {
+  if (movieAbortController) movieAbortController.abort();
+  movieProgressId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : String(Date.now()) + '-' + String(Math.random()).slice(2);
+  var buttons = [document.getElementById('btn-build-movie')].filter(Boolean);
+  var stopBtn = document.getElementById('btn-stop-movie');
+  var exportBtn = document.getElementById('btn-export-movie');
+  var oldLabels = buttons.map(function(btn) { return btn.textContent; });
+  buttons.forEach(function(btn) { btn.disabled = true; btn.textContent = 'Generating movie...'; });
+  if (exportBtn) exportBtn.disabled = true;
+  if (stopBtn) stopBtn.disabled = false;
+  function finishButtons() {
+    buttons.forEach(function(btn, idx) { btn.disabled = false; btn.textContent = oldLabels[idx] || 'Generate Movie'; });
+    if (stopBtn) stopBtn.disabled = true;
+    movieAbortController = null;
+  }
+  setMessages([{ level: 'info', text: 'Generating movie...' }]);
+  setMovieProgress(0, 'Generating movie...');
+  clearMovieExportDownload();
+  startMovieProgressPolling(movieProgressId);
+  document.getElementById('movie-output').innerHTML = '<span class="muted">Generating movie...</span>';
+  movieAbortController = new AbortController();
+  requestMovieFrames(movieProgressId, movieAbortController.signal).then(function(data) {
+    setMovieProgress(1, data.message || 'Movie Builder finished.');
+    setMessages([{ level: data.ok ? 'info' : 'warning', text: data.message || 'Movie Builder finished.' }]);
+    stopMovieProgressPolling();
+    finishButtons();
+  }).catch(function(err) {
+    if (err && err.name === 'AbortError') {
+      document.getElementById('movie-output').innerHTML = '<span class="muted">Movie Builder stopped.</span>';
+      setMessages([{ level: 'warning', text: 'Movie Builder stopped.' }]);
+      setMovieExportAvailable(!!lastMovieData && !!(lastMovieData.frames || []).length);
+      stopMovieProgressPolling();
+      finishButtons();
+      return;
+    }
+    document.getElementById('movie-output').innerHTML = '<span class="muted">Movie failed: ' + esc(err.message) + '</span>';
+    setMovieExportAvailable(!!lastMovieData && !!(lastMovieData.frames || []).length);
+    setMovieProgress(1, 'Movie failed: ' + err.message);
+    setMessages([{ level: 'error', text: 'Movie Builder failed: ' + err.message }]);
+    stopMovieProgressPolling();
+    finishButtons();
+  });
+}
+function fetchMovieExportBlob(body, signal) {
+  return fetch(API_BASE + '/movie/export', {
+    method: 'POST',
+    signal: signal,
+    headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }).then(function(res) {
+    if (!res.ok) return res.text().then(function(text) {
+      try { text = JSON.parse(text).detail || text; } catch (err) {}
+      throw new Error(text || ('HTTP ' + res.status));
+    });
+    var disposition = res.headers.get('Content-Disposition') || '';
+    var filename = movieExportFilename();
+    var match = disposition.match(/filename="?([^";]+)"?/i);
+    if (match && match[1]) filename = match[1];
+    return res.blob().then(function(blob) { return { blob: blob, filename: filename }; });
+  });
+}
+function exportMovieMp4() {
+  if (movieExportAbortController) movieExportAbortController.abort();
+  clearMovieExportDownload();
+  var btn = document.getElementById('btn-export-movie');
+  var buildBtn = document.getElementById('btn-build-movie');
+  var stopBtn = document.getElementById('btn-stop-movie');
+  var oldLabel = btn ? btn.textContent : 'Export MP4';
+  if (btn) { btn.disabled = true; btn.textContent = 'Exporting MP4...'; }
+  if (buildBtn) buildBtn.disabled = true;
+  if (stopBtn) stopBtn.disabled = false;
+
+  function exportGeneratedMovie(data) {
+    var spec = buildMovieFigureSpec(data, 0);
+    if (!spec || !(spec.frames || []).length) throw new Error('Movie export needs generated Plotly frames.');
+    var opts = selectedMovieExportOptions(spec);
+    movieProgressId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : String(Date.now()) + '-' + String(Math.random()).slice(2);
+    opts.progress_id = movieProgressId;
+    setMessages([{ level: 'info', text: 'Exporting Movie MP4...' }]);
+    setMovieProgress(0, 'Starting Movie export...');
+    startMovieProgressPolling(movieProgressId);
+    movieExportAbortController = new AbortController();
+    return fetchMovieExportBlob({ figure: { data: spec.data, layout: spec.layout, frames: spec.frames }, options: opts, progress_id: movieProgressId }, movieExportAbortController.signal).then(function(result) {
+      return { result: result, options: opts };
+    });
+  }
+
+  var currentMovieOptionsKey = movieFrameOptionsKey(selectedMovieFrameOptions(''));
+  var needsMovieFrames = !lastMovieData || !(lastMovieData.frames || []).length || lastMovieOptionsKey !== currentMovieOptionsKey;
+  var chain;
+  if (needsMovieFrames) {
+    movieProgressId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : String(Date.now()) + '-' + String(Math.random()).slice(2);
+    setMessages([{ level: 'info', text: 'Generating movie frames for export...' }]);
+    setMovieProgress(0, 'Generating movie frames for export...');
+    startMovieProgressPolling(movieProgressId);
+    document.getElementById('movie-output').innerHTML = '<span class="muted">Generating movie frames for export...</span>';
+    movieAbortController = new AbortController();
+    chain = requestMovieFrames(movieProgressId, movieAbortController.signal).then(function(data) {
+      stopMovieProgressPolling();
+      movieAbortController = null;
+      return exportGeneratedMovie(data);
+    });
+  } else {
+    chain = exportGeneratedMovie(lastMovieData);
+  }
+
+  chain.then(function(payload) {
+    stopMovieProgressPolling();
+    setMovieProgress(1, 'Movie export ready.');
+    lastMovieExportUrl = URL.createObjectURL(payload.result.blob);
+    var link = document.getElementById('movie-export-download');
+    if (link) {
+      link.href = lastMovieExportUrl;
+      link.download = payload.result.filename || payload.options.filename || 'movie.mp4';
+      link.textContent = 'Download MP4 (' + humanSize(payload.result.blob.size || 0) + ')';
+      link.classList.add('active');
+    }
+    setMessages([{ level: 'info', text: 'Movie export ready.' }]);
+  }).catch(function(err) {
+    stopMovieProgressPolling();
+    if (err && err.name === 'AbortError') {
+      setMovieProgress(1, 'Movie export stopped.');
+      setMessages([{ level: 'warning', text: 'Movie export stopped.' }]);
+      return;
+    }
+    setMovieProgress(1, 'Movie export failed: ' + err.message);
+    setMessages([{ level: 'error', text: 'Movie export failed: ' + err.message }]);
+  }).finally(function() {
+    if (btn) { btn.disabled = false; btn.textContent = oldLabel || 'Export MP4'; }
+    if (buildBtn) buildBtn.disabled = false;
+    if (stopBtn) stopBtn.disabled = true;
+    movieExportAbortController = null;
+    movieAbortController = null;
+    saveMovieExportSettings();
+  });
+}
+function selectStage(stage) {
+  document.querySelectorAll('.sb-section[data-stage]').forEach(function(btn) { btn.classList.toggle('active', btn.dataset.stage === stage); });
+  document.querySelectorAll('.stage-view').forEach(function(view) { view.classList.toggle('active', view.id === 'stage-' + stage); });
+  if (stage === 'simulation' && state.snapshot) {
+    setTimeout(function() { renderSimulationWorkspace(state.snapshot); }, 0);
+  }
+}
+function loadSession() {
+  var qs = '?draft_id=' + encodeURIComponent(DRAFT_ID || '') + '&result_path=' + encodeURIComponent(RESULT_PATH || '');
+  apiFetch('/session' + qs).then(function(data) {
+    if (Array.isArray(deepGet(data, ['page', 'hsl_signal_modes'], null))) state.hslSignalModes = data.page.hsl_signal_modes;
+    state.source = deepGet(data, ['snapshot', 'source'], 'default');
+    renderSnapshot(data.snapshot || {}); syncOptionsFromConfig(data.snapshot || {});
+    return populateMarkets().then(function() {
+      inferInitialSelectors(data.snapshot || {});
+      applyInitialResultPath(data.result_path || RESULT_PATH || '');
+      applyBacktestHandoff(data.handoff || {}, data.result_path || RESULT_PATH || '');
+      document.getElementById('movie-status').textContent = deepGet(data, ['movie', 'message'], 'Build replay frames from the selected candle window.');
+      setMovieExportAvailable(true);
+      setMessages(data.messages || deepGet(data, ['snapshot', 'messages'], []));
+    });
+  }).catch(function(err) { setMessages([{ level: 'error', text: 'Failed to load Strategy Explorer session: ' + err.message }]); });
+}
+document.querySelectorAll('.sb-section[data-stage]').forEach(function(btn) { btn.addEventListener('click', function() { selectStage(btn.dataset.stage); }); });
+document.querySelectorAll('input[name="compare-mode"]').forEach(function(input) { input.addEventListener('change', updateCompareModeUi); });
+document.querySelectorAll('.accordion-head').forEach(function(btn) { btn.addEventListener('click', function() { var card = btn.closest('.accordion-card'); if (card) card.classList.toggle('collapsed'); }); });
+document.getElementById('exchange-select').addEventListener('change', function() { updateCoinSelect(); changeMarket(); });
+document.getElementById('coin-select').addEventListener('change', changeMarket);
+document.getElementById('ohlcv-source-select').addEventListener('change', changeOhlcvSource);
+document.getElementById('context-days-input').addEventListener('input', function() { document.getElementById('context-days-value').textContent = Number(this.value || 0).toFixed(2); });
+document.getElementById('start-date-input').addEventListener('change', recalculate);
+document.getElementById('start-time-input').addEventListener('change', recalculate);
+document.getElementById('context-days-input').addEventListener('change', recalculate);
+document.getElementById('auto-exchange-params').addEventListener('change', function() { state.autoExchangeParams = this.checked; recalculate(); });
+document.getElementById('btn-reset-exchange-params').addEventListener('click', function() { state.exchangeParamOverrides = {}; state.autoExchangeParams = true; var autoEl = document.getElementById('auto-exchange-params'); if (autoEl) autoEl.checked = true; recalculate(); });
+document.getElementById('sim-start-state-select').addEventListener('change', updateSimulationStartStateUi);
+document.getElementById('btn-run-local-sim').addEventListener('click', function() { runSimulation('local_simulation'); });
+document.getElementById('btn-run-pb7-engine').addEventListener('click', function() { runSimulation('pb7_engine'); });
+document.getElementById('btn-run-compare').addEventListener('click', runCompare);
+document.getElementById('movie-step-select').addEventListener('change', function() { syncMovieDurationOptions(); updateMovieDurationFrames(); });
+document.getElementById('movie-duration-select').addEventListener('change', updateMovieDurationFrames);
+document.getElementById('movie-frames-input').addEventListener('input', function() { var sel = document.getElementById('movie-duration-select'); if (sel && sel.value !== 'Custom (Frames)') sel.value = 'Custom (Frames)'; });
+document.getElementById('movie-visible-input').addEventListener('input', function() { if (lastMovieData) renderMoviePlot(lastMovieData, currentMovieFrameIndex()); });
+document.getElementById('btn-build-movie').addEventListener('click', buildMovieFrames);
+document.getElementById('btn-stop-movie').addEventListener('click', stopMovieBuilder);
+document.getElementById('btn-export-movie').addEventListener('click', exportMovieMp4);
+document.getElementById('movie-export-preset').addEventListener('change', applyMovieExportPreset);
+['movie-export-codec', 'movie-export-width', 'movie-export-height', 'movie-export-scale', 'movie-export-crf', 'movie-export-ffmpeg-preset'].forEach(function(id) {
+  var el = document.getElementById(id);
+  if (el) el.addEventListener('change', markMovieExportCustom);
+});
+document.addEventListener('fullscreenchange', function() {
+  if (!window.Plotly) return;
+  var full = document.fullscreenElement;
+  ['plot-long', 'plot-short', 'sim-plot-long', 'sim-plot-short', 'movie-plot'].forEach(function(id) {
+    var plot = document.getElementById(id);
+    if (!plot) return;
+    var normalHeight = id === 'movie-plot' ? 760 : 520;
+    var height = full === plot ? Math.max(320, window.innerHeight - 16) : normalHeight;
+    setTimeout(function() { Plotly.relayout(plot, { height: height, autosize: true }); }, 50);
+  });
+});
+(function() {
+  var main = document.getElementById('main-content');
+  if (!main) return;
+  var scrollTimer = null;
+  main.addEventListener('scroll', function() {
+    main.classList.add('is-scrolling');
+    if (scrollTimer) clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(function() { main.classList.remove('is-scrolling'); }, 140);
+  }, { passive: true });
+})();
+(function() {
+  var tip = document.getElementById('data-tip-tooltip');
+  if (!tip) return;
+  var lastEvent = null;
+  var frameId = 0;
+  function positionTip() {
+    frameId = 0;
+    if (!lastEvent || tip.style.display === 'none') return;
+    var x = lastEvent.clientX + 14;
+    var y = lastEvent.clientY + 14;
+    var tw = tip.offsetWidth;
+    var th = tip.offsetHeight;
+    if (x + tw > window.innerWidth - 8) x = lastEvent.clientX - tw - 10;
+    if (y + th > window.innerHeight - 8) y = lastEvent.clientY - th - 10;
+    tip.style.transform = 'translate(' + x + 'px, ' + y + 'px)';
+  }
+  document.addEventListener('mouseover', function(e) {
+    var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+    if (!el) return;
+    var text = el.getAttribute('data-tip');
+    if (!text) return;
+    tip.textContent = text;
+    tip.style.display = 'block';
+    lastEvent = e;
+    if (!frameId) frameId = requestAnimationFrame(positionTip);
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (tip.style.display === 'none') return;
+    lastEvent = e;
+    if (!frameId) frameId = requestAnimationFrame(positionTip);
+  }, { passive: true });
+  document.addEventListener('mouseout', function(e) {
+    var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+    if (el) {
+      tip.style.display = 'none';
+      lastEvent = null;
+      if (frameId) cancelAnimationFrame(frameId);
+      frameId = 0;
+    }
+  });
+})();
+window.PBGUI_HELP_OPENER = function() {
+  var ovl = document.getElementById('help-ovl');
+  if (ovl) ovl.classList.add('visible');
+};
+document.getElementById('help-close').addEventListener('click', function() {
+  document.getElementById('help-ovl').classList.remove('visible');
+});
+window.PBGUI_NAV_CONFIG = { subtitle: 'Strategy Explorer', current: 'v7_strategy_explorer', token: TOKEN, apiBase: API_BASE, version: PBGUI_VERSION, serial: PBGUI_SERIAL };
+syncMovieDurationOptions();
+applyInitialResultPath(RESULT_PATH || '');
+loadMovieExportOptions();
+loadSession();
+updateCompareModeUi();
+</script>
+<script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+</body>
+</html>

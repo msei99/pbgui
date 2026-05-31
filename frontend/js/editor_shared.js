@@ -633,7 +633,6 @@
     var apiBase = getBalanceCalcApiBase(opts && opts.apiBase);
     var draftId = await createBalanceCalcDraft(opts);
     var url = apiBase + '/main_page?token=' + encodeURIComponent((opts && opts.token) || '') +
-      '&st_base=' + encodeURIComponent((opts && opts.stBase) || '') +
       '&draft_id=' + encodeURIComponent(draftId) +
       '&exchange=' + encodeURIComponent(exchange);
     if (!opts || opts.navigate !== false) {

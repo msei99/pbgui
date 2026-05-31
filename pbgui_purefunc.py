@@ -63,7 +63,11 @@ def pbgui_ini_path() -> Path:
     return Path(__file__).resolve().parent / "pbgui.ini"
 
 
-def streamlit_secrets_path() -> Path:
+def pbgui_auth_secrets_path() -> Path:
+    return Path(__file__).resolve().parent / "data" / "auth" / "secrets.toml"
+
+
+def legacy_auth_secrets_path() -> Path:
     return Path(__file__).resolve().parent / ".streamlit" / "secrets.toml"
 
 
@@ -248,7 +252,7 @@ def import_passivbot_rust():
     return pbr
 
 PBGDIR = Path(__file__).resolve().parent
-PBGUI_VERSION = "v1.80"
+PBGUI_VERSION = "v1.81"
 _serial_path = PBGDIR / 'api' / 'serial.txt'
 PBGUI_SERIAL = _serial_path.read_text().strip() if _serial_path.exists() else ''
 

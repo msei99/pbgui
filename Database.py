@@ -2,7 +2,7 @@ from pathlib import Path
 from datetime import datetime
 from User import Users, User
 from Exchange import Exchange
-from pbgui_func import PBGDIR
+from pbgui_purefunc import PBGDIR
 from logging_helpers import human_log as _human_log
 import shutil
 import sqlite3

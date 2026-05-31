@@ -113,4 +113,4 @@ argument-hint: 'Optional: name of page or element to migrate (e.g. dashboard_mai
 ## Notes
 - Source of truth: `frontend/api_keys_editor.html` `:root` block (line ~10)
 - `--sp-*`, `--input-h`, `--btn-h` are defined but not yet wired everywhere — wire them as you touch elements
-- Do NOT apply these tokens to Streamlit pages (`.py` navi files) — Streamlit has its own theming
+- No Streamlit pages remain; apply these tokens only to FastAPI-served frontend HTML/CSS.

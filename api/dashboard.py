@@ -927,7 +927,6 @@ def get_editor_page(
 def get_main_page(
     request: Request,
     current: str = Query(default="", description="Currently selected dashboard name"),
-    st_base: str = Query(default="", description="Browser-visible Streamlit base URL"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     """Serve the standalone dashboard main page (logo + sidebar + content area)."""
@@ -945,27 +944,20 @@ def get_main_page(
     api_base = origin + "/api"
     ws_base  = api_base.replace("http://", "ws://").replace("https://", "wss://")
 
-    # st_base may arrive empty when DOMPurify XML-escapes '&' in the redirect
-    # URL (turning &st_base= into amp;st_base=, which FastAPI ignores).
-    # Fallback: derive from the request hostname + Streamlit default port.
-    if not st_base:
-        st_base = f"http://{host}:8501"
-
     html = html.replace('"%%TOKEN%%"',         _json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"',      _json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"',       _json.dumps(ws_base))
-    html = html.replace('"%%ST_BASE%%"',       _json.dumps(st_base))
     html = html.replace('"%%CURRENT%%"',       _json.dumps(current))
 
-    from Dashboard import Dashboard as _Dashboard
+    from pbgui_purefunc import PBGDIR, PBGUI_SERIAL, PBGUI_VERSION
+
     try:
-        dashboards = sorted(_Dashboard().list_dashboards())
+        dashboards_dir = _P(PBGDIR) / "data" / "dashboards"
+        dashboards = sorted(path.stem for path in dashboards_dir.glob("*.json") if path.is_file())
     except Exception:
         dashboards = []
     html = html.replace("%%DASHBOARDS_JSON%%", _json.dumps(dashboards))
 
-    from pbgui_func import PBGUI_VERSION
-    from pbgui_purefunc import PBGUI_SERIAL
     html = html.replace('"%%VERSION%%"', _json.dumps(PBGUI_VERSION))
     html = html.replace('%%VERSION%%', PBGUI_VERSION)
     html = html.replace('"%%SERIAL%%"', _json.dumps(PBGUI_SERIAL))
@@ -1416,7 +1408,7 @@ def get_income_backups(
 ):
     """Return the latest 10 DB backups for the restore picker."""
     from pathlib import Path as _P
-    from pbgui_func import PBGDIR
+    from pbgui_purefunc import PBGDIR
     backups_dir = _P(f"{PBGDIR}/data/backup/db")
     result = []
     if backups_dir.exists():
@@ -1442,7 +1434,7 @@ def restore_income_backup(
     session: SessionToken = Depends(require_auth),
 ):
     """Restore the DB from a backup file."""
-    from pbgui_func import PBGDIR
+    from pbgui_purefunc import PBGDIR
     backup_dir = Path(f"{PBGDIR}/data/backup/db").resolve()
     try:
         restore_path = Path(payload.path).resolve()

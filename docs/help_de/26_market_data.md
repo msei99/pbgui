@@ -116,9 +116,9 @@ Hyperliquid verwendet statt dieses gemeinsamen iframes eine eigene Inline-Data-A
 
 Auch seine Aktionsdialoge sind jetzt im Seitenstil eingebettet: Cancel-, Delete-, Retry-, Requeue- und Bulk-Delete-Bestätigungen fallen nicht mehr auf browsernative Popup-Fenster zurück.
 
-Das FastAPI-Panel `OHLCV Data` folgt jetzt demselben Paritätsziel. Für die gewählte Exchange erscheinen die Dataset-Buttons direkt in der Sidebar: `1m` und `PB7 cache` sind immer verfügbar, auf Hyperliquid zusätzlich `1m_api` und `l2Book`. Im Hauptbereich bleibt dann derselbe Ablauf wie in Streamlit erhalten: Summary-Metriken, eine filterbare Inventory-Tabelle, Delete-Tools für schreibbare Datasets, eine Coverage-Heatmap, bei Verfügbarkeit eine Minute-Heatmap und optional ein OHLCV-Detailchart. `PB7 cache` bleibt read-only.
+Das FastAPI-Panel `OHLCV Data` bündelt den kompletten Datenprüfungsablauf an einer Stelle. Für die gewählte Exchange erscheinen die Dataset-Buttons direkt in der Sidebar: `1m` und `PB7 cache` sind immer verfügbar, auf Hyperliquid zusätzlich `1m_api` und `l2Book`. Im Hauptbereich erscheinen Summary-Metriken, eine filterbare Inventory-Tabelle, Delete-Tools für schreibbare Datasets, eine Coverage-Heatmap, bei Verfügbarkeit eine Minute-Heatmap und optional ein OHLCV-Detailchart. `PB7 cache` bleibt read-only.
 
-Dieses FastAPI-OHLCV-Detailchart nutzt jetzt ebenfalls dieselbe Lazy-Zoom-Strategie wie die Streamlit-Version. Das Iframe lädt anfangs nur grobe Layer, dadurch öffnen lange Historien wieder zuverlässig, und feinere Kerzen werden beim Reinzoomen gezielt nachgeladen statt den kompletten `15m`-/`5m`-/`1m`-Pyramiden-Block sofort einzubetten.
+Dieses FastAPI-OHLCV-Detailchart nutzt Lazy-Zoom-Laden. Das Iframe lädt anfangs nur grobe Layer, dadurch öffnen lange Historien wieder zuverlässig, und feinere Kerzen werden beim Reinzoomen gezielt nachgeladen statt den kompletten `15m`-/`5m`-/`1m`-Pyramiden-Block sofort einzubetten.
 
 Auch das Iframe-Template selbst wird jetzt wieder als echtes HTML/JS ausgeliefert, sodass der Chart nicht mehr wegen versehentlich escapeter Anführungszeichen im eingebetteten Script auf einem leeren `Loading chart...`-Panel stehen bleibt.
 

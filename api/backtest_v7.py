@@ -870,7 +870,6 @@ def shutdown():
 @router.get("/main_page", response_class=HTMLResponse)
 def main_page(
     request: Request,
-    st_base: str = Query(default="", description="Streamlit base URL"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     html_path = Path(__file__).resolve().parent.parent / "frontend" / "v7_backtest.html"
@@ -888,10 +887,6 @@ def main_page(
     html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
-
-    if not st_base:
-        st_base = f"http://{host}:8501"
-    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
 
     from pbgui_purefunc import PBGUI_VERSION, PBGUI_SERIAL
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
@@ -1468,7 +1463,7 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)):
 
     Body: {name} or {name, config}.
     Without ``config``: uses the existing config at data/bt_v7/{name}/backtest.json
-    directly (override files sit next to it, same as Streamlit).
+    directly (override files sit next to it, matching the historical layout).
     With ``config``: saves to data/bt_v7/{name}/backtest.json first (for re-backtest
     from results with modified params).
     """
@@ -2110,7 +2105,7 @@ def git_pull(name: str, session: SessionToken = Depends(require_auth)):
 
 @router.post("/archives/pull-all")
 def pull_all_archives(session: SessionToken = Depends(require_auth)):
-    """Pull all cloned archives (like Streamlit git_pull)."""
+    """Pull all cloned archives."""
     _log_archive("Manual pull-all triggered")
     results = _pull_all_archives_sync()
     return {"ok": True, "results": results}
@@ -2146,7 +2141,7 @@ def git_push(name: str, body: dict = None, session: SessionToken = Depends(requi
                            capture_output=True, timeout=10)
 
         if not dry_run:
-            # Pull before push (like Streamlit)
+            # Pull before push to avoid overwriting remote archive updates.
             pull_result = subprocess.run(
                 ["git", "pull"], cwd=str(dest),
                 capture_output=True, text=True, timeout=60
@@ -2215,7 +2210,7 @@ def add_config_to_archive(name: str, body: dict,
     if not source_path or not dest_name:
         raise HTTPException(400, "source_path and dest_name are required")
 
-    # Compute dest_name the same way Streamlit does: everything after the last /pbgui/ segment
+    # Compute dest_name from everything after the last /pbgui/ segment.
     if not dest_name:
         parts = source_path.replace("\\", "/").split("/pbgui/")
         dest_name = parts[-1].strip("/") if len(parts) > 1 else Path(source_path).name
@@ -2231,7 +2226,7 @@ def add_config_to_archive(name: str, body: dict,
     if not archive_dir.exists():
         raise HTTPException(404, f"Archive '{name}' not found")
 
-    # Read archive settings from ini to get my_archive_path (same section as Streamlit)
+    # Read archive settings from ini to get my_archive_path.
     my_path = load_ini("config_archive", "my_archive_path") or ""
     dest_dir = archive_dir / my_path / dest_name if my_path else archive_dir / dest_name
     dest_dir.parent.mkdir(parents=True, exist_ok=True)

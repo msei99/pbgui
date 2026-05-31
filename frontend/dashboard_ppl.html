@@ -1,8 +1,7 @@
 <!-- Dashboard P+L (Profits & Losses) — live view component.
-     Embedded via st.html(unsafe_allow_javascript=True).  NOTE: st.html is NOT iframed;
-     multiple instances share the same window/document.  Every DOM id and window.*
+     Multiple instances may share the same window/document.  Every DOM id and window.*
      variable MUST be scoped by POSITION to avoid collisions.
-     Config injected as JS variables (%%PLACEHOLDER%%) by Dashboard.py.
+     Config injected as JS variables (%%PLACEHOLDER%%).
      All rendering delegated to DashRender.buildPpl() — single source of truth.
      Data updates driven by WebSocket income_updated events — zero polling. -->
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
@@ -73,12 +72,6 @@
     }
 
     function reportHeight() {
-        var h = document.documentElement.scrollHeight + 16;
-        try {
-            window.parent.postMessage(
-                { isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'
-            );
-        } catch (_) {}
     }
 
     function load() {

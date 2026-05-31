@@ -1,19 +1,8 @@
-<!-- HL Data Actions — embedded via st.html(unsafe_allow_javascript=True)
+<!-- HL Data Actions.
      Two collapsible sections (Download l2Book + Build best 1m OHLCV) with
      inline job monitors via WebSocket. No iframes. All CSS scoped under
      .hlda-root. Config injected via data-attributes on root element.
-     All event binding via addEventListener / event delegation
-     (DOMPurify strips inline onclick).
-
-     *** IMPORTANT: \x3C / \x3E escaping in JS strings is MANDATORY ***
-     Streamlit 1.54 applies DOMPurify with SAFE_FOR_XML=true even when
-     unsafe_allow_javascript=True.  DOMPurify's element sanitizer checks:
-       if (/<[/\w!]/.test(scriptElement.innerHTML)) → REMOVE entire <script>
-     Any literal '<' followed by '/', word-char, or '!' inside a script
-     block causes DOMPurify to delete the whole element.  Using \x3C / \x3E
-     avoids the pattern.  Comparison operators must also be spaced (a < b,
-     not a<b).  See market_data_status.html which uses the same pattern.
-     When migrating away from Streamlit, bulk-replace \x3C→< and \x3E→>.
+     All event binding via addEventListener / event delegation.
 -->
 
 <style>

@@ -1,4 +1,5 @@
-__pycache__/*
+__pycache__/
+.pytest_cache/
 .gitignore
 data/*
 caches/
@@ -6,13 +7,12 @@ caches/
 pbgui.ini
 start.sh
 .streamlit/secrets.toml
+.streamlit/config.toml
 binance_markets.json
 todo.txt
 pbgui.log
 PBRun_test.py
-Dashboard.py
 pbgui.code-workspace
-Dashboard.py
 *.pyc
 test_results/
 test-results/
@@ -28,7 +28,6 @@ tools/
 
 # Copilot instructions (keep local edits out of commits)
 .github/copilot-instructions.md
-navi/v7_strategy_explorer.py.backup
 
 # Local-only diagnose script (do not commit)
 live_bt_diagnose.py

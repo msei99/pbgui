@@ -269,7 +269,6 @@ _VPS_SETTINGS_KEYS = {"debug_logging"}
 @router.get("/api/vps/main_page", response_class=HTMLResponse)
 def get_main_page(
     request: Request,
-    st_base: str = Query(default="", description="Browser-visible Streamlit base URL"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     """Serve the standalone VPS Monitor page with token injected server-side."""
@@ -284,14 +283,10 @@ def get_main_page(
     origin = f"{scheme}://{host}" + (f":{port}" if port else "")
     ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
 
-    if not st_base:
-        st_base = f"http://{host}:8501"
-
     html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
-    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
 
-    from pbgui_func import PBGUI_VERSION
+    from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)

@@ -1,8 +1,7 @@
-<!-- Dashboard Grid Editor header — embedded via st.html(unsafe_allow_javascript=True).
+<!-- Dashboard Grid Editor header.
      Handles Dashboard Name, Columns, and Rows.
-     Rows/Cols changes are pushed into URL query params to trigger Streamlit reruns.
-     Cell type selectors and swap buttons are rendered by Streamlit inline with previews.
-     Config injected as JS variables (%%PLACEHOLDER%% pattern) by Dashboard.py.
+     Rows/Cols changes are pushed into URL query params for the editor state.
+     Config injected as JS variables (%%PLACEHOLDER%% pattern).
 -->
 <style>
 :root {
@@ -87,7 +86,7 @@
     statusEl.className = "dge-status" + (cls ? " " + cls : "");
   }
 
-  // Push rows/cols into URL query params so Streamlit reruns automatically
+  // Push rows/cols into URL query params for editor state.
   function pushQueryParams() {
     var p = new URLSearchParams(window.location.search);
     p.set('_dbe_rows', rows);

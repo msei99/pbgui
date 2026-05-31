@@ -1051,17 +1051,15 @@
     <script src="/app/js/pbgui_dialogs.js?v=1"></script>
     <script>
     // ── Config ──────────────────────────────────────────────
-    // TOKEN, API_BASE, ST_BASE, PBGUI_VERSION and PBGUI_SERIAL are injected server-side by /main_page.
+    // TOKEN, API_BASE, PBGUI_VERSION and PBGUI_SERIAL are injected server-side by /main_page.
     // The server replaces "%%PLACEHOLDER%%" (with quotes) via html.replace(),
     // so guard strings must use a DIFFERENT form to avoid being replaced too.
     var TOKEN          = "%%TOKEN%%";
     var API_BASE       = "%%API_BASE%%";
-    var ST_BASE        = "%%ST_BASE%%";
     var PBGUI_VERSION  = "%%VERSION%%";
     var PBGUI_SERIAL   = "%%SERIAL%%";
     if (TOKEN          === "%%" + "TOKEN%%")    TOKEN          = new URLSearchParams(window.location.search).get("token") || "";
     if (API_BASE       === "%%" + "API_BASE%%") API_BASE       = "/api/api-keys";
-    if (ST_BASE        === "%%" + "ST_BASE%%")  ST_BASE        = "";
     if (PBGUI_VERSION  === "%%" + "VERSION%%")  PBGUI_VERSION  = "";
     if (PBGUI_SERIAL   === "%%" + "SERIAL%%")   PBGUI_SERIAL   = "";
     const HEADERS = {
@@ -3670,13 +3668,12 @@
     }());
     </script>
 
-    <!-- ── Shared nav bar (must come after TOKEN/ST_BASE/API_BASE/PBGUI_VERSION are set) ── -->
+    <!-- ── Shared nav bar ── -->
     <script>
     window.PBGUI_NAV_CONFIG = {
         subtitle: 'API KEYS',
         current:  'system_api_keys',
         token:    TOKEN,
-        stBase:   ST_BASE,
         apiBase:  API_BASE,
         version:  PBGUI_VERSION,
         serial:   PBGUI_SERIAL

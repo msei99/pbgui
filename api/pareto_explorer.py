@@ -1,9 +1,8 @@
 """
-api/pareto_explorer.py - Standalone FastAPI page for the new Pareto Explorer.
+api/pareto_explorer.py - FastAPI page and API for the PBv7 Pareto Explorer.
 
-Phase 1 provides the page shell, bootstrap session payload, and result-path
-validation so the new FastAPI/JS UI can run in parallel with the legacy
-Streamlit explorer during migration.
+Provides the FastAPI/JS page shell, bootstrap session payload, and result-path
+validation for the Pareto Explorer.
 """
 
 from __future__ import annotations
@@ -920,7 +919,7 @@ def _preview_display_metrics(loader: ParetoDataLoader, *, use_weighted: bool, co
             if len(display_metrics) >= 2:
                 break
     else:
-        # Mirror the currently visible Streamlit preview behavior exactly.
+        # Mirror the currently visible preview behavior exactly.
         # In the legacy implementation this branch belongs to the
         # `if len(display_metrics) < 2` check, so runs with 2+ scoring metrics
         # are rendered using unweighted names even when the weighted toggle is on.
@@ -2911,7 +2910,6 @@ def _build_server_refresh_bundle(loader: ParetoDataLoader, *, all_results_loaded
 @router.get("/main_page", response_class=HTMLResponse)
 def main_page(
     request: Request,
-    st_base: str = Query(default="", description="Streamlit base URL"),
     result_path: str = Query(default="", description="Optimize result directory to open"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
@@ -2928,13 +2926,9 @@ def main_page(
     api_base = origin + "/api/pareto-explorer"
     ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
 
-    if not st_base:
-        st_base = f"http://{host}:8501"
-
     html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
-    html = html.replace('"%%ST_BASE%%"', json.dumps(st_base))
     html = html.replace('"%%RESULT_PATH%%"', json.dumps(str(result_path or "")))
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
@@ -2961,7 +2955,7 @@ def get_session(
     messages = [] if result_meta else [
         {
             "level": "warning",
-            "text": "Open the new Pareto Explorer with a valid optimize result path to start the FastAPI migration preview.",
+            "text": "Open Pareto Explorer from an Optimize result or enter a valid optimize result path to load analysis data.",
         }
     ]
     if result_meta:

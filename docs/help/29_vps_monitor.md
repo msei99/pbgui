@@ -2,7 +2,7 @@
 
 VPS Monitor is a real-time operations dashboard for all configured VPS hosts.
 
-It uses the PBAPIServer as backend and receives updates over WebSocket, so UI updates are live without Streamlit reruns.
+It uses the PBAPIServer as backend and receives updates over WebSocket, so UI updates are live without page reloads or polling.
 
 ## What you can monitor
 

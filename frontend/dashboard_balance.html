@@ -1,6 +1,5 @@
-<!-- Dashboard Balance component — embedded via st.html(unsafe_allow_javascript=True).
-     Config injected as JS variables (%%PLACEHOLDER%% pattern) by Dashboard.py.
-     All angle brackets inside JS strings escaped as \x3C / \x3E for DOMPurify.
+<!-- Dashboard Balance component.
+     Config injected as JS variables (%%PLACEHOLDER%% pattern).
      CSS is provided by dashboard_render.js (loaded dynamically at init). -->
 
 <div id="db-root" class="db-root" data-token="" data-api-base="" data-api-host="">
@@ -57,7 +56,7 @@
 
 <script>
 (function () {
-    // Config injected directly by view_balance_impl in Dashboard.py
+    // Config injected directly by the dashboard view renderer.
     var TOKEN    = "%%TOKEN%%";
     var API_BASE = "%%API_BASE%%";
     var API_HOST = "%%API_HOST%%";
@@ -398,7 +397,7 @@
         }
     }
 
-    // Attach event listeners (DOMPurify strips inline onclick/onchange)
+    // Attach event listeners without inline onclick/onchange attributes.
     var ths = document.querySelectorAll('.db-table thead th[data-col]');
     for (var ti = 0; ti < ths.length; ti++) {
         (function(th) {

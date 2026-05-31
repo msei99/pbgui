@@ -129,7 +129,7 @@ The status cards above the setup grid are live operator hints:
 - **Update Ready** turns green as soon as a VPS user password is entered locally and shows how many Linux updates are pending.
 - **CoinData Ready** shows the remaining CoinMarketCap credits when that value is available from PBRemote.
 - Pending Linux updates and reboot-needed hints are refreshed from a live SSH package-status probe, so the cards no longer wait for the slower hourly `PBRemote` alive refresh.
-- The detail page also includes a one-row summary table plus a remote server resource snapshot similar to the old Streamlit view.
+- The detail page also includes a one-row summary table plus a remote server resource snapshot similar to the previous server view.
 
 `Cleanup VPS` also installs or refreshes two small daily cleanup cron jobs on the VPS: one user-level job for pip and rustup caches, plus one root-level job for `journalctl --vacuum-time=1d`. The periodic jobs run quietly and do not keep their own log history.
 

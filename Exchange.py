@@ -353,6 +353,11 @@ class Exchange:
                 self.instance.walletAddress = self.user.wallet_address
             if getattr(self.user, 'private_key', None):
                 self.instance.privateKey = self.user.private_key
+        try:
+            self.instance.checkRequiredCredentials()
+            self.error = None
+        except Exception as exc:
+            self.error = str(exc)
 
     def close(self):
         """Close the exchange instance and release resources (e.g. aiohttp sessions)."""
@@ -3003,5 +3008,4 @@ class Exchange:
             balance_needed += balance_needed_symbol
             # print(symbol, we, min_price, balance_needed_symbol)
         return balance_needed
-
 

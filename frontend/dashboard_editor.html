@@ -1,8 +1,7 @@
 <!DOCTYPE html>
 <!-- Dashboard Grid Editor — served as full page by FastAPI /api/dashboard/editor_page.
      Handles Name, Columns, Rows, per-cell type + config entirely in Vanilla JS.
-     No Streamlit reruns needed when layout or cell settings change.
-     Config is synced to FastAPI /api/dashboard/pending_full; Streamlit save() reads it.
+     Config is synced to FastAPI /api/dashboard/pending_full for dashboard saves.
 -->
 <html lang="en">
 <head>
@@ -33,7 +32,7 @@ body {
   background: #0e1117;
   color: #e2e8f0;
 }
-/* ── Outer wrapper (st.html strips body, so this is the real layout root) ── */
+/* ── Outer wrapper ── */
 .editor-wrapper {
   display: flex; flex-direction: column;
   height: 85vh; overflow: hidden;
@@ -493,7 +492,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
   var API_BASE = "%%API_BASE%%";
   var ORIG_NAME  = %%DASHBOARD_NAME%%;  /* JSON-encoded: "MyDash" or "" */
   var VIEW_ONLY  = %%VIEW_ONLY%%;       /* 0 = edit, 1 = view-only */
-  var STANDALONE = %%STANDALONE%%;      /* 0 = Streamlit iframe, 1 = standalone page */
+  var STANDALONE = %%STANDALONE%%;      /* 0 = embedded frame, 1 = standalone page */
 
   /* ── constants ── */
   var TYPES   = ['NONE','PNL','ADG','P+L','INCOME','TOP','BALANCE','POSITIONS','ORDERS'];
@@ -550,16 +549,6 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
   }
 
   function reportHeight() {
-    /* Report the wrapper's rendered height (85vh) so Streamlit gives us enough space.
-       The actual scrolling happens inside .editor-scroll-area, not the page. */
-    var wrap = document.querySelector('.editor-wrapper');
-    var h = wrap ? wrap.offsetHeight + 16 : 800;
-    try {
-      window.parent.postMessage(
-        { isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h },
-        '*'
-      );
-    } catch (e) {}
   }
 
   /* ── build widget palette ── */

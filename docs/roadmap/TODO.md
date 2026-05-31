@@ -1,6 +1,6 @@
 # PBGui – Gemeinsame TODO / Roadmap
 
-Stand: 2026-02-19
+Stand: 2026-05-31
 Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien umsetzen.
 
 ## Prioritäten
@@ -12,21 +12,7 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 
 ## P0 – Sicherheit & Stabilität
 
-### 1) PBRemote hardening + Codequalität
-**Ziel**
-- PBRemote stabil, thread-safe und ohne unsichere Patterns betreiben.
-
-**Umfang**
-- Race Conditions identifizieren und beheben (Locking, atomare Writes, saubere Worker-Lifecycle).
-- Unsicheren Code entfernen (unsaubere Shell-Aufrufe, unvalidierte Inputs, stille Exception-Swallows).
-- Logging und Fehlerpfade vereinheitlichen (klarer Kontext, reproduzierbare Fehlermeldungen).
-
-**Done wenn**
-- Keine bekannten Race-Condition-Hotspots mehr offen.
-- Kritische Pfade haben definierte Error-Strategien.
-- Relevante Tests für Nebenläufigkeit/Fehlerfälle vorhanden und grün.
-
-### 2) CMC API Pool (Master + VPS) mit globaler Usage-Steuerung
+### 1) CMC API Pool (Master + VPS) mit globaler Usage-Steuerung
 **Ziel**
 - CMC API-Limits (10k) nicht mehr reißen, Last intelligent über mehrere Keys verteilen.
 
@@ -46,21 +32,7 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 
 ## P1 – Betrieb & Observability
 
-### 3) Live-Logstream von VPS im Master (anstatt Ansible-Pull)
-**Ziel**
-- Logs einzelner VPS in Echtzeit direkt im Master sehen.
-
-**Umfang**
-- Streaming-Kanal für Log-Tail (push/poll-basiert, robust bei Reconnect).
-- Auswahl nach VPS/Service/Logdatei.
-- Basis-Filter: Level, Zeitfenster, Textsuche.
-
-**Done wenn**
-- Logzeilen laufen live im Master ein.
-- Verbindungsabbrüche werden sauber wieder aufgenommen.
-- Ansible ist nicht mehr der primäre Weg für Live-Debugging.
-
-### 4) Logging über alle Module vereinheitlichen
+### 2) Logging über alle Module vereinheitlichen
 **Ziel**
 - Einheitlicher Logging-Standard für Format, Pfade, Level und Kontext.
 
@@ -73,7 +45,7 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 - Neue und bestehende Module nutzen denselben Logging-Standard.
 - Loganalyse ist modulübergreifend konsistent möglich.
 
-### 5) Market-Data für alle Exchanges (analog Hyperliquid-Niveau)
+### 3) Market-Data für alle Exchanges (analog Hyperliquid-Niveau)
 **Ziel**
 - Für alle unterstützten Exchanges robuste, vergleichbare Marktdaten-Funktionen anbieten.
 
@@ -90,7 +62,23 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 
 ## P2 – Qualität & Dokumentation
 
-### 6) Guides für alle GUI-Seiten + Auto-Update-Mechanismus
+### Strategy Explorer Edge-Parity Backlog
+**Ziel**
+- Bekannte Spezialfälle für `PBGui Simulation` vs `PB7 Backtest Engine` festhalten, ohne sie kurzfristig als Pflicht-Parität zu behandeln.
+
+**Kontext**
+- Die normale Strategy-Explorer-Parität deckt Bot/Grid/Trailing/Close-Parameter, Market/Taker-Fills und HSL-Verhalten ab.
+- Die folgenden Punkte bleiben nur als Edge-Parity-Notiz bestehen, bis eine konkrete Compare-Differenz darauf zurückgeführt wird.
+
+**Offene Spezialfälle**
+- `backtest.maker_fee_override` / `backtest.taker_fee_override` in PBGui Simulation berücksichtigen, falls Fee-Deltas Balance, HSL oder Unstuck sichtbar verschieben.
+- `live.max_realized_loss_pct` samt `balance_raw`, `realized_pnl_cumsum_max` und `realized_pnl_cumsum_last` an den Orchestrator übergeben, falls Loss-Gate-Parität benötigt wird.
+- `live.pnls_max_lookback_days` zusätzlich für Auto-Unstuck-Allowance rolling anwenden; HSL nutzt diesen Wert bereits.
+
+**Done wenn**
+- Ein Punkt wird erst umgesetzt, wenn eine reproduzierbare Compare-Abweichung ihn als Ursache zeigt.
+
+### 4) Guides für alle GUI-Seiten + Auto-Update-Mechanismus
 **Ziel**
 - Jede GUI-Seite hat eine verständliche Guide-Doku; Änderungen im Code führen zu Doku-Updates.
 
@@ -103,7 +91,7 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 - Alle produktiven GUI-Seiten haben einen aktuellen Guide.
 - Für Codeänderungen existiert ein klarer Doku-Update-Prozess.
 
-### 7) Codebase-Review auf Unsauberkeiten & Fehler
+### 5) Codebase-Review auf Unsauberkeiten & Fehler
 **Ziel**
 - Technische Schulden sichtbar machen und systematisch abbauen.
 
@@ -119,7 +107,6 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 ---
 
 ## Bestehende offene Punkte (Legacy-Backlog)
-- Split approved / ignored coins dynamic ignore in short/long
 - Convert USDT <-> USDC
 - Save sort in bt
 
@@ -137,21 +124,6 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 - Konfigurationsänderungen (z.B. API-Keys, Intervalle, Feature-Flags) werden sofort übernommen ohne Daemon-Neustart.
 - Keine redundanten `load_ini()`-Aufrufe pro Loop mehr.
 
-### VPS Disk-Verbrauch optimieren
-**Ziel**
-- Speicherverbrauch auf den VPS-Servern reduzieren (Logs, Caches, alte Daten).
-
-**Umfang**
-- Analyse: welche Dateien/Verzeichnisse den meisten Platz verbrauchen (`passivbot.log`, `caches/`, alte Backtests, `__pycache__`).
-- Log-Rotation: automatisches Begrenzen/Rotieren von `passivbot.log` und Dienst-Logs.
-- Cache-Bereinigung: alte/unbenutzte OHLCV-Caches, Parquet-Dateien, Lock-Dateien aufräumen.
-- Optional: PBMaster-Befehl für Remote-Cleanup (z.B. „Bereinige VPS X").
-
-**Done wenn**
-- Logs werden automatisch rotiert und auf sinnvolle Maximalgrößen begrenzt.
-- Alte Caches werden periodisch oder auf Befehl bereinigt.
-- Disk-Verbrauch pro VPS ist nachvollziehbar im VPS Monitor sichtbar.
-
 ---
 
 ## P1 – Unified WebSocket + VPS Error Management
@@ -161,9 +133,9 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 - Ein einziger WebSocket-Endpoint für die gesamte Anwendung (Navigation, Dashboard, VPS, Errors).
 
 **Hintergrund**
-- Aktuell existieren `/ws/dashboard` (nav + widget updates) und `/ws/vps` (VPS state, logs, commands) als getrennte Endpoints.
+- Aktuell existieren `/ws/dashboard` (Navigation + Widget-Updates) und `/ws/vps` (VPS state, logs, commands) als getrennte Endpoints.
 - Jeder Client subscribed nur die Topics die er braucht (`vps_error_summary`, `vps_state`, `nav`, etc.).
-- In der Streamlit-Phase ergeben sich max. 2 Connections pro Seite (nav_bridge + error_banner als getrennte iframes). Sobald Streamlit weg ist → 1 WS pro Tab.
+- Ziel bleibt ein gemeinsamer WS pro Tab statt separater Spezialverbindungen pro Bereich.
 
 **Umfang**
 - Neuer Endpoint `/ws/app` mit Topic-basiertem Subscribe (`{cmd: "subscribe", topics: [...]}`).
@@ -175,13 +147,13 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 2. VPS Error Summary Topic + Ack-Command → ~40 Zeilen
 3. Error Banner HTML (`frontend/vps_error_banner.html`) → ~200 Zeilen
 4. `has_vps_errors()` → Banner ersetzen → ~10 Zeilen
-5. nav_bridge auf `/ws/app` migrieren (später)
+5. Dashboard-Navigation auf `/ws/app` migrieren (später)
 6. Dashboard-Widgets auf `/ws/app` migrieren (später)
 7. VPS Monitor auf `/ws/app` migrieren (später)
 8. `/ws/dashboard` + `/ws/vps` deprecaten (letzter Schritt)
 
 **Done wenn**
-- `/ws/app` existiert und wird von mindestens Error-Banner + nav_bridge genutzt.
+- `/ws/app` existiert und wird von mindestens Error-Banner + Dashboard-Navigation genutzt.
 - Alte Endpoints funktionieren weiterhin (Übergang).
 
 ### VPS Error Acknowledgement
@@ -194,7 +166,7 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 - Sichtbarkeitslogik: Fehler erst wieder sichtbar wenn `current_et >= acked_et + delta` (delta konfigurierbar via MonitorConfig).
 - History: Array der letzten 20 Acks pro Key (Timestamp + Counts beim Ack).
 - Error-Banner (`vps_error_banner.html`): collapsible (localStorage), live via WS, Ack-Buttons pro Instanz + Ack All.
-- Ersetzt bestehende `has_vps_errors()` + `PBRemote.has_error()` Streamlit-Logik.
+- Ersetzt bestehende `has_vps_errors()` + `PBRemote.has_error()` Fehlerlogik.
 
 **Future: Push-basierte Fehlererfassung**
 - PBRun/PBRemote auf Remote-VPS können bei Error-Detection direkt `POST /api/vps/error_event` an PBGui senden.
@@ -230,61 +202,25 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 
 ---
 
-### PBData: Ressourcen-Schonende Architektur (Dashboard-getriebene Live-Daten)
+### PBData: Live-Session Production Validation
 **Ziel**
-- PBData-Speicherverbrauch von ~840 MB auf ~150–200 MB reduzieren.
-- Private WebSocket-Verbindungen im Hintergrund eliminieren; WS nur noch wo wirklich sinnvoll.
+- Die umgesetzte Dashboard-getriebene Live-Datenarchitektur im Betrieb validieren.
+- PBData-Speicherverbrauch dauerhaft unter Kontrolle halten.
 
-**Hintergrund**
-- manibot01: 1.8 GB RAM total, PBData allein frisst 840 MB + 3.1 GB Swap.
-- Ursache: ccxtpro-Instanz pro User lädt intern `load_markets()` (Binance: ~500 Symbole), dazu WS-Tasks für Balance + Positions + Orders für alle 54 User gleichzeitig (~162 potenzielle Tasks).
-- Netzwerkprobleme (SSL-Fehler, Timeout-Kaskaden) kommen vermutlich von Ressourcenüberlastung durch Swapping.
+**Kontext**
+- `/api/live/stream` existiert und startet private Watcher nur für aktive Dashboard-SSE-Abonnenten.
+- Dashboard-Widgets öffnen Live-Sessions nur für konkrete User-Auswahlen bis maximal 10 User; `All Users` bleibt DB-basiert.
+- Offene Arbeit ist Betriebsvalidierung, nicht der Architekturaufbau.
 
-**Design: Drei-Schichten-Modell**
-
-*Layer 1 – Background (immer aktiv, nur REST):* ✅ umgesetzt
-- History, Executions, Balances, Positions, Orders per REST-Polling → schreibt in SQLite DB.
-- KEIN privater WebSocket im Hintergrund.
-- Alle WS-Loop-Methoden (`_order_poll_loop`, `_balance_poll_loop`, `_position_poll_loop`) sind Dead Code — nie gestartet.
-
-*Layer 2 – Live-Session (nur wenn Dashboard offen, ≤10 User):*
-- FastAPI öffnet private WS-Verbindungen pro User auf Anfrage.
-- Lifecycle: open bei Dashboard-open, close nach 30s Inaktivität → RAM sofort frei.
-- Shared Preis-WS pro Exchange (kein Auth, ref-counted): offen solange min. 1 Session aktiv.
-- Positions + Balances via privatem WS (alle Exchanges unterstützen echtes Push): HL direkt, Bybit Topic `position`, Binance via `userDataStream` (listenKey alle 60s erneuern).
-- Orders via REST alle 5–10s (WS-Push für Orders lohnt sich nicht: seltene Änderungen, kein Latenz-Vorteil).
-- Daten leben im RAM, nicht in DB geschrieben.
-- Streamt via SSE an Browser.
-
-*Layer 3 – Browser (Vanilla JS):*
-- Initialer Render aus DB-Snapshot (sofort).
-- Live-Patches via SSE drüber legen.
-- "All Users"-View: nur DB, kein Live-Stream.
-- ≤10 Selected Users: Live-Session starten.
-
-**Was WS wirklich braucht vs. nicht:**
-| Daten-Typ | WS sinnvoll? | Anmerkung |
-|---|---|---|
-| Positionen (HL) | Ja – Push-Events | `webData2` / user events |
-| Positionen (Bybit) | Ja – Push-Events | Private WS, Topic `position` |
-| Positionen (Binance) | Ja – Push-Events | `userDataStream` (listenKey, 60s-Keepalive) |
-| Balances | Ja – Push-Events | Alle Exchanges via privatem WS |
-| Orders | Nein – REST alle 5–10s | Seltene Änderungen, kein Latenz-Vorteil |
-| Preise/Ticker | Ja – shared, kein Auth, hohe Frequenz | Läuft bereits |
-| History/PnL/Executions | Nein – immer aus DB | |
-
-**Migrationsweg (schrittweise):**
-1. ~~Orders-WS entfernen → REST-Combined-Poller übernimmt~~ ✅ erledigt (Dead Code)
-2. ~~Balance-WS entfernen → REST Combined Poller~~ ✅ erledigt (Dead Code)
-3. ~~Positions-WS entfernen~~ ✅ erledigt (Dead Code, alle Exchanges via REST Combined)
-4. FastAPI Live-Session API + SSE-Stream bauen
-5. Positions + Balances via privatem WS in Live-Session (alle Exchanges)
+**Umfang**
+- PBData-RSS und offene WS/SSE-Verbindungen auf kleinen VPS im Normalbetrieb messen.
+- Live-Session-Limits, Timeouts und Unsupported-Exchange-Fallbacks nach Bedarf feinjustieren.
+- Kurzen Betriebs-/Troubleshooting-Hinweis dokumentieren.
 
 **Done wenn**
 - PBData RAM unter 250 MB im normalen Betrieb.
-- Keine privaten WS im Hintergrund (nur shared Preis-WS auf Anfrage).
-- Dashboard zeigt Live-Daten via SSE wenn ≤10 User selected.
-- "All Users"-View funktioniert weiterhin aus DB.
+- Nach Dashboard-Disconnect bleiben keine privaten Live-Session-WS im Hintergrund offen.
+- Dashboard Live-Daten und DB-Fallback sind im VPS-Betrieb geprüft.
 
 ---
 

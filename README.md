@@ -14,7 +14,7 @@ Just contact me on Telegram for more information.
 - Technical version source: `pbgui_purefunc.py` → `PBGUI_VERSION`
 
 ## Overview
-Passivbot GUI (pbgui) is a WEB Interface for Passivbot programed in python with streamlit
+Passivbot GUI (pbgui) is a FastAPI-based web interface for Passivbot.
 
 It has the following functions:
 - Running, backtesting, and optimization Passivbot v7 and v6 (single and multi).
@@ -28,9 +28,20 @@ It has the following functions:
 - Installing and updating your VPS with just a few clicks.
 - And much more to easily manage Passivbot.
 
+## Updating Existing Masters
+
+After updating an existing PBGui master from a pre-v1.81 Streamlit-based install to v1.81 or newer, run the one-time cleanup helper from the updated repository:
+
+```
+cd ~/software/pbgui
+bash setup/cleanup_streamlit_master.sh --dry-run
+bash setup/cleanup_streamlit_master.sh
+```
+
+The helper stops stale Streamlit processes, removes old Streamlit autostart entries, closes UFW port `8501`, removes direct Streamlit packages from detected PBGui virtualenvs, and deletes obsolete `.streamlit/config.toml`. It keeps `.streamlit/secrets.toml` so the new `data/auth/secrets.toml` path can import existing passwords during migration. No reboot is required.
+
 ### Requirements
 - Python 3.12 (default)
-- Streamlit 1.54.0
 - Linux
 
 ### Recommendation
@@ -130,7 +141,7 @@ sudo openvpn --config <user>.ovpn
 ```
 
 Step 7: Connect to PBGui
-- Now you are ready to connect to PBGui by open this url: http://<hostname>-vpn:8501/
+- Now you are ready to connect to PBGui by opening this URL: http://<hostname>-vpn:8000/
 
 
 ### Ubuntu installer
@@ -176,12 +187,12 @@ It is an independent Docker integration for current PBGui and Passivbot v7 relea
 
 ## Running
 ```
-streamlit run pbgui.py
+python PBApiServer.py
 
 ```
-Open http://localhost:8501 with Browser\
+Open http://localhost:8000 with Browser\
 Password = PBGui$Bot!\
-Change Password in file: .streamlit/secrets.toml\
+Change Password on the Welcome page or in `data/auth/secrets.toml`\
 On First Run, you have to select your passivbot and venv directories
 For the venv you have to enter the full path to python.
 Example path for venv_pb7: /home/mani/software/venv_pb7/bin/python
@@ -267,7 +278,6 @@ pbname = manibot50
 [pbremote]
 bucket = pbgui:
 ```
-There is no need to install or run streamlit on your Remote Server.
 Start PBRun.py and PBRemote using the start.sh script.
 
 ## PBCoinData CoinMarketCap Filters
@@ -291,7 +301,6 @@ Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
 ## Links:
 - Telegram https://t.me/+kwyeyrmjQ-lkYTJk
 - Passivbot https://www.passivbot.com/en/latest/
-- Streamlit https://streamlit.io/
 
 ## Screenshots
 ![Alt text](docs/images/dashboard.png)
