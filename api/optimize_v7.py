@@ -114,6 +114,13 @@ _pareto_dash_lock = threading.RLock()
 _config_list_cache_lock = threading.RLock()
 _config_summary_cache: dict[str, tuple[int, int, dict]] = {}
 _backtest_count_cache: dict[str, tuple[object, int]] = {}
+_results_list_cache_lock = threading.RLock()
+_result_summary_cache: dict[str, tuple[tuple, dict]] = {}
+_results_list_cache_signature: tuple | None = None
+_results_list_cache_payload: list[dict] = []
+_results_list_cache_loaded_at = 0.0
+_RESULTS_LIST_IDLE_TTL_SECONDS = 30.0
+_RESULTS_LIST_ACTIVE_TTL_SECONDS = 3.0
 
 
 def _validate_name(name: str) -> None:
@@ -1429,6 +1436,134 @@ def _result_name_from_pareto(path: Path) -> str:
     except Exception:
         pass
     return path.parent.parent.name
+
+
+def _path_stat_signature(path: Path) -> tuple[int, int] | None:
+    try:
+        stat_result = path.stat()
+    except OSError:
+        return None
+    return stat_result.st_mtime_ns, stat_result.st_size
+
+
+def _result_cache_key(result_dir: Path) -> str:
+    try:
+        return str(result_dir.resolve(strict=False))
+    except Exception:
+        return str(result_dir)
+
+
+def _results_list_cache_ttl() -> float:
+    try:
+        if any(item.get("status") in ("running", "optimizing") for item in _store.items.values()):
+            return _RESULTS_LIST_ACTIVE_TTL_SECONDS
+    except Exception:
+        pass
+    return _RESULTS_LIST_IDLE_TTL_SECONDS
+
+
+def _result_dir_signature(result_dir: Path) -> tuple | None:
+    try:
+        result_stat = result_dir.stat()
+    except OSError:
+        return None
+    all_results_sig = _path_stat_signature(result_dir / "all_results.bin")
+    first_pareto = _first_pareto_file(result_dir)
+    if all_results_sig is None and first_pareto is None:
+        return None
+    first_pareto_sig = _path_stat_signature(first_pareto) if first_pareto else None
+    return (
+        result_stat.st_mtime_ns,
+        result_stat.st_size,
+        all_results_sig,
+        _path_stat_signature(result_dir / "pareto"),
+        first_pareto.name if first_pareto else "",
+        first_pareto_sig,
+    )
+
+
+def _build_result_summary(result_dir: Path) -> dict:
+    pareto_dir = result_dir / "pareto"
+    pareto_files = sorted(pareto_dir.glob("*.json")) if pareto_dir.exists() else []
+    first_pareto = pareto_files[0] if pareto_files else None
+    result_name = result_dir.name
+    mode = "unknown"
+    scenario_count = 0
+    if first_pareto:
+        try:
+            first_data = _load_pareto_json(first_pareto)
+            result_name = _result_name_from_data(first_data, result_dir.name)
+            mode, scenario_labels = _detect_pareto_mode(first_data)
+            scenario_count = len(scenario_labels)
+        except Exception:
+            result_name = result_dir.name
+    return {
+        "path": str(result_dir),
+        "result": result_dir.name,
+        "name": result_name,
+        "pareto_count": len(pareto_files),
+        "mode": mode,
+        "scenario_count": scenario_count,
+        "modified": _result_modified_timestamp(result_dir).isoformat(),
+    }
+
+
+def _get_cached_result_summary(result_dir: Path) -> dict | None:
+    signature = _result_dir_signature(result_dir)
+    if signature is None:
+        return None
+    cache_key = _result_cache_key(result_dir)
+    with _results_list_cache_lock:
+        cached = _result_summary_cache.get(cache_key)
+        if cached and cached[0] == signature:
+            return copy.deepcopy(cached[1])
+
+    summary = _build_result_summary(result_dir)
+    with _results_list_cache_lock:
+        _result_summary_cache[cache_key] = (signature, copy.deepcopy(summary))
+    return summary
+
+
+def _invalidate_result_cache(result_dir: Path | None = None) -> None:
+    global _results_list_cache_signature, _results_list_cache_payload, _results_list_cache_loaded_at
+    with _results_list_cache_lock:
+        if result_dir is not None:
+            _result_summary_cache.pop(_result_cache_key(result_dir), None)
+        _results_list_cache_signature = None
+        _results_list_cache_payload = []
+        _results_list_cache_loaded_at = 0.0
+
+
+def _list_results_cached(base: Path) -> list[dict]:
+    global _results_list_cache_signature, _results_list_cache_payload, _results_list_cache_loaded_at
+    base_signature = _path_stat_signature(base)
+    now = time.monotonic()
+    with _results_list_cache_lock:
+        if (
+            _results_list_cache_signature == base_signature
+            and now - _results_list_cache_loaded_at < _results_list_cache_ttl()
+        ):
+            return copy.deepcopy(_results_list_cache_payload)
+
+    active_paths: set[str] = set()
+    results: list[dict] = []
+    for result_dir in _iter_result_dirs(base):
+        active_paths.add(_result_cache_key(result_dir))
+        try:
+            summary = _get_cached_result_summary(result_dir)
+            if summary is not None:
+                results.append(summary)
+        except Exception as exc:
+            _log(SERVICE, f"Error reading optimize result {result_dir}: {exc}", level="WARNING")
+
+    with _results_list_cache_lock:
+        for cache_key in list(_result_summary_cache):
+            if cache_key not in active_paths:
+                _result_summary_cache.pop(cache_key, None)
+        _results_list_cache_signature = base_signature
+        _results_list_cache_payload = copy.deepcopy(results)
+        _results_list_cache_loaded_at = time.monotonic()
+    return results
 
 
 def _serialize_exchange(exchange_value):
@@ -2839,6 +2974,21 @@ def delete_queue_items(body: dict, session: SessionToken = Depends(require_auth)
     return {"ok": True, "removed": removed, "missing": missing}
 
 
+def _normalize_result_paths(raw_paths) -> list[Path]:
+    if not isinstance(raw_paths, list):
+        raise HTTPException(status_code=400, detail="paths must be a list")
+    result_dirs: list[Path] = []
+    seen: set[str] = set()
+    for raw in raw_paths:
+        result_dir = _ensure_result_path(str(raw or ""))
+        cache_key = _result_cache_key(result_dir)
+        if cache_key in seen:
+            raise HTTPException(status_code=400, detail="paths must not contain duplicates")
+        seen.add(cache_key)
+        result_dirs.append(result_dir)
+    return result_dirs
+
+
 @router.post("/queue/clear-finished")
 def clear_finished(session: SessionToken = Depends(require_auth)):
     removed = 0
@@ -2879,35 +3029,9 @@ def get_queue_status(filename: str, session: SessionToken = Depends(require_auth
 def list_results(session: SessionToken = Depends(require_auth)):
     base = _opt_results_base()
     if not base.exists():
+        _invalidate_result_cache()
         return {"results": []}
-    results = []
-    for result_dir in _iter_result_dirs(base):
-        pareto_dir = result_dir / "pareto"
-        pareto_files = sorted(pareto_dir.glob("*.json")) if pareto_dir.exists() else []
-        first_pareto = pareto_files[0] if pareto_files else None
-        result_name = result_dir.name
-        mode = "unknown"
-        scenario_count = 0
-        if first_pareto:
-            try:
-                first_data = _load_pareto_json(first_pareto)
-                result_name = _result_name_from_data(first_data, result_dir.name)
-                mode, scenario_labels = _detect_pareto_mode(first_data)
-                scenario_count = len(scenario_labels)
-            except Exception:
-                result_name = result_dir.name
-        results.append(
-            {
-                "path": str(result_dir),
-                "result": result_dir.name,
-                "name": result_name,
-                "pareto_count": len(pareto_files),
-                "mode": mode,
-                "scenario_count": scenario_count,
-                "modified": _result_modified_timestamp(result_dir).isoformat(),
-            }
-        )
-    return {"results": results}
+    return {"results": _list_results_cached(base)}
 
 
 @router.get("/results/config")
@@ -2930,7 +3054,23 @@ def delete_result(path: str, session: SessionToken = Depends(require_auth)):
     if not result_dir.exists():
         raise HTTPException(404, "Result not found")
     rmtree(str(result_dir), ignore_errors=True)
+    _invalidate_result_cache(result_dir)
     return {"ok": True}
+
+
+@router.post("/results/delete")
+def delete_results(body: dict, session: SessionToken = Depends(require_auth)):
+    result_dirs = _normalize_result_paths((body or {}).get("paths"))
+    removed = 0
+    missing: list[str] = []
+    for result_dir in result_dirs:
+        if not result_dir.exists():
+            missing.append(str(result_dir))
+            continue
+        rmtree(str(result_dir), ignore_errors=True)
+        _invalidate_result_cache(result_dir)
+        removed += 1
+    return {"ok": True, "removed": removed, "missing": missing}
 
 
 @router.post("/results/3d-plot")
