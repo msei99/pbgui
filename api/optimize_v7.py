@@ -2568,6 +2568,48 @@ def _load_queue_sync() -> list[dict]:
     return items
 
 
+def _normalize_queue_filenames(raw_filenames) -> list[str]:
+    if not isinstance(raw_filenames, list):
+        raise HTTPException(status_code=400, detail="filenames must be a list")
+    filenames: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_filenames:
+        filename = str(raw or "").strip()
+        _validate_name(filename)
+        if filename in seen:
+            raise HTTPException(status_code=400, detail="filenames must not contain duplicates")
+        seen.add(filename)
+        filenames.append(filename)
+    return filenames
+
+
+def _queue_pid_is_live(filename: str) -> bool:
+    pid = _store._read_pid(filename)
+    return pid is not None and psutil.pid_exists(pid)
+
+
+def _unlink_queue_item_files(filename: str) -> None:
+    (_opt_queue_dir() / f"{filename}.json").unlink(missing_ok=True)
+    (_opt_queue_dir() / f"{filename}.pid").unlink(missing_ok=True)
+    (_opt_log_dir() / f"{filename}.log").unlink(missing_ok=True)
+    (_opt_queue_dir() / f"{filename}.log").unlink(missing_ok=True)
+    _store.items.pop(filename, None)
+
+
+def _remove_queue_item_fast(filename: str, session: SessionToken, *, require_exists: bool = True) -> bool:
+    _validate_name(filename)
+    queue_file = _opt_queue_dir() / f"{filename}.json"
+    if not queue_file.exists():
+        if require_exists:
+            raise HTTPException(404, "Queue item not found")
+        return False
+
+    if _queue_pid_is_live(filename):
+        stop_queue_item(filename, session)
+    _unlink_queue_item_files(filename)
+    return True
+
+
 @router.get("/queue")
 def get_queue(session: SessionToken = Depends(require_auth)):
     return {"items": _load_queue_sync()}
@@ -2778,14 +2820,23 @@ def repair_queue_item_config(filename: str, body: dict, session: SessionToken = 
 
 @router.delete("/queue/{filename}")
 def remove_queue_item(filename: str, session: SessionToken = Depends(require_auth)):
-    _validate_name(filename)
-    stop_queue_item(filename, session)
-    (_opt_queue_dir() / f"{filename}.json").unlink(missing_ok=True)
-    (_opt_queue_dir() / f"{filename}.pid").unlink(missing_ok=True)
-    (_opt_log_dir() / f"{filename}.log").unlink(missing_ok=True)
-    (_opt_queue_dir() / f"{filename}.log").unlink(missing_ok=True)
+    _remove_queue_item_fast(filename, session, require_exists=True)
     _store.notify()
     return {"ok": True}
+
+
+@router.post("/queue/delete")
+def delete_queue_items(body: dict, session: SessionToken = Depends(require_auth)):
+    filenames = _normalize_queue_filenames((body or {}).get("filenames"))
+    removed = 0
+    missing: list[str] = []
+    for filename in filenames:
+        if _remove_queue_item_fast(filename, session, require_exists=False):
+            removed += 1
+        else:
+            missing.append(filename)
+    _store.notify()
+    return {"ok": True, "removed": removed, "missing": missing}
 
 
 @router.post("/queue/clear-finished")

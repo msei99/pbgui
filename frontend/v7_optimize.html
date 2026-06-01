@@ -10194,6 +10194,17 @@ async function loadQueue() {
   renderQueue();
 }
 
+function removeQueueItemsFromState(filenames) {
+  var removed = new Set(Array.isArray(filenames) ? filenames : [filenames]);
+  state.queue = state.queue.filter(function(item) {
+    return !removed.has(item.filename);
+  });
+  removed.forEach(function(filename) {
+    state.selectedQueue.delete(filename);
+  });
+  renderQueue();
+}
+
 async function loadResults() {
   var data = await apiFetch('/results');
   state.results = data.results || [];
@@ -10309,12 +10320,20 @@ async function deleteSelectedQueue() {
     message: 'Delete ' + selected.length + ' selected queue item(s)?',
     confirmText: 'Delete'
   }))) return;
-  for (var i = 0; i < selected.length; i++) {
-    await apiFetch('/queue/' + encodeURIComponent(selected[i]), { method: 'DELETE' });
-  }
-  state.selectedQueue.clear();
+  await apiFetch('/queue/delete', {
+    method: 'POST',
+    body: JSON.stringify({ filenames: selected })
+  });
+  removeQueueItemsFromState(selected);
   toast('Selected queue items deleted.', 'ok');
-  await loadQueue();
+}
+
+async function deleteQueueItem(filename) {
+  await apiFetch('/queue/delete', {
+    method: 'POST',
+    body: JSON.stringify({ filenames: [filename] })
+  });
+  removeQueueItemsFromState(filename);
 }
 
 async function queueSelectedConfigs() {
@@ -10645,7 +10664,7 @@ function attachEventHandlers() {
     }
     if (target.classList.contains('queue-log')) return openLogPanel(filename, target.dataset.name);
     if (target.classList.contains('queue-edit')) return openQueueConfigEditor(filename).catch(handleError);
-    if (target.classList.contains('queue-delete')) return queueAction('/queue/' + encodeURIComponent(filename), 'DELETE').catch(handleError);
+    if (target.classList.contains('queue-delete')) return deleteQueueItem(filename).catch(handleError);
   });
 
   el('queue-config-choice-list').addEventListener('click', function(event) {
