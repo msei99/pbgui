@@ -30,6 +30,8 @@ SERVICE = "Services"
 router = APIRouter()
 
 _SERVICES = ["pbrun", "pbremote", "pbdata", "pbcoindata", "api-server"]
+_fetch_summary_snapshot: Dict[str, Any] = {}
+_poller_metrics_snapshot: Dict[str, Any] = {}
 
 
 def _get_service(name: str):
@@ -1222,15 +1224,26 @@ def save_pbdata_settings(
 
 # ── Fetch summary (PBData) ───────────────────────────────────
 
+@router.post("/internal/fetch-summary")
+async def update_fetch_summary(request: Request) -> Dict[str, Any]:
+    """Accept PBData fetch summary from localhost and keep it in memory."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="Internal endpoint")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid fetch summary payload")
+    global _fetch_summary_snapshot
+    _fetch_summary_snapshot = dict(body)
+    return {"ok": True}
+
+
 @router.get("/fetch-summary")
 def get_fetch_summary(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    try:
-        p = Path(f"{PBGDIR}/data/logs/fetch_summary.json")
-        if p.exists():
-            return json.loads(p.read_text())
-        return {}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return dict(_fetch_summary_snapshot)
 
 
 @router.get("/prices-snapshot")
@@ -1250,17 +1263,16 @@ def get_prices_snapshot(session: SessionToken = Depends(require_auth)) -> Dict[s
         except Exception:
             pass
 
-        # Load active symbol list from fetch_summary.
+        # Load active symbol list from the in-memory fetch summary.
         # 1. symbol_list present → filter by (symbol, exchange) pairs
         # 2. symbols>0 but no symbol_list (old PBData) → top-N most-recently-updated
-        # 3. fetch_summary absent or symbols=0 → return empty
+        # 3. fetch summary absent or symbols=0 → return empty
         active_symbols: Optional[List[str]] = None
         allowed_pairs: Optional[set] = None          # set of (symbol, exchange)
         top_n: Optional[int] = None
-        fs_path = Path(f"{PBGDIR}/data/logs/fetch_summary.json")
-        if fs_path.exists():
+        fs = dict(_fetch_summary_snapshot)
+        if fs:
             try:
-                fs = json.loads(fs_path.read_text())
                 prices = fs.get("prices", {})
                 total_active_count = sum(exd.get("symbols", 0) for exd in prices.values())
                 sym_set: set = set()
@@ -1328,15 +1340,25 @@ def get_prices_snapshot(session: SessionToken = Depends(require_auth)) -> Dict[s
 
 # ── Poller metrics (PBData) ──────────────────────────────────
 
+@router.post("/internal/poller-metrics")
+async def update_poller_metrics(request: Request) -> Dict[str, Any]:
+    """Accept PBData poller metrics from localhost and keep them in memory."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="Internal endpoint")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid metrics payload")
+    global _poller_metrics_snapshot
+    _poller_metrics_snapshot = dict(body)
+    return {"ok": True}
+
 @router.get("/poller-metrics")
 def get_poller_metrics(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    try:
-        p = Path(f"{PBGDIR}/data/logs/poller_metrics.json")
-        if p.exists():
-            return json.loads(p.read_text())
-        return {}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return dict(_poller_metrics_snapshot)
 
 
 # ── Main page ────────────────────────────────────────────────

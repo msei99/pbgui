@@ -28,7 +28,6 @@ LOG_GROUPS: dict[str, str] = {
     'Status':          'PBGui',
     'HyperliquidAWS':  'PBGui',
     'BacktestQueueAPI': 'PBGui',
-    'OptimizeQueueAPI': 'PBGui',
 }
 
 

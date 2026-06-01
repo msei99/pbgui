@@ -307,7 +307,7 @@ def _load_prepared_config_from_dict(
         tmp_path = tmp.name
 
     try:
-        prepared = load_prepared_config(tmp_path, verbose=verbose)
+        prepared = load_prepared_config(tmp_path, verbose=verbose, log_info=False)
     finally:
         try:
             os.unlink(tmp_path)
@@ -410,7 +410,7 @@ def load_pb7_config(
         )
     else:
         load_prepared_config, _ = _get_pb7_config_api()
-        prepared = load_prepared_config(path, verbose=verbose)
+        prepared = load_prepared_config(path, verbose=verbose, log_info=False)
     finalized = _finalize_prepared_pb7_config(
         prepared,
         extras=extras,

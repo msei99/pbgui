@@ -3,7 +3,7 @@
 from datetime import date as _date, datetime as _datetime
 import shutil
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pathlib import Path
 from typing import Any
@@ -62,6 +62,7 @@ from .auth import require_auth, SessionToken
 from .heatmap import _get_missing_lag_minutes
 
 router = APIRouter(prefix="/market-data", tags=["market-data"])
+_market_data_status_snapshot: dict[str, Any] = {}
 
 PBGDIR = Path(__file__).resolve().parent.parent
 SETTINGS_EXCHANGES: dict[str, dict[str, Any]] = {
@@ -599,15 +600,25 @@ def test_market_data_tiingo(request: dict[str, Any], session: SessionToken = Dep
 
 
 def _load_market_data_status() -> dict:
-    """Load market data status from status file."""
-    status_path = PBGDIR / "data" / "logs" / "market_data_status.json"
-    if not status_path.exists():
-        return {}
+    """Return the latest market data status snapshot kept in API memory."""
+    return dict(_market_data_status_snapshot)
+
+
+@router.post("/internal/status")
+async def update_market_data_status_snapshot(request: Request) -> dict[str, Any]:
+    """Accept PBData market-data status from localhost and keep it in memory."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="Internal endpoint")
     try:
-        with open(status_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        body = await request.json()
     except Exception:
-        return {}
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid market data status payload")
+    global _market_data_status_snapshot
+    _market_data_status_snapshot = dict(body)
+    return {"ok": True}
 
 
 def _filter_status_coins_to_enabled(exchange: str, exchange_status: dict[str, Any]) -> dict[str, Any]:

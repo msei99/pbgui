@@ -219,6 +219,72 @@ async def _notify_api_income(user_name: str = ""):
             pass
 
 
+async def _notify_api_poller_metrics(payload: dict):
+    """POST the latest PBData poller metrics to the API server memory cache."""
+    import urllib.request
+    from pbgui_purefunc import load_ini
+    try:
+        port_val = load_ini("api_server", "port")
+        port = int(port_val) if port_val and str(port_val).isdigit() else 8000
+        body = json.dumps(payload or {}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/services/internal/poller-metrics",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        await asyncio.to_thread(urllib.request.urlopen, req, None, 2)
+    except Exception as e:
+        try:
+            _human_log('PBData', f"[notify] poller metrics update to API failed: {e}", level='DEBUG')
+        except Exception:
+            pass
+
+
+async def _notify_api_fetch_summary(payload: dict):
+    """POST the latest PBData fetch summary to the API server memory cache."""
+    import urllib.request
+    from pbgui_purefunc import load_ini
+    try:
+        port_val = load_ini("api_server", "port")
+        port = int(port_val) if port_val and str(port_val).isdigit() else 8000
+        body = json.dumps(payload or {}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/services/internal/fetch-summary",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        await asyncio.to_thread(urllib.request.urlopen, req, None, 2)
+    except Exception as e:
+        try:
+            _human_log('PBData', f"[notify] fetch summary update to API failed: {e}", level='DEBUG')
+        except Exception:
+            pass
+
+
+async def _notify_api_market_data_status(payload: dict):
+    """POST the latest market-data status to the API server memory cache."""
+    import urllib.request
+    from pbgui_purefunc import load_ini
+    try:
+        port_val = load_ini("api_server", "port")
+        port = int(port_val) if port_val and str(port_val).isdigit() else 8000
+        body = json.dumps(payload or {}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/market-data/internal/status",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        await asyncio.to_thread(urllib.request.urlopen, req, None, 2)
+    except Exception as e:
+        try:
+            _human_log('PBData', f"[notify] market data status update to API failed: {e}", level='DEBUG')
+        except Exception:
+            pass
+
+
 class PBData():
     def __init__(self):
         self.piddir = Path(f'{PBGDIR}/data/pid')
@@ -372,7 +438,7 @@ class PBData():
         self._metrics_interval = 10
         # ── Poller metrics (observable via API) ──────────────────
         # Per-exchange counters / timestamps that the GUI can display.
-        # Written to data/logs/poller_metrics.json every _metrics_interval.
+        # Published to the API server memory cache every _metrics_interval.
         self._poller_metrics = defaultdict(lambda: {
             'combined_last_ts': 0,        # epoch of last combined-poller cycle finish
             'combined_cycle_ms': 0,       # duration of last combined cycle (ms)
@@ -422,7 +488,7 @@ class PBData():
         self._bybit_latest_1m_min_lookback_days = 2
         self._bybit_latest_1m_max_lookback_days = 7
         self._bybit_latest_1m_task = None
-        self._market_data_status_path = _Path(f"{PBGDIR}/data/logs/market_data_status.json")
+        self._market_data_status: dict = {}
         self._market_data_status_lock = asyncio.Lock()
         # Load initial settings (ws_max, log_level, ...)
         try:
@@ -748,40 +814,25 @@ class PBData():
         except Exception:
             pass
 
-    def _write_market_data_status(self, payload: dict) -> None:
-        try:
-            logs_dir = _Path(f"{PBGDIR}/data/logs")
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            tmp = self._market_data_status_path.with_suffix(".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2, sort_keys=True)
-            os.replace(tmp, self._market_data_status_path)
-        except Exception:
-            pass
-
     async def _update_market_data_status(self, key: str, value) -> None:
-        """Atomically update a single top-level key in market_data_status.json.
+        """Atomically update a single top-level market-data status key in memory.
 
-        Uses an asyncio.Lock so concurrent loops (HL, Binance, …) never
-        clobber each other's sections, even if they await between read and write.
+        Uses an asyncio.Lock so concurrent loops (HL, Binance, ...)
+        never clobber each other's sections.
         """
         async with self._market_data_status_lock:
-            existing: dict = {}
-            try:
-                if self._market_data_status_path.exists():
-                    existing = json.loads(
-                        self._market_data_status_path.read_text(encoding="utf-8")
-                    )
-            except Exception:
-                pass
+            existing: dict = dict(self._market_data_status or {})
             existing[key] = value
             existing["timestamp"] = datetime.now().isoformat(sep=" ", timespec="seconds")
-            self._write_market_data_status(existing)
+            self._market_data_status = existing
+            try:
+                payload = json.loads(json.dumps(existing))
+                asyncio.create_task(_notify_api_market_data_status(payload))
+            except Exception:
+                pass
 
     async def _latest_1m_loop(self):
         await asyncio.sleep(5)
-        _first_iter = True
-        _resume_after_coin: str = ""
         while True:
             try:
                 # Reload settings from pbgui.ini each loop so GUI changes
@@ -794,28 +845,6 @@ class PBData():
                 if not self._latest_1m_enabled:
                     await asyncio.sleep(5)
                     continue
-
-                # On first start after restart: respect remaining interval or resume crashed mid-cycle
-                if _first_iter:
-                    _first_iter = False
-                    try:
-                        _saved = json.loads(self._market_data_status_path.read_text(encoding="utf-8")).get("latest_1m", {})
-                        _last_ts = float(_saved.get("last_run_ts") or 0.0)
-                        _interval = float(self._latest_1m_interval_seconds)
-                        _remaining = _interval - (datetime.now().timestamp() - _last_ts) - 5.0
-                        if _saved.get("running"):
-                            _resume_after_coin = str(_saved.get("current_coin") or "")
-                            _human_log("PBData", f"[market-data] HL latest_1m: resuming after restart, skipping up to {_resume_after_coin!r}", level="INFO")
-                        elif _remaining > 2.0:
-                            _human_log("PBData", f"[market-data] HL latest_1m: {_remaining:.0f}s remaining in cycle — waiting on restart", level="INFO")
-                            _hl_flag_r = _Path(f"{PBGDIR}/data/logs/hyperliquid_latest_1m_run_now.flag")
-                            if await _wait_for_flag(_hl_flag_r, _remaining):
-                                try:
-                                    _hl_flag_r.unlink(missing_ok=True)
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
 
                 cfg = load_market_data_config()
                 coins, missing_saved_coins, auto_enable_new_coins = get_effective_enabled_coins("hyperliquid", cfg=cfg)
@@ -833,20 +862,14 @@ class PBData():
                     except Exception as e:
                         _human_log("PBData", f"[market-data] failed to prune unavailable hyperliquid coins: {e}", level="WARNING")
 
-                # Determine how many coins to skip when resuming a crashed mid-cycle
                 _coins_done_offset = 0
-                if _resume_after_coin:
-                    if _resume_after_coin in coins:
-                        _coins_done_offset = coins.index(_resume_after_coin) + 1
-                    else:
-                        _resume_after_coin = ""  # coin no longer enabled, start fresh
 
                 now = datetime.now()
                 now_ts = now.timestamp()
                 # Seed with previous coin results so table stays filled during the run
                 _prev_hl: dict = {}
                 try:
-                    _prev_hl = json.loads(self._market_data_status_path.read_text(encoding="utf-8")).get("latest_1m", {}).get("coins", {})
+                    _prev_hl = dict(self._market_data_status or {}).get("latest_1m", {}).get("coins", {})
                 except Exception:
                     pass
                 status = {
@@ -864,13 +887,7 @@ class PBData():
                 except Exception:
                     pass
 
-                _skipping = bool(_resume_after_coin)
                 for coin in coins:
-                    if _skipping:
-                        if coin == _resume_after_coin:
-                            _skipping = False
-                            _resume_after_coin = ""
-                        continue
                     coin_status = {
                         "last_fetch": None,
                         "result": "skipped",
@@ -979,7 +996,6 @@ class PBData():
                     if self._latest_1m_coin_pause_seconds > 0:
                         await asyncio.sleep(float(self._latest_1m_coin_pause_seconds))
 
-                _resume_after_coin = ""  # consumed — next iteration starts fresh
                 if invalid_live_meta_coins:
                     try:
                         updated_enabled = [c for c in coins if str(c).strip().upper() not in invalid_live_meta_coins]
@@ -1036,8 +1052,6 @@ class PBData():
     async def _binance_latest_1m_loop(self):
         """Background loop: refresh Binance USDM 1m candles for enabled coins."""
         await asyncio.sleep(8)  # Slight offset from HL loop
-        _first_iter = True
-        _resume_after_coin: str = ""
         while True:
             try:
                 try:
@@ -1048,28 +1062,6 @@ class PBData():
                 if not self._binance_latest_1m_enabled:
                     await asyncio.sleep(5)
                     continue
-
-                # On first start after restart: respect remaining interval or resume crashed mid-cycle
-                if _first_iter:
-                    _first_iter = False
-                    try:
-                        _saved = json.loads(self._market_data_status_path.read_text(encoding="utf-8")).get("binance_latest_1m", {})
-                        _last_ts = float(_saved.get("last_run_ts") or 0.0)
-                        _interval = float(self._binance_latest_1m_interval_seconds)
-                        _remaining = _interval - (datetime.now().timestamp() - _last_ts) - 8.0
-                        if _saved.get("running"):
-                            _resume_after_coin = str(_saved.get("current_coin") or "")
-                            _human_log("PBData", f"[market-data] Binance latest_1m: resuming after restart, skipping up to {_resume_after_coin!r}", level="INFO")
-                        elif _remaining > 2.0:
-                            _human_log("PBData", f"[market-data] Binance latest_1m: {_remaining:.0f}s remaining in cycle — waiting on restart", level="INFO")
-                            _bnc_flag_r = _Path(f"{PBGDIR}/data/logs/binance_latest_1m_run_now.flag")
-                            if await _wait_for_flag(_bnc_flag_r, _remaining):
-                                try:
-                                    _bnc_flag_r.unlink(missing_ok=True)
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
 
                 cfg = load_market_data_config()
                 coins, missing_saved_coins, auto_enable_new_coins = get_effective_enabled_coins("binance", cfg=cfg)
@@ -1090,20 +1082,14 @@ class PBData():
                     await asyncio.sleep(float(self._binance_latest_1m_interval_seconds))
                     continue
 
-                # Determine how many coins to skip when resuming a crashed mid-cycle
                 _coins_done_offset = 0
-                if _resume_after_coin:
-                    if _resume_after_coin in coins:
-                        _coins_done_offset = coins.index(_resume_after_coin) + 1
-                    else:
-                        _resume_after_coin = ""  # coin no longer enabled, start fresh
 
                 now = datetime.now()
                 now_ts = now.timestamp()
                 # Seed with previous coin results so table stays filled during the run
                 _prev_bnc: dict = {}
                 try:
-                    _prev_bnc = json.loads(self._market_data_status_path.read_text(encoding="utf-8")).get("binance_latest_1m", {}).get("coins", {})
+                    _prev_bnc = dict(self._market_data_status or {}).get("binance_latest_1m", {}).get("coins", {})
                 except Exception:
                     pass
                 status_bnc = {
@@ -1121,13 +1107,7 @@ class PBData():
                 except Exception:
                     pass
 
-                _skipping = bool(_resume_after_coin)
                 for coin in coins:
-                    if _skipping:
-                        if coin == _resume_after_coin:
-                            _skipping = False
-                            _resume_after_coin = ""
-                        continue
                     coin_status: dict = {"last_fetch": None, "result": "skipped"}
                     max_lb = int(self._binance_latest_1m_max_lookback_days)
                     lookback_days = int(self._binance_latest_1m_min_lookback_days)
@@ -1200,7 +1180,6 @@ class PBData():
                     if self._binance_latest_1m_coin_pause_seconds > 0:
                         await asyncio.sleep(float(self._binance_latest_1m_coin_pause_seconds))
 
-                _resume_after_coin = ""  # consumed — next iteration starts fresh
                 # Merge into market data status (locked to avoid clobbering other loops)
                 status_bnc["running"] = False
                 status_bnc["current_coin"] = None
@@ -1231,8 +1210,6 @@ class PBData():
     async def _bybit_latest_1m_loop(self):
         """Background loop: refresh Bybit 1m candles for enabled coins."""
         await asyncio.sleep(16)  # Slight offset from binance loop
-        _first_iter = True
-        _resume_after_coin: str = ""
         while True:
             try:
                 try:
@@ -1243,27 +1220,6 @@ class PBData():
                 if not self._bybit_latest_1m_enabled:
                     await asyncio.sleep(5)
                     continue
-
-                if _first_iter:
-                    _first_iter = False
-                    try:
-                        _saved = json.loads(self._market_data_status_path.read_text(encoding="utf-8")).get("bybit_latest_1m", {})
-                        _last_ts = float(_saved.get("last_run_ts") or 0.0)
-                        _interval = float(self._bybit_latest_1m_interval_seconds)
-                        _remaining = _interval - (datetime.now().timestamp() - _last_ts) - 16.0
-                        if _saved.get("running"):
-                            _resume_after_coin = str(_saved.get("current_coin") or "")
-                            _human_log("PBData", f"[market-data] Bybit latest_1m: resuming after restart, skipping up to {_resume_after_coin!r}", level="INFO")
-                        elif _remaining > 2.0:
-                            _human_log("PBData", f"[market-data] Bybit latest_1m: {_remaining:.0f}s remaining in cycle — waiting on restart", level="INFO")
-                            _bbt_flag_r = _Path(f"{PBGDIR}/data/logs/bybit_latest_1m_run_now.flag")
-                            if await _wait_for_flag(_bbt_flag_r, _remaining):
-                                try:
-                                    _bbt_flag_r.unlink(missing_ok=True)
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
 
                 cfg = load_market_data_config()
                 coins, missing_saved_coins, auto_enable_new_coins = get_effective_enabled_coins("bybit", cfg=cfg)
@@ -1285,17 +1241,12 @@ class PBData():
                     continue
 
                 _coins_done_offset = 0
-                if _resume_after_coin:
-                    if _resume_after_coin in coins:
-                        _coins_done_offset = coins.index(_resume_after_coin) + 1
-                    else:
-                        _resume_after_coin = ""
 
                 now = datetime.now()
                 now_ts = now.timestamp()
                 _prev_bbt: dict = {}
                 try:
-                    _prev_bbt = json.loads(self._market_data_status_path.read_text(encoding="utf-8")).get("bybit_latest_1m", {}).get("coins", {})
+                    _prev_bbt = dict(self._market_data_status or {}).get("bybit_latest_1m", {}).get("coins", {})
                 except Exception:
                     pass
                 status_bbt = {
@@ -1313,13 +1264,7 @@ class PBData():
                 except Exception:
                     pass
 
-                _skipping = bool(_resume_after_coin)
                 for coin in coins:
-                    if _skipping:
-                        if coin == _resume_after_coin:
-                            _skipping = False
-                            _resume_after_coin = ""
-                        continue
                     coin_status: dict = {"last_fetch": None, "result": "skipped"}
                     max_lb = int(self._bybit_latest_1m_max_lookback_days)
                     lookback_days = int(self._bybit_latest_1m_min_lookback_days)
@@ -1392,7 +1337,6 @@ class PBData():
                     if self._bybit_latest_1m_coin_pause_seconds > 0:
                         await asyncio.sleep(float(self._bybit_latest_1m_coin_pause_seconds))
 
-                _resume_after_coin = ""
                 status_bbt["running"] = False
                 status_bbt["current_coin"] = None
                 status_bbt["last_run_duration_s"] = int(datetime.now().timestamp() - now_ts)
@@ -2053,9 +1997,9 @@ class PBData():
                         backoffs.append(f"{exch}(hist):until={int(until-now)}s")
                 if lines or backoffs:
                     _human_log('PBData', f"[METRICS] Clients: {', '.join(lines)}; Backoffs: {', '.join(backoffs) if backoffs else '(none)'}", level='INFO')
-                # Write poller metrics JSON for the GUI panel
+                # Publish poller metrics to the API server memory cache.
                 try:
-                    self._write_poller_metrics()
+                    await _notify_api_poller_metrics(self._build_poller_metrics())
                 except Exception:
                     pass
                 # IO debugging removed: process/db IO summary logging disabled
@@ -3801,7 +3745,7 @@ class PBData():
             summary_lines.append(f"[summary] History last_fetch: " + ", ".join([f"{u}={last_minutes(u,'history')}" for u in all_users]))
             summary_lines.append(f"[summary] History (rest): {join_csv(all_users)}")
             try:
-                # Also write machine-readable JSON summary for GUI/monitoring
+                # Also publish machine-readable summary for GUI/monitoring.
                 try:
                     # Build machine-readable summary including last-fetch timestamps
                     lf = {}
@@ -3855,7 +3799,19 @@ class PBData():
                         cfg = self._price_exchange_config.get(exch_name, {})
                         sym_count = len(cfg.get('symbols', set()))
                         active = bool(task and not task.done())
-                        prices_info[exch_name] = {'symbols': sym_count, 'active': active}
+                        user_syms: list = []
+                        try:
+                            mapping = cfg.get('mapping', {})
+                            seen_syms: set = set()
+                            for pairs in mapping.values():
+                                for _uname, internal_sym in pairs:
+                                    if internal_sym not in seen_syms:
+                                        seen_syms.add(internal_sym)
+                                        user_syms.append(internal_sym)
+                            user_syms.sort()
+                        except Exception:
+                            user_syms = []
+                        prices_info[exch_name] = {'symbols': sym_count, 'active': active, 'symbol_list': user_syms}
                     summary_obj = {
                         'timestamp': datetime.now().isoformat(sep=' ', timespec='seconds'),
                         'balances': {'ws': balances_ws, 'rest': balances_rest},
@@ -3866,28 +3822,17 @@ class PBData():
                         'executions': exec_users,
                         'last_fetch_ts': lf,
                     }
-                    logs_dir = _Path(f"{PBGDIR}/data/logs")
-                    if not logs_dir.exists():
-                        try:
-                            logs_dir.mkdir(parents=True, exist_ok=True)
-                        except Exception:
-                            pass
-                    summary_path = logs_dir / 'fetch_summary.json'
-                    try:
-                        with open(summary_path, 'w') as _f:
-                            json.dump(summary_obj, _f, indent=2, ensure_ascii=False)
-                    except Exception:
-                        pass
+                    self._publish_fetch_summary(summary_obj)
                 except Exception:
                     pass
                 # Note: remove multi-line human-readable summary log to avoid
                 # making a single log entry out of many lines (which breaks
-                # leading-tag parsing). The machine-readable `fetch_summary.json`
-                # remains as the canonical summary.
+                # leading-tag parsing). The API memory cache remains the
+                # canonical machine-readable summary.
             except Exception:
-                # If writing JSON fails, fall back to logging a minimal error
+                # If publishing fails, fall back to logging a minimal error.
                 try:
-                    _human_log('PBData', f"[summary] Failed to write fetch_summary.json", level='WARNING')
+                    _human_log('PBData', f"[summary] Failed to publish fetch summary", level='WARNING')
                 except Exception:
                     pass
         except Exception as e:
@@ -3896,8 +3841,8 @@ class PBData():
             except Exception:
                 pass
 
-    def _write_poller_metrics(self):
-        """Write poller_metrics.json for the GUI metrics panel.
+    def _build_poller_metrics(self):
+        """Build the poller metrics payload for the GUI metrics panel.
 
         Collects per-exchange counters from _poller_metrics dict, backoff states,
         semaphore stats, and market-data status. Safe to call from _metrics_loop.
@@ -3928,22 +3873,21 @@ class PBData():
                     'in_use': max(0, limit - available) if available >= 0 else 0,
                 }
 
-            # Market data status (read existing file)
+            # Market data status summary from this process' memory snapshot.
             market_data = {}
             try:
-                if self._market_data_status_path.exists():
-                    md = json.loads(self._market_data_status_path.read_text(encoding='utf-8'))
-                    for key in ('latest_1m', 'binance_latest_1m', 'bybit_latest_1m'):
-                        if key in md:
-                            entry = md[key]
-                            market_data[key] = {
-                                'exchange': entry.get('exchange', ''),
-                                'running': entry.get('running', False),
-                                'coins_done': entry.get('coins_done', 0),
-                                'coins_total': entry.get('coins_total', 0),
-                                'last_run_ts': entry.get('last_run_ts', 0),
-                                'current_coin': entry.get('current_coin'),
-                            }
+                md = dict(self._market_data_status or {})
+                for key in ('latest_1m', 'binance_latest_1m', 'bybit_latest_1m'):
+                    if key in md:
+                        entry = md[key]
+                        market_data[key] = {
+                            'exchange': entry.get('exchange', ''),
+                            'running': entry.get('running', False),
+                            'coins_done': entry.get('coins_done', 0),
+                            'coins_total': entry.get('coins_total', 0),
+                            'last_run_ts': entry.get('last_run_ts', 0),
+                            'current_coin': entry.get('current_coin'),
+                        }
             except Exception:
                 pass
 
@@ -3962,22 +3906,25 @@ class PBData():
                 'market_data': market_data,
                 'budgets': budgets,
             }
-            logs_dir = _Path(f"{PBGDIR}/data/logs")
-            if not logs_dir.exists():
-                try:
-                    logs_dir.mkdir(parents=True, exist_ok=True)
-                except Exception:
-                    pass
+            return obj
+        except Exception:
+            return {}
+
+    def _publish_fetch_summary(self, payload: dict):
+        """Publish a fetch summary snapshot to the API server memory cache."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_notify_api_fetch_summary(payload or {}))
+        except RuntimeError:
             try:
-                with open(logs_dir / 'poller_metrics.json', 'w') as _f:
-                    json.dump(obj, _f, indent=2, ensure_ascii=False)
+                asyncio.run(_notify_api_fetch_summary(payload or {}))
             except Exception:
                 pass
         except Exception:
             pass
 
     def _write_fetch_summary(self):
-        """Write machine-readable `fetch_summary.json` from current in-memory state.
+        """Publish machine-readable fetch summary from current in-memory state.
 
         Safe to call from websocket/poller loops; exceptions are swallowed.
         """
@@ -4072,18 +4019,7 @@ class PBData():
                 'executions': exec_users,
                 'last_fetch_ts': lf,
             }
-            logs_dir = _Path(f"{PBGDIR}/data/logs")
-            if not logs_dir.exists():
-                try:
-                    logs_dir.mkdir(parents=True, exist_ok=True)
-                except Exception:
-                    pass
-            summary_path = logs_dir / 'fetch_summary.json'
-            try:
-                with open(summary_path, 'w') as _f:
-                    json.dump(summary_obj, _f, indent=2, ensure_ascii=False)
-            except Exception:
-                pass
+            self._publish_fetch_summary(summary_obj)
         except Exception:
             # never raise from this helper
             pass

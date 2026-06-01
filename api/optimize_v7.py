@@ -1749,6 +1749,30 @@ class OptimizeStore:
         self.items: dict[str, dict] = {}
         self.changed = asyncio.Event()
         self._lock = asyncio.Lock()
+        self._seed_cache: dict[str, tuple[int, int, str, str]] = {}
+
+    def _resolve_seed_info_cached(self, cfg_path: Path) -> tuple[str, str]:
+        """Return optimize seed info, reloading the config only after file changes."""
+        cache_key = str(cfg_path)
+        try:
+            stat = cfg_path.stat()
+        except OSError:
+            self._seed_cache.pop(cache_key, None)
+            return "none", ""
+
+        cached = self._seed_cache.get(cache_key)
+        if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+            return cached[2], cached[3]
+
+        try:
+            cfg = load_pb7_config(cfg_path)
+            seed_mode, seed_path = _resolve_optimize_seed(cfg)
+        except Exception:
+            self._seed_cache.pop(cache_key, None)
+            return "none", ""
+
+        self._seed_cache[cache_key] = (stat.st_mtime_ns, stat.st_size, seed_mode, seed_path)
+        return seed_mode, seed_path
 
     async def refresh_from_disk(self) -> None:
         async with self._lock:
@@ -1775,12 +1799,7 @@ class OptimizeStore:
                     seed_mode = "none"
                     seed_path = ""
                     if cfg_path.exists():
-                        try:
-                            cfg = load_pb7_config(cfg_path)
-                            seed_mode, seed_path = _resolve_optimize_seed(cfg)
-                        except Exception:
-                            seed_mode = "none"
-                            seed_path = ""
+                        seed_mode, seed_path = self._resolve_seed_info_cached(cfg_path)
                     found[filename] = {
                         "filename": filename,
                         "name": data.get("name", filename),

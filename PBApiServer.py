@@ -54,7 +54,7 @@ from api.optimize_v7 import router as optimize_v7_router
 from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
 from api.pareto_explorer import router as pareto_explorer_router
 from api.strategy_explorer import router as strategy_explorer_router
-from logging_helpers import human_log as _log
+from logging_helpers import human_log as _log, set_service_min_level
 from pb7_config import PB7ConfigurationError
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, PBGUI_SERIAL, PBGUI_VERSION
 
@@ -121,10 +121,10 @@ async def _serial_watcher_loop() -> None:
         _log(SERVICE, "[serial-watcher] stopped", level="INFO")
 
 
-# ── Route uvicorn logs through human_log ─────────────────────
+# ── Route library logs through human_log ─────────────────────
 
-class _UvicornLogHandler(logging.Handler):
-    """Bridges Python logging → human_log for uvicorn access/error logs."""
+class _HumanLogHandler(logging.Handler):
+    """Bridges Python logging to the PBGui logfile format."""
 
     _LEVEL_MAP = {
         logging.DEBUG: "DEBUG",
@@ -134,24 +134,96 @@ class _UvicornLogHandler(logging.Handler):
         logging.CRITICAL: "CRITICAL",
     }
 
+    def __init__(self, service: str):
+        super().__init__()
+        self.service = service
+
     def emit(self, record: logging.LogRecord):
         try:
             msg = self.format(record)
             level = self._LEVEL_MAP.get(record.levelno, "INFO")
-            _log(SERVICE, msg, level=level)
+            _log(self.service, msg, level=level)
         except Exception:
             pass
 
 
 def _setup_uvicorn_logging():
     """Replace uvicorn's default handlers with our human_log bridge."""
-    handler = _UvicornLogHandler()
+    handler = _HumanLogHandler(SERVICE)
     handler.setFormatter(logging.Formatter("%(message)s"))
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "py.warnings"):
         logger = logging.getLogger(name)
         logger.handlers = [handler]
         logger.propagate = False
     logging.captureWarnings(True)
+
+
+def _setup_ssh_logging():
+    """Route AsyncSSH logs to SSH.log and keep routine transport noise quiet."""
+    level_name = str(load_ini("api_server", "ssh_log_level") or "WARNING").strip().upper()
+    py_level = getattr(logging, level_name, logging.WARNING)
+    if not isinstance(py_level, int):
+        level_name = "WARNING"
+        py_level = logging.WARNING
+    set_service_min_level("SSH", level_name)
+    handler = _HumanLogHandler("SSH")
+    handler.setLevel(py_level)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    for name in ("asyncssh", "asyncssh.sftp"):
+        logger = logging.getLogger(name)
+        logger.handlers = [handler]
+        logger.setLevel(py_level)
+        logger.propagate = False
+    try:
+        import asyncssh
+        asyncssh.set_log_level(py_level)
+        asyncssh.set_sftp_log_level(py_level)
+    except Exception as exc:
+        _log(SERVICE, f"[logging] failed to configure AsyncSSH logging: {exc}", level="WARNING")
+
+
+def _setup_root_logging():
+    """Route uncategorized Python warnings/errors away from raw stderr."""
+    handler = _HumanLogHandler(SERVICE)
+    handler.setLevel(logging.WARNING)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger = logging.getLogger()
+    logger.handlers = [handler]
+    logger.setLevel(logging.WARNING)
+
+
+def _setup_api_logging():
+    """Configure API-server owned log routing."""
+    _setup_root_logging()
+    _setup_uvicorn_logging()
+    _setup_ssh_logging()
+
+
+def _open_api_console_log():
+    """Open the raw stdout/stderr fallback log for child process redirection."""
+    try:
+        log_path = Path(PBGDIR) / "data" / "logs" / "PBApiServer.console.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        return log_path.open("a", encoding="utf-8", buffering=1)
+    except Exception:
+        return open(os.devnull, "w", encoding="utf-8")
+
+
+def _redirect_api_console_output():
+    """Detach direct API-server starts from the terminal console."""
+    if str(os.getenv("PBGUI_API_CONSOLE", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        return None
+    log_handle = _open_api_console_log()
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(log_handle.fileno(), sys.stdout.fileno())
+        os.dup2(log_handle.fileno(), sys.stderr.fileno())
+    except Exception:
+        pass
+    sys.stdout = log_handle
+    sys.stderr = log_handle
+    return log_handle
 
 
 # ── VPS monitoring lifecycle ─────────────────────────────────
@@ -210,6 +282,7 @@ async def _worker_watchdog_loop() -> None:
 async def _lifespan(app: FastAPI):
     """FastAPI lifespan: startup and graceful shutdown of VPS monitoring."""
     global _vps_monitor
+    _setup_api_logging()
     from master.async_monitor import VPSMonitor
     from master.async_logs import AsyncLogStreamer
     from master.file_sync import FileSyncWorker
@@ -1057,14 +1130,16 @@ async def server_restart(request: Request):
             pid_file.unlink(missing_ok=True)
             env = os.environ.copy()
             env["PBGUI_RESTART_DELAY"] = "3"  # wait for old process to free the port
-            subprocess.Popen(
-                [str(venv_python), str(pbgdir / "PBApiServer.py")],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-                cwd=str(pbgdir),
-                env=env,
-            )
+            with _open_api_console_log() as console_log:
+                subprocess.Popen(
+                    [str(venv_python), str(pbgdir / "PBApiServer.py")],
+                    stdin=subprocess.DEVNULL,
+                    stdout=console_log,
+                    stderr=subprocess.STDOUT,
+                    close_fds=True,
+                    cwd=str(pbgdir),
+                    env=env,
+                )
         os.kill(os.getpid(), signal.SIGTERM)
 
     asyncio.create_task(_do_restart())
@@ -1174,15 +1249,17 @@ class PBApiServer:
             env["PBGUI_API_HOST"] = self.host
             env["PBGUI_API_PORT"] = str(self.port)
 
-            subprocess.Popen(
-                cmd,
-                stdout=None,
-                stderr=None,
-                cwd=pbgdir,
-                text=True,
-                env=env,
-                start_new_session=True,
-            )
+            with _open_api_console_log() as console_log:
+                subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=console_log,
+                    stderr=subprocess.STDOUT,
+                    cwd=pbgdir,
+                    text=True,
+                    env=env,
+                    start_new_session=True,
+                )
             count = 0
             while True:
                 if count > 5:
@@ -1231,6 +1308,7 @@ class PBApiServer:
 
 
 if __name__ == "__main__":
+    _console_log_handle = _redirect_api_console_output()
     server = PBApiServer()
     if server.is_running():
         _log(SERVICE, 'Already running — exit', level='INFO')
@@ -1251,7 +1329,7 @@ if __name__ == "__main__":
     _log(SERVICE, f"Docs: http://{host}:{port}/docs")
     _log(SERVICE, f"Frontend: http://{host}:{port}/app/jobs_monitor.html")
 
-    _setup_uvicorn_logging()
+    _setup_api_logging()
 
     uvicorn.run(
         app,

@@ -27,7 +27,7 @@ import asyncssh
 from pbgui_purefunc import PBGDIR
 from logging_helpers import human_log as _log
 
-SERVICE = "VPSMonitor"
+SERVICE = "SSH"
 
 # Remote PBGui directory on VPS (relative to home)
 REMOTE_PBGUI_DIR = "software/pbgui"
@@ -193,7 +193,7 @@ class AsyncSSHPool:
                 _log(SERVICE, f"Error loading VPS config {filepath}: {e}",
                      level="ERROR")
 
-        _log(SERVICE, f"Loaded {len(hostnames)} VPS configurations")
+        _log(SERVICE, f"Loaded {len(hostnames)} VPS configurations", level="DEBUG")
         return hostnames
 
     # ── Connect / disconnect ────────────────────────────────
@@ -241,7 +241,7 @@ class AsyncSSHPool:
                 await self._cache_remote_ini(entry, conn)
                 if previous_conn and previous_conn is not conn:
                     previous_conn.close()
-                _log(SERVICE, f"SSH connected to {hostname} ({cfg.ip})")
+                _log(SERVICE, f"SSH connected to {hostname} ({cfg.ip})", level="DEBUG")
                 # Fire on-connect callbacks (e.g. start inotifywait watchers)
                 for _i, _cb in enumerate(self._on_connect_callbacks):
                     asyncio.create_task(
@@ -299,7 +299,7 @@ class AsyncSSHPool:
             entry.last_disconnect = datetime.now()
             if conn:
                 conn.close()
-        _log(SERVICE, f"SSH disconnected from {hostname}")
+        _log(SERVICE, f"SSH disconnected from {hostname}", level="DEBUG")
 
     async def disconnect_all(self):
         """Close all SSH connections."""

@@ -327,12 +327,12 @@ async def _ssh_sync_instance(name: str) -> dict:
                 return {"success": True}
             except Exception as e:
                 if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
-                    _log(SERVICE, f"SSH sync {name} → {hostname} "
+                    _log("SSH", f"SSH sync {name} → {hostname} "
                          f"failed (attempt {attempt}): {e} — retrying",
                          level="WARNING")
                     await asyncio.sleep(SFTP_RETRY_DELAY)
                     continue
-                _log(SERVICE, f"SSH sync {name} → {hostname} failed: {e}",
+                _log("SSH", f"SSH sync {name} → {hostname} failed: {e}",
                      level="ERROR", meta={"traceback": traceback.format_exc()})
                 return {"success": False, "error": str(e)}
             finally:
@@ -350,8 +350,8 @@ async def _ssh_sync_instance(name: str) -> dict:
 
     ok = sum(1 for r in results.values() if r.get("success"))
     fail = len(results) - ok
-    _log(SERVICE, f"SSH sync '{name}': {ok}/{len(results)} hosts OK"
-         + (f", {fail} failed" if fail else ""), level="INFO")
+    _log("SSH", f"SSH sync '{name}': {ok}/{len(results)} hosts OK"
+         + (f", {fail} failed" if fail else ""), level="WARNING" if fail else "DEBUG")
 
     # Schedule a delayed collect on the enabled_on host as fallback
     if ok > 0 and _monitor:
