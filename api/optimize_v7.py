@@ -19,6 +19,7 @@ import platform
 import plotly.graph_objects as go
 import re
 import socket
+import stat
 import subprocess
 import threading
 import time
@@ -110,6 +111,9 @@ _PARETO_DASH_PROXY_RESP_DROP = {"content-length", "connection", "transfer-encodi
 _PARETO_DASH_PROXY_TEXT_TYPES = ("text/html", "text/javascript", "application/javascript", "application/json")
 _pareto_dash_sessions: dict[str, dict] = {}
 _pareto_dash_lock = threading.RLock()
+_config_list_cache_lock = threading.RLock()
+_config_summary_cache: dict[str, tuple[int, int, dict]] = {}
+_backtest_count_cache: dict[str, tuple[object, int]] = {}
 
 
 def _validate_name(name: str) -> None:
@@ -520,6 +524,10 @@ def _opt_queue_dir() -> Path:
 
 def _opt_configs_dir() -> Path:
     return Path(PBGDIR) / "data" / "opt_v7"
+
+
+def _opt_backtests_root() -> Path:
+    return Path(pb7dir()) / "backtests" / "pbgui"
 
 
 def _opt_results_base() -> Path:
@@ -1468,6 +1476,101 @@ def _resolve_optimize_seed(config: dict | None) -> tuple[str, str]:
     return mode, path
 
 
+def _load_raw_optimize_config(cfg_file: Path) -> dict:
+    with open(cfg_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("config root must be an object")
+    return data
+
+
+def _backtest_dir_signature(backtests_dir: Path) -> tuple | None:
+    try:
+        root_stat = backtests_dir.stat()
+    except OSError:
+        return None
+    if not stat.S_ISDIR(root_stat.st_mode):
+        return None
+
+    signature = [(".", root_stat.st_mtime_ns, root_stat.st_size)]
+    try:
+        children = sorted(backtests_dir.iterdir(), key=lambda path: path.name)
+    except OSError:
+        return tuple(signature)
+    for child in children:
+        try:
+            child_stat = child.stat()
+        except OSError:
+            continue
+        if stat.S_ISDIR(child_stat.st_mode) or child.name == "analysis.json":
+            signature.append((child.name, child_stat.st_mtime_ns, child_stat.st_size))
+    return tuple(signature)
+
+
+def _get_cached_backtest_count(name: str) -> int:
+    backtests_dir = _opt_backtests_root() / name
+    cache_key = str(backtests_dir)
+    signature = _backtest_dir_signature(backtests_dir)
+    with _config_list_cache_lock:
+        cached = _backtest_count_cache.get(cache_key)
+        if cached and cached[0] == signature:
+            return cached[1]
+
+    count = 0
+    if signature is not None:
+        count = sum(1 for _ in backtests_dir.glob("**/analysis.json"))
+
+    with _config_list_cache_lock:
+        _backtest_count_cache[cache_key] = (signature, count)
+    return count
+
+
+def _build_config_summary(cfg_file: Path, cfg_stat: os.stat_result, raw_cfg: dict) -> dict:
+    name = cfg_file.stem
+    backtest = raw_cfg.get("backtest") if isinstance(raw_cfg.get("backtest"), dict) else {}
+    seed_mode, seed_path = _resolve_optimize_seed(raw_cfg)
+    return {
+        "name": name,
+        "exchange": _serialize_exchange(backtest.get("exchanges")),
+        "backtest_count": 0,
+        "modified": datetime.datetime.fromtimestamp(cfg_stat.st_mtime).isoformat(),
+        "start_date": backtest.get("start_date", ""),
+        "end_date": backtest.get("end_date", ""),
+        "starting_config": seed_mode != "none",
+        "seed_mode": seed_mode,
+        "seed_path": seed_path,
+    }
+
+
+def _get_cached_config_summary(cfg_file: Path) -> dict:
+    cfg_stat = cfg_file.stat()
+    cache_key = str(cfg_file)
+    with _config_list_cache_lock:
+        cached = _config_summary_cache.get(cache_key)
+        if cached and cached[0] == cfg_stat.st_mtime_ns and cached[1] == cfg_stat.st_size:
+            return copy.deepcopy(cached[2])
+
+    raw_cfg = _load_raw_optimize_config(cfg_file)
+    summary = _build_config_summary(cfg_file, cfg_stat, raw_cfg)
+    with _config_list_cache_lock:
+        _config_summary_cache[cache_key] = (cfg_stat.st_mtime_ns, cfg_stat.st_size, copy.deepcopy(summary))
+    return summary
+
+
+def _prune_config_summary_cache(active_paths: set[str]) -> None:
+    with _config_list_cache_lock:
+        for cache_key in list(_config_summary_cache):
+            if cache_key not in active_paths:
+                _config_summary_cache.pop(cache_key, None)
+
+
+def _invalidate_config_list_cache(name: str, cfg_file: Path | None = None) -> None:
+    target_file = cfg_file if cfg_file is not None else _opt_configs_dir() / f"{name}.json"
+    with _config_list_cache_lock:
+        _config_summary_cache.pop(str(target_file), None)
+        _backtest_count_cache.pop(str(_opt_backtests_root() / name), None)
+
+
 def _ensure_result_path(path: str) -> Path:
     result_dir = Path(path).resolve()
     base = _opt_results_base().resolve()
@@ -2343,30 +2446,17 @@ def prepare_config_for_editor(body: dict, session: SessionToken = Depends(requir
 def list_configs(session: SessionToken = Depends(require_auth)):
     configs = []
     base = _opt_configs_dir()
+    active_paths: set[str] = set()
     if base.exists():
         for cfg_file in sorted(base.glob("*.json")):
+            active_paths.add(str(cfg_file))
             try:
-                cfg = load_pb7_config(cfg_file, neutralize_added=True)
-                name = cfg_file.stem
-                backtests_dir = Path(pb7dir()) / "backtests" / "pbgui" / name
-                backtest_count = len(list(backtests_dir.glob("**/analysis.json"))) if backtests_dir.exists() else 0
-                bt = cfg.get("backtest", {})
-                seed_mode, seed_path = _resolve_optimize_seed(cfg)
-                configs.append(
-                    {
-                        "name": name,
-                        "exchange": _serialize_exchange(bt.get("exchanges")),
-                        "backtest_count": backtest_count,
-                        "modified": datetime.datetime.fromtimestamp(cfg_file.stat().st_mtime).isoformat(),
-                        "start_date": bt.get("start_date", ""),
-                        "end_date": bt.get("end_date", ""),
-                        "starting_config": seed_mode != "none",
-                        "seed_mode": seed_mode,
-                        "seed_path": seed_path,
-                    }
-                )
+                summary = _get_cached_config_summary(cfg_file)
+                summary["backtest_count"] = _get_cached_backtest_count(summary["name"])
+                configs.append(summary)
             except Exception as exc:
                 _log(SERVICE, f"Error reading optimize config {cfg_file}: {exc}", level="WARNING")
+    _prune_config_summary_cache(active_paths)
     return {"configs": configs}
 
 
@@ -2418,6 +2508,7 @@ def delete_config(name: str, session: SessionToken = Depends(require_auth)):
     if not cfg_file.exists():
         raise HTTPException(404, f"Config '{name}' not found")
     cfg_file.unlink(missing_ok=True)
+    _invalidate_config_list_cache(name, cfg_file)
     return {"ok": True}
 
 

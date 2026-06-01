@@ -10109,6 +10109,17 @@ async function loadConfigs() {
   renderConfigs();
 }
 
+function removeConfigsFromState(names) {
+  var removed = new Set(Array.isArray(names) ? names : [names]);
+  state.configs = state.configs.filter(function(cfg) {
+    return !removed.has(cfg.name);
+  });
+  removed.forEach(function(name) {
+    state.selectedConfigs.delete(name);
+  });
+  renderConfigs();
+}
+
 async function loadQueue() {
   var data = await apiFetch('/queue');
   state.queue = data.items || [];
@@ -10169,9 +10180,8 @@ async function deleteConfig(name) {
     confirmText: 'Delete'
   }))) return;
   await apiFetch('/configs/' + encodeURIComponent(name), { method: 'DELETE' });
-  state.selectedConfigs.delete(name);
+  removeConfigsFromState(name);
   toast('Config deleted.', 'ok');
-  await loadConfigs();
 }
 
 async function queueConfig(name) {
@@ -10216,9 +10226,8 @@ async function deleteSelectedConfigs() {
   for (var i = 0; i < selected.length; i++) {
     await apiFetch('/configs/' + encodeURIComponent(selected[i]), { method: 'DELETE' });
   }
-  state.selectedConfigs.clear();
+  removeConfigsFromState(selected);
   toast('Selected configs deleted.', 'ok');
-  await loadConfigs();
 }
 
 async function deleteSelectedQueue() {
