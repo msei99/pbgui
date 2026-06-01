@@ -4856,6 +4856,58 @@ function isOptimizeHslAutoFixedBound(key) {
   return !isOptimizeHslEnabledForSide(group);
 }
 
+function isOptimizeHslRedThresholdBound(key) {
+  var cleanKey = String(key || '');
+  var group = getOptimizeBoundGroup(cleanKey);
+  return (group === 'long' || group === 'short') && getOptimizeBoundSuffix(cleanKey) === 'hsl_red_threshold';
+}
+
+function getOptimizeHslRedThresholdRequiredMin(key) {
+  var cleanKey = String(key || '');
+  if (!isOptimizeHslRedThresholdBound(cleanKey)) return null;
+  var group = getOptimizeBoundGroup(cleanKey);
+  return isOptimizeHslEnabledForSide(group) ? OPT_HSL_RED_THRESHOLD_MIN : null;
+}
+
+function getOptimizeBoundRequiredMin(key) {
+  return getOptimizeHslRedThresholdRequiredMin(key);
+}
+
+function constrainOptimizeBoundEntry(entry) {
+  if (!entry) return entry;
+  entry.meta = getOptimizeBoundMeta(entry.key, entry.lowValue, entry.highValue, entry.stepValue);
+  if (!entry.meta) return entry;
+  var min = Number(entry.meta.min);
+  var max = Number(entry.meta.max);
+  var changedLow = false;
+  var changedHigh = false;
+  if (Number.isFinite(entry.lowValue)) {
+    var nextLow = entry.lowValue;
+    if (Number.isFinite(min) && nextLow < min) nextLow = min;
+    if (Number.isFinite(max) && nextLow > max) nextLow = max;
+    if (!optimizeBoundNumbersMatch(nextLow, entry.lowValue)) {
+      entry.lowValue = nextLow;
+      changedLow = true;
+    }
+  }
+  if (Number.isFinite(entry.highValue)) {
+    var nextHigh = entry.highValue;
+    if (Number.isFinite(min) && nextHigh < min) nextHigh = min;
+    if (Number.isFinite(max) && nextHigh > max) nextHigh = max;
+    if (!optimizeBoundNumbersMatch(nextHigh, entry.highValue)) {
+      entry.highValue = nextHigh;
+      changedHigh = true;
+    }
+  }
+  if (Number.isFinite(entry.lowValue) && Number.isFinite(entry.highValue) && entry.lowValue > entry.highValue) {
+    entry.highValue = entry.lowValue;
+    changedHigh = true;
+  }
+  if (changedLow) entry.lowText = formatOptimizeBoundValue(entry.lowValue, entry.meta.decimals);
+  if (changedHigh) entry.highText = formatOptimizeBoundValue(entry.highValue, entry.meta.decimals);
+  return entry;
+}
+
 function getOptimizeEffectiveFixedParamSet() {
   var fixedSet = new Set(state.optimizeFixedParams || []);
   (state.optimizeBounds || []).forEach(function(entry) {
@@ -4901,6 +4953,11 @@ function getOptimizeBoundMeta(key, low, high, step) {
   if (Number.isFinite(high)) min = Math.min(min, high);
   if (Number.isFinite(low)) max = Math.max(max, low);
   if (Number.isFinite(high)) max = Math.max(max, high);
+  var requiredMin = getOptimizeBoundRequiredMin(key);
+  if (Number.isFinite(requiredMin)) {
+    min = Math.max(min, requiredMin);
+    max = Math.max(max, requiredMin);
+  }
   if (max <= min) max = min + 1;
   var boundStep = Number.isFinite(step) && step > 0 ? step : null;
   var rawSliderStep = boundStep != null ? boundStep : (rawMeta ? Number(rawMeta[2]) : 0.001);
@@ -5363,7 +5420,7 @@ function normalizeOptimizeBoundEntry(key, rawValue) {
   var highValue = Number.isFinite(high) ? high : meta.max;
   var stepValue = Number.isFinite(step) ? step : 0;
   var formattedStepText = formatOptimizeBoundStepValue(stepValue, meta);
-  return {
+  return constrainOptimizeBoundEntry({
     key: key,
     suffix: getOptimizeBoundSuffix(key),
     group: getOptimizeBoundGroup(key),
@@ -5374,14 +5431,35 @@ function normalizeOptimizeBoundEntry(key, rawValue) {
     lowText: lowText || formatOptimizeBoundValue(lowValue, meta.decimals),
     highText: highText || formatOptimizeBoundValue(highValue, meta.decimals),
     stepText: formattedStepText || stepText || ''
-  };
+  });
 }
 
 function normalizeOptimizeBounds(rawBounds) {
   var bounds = rawBounds && typeof rawBounds === 'object' && !Array.isArray(rawBounds) ? rawBounds : {};
   return Object.keys(bounds).map(function(key) {
     return normalizeOptimizeBoundEntry(key, bounds[key]);
-  });
+  }).sort(compareOptimizeBoundEntries);
+}
+
+function getOptimizeBoundGroupSortRank(group) {
+  if (group === 'long') return 0;
+  if (group === 'short') return 1;
+  return 2;
+}
+
+function getOptimizeBoundLifecycleSortRank(suffix) {
+  var rank = OPT_BOUNDS_LIFECYCLE_ORDER_MAP[String(suffix || '')];
+  return Number.isFinite(rank) ? rank : OPT_BOUNDS_UNKNOWN_SORT_RANK;
+}
+
+function compareOptimizeBoundEntries(a, b) {
+  var groupRankA = getOptimizeBoundGroupSortRank(a && a.group);
+  var groupRankB = getOptimizeBoundGroupSortRank(b && b.group);
+  if (groupRankA !== groupRankB) return groupRankA - groupRankB;
+  var rankA = getOptimizeBoundLifecycleSortRank(a && a.suffix);
+  var rankB = getOptimizeBoundLifecycleSortRank(b && b.suffix);
+  if (rankA !== rankB) return rankA - rankB;
+  return String((a && a.key) || '').localeCompare(String((b && b.key) || ''));
 }
 
 function updateOptimizeBoundsHeader() {
@@ -5453,6 +5531,7 @@ function renderOptimizeBoundsEditor() {
   var groups = { long: [], short: [], other: [] };
   var fixedSet = getOptimizeEffectiveFixedParamSet();
   (state.optimizeBounds || []).forEach(function(entry) {
+    constrainOptimizeBoundEntry(entry);
     groups[entry.group] = groups[entry.group] || [];
     groups[entry.group].push(entry);
   });
@@ -5591,8 +5670,9 @@ function updateOptimizeBoundField(key, field, rawValue, inputNode) {
   var parsed = Number(nextText);
   if (Number.isFinite(parsed)) entry[valueField] = parsed;
   else entry[valueField] = null;
+  constrainOptimizeBoundEntry(entry);
   if (field === 'step') {
-    entry.meta = getOptimizeBoundMeta(entry.key, entry.lowValue, entry.highValue, entry.stepValue);
+    constrainOptimizeBoundEntry(entry);
     if (Number.isFinite(entry.stepValue) && entry.stepValue > 0) entry.stepText = nextText;
     entry.lowText = getOptimizeBoundManualDisplayText(entry, 'low');
     entry.highText = getOptimizeBoundManualDisplayText(entry, 'high');
@@ -5617,7 +5697,7 @@ function finalizeOptimizeBoundStepField(key, inputNode) {
     return;
   }
   entry.stepValue = parsed;
-  entry.meta = getOptimizeBoundMeta(entry.key, entry.lowValue, entry.highValue, entry.stepValue);
+  constrainOptimizeBoundEntry(entry);
   entry.stepText = formatOptimizeBoundStepValue(parsed, entry.meta);
   entry.lowText = getOptimizeBoundManualDisplayText(entry, 'low');
   entry.highText = getOptimizeBoundManualDisplayText(entry, 'high');
@@ -5638,13 +5718,14 @@ function updateOptimizeBoundSlider(key, field, rawValue) {
     entry.highValue = Math.max(parsed, entry.lowValue);
     entry.highText = formatOptimizeBoundValue(entry.highValue, entry.meta.decimals);
   }
+  constrainOptimizeBoundEntry(entry);
   refreshOptimizeBoundRow(key);
   scheduleStructuredEditorSync();
 }
 
 function refreshOptimizeBoundsPrecision() {
   (state.optimizeBounds || []).forEach(function(entry) {
-    entry.meta = getOptimizeBoundMeta(entry.key, entry.lowValue, entry.highValue, entry.stepValue);
+    constrainOptimizeBoundEntry(entry);
     entry.lowText = getOptimizeBoundManualDisplayText(entry, 'low');
     entry.highText = getOptimizeBoundManualDisplayText(entry, 'high');
   });
@@ -5685,6 +5766,7 @@ function collectOptimizeBounds(opts) {
   var fallback = opts.fallbackValue && typeof opts.fallbackValue === 'object' ? opts.fallbackValue : {};
   var result = {};
   (state.optimizeBounds || []).forEach(function(entry) {
+    constrainOptimizeBoundEntry(entry);
     var lowText = String(entry.lowText || '').trim();
     var highText = String(entry.highText || '').trim();
     var stepText = String(entry.stepText || '').trim();
@@ -5697,6 +5779,12 @@ function collectOptimizeBounds(opts) {
       if (strict) throw new Error('Bounds max is required for ' + entry.key + '.');
       if (Object.prototype.hasOwnProperty.call(fallback, entry.key)) result[entry.key] = deepClone(fallback[entry.key]);
       return;
+    }
+    var requiredMin = getOptimizeBoundRequiredMin(entry.key);
+    if (Number.isFinite(requiredMin) && entry.lowValue < requiredMin) {
+      if (strict) throw new Error(entry.key + ' lower bound must be > 0.0 when HSL is enabled.');
+      entry.lowValue = requiredMin;
+      entry.lowText = formatOptimizeBoundValue(entry.lowValue, entry.meta.decimals);
     }
     var values = [entry.lowValue, entry.highValue];
     if (stepText) {
@@ -5995,6 +6083,64 @@ var OPT_ENABLE_OVERRIDE_VALUES = [
   'backward_tp_grid'
 ];
 var OPT_ENABLE_OVERRIDE_SET = new Set(OPT_ENABLE_OVERRIDE_VALUES);
+var OPT_HSL_RED_THRESHOLD_MIN = 0.001;
+var OPT_BOUNDS_UNKNOWN_SORT_RANK = 10000;
+var OPT_BOUNDS_LIFECYCLE_ORDER = [
+  'n_positions',
+  'total_wallet_exposure_limit',
+  'ema_span_0',
+  'ema_span_1',
+  'entry_initial_ema_dist',
+  'entry_initial_qty_pct',
+  'entry_grid_spacing_pct',
+  'entry_grid_spacing_volatility_weight',
+  'entry_grid_spacing_we_weight',
+  'entry_grid_double_down_factor',
+  'entry_trailing_threshold_pct',
+  'entry_trailing_threshold_volatility_weight',
+  'entry_trailing_threshold_we_weight',
+  'entry_trailing_retracement_pct',
+  'entry_trailing_retracement_volatility_weight',
+  'entry_trailing_retracement_we_weight',
+  'entry_trailing_grid_ratio',
+  'entry_trailing_double_down_factor',
+  'close_grid_markup_start',
+  'close_grid_markup_end',
+  'close_grid_qty_pct',
+  'close_trailing_threshold_pct',
+  'close_trailing_retracement_pct',
+  'close_trailing_grid_ratio',
+  'close_trailing_qty_pct',
+  'risk_wel_enforcer_threshold',
+  'risk_twel_enforcer_threshold',
+  'risk_we_excess_allowance_pct',
+  'unstuck_threshold',
+  'unstuck_ema_dist',
+  'unstuck_close_pct',
+  'unstuck_loss_allowance_pct',
+  'forager_score_weights_volume',
+  'forager_score_weights_ema_readiness',
+  'forager_score_weights_volatility',
+  'forager_volume_ema_span',
+  'forager_volume_drop_pct',
+  'forager_volatility_ema_span',
+  'filter_volume_ema_span',
+  'filter_volume_drop_pct',
+  'filter_volatility_ema_span',
+  'filter_volatility_drop_pct',
+  'hsl_red_threshold',
+  'hsl_ema_span_minutes',
+  'hsl_cooldown_minutes_after_red',
+  'hsl_no_restart_drawdown_threshold',
+  'hsl_tier_ratio_yellow',
+  'hsl_tier_ratio_orange',
+  'hsl_tier_ratios_yellow',
+  'hsl_tier_ratios_orange'
+];
+var OPT_BOUNDS_LIFECYCLE_ORDER_MAP = OPT_BOUNDS_LIFECYCLE_ORDER.reduce(function(acc, suffix, index) {
+  acc[suffix] = index;
+  return acc;
+}, {});
 var OPT_FIXED_RUNTIME_OVERRIDE_FIELDS = [
   {
     key: 'bot.long.hsl_enabled',
@@ -10109,9 +10255,31 @@ async function loadConfigs() {
   renderConfigs();
 }
 
+function removeConfigsFromState(names) {
+  var removed = new Set(Array.isArray(names) ? names : [names]);
+  state.configs = state.configs.filter(function(cfg) {
+    return !removed.has(cfg.name);
+  });
+  removed.forEach(function(name) {
+    state.selectedConfigs.delete(name);
+  });
+  renderConfigs();
+}
+
 async function loadQueue() {
   var data = await apiFetch('/queue');
   state.queue = data.items || [];
+  renderQueue();
+}
+
+function removeQueueItemsFromState(filenames) {
+  var removed = new Set(Array.isArray(filenames) ? filenames : [filenames]);
+  state.queue = state.queue.filter(function(item) {
+    return !removed.has(item.filename);
+  });
+  removed.forEach(function(filename) {
+    state.selectedQueue.delete(filename);
+  });
   renderQueue();
 }
 
@@ -10119,6 +10287,25 @@ async function loadResults() {
   var data = await apiFetch('/results');
   state.results = data.results || [];
   renderResults();
+}
+
+function removeResultsFromState(paths) {
+  var removed = new Set(Array.isArray(paths) ? paths : [paths]);
+  state.results = state.results.filter(function(result) {
+    return !removed.has(result.path);
+  });
+  removed.forEach(function(path) {
+    state.selectedResults.delete(path);
+    if (state.selectedResultPath === path) {
+      state.selectedResultPath = '';
+      state.selectedResultName = '';
+      state.paretos = [];
+      state.selectedParetos.clear();
+      clearParetoMeta({ keepStatistic: true });
+    }
+  });
+  renderResults();
+  renderParetos();
 }
 
 async function refreshOptimizePageData() {
@@ -10169,9 +10356,8 @@ async function deleteConfig(name) {
     confirmText: 'Delete'
   }))) return;
   await apiFetch('/configs/' + encodeURIComponent(name), { method: 'DELETE' });
-  state.selectedConfigs.delete(name);
+  removeConfigsFromState(name);
   toast('Config deleted.', 'ok');
-  await loadConfigs();
 }
 
 async function queueConfig(name) {
@@ -10216,9 +10402,8 @@ async function deleteSelectedConfigs() {
   for (var i = 0; i < selected.length; i++) {
     await apiFetch('/configs/' + encodeURIComponent(selected[i]), { method: 'DELETE' });
   }
-  state.selectedConfigs.clear();
+  removeConfigsFromState(selected);
   toast('Selected configs deleted.', 'ok');
-  await loadConfigs();
 }
 
 async function deleteSelectedQueue() {
@@ -10232,12 +10417,20 @@ async function deleteSelectedQueue() {
     message: 'Delete ' + selected.length + ' selected queue item(s)?',
     confirmText: 'Delete'
   }))) return;
-  for (var i = 0; i < selected.length; i++) {
-    await apiFetch('/queue/' + encodeURIComponent(selected[i]), { method: 'DELETE' });
-  }
-  state.selectedQueue.clear();
+  await apiFetch('/queue/delete', {
+    method: 'POST',
+    body: JSON.stringify({ filenames: selected })
+  });
+  removeQueueItemsFromState(selected);
   toast('Selected queue items deleted.', 'ok');
-  await loadQueue();
+}
+
+async function deleteQueueItem(filename) {
+  await apiFetch('/queue/delete', {
+    method: 'POST',
+    body: JSON.stringify({ filenames: [filename] })
+  });
+  removeQueueItemsFromState(filename);
 }
 
 async function queueSelectedConfigs() {
@@ -10359,20 +10552,12 @@ async function deleteResultsByPaths(paths) {
     message: 'Delete ' + label + '?',
     confirmText: 'Delete'
   }))) return;
-  for (var i = 0; i < selected.length; i++) {
-    await apiFetch('/results?path=' + encodeURIComponent(selected[i]), { method: 'DELETE' });
-    state.selectedResults.delete(selected[i]);
-    if (state.selectedResultPath === selected[i]) {
-      state.selectedResultPath = '';
-      state.selectedResultName = '';
-      state.paretos = [];
-      state.selectedParetos.clear();
-      clearParetoMeta({ keepStatistic: true });
-    }
-  }
+  await apiFetch('/results/delete', {
+    method: 'POST',
+    body: JSON.stringify({ paths: selected })
+  });
+  removeResultsFromState(selected);
   toast(selected.length === 1 ? 'Result deleted.' : (selected.length + ' results deleted.'), 'ok');
-  await loadResults();
-  renderParetos();
 }
 
 async function deleteSelectedResults() {
@@ -10568,7 +10753,7 @@ function attachEventHandlers() {
     }
     if (target.classList.contains('queue-log')) return openLogPanel(filename, target.dataset.name);
     if (target.classList.contains('queue-edit')) return openQueueConfigEditor(filename).catch(handleError);
-    if (target.classList.contains('queue-delete')) return queueAction('/queue/' + encodeURIComponent(filename), 'DELETE').catch(handleError);
+    if (target.classList.contains('queue-delete')) return deleteQueueItem(filename).catch(handleError);
   });
 
   el('queue-config-choice-list').addEventListener('click', function(event) {
