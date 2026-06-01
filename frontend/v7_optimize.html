@@ -4856,6 +4856,58 @@ function isOptimizeHslAutoFixedBound(key) {
   return !isOptimizeHslEnabledForSide(group);
 }
 
+function isOptimizeHslRedThresholdBound(key) {
+  var cleanKey = String(key || '');
+  var group = getOptimizeBoundGroup(cleanKey);
+  return (group === 'long' || group === 'short') && getOptimizeBoundSuffix(cleanKey) === 'hsl_red_threshold';
+}
+
+function getOptimizeHslRedThresholdRequiredMin(key) {
+  var cleanKey = String(key || '');
+  if (!isOptimizeHslRedThresholdBound(cleanKey)) return null;
+  var group = getOptimizeBoundGroup(cleanKey);
+  return isOptimizeHslEnabledForSide(group) ? OPT_HSL_RED_THRESHOLD_MIN : null;
+}
+
+function getOptimizeBoundRequiredMin(key) {
+  return getOptimizeHslRedThresholdRequiredMin(key);
+}
+
+function constrainOptimizeBoundEntry(entry) {
+  if (!entry) return entry;
+  entry.meta = getOptimizeBoundMeta(entry.key, entry.lowValue, entry.highValue, entry.stepValue);
+  if (!entry.meta) return entry;
+  var min = Number(entry.meta.min);
+  var max = Number(entry.meta.max);
+  var changedLow = false;
+  var changedHigh = false;
+  if (Number.isFinite(entry.lowValue)) {
+    var nextLow = entry.lowValue;
+    if (Number.isFinite(min) && nextLow < min) nextLow = min;
+    if (Number.isFinite(max) && nextLow > max) nextLow = max;
+    if (!optimizeBoundNumbersMatch(nextLow, entry.lowValue)) {
+      entry.lowValue = nextLow;
+      changedLow = true;
+    }
+  }
+  if (Number.isFinite(entry.highValue)) {
+    var nextHigh = entry.highValue;
+    if (Number.isFinite(min) && nextHigh < min) nextHigh = min;
+    if (Number.isFinite(max) && nextHigh > max) nextHigh = max;
+    if (!optimizeBoundNumbersMatch(nextHigh, entry.highValue)) {
+      entry.highValue = nextHigh;
+      changedHigh = true;
+    }
+  }
+  if (Number.isFinite(entry.lowValue) && Number.isFinite(entry.highValue) && entry.lowValue > entry.highValue) {
+    entry.highValue = entry.lowValue;
+    changedHigh = true;
+  }
+  if (changedLow) entry.lowText = formatOptimizeBoundValue(entry.lowValue, entry.meta.decimals);
+  if (changedHigh) entry.highText = formatOptimizeBoundValue(entry.highValue, entry.meta.decimals);
+  return entry;
+}
+
 function getOptimizeEffectiveFixedParamSet() {
   var fixedSet = new Set(state.optimizeFixedParams || []);
   (state.optimizeBounds || []).forEach(function(entry) {
@@ -4901,6 +4953,11 @@ function getOptimizeBoundMeta(key, low, high, step) {
   if (Number.isFinite(high)) min = Math.min(min, high);
   if (Number.isFinite(low)) max = Math.max(max, low);
   if (Number.isFinite(high)) max = Math.max(max, high);
+  var requiredMin = getOptimizeBoundRequiredMin(key);
+  if (Number.isFinite(requiredMin)) {
+    min = Math.max(min, requiredMin);
+    max = Math.max(max, requiredMin);
+  }
   if (max <= min) max = min + 1;
   var boundStep = Number.isFinite(step) && step > 0 ? step : null;
   var rawSliderStep = boundStep != null ? boundStep : (rawMeta ? Number(rawMeta[2]) : 0.001);
@@ -5363,7 +5420,7 @@ function normalizeOptimizeBoundEntry(key, rawValue) {
   var highValue = Number.isFinite(high) ? high : meta.max;
   var stepValue = Number.isFinite(step) ? step : 0;
   var formattedStepText = formatOptimizeBoundStepValue(stepValue, meta);
-  return {
+  return constrainOptimizeBoundEntry({
     key: key,
     suffix: getOptimizeBoundSuffix(key),
     group: getOptimizeBoundGroup(key),
@@ -5374,7 +5431,7 @@ function normalizeOptimizeBoundEntry(key, rawValue) {
     lowText: lowText || formatOptimizeBoundValue(lowValue, meta.decimals),
     highText: highText || formatOptimizeBoundValue(highValue, meta.decimals),
     stepText: formattedStepText || stepText || ''
-  };
+  });
 }
 
 function normalizeOptimizeBounds(rawBounds) {
@@ -5453,6 +5510,7 @@ function renderOptimizeBoundsEditor() {
   var groups = { long: [], short: [], other: [] };
   var fixedSet = getOptimizeEffectiveFixedParamSet();
   (state.optimizeBounds || []).forEach(function(entry) {
+    constrainOptimizeBoundEntry(entry);
     groups[entry.group] = groups[entry.group] || [];
     groups[entry.group].push(entry);
   });
@@ -5591,8 +5649,9 @@ function updateOptimizeBoundField(key, field, rawValue, inputNode) {
   var parsed = Number(nextText);
   if (Number.isFinite(parsed)) entry[valueField] = parsed;
   else entry[valueField] = null;
+  constrainOptimizeBoundEntry(entry);
   if (field === 'step') {
-    entry.meta = getOptimizeBoundMeta(entry.key, entry.lowValue, entry.highValue, entry.stepValue);
+    constrainOptimizeBoundEntry(entry);
     if (Number.isFinite(entry.stepValue) && entry.stepValue > 0) entry.stepText = nextText;
     entry.lowText = getOptimizeBoundManualDisplayText(entry, 'low');
     entry.highText = getOptimizeBoundManualDisplayText(entry, 'high');
@@ -5617,7 +5676,7 @@ function finalizeOptimizeBoundStepField(key, inputNode) {
     return;
   }
   entry.stepValue = parsed;
-  entry.meta = getOptimizeBoundMeta(entry.key, entry.lowValue, entry.highValue, entry.stepValue);
+  constrainOptimizeBoundEntry(entry);
   entry.stepText = formatOptimizeBoundStepValue(parsed, entry.meta);
   entry.lowText = getOptimizeBoundManualDisplayText(entry, 'low');
   entry.highText = getOptimizeBoundManualDisplayText(entry, 'high');
@@ -5638,13 +5697,14 @@ function updateOptimizeBoundSlider(key, field, rawValue) {
     entry.highValue = Math.max(parsed, entry.lowValue);
     entry.highText = formatOptimizeBoundValue(entry.highValue, entry.meta.decimals);
   }
+  constrainOptimizeBoundEntry(entry);
   refreshOptimizeBoundRow(key);
   scheduleStructuredEditorSync();
 }
 
 function refreshOptimizeBoundsPrecision() {
   (state.optimizeBounds || []).forEach(function(entry) {
-    entry.meta = getOptimizeBoundMeta(entry.key, entry.lowValue, entry.highValue, entry.stepValue);
+    constrainOptimizeBoundEntry(entry);
     entry.lowText = getOptimizeBoundManualDisplayText(entry, 'low');
     entry.highText = getOptimizeBoundManualDisplayText(entry, 'high');
   });
@@ -5685,6 +5745,7 @@ function collectOptimizeBounds(opts) {
   var fallback = opts.fallbackValue && typeof opts.fallbackValue === 'object' ? opts.fallbackValue : {};
   var result = {};
   (state.optimizeBounds || []).forEach(function(entry) {
+    constrainOptimizeBoundEntry(entry);
     var lowText = String(entry.lowText || '').trim();
     var highText = String(entry.highText || '').trim();
     var stepText = String(entry.stepText || '').trim();
@@ -5697,6 +5758,12 @@ function collectOptimizeBounds(opts) {
       if (strict) throw new Error('Bounds max is required for ' + entry.key + '.');
       if (Object.prototype.hasOwnProperty.call(fallback, entry.key)) result[entry.key] = deepClone(fallback[entry.key]);
       return;
+    }
+    var requiredMin = getOptimizeBoundRequiredMin(entry.key);
+    if (Number.isFinite(requiredMin) && entry.lowValue < requiredMin) {
+      if (strict) throw new Error(entry.key + ' lower bound must be > 0.0 when HSL is enabled.');
+      entry.lowValue = requiredMin;
+      entry.lowText = formatOptimizeBoundValue(entry.lowValue, entry.meta.decimals);
     }
     var values = [entry.lowValue, entry.highValue];
     if (stepText) {
@@ -5995,6 +6062,7 @@ var OPT_ENABLE_OVERRIDE_VALUES = [
   'backward_tp_grid'
 ];
 var OPT_ENABLE_OVERRIDE_SET = new Set(OPT_ENABLE_OVERRIDE_VALUES);
+var OPT_HSL_RED_THRESHOLD_MIN = 0.001;
 var OPT_FIXED_RUNTIME_OVERRIDE_FIELDS = [
   {
     key: 'bot.long.hsl_enabled',

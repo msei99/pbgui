@@ -894,6 +894,8 @@ def pb7_suite_preflight_errors(config: dict) -> list[str]:
     """Return preflight errors for PB7 suite configs.
 
     PB7 behavior note:
+    - Active HSL requires a strictly positive red threshold. Optimizer bounds
+      that include zero can generate invalid candidates and abort the run.
     - If `backtest.suite.enabled` is true and `include_base_scenario` is false,
       PB7 builds the master coin universe ONLY from scenario `coins` and
       `coin_sources`. In that mode, `live.approved_coins` is effectively ignored
@@ -910,9 +912,62 @@ def pb7_suite_preflight_errors(config: dict) -> list[str]:
     if not isinstance(backtest, dict):
         return ["Invalid config: missing or invalid 'backtest' section."]
 
+    bot = config.get("bot") or {}
+    optimize = config.get("optimize") or {}
+    bounds = optimize.get("bounds") if isinstance(optimize, dict) else {}
+    fixed_params = (
+        set(optimize.get("fixed_params") or []) if isinstance(optimize, dict) else set()
+    )
+    runtime_overrides = (
+        optimize.get("fixed_runtime_overrides") if isinstance(optimize, dict) else {}
+    )
+    if not isinstance(bounds, dict):
+        bounds = {}
+    if not isinstance(runtime_overrides, dict):
+        runtime_overrides = {}
+
+    for side in ("long", "short"):
+        side_cfg = bot.get(side) if isinstance(bot, dict) else {}
+        if not isinstance(side_cfg, dict):
+            continue
+        enabled = bool(
+            runtime_overrides.get(f"bot.{side}.hsl_enabled", side_cfg.get("hsl_enabled"))
+        )
+        if not enabled:
+            continue
+
+        red_threshold = side_cfg.get("hsl_red_threshold")
+        try:
+            red_threshold_value = float(red_threshold)
+        except (TypeError, ValueError):
+            errors.append(f"{side.capitalize()} HSL red threshold must be numeric when HSL is enabled.")
+            continue
+        if red_threshold_value <= 0.0:
+            errors.append(f"{side.capitalize()} HSL red threshold must be > 0.0 when HSL is enabled.")
+
+        bound_key = f"{side}_hsl_red_threshold"
+        if bound_key in fixed_params or bound_key not in bounds:
+            continue
+        raw_bound = bounds.get(bound_key)
+        try:
+            if isinstance(raw_bound, (list, tuple)):
+                if not raw_bound:
+                    continue
+                low = float(raw_bound[0])
+                high = float(raw_bound[1]) if len(raw_bound) > 1 else low
+            else:
+                low = high = float(raw_bound)
+        except (TypeError, ValueError):
+            errors.append(f"optimize.bounds.{bound_key} must be numeric when {side} HSL is enabled.")
+            continue
+        if min(low, high) <= 0.0:
+            errors.append(
+                f"optimize.bounds.{bound_key} lower bound must be > 0.0 when {side} HSL is enabled."
+            )
+
     suite = backtest.get("suite") or {}
     if not isinstance(suite, dict) or not suite.get("enabled"):
-        return []
+        return errors
 
     scenarios = suite.get("scenarios") or []
     if not isinstance(scenarios, list) or not scenarios:
@@ -921,7 +976,7 @@ def pb7_suite_preflight_errors(config: dict) -> list[str]:
 
     include_base = bool(suite.get("include_base_scenario", False))
     if include_base:
-        return []
+        return errors
 
     def _has_any_coins(value) -> bool:
         if isinstance(value, dict):
