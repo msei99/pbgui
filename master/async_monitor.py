@@ -38,6 +38,10 @@ SERVICE_CHECK_EVERY = 4     # every N iterations (= 60s at 15s)
 INSTANCE_COLLECT_INTERVAL = 30  # seconds
 HOST_META_INTERVAL = 30     # seconds
 PACKAGE_STATUS_INTERVAL = 3600  # seconds
+METRICS_STREAM_STARTUP_GRACE_SECONDS = 30.0
+METRICS_STREAM_STALE_SECONDS = 45.0
+METRICS_STREAM_RECONNECT_AFTER_STALE_RESTARTS = 2
+METRICS_STREAM_STALE_LOG_INTERVAL = 60.0
 MONITOR_CACHE_VERSION = 2
 STATE_SNAPSHOT_VERSION = 1
 CPU_HISTORY_VERSION = 1
@@ -282,10 +286,34 @@ def _shell_quote(value: str) -> str:
     return "'" + str(value or '').replace("'", "'\"'\"'") + "'"
 
 
+def _metrics_last_update(stream: dict[str, Any], metrics: dict[str, Any]) -> float:
+    values: list[float] = []
+    for raw in (stream.get("last_update"), metrics.get("timestamp")):
+        try:
+            value = float(raw or 0.0)
+        except (TypeError, ValueError):
+            value = 0.0
+        if value > 0:
+            values.append(value)
+    return max(values) if values else 0.0
+
+
+def _metrics_stale_age(stream: dict[str, Any], metrics: dict[str, Any], *, now: float | None = None) -> float | None:
+    now = float(now or time.time())
+    last_update = _metrics_last_update(stream, metrics)
+    if last_update <= 0:
+        return METRICS_STREAM_STALE_SECONDS + 1 if stream.get("stale") else None
+    age = max(now - last_update, 0.0)
+    if stream.get("stale") or age > METRICS_STREAM_STALE_SECONDS:
+        return age
+    return None
+
+
 def collect_live_alerts(connections: dict[str, Any], system_state: dict[str, Any],
                         instances: dict[str, Any], services: dict[str, Any],
-                        monitor_config) -> list[dict[str, Any]]:
+                        monitor_config, streams: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     alerts: list[dict[str, Any]] = []
+    streams = streams or {}
 
     for hostname in sorted({*connections.keys(), *system_state.keys(), *instances.keys(), *services.keys()}):
         conn = connections.get(hostname) or {}
@@ -322,6 +350,7 @@ def collect_live_alerts(connections: dict[str, Any], system_state: dict[str, Any
             })
 
         metrics = system_state.get(hostname) or {}
+        metrics_stale = _metrics_stale_age(streams.get(hostname) or {}, metrics) is not None
         mem_available_mb = float(metrics.get('mem_available') or 0) / 1024 / 1024
         swap_free_mb = float(metrics.get('swap_free') or 0) / 1024 / 1024
         disk_free_mb = float(metrics.get('disk_free') or 0) / 1024 / 1024
@@ -331,7 +360,7 @@ def collect_live_alerts(connections: dict[str, Any], system_state: dict[str, Any
         cpu_confirmed = cpu_60s_window >= 60
         cpu = cpu_60s if cpu_confirmed else cpu_live
         has_system_metrics = any(metrics.get(key) not in (None, 0, 0.0) for key in ('mem_total', 'disk_total', 'swap_total', 'timestamp'))
-        if has_system_metrics and (
+        if has_system_metrics and not metrics_stale and (
             mem_available_mb <= monitor_config.mem_error_server
             or swap_free_mb <= monitor_config.swap_error_server
             or disk_free_mb <= monitor_config.disk_error_server
@@ -394,7 +423,7 @@ def collect_live_alerts(connections: dict[str, Any], system_state: dict[str, Any
             if (
                 memory_mb > monitor_config.mem_error_v7
                 or swap_value > monitor_config.swap_error_v7
-                or (cpu_confirmed and cpu_value > monitor_config.cpu_error_v7)
+                or (not metrics_stale and cpu_confirmed and cpu_value > monitor_config.cpu_error_v7)
                 or errors_today > monitor_config.error_error_v7
                 or tracebacks_today > monitor_config.traceback_error_v7
             ):
@@ -2049,6 +2078,21 @@ def read_pb7_version(pb7dir):
     return 'N/A'
 
 
+def read_pb7_config_schema(pb7dir):
+    if not pb7dir:
+        return 'N/A'
+    schema_file = Path(pb7dir) / 'src' / 'config' / 'schema.py'
+    try:
+        if schema_file.exists():
+            content = schema_file.read_text(encoding='utf-8', errors='ignore')
+            match = re.search(r'CONFIG_SCHEMA_VERSION\s*=\s*["\']([^"\']+)["\']', content)
+            if match:
+                return match.group(1)
+    except Exception:
+        pass
+    return 'N/A'
+
+
 def git_value(git_dir, args, default=''):
     if not git_dir or not Path(git_dir).exists():
         return default
@@ -2083,6 +2127,7 @@ result = {
     'pbgb': 'unknown',
     'pbgpy': 'N/A',
     'pb7v': read_pb7_version(pb7dir),
+    'pb7_config_schema': read_pb7_config_schema(pb7dir),
     'pb7c': '',
     'pb7b': 'unknown',
     'pb7py': 'N/A',
@@ -2287,6 +2332,10 @@ class VPSMonitor:
         # Background tasks
         self._tasks: list[asyncio.Task] = []
         self._stream_tasks: dict[str, asyncio.Task] = {}
+        self._stream_generations: dict[str, int] = {}
+        self._stream_started_at: dict[str, float] = {}
+        self._stream_stale_counts: dict[str, int] = {}
+        self._stream_stale_last_logged: dict[str, float] = {}
         self._running = False
 
     # ── Config ──────────────────────────────────────────────
@@ -2506,7 +2555,14 @@ class VPSMonitor:
         self._load_alert_routes()
         conn_summary = self.pool.get_status_summary().get("connections") or {}
         monitor_config = MonitorConfig()
-        live_alerts = collect_live_alerts(conn_summary, {h: m.to_dict() for h, m in self.store.system.items()}, self.store.instances, self.store.services, monitor_config)
+        live_alerts = collect_live_alerts(
+            conn_summary,
+            {h: m.to_dict() for h, m in self.store.system.items()},
+            self.store.instances,
+            self.store.services,
+            monitor_config,
+            self.store.streams,
+        )
         now = time.time()
         self._prune_alert_history(now)
         live_map = {str(item.get("id") or ""): item for item in live_alerts if str(item.get("id") or "")}
@@ -2813,8 +2869,8 @@ class VPSMonitor:
                 self._last_host_meta_collect.pop(hostname, None)
                 self._last_package_status_collect.pop(hostname, None)
 
-        # 3. Restart dead metric streams
-        self._restart_dead_streams()
+        # 3. Restart dead or stale metric streams
+        await self._restart_dead_streams()
 
         # 4. Collect instances (every ~30s)
         await self._collect_instances_all()
@@ -2875,8 +2931,12 @@ class VPSMonitor:
     def _start_metrics_stream(self, hostname: str):
         """Launch an async task that reads system metrics from SSH."""
         self._stop_metrics_stream(hostname)
+        generation = self._stream_generations.get(hostname, 0) + 1
+        self._stream_generations[hostname] = generation
+        started_at = time.time()
+        self._stream_started_at[hostname] = started_at
         task = asyncio.create_task(
-            self._metrics_stream(hostname),
+            self._metrics_stream(hostname, generation),
             name=f"metrics-{hostname}",
         )
         self._stream_tasks[hostname] = task
@@ -2884,22 +2944,82 @@ class VPSMonitor:
     def _stop_metrics_stream(self, hostname: str):
         """Cancel the metrics stream task for a host."""
         task = self._stream_tasks.pop(hostname, None)
+        self._stream_generations[hostname] = self._stream_generations.get(hostname, 0) + 1
         if task and not task.done():
             task.cancel()
 
-    def _restart_dead_streams(self):
-        """Restart metric streams that have ended."""
-        for hostname in list(self._stream_tasks):
-            task = self._stream_tasks[hostname]
-            if task.done():
-                if hostname in self.pool.connected_hosts():
-                    _log(SERVICE, f"Restarting dead metrics stream for "
-                         f"{hostname}")
-                    self._start_metrics_stream(hostname)
-                else:
-                    self._stream_tasks.pop(hostname, None)
+    def _stream_last_update(self, hostname: str) -> float:
+        stream = self.store.streams.get(hostname) or {}
+        metrics = self.store.system.get(hostname)
+        metric_dict = metrics.to_dict() if metrics else {}
+        return _metrics_last_update(stream, metric_dict)
 
-    async def _metrics_stream(self, hostname: str):
+    def _stream_stale_age(self, hostname: str, now: float) -> float | None:
+        last_update = self._stream_last_update(hostname)
+        if last_update > 0:
+            age = max(now - last_update, 0.0)
+            if age > METRICS_STREAM_STALE_SECONDS:
+                return age
+            self._stream_stale_counts.pop(hostname, None)
+            return None
+        started_at = self._stream_started_at.get(hostname, now)
+        startup_age = max(now - started_at, 0.0)
+        if startup_age > METRICS_STREAM_STARTUP_GRACE_SECONDS:
+            return startup_age
+        return None
+
+    async def _restart_stale_metrics_stream(self, hostname: str, stale_age: float, now: float):
+        count = self._stream_stale_counts.get(hostname, 0) + 1
+        self._stream_stale_counts[hostname] = count
+        stale_text = f"No metrics received for {int(stale_age)}s"
+        self.store.update_stream_info(hostname, {
+            "alive": False,
+            "active": False,
+            "stale": True,
+            "stale_age": round(stale_age, 1),
+            "stale_since": now,
+            "error": stale_text,
+        })
+        last_logged = self._stream_stale_last_logged.get(hostname, 0.0)
+        should_log = now - last_logged >= METRICS_STREAM_STALE_LOG_INTERVAL
+        if should_log:
+            self._stream_stale_last_logged[hostname] = now
+        if count >= METRICS_STREAM_RECONNECT_AFTER_STALE_RESTARTS:
+            if should_log:
+                _log(SERVICE, f"[metrics] Stream stale for {hostname}: "
+                     f"{stale_text}; reconnecting SSH", level="WARNING")
+            self._stop_metrics_stream(hostname)
+            self._stream_stale_counts.pop(hostname, None)
+            await self.pool.disconnect(hostname)
+            return
+        if should_log:
+            _log(SERVICE, f"[metrics] Stream stale for {hostname}: "
+                 f"{stale_text}; restarting stream", level="WARNING")
+        self._start_metrics_stream(hostname)
+
+    async def _restart_dead_streams(self):
+        """Restart metric streams that have ended or stopped updating."""
+        connected = set(self.pool.connected_hosts())
+        enabled = self.enabled_hosts
+        now = time.time()
+        for hostname in sorted(connected & enabled):
+            task = self._stream_tasks.get(hostname)
+            if task is None:
+                _log(SERVICE, f"Starting missing metrics stream for {hostname}")
+                self._start_metrics_stream(hostname)
+                continue
+            if task.done():
+                _log(SERVICE, f"Restarting dead metrics stream for {hostname}")
+                self._start_metrics_stream(hostname)
+                continue
+            stale_age = self._stream_stale_age(hostname, now)
+            if stale_age is not None:
+                await self._restart_stale_metrics_stream(hostname, stale_age, now)
+        for hostname in list(self._stream_tasks):
+            if hostname not in connected and self._stream_tasks[hostname].done():
+                self._stream_tasks.pop(hostname, None)
+
+    async def _metrics_stream(self, hostname: str, generation: int):
         """Read system metrics from SSH stdout (JSON per line, 1/s)."""
         proc = None
         cancelled = False
@@ -2907,15 +3027,32 @@ class VPSMonitor:
         try:
             proc = await self.pool.start_process(hostname, MONITOR_AGENT_SCRIPT)
             if not proc:
+                stream_error = "Cannot start metrics stream"
                 _log(SERVICE, f"[metrics] Cannot start stream for {hostname}",
                      level="WARNING")
+                if self._stream_generations.get(hostname) == generation:
+                    self.store.update_stream_info(hostname, {
+                        "alive": False,
+                        "active": False,
+                        "stale": True,
+                        "error": stream_error,
+                    })
                 return
 
-            self.store.update_stream_info(hostname, {
-                "alive": True, "active": True, "error": None, "last_update": 0,
-            })
+            if self._stream_generations.get(hostname) == generation:
+                self.store.update_stream_info(hostname, {
+                    "alive": True,
+                    "active": True,
+                    "starting": True,
+                    "stale": False,
+                    "error": None,
+                    "last_update": 0,
+                    "started_at": self._stream_started_at.get(hostname, time.time()),
+                })
 
             async for line in proc.stdout:
+                if self._stream_generations.get(hostname) != generation:
+                    break
                 line = line.strip()
                 if not line:
                     continue
@@ -2923,6 +3060,7 @@ class VPSMonitor:
                     data = json.loads(line)
                     metrics = SystemMetrics.from_json(data)
                     self.store.update_system(hostname, metrics)
+                    self._stream_stale_counts.pop(hostname, None)
                     self._record_host_metric_history(hostname, metrics)
                     bots = data.get("bots")
                     if bots:
@@ -2940,6 +3078,10 @@ class VPSMonitor:
                     self.store.update_stream_info(hostname, {
                         "alive": True,
                         "active": True,
+                        "starting": False,
+                        "stale": False,
+                        "stale_age": 0,
+                        "stale_since": 0,
                         "error": None,
                         "last_update": metrics.timestamp,
                     })
@@ -2952,20 +3094,23 @@ class VPSMonitor:
             stream_error = str(e)
             _log(SERVICE, f"[metrics] Stream error for {hostname}: {e}",
                  level="WARNING")
-            self.store.update_stream_info(hostname, {
-                "alive": False, "active": False, "error": stream_error,
-            })
+            if self._stream_generations.get(hostname) == generation:
+                self.store.update_stream_info(hostname, {
+                    "alive": False, "active": False, "error": stream_error,
+                })
         finally:
             if proc is not None:
                 try:
                     proc.close()
                 except Exception:
                     pass
-            self.store.update_stream_info(hostname, {
-                "alive": False,
-                "active": False,
-                "error": None if cancelled else stream_error,
-            })
+            if self._stream_generations.get(hostname) == generation:
+                self.store.update_stream_info(hostname, {
+                    "alive": False,
+                    "active": False,
+                    "starting": False,
+                    "error": None if cancelled else stream_error,
+                })
             for store in self._host_metric_history.values():
                 store.maybe_flush(force=True)
             self._bot_cpu_history.maybe_flush(force=True)

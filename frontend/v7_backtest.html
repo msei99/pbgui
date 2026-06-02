@@ -941,7 +941,7 @@ var KNOWN_BT_PARAMS = new Set([
   'exchanges', 'btc_collateral_cap', 'btc_collateral_ltv_cap',
   'maker_fee_override', 'taker_fee_override', 'market_order_slippage_pct',
   'filter_by_min_effective_cost', 'liquidation_threshold', 'dynamic_wel_by_tradability',
-  'max_warmup_minutes', 'ohlcv_source_dir', 'candle_interval_minutes',
+  'ohlcv_source_dir', 'candle_interval_minutes',
   'gap_tolerance_ohlcvs_minutes', 'compress_cache', 'volume_normalization',
   'coin_sources', 'market_settings_sources', 'suite_enabled', 'scenarios', 'aggregate'
 ]);
@@ -1762,7 +1762,6 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   html += fieldNumber2('cfg-balance-divider', 'balance_sample_divider', bt.balance_sample_divider || 60, 1, 'Minutes per bucket for balance/equity sampling.\n1 = full per-minute resolution.', 1);
   html += fieldNumber2('cfg-btc-cap', 'btc_collateral_cap', bt.btc_collateral_cap || 0, 0.1, 'Target share of equity in BTC collateral.\n0 = fully USD, 1.0 = fully BTC.', 1);
   html += fieldNumber2('cfg-btc-ltv', 'btc_collateral_ltv_cap', bt.btc_collateral_ltv_cap || 0, 0.1, 'Loan-to-value ceiling for BTC collateral.\n0 = unlimited debt.', 1);
-  html += fieldNumber2('cfg-max-warmup', 'max_warmup_minutes', bt.max_warmup_minutes || live.max_warmup_minutes || 1440, 1440, 'Hard ceiling for historical warm-up window.\n0 = no cap.', 1);
   html += fieldNumber2('cfg-min-coin-age', 'minimum_coin_age_days', live.minimum_coin_age_days !== undefined ? live.minimum_coin_age_days : 30, 1, 'Disallows coins younger than given days.', 1);
   var liqThresh = bt.liquidation_threshold !== undefined ? bt.liquidation_threshold : 0.05;
   html += '<div class="form-group"><label><span data-tip="Early-stop equity-floor guard.\nTerminates when equity \u2264 starting_balance \u00d7 threshold.\nRange [0.0, 1.0).">liquidation_threshold</span></label>' +
@@ -2480,7 +2479,6 @@ function cfgSyncEditorFromParsed(name, cfg) {
   cfgSetFieldValue('cfg-balance-divider', bt.balance_sample_divider || 60);
   cfgSetFieldValue('cfg-btc-cap', bt.btc_collateral_cap || 0);
   cfgSetFieldValue('cfg-btc-ltv', bt.btc_collateral_ltv_cap || 0);
-  cfgSetFieldValue('cfg-max-warmup', bt.max_warmup_minutes || live.max_warmup_minutes || 1440);
   cfgSetFieldValue('cfg-min-coin-age', live.minimum_coin_age_days !== undefined ? live.minimum_coin_age_days : 30);
   cfgSetFieldValue('cfg-hsl-signal-mode', normalizeBacktestHslSignalModeValue(live.hsl_signal_mode));
   cfgSetFieldValue('cfg-liq-thresh', bt.liquidation_threshold !== undefined ? bt.liquidation_threshold : 0.05);
@@ -3691,7 +3689,6 @@ function collectConfig() {
   cfg.backtest.balance_sample_divider = parseFloat(document.getElementById('cfg-balance-divider').value) || 1;
   cfg.backtest.gap_tolerance_ohlcvs_minutes = parseFloat(document.getElementById('cfg-gap-tolerance').value) || 5;
   cfg.backtest.candle_interval_minutes = parseInt(document.getElementById('cfg-candle-interval').value) || 1;
-  cfg.backtest.max_warmup_minutes = parseFloat(document.getElementById('cfg-max-warmup').value) || 1440;
   cfg.backtest.compress_cache = document.getElementById('cfg-compress').checked;
   cfg.backtest.filter_by_min_effective_cost = document.getElementById('cfg-filter-cost').checked;
   cfg.backtest.volume_normalization = document.getElementById('cfg-vol-norm').checked;

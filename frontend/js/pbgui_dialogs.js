@@ -71,9 +71,6 @@
     var acceptBtn = document.getElementById('pbgui-dialog-accept');
     var input = document.getElementById('pbgui-dialog-input');
 
-    overlay.addEventListener('click', function (event) {
-      if (event.target === overlay) close(false);
-    });
     closeBtn.addEventListener('click', function () { close(false); });
     cancelBtn.addEventListener('click', function () { close(false); });
     acceptBtn.addEventListener('click', function () { close(true); });

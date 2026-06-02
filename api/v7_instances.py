@@ -257,6 +257,97 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
     return instances
 
 
+def _parse_schema_version(value: object) -> tuple[int, ...] | None:
+    """Parse config schema versions like ``v7.12.0`` for safe comparisons."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized.startswith("v"):
+        normalized = normalized[1:]
+    parts = normalized.split(".")
+    if not parts or any(not part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def _schema_newer_than(left: object, right: object) -> bool:
+    """Return True when schema version ``left`` is newer than ``right``."""
+    left_parsed = _parse_schema_version(left)
+    right_parsed = _parse_schema_version(right)
+    if left_parsed is None or right_parsed is None:
+        return False
+    width = max(len(left_parsed), len(right_parsed))
+    left_cmp = left_parsed + (0,) * (width - len(left_parsed))
+    right_cmp = right_parsed + (0,) * (width - len(right_parsed))
+    return left_cmp > right_cmp
+
+
+def _local_pb7_config_schema_version() -> str | None:
+    """Return the local PB7 config schema version if the PB7 bridge is importable."""
+    try:
+        schema = get_template_config().get("config_version")
+    except Exception:
+        return None
+    if isinstance(schema, str) and schema.strip():
+        return schema.strip()
+    return None
+
+
+def _host_pb7_config_schema_version(hostname: str) -> str | None:
+    """Return the last collected PB7 config schema version for a host."""
+    if not hostname or hostname == "disabled":
+        return None
+    if hostname == _get_master_hostname():
+        return _local_pb7_config_schema_version()
+    store = _monitor.store if _monitor else None
+    meta = store.host_meta.get(hostname, {}) if store else {}
+    if not isinstance(meta, dict):
+        return None
+    schema = meta.get("pb7_config_schema")
+    if isinstance(schema, str) and schema.strip() and schema.strip().upper() != "N/A":
+        return schema.strip()
+    return None
+
+
+async def _refresh_host_schema_if_missing(hostname: str) -> None:
+    """Collect host metadata once when the schema field is not yet available."""
+    if not hostname or hostname == "disabled" or hostname == _get_master_hostname():
+        return
+    if _host_pb7_config_schema_version(hostname):
+        return
+    if _monitor and hasattr(_monitor, "collect_host_meta_now"):
+        await _monitor.collect_host_meta_now(hostname, include_package_status=False)
+
+
+async def _target_schema_incompatibility_detail(name: str, cfg: dict) -> str | None:
+    """Return a user-facing error when target VPS PB7 cannot load this config."""
+    if not isinstance(cfg, dict):
+        return None
+    config_schema = cfg.get("config_version")
+    if not isinstance(config_schema, str) or not config_schema.strip():
+        return None
+    enabled_on = cfg.get("pbgui", {}).get("enabled_on", "disabled")
+    if not isinstance(enabled_on, str) or not enabled_on.strip() or enabled_on == "disabled":
+        return None
+    enabled_on = enabled_on.strip()
+    await _refresh_host_schema_if_missing(enabled_on)
+    host_schema = _host_pb7_config_schema_version(enabled_on)
+    if host_schema and _schema_newer_than(config_schema, host_schema):
+        return (
+            f"Update your VPS first: '{name}' uses PB7 config schema {config_schema}, "
+            f"but {enabled_on} supports only {host_schema}. Upgrade Passivbot on "
+            f"{enabled_on} before saving, syncing, or starting this bot."
+        )
+    return None
+
+
+async def _ensure_target_schema_compatible(name: str, cfg: dict) -> None:
+    """Raise 409 when a config targets a VPS with an older PB7 schema."""
+    detail = await _target_schema_incompatibility_detail(name, cfg)
+    if detail:
+        raise HTTPException(status_code=409, detail=detail)
+
+
 # ── SSH Sync ─────────────────────────────────────────────────
 
 async def _ssh_sync_instance(name: str) -> dict:
@@ -268,6 +359,20 @@ async def _ssh_sync_instance(name: str) -> dict:
     config_path = Path(f"{PBGDIR}/data/run_v7/{name}/config.json")
     if not config_path.is_file():
         return {"name": name, "error": f"Config not found: {name}"}
+
+    try:
+        cfg_for_schema_check = json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return {"name": name, "error": f"Could not read config for schema check: {exc}"}
+    incompatibility = await _target_schema_incompatibility_detail(name, cfg_for_schema_check)
+    if incompatibility:
+        return {
+            "name": name,
+            "error": incompatibility,
+            "schema_incompatible": True,
+            "ok": 0,
+            "failed": 0,
+        }
 
     # 1) Update local status_v7.json (bumps per-instance activate_ts)
     _update_status_v7(name)
@@ -784,6 +889,20 @@ async def restore_instance(
         )
 
     restore_payload = _load_backup_payload(backup_dir)
+    restore_config = None
+    for filename, content in restore_payload:
+        if filename == "config.json":
+            try:
+                restore_config = json.loads(content.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Restore failed: invalid backup config.json: {exc}",
+                ) from exc
+            break
+    if isinstance(restore_config, dict):
+        await _ensure_target_schema_compatible(name, restore_config)
+
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     rollback = instance_dir.is_dir()
     previous_version = _highest_backup_version(name)
@@ -964,6 +1083,9 @@ async def save_instance_config(
     if not isinstance(cfg, dict):
         raise HTTPException(status_code=400, detail="Missing or invalid 'config' in body")
 
+    strip_pbgui_param_status(cfg)
+    await _ensure_target_schema_compatible(name, cfg)
+
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     instance_dir.mkdir(parents=True, exist_ok=True)
     config_path = instance_dir / "config.json"
@@ -992,9 +1114,6 @@ async def save_instance_config(
                     copied.append(fname)
             if copied:
                 _log(SERVICE, f"Copied {len(copied)} coin override file(s) from backtest config '{from_bt_config}' to instance '{name}'")
-
-    # Strip UI-only metadata before processing
-    strip_pbgui_param_status(cfg)
 
     # Increment version
     cfg.setdefault("pbgui", {})["version"] = cfg["pbgui"].get("version", 0) + 1

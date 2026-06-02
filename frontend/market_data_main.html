@@ -3045,7 +3045,7 @@
   <script src="/app/js/shared_help_overlay.js?v=4"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
   <script src="/app/js/log_viewer_panel.js?v=21"></script>
-  <script src="/app/js/pbgui_dialogs.js?v=1"></script>
+  <script src="/app/js/pbgui_dialogs.js?v=3"></script>
   <script src="/app/js/editor_shared.js?v=10"></script>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <script>
@@ -7069,9 +7069,6 @@
         document.getElementById('inventory-delete-date-close').addEventListener('click', function () {
           closeInventoryDeleteOlderDialog();
         });
-        document.getElementById('inventory-delete-date-ovl').addEventListener('click', function (event) {
-          if (event.target === this) closeInventoryDeleteOlderDialog();
-        });
         document.getElementById('confirm-close').addEventListener('click', function () {
           closeConfirmDialog(false);
         });
@@ -7080,9 +7077,6 @@
         });
         document.getElementById('btn-confirm-accept').addEventListener('click', function () {
           closeConfirmDialog(true);
-        });
-        document.getElementById('confirm-ovl').addEventListener('click', function (event) {
-          if (event.target === this) closeConfirmDialog(false);
         });
         document.getElementById('btn-inventory-clear-dataset').addEventListener('click', function () {
           runInventoryClearDataset();

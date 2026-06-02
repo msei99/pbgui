@@ -18,7 +18,7 @@ import yaml
 
 from api.vps import get_monitor, get_monitor_state_snapshot, get_metric_history_snapshot
 from logging_helpers import human_log as _log
-from master.async_monitor import INSTANCE_COLLECT_SCRIPT, MONITOR_CACHE_VERSION
+from master.async_monitor import INSTANCE_COLLECT_SCRIPT, METRICS_STREAM_STALE_SECONDS, MONITOR_CACHE_VERSION
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from PBRemote import PBRemote
@@ -1085,6 +1085,33 @@ class VPSManagerService:
         status = str((host_state.get("connection") or {}).get("status") or "")
         return status == "connected"
 
+    def _host_telemetry_last_update(self, host_state: dict[str, Any] | None) -> float:
+        if not host_state:
+            return 0.0
+        stream = (host_state or {}).get("stream") or {}
+        system = (host_state or {}).get("system") or {}
+        values: list[float] = []
+        for raw in (stream.get("last_update"), system.get("timestamp")):
+            value = _safe_float(raw, 0.0)
+            if value > 0:
+                values.append(value)
+        return max(values) if values else 0.0
+
+    def _host_telemetry_age(self, host_state: dict[str, Any] | None) -> float | None:
+        last_update = self._host_telemetry_last_update(host_state)
+        if last_update <= 0:
+            return None
+        return max(time.time() - last_update, 0.0)
+
+    def _host_telemetry_fresh(self, host_state: dict[str, Any] | None) -> bool:
+        if not self._host_online(host_state):
+            return False
+        stream = (host_state or {}).get("stream") or {}
+        if stream.get("stale"):
+            return False
+        age = self._host_telemetry_age(host_state)
+        return age is not None and age <= METRICS_STREAM_STALE_SECONDS
+
     def _host_meta(self, host_state: dict[str, Any] | None) -> dict[str, Any]:
         return (host_state or {}).get("meta") or {}
 
@@ -1671,7 +1698,10 @@ class VPSManagerService:
             command=str(getattr(vps, "command", "") or "") if vps else "",
         )
         task_phase = _build_vps_logging_phase(task_progress, str(getattr(vps, "update_status", "") or "") if vps else "")
-        online = self._host_online(host_state)
+        ssh_online = self._host_online(host_state)
+        telemetry_fresh = self._host_telemetry_fresh(host_state)
+        telemetry_age = self._host_telemetry_age(host_state)
+        online = ssh_online and telemetry_fresh
         meta = self._host_meta(host_state)
         role = str(meta.get("role") or "slave")
         if role == "master":
@@ -1694,6 +1724,10 @@ class VPSManagerService:
             "hostname": hostname,
             "nav": "vps",
             "online": online,
+            "ssh_online": ssh_online,
+            "telemetry_fresh": telemetry_fresh,
+            "telemetry_stale": ssh_online and not telemetry_fresh,
+            "telemetry_age": round(telemetry_age, 1) if telemetry_age is not None else None,
             "role": role,
             "role_icon": role_icon,
             "start": datetime.fromtimestamp(boot).strftime("%Y-%m-%d %H:%M:%S") if boot else "",
@@ -1841,8 +1875,11 @@ class VPSManagerService:
             summary_row["reboot_required"] = bool(live_package_status.get("reboot", False))
         pbgui_github = self._build_remote_pbgui_github_status(pbremote, host_state)
         pb7_github = self._build_remote_pb7_github_status(pbremote, host_state)
+        ssh_online = self._host_online(host_state)
+        telemetry_fresh = self._host_telemetry_fresh(host_state)
+        telemetry_age = self._host_telemetry_age(host_state)
         if quick:
-            if not self._host_online(host_state):
+            if not ssh_online:
                 ssh_ok = False
             elif hostname in self._vps_ssh_ok_cache:
                 # Keep the last full SSH validation result while the host stays online.
@@ -1863,7 +1900,11 @@ class VPSManagerService:
             "rclone_ok": bool(getattr(pbremote, "bucket", None)),
             "coindata_ok": coindata_ok,
             "cmc_credits": self._host_meta(host_state).get("cmc_credits"),
-            "online": self._host_online(host_state),
+            "online": ssh_online and telemetry_fresh,
+            "ssh_online": ssh_online,
+            "telemetry_fresh": telemetry_fresh,
+            "telemetry_stale": ssh_online and not telemetry_fresh,
+            "telemetry_age": round(telemetry_age, 1) if telemetry_age is not None else None,
             "last_command": vps.command_text,
             "last_update": vps.last_update,
             "last_setup": vps.last_setup,
@@ -1968,9 +2009,16 @@ class VPSManagerService:
         if not system:
             return None
         boot = _safe_int(meta.get("boot"))
+        last_update = self._host_telemetry_last_update(host_state)
+        telemetry_age = self._host_telemetry_age(host_state)
+        telemetry_fresh = self._host_telemetry_fresh(host_state)
         return {
             "rtd": self._build_remote_rtd(host_state),
             "boot": datetime.fromtimestamp(boot).strftime("%Y-%m-%d %H:%M:%S") if boot else "",
+            "last_update": datetime.fromtimestamp(last_update).strftime("%Y-%m-%d %H:%M:%S") if last_update else "",
+            "telemetry_fresh": telemetry_fresh,
+            "telemetry_stale": self._host_online(host_state) and not telemetry_fresh,
+            "telemetry_age": round(telemetry_age, 1) if telemetry_age is not None else None,
             "cpu": _safe_float(system.get("cpu")),
             "cpu_60s": _safe_float(system.get("cpu_60s")),
             "cpu_60s_window": _safe_float(system.get("cpu_60s_window")),

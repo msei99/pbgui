@@ -403,7 +403,7 @@ def _loader_summary(loader: ParetoDataLoader, *, visible_configs: list | None = 
         vals = [cfg.suite_metrics.get(best_metric_name) for cfg in configs if isinstance(getattr(cfg, "suite_metrics", None), dict)]
         vals = [float(v) for v in vals if isinstance(v, (int, float))]
         if vals:
-            best_metric_value = max(vals)
+            best_metric_value = min(vals) if _metric_lower_is_better_for_loader(loader, best_metric_name) else max(vals)
 
     avg_robustness = None
     if pareto_configs:
@@ -512,19 +512,22 @@ def _build_champions(loader: ParetoDataLoader, limit: int = 5) -> list[dict]:
         return []
 
     primary_metric = loader.scoring_metrics[0] if loader.scoring_metrics else "adg_w_usd"
+    performance_bounds = _metric_bounds(pareto_configs, primary_metric)
+    primary_lower_is_better = _metric_lower_is_better_for_loader(loader, primary_metric)
     configs_with_scores = []
     for config in pareto_configs:
         metrics = getattr(config, "suite_metrics", None) or {}
         performance = float(metrics.get(primary_metric, 0.0) or 0.0)
+        performance_score = _normalized_metric_score(performance, performance_bounds, lower_is_better=primary_lower_is_better)
         robustness = float(loader.compute_overall_robustness(config) or 0.0)
-        composite_score = performance * robustness
-        configs_with_scores.append((config, performance, robustness, composite_score))
+        composite_score = performance_score * robustness
+        configs_with_scores.append((config, performance, performance_score, robustness, composite_score))
 
-    configs_with_scores.sort(key=lambda item: (-item[3], -item[2], -item[1]))
+    configs_with_scores.sort(key=lambda item: (-item[4], -item[3], -item[2]))
 
     champions: list[dict] = []
     similarity_threshold = 0.02
-    for config, performance, robustness, composite_score in configs_with_scores:
+    for config, performance, _performance_score, robustness, composite_score in configs_with_scores:
         if len(champions) >= limit:
             break
 
@@ -677,37 +680,126 @@ def _metric_display_name(metric_name: str | None) -> str:
     return (label + suffix).strip().title().replace("_W", "_w")
 
 
-def _compute_best_match(loader: ParetoDataLoader, *, perf_weight: int, risk_weight: int, robust_weight: int) -> tuple[object | None, float | None, str | None]:
-    pareto_configs = [cfg for cfg in (loader.get_pareto_configs() or []) if cfg is not None]
+def _metric_numeric_value(config: object, metric: str | None) -> float | None:
+    if not metric:
+        return None
+    try:
+        value = (getattr(config, "suite_metrics", None) or {}).get(metric)
+        numeric = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
+
+
+def _metric_bounds(configs: list, metric: str | None) -> tuple[float, float] | None:
+    values = [_metric_numeric_value(config, metric) for config in configs]
+    numeric_values = [value for value in values if value is not None]
+    if not numeric_values:
+        return None
+    return min(numeric_values), max(numeric_values)
+
+
+def _normalized_metric_score(value: float | None, bounds: tuple[float, float] | None, *, lower_is_better: bool) -> float:
+    if value is None or bounds is None:
+        return 0.0
+    lo, hi = bounds
+    span = hi - lo
+    if abs(span) <= 1e-12:
+        return 1.0
+    score = (value - lo) / span
+    if lower_is_better:
+        score = 1.0 - score
+    return max(0.0, min(1.0, score))
+
+
+def _unique_metric_names(metrics: list[str | None]) -> list[str]:
+    out: list[str] = []
+    for metric in metrics:
+        metric_name = str(metric or "").strip()
+        if metric_name and metric_name not in out:
+            out.append(metric_name)
+    return out
+
+
+def _best_match_metric_terms(loader: ParetoDataLoader, configs: list, metrics: list[str | None], *, perf_weight: int, risk_weight: int) -> list[dict]:
+    performance_terms: list[dict] = []
+    risk_terms: list[dict] = []
+    for metric in _unique_metric_names(metrics):
+        bounds = _metric_bounds(configs, metric)
+        if bounds is None:
+            continue
+        lower_is_better = _metric_lower_is_better_for_loader(loader, metric)
+        term = {"metric": metric, "bounds": bounds, "lower_is_better": lower_is_better}
+        if lower_is_better:
+            risk_terms.append(term)
+        else:
+            performance_terms.append(term)
+
+    terms: list[dict] = []
+    if performance_terms:
+        weight = float(perf_weight) / float(len(performance_terms))
+        for term in performance_terms:
+            terms.append({**term, "weight": weight})
+    if risk_terms:
+        weight = float(risk_weight) / float(len(risk_terms))
+        for term in risk_terms:
+            terms.append({**term, "weight": weight})
+    return terms
+
+
+def _compute_weighted_config_score(loader: ParetoDataLoader, config: object, terms: list[dict], *, robust_weight: int, total_weight: float | None = None) -> float:
+    weighted_sum = 0.0
+    active_weight = 0.0
+    for term in terms:
+        weight = float(term.get("weight") or 0.0)
+        if weight <= 0.0:
+            continue
+        score = _normalized_metric_score(
+            _metric_numeric_value(config, term.get("metric")),
+            term.get("bounds"),
+            lower_is_better=bool(term.get("lower_is_better")),
+        )
+        weighted_sum += score * weight
+        active_weight += weight
+
+    if robust_weight > 0:
+        robust = float(loader.compute_overall_robustness(config) or 0.0)
+        robust = max(0.0, min(1.0, robust)) if math.isfinite(robust) else 0.0
+        weighted_sum += robust * float(robust_weight)
+        active_weight += float(robust_weight)
+
+    denominator = total_weight if total_weight is not None else active_weight
+    return weighted_sum / (denominator if abs(float(denominator or 0.0)) > 1e-12 else 1.0)
+
+
+def _compute_best_match(
+    loader: ParetoDataLoader,
+    *,
+    perf_weight: int,
+    risk_weight: int,
+    robust_weight: int,
+    performance_metric: str | None = None,
+    risk_metric: str | None = None,
+    score_metrics: list[str | None] | None = None,
+    configs_override: list | None = None,
+) -> tuple[object | None, float | None, str | None]:
+    pareto_configs = [cfg for cfg in (configs_override if configs_override is not None else (loader.get_pareto_configs() or [])) if cfg is not None]
     if not pareto_configs:
         pareto_configs = [cfg for cfg in (loader.configs or [])[:100] if cfg is not None]
     if not pareto_configs:
         return None, None, None
 
-    primary_metric = loader.scoring_metrics[0] if loader.scoring_metrics else "adg_w_usd"
-    perf_values = []
-    for cfg in pareto_configs:
-        try:
-            perf_values.append(float(cfg.suite_metrics.get(primary_metric, 0.0) or 0.0))
-        except Exception:
-            pass
-    perf_max = max(perf_values) if perf_values else 0.0
-    perf_denom = perf_max if abs(perf_max) > 1e-12 else 1e-12
-    total_weight = float(perf_weight + risk_weight + robust_weight) or 1.0
+    primary_metric = performance_metric or (loader.scoring_metrics[0] if loader.scoring_metrics else "adg_w_usd")
+    if score_metrics is None:
+        score_metrics = [primary_metric, risk_metric or "drawdown_worst_usd"]
+    metric_terms = _best_match_metric_terms(loader, pareto_configs, score_metrics, perf_weight=perf_weight, risk_weight=risk_weight)
 
     best_match = None
     best_score = None
     for config in pareto_configs:
-        score = _compute_explorer_score(
-            loader,
-            config,
-            primary_metric=primary_metric,
-            perf_denom=perf_denom,
-            perf_weight=perf_weight,
-            risk_weight=risk_weight,
-            robust_weight=robust_weight,
-            total_weight=total_weight,
-        )
+        score = _compute_weighted_config_score(loader, config, metric_terms, robust_weight=robust_weight)
         if not math.isfinite(score):
             continue
         if best_score is None or score > best_score:
@@ -721,18 +813,33 @@ def _compute_explorer_score(
     config: object,
     *,
     primary_metric: str,
-    perf_denom: float,
     perf_weight: int,
     risk_weight: int,
     robust_weight: int,
+    performance_bounds: tuple[float, float] | None = None,
+    risk_metric: str = "drawdown_worst_usd",
+    risk_bounds: tuple[float, float] | None = None,
     total_weight: float | None = None,
 ) -> float:
-    perf = float(config.suite_metrics.get(primary_metric, 0.0) or 0.0)
-    risk = 1.0 - float(config.suite_metrics.get("drawdown_worst_usd", 0.1) or 0.1)
-    robust = float(loader.compute_overall_robustness(config) or 0.0)
-    perf_norm = perf / (perf_denom if abs(perf_denom) > 1e-12 else 1e-12)
-    effective_total_weight = total_weight if total_weight is not None else (float(perf_weight + risk_weight + robust_weight) or 1.0)
-    return (perf_norm * perf_weight + risk * risk_weight + robust * robust_weight) / effective_total_weight
+    configs = [config]
+    terms = []
+    performance_bounds = performance_bounds or _metric_bounds(configs, primary_metric)
+    if performance_bounds is not None:
+        terms.append({
+            "metric": primary_metric,
+            "bounds": performance_bounds,
+            "lower_is_better": _metric_lower_is_better_for_loader(loader, primary_metric),
+            "weight": float(perf_weight),
+        })
+    risk_bounds = risk_bounds or _metric_bounds(configs, risk_metric)
+    if risk_bounds is not None:
+        terms.append({
+            "metric": risk_metric,
+            "bounds": risk_bounds,
+            "lower_is_better": _metric_lower_is_better_for_loader(loader, risk_metric),
+            "weight": float(risk_weight),
+        })
+    return _compute_weighted_config_score(loader, config, terms, robust_weight=robust_weight, total_weight=total_weight)
 
 
 def _build_playground_scatter(
@@ -895,13 +1002,39 @@ def _preview_display_metrics(loader: ParetoDataLoader, *, use_weighted: bool, co
         scoring_metrics = ["adg_w_usd"]
     display_metrics: list[str] = []
     sample_metrics = set((configs[0].suite_metrics or {}).keys()) if configs else set()
-    if use_weighted:
-        for metric in scoring_metrics:
-            if "_w_" not in metric and not metric.endswith("_w"):
-                weighted_metric = metric.replace("_usd", "_w_usd").replace("_btc", "_w_btc")
-                display_metrics.append(weighted_metric if weighted_metric in sample_metrics else metric)
+
+    def _metric_variant(metric: str) -> str:
+        raw_metric = str(metric or "").strip()
+        candidates: list[str] = []
+        if use_weighted:
+            if raw_metric.endswith("_w_usd") or raw_metric.endswith("_w_btc") or raw_metric.endswith("_w") or "_w_" in raw_metric:
+                candidates.append(raw_metric)
+            elif raw_metric.endswith("_usd"):
+                candidates.extend([raw_metric[:-4] + "_w_usd", raw_metric])
+            elif raw_metric.endswith("_btc"):
+                candidates.extend([raw_metric[:-4] + "_w_btc", raw_metric])
             else:
-                display_metrics.append(metric)
+                candidates.extend([raw_metric + "_w", raw_metric])
+        else:
+            if raw_metric.endswith("_w_usd"):
+                candidates.extend([raw_metric[:-6] + "_usd", raw_metric])
+            elif raw_metric.endswith("_w_btc"):
+                candidates.extend([raw_metric[:-6] + "_btc", raw_metric])
+            elif raw_metric.endswith("_w"):
+                candidates.extend([raw_metric[:-2], raw_metric])
+            elif "_w_" in raw_metric:
+                candidates.extend([raw_metric.replace("_w_", "_", 1), raw_metric])
+            else:
+                candidates.append(raw_metric)
+        for candidate in candidates:
+            if candidate in sample_metrics:
+                return candidate
+        return raw_metric
+
+    for metric in scoring_metrics:
+        resolved_metric = _metric_variant(metric)
+        if resolved_metric and resolved_metric not in display_metrics:
+            display_metrics.append(resolved_metric)
 
     if len(display_metrics) < 2:
         available_metrics = list(sample_metrics)
@@ -911,6 +1044,7 @@ def _preview_display_metrics(loader: ParetoDataLoader, *, use_weighted: bool, co
             "gain_usd",
             "adg_pnl_w" if use_weighted else "adg_pnl",
             "mdg_pnl_w" if use_weighted else "mdg_pnl",
+            "drawdown_worst_w_usd" if use_weighted else "drawdown_worst_usd",
             "drawdown_worst_usd",
         ]
         for metric in preferred_fallbacks:
@@ -918,17 +1052,6 @@ def _preview_display_metrics(loader: ParetoDataLoader, *, use_weighted: bool, co
                 display_metrics.append(metric)
             if len(display_metrics) >= 2:
                 break
-    else:
-        # Mirror the currently visible preview behavior exactly.
-        # In the legacy implementation this branch belongs to the
-        # `if len(display_metrics) < 2` check, so runs with 2+ scoring metrics
-        # are rendered using unweighted names even when the weighted toggle is on.
-        display_metrics = []
-        for metric in scoring_metrics:
-            if "_w_" in metric or metric.endswith("_w_usd") or metric.endswith("_w_btc"):
-                display_metrics.append(metric.replace("_w_", "_").replace("_w_usd", "_usd").replace("_w_btc", "_btc"))
-            else:
-                display_metrics.append(metric)
     return display_metrics
 
 
@@ -959,8 +1082,20 @@ def _build_preview_payload(
     pareto_count = sum(1 for config in configs if bool(getattr(config, "is_pareto", False)))
     x_metric = display_metrics[0] if display_metrics else "adg_w_usd"
     y_metric = display_metrics[1] if len(display_metrics) > 1 else x_metric
-    color_metric = "drawdown_worst_usd" if "drawdown_worst_usd" in (preview_configs[0].suite_metrics or {}) else None
-    best_match, _, _ = _compute_best_match(visible_loader, perf_weight=80, risk_weight=60, robust_weight=70)
+    color_metric = _resolve_existing_metric(
+        visible_loader,
+        _metric_variants("drawdown_worst", use_weighted=use_weighted, use_btc=False),
+    )
+    best_match, _, _ = _compute_best_match(
+        visible_loader,
+        perf_weight=80,
+        risk_weight=60,
+        robust_weight=70,
+        performance_metric=x_metric,
+        risk_metric=color_metric or y_metric,
+        score_metrics=[x_metric, y_metric, color_metric],
+        configs_override=preview_configs,
+    )
     selected_config = visible_loader.get_config_by_index(selected_config_index) if selected_config_index is not None else None
     return {
         "display_metrics": display_metrics,
@@ -1064,8 +1199,7 @@ def _select_playground_radar_configs(loader: ParetoDataLoader, *, best_match: ob
     primary_metric = loader.scoring_metrics[0] if loader.scoring_metrics else "adg_w_usd"
     comparison_configs = sorted(
         [config for config in pareto_configs if config.config_index != best_match.config_index],
-        key=lambda config: config.suite_metrics.get(primary_metric, 0),
-        reverse=True,
+        key=lambda config: _metric_sort_value_for_loader(loader, config, primary_metric),
     )[:top_n]
     return [best_match] + comparison_configs
 
@@ -1125,7 +1259,7 @@ def _build_playground_radar(loader: ParetoDataLoader, *, best_match: object | No
             value = loader.compute_overall_robustness(config) if metric == "robustness" else config.suite_metrics.get(metric, 0)
             bounds = metric_ranges[metric]
             normalized = (value - bounds["min"]) / bounds["range"] if bounds["range"] > 0 else 0.5
-            if "drawdown" in metric.lower() or "choppiness" in metric.lower() or "volatility" in metric.lower():
+            if _metric_lower_is_better_for_loader(loader, metric):
                 normalized = 1.0 - normalized
             values.append(normalized)
         return values
@@ -1403,7 +1537,7 @@ def _build_playground_3d(loader: ParetoDataLoader, *, x_metric: str, y_metric: s
             "x": [_safe_number(cfg.suite_metrics.get(x_metric), digits=9) for cfg in non_pareto_configs],
             "y": [_safe_number(cfg.suite_metrics.get(y_metric), digits=9) for cfg in non_pareto_configs],
             "z": [_safe_number(cfg.suite_metrics.get(z_metric), digits=9) for cfg in non_pareto_configs],
-            "marker": {"size": 6, "color": [_safe_number(cfg.suite_metrics.get(color_metric), digits=9) for cfg in non_pareto_configs] if color_metric else "lightblue", "colorscale": "Viridis" if color_metric else None, "showscale": bool(color_metric), "cmin": color_range[0] if color_metric and color_range else None, "cmax": color_range[1] if color_metric and color_range else None, "colorbar": {"thickness": 18, "len": 0.82, "x": 0.98, "xanchor": "left", "y": 0.5, "yanchor": "middle", "outlinewidth": 0, "tickfont": {"color": "#fafafa"}}, "opacity": 0.4},
+            "marker": {"size": 3, "color": [_safe_number(cfg.suite_metrics.get(color_metric), digits=9) for cfg in non_pareto_configs] if color_metric else "lightblue", "colorscale": "Viridis" if color_metric else None, "showscale": bool(color_metric), "cmin": color_range[0] if color_metric and color_range else None, "cmax": color_range[1] if color_metric and color_range else None, "colorbar": {"thickness": 18, "len": 0.82, "x": 0.98, "xanchor": "left", "y": 0.5, "yanchor": "middle", "outlinewidth": 0, "tickfont": {"color": "#fafafa"}}, "opacity": 0.35},
             "name": "All Configs",
             "customdata": [[cfg.config_index] for cfg in non_pareto_configs],
             "hovertemplate": f"<b>Config %{{customdata[0]}}</b><br>{x_label}: %{{x:.6f}}<br>{y_label}: %{{y:.6f}}<br>{z_label}: %{{z:.6f}}<extra></extra>",
@@ -1415,7 +1549,7 @@ def _build_playground_3d(loader: ParetoDataLoader, *, x_metric: str, y_metric: s
             "x": [_safe_number(cfg.suite_metrics.get(x_metric), digits=9) for cfg in pareto_configs],
             "y": [_safe_number(cfg.suite_metrics.get(y_metric), digits=9) for cfg in pareto_configs],
             "z": [_safe_number(cfg.suite_metrics.get(z_metric), digits=9) for cfg in pareto_configs],
-            "marker": {"size": 10, "color": [_safe_number(cfg.suite_metrics.get(color_metric), digits=9) for cfg in pareto_configs] if color_metric else "red", "colorscale": "Viridis" if color_metric else None, "showscale": bool(color_metric) and not (show_all and non_pareto_configs), "cmin": color_range[0] if color_metric and color_range else None, "cmax": color_range[1] if color_metric and color_range else None, "colorbar": {"thickness": 18, "len": 0.82, "x": 0.98, "xanchor": "left", "y": 0.5, "yanchor": "middle", "outlinewidth": 0, "tickfont": {"color": "#fafafa"}} if color_metric and not (show_all and non_pareto_configs) else None, "line": {"width": 2, "color": "white"}, "opacity": 0.9},
+            "marker": {"size": 4, "color": [_safe_number(cfg.suite_metrics.get(color_metric), digits=9) for cfg in pareto_configs] if color_metric else "red", "colorscale": "Viridis" if color_metric else None, "showscale": bool(color_metric) and not (show_all and non_pareto_configs), "cmin": color_range[0] if color_metric and color_range else None, "cmax": color_range[1] if color_metric and color_range else None, "colorbar": {"thickness": 18, "len": 0.82, "x": 0.98, "xanchor": "left", "y": 0.5, "yanchor": "middle", "outlinewidth": 0, "tickfont": {"color": "#fafafa"}} if color_metric and not (show_all and non_pareto_configs) else None, "line": {"width": 1, "color": "white"}, "opacity": 0.8},
             "name": "Pareto Front",
             "customdata": [[cfg.config_index] for cfg in pareto_configs],
             "hovertemplate": f"<b>Pareto Config %{{customdata[0]}}</b><br>{x_label}: %{{x:.6f}}<br>{y_label}: %{{y:.6f}}<br>{z_label}: %{{z:.6f}}<extra></extra>",
@@ -1427,7 +1561,7 @@ def _build_playground_3d(loader: ParetoDataLoader, *, x_metric: str, y_metric: s
             "x": [_safe_number(best_match.suite_metrics.get(x_metric), digits=9)],
             "y": [_safe_number(best_match.suite_metrics.get(y_metric), digits=9)],
             "z": [_safe_number(best_match.suite_metrics.get(z_metric), digits=9)],
-            "marker": {"size": 18, "color": "lime", "line": {"width": 4, "color": "darkgreen"}},
+            "marker": {"size": 8, "color": "lime", "line": {"width": 2, "color": "darkgreen"}},
             "name": "Best Match",
             "customdata": [[best_match.config_index]],
             "hovertemplate": f"<b>Best Match Config %{{customdata[0]}}</b><br>{x_label}: %{{x:.6f}}<br>{y_label}: %{{y:.6f}}<br>{z_label}: %{{z:.6f}}<extra></extra>",
@@ -1866,7 +2000,7 @@ def _build_evolution_chart(loader: ParetoDataLoader, *, metric: str, window: int
             "hovertemplate": f"<b>STAR Pareto Config #%{{customdata[0]:.0f}}</b><br>Iteration: %{{x:.0f}}<br>{metric.replace('_', ' ').title()}: %{{y:.6f}}<br><i>Click to view details</i><extra></extra>",
         }]
 
-    lower_is_better = _metric_lower_is_better(metric)
+    lower_is_better = _metric_lower_is_better_for_loader(loader, metric)
     best_values: list[float | None] = []
     best_value: float | None = None
     best_config_index: int | None = None
@@ -2000,6 +2134,8 @@ def _metric_lower_is_better(metric: str) -> bool:
         "paper_loss_ratio",
         "paper_loss_mean_ratio",
         "total_wallet_exposure_mean",
+        "equity_volatility",
+        "equity_volatility_w",
         "equity_choppiness",
         "equity_choppiness_w",
         "equity_jerkiness",
@@ -2008,6 +2144,41 @@ def _metric_lower_is_better(metric: str) -> bool:
         "exponential_fit_error_w",
     }
     return name in lower_names or name.startswith(lower_prefixes)
+
+
+def _metric_goal_for_loader(loader: ParetoDataLoader, metric: str | None) -> str | None:
+    goals = getattr(loader, "scoring_goals", None) or {}
+    metric_name = str(metric or "").strip()
+    candidates = [metric_name]
+    if metric_name.endswith("_w_usd"):
+        candidates.append(metric_name[:-6] + "_usd")
+    elif metric_name.endswith("_w_btc"):
+        candidates.append(metric_name[:-6] + "_btc")
+    elif metric_name.endswith("_w"):
+        candidates.append(metric_name[:-2])
+    if "_w_" in metric_name:
+        candidates.append(metric_name.replace("_w_", "_", 1))
+    for candidate in candidates:
+        goal = str(goals.get(candidate, "")).strip().lower()
+        if goal in {"min", "max"}:
+            return goal
+    return None
+
+
+def _metric_lower_is_better_for_loader(loader: ParetoDataLoader, metric: str | None) -> bool:
+    goal = _metric_goal_for_loader(loader, metric)
+    if goal == "min":
+        return True
+    if goal == "max":
+        return False
+    return _metric_lower_is_better(str(metric or ""))
+
+
+def _metric_sort_value_for_loader(loader: ParetoDataLoader, config: object, metric: str | None) -> float:
+    value = _metric_numeric_value(config, metric)
+    if value is None:
+        return float("inf")
+    return value if _metric_lower_is_better_for_loader(loader, metric) else -value
 
 
 def _find_metric_variant(available_metrics: set[str], base_name: str, *, use_weighted: bool, currency_suffix: str, need_currency: bool) -> str:
@@ -2056,20 +2227,36 @@ def _select_correlation_configs(loader: ParetoDataLoader, *, strategy: str, num_
             metric_name = _find_metric_variant(available_metrics, base_name, use_weighted=use_weighted, currency_suffix=currency_suffix, need_currency=need_currency)
             if metric_name not in available_metrics:
                 continue
-            if maximize:
-                best = max(pareto_configs, key=lambda cfg: cfg.suite_metrics.get(metric_name, float("-inf")), default=None)
-            else:
-                best = min(pareto_configs, key=lambda cfg: cfg.suite_metrics.get(metric_name, float("inf")), default=None)
+            lower_is_better = _metric_lower_is_better_for_loader(loader, metric_name)
+            if maximize and lower_is_better:
+                lower_is_better = False
+            elif not maximize:
+                lower_is_better = True
+            def _candidate_sort_key(cfg: object) -> float:
+                value = _metric_numeric_value(cfg, metric_name)
+                if value is None:
+                    return float("inf")
+                return value if lower_is_better else -value
+
+            best = min(pareto_configs, key=_candidate_sort_key, default=None)
             if not best:
                 continue
-            value = best.suite_metrics.get(metric_name, 0)
+            value = _metric_numeric_value(best, metric_name)
+            if value is None:
+                continue
             label = f"{label_prefix} ({value:{fmt}})"
             if base_name == "position_held_hours_mean":
                 label = f"{label_prefix} ({value:.1f}h)"
             elif base_name == "volume_pct_per_day_avg":
                 label = f"{label_prefix} ({value:.2f}%)"
             candidates.append((best, label))
-        for config, label in candidates[:num_configs]:
+        seen_config_indices: set[int] = set()
+        for config, label in candidates:
+            if len(selected_configs) >= num_configs:
+                break
+            if config.config_index in seen_config_indices:
+                continue
+            seen_config_indices.add(config.config_index)
             selected_configs.append(config.config_index)
             labels.append(f"#{config.config_index} {label}")
 
@@ -2081,11 +2268,15 @@ def _select_correlation_configs(loader: ParetoDataLoader, *, strategy: str, num_
         if not styles:
             return [], []
 
+        style_metric = _find_metric_variant(available_metrics, "adg", use_weighted=use_weighted, currency_suffix=currency_suffix, need_currency=True)
+        if style_metric not in available_metrics:
+            style_metric = loader.scoring_metrics[0] if getattr(loader, "scoring_metrics", None) else "adg_w_usd"
+
         def style_key(cfg: ConfigMetrics) -> float:
-            return cfg.suite_metrics.get("adg_w_usd", float("-inf"))
+            return _metric_sort_value_for_loader(loader, cfg, style_metric)
 
         for style in styles:
-            styles[style] = sorted(styles[style], key=style_key, reverse=True)
+            styles[style] = sorted(styles[style], key=style_key)
 
         style_names = sorted(styles.keys())
         if not style_names:
@@ -2102,8 +2293,8 @@ def _select_correlation_configs(loader: ParetoDataLoader, *, strategy: str, num_
                 config = style_configs[round_num]
                 selected_configs.append(config.config_index)
                 added_this_round = True
-                adg = config.suite_metrics.get("adg_w_usd", 0)
-                labels.append(f"#{config.config_index} {style} (ADG: {adg:.6f})")
+                adg = config.suite_metrics.get(style_metric, 0)
+                labels.append(f"#{config.config_index} {style} ({style_metric}: {adg:.6f})")
                 if len(selected_configs) >= target_count:
                     break
             if not added_this_round:
@@ -2249,6 +2440,7 @@ def _serialize_config_detail(
     perf_weight: int = 80,
     risk_weight: int = 60,
     robust_weight: int = 70,
+    score_configs_override: list | None = None,
 ) -> dict:
     config = loader.get_config_by_index(config_index)
     if config is None:
@@ -2285,22 +2477,18 @@ def _serialize_config_detail(
     ]
 
     primary_metric = loader.scoring_metrics[0] if loader.scoring_metrics else "adg_w_usd"
-    score_configs = [cfg for cfg in (loader.get_pareto_configs() or []) if cfg is not None]
+    score_source = score_configs_override if score_configs_override is not None else (loader.get_pareto_configs() or [])
+    score_configs = [cfg for cfg in score_source if cfg is not None]
     if not score_configs:
         score_configs = [cfg for cfg in (loader.configs or [])[:100] if cfg is not None]
-    perf_values = []
-    for cfg in score_configs:
-        try:
-            perf_values.append(float(cfg.suite_metrics.get(primary_metric, 0.0) or 0.0))
-        except Exception:
-            pass
-    perf_max = max(perf_values) if perf_values else 0.0
-    perf_denom = perf_max if abs(perf_max) > 1e-12 else 1e-12
+    risk_metric = "drawdown_worst_usd"
     explorer_score = _compute_explorer_score(
         loader,
         config,
         primary_metric=primary_metric,
-        perf_denom=perf_denom,
+        performance_bounds=_metric_bounds(score_configs, primary_metric),
+        risk_metric=risk_metric,
+        risk_bounds=_metric_bounds(score_configs, risk_metric),
         perf_weight=perf_weight,
         risk_weight=risk_weight,
         robust_weight=robust_weight,
@@ -2503,12 +2691,7 @@ def _build_playground_payload(
     view_range: object = None,
 ) -> dict:
     visible_loader, normalized_range = _visible_loader(loader, all_results_loaded=all_results_loaded, view_range=view_range)
-    best_match, best_score, primary_metric = _compute_best_match(
-        visible_loader,
-        perf_weight=perf_weight,
-        risk_weight=risk_weight,
-        robust_weight=robust_weight,
-    )
+    primary_metric = visible_loader.scoring_metrics[0] if visible_loader.scoring_metrics else "adg_w_usd"
 
     x_metric = _resolve_existing_metric(visible_loader, _metric_variants("adg", use_weighted=use_weighted, use_btc=use_btc)) or primary_metric or "adg_w_usd"
     y_metric = _resolve_existing_metric(visible_loader, _metric_variants("drawdown_worst", use_weighted=use_weighted, use_btc=use_btc)) or "drawdown_worst_usd"
@@ -2600,6 +2783,21 @@ def _build_playground_payload(
     if color_metric_input and color_metric_input != "None":
         color_metric = _resolve_existing_metric(visible_loader, [color_metric_input]) or color_metric
 
+    score_metrics = [x_metric, y_metric]
+    if viz_type in {"3D Scatter", "3D Projections"}:
+        score_metrics.append(z_metric)
+    best_match_configs = list(visible_loader.configs if show_all else visible_loader.get_pareto_configs())
+
+    best_match, best_score, primary_metric = _compute_best_match(
+        visible_loader,
+        perf_weight=perf_weight,
+        risk_weight=risk_weight,
+        robust_weight=robust_weight,
+        performance_metric=x_metric,
+        risk_metric=y_metric,
+        score_metrics=score_metrics,
+        configs_override=best_match_configs,
+    )
     selected_config = visible_loader.get_config_by_index(selected_config_index) if selected_config_index is not None else None
     visualizations = {
         "preview": _build_preview_payload(
@@ -3074,12 +3272,14 @@ def get_config_detail(body: dict, session: SessionToken = Depends(require_auth))
     if loading_response is not None:
         return loading_response
     visible_loader, normalized_range = _visible_loader(loader, all_results_loaded=all_results_loaded, view_range=(body or {}).get("view_range"))
+    score_configs = visible_loader.get_pareto_configs() or list(visible_loader.configs or [])
     detail = _serialize_config_detail(
         loader,
         config_index,
         perf_weight=perf_weight,
         risk_weight=risk_weight,
         robust_weight=robust_weight,
+        score_configs_override=score_configs,
     )
     return {
         "ok": True,

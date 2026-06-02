@@ -780,7 +780,7 @@ html, body {
   <iframe id="tpl-iframe" src=""></iframe>
 </div>
 
-<script src="/app/js/pbgui_dialogs.js?v=1"></script>
+<script src="/app/js/pbgui_dialogs.js?v=3"></script>
 <script>
 (function () {
   'use strict';
@@ -1073,10 +1073,6 @@ html, body {
   document.getElementById('new-dash-cancel').addEventListener('click', function () {
     newDashDialog.classList.remove('visible');
   });
-  newDashDialog.addEventListener('click', function (e) {
-    if (e.target === newDashDialog) newDashDialog.classList.remove('visible');
-  });
-
   document.getElementById('new-dash-ok').addEventListener('click', function () {
     var name = (newDashNameInput.value || '').trim();
     if (!name) {
@@ -1111,9 +1107,6 @@ html, body {
   }
   document.getElementById('del-cancel').addEventListener('click', function () {
     delDialog.classList.remove('visible');
-  });
-  delDialog.addEventListener('click', function (e) {
-    if (e.target === delDialog) delDialog.classList.remove('visible');
   });
   document.getElementById('del-ok').addEventListener('click', function () {
     delDialog.classList.remove('visible');

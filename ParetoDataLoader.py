@@ -4,6 +4,7 @@ Provides comprehensive metrics, robustness scores, and parameter analysis
 """
 
 import os
+import copy
 import heapq
 import msgpack
 import numpy as np
@@ -29,6 +30,7 @@ _MSGSPEC_MSGPACK_DECODER = msgspec.msgpack.Decoder() if _HAS_MSGSPEC else None
 
 _DISABLE_SCAN_CACHE = os.environ.get("PBG_DISABLE_SCAN_CACHE") == "1"
 _FULL_SCAN_CACHE = os.environ.get("PBG_FULL_SCAN_CACHE") == "1"
+_SCAN_CACHE_VERSION = 5
 
 
 @dataclass
@@ -96,6 +98,46 @@ def _extract_scoring_metric_names(scoring_list: list) -> List[str]:
     return names
 
 
+def _extract_scoring_metric_goals(scoring_list: list) -> Dict[str, str]:
+    """Extract PB7 scoring goals keyed by metric name."""
+    goals: Dict[str, str] = {}
+    for entry in scoring_list:
+        if not isinstance(entry, dict):
+            continue
+        metric = entry.get('metric') or entry.get(b'metric')
+        goal = entry.get('goal') or entry.get(b'goal')
+        if isinstance(metric, bytes):
+            metric = metric.decode('utf-8', errors='replace')
+        if isinstance(goal, bytes):
+            goal = goal.decode('utf-8', errors='replace')
+        metric = str(metric or '').strip()
+        goal = str(goal or '').strip().lower()
+        if metric and goal in {'min', 'max'}:
+            goals[metric] = goal
+    return goals
+
+
+def _scoring_goal_for_metric(scoring_goals: Dict[str, str], metric_name: str, default: str = 'max') -> str:
+    """Return PB7 scoring goal for a metric name, tolerating weighted variants."""
+    goals = scoring_goals or {}
+    metric = str(metric_name or '').strip()
+    candidates = [metric]
+    if metric.endswith('_w_usd'):
+        candidates.append(metric[:-6] + '_usd')
+    elif metric.endswith('_w_btc'):
+        candidates.append(metric[:-6] + '_btc')
+    elif metric.endswith('_w'):
+        candidates.append(metric[:-2])
+    if '_w_' in metric:
+        candidates.append(metric.replace('_w_', '_', 1))
+
+    for candidate in candidates:
+        goal = str(goals.get(candidate, '')).strip().lower()
+        if goal in {'min', 'max'}:
+            return goal
+    return default
+
+
 class ParetoDataLoader:
     """Loads and analyzes all_results.bin from optimize runs"""
     
@@ -113,6 +155,7 @@ class ParetoDataLoader:
         self.configs: List[ConfigMetrics] = []
         self.pareto_hashes: set = set()
         self.scoring_metrics: List[str] = []
+        self.scoring_goals: Dict[str, str] = {}
         self.scenario_labels: List[str] = []
         
         # Cache for pareto JSON configs (index -> full config)
@@ -194,7 +237,11 @@ class ParetoDataLoader:
             with open(meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
             src = meta.get("source") or {}
-            return int(src.get("size") or -1) == int(st_bin.st_size) and float(src.get("mtime") or -1) == float(st_bin.st_mtime)
+            return (
+                int(meta.get("version") or -1) == _SCAN_CACHE_VERSION
+                and int(src.get("size") or -1) == int(st_bin.st_size)
+                and float(src.get("mtime") or -1) == float(st_bin.st_mtime)
+            )
         except Exception:
             return False
 
@@ -340,15 +387,17 @@ class ParetoDataLoader:
         self.raw_configs_cache = {}
         self.pareto_configs_cache = {}
         self.scoring_metrics = []
+        self.scoring_goals = {}
         self.scenario_labels = []
         self.optimize_bounds = {}
         self.optimize_limits = []
         self.backtest_scenarios = []
 
-        # Load pareto hashes to mark pareto configs
-        t0 = time.perf_counter()
-        self._load_pareto_hashes()
-        t_load_pareto_hashes = time.perf_counter() - t0
+        # Full mode should rank all_results.bin by the selected load strategy.
+        # Saved pareto/*.json files belong to fast mode and must not pin or override
+        # the full-mode front, especially with compact PB7 all_results rows.
+        self.pareto_hashes = set()
+        t_load_pareto_hashes = 0.0
 
         # Preload globals from first object (cheap) so the main scan can run in raw=True mode.
         try:
@@ -359,7 +408,9 @@ class ParetoDataLoader:
                 # populate scoring_metrics, optimize bounds/limits, scenarios, scenario_labels
                 try:
                     optimize_config = first_obj.get('optimize', {}) or {}
-                    self.scoring_metrics = _extract_scoring_metric_names(optimize_config.get('scoring', []) or [])
+                    scoring = optimize_config.get('scoring', []) or []
+                    self.scoring_metrics = _extract_scoring_metric_names(scoring)
+                    self.scoring_goals = _extract_scoring_metric_goals(scoring)
                     self.optimize_bounds = self._normalize_optimize_bounds(optimize_config.get('bounds', {}) or {})
                     self.optimize_limits = optimize_config.get('limits', []) or []
                 except Exception:
@@ -392,6 +443,7 @@ class ParetoDataLoader:
             try:
                 # Restore globals from cache
                 self.scoring_metrics = _extract_scoring_metric_names(meta.get("scoring_metrics") or [])
+                self.scoring_goals = meta.get("scoring_goals") or self.scoring_goals or {}
                 self.scenario_labels = meta.get("scenario_labels") or []
                 self.optimize_bounds = self._normalize_optimize_bounds(meta.get("optimize_bounds") or {})
                 self.optimize_limits = meta.get("optimize_limits") or []
@@ -427,7 +479,6 @@ class ParetoDataLoader:
                 offsets = arrays["offsets"]
                 constraint_v = arrays["constraint_violation"]
                 primary_v = arrays["primary"]
-                pareto_indices = arrays["pareto_indices"] if "pareto_indices" in available_fields else None
                 overall_rob_v = arrays["overall_robustness"] if "overall_robustness" in available_fields else None
                 sharpe_v = arrays["sharpe"] if "sharpe" in available_fields else None
                 drawdown_v = arrays["drawdown"] if "drawdown" in available_fields else None
@@ -436,10 +487,6 @@ class ParetoDataLoader:
                 omega_v = arrays["omega"] if "omega" in available_fields else None
                 volatility_v = arrays["volatility"] if "volatility" in available_fields else None
                 recovery_v = arrays["recovery"] if "recovery" in available_fields else None
-
-                if self.pareto_hashes and pareto_indices is None:
-                    scan_cache = None
-                    raise RuntimeError('scan cache missing pareto_indices')
 
                 total_parsed = int(len(offsets))
                 if total_parsed <= 0:
@@ -452,11 +499,10 @@ class ParetoDataLoader:
                         order = np.lexsort(keys)
                         return order[:k]
 
-                    # Precompute full performance ordering (used for fill)
-                    perf_order = _topk_by((idxs, primary_v, constraint_v), min(max_configs, total_parsed))
-                    # Note: primary_v is stored as (-primary_metric) already? No; stored as positive.
-                    # For performance we want constraint asc, -primary desc, idx asc => keys: (idx, -primary, constraint)
-                    perf_order = np.lexsort((idxs, -primary_v, constraint_v))[: min(max_configs, total_parsed)]
+                    # Precompute full performance ordering (used for fill).
+                    # PB7 scoring goals decide whether the primary metric is minimized or maximized.
+                    primary_key_v = primary_v if _scoring_goal_for_metric(self.scoring_goals, self.scoring_metrics[0] if self.scoring_metrics else 'adg_w_usd') == 'min' else -primary_v
+                    perf_order = np.lexsort((idxs, primary_key_v, constraint_v))[: min(max_configs, total_parsed)]
 
                     selected_order: List[int] = []
                     selected_set: set = set()
@@ -478,7 +524,7 @@ class ParetoDataLoader:
                             if drawdown_v is None:
                                 scan_cache = None
                                 raise RuntimeError('scan cache missing drawdown')
-                            order = np.lexsort((idxs, -drawdown_v, constraint_v))[: min(configs_per_criterion, total_parsed)]
+                            order = np.lexsort((idxs, drawdown_v, constraint_v))[: min(configs_per_criterion, total_parsed)]
                         elif criterion == 'calmar':
                             if calmar_v is None:
                                 scan_cache = None
@@ -516,7 +562,7 @@ class ParetoDataLoader:
                     selected_order = self._merge_selected_with_pareto_indices(
                         selected_order,
                         perf_order.tolist(),
-                        pareto_indices.tolist() if pareto_indices is not None else [],
+                        [],
                         max_configs,
                     )
 
@@ -634,7 +680,9 @@ class ParetoDataLoader:
             if 'optimize' in config_data:
                 optimize_config = config_data.get('optimize', {}) or {}
                 if not self.scoring_metrics:
-                    self.scoring_metrics = _extract_scoring_metric_names(optimize_config.get('scoring', []) or [])
+                    scoring = optimize_config.get('scoring', []) or []
+                    self.scoring_metrics = _extract_scoring_metric_names(scoring)
+                    self.scoring_goals = _extract_scoring_metric_goals(scoring)
                 if not self.optimize_bounds:
                     self.optimize_bounds = self._normalize_optimize_bounds(optimize_config.get('bounds', {}) or {})
                 if not self.optimize_limits:
@@ -732,8 +780,6 @@ class ParetoDataLoader:
         store_overall_rob = cache_full or needs_robustness
 
         fast_perf_scan = bool(only_performance and not cache_full)
-        pareto_indices_all: Optional[List[int]] = [] if self.pareto_hashes else None
-
         sharpe_all: Optional[List[float]] = [] if store_sharpe else None
         drawdown_all: Optional[List[float]] = [] if store_drawdown else None
         calmar_all: Optional[List[float]] = [] if store_calmar else None
@@ -808,13 +854,6 @@ class ParetoDataLoader:
 
                 offsets_all.append(int(offset))
 
-                if pareto_indices_all is not None:
-                    try:
-                        if self._compute_config_hash(config_data) in self.pareto_hashes:
-                            pareto_indices_all.append(int(idx))
-                    except Exception:
-                        pass
-
                 # raw=True scan extraction
                 metrics_dict = _metrics_dict_from_raw(config_data)
                 metrics_block = _get(config_data, b'metrics', {}) or {}
@@ -875,7 +914,8 @@ class ParetoDataLoader:
                     if overall_rob_all is not None:
                         overall_rob_all.append(float(overall_robustness))
 
-                key_perf = (constraint_violation, -primary_val, int(idx))
+                primary_key_val = primary_val if _scoring_goal_for_metric(self.scoring_goals, primary_metric) == 'min' else -primary_val
+                key_perf = (constraint_violation, primary_key_val, int(idx))
 
                 # Always maintain performance heap for fill.
                 _push_candidate(perf_fill_heap, max_configs, idx, key_perf)
@@ -891,7 +931,7 @@ class ParetoDataLoader:
                         key = (constraint_violation, -sharpe_val, int(idx))
                         _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
                     elif criterion == 'drawdown':
-                        key = (constraint_violation, -drawdown_val, int(idx))
+                        key = (constraint_violation, drawdown_val, int(idx))
                         _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
                     elif criterion == 'calmar':
                         key = (constraint_violation, -calmar_val, int(idx))
@@ -939,7 +979,7 @@ class ParetoDataLoader:
         selected_order = self._merge_selected_with_pareto_indices(
             selected_order,
             [int(cand_idx) for _, cand_idx, _ in sorted(perf_fill_heap, key=lambda x: x[2])],
-            pareto_indices_all or [],
+            [],
             max_configs,
         )
         selected_set = set(selected_order)
@@ -1021,9 +1061,10 @@ class ParetoDataLoader:
             try:
                 st_bin = os.stat(self.all_results_path)
                 cache_meta = {
-                    "version": 3,
+                    "version": _SCAN_CACHE_VERSION,
                     "source": {"size": int(st_bin.st_size), "mtime": float(st_bin.st_mtime)},
                     "scoring_metrics": self.scoring_metrics,
+                    "scoring_goals": self.scoring_goals,
                     "scenario_labels": self.scenario_labels,
                     "optimize_bounds": self.optimize_bounds,
                     "optimize_limits": self.optimize_limits,
@@ -1041,7 +1082,6 @@ class ParetoDataLoader:
                         *( ["volatility"] if volatility_all is not None else [] ),
                         *( ["recovery"] if recovery_all is not None else [] ),
                         *( ["overall_robustness"] if overall_rob_all is not None else [] ),
-                        *( ["pareto_indices"] if pareto_indices_all is not None else [] ),
                     ],
                 }
                 cache_arrays = {
@@ -1065,8 +1105,6 @@ class ParetoDataLoader:
                     cache_arrays["recovery"] = np.asarray(recovery_all, dtype=np.float32)
                 if overall_rob_all is not None:
                     cache_arrays["overall_robustness"] = np.asarray(overall_rob_all, dtype=np.float32)
-                if pareto_indices_all is not None:
-                    cache_arrays["pareto_indices"] = np.asarray(pareto_indices_all, dtype=np.int32)
                 self._write_scan_cache(cache_meta, cache_arrays)
             except Exception:
                 pass
@@ -1117,6 +1155,7 @@ class ParetoDataLoader:
             return all_configs
         
         primary_metric = self.scoring_metrics[0] if self.scoring_metrics else 'adg_w_usd'
+        primary_goal = _scoring_goal_for_metric(self.scoring_goals, primary_metric)
         
         # Calculate how many configs per criterion
         configs_per_criterion = max_count // len(strategy) if strategy else max_count
@@ -1132,7 +1171,7 @@ class ParetoDataLoader:
                     all_configs,
                     key=lambda c: (
                         c.constraint_violation,
-                        -c.suite_metrics.get(primary_metric, float('-inf')),
+                        c.suite_metrics.get(primary_metric, float('inf') if primary_goal == 'min' else float('-inf')) if primary_goal == 'min' else -c.suite_metrics.get(primary_metric, float('-inf')),
                         c.config_index,
                     ),
                 )
@@ -1173,13 +1212,13 @@ class ParetoDataLoader:
                         selected_indices.add(config.config_index)
             
             elif criterion == 'drawdown':
-                # Lowest drawdown (higher is better, drawdown is negative)
+                # Lowest positive drawdown is better.
                 top = heapq.nsmallest(
                     configs_per_criterion,
                     all_configs,
                     key=lambda c: (
                         c.constraint_violation,
-                        -c.suite_metrics.get('drawdown_worst_usd', float('inf')),
+                        c.suite_metrics.get('drawdown_worst_usd', float('inf')),
                         c.config_index,
                     ),
                 )
@@ -1276,7 +1315,7 @@ class ParetoDataLoader:
                 all_configs,
                 key=lambda c: (
                     c.constraint_violation,
-                    -c.suite_metrics.get(primary_metric, float('-inf')),
+                    c.suite_metrics.get(primary_metric, float('inf') if primary_goal == 'min' else float('-inf')) if primary_goal == 'min' else -c.suite_metrics.get(primary_metric, float('-inf')),
                     c.config_index,
                 ),
             )
@@ -1460,7 +1499,7 @@ class ParetoDataLoader:
 
         - Prefer feasible solutions (`constraint_violation` ~ 0).
         - Compute a true Pareto front using the objective vector stored in `metrics.objectives`.
-        - All objectives are treated as minimization (PB7 typically encodes maximization as negative objectives).
+        - Modern PB7 scoring goals are honored (`max` metrics are sign-flipped to minimization).
         """
 
         # Reset
@@ -1468,15 +1507,6 @@ class ParetoDataLoader:
             c.is_pareto = False
 
         if not self.configs:
-            return
-
-        # When official pareto/<hash>.json files exist, they are the authoritative source.
-        # Full all_results.bin mode may load only a selected window of configs, so recomputing
-        # a front on that subset would mislabel the persisted PB7 Pareto set.
-        known_pareto = [c for c in self.configs if getattr(c, 'config_hash', None) in self.pareto_hashes]
-        if known_pareto:
-            for c in known_pareto:
-                c.is_pareto = True
             return
 
         eps_cv = 1e-12
@@ -1520,9 +1550,14 @@ class ParetoDataLoader:
                 c.is_pareto = True
             return
 
-        # 1D objective: Pareto front = minimum objective value.
+        objective_signs = np.asarray([
+            -1.0 if _scoring_goal_for_metric(self.scoring_goals, k, default='min') == 'max' else 1.0
+            for k in objective_keys
+        ], dtype=float)
+
+        # 1D objective: Pareto front = best transformed objective value.
         if len(objective_keys) == 1:
-            vals = [r[0] for r in obj_rows]
+            vals = [r[0] * float(objective_signs[0]) for r in obj_rows]
             best = min(vals)
             tol = 1e-12 if best == 0 else abs(best) * 1e-12
             for c, v in zip(valid, vals):
@@ -1530,7 +1565,7 @@ class ParetoDataLoader:
                     c.is_pareto = True
             return
 
-        objectives = np.asarray(obj_rows, dtype=float)
+        objectives = np.asarray(obj_rows, dtype=float) * objective_signs
         n_points = len(valid)
         sorted_indices = np.argsort(objectives[:, 0])
         is_pareto = np.zeros(n_points, dtype=bool)
@@ -1550,6 +1585,7 @@ class ParetoDataLoader:
 
                 dominated_by_p = np.all(p <= pareto_objs, axis=1) & np.any(p < pareto_objs, axis=1)
                 if np.any(dominated_by_p):
+                    is_pareto[pareto_idxs[dominated_by_p]] = False
                     keep = ~dominated_by_p
                     pareto_objs = pareto_objs[keep]
                     pareto_idxs = pareto_idxs[keep]
@@ -1765,7 +1801,9 @@ class ParetoDataLoader:
         if isinstance(opt, dict):
             scoring = opt.get(b'scoring', [])
             if isinstance(scoring, list):
-                scoring = [(x.decode('utf-8', errors='ignore') if isinstance(x, bytes) else x) for x in scoring]
+                scoring = [self._deep_decode_bytes(x) for x in scoring]
+            if not self.scoring_goals:
+                self.scoring_goals = _extract_scoring_metric_goals(scoring or [])
             optimize_settings = {
                 'scoring': _extract_scoring_metric_names(scoring) if scoring else [],
                 'limits': opt.get(b'limits', []) or [],
@@ -1834,7 +1872,7 @@ class ParetoDataLoader:
             # In this mode, config_index is the position in sorted pareto files
             # Check if we loaded from JSONs (load_stats has 'pareto_only' strategy)
             load_strategy = self.load_stats.get('load_strategy', [])
-            if 'pareto_only' in load_strategy or len(self.configs) == len(pareto_files):
+            if 'pareto_only' in load_strategy:
                 # Fast mode: Load JSON directly at this index
                 if 0 <= config_index < len(pareto_files):
                     json_file = os.path.join(self.pareto_dir, pareto_files[config_index])
@@ -1853,36 +1891,15 @@ class ParetoDataLoader:
             # Get config_data from cache (avoids re-reading entire file!)
             config_data = self.raw_configs_cache.get(config_index)
             if config_data:
-                # Merge bot params (keep missing params from pareto template)
-                bot_section = None
+                if isinstance(config_data, dict) and any(isinstance(k, bytes) for k in config_data.keys()):
+                    config_data = self._deep_decode_bytes(config_data)
                 if isinstance(config_data, dict):
-                    bot_section = config_data.get('bot')
-                    if bot_section is None:
-                        bot_section = config_data.get(b'bot')
+                    merged_config = copy.deepcopy(full_config)
+                    for key, value in config_data.items():
+                        key_name = key.decode('utf-8', errors='ignore') if isinstance(key, bytes) else str(key)
+                        merged_config[key_name] = value
+                    full_config = merged_config
 
-                if isinstance(bot_section, dict):
-                    for side in ['long', 'short']:
-                        side_dict = bot_section.get(side)
-                        if side_dict is None:
-                            side_dict = bot_section.get(side.encode('utf-8'))
-                        if not isinstance(side_dict, dict):
-                            continue
-
-                        decoded_side: Dict[str, Any] = {}
-                        for k, v in side_dict.items():
-                            if isinstance(k, bytes):
-                                try:
-                                    k = k.decode('utf-8', errors='ignore')
-                                except Exception:
-                                    k = str(k)
-                            decoded_side[str(k)] = v
-
-                        if side in full_config.get('bot', {}):
-                            full_config['bot'][side].update(decoded_side)
-                        else:
-                            full_config.setdefault('bot', {})
-                            full_config['bot'][side] = decoded_side
-                
                 # Cache and return
                 self.pareto_configs_cache[config_index] = full_config
                 return full_config
@@ -1931,7 +1948,9 @@ class ParetoDataLoader:
 
         if not self.scoring_metrics and 'optimize' in config_data:
             optimize_config = config_data.get('optimize', {}) or {}
-            self.scoring_metrics = _extract_scoring_metric_names(optimize_config.get('scoring', []) or [])
+            scoring = optimize_config.get('scoring', []) or []
+            self.scoring_metrics = _extract_scoring_metric_names(scoring)
+            self.scoring_goals = _extract_scoring_metric_goals(scoring)
             if not self.optimize_bounds:
                 self.optimize_bounds = self._normalize_optimize_bounds(optimize_config.get('bounds', {}) or {})
                 self.optimize_limits = optimize_config.get('limits', []) or []
@@ -2127,7 +2146,9 @@ class ParetoDataLoader:
         # Extract scoring metrics from optimize config (first time only)
         if not self.scoring_metrics and 'optimize' in config_data:
             optimize_config = config_data['optimize']
-            self.scoring_metrics = _extract_scoring_metric_names(optimize_config.get('scoring', []))
+            scoring = optimize_config.get('scoring', [])
+            self.scoring_metrics = _extract_scoring_metric_names(scoring)
+            self.scoring_goals = _extract_scoring_metric_goals(scoring)
             
             # Extract global optimize settings (first time only)
             if not self.optimize_bounds:
@@ -2272,7 +2293,9 @@ class ParetoDataLoader:
             # Extract scoring metrics (first time only)
             if not self.scoring_metrics and 'optimize' in config_data:
                 optimize_config = config_data['optimize']
-                self.scoring_metrics = _extract_scoring_metric_names(optimize_config.get('scoring', []))
+                scoring = optimize_config.get('scoring', [])
+                self.scoring_metrics = _extract_scoring_metric_names(scoring)
+                self.scoring_goals = _extract_scoring_metric_goals(scoring)
                 
                 # Extract global optimize settings
                 if not self.optimize_bounds:
@@ -2595,10 +2618,33 @@ class ParetoDataLoader:
         if not pareto_configs:
             return {'at_lower': {}, 'at_upper': {}, 'within_range': []}
         
-        # Sort by composite score
+        # Sort by goal-aware composite score
         primary_metric = self.scoring_metrics[0] if self.scoring_metrics else 'adg_w_usd'
+        primary_goal = _scoring_goal_for_metric(self.scoring_goals, primary_metric)
+        primary_values = []
+        for c in pareto_configs:
+            try:
+                primary_values.append(float(c.suite_metrics.get(primary_metric)))
+            except Exception:
+                continue
+        primary_min = min(primary_values) if primary_values else 0.0
+        primary_max = max(primary_values) if primary_values else 0.0
+        primary_span = primary_max - primary_min
+
+        def _primary_score(config: ConfigMetrics) -> float:
+            try:
+                value = float(config.suite_metrics.get(primary_metric))
+            except Exception:
+                return 0.0
+            if abs(primary_span) <= 1e-12:
+                return 1.0
+            score = (value - primary_min) / primary_span
+            if primary_goal == 'min':
+                score = 1.0 - score
+            return max(0.0, min(1.0, score))
+
         scored_configs = [
-            (c, c.suite_metrics.get(primary_metric, 0) * self.compute_overall_robustness(c))
+            (c, _primary_score(c) * self.compute_overall_robustness(c))
             for c in pareto_configs
         ]
         scored_configs.sort(key=lambda x: x[1], reverse=True)

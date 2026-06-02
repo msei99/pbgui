@@ -796,9 +796,6 @@
     var closeBtn = document.getElementById('pbgui-confirm-close');
     var cancelBtn = document.getElementById('pbgui-confirm-cancel');
     var acceptBtn = document.getElementById('pbgui-confirm-accept');
-    if (overlay) overlay.addEventListener('click', function (e) {
-      if (e.target === overlay) closeNavConfirm(false);
-    });
     if (closeBtn) closeBtn.addEventListener('click', function () { closeNavConfirm(false); });
     if (cancelBtn) cancelBtn.addEventListener('click', function () { closeNavConfirm(false); });
     if (acceptBtn) acceptBtn.addEventListener('click', function () { closeNavConfirm(true); });
@@ -1089,9 +1086,6 @@
     if (aboutBtn && aboutOvl) {
       aboutBtn.addEventListener('click', function () { aboutOvl.classList.add('visible'); });
       if (aboutClose) aboutClose.addEventListener('click', function () { aboutOvl.classList.remove('visible'); });
-      aboutOvl.addEventListener('click', function (e) {
-        if (e.target === aboutOvl) aboutOvl.classList.remove('visible');
-      });
     }
 
     var logoutBtn = document.getElementById('pbgui-logout-btn');

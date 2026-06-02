@@ -1246,6 +1246,29 @@ function ageStr(ts) {
   return (age / 60).toFixed(1) + 'm ago';
 }
 
+const TELEMETRY_STALE_SECONDS = 45;
+
+function telemetryLastUpdate(metrics, stream) {
+  const values = [];
+  const streamTs = Number(stream && stream.last_update);
+  const metricTs = Number(metrics && metrics.timestamp);
+  if (Number.isFinite(streamTs) && streamTs > 0) values.push(streamTs);
+  if (Number.isFinite(metricTs) && metricTs > 0) values.push(metricTs);
+  return values.length ? Math.max.apply(null, values) : 0;
+}
+
+function telemetryAgeSeconds(metrics, stream) {
+  const lastUpdate = telemetryLastUpdate(metrics, stream);
+  return lastUpdate ? Math.max((Date.now() / 1000) - lastUpdate, 0) : null;
+}
+
+function telemetryFresh(metrics, stream) {
+  if (!metrics) return false;
+  if (stream && stream.stale) return false;
+  const age = telemetryAgeSeconds(metrics, stream);
+  return age !== null && age <= TELEMETRY_STALE_SECONDS;
+}
+
 // ── Dashboard ──────────────────────────────────────────────
 function renderDashboard() {
   if (!state) return;
@@ -1288,6 +1311,8 @@ function renderDashboard() {
     const isConnecting = status === 'connecting';
     const metrics = sys[host];
     const stream = streams[host] || {};
+    const metricsFresh = telemetryFresh(metrics, stream);
+    const lastUpdate = telemetryLastUpdate(metrics, stream);
     // compactToggled tracks manual open/close; reset on mode switch
     const isCollapsed = compactToggled[host] !== undefined
       ? compactToggled[host]
@@ -1297,23 +1322,26 @@ function renderDashboard() {
     html += `<div class="vps-header" onclick="toggleCard(this)">`;
     html += `<span class="vps-title">${isConn ? '✅' : (isConnecting ? '⏳' : '❌')} ${host}`;
     html += ` <span class="vps-badge ${isConn ? 'badge-green' : (isConnecting ? 'badge-orange' : 'badge-red')}"${hideIP ? ' style="display:none"' : ''}>${info.ip || '?'}</span>`;
-    if (stream.alive) {
-      const m = metrics;
-      const lastUpdate = stream.last_update || (m ? m.timestamp : 0);
+    if (lastUpdate) {
       const streamAge = lastUpdate ? (Date.now()/1000 - lastUpdate) : -1;
-      const ageColor = streamAge < 5 ? 'green' : streamAge < 15 ? 'orange' : 'red';
-      html += ` <span class="vps-badge badge-${ageColor}" style="font-size:10px">${ageStr(lastUpdate)}</span>`;
+      const ageColor = metricsFresh ? (streamAge < 5 ? 'green' : 'orange') : 'red';
+      const ageText = metricsFresh ? ageStr(lastUpdate) : ('stale ' + ageStr(lastUpdate));
+      html += ` <span class="vps-badge badge-${ageColor}" style="font-size:10px">${ageText}</span>`;
     }
     html += `</span>`;
     // Inline metrics in header (always shown for connected hosts)
     if (isConn && metrics) {
-      const cpuUi = cpuTelemetry(metrics);
       html += `<span class="compact-metrics">`;
-      html += compactMetric('CPU', cpuUi.liveCompact, metrics.cpu, cpuUi.compactSub, tooltipTextForMetrics('CPU', metrics), ` class="cpu-clickable compact-metric" data-history-host="${escAttr(host)}" data-history-metric="cpu" data-cpu-history-host="${escAttr(host)}"`);
-      html += compactMetric('RAM', fmtBytes(metrics.mem_used), metrics.mem_percent, '', tooltipTextForMetrics('RAM', metrics), ` class="cpu-clickable compact-metric" data-history-host="${escAttr(host)}" data-history-metric="memory"`);
-      html += compactMetric('Disk', fmtBytes(metrics.disk_used), metrics.disk_percent, '', tooltipTextForMetrics('Disk', metrics), ` class="cpu-clickable compact-metric" data-history-host="${escAttr(host)}" data-history-metric="disk"`);
-      if (metrics.swap_total > 0) {
-        html += compactMetric('Swap', fmtBytes(metrics.swap_used), metrics.swap_percent, '', tooltipTextForMetrics('Swap', metrics), ` class="cpu-clickable compact-metric" data-history-host="${escAttr(host)}" data-history-metric="swap"`);
+      if (metricsFresh) {
+        const cpuUi = cpuTelemetry(metrics);
+        html += compactMetric('CPU', cpuUi.liveCompact, metrics.cpu, cpuUi.compactSub, tooltipTextForMetrics('CPU', metrics), ` class="cpu-clickable compact-metric" data-history-host="${escAttr(host)}" data-history-metric="cpu" data-cpu-history-host="${escAttr(host)}"`);
+        html += compactMetric('RAM', fmtBytes(metrics.mem_used), metrics.mem_percent, '', tooltipTextForMetrics('RAM', metrics), ` class="cpu-clickable compact-metric" data-history-host="${escAttr(host)}" data-history-metric="memory"`);
+        html += compactMetric('Disk', fmtBytes(metrics.disk_used), metrics.disk_percent, '', tooltipTextForMetrics('Disk', metrics), ` class="cpu-clickable compact-metric" data-history-host="${escAttr(host)}" data-history-metric="disk"`);
+        if (metrics.swap_total > 0) {
+          html += compactMetric('Swap', fmtBytes(metrics.swap_used), metrics.swap_percent, '', tooltipTextForMetrics('Swap', metrics), ` class="cpu-clickable compact-metric" data-history-host="${escAttr(host)}" data-history-metric="swap"`);
+        }
+      } else {
+        html += `<span class="compact-metric"><span class="cm-label">Metrics</span><span class="cm-value" style="color:var(--red)">stale</span><span class="cm-sub">${esc(ageStr(lastUpdate))}</span></span>`;
       }
       html += `</span>`;
     }
@@ -1328,6 +1356,8 @@ function renderDashboard() {
       html += `<div style="color:${statusColor};padding:8px 0">${statusText}${err ? ': ' + esc(err) : ''}</div>`;
     } else if (!metrics) {
       html += `<div style="color:var(--text-dim);padding:8px 0">Waiting for system metrics...</div>`;
+    } else if (!metricsFresh) {
+      html += `<div style="color:var(--red);padding:8px 0">Live system metrics are stale. Last update: ${esc(ageStr(lastUpdate))}. Restarting the metrics stream...</div>`;
     } else {
       const cpuUi = cpuTelemetry(metrics);
       html += `<div class="metrics-grid">`;
@@ -2547,9 +2577,6 @@ window.addEventListener('resize', function () {
 });
 initCpuHistoryInteractions();
 
-document.getElementById('cpu-history-ovl').addEventListener('click', function (event) {
-  if (event.target === event.currentTarget) closeCpuHistory();
-});
 </script>
 </body>
 </html>

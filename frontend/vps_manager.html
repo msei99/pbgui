@@ -3856,6 +3856,7 @@
           name: detail && detail.status ? (detail.status.name || 'Master') : 'Master',
           localUser: config.local_user || '',
           hasServerMetrics: !!monitor.server,
+          serverStale: !!(monitor.server && (monitor.server.telemetry_stale || monitor.server.telemetry_fresh === false)),
           hasV7Rows: Array.isArray(monitor.v7) && monitor.v7.length > 0,
           hasV7Fallback: Array.isArray(monitor.v7_running) && monitor.v7_running.length > 0,
           remoteBranches: Array.isArray(store.master.remoteBranches) ? store.master.remoteBranches : []
@@ -3902,6 +3903,7 @@
           hostname: store.hostname || '',
           ready: !!detail,
           hasServerMetrics: store.view === 'vps' ? !!monitor.server : false,
+          serverStale: store.view === 'vps' ? !!(monitor.server && (monitor.server.telemetry_stale || monitor.server.telemetry_fresh === false)) : false,
           hasV7Rows: store.view === 'vps' ? (Array.isArray(monitor.v7) && monitor.v7.length > 0) : false,
           hasV7Fallback: store.view === 'vps' ? (Array.isArray(monitor.v7_running) && monitor.v7_running.length > 0) : false,
           swapOptions: store.view === 'vps-setup' ? (Array.isArray(config.swap_options) ? config.swap_options : []) : [],
@@ -4040,6 +4042,8 @@
     function getSystemHeaderModel(status, summary, isMaster, rtd) {
       const hostname = String(status.name || summary.name || store.hostname || '-');
       const online = !!status.online;
+      const telemetryStale = !!(status.telemetry_stale || summary.telemetry_stale);
+      const onlineText = telemetryStale ? 'Telemetry Stale' : (online ? 'Online' : 'Offline');
       const rtdLabel = rtd != null ? formatLatency(rtd) : null;
       const bootTime = String(summary.start || '-');
       const uptime = computeUptime(summary.start_ts || summary.start);
@@ -4056,7 +4060,7 @@
       const pb7Tone = getOverviewVersionTone(summary.pb7_github, summary.pb7);
       const tags = [];
       if (!isMaster) {
-        tags.push(`<span class='tag ${online ? 'ok' : 'error'}'>${online ? 'Online' : 'Offline'}</span>`);
+        tags.push(`<span class='tag ${online ? 'ok' : 'error'}'>${esc(onlineText)}</span>`);
         if (!summary.pbgui) {
           if (!status.last_init) tags.push(`<span class='tag warning'>Init Pending</span>`);
           if (!status.last_setup) tags.push(`<span class='tag warning'>Setup Pending</span>`);
@@ -4069,6 +4073,7 @@
       return {
         hostname,
         online,
+        onlineText,
         rtdLabel,
         bootTime,
         uptime,
@@ -4212,8 +4217,9 @@
     }
 
     function renderVpsSummaryTags(status) {
+      const onlineLabel = status.telemetry_stale ? 'Telemetry Stale' : (status.online ? 'Online' : 'Offline');
       return `
-        <span class='tag ${status.online ? 'ok' : 'error'}'>${status.online ? 'Online' : 'Offline'}</span>
+        <span class='tag ${status.online ? 'ok' : 'error'}'>${esc(onlineLabel)}</span>
         <span class='tag ${status.init_ok ? 'ok' : 'warning'}'>Init ${status.init_ok ? 'Done' : 'Pending'}</span>
         <span class='tag ${status.setup_ok ? 'ok' : 'warning'}'>Setup ${status.setup_ok ? 'Done' : 'Pending'}</span>
         <span class='tag ${status.update_ok ? 'ok' : 'warning'}'>Last Update ${status.update_ok ? 'Successful' : 'Pending/Failed'}</span>`;
@@ -4420,6 +4426,10 @@
         var sub = el.querySelector('.status-sub');
         if (sub) {
           var text = ok ? (f.okSub || '') : (f.failSub || '');
+          if (f.key === 'online' && status.telemetry_stale) {
+            var telemetryAge = Number(status.telemetry_age);
+            text = 'Telemetry stale' + (Number.isFinite(telemetryAge) && telemetryAge > 0 ? ' (' + formatLatency(telemetryAge * 1000) + ' ago)' : '');
+          }
           if (f.key === 'coindata_ok') {
             var credits = status.cmc_credits;
             if (ok && credits !== null && credits !== undefined && String(credits).trim() !== '') {
@@ -4538,7 +4548,7 @@
         if (liveValue) setNodeTextIfChanged(liveValue, cpuTelemetry.liveValueText);
         var liveFill = cpuMeter.querySelector('[data-cpu-bar="live"]');
         if (liveFill) {
-          setNodeClassNameIfChanged(liveFill, 'resource-fill ' + resourceTone(cpuTelemetry.livePct));
+          setNodeClassNameIfChanged(liveFill, 'resource-fill ' + (cpuTelemetry.liveTone || resourceTone(cpuTelemetry.livePct)));
           liveFill.style.width = cpuTelemetry.livePct + '%';
         }
         var avgRow = cpuMeter.querySelector('[data-cpu-row="avg60"]');
@@ -4549,7 +4559,7 @@
         if (avgValue) setNodeTextIfChanged(avgValue, cpuTelemetry.avg60ValueText);
         var avgFill = cpuMeter.querySelector('[data-cpu-bar="avg60"]');
         if (avgFill) {
-          setNodeClassNameIfChanged(avgFill, 'resource-fill ' + resourceTone(cpuTelemetry.avg60Pct));
+          setNodeClassNameIfChanged(avgFill, 'resource-fill ' + (cpuTelemetry.avg60Tone || resourceTone(cpuTelemetry.avg60Pct)));
           avgFill.style.width = cpuTelemetry.avg60Pct + '%';
         }
       }
@@ -7884,7 +7894,7 @@
           return `${target}${row.nav === 'vps' ? renderOverviewTaskSummary(row) : ''}`;
         }
         if (column.key === 'role') return `${esc(row.role_icon || '')} ${esc(row.role || '')}`;
-        if (column.key === 'online') return row.online ? levelTag('ok', 'Online') : levelTag('error', 'Offline');
+        if (column.key === 'online') return row.online ? levelTag('ok', 'Online') : levelTag('error', row.telemetry_stale ? 'Stale' : 'Offline');
         if (column.key === 'running_bots') return esc(row.running_bots == null ? '-' : String(row.running_bots));
         if (column.key === 'start') return esc(row.start || '-');
         if (column.key === 'updates') return `${esc(row.updates || '-')} ${row.reboot_required ? levelTag('warning', 'Reboot') : ''}`;
@@ -9181,6 +9191,21 @@
     }
 
     function formatCpuTelemetry(serverMetrics) {
+      const telemetryFresh = !(serverMetrics && (serverMetrics.telemetry_stale || serverMetrics.telemetry_fresh === false));
+      if (!telemetryFresh) {
+        const age = Number(serverMetrics && serverMetrics.telemetry_age);
+        const staleText = Number.isFinite(age) && age > 0 ? ('stale ' + formatLatency(age * 1000) + ' ago') : 'stale';
+        return {
+          livePct: 0,
+          liveValueText: staleText,
+          liveTone: 'warning',
+          avg60Pct: 0,
+          avg60ValueText: staleText,
+          avg60Tone: 'warning',
+          avg60Confirmed: false,
+          title: 'CPU Utilisation (stale):'
+        };
+      }
       const liveValue = Number.isFinite(Number(serverMetrics && serverMetrics.cpu)) ? Number(serverMetrics.cpu) : 0;
       const livePct = Math.max(0, Math.min(liveValue, 100));
       const cpu60sValue = Number.isFinite(Number(serverMetrics && serverMetrics.cpu_60s)) ? Number(serverMetrics.cpu_60s) : 0;
@@ -9786,7 +9811,11 @@
         cards.push({ key:'coindata_ok', label: 'CoinData Ready', ok: !!status.coindata_ok, sub: sub });
       }
       if (Object.prototype.hasOwnProperty.call(status, 'online')) {
-        cards.push({ key:'online', label: 'Online', ok: !!status.online, sub: status.online ? 'Live telemetry received' : 'No current live telemetry' });
+        const telemetryAge = Number(status.telemetry_age);
+        const staleSub = status.telemetry_stale
+          ? ('Telemetry stale' + (Number.isFinite(telemetryAge) && telemetryAge > 0 ? ' (' + formatLatency(telemetryAge * 1000) + ' ago)' : ''))
+          : 'No current live telemetry';
+        cards.push({ key:'online', label: 'Online', ok: !!status.online, sub: status.online ? 'Live telemetry received' : staleSub });
       }
       if (store.detail && store.detail.kind === 'vps' && store.detail.hostname) {
         const userPwStatus = getSecretStatus(store.detail.hostname, 'user_pw');
@@ -10262,6 +10291,7 @@
       const server = monitor.server || null;
       const serverMetrics = server || {};
       const hasServerMetrics = !!server;
+      const telemetryFresh = !(server && (server.telemetry_stale || server.telemetry_fresh === false));
       const pb7Rows = Array.isArray(monitor.v7) ? monitor.v7 : [];
       const pb7Fallback = Array.isArray(monitor.v7_running) ? monitor.v7_running : [];
       const summary = status && status.summary_row ? status.summary_row : {};
@@ -10275,9 +10305,13 @@
         pb7Content = renderRunningPb7Fallback(pb7Fallback);
       }
       const cpuTelemetry = formatCpuTelemetry(serverMetrics);
+      const staleNotice = hasServerMetrics && !telemetryFresh
+        ? `<div class='notice warning'>Live telemetry is stale${serverMetrics.telemetry_age ? ` (${esc(formatLatency(Number(serverMetrics.telemetry_age) * 1000))} ago)` : ''}. Waiting for the metrics stream to recover.</div>`
+        : '';
       const metrics = hasServerMetrics ? `
         <div class='stack'>
           <div style='font-size:var(--fs-sm);color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.06em'>Telemetry Data</div>
+          ${staleNotice}
           <div class='resource-grid'>
             <div class='stack'>
               ${renderResourceMeter('Memory', serverMetrics.mem)}
@@ -10290,12 +10324,12 @@
                 <div class='cpu-meter'>
                   <div class='cpu-meter-row' data-cpu-row='live'>
                     <div class='cpu-meter-label'>1s</div>
-                    <div class='resource-track'><div class='resource-fill ${resourceTone(cpuTelemetry.livePct)}' data-cpu-bar='live' style='width:${cpuTelemetry.livePct}%'></div></div>
+                    <div class='resource-track'><div class='resource-fill ${cpuTelemetry.liveTone || resourceTone(cpuTelemetry.livePct)}' data-cpu-bar='live' style='width:${cpuTelemetry.livePct}%'></div></div>
                     <div class='cpu-meter-value' data-cpu-value='live'>${esc(cpuTelemetry.liveValueText)}</div>
                   </div>
                   <div class='cpu-meter-row ${cpuTelemetry.avg60Confirmed ? '' : 'warming'}' data-cpu-row='avg60'>
                     <div class='cpu-meter-label'>60s</div>
-                    <div class='resource-track'><div class='resource-fill ${resourceTone(cpuTelemetry.avg60Pct)}' data-cpu-bar='avg60' style='width:${cpuTelemetry.avg60Pct}%'></div></div>
+                    <div class='resource-track'><div class='resource-fill ${cpuTelemetry.avg60Tone || resourceTone(cpuTelemetry.avg60Pct)}' data-cpu-bar='avg60' style='width:${cpuTelemetry.avg60Pct}%'></div></div>
                     <div class='cpu-meter-value' data-cpu-value='avg60'>${esc(cpuTelemetry.avg60ValueText)}</div>
                   </div>
                 </div>
@@ -10444,12 +10478,6 @@
       scheduleVpsSecretSyncPasses();
     }
 
-    document.getElementById('help-ovl').addEventListener('click', function (event) {
-      if (event.target === event.currentTarget && typeof window.closeHelp === 'function') {
-        window.closeHelp();
-      }
-    });
-
     document.addEventListener('focusin', function (event) {
       const target = event.target;
       if (!(target instanceof HTMLInputElement)) return;
@@ -10476,9 +10504,6 @@
       }
     });
     initCpuHistoryModalInteractions();
-    document.getElementById('cpuHistoryOverlay').addEventListener('click', function (event) {
-      if (event.target === event.currentTarget) closeCpuHistoryModal();
-    });
     document.addEventListener('click', handleCpuHistoryInteraction, true);
 
     loadOverviewPrefs();

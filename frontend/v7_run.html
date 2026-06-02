@@ -6,7 +6,7 @@
 <title>PBv7 Run</title>
 <link rel="stylesheet" href="/app/css/sidebar.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
-<script src="/app/js/pbgui_dialogs.js?v=2"></script>
+<script src="/app/js/pbgui_dialogs.js?v=3"></script>
 <style>
 /* ─── Reset & Base ─────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -765,9 +765,6 @@ function confirmDelete(name) {
       '</div>' +
     '</div>';
   document.getElementById('modal-cancel').onclick = closeModal;
-  document.getElementById('modal-overlay').onclick = function(e) {
-    if (e.target === this) closeModal();
-  };
   document.getElementById('modal-confirm').onclick = function() {
     executeDelete(name);
   };

@@ -2386,7 +2386,7 @@ textarea.json-invalid:focus {
 <script src="/app/js/editor_shared.js?v=10"></script>
 <script src="/app/js/suite_editor.js?v=4"></script>
 <script src="/app/js/log_viewer_panel.js?v=21"></script>
-<script src="/app/js/pbgui_dialogs.js?v=1"></script>
+<script src="/app/js/pbgui_dialogs.js?v=3"></script>
 <script>
 var TOKEN = "%%TOKEN%%";
 var API_BASE = "%%API_BASE%%";
@@ -10711,7 +10711,6 @@ function attachEventHandlers() {
     state.settingsModalDirty = true;
   });
   el('btn-close-plot').addEventListener('click', closeAllModals);
-  el('modal-backdrop').addEventListener('click', closeAllModals);
   el('btn-editor-format').addEventListener('click', function() {
     var parsed = parseEditorJson();
     if (!parsed.ok) {

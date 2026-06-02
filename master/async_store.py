@@ -210,7 +210,9 @@ class VPSStore:
 
     def update_stream_info(self, hostname: str, info: dict):
         """Update stream diagnostics for a host."""
-        self.streams[hostname] = info
+        current = dict(self.streams.get(hostname, {}))
+        current.update(info)
+        self.streams[hostname] = current
         self.changed.set()
 
     def remove_host(self, hostname: str):
