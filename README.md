@@ -17,7 +17,7 @@ Just contact me on Telegram for more information.
 Passivbot GUI (pbgui) is a FastAPI-based web interface for Passivbot.
 
 It has the following functions:
-- Running, backtesting, and optimization Passivbot v7 and v6 (single and multi).
+- Running, backtesting, and optimization Passivbot v7 and v6.
 - Installing Passivbot configurations on your VPS.
 - Starting and stopping Passivbot instances on your VPS.
 - Moving instances between your VPS.
@@ -231,14 +231,6 @@ python PBRun.py &
 
 Please make sure to adjust the paths in the script file and crontab entry according to your specific setup.
 
-## PBStat Statistics
-This is only needed if you trade spot and have some statistics
-Actually, the best way to enable PBStat is by adding the following line to your start.sh script:
-```
-python PBStat.py &
-```
-This command will run the PBStat.py script in the background, allowing it to collect statistics.
-
 ## PBData Database for Dashboard
 Actually, the best way to enable PBData is by adding the following line to your start.sh script:
 ```
@@ -293,17 +285,6 @@ fetch_interval = 4
 With these settings, PBCoinData will fetch the top 1000 symbols every 4 hours. You will need around 930 credits per month with this configuration. A Basic Free Plan from CoinMarketCap provides 10,000 credits per month, allowing you to run 1 master and 9 VPS instances with the same API key.
 Start PBCoinData.py using the start.sh script.
 
-## Running on Windows (Not tested with passivbot 7)
-Copy the start.bat.example to start.bat
-Edit pbguipath in the start.bat to your pbgui installation path
-Add start.bat to Windows Task Scheduler and use Trigger "At system startup"
-
 ## Links:
 - Telegram https://t.me/+kwyeyrmjQ-lkYTJk
 - Passivbot https://www.passivbot.com/en/latest/
-
-## Screenshots
-![Alt text](docs/images/dashboard.png)
-![Alt text](docs/images/run.png)
-![Alt text](docs/images/backtest.png)
-![Alt text](docs/images/optimize.png)
