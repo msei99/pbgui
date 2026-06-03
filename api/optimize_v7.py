@@ -9,7 +9,6 @@ Provides:
 
 import asyncio
 import copy
-import configparser
 import datetime
 import json
 import multiprocessing
@@ -52,7 +51,7 @@ from api.pb7_ohlcv_tools import (
 )
 from logging_helpers import human_log as _log
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
-from pbgui_purefunc import PBGDIR, pb7_suite_preflight_errors, pb7dir, pb7venv, save_ini
+from pbgui_purefunc import PBGDIR, load_ini_section, pb7_suite_preflight_errors, pb7dir, pb7venv, save_ini
 
 SERVICE = "OptimizeQueueAPI"
 
@@ -546,13 +545,11 @@ def _opt_log_dir() -> Path:
 
 
 def _read_ini_section(section: str = "optimize_v7") -> dict:
-    cfg = configparser.ConfigParser()
-    cfg.read("pbgui.ini")
-    if not cfg.has_section(section):
+    items = load_ini_section(section)
+    if not items:
         # cpu_override controls whether autostart rewrites optimize.n_cpus before launch.
         return {"autostart": "False", "cpu": "1", "cpu_override": "True"}
     # Ensure new keys get a stable default even when the section exists.
-    items = dict(cfg.items(section))
     items.setdefault("autostart", "False")
     items.setdefault("cpu", "1")
     items.setdefault("cpu_override", "True")

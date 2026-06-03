@@ -47,7 +47,7 @@ from api.pb7_ohlcv_tools import (
 )
 from logging_helpers import human_log as _log
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
-from pbgui_purefunc import PBGDIR, load_ini, save_ini, pb7dir, pb7venv
+from pbgui_purefunc import PBGDIR, load_ini, load_ini_section, save_ini, pb7dir, pb7venv
 
 SERVICE = "BacktestQueueAPI"
 ARCHIVE_SERVICE = "ArchiveSync"
@@ -185,11 +185,10 @@ def _archives_dir() -> Path:
 
 def _read_ini_section(section: str = "backtest_v7") -> dict:
     """Read backtest_v7 settings from pbgui.ini."""
-    cfg = configparser.ConfigParser()
-    cfg.read("pbgui.ini")
-    if not cfg.has_section(section):
+    settings = load_ini_section(section)
+    if not settings:
         return {"autostart": "False", "cpu": "1"}
-    return dict(cfg.items(section))
+    return settings
 
 
 def _write_ini(key: str, value: str, section: str = "backtest_v7"):
