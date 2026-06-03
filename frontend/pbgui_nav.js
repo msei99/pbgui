@@ -1233,7 +1233,8 @@
     btn.style.display = visible ? 'flex' : 'none';
     btn.setAttribute('data-restart-blocked', blocked ? '1' : '0');
     btn.setAttribute('data-restart-block-reason', reason);
-    btn.disabled = blocked;
+    btn.disabled = false;
+    btn.setAttribute('aria-disabled', blocked ? 'true' : 'false');
     btn.classList.toggle('disabled', blocked);
     btn.title = blocked ? ('Restart blocked: ' + (reason || 'Active VPS tasks are still running.')) : 'Restart API server';
   }

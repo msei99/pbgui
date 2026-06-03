@@ -355,6 +355,14 @@ def _read_vps_update_log_tail(vps: VPS) -> str:
     return strip_ansi(str(getattr(vps, "update_log", "") or ""))
 
 
+def _read_master_update_log_tail(vpsmanager: VPSManager) -> str:
+    command = str(getattr(vpsmanager, "command", "") or "").strip()
+    log_text = _read_text_tail(vpsmanager._task_log_path(command, "master-update-pb"))
+    if log_text:
+        return strip_ansi(log_text)
+    return strip_ansi(str(getattr(vpsmanager, "update_log", "") or ""))
+
+
 def _extract_playbook_run_started_at(log_text: str) -> str:
     text = str(log_text or "")
     if not text:
@@ -710,13 +718,32 @@ class VPSManagerService:
     def _should_treat_master_process_as_active(self) -> bool:
         if not _status_running(getattr(self.vpsmanager, "update_status", None)):
             return False
-        log_text = strip_ansi(str(getattr(self.vpsmanager, "update_log", "") or ""))
+        log_text = _read_master_update_log_tail(self.vpsmanager)
         command = str(getattr(self.vpsmanager, "command", "") or "").strip()
-        hostname = str(getattr(self.vpsmanager, "hostname", "local") or "local").strip() or "local"
         if not log_text:
             return True
-        parsed_progress = _parse_ansible_task_progress(hostname, log_text, command=command)
+        parsed_progress = _parse_ansible_task_progress("localhost", log_text, command=command)
         return self._status_from_task_progress(parsed_progress) not in {"successful", "failed", "unreachable"}
+
+    def _recover_completed_master_run(self) -> str:
+        status = str(getattr(self.vpsmanager, "update_status", "") or "").strip()
+        if not _status_running(status):
+            return status
+        log_text = _read_master_update_log_tail(self.vpsmanager)
+        if not log_text:
+            return status
+        command = str(getattr(self.vpsmanager, "command", "") or "").strip()
+        parsed_progress = _parse_ansible_task_progress("localhost", log_text, command=command)
+        parsed_status = self._status_from_task_progress(parsed_progress)
+        if parsed_status not in {"successful", "failed", "unreachable"}:
+            return status
+        final_status = "failed" if parsed_status == "unreachable" else parsed_status
+        self.vpsmanager.update_status = final_status
+        if not str(getattr(self.vpsmanager, "last_update", "") or "").strip():
+            self.vpsmanager.last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.vpsmanager.save_master()
+        _log(SERVICE, f"recovered completed master task state from log: {final_status}", level="INFO")
+        return final_status
 
     def _recover_interrupted_vps_runs(self) -> None:
         recovered_hosts: list[str] = []
@@ -750,7 +777,8 @@ class VPSManagerService:
                 return True
             if self._is_vps_playbook_process_running(vps):
                 return True
-        if _status_running(getattr(self.vpsmanager, "update_status", None)) or self._is_master_playbook_process_running():
+        self._recover_completed_master_run()
+        if self._should_treat_master_process_as_active() or self._is_master_playbook_process_running():
             return True
         return False
 
@@ -782,8 +810,8 @@ class VPSManagerService:
                     "status": "running",
                     "command_text": str(vps.command_text or _vps_deploy_command_text(vps.command) or "Ansible Task"),
                 })
-        master_status = str(getattr(self.vpsmanager, "update_status", "") or "").strip()
-        if _status_running(master_status) or self._is_master_playbook_process_running():
+        master_status = self._recover_completed_master_run()
+        if self._should_treat_master_process_as_active() or self._is_master_playbook_process_running():
             items.append({
                 "hostname": "local",
                 "phase": "master",
@@ -1804,7 +1832,8 @@ class VPSManagerService:
             origin_commit = branches[server_branch][0]["full"]
             if server_commit == origin_commit:
                 return "✅"
-            return f"❌ {server_version} ({_short_commit(origin_commit)})"
+            target_version = str(release_info.get("origin_version") or release_info.get("version") or "N/A")
+            return f"❌ {target_version} ({_short_commit(origin_commit)})"
         if server_branch == "main":
             if server_version == str(release_info.get("origin_version") or "N/A") and server_commit == str(release_info.get("origin_commit") or ""):
                 return "✅"
@@ -1823,7 +1852,8 @@ class VPSManagerService:
             origin_commit = branches[server_branch][0]["full"]
             if server_commit == origin_commit:
                 return "✅"
-            return f"❌ {server_version} ({_short_commit(origin_commit)})"
+            target_version = str(release_info.get("origin_version") or release_info.get("version") or "N/A")
+            return f"❌ {target_version} ({_short_commit(origin_commit)})"
         if server_branch == "master":
             if server_version == str(release_info.get("origin_version") or "N/A") and server_commit == str(release_info.get("origin_commit") or ""):
                 return "✅"

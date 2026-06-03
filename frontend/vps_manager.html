@@ -3964,6 +3964,24 @@
       return 'info';
     }
 
+    function getOverviewGithubTarget(github) {
+      const text = String(github || '').trim();
+      if (!text || text === '-') return '';
+      if (text.indexOf('❌') === 0 || text.indexOf('x') === 0 || text.indexOf('X') === 0) {
+        return text.replace(/^[❌xX]\s*/, '').trim();
+      }
+      return '';
+    }
+
+    function getVersionStatusSub(branch, github, tone) {
+      const branchText = String(branch || '-');
+      const target = getOverviewGithubTarget(github);
+      if (tone === 'error' && target) {
+        return branchText && branchText !== '-' ? branchText + ' -> ' + target : 'Update: ' + target;
+      }
+      return branchText;
+    }
+
     function renderOverviewVersionCell(version, github) {
       const value = getOverviewVersionCore(version);
       const tone = getOverviewVersionTone(github, value);
@@ -4058,6 +4076,8 @@
       const apiSync = getDetailApiSyncLabel(summary);
       const pbguiTone = getOverviewVersionTone(summary.pbgui_github, summary.pbgui);
       const pb7Tone = getOverviewVersionTone(summary.pb7_github, summary.pb7);
+      const pbguiSub = getVersionStatusSub(pbguiBranch, summary.pbgui_github, pbguiTone);
+      const pb7Sub = getVersionStatusSub(pb7Branch, summary.pb7_github, pb7Tone);
       const tags = [];
       if (!isMaster) {
         tags.push(`<span class='tag ${online ? 'ok' : 'error'}'>${esc(onlineText)}</span>`);
@@ -4084,6 +4104,8 @@
         pb7Ver,
         pbguiBranch,
         pb7Branch,
+        pbguiSub,
+        pb7Sub,
         apiSync,
         pbguiTone,
         pb7Tone,
@@ -4122,12 +4144,12 @@
             <div class='system-metric'>
               <div class='system-metric-label' data-role='pbgui-label'>PBGui ${model.pbguiTone !== 'ok' && model.pbguiVer !== '-' ? '⚠' : ''}</div>
               <div class='system-metric-value'><span class='dot ${model.pbguiTone}' data-role='pbgui-dot'></span><span data-role='pbgui-ver'>${esc(model.pbguiVer)}</span></div>
-              <div class='system-metric-sub' data-role='pbgui-branch'>${esc(model.pbguiBranch)}</div>
+              <div class='system-metric-sub' data-role='pbgui-branch'>${esc(model.pbguiSub)}</div>
             </div>
             <div class='system-metric'>
               <div class='system-metric-label' data-role='pb7-label'>PB7 ${model.pb7Tone !== 'ok' && model.pb7Ver !== '-' ? '⚠' : ''}</div>
               <div class='system-metric-value'><span class='dot ${model.pb7Tone}' data-role='pb7-dot'></span><span data-role='pb7-ver'>${esc(model.pb7Ver)}</span></div>
-              <div class='system-metric-sub' data-role='pb7-branch'>${esc(model.pb7Branch)}</div>
+              <div class='system-metric-sub' data-role='pb7-branch'>${esc(model.pb7Sub)}</div>
             </div>
           </div>
         </div>`;
@@ -4183,11 +4205,11 @@
       setNodeTextIfChanged(pbguiLabelNode, 'PBGui ' + (model.pbguiTone !== 'ok' && model.pbguiVer !== '-' ? '⚠' : ''));
       setNodeClassNameIfChanged(pbguiDot, 'dot ' + model.pbguiTone);
       setNodeTextIfChanged(pbguiVerNode, model.pbguiVer);
-      setNodeTextIfChanged(pbguiBranchNode, model.pbguiBranch);
+      setNodeTextIfChanged(pbguiBranchNode, model.pbguiSub);
       setNodeTextIfChanged(pb7LabelNode, 'PB7 ' + (model.pb7Tone !== 'ok' && model.pb7Ver !== '-' ? '⚠' : ''));
       setNodeClassNameIfChanged(pb7Dot, 'dot ' + model.pb7Tone);
       setNodeTextIfChanged(pb7VerNode, model.pb7Ver);
-      setNodeTextIfChanged(pb7BranchNode, model.pb7Branch);
+      setNodeTextIfChanged(pb7BranchNode, model.pb7Sub);
     }
 
     function renderMasterSummaryTags(status) {
