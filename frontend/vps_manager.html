@@ -5597,8 +5597,8 @@
         const pw = document.getElementById('master-pw-prompt-input').value;
         if (!pw) return;
         store.master.sudoPw = pw;
-        closeAlertModal();
         if (typeof onConfirm === 'function') onConfirm();
+        closeAlertModal();
       });
       setTimeout(function () {
         const input = document.getElementById('master-pw-prompt-input');
