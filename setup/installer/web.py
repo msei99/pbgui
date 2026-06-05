@@ -18,6 +18,7 @@ import webbrowser
 
 from .core import (
     LocalMasterConfig,
+    LocalUninstallConfig,
     TOTP_QR_BEGIN,
     TOTP_QR_END,
     RemoteInstallError,
@@ -28,6 +29,7 @@ from .core import (
     default_target_user,
     detect_public_ip,
     run_local_master_install,
+    run_local_master_uninstall,
     run_remote_master_install,
 )
 
@@ -172,7 +174,11 @@ def _new_job(payload: dict) -> str:
 
     def worker() -> None:
         try:
-            if str(payload.get("install_mode") or "remote") == "local":
+            mode = str(payload.get("install_mode") or "local")
+            if mode == "local-uninstall":
+                cfg = LocalUninstallConfig.from_mapping(payload)
+                result = run_local_master_uninstall(cfg, log, artifact_dir)
+            elif mode == "local":
                 cfg = LocalMasterConfig.from_mapping(payload)
                 result = run_local_master_install(cfg, log, artifact_dir)
             else:
@@ -240,6 +246,8 @@ def _html() -> str:
     .result { display:none; gap:10px; min-width:0; }
     .secondary { background:#1f2937; color:var(--text); }
     .recommendation { border:1px solid rgba(99,179,237,.35); background:rgba(99,179,237,.08); color:#bfdbfe; padding:12px; border-radius:10px; }
+    .danger-panel { border:1px solid rgba(248,113,113,.55); background:rgba(248,113,113,.09); color:#fecaca; padding:12px; border-radius:10px; display:grid; gap:10px; }
+    .danger-panel strong { color:#fee2e2; }
     .path-preview { grid-column:1/-1; border:1px solid var(--line); background:#0b1220; color:var(--muted); padding:10px; border-radius:10px; font-size:13px; line-height:1.45; }
     .path-preview strong { color:var(--text); }
     .progress-wrap { display:grid; gap:8px; margin-bottom:12px; }
@@ -258,13 +266,14 @@ def _html() -> str:
     <p style="color:var(--muted)">Install a fresh PBGui master either on a remote VPS or on this local machine.</p>
   </section>
   <section class="panel">
-    <h2 id="mode-title">Remote Master VPS</h2>
+    <h2 id="mode-title">Local Master Install</h2>
     <p class="recommendation remote-only">Recommended VPS: <a href="https://aklam.io/CBA3zSaZ" target="_blank" rel="noopener noreferrer">IONOS VPS Linux M+</a> with 4 vCores CPU, 4 GB RAM, and 120 GB NVMe.</p>
     <form id="install-form" class="grid">
       <label class="full">Install mode
         <select name="install_mode" id="install-mode">
-          <option value="remote">Remote Master VPS</option>
           <option value="local">Local Master Install</option>
+          <option value="remote">Remote Master VPS</option>
+          <option value="local-uninstall">Local Master Uninstall</option>
         </select>
       </label>
       <label class="remote-only">Initial login mode
@@ -296,7 +305,7 @@ def _html() -> str:
       </label>
       <label class="full">Install parent directory <input name="install_dir" id="install-dir" value="%%INSTALL_DIR%%" placeholder="/home/%%TARGET_USER%%/software"></label>
       <div class="path-preview" id="install-preview"></div>
-      <label>Master name <input name="hostname" id="master-name" value="pbgui-master"></label>
+      <label class="install-only">Master name <input name="hostname" id="master-name" value="pbgui-master"></label>
       <label class="remote-only">Swap size
         <select id="swap-size-select">
           <option value="4G">4 GB</option>
@@ -307,14 +316,14 @@ def _html() -> str:
       </label>
       <label class="remote-only" id="swap-custom-wrap" style="display:none">Custom swap size <input id="swap-custom" placeholder="10G"></label>
       <input type="hidden" name="swap_size" id="swap-size-value" value="6G">
-      <label>PBGui login password
+      <label class="install-only">PBGui login password
         <span class="password-wrap">
           <input id="pbgui-password" name="pbgui_password" type="password" value="PBGui$Bot!" autocomplete="new-password">
           <button class="password-toggle" type="button" data-target="pbgui-password" aria-label="Show PBGui login password" aria-pressed="false">&#128065;</button>
         </span>
       </label>
-      <label>PBGui bind address <input name="pbgui_bind_host" id="pbgui-bind-host" value="0.0.0.0"></label>
-      <label>PBGui port <input name="pbgui_port" type="number" value="8000" min="1024" max="65535"></label>
+      <label class="install-only">PBGui bind address <input name="pbgui_bind_host" id="pbgui-bind-host" value="0.0.0.0"></label>
+      <label class="install-only">PBGui port <input name="pbgui_port" type="number" value="8000" min="1024" max="65535"></label>
       <label class="remote-only">OpenVPN network CIDR <input name="openvpn_cidr" value="10.8.0.0/24" placeholder="10.8.0.0/24"></label>
       <label class="remote-only">SSH firewall mode
         <select name="ssh_mode" id="ssh-mode">
@@ -328,7 +337,12 @@ def _html() -> str:
         Not secure, not recommended. SSH will be reachable from the public internet. Use this only temporarily if you understand the risk.<br>
         <label style="margin-top:8px"><input type="checkbox" id="ssh-risk" style="height:auto"> I understand that public SSH access is not recommended.</label>
       </div>
-      <div class="full"><button id="start-btn" type="submit">Install Remote Master</button></div>
+      <div class="danger-panel full uninstall-only" id="uninstall-warning">
+        <strong>Local uninstall removes PBGui/PB7 checkouts, virtualenvs, and PBGui systemd user services under the selected parent directory.</strong>
+        <label><input type="checkbox" name="uninstall_confirm" id="uninstall-confirm" value="yes" style="height:auto"> I understand that local install files will be deleted.</label>
+        <label>Type DELETE to confirm <input name="uninstall_confirm_text" id="uninstall-confirm-text" autocomplete="off" placeholder="DELETE"></label>
+      </div>
+      <div class="full"><button id="start-btn" type="submit">Install Local Master</button></div>
     </form>
   </section>
   <section class="panel">
@@ -354,6 +368,8 @@ const modeTitle = document.getElementById('mode-title');
 const sshMode = document.getElementById('ssh-mode');
 const sshWarning = document.getElementById('ssh-warning');
 const sshRisk = document.getElementById('ssh-risk');
+const uninstallConfirm = document.getElementById('uninstall-confirm');
+const uninstallConfirmText = document.getElementById('uninstall-confirm-text');
 const sshIpsWrap = document.getElementById('ssh-ips-wrap');
 const sshAllowedIps = document.getElementById('ssh-allowed-ips');
 const loginMode = document.getElementById('login-mode');
@@ -374,18 +390,19 @@ const defaultLocalInstallDir = %%LOCAL_INSTALL_DIR_JSON%%;
 const defaultLocalMasterName = %%LOCAL_MASTER_NAME_JSON%%;
 let pollTimer = null;
 let currentJobId = '';
+let currentJobMode = 'local';
 let lastLogCount = 0;
 let logHasContent = false;
 let installDirTouched = false;
 let masterNameTouched = false;
 let bindHostTouched = false;
 function defaultInstallDir() {
-  if (installMode.value === 'local') return defaultLocalInstallDir;
+  if (installMode.value === 'local' || installMode.value === 'local-uninstall') return defaultLocalInstallDir;
   const user = (targetUser.value || defaultTargetUser || 'pbgui').trim() || 'pbgui';
   return '/home/' + user + '/software';
 }
-function defaultMasterName() { return installMode.value === 'local' ? defaultLocalMasterName : 'pbgui-master'; }
-function defaultBindHost() { return installMode.value === 'local' ? '127.0.0.1' : '0.0.0.0'; }
+function defaultMasterName() { return installMode.value === 'remote' ? 'pbgui-master' : defaultLocalMasterName; }
+function defaultBindHost() { return installMode.value === 'remote' ? '0.0.0.0' : '127.0.0.1'; }
 function syncInstallDir() {
   if (!installDirTouched) installDir.value = defaultInstallDir();
   syncInstallPreview();
@@ -396,13 +413,15 @@ function joinPath(parent, child) {
 function syncInstallPreview() {
   const parent = (installDir.value || defaultInstallDir()).trim();
   const valid = parent.startsWith('/') || parent === '~' || parent.startsWith('~/');
+  const action = installMode.value === 'local-uninstall' ? 'Will remove ' : '';
   installPreview.innerHTML = (valid ? '' : '<div style="color:var(--danger)">Install parent directory must be an absolute path or start with ~.</div>')
-    + '<div><strong>PBGui:</strong> ' + escapeHtml(joinPath(parent, 'pbgui')) + '</div>'
-    + '<div><strong>PB7:</strong> ' + escapeHtml(joinPath(parent, 'pb7')) + '</div>'
-    + '<div><strong>Venvs:</strong> ' + escapeHtml(joinPath(parent, 'venv_pbgui')) + ', ' + escapeHtml(joinPath(parent, 'venv_pb7')) + '</div>';
+    + '<div><strong>' + action + 'PBGui:</strong> ' + escapeHtml(joinPath(parent, 'pbgui')) + '</div>'
+    + '<div><strong>' + action + 'PB7:</strong> ' + escapeHtml(joinPath(parent, 'pb7')) + '</div>'
+    + '<div><strong>' + action + 'Venvs:</strong> ' + escapeHtml(joinPath(parent, 'venv_pbgui')) + ', ' + escapeHtml(joinPath(parent, 'venv_pb7')) + '</div>'
+    + (installMode.value === 'local-uninstall' ? '<div><strong>Will remove systemd user units:</strong> pbgui-api, pbgui-pbrun, pbgui-pbdata, pbgui-pbcoindata, pbgui-pbremote</div>' : '');
 }
 function syncMode() {
-  if (installMode.value === 'local') {
+  if (installMode.value !== 'remote') {
     sshWarning.style.display = 'none';
     sshIpsWrap.style.display = 'none';
     return;
@@ -411,7 +430,7 @@ function syncMode() {
   sshIpsWrap.style.display = sshMode.value === 'specific_ips_vpn' ? 'grid' : 'none';
 }
 function syncLogin() {
-  if (installMode.value === 'local') {
+  if (installMode.value !== 'remote') {
     syncInstallDir();
     return;
   }
@@ -429,15 +448,24 @@ function syncLogin() {
   syncInstallDir();
 }
 function syncInstallMode() {
-  const isLocal = installMode.value === 'local';
+  const isRemote = installMode.value === 'remote';
+  const isUninstall = installMode.value === 'local-uninstall';
   document.querySelectorAll('.remote-only').forEach(el => {
-    el.style.display = isLocal ? 'none' : '';
-    el.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = isLocal; });
+    el.style.display = isRemote ? '' : 'none';
+    el.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = !isRemote; });
   });
-  modeTitle.textContent = isLocal ? 'Local Master Install' : 'Remote Master VPS';
-  startBtn.textContent = isLocal ? 'Install Local Master' : 'Install Remote Master';
-  if (!masterNameTouched) masterName.value = defaultMasterName();
-  if (!bindHostTouched) pbguiBindHost.value = defaultBindHost();
+  document.querySelectorAll('.install-only').forEach(el => {
+    el.style.display = isUninstall ? 'none' : '';
+    el.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = isUninstall; });
+  });
+  document.querySelectorAll('.uninstall-only').forEach(el => {
+    el.style.display = isUninstall ? 'grid' : 'none';
+    el.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = !isUninstall; });
+  });
+  modeTitle.textContent = isUninstall ? 'Local Master Uninstall' : (isRemote ? 'Remote Master VPS' : 'Local Master Install');
+  startBtn.textContent = isUninstall ? 'Uninstall Local Master' : (isRemote ? 'Install Remote Master' : 'Install Local Master');
+  if (!masterNameTouched && !isUninstall) masterName.value = defaultMasterName();
+  if (!bindHostTouched && !isUninstall) pbguiBindHost.value = defaultBindHost();
   syncMode();
   syncLogin();
   syncInstallDir();
@@ -532,6 +560,7 @@ const progressPhases = [
   { pct: 52, label: 'Installing Python dependencies', re: /pip install -r|requirements\.txt|pip install maturin/ },
   { pct: 72, label: 'Building passivbot-rust', re: /Building passivbot-rust|maturin develop|Rust source stamp updated/ },
   { pct: 82, label: 'Writing configuration', re: /Writing PBGui configuration|secrets\.toml|pbgui\.ini/ },
+  { pct: 82, label: 'Removing local install', re: /Uninstalling local PBGui master|Removed PBGui|Removed PB7|Removed PBGui venv|Removed PB7 venv/ },
   { pct: 87, label: 'Configuring remote access', re: /Setting up OpenVPN|Configuring firewall|TOTP|OpenVPN/ },
   { pct: 93, label: 'Installing systemd services', re: /Installing PBGui systemd user services|setup_systemd|Enabled pbgui-/ },
   { pct: 97, label: 'Checking PBGui API', re: /Checking PBGui API service|PBGui API is listening/ },
@@ -545,8 +574,9 @@ function setProgress(pct, label, state) {
 }
 function updateProgress(job) {
   const status = job.status || 'running';
-  if (status === 'done') { setProgress(100, 'Installation complete', 'done'); return; }
-  if (status === 'error') { setProgress(100, 'Installation failed', 'error'); return; }
+  const mode = (job.result || {}).mode || currentJobMode;
+  if (status === 'done') { setProgress(100, mode === 'local-uninstall' ? 'Uninstall complete' : 'Installation complete', 'done'); return; }
+  if (status === 'error') { setProgress(100, mode === 'local-uninstall' ? 'Uninstall failed' : 'Installation failed', 'error'); return; }
   const text = (job.logs || []).join('\n');
   let pct = text ? 5 : 0;
   let label = text ? 'Starting installer' : 'Waiting for installer input...';
@@ -568,7 +598,9 @@ function renderResult(job) {
   const localHref = escapeHtml(r.local_url || '#');
   const qrText = escapeHtml(r.totp_qr_text || '');
   resultEl.style.display = 'grid';
-  resultEl.innerHTML = (job.status === 'done' && r.mode === 'local'
+  resultEl.innerHTML = (job.status === 'done' && r.mode === 'local-uninstall'
+    ? '<strong style="color:var(--ok)">Local uninstall complete.</strong><div style="color:var(--muted)">Removed install parent targets under: ' + escapeHtml(r.install_dir || '') + '</div>'
+    : job.status === 'done' && r.mode === 'local'
     ? '<strong style="color:var(--ok)">Local installation complete.</strong><div>Open PBGui: <a href="' + localHref + '" target="_blank">' + localUrl + '</a></div><div style="color:var(--muted)">PBGui: ' + escapeHtml(r.pbgui_dir || '') + '<br>PB7: ' + escapeHtml(r.pb7_dir || '') + '<br>Python: ' + escapeHtml(r.pbgui_python || '') + '</div>'
     : job.status === 'done'
     ? '<strong style="color:var(--ok)">Installation complete.</strong><div>Connect OpenVPN, then open: <a href="' + vpnHref + '" target="_blank">' + vpnUrl + '</a></div><div style="color:var(--muted)">Use the NetworkManager button to import the profile as split tunnel. If you import it manually, enable <strong>Use this connection only for resources on its network</strong> so the VPN does not become your default internet route.</div>'
@@ -610,13 +642,20 @@ function poll(jobId) {
 }
 form.addEventListener('submit', ev => {
   ev.preventDefault();
-  if (installMode.value !== 'local' && sshMode.value === 'anywhere' && !sshRisk.checked) {
+  if (installMode.value === 'remote' && sshMode.value === 'anywhere' && !sshRisk.checked) {
     resultEl.style.display = 'grid';
     resultEl.innerHTML = '<strong style="color:var(--danger)">Please confirm the public SSH warning before continuing.</strong>';
     return;
   }
-  startBtn.disabled = true; resultEl.style.display = 'none'; logEl.textContent = 'Starting installation...';
-  lastLogCount = 0; logHasContent = false; setProgress(3, 'Starting installation...', '');
+  if (installMode.value === 'local-uninstall' && (!uninstallConfirm.checked || uninstallConfirmText.value.trim() !== 'DELETE')) {
+    resultEl.style.display = 'grid';
+    resultEl.innerHTML = '<strong style="color:var(--danger)">Please confirm local uninstall by checking the box and typing DELETE.</strong>';
+    return;
+  }
+  currentJobMode = installMode.value;
+  const startText = currentJobMode === 'local-uninstall' ? 'Starting uninstall...' : 'Starting installation...';
+  startBtn.disabled = true; resultEl.style.display = 'none'; logEl.textContent = startText;
+  lastLogCount = 0; logHasContent = false; setProgress(3, startText, '');
   const payload = Object.fromEntries(new FormData(form).entries());
   fetch('/api/install', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) })
     .then(r => r.json()).then(data => poll(data.job_id))

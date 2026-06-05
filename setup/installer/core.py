@@ -122,6 +122,31 @@ class LocalMasterConfig:
 
 
 @dataclass
+class LocalUninstallConfig:
+    """Local master uninstall settings."""
+
+    install_dir: str = field(default_factory=default_local_install_dir)
+    confirm: bool = False
+    confirm_text: str = ""
+
+    @classmethod
+    def from_mapping(cls, data: dict) -> "LocalUninstallConfig":
+        """Build local uninstall config from web/CLI input."""
+        confirm_value = data.get("uninstall_confirm")
+        return cls(
+            install_dir=str(data.get("install_dir") or default_local_install_dir()).strip(),
+            confirm=confirm_value in {True, "true", "1", "yes", "on"},
+            confirm_text=str(data.get("uninstall_confirm_text") or "").strip(),
+        )
+
+    def validate(self) -> None:
+        """Validate local uninstall settings."""
+        self.install_dir = normalize_local_install_dir(self.install_dir)
+        if not self.confirm or self.confirm_text != "DELETE":
+            raise ValueError("Local uninstall requires checking the confirmation box and typing DELETE.")
+
+
+@dataclass
 class RemoteMasterConfig:
     """Remote master installation settings."""
 
@@ -368,6 +393,104 @@ def _local_url(bind_host: str, port: int) -> str:
     """Return a browser-friendly URL for a local PBGui install."""
     host = bind_host if bind_host not in {"0.0.0.0", "::", ""} else "127.0.0.1"
     return f"http://{host}:{port}/"
+
+
+def _local_install_targets(install_dir: Path) -> dict[str, Path]:
+    """Return removable local install targets under an install parent."""
+    return {
+        "PBGui": install_dir / "pbgui",
+        "PB7": install_dir / "pb7",
+        "PBGui venv": install_dir / "venv_pbgui",
+        "PB7 venv": install_dir / "venv_pb7",
+    }
+
+
+def _run_user_systemctl_best_effort(args: list[str], log: LogCallback) -> None:
+    """Run systemctl --user without failing uninstall on missing units/managers."""
+    systemctl = shutil.which("systemctl")
+    if not systemctl:
+        log("systemctl not found; skipping systemd user service cleanup.")
+        return
+    env = os.environ.copy()
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    command = [systemctl, "--user", *args]
+    log("$ " + shlex.join(command))
+    proc = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30, env=env)
+    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if output:
+        for line in output.splitlines():
+            log(line)
+    if proc.returncode != 0:
+        log(f"Warning: systemctl --user {' '.join(args)} exited with {proc.returncode}.")
+
+
+def run_local_master_uninstall(config: LocalUninstallConfig, log: LogCallback, artifact_dir: Path | None = None) -> dict:
+    """Uninstall a local PBGui master from this machine."""
+    config.validate()
+    install_dir = Path(config.install_dir)
+    root = _installer_root().resolve()
+    targets = _local_install_targets(install_dir)
+    for label, target in targets.items():
+        try:
+            if target.exists() and target.resolve() == root:
+                raise RuntimeError(f"Refusing to remove current installer checkout for {label}: {target}")
+        except OSError:
+            pass
+
+    log(f"Uninstalling local PBGui master under: {install_dir}")
+    units = [
+        "pbgui-api.service",
+        "pbgui-pbrun.service",
+        "pbgui-pbdata.service",
+        "pbgui-pbcoindata.service",
+        "pbgui-pbremote.service",
+    ]
+    for unit in units:
+        _run_user_systemctl_best_effort(["stop", unit], log)
+    for unit in units:
+        _run_user_systemctl_best_effort(["disable", unit], log)
+
+    unit_dir = Path.home() / ".config" / "systemd" / "user"
+    wants_dir = unit_dir / "default.target.wants"
+    removed_units: list[str] = []
+    for unit in units:
+        for path in (unit_dir / unit, wants_dir / unit):
+            try:
+                if path.exists() or path.is_symlink():
+                    path.unlink()
+                    removed_units.append(str(path))
+                    log(f"Removed systemd file: {path}")
+            except OSError as exc:
+                log(f"Warning: could not remove {path}: {exc}")
+    _run_user_systemctl_best_effort(["daemon-reload"], log)
+    _run_user_systemctl_best_effort(["reset-failed"], log)
+
+    removed_paths: list[str] = []
+    for label, target in targets.items():
+        if not target.exists() and not target.is_symlink():
+            log(f"Skipping missing {label}: {target}")
+            continue
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        else:
+            shutil.rmtree(target)
+        removed_paths.append(str(target))
+        log(f"Removed {label}: {target}")
+    try:
+        install_dir.rmdir()
+        log(f"Removed empty install parent: {install_dir}")
+        removed_paths.append(str(install_dir))
+    except OSError:
+        log(f"Install parent kept because it is not empty: {install_dir}")
+
+    return {
+        "ok": True,
+        "mode": "local-uninstall",
+        "install_dir": str(install_dir),
+        "removed_paths": removed_paths,
+        "removed_units": removed_units,
+        "completed_at": int(time.time()),
+    }
 
 
 def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifact_dir: Path | None = None) -> dict:
