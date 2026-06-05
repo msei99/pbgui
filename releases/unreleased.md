@@ -2,6 +2,7 @@
 
 - Added a new remote master installer entry point (`setup/master_installer.sh`) that starts a local browser wizard or CLI mode from one curl command.
 - Added a Local Master Install mode to the master installer browser wizard and CLI for installing PBGui/PB7 locally under a configurable parent directory.
+- Made the master installer bootstrap install missing Python venv support on apt-based systems before creating its temporary installer environment.
 - Added systemd user-service setup for PBGui services so new remote master installs no longer rely on `start.sh` and `crontab`.
 - Made the Services API systemd-aware so PBGui service start, stop, status, local restart, and API restart actions use user units when available instead of killing processes that systemd restarts.
 - Added a Services page migration panel for converting existing PBGui masters to systemd user services with preflight status, a dry-run test output, warning display, legacy crontab cleanup, and migration logs.

@@ -9,6 +9,28 @@ info() { printf '\033[36m[INFO]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[WARN]\033[0m %s\n' "$*"; }
 err() { printf '\033[31m[ERR ]\033[0m %s\n' "$*" >&2; }
 
+install_python_venv_package() {
+  if ! command -v apt-get >/dev/null 2>&1; then
+    return 1
+  fi
+  local py_version venv_pkg
+  py_version="$($PYTHON_BIN -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  venv_pkg="python${py_version}-venv"
+  local apt_cmd=(apt-get)
+  if [[ "$(id -u)" -ne 0 ]]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+      return 1
+    fi
+    apt_cmd=(sudo apt-get)
+  fi
+  warn "Python venv support is missing. Installing $venv_pkg..."
+  "${apt_cmd[@]}" update
+  if ! "${apt_cmd[@]}" install -y "$venv_pkg"; then
+    warn "Could not install $venv_pkg. Trying python3-venv..."
+    "${apt_cmd[@]}" install -y python3-venv
+  fi
+}
+
 script_dir=""
 if [[ "${BASH_SOURCE[0]}" != /dev/fd/* && "${BASH_SOURCE[0]}" != /proc/* ]]; then
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,8 +64,11 @@ mkdir -p "$WORK_DIR"
 if [[ ! -x "$venv_dir/bin/python" ]]; then
   info "Preparing installer virtualenv..."
   if ! "$PYTHON_BIN" -m venv "$venv_dir"; then
-    err "Failed to create a Python virtualenv. Install python3-venv and retry."
-    exit 1
+    rm -rf "$venv_dir"
+    if ! install_python_venv_package || ! "$PYTHON_BIN" -m venv "$venv_dir"; then
+      err "Failed to create a Python virtualenv. Install python3-venv or python$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')-venv and retry."
+      exit 1
+    fi
   fi
   "$venv_dir/bin/python" -m pip install --upgrade pip >/dev/null
   "$venv_dir/bin/python" -m pip install paramiko >/dev/null
