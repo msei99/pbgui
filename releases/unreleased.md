@@ -5,6 +5,7 @@
 - Made the master installer bootstrap install missing Python venv support on apt-based systems before creating its temporary installer environment.
 - Added `PBGUI_INSTALLER_BRANCH` support to the master installer bootstrap so branch-based raw-script tests download the matching archive.
 - Made the Local Master Install flow install missing apt-based prerequisites such as git, build tools, pkg-config, and Python venv support before cloning repositories.
+- Added a progress bar to the master installer wizard and changed log updates to append incrementally so selected log text can be copied without being cleared by polling.
 - Added systemd user-service setup for PBGui services so new remote master installs no longer rely on `start.sh` and `crontab`.
 - Made the Services API systemd-aware so PBGui service start, stop, status, local restart, and API restart actions use user units when available instead of killing processes that systemd restarts.
 - Added a Services page migration panel for converting existing PBGui masters to systemd user services with preflight status, a dry-run test output, warning display, legacy crontab cleanup, and migration logs.

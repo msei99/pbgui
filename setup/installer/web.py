@@ -242,6 +242,12 @@ def _html() -> str:
     .recommendation { border:1px solid rgba(99,179,237,.35); background:rgba(99,179,237,.08); color:#bfdbfe; padding:12px; border-radius:10px; }
     .path-preview { grid-column:1/-1; border:1px solid var(--line); background:#0b1220; color:var(--muted); padding:10px; border-radius:10px; font-size:13px; line-height:1.45; }
     .path-preview strong { color:var(--text); }
+    .progress-wrap { display:grid; gap:8px; margin-bottom:12px; }
+    .progress-row { display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size:13px; }
+    .progress-track { height:12px; border-radius:999px; border:1px solid var(--line); background:#0b1220; overflow:hidden; }
+    .progress-bar { height:100%; width:0%; background:linear-gradient(90deg,#2563eb,#63b3ed); transition:width .25s ease; }
+    .progress-bar.done { background:linear-gradient(90deg,#16a34a,#86efac); }
+    .progress-bar.error { background:linear-gradient(90deg,#dc2626,#fca5a5); }
     a { color:#93c5fd; }
   </style>
 </head>
@@ -327,6 +333,10 @@ def _html() -> str:
   </section>
   <section class="panel">
     <h2>Progress</h2>
+    <div class="progress-wrap" id="progress-wrap">
+      <div class="progress-row"><span id="progress-label">Waiting for installer input...</span><span id="progress-percent">0%</span></div>
+      <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
+    </div>
     <pre id="log">Waiting for installer input...</pre>
     <div class="result" id="result"></div>
   </section>
@@ -334,6 +344,9 @@ def _html() -> str:
 <script>
 const form = document.getElementById('install-form');
 const logEl = document.getElementById('log');
+const progressBar = document.getElementById('progress-bar');
+const progressLabel = document.getElementById('progress-label');
+const progressPercent = document.getElementById('progress-percent');
 const resultEl = document.getElementById('result');
 const startBtn = document.getElementById('start-btn');
 const installMode = document.getElementById('install-mode');
@@ -361,6 +374,8 @@ const defaultLocalInstallDir = %%LOCAL_INSTALL_DIR_JSON%%;
 const defaultLocalMasterName = %%LOCAL_MASTER_NAME_JSON%%;
 let pollTimer = null;
 let currentJobId = '';
+let lastLogCount = 0;
+let logHasContent = false;
 let installDirTouched = false;
 let masterNameTouched = false;
 let bindHostTouched = false;
@@ -482,7 +497,67 @@ function ansiToHtml(text) {
   if (open) html += '</span>';
   return html;
 }
-function appendLogs(lines) { logEl.innerHTML = lines.length ? ansiToHtml(lines.join('\n')) : 'No logs yet...'; logEl.scrollTop = logEl.scrollHeight; }
+function selectionInsideLog() {
+  const sel = window.getSelection ? window.getSelection() : null;
+  return !!(sel && !sel.isCollapsed && logEl.contains(sel.anchorNode) && logEl.contains(sel.focusNode));
+}
+function appendLogs(lines) {
+  lines = Array.isArray(lines) ? lines : [];
+  if (!lines.length) {
+    if (!logHasContent) logEl.textContent = 'No logs yet...';
+    return;
+  }
+  if (lines.length < lastLogCount) {
+    logEl.innerHTML = '';
+    lastLogCount = 0;
+    logHasContent = false;
+  }
+  if (lines.length === lastLogCount) return;
+  const nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 48;
+  const nextLines = lines.slice(lastLogCount);
+  if (!logHasContent) {
+    logEl.innerHTML = '';
+    logHasContent = true;
+  }
+  const prefix = lastLogCount > 0 ? '\n' : '';
+  logEl.insertAdjacentHTML('beforeend', ansiToHtml(prefix + nextLines.join('\n')));
+  lastLogCount = lines.length;
+  if (nearBottom && !selectionInsideLog()) logEl.scrollTop = logEl.scrollHeight;
+}
+const progressPhases = [
+  { pct: 5, label: 'Starting installer', re: /Starting installation|Connecting to|Using local install parent directory/ },
+  { pct: 12, label: 'Installing prerequisites', re: /Ensuring local installer prerequisites|Installing system packages|apt-get install/ },
+  { pct: 22, label: 'Preparing repositories', re: /Cloning PBGui|Updating existing checkout|git clone|Using current PBGui checkout/ },
+  { pct: 38, label: 'Creating virtualenvs', re: /Creating Python virtualenvs|python3\.12 -m venv/ },
+  { pct: 52, label: 'Installing Python dependencies', re: /pip install -r|requirements\.txt|pip install maturin/ },
+  { pct: 72, label: 'Building passivbot-rust', re: /Building passivbot-rust|maturin develop|Rust source stamp updated/ },
+  { pct: 82, label: 'Writing configuration', re: /Writing PBGui configuration|secrets\.toml|pbgui\.ini/ },
+  { pct: 87, label: 'Configuring remote access', re: /Setting up OpenVPN|Configuring firewall|TOTP|OpenVPN/ },
+  { pct: 93, label: 'Installing systemd services', re: /Installing PBGui systemd user services|setup_systemd|Enabled pbgui-/ },
+  { pct: 97, label: 'Checking PBGui API', re: /Checking PBGui API service|PBGui API is listening/ },
+];
+function setProgress(pct, label, state) {
+  const value = Math.max(0, Math.min(100, Math.round(pct || 0)));
+  progressBar.style.width = value + '%';
+  progressBar.className = 'progress-bar' + (state ? ' ' + state : '');
+  progressLabel.textContent = label || 'Waiting for installer input...';
+  progressPercent.textContent = value + '%';
+}
+function updateProgress(job) {
+  const status = job.status || 'running';
+  if (status === 'done') { setProgress(100, 'Installation complete', 'done'); return; }
+  if (status === 'error') { setProgress(100, 'Installation failed', 'error'); return; }
+  const text = (job.logs || []).join('\n');
+  let pct = text ? 5 : 0;
+  let label = text ? 'Starting installer' : 'Waiting for installer input...';
+  progressPhases.forEach(phase => {
+    if (phase.re.test(text) && phase.pct >= pct) {
+      pct = phase.pct;
+      label = phase.label;
+    }
+  });
+  setProgress(pct, label, '');
+}
 function renderResult(job) {
   currentJobId = job.id || currentJobId;
   const r = job.result || {};
@@ -522,6 +597,7 @@ function installNetworkManagerProfile() {
 }
 function poll(jobId) {
   fetch('/api/status?job=' + encodeURIComponent(jobId)).then(r => r.json()).then(job => {
+    updateProgress(job);
     appendLogs(job.logs || []);
     renderResult(job);
     if (job.status === 'done' || job.status === 'error') {
@@ -540,6 +616,7 @@ form.addEventListener('submit', ev => {
     return;
   }
   startBtn.disabled = true; resultEl.style.display = 'none'; logEl.textContent = 'Starting installation...';
+  lastLogCount = 0; logHasContent = false; setProgress(3, 'Starting installation...', '');
   const payload = Object.fromEntries(new FormData(form).entries());
   fetch('/api/install', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) })
     .then(r => r.json()).then(data => poll(data.job_id))
