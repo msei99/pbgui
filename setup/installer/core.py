@@ -127,7 +127,6 @@ class LocalUninstallConfig:
 
     install_dir: str = field(default_factory=default_local_install_dir)
     confirm: bool = False
-    confirm_text: str = ""
 
     @classmethod
     def from_mapping(cls, data: dict) -> "LocalUninstallConfig":
@@ -136,14 +135,13 @@ class LocalUninstallConfig:
         return cls(
             install_dir=str(data.get("install_dir") or default_local_install_dir()).strip(),
             confirm=confirm_value in {True, "true", "1", "yes", "on"},
-            confirm_text=str(data.get("uninstall_confirm_text") or "").strip(),
         )
 
     def validate(self) -> None:
         """Validate local uninstall settings."""
         self.install_dir = normalize_local_install_dir(self.install_dir)
-        if not self.confirm or self.confirm_text != "DELETE":
-            raise ValueError("Local uninstall requires checking the confirmation box and typing DELETE.")
+        if not self.confirm:
+            raise ValueError("Local uninstall requires confirmation in the safety dialog.")
 
 
 @dataclass
@@ -415,7 +413,25 @@ def _run_user_systemctl_best_effort(args: list[str], log: LogCallback) -> None:
     env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     command = [systemctl, "--user", *args]
     log("$ " + shlex.join(command))
-    proc = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30, env=env)
+    try:
+        proc = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30, env=env)
+    except subprocess.TimeoutExpired:
+        log(f"Warning: systemctl --user {' '.join(args)} timed out; continuing cleanup.")
+        if args[:1] == ["stop"] and len(args) == 2:
+            kill_command = [systemctl, "--user", "kill", "--kill-who=all", "--signal=SIGKILL", args[1]]
+            log("$ " + shlex.join(kill_command))
+            try:
+                kill_proc = subprocess.run(kill_command, check=False, capture_output=True, text=True, timeout=10, env=env)
+            except subprocess.TimeoutExpired:
+                log(f"Warning: systemctl --user kill {args[1]} timed out.")
+                return
+            kill_output = ((kill_proc.stdout or "") + (kill_proc.stderr or "")).strip()
+            if kill_output:
+                for line in kill_output.splitlines():
+                    log(line)
+            if kill_proc.returncode != 0:
+                log(f"Warning: systemctl --user kill {args[1]} exited with {kill_proc.returncode}.")
+        return
     output = ((proc.stdout or "") + (proc.stderr or "")).strip()
     if output:
         for line in output.splitlines():

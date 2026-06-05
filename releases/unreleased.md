@@ -2,7 +2,8 @@
 
 - Added a new remote master installer entry point (`setup/master_installer.sh`) that starts a local browser wizard or CLI mode from one curl command.
 - Added a Local Master Install mode to the master installer browser wizard and CLI for installing PBGui/PB7 locally under a configurable parent directory.
-- Added a Local Master Uninstall mode to the master installer browser wizard for removing local PBGui/PB7 checkouts, virtualenvs, and PBGui user services with explicit confirmation.
+- Added a Local Master Uninstall mode to the master installer browser wizard for removing local PBGui/PB7 checkouts, virtualenvs, and PBGui user services with a safety confirmation dialog.
+- Made local master uninstall continue cleanup when a systemd user-service stop command times out, with a best-effort service kill attempt.
 - Made the master installer bootstrap install missing Python venv support on apt-based systems before creating its temporary installer environment.
 - Added `PBGUI_INSTALLER_BRANCH` support to the master installer bootstrap so branch-based raw-script tests download the matching archive.
 - Made the Local Master Install flow install missing apt-based prerequisites such as git, build tools, pkg-config, and Python venv support before cloning repositories.

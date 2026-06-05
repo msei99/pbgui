@@ -248,6 +248,12 @@ def _html() -> str:
     .recommendation { border:1px solid rgba(99,179,237,.35); background:rgba(99,179,237,.08); color:#bfdbfe; padding:12px; border-radius:10px; }
     .danger-panel { border:1px solid rgba(248,113,113,.55); background:rgba(248,113,113,.09); color:#fecaca; padding:12px; border-radius:10px; display:grid; gap:10px; }
     .danger-panel strong { color:#fee2e2; }
+    .modal-backdrop { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(2,6,23,.76); padding:24px; z-index:20; }
+    .modal { width:min(520px,100%); background:var(--panel); border:1px solid rgba(248,113,113,.55); border-radius:16px; box-shadow:0 22px 80px rgba(0,0,0,.5); padding:20px; display:grid; gap:14px; }
+    .modal h3 { margin:0; font-size:20px; color:#fee2e2; }
+    .modal p { margin:0; color:var(--muted); line-height:1.5; }
+    .modal-actions { display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; }
+    .danger-button { background:var(--danger); color:#190606; }
     .path-preview { grid-column:1/-1; border:1px solid var(--line); background:#0b1220; color:var(--muted); padding:10px; border-radius:10px; font-size:13px; line-height:1.45; }
     .path-preview strong { color:var(--text); }
     .progress-wrap { display:grid; gap:8px; margin-bottom:12px; }
@@ -339,8 +345,7 @@ def _html() -> str:
       </div>
       <div class="danger-panel full uninstall-only" id="uninstall-warning">
         <strong>Local uninstall removes PBGui/PB7 checkouts, virtualenvs, and PBGui systemd user services under the selected parent directory.</strong>
-        <label><input type="checkbox" name="uninstall_confirm" id="uninstall-confirm" value="yes" style="height:auto"> I understand that local install files will be deleted.</label>
-        <label>Type DELETE to confirm <input name="uninstall_confirm_text" id="uninstall-confirm-text" autocomplete="off" placeholder="DELETE"></label>
+        <span>After clicking Uninstall Local Master, a safety dialog will ask for one final confirmation.</span>
       </div>
       <div class="full"><button id="start-btn" type="submit">Install Local Master</button></div>
     </form>
@@ -355,6 +360,17 @@ def _html() -> str:
     <div class="result" id="result"></div>
   </section>
 </main>
+<div class="modal-backdrop" id="uninstall-modal" role="dialog" aria-modal="true" aria-labelledby="uninstall-modal-title">
+  <div class="modal">
+    <h3 id="uninstall-modal-title">Confirm Local Uninstall</h3>
+    <p id="uninstall-modal-message"></p>
+    <p>This removes the local PBGui/PB7 checkouts, virtualenvs, and PBGui systemd user services for the selected install parent.</p>
+    <div class="modal-actions">
+      <button type="button" class="secondary" id="uninstall-cancel-btn">Cancel</button>
+      <button type="button" class="danger-button" id="uninstall-confirm-btn">Uninstall Local Master</button>
+    </div>
+  </div>
+</div>
 <script>
 const form = document.getElementById('install-form');
 const logEl = document.getElementById('log');
@@ -368,8 +384,10 @@ const modeTitle = document.getElementById('mode-title');
 const sshMode = document.getElementById('ssh-mode');
 const sshWarning = document.getElementById('ssh-warning');
 const sshRisk = document.getElementById('ssh-risk');
-const uninstallConfirm = document.getElementById('uninstall-confirm');
-const uninstallConfirmText = document.getElementById('uninstall-confirm-text');
+const uninstallModal = document.getElementById('uninstall-modal');
+const uninstallModalMessage = document.getElementById('uninstall-modal-message');
+const uninstallCancelBtn = document.getElementById('uninstall-cancel-btn');
+const uninstallConfirmBtn = document.getElementById('uninstall-confirm-btn');
 const sshIpsWrap = document.getElementById('ssh-ips-wrap');
 const sshAllowedIps = document.getElementById('ssh-allowed-ips');
 const loginMode = document.getElementById('login-mode');
@@ -396,6 +414,7 @@ let logHasContent = false;
 let installDirTouched = false;
 let masterNameTouched = false;
 let bindHostTouched = false;
+let pendingUninstallConfirm = null;
 function defaultInstallDir() {
   if (installMode.value === 'local' || installMode.value === 'local-uninstall') return defaultLocalInstallDir;
   const user = (targetUser.value || defaultTargetUser || 'pbgui').trim() || 'pbgui';
@@ -591,6 +610,7 @@ function updateProgress(job) {
 function renderResult(job) {
   currentJobId = job.id || currentJobId;
   const r = job.result || {};
+  const isUninstall = r.mode === 'local-uninstall' || currentJobMode === 'local-uninstall';
   if (job.status !== 'done' && job.status !== 'error' && !r.totp_qr_text) return;
   const vpnUrl = escapeHtml(r.vpn_url || '');
   const vpnHref = escapeHtml(r.vpn_url || '#');
@@ -605,7 +625,7 @@ function renderResult(job) {
     : job.status === 'done'
     ? '<strong style="color:var(--ok)">Installation complete.</strong><div>Connect OpenVPN, then open: <a href="' + vpnHref + '" target="_blank">' + vpnUrl + '</a></div><div style="color:var(--muted)">Use the NetworkManager button to import the profile as split tunnel. If you import it manually, enable <strong>Use this connection only for resources on its network</strong> so the VPN does not become your default internet route.</div>'
     : job.status === 'error'
-      ? '<strong style="color:var(--danger)">Installation failed: ' + escapeHtml(job.error || 'unknown error') + '</strong>'
+      ? '<strong style="color:var(--danger)">' + (isUninstall ? 'Uninstall' : 'Installation') + ' failed: ' + escapeHtml(job.error || 'unknown error') + '</strong>'
       : '<strong style="color:var(--ok)">TOTP QR code is ready.</strong><div>Scan this now. The installation is still running.</div>')
     + (r.ovpn_local ? '<div><a href="/download/ovpn?job=' + encodeURIComponent(job.id) + '">Download OpenVPN profile</a> <button class="secondary" type="button" id="nm-install-btn">Install in NetworkManager as split tunnel</button></div><div id="nm-install-result" style="color:var(--muted)"></div>' : '')
     + (qrText ? '<div><strong>TOTP QR code</strong><div class="qr-wrap"><pre class="qr-code">' + qrText + '</pre></div></div>' : '');
@@ -640,16 +660,32 @@ function poll(jobId) {
     pollTimer = setTimeout(() => poll(jobId), 1500);
   });
 }
-form.addEventListener('submit', ev => {
-  ev.preventDefault();
+function openUninstallConfirmModal(onConfirm) {
+  pendingUninstallConfirm = onConfirm;
+  uninstallModalMessage.innerHTML = 'Install parent: <strong>' + escapeHtml((installDir.value || defaultInstallDir()).trim()) + '</strong>';
+  uninstallModal.style.display = 'flex';
+  uninstallCancelBtn.focus();
+}
+function closeUninstallConfirmModal() {
+  uninstallModal.style.display = 'none';
+  pendingUninstallConfirm = null;
+  startBtn.focus();
+}
+uninstallCancelBtn.addEventListener('click', closeUninstallConfirmModal);
+uninstallConfirmBtn.addEventListener('click', () => {
+  const onConfirm = pendingUninstallConfirm;
+  uninstallModal.style.display = 'none';
+  pendingUninstallConfirm = null;
+  if (onConfirm) onConfirm();
+});
+function startJob(confirmedUninstall) {
   if (installMode.value === 'remote' && sshMode.value === 'anywhere' && !sshRisk.checked) {
     resultEl.style.display = 'grid';
     resultEl.innerHTML = '<strong style="color:var(--danger)">Please confirm the public SSH warning before continuing.</strong>';
     return;
   }
-  if (installMode.value === 'local-uninstall' && (!uninstallConfirm.checked || uninstallConfirmText.value.trim() !== 'DELETE')) {
-    resultEl.style.display = 'grid';
-    resultEl.innerHTML = '<strong style="color:var(--danger)">Please confirm local uninstall by checking the box and typing DELETE.</strong>';
+  if (installMode.value === 'local-uninstall' && !confirmedUninstall) {
+    openUninstallConfirmModal(() => startJob(true));
     return;
   }
   currentJobMode = installMode.value;
@@ -657,9 +693,14 @@ form.addEventListener('submit', ev => {
   startBtn.disabled = true; resultEl.style.display = 'none'; logEl.textContent = startText;
   lastLogCount = 0; logHasContent = false; setProgress(3, startText, '');
   const payload = Object.fromEntries(new FormData(form).entries());
+  if (currentJobMode === 'local-uninstall') payload.uninstall_confirm = 'yes';
   fetch('/api/install', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) })
     .then(r => r.json()).then(data => poll(data.job_id))
     .catch(err => { startBtn.disabled = false; logEl.textContent = 'Failed to start: ' + err; });
+}
+form.addEventListener('submit', ev => {
+  ev.preventDefault();
+  startJob(false);
 });
 </script>
 </body>
