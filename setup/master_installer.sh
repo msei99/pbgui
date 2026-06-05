@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ARCHIVE_URL="${PBGUI_INSTALLER_ARCHIVE_URL:-https://github.com/msei99/pbgui/archive/refs/heads/main.tar.gz}"
+PBGUI_INSTALLER_BRANCH="${PBGUI_INSTALLER_BRANCH:-main}"
+REPO_ARCHIVE_URL="${PBGUI_INSTALLER_ARCHIVE_URL:-https://github.com/msei99/pbgui/archive/refs/heads/${PBGUI_INSTALLER_BRANCH}.tar.gz}"
 WORK_DIR="${PBGUI_INSTALLER_WORKDIR:-${TMPDIR:-/tmp}/pbgui-master-installer}"
 PYTHON_BIN="${PYTHON:-python3}"
 
@@ -77,6 +78,8 @@ fi
 installer="$source_dir/setup/installer/master_installer.py"
 if [[ ! -f "$installer" ]]; then
   err "Installer entry point not found: $installer"
+  err "Archive used: $REPO_ARCHIVE_URL"
+  err "If you are testing a branch, set PBGUI_INSTALLER_BRANCH=<branch> or PBGUI_INSTALLER_ARCHIVE_URL=<branch archive URL>."
   exit 1
 fi
 
