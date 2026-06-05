@@ -1,8 +1,11 @@
 # Unreleased
 
 - Added a new remote master installer entry point (`setup/master_installer.sh`) that starts a local browser wizard or CLI mode from one curl command.
+- Added a Local Master Install mode to the master installer browser wizard and CLI for installing PBGui/PB7 locally under a configurable parent directory.
 - Added systemd user-service setup for PBGui services so new remote master installs no longer rely on `start.sh` and `crontab`.
 - Made the Services API systemd-aware so PBGui service start, stop, status, local restart, and API restart actions use user units when available instead of killing processes that systemd restarts.
+- Added a Services page migration panel for converting existing PBGui masters to systemd user services with preflight status, a dry-run test output, warning display, legacy crontab cleanup, and migration logs.
+- Clarified the Services migration dry-run output so the PBApiServer systemd handoff is listed separately from daemon restarts.
 - Improved the remote master installer wizard by clarifying password fields, adding reveal toggles, and auto-filling the current public IP for the recommended SSH firewall mode.
 - Fixed remote master installer logging so ANSI colors render cleanly in the browser and adjusted Rust installation to avoid Ubuntu `rustup`/`cargo` package conflicts.
 - Fixed remote master bootstrap hostname resolution and aligned the `passivbot-rust` build with the VPS manager flow by activating the PB7 virtualenv before running `maturin`.
@@ -16,6 +19,7 @@
 - Made the NetworkManager import use the imported connection UUID and disable automatic IPv4 routes so the split-tunnel setting is applied to the correct profile on localized systems.
 - Fixed remote master dependency installation to use PBGui `requirements.txt` and PB7 `requirements.txt` so master-only features such as backtesting and optimization are available.
 - Changed the remote master installer default target PBGui user to the locally logged-in user instead of a hard-coded `pbgui` account.
+- Made the remote master installer parent directory configurable in the browser wizard and CLI with a PBGui/PB7/virtualenv path preview.
 - Added a password reveal toggle for the remote master target user password field.
 - Changed the remote master wizard swap size input to a 4/6/8 GB dropdown with 6 GB as the default.
 - Added a custom swap size option to the remote master wizard.

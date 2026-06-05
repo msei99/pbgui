@@ -6,7 +6,19 @@ from getpass import getpass
 from pathlib import Path
 import tempfile
 
-from .core import TOTP_QR_BEGIN, TOTP_QR_END, RemoteMasterConfig, default_target_user, detect_public_ip, run_remote_master_install
+from .core import (
+    LocalMasterConfig,
+    TOTP_QR_BEGIN,
+    TOTP_QR_END,
+    RemoteMasterConfig,
+    default_local_install_dir,
+    default_local_master_name,
+    default_remote_install_dir,
+    default_target_user,
+    detect_public_ip,
+    run_local_master_install,
+    run_remote_master_install,
+)
 
 
 def _ask(prompt: str, default: str = "") -> str:
@@ -20,15 +32,16 @@ def _ask_password(prompt: str, default: str = "") -> str:
     return value or default
 
 
-def run_cli() -> int:
-    """Run the CLI installer."""
-    print("PBGui Master Installer")
-    print("1) Remote Master VPS")
-    mode = _ask("Select mode", "1")
-    if mode != "1":
-        print("Only Remote Master VPS is implemented in this phase.")
-        return 2
+def _print_install_preview(install_dir: str) -> None:
+    """Print the install target preview."""
+    install_parent = install_dir.rstrip("/")
+    print(f"PBGui: {install_parent}/pbgui")
+    print(f"PB7: {install_parent}/pb7")
+    print(f"Venvs: {install_parent}/venv_pbgui, {install_parent}/venv_pb7")
 
+
+def _run_remote_cli() -> int:
+    """Run the remote CLI installer flow."""
     login_mode = _ask("Initial login mode (root/sudo)", "root").lower()
     ssh_username = "root" if login_mode == "root" else _ask("Existing sudo user")
     ssh_password = _ask_password("SSH password")
@@ -39,6 +52,8 @@ def run_cli() -> int:
     target_password = ""
     if login_mode == "root":
         target_password = _ask_password(f"Password for new user {target_user}")
+    install_dir = _ask("Install parent directory", default_remote_install_dir(target_user))
+    _print_install_preview(install_dir)
     remote_host = _ask("VPS IP or hostname")
     hostname = _ask("Remote hostname / OpenVPN profile name", "pbgui-master")
     swap_size = _ask("Swap size", "6G")
@@ -72,6 +87,7 @@ def run_cli() -> int:
             "root_password": root_password,
             "target_user": target_user,
             "target_password": target_password,
+            "install_dir": install_dir,
             "hostname": hostname,
             "swap_size": swap_size,
             "pbgui_password": pbgui_password,
@@ -108,3 +124,43 @@ def run_cli() -> int:
     if result.get("ovpn_local"):
         print(f"OpenVPN profile: {result['ovpn_local']}")
     return 0
+
+
+def _run_local_cli() -> int:
+    """Run the local CLI installer flow."""
+    install_dir = _ask("Install parent directory", default_local_install_dir())
+    _print_install_preview(install_dir)
+    master_name = _ask("Master name", default_local_master_name())
+    pbgui_password = _ask_password("PBGui web password", "PBGui$Bot!")
+    pbgui_bind_host = _ask("PBGui bind address", "127.0.0.1")
+    pbgui_port = int(_ask("PBGui port", "8000"))
+    cfg = LocalMasterConfig.from_mapping(
+        {
+            "install_dir": install_dir,
+            "master_name": master_name,
+            "pbgui_password": pbgui_password,
+            "pbgui_bind_host": pbgui_bind_host,
+            "pbgui_port": pbgui_port,
+        }
+    )
+    artifact_dir = Path(tempfile.mkdtemp(prefix="pbgui-installer-"))
+    result = run_local_master_install(cfg, print, artifact_dir)
+    print("\nLocal installation complete.")
+    print(f"PBGui URL: {result.get('local_url')}")
+    print(f"PBGui directory: {result.get('pbgui_dir')}")
+    print(f"PB7 directory: {result.get('pb7_dir')}")
+    return 0
+
+
+def run_cli() -> int:
+    """Run the CLI installer."""
+    print("PBGui Master Installer")
+    print("1) Remote Master VPS")
+    print("2) Local Master Install")
+    mode = _ask("Select mode", "1")
+    if mode == "2":
+        return _run_local_cli()
+    if mode != "1":
+        print("Invalid mode.")
+        return 2
+    return _run_remote_cli()

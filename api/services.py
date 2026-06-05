@@ -8,6 +8,8 @@ import glob
 import json
 import importlib
 import os
+import pwd
+import shlex
 import signal
 import subprocess
 import sys
@@ -38,6 +40,15 @@ _SYSTEMD_SERVICE_UNITS = {
     "api-server": "pbgui-api.service",
 }
 _SYSTEMD_RUNNING_STATES = {"active", "activating", "reloading"}
+_SERVICE_SCRIPT_NAMES = {
+    "pbrun": "PBRun.py",
+    "pbremote": "PBRemote.py",
+    "pbdata": "PBData.py",
+    "pbcoindata": "PBCoinData.py",
+    "api-server": "PBApiServer.py",
+}
+_MIGRATION_DEFAULT_SERVICES = ["api", "pbrun", "pbdata", "pbcoindata"]
+_MIGRATION_LEGACY_STOP_SERVICES = ["pbrun", "pbremote", "pbdata", "pbcoindata"]
 _fetch_summary_snapshot: Dict[str, Any] = {}
 _poller_metrics_snapshot: Dict[str, Any] = {}
 
@@ -163,6 +174,444 @@ def _service_action(name: str, action: str) -> dict[str, Any]:
     else:
         raise ValueError(f"Unsupported service action: {action}")
     return _service_status(name)
+
+
+def _current_username() -> str:
+    """Return the Unix user running PBGui."""
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
+def _detect_pbgui_python() -> str:
+    """Return the Python executable that should run PBGui services."""
+    pbgdir = Path(PBGDIR)
+    candidates = [
+        Path(sys.executable),
+        pbgdir.parent / "venv_pbgui" / "bin" / "python",
+        pbgdir.parent / "venv_pbgui312" / "bin" / "python",
+        pbgdir.parent / "venv" / "bin" / "python",
+    ]
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return sys.executable
+
+
+def _legacy_crontab_line_matches(line: str) -> bool:
+    """Return True for PBGui legacy autostart crontab entries."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or not stripped.startswith("@reboot"):
+        return False
+    lower = stripped.lower()
+    if "start.sh" in lower and "pbgui" in lower:
+        return True
+    return any(script.lower() in lower for script in _SERVICE_SCRIPT_NAMES.values())
+
+
+def _read_legacy_crontab() -> dict[str, Any]:
+    """Inspect current user's crontab for legacy PBGui autostarts."""
+    try:
+        proc = subprocess.run(["crontab", "-l"], check=False, capture_output=True, text=True, timeout=10)
+    except FileNotFoundError:
+        return {"checked": False, "entries": [], "warning": "crontab command is not installed."}
+    except Exception as exc:
+        return {"checked": False, "entries": [], "warning": f"Could not inspect crontab: {exc}"}
+
+    if proc.returncode != 0:
+        text = ((proc.stderr or "") + (proc.stdout or "")).strip().lower()
+        if "no crontab" in text:
+            return {"checked": True, "entries": [], "warning": ""}
+        return {"checked": False, "entries": [], "warning": ((proc.stderr or proc.stdout or "").strip() or "Could not inspect crontab.")}
+
+    lines = proc.stdout.splitlines()
+    entries = [line for line in lines if _legacy_crontab_line_matches(line)]
+    return {"checked": True, "entries": entries, "warning": "", "lines": lines}
+
+
+def _remove_legacy_crontab_entries() -> dict[str, Any]:
+    """Remove PBGui legacy autostart entries from current user's crontab."""
+    status = _read_legacy_crontab()
+    entries = list(status.get("entries") or [])
+    if not status.get("checked") or not entries:
+        status.pop("lines", None)
+        status["removed"] = []
+        return status
+
+    lines = list(status.get("lines") or [])
+    remaining = [line for line in lines if not _legacy_crontab_line_matches(line)]
+    tmp_path = Path(PBGDIR) / "data" / "tmp" / f"crontab-migration-{int(time.time())}.tmp"
+    tmp_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
+    try:
+        proc = subprocess.run(["crontab", str(tmp_path)], check=False, capture_output=True, text=True, timeout=10)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    if proc.returncode != 0:
+        return {
+            "checked": True,
+            "entries": entries,
+            "removed": [],
+            "warning": ((proc.stderr or proc.stdout or "").strip() or "Could not update crontab."),
+        }
+    return {"checked": True, "entries": entries, "removed": entries, "warning": ""}
+
+
+def _collect_pbgui_daemon_processes() -> list[dict[str, Any]]:
+    """Return PBGui daemon processes visible to this user."""
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return []
+
+    processes: list[dict[str, Any]] = []
+    current_pid = os.getpid()
+    for proc in psutil.process_iter(["pid", "cmdline", "username"]):
+        try:
+            cmdline = [str(arg) for arg in (proc.info.get("cmdline") or [])]
+        except Exception:
+            continue
+        if not cmdline:
+            continue
+        for service, script in _SERVICE_SCRIPT_NAMES.items():
+            if any(Path(arg).name == script for arg in cmdline):
+                pid = int(proc.info.get("pid") or 0)
+                processes.append(
+                    {
+                        "pid": pid,
+                        "service": service,
+                        "script": script,
+                        "current": pid == current_pid,
+                        "cmdline": " ".join(cmdline),
+                        "username": proc.info.get("username") or "",
+                    }
+                )
+                break
+    return processes
+
+
+def _migration_systemd_units() -> list[dict[str, Any]]:
+    """Return status rows for PBGui systemd user units."""
+    rows: list[dict[str, Any]] = []
+    for service, unit in _SYSTEMD_SERVICE_UNITS.items():
+        unit_path = _systemd_unit_path(unit)
+        row: dict[str, Any] = {
+            "service": service,
+            "unit": unit,
+            "path": str(unit_path),
+            "exists": unit_path.exists(),
+            "enabled": False,
+            "active": False,
+            "state": "missing",
+        }
+        if unit_path.exists():
+            row["state"] = "unknown"
+            status = _systemd_service_status(service)
+            if status is not None:
+                row["active"] = bool(status.get("running"))
+                row["state"] = status.get("systemd_state") or "unknown"
+            enabled_proc = _run_user_systemctl(["is-enabled", unit], timeout=5)
+            row["enabled"] = enabled_proc.returncode == 0 and enabled_proc.stdout.strip() == "enabled"
+        rows.append(row)
+    return rows
+
+
+def _detect_pbremote_migration_needed(cron_entries: list[str], processes: list[dict[str, Any]]) -> bool:
+    """Preserve PBRemote during migration only when this master already uses it."""
+    if any(item.get("service") == "pbremote" for item in processes):
+        return True
+    if any("PBRemote.py" in entry for entry in cron_entries):
+        return True
+    return _systemd_unit_path("pbgui-pbremote.service").exists()
+
+
+def _migration_status_payload() -> dict[str, Any]:
+    """Build the migration preflight payload for the Services UI."""
+    pbgdir = Path(PBGDIR)
+    crontab = _read_legacy_crontab()
+    processes = _collect_pbgui_daemon_processes()
+    units = _migration_systemd_units()
+    default_units = {"api-server", "pbrun", "pbdata", "pbcoindata"}
+    missing_default_units = [row for row in units if row["service"] in default_units and not row["exists"]]
+    legacy_entries = list(crontab.get("entries") or [])
+    pbremote_needed = _detect_pbremote_migration_needed(legacy_entries, processes)
+    pbremote_unit_exists = _systemd_unit_path("pbgui-pbremote.service").exists()
+    pbremote_unit_missing = pbremote_needed and not pbremote_unit_exists
+    warnings = []
+    if crontab.get("warning"):
+        warnings.append(
+            "Could not inspect/remove legacy crontab autostart. If you configured PBGui autostart manually, remove it yourself to avoid duplicate starts."
+        )
+    if not (pbgdir / "setup" / "setup_systemd.sh").exists():
+        warnings.append("setup/setup_systemd.sh is missing; update PBGui before migrating to systemd.")
+    return {
+        "user": _current_username(),
+        "uid": os.getuid(),
+        "pbgui_dir": str(pbgdir),
+        "pbgui_python": _detect_pbgui_python(),
+        "pb7dir": str(load_ini("main", "pb7dir") or ""),
+        "pb7venv": str(load_ini("main", "pb7venv") or ""),
+        "systemd_unit_dir": str(Path.home() / ".config" / "systemd" / "user"),
+        "systemd_units": units,
+        "missing_default_units": missing_default_units,
+        "legacy_crontab": {k: v for k, v in crontab.items() if k != "lines"},
+        "processes": processes,
+        "pbremote_will_be_preserved": pbremote_needed,
+        "pbremote_unit_missing": pbremote_unit_missing,
+        "migration_needed": bool(missing_default_units or legacy_entries or pbremote_unit_missing),
+        "warnings": warnings,
+    }
+
+
+def _migration_enable_services(status: dict[str, Any]) -> list[str]:
+    """Return the service set that migration would enable."""
+    enable_services = list(_MIGRATION_DEFAULT_SERVICES)
+    if status.get("pbremote_will_be_preserved") and "pbremote" not in enable_services:
+        enable_services.append("pbremote")
+    return enable_services
+
+
+def _migration_setup_command(status: dict[str, Any]) -> tuple[list[str], list[str], Path, str, Path, str]:
+    """Build the exact setup_systemd.sh command used by migration."""
+    user = _current_username()
+    pbgdir = Path(PBGDIR)
+    python_bin = _detect_pbgui_python()
+    setup_script = pbgdir / "setup" / "setup_systemd.sh"
+    enable_services = _migration_enable_services(status)
+    cmd = [
+        "bash",
+        str(setup_script),
+        "--user",
+        user,
+        "--pbgui-dir",
+        str(pbgdir),
+        "--python",
+        python_bin,
+        "--enable",
+        ",".join(enable_services),
+        "--no-start",
+    ]
+    return cmd, enable_services, setup_script, user, pbgdir, python_bin
+
+
+def _try_enable_linger(user: str) -> dict[str, Any]:
+    """Try to enable linger without prompting for a password."""
+    commands = [["loginctl", "enable-linger", user]]
+    if os.getuid() != 0:
+        commands.append(["sudo", "-n", "loginctl", "enable-linger", user])
+    last_output = ""
+    for command in commands:
+        try:
+            proc = subprocess.run(command, check=False, capture_output=True, text=True, timeout=10)
+        except FileNotFoundError:
+            last_output = f"Command not found: {command[0]}"
+            continue
+        except Exception as exc:
+            last_output = str(exc)
+            continue
+        if proc.returncode == 0:
+            if os.getuid() != 0:
+                uid = os.getuid()
+                try:
+                    subprocess.run(
+                        ["sudo", "-n", "systemctl", "start", f"user@{uid}.service"],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                except Exception:
+                    pass
+            return {"ok": True, "warning": ""}
+        last_output = ((proc.stderr or "") + (proc.stdout or "")).strip()
+    return {
+        "ok": False,
+        "warning": last_output or f"Could not enable linger for {user}; run: sudo loginctl enable-linger {user}",
+    }
+
+
+def _stop_legacy_services(logs: list[str]) -> None:
+    """Stop non-API legacy daemons before systemd starts replacements."""
+    for service in _MIGRATION_LEGACY_STOP_SERVICES:
+        status = _systemd_service_status(service)
+        if status is not None and status.get("running"):
+            logs.append(f"Skipping {service}: already managed by active systemd unit.")
+            continue
+        try:
+            obj = _get_service(service)
+            if obj.is_running():
+                obj.stop()
+                logs.append(f"Stopped legacy {service} process.")
+        except Exception as exc:
+            logs.append(f"Warning: could not stop legacy {service}: {exc}")
+
+
+def _schedule_api_systemd_handoff(logs: list[str]) -> str:
+    """Restart the API through systemd after the HTTP response is sent."""
+    import threading
+
+    unit = _systemd_unit_for_service("api-server")
+    if not unit:
+        raise RuntimeError("pbgui-api.service was not installed.")
+    status = _systemd_service_status("api-server")
+    if status is not None and status.get("running"):
+        proc = _run_user_systemctl(["--no-block", "restart", unit], timeout=10)
+        if proc.returncode != 0:
+            output = ((proc.stderr or "") + (proc.stdout or "")).strip()
+            raise RuntimeError(output or f"systemctl --user restart {unit} failed")
+        return "API restart requested through existing systemd unit."
+
+    env = _systemd_user_env()
+    subprocess.Popen(
+        ["bash", "-lc", f"sleep 1; systemctl --user restart {unit}"],
+        cwd=str(PBGDIR),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    def _stop_current_api() -> None:
+        time.sleep(0.3)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    threading.Thread(target=_stop_current_api, daemon=True).start()
+    logs.append("Scheduled current API process shutdown after starting systemd handoff.")
+    return "API handoff scheduled through pbgui-api.service."
+
+
+def _test_systemd_migration() -> dict[str, Any]:
+    """Return a non-mutating dry-run plan for systemd migration."""
+    status = _migration_status_payload()
+    cmd, enable_services, setup_script, user, pbgdir, python_bin = _migration_setup_command(status)
+    warnings: list[str] = list(status.get("warnings") or [])
+    errors: list[str] = []
+    logs: list[str] = [
+        "DRY RUN: no files, crontab entries, services, or systemd units were changed.",
+        f"PBGui user: {user}",
+        f"PBGui directory: {pbgdir}",
+        f"PBGui Python: {python_bin}",
+        f"Systemd unit directory: {status.get('systemd_unit_dir') or ''}",
+    ]
+
+    if setup_script.exists():
+        proc = subprocess.run(["bash", "-n", str(setup_script)], check=False, capture_output=True, text=True, timeout=20)
+        if proc.returncode == 0:
+            logs.append("Validated setup/setup_systemd.sh syntax with bash -n.")
+        else:
+            output = ((proc.stderr or "") + (proc.stdout or "")).strip()
+            errors.append(output or "setup/setup_systemd.sh syntax check failed.")
+    else:
+        errors.append("setup/setup_systemd.sh is missing; update PBGui before migrating to systemd.")
+
+    legacy_entries = list((status.get("legacy_crontab") or {}).get("entries") or [])
+    if legacy_entries:
+        logs.append(f"Would remove {len(legacy_entries)} legacy PBGui crontab autostart entrie(s):")
+        logs.extend(f"  - {entry}" for entry in legacy_entries)
+    else:
+        logs.append("Would not remove crontab entries because none were detected.")
+
+    if status.get("pbremote_will_be_preserved"):
+        logs.append("Would preserve PBRemote by installing/enabling pbgui-pbremote.service.")
+
+    missing_units = [row.get("unit") or row.get("service") for row in status.get("missing_default_units") or []]
+    if status.get("pbremote_unit_missing"):
+        missing_units.append("pbgui-pbremote.service")
+    if missing_units:
+        logs.append("Would install missing systemd user unit(s): " + ", ".join(str(unit) for unit in missing_units))
+    else:
+        logs.append("Would refresh existing PBGui systemd user unit files.")
+
+    logs.append("Would run setup command:")
+    logs.append(f"  {shlex.join(cmd)}")
+    logs.append("Would install and enable PBApiServer as pbgui-api.service because the setup command includes --enable api.")
+    logs.append("Would not restart pbgui-api.service together with the daemon services; the current HTTP migration response must finish first.")
+
+    legacy_processes = [
+        proc for proc in status.get("processes") or []
+        if proc.get("service") in _MIGRATION_LEGACY_STOP_SERVICES
+    ]
+    if legacy_processes:
+        logs.append("Would stop legacy PBGui daemon process(es) before systemd restarts them:")
+        for proc in legacy_processes:
+            logs.append(f"  - {proc.get('service')} pid={proc.get('pid')} cmd={proc.get('cmdline')}")
+    else:
+        logs.append("Would not stop legacy daemon processes because none were detected.")
+
+    restart_services = [service for service in enable_services if service != "api"]
+    if restart_services:
+        logs.append("Would restart systemd user service(s): " + ", ".join(f"pbgui-{service}.service" for service in restart_services))
+    logs.append("Would hand off PBApiServer after returning the migration response by restarting pbgui-api.service through systemctl --user.")
+    logs.append("Would terminate the current legacy PBApiServer process only after scheduling the systemd API restart, so systemd owns PBGui API afterwards.")
+    logs.append("Would keep existing PBGui/PB7 data and configured paths unchanged.")
+
+    return {
+        "ok": not errors,
+        "logs": logs,
+        "warnings": warnings,
+        "errors": errors,
+        "status": status,
+        "command": shlex.join(cmd),
+    }
+
+
+def _run_systemd_migration() -> dict[str, Any]:
+    """Migrate the current master installation to systemd user services."""
+    before = _migration_status_payload()
+    logs: list[str] = []
+    warnings: list[str] = list(before.get("warnings") or [])
+    cmd, enable_services, setup_script, user, pbgdir, python_bin = _migration_setup_command(before)
+    if not setup_script.exists():
+        raise RuntimeError("setup/setup_systemd.sh is missing; update PBGui before migrating to systemd.")
+
+    linger = _try_enable_linger(user)
+    if linger.get("ok"):
+        logs.append(f"Enabled linger for {user}.")
+    elif linger.get("warning"):
+        warnings.append(str(linger.get("warning")))
+
+    crontab_result = _remove_legacy_crontab_entries()
+    if crontab_result.get("removed"):
+        logs.append(f"Removed {len(crontab_result.get('removed') or [])} legacy PBGui crontab autostart entrie(s).")
+    if crontab_result.get("warning"):
+        warnings.append(
+            "Could not inspect/remove legacy crontab autostart. If you configured PBGui autostart manually, remove it yourself to avoid duplicate starts."
+        )
+
+    if before.get("pbremote_will_be_preserved") and "pbremote" in enable_services:
+        logs.append("PBRemote was detected and will be preserved as a systemd user service.")
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=120, cwd=str(pbgdir))
+    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if output:
+        logs.extend(output.splitlines())
+    if proc.returncode != 0:
+        raise RuntimeError(output or "setup_systemd.sh failed")
+
+    _stop_legacy_services(logs)
+    for service in enable_services:
+        if service == "api":
+            continue
+        service_id = "api-server" if service == "api" else service
+        action_result = _service_action(service_id, "restart")
+        logs.append(f"Restarted {service_id} with {action_result.get('manager', 'unknown')}.")
+
+    api_message = _schedule_api_systemd_handoff(logs)
+    logs.append(api_message)
+    after = _migration_status_payload()
+    return {
+        "ok": True,
+        "logs": logs,
+        "warnings": warnings,
+        "before": before,
+        "after": after,
+        "api_restart": True,
+    }
 
 
 def _task_active(task: Any) -> bool:
@@ -597,6 +1046,36 @@ def get_status(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
             _log(SERVICE, f"status check failed for {svc}: {e}", level="WARNING")
             result[svc] = {"running": False, "error": str(e)}
     return result
+
+
+@router.get("/migration/status")
+def get_migration_status(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    """Return preflight status for migrating this master to systemd services."""
+    try:
+        return _migration_status_payload()
+    except Exception as e:
+        _log(SERVICE, f"migration status failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/migration/test")
+def test_migration(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    """Return a dry-run plan for migrating this master to systemd services."""
+    try:
+        return _test_systemd_migration()
+    except Exception as e:
+        _log(SERVICE, f"migration test failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/migration/run")
+def run_migration(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    """Migrate the current master installation to systemd user services."""
+    try:
+        return _run_systemd_migration()
+    except Exception as e:
+        _log(SERVICE, f"migration run failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/workers/status")

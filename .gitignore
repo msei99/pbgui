@@ -18,6 +18,8 @@ test_results/
 test-results/
 .vscode/
 scripts/
+!setup/installer/scripts/
+!setup/installer/scripts/remote_master_bootstrap.sh
 pytest.ini
 
 # Local-only benchmarking helpers (do not commit)

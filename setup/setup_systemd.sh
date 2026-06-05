@@ -59,6 +59,10 @@ if [[ -z "$TARGET_HOME" || ! -d "$TARGET_HOME" ]]; then
   exit 1
 fi
 TARGET_GROUP="$(id -gn "$TARGET_USER")"
+RUNNING_AS_ROOT=false
+if [[ "$(id -u)" -eq 0 ]]; then
+  RUNNING_AS_ROOT=true
+fi
 
 if [[ -z "$PBGUI_DIR" ]]; then
   PBGUI_DIR="$(pwd)"
@@ -82,7 +86,9 @@ PYTHON_BIN="$(cd "$(dirname "$PYTHON_BIN")" && pwd)/$(basename "$PYTHON_BIN")"
 unit_dir="$TARGET_HOME/.config/systemd/user"
 wants_dir="$unit_dir/default.target.wants"
 mkdir -p "$unit_dir" "$wants_dir"
-chown "$TARGET_USER:$TARGET_GROUP" "$TARGET_HOME/.config" "$TARGET_HOME/.config/systemd" "$unit_dir" "$wants_dir"
+if [[ "$RUNNING_AS_ROOT" == true ]]; then
+  chown "$TARGET_USER:$TARGET_GROUP" "$TARGET_HOME/.config" "$TARGET_HOME/.config/systemd" "$unit_dir" "$wants_dir"
+fi
 
 write_unit() {
   local unit_name="$1"
@@ -108,7 +114,9 @@ Environment=PYTHONUNBUFFERED=1
 [Install]
 WantedBy=default.target
 EOF
-  chown "$TARGET_USER:$TARGET_GROUP" "$unit_path"
+  if [[ "$RUNNING_AS_ROOT" == true ]]; then
+    chown "$TARGET_USER:$TARGET_GROUP" "$unit_path"
+  fi
 }
 
 write_unit "pbgui-api.service" "PBGui API Server" "PBApiServer.py"
@@ -119,7 +127,7 @@ if [[ "$INSTALL_PBREMOTE" == true || "$ENABLE_SERVICES" == *pbremote* ]]; then
   write_unit "pbgui-pbremote.service" "PBGui PBRemote Service" "PBRemote.py"
 fi
 
-if [[ "$(id -u)" -eq 0 ]]; then
+if [[ "$RUNNING_AS_ROOT" == true ]]; then
   loginctl enable-linger "$TARGET_USER" >/dev/null 2>&1 || warn "Could not enable linger for $TARGET_USER."
   uid="$(id -u "$TARGET_USER")"
   systemctl start "user@$uid.service" >/dev/null 2>&1 || true
@@ -127,8 +135,9 @@ if [[ "$(id -u)" -eq 0 ]]; then
     sudo -H -u "$TARGET_USER" env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user "$@"
   }
 else
+  uid="$(id -u "$TARGET_USER")"
   run_user_systemctl() {
-    systemctl --user "$@"
+    env XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$uid}" systemctl --user "$@"
   }
 fi
 

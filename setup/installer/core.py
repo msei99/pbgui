@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import configparser
 import getpass
 import ipaddress
 import json
 import os
-from pathlib import Path
+import platform
+from pathlib import Path, PurePosixPath
 import secrets
+import shlex
 import shutil
 import subprocess
 import time
@@ -33,6 +36,89 @@ class RemoteInstallError(RuntimeError):
 def default_target_user() -> str:
     """Return the local logged-in user to use as default remote PBGui user."""
     return (getpass.getuser() or os.environ.get("USER") or "pbgui").strip() or "pbgui"
+
+
+def default_remote_install_dir(target_user: str) -> str:
+    """Return the default remote install parent directory for a target user."""
+    user = (target_user or default_target_user()).strip() or "pbgui"
+    return f"/home/{user}/software"
+
+
+def default_local_install_dir() -> str:
+    """Return the default local install parent shown to users."""
+    return "~/software"
+
+
+def default_local_master_name() -> str:
+    """Return the default local PBGui master name."""
+    return (platform.node() or "pbgui-local").strip() or "pbgui-local"
+
+
+def normalize_remote_install_dir(value: str, target_user: str) -> str:
+    """Validate and normalize a remote POSIX install parent directory."""
+    raw = str(value or "").strip() or default_remote_install_dir(target_user)
+    if any(ch in raw for ch in ("\x00", "\n", "\r")):
+        raise ValueError("Install parent directory contains invalid control characters.")
+    if "'" in raw:
+        raise ValueError("Install parent directory cannot contain single quotes.")
+    path = PurePosixPath(raw)
+    if not path.is_absolute():
+        raise ValueError("Install parent directory must be an absolute path.")
+    if ".." in path.parts:
+        raise ValueError("Install parent directory cannot contain '..' path segments.")
+    normalized = str(path)
+    if normalized == "/":
+        raise ValueError("Install parent directory cannot be '/'.")
+    return normalized
+
+
+def normalize_local_install_dir(value: str) -> str:
+    """Validate and normalize a local install parent directory."""
+    raw = str(value or "").strip() or default_local_install_dir()
+    if any(ch in raw for ch in ("\x00", "\n", "\r")):
+        raise ValueError("Install parent directory contains invalid control characters.")
+    raw_path = Path(raw)
+    if ".." in raw_path.parts:
+        raise ValueError("Install parent directory cannot contain '..' path segments.")
+    path = raw_path.expanduser()
+    if not path.is_absolute():
+        raise ValueError("Install parent directory must be an absolute path or start with '~'.")
+    normalized = str(path)
+    if normalized == "/":
+        raise ValueError("Install parent directory cannot be '/'.")
+    return normalized
+
+
+@dataclass
+class LocalMasterConfig:
+    """Local master installation settings."""
+
+    install_dir: str = field(default_factory=default_local_install_dir)
+    master_name: str = field(default_factory=default_local_master_name)
+    pbgui_password: str = "PBGui$Bot!"
+    pbgui_bind_host: str = "127.0.0.1"
+    pbgui_port: int = 8000
+    start_services: bool = True
+
+    @classmethod
+    def from_mapping(cls, data: dict) -> "LocalMasterConfig":
+        """Build local config from web/CLI input."""
+        return cls(
+            install_dir=str(data.get("install_dir") or default_local_install_dir()).strip(),
+            master_name=str(data.get("master_name") or data.get("hostname") or default_local_master_name()).strip(),
+            pbgui_password=str(data.get("pbgui_password") or "PBGui$Bot!"),
+            pbgui_bind_host=str(data.get("pbgui_bind_host") or "127.0.0.1").strip(),
+            pbgui_port=int(data.get("pbgui_port") or 8000),
+            start_services=bool(data.get("start_services", True)),
+        )
+
+    def validate(self) -> None:
+        """Validate local install settings."""
+        self.install_dir = normalize_local_install_dir(self.install_dir)
+        if not self.master_name:
+            raise ValueError("Master name is required.")
+        if not (1024 <= int(self.pbgui_port) <= 65535):
+            raise ValueError("PBGui port must be between 1024 and 65535.")
 
 
 @dataclass
@@ -74,6 +160,7 @@ class RemoteMasterConfig:
         target_password = str(data.get("target_password") or "")
         if login_mode == "sudo" and not target_password:
             target_password = str(data.get("ssh_password") or "")
+        install_dir = normalize_remote_install_dir(str(data.get("install_dir") or ""), target_user)
         return cls(
             remote_host=str(data.get("remote_host") or "").strip(),
             ssh_port=int(data.get("ssh_port") or 22),
@@ -91,7 +178,7 @@ class RemoteMasterConfig:
             openvpn_cidr=str(data.get("openvpn_cidr") or "10.8.0.0/24").strip(),
             ssh_mode=str(data.get("ssh_mode") or "specific_ips_vpn").strip(),
             ssh_allowed_ips=allowed,
-            install_dir=str(data.get("install_dir") or "").strip(),
+            install_dir=install_dir,
             coinmarketcap_api_key=str(data.get("coinmarketcap_api_key") or "").strip(),
             enable_pbremote=bool(data.get("enable_pbremote")),
         )
@@ -110,6 +197,7 @@ class RemoteMasterConfig:
             raise ValueError("Target user is required.")
         if self.login_mode == "root" and not self.target_password:
             raise ValueError("Target user password is required for root installs.")
+        self.install_dir = normalize_remote_install_dir(self.install_dir, self.target_user)
         if self.ssh_mode not in {"specific_ips_vpn", "vpn_only", "anywhere"}:
             raise ValueError("Invalid SSH firewall mode.")
         if self.ssh_mode == "specific_ips_vpn" and not self.ssh_allowed_ips:
@@ -143,6 +231,216 @@ class RemoteMasterConfig:
 
 def _installer_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _run_command(
+    args: list[str | Path],
+    log: LogCallback,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: int | None = None,
+) -> str:
+    """Run a local command and stream captured output to the installer log."""
+    command = [str(arg) for arg in args]
+    log("$ " + shlex.join(command))
+    proc = subprocess.run(
+        command,
+        check=False,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if output:
+        for line in output.splitlines():
+            log(line)
+    if proc.returncode != 0:
+        raise RuntimeError(output or f"Command failed: {shlex.join(command)}")
+    return output
+
+
+def _require_command(name: str, hint: str = "") -> str:
+    """Return a command path or raise a clear install error."""
+    path = shutil.which(name)
+    if not path:
+        message = f"Required command not found: {name}"
+        if hint:
+            message += f". {hint}"
+        raise RuntimeError(message)
+    return path
+
+
+def _ensure_git_checkout(repo_url: str, target: Path, log: LogCallback, *, current_source: Path | None = None) -> None:
+    """Clone or fast-forward an existing git checkout."""
+    if current_source and target.exists():
+        try:
+            if target.resolve() == current_source.resolve():
+                log(f"Using current PBGui checkout: {target}")
+                return
+        except OSError:
+            pass
+    if (target / ".git").exists():
+        log(f"Updating existing checkout: {target}")
+        _run_command(["git", "pull", "--ff-only"], log, cwd=target)
+        return
+    if target.exists() and not target.is_dir():
+        raise RuntimeError(f"Target path exists and is not a directory: {target}")
+    if target.exists() and any(target.iterdir()):
+        raise RuntimeError(f"Target directory exists and is not an empty git checkout: {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _run_command(["git", "clone", repo_url, target], log)
+
+
+def _write_pbgui_config(config: LocalMasterConfig, install_dir: Path, pbgui_dir: Path) -> None:
+    """Write local PBGui pbgui.ini atomically."""
+    cfg = configparser.ConfigParser()
+    cfg["main"] = {
+        "pbname": config.master_name,
+        "pb7dir": str(install_dir / "pb7"),
+        "pb7venv": str(install_dir / "venv_pb7" / "bin" / "python"),
+        "role": "master",
+    }
+    cfg["api_server"] = {"host": config.pbgui_bind_host, "port": str(config.pbgui_port)}
+    cfg["coinmarketcap"] = {"api_key": "", "fetch_limit": "1000", "fetch_interval": "4"}
+    path = pbgui_dir / "pbgui.ini"
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        cfg.write(handle)
+    os.replace(tmp, path)
+
+
+def _write_auth_secret(config: LocalMasterConfig, pbgui_dir: Path) -> None:
+    """Write the local PBGui auth secret atomically."""
+    path = pbgui_dir / "data" / "auth" / "secrets.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    password = config.pbgui_password.replace("\\", "\\\\").replace('"', '\\"')
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(f'password = "{password}"\n', encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _local_url(bind_host: str, port: int) -> str:
+    """Return a browser-friendly URL for a local PBGui install."""
+    host = bind_host if bind_host not in {"0.0.0.0", "::", ""} else "127.0.0.1"
+    return f"http://{host}:{port}/"
+
+
+def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifact_dir: Path | None = None) -> dict:
+    """Install a local PBGui master on this machine."""
+    config.validate()
+    _require_command("git", "Install git and retry.")
+    _require_command("curl", "Install curl and retry.")
+    _require_command("gcc", "Install build-essential/gcc and retry.")
+    _require_command("systemctl", "systemd user services are required for the local master install.")
+    python312 = _require_command("python3.12", "Install Python 3.12 with venv support and retry.")
+
+    install_dir = Path(config.install_dir)
+    pbgui_dir = install_dir / "pbgui"
+    pb7_dir = install_dir / "pb7"
+    pbgui_venv = install_dir / "venv_pbgui"
+    pb7_venv = install_dir / "venv_pb7"
+    root = _installer_root()
+
+    if artifact_dir:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+    log(f"Using local install parent directory: {install_dir}")
+    log(f"PBGui: {pbgui_dir}")
+    log(f"PB7: {pb7_dir}")
+    log(f"Venvs: {pbgui_venv}, {pb7_venv}")
+
+    _ensure_git_checkout("https://github.com/msei99/pbgui.git", pbgui_dir, log, current_source=root)
+    _ensure_git_checkout("https://github.com/enarjord/passivbot.git", pb7_dir, log)
+
+    setup_systemd_source = root / "setup" / "setup_systemd.sh"
+    setup_systemd_target = pbgui_dir / "setup" / "setup_systemd.sh"
+    if not setup_systemd_target.exists() and setup_systemd_source.exists():
+        setup_systemd_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(setup_systemd_source, setup_systemd_target)
+        setup_systemd_target.chmod(0o755)
+
+    log("Creating Python virtualenvs...")
+    _run_command([python312, "-m", "venv", pb7_venv], log)
+    _run_command([pb7_venv / "bin" / "python", "-m", "pip", "install", "--upgrade", "pip"], log)
+    _run_command([pb7_venv / "bin" / "python", "-m", "pip", "install", "-r", pb7_dir / "requirements.txt"], log)
+    _run_command([pb7_venv / "bin" / "python", "-m", "pip", "install", "maturin"], log)
+
+    pbgui_requirements = pbgui_dir / "requirements.txt"
+    if not pbgui_requirements.exists():
+        pbgui_requirements = pbgui_dir / "requirements_vps.txt"
+    _run_command([python312, "-m", "venv", pbgui_venv], log)
+    _run_command([pbgui_venv / "bin" / "python", "-m", "pip", "install", "--upgrade", "pip"], log)
+    _run_command([pbgui_venv / "bin" / "python", "-m", "pip", "install", "-r", pbgui_requirements], log)
+
+    log("Building passivbot-rust...")
+    if not shutil.which("rustup"):
+        _run_command(["bash", "-lc", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"], log)
+    cargo_env = Path.home() / ".cargo" / "env"
+    _run_command(["bash", "-lc", f"source {shlex.quote(str(cargo_env))} && rustup toolchain install 1.90.0 && rustup default 1.90.0"], log)
+    _run_command(
+        [
+            "bash",
+            "-lc",
+            "source "
+            + shlex.quote(str(cargo_env))
+            + " && source "
+            + shlex.quote(str(pb7_venv / "bin" / "activate"))
+            + " && cd "
+            + shlex.quote(str(pb7_dir / "passivbot-rust"))
+            + " && maturin develop --release",
+        ],
+        log,
+    )
+    _run_command(
+        [
+            "bash",
+            "-lc",
+            "source "
+            + shlex.quote(str(pb7_venv / "bin" / "activate"))
+            + " && cd "
+            + shlex.quote(str(pb7_dir))
+            + " && python -c \"import sys; sys.path.insert(0, 'src'); from rust_utils import stamp_compiled_extensions, source_fingerprint; stamp_compiled_extensions(source_fingerprint()); print('Rust source stamp updated.')\"",
+        ],
+        log,
+    )
+
+    log("Writing PBGui configuration...")
+    _write_pbgui_config(config, install_dir, pbgui_dir)
+    _write_auth_secret(config, pbgui_dir)
+
+    if config.start_services:
+        if not setup_systemd_target.exists():
+            raise RuntimeError(f"Systemd setup helper not found: {setup_systemd_target}")
+        log("Installing PBGui systemd user services...")
+        _run_command(
+            [
+                "bash",
+                setup_systemd_target,
+                "--user",
+                getpass.getuser(),
+                "--pbgui-dir",
+                pbgui_dir,
+                "--python",
+                pbgui_venv / "bin" / "python",
+                "--enable",
+                "api,pbrun,pbdata,pbcoindata",
+            ],
+            log,
+        )
+
+    return {
+        "ok": True,
+        "mode": "local",
+        "install_dir": str(install_dir),
+        "pbgui_dir": str(pbgui_dir),
+        "pb7_dir": str(pb7_dir),
+        "pbgui_python": str(pbgui_venv / "bin" / "python"),
+        "pb7_python": str(pb7_venv / "bin" / "python"),
+        "local_url": _local_url(config.pbgui_bind_host, config.pbgui_port),
+        "completed_at": int(time.time()),
+    }
 
 
 def ensure_local_public_key(log: LogCallback) -> str:

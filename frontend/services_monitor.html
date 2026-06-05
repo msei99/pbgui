@@ -37,6 +37,7 @@
     .sb-dot { width: 8px; height: 8px; border-radius: 50%; background: #4a5568; flex-shrink: 0; }
     .sb-dot.running { background: #21c354; }
     .sb-dot.stopped { background: #ff4b4b; }
+    .sb-dot.warn { background: #f59e0b; }
 
     /* ── Main content ── */
     #main-content { flex: 1; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
@@ -55,6 +56,7 @@
     .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #4a5568; flex-shrink: 0; }
     .status-dot.running { background: #21c354; }
     .status-dot.stopped { background: #ff4b4b; }
+    .status-dot.warn { background: #f59e0b; }
     .status-label { font-size: var(--fs-xs); color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
     .ctrl-btn {
       padding: 0.25rem 0.75rem; border-radius: 5px; border: 1px solid #2d3748;
@@ -91,6 +93,7 @@
     .card-dot { width: 7px; height: 7px; border-radius: 50%; background: #4a5568; flex-shrink: 0; }
     .card-dot.running { background: #21c354; }
     .card-dot.stopped { background: #ff4b4b; }
+    .card-dot.warn { background: #f59e0b; }
     .card-btn {
       align-self: flex-start; padding: 0.2rem 0.65rem; border-radius: 4px;
       border: 1px solid #2d3748; background: #1a202c; color: #94a3b8;
@@ -184,6 +187,33 @@
     .worker-monitor-frame {
       flex: 1; width: 100%; min-height: 320px; border: 0; background: #0b1220;
     }
+
+    /* ── Migration ── */
+    .migration-hero { background:#131b2b; border:1px solid #1e2736; border-radius:10px; padding:1rem; margin-bottom:1rem; }
+    .migration-title { font-size:var(--fs-lg); font-weight:700; color:#e2e8f0; margin-bottom:0.35rem; }
+    .migration-desc { color:#94a3b8; line-height:1.45; max-width:860px; }
+    .migration-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:0.75rem; margin-bottom:1rem; }
+    .migration-card { background:#0f1722; border:1px solid #1e2736; border-radius:8px; padding:0.75rem; min-width:0; }
+    .migration-label { font-size:var(--fs-xs); color:#64748b; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.3rem; }
+    .migration-value { color:#e2e8f0; font-size:var(--fs-sm); word-break:break-all; }
+    .migration-section { background:#0f1722; border:1px solid #1e2736; border-radius:8px; padding:0.85rem; margin-bottom:1rem; }
+    .migration-section-title { display:flex; align-items:center; justify-content:space-between; gap:0.75rem; color:#e2e8f0; font-weight:700; font-size:var(--fs-md); margin-bottom:0.55rem; }
+    .migration-note { color:#94a3b8; font-size:var(--fs-sm); line-height:1.45; }
+    .migration-warn { background:#1c1a08; border:1px solid rgba(180,83,9,0.5); color:#fcd34d; border-radius:7px; padding:0.55rem 0.7rem; margin:0.45rem 0; font-size:var(--fs-sm); }
+    .migration-ok { background:#052e16; border:1px solid rgba(22,101,52,0.7); color:#4ade80; border-radius:7px; padding:0.55rem 0.7rem; margin:0.45rem 0; font-size:var(--fs-sm); }
+    .migration-table-wrap { overflow-x:auto; }
+    .migration-table { width:100%; border-collapse:collapse; font-size:var(--fs-xs); }
+    .migration-table th { background:#111827; color:#64748b; padding:0.4rem 0.55rem; text-align:left; border-bottom:1px solid #1e2736; white-space:nowrap; }
+    .migration-table td { padding:0.35rem 0.55rem; border-bottom:1px solid #131b2b; color:#cbd5e1; vertical-align:top; }
+    .migration-table tr:hover td { background:#131b2b; }
+    .migration-badge { display:inline-flex; align-items:center; padding:0.12rem 0.45rem; border-radius:999px; border:1px solid #2d3748; color:#94a3b8; font-size:var(--fs-xs); font-weight:700; text-transform:uppercase; letter-spacing:0.04em; }
+    .migration-badge.ok { color:#4ade80; border-color:rgba(33,195,84,0.45); background:#052e16; }
+    .migration-badge.warn { color:#fcd34d; border-color:rgba(180,83,9,0.5); background:#1c1a08; }
+    .migration-badge.err { color:#fca5a5; border-color:#7f1d1d; background:#2d1515; }
+    .migration-actions { display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; }
+    .migration-primary { height:var(--btn-h); padding:0 1rem; border-radius:6px; border:1px solid #2563eb; background:#1e3a5f; color:#bfdbfe; cursor:pointer; font-size:var(--fs-sm); font-family:inherit; }
+    .migration-primary:hover:not(:disabled) { background:#1d4ed8; color:#fff; }
+    .migration-primary:disabled { cursor:not-allowed; opacity:0.55; }
 
     /* ── Settings form ── */
     .settings-wrap { padding: 1.25rem 1.5rem; overflow-y: auto; flex: 1; }
@@ -458,6 +488,9 @@
       <button class="sb-btn" data-panel="workers">
         <span class="sb-dot" id="dot-workers"></span>Workers
       </button>
+      <button class="sb-btn" data-panel="migration">
+        <span class="sb-dot" id="dot-migration"></span>Migration
+      </button>
       <button class="sb-btn" data-panel="pbrun">
         <span class="sb-dot" id="dot-pbrun"></span>PBRun
       </button>
@@ -510,6 +543,22 @@
             <div id="worker-log-wrap" class="log-wrap" style="display:none;"><div id="worker-log" style="height:100%;"></div></div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Migration panel -->
+    <div id="panel-migration" class="svc-panel">
+      <div class="ctrl-strip">
+        <span class="ctrl-title">Migration</span>
+        <div class="ctrl-status">
+          <div class="status-dot" id="cs-migration"></div>
+          <span class="status-label" id="sl-migration">loading...</span>
+        </div>
+        <span style="flex:1"></span>
+        <button class="ctrl-btn" type="button" onclick="loadMigrationStatus(true)">&#8635; Refresh</button>
+      </div>
+      <div class="settings-wrap" id="migration-wrap">
+        <div style="color:#4a5568;font-style:italic;">Loading migration status...</div>
       </div>
     </div>
 
@@ -966,6 +1015,7 @@ window.PBGUI_NAV_CONFIG = {
   var _workerIndex = {};
   var _selectedWorkerId = '';
   var _currentPanelId = 'overview';
+  var _migrationStatus = null;
 
   function esc(value) {
     return String(value == null ? '' : value)
@@ -1014,6 +1064,7 @@ window.PBGUI_NAV_CONFIG = {
       }
     });
     updateWorkersSummary();
+    updateMigrationSummary();
     renderOverviewCards();
   }
 
@@ -1068,6 +1119,228 @@ window.PBGUI_NAV_CONFIG = {
     if (dotCs) dotCs.className = 'status-dot ' + cls;
     if (lbl) lbl.textContent = running + ' / ' + total + ' running';
   }
+
+  /* ── Systemd migration ─────────────────────────────────── */
+  function migrationStatusMeta(data) {
+    if (!data) return { cls: '', label: 'Not loaded', text: 'Migration status not loaded yet.', needed: false };
+    if (data._error) return { cls: 'stopped', label: 'Error', text: data._error, needed: false };
+    var warnings = data.warnings || [];
+    if (data.migration_needed) return { cls: 'warn', label: 'Needed', text: 'Systemd migration is available for this master.', needed: true };
+    if (warnings.length) return { cls: 'warn', label: 'Warnings', text: 'Systemd services are installed, but warnings need review.', needed: false };
+    return { cls: 'running', label: 'Ready', text: 'This master is already managed by systemd user services.', needed: false };
+  }
+
+  function updateMigrationSummary() {
+    var meta = migrationStatusMeta(_migrationStatus);
+    var dotSb = document.getElementById('dot-migration');
+    var dotCs = document.getElementById('cs-migration');
+    var lbl = document.getElementById('sl-migration');
+    if (dotSb) dotSb.className = 'sb-dot ' + meta.cls;
+    if (dotCs) dotCs.className = 'status-dot ' + meta.cls;
+    if (lbl) lbl.textContent = meta.label;
+  }
+
+  function migrationBadge(text, cls) {
+    return '<span class="migration-badge ' + (cls || '') + '">' + esc(text) + '</span>';
+  }
+
+  function renderMigrationUnits(units) {
+    if (!units || !units.length) return '<div class="migration-note">No PBGui systemd units were reported.</div>';
+    var html = '<div class="migration-table-wrap"><table class="migration-table"><thead><tr>'
+      + '<th>Service</th><th>Unit</th><th>Installed</th><th>Enabled</th><th>State</th>'
+      + '</tr></thead><tbody>';
+    units.forEach(function (row) {
+      html += '<tr>'
+        + '<td>' + esc(row.service || '') + '</td>'
+        + '<td>' + esc(row.unit || '') + '</td>'
+        + '<td>' + migrationBadge(row.exists ? 'yes' : 'missing', row.exists ? 'ok' : 'err') + '</td>'
+        + '<td>' + migrationBadge(row.enabled ? 'yes' : 'no', row.enabled ? 'ok' : 'warn') + '</td>'
+        + '<td>' + esc(row.state || 'unknown') + '</td>'
+        + '</tr>';
+    });
+    return html + '</tbody></table></div>';
+  }
+
+  function renderMigrationCrontab(crontab) {
+    crontab = crontab || {};
+    var entries = crontab.entries || [];
+    if (!entries.length) return '<div class="migration-ok">No legacy PBGui crontab autostart entries were detected.</div>';
+    var html = '<div class="migration-warn">Legacy crontab autostart entries will be removed automatically during migration.</div>';
+    html += '<div class="migration-table-wrap"><table class="migration-table"><thead><tr><th>Entry</th></tr></thead><tbody>';
+    entries.forEach(function (entry) { html += '<tr><td>' + esc(entry) + '</td></tr>'; });
+    return html + '</tbody></table></div>';
+  }
+
+  function renderMigrationProcesses(processes) {
+    processes = processes || [];
+    if (!processes.length) return '<div class="migration-note">No PBGui daemon processes were detected by the preflight scan.</div>';
+    var html = '<div class="migration-table-wrap"><table class="migration-table"><thead><tr>'
+      + '<th>Service</th><th>PID</th><th>User</th><th>Current API</th><th>Command</th>'
+      + '</tr></thead><tbody>';
+    processes.forEach(function (proc) {
+      html += '<tr>'
+        + '<td>' + esc(proc.service || '') + '</td>'
+        + '<td>' + esc(proc.pid || '') + '</td>'
+        + '<td>' + esc(proc.username || '') + '</td>'
+        + '<td>' + migrationBadge(proc.current ? 'yes' : 'no', proc.current ? 'warn' : '') + '</td>'
+        + '<td>' + esc(proc.cmdline || '') + '</td>'
+        + '</tr>';
+    });
+    return html + '</tbody></table></div>';
+  }
+
+  function renderMigrationStatus(data) {
+    var wrap = document.getElementById('migration-wrap');
+    if (!wrap) return;
+    var meta = migrationStatusMeta(data);
+    if (data && data._error) {
+      wrap.innerHTML = '<div class="migration-section"><div class="migration-warn">Failed to load migration status: ' + esc(data._error) + '</div></div>';
+      return;
+    }
+    if (!data) {
+      wrap.innerHTML = '<div style="color:#4a5568;font-style:italic;">Loading migration status...</div>';
+      return;
+    }
+
+    var warnings = data.warnings || [];
+    var missing = data.missing_default_units || [];
+    var html = '<div class="migration-hero">'
+      + '<div class="migration-title">Systemd user services migration</div>'
+      + '<div class="migration-desc">Move this PBGui master from legacy autostart/process control to systemd user services. The migration keeps existing data and paths, removes legacy PBGui crontab autostarts when possible, and restarts PBGui daemons through systemd.</div>'
+      + '</div>';
+
+    html += '<div class="migration-grid">'
+      + '<div class="migration-card"><div class="migration-label">Status</div><div class="migration-value">' + migrationBadge(meta.label, meta.cls === 'running' ? 'ok' : (meta.cls === 'warn' ? 'warn' : 'err')) + '</div></div>'
+      + '<div class="migration-card"><div class="migration-label">User</div><div class="migration-value">' + esc(data.user || '') + ' (uid ' + esc(data.uid || '') + ')</div></div>'
+      + '<div class="migration-card"><div class="migration-label">PBGui directory</div><div class="migration-value">' + esc(data.pbgui_dir || '') + '</div></div>'
+      + '<div class="migration-card"><div class="migration-label">Python</div><div class="migration-value">' + esc(data.pbgui_python || '') + '</div></div>'
+      + '<div class="migration-card"><div class="migration-label">Unit directory</div><div class="migration-value">' + esc(data.systemd_unit_dir || '') + '</div></div>'
+      + '<div class="migration-card"><div class="migration-label">PB7</div><div class="migration-value">' + esc(data.pb7dir || 'not configured') + '</div></div>'
+      + '</div>';
+
+    html += '<div class="migration-section"><div class="migration-section-title"><span>Preflight result</span></div>';
+    html += data.migration_needed ? '<div class="migration-warn">' + esc(meta.text) + '</div>' : '<div class="migration-ok">' + esc(meta.text) + '</div>';
+    if (missing.length) {
+      html += '<div class="migration-warn">Missing required units: ' + esc(missing.map(function (row) { return row.unit || row.service; }).join(', ')) + '</div>';
+    }
+    if (data.pbremote_will_be_preserved) {
+      html += '<div class="migration-note">PBRemote usage was detected and will be preserved as a systemd user service.</div>';
+    }
+    warnings.forEach(function (warning) { html += '<div class="migration-warn">' + esc(warning) + '</div>'; });
+    html += '</div>';
+
+    html += '<div class="migration-section"><div class="migration-section-title"><span>Systemd units</span></div>' + renderMigrationUnits(data.systemd_units || []) + '</div>';
+    html += '<div class="migration-section"><div class="migration-section-title"><span>Legacy crontab autostart</span></div>' + renderMigrationCrontab(data.legacy_crontab || {}) + '</div>';
+    html += '<div class="migration-section"><div class="migration-section-title"><span>Detected PBGui processes</span></div>' + renderMigrationProcesses(data.processes || []) + '</div>';
+
+    html += '<div class="migration-section"><div class="migration-section-title"><span>Action</span></div>'
+      + '<div class="migration-actions">'
+      + '<button class="migration-primary" id="migration-test-btn" type="button" onclick="testSystemdMigration()">Test migration</button>'
+      + '<button class="migration-primary" id="migration-run-btn" type="button" onclick="runSystemdMigration()"' + (data.migration_needed ? '' : ' disabled') + '>Migrate this master to systemd</button>'
+      + '<span class="migration-note">The API server will restart after a successful migration. Reload this page if the connection drops briefly.</span>'
+      + '</div></div>';
+    wrap.innerHTML = html;
+  }
+
+  function loadMigrationStatus(force) {
+    var wrap = document.getElementById('migration-wrap');
+    if (force && wrap) wrap.innerHTML = '<div style="color:#4a5568;font-style:italic;">Loading migration status...</div>';
+    fetch(API_BASE + '/migration/status?token=' + TOKEN)
+      .then(function (resp) {
+        return resp.json().catch(function () { return {}; }).then(function (data) {
+          if (!resp.ok) throw new Error(data.detail || 'Migration status request failed.');
+          return data;
+        });
+      })
+      .then(function (data) {
+        _migrationStatus = data;
+        updateMigrationSummary();
+        renderMigrationStatus(data);
+        renderOverviewCards();
+      })
+      .catch(function (err) {
+        _migrationStatus = { _error: err && err.message ? err.message : 'Migration status request failed.' };
+        updateMigrationSummary();
+        renderMigrationStatus(_migrationStatus);
+        renderOverviewCards();
+      });
+  }
+  window.loadMigrationStatus = loadMigrationStatus;
+
+  async function migrationConfirm() {
+    if (window.PBGuiDialogs && typeof window.PBGuiDialogs.confirm === 'function') {
+      return window.PBGuiDialogs.confirm({
+        title: 'Migrate to systemd',
+        message: 'Migrate this master to systemd user services now? PBGui daemons and the API server will restart after the migration.',
+        confirmText: 'Migrate'
+      });
+    }
+    _resultPopup('Migration blocked', 'Confirmation dialog is unavailable.', 'Reload the page and try again.', false);
+    return false;
+  }
+
+  window.testSystemdMigration = function () {
+    var btn = document.getElementById('migration-test-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Testing...'; }
+    _resultPopup('Systemd migration test', 'Dry-run running...', '', true, true);
+    fetch(API_BASE + '/migration/test?token=' + TOKEN, { method: 'POST' })
+      .then(function (resp) {
+        return resp.json().catch(function () { return {}; }).then(function (data) {
+          if (!resp.ok) throw new Error(data.detail || 'Migration test failed.');
+          return data;
+        });
+      })
+      .then(function (data) {
+        var lines = [];
+        (data.warnings || []).forEach(function (warning) { lines.push('WARNING: ' + warning); });
+        (data.errors || []).forEach(function (error) { lines.push('ERROR: ' + error); });
+        (data.logs || []).forEach(function (line) { lines.push(line); });
+        _resultPopup(
+          'Systemd migration test',
+          data.ok ? 'Dry-run completed. No changes were made.' : 'Dry-run found blockers. No changes were made.',
+          lines.join('\n'),
+          !!data.ok
+        );
+      })
+      .catch(function (err) {
+        _resultPopup('Systemd migration test', 'Migration test failed.', err && err.message ? err.message : 'Migration test failed.', false);
+      })
+      .finally(function () {
+        if (btn) { btn.disabled = false; btn.textContent = 'Test migration'; }
+      });
+  };
+
+  window.runSystemdMigration = async function () {
+    if (!(await migrationConfirm())) return;
+    var btn = document.getElementById('migration-run-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Migrating...'; }
+    _resultPopup('Systemd migration', 'Migration running...', '', true, true);
+    fetch(API_BASE + '/migration/run?token=' + TOKEN, { method: 'POST' })
+      .then(function (resp) {
+        return resp.json().catch(function () { return {}; }).then(function (data) {
+          if (!resp.ok || data.ok === false) throw new Error(data.detail || data.error || 'Migration failed.');
+          return data;
+        });
+      })
+      .then(function (data) {
+        var lines = [];
+        (data.warnings || []).forEach(function (warning) { lines.push('WARNING: ' + warning); });
+        (data.logs || []).forEach(function (line) { lines.push(line); });
+        _migrationStatus = data.after || _migrationStatus;
+        updateMigrationSummary();
+        renderMigrationStatus(_migrationStatus);
+        renderOverviewCards();
+        _resultPopup('Systemd migration', 'Migration completed. API restart has been scheduled.', lines.join('\n'), true);
+        setTimeout(function () { loadMigrationStatus(true); }, 6000);
+      })
+      .catch(function (err) {
+        _resultPopup('Systemd migration', 'Migration failed.', err && err.message ? err.message : 'Migration failed.', false);
+        loadMigrationStatus(true);
+      })
+      .finally(function () {
+        if (btn) { btn.disabled = false; btn.textContent = 'Migrate this master to systemd'; }
+      });
+  };
 
   function renderWorkerActionButtons(item, compact) {
     if (!item || item.available === false) return '';
@@ -1307,6 +1580,13 @@ window.PBGUI_NAV_CONFIG = {
           +  '<div class="card-status-row"><span class="card-dot ' + workerCls + '"></span>' + esc((workerCounts.running || 0) + ' / ' + (workerCounts.total || 0) + ' running') + '</div>'
           +  '<div style="display:flex;gap:4px;flex-wrap:wrap;"><button class="card-btn" onclick="selectPanel(\'workers\');event.stopPropagation()">Open</button></div>'
           +  '</div>';
+        var migrationMeta = migrationStatusMeta(_migrationStatus);
+        var migrationCls = migrationMeta.cls || 'stopped';
+        html += '<div class="svc-card ' + (migrationCls === 'warn' ? '' : migrationCls) + '" onclick="selectPanel(\'migration\')">'
+          +  '<div class="card-name">Migration</div>'
+          +  '<div class="card-status-row"><span class="card-dot ' + migrationCls + '"></span>' + esc(migrationMeta.text) + '</div>'
+          +  '<div style="display:flex;gap:4px;flex-wrap:wrap;"><button class="card-btn" onclick="selectPanel(\'migration\');event.stopPropagation()">Open</button></div>'
+          +  '</div>';
     grid.innerHTML = html;
   }
 
@@ -1319,7 +1599,7 @@ window.PBGUI_NAV_CONFIG = {
     document.querySelectorAll('.svc-panel').forEach(function (p) {
       p.classList.toggle('active', p.id === 'panel-' + panelId);
     });
-    if (panelId !== 'overview' && panelId !== 'workers') {
+    if (panelId !== 'overview' && panelId !== 'workers' && panelId !== 'migration') {
       initLogViewer(panelId);
     }
     clearTimeout(_workersTimer); _workersTimer = null;
@@ -1327,6 +1607,7 @@ window.PBGUI_NAV_CONFIG = {
     clearInterval(_pollerMetricsTimer); _pollerMetricsTimer = null;
     if (panelId === 'pbcoindata') loadCmcKeyStatus();
     if (panelId === 'workers') window.fetchWorkers(true);
+    if (panelId === 'migration') loadMigrationStatus(true);
     /* update guide keyword for the active panel */
     var svc = SERVICES.find(function (s) { return s.id === panelId; });
     window._servicesGuideKeyword = svc ? svc.guideKeyword : 'services_overview';
@@ -2818,6 +3099,7 @@ window.PBGUI_NAV_CONFIG = {
   /* ── Init ──────────────────────────────────────────────── */
   fetchStatus();
   window.fetchWorkers(false);
+  loadMigrationStatus(false);
 
 }());
 </script>
