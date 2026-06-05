@@ -273,6 +273,48 @@ def _require_command(name: str, hint: str = "") -> str:
     return path
 
 
+def _apt_get_command() -> list[str] | None:
+    """Return a non-interactive apt-get command for local prerequisite installs."""
+    apt_get = shutil.which("apt-get")
+    if not apt_get:
+        return None
+    if os.getuid() == 0:
+        return [apt_get]
+    sudo = shutil.which("sudo")
+    if not sudo:
+        return None
+    return [sudo, "-n", "env", "DEBIAN_FRONTEND=noninteractive", apt_get]
+
+
+def _install_local_prerequisites(log: LogCallback) -> None:
+    """Install local master prerequisites on apt-based systems when possible."""
+    apt_cmd = _apt_get_command()
+    if not apt_cmd:
+        return
+    packages = [
+        "software-properties-common",
+        "ca-certificates",
+        "curl",
+        "git",
+        "python3",
+        "python3-pip",
+        "python3.12-venv",
+        "gcc",
+        "build-essential",
+        "pkg-config",
+    ]
+    log("Ensuring local installer prerequisites are installed...")
+    try:
+        _run_command([*apt_cmd, "update"], log, timeout=300)
+        _run_command([*apt_cmd, "install", "-y", *packages], log, timeout=900)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "Could not install local prerequisites automatically. Run "
+            "sudo apt-get update && sudo apt-get install -y git curl build-essential pkg-config python3.12-venv "
+            "and retry. If you just started the browser installer, run sudo -v in the same terminal first."
+        ) from exc
+
+
 def _ensure_git_checkout(repo_url: str, target: Path, log: LogCallback, *, current_source: Path | None = None) -> None:
     """Clone or fast-forward an existing git checkout."""
     if current_source and target.exists():
@@ -331,6 +373,7 @@ def _local_url(bind_host: str, port: int) -> str:
 def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifact_dir: Path | None = None) -> dict:
     """Install a local PBGui master on this machine."""
     config.validate()
+    _install_local_prerequisites(log)
     _require_command("git", "Install git and retry.")
     _require_command("curl", "Install curl and retry.")
     _require_command("gcc", "Install build-essential/gcc and retry.")
