@@ -23,11 +23,13 @@ error()   { echo -e "${RED}[ERR ]${RESET} $*" >&2; }
 # --- Variables ---
 SERVER_NAME=$(hostname)
 CLIENT_NAME=$(whoami)
+PROFILE_NAME="${SERVER_NAME//[!A-Za-z0-9._-]/_}"
+[[ -n "$PROFILE_NAME" ]] || PROFILE_NAME="pbgui-master"
 OVPN_DIR="/etc/openvpn/server"
 EASYRSA_DIR="/etc/openvpn/easy-rsa"
 CLIENT_KEYS_DIR="/etc/openvpn/client_keys"
-CLIENT_OVPN_DIR="$HOME/${CLIENT_NAME}_client"
-CLIENT_FILE="$CLIENT_OVPN_DIR/${CLIENT_NAME}.ovpn"
+CLIENT_OVPN_DIR="$HOME/${PROFILE_NAME}_client"
+CLIENT_FILE="$CLIENT_OVPN_DIR/${PROFILE_NAME}.ovpn"
 
 # --- Header ---
 echo -e "${BOLD}${GREEN}==============================================="
@@ -39,7 +41,8 @@ echo
 
 # --- Show Server and Client Info ---
 echo -e "${YELLOW}🔹 Server name: $SERVER_NAME"
-echo -e "🔹 Client name: $CLIENT_NAME${RESET}"
+echo -e "🔹 Client name: $CLIENT_NAME"
+echo -e "🔹 Profile name: $PROFILE_NAME${RESET}"
 echo
 
 # --- Install dependencies ---
@@ -128,7 +131,7 @@ explicit-exit-notify 1
 client-to-client
 duplicate-cn
 reneg-sec 3600
-auth-gen-token 84600
+auth-gen-token 604800
 
 # Logging
 status /var/log/openvpn-status.log

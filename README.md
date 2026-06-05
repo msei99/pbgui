@@ -65,6 +65,24 @@ Here are all my copytradings and statistics of them: https://manicpt.streamlit.a
 
 ### Install PBGui Master on a vps (Best Option)
 
+Recommended remote master installer:
+
+```
+bash <(curl -fsSL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/setup/master_installer.sh)
+```
+
+The command starts a local browser wizard at `http://127.0.0.1:8088/`. The wizard installs a fresh remote master VPS over SSH, configures OpenVPN and TOTP, installs PBGui/PB7, creates systemd user services, and starts PBGui. PBGui is opened to the VPN network only; SSH can be restricted to specific IPs plus VPN, VPN-only, or explicitly left open with a warning. Keep the PBGui bind address at `0.0.0.0` for remote masters; the firewall limits access to the configured OpenVPN network. If you install multiple remote masters, choose a different private OpenVPN CIDR for each one, for example `10.8.0.0/24`, `10.9.0.0/24`, or `10.10.0.0/24`. When importing the `.ovpn` profile with NetworkManager, enable `Use this connection only for resources on its network` and disable IPv6, or use the installer's NetworkManager import button to apply these settings automatically.
+
+For headless systems, use the CLI mode:
+
+```
+bash <(curl -fsSL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/setup/master_installer.sh) --cli
+```
+
+OpenVPN and TOTP are mandatory for the remote master installer. PBRemote/rclone is not started by default and remains a legacy/optional setup.
+
+### Legacy manual remote master setup
+
 Step 1: Get a Linux VPS from IONOS. Please use my [referral link](https://aklam.io/CBA3zSaZ)
 - Select `Server` -> `vServer (VPS)` -> `Linux VPS`
 - For normal VPS bots I currently suggest `VPS S+` with 2 vCores CPU, 2 GB RAM and 80 GB NVMe
@@ -123,7 +141,7 @@ bash <(curl -sL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/s
 # Setup PBGui
 bash <(curl -sL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/install.sh)
 
-# Setup crontab for autostart
+# Legacy autostart via crontab. New installs should use the remote master installer/systemd path above.
 bash <(curl -sL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main/setup/setup_autostart.sh)
 ```
 
@@ -204,7 +222,7 @@ To enable the PBGui instance manager in the GUI, you can follow these steps:
 1. Open the PBGui interface.
 2. Go to Services and enable PBRun
 
-To ensure that the Instance Manager starts after rebooting your server, you can use the following method:
+New master installations use systemd user services from the remote master installer. The following `start.sh`/crontab method is legacy and only kept for older manual installations:
 
 1. Create a script file, such as "start.sh", in your pbgui directory (e.g., ~/software/pbgui).
 2. In the script file, include the following lines:
@@ -232,7 +250,7 @@ python PBRun.py &
 Please make sure to adjust the paths in the script file and crontab entry according to your specific setup.
 
 ## PBData Database for Dashboard
-Actually, the best way to enable PBData is by adding the following line to your start.sh script:
+New master installations use systemd user services from the remote master installer. For older manual installations, PBData can be started from `start.sh`:
 ```
 python PBData.py &
 ```
@@ -270,7 +288,7 @@ pbname = manibot50
 [pbremote]
 bucket = pbgui:
 ```
-Start PBRun.py and PBRemote using the start.sh script.
+On new master installations, PBRemote is not started by default and remains a legacy/optional rclone-based service. Older manual installations can still start PBRun.py and PBRemote using the start.sh script.
 
 ## PBCoinData CoinMarketCap Filters
 With PBCoinData, you can download CoinMarketCap data for symbols and use this data to maintain your ignored_symbols and ignored_coins. You can filter out low market cap symbols or use vol/mcap to detect possible rug pulls early.
@@ -283,7 +301,7 @@ fetch_limit = 1000
 fetch_interval = 4
 ```
 With these settings, PBCoinData will fetch the top 1000 symbols every 4 hours. You will need around 930 credits per month with this configuration. A Basic Free Plan from CoinMarketCap provides 10,000 credits per month, allowing you to run 1 master and 9 VPS instances with the same API key.
-Start PBCoinData.py using the start.sh script.
+On new master installations, PBCoinData is managed by a systemd user service. Older manual installations can still start PBCoinData.py using the start.sh script.
 
 ## Links:
 - Telegram https://t.me/+kwyeyrmjQ-lkYTJk

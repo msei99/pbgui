@@ -1,1 +1,29 @@
 # Unreleased
+
+- Added a new remote master installer entry point (`setup/master_installer.sh`) that starts a local browser wizard or CLI mode from one curl command.
+- Added systemd user-service setup for PBGui services so new remote master installs no longer rely on `start.sh` and `crontab`.
+- Made the Services API systemd-aware so PBGui service start, stop, status, local restart, and API restart actions use user units when available instead of killing processes that systemd restarts.
+- Improved the remote master installer wizard by clarifying password fields, adding reveal toggles, and auto-filling the current public IP for the recommended SSH firewall mode.
+- Fixed remote master installer logging so ANSI colors render cleanly in the browser and adjusted Rust installation to avoid Ubuntu `rustup`/`cargo` package conflicts.
+- Fixed remote master bootstrap hostname resolution and aligned the `passivbot-rust` build with the VPS manager flow by activating the PB7 virtualenv before running `maturin`.
+- Fixed local-branch remote master tests by uploading the systemd setup helper to the VPS before installing PBGui services.
+- Made the systemd setup helper retry-safe by fixing user directory ownership and enabling services from absolute unit paths.
+- Fixed systemd service generation so PBGui services keep the virtualenv Python path instead of resolving it to the system Python.
+- Kept remote master `.ovpn` generation aligned with the manual OpenVPN setup and added a PBGui API startup check with user-service logs on failure.
+- Aligned the remote master OpenVPN server encryption, timeout, authentication, and keepalive settings with the existing manual setup, while keeping the VPN CIDR configurable.
+- Set the OpenVPN server `auth-gen-token` lifetime to 604800 seconds.
+- Added a local NetworkManager import action to the remote master installer that imports the `.ovpn` profile with `ipv4.never-default` enabled and IPv6 disabled.
+- Made the NetworkManager import use the imported connection UUID and disable automatic IPv4 routes so the split-tunnel setting is applied to the correct profile on localized systems.
+- Fixed remote master dependency installation to use PBGui `requirements.txt` and PB7 `requirements.txt` so master-only features such as backtesting and optimization are available.
+- Changed the remote master installer default target PBGui user to the locally logged-in user instead of a hard-coded `pbgui` account.
+- Added a password reveal toggle for the remote master target user password field.
+- Changed the remote master wizard swap size input to a 4/6/8 GB dropdown with 6 GB as the default.
+- Added a custom swap size option to the remote master wizard.
+- Removed the CoinMarketCap API key prompt from the remote master installer because it can be configured later in PBGui.
+- Compact the remote master wizard layout by placing OpenVPN CIDR and SSH firewall mode on the same row.
+- Added the IONOS VPS Linux M+ recommendation with the referral link to the remote master wizard.
+- Change the provider-supplied root password only when a new root password is entered during fresh root-based remote master installs before locking root login.
+- Added an optional new root password field for fresh root-based remote master installs and removed the SSH port field from the browser wizard.
+- Stream and show the TOTP QR code directly in the remote master installer result panel as soon as it is generated.
+- Made the remote master OpenVPN network configurable so multiple remote masters can use separate VPN CIDRs.
+- Name generated OpenVPN client profiles after the server hostname instead of the login user to avoid collisions across multiple servers using the same user.

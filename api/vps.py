@@ -573,23 +573,18 @@ _SVC_NAME_MAP = {
 
 async def _local_restart_service(service: str) -> dict:
     """Restart a local service using the same stop/start mechanism as api/services.py."""
-    from api.services import _get_service, _SERVICES
+    from api.services import _service_action, _SERVICES
     svc_id = _SVC_NAME_MAP.get(service)
     if not svc_id or svc_id not in _SERVICES:
         return {"type": "result", "cmd": "restart_service",
                 "host": "local", "service": service, "success": False,
                 "error": f"Unknown local service: {service}"}
     try:
-        obj = _get_service(svc_id)
-        if obj.is_running():
-            obj.stop()
-        # Brief pause to let the process exit
-        await asyncio.sleep(1.5)
-        obj = _get_service(svc_id)
-        obj.run()
+        result = _service_action(svc_id, "restart")
         _log(SERVICE, f"[local] Restarted service {service} ({svc_id})")
         return {"type": "result", "cmd": "restart_service",
-                "host": "local", "service": service, "success": True}
+                "host": "local", "service": service,
+                "success": bool(result.get("running", True))}
     except Exception as e:
         _log(SERVICE, f"[local] Failed to restart {service}: {e}",
              level="ERROR", meta={"traceback": traceback.format_exc()})

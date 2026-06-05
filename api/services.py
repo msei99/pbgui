@@ -30,6 +30,14 @@ SERVICE = "Services"
 router = APIRouter()
 
 _SERVICES = ["pbrun", "pbremote", "pbdata", "pbcoindata", "api-server"]
+_SYSTEMD_SERVICE_UNITS = {
+    "pbrun": "pbgui-pbrun.service",
+    "pbremote": "pbgui-pbremote.service",
+    "pbdata": "pbgui-pbdata.service",
+    "pbcoindata": "pbgui-pbcoindata.service",
+    "api-server": "pbgui-api.service",
+}
+_SYSTEMD_RUNNING_STATES = {"active", "activating", "reloading"}
 _fetch_summary_snapshot: Dict[str, Any] = {}
 _poller_metrics_snapshot: Dict[str, Any] = {}
 
@@ -57,6 +65,104 @@ def _get_service(name: str):
         mod = importlib.import_module("PBApiServer")
         return mod.PBApiServer()
     raise ValueError(f"Unknown service: {name}")
+
+
+def _systemd_unit_path(unit: str) -> Path:
+    """Return the per-user systemd unit path for a PBGui service."""
+    return Path.home() / ".config" / "systemd" / "user" / unit
+
+
+def _systemd_unit_for_service(name: str) -> str | None:
+    """Return the systemd unit for a service when this install manages it."""
+    unit = _SYSTEMD_SERVICE_UNITS.get(name)
+    if not unit:
+        return None
+    return unit if _systemd_unit_path(unit).exists() else None
+
+
+def _systemd_user_env() -> dict[str, str]:
+    """Build an environment that can talk to the current user's systemd manager."""
+    env = os.environ.copy()
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    return env
+
+
+def _run_user_systemctl(args: list[str], *, timeout: int = 15) -> subprocess.CompletedProcess[str]:
+    """Run systemctl against the current user's service manager."""
+    return subprocess.run(
+        ["systemctl", "--user", *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=_systemd_user_env(),
+    )
+
+
+def _systemd_service_status(name: str) -> dict[str, Any] | None:
+    """Return systemd status for service, or None when no unit is installed."""
+    unit = _systemd_unit_for_service(name)
+    if not unit:
+        return None
+    proc = _run_user_systemctl(["is-active", unit], timeout=5)
+    if proc.returncode not in {0, 3, 4}:
+        return None
+    state = (proc.stdout.strip().splitlines() or ["unknown"])[0]
+    return {
+        "running": state in _SYSTEMD_RUNNING_STATES,
+        "manager": "systemd",
+        "unit": unit,
+        "systemd_state": state,
+    }
+
+
+def _systemd_service_action(name: str, action: str) -> dict[str, Any] | None:
+    """Run a start/stop/restart action through systemd when a unit is installed."""
+    if action not in {"start", "stop", "restart"}:
+        raise ValueError(f"Unsupported service action: {action}")
+    unit = _systemd_unit_for_service(name)
+    if not unit:
+        return None
+    proc = _run_user_systemctl([action, unit], timeout=30)
+    if proc.returncode != 0:
+        output = ((proc.stderr or "") + (proc.stdout or "")).strip()
+        raise RuntimeError(output or f"systemctl --user {action} {unit} failed")
+    status = _systemd_service_status(name)
+    if status is not None:
+        return status
+    return {"running": action != "stop", "manager": "systemd", "unit": unit}
+
+
+def _service_status(name: str) -> dict[str, Any]:
+    """Return service status using systemd when available, otherwise legacy PID checks."""
+    systemd_status = _systemd_service_status(name)
+    if systemd_status is not None:
+        return systemd_status
+    obj = _get_service(name)
+    return {"running": bool(obj.is_running()), "manager": "legacy"}
+
+
+def _service_action(name: str, action: str) -> dict[str, Any]:
+    """Start, stop, or restart a PBGui service using the active service manager."""
+    systemd_status = _systemd_service_action(name, action)
+    if systemd_status is not None:
+        return systemd_status
+
+    obj = _get_service(name)
+    if action == "start":
+        if not obj.is_running():
+            obj.run()
+    elif action == "stop":
+        if obj.is_running():
+            obj.stop()
+    elif action == "restart":
+        if obj.is_running():
+            obj.stop()
+            time.sleep(1.5)
+        obj.run()
+    else:
+        raise ValueError(f"Unsupported service action: {action}")
+    return _service_status(name)
 
 
 def _task_active(task: Any) -> bool:
@@ -486,8 +592,7 @@ def get_status(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
     result = {}
     for svc in _SERVICES:
         try:
-            obj = _get_service(svc)
-            result[svc] = {"running": bool(obj.is_running())}
+            result[svc] = _service_status(svc)
         except Exception as e:
             _log(SERVICE, f"status check failed for {svc}: {e}", level="WARNING")
             result[svc] = {"running": False, "error": str(e)}
@@ -518,10 +623,7 @@ def start_service(service: str, session: SessionToken = Depends(require_auth)) -
     if service not in _SERVICES:
         raise HTTPException(status_code=404, detail=f"Unknown service: {service}")
     try:
-        obj = _get_service(service)
-        if not obj.is_running():
-            obj.run()
-        return {"running": bool(obj.is_running())}
+        return _service_action(service, "start")
     except Exception as e:
         _log(SERVICE, f"start {service} failed: {e}\n{traceback.format_exc()}", level="ERROR")
         raise HTTPException(status_code=500, detail=str(e))
@@ -532,10 +634,7 @@ def stop_service(service: str, session: SessionToken = Depends(require_auth)) ->
     if service not in _SERVICES:
         raise HTTPException(status_code=404, detail=f"Unknown service: {service}")
     try:
-        obj = _get_service(service)
-        if obj.is_running():
-            obj.stop()
-        return {"running": bool(obj.is_running())}
+        return _service_action(service, "stop")
     except Exception as e:
         _log(SERVICE, f"stop {service} failed: {e}\n{traceback.format_exc()}", level="ERROR")
         raise HTTPException(status_code=500, detail=str(e))
@@ -585,6 +684,20 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
         if deploy_state.get("active"):
             detail = str(deploy_state.get("summary") or "Active VPS deploys are still running.")
             raise HTTPException(status_code=409, detail=f"Cannot restart API server while VPS tasks are running: {detail}")
+
+        systemd_unit = _systemd_unit_for_service("api-server")
+        if systemd_unit:
+            def _do_systemd_restart() -> None:
+                time.sleep(0.3)  # let HTTP response reach the browser first
+                proc = _run_user_systemctl(["--no-block", "restart", systemd_unit], timeout=10)
+                if proc.returncode != 0:
+                    output = ((proc.stderr or "") + (proc.stdout or "")).strip()
+                    _log(SERVICE, f"[restart] systemd restart failed for {systemd_unit}: {output}", level="ERROR")
+
+            _log(SERVICE, f"[restart] systemd restart requested for {systemd_unit}", level="WARNING")
+            threading.Thread(target=_do_systemd_restart, daemon=True).start()
+            return {"ok": True, "message": "Restarting…"}
+
         pbgdir = Path(PBGDIR)
         venv_python: Optional[str] = None
         for candidate in [
