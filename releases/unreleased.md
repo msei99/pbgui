@@ -1,5 +1,8 @@
 # Unreleased
 
+- Made Existing VPS import probe use running PBGui process paths, legacy crontab paths, and common install parents when the entered install path does not contain PBGui.
+- Made the Existing VPS import hostname placeholder generic and auto-fill the IPv4 field from local `/etc/hosts` when possible.
+- Made the Existing VPS import action visible from the VPS Manager overview sidebar.
 - Added elapsed time to the master installer progress bar and stop progress polling/timing as soon as an installer job finishes or fails.
 - Fixed Local Master CPU telemetry in VPS Manager so quick detail updates refresh live CPU and the 60s CPU window from local system metrics instead of reusing a stale cached payload.
 - Added a FastAPI-based VPS Manager import flow for existing PBGui VPS hosts that probes over SSH, previews detected settings, and saves the VPS without running init or setup.

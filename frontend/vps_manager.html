@@ -2978,6 +2978,7 @@
         form: {
           hostname: '',
           ip: '',
+          auto_ip: '',
           user: '',
           user_pw: '',
           install_dir: '',
@@ -6363,6 +6364,22 @@
       });
     }
 
+    function vpsManagerGet(path, params) {
+      const query = new URLSearchParams(params || {});
+      query.set('token', TOKEN);
+      return fetch(API_BASE + path + '?' + query.toString(), {
+        headers: { 'Authorization': 'Bearer ' + TOKEN }
+      }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (data) {
+          if (!response.ok) {
+            const detail = data && data.detail ? data.detail : 'Request failed.';
+            throw new Error(String(detail));
+          }
+          return data;
+        });
+      });
+    }
+
     function sendContext() {
       if (isMasterContextView()) {
         send({ cmd: 'set_context', view: 'master' });
@@ -7165,11 +7182,67 @@
       };
     }
 
+    let existingVpsImportResolveTimer = 0;
+    let existingVpsImportResolveSeq = 0;
+
+    function resolveExistingVpsImportHost(hostname) {
+      const expected = String(hostname || '').trim();
+      const seq = ++existingVpsImportResolveSeq;
+      if (!expected) return;
+      vpsManagerGet('/import/resolve-host', { hostname: expected })
+        .then(function (data) {
+          if (seq !== existingVpsImportResolveSeq) return;
+          const flow = store.importExistingVps || defaultExistingVpsImportState();
+          const form = flow.form || {};
+          if (String(form.hostname || '').trim() !== expected) return;
+          const currentIp = String(form.ip || '').trim();
+          const autoIp = String(form.auto_ip || '').trim();
+          const foundIp = String((data && data.ip) || '').trim();
+          if (data && data.found && foundIp && (!currentIp || currentIp === autoIp)) {
+            form.ip = foundIp;
+            form.auto_ip = foundIp;
+          } else if ((!data || !data.found) && currentIp && currentIp === autoIp) {
+            form.ip = '';
+            form.auto_ip = '';
+          }
+          flow.form = form;
+          store.importExistingVps = flow;
+          const input = document.getElementById('existing-vps-import-ip');
+          if (input) input.value = form.ip || '';
+        })
+        .catch(function () {});
+    }
+
+    function scheduleExistingVpsImportHostResolve(hostname) {
+      if (existingVpsImportResolveTimer) clearTimeout(existingVpsImportResolveTimer);
+      existingVpsImportResolveTimer = 0;
+      const expected = String(hostname || '').trim();
+      if (!expected) {
+        existingVpsImportResolveSeq += 1;
+        return;
+      }
+      existingVpsImportResolveTimer = setTimeout(function () {
+        existingVpsImportResolveTimer = 0;
+        resolveExistingVpsImportHost(expected);
+      }, 250);
+    }
+
     function setExistingVpsImportField(name, value) {
       const flow = store.importExistingVps || defaultExistingVpsImportState();
       flow.form = flow.form || {};
       const oldUser = String(flow.form.user || '').trim();
       flow.form[name] = value;
+      if (name === 'ip' && String(value || '').trim() !== String(flow.form.auto_ip || '').trim()) {
+        flow.form.auto_ip = '';
+      }
+      if (name === 'hostname' && !String(value || '').trim()) {
+        if (String(flow.form.ip || '').trim() === String(flow.form.auto_ip || '').trim()) {
+          flow.form.ip = '';
+          const ipInput = document.getElementById('existing-vps-import-ip');
+          if (ipInput) ipInput.value = '';
+        }
+        flow.form.auto_ip = '';
+      }
       if (name === 'user') {
         const nextUser = String(value || '').trim();
         const oldDefault = oldUser ? '/home/' + oldUser + '/software' : '';
@@ -7190,6 +7263,7 @@
       if (preview) preview.innerHTML = `<div class='notice info'>Probe reads the existing VPS over SSH and does not run init, setup, Ansible, or remote writes.</div>`;
       const saveBtn = document.getElementById('existing-vps-save-btn');
       if (saveBtn) saveBtn.disabled = true;
+      if (name === 'hostname') scheduleExistingVpsImportHostResolve(value);
     }
 
     function renderExistingVpsImportPreview(probe) {
@@ -7257,12 +7331,13 @@
           <div class='field-grid'>
             <div class='field'>
               <label>Hostname</label>
-              <input id='existing-vps-import-hostname' type='text' value='${escAttr(form.hostname || '')}' oninput="setExistingVpsImportField('hostname', this.value)" placeholder='manibot42'>
+              <input id='existing-vps-import-hostname' type='text' value='${escAttr(form.hostname || '')}' oninput="setExistingVpsImportField('hostname', this.value)" placeholder='vps-hostname'>
               <div class='field-help'>Must already resolve in local /etc/hosts.</div>
             </div>
             <div class='field'>
               <label>VPS IPv4</label>
               <input id='existing-vps-import-ip' type='text' value='${escAttr(form.ip || '')}' oninput="setExistingVpsImportField('ip', this.value)" placeholder='203.0.113.10'>
+              <div class='field-help'>Auto-filled from local /etc/hosts when available.</div>
             </div>
             <div class='field'>
               <label>VPS user</label>
@@ -7326,6 +7401,10 @@
           next.loading = false;
           next.error = '';
           next.probe = data || null;
+          if (data && data.install_dir) {
+            next.form = next.form || {};
+            next.form.install_dir = String(data.install_dir || '');
+          }
           store.importExistingVps = next;
           renderExistingVpsImportModal();
         })
@@ -8881,9 +8960,6 @@
         const deployConfig = getVpsDeployConfig();
         const hasSelectedHosts = selectedHosts.length > 0;
         const disabledAttr = hasSelectedHosts ? '' : 'disabled';
-        const selectedLabel = hasSelectedHosts
-          ? (selectedHosts.length === 1 ? ('Selected VPS: ' + selectedHosts[0]) : ('Selected VPS: ' + selectedHosts.length + ' hosts'))
-          : 'Select VPS rows in Overview to enable deploy and update actions.';
         const settingsBtnClass = isOverviewSettingsView() ? 'sb-btn active' : 'sb-btn';
         const deployHistoryBtnClass = isDeploysView() ? 'sb-btn active' : 'sb-btn';
         const parallelBtnClass = String(deployConfig.mode || 'parallel') === 'parallel' ? 'sb-btn active' : 'sb-btn';
@@ -8894,10 +8970,10 @@
             <button class='sb-icon-btn' type='button' title='Add VPS' aria-label='Add VPS' onclick='selectView("add")'>+</button>
           </div>
           <button class='sb-status-btn ${apiModel.statusClass}' id='overview-api-sync-btn' type='button' title='${escAttr(apiModel.title || '')}' onclick='startApiSync()'>${esc(apiModel.text)}</button>
+          <button class='sb-btn info' type='button' onclick='openExistingVpsImportPrompt()'>Import Existing VPS</button>
           ${store.view !== 'overview' ? `<button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>` : ''}
           <button class='${settingsBtnClass}' type='button' onclick='selectView("settings-vps-logging")'>Settings</button>
           <button class='${deployHistoryBtnClass}' type='button' onclick='selectView("deploys-vps-logging")'>History</button>
-          <div class='sb-note'>${esc(selectedLabel)}</div>
           <div class='sb-field'>
             <div class='sb-label'>Rollout</div>
             <div class='sb-button-row'>

@@ -203,8 +203,8 @@ def _validate_import_hostname(value: Any) -> str:
     return hostname
 
 
-def _hosts_entry_status(hostname: str, ip: str) -> dict[str, Any]:
-    result = {"ok": False, "has_hostname": False, "current_ip": ""}
+def _hosts_entry_lookup(hostname: str) -> dict[str, Any]:
+    result = {"hostname": str(hostname or ""), "found": False, "ip": ""}
     hosts = Path("/etc/hosts")
     if not hosts.exists():
         return result
@@ -221,13 +221,22 @@ def _hosts_entry_status(hostname: str, ip: str) -> dict[str, Any]:
                 names = parts[1:]
                 if hostname not in names:
                     continue
-                result["has_hostname"] = True
-                result["current_ip"] = line_ip
-                if line_ip == ip:
-                    result["ok"] = True
+                result["found"] = True
+                result["ip"] = line_ip
+                if _valid_ipv4(line_ip):
                     return result
     except Exception:
         return result
+    return result
+
+
+def _hosts_entry_status(hostname: str, ip: str) -> dict[str, Any]:
+    result = {"ok": False, "has_hostname": False, "current_ip": ""}
+    lookup = _hosts_entry_lookup(hostname)
+    if lookup.get("found"):
+        result["has_hostname"] = True
+        result["current_ip"] = str(lookup.get("ip") or "")
+        result["ok"] = result["current_ip"] == str(ip or "").strip()
     return result
 
 
@@ -4079,6 +4088,116 @@ printf 'SECTION\tprocesses\tEND\n'
             if text and text not in result["blockers"]:
                 result["blockers"].append(text)
 
+        install_dir_hints: list[str] = []
+
+        def set_import_install_dir(next_install_dir: str) -> None:
+            nonlocal install_dir, pbgui_dir, pbgui_ini, python_bin, default_pb7_dir, default_pb7_venv
+            install_dir = _normalize_vps_install_dir(next_install_dir, user)
+            pbgui_dir = f"{install_dir.rstrip('/')}/pbgui"
+            pbgui_ini = f"{pbgui_dir}/pbgui.ini"
+            python_bin = f"{install_dir.rstrip('/')}/venv_pbgui/bin/python"
+            default_pb7_dir = f"{install_dir.rstrip('/')}/pb7"
+            default_pb7_venv = f"{install_dir.rstrip('/')}/venv_pb7/bin/python"
+            result["install_dir"] = install_dir
+            result["pbgui_dir"] = pbgui_dir
+            result["detected"].update({
+                "remote_pbgui_dir": pbgui_dir,
+                "pbgui_dir": pbgui_dir,
+                "pbgui_ini": pbgui_ini,
+                "python_bin": python_bin,
+                "pb7_dir": default_pb7_dir,
+                "pb7_venv": default_pb7_venv,
+            })
+
+        def install_dir_candidates() -> list[str]:
+            raw_path = str(raw_install_dir or install_dir).strip().rstrip("/") or f"/home/{user}/software"
+            paths = list(install_dir_hints) + [raw_path]
+            try:
+                raw_posix = PurePosixPath(raw_path)
+                if raw_posix.name == "pbgui":
+                    paths.append(str(raw_posix.parent))
+                paths.append(str(raw_posix / "software"))
+                if str(raw_posix.parent) and raw_posix.parent != raw_posix:
+                    paths.append(str(raw_posix.parent / "software"))
+            except Exception:
+                pass
+            paths.extend([f"/home/{user}/software", f"/home/{user}"])
+            out: list[str] = []
+            for path in paths:
+                try:
+                    candidate = _normalize_vps_install_dir(path, user)
+                except ValueError:
+                    continue
+                if candidate not in out:
+                    out.append(candidate)
+            return out
+
+        def expand_remote_user_path(path: str) -> str:
+            text = str(path or "").strip()
+            if text.startswith("~/"):
+                return f"/home/{user}/{text[2:]}"
+            if text.startswith("$HOME/"):
+                return f"/home/{user}/{text[6:]}"
+            if text.startswith("${HOME}/"):
+                return f"/home/{user}/{text[8:]}"
+            return text
+
+        def add_install_dir_hint(path: PurePosixPath | str) -> None:
+            try:
+                candidate = _normalize_vps_install_dir(expand_remote_user_path(str(path)), user)
+            except ValueError:
+                return
+            if candidate not in install_dir_hints:
+                install_dir_hints.append(candidate)
+
+        def add_process_install_dir_candidates(output: str) -> None:
+            script_pattern = r"(?:PBApiServer|PBRun|PBRemote|PBCoinData|starter)\.py"
+            absolute_pattern = re.compile(rf"(/[^\s'\"]+/{script_pattern})")
+            relative_name_pattern = re.compile(rf"(^|[\s'\"])(?:\./)?{script_pattern}($|[\s'\"])")
+            relative_pbgui_pattern = re.compile(rf"(^|[\s'\"])pbgui/{script_pattern}($|[\s'\"])")
+
+            for match in absolute_pattern.findall(str(output or "")):
+                script_dir = PurePosixPath(match).parent
+                candidates = [script_dir.parent] if script_dir.name == "pbgui" else [script_dir, script_dir.parent]
+                for path in candidates:
+                    add_install_dir_hint(path)
+
+            for line in str(output or "").splitlines():
+                parts = line.split("\t", 2)
+                if len(parts) < 3:
+                    continue
+                cwd = parts[1].strip().rstrip("/")
+                if not cwd:
+                    continue
+                args = parts[2]
+                cwd_path = PurePosixPath(cwd)
+                if cwd_path.name == "pbgui":
+                    add_install_dir_hint(cwd_path.parent)
+                elif relative_pbgui_pattern.search(args) or relative_name_pattern.search(args):
+                    add_install_dir_hint(cwd_path)
+
+        def add_cron_install_dir_candidates(lines: list[str]) -> None:
+            pbgui_path_pattern = re.compile(r"((?:/|~/|\$HOME/|\$\{HOME\}/)[^\s'\"]*/pbgui)(?:/start\.sh)?")
+            for line in lines:
+                if "pbgui" not in line or "start.sh" not in line:
+                    continue
+                for match in pbgui_path_pattern.findall(line):
+                    add_install_dir_hint(PurePosixPath(match).parent)
+
+        def detect_install_dir(sftp: Any) -> str:
+            fallback = ""
+            for candidate in install_dir_candidates():
+                base = candidate.rstrip("/")
+                candidate_ini = f"{base}/pbgui/pbgui.ini"
+                candidate_python = f"{base}/venv_pbgui/bin/python"
+                has_ini = _sftp_path_exists(sftp, candidate_ini)
+                has_python = _sftp_path_exists(sftp, candidate_python)
+                if has_ini and has_python:
+                    return candidate
+                if has_ini and not fallback:
+                    fallback = candidate
+            return fallback
+
         if hostname in self.vpsmanager.list():
             add_check("VPS Manager record", False, "Hostname already exists.")
             add_blocker("Hostname already exists in VPS Manager.")
@@ -4225,6 +4344,38 @@ printf 'SECTION\tprocesses\tEND\n'
             else:
                 add_warning((ufw_err or ufw_out or "Could not read UFW status.").strip())
 
+            proc_cmd = """ps -eo pid=,args= 2>/dev/null | grep -E '[P]BApiServer.py|[P]BRun.py|[P]BRemote.py|[P]BCoinData.py|[s]tarter.py' | while read -r pid args; do
+  [ -n "$pid" ] || continue
+  cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+  printf '%s\t%s\t%s\n' "$pid" "$cwd" "$args"
+done || true"""
+            _proc_rc, proc_out, _proc_err = self._exec_import_ssh_command(ssh, proc_cmd, timeout=8)
+            add_process_install_dir_candidates(proc_out)
+
+            cron_rc, cron_out, _cron_err = self._exec_import_ssh_command(ssh, "crontab -l 2>/dev/null || true", timeout=8)
+            cron_lines = []
+            if cron_rc == 0:
+                cron_lines = [
+                    line
+                    for line in cron_out.splitlines()
+                    if "pbgui" in line and "start.sh" in line
+                ]
+                add_cron_install_dir_candidates(cron_lines)
+
+            sftp = ssh.open_sftp()
+            try:
+                detected_install_dir = detect_install_dir(sftp)
+            finally:
+                try:
+                    sftp.close()
+                except Exception:
+                    pass
+            if detected_install_dir and detected_install_dir != install_dir:
+                original_install_dir = install_dir
+                set_import_install_dir(detected_install_dir)
+                add_check("Install path", True, f"Detected {install_dir}.")
+                add_warning(f"Install path '{original_install_dir}' did not contain PBGui; using detected path '{install_dir}'.")
+
             units = " ".join(shlex.quote(unit) for unit in VPS_SYSTEMD_MIGRATION_UNITS)
             units_cmd = f"""uid=$(id -u)
 systemctl_path=$(command -v systemctl || true)
@@ -4246,19 +4397,11 @@ done"""
             active_units = [unit for unit in systemd_units if unit.get("active") == "active"]
             add_check("systemd user units", bool(active_units), f"{len(active_units)} active unit(s).")
 
-            cron_rc, cron_out, _cron_err = self._exec_import_ssh_command(ssh, "crontab -l 2>/dev/null || true", timeout=8)
             if cron_rc == 0:
-                cron_lines = [
-                    line
-                    for line in cron_out.splitlines()
-                    if (f"{pbgui_dir}/start.sh" in line) or ("pbgui" in line and "start.sh" in line)
-                ]
                 result["detected"]["legacy_cron_lines"] = cron_lines
                 if cron_lines:
                     add_warning(f"Found {len(cron_lines)} legacy pbgui crontab line(s). Use systemd migration after import.")
 
-            proc_cmd = "ps -eo pid=,args= 2>/dev/null | grep -E 'PBApiServer.py|PBRun.py|PBRemote.py|PBCoinData.py|starter.py' | grep -v grep || true"
-            _proc_rc, proc_out, _proc_err = self._exec_import_ssh_command(ssh, proc_cmd, timeout=8)
             legacy_processes = [line.strip() for line in proc_out.splitlines() if pbgui_dir in line]
             result["detected"]["legacy_processes"] = legacy_processes
             if legacy_processes:
@@ -4330,6 +4473,16 @@ done"""
 
         result["can_save"] = not result["blockers"] and not result["needs_host_key_confirmation"]
         return result
+
+    def resolve_existing_vps_import_host(self, hostname: str) -> dict[str, Any]:
+        hostname = _validate_import_hostname(hostname)
+        lookup = _hosts_entry_lookup(hostname)
+        ip = str(lookup.get("ip") or "").strip()
+        return {
+            "hostname": hostname,
+            "found": bool(lookup.get("found") and _valid_ipv4(ip)),
+            "ip": ip if _valid_ipv4(ip) else "",
+        }
 
     def save_existing_vps_import(self, token: str, form: dict[str, Any]) -> dict[str, Any]:
         probe = self.probe_existing_vps_import(form)

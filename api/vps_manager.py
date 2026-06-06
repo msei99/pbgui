@@ -144,6 +144,19 @@ def get_metric_history(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.get("/import/resolve-host")
+def resolve_existing_vps_import_host(
+    hostname: str = Query(default="", description="Hostname to resolve from local /etc/hosts"),
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    del session
+    try:
+        data = _get_service().resolve_existing_vps_import_host(hostname)
+        return JSONResponse(content=data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/import/probe")
 def probe_existing_vps_import(
     payload: ExistingVpsImportRequest,
