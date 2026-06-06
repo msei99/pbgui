@@ -45,6 +45,20 @@ LOCAL_PREREQUISITE_COMMANDS = {
     "pkg-config": "pkg-config",
     "systemctl": "systemd user services",
 }
+LOCAL_SYSTEMD_UNITS = (
+    "pbgui-api.service",
+    "pbgui-pbrun.service",
+    "pbgui-pbdata.service",
+    "pbgui-pbcoindata.service",
+    "pbgui-pbremote.service",
+)
+PBGUI_SERVICE_SCRIPTS = {
+    "PBApiServer.py",
+    "PBRun.py",
+    "PBData.py",
+    "PBCoinData.py",
+    "PBRemote.py",
+}
 
 
 class RemoteInstallError(RuntimeError):
@@ -68,7 +82,7 @@ def default_remote_install_dir(target_user: str) -> str:
 
 def default_local_install_dir() -> str:
     """Return the default local install parent shown to users."""
-    return "~/software"
+    return _detected_local_install_dir() or "~/software"
 
 
 def default_local_master_name() -> str:
@@ -540,6 +554,104 @@ def _local_install_targets(install_dir: Path) -> dict[str, Path]:
     }
 
 
+def _same_local_path(left: Path, right: Path) -> bool:
+    """Compare local paths without requiring either path to exist."""
+    try:
+        return left.expanduser().resolve(strict=False) == right.expanduser().resolve(strict=False)
+    except OSError:
+        return str(left.expanduser()) == str(right.expanduser())
+
+
+def _local_systemd_unit_dir() -> Path:
+    """Return the current user's systemd unit directory."""
+    return Path.home() / ".config" / "systemd" / "user"
+
+
+def _local_systemd_unit_paths(unit: str) -> tuple[Path, Path]:
+    """Return the unit file and default.target symlink paths for a local unit."""
+    unit_dir = _local_systemd_unit_dir()
+    return unit_dir / unit, unit_dir / "default.target.wants" / unit
+
+
+def _pbgui_dir_from_unit_path(value: str) -> Path | None:
+    """Return a PBGui checkout directory referenced by a systemd unit value."""
+    raw = str(value or "").strip().strip('"')
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        return None
+    if path.name == "pbgui":
+        return path
+    if path.name in PBGUI_SERVICE_SCRIPTS and path.parent.name == "pbgui":
+        return path.parent
+    return None
+
+
+def _extract_pbgui_dir_from_unit_text(text: str) -> Path | None:
+    """Extract the PBGui checkout path from a generated pbgui systemd unit."""
+    for line in str(text or "").splitlines():
+        key, sep, value = line.strip().partition("=")
+        if not sep:
+            continue
+        if key == "WorkingDirectory":
+            pbgui_dir = _pbgui_dir_from_unit_path(value)
+            if pbgui_dir:
+                return pbgui_dir
+        if key == "ExecStart":
+            try:
+                tokens = shlex.split(value)
+            except ValueError:
+                tokens = value.split()
+            for token in tokens:
+                pbgui_dir = _pbgui_dir_from_unit_path(token)
+                if pbgui_dir:
+                    return pbgui_dir
+    return None
+
+
+def _local_systemd_unit_pbgui_dir(unit: str) -> Path | None:
+    """Return the PBGui checkout path referenced by a local systemd unit."""
+    for path in _local_systemd_unit_paths(unit):
+        if not path.exists() and not path.is_symlink():
+            continue
+        try:
+            pbgui_dir = _extract_pbgui_dir_from_unit_text(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if pbgui_dir:
+            return pbgui_dir
+    return None
+
+
+def _detected_local_install_dir() -> str:
+    """Detect the local install parent from existing PBGui systemd units."""
+    for unit in LOCAL_SYSTEMD_UNITS:
+        pbgui_dir = _local_systemd_unit_pbgui_dir(unit)
+        if pbgui_dir:
+            return str(pbgui_dir.parent)
+    return ""
+
+
+def _local_systemd_units_for_install(install_dir: Path, log: LogCallback) -> list[str]:
+    """Return only systemd units that are proven to belong to install_dir."""
+    selected_pbgui_dir = install_dir / "pbgui"
+    matched: list[str] = []
+    for unit in LOCAL_SYSTEMD_UNITS:
+        paths = _local_systemd_unit_paths(unit)
+        if not any(path.exists() or path.is_symlink() for path in paths):
+            continue
+        unit_pbgui_dir = _local_systemd_unit_pbgui_dir(unit)
+        if not unit_pbgui_dir:
+            log(f"Skipping systemd unit {unit}: could not verify its PBGui path.")
+            continue
+        if _same_local_path(unit_pbgui_dir, selected_pbgui_dir):
+            matched.append(unit)
+            continue
+        log(f"Skipping systemd unit {unit}: points to {unit_pbgui_dir}, not selected {selected_pbgui_dir}.")
+    return matched
+
+
 def _run_user_systemctl_best_effort(args: list[str], log: LogCallback) -> None:
     """Run systemctl --user without failing uninstall on missing units/managers."""
     systemctl = shutil.which("systemctl")
@@ -591,23 +703,17 @@ def run_local_master_uninstall(config: LocalUninstallConfig, log: LogCallback, a
             pass
 
     log(f"Uninstalling local PBGui master under: {install_dir}")
-    units = [
-        "pbgui-api.service",
-        "pbgui-pbrun.service",
-        "pbgui-pbdata.service",
-        "pbgui-pbcoindata.service",
-        "pbgui-pbremote.service",
-    ]
+    units = _local_systemd_units_for_install(install_dir, log)
+    if not units:
+        log("No systemd user units matched the selected install parent; skipping unit cleanup.")
     for unit in units:
         _run_user_systemctl_best_effort(["stop", unit], log)
     for unit in units:
         _run_user_systemctl_best_effort(["disable", unit], log)
 
-    unit_dir = Path.home() / ".config" / "systemd" / "user"
-    wants_dir = unit_dir / "default.target.wants"
     removed_units: list[str] = []
     for unit in units:
-        for path in (unit_dir / unit, wants_dir / unit):
+        for path in _local_systemd_unit_paths(unit):
             try:
                 if path.exists() or path.is_symlink():
                     path.unlink()
