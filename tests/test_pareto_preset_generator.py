@@ -179,6 +179,42 @@ def test_build_optimize_preset_uses_direction_and_existing_bounds(monkeypatch) -
     assert payload["bounds_preview_rows"]
 
 
+def test_generated_bound_float_cleanup_removes_precision_tails() -> None:
+    """Generated bounds should not expose binary float precision tails."""
+
+    assert generator._clean_generated_float(0.8691264999999999) == 0.8691265
+    assert generator._clean_generated_float(1.2937049999999999) == 1.293705
+    assert generator._clean_generated_float(10.455300000000003) == 10.4553
+    assert generator._clean_generated_float(0.012106800000000001, 0.0001) == 0.0121
+
+
+def test_near_bound_expansion_cleans_generated_bounds() -> None:
+    """Near-bound expansion should return clean JSON-ready bounds."""
+
+    bounds = {
+        "long_close_grid_markup_range": [0.8691264999999999, 0.9806135],
+        "long_close_trailing_grid_ratio": [0.012106800000000001, 0.0133812, 0.0001],
+    }
+    result = generator._build_new_bounds(
+        bounds=bounds,
+        bot_params={},
+        direction="Balanced (keep run scoring)",
+        risk_adjust=0,
+        window_pct=0,
+        near_map={
+            "long_close_grid_markup_range": {"edge": "upper"},
+            "long_close_trailing_grid_ratio": {"edge": "upper"},
+        },
+        expand_near_bounds=True,
+        near_bounds_expand_pct=25,
+    )
+
+    assert result["long_close_grid_markup_range"][0] == 0.8691265
+    assert result["long_close_trailing_grid_ratio"][0] == 0.0121
+    assert "999999" not in json.dumps(result)
+    assert "000000" not in json.dumps(result)
+
+
 def test_full_load_does_not_pin_saved_pareto_configs(tmp_path: Path) -> None:
     """Full mode should keep the load-strategy winners, not force saved paretos in."""
 

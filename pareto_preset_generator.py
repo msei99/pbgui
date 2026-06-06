@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from api.pb7_bridge import get_optimize_metric_sets, get_optimize_scoring_default_goals
@@ -258,6 +259,37 @@ def _as_bound_tuple(bound_value: Any) -> tuple[float | None, float | None, float
     return None, None, None
 
 
+def _step_decimal_places(step: float | None) -> int | None:
+    if step is None or step == 0:
+        return None
+    try:
+        value = Decimal(str(abs(float(step)))).normalize()
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    exponent = value.as_tuple().exponent
+    if exponent >= 0:
+        return 0
+    return min(abs(exponent), 12)
+
+
+def _clean_generated_float(value: float | None, step: float | None = None) -> float | None:
+    if value is None:
+        return None
+    numeric = float(value)
+    if step and abs(step - 1.0) < 1e-12:
+        return float(int(round(numeric)))
+    step_decimals = _step_decimal_places(step)
+    if step_decimals is not None:
+        return float(round(numeric, step_decimals))
+    return float(f"{numeric:.12g}")
+
+
+def _clean_generated_bounds(low: float, high: float, step: float | None) -> tuple[float, float]:
+    cleaned_low = _clean_generated_float(low, step)
+    cleaned_high = _clean_generated_float(high, step)
+    return float(cleaned_low), float(cleaned_high)
+
+
 def _tighten_bounds_around_value(low: float | None, high: float | None, value: float, pct: float, step: float | None) -> Any:
     if pct <= 0:
         return [low, high, step] if step else [low, high]
@@ -282,12 +314,11 @@ def _tighten_bounds_around_value(low: float | None, high: float | None, value: f
             new_high = min(high, new_high + expand)
 
     if step:
-        if abs(step - 1.0) < 1e-12:
-            new_low = float(int(round(new_low)))
-            new_high = float(int(round(new_high)))
-            if new_high <= new_low:
-                new_high = min(high, new_low + 1.0)
+        new_low, new_high = _clean_generated_bounds(new_low, new_high, step)
+        if new_high <= new_low:
+            new_high = min(high, new_low + step)
         return [new_low, new_high, step]
+    new_low, new_high = _clean_generated_bounds(new_low, new_high, None)
     return [new_low, new_high]
 
 
@@ -326,12 +357,11 @@ def _tighten_bounds_around_value_asymmetric(
             new_high = min(high, new_high + expand)
 
     if step:
-        if abs(step - 1.0) < 1e-12:
-            new_low = float(int(round(new_low)))
-            new_high = float(int(round(new_high)))
-            if new_high <= new_low:
-                new_high = min(high, new_low + 1.0)
+        new_low, new_high = _clean_generated_bounds(new_low, new_high, step)
+        if new_high <= new_low:
+            new_high = min(high, new_low + step)
         return [new_low, new_high, step]
+    new_low, new_high = _clean_generated_bounds(new_low, new_high, None)
     return [new_low, new_high]
 
 
@@ -642,8 +672,8 @@ def _build_new_bounds(
             else:
                 new_high = high + expand
             if step and abs(step - 1.0) < 1e-12:
-                rounded_low = float(int(round(new_low)))
-                rounded_high = float(int(round(new_high)))
+                rounded_low = _clean_generated_float(new_low, step)
+                rounded_high = _clean_generated_float(new_high, step)
                 if (abs(rounded_low - new_low) > 1e-12 or abs(rounded_high - new_high) > 1e-12) and expand_notes_out is not None:
                     prev = expand_notes_out.get(param_name)
                     expand_notes_out[param_name] = f"{prev}; rounded to integer step" if prev else "rounded to integer step"
@@ -651,6 +681,8 @@ def _build_new_bounds(
                 new_high = rounded_high
                 if new_high <= new_low:
                     new_high = new_low + 1.0
+            else:
+                new_low, new_high = _clean_generated_bounds(new_low, new_high, step)
             base_bounds[param_name] = [new_low, new_high, step] if step else [new_low, new_high]
 
     risk_enabled = bool(apply_risk_adjustments and risk_adjust != 0)

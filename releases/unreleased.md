@@ -1,5 +1,7 @@
 # Unreleased
 
+- Rounded generated Pareto preset bounds to step precision or clean significant digits so expanded ranges no longer show long floating-point tails.
+- Hardened the VPS Manager data path so it resolves the PBGui directory from the module location instead of the process working directory, avoiding `//data` permission errors when the API starts from `/`.
 - Hardened VPS systemd migration so leftover legacy PBGui processes, stale PID files, and restart-looping user services fail before legacy autostart cleanup is finalized.
 - Made the VPS monitor restart PBRun, PBRemote, and PBCoinData through remote systemd user units when they exist, preventing legacy `nohup starter.py` restarts from racing systemd migration.
 - Made `starter.py` and VPS systemd migration systemd-aware so older masters that still call `starter.py -r` on migrated slaves do not create orphan PBRun/PBRemote processes.

@@ -19,7 +19,7 @@ import paramiko
 from logging_helpers import human_log as _log
 from pbgui_purefunc import load_ini, pb7dir, pb7venv, save_ini
 
-PBGDIR = Path.cwd()
+PBGDIR = Path(__file__).resolve().parent
 PB7DIR = pb7dir()
 PB7VENV = pb7venv()
 TASK_LOG_HISTORY_DEFAULT = 10
