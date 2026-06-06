@@ -268,10 +268,9 @@
       ignore_errors: yes
 
     - name: Make sure PBRun ist running
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -s PBRun
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
+      script: setup/vps_service_control.sh start PBRun
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"
       listen: "restart pb7"

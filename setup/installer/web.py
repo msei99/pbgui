@@ -32,6 +32,7 @@ from .core import (
     run_local_master_uninstall,
     run_remote_master_install,
 )
+from .ssh import probe_ssh_host_key
 
 _JOBS: dict[str, dict] = {}
 _JOBS_LOCK = threading.Lock()
@@ -288,7 +289,8 @@ def _html() -> str:
           <option value="sudo">Existing sudo user</option>
         </select>
       </label>
-      <label class="remote-only">VPS IP or hostname <input name="remote_host" required placeholder="1.2.3.4"></label>
+      <label class="remote-only">VPS IP or hostname <input name="remote_host" id="remote-host" required placeholder="1.2.3.4"></label>
+      <label class="remote-only">SSH port <input name="ssh_port" id="ssh-port" type="number" value="22" min="1" max="65535"></label>
       <label class="remote-only">SSH username <input name="ssh_username" id="ssh-username" value="root"></label>
       <label class="remote-only">SSH password
         <span class="password-wrap">
@@ -343,6 +345,13 @@ def _html() -> str:
         Not secure, not recommended. SSH will be reachable from the public internet. Use this only temporarily if you understand the risk.<br>
         <label style="margin-top:8px"><input type="checkbox" id="ssh-risk" style="height:auto"> I understand that public SSH access is not recommended.</label>
       </div>
+      <div class="danger-panel full remote-only" id="fresh-host-warning">
+        <strong>Remote Master install is intended for a fresh VPS.</strong>
+        <span>It may change hostname, users, passwords, swap, firewall rules, OpenVPN, packages, and PBGui systemd services on the target.</span>
+        <label><input type="checkbox" name="confirm_fresh_host" id="confirm-fresh-host" value="yes" style="height:auto"> I confirm this target is a fresh/disposable VPS prepared for PBGui Master install.</label>
+        <input type="hidden" name="accept_unknown_host" id="accept-unknown-host" value="">
+        <input type="hidden" name="accepted_host_key_fingerprint" id="accepted-host-key-fingerprint" value="">
+      </div>
       <div class="danger-panel full uninstall-only" id="uninstall-warning">
         <strong>Local uninstall removes PBGui/PB7 checkouts, virtualenvs, and PBGui systemd user services under the selected parent directory.</strong>
         <span>After clicking Uninstall Local Master, a safety dialog will ask for one final confirmation.</span>
@@ -371,6 +380,17 @@ def _html() -> str:
     </div>
   </div>
 </div>
+<div class="modal-backdrop" id="host-key-modal" role="dialog" aria-modal="true" aria-labelledby="host-key-modal-title">
+  <div class="modal">
+    <h3 id="host-key-modal-title">Confirm SSH Host Key</h3>
+    <p id="host-key-modal-message"></p>
+    <p>If this fingerprint does not match your VPS provider console, cancel and verify the target before installing.</p>
+    <div class="modal-actions">
+      <button type="button" class="secondary" id="host-key-cancel-btn">Cancel</button>
+      <button type="button" class="danger-button" id="host-key-confirm-btn">Trust Host Key and Install</button>
+    </div>
+  </div>
+</div>
 <script>
 const form = document.getElementById('install-form');
 const logEl = document.getElementById('log');
@@ -388,6 +408,12 @@ const uninstallModal = document.getElementById('uninstall-modal');
 const uninstallModalMessage = document.getElementById('uninstall-modal-message');
 const uninstallCancelBtn = document.getElementById('uninstall-cancel-btn');
 const uninstallConfirmBtn = document.getElementById('uninstall-confirm-btn');
+const hostKeyModal = document.getElementById('host-key-modal');
+const hostKeyModalMessage = document.getElementById('host-key-modal-message');
+const hostKeyCancelBtn = document.getElementById('host-key-cancel-btn');
+const hostKeyConfirmBtn = document.getElementById('host-key-confirm-btn');
+const remoteHost = document.getElementById('remote-host');
+const sshPort = document.getElementById('ssh-port');
 const sshIpsWrap = document.getElementById('ssh-ips-wrap');
 const sshAllowedIps = document.getElementById('ssh-allowed-ips');
 const loginMode = document.getElementById('login-mode');
@@ -403,6 +429,9 @@ const swapSizeSelect = document.getElementById('swap-size-select');
 const swapCustomWrap = document.getElementById('swap-custom-wrap');
 const swapCustom = document.getElementById('swap-custom');
 const swapSizeValue = document.getElementById('swap-size-value');
+const confirmFreshHost = document.getElementById('confirm-fresh-host');
+const acceptUnknownHost = document.getElementById('accept-unknown-host');
+const acceptedHostKeyFingerprint = document.getElementById('accepted-host-key-fingerprint');
 const defaultTargetUser = %%TARGET_USER_JSON%%;
 const defaultLocalInstallDir = %%LOCAL_INSTALL_DIR_JSON%%;
 const defaultLocalMasterName = %%LOCAL_MASTER_NAME_JSON%%;
@@ -415,6 +444,7 @@ let installDirTouched = false;
 let masterNameTouched = false;
 let bindHostTouched = false;
 let pendingUninstallConfirm = null;
+let pendingHostKeyConfirm = null;
 function defaultInstallDir() {
   if (installMode.value === 'local' || installMode.value === 'local-uninstall') return defaultLocalInstallDir;
   const user = (targetUser.value || defaultTargetUser || 'pbgui').trim() || 'pbgui';
@@ -678,10 +708,73 @@ uninstallConfirmBtn.addEventListener('click', () => {
   pendingUninstallConfirm = null;
   if (onConfirm) onConfirm();
 });
-function startJob(confirmedUninstall) {
+function showStartError(message) {
+  startBtn.disabled = false;
+  resultEl.style.display = 'grid';
+  resultEl.innerHTML = '<strong style="color:var(--danger)">' + escapeHtml(message) + '</strong>';
+}
+function resetHostKeyAcceptance() {
+  acceptUnknownHost.value = '';
+  acceptedHostKeyFingerprint.value = '';
+}
+function openHostKeyConfirmModal(info, onConfirm) {
+  pendingHostKeyConfirm = onConfirm;
+  hostKeyModalMessage.innerHTML = 'Unknown SSH host key for <strong>' + escapeHtml(info.host || '') + ':' + escapeHtml(info.port || '') + '</strong><br>Key type: <strong>' + escapeHtml(info.key_type || '') + '</strong><br>Fingerprint: <strong>' + escapeHtml(info.fingerprint || '') + '</strong>';
+  hostKeyModal.style.display = 'flex';
+  hostKeyCancelBtn.focus();
+}
+function closeHostKeyConfirmModal() {
+  hostKeyModal.style.display = 'none';
+  pendingHostKeyConfirm = null;
+  startBtn.focus();
+}
+hostKeyCancelBtn.addEventListener('click', closeHostKeyConfirmModal);
+hostKeyConfirmBtn.addEventListener('click', () => {
+  const onConfirm = pendingHostKeyConfirm;
+  hostKeyModal.style.display = 'none';
+  pendingHostKeyConfirm = null;
+  if (onConfirm) onConfirm();
+});
+function preflightRemoteHostKey(confirmedUninstall) {
+  const host = (remoteHost.value || '').trim();
+  const port = (sshPort.value || '22').trim();
+  if (!host) { showStartError('Remote host is required.'); return; }
+  resetHostKeyAcceptance();
+  startBtn.disabled = true;
+  resultEl.style.display = 'grid';
+  resultEl.innerHTML = '<span style="color:var(--muted)">Checking SSH host key...</span>';
+  fetch('/api/ssh-host-key?host=' + encodeURIComponent(host) + '&port=' + encodeURIComponent(port))
+    .then(r => r.json().then(data => ({ok:r.ok, data})))
+    .then(({ok, data}) => {
+      startBtn.disabled = false;
+      if (!ok) { showStartError(data.error || 'Could not read SSH host key.'); return; }
+      if (data.mismatch) {
+        showStartError('SSH host key mismatch. Refusing to connect until known_hosts is fixed intentionally. Presented key: ' + (data.key_type || '') + ' ' + (data.fingerprint || ''));
+        return;
+      }
+      if (!data.known) {
+        openHostKeyConfirmModal(data, () => {
+          acceptUnknownHost.value = 'yes';
+          acceptedHostKeyFingerprint.value = data.fingerprint || '';
+          startJob(confirmedUninstall, true);
+        });
+        return;
+      }
+      startJob(confirmedUninstall, true);
+    })
+    .catch(err => { showStartError('Could not read SSH host key: ' + err); });
+}
+function startJob(confirmedUninstall, confirmedHostKey) {
   if (installMode.value === 'remote' && sshMode.value === 'anywhere' && !sshRisk.checked) {
-    resultEl.style.display = 'grid';
-    resultEl.innerHTML = '<strong style="color:var(--danger)">Please confirm the public SSH warning before continuing.</strong>';
+    showStartError('Please confirm the public SSH warning before continuing.');
+    return;
+  }
+  if (installMode.value === 'remote' && !confirmFreshHost.checked) {
+    showStartError('Please confirm this is a fresh/disposable VPS before continuing.');
+    return;
+  }
+  if (installMode.value === 'remote' && !confirmedHostKey) {
+    preflightRemoteHostKey(confirmedUninstall);
     return;
   }
   if (installMode.value === 'local-uninstall' && !confirmedUninstall) {
@@ -700,7 +793,7 @@ function startJob(confirmedUninstall) {
 }
 form.addEventListener('submit', ev => {
   ev.preventDefault();
-  startJob(false);
+  startJob(false, false);
 });
 </script>
 </body>
@@ -746,6 +839,25 @@ class InstallerHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/public-ip":
             self._send_json({"ip": detect_public_ip()})
+            return
+        if parsed.path == "/api/ssh-host-key":
+            query = urllib.parse.parse_qs(parsed.query)
+            host = str(query.get("host", [""])[0]).strip()
+            try:
+                port = int(query.get("port", ["22"])[0] or 22)
+            except ValueError:
+                self._send_json({"error": "SSH port must be a number."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            if not (1 <= port <= 65535):
+                self._send_json({"error": "SSH port must be between 1 and 65535."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            if not host:
+                self._send_json({"error": "Remote host is required."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                self._send_json(probe_ssh_host_key(host, port))
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
         if parsed.path in {"/download/ovpn", "/download/totp"}:
             job_id = urllib.parse.parse_qs(parsed.query).get("job", [""])[0]

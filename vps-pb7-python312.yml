@@ -18,7 +18,7 @@
   vars:
     ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"
-    install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
+    install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
     pb7_requirements_file: "{{ install_dir }}/pb7/requirements-live.txt"
 
   tasks:
@@ -28,12 +28,11 @@
       tags: debug,never
 
     - name: Stop PBRun + PBRemote
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -k PBRun PBRemote
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
+      script: setup/vps_service_control.sh stop PBRun PBRemote
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"
       ignore_errors: yes
 
     - name: kill all pb7 processes (bots)
@@ -245,9 +244,8 @@
         free_after_cleanup_mb: "{{ (pb7_disk_after_cleanup.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
 
     - name: Start PBRun + PBRemote
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -s PBRun PBRemote
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
+      script: setup/vps_service_control.sh start PBRun PBRemote
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"

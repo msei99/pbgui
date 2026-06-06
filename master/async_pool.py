@@ -15,6 +15,7 @@ import glob
 import io
 import json
 import re
+import shlex
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -31,6 +32,26 @@ SERVICE = "SSH"
 
 # Remote PBGui directory on VPS (relative to home)
 REMOTE_PBGUI_DIR = "software/pbgui"
+
+
+def remote_path_join(base: str | None, *parts: str) -> str:
+    """Join a remote base path with path parts without changing absolute paths."""
+    base_path = str(base or REMOTE_PBGUI_DIR).strip().rstrip("/") or REMOTE_PBGUI_DIR
+    tail = "/".join(str(part or "").strip("/") for part in parts if str(part or "").strip("/"))
+    return f"{base_path}/{tail}" if tail else base_path
+
+
+def remote_shell_path(path: str | None) -> str:
+    """Return a shell expression for a remote path relative to HOME or absolute."""
+    raw = str(path or "").strip().rstrip("/")
+    if not raw or raw == "~":
+        return '"$HOME"'
+    if raw.startswith("~/"):
+        suffix = raw[2:].strip("/")
+        return '"$HOME"' + (f"/{shlex.quote(suffix)}" if suffix else "")
+    if raw.startswith("/"):
+        return shlex.quote(raw)
+    return f'"$HOME"/{shlex.quote(raw)}'
 
 
 class ConnectionStatus(Enum):
@@ -718,7 +739,7 @@ class AsyncSSHPool:
         remote_pbgui_dir = str(remote_pbgui_dir or '').strip().rstrip('/')
         if not remote_pbgui_dir:
             return False
-        base_expr = remote_pbgui_dir if remote_pbgui_dir.startswith('/') else f'$HOME/{remote_pbgui_dir}'
+        base_expr = remote_shell_path(remote_pbgui_dir)
         cmd = (
             f'base={base_expr}; '
             f'test -d "$base" && '

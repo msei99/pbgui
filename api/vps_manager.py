@@ -212,6 +212,14 @@ async def ws_vps_manager(websocket: WebSocket):
                         debug=bool(msg.get("debug")),
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "preview_vps_systemd_migration":
+                    data = await asyncio.to_thread(
+                        service.preview_vps_systemd_migration,
+                        token,
+                        str(msg.get("hostname") or ""),
+                        msg.get("form") or {},
+                    )
+                    await websocket.send_json({"type": "vps_systemd_migration_preview", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "delete_vps":
                     await asyncio.to_thread(service.delete_vps, str(msg.get("hostname") or ""))
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True})

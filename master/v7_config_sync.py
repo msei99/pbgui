@@ -27,13 +27,10 @@ from pathlib import Path
 from typing import Optional
 
 from logging_helpers import human_log as _log
+from master.async_pool import remote_path_join
 from pbgui_purefunc import PBGDIR, STATUS_V7_FILE, SYNC_EXCLUDE_FILES
 
 SERVICE = "V7ConfigSync"
-
-# Remote pbgui data dir (relative to home)
-REMOTE_PBGUI_DIR = "software/pbgui"
-REMOTE_RUN_V7 = f"{REMOTE_PBGUI_DIR}/data/run_v7"
 
 # Local v7 config directory
 LOCAL_RUN_V7 = Path(PBGDIR) / "data" / "run_v7"
@@ -199,19 +196,21 @@ class V7ConfigSyncWorker:
         - running_version.txt per inst → trigger immediate instance collection
         """
         paths = []
+        remote_pbgui_dir = self.pool.get_remote_pbgui_dir(hostname)
+        remote_run_v7 = remote_path_join(remote_pbgui_dir, "data", "run_v7")
 
         # Watch status_v7.json in data/cmd/
-        remote_cmd_dir = f"{REMOTE_PBGUI_DIR}/data/cmd"
+        remote_cmd_dir = remote_path_join(remote_pbgui_dir, "data", "cmd")
         if await self.pool.stat_remote(hostname, remote_cmd_dir):
             paths.append(f"{remote_cmd_dir}/status_v7.json")
 
         # Watch running_version.txt per instance
-        entries = await self.pool.list_remote_dir(hostname, REMOTE_RUN_V7)
+        entries = await self.pool.list_remote_dir(hostname, remote_run_v7)
         if entries:
             for entry in entries:
                 if entry.startswith("."):
                     continue
-                dir_path = f"{REMOTE_RUN_V7}/{entry}"
+                dir_path = remote_path_join(remote_run_v7, entry)
                 if await self.pool.stat_remote(hostname, dir_path):
                     paths.append(f"{dir_path}/running_version.txt")
 
@@ -359,7 +358,9 @@ class V7ConfigSyncWorker:
         - Instance in remote but not local → create + pull.
         - Instance in local but not remote → backup + delete locally.
         """
-        remote_path = f"{REMOTE_PBGUI_DIR}/data/cmd/status_v7.json"
+        remote_path = remote_path_join(
+            self.pool.get_remote_pbgui_dir(hostname), "data", "cmd", "status_v7.json"
+        )
         raw = await self.pool.read_remote_file(hostname, remote_path)
         if raw is None:
             _log(SERVICE, f"[reconcile] {hostname}: could not read "
@@ -486,7 +487,9 @@ class V7ConfigSyncWorker:
     async def _pull_instance_configs(self, hostname: str,
                                      instance_name: str):
         """Pull all syncable config files for an instance from VPS."""
-        remote_dir = f"{REMOTE_RUN_V7}/{instance_name}"
+        remote_dir = remote_path_join(
+            self.pool.get_remote_pbgui_dir(hostname), "data", "run_v7", instance_name
+        )
         entries = await self.pool.list_remote_dir(hostname, remote_dir)
         if not entries:
             _log(SERVICE, f"[pull] {hostname}/{instance_name}: "

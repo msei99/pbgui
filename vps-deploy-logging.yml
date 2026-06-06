@@ -41,18 +41,9 @@
         no_extra_spaces: true
       loop: "{{ vps_logging_services | default([]) }}"
 
-    - name: restart PBRun and PBRemote after logging deploy
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -r PBRun PBRemote
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
-
-    - name: restart PBCoinData after logging deploy
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -r PBCoinData
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
+    - name: restart PBRun PBRemote and PBCoinData after logging deploy
+      script: setup/vps_service_control.sh restart PBRun PBRemote PBCoinData
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"

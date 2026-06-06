@@ -390,6 +390,7 @@
       display: grid;
       gap: 12px;
       grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      align-items: start;
     }
 
     .field {
@@ -2962,6 +2963,7 @@
         user_sudo: '',
         user_sudo_pw: '',
         swap: '0',
+        install_dir: '',
         bucket: '',
         coinmarketcap_api_key: '',
         firewall: false,
@@ -5763,6 +5765,95 @@
       }, 100);
     }
 
+    function previewVpsSystemdMigration(hostname) {
+      const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
+      function sendPreview() {
+        send({
+          cmd: 'preview_vps_systemd_migration',
+          hostname: hostname,
+          form: buildSecretAwareForm(hostname, ui.form)
+        });
+      }
+      if (!String(getEffectiveVpsUserPw(hostname) || '').trim() && !hasSessionSecret(hostname, 'user_pw')) {
+        openPasswordPrompt(hostname, function () {
+          sendPreview();
+        }, {
+          title: 'VPS User Password Required',
+          message: 'Enter the VPS user password to preview the systemd migration:',
+          confirmLabel: 'Preview'
+        });
+        return;
+      }
+      sendPreview();
+    }
+
+    function renderVpsSystemdMigrationPreview(data) {
+      const checks = Array.isArray(data.checks) ? data.checks : [];
+      const actions = Array.isArray(data.actions) ? data.actions : [];
+      const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+      const blockers = Array.isArray(data.blockers) ? data.blockers : [];
+      const units = Array.isArray(data.units) ? data.units : [];
+      const cronLines = Array.isArray(data.legacy_cron_lines) ? data.legacy_cron_lines : [];
+      const processes = Array.isArray(data.legacy_processes) ? data.legacy_processes : [];
+      function section(title, body) {
+        return `<div style='display:grid;gap:8px'><div class='panel-title' style='font-size:var(--fs-md)'>${esc(title)}</div>${body}</div>`;
+      }
+      function rows(items, emptyText) {
+        if (!items.length) return `<div class='field-help'>${esc(emptyText || 'None')}</div>`;
+        return `<div style='display:grid;gap:6px'>${items.map(function (item) { return `<div class='status-item'><div class='status-label'>${esc(String(item.label || ''))}</div><div class='status-value'>${boolDot(!!item.ok)}</div><div class='status-sub'>${esc(String(item.detail || ''))}</div></div>`; }).join('')}</div>`;
+      }
+      const actionRows = actions.length
+        ? `<div style='display:grid;gap:6px'>${actions.map(function (item) {
+            const actionState = item.needed ? `<span class='dot warning'></span>Will change` : boolDot(true);
+            return `<div class='status-item'><div class='status-label'>${esc(String(item.label || ''))}</div><div class='status-value'>${actionState}</div><div class='status-sub'>${esc(String(item.detail || ''))}</div></div>`;
+          }).join('')}</div>`
+        : `<div class='field-help'>No changes required.</div>`;
+      const unitRows = units.length
+        ? `<div class='table-wrap'><table><thead><tr><th>Unit</th><th>File</th><th>Enabled</th><th>Active</th></tr></thead><tbody>${units.map(function (unit) {
+            return `<tr><td>${esc(unit.unit || '')}</td><td>${esc(unit.exists || '')}</td><td>${esc(unit.enabled || '')}</td><td>${esc(unit.active || '')}</td></tr>`;
+          }).join('')}</tbody></table></div>`
+        : `<div class='field-help'>No unit status available.</div>`;
+      const cronHtml = cronLines.length
+        ? `<pre style='white-space:pre-wrap;max-height:120px;overflow:auto'>${esc(cronLines.join('\n'))}</pre>`
+        : `<div class='field-help'>No matching crontab lines found.</div>`;
+      const processHtml = processes.length
+        ? `<pre style='white-space:pre-wrap;max-height:160px;overflow:auto'>${esc(processes.join('\n'))}</pre>`
+        : `<div class='field-help'>No matching legacy PBGui processes found.</div>`;
+      return `
+        <div style='display:grid;gap:14px'>
+          <div class='notice info'>Preview for <strong>${esc(data.hostname || '')}</strong>. Migration will remove legacy VPS autostart files and switch PBGui services to systemd user units.</div>
+          ${blockers.length ? `<div class='notice error'><strong>Migration blocked:</strong><br>${blockers.map(esc).join('<br>')}</div>` : ''}
+          ${warnings.length ? `<div class='notice warning'><strong>Warnings:</strong><br>${warnings.map(esc).join('<br>')}</div>` : ''}
+          ${section('Checks', rows(checks, 'No checks available.'))}
+          ${section('Planned Changes', actionRows)}
+          ${section('Systemd Units', unitRows)}
+          ${section('Crontab Lines To Remove', cronHtml)}
+          ${section('Legacy Processes To Stop', processHtml)}
+        </div>`;
+    }
+
+    function openVpsSystemdMigrationPreview(data) {
+      const payload = data || {};
+      const hostname = String(payload.hostname || store.hostname || '');
+      prepareAlertModalWindow(980, 820);
+      document.getElementById('alertModalTitle').textContent = 'Systemd Migration Preview';
+      const box = document.getElementById('alertModalBody');
+      box.className = 'notice bucket-cleanup-body';
+      box.innerHTML = renderVpsSystemdMigrationPreview(payload);
+      document.getElementById('alertModalBtnRow').innerHTML = payload.can_migrate
+        ? '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" id="systemd-migrate-confirm">Migrate to systemd</button>'
+        : '<button class="btn ghost" type="button" onclick="closeAlertModal()">Close</button>';
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      const migrateBtn = document.getElementById('systemd-migrate-confirm');
+      if (migrateBtn) {
+        migrateBtn.onclick = function () {
+          closeAlertModal();
+          runVpsWithLog(hostname, 'vps-migrate-systemd', 'Migrate to systemd', null, true);
+        };
+      }
+      setTimeout(function() { box.scrollTop = 0; }, 0);
+    }
+
     function openBucketCleanupPreview() {
       send({ cmd: 'preview_bucket_cleanup' });
     }
@@ -6425,6 +6516,10 @@
       }
       if (msg.type === 'result') {
         handleResult(msg);
+        return;
+      }
+      if (msg.type === 'vps_systemd_migration_preview') {
+        openVpsSystemdMigrationPreview(msg.data || {});
         return;
       }
       if (msg.type === 'bucket_cleanup_indicator_result') {
@@ -7193,6 +7288,11 @@
         store.addForm.coinmarketcap_api_key = String(config.coinmarketcap_api_key || '').trim();
         changed = true;
       }
+      const installUser = String(store.addForm.user || config.local_user || '').trim();
+      if (!String(store.addForm.install_dir || '').trim() && installUser) {
+        store.addForm.install_dir = '/home/' + installUser + '/software';
+        changed = true;
+      }
       if (changed && store.view === 'add') {
         setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
         setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
@@ -7859,9 +7959,10 @@
         if (!(form.initial_root_pw && form.root_pw)) return false;
       }
       const hasSwap = !!String(form.swap || '').trim();
+      const hasInstallDir = !!String(form.install_dir || '').trim();
       const hasBucket = !!String(form.bucket || '').trim();
       const hasCmc = !!String(form.coinmarketcap_api_key || '').trim();
-      if (!hasSwap || !hasBucket || !hasCmc) return false;
+      if (!hasSwap || !hasInstallDir || !hasBucket || !hasCmc) return false;
       const bucketCheckOk = !!(store.addBucketCheck || {}).ok;
       const cmcCheckOk = !!(store.addCmcCheck || {}).ok;
       if (!bucketCheckOk || !cmcCheckOk) return false;
@@ -7874,10 +7975,11 @@
       const hostname = String(form.hostname || store.hostname || '');
       const hasUserPw = !!String(form.user_pw || '').trim() || !!String(hostname ? getEffectiveVpsUserPw(hostname) : '').trim() || (hostname ? hasSessionSecret(hostname, 'user_pw') : false);
       const hasSwap = !!String(form.swap || '').trim();
+      const hasInstallDir = !!String(form.install_dir || '').trim();
       const hasBucket = !!String(form.bucket || '').trim();
       const hasCmc = !!String(form.coinmarketcap_api_key || '').trim();
       const fwCheck = validateFirewallIps(form.firewall_ssh_ips);
-      return hasUserPw && hasSwap && hasBucket && hasCmc && fwCheck.ok;
+      return hasUserPw && hasSwap && hasInstallDir && hasBucket && hasCmc && fwCheck.ok;
     }
 
     function canSaveForm(form, savedForm) {
@@ -8522,7 +8624,8 @@
           <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='vpsActionWithPw(${js(selectedHost)}, "vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
           <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='openSwapResizePrompt(${js(selectedHost)})'>Resize Swap</button>
           <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='openFirewallSettingsPrompt(${js(selectedHost)})'>Update Firewall Settings</button>
-          <button class='sb-btn' type='button' onclick='openCoinDataPrompt(${js(selectedHost)})'>Update CoinData API</button>`;
+          <button class='sb-btn' type='button' onclick='openCoinDataPrompt(${js(selectedHost)})'>Update CoinData API</button>
+          <button class='sb-btn warning' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='previewVpsSystemdMigration(${js(selectedHost)})'>Preview systemd migration</button>`;
       } else if (store.view === 'add') {
         html = `
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>
@@ -9021,6 +9124,11 @@
                 ${renderVisibilityInput('password', form.user_pw, "setAddField('user_pw', this.value)", 'Show or hide VPS user password', 'add.user_pw')}
               </div>
               <div class='field'>
+                <label>Install Path</label>
+                <input type='text' value='${escAttr(form.install_dir || '')}' oninput="setAddField('install_dir', this.value)" placeholder='/home/user/software'>
+                <div class='field-help'>Parent directory for pbgui, pb7, and virtualenvs.</div>
+              </div>
+              <div class='field'>
                 <label>Swap Size</label>
                 <select onchange="setAddField('swap', this.value)">
                   ${swapOptions.map(function (option) {
@@ -9070,6 +9178,7 @@
       const hasHostname = !!String(currentForm.hostname || '').trim();
       const hasUser = !!String(currentForm.user || '').trim();
       const hasUserPw = !!String(currentForm.user_pw || '').trim();
+      const installDir = String(currentForm.install_dir || '').trim();
       const initMethod = String(currentForm.init_methode || 'root');
       let initMethodReady = false;
       let initMethodLabel = 'Init method';
@@ -9097,14 +9206,16 @@
       const cmcOk = hasCmc && cmcCheck.ok;
       const fwCheck = validateFirewallIps(currentForm.firewall_ssh_ips);
       const fwOk = fwCheck.ok;
-      const setupReady = bucketOk && cmcOk && fwOk;
+      const setupReady = !!installDir && bucketOk && cmcOk && fwOk;
       let initReadySub;
       if (canInit) {
         initReadySub = 'All required fields are set';
       } else if (userPwInvalid || initPwInvalid) {
         initReadySub = 'Password contains invalid characters {{ or }}';
       } else if (!setupReady) {
-        if (!bucketOk) {
+        if (!installDir) {
+          initReadySub = 'Install path missing';
+        } else if (!bucketOk) {
           initReadySub = String(bucketCheck.error || '') || 'PBRemote bucket check failed';
         } else if (!cmcOk) {
           initReadySub = String(cmcCheck.error || '') || 'CoinMarketCap API key check failed';
@@ -9123,6 +9234,7 @@
           ${addStatusCard('Hostname', hasHostname, hasHostname ? String(currentForm.hostname).trim() : 'Missing VPS hostname')}
           ${addStatusCard('VPS user', hasUser, hasUser ? String(currentForm.user).trim() : 'Missing VPS user name')}
           ${addStatusCard('VPS user password', hasUserPw && !userPwInvalid, hasUserPw ? (userPwInvalid ? 'Contains invalid characters {{ or }}' : 'User password set') : 'Missing VPS user password')}
+          ${addStatusCard('Install path', !!installDir, installDir || 'Missing install path')}
           ${addStatusCard(initMethodLabel, initMethodReady && !initPwInvalid, initMethodReady ? (initPwInvalid ? 'Contains invalid characters {{ or }}' : initMethodSub) : initMethodSub)}
         </div>`;
     }
@@ -9997,6 +10109,11 @@
                 <label>VPS User Password</label>
                 ${renderVisibilityInput('password', ui.form.user_pw || '', `setVpsField(${js(detail.hostname)}, 'user_pw', this.value)`, 'Show or hide VPS user password', vpsUserPwVisibilityKey, detail.hostname, 'user_pw')}
                 ${renderSecretHint(detail.hostname, 'user_pw')}
+              </div>
+              <div class='field'>
+                <label>Install Path</label>
+                <input type='text' value='${escAttr(ui.form.install_dir || '')}' oninput="setVpsField(${js(detail.hostname)}, 'install_dir', this.value)" placeholder='/home/user/software'>
+                <div class='field-help'>Parent directory for pbgui, pb7, and virtualenvs.</div>
               </div>
               <div class='field'>
                 <label>Swap Size</label>

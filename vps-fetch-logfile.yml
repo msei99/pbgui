@@ -14,7 +14,7 @@
     vps_dir: "{{ vps_dir }}"
     logfile: "{{ logfile }}"
     # user_pw: "{{ user_pw }}"
-    install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
+    install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
     logs_dir: "{{ install_dir }}/pbgui/data"
 
   tasks:

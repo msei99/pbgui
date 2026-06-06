@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from master.async_pool import AsyncSSHPool, REMOTE_PBGUI_DIR
+from master.async_pool import AsyncSSHPool, remote_path_join, remote_shell_path
 from logging_helpers import human_log as _log
 from pbgui_purefunc import pb7dir
 
@@ -54,6 +54,28 @@ def _is_home_relative_log_path(log_path: str) -> bool:
 def resolve_bot_log_path(instance_name: str, pb_version: str) -> str:
     """Resolve a bot instance to its remote log file path (passivbot's own log)."""
     return f"software/pb7/logs/{instance_name}.log"
+
+
+def _bot_log_path_from_pb7dir(pb7dir_value: str | None, instance_name: str) -> str:
+    """Return the remote bot log path using cached pb7dir when available."""
+    if pb7dir_value:
+        return remote_path_join(pb7dir_value, "logs", f"{instance_name}.log")
+    return resolve_bot_log_path(instance_name, "7")
+
+
+def _pb7dir_for_host(pool: AsyncSSHPool, hostname: str) -> str:
+    """Return cached remote pb7dir for a host, if the ini cache has it."""
+    entry = pool.get_connection(hostname)
+    return str((entry.data or {}).get("pb7dir") or "") if entry else ""
+
+
+def _remote_log_shell_path(pool: AsyncSSHPool, hostname: str, log_path: str) -> str:
+    """Resolve a remote log path to a shell-safe absolute/HOME expression."""
+    if log_path.startswith("software/pb7/logs/"):
+        pb7dir_value = _pb7dir_for_host(pool, hostname)
+        if pb7dir_value:
+            return remote_shell_path(remote_path_join(pb7dir_value, "logs", Path(log_path).name))
+    return remote_shell_path(log_path)
 
 
 def resolve_local_bot_log_path(instance_name: str) -> Path:
@@ -290,7 +312,7 @@ class AsyncLogStreamer:
         # pbgui base dir. Relative paths like data/logs/PBRun.log must still be
         # resolved below each remote pbgui candidate.
         if _is_home_relative_log_path(log_path):
-            full_path = f"~/{log_path}"
+            full_path = _remote_log_shell_path(self._pool, hostname, log_path)
             if lines == 0:
                 cmd = f"cat {full_path} 2>/dev/null"
             else:
@@ -304,7 +326,7 @@ class AsyncLogStreamer:
             return ""
 
         for base_dir in self._pool.get_remote_pbgui_dirs(hostname):
-            full_path = f"~/{base_dir}/{log_path}"
+            full_path = remote_shell_path(remote_path_join(base_dir, log_path))
             if lines == 0:
                 cmd = f"cat {full_path} 2>/dev/null"
             else:
@@ -326,7 +348,9 @@ class AsyncLogStreamer:
         manages rotation internally; the stable filename always points to the
         current run.
         """
-        log_path = f"~/software/pb7/logs/{instance_name}.log"
+        log_path = remote_shell_path(
+            _bot_log_path_from_pb7dir(_pb7dir_for_host(self._pool, hostname), instance_name)
+        )
         if lines == 0:
             cmd = f"cat {log_path} 2>/dev/null"
         else:
@@ -342,8 +366,16 @@ class AsyncLogStreamer:
         if service_or_path.startswith("Bot:"):
             parts = service_or_path[4:].strip().split(":")
             bot_name = parts[0]
-            pv = parts[1] if len(parts) > 1 else pb_version
-            log_path = resolve_bot_log_path(bot_name, pv or "7")
+            log_path = _bot_log_path_from_pb7dir(_pb7dir_for_host(self._pool, hostname), bot_name)
+            full_path = remote_shell_path(log_path)
+            result = await self._pool.run(
+                hostname, f"stat -c '%s' {full_path} 2>/dev/null", timeout=10
+            )
+            if result and result.exit_status == 0:
+                output = (result.stdout or "").strip()
+                if output.isdigit():
+                    return {"size": int(output)}
+            return None
         else:
             log_path = _resolve_log_path(service_or_path)
 
@@ -351,7 +383,7 @@ class AsyncLogStreamer:
         # pbgui base dir. Relative paths like data/logs/PBRun.log must still be
         # resolved below each remote pbgui candidate.
         if _is_home_relative_log_path(log_path):
-            full_path = f"~/{log_path}"
+            full_path = _remote_log_shell_path(self._pool, hostname, log_path)
             result = await self._pool.run(
                 hostname, f"stat -c '%s' {full_path} 2>/dev/null", timeout=10
             )
@@ -362,7 +394,7 @@ class AsyncLogStreamer:
             return None
 
         for base_dir in self._pool.get_remote_pbgui_dirs(hostname):
-            full_path = f"~/{base_dir}/{log_path}"
+            full_path = remote_shell_path(remote_path_join(base_dir, log_path))
             result = await self._pool.run(
                 hostname, f"stat -c '%s' {full_path} 2>/dev/null", timeout=10
             )
@@ -384,16 +416,18 @@ class AsyncLogStreamer:
         # pbgui base dir. Relative paths like data/logs/PBRun.log must still be
         # resolved below each remote pbgui candidate.
         if _is_home_relative_log_path(log_path):
-            full_path = f"~/{log_path}"
+            full_path = _remote_log_shell_path(self._pool, hostname, log_path)
         else:
             for base_dir in self._pool.get_remote_pbgui_dirs(hostname):
-                candidate = f"~/{base_dir}/{log_path}"
+                candidate = remote_shell_path(remote_path_join(base_dir, log_path))
                 result = await self._pool.run(hostname, f"test -f {candidate}", timeout=10)
                 if result and result.exit_status == 0:
                     full_path = candidate
                     break
             if full_path is None:
-                full_path = f"~/{self._pool.get_remote_pbgui_dir(hostname)}/{log_path}"
+                full_path = remote_shell_path(
+                    remote_path_join(self._pool.get_remote_pbgui_dir(hostname), log_path)
+                )
 
         self._stream_counter += 1
         stream_id = f"{hostname}:{log_path}:{self._stream_counter}"

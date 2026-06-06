@@ -22,12 +22,10 @@ from pathlib import Path
 from typing import Optional
 
 from logging_helpers import human_log as _log
+from master.async_pool import remote_path_join
 from pbgui_purefunc import PBGDIR, pb7dir as _pb7dir
 
 SERVICE = "FileSync"
-
-# Remote pbgui data dir (relative to home)
-REMOTE_PBGUI_DIR = "software/pbgui"
 
 # Minimal Python inotify watcher — uses ctypes to call Linux inotify syscalls
 # directly, no packages needed beyond stdlib.
@@ -317,12 +315,14 @@ class FileSyncWorker:
         }
 
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        remote_pbgui_dir = self.pool.get_remote_pbgui_dir(hostname)
 
         # a) Backup remote files
         if pb7dir:
             result["backup_v7"] = await self._backup_remote(
                 hostname, f"{pb7dir}/api-keys.json",
-                f"{REMOTE_PBGUI_DIR}/data/backup/api-keys_v7/{ts}")
+                remote_path_join(remote_pbgui_dir, "data", "backup", "api-keys_v7", ts),
+            )
 
         # b) Push file to target dir
         sftp = await self.pool._open_sftp(hostname)
@@ -441,8 +441,9 @@ class FileSyncWorker:
             fallback=str(DEFAULT_MIN_VERSIONS)) or DEFAULT_MIN_VERSIONS)
 
         cleaned = False
+        remote_pbgui_dir = self.pool.get_remote_pbgui_dir(hostname)
         for backup_subdir in ("data/backup/api-keys_v7", "data/backup/api-keys"):
-            remote_dir = f"{REMOTE_PBGUI_DIR}/{backup_subdir}"
+            remote_dir = remote_path_join(remote_pbgui_dir, backup_subdir)
             ok = await self._cleanup_dir(
                 hostname, remote_dir, days, min_versions)
             cleaned = cleaned or ok

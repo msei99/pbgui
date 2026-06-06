@@ -9,6 +9,7 @@ import ipaddress
 import json
 import os
 import platform
+import re
 from pathlib import Path, PurePosixPath
 import secrets
 import shlex
@@ -23,6 +24,8 @@ from .ssh import SSHConnection
 LogCallback = Callable[[str], None]
 TOTP_QR_BEGIN = "__PBGUI_TOTP_QR_BEGIN__"
 TOTP_QR_END = "__PBGUI_TOTP_QR_END__"
+SAFE_INSTALL_PATH_RE = re.compile(r"^[A-Za-z0-9._~/-]+$")
+SAFE_GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 
 class RemoteInstallError(RuntimeError):
@@ -54,13 +57,59 @@ def default_local_master_name() -> str:
     return (platform.node() or "pbgui-local").strip() or "pbgui-local"
 
 
+def _current_installer_branch() -> str:
+    """Return the source checkout branch when the installer is branch-based."""
+    env_branch = str(os.environ.get("PBGUI_INSTALLER_BRANCH") or "").strip()
+    if env_branch:
+        return normalize_installer_branch(env_branch)
+    root = _installer_root()
+    if not (root / ".git").exists():
+        return ""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return ""
+    branch = str(proc.stdout or "").strip()
+    if proc.returncode != 0 or not branch or branch == "HEAD":
+        return ""
+    try:
+        return normalize_installer_branch(branch)
+    except ValueError:
+        return ""
+
+
+def normalize_installer_branch(value: str | None) -> str:
+    """Validate an optional git branch name for remote shell use."""
+    branch = str(value or "").strip()
+    if not branch:
+        return ""
+    if branch.startswith("-") or ".." in branch or not SAFE_GIT_BRANCH_RE.fullmatch(branch):
+        raise ValueError("Installer branch contains invalid characters.")
+    if any(part in {"", ".", ".."} for part in branch.split("/")):
+        raise ValueError("Installer branch contains invalid path segments.")
+    return branch
+
+
+def _validate_safe_install_path_text(raw: str, label: str) -> None:
+    """Reject install paths that would break generated shell/systemd files."""
+    if any(ch in raw for ch in ("\x00", "\n", "\r")) or "{{" in raw or "}}" in raw:
+        raise ValueError(f"{label} contains invalid characters.")
+    if not SAFE_INSTALL_PATH_RE.fullmatch(raw):
+        raise ValueError(f"{label} may only contain letters, numbers, '/', '.', '_', '-' and '~'.")
+    if "." in raw.split("/") or ".." in raw.split("/"):
+        raise ValueError(f"{label} cannot contain '.' or '..' path segments.")
+
+
 def normalize_remote_install_dir(value: str, target_user: str) -> str:
     """Validate and normalize a remote POSIX install parent directory."""
     raw = str(value or "").strip() or default_remote_install_dir(target_user)
-    if any(ch in raw for ch in ("\x00", "\n", "\r")):
-        raise ValueError("Install parent directory contains invalid control characters.")
-    if "'" in raw:
-        raise ValueError("Install parent directory cannot contain single quotes.")
+    _validate_safe_install_path_text(raw, "Install parent directory")
     path = PurePosixPath(raw)
     if not path.is_absolute():
         raise ValueError("Install parent directory must be an absolute path.")
@@ -69,23 +118,22 @@ def normalize_remote_install_dir(value: str, target_user: str) -> str:
     normalized = str(path)
     if normalized == "/":
         raise ValueError("Install parent directory cannot be '/'.")
+    _validate_safe_install_path_text(normalized, "Install parent directory")
     return normalized
 
 
 def normalize_local_install_dir(value: str) -> str:
     """Validate and normalize a local install parent directory."""
     raw = str(value or "").strip() or default_local_install_dir()
-    if any(ch in raw for ch in ("\x00", "\n", "\r")):
-        raise ValueError("Install parent directory contains invalid control characters.")
+    _validate_safe_install_path_text(raw, "Install parent directory")
     raw_path = Path(raw)
-    if ".." in raw_path.parts:
-        raise ValueError("Install parent directory cannot contain '..' path segments.")
     path = raw_path.expanduser()
     if not path.is_absolute():
         raise ValueError("Install parent directory must be an absolute path or start with '~'.")
     normalized = str(path)
     if normalized == "/":
         raise ValueError("Install parent directory cannot be '/'.")
+    _validate_safe_install_path_text(normalized, "Install parent directory")
     return normalized
 
 
@@ -168,6 +216,10 @@ class RemoteMasterConfig:
     coinmarketcap_api_key: str = ""
     enable_pbremote: bool = False
     local_public_key: str = ""
+    installer_branch: str = field(default_factory=_current_installer_branch)
+    confirm_fresh_host: bool = False
+    accept_unknown_host: bool = False
+    accepted_host_key_fingerprint: str = ""
 
     @classmethod
     def from_mapping(cls, data: dict) -> "RemoteMasterConfig":
@@ -204,6 +256,10 @@ class RemoteMasterConfig:
             install_dir=install_dir,
             coinmarketcap_api_key=str(data.get("coinmarketcap_api_key") or "").strip(),
             enable_pbremote=bool(data.get("enable_pbremote")),
+            installer_branch=normalize_installer_branch(data.get("installer_branch") or _current_installer_branch()),
+            confirm_fresh_host=data.get("confirm_fresh_host") in {True, "true", "1", "yes", "on"},
+            accept_unknown_host=data.get("accept_unknown_host") in {True, "true", "1", "yes", "on"},
+            accepted_host_key_fingerprint=str(data.get("accepted_host_key_fingerprint") or "").strip(),
         )
 
     def validate(self) -> None:
@@ -212,15 +268,20 @@ class RemoteMasterConfig:
             raise ValueError("Remote host is required.")
         if self.login_mode not in {"root", "sudo"}:
             raise ValueError("Login mode must be root or sudo.")
+        if not (1 <= int(self.ssh_port) <= 65535):
+            raise ValueError("SSH port must be between 1 and 65535.")
         if not self.ssh_username:
             raise ValueError("SSH username is required.")
         if not self.ssh_password:
             raise ValueError("SSH password is required.")
         if not self.target_user:
             raise ValueError("Target user is required.")
+        if not self.confirm_fresh_host:
+            raise ValueError("Remote master install requires confirmation that the target is a fresh VPS and host-level services may be changed.")
         if self.login_mode == "root" and not self.target_password:
             raise ValueError("Target user password is required for root installs.")
         self.install_dir = normalize_remote_install_dir(self.install_dir, self.target_user)
+        self.installer_branch = normalize_installer_branch(self.installer_branch)
         if self.ssh_mode not in {"specific_ips_vpn", "vpn_only", "anywhere"}:
             raise ValueError("Invalid SSH firewall mode.")
         if self.ssh_mode == "specific_ips_vpn" and not self.ssh_allowed_ips:
@@ -338,8 +399,16 @@ def _install_local_prerequisites(log: LogCallback) -> None:
         ) from exc
 
 
-def _ensure_git_checkout(repo_url: str, target: Path, log: LogCallback, *, current_source: Path | None = None) -> None:
+def _ensure_git_checkout(
+    repo_url: str,
+    target: Path,
+    log: LogCallback,
+    *,
+    current_source: Path | None = None,
+    branch: str = "",
+) -> None:
     """Clone or fast-forward an existing git checkout."""
+    branch = normalize_installer_branch(branch)
     if current_source and target.exists():
         try:
             if target.resolve() == current_source.resolve():
@@ -349,6 +418,11 @@ def _ensure_git_checkout(repo_url: str, target: Path, log: LogCallback, *, curre
             pass
     if (target / ".git").exists():
         log(f"Updating existing checkout: {target}")
+        if branch:
+            _run_command(["git", "fetch", "origin", f"{branch}:refs/remotes/origin/{branch}"], log, cwd=target)
+            _run_command(["git", "checkout", "-B", branch, f"refs/remotes/origin/{branch}"], log, cwd=target)
+            _run_command(["git", "pull", "--ff-only", "origin", branch], log, cwd=target)
+            return
         _run_command(["git", "pull", "--ff-only"], log, cwd=target)
         return
     if target.exists() and not target.is_dir():
@@ -356,7 +430,11 @@ def _ensure_git_checkout(repo_url: str, target: Path, log: LogCallback, *, curre
     if target.exists() and any(target.iterdir()):
         raise RuntimeError(f"Target directory exists and is not an empty git checkout: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
-    _run_command(["git", "clone", repo_url, target], log)
+    clone_cmd: list[str | Path] = ["git", "clone"]
+    if branch:
+        clone_cmd.extend(["--branch", branch, "--single-branch"])
+    clone_cmd.extend([repo_url, target])
+    _run_command(clone_cmd, log)
 
 
 def _write_pbgui_config(config: LocalMasterConfig, install_dir: Path, pbgui_dir: Path) -> None:
@@ -533,7 +611,13 @@ def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifa
     log(f"PB7: {pb7_dir}")
     log(f"Venvs: {pbgui_venv}, {pb7_venv}")
 
-    _ensure_git_checkout("https://github.com/msei99/pbgui.git", pbgui_dir, log, current_source=root)
+    _ensure_git_checkout(
+        "https://github.com/msei99/pbgui.git",
+        pbgui_dir,
+        log,
+        current_source=root,
+        branch=_current_installer_branch(),
+    )
     _ensure_git_checkout("https://github.com/enarjord/passivbot.git", pb7_dir, log)
 
     setup_systemd_source = root / "setup" / "setup_systemd.sh"
@@ -680,6 +764,8 @@ def run_remote_master_install(config: RemoteMasterConfig, log: LogCallback, arti
         port=config.ssh_port,
         username=config.ssh_username,
         password=config.ssh_password,
+        accept_unknown_host=config.accept_unknown_host,
+        expected_host_key_fingerprint=config.accepted_host_key_fingerprint,
     ) as conn:
         conn.put_text(remote_config, json.dumps(payload, indent=2), mode=0o600)
         conn.put_file(script_path, remote_script, mode=0o700)

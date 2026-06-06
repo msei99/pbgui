@@ -13,7 +13,7 @@
     user: "{{ user }}"
     api_key: "{{ coinmarketcap_api_key }}"
     reboot: "{{ reboot }}"
-    install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
+    install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
 
   tasks:
     - name: display facts
@@ -33,58 +33,18 @@
         option: api_key
         value: "{{ api_key }}"
 
-    - name: Start or Restart PBRun and PBRemote
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -r PBRun PBRemote
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
-      register: starter_result
-
-    - name: print starter result
-      debug:
-        var: starter_result
-      tags: debug,never
-
-    - name: Start or Restart PBCoinData
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -r PBCoinData
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
-      register: starter_result
-
-    - name: Verify PBRun PBRemote and PBCoinData are running
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        missing=0
-        for proc in PBRun.py PBRemote.py PBCoinData.py; do
-          if ! pgrep -f "{{ install_dir }}/pbgui/${proc}" >/dev/null; then
-            echo "Missing process: ${proc}"
-            python "{{ install_dir }}/pbgui/starter.py" -s "${proc%.py}" || true
-            missing=1
-          fi
-        done
-        if [ "$missing" -ne 0 ]; then
-          echo "--- PBRun.log tail ---"
-          tail -n 40 "{{ install_dir }}/pbgui/data/logs/PBRun.log" || true
-          echo "--- PBRemote.log tail ---"
-          tail -n 40 "{{ install_dir }}/pbgui/data/logs/PBRemote.log" || true
-          echo "--- PBCoinData.log tail ---"
-          tail -n 40 "{{ install_dir }}/pbgui/data/logs/PBCoinData.log" || true
-          exit 1
-        fi
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
+    - name: Start or Restart PBRun, PBRemote and PBCoinData
+      script: setup/vps_service_control.sh restart PBRun PBRemote PBCoinData
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"
       register: pbgui_process_health
       retries: 8
       delay: 3
       until: pbgui_process_health.rc == 0
 
-    - name: print starter result
+    - name: print service control result
       debug:
-        var: starter_result
+        var: pbgui_process_health
       tags: debug,never

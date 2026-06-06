@@ -15,7 +15,7 @@
     user: "{{ user }}"
     target_branch: "{{ branch }}"
     target_commit: "{{ commit | default('') }}"
-    install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
+    install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
     pbgdir: "{{ install_dir }}/pbgui"
 
   tasks:
@@ -97,10 +97,9 @@
       listen: "restart pbgui"
 
     - name: Restart PBRun, PBRemote and PBCoinData
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -r PBRun PBRemote PBCoinData
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
+      script: setup/vps_service_control.sh restart PBRun PBRemote PBCoinData
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"
       listen: "restart pbgui"

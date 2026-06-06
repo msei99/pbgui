@@ -42,7 +42,35 @@ INSTALL_DIR="${INSTALL_DIR:-/home/${TARGET_USER}/software}"
 RESULT_PATH="${RESULT_PATH:-/tmp/pbgui_remote_master_result.json}"
 LOCAL_PUBLIC_KEY="${LOCAL_PUBLIC_KEY:-}"
 UPLOADED_SETUP_SYSTEMD_PATH="${UPLOADED_SETUP_SYSTEMD_PATH:-}"
+INSTALLER_BRANCH="${INSTALLER_BRANCH:-}"
 export COINMARKETCAP_API_KEY="${COINMARKETCAP_API_KEY:-}"
+
+eval "$(python3 - "$INSTALL_DIR" <<'PY'
+import shlex
+import sys
+import re
+from pathlib import PurePosixPath
+
+raw = sys.argv[1].strip()
+if not raw:
+    raise SystemExit("Install parent directory is required.")
+if any(ch in raw for ch in ("\x00", "\n", "\r")):
+    raise SystemExit("Install parent directory contains invalid control characters.")
+if "{{" in raw or "}}" in raw:
+    raise SystemExit("Install parent directory contains invalid template markers.")
+if not re.fullmatch(r"[A-Za-z0-9._~/-]+", raw):
+    raise SystemExit("Install parent directory may only contain letters, numbers, '/', '.', '_', '-' and '~'.")
+path = PurePosixPath(raw)
+if not path.is_absolute():
+    raise SystemExit("Install parent directory must be an absolute path.")
+if "." in path.parts or ".." in path.parts:
+    raise SystemExit("Install parent directory cannot contain '.' or '..' path segments.")
+normalized = str(path)
+if normalized == "/":
+    raise SystemExit("Install parent directory cannot be '/'.")
+print(f"INSTALL_DIR={shlex.quote(normalized)}")
+PY
+)"
 
 eval "$(python3 - "$OPENVPN_CIDR" <<'PY'
 import ipaddress, shlex, sys
@@ -117,30 +145,6 @@ if [[ -z "$TARGET_HOME" ]]; then
   exit 1
 fi
 TARGET_GROUP="$(id -gn "$TARGET_USER")"
-
-eval "$(python3 - "$INSTALL_DIR" <<'PY'
-import shlex
-import sys
-from pathlib import PurePosixPath
-
-raw = sys.argv[1].strip()
-if not raw:
-    raise SystemExit("Install parent directory is required.")
-if any(ch in raw for ch in ("\x00", "\n", "\r")):
-    raise SystemExit("Install parent directory contains invalid control characters.")
-if "'" in raw:
-    raise SystemExit("Install parent directory cannot contain single quotes.")
-path = PurePosixPath(raw)
-if not path.is_absolute():
-    raise SystemExit("Install parent directory must be an absolute path.")
-if ".." in path.parts:
-    raise SystemExit("Install parent directory cannot contain '..' path segments.")
-normalized = str(path)
-if normalized == "/":
-    raise SystemExit("Install parent directory cannot be '/'.")
-print(f"INSTALL_DIR={shlex.quote(normalized)}")
-PY
-)"
 info "Using install parent directory: $INSTALL_DIR"
 
 if [[ -n "$LOCAL_PUBLIC_KEY" ]]; then
@@ -166,6 +170,14 @@ if apt-cache policy python3.12-venv | grep -Eq 'Candidate:\s+\(none\)'; then
 fi
 apt-get "${APT_OPTS[@]}" install -y python3.12-venv
 
+if [[ -n "$INSTALLER_BRANCH" ]]; then
+  if ! git check-ref-format --branch "$INSTALLER_BRANCH" >/dev/null 2>&1; then
+    err "Invalid PBGui installer branch: $INSTALLER_BRANCH"
+    exit 1
+  fi
+  info "Using PBGui branch: $INSTALLER_BRANCH"
+fi
+
 info "Creating swapfile ($SWAP_SIZE) if needed..."
 if [[ -f /swapfile ]]; then
   swapoff /swapfile >/dev/null 2>&1 || true
@@ -186,10 +198,26 @@ run_as_user() {
 install -d -o "$TARGET_USER" -g "$TARGET_GROUP" "$INSTALL_DIR"
 
 info "Cloning PBGui and Passivbot..."
+branch_arg=""
+branch_refspec=""
+branch_remote_ref=""
+if [[ -n "$INSTALLER_BRANCH" ]]; then
+  branch_arg="$(printf '%q' "$INSTALLER_BRANCH")"
+  branch_refspec="$(printf '%q' "${INSTALLER_BRANCH}:refs/remotes/origin/${INSTALLER_BRANCH}")"
+  branch_remote_ref="$(printf '%q' "refs/remotes/origin/${INSTALLER_BRANCH}")"
+fi
 if [[ -d "$INSTALL_DIR/pbgui/.git" ]]; then
-  run_as_user "cd '$INSTALL_DIR/pbgui' && git pull --ff-only"
+  if [[ -n "$branch_arg" ]]; then
+    run_as_user "cd '$INSTALL_DIR/pbgui' && git fetch origin $branch_refspec && git checkout -B $branch_arg $branch_remote_ref && git pull --ff-only origin $branch_arg"
+  else
+    run_as_user "cd '$INSTALL_DIR/pbgui' && git pull --ff-only"
+  fi
 else
-  run_as_user "git clone https://github.com/msei99/pbgui.git '$INSTALL_DIR/pbgui'"
+  if [[ -n "$branch_arg" ]]; then
+    run_as_user "git clone --branch $branch_arg --single-branch https://github.com/msei99/pbgui.git '$INSTALL_DIR/pbgui'"
+  else
+    run_as_user "git clone https://github.com/msei99/pbgui.git '$INSTALL_DIR/pbgui'"
+  fi
 fi
 if [[ -d "$INSTALL_DIR/pb7/.git" ]]; then
   run_as_user "cd '$INSTALL_DIR/pb7' && git pull --ff-only"

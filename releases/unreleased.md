@@ -4,6 +4,13 @@
 - Added a Local Master Install mode to the master installer browser wizard and CLI for installing PBGui/PB7 locally under a configurable parent directory.
 - Added a Local Master Uninstall mode to the master installer browser wizard for removing local PBGui/PB7 checkouts, virtualenvs, and PBGui user services with a safety confirmation dialog.
 - Made local master uninstall continue cleanup when a systemd user-service stop command times out, with a best-effort service kill attempt.
+- Made VPS update playbooks, remote log access, V7 config sync, API key backups, and service auto-restarts respect custom PBGui install directories instead of assuming `~/software`.
+- Added a configurable VPS Manager install path and changed the VPS setup playbook to install systemd user services instead of creating `start.sh` and an `@reboot` crontab.
+- Aligned VPS Manager setup form fields so rows stay level when one field shows helper text.
+- Added a VPS Manager systemd migration preview and migration task for existing VPS, removing legacy `start.sh`/crontab autostart and enabling PBGui systemd user services.
+- Made VPS update, branch, logging, swap, and Python migration playbooks restart PBGui services through systemd user units when available, with `starter.py` kept as a legacy fallback.
+- Hardened VPS custom install path validation and systemd migration cleanup so unsafe paths are rejected and legacy autostart is removed only after systemd services verify successfully.
+- Hardened the master installer by requiring fresh-VPS confirmation, explicit SSH host-key fingerprint acceptance, safer install path validation, and branch propagation to remote bootstraps.
 - Made the master installer bootstrap install missing Python venv support on apt-based systems before creating its temporary installer environment.
 - Added `PBGUI_INSTALLER_BRANCH` support to the master installer bootstrap so branch-based raw-script tests download the matching archive.
 - Made the Local Master Install flow install missing apt-based prerequisites such as git, build tools, pkg-config, and Python venv support before cloning repositories.
@@ -33,7 +40,7 @@
 - Compact the remote master wizard layout by placing OpenVPN CIDR and SSH firewall mode on the same row.
 - Added the IONOS VPS Linux M+ recommendation with the referral link to the remote master wizard.
 - Change the provider-supplied root password only when a new root password is entered during fresh root-based remote master installs before locking root login.
-- Added an optional new root password field for fresh root-based remote master installs and removed the SSH port field from the browser wizard.
+- Added an optional new root password field for fresh root-based remote master installs.
 - Stream and show the TOTP QR code directly in the remote master installer result panel as soon as it is generated.
 - Made the remote master OpenVPN network configurable so multiple remote masters can use separate VPN CIDRs.
 - Name generated OpenVPN client profiles after the server hostname instead of the login user to avoid collisions across multiple servers using the same user.

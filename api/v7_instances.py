@@ -33,7 +33,13 @@ from api.auth import SessionToken, require_auth, validate_token
 from api.pb7_bridge import get_allowed_override_params, get_template_config
 from logging_helpers import human_log as _log
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config, strip_pbgui_param_status
-from master.async_pool import SFTP_RETRY_ATTEMPTS, SFTP_RETRY_DELAY, _is_transient_error
+from master.async_pool import (
+    SFTP_RETRY_ATTEMPTS,
+    SFTP_RETRY_DELAY,
+    _is_transient_error,
+    remote_path_join,
+    remote_shell_path,
+)
 from pbgui_purefunc import (PBGDIR, STATUS_V7_FILE, SYNC_EXCLUDE_FILES,
                              update_status_v7 as _update_status_v7,
                              get_syncable_files as _get_syncable_files)
@@ -41,9 +47,6 @@ from pbgui_purefunc import (PBGDIR, STATUS_V7_FILE, SYNC_EXCLUDE_FILES,
 SERVICE = "V7Instances"
 
 router = APIRouter()
-
-# Remote pbgui data dir (relative to home on VPS)
-REMOTE_PBGUI_DIR = "software/pbgui"
 
 # ── Draft config store (in-memory, TTL-limited) ─────────────
 import secrets as _secrets
@@ -404,8 +407,9 @@ async def _ssh_sync_instance(name: str) -> dict:
                 return {"success": False, "error": "SFTP failed"}
 
             try:
-                remote_inst_dir = f"{REMOTE_PBGUI_DIR}/data/run_v7/{name}"
-                remote_cmd_dir = f"{REMOTE_PBGUI_DIR}/data/cmd"
+                remote_pbgui_dir = pool.get_remote_pbgui_dir(hostname)
+                remote_inst_dir = remote_path_join(remote_pbgui_dir, "data", "run_v7", name)
+                remote_cmd_dir = remote_path_join(remote_pbgui_dir, "data", "cmd")
 
                 # Ensure dirs exist
                 try:
@@ -659,15 +663,16 @@ async def delete_instance(
     if _monitor and _monitor.pool:
         pool = _monitor.pool
         connected = pool.connected_hosts()
-        remote_dir = f"{REMOTE_PBGUI_DIR}/data/run_v7/{name}"
 
         async def delete_on_host(hostname: str):
             for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
                 try:
+                    remote_pbgui_dir = pool.get_remote_pbgui_dir(hostname)
+                    remote_dir = remote_path_join(remote_pbgui_dir, "data", "run_v7", name)
                     # Remove instance directory
                     result = await pool.run(
                         hostname,
-                        f"rm -rf ~/{remote_dir}",
+                        f"rm -rf {remote_shell_path(remote_dir)}",
                         timeout=15,
                     )
                     if result is None:
@@ -678,7 +683,7 @@ async def delete_instance(
                         sftp = await pool._open_sftp(hostname)
                         if sftp:
                             try:
-                                remote_cmd_dir = f"{REMOTE_PBGUI_DIR}/data/cmd"
+                                remote_cmd_dir = remote_path_join(remote_pbgui_dir, "data", "cmd")
                                 try:
                                     await sftp.makedirs(
                                         remote_cmd_dir, exist_ok=True)

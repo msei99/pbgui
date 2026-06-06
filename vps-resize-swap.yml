@@ -18,7 +18,7 @@
     user: "{{ user }}"
     user_pw: "{{ user_pw }}"
     swap_size: "{{ swap_size }}"
-    install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
+    install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
 
   tasks:
     - name: display facts
@@ -44,12 +44,11 @@
     - name: delete swapfile if it exists and recreate it
       block:
         - name: Make sure PBRun is stopped
-          shell: |
-            source "{{ install_dir }}/venv_pbgui/bin/activate"
-            python "{{ install_dir }}/pbgui/starter.py" -k PBRun
-          args:
-            executable: /bin/bash
-            chdir: "{{ install_dir }}/pbgui"
+          script: setup/vps_service_control.sh stop PBRun
+          environment:
+            PBGUI_DIR: "{{ install_dir }}/pbgui"
+            PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+            PBGUI_USER: "{{ user }}"
 
         - name: kill all pb7 processes
           shell: |
@@ -127,9 +126,8 @@
       when: swapfile_status.stat.exists == false
       
     - name: Make sure PBRun ist running
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -s PBRun
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
+      script: setup/vps_service_control.sh start PBRun
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"

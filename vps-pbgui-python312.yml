@@ -13,7 +13,7 @@
   vars:
     ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"
-    install_dir: "{{ ansible_facts['env']['HOME'] + '/software' }}"
+    install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
 
   tasks:
     - name: display facts
@@ -53,12 +53,11 @@
       tags: debug,never
 
     - name: Stop PBRun + PBRemote + PBCoinData
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -k PBRun PBRemote PBCoinData
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
+      script: setup/vps_service_control.sh stop PBRun PBRemote PBCoinData
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"
       ignore_errors: yes
 
     - name: Install python3.12-venv
@@ -98,9 +97,8 @@
       become: yes
 
     - name: Start PBRun + PBRemote + PBCoinData
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -s PBRun PBRemote PBCoinData
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
+      script: setup/vps_service_control.sh start PBRun PBRemote PBCoinData
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"

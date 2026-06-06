@@ -100,6 +100,10 @@ def _install_dir_from_remote_pbgui_dir(remote_pbgui_dir: str | None, vps_user: s
     home = f"/home/{vps_user}" if vps_user else str(Path.home())
     if not raw:
         return f"{home}/software"
+    if raw.startswith("~/"):
+        raw = raw[2:]
+    if raw.startswith("/"):
+        return str(PurePath(raw).parent)
     if "/" in raw:
         parent = raw.rsplit("/", 1)[0]
         return f"{home}/{parent}" if parent else home
@@ -471,15 +475,36 @@ class VPS:
                 _log("VPSManager", f"Failed to get swap size on VPS {self.hostname}: {exc}", level="WARNING")
 
             sftp = ssh.open_sftp()
-            remote_path = "software/pbgui/pbgui.ini"
-            content = None
             try:
-                with sftp.file(remote_path, mode="r") as config_file:
-                    content = config_file.read().decode()
-            except FileNotFoundError:
-                _log("VPSManager", f"File not found on VPS {self.hostname} ({self.ip}): {remote_path}", level="ERROR")
-            except Exception as exc:
-                _log("VPSManager", f"Error reading file from VPS {self.hostname} ({self.ip}): {exc}", level="ERROR")
+                remote_dirs = []
+                for item in (self.remote_pbgui_dir, "software/pbgui", "pbgui"):
+                    value = str(item or "").strip().rstrip("/")
+                    if value and value not in remote_dirs:
+                        remote_dirs.append(value)
+                content = None
+                for remote_dir in remote_dirs:
+                    remote_path = f"{remote_dir}/pbgui.ini"
+                    try:
+                        with sftp.file(remote_path, mode="r") as config_file:
+                            content = config_file.read().decode()
+                        if content and remote_dir != self.remote_pbgui_dir:
+                            self.remote_pbgui_dir = remote_dir
+                        break
+                    except FileNotFoundError:
+                        continue
+                    except Exception as exc:
+                        _log(
+                            "VPSManager",
+                            f"Error reading file from VPS {self.hostname} ({self.ip}): {exc}",
+                            level="ERROR",
+                        )
+                        break
+                if not content:
+                    _log(
+                        "VPSManager",
+                        f"pbgui.ini not found on VPS {self.hostname} ({self.ip}) in: {', '.join(remote_dirs)}",
+                        level="ERROR",
+                    )
             finally:
                 sftp.close()
                 ssh.close()

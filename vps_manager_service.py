@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 import yaml
 
@@ -76,6 +76,9 @@ VPS_DEPLOY_HISTORY_LIMIT = VPS_LOGGING_DEPLOY_HISTORY_LIMIT
 DEPLOY_PROGRESS_LOG_TAIL_BYTES = 64 * 1024
 DEPLOY_PROGRESS_CACHE_LIMIT = 256
 DEPLOY_RUN_APPEAR_TIMEOUT_SECONDS = 30
+SAFE_VPS_INSTALL_PATH_RE = re.compile(r"^[A-Za-z0-9._~/-]+$")
+VPS_SYSTEMD_MIGRATION_SERVICES = ("api", "pbrun", "pbremote", "pbcoindata")
+VPS_SYSTEMD_MIGRATION_UNITS = tuple(f"pbgui-{service}.service" for service in VPS_SYSTEMD_MIGRATION_SERVICES)
 _PLAYBOOK_TASK_CACHE: dict[str, tuple[str, ...]] = {}
 
 
@@ -115,6 +118,29 @@ def _truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalize_vps_install_dir(value: Any, vps_user: str | None) -> str:
+    raw = str(value or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    if any(ch in raw for ch in ("\x00", "\n", "\r")) or "{{" in raw or "}}" in raw:
+        raise ValueError("Install path contains invalid characters.")
+    user = str(vps_user or "").strip()
+    home = f"/home/{user}" if user else str(Path.home())
+    if raw.startswith("~/"):
+        raw = f"{home}/{raw[2:]}"
+    elif not raw.startswith("/"):
+        raise ValueError("Install path must be absolute or start with '~/'.")
+    if not SAFE_VPS_INSTALL_PATH_RE.fullmatch(raw):
+        raise ValueError("Install path may only contain letters, numbers, '/', '.', '_', '-' and '~'.")
+    if "." in raw.split("/") or ".." in raw.split("/"):
+        raise ValueError("Install path cannot contain '.' or '..' path segments.")
+    path = PurePosixPath(raw)
+    normalized = str(path)
+    if normalized == "/":
+        raise ValueError("Install path cannot be '/'.")
+    return normalized
 
 
 def _status_running(status: str | None) -> bool:
@@ -2478,6 +2504,8 @@ class VPSManagerService:
             "hostname": vps.hostname,
             "ip": vps.ip or "",
             "user": vps.user or "",
+            "install_dir": _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user),
+            "remote_pbgui_dir": vps.remote_pbgui_dir or "",
             "swap": vps.swap or "0",
             "bucket": vps.bucket or "",
             "coinmarketcap_api_key": vps.coinmarketcap_api_key or "",
@@ -3449,6 +3477,211 @@ class VPSManagerService:
         vps.save()
         return self._build_vps_config(token, vps)
 
+    def preview_vps_systemd_migration(self, token: str, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
+        import paramiko
+
+        vps = self._require_vps(hostname)
+        hostname = str(vps.hostname or hostname or "").strip()
+        self._store_session_secrets(token, hostname, form)
+        user_pw = str(form.get("user_pw") or self._session_secret_value(token, hostname, "user_pw") or "")
+        raw_install_dir = str(form.get("install_dir") or "").strip()
+        install_dir = _normalize_vps_install_dir(raw_install_dir, vps.user) if raw_install_dir else _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user)
+        pbgui_dir = f"{install_dir.rstrip('/')}/pbgui"
+        python_bin = f"{install_dir.rstrip('/')}/venv_pbgui/bin/python"
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            try:
+                ssh.connect(
+                    hostname=vps.ip,
+                    username=vps.user,
+                    timeout=8,
+                    banner_timeout=8,
+                    auth_timeout=8,
+                    allow_agent=True,
+                    look_for_keys=True,
+                )
+            except Exception:
+                if not user_pw:
+                    raise ValueError("VPS user password expired or missing. Please enter it again.")
+                ssh.connect(
+                    hostname=vps.ip,
+                    username=vps.user,
+                    password=user_pw,
+                    timeout=8,
+                    banner_timeout=8,
+                    auth_timeout=8,
+                    allow_agent=False,
+                    look_for_keys=False,
+                )
+
+            script = self._vps_systemd_migration_preview_script(pbgui_dir, python_bin)
+            stdin, stdout, stderr = ssh.exec_command(script, timeout=20)
+            del stdin
+            out = stdout.read().decode("utf-8", errors="replace")
+            err = stderr.read().decode("utf-8", errors="replace")
+            rc = stdout.channel.recv_exit_status()
+            if rc != 0:
+                raise ValueError((err or out or "Systemd migration preview failed.").strip())
+        finally:
+            try:
+                ssh.close()
+            except Exception:
+                pass
+
+        parsed = self._parse_vps_systemd_migration_preview(out)
+        values = parsed.get("values") or {}
+        units = parsed.get("units") or []
+        cron_lines = parsed.get("cron") or []
+        processes = parsed.get("processes") or []
+
+        pbgui_exists = values.get("pbgui_dir_exists") == "yes"
+        python_exists = values.get("python_exists") == "yes"
+        systemctl_exists = values.get("systemctl_exists") == "yes"
+        user_manager_ok = values.get("systemd_user_manager") == "yes"
+        start_sh_exists = values.get("start_sh_exists") == "yes"
+        units_missing = [item for item in units if item.get("exists") != "yes"]
+        units_inactive = [item for item in units if item.get("active") != "active"]
+        blockers: list[str] = []
+        if not pbgui_exists:
+            blockers.append(f"PBGui directory not found: {pbgui_dir}")
+        if not python_exists:
+            blockers.append(f"PBGui virtualenv Python not found: {python_bin}")
+        if not systemctl_exists:
+            blockers.append("systemctl is not available on the VPS.")
+
+        warnings: list[str] = []
+        if not user_manager_ok:
+            warnings.append("The systemd user manager is not active yet. Migration will enable linger and start it.")
+
+        actions = [
+            {"label": "Copy/update systemd setup helper", "needed": True, "detail": f"{pbgui_dir}/setup/setup_systemd.sh"},
+            {"label": "Install/enable/start systemd units", "needed": bool(units_missing or units_inactive), "detail": ", ".join(VPS_SYSTEMD_MIGRATION_UNITS)},
+            {"label": "Stop legacy PBGui processes", "needed": bool(processes), "detail": f"{len(processes)} matching process(es)" if processes else "No matching legacy processes found"},
+            {"label": "Remove legacy pbgui crontab", "needed": bool(cron_lines), "detail": f"{len(cron_lines)} matching crontab line(s)" if cron_lines else "No matching crontab lines found"},
+            {"label": "Delete legacy start.sh", "needed": bool(start_sh_exists), "detail": f"{pbgui_dir}/start.sh"},
+        ]
+
+        checks = [
+            {"label": "PBGui directory", "ok": pbgui_exists, "detail": pbgui_dir},
+            {"label": "PBGui virtualenv Python", "ok": python_exists, "detail": python_bin},
+            {"label": "systemctl available", "ok": systemctl_exists, "detail": values.get("systemctl_path") or "not found"},
+            {"label": "systemd user manager", "ok": user_manager_ok, "detail": values.get("systemd_user_manager_detail") or "not active"},
+        ]
+
+        return {
+            "hostname": hostname,
+            "install_dir": install_dir,
+            "pbgui_dir": pbgui_dir,
+            "python_bin": python_bin,
+            "checks": checks,
+            "actions": actions,
+            "warnings": warnings,
+            "blockers": blockers,
+            "units": units,
+            "legacy_cron_lines": cron_lines,
+            "legacy_processes": processes,
+            "can_migrate": not blockers,
+        }
+
+    def _vps_systemd_migration_preview_script(self, pbgui_dir: str, python_bin: str) -> str:
+        units = " ".join(shlex.quote(unit) for unit in VPS_SYSTEMD_MIGRATION_UNITS)
+        return f"""#!/usr/bin/env bash
+set +e
+pbgui_dir={shlex.quote(pbgui_dir)}
+python_bin={shlex.quote(python_bin)}
+units={shlex.quote(units)}
+uid=$(id -u)
+systemctl_path=$(command -v systemctl || true)
+printf 'KV\tpbgui_dir_exists\t%s\n' "$([ -d "$pbgui_dir" ] && printf yes || printf no)"
+printf 'KV\tpython_exists\t%s\n' "$([ -x "$python_bin" ] && printf yes || printf no)"
+printf 'KV\tstart_sh_exists\t%s\n' "$([ -e "$pbgui_dir/start.sh" ] && printf yes || printf no)"
+printf 'KV\tsystemctl_exists\t%s\n' "$([ -n "$systemctl_path" ] && printf yes || printf no)"
+printf 'KV\tsystemctl_path\t%s\n' "$systemctl_path"
+if [ -n "$systemctl_path" ] && env XDG_RUNTIME_DIR="${{XDG_RUNTIME_DIR:-/run/user/$uid}}" systemctl --user show-environment >/dev/null 2>&1; then
+  printf 'KV\tsystemd_user_manager\tyes\n'
+  printf 'KV\tsystemd_user_manager_detail\tactive\n'
+else
+  printf 'KV\tsystemd_user_manager\tno\n'
+  printf 'KV\tsystemd_user_manager_detail\tnot active\n'
+fi
+printf 'SECTION\tunits\tBEGIN\n'
+unit_dir="$HOME/.config/systemd/user"
+for unit in $units; do
+  exists="$([ -f "$unit_dir/$unit" ] && printf yes || printf no)"
+  if [ -n "$systemctl_path" ]; then
+    active=$(env XDG_RUNTIME_DIR="${{XDG_RUNTIME_DIR:-/run/user/$uid}}" systemctl --user is-active "$unit" 2>/dev/null || true)
+    enabled=$(env XDG_RUNTIME_DIR="${{XDG_RUNTIME_DIR:-/run/user/$uid}}" systemctl --user is-enabled "$unit" 2>/dev/null || true)
+  else
+    active="unknown"
+    enabled="unknown"
+  fi
+  printf '%s\t%s\t%s\t%s\n' "$unit" "$exists" "${{enabled:-unknown}}" "${{active:-unknown}}"
+done
+printf 'SECTION\tunits\tEND\n'
+printf 'SECTION\tcron\tBEGIN\n'
+crontab -l 2>/dev/null | awk -v start="$pbgui_dir/start.sh" 'index($0, start) || ($0 ~ /pbgui/ && $0 ~ /start\\.sh/) {{ print }}'
+printf 'SECTION\tcron\tEND\n'
+printf 'SECTION\tprocesses\tBEGIN\n'
+PBGUI_MIGRATION_DIR="$pbgui_dir" python3 - <<'PY' 2>/dev/null || true
+import os
+from pathlib import Path
+target_dir = os.path.realpath(os.environ['PBGUI_MIGRATION_DIR'])
+target_prefix = target_dir + os.sep
+scripts = ('PBApiServer.py', 'PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'PBData.py', 'PBMon.py', 'starter.py')
+for entry in Path('/proc').iterdir():
+    if not entry.name.isdigit():
+        continue
+    try:
+        raw = (entry / 'cmdline').read_bytes()
+    except Exception:
+        continue
+    cmd = raw.replace(b'\\0', b' ').decode('utf-8', errors='replace').strip()
+    try:
+        cwd = os.path.realpath(os.readlink(entry / 'cwd'))
+    except Exception:
+        cwd = ''
+    if cmd and any(script in cmd for script in scripts) and (target_prefix in cmd or cwd == target_dir):
+        print(f"{{entry.name}} {{cmd}}")
+PY
+printf 'SECTION\tprocesses\tEND\n'
+"""
+
+    def _parse_vps_systemd_migration_preview(self, output: str) -> dict[str, Any]:
+        values: dict[str, str] = {}
+        sections: dict[str, list[str]] = {"units": [], "cron": [], "processes": []}
+        current = ""
+        for raw_line in str(output or "").splitlines():
+            line = raw_line.rstrip("\n")
+            if line.startswith("KV\t"):
+                parts = line.split("\t", 2)
+                if len(parts) == 3:
+                    values[parts[1]] = parts[2]
+                continue
+            if line.startswith("SECTION\t"):
+                parts = line.split("\t")
+                if len(parts) >= 3 and parts[2] == "BEGIN":
+                    current = parts[1]
+                    sections.setdefault(current, [])
+                elif len(parts) >= 3 and parts[2] == "END":
+                    current = ""
+                continue
+            if current:
+                sections.setdefault(current, []).append(line)
+
+        units: list[dict[str, str]] = []
+        for line in sections.get("units") or []:
+            parts = line.split("\t")
+            if len(parts) >= 4:
+                units.append({"unit": parts[0], "exists": parts[1], "enabled": parts[2], "active": parts[3]})
+        return {
+            "values": values,
+            "units": units,
+            "cron": sections.get("cron") or [],
+            "processes": sections.get("processes") or [],
+        }
+
     def save_vps(self, token: str, form: dict[str, Any]) -> dict[str, Any]:
         vps, is_new = self._hydrate_vps_from_form(token, form, allow_create=True)
         self._apply_vps_setup_form(token, vps, form)
@@ -3589,6 +3822,9 @@ class VPSManagerService:
         vps.swap = swap
         vps.bucket = str(form.get("bucket") or vps.bucket or "")
         vps.coinmarketcap_api_key = str(form.get("coinmarketcap_api_key") or vps.coinmarketcap_api_key or "")
+        install_dir = _normalize_vps_install_dir(form.get("install_dir"), vps.user)
+        if install_dir:
+            vps.remote_pbgui_dir = f"{install_dir}/pbgui"
         vps.firewall = _truthy(form.get("firewall"))
         vps.firewall_ssh_port = _safe_int(form.get("firewall_ssh_port"), 22)
         vps.firewall_ssh_ips = firewall_ips

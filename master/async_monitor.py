@@ -26,7 +26,7 @@ from MonitorConfig import MonitorConfig
 from pbgui_purefunc import PBGDIR, load_ini, save_ini
 from logging_helpers import human_log as _log
 from ini_watcher import IniWatcher
-from master.async_pool import AsyncSSHPool, ConnectionStatus
+from master.async_pool import AsyncSSHPool, ConnectionStatus, remote_path_join, remote_shell_path
 from master.async_store import VPSStore, SystemMetrics
 
 SERVICE = "VPSMonitor"
@@ -1374,8 +1374,19 @@ import json, os, re, subprocess, time
 from datetime import datetime, timezone
 
 HOME = os.path.expanduser('~')
-PBGDIR = os.path.join(HOME, 'software/pbgui')
-PB7DIR = os.path.join(HOME, 'software/pb7')
+
+def _home_path(raw, default):
+    value = str(raw or default or '').strip().rstrip('/')
+    if not value:
+        value = default
+    if value.startswith('~/'):
+        return os.path.join(HOME, value[2:])
+    if os.path.isabs(value):
+        return value
+    return os.path.join(HOME, value)
+
+PBGDIR = _home_path(os.environ.get('PBGUI_PBGDIR'), 'software/pbgui')
+PB7DIR = _home_path(os.environ.get('PBGUI_PB7DIR'), 'software/pb7')
 TODAY_START = int(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
 YESTERDAY_START = TODAY_START - 86400
 TODAY = datetime.fromtimestamp(TODAY_START, timezone.utc).strftime('%Y-%m-%d')
@@ -2159,7 +2170,7 @@ result['pb7b'] = git_value(pb7_git, ['rev-parse', '--abbrev-ref', 'HEAD'], 'unkn
 
 for candidate in (
     str(Path(PBGDIR) / '.venv' / 'bin' / 'python'),
-    str(Path(HOME) / 'software' / 'venv_pbgui' / 'bin' / 'python'),
+    str(Path(PBGDIR).parent / 'venv_pbgui' / 'bin' / 'python'),
 ):
     version = python_version(candidate)
     if version:
@@ -3189,6 +3200,16 @@ class VPSMonitor:
                 same_minute_mode='peak',
             )
 
+    def _instance_collect_env(self, hostname: str) -> str:
+        """Return remote collector environment values for custom install paths."""
+        pbgui_dir = self.pool.get_remote_pbgui_dir(hostname)
+        entry = self.pool.get_connection(hostname)
+        pb7_dir = str((entry.data or {}).get('pb7dir') or '') if entry else ''
+        parts = [f"PBGUI_PBGDIR={_shell_quote(pbgui_dir)}"]
+        if pb7_dir:
+            parts.append(f"PBGUI_PB7DIR={_shell_quote(pb7_dir)}")
+        return " ".join(parts)
+
     async def _rebuild_bot_count_history(self, hostname: str, bot_logs: dict[str, Any] | None) -> None:
         if not hostname or not isinstance(bot_logs, dict):
             return
@@ -3212,6 +3233,7 @@ class VPSMonitor:
                 continue
 
             cmd = (
+                f"{self._instance_collect_env(hostname)} "
                 f"PBGUI_REBUILD_COUNTS=1 PBGUI_REBUILD_BOT={_shell_quote(name)} "
                 f"PBGUI_REBUILD_FROM_HOUR={rebuild_from_hour} PBGUI_REBUILD_TO_HOUR={now_hour} "
                 f"{INSTANCE_COLLECT_SCRIPT}"
@@ -3244,6 +3266,7 @@ class VPSMonitor:
                 continue
             last_fill_ts = self._bot_pnl_history.get_last_fill_ts(name)
             cmd = (
+                f"{self._instance_collect_env(hostname)} "
                 f"PBGUI_REBUILD_PNL=1 PBGUI_REBUILD_BOT={_shell_quote(name)} "
                 f"PBGUI_REBUILD_PNL_SINCE_TS={int(last_fill_ts)} {INSTANCE_COLLECT_SCRIPT}"
             )
@@ -3462,7 +3485,11 @@ class VPSMonitor:
         host_cache = dict(host_cache)
         host_cache['_version'] = MONITOR_CACHE_VERSION
         cache_json = json.dumps(host_cache)
-        cmd = f"PBGUI_CACHE_VERSION={MONITOR_CACHE_VERSION} PBGUI_CACHE='{cache_json}' {INSTANCE_COLLECT_SCRIPT}"
+        cmd = (
+            f"{self._instance_collect_env(hostname)} "
+            f"PBGUI_CACHE_VERSION={MONITOR_CACHE_VERSION} "
+            f"PBGUI_CACHE={_shell_quote(cache_json)} {INSTANCE_COLLECT_SCRIPT}"
+        )
         result = await self.pool.run(hostname, cmd, timeout=30)
         if result and result.exit_status == 0 and result.stdout:
             try:
@@ -3720,11 +3747,19 @@ class VPSMonitor:
 
         start_cmd = ""
         for base_dir in self.pool.get_remote_pbgui_dirs(hostname):
+            parent_dir = base_dir.rsplit('/', 1)[0] if '/' in base_dir else ''
+            venv_pbgui = (
+                remote_path_join(parent_dir, 'venv_pbgui', 'bin', 'activate')
+                if parent_dir else 'venv_pbgui/bin/activate'
+            )
+            base_shell = remote_shell_path(base_dir)
+            venv_shell = remote_shell_path(venv_pbgui)
+            dotvenv_shell = remote_shell_path(remote_path_join(base_dir, '.venv', 'bin', 'activate'))
             venv_check = await self.pool.run(
                 hostname,
-                f'test -d ~/{base_dir} || exit 1; '
-                f'test -f ~/software/venv_pbgui/bin/activate && echo "venv_pbgui" '
-                f'|| (test -f ~/{base_dir}/.venv/bin/activate '
+                f'test -d {base_shell} || exit 1; '
+                f'test -f {venv_shell} && echo "venv_pbgui" '
+                f'|| (test -f {dotvenv_shell} '
                 f'&& echo "dotvenv" || echo "system")',
                 timeout=5,
             )
@@ -3733,21 +3768,21 @@ class VPSMonitor:
             venv_type = (venv_check.stdout or "").strip() if venv_check else "system"
             if venv_type == "venv_pbgui":
                 start_cmd = (
-                    f"cd ~/{base_dir} && "
-                    f"source ~/software/venv_pbgui/bin/activate && "
+                    f"cd {base_shell} && "
+                    f"source {venv_shell} && "
                     f"nohup python -u starter.py -r {service_name} "
                     f"> /dev/null 2>&1 &"
                 )
             elif venv_type == "dotvenv":
                 start_cmd = (
-                    f"cd ~/{base_dir} && "
-                    f"source ~/{base_dir}/.venv/bin/activate && "
+                    f"cd {base_shell} && "
+                    f"source {dotvenv_shell} && "
                     f"nohup python -u starter.py -r {service_name} "
                     f"> /dev/null 2>&1 &"
                 )
             else:
                 start_cmd = (
-                    f"cd ~/{base_dir} && "
+                    f"cd {base_shell} && "
                     f"nohup python3 -u starter.py -r {service_name} "
                     f"> /dev/null 2>&1 &"
                 )

@@ -1,0 +1,202 @@
+---
+# Migrate an existing VPS from legacy start.sh/crontab startup to systemd user services.
+
+- hosts: "{{ hostname }}"
+  gather_facts: yes
+
+  vars:
+    ansible_ssh_pass: "{{ user_pw }}"
+    ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+    install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
+    pbgui_dir: "{{ install_dir }}/pbgui"
+    python_bin: "{{ install_dir }}/venv_pbgui/bin/python"
+    systemd_units:
+      - pbgui-api.service
+      - pbgui-pbrun.service
+      - pbgui-pbremote.service
+      - pbgui-pbcoindata.service
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: check PBGui directory
+      stat:
+        path: "{{ pbgui_dir }}"
+      register: pbgui_dir_stat
+
+    - name: fail when PBGui directory is missing
+      fail:
+        msg: "PBGui directory not found at {{ pbgui_dir }}"
+      when: not pbgui_dir_stat.stat.isdir
+
+    - name: check PBGui venv Python
+      stat:
+        path: "{{ python_bin }}"
+      register: python_bin_stat
+
+    - name: fail when PBGui venv Python is missing
+      fail:
+        msg: "PBGui virtualenv Python not found at {{ python_bin }}"
+      when: not python_bin_stat.stat.exists
+
+    - name: ensure PBGui setup directory exists
+      file:
+        path: "{{ pbgui_dir }}/setup"
+        state: directory
+        mode: "0755"
+
+    - name: copy systemd setup helper
+      copy:
+        src: setup/setup_systemd.sh
+        dest: "{{ pbgui_dir }}/setup/setup_systemd.sh"
+        mode: "0755"
+
+    - name: stop existing PBGui systemd user services before migration
+      shell: |
+        uid="$(id -u {{ user | quote }})"
+        sudo -H -u {{ user | quote }} env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user stop {{ systemd_units | join(' ') }} || true
+      args:
+        executable: /bin/bash
+      become: yes
+      changed_when: false
+
+    - name: stop legacy starter-managed PBGui services
+      shell: |
+        if [ -x {{ python_bin | quote }} ] && [ -f {{ (pbgui_dir + '/starter.py') | quote }} ]; then
+          {{ python_bin | quote }} {{ (pbgui_dir + '/starter.py') | quote }} -k PBRun PBRemote PBCoinData || true
+        fi
+      args:
+        executable: /bin/bash
+      register: legacy_starter_stop
+      changed_when: true
+
+    - name: stop remaining legacy PBGui processes
+      shell: |
+        PBGUI_MIGRATION_DIR={{ pbgui_dir | quote }} python3 - <<'PY'
+        import os
+        import signal
+        import time
+
+        target_dir = os.path.realpath(os.environ['PBGUI_MIGRATION_DIR'])
+        target_prefix = target_dir + os.sep
+        scripts = ('PBApiServer.py', 'PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'PBData.py', 'PBMon.py', 'starter.py')
+        current = os.getpid()
+        targets = []
+        for name in os.listdir('/proc'):
+            if not name.isdigit():
+                continue
+            pid = int(name)
+            if pid == current:
+                continue
+            try:
+                with open(f'/proc/{pid}/cmdline', 'rb') as handle:
+                    cmd = handle.read().replace(b'\0', b' ').decode('utf-8', errors='replace').strip()
+            except Exception:
+                continue
+            try:
+                cwd = os.path.realpath(os.readlink(f'/proc/{pid}/cwd'))
+            except Exception:
+                cwd = ''
+            if cmd and any(script in cmd for script in scripts) and (target_prefix in cmd or cwd == target_dir):
+                targets.append(pid)
+
+        for pid in targets:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        if targets:
+            time.sleep(3)
+        for pid in targets:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        print(f'legacy_processes={len(targets)}')
+        PY
+      args:
+        executable: /bin/bash
+      register: legacy_process_stop
+      changed_when: "'legacy_processes=0' not in legacy_process_stop.stdout"
+
+    - name: install and start PBGui systemd user services
+      command:
+        argv:
+          - /bin/bash
+          - "{{ pbgui_dir }}/setup/setup_systemd.sh"
+          - --user
+          - "{{ user }}"
+          - --pbgui-dir
+          - "{{ pbgui_dir }}"
+          - --python
+          - "{{ python_bin }}"
+          - --enable
+          - api,pbrun,pbremote,pbcoindata
+          - --include-pbremote
+      become: yes
+      register: systemd_setup_result
+
+    - name: verify PBGui systemd services are active
+      shell: |
+        uid="$(id -u {{ user | quote }})"
+        sudo -H -u {{ user | quote }} env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user is-active {{ item }}
+      args:
+        executable: /bin/bash
+      become: yes
+      loop: "{{ systemd_units }}"
+      register: systemd_active_result
+      changed_when: false
+
+    - name: remove Ansible-managed legacy pbgui crontab entry
+      cron:
+        name: "pbgui"
+        state: absent
+
+    - name: remove legacy pbgui start.sh crontab lines
+      shell: |
+        legacy_start={{ (pbgui_dir + '/start.sh') | quote }}
+        before="$(mktemp)"
+        after="$(mktemp)"
+        crontab -l > "${before}" 2>/dev/null || true
+        awk -v legacy_start="${legacy_start}" '
+          /^#Ansible: pbgui$/ { skip_next=1; changed=1; next }
+          skip_next { skip_next=0; changed=1; next }
+          index($0, legacy_start) { changed=1; next }
+          ($0 ~ /pbgui/ && $0 ~ /start\.sh/) { changed=1; next }
+          { print }
+          END { if (changed) print "changed=1" > "/dev/stderr"; else print "changed=0" > "/dev/stderr" }
+        ' "${before}" > "${after}" 2>"${after}.status"
+        if grep -q 'changed=1' "${after}.status"; then
+          crontab "${after}"
+          cat "${after}.status"
+        else
+          cat "${after}.status"
+        fi
+        rm -f "${before}" "${after}" "${after}.status"
+      args:
+        executable: /bin/bash
+      register: legacy_crontab_cleanup
+      changed_when: "'changed=1' in legacy_crontab_cleanup.stdout"
+
+    - name: delete legacy start.sh
+      file:
+        path: "{{ pbgui_dir }}/start.sh"
+        state: absent
+
+    - name: print systemd setup result
+      debug:
+        var: systemd_setup_result
+      tags: debug,never
+
+    - name: print systemd active result
+      debug:
+        var: systemd_active_result
+      tags: debug,never

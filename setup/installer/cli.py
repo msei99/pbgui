@@ -19,6 +19,7 @@ from .core import (
     run_local_master_install,
     run_remote_master_install,
 )
+from .ssh import probe_ssh_host_key
 
 
 def _ask(prompt: str, default: str = "") -> str:
@@ -40,6 +41,13 @@ def _print_install_preview(install_dir: str) -> None:
     print(f"Venvs: {install_parent}/venv_pbgui, {install_parent}/venv_pb7")
 
 
+def _fingerprint_matches(value: str, fingerprint: str) -> bool:
+    """Return True when user input matches a SHA256 SSH fingerprint."""
+    entered = str(value or "").strip()
+    expected = str(fingerprint or "").strip()
+    return entered == expected or entered == expected.removeprefix("SHA256:")
+
+
 def _run_remote_cli() -> int:
     """Run the remote CLI installer flow."""
     login_mode = _ask("Initial login mode (root/sudo)", "root").lower()
@@ -55,6 +63,42 @@ def _run_remote_cli() -> int:
     install_dir = _ask("Install parent directory", default_remote_install_dir(target_user))
     _print_install_preview(install_dir)
     remote_host = _ask("VPS IP or hostname")
+    try:
+        ssh_port = int(_ask("SSH port", "22"))
+    except ValueError:
+        print("SSH port must be a number.")
+        return 2
+    if not (1 <= ssh_port <= 65535):
+        print("SSH port must be between 1 and 65535.")
+        return 2
+    print("\nRemote Master install is intended for a fresh VPS and may change hostname, users, swap, firewall, OpenVPN, packages, and systemd services.")
+    fresh_confirm = _ask("Type FRESH_VPS to confirm this target is disposable/fresh", "")
+    if fresh_confirm != "FRESH_VPS":
+        print("Cancelled.")
+        return 2
+    try:
+        host_key = probe_ssh_host_key(remote_host, ssh_port)
+    except Exception as exc:
+        print(f"Could not read SSH host key: {exc}")
+        return 2
+    if host_key.get("mismatch"):
+        print("SSH host key mismatch. Refusing to connect until ~/.ssh/known_hosts is fixed intentionally.")
+        print(f"Presented key: {host_key.get('key_type')} {host_key.get('fingerprint')}")
+        return 2
+    accept_unknown_host = False
+    accepted_host_key_fingerprint = ""
+    if not host_key.get("known"):
+        fingerprint = str(host_key.get("fingerprint") or "")
+        print("\nThis SSH host key is not in your known_hosts file.")
+        print(f"Host key: {host_key.get('key_type')} {fingerprint}")
+        confirm_key = _ask("Type the fingerprint above to trust this host for this install", "")
+        if not _fingerprint_matches(confirm_key, fingerprint):
+            print("Cancelled.")
+            return 2
+        accept_unknown_host = True
+        accepted_host_key_fingerprint = fingerprint
+    else:
+        print("SSH host key is already known.")
     hostname = _ask("Remote hostname / OpenVPN profile name", "pbgui-master")
     swap_size = _ask("Swap size", "6G")
     pbgui_password = _ask_password("PBGui web password", "PBGui$Bot!")
@@ -80,7 +124,7 @@ def _run_remote_cli() -> int:
     cfg = RemoteMasterConfig.from_mapping(
         {
             "remote_host": remote_host,
-            "ssh_port": 22,
+            "ssh_port": ssh_port,
             "login_mode": login_mode,
             "ssh_username": ssh_username,
             "ssh_password": ssh_password,
@@ -96,6 +140,9 @@ def _run_remote_cli() -> int:
             "openvpn_cidr": openvpn_cidr,
             "ssh_mode": ssh_mode,
             "ssh_allowed_ips": ssh_allowed_ips,
+            "confirm_fresh_host": True,
+            "accept_unknown_host": accept_unknown_host,
+            "accepted_host_key_fingerprint": accepted_host_key_fingerprint,
         }
     )
     artifact_dir = Path(tempfile.mkdtemp(prefix="pbgui-installer-"))

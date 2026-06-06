@@ -1,7 +1,7 @@
 [main]
 pbname = <hostname>
-pb7dir = /home/<username>/software/pb7
-pb7venv = /home/<username>/software/venv_pb7/bin/python
+pb7dir = <install_dir>/pb7
+pb7venv = <install_dir>/venv_pb7/bin/python
 
 [pbremote]
 bucket = <bucket_name>:
@@ -26,4 +26,3 @@ port = 8000
 [vps_manager]
 # Number of rotated historical task logs to keep per VPS Manager action
 task_log_history = 10
-

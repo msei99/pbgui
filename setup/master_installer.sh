@@ -5,6 +5,7 @@ PBGUI_INSTALLER_BRANCH="${PBGUI_INSTALLER_BRANCH:-main}"
 REPO_ARCHIVE_URL="${PBGUI_INSTALLER_ARCHIVE_URL:-https://github.com/msei99/pbgui/archive/refs/heads/${PBGUI_INSTALLER_BRANCH}.tar.gz}"
 WORK_DIR="${PBGUI_INSTALLER_WORKDIR:-${TMPDIR:-/tmp}/pbgui-master-installer}"
 PYTHON_BIN="${PYTHON:-python3}"
+export PBGUI_INSTALLER_BRANCH
 
 info() { printf '\033[36m[INFO]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[WARN]\033[0m %s\n' "$*"; }

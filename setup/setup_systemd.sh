@@ -13,6 +13,30 @@ success() { printf '\033[32m[ OK ]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[WARN]\033[0m %s\n' "$*"; }
 err() { printf '\033[31m[ERR ]\033[0m %s\n' "$*" >&2; }
 
+validate_unit_path() {
+  local label="$1"
+  local value="$2"
+  if [[ -z "$value" ]]; then
+    err "$label is required."
+    exit 1
+  fi
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *'{{'* || "$value" == *'}}'* ]]; then
+    err "$label contains invalid characters."
+    exit 1
+  fi
+  if [[ ! "$value" =~ ^[A-Za-z0-9._~/-]+$ ]]; then
+    err "$label may only contain letters, numbers, '/', '.', '_', '-' and '~'."
+    exit 1
+  fi
+  IFS='/' read -r -a _parts <<< "$value"
+  for _part in "${_parts[@]}"; do
+    if [[ "$_part" == "." || "$_part" == ".." ]]; then
+      err "$label cannot contain '.' or '..' path segments."
+      exit 1
+    fi
+  done
+}
+
 usage() {
   cat <<'EOF'
 Usage: setup/setup_systemd.sh [options]
@@ -68,6 +92,7 @@ if [[ -z "$PBGUI_DIR" ]]; then
   PBGUI_DIR="$(pwd)"
 fi
 PBGUI_DIR="$(realpath "$PBGUI_DIR")"
+validate_unit_path "PBGui directory" "$PBGUI_DIR"
 
 if [[ -z "$PYTHON_BIN" ]]; then
   if [[ -x "$(dirname "$PBGUI_DIR")/venv_pbgui/bin/python" ]]; then
@@ -82,6 +107,7 @@ if [[ "$PYTHON_BIN" != /* ]]; then
   PYTHON_BIN="$(pwd)/$PYTHON_BIN"
 fi
 PYTHON_BIN="$(cd "$(dirname "$PYTHON_BIN")" && pwd)/$(basename "$PYTHON_BIN")"
+validate_unit_path "Python executable" "$PYTHON_BIN"
 
 unit_dir="$TARGET_HOME/.config/systemd/user"
 wants_dir="$unit_dir/default.target.wants"

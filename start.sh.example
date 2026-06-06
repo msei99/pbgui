@@ -1,9 +1,11 @@
-#!/usr/bin/bash
-venv=~/software/venv_pbgui      #Path to python venv
-pbgui=~/software/pbgui          #path to pbgui installation
+#!/usr/bin/env bash
+# Legacy fallback only. New installations should use setup/setup_systemd.sh.
+install_dir="${PBGUI_INSTALL_DIR:-$HOME/software}"
+venv="$install_dir/venv_pbgui"
+pbgui="$install_dir/pbgui"
 
-source ${venv}/bin/activate
-cd ${pbgui}
+source "${venv}/bin/activate"
+cd "${pbgui}"
 python PBApiServer.py &
 python PBRun.py &
 python PBRemote.py &

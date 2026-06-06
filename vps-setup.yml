@@ -14,7 +14,7 @@
 # 11. Create python3.12 venv for pb7
 # 12. Build passivbot-rust with maturin
 # 13. Setup pbgui
-# 14. Restart PBRun, PBRemote and PBCoinData
+# 14. Install and start PBGui systemd user services
 
 - hosts: "{{ hostname }}"
   gather_facts: yes
@@ -52,6 +52,14 @@
       set_fact:
         remote_home: "{{ ansible_facts['env']['HOME'] }}"
         install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
+
+    - name: create install directory
+      file:
+        path: "{{ install_dir }}"
+        state: directory
+        owner: "{{ user }}"
+        mode: "0755"
+      become: yes
     
     - name: print install_dir
       debug:
@@ -327,23 +335,15 @@
         var: maturin_result
       tags: debug,never
 
-    - name: pbgui copy start.sh.example -> start.sh
-      command: cp "{{ install_dir }}/pbgui/start.sh.example" "{{ install_dir }}/pbgui/start.sh"
-    
-    - name: comment out PBStat.py and PBData.py in start.sh
-      replace:
-        path: "{{ install_dir }}/pbgui/start.sh"
-        regexp: "{{ item.regexp }}"
-        replace: "{{ item.replace }}"
-      loop:
-        - { regexp: '^python PBStat', replace: '# python PBStat' }
-        - { regexp: '^python PBData', replace: '# python PBData' }
-    
-    - name: create crontab for pbgui
+    - name: remove legacy pbgui crontab entry
       cron:
         name: "pbgui"
-        job: "{{ install_dir }}/pbgui/start.sh"
-        special_time: reboot
+        state: absent
+
+    - name: remove legacy start.sh
+      file:
+        path: "{{ install_dir }}/pbgui/start.sh"
+        state: absent
     
     - name: pbgui copy pbgui.ini.example -> pbgui.ini
       command: cp "{{ install_dir }}/pbgui/pbgui.ini.example" "{{ install_dir }}/pbgui/pbgui.ini"
@@ -355,7 +355,7 @@
         replace: "{{ item.replace }}"
       loop:
         - { regexp: '<hostname>', replace: "{{ hostname }}" }
-        - { regexp: '<username>', replace: "{{ user }}" }
+        - { regexp: '<install_dir>', replace: "{{ install_dir }}" }
         - { regexp: '<bucket_name>:', replace: "{{ bucket_name }}" }
         - { regexp: '<api_key>', replace: "{{ api_key }}" }
 
@@ -381,31 +381,25 @@
       copy:
         src: "{{ local_home }}/.config/rclone/"
         dest: "{{ remote_home }}/.config/rclone/"
-    
-    - name: Start or Restart PBRun and PBRemote
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -r PBRun PBRemote
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
-      register: starter_result
 
-    - name: print starter result
+    - name: install and start PBGui systemd user services
+      command:
+        argv:
+          - /bin/bash
+          - "{{ install_dir }}/pbgui/setup/setup_systemd.sh"
+          - --user
+          - "{{ user }}"
+          - --pbgui-dir
+          - "{{ install_dir }}/pbgui"
+          - --python
+          - "{{ install_dir }}/venv_pbgui/bin/python"
+          - --enable
+          - api,pbrun,pbremote,pbcoindata
+          - --include-pbremote
+      become: yes
+      register: systemd_setup_result
+
+    - name: print systemd setup result
       debug:
-        var: starter_result
-      tags: debug,never
-
-    - name: Start or Restart PBCoinData
-      shell: |
-        source "{{ install_dir }}/venv_pbgui/bin/activate"
-        python "{{ install_dir }}/pbgui/starter.py" -r PBCoinData
-      args:
-        executable: /bin/bash
-        chdir: "{{ install_dir }}/pbgui"
-      register: starter_result
-
-    - name: print starter result
-      debug:
-        var: starter_result
+        var: systemd_setup_result
       tags: debug,never

@@ -512,7 +512,7 @@ def _test_systemd_migration() -> dict[str, Any]:
 
     legacy_entries = list((status.get("legacy_crontab") or {}).get("entries") or [])
     if legacy_entries:
-        logs.append(f"Would remove {len(legacy_entries)} legacy PBGui crontab autostart entrie(s):")
+        logs.append(f"Would remove {len(legacy_entries)} legacy PBGui crontab autostart entrie(s) after systemd services verify successfully:")
         logs.extend(f"  - {entry}" for entry in legacy_entries)
     else:
         logs.append("Would not remove crontab entries because none were detected.")
@@ -576,14 +576,6 @@ def _run_systemd_migration() -> dict[str, Any]:
     elif linger.get("warning"):
         warnings.append(str(linger.get("warning")))
 
-    crontab_result = _remove_legacy_crontab_entries()
-    if crontab_result.get("removed"):
-        logs.append(f"Removed {len(crontab_result.get('removed') or [])} legacy PBGui crontab autostart entrie(s).")
-    if crontab_result.get("warning"):
-        warnings.append(
-            "Could not inspect/remove legacy crontab autostart. If you configured PBGui autostart manually, remove it yourself to avoid duplicate starts."
-        )
-
     if before.get("pbremote_will_be_preserved") and "pbremote" in enable_services:
         logs.append("PBRemote was detected and will be preserved as a systemd user service.")
     proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=120, cwd=str(pbgdir))
@@ -599,7 +591,20 @@ def _run_systemd_migration() -> dict[str, Any]:
             continue
         service_id = "api-server" if service == "api" else service
         action_result = _service_action(service_id, "restart")
+        if not action_result.get("running"):
+            raise RuntimeError(f"pbgui-{service}.service did not become active after restart.")
         logs.append(f"Restarted {service_id} with {action_result.get('manager', 'unknown')}.")
+
+    if not _systemd_unit_for_service("api-server"):
+        raise RuntimeError("pbgui-api.service was not installed.")
+
+    crontab_result = _remove_legacy_crontab_entries()
+    if crontab_result.get("removed"):
+        logs.append(f"Removed {len(crontab_result.get('removed') or [])} legacy PBGui crontab autostart entrie(s).")
+    if crontab_result.get("warning"):
+        warnings.append(
+            "Could not inspect/remove legacy crontab autostart. If you configured PBGui autostart manually, remove it yourself to avoid duplicate starts."
+        )
 
     api_message = _schedule_api_systemd_handoff(logs)
     logs.append(api_message)
