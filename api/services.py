@@ -9,6 +9,7 @@ import json
 import importlib
 import os
 import pwd
+import re
 import shlex
 import signal
 import subprocess
@@ -147,10 +148,19 @@ def _systemd_service_action(name: str, action: str) -> dict[str, Any] | None:
 def _service_status(name: str) -> dict[str, Any]:
     """Return service status using systemd when available, otherwise legacy PID checks."""
     systemd_status = _systemd_service_status(name)
-    if systemd_status is not None:
+    if systemd_status is not None and systemd_status.get("running"):
         return systemd_status
     obj = _get_service(name)
-    return {"running": bool(obj.is_running()), "manager": "legacy"}
+    legacy_running = bool(obj.is_running())
+    if legacy_running:
+        result = {"running": True, "manager": "legacy"}
+        if systemd_status is not None:
+            result["unit"] = systemd_status.get("unit")
+            result["systemd_state"] = systemd_status.get("systemd_state")
+        return result
+    if systemd_status is not None:
+        return systemd_status
+    return {"running": False, "manager": "legacy"}
 
 
 def _service_action(name: str, action: str) -> dict[str, Any]:
@@ -209,10 +219,39 @@ def _legacy_crontab_line_matches(line: str) -> bool:
     stripped = line.strip()
     if not stripped or stripped.startswith("#") or not stripped.startswith("@reboot"):
         return False
-    lower = stripped.lower()
-    if "start.sh" in lower and "pbgui" in lower:
-        return True
-    return any(script.lower() in lower for script in _SERVICE_SCRIPT_NAMES.values())
+    parts = stripped.split(None, 1)
+    command = parts[1] if len(parts) > 1 else ""
+    target_dir = Path(PBGDIR).resolve()
+    target_start = target_dir / "start.sh"
+    script_names = set(_SERVICE_SCRIPT_NAMES.values())
+    candidate_paths: list[Path] = []
+
+    def expand_cron_path(value: str) -> Path:
+        text = value.strip().strip("'\"")
+        home = str(Path.home())
+        if text.startswith("~/"):
+            text = f"{home}/{text[2:]}"
+        elif text.startswith("$HOME/"):
+            text = f"{home}/{text[6:]}"
+        elif text.startswith("${HOME}/"):
+            text = f"{home}/{text[8:]}"
+        return Path(text).resolve(strict=False)
+
+    for match in re.findall(r"(?:^|[\s;&|])((?:/|~/|\$HOME/|\$\{HOME\}/)[^\s'\";&|]+)", command):
+        try:
+            candidate_paths.append(expand_cron_path(match))
+        except Exception:
+            continue
+
+    for path in candidate_paths:
+        if path == target_start:
+            return True
+        if path.parent == target_dir and path.name in script_names:
+            return True
+
+    if any(path == target_dir for path in candidate_paths):
+        return any(script in command for script in script_names)
+    return False
 
 
 def _read_legacy_crontab() -> dict[str, Any]:
@@ -467,22 +506,49 @@ def _schedule_api_systemd_handoff(logs: list[str]) -> str:
             raise RuntimeError(output or f"systemctl --user restart {unit} failed")
         return "API restart requested through existing systemd unit."
 
+    current_pid = os.getpid()
+    pidfile = Path(PBGDIR) / "data" / "pid" / "api_server.pid"
+    handoff_log = Path(PBGDIR) / "data" / "logs" / "api-systemd-handoff.log"
+    handoff_cmd = f"""old_pid={current_pid}
+pidfile={shlex.quote(str(pidfile))}
+logfile={shlex.quote(str(handoff_log))}
+{{
+  printf '%s API handoff waiting for old pid %s\n' "$(date -Is)" "$old_pid"
+  for _ in $(seq 1 30); do
+    if ! kill -0 "$old_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 1
+  done
+  if [ -f "$pidfile" ] && [ "$(cat "$pidfile" 2>/dev/null || true)" = "$old_pid" ]; then
+    rm -f "$pidfile"
+    printf '%s removed stale pidfile %s\n' "$(date -Is)" "$pidfile"
+  fi
+  printf '%s starting %s\n' "$(date -Is)" {shlex.quote(unit)}
+  systemctl --user start {shlex.quote(unit)}
+  printf '%s start command exited rc=%s\n' "$(date -Is)" "$?"
+}} >> "$logfile" 2>&1"""
+
     env = _systemd_user_env()
-    subprocess.Popen(
-        ["bash", "-lc", f"sleep 1; systemctl --user restart {unit}"],
-        cwd=str(PBGDIR),
+    handoff_unit = f"pbgui-api-handoff-{current_pid}.service"
+    proc = subprocess.run(
+        ["systemd-run", "--user", f"--unit={handoff_unit}", "--collect", "/bin/bash", "-lc", handoff_cmd],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
     )
+    if proc.returncode != 0:
+        output = ((proc.stderr or "") + (proc.stdout or "")).strip()
+        raise RuntimeError(output or "Could not schedule API systemd handoff.")
 
     def _stop_current_api() -> None:
         time.sleep(0.3)
         os.kill(os.getpid(), signal.SIGTERM)
 
     threading.Thread(target=_stop_current_api, daemon=True).start()
-    logs.append("Scheduled current API process shutdown after starting systemd handoff.")
+    logs.append(f"Scheduled current API process shutdown before systemd handoff unit {handoff_unit} starts pbgui-api.service.")
     return "API handoff scheduled through pbgui-api.service."
 
 

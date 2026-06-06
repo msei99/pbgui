@@ -3788,7 +3788,9 @@
           hostname: store.hostname || '',
           hosts: getManagedRows().map(function (row) { return row.hostname; }),
           pbgui_up: !!st.pbgui_update_available,
-          pb7_up: !!st.pb7_update_available
+          pb7_up: !!st.pb7_update_available,
+          pending_updates: st.pending_updates == null ? String(((st.summary_row || {}).updates) || '') : String(st.pending_updates),
+          reboot_required: !!((st.summary_row || {}).reboot_required)
         });
       }
       if (isMasterContextView()) {
@@ -5807,6 +5809,32 @@
       sendPreview();
     }
 
+    function getVpsSystemdMigrationButtonModel(hostname, detail, ui) {
+      const st = (detail && detail.status) || {};
+      const summary = st.summary_row || {};
+      const apiStatus = st.systemd_migration || {};
+      const cached = (ui && ui.systemdMigrationPreview) || {};
+      const command = String(st.task_command || summary.task_command || '').trim();
+      const status = String(st.task_status || summary.task_status || '').trim().toLowerCase();
+      const failedTask = command === 'vps-migrate-systemd' && ['failed', 'error', 'timeout', 'canceled', 'cancelled', 'unreachable'].includes(status);
+      if (apiStatus.migration_complete) {
+        return { className: 'sb-btn ok', text: 'Systemd migration complete', title: 'Migration appears complete. Click to preview current state.' };
+      }
+      if (String(apiStatus.state || '') === 'blocked') {
+        return { className: 'sb-btn danger', text: 'Systemd migration blocked', title: String(apiStatus.error || 'Migration prerequisites are not met. Click to preview current state.') };
+      }
+      if (apiStatus.migration_needed || String(apiStatus.state || '') === 'needed') {
+        return { className: 'sb-btn warning', text: 'Preview systemd migration', title: 'Migration is still needed. Click to preview and run it.' };
+      }
+      if (cached.migration_complete || cached.migration_needed === false) {
+        return { className: 'sb-btn ok', text: 'Systemd migration complete', title: 'Last preview reported the migration complete. Click to refresh current state.' };
+      }
+      if (failedTask) {
+        return { className: 'sb-btn danger', text: 'Systemd migration failed', title: 'Last migration task failed. Click to preview current state.' };
+      }
+      return { className: 'sb-btn warning', text: 'Preview systemd migration', title: 'Preview and run the VPS systemd migration.' };
+    }
+
     function renderVpsSystemdMigrationPreview(data) {
       const checks = Array.isArray(data.checks) ? data.checks : [];
       const actions = Array.isArray(data.actions) ? data.actions : [];
@@ -5868,7 +5896,7 @@
       if (migrateBtn) {
         migrateBtn.onclick = function () {
           closeAlertModal();
-          runVpsWithLog(hostname, 'vps-migrate-systemd', 'Migrate to systemd', null, true);
+          vpsActionWithPw(hostname, 'vps-migrate-systemd', 'Migrate to systemd');
         };
       }
       setTimeout(function() { box.scrollTop = 0; }, 0);
@@ -6574,7 +6602,13 @@
         return;
       }
       if (msg.type === 'vps_systemd_migration_preview') {
-        openVpsSystemdMigrationPreview(msg.data || {});
+        const data = msg.data || {};
+        const hostname = String(data.hostname || store.hostname || '');
+        if (hostname) {
+          ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null).systemdMigrationPreview = data;
+          renderUi({ forceSidebarActions: true });
+        }
+        openVpsSystemdMigrationPreview(data);
         return;
       }
       if (msg.type === 'bucket_cleanup_indicator_result') {
@@ -8912,6 +8946,7 @@
         const linuxUpdateBtnClass = hasLinuxUpdates ? 'sb-btn warning' : 'sb-btn ok';
         const needsReboot = !!(st.summary_row || {}).reboot_required;
         const rebootBtnClass = needsReboot ? 'sb-btn warning' : 'sb-btn ok';
+        const systemdMigrationBtn = getVpsSystemdMigrationButtonModel(selectedHost, detail, ui);
         html = `
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>
           <div class='sb-field'>
@@ -8945,7 +8980,7 @@
           <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='openSwapResizePrompt(${js(selectedHost)})'>Resize Swap</button>
           <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='openFirewallSettingsPrompt(${js(selectedHost)})'>Update Firewall Settings</button>
           <button class='sb-btn' type='button' onclick='openCoinDataPrompt(${js(selectedHost)})'>Update CoinData API</button>
-          <button class='sb-btn warning' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='previewVpsSystemdMigration(${js(selectedHost)})'>Preview systemd migration</button>`;
+          <button class='${systemdMigrationBtn.className}' type='button' title='${escAttr(systemdMigrationBtn.title)}' onclick='previewVpsSystemdMigration(${js(selectedHost)})'>${esc(systemdMigrationBtn.text)}</button>`;
       } else if (store.view === 'add') {
         html = `
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>

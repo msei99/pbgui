@@ -1016,6 +1016,8 @@ window.PBGUI_NAV_CONFIG = {
   var _selectedWorkerId = '';
   var _currentPanelId = 'overview';
   var _migrationStatus = null;
+  var _apiRestartPendingUntil = 0;
+  var _migrationRestartTimer = null;
 
   function esc(value) {
     return String(value == null ? '' : value)
@@ -1121,8 +1123,21 @@ window.PBGUI_NAV_CONFIG = {
   }
 
   /* ── Systemd migration ─────────────────────────────────── */
+  function apiRestartPending() {
+    return _apiRestartPendingUntil && Date.now() < _apiRestartPendingUntil;
+  }
+
+  function scheduleMigrationRestartCheck(delayMs) {
+    clearTimeout(_migrationRestartTimer);
+    _migrationRestartTimer = setTimeout(function () {
+      _migrationRestartTimer = null;
+      loadMigrationStatus(false);
+    }, delayMs || 3000);
+  }
+
   function migrationStatusMeta(data) {
     if (!data) return { cls: '', label: 'Not loaded', text: 'Migration status not loaded yet.', needed: false };
+    if (data._restart_pending) return { cls: 'warn', label: 'Restarting', text: 'API restart is in progress after successful migration.', needed: false };
     if (data._error) return { cls: 'stopped', label: 'Error', text: data._error, needed: false };
     var warnings = data.warnings || [];
     if (data.migration_needed) return { cls: 'warn', label: 'Needed', text: 'Systemd migration is available for this master.', needed: true };
@@ -1193,6 +1208,10 @@ window.PBGUI_NAV_CONFIG = {
     var wrap = document.getElementById('migration-wrap');
     if (!wrap) return;
     var meta = migrationStatusMeta(data);
+    if (data && data._restart_pending && !data.user) {
+      wrap.innerHTML = '<div class="migration-section"><div class="migration-ok">Migration completed. API restart is in progress; retrying status automatically...</div></div>';
+      return;
+    }
     if (data && data._error) {
       wrap.innerHTML = '<div class="migration-section"><div class="migration-warn">Failed to load migration status: ' + esc(data._error) + '</div></div>';
       return;
@@ -1219,7 +1238,7 @@ window.PBGUI_NAV_CONFIG = {
       + '</div>';
 
     html += '<div class="migration-section"><div class="migration-section-title"><span>Preflight result</span></div>';
-    html += data.migration_needed ? '<div class="migration-warn">' + esc(meta.text) + '</div>' : '<div class="migration-ok">' + esc(meta.text) + '</div>';
+    html += data._restart_pending ? '<div class="migration-ok">Migration completed. API restart is in progress; retrying status automatically...</div>' : (data.migration_needed ? '<div class="migration-warn">' + esc(meta.text) + '</div>' : '<div class="migration-ok">' + esc(meta.text) + '</div>');
     if (missing.length) {
       html += '<div class="migration-warn">Missing required units: ' + esc(missing.map(function (row) { return row.unit || row.service; }).join(', ')) + '</div>';
     }
@@ -1237,7 +1256,7 @@ window.PBGUI_NAV_CONFIG = {
       + '<div class="migration-actions">'
       + '<button class="migration-primary" id="migration-test-btn" type="button" onclick="testSystemdMigration()">Test migration</button>'
       + '<button class="migration-primary" id="migration-run-btn" type="button" onclick="runSystemdMigration()"' + (data.migration_needed ? '' : ' disabled') + '>Migrate this master to systemd</button>'
-      + '<span class="migration-note">The API server will restart after a successful migration. Reload this page if the connection drops briefly.</span>'
+      + '<span class="migration-note">The API server will restart after a successful migration. This page retries status automatically while the handoff is in progress.</span>'
       + '</div></div>';
     wrap.innerHTML = html;
   }
@@ -1253,12 +1272,27 @@ window.PBGUI_NAV_CONFIG = {
         });
       })
       .then(function (data) {
+        var restartWasPending = apiRestartPending();
+        _apiRestartPendingUntil = 0;
+        clearTimeout(_migrationRestartTimer);
         _migrationStatus = data;
         updateMigrationSummary();
         renderMigrationStatus(data);
         renderOverviewCards();
+        if (restartWasPending) {
+          fetchStatus();
+          window.fetchWorkers(false);
+        }
       })
       .catch(function (err) {
+        if (apiRestartPending()) {
+          _migrationStatus = Object.assign({}, _migrationStatus || {}, { _restart_pending: true });
+          updateMigrationSummary();
+          renderMigrationStatus(_migrationStatus);
+          renderOverviewCards();
+          scheduleMigrationRestartCheck(3000);
+          return;
+        }
         _migrationStatus = { _error: err && err.message ? err.message : 'Migration status request failed.' };
         updateMigrationSummary();
         renderMigrationStatus(_migrationStatus);
@@ -1326,12 +1360,15 @@ window.PBGUI_NAV_CONFIG = {
         var lines = [];
         (data.warnings || []).forEach(function (warning) { lines.push('WARNING: ' + warning); });
         (data.logs || []).forEach(function (line) { lines.push(line); });
-        _migrationStatus = data.after || _migrationStatus;
+        if (data.api_restart) {
+          _apiRestartPendingUntil = Date.now() + 90000;
+        }
+        _migrationStatus = Object.assign({}, data.after || _migrationStatus || {}, data.api_restart ? { _restart_pending: true } : {});
         updateMigrationSummary();
         renderMigrationStatus(_migrationStatus);
         renderOverviewCards();
         _resultPopup('Systemd migration', 'Migration completed. API restart has been scheduled.', lines.join('\n'), true);
-        setTimeout(function () { loadMigrationStatus(true); }, 6000);
+        scheduleMigrationRestartCheck(3000);
       })
       .catch(function (err) {
         _resultPopup('Systemd migration', 'Migration failed.', err && err.message ? err.message : 'Migration failed.', false);

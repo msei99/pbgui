@@ -1,5 +1,20 @@
 # Unreleased
 
+- Hardened VPS systemd migration so leftover legacy PBGui processes, stale PID files, and restart-looping user services fail before legacy autostart cleanup is finalized.
+- Made the VPS monitor restart PBRun, PBRemote, and PBCoinData through remote systemd user units when they exist, preventing legacy `nohup starter.py` restarts from racing systemd migration.
+- Made `starter.py` and VPS systemd migration systemd-aware so older masters that still call `starter.py -r` on migrated slaves do not create orphan PBRun/PBRemote processes.
+- Preinstalled VPS systemd unit files before stopping legacy services so older masters cannot recreate legacy processes during the migration stop/start window.
+- Fixed the VPS Manager sidebar so the Update Linux and Reboot VPS buttons refresh their color when package/reboot status changes without requiring a browser reload.
+- Fixed VPS systemd migration crontab cleanup so `${HOME}` path matching does not get interpreted as an Ansible template variable, and removed the noisy legacy `starter.py` stop attempt from migration.
+- Fixed VPS setup, import probing, and systemd migration so managed VPS hosts use only the slave services (`PBRun`, `PBRemote`, `PBCoinData`) and no longer install, detect, stop, or verify master-only services such as the PBGui FastAPI server.
+- Made the VPS Manager systemd migration button use an API-provided systemd migration status so it can turn green after API/browser restarts, with the status probe ignoring Slave processes that are already owned by the expected systemd user units.
+- Fixed the VPS systemd migration status probe script generation and made API-provided migration status override stale browser/task state in the sidebar button.
+- Made VPS systemd migration prompt for and require the VPS user password before running the sudo/become playbook.
+- Made the Services migration API handoff run as a separate transient user unit so it survives shutdown of the old API process.
+- Fixed the Services status page so inactive installed systemd units do not hide running legacy PBGui processes during migration testing.
+- Restricted Services systemd migration crontab cleanup to the current PBGui install path so sibling tools such as pbgui-share are not removed.
+- Fixed Services systemd migration API handoff so the new systemd API process waits for the old process to exit and does not stop on a stale PID file.
+- Made the Services migration page treat the scheduled API systemd handoff as a restart-in-progress state instead of showing a failed migration fetch.
 - Made Existing VPS import probe use running PBGui process paths, legacy crontab paths, and common install parents when the entered install path does not contain PBGui.
 - Made the Existing VPS import hostname placeholder generic and auto-fill the IPv4 field from local `/etc/hosts` when possible.
 - Made the Existing VPS import action visible from the VPS Manager overview sidebar.

@@ -394,7 +394,7 @@
           - --python
           - "{{ install_dir }}/venv_pbgui/bin/python"
           - --enable
-          - api,pbrun,pbremote,pbcoindata
+          - pbrun,pbremote,pbcoindata
           - --include-pbremote
       become: yes
       register: systemd_setup_result

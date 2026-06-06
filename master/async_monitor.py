@@ -2252,9 +2252,15 @@ MONITORED_SERVICES = {
     "PBRun": ServiceInfo("PBRun", "data/pid/pbrun.pid",
                          "PBRun.py", "pbrun.py"),
     "PBRemote": ServiceInfo("PBRemote", "data/pid/pbremote.pid",
-                            "PBRemote.py", "pbremote.py"),
+                             "PBRemote.py", "pbremote.py"),
     "PBCoinData": ServiceInfo("PBCoinData", "data/pid/pbcoindata.pid",
-                              "PBCoinData.py", "pbcoindata.py"),
+                               "PBCoinData.py", "pbcoindata.py"),
+}
+
+MONITORED_SERVICE_SYSTEMD_UNITS = {
+    "PBRun": "pbgui-pbrun.service",
+    "PBRemote": "pbgui-pbremote.service",
+    "PBCoinData": "pbgui-pbcoindata.service",
 }
 
 
@@ -3680,9 +3686,73 @@ class VPSMonitor:
 
     # ── Service monitoring ──────────────────────────────────
 
+    async def _check_systemd_service(self, hostname: str,
+                                     service_name: str) -> dict | None:
+        """Return remote systemd user-unit status when the unit is installed."""
+        unit = MONITORED_SERVICE_SYSTEMD_UNITS.get(service_name)
+        if not unit:
+            return None
+        unit_json = json.dumps(unit)
+        result = await self.pool.run(
+            hostname,
+            "uid=\"$(id -u)\"; "
+            "export XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$uid}\"; "
+            "command -v systemctl >/dev/null 2>&1 || exit 2; "
+            f"unit={unit_json}; "
+            "systemctl --user show \"$unit\" "
+            "-p LoadState -p ActiveState -p SubState -p Result "
+            "-p MainPID -p ExecMainPID -p ExecMainStatus -p FragmentPath "
+            "--no-pager",
+            timeout=10,
+        )
+        if result is None or result.exit_status != 0:
+            return None
+
+        props: dict[str, str] = {}
+        for line in (result.stdout or "").splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            props[key] = value
+
+        load_state = props.get("LoadState", "")
+        if not load_state or load_state == "not-found":
+            return None
+
+        def _int_prop(name: str) -> int:
+            raw = props.get(name, "")
+            return int(raw) if raw.isdigit() else 0
+
+        active = props.get("ActiveState", "")
+        sub = props.get("SubState", "")
+        result_state = props.get("Result", "")
+        main_pid = _int_prop("MainPID") or _int_prop("ExecMainPID")
+        exec_status = props.get("ExecMainStatus", "")
+        running = active == "active" and sub == "running" and main_pid > 0
+        error = None
+        if not running:
+            error = (
+                f"systemd {unit}: active={active or 'unknown'} "
+                f"sub={sub or 'unknown'} result={result_state or 'unknown'} "
+                f"status={exec_status or 'unknown'}"
+            )
+        return {
+            "status": (ServiceStatus.RUNNING.value if running
+                       else ServiceStatus.STOPPED.value),
+            "pid": main_pid if running else None,
+            "error": error,
+            "was_restarted": False,
+            "manager": "systemd",
+            "unit": unit,
+        }
+
     async def _check_service(self, hostname: str, svc: ServiceInfo
                              ) -> dict:
         """Check if a service is running on a VPS."""
+        systemd_status = await self._check_systemd_service(hostname, svc.name)
+        if systemd_status is not None:
+            return systemd_status
+
         result = None
         for base_dir in self.pool.get_remote_pbgui_dirs(hostname):
             pid_path = f"{base_dir}/{svc.pid_file}"
@@ -3744,6 +3814,31 @@ class VPSMonitor:
             return False
 
         _log(SERVICE, f"[service] Restarting {service_name} on {hostname}")
+
+        unit = MONITORED_SERVICE_SYSTEMD_UNITS.get(service_name)
+        if unit:
+            unit_json = json.dumps(unit)
+            systemd_cmd = (
+                "uid=\"$(id -u)\"; "
+                "export XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$uid}\"; "
+                "command -v systemctl >/dev/null 2>&1 || exit 2; "
+                f"unit={unit_json}; "
+                "load_state=$(systemctl --user show \"$unit\" "
+                "-p LoadState --value --no-pager 2>/dev/null || true); "
+                "if [ -n \"$load_state\" ] && [ \"$load_state\" != not-found ]; then "
+                "systemctl --user restart \"$unit\"; "
+                "else exit 3; fi"
+            )
+            result = await self.pool.run(hostname, systemd_cmd, timeout=15)
+            if result and result.exit_status == 0:
+                self._record_restart(hostname, service_name)
+                _log(SERVICE, f"[service] {service_name} systemd restart sent to "
+                     f"{hostname}")
+                return True
+            if result and result.exit_status not in (2, 3):
+                _log(SERVICE, f"[service] Failed to restart {service_name} on "
+                     f"{hostname} through systemd", level="ERROR")
+                return False
 
         start_cmd = ""
         for base_dir in self.pool.get_remote_pbgui_dirs(hostname):

@@ -12,7 +12,6 @@
     pbgui_dir: "{{ install_dir }}/pbgui"
     python_bin: "{{ install_dir }}/venv_pbgui/bin/python"
     systemd_units:
-      - pbgui-api.service
       - pbgui-pbrun.service
       - pbgui-pbremote.service
       - pbgui-pbcoindata.service
@@ -55,77 +54,153 @@
         dest: "{{ pbgui_dir }}/setup/setup_systemd.sh"
         mode: "0755"
 
+    - name: copy systemd-aware starter helper
+      copy:
+        src: starter.py
+        dest: "{{ pbgui_dir }}/starter.py"
+        mode: "0755"
+
+    - name: preinstall PBGui systemd user units without starting services
+      command:
+        argv:
+          - /bin/bash
+          - "{{ pbgui_dir }}/setup/setup_systemd.sh"
+          - --user
+          - "{{ user }}"
+          - --pbgui-dir
+          - "{{ pbgui_dir }}"
+          - --python
+          - "{{ python_bin }}"
+          - --enable
+          - pbrun,pbremote,pbcoindata
+          - --include-pbremote
+          - --no-start
+      become: yes
+      register: systemd_preinstall_result
+
     - name: stop existing PBGui systemd user services before migration
       shell: |
         uid="$(id -u {{ user | quote }})"
-        sudo -H -u {{ user | quote }} env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user stop {{ systemd_units | join(' ') }} || true
+        for unit in {{ systemd_units | join(' ') }}; do
+          sudo -H -u {{ user | quote }} env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user stop "$unit" >/dev/null 2>&1 || true
+        done
       args:
         executable: /bin/bash
       become: yes
       changed_when: false
-
-    - name: stop legacy starter-managed PBGui services
-      shell: |
-        if [ -x {{ python_bin | quote }} ] && [ -f {{ (pbgui_dir + '/starter.py') | quote }} ]; then
-          {{ python_bin | quote }} {{ (pbgui_dir + '/starter.py') | quote }} -k PBRun PBRemote PBCoinData || true
-        fi
-      args:
-        executable: /bin/bash
-      register: legacy_starter_stop
-      changed_when: true
 
     - name: stop remaining legacy PBGui processes
       shell: |
         PBGUI_MIGRATION_DIR={{ pbgui_dir | quote }} python3 - <<'PY'
         import os
         import signal
+        import sys
         import time
+        from pathlib import Path
 
         target_dir = os.path.realpath(os.environ['PBGUI_MIGRATION_DIR'])
         target_prefix = target_dir + os.sep
-        scripts = ('PBApiServer.py', 'PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'PBData.py', 'PBMon.py', 'starter.py')
+        scripts = ('PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
+        pidfiles = {
+            'PBRun.py': 'pbrun.pid',
+            'PBRemote.py': 'pbremote.pid',
+            'PBCoinData.py': 'pbcoindata.pid',
+        }
         current = os.getpid()
-        targets = []
-        for name in os.listdir('/proc'):
-            if not name.isdigit():
-                continue
-            pid = int(name)
-            if pid == current:
-                continue
+
+        def read_process(pid):
             try:
                 with open(f'/proc/{pid}/cmdline', 'rb') as handle:
                     cmd = handle.read().replace(b'\0', b' ').decode('utf-8', errors='replace').strip()
             except Exception:
-                continue
+                cmd = ''
             try:
                 cwd = os.path.realpath(os.readlink(f'/proc/{pid}/cwd'))
             except Exception:
                 cwd = ''
-            if cmd and any(script in cmd for script in scripts) and (target_prefix in cmd or cwd == target_dir):
-                targets.append(pid)
+            return cmd, cwd
 
-        for pid in targets:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        if targets:
-            time.sleep(3)
-        for pid in targets:
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
+        def matching_script(cmd):
+            for script in scripts:
+                if script in cmd:
+                    return script
+            return None
+
+        def is_target_process(pid):
+            if pid == current:
+                return False
+            cmd, cwd = read_process(pid)
+            if not cmd or not matching_script(cmd):
+                return False
+            return target_prefix in cmd or cwd == target_dir
+
+        def collect_targets():
+            targets = set()
+            for name in os.listdir('/proc'):
+                if not name.isdigit():
+                    continue
+                pid = int(name)
+                if is_target_process(pid):
+                    targets.add(pid)
+
+            pid_dir = Path(target_dir) / 'data' / 'pid'
+            for script, pidfile in pidfiles.items():
+                path = pid_dir / pidfile
+                try:
+                    raw = path.read_text(encoding='utf-8').strip()
+                    pid = int(raw) if raw.isdigit() else 0
+                except Exception:
+                    continue
+                if pid > 0 and is_target_process(pid):
+                    cmd, _cwd = read_process(pid)
+                    if matching_script(cmd) == script:
+                        targets.add(pid)
+            return targets
+
+        def signal_targets(targets, sig):
+            for pid in targets:
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    pass
+
+        targets = collect_targets()
+        signal_targets(targets, signal.SIGTERM)
+        deadline = time.monotonic() + 8
+        remaining = collect_targets()
+        while remaining and time.monotonic() < deadline:
+            time.sleep(0.5)
+            remaining = collect_targets()
+        if remaining:
+            signal_targets(remaining, signal.SIGKILL)
+            deadline = time.monotonic() + 3
+            while remaining and time.monotonic() < deadline:
+                time.sleep(0.25)
+                remaining = collect_targets()
+        if remaining:
+            print('legacy_processes_remaining=' + ','.join(str(pid) for pid in sorted(remaining)))
+            sys.exit(1)
+
+        removed_pidfiles = 0
+        pid_dir = Path(target_dir) / 'data' / 'pid'
+        for pidfile in pidfiles.values():
+            path = pid_dir / pidfile
+            if not path.exists():
                 continue
             try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        print(f'legacy_processes={len(targets)}')
+                raw = path.read_text(encoding='utf-8').strip()
+                pid = int(raw) if raw.isdigit() else 0
+            except Exception:
+                pid = 0
+            if not pid or not is_target_process(pid):
+                path.unlink(missing_ok=True)
+                removed_pidfiles += 1
+        print(f'legacy_processes={len(targets)} removed_pidfiles={removed_pidfiles}')
         PY
       args:
         executable: /bin/bash
       register: legacy_process_stop
-      changed_when: "'legacy_processes=0' not in legacy_process_stop.stdout"
+      changed_when: "'legacy_processes=0 removed_pidfiles=0' not in legacy_process_stop.stdout"
 
     - name: install and start PBGui systemd user services
       command:
@@ -139,19 +214,45 @@
           - --python
           - "{{ python_bin }}"
           - --enable
-          - api,pbrun,pbremote,pbcoindata
+          - pbrun,pbremote,pbcoindata
           - --include-pbremote
       become: yes
       register: systemd_setup_result
 
-    - name: verify PBGui systemd services are active
+    - name: verify PBGui systemd services stay active
       shell: |
         uid="$(id -u {{ user | quote }})"
-        sudo -H -u {{ user | quote }} env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user is-active {{ item }}
+        units=({{ systemd_units | join(' ') }})
+        run_systemctl() {
+          sudo -H -u {{ user | quote }} env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user "$@"
+        }
+        show_prop() {
+          run_systemctl show "$1" -p "$2" --value 2>/dev/null || true
+        }
+        declare -A restarts_before
+        for unit in "${units[@]}"; do
+          restarts_before["$unit"]="$(show_prop "$unit" NRestarts)"
+          [[ "${restarts_before[$unit]}" =~ ^[0-9]+$ ]] || restarts_before["$unit"]=0
+        done
+        sleep 12
+        failed=0
+        for unit in "${units[@]}"; do
+          active="$(show_prop "$unit" ActiveState)"
+          sub="$(show_prop "$unit" SubState)"
+          result="$(show_prop "$unit" Result)"
+          status="$(show_prop "$unit" ExecMainStatus)"
+          restarts_after="$(show_prop "$unit" NRestarts)"
+          [[ "$restarts_after" =~ ^[0-9]+$ ]] || restarts_after=0
+          printf 'unit=%s active=%s sub=%s result=%s status=%s restarts_before=%s restarts_after=%s\n' "$unit" "$active" "$sub" "$result" "$status" "${restarts_before[$unit]}" "$restarts_after"
+          if [ "$active" != "active" ] || [ "$sub" != "running" ] || [ "$result" != "success" ] || [ "${status:-0}" != "0" ] || [ "$restarts_after" -gt "${restarts_before[$unit]}" ]; then
+            run_systemctl status "$unit" --no-pager -l || true
+            failed=1
+          fi
+        done
+        exit "$failed"
       args:
         executable: /bin/bash
       become: yes
-      loop: "{{ systemd_units }}"
       register: systemd_active_result
       changed_when: false
 
@@ -162,25 +263,47 @@
 
     - name: remove legacy pbgui start.sh crontab lines
       shell: |
-        legacy_start={{ (pbgui_dir + '/start.sh') | quote }}
-        before="$(mktemp)"
-        after="$(mktemp)"
-        crontab -l > "${before}" 2>/dev/null || true
-        awk -v legacy_start="${legacy_start}" '
-          /^#Ansible: pbgui$/ { skip_next=1; changed=1; next }
-          skip_next { skip_next=0; changed=1; next }
-          index($0, legacy_start) { changed=1; next }
-          ($0 ~ /pbgui/ && $0 ~ /start\.sh/) { changed=1; next }
-          { print }
-          END { if (changed) print "changed=1" > "/dev/stderr"; else print "changed=0" > "/dev/stderr" }
-        ' "${before}" > "${after}" 2>"${after}.status"
-        if grep -q 'changed=1' "${after}.status"; then
-          crontab "${after}"
-          cat "${after}.status"
-        else
-          cat "${after}.status"
-        fi
-        rm -f "${before}" "${after}" "${after}.status"
+        PBGUI_MIGRATION_DIR={{ pbgui_dir | quote }} PBGUI_MIGRATION_USER={{ user | quote }} python3 - <<'PY'
+        import os
+        import pwd
+        import subprocess
+
+        pbgui_dir = os.path.realpath(os.environ['PBGUI_MIGRATION_DIR'])
+        user = os.environ['PBGUI_MIGRATION_USER']
+        home = pwd.getpwnam(user).pw_dir
+        legacy_start = f'{pbgui_dir}/start.sh'
+        tokens = {legacy_start}
+        if legacy_start.startswith(home.rstrip('/') + '/'):
+            rel = legacy_start[len(home.rstrip('/')) + 1:]
+            tokens.update({f'~/{rel}', '$HOME/' + rel, '$' + '{HOME}/' + rel})
+
+        result = subprocess.run(['crontab', '-l'], text=True, capture_output=True, check=False)
+        lines = result.stdout.splitlines()
+        kept = []
+        changed = False
+        skip_next = False
+        for line in lines:
+            if line.strip() == '#Ansible: pbgui':
+                skip_next = True
+                changed = True
+                continue
+            if skip_next:
+                skip_next = False
+                changed = True
+                continue
+            if any(token in line for token in tokens):
+                changed = True
+                continue
+            kept.append(line)
+        if changed:
+            new_crontab = '\n'.join(kept)
+            if new_crontab:
+                new_crontab += '\n'
+            subprocess.run(['crontab', '-'], input=new_crontab, text=True, check=True)
+            print('changed=1')
+        else:
+            print('changed=0')
+        PY
       args:
         executable: /bin/bash
       register: legacy_crontab_cleanup
@@ -194,6 +317,11 @@
     - name: print systemd setup result
       debug:
         var: systemd_setup_result
+      tags: debug,never
+
+    - name: print systemd preinstall result
+      debug:
+        var: systemd_preinstall_result
       tags: debug,never
 
     - name: print systemd active result

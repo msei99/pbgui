@@ -64,6 +64,7 @@ COMMAND_VPS_UPDATE_PBGUI = "vps-update-pbgui"
 COMMAND_VPS_UPDATE_PB7 = "vps-update-pb7"
 COMMAND_VPS_UPDATE_PB = "vps-update-pb"
 COMMAND_VPS_CLEANUP = "vps-cleanup"
+COMMAND_VPS_MIGRATE_SYSTEMD = "vps-migrate-systemd"
 VPS_DEPLOY_DEFAULT_ACTION = COMMAND_VPS_DEPLOY_LOGGING
 VPS_DEPLOY_DEFAULT_MODE = "parallel"
 VPS_DEPLOY_MODES = ("parallel", "sequential")
@@ -82,8 +83,9 @@ DEPLOY_PROGRESS_LOG_TAIL_BYTES = 64 * 1024
 DEPLOY_PROGRESS_CACHE_LIMIT = 256
 DEPLOY_RUN_APPEAR_TIMEOUT_SECONDS = 30
 SAFE_VPS_INSTALL_PATH_RE = re.compile(r"^[A-Za-z0-9._~/-]+$")
-VPS_SYSTEMD_MIGRATION_SERVICES = ("api", "pbrun", "pbremote", "pbcoindata")
+VPS_SYSTEMD_MIGRATION_SERVICES = ("pbrun", "pbremote", "pbcoindata")
 VPS_SYSTEMD_MIGRATION_UNITS = tuple(f"pbgui-{service}.service" for service in VPS_SYSTEMD_MIGRATION_SERVICES)
+VPS_SYSTEMD_MIGRATION_STATUS_TTL_SECONDS = 90
 _PLAYBOOK_TASK_CACHE: dict[str, tuple[str, ...]] = {}
 
 
@@ -750,6 +752,7 @@ class VPSManagerService:
         self._master_server_cpu_history: list[tuple[float, float, float]] = []
         self._vps_coindata_status_cache: dict[str, bool] = {}
         self._vps_ssh_ok_cache: dict[str, bool] = {}
+        self._vps_systemd_migration_status_cache: dict[str, dict[str, Any]] = {}
         self._session_secrets: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
         self._setup_api_sync_done: dict[str, str] = {}
         self._deploy_threads: dict[str, threading.Thread] = {}
@@ -2157,7 +2160,124 @@ class VPSManagerService:
             "pbgui_update_available": pbgui_github.startswith("\u274c"),
             "pb7_update_available": pb7_github.startswith("\u274c"),
             "server_metrics": self._build_remote_server_metrics(vps.hostname, host_state),
+            "systemd_migration": self._get_vps_systemd_migration_status(vps, host_state, quick=quick),
         }
+
+    def _empty_vps_systemd_migration_status(self, state: str = "unknown", error: str = "") -> dict[str, Any]:
+        return {
+            "state": state,
+            "available": False,
+            "migration_complete": False,
+            "migration_needed": False,
+            "units_ready": False,
+            "legacy_process_count": 0,
+            "legacy_cron_count": 0,
+            "legacy_start_sh_exists": False,
+            "checked_at": 0,
+            "error": error,
+        }
+
+    def _build_vps_systemd_migration_status_from_preview(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        values = parsed.get("values") or {}
+        units = parsed.get("units") or []
+        cron_lines = parsed.get("cron") or []
+        processes = parsed.get("processes") or []
+        pbgui_exists = values.get("pbgui_dir_exists") == "yes"
+        python_exists = values.get("python_exists") == "yes"
+        systemctl_exists = values.get("systemctl_exists") == "yes"
+        user_manager_ok = values.get("systemd_user_manager") == "yes"
+        start_sh_exists = values.get("start_sh_exists") == "yes"
+        units_missing = [item for item in units if item.get("exists") != "yes"]
+        units_not_enabled = [item for item in units if item.get("enabled") != "enabled"]
+        units_inactive = [item for item in units if item.get("active") != "active"]
+        units_ready = bool(units) and not units_missing and not units_not_enabled and not units_inactive
+        blockers = []
+        if not pbgui_exists:
+            blockers.append("PBGui directory missing")
+        if not python_exists:
+            blockers.append("PBGui virtualenv Python missing")
+        if not systemctl_exists:
+            blockers.append("systemctl missing")
+        migration_complete = bool(pbgui_exists and python_exists and systemctl_exists and user_manager_ok and units_ready and not processes and not cron_lines and not start_sh_exists)
+        state = "complete" if migration_complete else "blocked" if blockers else "needed"
+        return {
+            "state": state,
+            "available": True,
+            "migration_complete": migration_complete,
+            "migration_needed": not migration_complete,
+            "units_ready": units_ready,
+            "legacy_process_count": len(processes),
+            "legacy_cron_count": len(cron_lines),
+            "legacy_start_sh_exists": start_sh_exists,
+            "checked_at": int(time.time()),
+            "error": "",
+            "blockers": blockers,
+        }
+
+    def _get_vps_systemd_migration_status(self, vps: VPS, host_state: dict[str, Any], *, quick: bool = False) -> dict[str, Any]:
+        hostname = str(vps.hostname or "").strip()
+        cached = self._vps_systemd_migration_status_cache.get(hostname) if hostname else None
+        if cached:
+            age = time.time() - float(cached.get("checked_at") or 0)
+            if age < VPS_SYSTEMD_MIGRATION_STATUS_TTL_SECONDS:
+                return dict(cached)
+        if quick:
+            return dict(cached or self._empty_vps_systemd_migration_status("unknown", "Full status not checked yet."))
+        if not hostname:
+            return self._empty_vps_systemd_migration_status("unknown", "Hostname missing.")
+        if not self._host_online(host_state):
+            return dict(cached or self._empty_vps_systemd_migration_status("unknown", "Host is offline."))
+
+        install_dir = _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user)
+        pbgui_dir = f"{install_dir.rstrip('/')}/pbgui"
+        python_bin = f"{install_dir.rstrip('/')}/venv_pbgui/bin/python"
+        ssh_host = str(getattr(vps, "hostname", "") or vps.ip or "").strip()
+        if not ssh_host or not str(vps.user or "").strip():
+            return self._empty_vps_systemd_migration_status("unknown", "SSH host or user missing.")
+
+        import paramiko
+
+        ssh = paramiko.SSHClient()
+        ssh.load_system_host_keys()
+        try:
+            known_hosts = _user_known_hosts_path()
+            if known_hosts.exists():
+                ssh.load_host_keys(str(known_hosts))
+        except Exception:
+            pass
+        ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+        try:
+            connect_kwargs = {
+                "hostname": ssh_host,
+                "username": vps.user,
+                "timeout": 3,
+                "banner_timeout": 3,
+                "auth_timeout": 3,
+            }
+            if getattr(vps, "user_pw", None):
+                connect_kwargs.update({"password": vps.user_pw, "allow_agent": False, "look_for_keys": False})
+            else:
+                connect_kwargs.update({"allow_agent": True, "look_for_keys": True})
+            ssh.connect(**connect_kwargs)
+            script = self._vps_systemd_migration_preview_script(pbgui_dir, python_bin)
+            _stdin, stdout, stderr = ssh.exec_command(script, timeout=5)
+            out = stdout.read().decode("utf-8", errors="replace")
+            err = stderr.read().decode("utf-8", errors="replace")
+            rc = int(stdout.channel.recv_exit_status())
+            if rc != 0:
+                raise RuntimeError((err or out or "systemd migration status probe failed").strip())
+            status = self._build_vps_systemd_migration_status_from_preview(self._parse_vps_systemd_migration_preview(out))
+            self._vps_systemd_migration_status_cache[hostname] = status
+            return dict(status)
+        except Exception as exc:
+            status = dict(cached or self._empty_vps_systemd_migration_status("unknown"))
+            status.update({"state": "unknown", "available": False, "error": str(exc) or "Status probe failed.", "checked_at": int(time.time())})
+            return status
+        finally:
+            try:
+                ssh.close()
+            except Exception:
+                pass
 
     def _maybe_auto_sync_api_after_setup(self, vps: VPS) -> None:
         hostname = str(vps.hostname or "").strip()
@@ -3710,6 +3830,8 @@ class VPSManagerService:
     def run_vps_command(self, *, token: str, hostname: str, command: str, command_text: str, debug: bool = False, extra_vars: dict[str, Any] | None = None) -> None:
         vps = self._require_vps(hostname)
         self._apply_session_secrets_to_vps(token, vps)
+        if command == COMMAND_VPS_MIGRATE_SYSTEMD and not getattr(vps, "user_pw", None):
+            raise ValueError(f"VPS user password missing for {hostname}. It is required for sudo/become during systemd migration.")
         vps.command = command
         vps.command_text = command_text
         self.vpsmanager.update_vps(vps, debug=debug, extra_vars=extra_vars)
@@ -3800,7 +3922,9 @@ class VPSManagerService:
         user_manager_ok = values.get("systemd_user_manager") == "yes"
         start_sh_exists = values.get("start_sh_exists") == "yes"
         units_missing = [item for item in units if item.get("exists") != "yes"]
+        units_not_enabled = [item for item in units if item.get("enabled") != "enabled"]
         units_inactive = [item for item in units if item.get("active") != "active"]
+        units_ready = bool(units) and not units_missing and not units_not_enabled and not units_inactive
         blockers: list[str] = []
         if not pbgui_exists:
             blockers.append(f"PBGui directory not found: {pbgui_dir}")
@@ -3813,9 +3937,10 @@ class VPSManagerService:
         if not user_manager_ok:
             warnings.append("The systemd user manager is not active yet. Migration will enable linger and start it.")
 
+        migration_complete = bool(pbgui_exists and python_exists and systemctl_exists and user_manager_ok and units_ready and not processes and not cron_lines and not start_sh_exists)
         actions = [
-            {"label": "Copy/update systemd setup helper", "needed": True, "detail": f"{pbgui_dir}/setup/setup_systemd.sh"},
-            {"label": "Install/enable/start systemd units", "needed": bool(units_missing or units_inactive), "detail": ", ".join(VPS_SYSTEMD_MIGRATION_UNITS)},
+            {"label": "Copy/update systemd setup helper", "needed": not migration_complete, "detail": f"{pbgui_dir}/setup/setup_systemd.sh"},
+            {"label": "Install/enable/start systemd units", "needed": bool(units_missing or units_not_enabled or units_inactive), "detail": ", ".join(VPS_SYSTEMD_MIGRATION_UNITS)},
             {"label": "Stop legacy PBGui processes", "needed": bool(processes), "detail": f"{len(processes)} matching process(es)" if processes else "No matching legacy processes found"},
             {"label": "Remove legacy pbgui crontab", "needed": bool(cron_lines), "detail": f"{len(cron_lines)} matching crontab line(s)" if cron_lines else "No matching crontab lines found"},
             {"label": "Delete legacy start.sh", "needed": bool(start_sh_exists), "detail": f"{pbgui_dir}/start.sh"},
@@ -3840,7 +3965,9 @@ class VPSManagerService:
             "units": units,
             "legacy_cron_lines": cron_lines,
             "legacy_processes": processes,
-            "can_migrate": not blockers,
+            "migration_complete": migration_complete,
+            "migration_needed": not migration_complete,
+            "can_migrate": not blockers and not migration_complete,
         }
 
     def _vps_systemd_migration_preview_script(self, pbgui_dir: str, python_bin: str) -> str:
@@ -3879,7 +4006,7 @@ for unit in $units; do
 done
 printf 'SECTION\tunits\tEND\n'
 printf 'SECTION\tcron\tBEGIN\n'
-crontab -l 2>/dev/null | awk -v start="$pbgui_dir/start.sh" 'index($0, start) || ($0 ~ /pbgui/ && $0 ~ /start\\.sh/) {{ print }}'
+crontab -l 2>/dev/null | awk -v start="$pbgui_dir/start.sh" 'index($0, start) {{ print }}'
 printf 'SECTION\tcron\tEND\n'
 printf 'SECTION\tprocesses\tBEGIN\n'
 PBGUI_MIGRATION_DIR="$pbgui_dir" python3 - <<'PY' 2>/dev/null || true
@@ -3887,7 +4014,29 @@ import os
 from pathlib import Path
 target_dir = os.path.realpath(os.environ['PBGUI_MIGRATION_DIR'])
 target_prefix = target_dir + os.sep
-scripts = ('PBApiServer.py', 'PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'PBData.py', 'PBMon.py', 'starter.py')
+scripts = ('PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
+unit_by_script = {{
+    'PBRun.py': 'pbgui-pbrun.service',
+    'PBRemote.py': 'pbgui-pbremote.service',
+    'PBCoinData.py': 'pbgui-pbcoindata.service',
+}}
+
+def matching_script(cmd):
+    for script in scripts:
+        if script in cmd:
+            return script
+    return None
+
+def is_systemd_managed(pid, script):
+    unit = unit_by_script.get(script)
+    if not unit:
+        return False
+    try:
+        cgroup = Path(f'/proc/{{pid}}/cgroup').read_text(encoding='utf-8', errors='replace')
+    except Exception:
+        return False
+    return unit in cgroup
+
 for entry in Path('/proc').iterdir():
     if not entry.name.isdigit():
         continue
@@ -3900,7 +4049,8 @@ for entry in Path('/proc').iterdir():
         cwd = os.path.realpath(os.readlink(entry / 'cwd'))
     except Exception:
         cwd = ''
-    if cmd and any(script in cmd for script in scripts) and (target_prefix in cmd or cwd == target_dir):
+    script = matching_script(cmd)
+    if cmd and script and (target_prefix in cmd or cwd == target_dir) and not is_systemd_managed(entry.name, script):
         print(f"{{entry.name}} {{cmd}}")
 PY
 printf 'SECTION\tprocesses\tEND\n'
@@ -4151,7 +4301,7 @@ printf 'SECTION\tprocesses\tEND\n'
                 install_dir_hints.append(candidate)
 
         def add_process_install_dir_candidates(output: str) -> None:
-            script_pattern = r"(?:PBApiServer|PBRun|PBRemote|PBCoinData|starter)\.py"
+            script_pattern = r"(?:PBRun|PBRemote|PBCoinData|starter)\.py"
             absolute_pattern = re.compile(rf"(/[^\s'\"]+/{script_pattern})")
             relative_name_pattern = re.compile(rf"(^|[\s'\"])(?:\./)?{script_pattern}($|[\s'\"])")
             relative_pbgui_pattern = re.compile(rf"(^|[\s'\"])pbgui/{script_pattern}($|[\s'\"])")
@@ -4344,7 +4494,7 @@ printf 'SECTION\tprocesses\tEND\n'
             else:
                 add_warning((ufw_err or ufw_out or "Could not read UFW status.").strip())
 
-            proc_cmd = """ps -eo pid=,args= 2>/dev/null | grep -E '[P]BApiServer.py|[P]BRun.py|[P]BRemote.py|[P]BCoinData.py|[s]tarter.py' | while read -r pid args; do
+            proc_cmd = """ps -eo pid=,args= 2>/dev/null | grep -E '[P]BRun.py|[P]BRemote.py|[P]BCoinData.py|[s]tarter.py' | while read -r pid args; do
   [ -n "$pid" ] || continue
   cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
   printf '%s\t%s\t%s\n' "$pid" "$cwd" "$args"
