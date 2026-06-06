@@ -279,6 +279,17 @@ def _parse_import_systemd_units(output: str) -> list[dict[str, str]]:
     return units
 
 
+def _import_process_line_is_legacy(line: str, pbgui_dir: str) -> bool:
+    """Return whether an import probe process row is an unmanaged legacy process."""
+    text = str(line or "").strip()
+    if not text or str(pbgui_dir or "") not in text:
+        return False
+    parts = text.split("\t", 3)
+    if len(parts) >= 4:
+        return parts[2] != "systemd"
+    return True
+
+
 def _now_ts() -> int:
     return round(datetime.now().timestamp())
 
@@ -4494,11 +4505,51 @@ printf 'SECTION\tprocesses\tEND\n'
             else:
                 add_warning((ufw_err or ufw_out or "Could not read UFW status.").strip())
 
-            proc_cmd = """ps -eo pid=,args= 2>/dev/null | grep -E '[P]BRun.py|[P]BRemote.py|[P]BCoinData.py|[s]tarter.py' | while read -r pid args; do
-  [ -n "$pid" ] || continue
-  cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
-  printf '%s\t%s\t%s\n' "$pid" "$cwd" "$args"
-done || true"""
+            proc_cmd = """python3 - <<'PY' 2>/dev/null || true
+import os
+from pathlib import Path
+
+scripts = ('PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
+unit_by_script = {
+    'PBRun.py': 'pbgui-pbrun.service',
+    'PBRemote.py': 'pbgui-pbremote.service',
+    'PBCoinData.py': 'pbgui-pbcoindata.service',
+}
+
+def matching_script(cmd):
+    for script in scripts:
+        if script in cmd:
+            return script
+    return ''
+
+def is_systemd_managed(pid, script):
+    unit = unit_by_script.get(script)
+    if not unit:
+        return False
+    try:
+        cgroup = Path(f'/proc/{pid}/cgroup').read_text(encoding='utf-8', errors='replace')
+    except Exception:
+        return False
+    return unit in cgroup
+
+for entry in Path('/proc').iterdir():
+    if not entry.name.isdigit():
+        continue
+    try:
+        raw = (entry / 'cmdline').read_bytes()
+    except Exception:
+        continue
+    cmd = raw.replace(b'\\0', b' ').decode('utf-8', errors='replace').strip()
+    script = matching_script(cmd)
+    if not cmd or not script:
+        continue
+    try:
+        cwd = os.path.realpath(os.readlink(entry / 'cwd'))
+    except Exception:
+        cwd = ''
+    manager = 'systemd' if is_systemd_managed(entry.name, script) else 'legacy'
+    print(f"{entry.name}\t{cwd}\t{manager}\t{cmd}")
+PY"""
             _proc_rc, proc_out, _proc_err = self._exec_import_ssh_command(ssh, proc_cmd, timeout=8)
             add_process_install_dir_candidates(proc_out)
 
@@ -4552,7 +4603,11 @@ done"""
                 if cron_lines:
                     add_warning(f"Found {len(cron_lines)} legacy pbgui crontab line(s). Use systemd migration after import.")
 
-            legacy_processes = [line.strip() for line in proc_out.splitlines() if pbgui_dir in line]
+            legacy_processes = [
+                line.strip()
+                for line in proc_out.splitlines()
+                if _import_process_line_is_legacy(line, pbgui_dir)
+            ]
             result["detected"]["legacy_processes"] = legacy_processes
             if legacy_processes:
                 add_warning(f"Found {len(legacy_processes)} running legacy PBGui process(es). Use systemd migration after import.")
