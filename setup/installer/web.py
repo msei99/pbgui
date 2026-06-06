@@ -268,6 +268,7 @@ def _html() -> str:
     .path-preview strong { color:var(--text); }
     .progress-wrap { display:grid; gap:8px; margin-bottom:12px; }
     .progress-row { display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size:13px; }
+    .progress-stats { display:flex; gap:10px; white-space:nowrap; }
     .progress-track { height:12px; border-radius:999px; border:1px solid var(--line); background:#0b1220; overflow:hidden; }
     .progress-bar { height:100%; width:0%; background:linear-gradient(90deg,#2563eb,#63b3ed); transition:width .25s ease; }
     .progress-bar.done { background:linear-gradient(90deg,#16a34a,#86efac); }
@@ -378,7 +379,7 @@ def _html() -> str:
   <section class="panel">
     <h2>Progress</h2>
     <div class="progress-wrap" id="progress-wrap">
-      <div class="progress-row"><span id="progress-label">Waiting for installer input...</span><span id="progress-percent">0%</span></div>
+      <div class="progress-row"><span id="progress-label">Waiting for installer input...</span><span class="progress-stats"><span id="progress-percent">0%</span><span id="progress-duration">Elapsed 0s</span></span></div>
       <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
     </div>
     <pre id="log">Waiting for installer input...</pre>
@@ -413,6 +414,7 @@ const logEl = document.getElementById('log');
 const progressBar = document.getElementById('progress-bar');
 const progressLabel = document.getElementById('progress-label');
 const progressPercent = document.getElementById('progress-percent');
+const progressDuration = document.getElementById('progress-duration');
 const resultEl = document.getElementById('result');
 const startBtn = document.getElementById('start-btn');
 const installMode = document.getElementById('install-mode');
@@ -454,6 +456,9 @@ const defaultLocalInstallDir = %%LOCAL_INSTALL_DIR_JSON%%;
 const defaultLocalMasterName = %%LOCAL_MASTER_NAME_JSON%%;
 const localSudoPasswordUseful = %%LOCAL_SUDO_PASSWORD_USEFUL_JSON%%;
 let pollTimer = null;
+let progressTimer = null;
+let progressStartedAt = 0;
+let progressStoppedElapsed = 0;
 let currentJobId = '';
 let currentJobMode = 'local';
 let lastLogCount = 0;
@@ -577,6 +582,36 @@ function escapeHtml(value) {
 }
 function cleanLogChunk(value) {
   return escapeHtml(String(value).replace(/\r/g, '\n').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ''));
+}
+function formatElapsed(ms) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return hours + 'h ' + String(minutes).padStart(2, '0') + 'm ' + String(seconds).padStart(2, '0') + 's';
+  if (minutes > 0) return minutes + 'm ' + String(seconds).padStart(2, '0') + 's';
+  return seconds + 's';
+}
+function updateElapsedDisplay() {
+  const elapsed = progressStartedAt ? (progressStoppedElapsed || (Date.now() - progressStartedAt)) : 0;
+  progressDuration.textContent = 'Elapsed ' + formatElapsed(elapsed);
+}
+function stopProgressTimer() {
+  if (progressTimer) clearInterval(progressTimer);
+  progressTimer = null;
+  if (progressStartedAt && !progressStoppedElapsed) progressStoppedElapsed = Date.now() - progressStartedAt;
+  updateElapsedDisplay();
+}
+function startProgressTimer() {
+  if (progressTimer) clearInterval(progressTimer);
+  progressStartedAt = Date.now();
+  progressStoppedElapsed = 0;
+  updateElapsedDisplay();
+  progressTimer = setInterval(updateElapsedDisplay, 1000);
+}
+function stopPolling() {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = null;
 }
 function ansiToHtml(text) {
   const colorMap = {31:'ansi-red', 32:'ansi-green', 33:'ansi-yellow', 36:'ansi-cyan'};
@@ -711,10 +746,17 @@ function poll(jobId) {
     renderResult(job);
     if (job.status === 'done' || job.status === 'error') {
       startBtn.disabled = false;
-      clearTimeout(pollTimer);
+      stopProgressTimer();
+      stopPolling();
       return;
     }
     pollTimer = setTimeout(() => poll(jobId), 1500);
+  }).catch(err => {
+    startBtn.disabled = false;
+    stopProgressTimer();
+    stopPolling();
+    resultEl.style.display = 'grid';
+    resultEl.innerHTML = '<strong style="color:var(--danger)">Installer status polling failed: ' + escapeHtml(err) + '</strong>';
   });
 }
 function openUninstallConfirmModal(onConfirm) {
@@ -810,13 +852,15 @@ function startJob(confirmedUninstall, confirmedHostKey) {
   }
   currentJobMode = installMode.value;
   const startText = currentJobMode === 'local-uninstall' ? 'Starting uninstall...' : 'Starting installation...';
+  stopPolling();
+  startProgressTimer();
   startBtn.disabled = true; resultEl.style.display = 'none'; logEl.textContent = startText;
   lastLogCount = 0; logHasContent = false; setProgress(3, startText, '');
   const payload = Object.fromEntries(new FormData(form).entries());
   if (currentJobMode === 'local-uninstall') payload.uninstall_confirm = 'yes';
   fetch('/api/install', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) })
     .then(r => r.json()).then(data => poll(data.job_id))
-    .catch(err => { startBtn.disabled = false; logEl.textContent = 'Failed to start: ' + err; });
+    .catch(err => { startBtn.disabled = false; stopProgressTimer(); logEl.textContent = 'Failed to start: ' + err; });
 }
 form.addEventListener('submit', ev => {
   ev.preventDefault();
