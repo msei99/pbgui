@@ -1,5 +1,6 @@
 # Unreleased
 
+- Fixed API self-restarts under systemd so `/api/server-restart` queues a user-service restart instead of spawning a child that systemd kills when the old service exits.
 - Rounded generated Pareto preset bounds to step precision or clean significant digits so expanded ranges no longer show long floating-point tails.
 - Hardened the VPS Manager data path so it resolves the PBGui directory from the module location instead of the process working directory, avoiding `//data` permission errors when the API starts from `/`.
 - Hardened VPS systemd migration so leftover legacy PBGui processes, stale PID files, and restart-looping user services fail before legacy autostart cleanup is finalized.

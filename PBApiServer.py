@@ -63,6 +63,7 @@ SERVICE = "PBApiServer"
 # ── Server-restart watchdog (serial.txt) ─────────────────────
 
 _SERIAL_FILE = Path(__file__).parent / "api" / "serial.txt"
+_API_SYSTEMD_UNIT = "pbgui-api.service"
 _startup_serial: int = 0
 _needs_restart: bool = False
 _sse_subscribers: list[asyncio.Queue] = []
@@ -100,6 +101,59 @@ async def _restart_block_state() -> tuple[bool, str]:
     restart_blocked = bool(deploy_state.get("active")) if isinstance(deploy_state, dict) else False
     restart_block_reason = str(deploy_state.get("summary") or "") if restart_blocked and isinstance(deploy_state, dict) else ""
     return restart_blocked, restart_block_reason
+
+
+def _systemd_user_env() -> dict[str, str]:
+    """Return an environment that can talk to the current user's systemd manager."""
+    env = os.environ.copy()
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    return env
+
+
+def _restart_current_api_systemd_unit() -> bool:
+    """Restart pbgui-api.service when systemd owns the current API process."""
+    env = _systemd_user_env()
+    try:
+        status = subprocess.run(
+            ["systemctl", "--user", "show", _API_SYSTEMD_UNIT, "-p", "ActiveState", "-p", "MainPID"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+    if status.returncode != 0:
+        return False
+
+    props: dict[str, str] = {}
+    for line in status.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            props[key] = value
+    try:
+        main_pid = int(props.get("MainPID", "0") or "0")
+    except ValueError:
+        main_pid = 0
+    if props.get("ActiveState") != "active" or main_pid != os.getpid():
+        return False
+
+    restart = subprocess.run(
+        ["systemctl", "--user", "--no-block", "restart", _API_SYSTEMD_UNIT],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=env,
+    )
+    if restart.returncode != 0:
+        output = ((restart.stderr or "") + (restart.stdout or "")).strip()
+        _log(SERVICE, f"[restart] systemd restart failed: {output or restart.returncode}", level="ERROR")
+        os._exit(1)
+    _log(SERVICE, f"[restart] queued systemd restart for {_API_SYSTEMD_UNIT}", level="WARNING")
+    return True
 
 
 async def _serial_watcher_loop() -> None:
@@ -1112,6 +1166,8 @@ async def server_restart(request: Request):
 
     async def _do_restart():
         await asyncio.sleep(0.3)  # let response reach the client first
+        if _restart_current_api_systemd_unit():
+            return
         pbgdir = Path(__file__).resolve().parent
         venv_python = None
         for candidate in [
