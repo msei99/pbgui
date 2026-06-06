@@ -34,8 +34,9 @@ install_python_venv_package() {
 }
 
 script_dir=""
-if [[ "${BASH_SOURCE[0]}" != /dev/fd/* && "${BASH_SOURCE[0]}" != /proc/* ]]; then
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script_source="${BASH_SOURCE[0]:-}"
+if [[ -n "$script_source" && "$script_source" != /dev/fd/* && "$script_source" != /proc/* ]]; then
+  script_dir="$(cd "$(dirname "$script_source")" && pwd)"
 fi
 
 if [[ -n "$script_dir" && -f "$script_dir/installer/master_installer.py" ]]; then

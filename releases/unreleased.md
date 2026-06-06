@@ -11,6 +11,8 @@
 - Made VPS update, branch, logging, swap, and Python migration playbooks restart PBGui services through systemd user units when available, with `starter.py` kept as a legacy fallback.
 - Hardened VPS custom install path validation and systemd migration cleanup so unsafe paths are rejected and legacy autostart is removed only after systemd services verify successfully.
 - Hardened the master installer by requiring fresh-VPS confirmation, explicit SSH host-key fingerprint acceptance, safer install path validation, and branch propagation to remote bootstraps.
+- Made the Local Master installer accept a local sudo password for apt prerequisite installation instead of requiring a prior `sudo -v` session.
+- Fixed the master installer bootstrap so the `bash -c "$(curl ...)"` launch style works with `set -u`.
 - Made the master installer bootstrap install missing Python venv support on apt-based systems before creating its temporary installer environment.
 - Added `PBGUI_INSTALLER_BRANCH` support to the master installer bootstrap so branch-based raw-script tests download the matching archive.
 - Made the Local Master Install flow install missing apt-based prerequisites such as git, build tools, pkg-config, and Python venv support before cloning repositories.

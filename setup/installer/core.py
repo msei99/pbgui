@@ -142,6 +142,7 @@ class LocalMasterConfig:
     """Local master installation settings."""
 
     install_dir: str = field(default_factory=default_local_install_dir)
+    local_sudo_password: str = ""
     master_name: str = field(default_factory=default_local_master_name)
     pbgui_password: str = "PBGui$Bot!"
     pbgui_bind_host: str = "127.0.0.1"
@@ -153,6 +154,7 @@ class LocalMasterConfig:
         """Build local config from web/CLI input."""
         return cls(
             install_dir=str(data.get("install_dir") or default_local_install_dir()).strip(),
+            local_sudo_password=str(data.get("local_sudo_password") or ""),
             master_name=str(data.get("master_name") or data.get("hostname") or default_local_master_name()).strip(),
             pbgui_password=str(data.get("pbgui_password") or "PBGui$Bot!"),
             pbgui_bind_host=str(data.get("pbgui_bind_host") or "127.0.0.1").strip(),
@@ -323,6 +325,7 @@ def _run_command(
     *,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
+    input_data: str | None = None,
     timeout: int | None = None,
 ) -> str:
     """Run a local command and stream captured output to the installer log."""
@@ -333,6 +336,7 @@ def _run_command(
         check=False,
         cwd=str(cwd) if cwd else None,
         env=env,
+        input=input_data,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -357,24 +361,28 @@ def _require_command(name: str, hint: str = "") -> str:
     return path
 
 
-def _apt_get_command() -> list[str] | None:
+def _apt_get_command(sudo_password: str = "") -> tuple[list[str], str | None] | None:
     """Return a non-interactive apt-get command for local prerequisite installs."""
     apt_get = shutil.which("apt-get")
     if not apt_get:
         return None
     if os.getuid() == 0:
-        return [apt_get]
+        return [apt_get], None
     sudo = shutil.which("sudo")
     if not sudo:
         return None
-    return [sudo, "-n", "env", "DEBIAN_FRONTEND=noninteractive", apt_get]
+    password = str(sudo_password or "")
+    if password:
+        return [sudo, "-S", "-p", "", "env", "DEBIAN_FRONTEND=noninteractive", apt_get], password + "\n"
+    return [sudo, "-n", "env", "DEBIAN_FRONTEND=noninteractive", apt_get], None
 
 
-def _install_local_prerequisites(log: LogCallback) -> None:
+def _install_local_prerequisites(log: LogCallback, sudo_password: str = "") -> None:
     """Install local master prerequisites on apt-based systems when possible."""
-    apt_cmd = _apt_get_command()
-    if not apt_cmd:
+    apt = _apt_get_command(sudo_password)
+    if not apt:
         return
+    apt_cmd, input_data = apt
     packages = [
         "software-properties-common",
         "ca-certificates",
@@ -389,13 +397,13 @@ def _install_local_prerequisites(log: LogCallback) -> None:
     ]
     log("Ensuring local installer prerequisites are installed...")
     try:
-        _run_command([*apt_cmd, "update"], log, timeout=300)
-        _run_command([*apt_cmd, "install", "-y", *packages], log, timeout=900)
+        _run_command([*apt_cmd, "update"], log, input_data=input_data, timeout=300)
+        _run_command([*apt_cmd, "install", "-y", *packages], log, input_data=input_data, timeout=900)
     except RuntimeError as exc:
         raise RuntimeError(
             "Could not install local prerequisites automatically. Run "
             "sudo apt-get update && sudo apt-get install -y git curl build-essential pkg-config python3.12-venv "
-            "and retry. If you just started the browser installer, run sudo -v in the same terminal first."
+            "and retry, or enter your local sudo password in the installer."
         ) from exc
 
 
@@ -590,7 +598,7 @@ def run_local_master_uninstall(config: LocalUninstallConfig, log: LogCallback, a
 def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifact_dir: Path | None = None) -> dict:
     """Install a local PBGui master on this machine."""
     config.validate()
-    _install_local_prerequisites(log)
+    _install_local_prerequisites(log, config.local_sudo_password)
     _require_command("git", "Install git and retry.")
     _require_command("curl", "Install curl and retry.")
     _require_command("gcc", "Install build-essential/gcc and retry.")

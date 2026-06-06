@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from getpass import getpass
+import os
 from pathlib import Path
+import shutil
 import tempfile
 
 from .core import (
@@ -177,6 +179,9 @@ def _run_local_cli() -> int:
     """Run the local CLI installer flow."""
     install_dir = _ask("Install parent directory", default_local_install_dir())
     _print_install_preview(install_dir)
+    local_sudo_password = ""
+    if os.getuid() != 0 and shutil.which("apt-get") and shutil.which("sudo"):
+        local_sudo_password = _ask_password("Local sudo password for apt prerequisites (leave empty to use an existing sudo session)")
     master_name = _ask("Master name", default_local_master_name())
     pbgui_password = _ask_password("PBGui web password", "PBGui$Bot!")
     pbgui_bind_host = _ask("PBGui bind address", "127.0.0.1")
@@ -184,6 +189,7 @@ def _run_local_cli() -> int:
     cfg = LocalMasterConfig.from_mapping(
         {
             "install_dir": install_dir,
+            "local_sudo_password": local_sudo_password,
             "master_name": master_name,
             "pbgui_password": pbgui_password,
             "pbgui_bind_host": pbgui_bind_host,

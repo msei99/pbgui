@@ -313,6 +313,12 @@ def _html() -> str:
       </label>
       <label class="full">Install parent directory <input name="install_dir" id="install-dir" value="%%INSTALL_DIR%%" placeholder="/home/%%TARGET_USER%%/software"></label>
       <div class="path-preview" id="install-preview"></div>
+      <label class="local-only">Local sudo password (for apt prerequisites)
+        <span class="password-wrap">
+          <input id="local-sudo-password" name="local_sudo_password" type="password" autocomplete="current-password" placeholder="Required if sudo is not already authenticated">
+          <button class="password-toggle" type="button" data-target="local-sudo-password" aria-label="Show local sudo password" aria-pressed="false">&#128065;</button>
+        </span>
+      </label>
       <label class="install-only">Master name <input name="hostname" id="master-name" value="pbgui-master"></label>
       <label class="remote-only">Swap size
         <select id="swap-size-select">
@@ -511,6 +517,10 @@ function syncInstallMode() {
     el.style.display = isUninstall ? 'grid' : 'none';
     el.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = !isUninstall; });
   });
+  document.querySelectorAll('.local-only').forEach(el => {
+    el.style.display = installMode.value === 'local' ? '' : 'none';
+    el.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = installMode.value !== 'local'; });
+  });
   modeTitle.textContent = isUninstall ? 'Local Master Uninstall' : (isRemote ? 'Remote Master VPS' : 'Local Master Install');
   startBtn.textContent = isUninstall ? 'Uninstall Local Master' : (isRemote ? 'Install Remote Master' : 'Install Local Master');
   if (!masterNameTouched && !isUninstall) masterName.value = defaultMasterName();
@@ -534,7 +544,7 @@ document.querySelectorAll('.password-toggle').forEach(btn => {
     const show = input.type === 'password';
     input.type = show ? 'text' : 'password';
     btn.setAttribute('aria-pressed', show ? 'true' : 'false');
-    const labels = {'ssh-password':'SSH password', 'root-password':'new root password', 'target-password':'target user password', 'pbgui-password':'PBGui login password'};
+    const labels = {'ssh-password':'SSH password', 'root-password':'new root password', 'target-password':'target user password', 'local-sudo-password':'local sudo password', 'pbgui-password':'PBGui login password'};
     const label = labels[input.id] || 'password';
     btn.setAttribute('aria-label', (show ? 'Hide ' : 'Show ') + label);
   });
