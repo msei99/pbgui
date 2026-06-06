@@ -17,6 +17,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any
 import yaml
 
@@ -737,6 +738,7 @@ class VPSManagerService:
             "disk": [],
             "swap": [],
         }
+        self._master_server_cpu_history: list[tuple[float, float, float]] = []
         self._vps_coindata_status_cache: dict[str, bool] = {}
         self._vps_ssh_ok_cache: dict[str, bool] = {}
         self._session_secrets: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
@@ -2339,6 +2341,76 @@ class VPSManagerService:
         window = round(now - history[0][0], 1)
         return peak, window
 
+    def _local_master_cpu_stats(self) -> tuple[float, float, float]:
+        """Return local master live CPU, 60s CPU, and 60s sample window."""
+        try:
+            cpu_times = psutil.cpu_times()
+        except Exception as exc:
+            _log(SERVICE, f"local master CPU probe failed: {exc}", level="WARNING")
+            return 0.0, 0.0, 0.0
+
+        now = time.time()
+        idle = _safe_float(getattr(cpu_times, "idle", 0.0))
+        total = sum(_safe_float(value) for value in cpu_times)
+        if total <= 0:
+            return 0.0, 0.0, 0.0
+
+        history = self._master_server_cpu_history
+        cutoff = now - (ROLLING_PEAK_WINDOW_SECONDS + 2.0)
+        history[:] = [sample for sample in history if sample[0] >= cutoff]
+        previous = history[-1] if history else None
+        history.append((now, idle, total))
+
+        live_cpu = 0.0
+        if previous is not None:
+            total_delta = total - previous[2]
+            if total_delta > 0:
+                live_cpu = (1.0 - ((idle - previous[1]) / total_delta)) * 100.0
+
+        base_sample = None
+        for sample in history:
+            if now - sample[0] >= ROLLING_PEAK_WINDOW_SECONDS:
+                base_sample = sample
+            else:
+                break
+
+        if base_sample is None:
+            window = round(now - history[0][0], 1) if history else 0.0
+            return round(max(0.0, min(live_cpu, 100.0)), 1), 0.0, window
+
+        elapsed = now - base_sample[0]
+        total_delta = total - base_sample[2]
+        if elapsed <= 0 or total_delta <= 0:
+            return round(max(0.0, min(live_cpu, 100.0)), 1), 0.0, round(max(elapsed, 0.0), 1)
+        cpu_60s = (1.0 - ((idle - base_sample[1]) / total_delta)) * 100.0
+        return (
+            round(max(0.0, min(live_cpu, 100.0)), 1),
+            round(max(0.0, min(cpu_60s, 100.0)), 1),
+            round(elapsed, 1),
+        )
+
+    def _build_local_master_server_metrics(self) -> dict[str, Any] | None:
+        """Build current local master server telemetry without remote/PBRemote probes."""
+        try:
+            mem = psutil.virtual_memory()
+            disk = psutil.disk_usage("/")
+            swap = psutil.swap_memory()
+            boot = psutil.boot_time()
+        except Exception as exc:
+            _log(SERVICE, f"local master server telemetry failed: {exc}", level="WARNING")
+            return None
+        cpu, cpu_60s, cpu_60s_window = self._local_master_cpu_stats()
+        return self._build_server_metrics(SimpleNamespace(
+            rtd=0,
+            boot=boot,
+            cpu=cpu,
+            cpu_60s=cpu_60s,
+            cpu_60s_window=cpu_60s_window,
+            mem=mem,
+            disk=disk,
+            swap=swap,
+        ))
+
     def _empty_monitor_payload(self) -> dict[str, Any]:
         return {"server": None, "v7": [], "v7_running": [], "multi": [], "single": [], "logfiles": []}
 
@@ -2522,9 +2594,10 @@ class VPSManagerService:
 
     def _build_local_master_monitor_payload(self, pbremote: PBRemote, *, refresh: bool) -> dict[str, Any]:
         if not refresh and self._master_monitor_payload_cache is not None:
+            self._master_monitor_payload_cache["server"] = self._build_local_master_server_metrics()
             return self._master_monitor_payload_cache
         payload = self._empty_monitor_payload()
-        payload["server"] = self._build_server_metrics(pbremote)
+        payload["server"] = self._build_local_master_server_metrics()
         snapshot = self._collect_local_master_monitor_snapshot()
         live_stats = self._collect_local_master_live_bot_stats()
         cfg = self.monitor_config

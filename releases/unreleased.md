@@ -1,5 +1,6 @@
 # Unreleased
 
+- Fixed Local Master CPU telemetry in VPS Manager so quick detail updates refresh live CPU and the 60s CPU window from local system metrics instead of reusing a stale cached payload.
 - Added a FastAPI-based VPS Manager import flow for existing PBGui VPS hosts that probes over SSH, previews detected settings, and saves the VPS without running init or setup.
 - Added a new remote master installer entry point (`setup/master_installer.sh`) that starts a local browser wizard or CLI mode from one curl command.
 - Added a Local Master Install mode to the master installer browser wizard and CLI for installing PBGui/PB7 locally under a configurable parent directory.
