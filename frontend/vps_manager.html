@@ -2880,6 +2880,7 @@
       addVpsReady: { hostsOk: false, sshOk: false, sshError: '', loading: false },
       addBucketCheck: { ok: false, error: '', loading: false },
       addCmcCheck: { ok: false, error: '', loading: false, credit_limit_monthly: null, credits_used_day: null, credits_used_month: null, credits_left: null, credit_limit_monthly_reset_timestamp: null },
+      importExistingVps: defaultExistingVpsImportState(),
       pendingAutoSetupSwitch: null,
       master: defaultMasterUi(),
       taskLog: defaultTaskLog(),
@@ -2969,6 +2970,24 @@
         firewall: false,
         firewall_ssh_port: 22,
         firewall_ssh_ips: ''
+      };
+    }
+
+    function defaultExistingVpsImportState() {
+      return {
+        form: {
+          hostname: '',
+          ip: '',
+          user: '',
+          user_pw: '',
+          install_dir: '',
+          accept_unknown_host: false,
+          accepted_host_key_fingerprint: ''
+        },
+        loading: false,
+        saving: false,
+        error: '',
+        probe: null
       };
     }
 
@@ -6325,6 +6344,25 @@
       store.ws.send(JSON.stringify(payload));
     }
 
+    function vpsManagerPost(path, payload) {
+      return fetch(API_BASE + path + '?token=' + encodeURIComponent(TOKEN), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + TOKEN
+        },
+        body: JSON.stringify(payload || {})
+      }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (data) {
+          if (!response.ok) {
+            const detail = data && data.detail ? data.detail : 'Request failed.';
+            throw new Error(String(detail));
+          }
+          return data;
+        });
+      });
+    }
+
     function sendContext() {
       if (isMasterContextView()) {
         send({ cmd: 'set_context', view: 'master' });
@@ -7113,35 +7151,238 @@
       }).catch(function () {});
     }
 
-    function openManualImportPrompt() {
-      document.getElementById('alertModalTitle').textContent = 'Import VPS by Hostname';
-      const box = document.getElementById('alertModalBody');
-      box.className = 'notice';
-      box.innerHTML = `
-        <div style="display:grid;gap:12px">
-          <div>Enter the VPS hostname exactly as it is mapped in your local <span class='code'>/etc/hosts</span>.</div>
-          <div>
-            <label style="display:block;margin-bottom:6px">Hostname</label>
-            <input type="text" id="import-hostname-input" placeholder="manibot42" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none">
-          </div>
-          <div class='field-help'>This import only works when the hostname already exists in your local <span class='code'>/etc/hosts</span> file.</div>
-        </div>`;
-      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" id="import-hostname-confirm">Import</button>';
-      document.getElementById('alertModalOverlay').classList.add('visible');
-      document.getElementById('import-hostname-confirm').onclick = function () {
-        const input = document.getElementById('import-hostname-input');
-        const hostname = input ? String(input.value || '').trim() : '';
-        send({ cmd: 'prepare_import', hostname: hostname });
+    function existingVpsImportPayload() {
+      const flow = store.importExistingVps || defaultExistingVpsImportState();
+      const form = flow.form || {};
+      return {
+        hostname: String(form.hostname || '').trim(),
+        ip: String(form.ip || '').trim(),
+        user: String(form.user || '').trim(),
+        user_pw: String(form.user_pw || ''),
+        install_dir: String(form.install_dir || '').trim(),
+        accept_unknown_host: !!form.accept_unknown_host,
+        accepted_host_key_fingerprint: String(form.accepted_host_key_fingerprint || '').trim()
       };
-      setTimeout(function () {
-        const input = document.getElementById('import-hostname-input');
-        if (input) {
-          input.focus();
-          input.addEventListener('keydown', function (event) {
-            if (event.key === 'Enter') document.getElementById('import-hostname-confirm').click();
-          });
+    }
+
+    function setExistingVpsImportField(name, value) {
+      const flow = store.importExistingVps || defaultExistingVpsImportState();
+      flow.form = flow.form || {};
+      const oldUser = String(flow.form.user || '').trim();
+      flow.form[name] = value;
+      if (name === 'user') {
+        const nextUser = String(value || '').trim();
+        const oldDefault = oldUser ? '/home/' + oldUser + '/software' : '';
+        if (nextUser && (!String(flow.form.install_dir || '').trim() || String(flow.form.install_dir || '').trim() === oldDefault)) {
+          flow.form.install_dir = '/home/' + nextUser + '/software';
+          const installInput = document.getElementById('existing-vps-import-install-dir');
+          if (installInput) installInput.value = flow.form.install_dir;
         }
+      }
+      flow.error = '';
+      flow.probe = null;
+      flow.form.accept_unknown_host = false;
+      flow.form.accepted_host_key_fingerprint = '';
+      store.importExistingVps = flow;
+      const errorBox = document.getElementById('existing-vps-import-error');
+      if (errorBox) errorBox.innerHTML = '';
+      const preview = document.getElementById('existing-vps-import-preview');
+      if (preview) preview.innerHTML = `<div class='notice info'>Probe reads the existing VPS over SSH and does not run init, setup, Ansible, or remote writes.</div>`;
+      const saveBtn = document.getElementById('existing-vps-save-btn');
+      if (saveBtn) saveBtn.disabled = true;
+    }
+
+    function renderExistingVpsImportPreview(probe) {
+      const payload = probe || {};
+      const checks = Array.isArray(payload.checks) ? payload.checks : [];
+      const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+      const blockers = Array.isArray(payload.blockers) ? payload.blockers : [];
+      const detected = payload.detected || {};
+      const hostKey = payload.host_key || {};
+      const units = Array.isArray(detected.systemd_units) ? detected.systemd_units : [];
+      const cronLines = Array.isArray(detected.legacy_cron_lines) ? detected.legacy_cron_lines : [];
+      const processes = Array.isArray(detected.legacy_processes) ? detected.legacy_processes : [];
+      const checkRows = checks.length
+        ? checks.map(function (item) {
+            return `<div class='status-item'><div class='status-label'>${esc(item.label || '')}</div><div class='status-value'>${boolDot(!!item.ok)}</div><div class='status-sub'>${esc(item.detail || '')}</div></div>`;
+          }).join('')
+        : `<div class='field-help'>No checks run yet.</div>`;
+      const unitRows = units.length
+        ? `<div class='table-wrap'><table><thead><tr><th>Unit</th><th>File</th><th>Enabled</th><th>Active</th></tr></thead><tbody>${units.map(function (unit) {
+            return `<tr><td>${esc(unit.unit || '')}</td><td>${esc(unit.exists || '')}</td><td>${esc(unit.enabled || '')}</td><td>${esc(unit.active || '')}</td></tr>`;
+          }).join('')}</tbody></table></div>`
+        : `<div class='field-help'>No systemd unit status available.</div>`;
+      const legacyHtml = `
+        <div class='status-grid'>
+          <div class='status-item'><div class='status-label'>Legacy start.sh</div><div class='status-value'>${boolDot(!detected.legacy_start_sh_exists)}</div><div class='status-sub'>${detected.legacy_start_sh_exists ? 'Found' : 'Not found'}</div></div>
+          <div class='status-item'><div class='status-label'>Legacy crontab lines</div><div class='status-value'>${cronLines.length ? '<span class="dot warning"></span>' : boolDot(true)}</div><div class='status-sub'>${esc(String(cronLines.length))} line(s)</div></div>
+          <div class='status-item'><div class='status-label'>Legacy processes</div><div class='status-value'>${processes.length ? '<span class="dot warning"></span>' : boolDot(true)}</div><div class='status-sub'>${esc(String(processes.length))} process(es)</div></div>
+        </div>`;
+      const detectedHtml = `
+        <div class='status-grid'>
+          <div class='status-item'><div class='status-label'>Install Path</div><div class='status-value'>${esc(payload.install_dir || '')}</div><div class='status-sub'>Parent directory</div></div>
+          <div class='status-item'><div class='status-label'>PBGui</div><div class='status-value'>${esc(detected.pbgui_dir || '')}</div><div class='status-sub'>Remote PBGui directory</div></div>
+          <div class='status-item'><div class='status-label'>PB7</div><div class='status-value'>${esc(detected.pb7_dir || '')}</div><div class='status-sub'>From pbgui.ini or install path</div></div>
+          <div class='status-item'><div class='status-label'>Swap</div><div class='status-value'>${esc(detected.swap || '0')}</div><div class='status-sub'>Detected /swapfile size</div></div>
+          <div class='status-item'><div class='status-label'>PBRemote Bucket</div><div class='status-value'>${esc(detected.bucket || '-')}</div><div class='status-sub'>From remote pbgui.ini</div></div>
+          <div class='status-item'><div class='status-label'>CoinMarketCap API</div><div class='status-value'>${detected.coinmarketcap_api_key ? boolDot(true) : boolDot(false)}</div><div class='status-sub'>${detected.coinmarketcap_api_key ? 'Detected' : 'Missing'}</div></div>
+        </div>`;
+      const hostKeyHtml = hostKey.fingerprint
+        ? `<div class='notice ${payload.needs_host_key_confirmation ? 'warning' : (hostKey.mismatch ? 'error' : 'info')}'>SSH host key for <strong>${esc(hostKey.host || payload.hostname || '')}</strong>${hostKey.ip ? ' (' + esc(hostKey.ip) + ')' : ''}: <span class='code'>${esc(hostKey.key_type || '')} ${esc(hostKey.fingerprint || '')}</span>${payload.needs_host_key_confirmation ? '<div style="margin-top:8px"><button class="btn primary" type="button" onclick="trustExistingVpsImportHostKey()">Trust fingerprint and probe again</button></div>' : ''}</div>`
+        : '';
+      return `
+        <div style='display:grid;gap:14px'>
+          ${hostKeyHtml}
+          ${blockers.length ? `<div class='notice error'><strong>Import blocked:</strong><br>${blockers.map(esc).join('<br>')}</div>` : ''}
+          ${warnings.length ? `<div class='notice warning'><strong>Warnings:</strong><br>${warnings.map(esc).join('<br>')}</div>` : ''}
+          <div><div class='panel-title' style='font-size:var(--fs-md);margin-bottom:8px'>Checks</div><div class='status-grid'>${checkRows}</div></div>
+          <div><div class='panel-title' style='font-size:var(--fs-md);margin-bottom:8px'>Detected Settings</div>${detectedHtml}</div>
+          <div><div class='panel-title' style='font-size:var(--fs-md);margin-bottom:8px'>Systemd Units</div>${unitRows}</div>
+          <div><div class='panel-title' style='font-size:var(--fs-md);margin-bottom:8px'>Legacy Autostart</div>${legacyHtml}</div>
+        </div>`;
+    }
+
+    function renderExistingVpsImportModal() {
+      const flow = store.importExistingVps || defaultExistingVpsImportState();
+      const form = flow.form || {};
+      prepareAlertModalWindow(980, 860);
+      document.getElementById('alertModalTitle').textContent = 'Import Existing VPS';
+      const box = document.getElementById('alertModalBody');
+      box.className = 'notice bucket-cleanup-body';
+      const errorHtml = `<div id='existing-vps-import-error'>${flow.error ? `<div class='notice error'>${esc(flow.error)}</div>` : ''}</div>`;
+      const probeHtml = flow.probe ? renderExistingVpsImportPreview(flow.probe) : `<div class='notice info'>Probe reads the existing VPS over SSH and does not run init, setup, Ansible, or remote writes.</div>`;
+      box.innerHTML = `
+        <div style='display:grid;gap:14px'>
+          ${errorHtml}
+          <div class='field-grid'>
+            <div class='field'>
+              <label>Hostname</label>
+              <input id='existing-vps-import-hostname' type='text' value='${escAttr(form.hostname || '')}' oninput="setExistingVpsImportField('hostname', this.value)" placeholder='manibot42'>
+              <div class='field-help'>Must already resolve in local /etc/hosts.</div>
+            </div>
+            <div class='field'>
+              <label>VPS IPv4</label>
+              <input id='existing-vps-import-ip' type='text' value='${escAttr(form.ip || '')}' oninput="setExistingVpsImportField('ip', this.value)" placeholder='203.0.113.10'>
+            </div>
+            <div class='field'>
+              <label>VPS user</label>
+              <input id='existing-vps-import-user' type='text' value='${escAttr(form.user || '')}' oninput="setExistingVpsImportField('user', this.value)" placeholder='${escAttr(((store.state || {}).config || {}).local_user || '')}'>
+            </div>
+            <div class='field'>
+              <label>VPS user password</label>
+              <input id='existing-vps-import-user-pw' type='password' value='${escAttr(form.user_pw || '')}' oninput="setExistingVpsImportField('user_pw', this.value)" placeholder='Required for probe and future tasks'>
+            </div>
+            <div class='field span-2'>
+              <label>Install Path</label>
+              <input id='existing-vps-import-install-dir' type='text' value='${escAttr(form.install_dir || '')}' oninput="setExistingVpsImportField('install_dir', this.value)" placeholder='/home/user/software'>
+              <div class='field-help'>Parent directory containing pbgui, pb7, venv_pbgui and venv_pb7.</div>
+            </div>
+          </div>
+          <div id='existing-vps-import-preview'>${probeHtml}</div>
+        </div>`;
+      const canSave = !!(flow.probe && flow.probe.can_save && !flow.loading && !flow.saving);
+      const probeLabel = flow.loading ? 'Probing...' : 'Probe VPS';
+      const saveLabel = flow.saving ? 'Saving...' : 'Save Imported VPS';
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" id="existing-vps-probe-btn">' + esc(probeLabel) + '</button> <button class="btn ok" type="button" id="existing-vps-save-btn" ' + (canSave ? '' : 'disabled') + '>' + esc(saveLabel) + '</button>';
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      const probeBtn = document.getElementById('existing-vps-probe-btn');
+      const saveBtn = document.getElementById('existing-vps-save-btn');
+      if (probeBtn) {
+        probeBtn.disabled = !!flow.loading || !!flow.saving;
+        probeBtn.onclick = function () { probeExistingVpsImport(false); };
+      }
+      if (saveBtn) {
+        saveBtn.onclick = function () { saveExistingVpsImport(); };
+      }
+    }
+
+    function openExistingVpsImportPrompt() {
+      const config = ((store.state || {}).config) || {};
+      const localUser = String(config.local_user || '').trim();
+      const flow = defaultExistingVpsImportState();
+      flow.form.user = localUser;
+      flow.form.install_dir = localUser ? '/home/' + localUser + '/software' : '';
+      store.importExistingVps = flow;
+      renderExistingVpsImportModal();
+      setTimeout(function () {
+        const input = document.querySelector('#alertModalBody input');
+        if (input) input.focus();
       }, 100);
+    }
+
+    function probeExistingVpsImport(keepHostKeyAcceptance) {
+      const flow = store.importExistingVps || defaultExistingVpsImportState();
+      if (!keepHostKeyAcceptance) {
+        flow.form.accept_unknown_host = false;
+        flow.form.accepted_host_key_fingerprint = '';
+      }
+      flow.loading = true;
+      flow.error = '';
+      store.importExistingVps = flow;
+      renderExistingVpsImportModal();
+      vpsManagerPost('/import/probe', existingVpsImportPayload())
+        .then(function (data) {
+          const next = store.importExistingVps || defaultExistingVpsImportState();
+          next.loading = false;
+          next.error = '';
+          next.probe = data || null;
+          store.importExistingVps = next;
+          renderExistingVpsImportModal();
+        })
+        .catch(function (err) {
+          const next = store.importExistingVps || defaultExistingVpsImportState();
+          next.loading = false;
+          next.error = String(err && err.message ? err.message : err || 'Probe failed.');
+          store.importExistingVps = next;
+          renderExistingVpsImportModal();
+        });
+    }
+
+    function trustExistingVpsImportHostKey() {
+      const flow = store.importExistingVps || defaultExistingVpsImportState();
+      const hostKey = (flow.probe || {}).host_key || {};
+      const fingerprint = String(hostKey.fingerprint || '').trim();
+      if (!fingerprint) {
+        flow.error = 'No SSH host key fingerprint is available.';
+        store.importExistingVps = flow;
+        renderExistingVpsImportModal();
+        return;
+      }
+      flow.form.accept_unknown_host = true;
+      flow.form.accepted_host_key_fingerprint = fingerprint;
+      store.importExistingVps = flow;
+      probeExistingVpsImport(true);
+    }
+
+    function saveExistingVpsImport() {
+      const flow = store.importExistingVps || defaultExistingVpsImportState();
+      if (!flow.probe || !flow.probe.can_save) return;
+      flow.saving = true;
+      flow.error = '';
+      store.importExistingVps = flow;
+      renderExistingVpsImportModal();
+      vpsManagerPost('/import/save', existingVpsImportPayload())
+        .then(function (data) {
+          const hostname = String((data && data.hostname) || (((data || {}).config || {}).hostname) || '');
+          closeAlertModal();
+          toast(String((data && data.message) || 'Imported VPS saved.'), 'success');
+          if (hostname) {
+            store.hostname = hostname;
+            store.view = 'vps';
+            sendContext();
+            scheduleVpsDetailFetch(hostname);
+            renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+          } else {
+            send({ cmd: 'refresh' });
+          }
+        })
+        .catch(function (err) {
+          const next = store.importExistingVps || defaultExistingVpsImportState();
+          next.saving = false;
+          next.error = String(err && err.message ? err.message : err || 'Save failed.');
+          store.importExistingVps = next;
+          renderExistingVpsImportModal();
+        });
     }
 
     function applyPreparedImport(data) {
@@ -8698,12 +8939,12 @@
       const html = `
         <div class='side-group'>
           <div class='side-group-title'>Import Host</div>
-          <button class='side-button' type='button' onclick='openManualImportPrompt()'>
+          <button class='side-button' type='button' onclick='openExistingVpsImportPrompt()'>
             <div class='side-button-row'>
-              <div class='side-button-title'>Import by Hostname</div>
+              <div class='side-button-title'>Import Existing VPS</div>
               <div class='tag ok'>Manual</div>
             </div>
-            <div class='side-button-sub'>Requires a matching local /etc/hosts entry before the import can continue.</div>
+            <div class='side-button-sub'>Probe an existing PBGui VPS over SSH, then save it without init or setup.</div>
           </button>
         </div>`;
       if (sidebarList && sidebarList.innerHTML !== html) sidebarList.innerHTML = html;

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
 
 from api.auth import SessionToken, require_auth, validate_token
 from api.vps import get_bot_log_matches
@@ -20,6 +21,16 @@ SERVICE = "VPSManagerApi"
 router = APIRouter()
 
 _service: VPSManagerService | None = None
+
+
+class ExistingVpsImportRequest(BaseModel):
+    hostname: str = ""
+    ip: str = ""
+    user: str = ""
+    user_pw: str = ""
+    install_dir: str = ""
+    accept_unknown_host: bool = False
+    accepted_host_key_fingerprint: str = ""
 
 MASTER_CONTEXT_VIEWS = {
     "master",
@@ -131,6 +142,33 @@ def get_metric_history(
         return JSONResponse(content=payload)
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/import/probe")
+def probe_existing_vps_import(
+    payload: ExistingVpsImportRequest,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    del session
+    try:
+        data = _get_service().probe_existing_vps_import(payload.dict())
+        return JSONResponse(content=data)
+    except Exception as exc:
+        _log(SERVICE, f"existing VPS import probe failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/import/save")
+def save_existing_vps_import(
+    payload: ExistingVpsImportRequest,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    try:
+        data = _get_service().save_existing_vps_import(session.token, payload.dict())
+        return JSONResponse(content=data)
+    except Exception as exc:
+        _log(SERVICE, f"existing VPS import save failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.websocket("/ws")

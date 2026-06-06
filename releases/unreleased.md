@@ -1,5 +1,6 @@
 # Unreleased
 
+- Added a FastAPI-based VPS Manager import flow for existing PBGui VPS hosts that probes over SSH, previews detected settings, and saves the VPS without running init or setup.
 - Added a new remote master installer entry point (`setup/master_installer.sh`) that starts a local browser wizard or CLI mode from one curl command.
 - Added a Local Master Install mode to the master installer browser wizard and CLI for installing PBGui/PB7 locally under a configurable parent directory.
 - Added a Local Master Uninstall mode to the master installer browser wizard for removing local PBGui/PB7 checkouts, virtualenvs, and PBGui user services with a safety confirmation dialog.

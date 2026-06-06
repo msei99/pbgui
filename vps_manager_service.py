@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import configparser
 import getpass
+import hashlib
 import json
 import os
 import psutil
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import threading
@@ -89,6 +93,178 @@ class UnknownHostKeyError(ValueError):
         self.ip = str(ip or "")
         target = self.ssh_host or self.ip or self.hostname
         super().__init__(f"Server '{target}' not found in known_hosts")
+
+
+def _ssh_fingerprint_sha256(key: Any) -> str:
+    digest = hashlib.sha256(key.asbytes()).digest()
+    encoded = base64.b64encode(digest).decode("ascii").rstrip("=")
+    return f"SHA256:{encoded}"
+
+
+def _normalize_ssh_fingerprint(value: str) -> str:
+    text = str(value or "").strip()
+    return text[7:] if text.startswith("SHA256:") else text
+
+
+def _ssh_fingerprints_match(expected: str, actual: str) -> bool:
+    return bool(expected) and _normalize_ssh_fingerprint(expected) == _normalize_ssh_fingerprint(actual)
+
+
+def _user_known_hosts_path() -> Path:
+    return Path.home() / ".ssh" / "known_hosts"
+
+
+def _load_known_hosts() -> Any:
+    import paramiko
+
+    host_keys = paramiko.HostKeys()
+    for path in (Path("/etc/ssh/ssh_known_hosts"), _user_known_hosts_path()):
+        try:
+            if path.exists():
+                host_keys.load(str(path))
+        except Exception:
+            continue
+    return host_keys
+
+
+def _host_key_names(host: str, port: int = 22) -> list[str]:
+    clean_host = str(host or "").strip()
+    if not clean_host:
+        return []
+    names = [clean_host]
+    if int(port) != 22:
+        names.insert(0, f"[{clean_host}]:{int(port)}")
+    return names
+
+
+def _known_host_key_status(host: str, port: int, key: Any) -> str:
+    host_keys = _load_known_hosts()
+    matched = False
+    mismatch = False
+    for name in _host_key_names(host, port):
+        entries = host_keys.lookup(name)
+        if not entries:
+            continue
+        known_key = entries.get(key.get_name())
+        if known_key is None:
+            continue
+        if known_key.asbytes() == key.asbytes():
+            matched = True
+        else:
+            mismatch = True
+    if mismatch:
+        return "mismatch"
+    return "known" if matched else "unknown"
+
+
+def _fetch_remote_host_key(host: str, port: int = 22, timeout: int = 10) -> Any:
+    import paramiko
+
+    sock = socket.create_connection((host, int(port)), timeout=timeout)
+    transport = paramiko.Transport(sock)
+    try:
+        transport.start_client(timeout=timeout)
+        return transport.get_remote_server_key()
+    finally:
+        transport.close()
+
+
+def _remember_known_host_key(host: str, port: int, key: Any) -> None:
+    import paramiko
+
+    names = _host_key_names(host, port)
+    if not names:
+        return
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(mode=0o700, exist_ok=True)
+    try:
+        ssh_dir.chmod(0o700)
+    except OSError:
+        pass
+    path = _user_known_hosts_path()
+    host_keys = paramiko.HostKeys()
+    if path.exists():
+        host_keys.load(str(path))
+    host_keys.add(names[0], key.get_name(), key)
+    host_keys.save(str(path))
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def _validate_import_hostname(value: Any) -> str:
+    hostname = str(value or "").strip()
+    if not hostname:
+        raise ValueError("Hostname is required.")
+    if hostname in {".", ".."} or any(ch in hostname for ch in ("/", "\\", "\x00")):
+        raise ValueError("Hostname contains invalid characters.")
+    return hostname
+
+
+def _hosts_entry_status(hostname: str, ip: str) -> dict[str, Any]:
+    result = {"ok": False, "has_hostname": False, "current_ip": ""}
+    hosts = Path("/etc/hosts")
+    if not hosts.exists():
+        return result
+    try:
+        with hosts.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                line_ip = parts[0]
+                names = parts[1:]
+                if hostname not in names:
+                    continue
+                result["has_hostname"] = True
+                result["current_ip"] = line_ip
+                if line_ip == ip:
+                    result["ok"] = True
+                    return result
+    except Exception:
+        return result
+    return result
+
+
+def _sftp_path_exists(sftp: Any, path: str) -> bool:
+    try:
+        sftp.stat(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+
+
+def _parse_ufw_status(output: str) -> tuple[bool, str]:
+    allowed_ips: list[str] = []
+    fw_enabled = bool(re.search(r"^Status:\s+active\b", str(output or ""), re.IGNORECASE | re.MULTILINE))
+    pattern = re.compile(r"^(?:22|ssh)/tcp\s+ALLOW\s+(.+)$", re.IGNORECASE)
+    for raw_line in str(output or "").splitlines():
+        line = raw_line.strip()
+        match = pattern.search(line)
+        if not match:
+            continue
+        value = match.group(1).strip().split()[0]
+        if value.lower() in {"anywhere", "anywhere(v6)", "anywhere (v6)"}:
+            value = ""
+        if value and _valid_ipv4(value) and value not in allowed_ips:
+            allowed_ips.append(value)
+    return fw_enabled, ",".join(allowed_ips)
+
+
+def _parse_import_systemd_units(output: str) -> list[dict[str, str]]:
+    units: list[dict[str, str]] = []
+    for raw_line in str(output or "").splitlines():
+        parts = raw_line.split("\t")
+        if len(parts) < 4:
+            continue
+        units.append({"unit": parts[0], "exists": parts[1], "enabled": parts[2], "active": parts[3]})
+    return units
 
 
 def _now_ts() -> int:
@@ -3708,6 +3884,430 @@ printf 'SECTION\tprocesses\tEND\n'
             "hostname": hostname,
             "ip": ip,
             "user": getpass.getuser(),
+        }
+
+    def _exec_import_ssh_command(
+        self,
+        ssh: Any,
+        command: str,
+        *,
+        sudo_password: str | None = None,
+        timeout: int = 10,
+    ) -> tuple[int, str, str]:
+        stdin, stdout, stderr = ssh.exec_command(command, timeout=timeout, get_pty=False)
+        if sudo_password is not None:
+            stdin.write(str(sudo_password or "") + "\n")
+            stdin.flush()
+        else:
+            try:
+                stdin.close()
+            except Exception:
+                pass
+        out = stdout.read().decode("utf-8", errors="replace")
+        err = stderr.read().decode("utf-8", errors="replace")
+        rc = int(stdout.channel.recv_exit_status())
+        return rc, out, err
+
+    def _test_import_key_login(self, *, ssh_host: str, user: str, timeout: int = 6) -> tuple[bool, str]:
+        import paramiko
+
+        ssh = paramiko.SSHClient()
+        ssh.load_system_host_keys()
+        try:
+            known_hosts = _user_known_hosts_path()
+            if known_hosts.exists():
+                ssh.load_host_keys(str(known_hosts))
+        except Exception:
+            pass
+        ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+        try:
+            ssh.connect(
+                hostname=ssh_host,
+                username=user,
+                timeout=timeout,
+                banner_timeout=timeout,
+                auth_timeout=timeout,
+                allow_agent=True,
+                look_for_keys=True,
+            )
+            return True, "Key authentication succeeded."
+        except Exception as exc:
+            return False, str(exc) or "Key authentication failed."
+        finally:
+            try:
+                ssh.close()
+            except Exception:
+                pass
+
+    def probe_existing_vps_import(self, form: dict[str, Any]) -> dict[str, Any]:
+        import paramiko
+
+        hostname = _validate_import_hostname(form.get("hostname"))
+        ip = str(form.get("ip") or "").strip()
+        if not _valid_ipv4(ip):
+            raise ValueError("IP address is not valid.")
+        user = str(form.get("user") or "").strip()
+        if not user:
+            raise ValueError("VPS user is required.")
+        user_pw = str(form.get("user_pw") or "")
+        raw_install_dir = str(form.get("install_dir") or "").strip() or f"/home/{user}/software"
+        install_dir = _normalize_vps_install_dir(raw_install_dir, user)
+        pbgui_dir = f"{install_dir.rstrip('/')}/pbgui"
+        pbgui_ini = f"{pbgui_dir}/pbgui.ini"
+        python_bin = f"{install_dir.rstrip('/')}/venv_pbgui/bin/python"
+        default_pb7_dir = f"{install_dir.rstrip('/')}/pb7"
+        default_pb7_venv = f"{install_dir.rstrip('/')}/venv_pb7/bin/python"
+        accept_unknown_host = bool(form.get("accept_unknown_host"))
+        accepted_fingerprint = str(form.get("accepted_host_key_fingerprint") or "").strip()
+
+        result: dict[str, Any] = {
+            "hostname": hostname,
+            "ip": ip,
+            "user": user,
+            "install_dir": install_dir,
+            "pbgui_dir": pbgui_dir,
+            "checks": [],
+            "warnings": [],
+            "blockers": [],
+            "host_key": {},
+            "needs_host_key_confirmation": False,
+            "detected": {
+                "remote_pbgui_dir": pbgui_dir,
+                "pbgui_dir": pbgui_dir,
+                "pbgui_ini": pbgui_ini,
+                "python_bin": python_bin,
+                "pb7_dir": default_pb7_dir,
+                "pb7_venv": default_pb7_venv,
+                "swap": "0",
+                "bucket": "",
+                "coinmarketcap_api_key": "",
+                "firewall": False,
+                "firewall_ssh_port": 22,
+                "firewall_ssh_ips": "",
+                "key_auth_ok": False,
+                "systemd_units": [],
+                "legacy_cron_lines": [],
+                "legacy_processes": [],
+                "legacy_start_sh_exists": False,
+            },
+            "can_save": False,
+        }
+
+        def add_check(label: str, ok: bool, detail: str = "") -> None:
+            result["checks"].append({"label": label, "ok": bool(ok), "detail": str(detail or "")})
+
+        def add_warning(message: str) -> None:
+            text = str(message or "").strip()
+            if text and text not in result["warnings"]:
+                result["warnings"].append(text)
+
+        def add_blocker(message: str) -> None:
+            text = str(message or "").strip()
+            if text and text not in result["blockers"]:
+                result["blockers"].append(text)
+
+        if hostname in self.vpsmanager.list():
+            add_check("VPS Manager record", False, "Hostname already exists.")
+            add_blocker("Hostname already exists in VPS Manager.")
+            return result
+        add_check("VPS Manager record", True, "Hostname is not saved yet.")
+
+        hosts_status = _hosts_entry_status(hostname, ip)
+        if hosts_status.get("ok"):
+            add_check("/etc/hosts", True, f"{hostname} resolves to {ip}.")
+        elif hosts_status.get("has_hostname"):
+            current_ip = str(hosts_status.get("current_ip") or "")
+            add_check("/etc/hosts", False, f"Hostname maps to {current_ip}, expected {ip}.")
+            add_blocker(f"Local /etc/hosts maps {hostname} to {current_ip} instead of {ip}.")
+        else:
+            add_check("/etc/hosts", False, "Hostname is missing locally.")
+            add_blocker(f"Add '{ip} {hostname}' to local /etc/hosts before importing.")
+        if not hosts_status.get("ok"):
+            return result
+
+        try:
+            remote_key = _fetch_remote_host_key(hostname, 22, timeout=8)
+            fingerprint = _ssh_fingerprint_sha256(remote_key)
+            status = _known_host_key_status(hostname, 22, remote_key)
+            host_key = {
+                "host": hostname,
+                "ip": ip,
+                "port": 22,
+                "key_type": remote_key.get_name(),
+                "fingerprint": fingerprint,
+                "status": status,
+                "known": status == "known",
+                "mismatch": status == "mismatch",
+            }
+            result["host_key"] = host_key
+        except Exception as exc:
+            add_check("SSH host key", False, str(exc) or "Cannot read host key.")
+            add_blocker(f"Cannot read SSH host key for {hostname}: {exc}")
+            return result
+
+        if result["host_key"].get("mismatch"):
+            add_check("SSH host key", False, "Known host key mismatch.")
+            add_blocker("SSH host key mismatch. Fix known_hosts intentionally before importing.")
+            return result
+        if result["host_key"].get("status") != "known":
+            if not accept_unknown_host:
+                result["needs_host_key_confirmation"] = True
+                add_check("SSH host key", False, "Fingerprint confirmation required.")
+                add_warning("Confirm the SSH host key fingerprint before continuing.")
+                return result
+            fingerprint = str(result["host_key"].get("fingerprint") or "")
+            if not _ssh_fingerprints_match(accepted_fingerprint, fingerprint):
+                result["needs_host_key_confirmation"] = True
+                add_check("SSH host key", False, "Accepted fingerprint does not match.")
+                add_blocker("Accepted SSH host key fingerprint does not match the presented key.")
+                return result
+            _remember_known_host_key(hostname, 22, remote_key)
+            result["host_key"]["status"] = "known"
+            result["host_key"]["known"] = True
+            add_check("SSH host key", True, f"Trusted {remote_key.get_name()} {fingerprint}.")
+        else:
+            add_check("SSH host key", True, "Known host key matches.")
+
+        if not user_pw:
+            add_check("SSH password login", False, "VPS user password is required.")
+            add_blocker("VPS user password is required.")
+            return result
+
+        ssh = paramiko.SSHClient()
+        ssh.load_system_host_keys()
+        try:
+            known_hosts = _user_known_hosts_path()
+            if known_hosts.exists():
+                ssh.load_host_keys(str(known_hosts))
+        except Exception:
+            pass
+        ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+        try:
+            ssh.connect(
+                hostname=hostname,
+                username=user,
+                password=user_pw,
+                timeout=8,
+                banner_timeout=8,
+                auth_timeout=8,
+                allow_agent=False,
+                look_for_keys=False,
+            )
+            add_check("SSH password login", True, f"Connected as {user}.")
+        except paramiko.AuthenticationException:
+            add_check("SSH password login", False, "Authentication failed.")
+            add_blocker("Cannot connect via SSH with the supplied VPS user password.")
+            return result
+        except Exception as exc:
+            add_check("SSH password login", False, str(exc) or "SSH connection failed.")
+            add_blocker(f"Cannot connect via SSH: {exc}")
+            return result
+
+        try:
+            sudo_rc, sudo_out, sudo_err = self._exec_import_ssh_command(
+                ssh,
+                "sudo -k -S -p '' -v",
+                sudo_password=user_pw,
+                timeout=10,
+            )
+            sudo_combined = "\n".join([sudo_out, sudo_err]).strip()
+            sudo_lower = sudo_combined.lower()
+            wrong_sudo = any(marker in sudo_lower for marker in (
+                "incorrect password",
+                "sorry, try again",
+                "no password was provided",
+                "a password is required",
+                "1 incorrect password attempt",
+            ))
+            if sudo_rc != 0 or wrong_sudo:
+                detail = sudo_combined.splitlines()[0].strip() if sudo_combined else "sudo validation failed"
+                add_check("sudo access", False, detail)
+                add_blocker("The VPS user must have sudo access for future VPS Manager actions.")
+                return result
+            add_check("sudo access", True, "sudo -v succeeded.")
+
+            swap_rc, swap_out, _swap_err = self._exec_import_ssh_command(
+                ssh,
+                "swapon --show --noheadings --raw | awk '$1==\"/swapfile\" {print $3; found=1; exit} END {if (!found) print \"0\"}'",
+                timeout=8,
+            )
+            swap_value = swap_out.strip().splitlines()[0].strip() if swap_rc == 0 and swap_out.strip() else "0"
+            if swap_value not in SWAP_OPTIONS:
+                add_warning(f"Detected swap size '{swap_value}' is not a supported VPS Manager option; saved as 0.")
+                swap_value = "0"
+            result["detected"]["swap"] = swap_value
+            add_check("Swap", True, swap_value)
+
+            ufw_rc, ufw_out, ufw_err = self._exec_import_ssh_command(
+                ssh,
+                "sudo -S -p '' ufw status",
+                sudo_password=user_pw,
+                timeout=10,
+            )
+            if ufw_rc == 0:
+                firewall, firewall_ips = _parse_ufw_status(ufw_out)
+                result["detected"]["firewall"] = firewall
+                result["detected"]["firewall_ssh_ips"] = firewall_ips
+                add_check("UFW", True, "active" if firewall else "inactive")
+            else:
+                add_warning((ufw_err or ufw_out or "Could not read UFW status.").strip())
+
+            units = " ".join(shlex.quote(unit) for unit in VPS_SYSTEMD_MIGRATION_UNITS)
+            units_cmd = f"""uid=$(id -u)
+systemctl_path=$(command -v systemctl || true)
+unit_dir=\"$HOME/.config/systemd/user\"
+for unit in {units}; do
+  exists=\"$([ -f \"$unit_dir/$unit\" ] && printf yes || printf no)\"
+  if [ -n \"$systemctl_path\" ]; then
+    active=$(env XDG_RUNTIME_DIR=\"${{XDG_RUNTIME_DIR:-/run/user/$uid}}\" systemctl --user is-active \"$unit\" 2>/dev/null || true)
+    enabled=$(env XDG_RUNTIME_DIR=\"${{XDG_RUNTIME_DIR:-/run/user/$uid}}\" systemctl --user is-enabled \"$unit\" 2>/dev/null || true)
+  else
+    active=unknown
+    enabled=unknown
+  fi
+  printf '%s\t%s\t%s\t%s\n' \"$unit\" \"$exists\" \"${{enabled:-unknown}}\" \"${{active:-unknown}}\"
+done"""
+            _units_rc, units_out, _units_err = self._exec_import_ssh_command(ssh, units_cmd, timeout=12)
+            systemd_units = _parse_import_systemd_units(units_out)
+            result["detected"]["systemd_units"] = systemd_units
+            active_units = [unit for unit in systemd_units if unit.get("active") == "active"]
+            add_check("systemd user units", bool(active_units), f"{len(active_units)} active unit(s).")
+
+            cron_rc, cron_out, _cron_err = self._exec_import_ssh_command(ssh, "crontab -l 2>/dev/null || true", timeout=8)
+            if cron_rc == 0:
+                cron_lines = [
+                    line
+                    for line in cron_out.splitlines()
+                    if (f"{pbgui_dir}/start.sh" in line) or ("pbgui" in line and "start.sh" in line)
+                ]
+                result["detected"]["legacy_cron_lines"] = cron_lines
+                if cron_lines:
+                    add_warning(f"Found {len(cron_lines)} legacy pbgui crontab line(s). Use systemd migration after import.")
+
+            proc_cmd = "ps -eo pid=,args= 2>/dev/null | grep -E 'PBApiServer.py|PBRun.py|PBRemote.py|PBCoinData.py|starter.py' | grep -v grep || true"
+            _proc_rc, proc_out, _proc_err = self._exec_import_ssh_command(ssh, proc_cmd, timeout=8)
+            legacy_processes = [line.strip() for line in proc_out.splitlines() if pbgui_dir in line]
+            result["detected"]["legacy_processes"] = legacy_processes
+            if legacy_processes:
+                add_warning(f"Found {len(legacy_processes)} running legacy PBGui process(es). Use systemd migration after import.")
+
+            sftp = ssh.open_sftp()
+            try:
+                pbgui_exists = _sftp_path_exists(sftp, pbgui_dir)
+                python_exists = _sftp_path_exists(sftp, python_bin)
+                pbgui_ini_exists = _sftp_path_exists(sftp, pbgui_ini)
+                start_sh_exists = _sftp_path_exists(sftp, f"{pbgui_dir}/start.sh")
+                result["detected"]["legacy_start_sh_exists"] = start_sh_exists
+                add_check("PBGui directory", pbgui_exists, pbgui_dir)
+                add_check("PBGui virtualenv Python", python_exists, python_bin)
+                add_check("pbgui.ini", pbgui_ini_exists, pbgui_ini)
+                if not pbgui_exists:
+                    add_blocker(f"PBGui directory not found: {pbgui_dir}")
+                if not python_exists:
+                    add_blocker(f"PBGui virtualenv Python not found: {python_bin}")
+                if not pbgui_ini_exists:
+                    add_blocker(f"pbgui.ini not found: {pbgui_ini}")
+                if start_sh_exists:
+                    add_warning("Legacy start.sh exists. Use systemd migration after import.")
+
+                if pbgui_ini_exists:
+                    with sftp.open(pbgui_ini, "r") as handle:
+                        ini_content = handle.read().decode("utf-8", errors="replace")
+                    config = configparser.ConfigParser()
+                    config.read_string(ini_content)
+                    remote_pbname = config.get("main", "pbname", fallback="").strip()
+                    pb7_dir = config.get("main", "pb7dir", fallback=default_pb7_dir).strip() or default_pb7_dir
+                    pb7_venv = config.get("main", "pb7venv", fallback=default_pb7_venv).strip() or default_pb7_venv
+                    bucket = config.get("pbremote", "bucket", fallback="").strip()
+                    cmc_key = config.get("coinmarketcap", "api_key", fallback="").strip()
+                    result["detected"]["pb7_dir"] = pb7_dir
+                    result["detected"]["pb7_venv"] = pb7_venv
+                    result["detected"]["bucket"] = bucket
+                    result["detected"]["coinmarketcap_api_key"] = cmc_key
+                    if remote_pbname and remote_pbname != hostname:
+                        add_warning(f"Remote pbgui.ini pbname is '{remote_pbname}', not '{hostname}'.")
+                    if not bucket:
+                        add_warning("Remote pbgui.ini has no PBRemote bucket.")
+                    if not cmc_key:
+                        add_warning("Remote pbgui.ini has no CoinMarketCap API key.")
+                    pb7_dir_exists = _sftp_path_exists(sftp, pb7_dir)
+                    pb7_venv_exists = _sftp_path_exists(sftp, pb7_venv)
+                    add_check("PB7 directory", pb7_dir_exists, pb7_dir)
+                    add_check("PB7 virtualenv Python", pb7_venv_exists, pb7_venv)
+                    if not pb7_dir_exists:
+                        add_warning(f"PB7 directory not found: {pb7_dir}")
+                    if not pb7_venv_exists:
+                        add_warning(f"PB7 virtualenv Python not found: {pb7_venv}")
+            finally:
+                try:
+                    sftp.close()
+                except Exception:
+                    pass
+        finally:
+            try:
+                ssh.close()
+            except Exception:
+                pass
+
+        key_auth_ok, key_auth_detail = self._test_import_key_login(ssh_host=hostname, user=user)
+        result["detected"]["key_auth_ok"] = key_auth_ok
+        add_check("SSH key login for monitoring", key_auth_ok, key_auth_detail)
+        if not key_auth_ok:
+            add_warning("Live monitoring will stay disabled until this master can SSH to the VPS with key authentication.")
+
+        result["can_save"] = not result["blockers"] and not result["needs_host_key_confirmation"]
+        return result
+
+    def save_existing_vps_import(self, token: str, form: dict[str, Any]) -> dict[str, Any]:
+        probe = self.probe_existing_vps_import(form)
+        if probe.get("needs_host_key_confirmation"):
+            raise ValueError("Confirm the SSH host key fingerprint before saving this VPS.")
+        blockers = [str(item) for item in (probe.get("blockers") or []) if str(item).strip()]
+        if blockers:
+            raise ValueError(blockers[0])
+
+        hostname = str(probe.get("hostname") or "").strip()
+        if not hostname:
+            raise ValueError("Hostname is required.")
+        if hostname in self.vpsmanager.list():
+            raise ValueError("Hostname already exists.")
+
+        detected = probe.get("detected") or {}
+        user_pw = str(form.get("user_pw") or "")
+        self._store_session_secrets(token, hostname, {"user_pw": user_pw})
+
+        vps = VPS()
+        vps.hostname = hostname
+        vps.ip = str(probe.get("ip") or "").strip()
+        vps.user = str(probe.get("user") or "").strip()
+        vps.remote_pbgui_dir = str(detected.get("remote_pbgui_dir") or detected.get("pbgui_dir") or "").strip()
+        vps.swap = str(detected.get("swap") or "0") if str(detected.get("swap") or "0") in SWAP_OPTIONS else "0"
+        vps.bucket = str(detected.get("bucket") or "")
+        vps.coinmarketcap_api_key = str(detected.get("coinmarketcap_api_key") or "")
+        vps.firewall = bool(detected.get("firewall"))
+        vps.firewall_ssh_port = _safe_int(detected.get("firewall_ssh_port"), 22)
+        vps.firewall_ssh_ips = str(detected.get("firewall_ssh_ips") or "")
+        vps.init_methode = "password"
+        vps.init_status = "successful"
+        vps.setup_status = "successful"
+        vps.command = "import-existing-vps"
+        vps.command_text = "Imported existing VPS"
+        vps.user_pw = None
+        vps.save()
+
+        self.vpsmanager.vpss.append(vps)
+        self.vpsmanager.vpss.sort(key=lambda item: item.hostname or "")
+
+        monitor_enabled = bool(detected.get("key_auth_ok"))
+        if monitor_enabled:
+            self._set_vps_monitor_enabled(hostname, enabled=True)
+        self._invalidate_bucket_cleanup_indicator()
+        return {
+            "hostname": hostname,
+            "config": self._build_vps_config(token, vps),
+            "probe": probe,
+            "monitor_enabled": monitor_enabled,
+            "message": "Imported VPS saved." if monitor_enabled else "Imported VPS saved. Live monitoring needs SSH key authentication.",
         }
 
     def save_vps_config(self, token: str, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
