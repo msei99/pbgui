@@ -26,6 +26,25 @@ TOTP_QR_BEGIN = "__PBGUI_TOTP_QR_BEGIN__"
 TOTP_QR_END = "__PBGUI_TOTP_QR_END__"
 SAFE_INSTALL_PATH_RE = re.compile(r"^[A-Za-z0-9._~/-]+$")
 SAFE_GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+LOCAL_APT_PACKAGES = [
+    "software-properties-common",
+    "ca-certificates",
+    "curl",
+    "git",
+    "python3",
+    "python3-pip",
+    "python3.12-venv",
+    "gcc",
+    "build-essential",
+    "pkg-config",
+]
+LOCAL_PREREQUISITE_COMMANDS = {
+    "git": "git",
+    "curl": "curl",
+    "gcc": "gcc/build-essential",
+    "pkg-config": "pkg-config",
+    "systemctl": "systemd user services",
+}
 
 
 class RemoteInstallError(RuntimeError):
@@ -361,6 +380,45 @@ def _require_command(name: str, hint: str = "") -> str:
     return path
 
 
+def _python312_venv_available() -> bool:
+    """Return True when Python 3.12 can create venvs without apt changes."""
+    python312 = shutil.which("python3.12")
+    if not python312:
+        return False
+    try:
+        proc = subprocess.run(
+            [python312, "-c", "import venv, ensurepip"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return False
+    return proc.returncode == 0
+
+
+def local_prerequisite_status() -> dict[str, object]:
+    """Return non-mutating local prerequisite status for the installer UI/CLI."""
+    missing: list[str] = []
+    for command, label in LOCAL_PREREQUISITE_COMMANDS.items():
+        if not shutil.which(command):
+            missing.append(label)
+    if not _python312_venv_available():
+        missing.append("python3.12-venv")
+
+    apt_available = bool(shutil.which("apt-get"))
+    sudo_available = bool(shutil.which("sudo"))
+    sudo_password_useful = bool(missing and os.getuid() != 0 and apt_available and sudo_available)
+    return {
+        "ok": not missing,
+        "missing": missing,
+        "apt_available": apt_available,
+        "sudo_available": sudo_available,
+        "sudo_password_useful": sudo_password_useful,
+    }
+
+
 def _apt_get_command(sudo_password: str = "") -> tuple[list[str], str | None] | None:
     """Return a non-interactive apt-get command for local prerequisite installs."""
     apt_get = shutil.which("apt-get")
@@ -379,26 +437,19 @@ def _apt_get_command(sudo_password: str = "") -> tuple[list[str], str | None] | 
 
 def _install_local_prerequisites(log: LogCallback, sudo_password: str = "") -> None:
     """Install local master prerequisites on apt-based systems when possible."""
+    status = local_prerequisite_status()
+    missing = [str(item) for item in status.get("missing") or []]
+    if not missing:
+        log("Local prerequisites already available; skipping apt install.")
+        return
     apt = _apt_get_command(sudo_password)
     if not apt:
         return
     apt_cmd, input_data = apt
-    packages = [
-        "software-properties-common",
-        "ca-certificates",
-        "curl",
-        "git",
-        "python3",
-        "python3-pip",
-        "python3.12-venv",
-        "gcc",
-        "build-essential",
-        "pkg-config",
-    ]
-    log("Ensuring local installer prerequisites are installed...")
+    log("Installing missing local prerequisites: " + ", ".join(missing))
     try:
         _run_command([*apt_cmd, "update"], log, input_data=input_data, timeout=300)
-        _run_command([*apt_cmd, "install", "-y", *packages], log, input_data=input_data, timeout=900)
+        _run_command([*apt_cmd, "install", "-y", *LOCAL_APT_PACKAGES], log, input_data=input_data, timeout=900)
     except RuntimeError as exc:
         raise RuntimeError(
             "Could not install local prerequisites automatically. Run "

@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from getpass import getpass
-import os
 from pathlib import Path
-import shutil
 import tempfile
 
 from .core import (
@@ -18,6 +16,7 @@ from .core import (
     default_remote_install_dir,
     default_target_user,
     detect_public_ip,
+    local_prerequisite_status,
     run_local_master_install,
     run_remote_master_install,
 )
@@ -180,7 +179,11 @@ def _run_local_cli() -> int:
     install_dir = _ask("Install parent directory", default_local_install_dir())
     _print_install_preview(install_dir)
     local_sudo_password = ""
-    if os.getuid() != 0 and shutil.which("apt-get") and shutil.which("sudo"):
+    prereqs = local_prerequisite_status()
+    missing = [str(item) for item in prereqs.get("missing") or []]
+    if missing:
+        print("Missing local prerequisites: " + ", ".join(missing))
+    if prereqs.get("sudo_password_useful"):
         local_sudo_password = _ask_password("Local sudo password for apt prerequisites (leave empty to use an existing sudo session)")
     master_name = _ask("Master name", default_local_master_name())
     pbgui_password = _ask_password("PBGui web password", "PBGui$Bot!")

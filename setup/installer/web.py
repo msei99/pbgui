@@ -28,6 +28,7 @@ from .core import (
     default_remote_install_dir,
     default_target_user,
     detect_public_ip,
+    local_prerequisite_status,
     run_local_master_install,
     run_local_master_uninstall,
     run_remote_master_install,
@@ -211,6 +212,14 @@ def _new_job(payload: dict) -> str:
 
 def _html() -> str:
     target_user = default_target_user()
+    prereqs = local_prerequisite_status()
+    missing_prereqs = [str(item) for item in prereqs.get("missing") or []]
+    if missing_prereqs:
+        local_prereq_status_html = "Missing local prerequisites: " + html.escape(", ".join(missing_prereqs))
+        if prereqs.get("sudo_password_useful"):
+            local_prereq_status_html += ". Enter your local sudo password or use an existing sudo session."
+    else:
+        local_prereq_status_html = "Local prerequisites are already available; sudo password is not needed."
     return r"""
 <!doctype html>
 <html lang="en">
@@ -313,9 +322,10 @@ def _html() -> str:
       </label>
       <label class="full">Install parent directory <input name="install_dir" id="install-dir" value="%%INSTALL_DIR%%" placeholder="/home/%%TARGET_USER%%/software"></label>
       <div class="path-preview" id="install-preview"></div>
-      <label class="local-only">Local sudo password (for apt prerequisites)
+      <div class="path-preview local-only" id="local-prereq-status">%%LOCAL_PREREQ_STATUS%%</div>
+      <label class="local-only" id="local-sudo-wrap">Local sudo password (only if apt prerequisites are missing)
         <span class="password-wrap">
-          <input id="local-sudo-password" name="local_sudo_password" type="password" autocomplete="current-password" placeholder="Required if sudo is not already authenticated">
+          <input id="local-sudo-password" name="local_sudo_password" type="password" autocomplete="current-password" placeholder="Only used for apt prerequisite installation">
           <button class="password-toggle" type="button" data-target="local-sudo-password" aria-label="Show local sudo password" aria-pressed="false">&#128065;</button>
         </span>
       </label>
@@ -414,6 +424,7 @@ const uninstallModal = document.getElementById('uninstall-modal');
 const uninstallModalMessage = document.getElementById('uninstall-modal-message');
 const uninstallCancelBtn = document.getElementById('uninstall-cancel-btn');
 const uninstallConfirmBtn = document.getElementById('uninstall-confirm-btn');
+const localSudoWrap = document.getElementById('local-sudo-wrap');
 const hostKeyModal = document.getElementById('host-key-modal');
 const hostKeyModalMessage = document.getElementById('host-key-modal-message');
 const hostKeyCancelBtn = document.getElementById('host-key-cancel-btn');
@@ -441,6 +452,7 @@ const acceptedHostKeyFingerprint = document.getElementById('accepted-host-key-fi
 const defaultTargetUser = %%TARGET_USER_JSON%%;
 const defaultLocalInstallDir = %%LOCAL_INSTALL_DIR_JSON%%;
 const defaultLocalMasterName = %%LOCAL_MASTER_NAME_JSON%%;
+const localSudoPasswordUseful = %%LOCAL_SUDO_PASSWORD_USEFUL_JSON%%;
 let pollTimer = null;
 let currentJobId = '';
 let currentJobMode = 'local';
@@ -521,6 +533,11 @@ function syncInstallMode() {
     el.style.display = installMode.value === 'local' ? '' : 'none';
     el.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = installMode.value !== 'local'; });
   });
+  if (localSudoWrap) {
+    const showSudo = installMode.value === 'local' && localSudoPasswordUseful;
+    localSudoWrap.style.display = showSudo ? '' : 'none';
+    localSudoWrap.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = !showSudo; });
+  }
   modeTitle.textContent = isUninstall ? 'Local Master Uninstall' : (isRemote ? 'Remote Master VPS' : 'Local Master Install');
   startBtn.textContent = isUninstall ? 'Uninstall Local Master' : (isRemote ? 'Install Remote Master' : 'Install Local Master');
   if (!masterNameTouched && !isUninstall) masterName.value = defaultMasterName();
@@ -808,7 +825,7 @@ form.addEventListener('submit', ev => {
 </script>
 </body>
 </html>
-""".replace("%%TARGET_USER%%", html.escape(target_user, quote=True)).replace("%%TARGET_USER_JSON%%", json.dumps(target_user)).replace("%%INSTALL_DIR%%", html.escape(default_remote_install_dir(target_user), quote=True)).replace("%%LOCAL_INSTALL_DIR_JSON%%", json.dumps(default_local_install_dir())).replace("%%LOCAL_MASTER_NAME_JSON%%", json.dumps(default_local_master_name()))
+""".replace("%%TARGET_USER%%", html.escape(target_user, quote=True)).replace("%%TARGET_USER_JSON%%", json.dumps(target_user)).replace("%%INSTALL_DIR%%", html.escape(default_remote_install_dir(target_user), quote=True)).replace("%%LOCAL_INSTALL_DIR_JSON%%", json.dumps(default_local_install_dir())).replace("%%LOCAL_MASTER_NAME_JSON%%", json.dumps(default_local_master_name())).replace("%%LOCAL_PREREQ_STATUS%%", local_prereq_status_html).replace("%%LOCAL_SUDO_PASSWORD_USEFUL_JSON%%", json.dumps(bool(prereqs.get("sudo_password_useful"))))
 
 
 class InstallerHandler(BaseHTTPRequestHandler):
