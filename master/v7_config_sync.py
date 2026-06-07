@@ -148,6 +148,11 @@ class V7ConfigSyncWorker:
             self._watchers[h] = task
             _log(SERVICE, f"[watcher] Started for {h} "
                  f"({len(paths)} path(s))", level="DEBUG")
+            try:
+                await self._reconcile_status_v7(h)
+            except Exception as e:
+                _log(SERVICE, f"[reconcile] {h}: initial reconcile failed: {e}",
+                     level="WARNING", meta={"traceback": traceback.format_exc()})
 
     async def start_watchers_single(self, hostname: str):
         """Start watcher for a single host (on-connect callback)."""
@@ -376,15 +381,27 @@ class V7ConfigSyncWorker:
 
         remote_instances = remote_status.get("instances", {})
 
+        def _activate_ts(value) -> int:
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
         # Read local status_v7.json
+        local_status = {}
         local_instances = {}
         if STATUS_V7_FILE.is_file():
             try:
-                local_status = json.loads(
+                parsed_status = json.loads(
                     STATUS_V7_FILE.read_text(encoding="utf-8"))
-                local_instances = local_status.get("instances", {})
+                if isinstance(parsed_status, dict):
+                    local_status = parsed_status
+                    local_instances = local_status.get("instances", {})
             except (json.JSONDecodeError, OSError):
                 pass
+
+        remote_activate_ts = _activate_ts(remote_status.get("activate_ts"))
+        local_activate_ts = _activate_ts(local_status.get("activate_ts"))
 
         # Skip if the remote status was written by us (same activate_pbname)
         remote_pbname = remote_status.get("activate_pbname", "")
@@ -401,73 +418,91 @@ class V7ConfigSyncWorker:
             # Sanitise instance name
             if "/" in name or "\\" in name or name in (".", ".."):
                 continue
-            r_ts = r_info.get("activate_ts", 0)
-            l_ts = local_instances.get(name, {}).get("activate_ts", 0)
+            r_ts = _activate_ts(r_info.get("activate_ts", 0))
+            l_ts = _activate_ts(
+                local_instances.get(name, {}).get("activate_ts", 0))
+            instance_dir = LOCAL_RUN_V7 / name
 
-            if r_ts > l_ts:
+            missing_status = name not in local_instances
+            missing_dir = not instance_dir.is_dir()
+            if missing_status or missing_dir or r_ts > l_ts:
+                reason = f"remote ts {r_ts} > local {l_ts}"
+                if missing_status:
+                    reason = "missing locally"
+                elif missing_dir:
+                    reason = "local dir missing"
                 _log(SERVICE, f"[reconcile] {hostname}/{name}: "
-                     f"remote ts {r_ts} > local {l_ts} — pulling configs")
+                     f"{reason} — pulling configs")
                 await self._pull_instance_configs(hostname, name)
                 pulled += 1
 
         # 2) Delete instances that are in local but not in remote
-        for name in list(local_instances.keys()):
-            if name not in remote_instances:
-                instance_dir = LOCAL_RUN_V7 / name
-                if not instance_dir.is_dir():
-                    continue
+        remote_allows_delete = remote_activate_ts > local_activate_ts
+        if remote_allows_delete:
+            for name in list(local_instances.keys()):
+                if name not in remote_instances:
+                    instance_dir = LOCAL_RUN_V7 / name
+                    if not instance_dir.is_dir():
+                        continue
 
-                # Skip if running locally
-                l_info = local_instances.get(name, {})
-                if l_info.get("running"):
-                    _log(SERVICE, f"[reconcile] {name}: removed from "
-                         "remote but running locally — skipping",
-                         level="WARNING")
-                    continue
+                    # Skip if running locally
+                    l_info = local_instances.get(name, {})
+                    if l_info.get("running"):
+                        _log(SERVICE, f"[reconcile] {name}: removed from "
+                             "remote but running locally — skipping",
+                             level="WARNING")
+                        continue
 
-                # Backup + delete
-                from datetime import datetime
-                backup_ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                backup_dir = (Path(PBGDIR) / "data" / "backup" / "v7"
-                              / name / backup_ts)
-                try:
-                    backup_dir.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copytree(instance_dir, backup_dir)
-                    _log(SERVICE, f"[reconcile] Backed up '{name}' "
-                         f"→ {backup_dir}")
-                except OSError as e:
-                    _log(SERVICE, f"[reconcile] Backup failed for "
-                         f"'{name}': {e}", level="WARNING")
+                    # Backup + delete
+                    from datetime import datetime
+                    backup_ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    backup_dir = (Path(PBGDIR) / "data" / "backup" / "v7"
+                                  / name / backup_ts)
+                    try:
+                        backup_dir.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copytree(instance_dir, backup_dir)
+                        _log(SERVICE, f"[reconcile] Backed up '{name}' "
+                             f"→ {backup_dir}")
+                    except OSError as e:
+                        _log(SERVICE, f"[reconcile] Backup failed for "
+                             f"'{name}': {e}", level="WARNING")
 
-                try:
-                    shutil.rmtree(instance_dir)
-                    _log(SERVICE, f"[reconcile] Deleted '{name}' "
-                         f"(removed by {remote_pbname} via {hostname})")
-                    deleted += 1
-                except OSError as e:
-                    _log(SERVICE, f"[reconcile] Delete failed for "
-                         f"'{name}': {e}", level="ERROR")
+                    try:
+                        shutil.rmtree(instance_dir)
+                        _log(SERVICE, f"[reconcile] Deleted '{name}' "
+                             f"(removed by {remote_pbname} via {hostname})")
+                        deleted += 1
+                    except OSError as e:
+                        _log(SERVICE, f"[reconcile] Delete failed for "
+                             f"'{name}': {e}", level="ERROR")
 
         # 3) Write remote status_v7 to local (merge: keep higher activate_ts)
         merged = dict(local_instances)
         for name, r_info in remote_instances.items():
             if "/" in name or "\\" in name or name in (".", ".."):
                 continue
-            r_ts = r_info.get("activate_ts", 0)
-            l_ts = merged.get(name, {}).get("activate_ts", 0)
+            r_ts = _activate_ts(r_info.get("activate_ts", 0))
+            l_ts = _activate_ts(merged.get(name, {}).get("activate_ts", 0))
             if r_ts >= l_ts:
                 merged[name] = r_info
 
-        # Remove instances no longer in remote
-        for name in list(merged.keys()):
-            if name not in remote_instances:
-                del merged[name]
+        # Remove instances no longer in remote only when the remote manifest is newer.
+        if remote_allows_delete:
+            for name in list(merged.keys()):
+                if name not in remote_instances:
+                    del merged[name]
 
         local_status_out = local_status if STATUS_V7_FILE.is_file() else {}
         local_status_out["instances"] = merged
-        local_status_out["activate_ts"] = remote_status.get("activate_ts",
-                                                             time.time())
-        local_status_out["activate_pbname"] = remote_pbname
+        if remote_activate_ts >= local_activate_ts:
+            local_status_out["activate_ts"] = remote_status.get("activate_ts",
+                                                                 time.time())
+            local_status_out["activate_pbname"] = remote_pbname
+        else:
+            local_status_out["activate_ts"] = local_status.get("activate_ts",
+                                                               local_activate_ts)
+            local_status_out["activate_pbname"] = local_status.get(
+                "activate_pbname", remote_pbname)
 
         tmp = STATUS_V7_FILE.with_suffix(".tmp")
         try:
