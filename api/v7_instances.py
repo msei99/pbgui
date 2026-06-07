@@ -347,6 +347,23 @@ def _vps_manager_coinmarketcap_configured(hostname: str) -> bool | None:
     return _configured_secret_value(payload.get("coinmarketcap_api_key"))
 
 
+def _vps_manager_coinmarketcap_pending(hostname: str) -> bool | None:
+    """Return pending desired VPS CMC-key state after a local Save VPS change."""
+    safe_host = str(hostname or "").strip()
+    if not safe_host or "/" in safe_host or "\\" in safe_host:
+        return None
+    pending_path = Path(PBGDIR) / "data" / "vpsmanager" / "hosts" / safe_host / "optional_config_pending.json"
+    if not pending_path.is_file():
+        return None
+    try:
+        payload = json.loads(pending_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict) or "coinmarketcap_api_key" not in payload:
+        return None
+    return _configured_secret_value(payload.get("coinmarketcap_api_key"))
+
+
 def _host_meta_coinmarketcap_configured(hostname: str) -> bool | None:
     """Return CMC-key capability from the latest monitor host metadata."""
     store = _monitor.store if _monitor else None
@@ -368,6 +385,10 @@ def _host_coinmarketcap_configured(hostname: str) -> bool | None:
     if hostname == _get_master_hostname():
         return _local_coinmarketcap_configured()
 
+    pending_state = _vps_manager_coinmarketcap_pending(hostname)
+    if pending_state is False:
+        return False
+
     meta_state = _host_meta_coinmarketcap_configured(hostname)
     if meta_state is not None:
         return meta_state
@@ -376,6 +397,17 @@ def _host_coinmarketcap_configured(hostname: str) -> bool | None:
     if stored is not None:
         return stored
     return None
+
+
+def _host_dropdown_detail(hostname: str) -> dict:
+    """Return host metadata used by the PBv7 enabled_on dropdown."""
+    clean_host = str(hostname or "").strip()
+    cmc_configured = _host_coinmarketcap_configured(clean_host)
+    return {
+        "name": clean_host,
+        "coinmarketcap_configured": cmc_configured,
+        "dynamic_ignore_allowed": cmc_configured is True,
+    }
 
 
 async def _refresh_host_schema_if_missing(hostname: str) -> None:
@@ -432,9 +464,11 @@ async def _target_dynamic_ignore_incompatibility_detail(name: str, cfg: dict) ->
         return None
     enabled_on = enabled_on.strip()
     await _refresh_host_coinmarketcap_if_missing(enabled_on)
-    if _host_coinmarketcap_configured(enabled_on) is False:
+    cmc_configured = _host_coinmarketcap_configured(enabled_on)
+    if cmc_configured is not True:
+        status = "has no" if cmc_configured is False else "has no confirmed"
         return (
-            f"'{name}' uses dynamic_ignore but {enabled_on} has no CoinMarketCap API key. "
+            f"'{name}' uses dynamic_ignore but {enabled_on} {status} CoinMarketCap API key. "
             "Add a CoinMarketCap API key on that VPS before saving, syncing, or starting this bot."
         )
     return None
@@ -1328,7 +1362,10 @@ def get_hosts(session: SessionToken = Depends(require_auth)):
         for h in sorted(_monitor.enabled_hosts):
             if h != master and h not in hosts:
                 hosts.append(h)
-    return {"hosts": hosts}
+    return {
+        "hosts": hosts,
+        "host_details": [_host_dropdown_detail(host) for host in hosts],
+    }
 
 
 def _normalize_exchange_list(values) -> list[str]:

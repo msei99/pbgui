@@ -1042,6 +1042,7 @@ var allSymbols = [];     // available symbols for current exchange
 var allTags = [];        // available tags for current exchange
 var allUsers = [];       // [{name, exchange}]
 var allHosts = [];       // [string]
+var hostDetailsByName = {}; // {host: {coinmarketcap_configured, dynamic_ignore_allowed}}
 var dirty = false;
 var _extraLiveKeys = []; // unknown live.* keys not in the GUI form
 var _rawEditorSyncing = false;
@@ -1556,6 +1557,11 @@ async function init() {
     ]);
     allUsers = usersResp.users || [];
     allHosts = hostsResp.hosts || [];
+    hostDetailsByName = {};
+    (hostsResp.host_details || []).forEach(function(item) {
+      var name = String((item || {}).name || '').trim();
+      if (name) hostDetailsByName[name] = item || {};
+    });
 
     // Populate user dropdown
     var userSel = document.getElementById('f-user');
@@ -1638,11 +1644,48 @@ function populateHosts() {
   sel.appendChild(disOpt);
   allHosts.forEach(function(h) {
     if (h === 'disabled') return;
+    var detail = hostDetailsByName[h] || {};
     var opt = document.createElement('option');
     opt.value = h;
     opt.textContent = h;
+    opt.dataset.dynamicIgnoreAllowed = detail.dynamic_ignore_allowed === true ? '1' : '0';
+    opt.dataset.cmcStatus = detail.coinmarketcap_configured === true ? 'ok' : (detail.coinmarketcap_configured === false ? 'missing' : 'unknown');
     sel.appendChild(opt);
   });
+  updateEnabledOnAvailability();
+}
+
+function hostDynamicIgnoreAllowed(hostname) {
+  var host = String(hostname || '').trim();
+  if (!host || host === 'disabled') return true;
+  var detail = hostDetailsByName[host] || {};
+  return detail.dynamic_ignore_allowed === true;
+}
+
+function hostCmcStatusLabel(hostname) {
+  var detail = hostDetailsByName[String(hostname || '').trim()] || {};
+  if (detail.coinmarketcap_configured === false) return 'CoinMarketCap API missing';
+  if (detail.coinmarketcap_configured !== true) return 'CoinMarketCap status unknown';
+  return 'CoinMarketCap API OK';
+}
+
+function updateEnabledOnAvailability() {
+  var sel = document.getElementById('f-enabled-on');
+  if (!sel) return;
+  var dynamicIgnore = getChk('f-dynamic-ignore');
+  Array.prototype.forEach.call(sel.options, function(opt) {
+    if (!opt || opt.value === 'disabled') {
+      opt.disabled = false;
+      return;
+    }
+    var blocked = dynamicIgnore && !hostDynamicIgnoreAllowed(opt.value);
+    opt.disabled = blocked;
+    opt.textContent = opt.value + (blocked ? ' (' + hostCmcStatusLabel(opt.value) + ')' : '');
+  });
+  if (dynamicIgnore && sel.value !== 'disabled' && !hostDynamicIgnoreAllowed(sel.value)) {
+    toast(sel.value + ' cannot run dynamic_ignore: ' + hostCmcStatusLabel(sel.value), 'warn');
+    sel.value = 'disabled';
+  }
 }
 
 async function fetchTemplateConfig(user) {
@@ -1906,6 +1949,7 @@ function populateForm(opts) {
   setChk('f-notices-ignore', pbgui.notices_ignore);
   setChk('f-apply-filters', false);
   setChk('f-dynamic-ignore', pbgui.dynamic_ignore);
+  updateEnabledOnAvailability();
 
   // Coin overrides
   coinOvLoad(cfg);
@@ -2238,6 +2282,7 @@ async function saveConfig() {
     if (!ensureRawJsonValidForSave()) return;
     if (!ensureStructuredJsonFieldsValidForSave()) return;
     if (!validateExecutionSyncFieldsForSave()) return;
+    if (!validateDynamicIgnoreTargetForSave()) return;
     var config = collectConfig();
     var name = IS_NEW === 'true' ? config.live.user : INSTANCE_NAME;
 
@@ -2443,8 +2488,21 @@ function closeLogPanel() {
 /* ─── Dynamic Ignore Preview ───────────────────────────────── */
 function updateDynamicIgnorePreview() {
   var show = getChk('f-dynamic-ignore');
+  updateEnabledOnAvailability();
   document.getElementById('dynamic-ignore-preview').style.display = show ? 'block' : 'none';
   if (show) fetchDynamicIgnorePreview();
+}
+
+function validateDynamicIgnoreTargetForSave() {
+  if (!getChk('f-dynamic-ignore')) return true;
+  var enabledOn = getVal('f-enabled-on') || 'disabled';
+  if (hostDynamicIgnoreAllowed(enabledOn)) return true;
+  window.PBGuiDialogs.alert({
+    title: 'Save blocked',
+    message: enabledOn + ' cannot run dynamic_ignore: ' + hostCmcStatusLabel(enabledOn) + '. Add a CoinMarketCap API key on that VPS first.',
+    confirmText: 'OK'
+  });
+  return false;
 }
 
 async function fetchDynamicIgnorePreview() {
@@ -2472,6 +2530,12 @@ async function fetchDynamicIgnorePreview() {
 }
 
 document.getElementById('f-dynamic-ignore').addEventListener('change', updateDynamicIgnorePreview);
+document.getElementById('f-enabled-on').addEventListener('change', function() {
+  if (getChk('f-dynamic-ignore') && !hostDynamicIgnoreAllowed(this.value)) {
+    toast(this.value + ' cannot run dynamic_ignore: ' + hostCmcStatusLabel(this.value), 'warn');
+    this.value = 'disabled';
+  }
+});
 ['f-max-cancel', 'f-max-create'].forEach(function(id) {
   document.getElementById(id).addEventListener('input', function() {
     syncExecutionSyncFieldBounds(id);

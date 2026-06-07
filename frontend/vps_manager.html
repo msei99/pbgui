@@ -3037,6 +3037,8 @@
         debug: false,
         updateReboot: true,
         form: {},
+        savedForm: {},
+        dirtyFields: {},
         log: { filename: '', size_kb: 50, reverse: true },
         pbguiBranch: '',
         pbguiCommit: 'HEAD',
@@ -4294,6 +4296,37 @@
         </div>`;
     }
 
+    function markVpsFieldDirtyState(ui, name, value) {
+      if (!ui || !name) return;
+      ui.dirtyFields = ui.dirtyFields || {};
+      if (String(value || '') === String((ui.savedForm || {})[name] || '')) {
+        delete ui.dirtyFields[name];
+      } else {
+        ui.dirtyFields[name] = true;
+      }
+    }
+
+    function syncCurrentVpsFormFromDom(hostname, ui) {
+      if (typeof document === 'undefined') return false;
+      if (store.view !== 'vps-setup' || store.hostname !== hostname || !ui) return false;
+      const nodes = Array.from(document.querySelectorAll('[data-vps-field]'));
+      let changed = false;
+      nodes.forEach(function (node) {
+        const fieldName = String(node.getAttribute('data-vps-field') || '');
+        const fieldHost = String(node.getAttribute('data-vps-host') || '');
+        if (!fieldName || fieldHost !== hostname) return;
+        const value = node.type === 'checkbox' ? !!node.checked : String(node.value || '');
+        const current = (ui.form || {})[fieldName];
+        const same = node.type === 'checkbox' ? (!!current === !!value) : (String(current || '') === String(value || ''));
+        if (!same) {
+          ui.form[fieldName] = value;
+          changed = true;
+        }
+        markVpsFieldDirtyState(ui, fieldName, value);
+      });
+      return changed;
+    }
+
     function syncCurrentVpsSecretsFromDom() {
       if ((store.view !== 'vps' && store.view !== 'vps-setup') || !store.hostname) return false;
       const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
@@ -4315,6 +4348,7 @@
         if (!domValue.trim()) return;
         if (String((((ui || {}).form || {})[fieldName]) || '') === domValue) return;
         ui.form[fieldName] = domValue;
+        markVpsFieldDirtyState(ui, fieldName, domValue);
         changed = true;
       });
       return changed;
@@ -4961,13 +4995,13 @@
       return JSON.stringify(value == null ? '' : String(value));
     }
 
-    function renderVisibilityInput(type, value, oninput, title, visibilityKey, revealHost, revealField) {
+    function renderVisibilityInput(type, value, oninput, title, visibilityKey, revealHost, revealField, extraAttrs) {
       const isVisible = type === 'password' && isFieldVisible(visibilityKey);
       const inputType = isVisible ? 'text' : type;
       const buttonLabel = isVisible ? '&#128584;' : '&#128065;';
       return `
         <div class='pw-wrap'>
-          <input type='${inputType}' value='${escAttr(value)}' oninput="${oninput}">
+          <input type='${inputType}' value='${escAttr(value)}' oninput="${oninput}" ${extraAttrs || ''}>
           <button type='button' class='pw-eye-btn' onclick='togglePwVisible(this, ${js(visibilityKey || '')}, ${js(revealHost || '')}, ${js(revealField || '')})' tabindex='-1' title='${escAttr(title || 'Show or hide value')}' aria-label='${escAttr(title || 'Show or hide value')}'>${buttonLabel}</button>
         </div>`;
     }
@@ -6986,10 +7020,28 @@
           needsForceView = true;
         }
       } else if (cmd === 'save_vps_config') {
-        toast('VPS configuration saved.', 'success');
+        const remoteApply = (msg.data || {}).remote_apply || {};
+        if (remoteApply.started) {
+          toast('VPS configuration saved. Applying optional settings on the VPS...', 'success');
+        } else if (remoteApply.error) {
+          toast('VPS configuration saved locally. Remote apply could not start: ' + remoteApply.error, 'warning');
+        } else {
+          toast('VPS configuration saved.', 'success');
+        }
         if (store.hostname && store.vps[store.hostname]) {
           const ui = store.vps[store.hostname];
+          if (msg.data && msg.data.config && store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname) {
+            store.detail.config = Object.assign({}, store.detail.config || {}, msg.data.config || {});
+          }
           ui.savedForm = Object.assign({}, ui.form);
+          ui.dirtyFields = {};
+        }
+        if (remoteApply.started && store.hostname) {
+          const applyCommand = String(remoteApply.command || 'vps-apply-config');
+          const applyText = String(remoteApply.command_text || 'Apply VPS Config');
+          scheduleVpsDetailFetch(store.hostname);
+          switchToVpsTaskLog(store.hostname, applyCommand, applyText);
+          return;
         }
       } else if (cmd === 'save_vps_logging_config') {
         if (store.state && store.state.config && msg.data) {
@@ -7104,6 +7156,7 @@
           ui.form = Object.assign({}, ui.form, msg.data);
           if (pw) ui.form.user_pw = pw;
           ui.savedForm = Object.assign({}, ui.form);
+          ui.dirtyFields = {};
           renderUi({ forceSidebarActions: true, forceView: true });
         }
         toast('VPS settings refreshed.', 'success');
@@ -7149,9 +7202,14 @@
       if (ui.savedForm === undefined) {
         ui.savedForm = Object.keys(ui.form || {}).length ? Object.assign({}, ui.form) : {};
       }
+      if (ui.dirtyFields === undefined) {
+        ui.dirtyFields = {};
+      }
+      syncCurrentVpsFormFromDom(hostname, ui);
       if (detail && (!ui.initialized || !Object.keys(ui.form || {}).length)) {
         ui.form = Object.assign({}, detail.config || {});
         ui.savedForm = Object.assign({}, ui.form);
+        ui.dirtyFields = {};
         ui.log = Object.assign({}, ui.log, detail.log_preview || {});
         ui.log.reverse = ui.log.reverse !== false;
         ui.pbguiBranch = detail.branches && detail.branches.pbgui ? (detail.branches.pbgui.current_branch || '') : ui.pbguiBranch;
@@ -7159,6 +7217,15 @@
         ui.pb7RemoteName = detail.branches && detail.branches.pb7 ? (detail.branches.pb7.default_remote_name || '') : ui.pb7RemoteName;
         ui.pb7RemoteUrl = detail.branches && detail.branches.pb7 ? ((detail.branches.pb7.remote_urls || {})[ui.pb7RemoteName] || '') : ui.pb7RemoteUrl;
         ui.initialized = true;
+      } else if (detail && detail.config) {
+        const dirty = ui.dirtyFields || {};
+        Object.keys(detail.config || {}).forEach(function (key) {
+          const value = detail.config[key];
+          ui.savedForm[key] = value;
+          if (!dirty[key]) {
+            ui.form[key] = value;
+          }
+        });
       }
       return ui;
     }
@@ -7764,6 +7831,7 @@
     function setVpsField(hostname, name, value) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
       ui.form[name] = value;
+      markVpsFieldDirtyState(ui, name, value);
       if ((store.view === 'vps' || store.view === 'vps-setup') && store.hostname === hostname && name === 'user_pw') {
         renderSidebarActions();
         if (store.detail && store.detail.kind === 'vps' && store.detail.hostname === hostname) {
@@ -7776,6 +7844,7 @@
     function setVpsBool(hostname, name, checked) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
       ui.form[name] = !!checked;
+      markVpsFieldDirtyState(ui, name, ui.form[name]);
       refreshLocalInteractiveState();
     }
 
@@ -10529,6 +10598,7 @@
       const summary = status.summary_row || {};
       const canSetup = canSetupForm(Object.assign({ hostname: detail.hostname }, ui.form || {}));
       const canSave = canSaveForm(ui.form || {}, ui.savedForm);
+      const formHostAttr = `data-vps-host='${escAttr(detail.hostname)}'`;
       const vpsUserPwVisibilityKey = 'vps:' + detail.hostname + ':user_pw';
       const vpsCoinmarketcapKeyVisibilityKey = 'vps:' + detail.hostname + ':coinmarketcap_api_key';
       return `
@@ -10557,17 +10627,17 @@
             <div class='field-grid'>
               <div class='field'>
                 <label>VPS User Password</label>
-                ${renderVisibilityInput('password', ui.form.user_pw || '', `setVpsField(${js(detail.hostname)}, 'user_pw', this.value)`, 'Show or hide VPS user password', vpsUserPwVisibilityKey, detail.hostname, 'user_pw')}
+                ${renderVisibilityInput('password', ui.form.user_pw || '', `setVpsField(${js(detail.hostname)}, 'user_pw', this.value)`, 'Show or hide VPS user password', vpsUserPwVisibilityKey, detail.hostname, 'user_pw', `data-vps-field='user_pw' ${formHostAttr}`)}
                 ${renderSecretHint(detail.hostname, 'user_pw')}
               </div>
               <div class='field'>
                 <label>Install Path</label>
-                <input type='text' value='${escAttr(ui.form.install_dir || '')}' oninput="setVpsField(${js(detail.hostname)}, 'install_dir', this.value)" placeholder='/home/user/software'>
+                <input type='text' value='${escAttr(ui.form.install_dir || '')}' data-vps-field='install_dir' ${formHostAttr} oninput="setVpsField(${js(detail.hostname)}, 'install_dir', this.value)" placeholder='/home/user/software'>
                 <div class='field-help'>Parent directory for pbgui, pb7, and virtualenvs.</div>
               </div>
               <div class='field'>
                 <label>Swap Size</label>
-                <select onchange="setVpsField(${js(detail.hostname)}, 'swap', this.value)">
+                <select data-vps-field='swap' ${formHostAttr} onchange="setVpsField(${js(detail.hostname)}, 'swap', this.value)">
                   ${(((store.state || {}).config || {}).swap_options || ['0']).map(function (option) {
                     return `<option value='${escAttr(option)}'${String(option) === String(ui.form.swap || '0') ? ' selected' : ''}>${esc(option)}</option>`;
                   }).join('')}
@@ -10575,23 +10645,23 @@
               </div>
               <div class='field'>
                 <label>PBRemote Bucket (optional)</label>
-                <input type='text' value='${escAttr(ui.form.bucket || '')}' oninput="setVpsField(${js(detail.hostname)}, 'bucket', this.value)">
+                <input type='text' value='${escAttr(ui.form.bucket || '')}' data-vps-field='bucket' ${formHostAttr} oninput="setVpsField(${js(detail.hostname)}, 'bucket', this.value)">
               </div>
               <div class='field'>
                 <label>CoinMarketCap API Key (optional)</label>
-                ${renderVisibilityInput('password', ui.form.coinmarketcap_api_key || '', `setVpsField(${js(detail.hostname)}, 'coinmarketcap_api_key', this.value)`, 'Show or hide CoinMarketCap API key', vpsCoinmarketcapKeyVisibilityKey)}
+                ${renderVisibilityInput('password', ui.form.coinmarketcap_api_key || '', `setVpsField(${js(detail.hostname)}, 'coinmarketcap_api_key', this.value)`, 'Show or hide CoinMarketCap API key', vpsCoinmarketcapKeyVisibilityKey, '', '', `data-vps-field='coinmarketcap_api_key' ${formHostAttr}`)}
               </div>
               <div class='field'>
                 <label>Firewall SSH Port</label>
-                <input type='number' value='${escAttr(ui.form.firewall_ssh_port || 22)}' oninput="setVpsField(${js(detail.hostname)}, 'firewall_ssh_port', this.value)">
+                <input type='number' value='${escAttr(ui.form.firewall_ssh_port || 22)}' data-vps-field='firewall_ssh_port' ${formHostAttr} oninput="setVpsField(${js(detail.hostname)}, 'firewall_ssh_port', this.value)">
               </div>
               <div class='field span-2'>
                 <label>Allowed SSH IPs</label>
-                <input type='text' value='${escAttr(ui.form.firewall_ssh_ips || '')}' oninput="setVpsField(${js(detail.hostname)}, 'firewall_ssh_ips', this.value)" placeholder='198.51.100.1, 203.0.113.7'>
+                <input type='text' value='${escAttr(ui.form.firewall_ssh_ips || '')}' data-vps-field='firewall_ssh_ips' ${formHostAttr} oninput="setVpsField(${js(detail.hostname)}, 'firewall_ssh_ips', this.value)" placeholder='198.51.100.1, 203.0.113.7'>
               </div>
               <div class='field'>
                 <label>&nbsp;</label>
-                <label class='checkbox-row'><input type='checkbox' ${ui.form.firewall ? 'checked' : ''} onchange="setVpsBool(${js(detail.hostname)}, 'firewall', this.checked)"> Enable UFW</label>
+                <label class='checkbox-row'><input type='checkbox' ${ui.form.firewall ? 'checked' : ''} data-vps-field='firewall' ${formHostAttr} onchange="setVpsBool(${js(detail.hostname)}, 'firewall', this.checked)"> Enable UFW</label>
               </div>
             </div>
             <div class='button-row'>

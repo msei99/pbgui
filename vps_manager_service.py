@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -66,7 +67,9 @@ COMMAND_VPS_UPDATE_PBGUI = "vps-update-pbgui"
 COMMAND_VPS_UPDATE_PB7 = "vps-update-pb7"
 COMMAND_VPS_UPDATE_PB = "vps-update-pb"
 COMMAND_VPS_CLEANUP = "vps-cleanup"
+COMMAND_VPS_APPLY_CONFIG = "vps-apply-config"
 COMMAND_VPS_MIGRATE_SYSTEMD = "vps-migrate-systemd"
+OPTIONAL_VPS_CONFIG_FIELDS = ("bucket", "coinmarketcap_api_key")
 VPS_DEPLOY_DEFAULT_ACTION = COMMAND_VPS_DEPLOY_LOGGING
 VPS_DEPLOY_DEFAULT_MODE = "parallel"
 VPS_DEPLOY_MODES = ("parallel", "sequential")
@@ -1459,21 +1462,83 @@ class VPSManagerService:
     def _host_meta(self, host_state: dict[str, Any] | None) -> dict[str, Any]:
         return (host_state or {}).get("meta") or {}
 
+    def _vps_optional_config_pending_path(self, vps: VPS) -> Path | None:
+        hostname = str(getattr(vps, "hostname", "") or "").strip()
+        if not hostname:
+            return None
+        base_path = getattr(vps, "path", None)
+        if base_path:
+            return Path(base_path) / "optional_config_pending.json"
+        return Path(PBGDIR) / "data" / "vpsmanager" / "hosts" / hostname / "optional_config_pending.json"
+
+    def _load_vps_optional_config_pending(self, vps: VPS) -> dict[str, str]:
+        path = self._vps_optional_config_pending_path(vps)
+        if path is None or not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return {
+            field: str(payload.get(field) or "").strip()
+            for field in OPTIONAL_VPS_CONFIG_FIELDS
+            if field in payload
+        }
+
+    def _write_vps_optional_config_pending(self, vps: VPS, values: dict[str, Any]) -> None:
+        path = self._vps_optional_config_pending_path(vps)
+        if path is None:
+            return
+        payload = {
+            field: str(values.get(field) or "").strip()
+            for field in OPTIONAL_VPS_CONFIG_FIELDS
+            if field in values
+        }
+        if not payload:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return
+        payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        _atomic_write_json(path, payload)
+
+    def _clear_vps_optional_config_pending(self, vps: VPS) -> None:
+        self._write_vps_optional_config_pending(vps, {})
+
     def _sync_vps_config_from_host_meta(self, vps: VPS, host_state: dict[str, Any] | None) -> None:
         if not vps or not self._host_telemetry_fresh(host_state):
             return
         meta = self._host_meta(host_state)
+        pending = self._load_vps_optional_config_pending(vps)
+        remaining_pending = dict(pending)
         changed = False
+
+        def sync_optional_field(meta_key: str, attr_name: str, pending_key: str) -> None:
+            nonlocal changed
+            if meta_key not in meta:
+                return
+            remote_value = str(meta.get(meta_key) or "").strip()
+            if pending_key in pending:
+                desired_value = str(pending.get(pending_key) or "").strip()
+                if str(getattr(vps, attr_name, "") or "") != desired_value:
+                    setattr(vps, attr_name, desired_value)
+                    changed = True
+                if remote_value == desired_value:
+                    remaining_pending.pop(pending_key, None)
+                return
+            if str(getattr(vps, attr_name, "") or "") != remote_value:
+                setattr(vps, attr_name, remote_value)
+                changed = True
+
         if "pbremote_bucket" in meta:
-            bucket = str(meta.get("pbremote_bucket") or "").strip()
-            if str(vps.bucket or "") != bucket:
-                vps.bucket = bucket
-                changed = True
+            sync_optional_field("pbremote_bucket", "bucket", "bucket")
         if "coinmarketcap_api_key" in meta:
-            api_key = str(meta.get("coinmarketcap_api_key") or "").strip()
-            if str(vps.coinmarketcap_api_key or "") != api_key:
-                vps.coinmarketcap_api_key = api_key
-                changed = True
+            sync_optional_field("coinmarketcap_api_key", "coinmarketcap_api_key", "coinmarketcap_api_key")
+        if remaining_pending != pending:
+            self._write_vps_optional_config_pending(vps, remaining_pending)
         if changed:
             vps.save()
 
@@ -4038,13 +4103,45 @@ class VPSManagerService:
             host_state = self._get_host_telemetry(monitor_state, hostname)
             self._sync_vps_config_from_host_meta(vps, host_state)
             host_meta = self._host_meta(host_state)
-            if host_meta.get("pbremote_configured") is False and "bucket" not in command_extra_vars:
+            pending_optional = self._load_vps_optional_config_pending(vps)
+            if host_meta.get("pbremote_configured") is False and "bucket" not in command_extra_vars and "bucket" not in pending_optional:
                 command_extra_vars["bucket"] = ""
-            if host_meta.get("coindata_configured") is False and "coinmarketcap_api_key" not in command_extra_vars:
+            if host_meta.get("coindata_configured") is False and "coinmarketcap_api_key" not in command_extra_vars and "coinmarketcap_api_key" not in pending_optional:
                 command_extra_vars["coinmarketcap_api_key"] = ""
         vps.command = command
         vps.command_text = command_text
         self.vpsmanager.update_vps(vps, debug=debug, extra_vars=command_extra_vars or None)
+
+    def _start_vps_optional_config_apply(self, token: str, vps: VPS) -> dict[str, Any]:
+        self._apply_session_secrets_to_vps(token, vps)
+        vps.command = COMMAND_VPS_APPLY_CONFIG
+        vps.command_text = "Apply VPS Config"
+        extra_vars = {
+            "bucket": str(getattr(vps, "bucket", "") or "").strip(),
+            "coinmarketcap_api_key": str(getattr(vps, "coinmarketcap_api_key", "") or "").strip(),
+        }
+        try:
+            self.vpsmanager.update_vps(vps, debug=False, extra_vars=extra_vars)
+        except Exception as exc:
+            _log(SERVICE, f"failed to start VPS optional config apply for {vps.hostname}: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
+            return {
+                "started": False,
+                "command": COMMAND_VPS_APPLY_CONFIG,
+                "command_text": "Apply VPS Config",
+                "error": str(exc),
+            }
+        task_log_name = ""
+        try:
+            task_log_name = vps._task_log_path(vps.command, COMMAND_VPS_UPDATE).name
+        except Exception:
+            task_log_name = ""
+        return {
+            "started": True,
+            "command": COMMAND_VPS_APPLY_CONFIG,
+            "command_text": "Apply VPS Config",
+            "run_id": str(getattr(vps, "command_run_id", "") or ""),
+            "filename": task_log_name,
+        }
 
     def delete_vps(self, hostname: str) -> None:
         vps = self._require_vps(hostname)
@@ -4064,6 +4161,7 @@ class VPSManagerService:
         vps.swap = info.get("swap", "0") if info.get("swap") in SWAP_OPTIONS else "0"
         vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
         vps.save()
+        self._clear_vps_optional_config_pending(vps)
         return self._build_vps_config(token, vps)
 
     def preview_vps_systemd_migration(self, token: str, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
@@ -5014,9 +5112,26 @@ done"""
 
     def save_vps_config(self, token: str, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
         vps = self._require_vps(hostname)
+        previous_optional = {
+            "bucket": str(getattr(vps, "bucket", "") or "").strip(),
+            "coinmarketcap_api_key": str(getattr(vps, "coinmarketcap_api_key", "") or "").strip(),
+        }
         self._apply_vps_setup_form(token, vps, form)
         vps.save()
-        return self._build_vps_config(token, vps)
+        current_optional = {
+            "bucket": str(getattr(vps, "bucket", "") or "").strip(),
+            "coinmarketcap_api_key": str(getattr(vps, "coinmarketcap_api_key", "") or "").strip(),
+        }
+        optional_changed = current_optional != previous_optional
+        remote_apply = {"started": False, "command": COMMAND_VPS_APPLY_CONFIG, "command_text": "Apply VPS Config"}
+        if optional_changed:
+            self._write_vps_optional_config_pending(vps, current_optional)
+            remote_apply = self._start_vps_optional_config_apply(token, vps)
+        return {
+            "config": self._build_vps_config(token, vps),
+            "remote_apply": remote_apply,
+            "optional_changed": optional_changed,
+        }
 
     def init_vps(self, token: str, form: dict[str, Any], *, debug: bool = False) -> dict[str, Any]:
         vps, is_new = self._hydrate_vps_from_form(token, form, allow_create=True)
