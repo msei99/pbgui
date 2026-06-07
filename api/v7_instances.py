@@ -312,11 +312,87 @@ def _host_pb7_config_schema_version(hostname: str) -> str | None:
     return None
 
 
+def _configured_secret_value(value) -> bool:
+    """Return whether an optional secret-like config value is usable."""
+    normalized = str(value or "").strip()
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if lowered in {"none", "null", "false", "<api_key>"}:
+        return False
+    return not (normalized.startswith("<") and normalized.endswith(">"))
+
+
+def _local_coinmarketcap_configured() -> bool:
+    """Return whether this PBGui host has a CoinMarketCap API key configured."""
+    pb_config = configparser.ConfigParser()
+    pb_config.read(Path(PBGDIR) / "pbgui.ini")
+    return _configured_secret_value(pb_config.get("coinmarketcap", "api_key", fallback=""))
+
+
+def _vps_manager_coinmarketcap_configured(hostname: str) -> bool | None:
+    """Return stored VPS setup CMC-key state when this host was set up by PBGui."""
+    safe_host = str(hostname or "").strip()
+    if not safe_host or "/" in safe_host or "\\" in safe_host:
+        return None
+    config_path = Path(PBGDIR) / "data" / "vpsmanager" / "hosts" / safe_host / f"{safe_host}.json"
+    if not config_path.is_file():
+        return None
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict) or "coinmarketcap_api_key" not in payload:
+        return None
+    return _configured_secret_value(payload.get("coinmarketcap_api_key"))
+
+
+def _host_meta_coinmarketcap_configured(hostname: str) -> bool | None:
+    """Return CMC-key capability from the latest monitor host metadata."""
+    store = _monitor.store if _monitor else None
+    meta = store.host_meta.get(hostname, {}) if store else {}
+    if not isinstance(meta, dict):
+        return None
+    optional_services = meta.get("optional_services")
+    if isinstance(optional_services, dict) and "PBCoinData" in optional_services:
+        return bool(optional_services.get("PBCoinData"))
+    if "coindata_configured" in meta:
+        return bool(meta.get("coindata_configured"))
+    return None
+
+
+def _host_coinmarketcap_configured(hostname: str) -> bool | None:
+    """Return tri-state CMC-key capability for a target host."""
+    if not hostname or hostname == "disabled":
+        return True
+    if hostname == _get_master_hostname():
+        return _local_coinmarketcap_configured()
+
+    meta_state = _host_meta_coinmarketcap_configured(hostname)
+    if meta_state is not None:
+        return meta_state
+
+    stored = _vps_manager_coinmarketcap_configured(hostname)
+    if stored is not None:
+        return stored
+    return None
+
+
 async def _refresh_host_schema_if_missing(hostname: str) -> None:
     """Collect host metadata once when the schema field is not yet available."""
     if not hostname or hostname == "disabled" or hostname == _get_master_hostname():
         return
     if _host_pb7_config_schema_version(hostname):
+        return
+    if _monitor and hasattr(_monitor, "collect_host_meta_now"):
+        await _monitor.collect_host_meta_now(hostname, include_package_status=False)
+
+
+async def _refresh_host_coinmarketcap_if_missing(hostname: str) -> None:
+    """Collect host metadata once when CMC-key capability is not yet available."""
+    if not hostname or hostname == "disabled" or hostname == _get_master_hostname():
+        return
+    if _host_meta_coinmarketcap_configured(hostname) is not None:
         return
     if _monitor and hasattr(_monitor, "collect_host_meta_now"):
         await _monitor.collect_host_meta_now(hostname, include_package_status=False)
@@ -344,9 +420,37 @@ async def _target_schema_incompatibility_detail(name: str, cfg: dict) -> str | N
     return None
 
 
+async def _target_dynamic_ignore_incompatibility_detail(name: str, cfg: dict) -> str | None:
+    """Return a user-facing error when dynamic_ignore targets a host without CMC."""
+    if not isinstance(cfg, dict):
+        return None
+    pbgui = cfg.get("pbgui") or {}
+    if not isinstance(pbgui, dict) or not bool(pbgui.get("dynamic_ignore")):
+        return None
+    enabled_on = pbgui.get("enabled_on", "disabled")
+    if not isinstance(enabled_on, str) or not enabled_on.strip() or enabled_on == "disabled":
+        return None
+    enabled_on = enabled_on.strip()
+    await _refresh_host_coinmarketcap_if_missing(enabled_on)
+    if _host_coinmarketcap_configured(enabled_on) is False:
+        return (
+            f"'{name}' uses dynamic_ignore but {enabled_on} has no CoinMarketCap API key. "
+            "Add a CoinMarketCap API key on that VPS before saving, syncing, or starting this bot."
+        )
+    return None
+
+
 async def _ensure_target_schema_compatible(name: str, cfg: dict) -> None:
     """Raise 409 when a config targets a VPS with an older PB7 schema."""
     detail = await _target_schema_incompatibility_detail(name, cfg)
+    if detail:
+        raise HTTPException(status_code=409, detail=detail)
+
+
+async def _ensure_target_runtime_compatible(name: str, cfg: dict) -> None:
+    """Raise 409 when target runtime prerequisites are not configured."""
+    await _ensure_target_schema_compatible(name, cfg)
+    detail = await _target_dynamic_ignore_incompatibility_detail(name, cfg)
     if detail:
         raise HTTPException(status_code=409, detail=detail)
 
@@ -373,6 +477,15 @@ async def _ssh_sync_instance(name: str) -> dict:
             "name": name,
             "error": incompatibility,
             "schema_incompatible": True,
+            "ok": 0,
+            "failed": 0,
+        }
+    incompatibility = await _target_dynamic_ignore_incompatibility_detail(name, cfg_for_schema_check)
+    if incompatibility:
+        return {
+            "name": name,
+            "error": incompatibility,
+            "runtime_incompatible": True,
             "ok": 0,
             "failed": 0,
         }
@@ -906,7 +1019,7 @@ async def restore_instance(
                 ) from exc
             break
     if isinstance(restore_config, dict):
-        await _ensure_target_schema_compatible(name, restore_config)
+        await _ensure_target_runtime_compatible(name, restore_config)
 
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     rollback = instance_dir.is_dir()
@@ -1089,7 +1202,7 @@ async def save_instance_config(
         raise HTTPException(status_code=400, detail="Missing or invalid 'config' in body")
 
     strip_pbgui_param_status(cfg)
-    await _ensure_target_schema_compatible(name, cfg)
+    await _ensure_target_runtime_compatible(name, cfg)
 
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     instance_dir.mkdir(parents=True, exist_ok=True)

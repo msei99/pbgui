@@ -218,6 +218,16 @@ def _ensure_dynamic_ignore_ready(dynamic_ignore: "DynamicIgnore") -> bool:
         return lists_ready()
     return False
 
+
+def _configured_secret_value(value) -> bool:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if lowered in {"none", "null", "false", "<api_key>"}:
+        return False
+    return not (normalized.startswith("<") and normalized.endswith(">"))
+
 class DynamicIgnore():
     def __init__(self):
         self.path = None
@@ -444,6 +454,8 @@ class RunV7():
                 return False
 
             self.dynamic_ignore.coindata.load_config()
+            if not _configured_secret_value(getattr(self.dynamic_ignore.coindata, "api_key", None)):
+                return False
 
             # First try to build or reuse list files from whatever local mapping data
             # is already available, avoiding a CMC/CCXT refresh unless it is needed.
@@ -490,6 +502,29 @@ class RunV7():
             _log("PBRun", f"Dynamic_ignore bootstrap error for {self.path}: {e}", level="ERROR")
             _log("PBRun", "Dynamic_ignore bootstrap traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
             return False
+
+    def _dynamic_ignore_api_key_configured(self) -> bool:
+        if self.dynamic_ignore is None:
+            return True
+        coindata = getattr(self.dynamic_ignore, "coindata", None)
+        if coindata is None:
+            return True
+        try:
+            coindata.load_config()
+        except Exception:
+            pass
+        return _configured_secret_value(getattr(coindata, "api_key", None))
+
+    def _delay_dynamic_ignore_start(self, reason: str):
+        _atomic_write_text(Path(self.path) / "running_version.txt", "0")
+        now_ts = int(datetime.now().timestamp())
+        if now_ts - self._dynamic_wait_log_ts >= 60:
+            _log(
+                "PBRun",
+                f"Delay start: passivbot_v7 {self.path}/config_run.json {reason}",
+                level="WARNING",
+            )
+            self._dynamic_wait_log_ts = now_ts
 
     def watch(self):
         if self.is_running():
@@ -555,15 +590,11 @@ class RunV7():
     def start(self):
         if not self.is_running():
             if self.dynamic_ignore is not None and not _ensure_dynamic_ignore_ready(self.dynamic_ignore):
+                if not self._dynamic_ignore_api_key_configured():
+                    self._delay_dynamic_ignore_start("requires CoinMarketCap API key for dynamic_ignore")
+                    return
                 if not self._bootstrap_dynamic_ignore_data():
-                    now_ts = int(datetime.now().timestamp())
-                    if now_ts - self._dynamic_wait_log_ts >= 60:
-                        _log(
-                            "PBRun",
-                            f"Delay start: passivbot_v7 {self.path}/config_run.json waiting for dynamic ignore lists",
-                            level="WARNING",
-                        )
-                        self._dynamic_wait_log_ts = now_ts
+                    self._delay_dynamic_ignore_start("waiting for dynamic ignore lists")
                     return
             self._dynamic_wait_log_ts = 0
             old_os_path = os.environ.get('PATH', '')
@@ -1135,13 +1166,11 @@ class PBRun():
                         running_version = self.find_running_version(v7_instance)
                         if running_version < run_v7.version:
                             run_v7.stop()
-                            run_v7.create_v7_running_version()
                             run_v7.start()
                     else:
-                        run_v7.create_v7_running_version()
                         run_v7.start()
                     self.add_v7(run_v7)
-                    status.running = True
+                    status.running = run_v7.is_running()
                 else:
                     self.remove_v7(run_v7)
                     status.running = False

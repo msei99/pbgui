@@ -427,7 +427,7 @@
     .gs-topic { color:#93c5fd; font-weight:600; font-size:13px; margin-bottom:5px; }
     .gs-snip { color:#94a3b8; font-size:11px; line-height:1.55; }
   </style>
-  <script src="/app/js/log_viewer_panel.js?v=21"></script>
+  <script src="/app/js/log_viewer_panel.js?v=23"></script>
 </head>
 <body>
 <!-- ── Prices overlay ── -->
@@ -1043,17 +1043,24 @@ window.PBGUI_NAV_CONFIG = {
 
   function updateStatusUI() {
     SERVICES.forEach(function (svc) {
-      var running = (_status[svc.id] || {}).running;
+      var item = _status[svc.id] || {};
+      var running = item.running;
+      var skipped = item.expected === false && !running;
       var dotSb = document.getElementById('dot-' + svc.id);
       var dotCs = document.getElementById('cs-' + svc.id);
       var lbl   = document.getElementById('sl-' + svc.id);
-      if (dotSb) dotSb.className = 'sb-dot ' + (running ? 'running' : 'stopped');
-      if (dotCs) dotCs.className = 'status-dot ' + (running ? 'running' : 'stopped');
-      if (lbl)   lbl.textContent = running ? 'Running' : 'Stopped';
+      if (dotSb) dotSb.className = 'sb-dot ' + (skipped ? '' : (running ? 'running' : 'stopped'));
+      if (dotCs) dotCs.className = 'status-dot ' + (skipped ? '' : (running ? 'running' : 'stopped'));
+      if (lbl) {
+        lbl.textContent = skipped ? 'Skipped' : (running ? 'Running' : 'Stopped');
+        lbl.title = skipped ? (item.reason || 'Service is not configured') : '';
+      }
       /* ctrl-strip buttons */
       var ctrlSlot = document.getElementById('ctrl-btns-' + svc.id);
       if (ctrlSlot) {
-        if (svc.isApiServer) {
+        if (skipped) {
+          ctrlSlot.innerHTML = '';
+        } else if (svc.isApiServer) {
           ctrlSlot.innerHTML = running
             ? '<button class="ctrl-btn restart" onclick="restartApiServer()">&#8635; Restart</button>'
             : '';
@@ -1594,19 +1601,22 @@ window.PBGUI_NAV_CONFIG = {
     if (!grid) return;
     var html = '';
     SERVICES.forEach(function (svc) {
-      var running = (_status[svc.id] || {}).running;
-      var cls = running ? 'running' : 'stopped';
-      var btns = svc.isApiServer
+      var item = _status[svc.id] || {};
+      var running = item.running;
+      var skipped = item.expected === false && !running;
+      var cls = skipped ? '' : (running ? 'running' : 'stopped');
+      var label = skipped ? 'Skipped' : (running ? 'Running' : 'Stopped');
+      var btns = skipped ? '' : (svc.isApiServer
         ? (running
             ? '<button class="card-btn restart" onclick="restartApiServer();event.stopPropagation()">&#8635; Restart</button>'
             : '<button class="card-btn start" onclick="svcAction(\'' + svc.id + '\',\'start\');event.stopPropagation()">&#9654; Start</button>')
         : (running
             ? '<button class="card-btn stop" onclick="svcAction(\'' + svc.id + '\',\'stop\');event.stopPropagation()">&#9632; Stop</button>'
               + '<button class="card-btn restart" onclick="svcAction(\'' + svc.id + '\',\'stop\');setTimeout(function(){svcAction(\'' + svc.id + '\',\'start\');},1500);event.stopPropagation()">&#8635; Restart</button>'
-            : '<button class="card-btn start" onclick="svcAction(\'' + svc.id + '\',\'start\');event.stopPropagation()">&#9654; Start</button>');
+            : '<button class="card-btn start" onclick="svcAction(\'' + svc.id + '\',\'start\');event.stopPropagation()">&#9654; Start</button>'));
       html += '<div class="svc-card ' + cls + '" onclick="selectPanel(\'' + svc.id + '\')">'
            +  '<div class="card-name">' + svc.label + '</div>'
-           +  '<div class="card-status-row"><span class="card-dot ' + cls + '"></span>' + (running ? 'Running' : 'Stopped') + '</div>'
+           +  '<div class="card-status-row"><span class="card-dot ' + cls + '"></span>' + label + '</div>'
            +  '<div style="display:flex;gap:4px;flex-wrap:wrap;">' + btns + '</div>'
            +  '</div>';
     });

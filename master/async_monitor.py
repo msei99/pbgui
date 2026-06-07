@@ -332,6 +332,8 @@ def collect_live_alerts(connections: dict[str, Any], system_state: dict[str, Any
 
         host_services = services.get(hostname) or {}
         for svc_name, check in sorted(host_services.items()):
+            if (check or {}).get("expected") is False:
+                continue
             status_val = str((check or {}).get("status") or "")
             if status_val != ServiceStatus.STOPPED.value:
                 continue
@@ -2123,9 +2125,22 @@ try:
 except Exception:
     pass
 
+def configured_value(section, option):
+    value = str(cfg.get(section, option, fallback='') or '').strip()
+    if not value:
+        return False
+    lowered = value.lower()
+    if lowered in ('none', 'null', 'false', '<api_key>', '<bucket_name>:', '<bucket_name>'):
+        return False
+    if value.startswith('<') and value.endswith('>'):
+        return False
+    return True
+
 role = cfg.get('main', 'role', fallback='slave')
 pb7dir = cfg.get('main', 'pb7dir', fallback='')
 pb7venv = cfg.get('main', 'pb7venv', fallback='')
+pbremote_configured = configured_value('pbremote', 'bucket')
+coindata_configured = configured_value('coinmarketcap', 'api_key')
 
 result = {
     'role': role,
@@ -2142,6 +2157,12 @@ result = {
     'pb7c': '',
     'pb7b': 'unknown',
     'pb7py': 'N/A',
+    'pbremote_configured': pbremote_configured,
+    'coindata_configured': coindata_configured,
+    'optional_services': {
+        'PBRemote': pbremote_configured,
+        'PBCoinData': coindata_configured,
+    },
 }
 
 try:
@@ -2238,6 +2259,7 @@ class ServiceStatus(Enum):
     STOPPED = "stopped"
     UNKNOWN = "unknown"
     RESTARTING = "restarting"
+    DISABLED = "disabled"
 
 
 @dataclass
@@ -2261,6 +2283,17 @@ MONITORED_SERVICE_SYSTEMD_UNITS = {
     "PBRun": "pbgui-pbrun.service",
     "PBRemote": "pbgui-pbremote.service",
     "PBCoinData": "pbgui-pbcoindata.service",
+}
+
+OPTIONAL_SERVICE_REQUIREMENTS = {
+    "PBRemote": {
+        "config_key": "bucket",
+        "reason": "PBRemote bucket is not configured",
+    },
+    "PBCoinData": {
+        "config_key": "coinmarketcap_api_key",
+        "reason": "CoinMarketCap API key is not configured",
+    },
 }
 
 
@@ -2387,6 +2420,69 @@ class VPSMonitor:
             else:
                 self._enabled_hosts = set()
         return self._enabled_hosts
+
+    @staticmethod
+    def _configured_optional_value(value: Any) -> bool:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return False
+        lowered = normalized.lower()
+        if lowered in {"none", "null", "false", "<api_key>", "<bucket_name>", "<bucket_name>:"}:
+            return False
+        return not (normalized.startswith("<") and normalized.endswith(">"))
+
+    def _local_vps_config(self, hostname: str) -> dict[str, Any] | None:
+        safe_host = str(hostname or "").strip()
+        if not safe_host or "/" in safe_host or "\\" in safe_host:
+            return None
+        config_path = Path(PBGDIR) / "data" / "vpsmanager" / "hosts" / safe_host / f"{safe_host}.json"
+        if not config_path.is_file():
+            return None
+        try:
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            _log(SERVICE, f"[service] Could not read VPS config for {safe_host}: {exc}", level="WARNING")
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _local_optional_service_expected(self, hostname: str, service_name: str) -> bool | None:
+        requirement = OPTIONAL_SERVICE_REQUIREMENTS.get(service_name)
+        if not requirement:
+            return True
+        config = self._local_vps_config(hostname)
+        if not config or requirement["config_key"] not in config:
+            return None
+        return self._configured_optional_value(config.get(requirement["config_key"]))
+
+    def _optional_service_expected(self, hostname: str, service_name: str) -> bool:
+        if service_name not in OPTIONAL_SERVICE_REQUIREMENTS:
+            return True
+        local_expected = self._local_optional_service_expected(hostname, service_name)
+        if local_expected is not None:
+            return local_expected
+
+        meta = self.store.host_meta.get(hostname, {}) if self.store else {}
+        optional_services = meta.get("optional_services") if isinstance(meta, dict) else None
+        if isinstance(optional_services, dict) and service_name in optional_services:
+            return bool(optional_services.get(service_name))
+        if service_name == "PBRemote" and isinstance(meta, dict) and "pbremote_configured" in meta:
+            return bool(meta.get("pbremote_configured"))
+        if service_name == "PBCoinData" and isinstance(meta, dict) and "coindata_configured" in meta:
+            return bool(meta.get("coindata_configured"))
+
+        # Unknown capability should be treated as expected to avoid hiding real failures.
+        return True
+
+    def _disabled_service_check(self, service_name: str) -> dict[str, Any]:
+        requirement = OPTIONAL_SERVICE_REQUIREMENTS.get(service_name) or {}
+        return {
+            "status": ServiceStatus.DISABLED.value,
+            "pid": None,
+            "error": None,
+            "was_restarted": False,
+            "expected": False,
+            "reason": str(requirement.get("reason") or "Service is not configured"),
+        }
 
     @property
     def telegram_token(self):
@@ -3749,6 +3845,9 @@ class VPSMonitor:
     async def _check_service(self, hostname: str, svc: ServiceInfo
                              ) -> dict:
         """Check if a service is running on a VPS."""
+        if not self._optional_service_expected(hostname, svc.name):
+            return self._disabled_service_check(svc.name)
+
         systemd_status = await self._check_systemd_service(hostname, svc.name)
         if systemd_status is not None:
             return systemd_status
@@ -3806,6 +3905,11 @@ class VPSMonitor:
         """Restart a service on a VPS (same logic as old ServiceMonitor)."""
         svc = MONITORED_SERVICES.get(service_name)
         if not svc:
+            return False
+
+        if not self._optional_service_expected(hostname, service_name):
+            reason = (OPTIONAL_SERVICE_REQUIREMENTS.get(service_name) or {}).get("reason") or "service is not configured"
+            _log(SERVICE, f"[service] Skip restart for {service_name} on {hostname}: {reason}")
             return False
 
         if not self._can_restart(hostname, service_name):

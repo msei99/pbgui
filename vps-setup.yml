@@ -359,6 +359,10 @@
         - { regexp: '<bucket_name>:', replace: "{{ bucket_name }}" }
         - { regexp: '<api_key>', replace: "{{ api_key }}" }
 
+    - name: Build enabled PBGui service list
+      set_fact:
+        pbgui_enabled_services: "{{ ['pbrun'] + (['pbremote'] if (bucket_name | default('') | string | trim) else []) + (['pbcoindata'] if (api_key | default('') | string | trim) else []) }}"
+
     - name: apply VPS logging max bytes
       ini_file:
         path: "{{ install_dir }}/pbgui/pbgui.ini"
@@ -381,6 +385,7 @@
       copy:
         src: "{{ local_home }}/.config/rclone/"
         dest: "{{ remote_home }}/.config/rclone/"
+      when: bucket_name | default('') | string | trim != ""
 
     - name: install and start PBGui systemd user services
       command:
@@ -394,8 +399,7 @@
           - --python
           - "{{ install_dir }}/venv_pbgui/bin/python"
           - --enable
-          - pbrun,pbremote,pbcoindata
-          - --include-pbremote
+          - "{{ pbgui_enabled_services | join(',') }}"
       become: yes
       register: systemd_setup_result
 

@@ -92,6 +92,24 @@ def _systemd_unit_for_service(name: str) -> str | None:
     return unit if _systemd_unit_path(unit).exists() else None
 
 
+def _configured_optional_secret(value: Any) -> bool:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if lowered in {"none", "null", "false", "<api_key>", "<bucket_name>", "<bucket_name>:"}:
+        return False
+    return not (normalized.startswith("<") and normalized.endswith(">"))
+
+
+def _optional_service_blocker(name: str) -> str:
+    if name == "pbremote" and not _configured_optional_secret(load_ini("pbremote", "bucket")):
+        return "PBRemote bucket is not configured"
+    if name == "pbcoindata" and not _configured_optional_secret(load_ini("coinmarketcap", "api_key")):
+        return "CoinMarketCap API key is not configured"
+    return ""
+
+
 def _systemd_user_env() -> dict[str, str]:
     """Build an environment that can talk to the current user's systemd manager."""
     env = os.environ.copy()
@@ -147,6 +165,7 @@ def _systemd_service_action(name: str, action: str) -> dict[str, Any] | None:
 
 def _service_status(name: str) -> dict[str, Any]:
     """Return service status using systemd when available, otherwise legacy PID checks."""
+    blocker = _optional_service_blocker(name)
     systemd_status = _systemd_service_status(name)
     if systemd_status is not None and systemd_status.get("running"):
         return systemd_status
@@ -158,6 +177,17 @@ def _service_status(name: str) -> dict[str, Any]:
             result["unit"] = systemd_status.get("unit")
             result["systemd_state"] = systemd_status.get("systemd_state")
         return result
+    if blocker:
+        result = {
+            "running": False,
+            "manager": "disabled",
+            "expected": False,
+            "reason": blocker,
+        }
+        if systemd_status is not None:
+            result["unit"] = systemd_status.get("unit")
+            result["systemd_state"] = systemd_status.get("systemd_state")
+        return result
     if systemd_status is not None:
         return systemd_status
     return {"running": False, "manager": "legacy"}
@@ -165,6 +195,16 @@ def _service_status(name: str) -> dict[str, Any]:
 
 def _service_action(name: str, action: str) -> dict[str, Any]:
     """Start, stop, or restart a PBGui service using the active service manager."""
+    if action in {"start", "restart"}:
+        blocker = _optional_service_blocker(name)
+        if blocker:
+            return {
+                "running": False,
+                "manager": "disabled",
+                "expected": False,
+                "reason": blocker,
+                "error": blocker,
+            }
     systemd_status = _systemd_service_action(name, action)
     if systemd_status is not None:
         return systemd_status

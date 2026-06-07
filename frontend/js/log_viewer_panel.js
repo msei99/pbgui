@@ -271,6 +271,7 @@ class LogViewerPanel {
         this._localFileFilter = typeof opts.localFileFilter === 'function' ? opts.localFileFilter : null;
         this._startLocalAtEnd = !!opts.startLocalAtEnd;
         this._serviceListOverride = typeof opts.serviceListOverride === 'function' ? opts.serviceListOverride : null;
+        this._serviceStatusProvider = typeof opts.serviceStatusProvider === 'function' ? opts.serviceStatusProvider : null;
         this._taskBrowseMode = !!opts.taskBrowseMode;
         this._taskListSortMode = opts.taskListSortMode || 'newest';
 
@@ -1300,7 +1301,10 @@ class LogViewerPanel {
     _updateRestartBtn() {
         var rb = this._q('restart-btn');
         if (!rb) return;
-        rb.style.display = this._restartableService() ? '' : 'none';
+        var svc = this._restartableService();
+        var blocker = this._restartBlockerFor(svc);
+        rb.style.display = svc && !blocker ? '' : 'none';
+        rb.title = blocker || '';
     }
 
     _updateBadge() {
@@ -1507,9 +1511,25 @@ class LogViewerPanel {
         return this._service || null;
     }
 
+    _restartBlockerFor(svc) {
+        if (!svc || svc.indexOf('Bot:') === 0 || !this._serviceStatusProvider) return '';
+        var check = null;
+        try {
+            check = this._serviceStatusProvider(this._host || 'local', svc, this._vpState);
+        } catch (_e) {
+            check = null;
+        }
+        if (!check) return '';
+        if (check.expected === false || check.status === 'disabled') {
+            return check.reason || 'Service is not configured';
+        }
+        return '';
+    }
+
     _restart() {
         var svc = this._restartableService();
         if (!svc) return;
+        if (this._restartBlockerFor(svc)) return;
         var host = this._host || 'local';
         var rb = this._q('restart-btn');
         this._restartTargetService = (!this._isLocal() && svc.indexOf('Bot:') === 0) ? svc : this._activeItem();

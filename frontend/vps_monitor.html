@@ -919,7 +919,7 @@ tr.row-inactive td { opacity: 0.45; }
 </div><!-- /#main-content -->
 </div><!-- /#page-body -->
 
-<script src="/app/js/log_viewer_panel.js?v=21"></script>
+<script src="/app/js/log_viewer_panel.js?v=23"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
    VPS Monitor — WebSocket-powered real-time dashboard
@@ -2261,12 +2261,15 @@ function renderServices() {
       html += `<div class="svc-inline">`;
       for (const [svcName, check] of Object.entries(hostSvc)) {
         const st = check.status || 'unknown';
+        const expected = check.expected !== false && st !== 'disabled';
+        const label = expected ? st : 'skipped';
         let dotColor;
-        if (st === 'running') dotColor = 'var(--green)';
+        if (!expected) dotColor = 'var(--text-dim)';
+        else if (st === 'running') dotColor = 'var(--green)';
         else if (st === 'stopped') dotColor = 'var(--red)';
         else if (st === 'restarting') dotColor = 'var(--orange)';
         else dotColor = 'var(--text-dim)';
-        html += `<span class="svc-inline-item" title="${esc(svcName)}: ${st}${check.pid ? ' (PID:'+check.pid+')' : ''}">`;
+        html += `<span class="svc-inline-item" title="${esc(svcName)}: ${esc(label)}${check.pid ? ' (PID:'+check.pid+')' : ''}${check.reason ? ' - ' + esc(check.reason) : ''}">`;
         html += `<span class="svc-inline-dot" style="background:${dotColor}"></span>`;
         html += `<span class="svc-inline-name">${esc(svcName)}</span>`;
         html += `</span>`;
@@ -2284,16 +2287,20 @@ function renderServices() {
       html += `<div class="svc-grid">`;
       for (const [svcName, check] of Object.entries(hostSvc)) {
         const st = check.status || 'unknown';
+        const expected = check.expected !== false && st !== 'disabled';
+        const label = expected ? st : 'skipped';
         let icon, color;
-        if (st === 'running') { icon = '✅'; color = 'var(--green)'; }
+        if (!expected) { icon = '-'; color = 'var(--text-dim)'; }
+        else if (st === 'running') { icon = '✅'; color = 'var(--green)'; }
         else if (st === 'stopped') { icon = '❌'; color = 'var(--red)'; }
         else if (st === 'restarting') { icon = '🔄'; color = 'var(--orange)'; }
         else { icon = '❓'; color = 'var(--text-dim)'; }
         html += `<div class="svc-card">`;
         html += `<div class="svc-name">${icon} ${esc(svcName)}</div>`;
-        html += `<div class="svc-status" style="color:${color}">${st}${check.pid ? ' (PID: ' + check.pid + ')' : ''}</div>`;
+        html += `<div class="svc-status" style="color:${color}">${esc(label)}${check.pid ? ' (PID: ' + check.pid + ')' : ''}</div>`;
+        if (!expected && check.reason) html += `<div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">${esc(check.reason)}</div>`;
         if (check.error) html += `<div style="font-size:10px;color:var(--red);margin-bottom:4px">${esc(check.error)}</div>`;
-        html += `<button class="svc-btn" data-restart="${host}:${svcName}" onclick="restartService('${esc(host)}','${esc(svcName)}',this)">Restart</button>`;
+        if (expected) html += `<button class="svc-btn" data-restart="${host}:${svcName}" onclick="restartService('${esc(host)}','${esc(svcName)}',this)">Restart</button>`;
         html += `</div>`;
       }
       html += `</div>`;
@@ -2330,6 +2337,12 @@ function toggleSvcCard(header) {
 }
 
 // ── Live Logs (LogViewerPanel) ──────────────────────────────
+function serviceStatusForLogViewer(host, service) {
+  const services = (state && state.services) || {};
+  const hostServices = services[host] || {};
+  return hostServices[service] || null;
+}
+
 function initVpsLogViewer() {
   if (vpsLogViewer) return;
   vpsLogViewer = new LogViewerPanel({
@@ -2341,6 +2354,7 @@ function initVpsLogViewer() {
     presets:        'trading',
     showRestart:    true,
     height:         '100%',
+    serviceStatusProvider: serviceStatusForLogViewer,
   });
   vpsLogViewer.open();
 }

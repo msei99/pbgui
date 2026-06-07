@@ -254,6 +254,9 @@ async def ws_vps_manager(websocket: WebSocket):
                 elif cmd == "check_cmc_api_key":
                     data = await asyncio.to_thread(service.check_cmc_api_key, str(msg.get("api_key") or ""))
                     await websocket.send_json({"type": "cmc_check_result", "data": data})
+                elif cmd == "detect_public_ip":
+                    data = await asyncio.to_thread(service.detect_public_ip)
+                    await websocket.send_json({"type": "public_ip_result", "data": data})
                 elif cmd == "setup_vps":
                     data = await asyncio.to_thread(
                         service.setup_vps,

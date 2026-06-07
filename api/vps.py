@@ -24,7 +24,7 @@ from fastapi.responses import HTMLResponse
 
 from api.auth import validate_token, require_auth, SessionToken
 from MonitorConfig import MonitorConfig
-from pbgui_purefunc import save_ini
+from pbgui_purefunc import load_ini, save_ini
 from logging_helpers import human_log as _log
 from master.async_monitor import VPSMonitor, INSTANCE_COLLECT_SCRIPT
 from master.async_logs import (
@@ -48,6 +48,24 @@ _clients: set[WebSocket] = set()
 STATE_PUSH_INTERVAL = 1.0    # max rate for full-state push
 LOG_PUSH_INTERVAL = 0.15     # ~150ms for log line push
 LOCAL_LOG_PUSH_INTERVAL = 0.15
+
+
+def _configured_secret_value(value: Any) -> bool:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if lowered in {"none", "null", "false", "<api_key>", "<bucket_name>", "<bucket_name>:"}:
+        return False
+    return not (normalized.startswith("<") and normalized.endswith(">"))
+
+
+def _local_optional_service_blocker(service: str) -> str:
+    if service in {"PBRemote", "pbremote"} and not _configured_secret_value(load_ini("pbremote", "bucket")):
+        return "PBRemote bucket is not configured"
+    if service in {"PBCoinData", "pbcoindata"} and not _configured_secret_value(load_ini("coinmarketcap", "api_key")):
+        return "CoinMarketCap API key is not configured"
+    return ""
 
 
 def _host_usage_threshold(total_bytes: float, free_threshold_mb: float) -> Optional[float]:
@@ -579,6 +597,11 @@ async def _local_restart_service(service: str) -> dict:
         return {"type": "result", "cmd": "restart_service",
                 "host": "local", "service": service, "success": False,
                 "error": f"Unknown local service: {service}"}
+    blocker = _local_optional_service_blocker(service)
+    if blocker:
+        return {"type": "result", "cmd": "restart_service",
+                "host": "local", "service": service, "success": False,
+                "error": blocker}
     try:
         result = _service_action(svc_id, "restart")
         _log(SERVICE, f"[local] Restarted service {service} ({svc_id})")

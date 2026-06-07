@@ -167,9 +167,36 @@ else
   }
 fi
 
-run_user_systemctl daemon-reload
-
 IFS=',' read -r -a enabled <<< "$ENABLE_SERVICES"
+
+service_requested() {
+  local wanted="$1"
+  local service
+  for service in "${enabled[@]}"; do
+    service="$(printf '%s' "$service" | tr -d '[:space:]')"
+    [[ "$service" == "$wanted" ]] && return 0
+  done
+  return 1
+}
+
+disable_optional_if_excluded() {
+  local service="$1"
+  local unit="pbgui-$service.service"
+  if service_requested "$service"; then
+    return 0
+  fi
+  rm -f "$wants_dir/$unit"
+  if [[ -f "$unit_dir/$unit" ]]; then
+    run_user_systemctl stop "$unit" >/dev/null 2>&1 || true
+    run_user_systemctl disable "$unit" >/dev/null 2>&1 || true
+    success "Disabled optional $unit"
+  fi
+}
+
+run_user_systemctl daemon-reload
+disable_optional_if_excluded pbremote
+disable_optional_if_excluded pbcoindata
+
 for service in "${enabled[@]}"; do
   service="$(printf '%s' "$service" | tr -d '[:space:]')"
   [[ -z "$service" ]] && continue

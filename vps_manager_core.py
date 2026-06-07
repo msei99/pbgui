@@ -671,7 +671,7 @@ class VPS:
         return False
 
     def has_setup_parameters(self):
-        return bool(self.hostname and self.user and self.user_pw and self.swap and self.bucket and self.coinmarketcap_api_key)
+        return bool(self.hostname and self.user and self.user_pw and self.swap)
 
     def has_user_pw(self):
         return bool(self.user_pw)
@@ -959,8 +959,8 @@ class VPSManager:
             "user": vps.user,
             "user_pw": vps.user_pw,
             "swap_size": vps.swap,
-            "bucket": vps.bucket,
-            "coinmarketcap_api_key": vps.coinmarketcap_api_key,
+            "bucket": str(vps.bucket or ""),
+            "coinmarketcap_api_key": str(vps.coinmarketcap_api_key or ""),
             "firewall": vps.firewall,
             "firewall_ssh_port": vps.firewall_ssh_port,
             "firewall_ssh_ips": vps.firewall_ssh_ips.split(","),

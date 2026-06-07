@@ -516,6 +516,16 @@ def _safe_float_str(value: Any, default: float) -> float:
         return default
 
 
+def _configured_optional_secret(value: Any) -> bool:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if lowered in {"none", "null", "false", "<api_key>", "<bucket_name>", "<bucket_name>:"}:
+        return False
+    return not (normalized.startswith("<") and normalized.endswith(">"))
+
+
 def _python_major_minor(executable: str | None) -> str:
     candidate = str(executable or "").strip()
     if not candidate:
@@ -2169,6 +2179,8 @@ class VPSManagerService:
     def _build_master_status(self, pbremote: PBRemote, coindata_ok: bool) -> dict[str, Any]:
         summary_row = self._build_master_overview_row(pbremote)
         local_coindata = getattr(pbremote.local_run, "coindata", None)
+        pbremote_configured = _configured_optional_secret(getattr(pbremote, "bucket", None))
+        coindata_configured = _configured_optional_secret(getattr(local_coindata, "api_key", None))
         local_no_new_privs = _local_no_new_privileges()
         local_sudo_blocked_reason = "Local sudo blocked by runtime (`NoNewPrivs`)." if local_no_new_privs else ""
         pbgui_github = str(summary_row.get("pbgui_github") or "")
@@ -2176,8 +2188,10 @@ class VPSManagerService:
         return {
             "name": pbremote.name,
             "online": pbremote.is_online(),
-            "rclone_ok": bool(pbremote.bucket),
+            "rclone_ok": pbremote_configured,
+            "pbremote_configured": pbremote_configured,
             "coindata_ok": coindata_ok,
+            "coindata_configured": coindata_configured,
             "update_ok": self.vpsmanager.update_status == "successful",
             "update_ready": True,
             "pending_updates": summary_row.get("updates", "N/A"),
@@ -2214,6 +2228,9 @@ class VPSManagerService:
         ssh_online = self._host_online(host_state)
         telemetry_fresh = self._host_telemetry_fresh(host_state)
         telemetry_age = self._host_telemetry_age(host_state)
+        host_meta = self._host_meta(host_state)
+        pbremote_configured = _configured_optional_secret(vps.bucket) or bool(host_meta.get("pbremote_configured"))
+        coindata_configured = _configured_optional_secret(vps.coinmarketcap_api_key) or bool(host_meta.get("coindata_configured"))
         if quick:
             if not ssh_online:
                 ssh_ok = False
@@ -2233,9 +2250,11 @@ class VPSManagerService:
             "update_ok": vps.update_status == "successful",
             "update_ready": bool(vps.user_pw),
             "pending_updates": summary_row.get("updates", "N/A"),
-            "rclone_ok": bool(getattr(pbremote, "bucket", None)),
+            "rclone_ok": pbremote_configured,
+            "pbremote_configured": pbremote_configured,
             "coindata_ok": coindata_ok,
-            "cmc_credits": self._host_meta(host_state).get("cmc_credits"),
+            "coindata_configured": coindata_configured,
+            "cmc_credits": host_meta.get("cmc_credits"),
             "online": ssh_online and telemetry_fresh,
             "ssh_online": ssh_online,
             "telemetry_fresh": telemetry_fresh,
@@ -5003,8 +5022,10 @@ done"""
                     raise ValueError("IP-Addresses to allow contains an invalid IPv4 address.")
         vps.user_pw = user_pw or None
         vps.swap = swap
-        vps.bucket = str(form.get("bucket") or vps.bucket or "")
-        vps.coinmarketcap_api_key = str(form.get("coinmarketcap_api_key") or vps.coinmarketcap_api_key or "")
+        bucket = form.get("bucket") if "bucket" in form else vps.bucket
+        coinmarketcap_api_key = form.get("coinmarketcap_api_key") if "coinmarketcap_api_key" in form else vps.coinmarketcap_api_key
+        vps.bucket = str(bucket or "").strip()
+        vps.coinmarketcap_api_key = str(coinmarketcap_api_key or "").strip()
         install_dir = _normalize_vps_install_dir(form.get("install_dir"), vps.user)
         if install_dir:
             vps.remote_pbgui_dir = f"{install_dir}/pbgui"
@@ -5035,34 +5056,30 @@ done"""
         hostname = str(form.get("hostname") or "").strip()
         init_method = str(form.get("init_methode") or "root")
 
-        result = {"hosts_ok": False, "hosts_has_hostname": False, "hosts_current_ip": "", "ssh_ok": False, "ssh_error": ""}
+        result = {"hostname": hostname, "hosts_ok": False, "hosts_has_hostname": False, "hosts_current_ip": "", "ssh_ok": False, "ssh_error": ""}
 
-        if not ip or not hostname:
-            result["ssh_error"] = "IP and hostname required"
+        if not hostname:
+            result["ssh_error"] = "Hostname required"
             return result
 
-        try:
-            with open("/etc/hosts", "r") as f:
-                for line in f:
-                    line = line.split("#")[0].strip()
-                    if not line:
-                        continue
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        line_ip = parts[0]
-                        hosts = parts[1:]
-                        if hostname in hosts:
-                            result["hosts_has_hostname"] = True
-                            result["hosts_current_ip"] = line_ip
-                            if line_ip == ip:
-                                result["hosts_ok"] = True
-                                break
-        except Exception:
-            pass
+        lookup = _hosts_entry_lookup(hostname)
+        hosts_ip = str(lookup.get("ip") or "").strip()
+        if lookup.get("found"):
+            result["hosts_has_hostname"] = True
+            result["hosts_current_ip"] = hosts_ip
+            if not ip and _valid_ipv4(hosts_ip):
+                ip = hosts_ip
+            if hosts_ip == ip:
+                result["hosts_ok"] = True
 
         if not result["hosts_ok"]:
             if result["hosts_has_hostname"]:
-                result["ssh_error"] = f"Hostname found with IP {result['hosts_current_ip']} instead of {ip}"
+                if ip:
+                    result["ssh_error"] = f"Hostname found with IP {result['hosts_current_ip']} instead of {ip}"
+                else:
+                    result["ssh_error"] = f"Hostname found with IP {result['hosts_current_ip']}, but it is not a valid IPv4 address"
+            elif not ip:
+                result["ssh_error"] = "IP/hostname not found in local /etc/hosts"
             else:
                 result["ssh_error"] = "IP/hostname not found in local /etc/hosts"
             return result
@@ -5254,3 +5271,16 @@ done"""
             return {"ok": False, "error": str(exc)}
         finally:
             coindata.api_key = old_key
+
+    def detect_public_ip(self) -> dict[str, Any]:
+        from urllib.request import urlopen
+
+        try:
+            with urlopen("https://api.ipify.org", timeout=5) as response:  # noqa: S310 - fixed URL
+                ip = response.read().decode("utf-8", errors="replace").strip()
+        except Exception as exc:
+            _log(SERVICE, f"Failed to detect public IP: {exc}", level="WARNING")
+            return {"ok": False, "ip": "", "error": "Failed to detect public IP."}
+        if not _valid_ipv4(ip):
+            return {"ok": False, "ip": "", "error": "Detected public IP is not a valid IPv4 address."}
+        return {"ok": True, "ip": ip, "error": ""}

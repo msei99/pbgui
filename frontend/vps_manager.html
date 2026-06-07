@@ -2839,7 +2839,7 @@
     </main>
   </div>
 
-  <script src='/app/js/log_viewer_panel.js?v=22'></script>
+  <script src='/app/js/log_viewer_panel.js?v=23'></script>
   <script src="/app/js/api_sync_status.js?v=2"></script>
   <script>
     const TOKEN = "%%TOKEN%%";
@@ -2880,6 +2880,7 @@
       addVpsReady: { hostsOk: false, sshOk: false, sshError: '', loading: false },
       addBucketCheck: { ok: false, error: '', loading: false },
       addCmcCheck: { ok: false, error: '', loading: false, credit_limit_monthly: null, credits_used_day: null, credits_used_month: null, credits_left: null, credit_limit_monthly_reset_timestamp: null },
+      addPublicIp: { ip: '', loading: false, requested: false, applied: false },
       importExistingVps: defaultExistingVpsImportState(),
       pendingAutoSetupSwitch: null,
       master: defaultMasterUi(),
@@ -2965,6 +2966,8 @@
         user_sudo_pw: '',
         swap: '0',
         install_dir: '',
+        auto_ip: '',
+        firewall_ssh_ips_auto: '',
         bucket: '',
         coinmarketcap_api_key: '',
         firewall: false,
@@ -4110,8 +4113,10 @@
           if (!status.last_setup) tags.push(`<span class='tag warning'>Setup Pending</span>`);
         }
       } else {
-        tags.push(`<span class='tag ${status.rclone_ok ? 'ok' : 'warning'}'>PBRemote ${status.rclone_ok ? 'Ready' : 'Missing'}</span>`);
-        tags.push(`<span class='tag ${status.coindata_ok ? 'ok' : 'warning'}'>CoinData ${status.coindata_ok ? 'Ready' : 'Missing'}</span>`);
+        const pbremoteConfigured = Object.prototype.hasOwnProperty.call(status, 'pbremote_configured') ? !!status.pbremote_configured : true;
+        const coindataConfigured = Object.prototype.hasOwnProperty.call(status, 'coindata_configured') ? !!status.coindata_configured : true;
+        tags.push(`<span class='tag ${pbremoteConfigured ? (status.rclone_ok ? 'ok' : 'warning') : ''}'>PBRemote ${pbremoteConfigured ? (status.rclone_ok ? 'Ready' : 'Missing') : 'Skipped'}</span>`);
+        tags.push(`<span class='tag ${coindataConfigured ? (status.coindata_ok ? 'ok' : 'warning') : ''}'>CoinData ${coindataConfigured ? (status.coindata_ok ? 'Ready' : 'Missing') : 'Skipped'}</span>`);
       }
 
       return {
@@ -4237,17 +4242,23 @@
     }
 
     function renderMasterSummaryTags(status) {
+      const pbremoteConfigured = Object.prototype.hasOwnProperty.call(status, 'pbremote_configured') ? !!status.pbremote_configured : true;
+      const coindataConfigured = Object.prototype.hasOwnProperty.call(status, 'coindata_configured') ? !!status.coindata_configured : true;
       return `
         <span class='tag ${status.online ? 'ok' : 'error'}'>${status.online ? 'Online' : 'Offline'}</span>
-        <span class='tag ${status.rclone_ok ? 'ok' : 'warning'}'>PBRemote ${status.rclone_ok ? 'Ready' : 'Missing'}</span>
-        <span class='tag ${status.coindata_ok ? 'ok' : 'warning'}'>CoinData ${status.coindata_ok ? 'Ready' : 'Missing'}</span>`;
+        <span class='tag ${pbremoteConfigured ? (status.rclone_ok ? 'ok' : 'warning') : ''}'>PBRemote ${pbremoteConfigured ? (status.rclone_ok ? 'Ready' : 'Missing') : 'Skipped'}</span>
+        <span class='tag ${coindataConfigured ? (status.coindata_ok ? 'ok' : 'warning') : ''}'>CoinData ${coindataConfigured ? (status.coindata_ok ? 'Ready' : 'Missing') : 'Skipped'}</span>`;
     }
 
     function renderMasterStatusCards(status) {
-      function masterFlagCard(key, label, ok, sub) {
-        return `<div class='status-item' data-flag='${escAttr(key)}'><div class='status-label'>${esc(label)}</div><div class='status-value'>${boolDot(ok)}</div><div class='status-sub'>${esc(sub)}</div></div>`;
+      function masterFlagCard(key, label, ok, sub, valueHtml) {
+        return `<div class='status-item' data-flag='${escAttr(key)}'><div class='status-label'>${esc(label)}</div><div class='status-value'>${valueHtml || boolDot(ok)}</div><div class='status-sub'>${esc(sub)}</div></div>`;
       }
-      const coindataSub = status.coindata_ok
+      const pbremoteConfigured = Object.prototype.hasOwnProperty.call(status, 'pbremote_configured') ? !!status.pbremote_configured : true;
+      const coindataConfigured = Object.prototype.hasOwnProperty.call(status, 'coindata_configured') ? !!status.coindata_configured : true;
+      const coindataSub = !coindataConfigured
+        ? 'CoinMarketCap API key not configured'
+        : status.coindata_ok
         ? ((status.cmc_credits !== null && status.cmc_credits !== undefined && String(status.cmc_credits).trim() !== '')
             ? asCountLabel(status.cmc_credits, 'credit left', 'credits left')
             : 'CoinData API OK')
@@ -4257,8 +4268,8 @@
           <div class='status-item' data-field='last-update'><div class='status-label'>Last update</div><div class='status-value'>${esc(status.last_update || '-')}</div></div>
           <div class='status-item' data-field='last-command'><div class='status-label'>Last command</div><div class='status-value code'>${esc(status.last_command || '-')}</div></div>
           ${masterFlagCard('online', 'Online', !!status.online, status.online ? 'Live telemetry received' : 'No current live telemetry')}
-          ${masterFlagCard('rclone_ok', 'Rclone Ready', !!status.rclone_ok, status.rclone_ok ? 'PBRemote bucket available' : 'PBRemote bucket missing')}
-          ${masterFlagCard('coindata_ok', 'CoinData Ready', !!status.coindata_ok, coindataSub)}
+          ${masterFlagCard('rclone_ok', 'Rclone Ready', !!status.rclone_ok, pbremoteConfigured ? (status.rclone_ok ? 'PBRemote bucket available' : 'PBRemote bucket missing') : 'PBRemote bucket not configured', pbremoteConfigured ? '' : `<span class='dot info'></span>Skipped`)}
+          ${masterFlagCard('coindata_ok', 'CoinData Ready', !!status.coindata_ok, coindataSub, coindataConfigured ? '' : `<span class='dot info'></span>Skipped`)}
         </div>`;
     }
 
@@ -4740,6 +4751,31 @@
       return Array.from(new Set(services));
     }
 
+    function optionalServiceStatusFromDetail(status, service) {
+      if (service === 'PBRemote' && Object.prototype.hasOwnProperty.call(status || {}, 'pbremote_configured') && !status.pbremote_configured) {
+        return { status: 'disabled', expected: false, reason: 'PBRemote bucket is not configured' };
+      }
+      if (service === 'PBCoinData' && Object.prototype.hasOwnProperty.call(status || {}, 'coindata_configured') && !status.coindata_configured) {
+        return { status: 'disabled', expected: false, reason: 'CoinMarketCap API key is not configured' };
+      }
+      return null;
+    }
+
+    function getVpsLogViewerServiceStatus(hostname, service, vpState) {
+      const state = vpState || store.state || {};
+      const services = state.services || {};
+      const hostServices = services[hostname] || {};
+      if (hostServices[service]) return hostServices[service];
+      const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === hostname ? store.detail : null;
+      return optionalServiceStatusFromDetail(detail ? detail.status || {} : {}, service);
+    }
+
+    function getMasterLogViewerServiceStatus(hostname, service) {
+      if (hostname && hostname !== 'local') return null;
+      const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
+      return optionalServiceStatusFromDetail(detail ? detail.status || {} : {}, service);
+    }
+
     function syncVpsLogViewer() {
       const container = document.getElementById('vps-log-viewer-target');
       if (store.view !== 'vps-host-logs' || !store.hostname || !container || typeof LogViewerPanel !== 'function') {
@@ -4772,7 +4808,8 @@
           showRestart: true,
           serviceListOverride: function (host, vpState) {
             return getVpsLogViewerServices(host, vpState);
-          }
+          },
+          serviceStatusProvider: getVpsLogViewerServiceStatus
         });
         vpsLogViewer.open();
         vpsLogViewer.setHost(detail.hostname);
@@ -4825,7 +4862,8 @@
           showRestart: true,
           serviceListOverride: function (host, vpState) {
             return getMasterHostLogServices(host, vpState);
-          }
+          },
+          serviceStatusProvider: getMasterLogViewerServiceStatus
         });
         masterHostLogViewer.open();
         masterHostLogViewerKey = requestedKey;
@@ -6761,6 +6799,22 @@
       }
       if (msg.type === 'vps_ready_result') {
         const data = msg.data || {};
+        const expectedHostname = String(data.hostname || '').trim();
+        if (expectedHostname && expectedHostname !== String(store.addForm.hostname || '').trim()) return;
+        const foundIp = String(data.hosts_current_ip || '').trim();
+        const currentIp = String(store.addForm.ip || '').trim();
+        const autoIp = String(store.addForm.auto_ip || '').trim();
+        if (data.hosts_has_hostname && foundIp && (!currentIp || currentIp === autoIp)) {
+          store.addForm.ip = foundIp;
+          store.addForm.auto_ip = foundIp;
+          const ipInput = document.getElementById('add-vps-ip');
+          if (ipInput) ipInput.value = foundIp;
+        } else if (!data.hosts_has_hostname && currentIp && currentIp === autoIp) {
+          store.addForm.ip = '';
+          store.addForm.auto_ip = '';
+          const ipInput = document.getElementById('add-vps-ip');
+          if (ipInput) ipInput.value = '';
+        }
         store.addVpsReady = {
           hostsOk: !!data.hosts_ok,
           hostsHasHostname: !!data.hosts_has_hostname,
@@ -6771,6 +6825,22 @@
         };
         if (store.view === 'add') {
           setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
+        }
+        return;
+      }
+      if (msg.type === 'public_ip_result') {
+        const data = msg.data || {};
+        const ip = String(data.ip || '').trim();
+        store.addPublicIp = Object.assign({}, store.addPublicIp || {}, { ip: ip, loading: false, requested: true });
+        if (data.ok && ip && store.view === 'add' && !String(store.addForm.firewall_ssh_ips || '').trim() && !(store.addPublicIp || {}).applied) {
+          store.addForm.firewall_ssh_ips = ip;
+          store.addForm.firewall_ssh_ips_auto = ip;
+          store.addPublicIp.applied = true;
+          const fwInput = document.getElementById('add-firewall-ssh-ips');
+          if (fwInput) fwInput.value = ip;
+          setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
+          setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+          refreshLocalInteractiveState();
         }
         return;
       }
@@ -7512,7 +7582,21 @@
     }
 
     function setAddField(name, value) {
+      if (name === 'ip' && String(value || '').trim() !== String(store.addForm.auto_ip || '').trim()) {
+        store.addForm.auto_ip = '';
+      }
+      if (name === 'firewall_ssh_ips' && String(value || '').trim() !== String(store.addForm.firewall_ssh_ips_auto || '').trim()) {
+        store.addForm.firewall_ssh_ips_auto = '';
+      }
       store.addForm[name] = value;
+      if (name === 'hostname' && !String(value || '').trim()) {
+        if (String(store.addForm.ip || '').trim() === String(store.addForm.auto_ip || '').trim()) {
+          store.addForm.ip = '';
+          const ipInput = document.getElementById('add-vps-ip');
+          if (ipInput) ipInput.value = '';
+        }
+        store.addForm.auto_ip = '';
+      }
       if (store.view === 'add') {
         setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
         if (name === 'init_methode') {
@@ -7554,7 +7638,7 @@
         const form = store.addForm;
         const ip = String(form.ip || '').trim();
         const hostname = String(form.hostname || '').trim();
-        if (!ip || !hostname) {
+        if (!hostname) {
           store.addVpsReady = { hostsOk: false, hostsHasHostname: false, hostsCurrentIp: '', sshOk: false, sshError: '', loading: false };
           setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
           return;
@@ -7641,6 +7725,16 @@
       if (!String(store.addForm.coinmarketcap_api_key || '').trim() && String(config.coinmarketcap_api_key || '').trim()) {
         store.addForm.coinmarketcap_api_key = String(config.coinmarketcap_api_key || '').trim();
         changed = true;
+      }
+      const publicIp = store.addPublicIp || { ip: '', loading: false, requested: false, applied: false };
+      if (!String(store.addForm.firewall_ssh_ips || '').trim() && String(publicIp.ip || '').trim() && !publicIp.applied) {
+        store.addForm.firewall_ssh_ips = String(publicIp.ip || '').trim();
+        store.addForm.firewall_ssh_ips_auto = String(publicIp.ip || '').trim();
+        store.addPublicIp = Object.assign({}, publicIp, { applied: true });
+        changed = true;
+      } else if (!String(store.addForm.firewall_ssh_ips || '').trim() && !publicIp.loading && !publicIp.requested) {
+        store.addPublicIp = Object.assign({}, publicIp, { loading: true, requested: true });
+        send({ cmd: 'detect_public_ip' });
       }
       const installUser = String(store.addForm.user || config.local_user || '').trim();
       if (!String(store.addForm.install_dir || '').trim() && installUser) {
@@ -8316,10 +8410,10 @@
       const hasInstallDir = !!String(form.install_dir || '').trim();
       const hasBucket = !!String(form.bucket || '').trim();
       const hasCmc = !!String(form.coinmarketcap_api_key || '').trim();
-      if (!hasSwap || !hasInstallDir || !hasBucket || !hasCmc) return false;
+      if (!hasSwap || !hasInstallDir) return false;
       const bucketCheckOk = !!(store.addBucketCheck || {}).ok;
       const cmcCheckOk = !!(store.addCmcCheck || {}).ok;
-      if (!bucketCheckOk || !cmcCheckOk) return false;
+      if ((hasBucket && !bucketCheckOk) || (hasCmc && !cmcCheckOk)) return false;
       const fwCheck = validateFirewallIps(form.firewall_ssh_ips);
       return fwCheck.ok;
     }
@@ -8330,10 +8424,8 @@
       const hasUserPw = !!String(form.user_pw || '').trim() || !!String(hostname ? getEffectiveVpsUserPw(hostname) : '').trim() || (hostname ? hasSessionSecret(hostname, 'user_pw') : false);
       const hasSwap = !!String(form.swap || '').trim();
       const hasInstallDir = !!String(form.install_dir || '').trim();
-      const hasBucket = !!String(form.bucket || '').trim();
-      const hasCmc = !!String(form.coinmarketcap_api_key || '').trim();
       const fwCheck = validateFirewallIps(form.firewall_ssh_ips);
-      return hasUserPw && hasSwap && hasInstallDir && hasBucket && hasCmc && fwCheck.ok;
+      return hasUserPw && hasSwap && hasInstallDir && fwCheck.ok;
     }
 
     function canSaveForm(form, savedForm) {
@@ -9303,8 +9395,8 @@
       const cmcCheck = store.addCmcCheck || {};
       const hasBucket = !!String(store.addForm.bucket || '').trim();
       const hasCmc = !!String(store.addForm.coinmarketcap_api_key || '').trim();
-      const bucketOk = hasBucket && bucketCheck.ok;
-      const cmcOk = hasCmc && cmcCheck.ok;
+      const bucketOk = !hasBucket || bucketCheck.ok;
+      const cmcOk = !hasCmc || cmcCheck.ok;
       const bucketLoading = !!bucketCheck.loading;
       const cmcLoading = !!cmcCheck.loading;
       const bucketError = String(bucketCheck.error || '');
@@ -9321,12 +9413,12 @@
         ? (String(store.addForm.firewall_ssh_ips || '').trim() || 'Empty (any IP)')
         : (fwCheck.error || 'Invalid IP list');
 
-      let bucketLabel = 'PBRemote bucket';
+      let bucketLabel = 'PBRemote bucket (optional)';
       let bucketValue;
       let bucketSub;
       if (!hasBucket) {
-        bucketValue = boolDot(false);
-        bucketSub = 'Missing bucket';
+        bucketValue = `<span class='dot info'></span>Skipped`;
+        bucketSub = 'PBRemote will not be configured';
       } else if (bucketLoading) {
         bucketValue = boolDot('pending');
         bucketSub = 'Checking bucket...';
@@ -9338,12 +9430,12 @@
         bucketSub = bucketError || 'Bucket check failed';
       }
 
-      let cmcLabel = 'CoinData API key';
+      let cmcLabel = 'CoinData API key (optional)';
       let cmcValue;
       let cmcSub;
       if (!hasCmc) {
-        cmcValue = boolDot(false);
-        cmcSub = 'Missing API key';
+        cmcValue = `<span class='dot info'></span>Skipped`;
+        cmcSub = 'PBCoinData will not be configured';
       } else if (cmcLoading) {
         cmcValue = boolDot('pending');
         cmcSub = 'Checking API key...';
@@ -9434,7 +9526,7 @@
           </div>
           <div class='panel-body'>
             <ul class='page-copy-list'>
-              <li>Add the VPS IP and hostname to your local <span class='code'>/etc/hosts</span>.</li>
+              <li>Add the VPS hostname and IP to your local <span class='code'>/etc/hosts</span>.</li>
               <li>Verify that you can SSH to the VPS before starting the bootstrap.</li>
             </ul>
           </div>
@@ -9453,19 +9545,19 @@
           <div class='panel-head'>
             <div>
               <div class='panel-title'>Step 4: Initialize &amp; Setup your VPS</div>
-              <div class='panel-sub'>Run only one time after installation. Init creates the user, changes the root password, and installs the SSH key. Setup configures swap, firewall, rclone, and CoinData.</div>
+              <div class='panel-sub'>Run only one time after installation. Init creates the user, changes the root password, and installs the SSH key. Setup configures swap, firewall, and optional PBRemote/CoinData services.</div>
             </div>
           </div>
           <div class='panel-body'>
             <div class='field-grid'>
               <div id='add-init-dynamic' style='display:contents'>${renderAddInitDynamic()}</div>
               <div class='field'>
-                <label>VPS IPv4</label>
-                <input type='text' value='${escAttr(form.ip)}' oninput="setAddField('ip', this.value)" placeholder='203.0.113.10'>
-              </div>
-              <div class='field'>
                 <label>VPS hostname</label>
                 <input type='text' value='${escAttr(form.hostname)}' oninput="setAddField('hostname', this.value)">
+              </div>
+              <div class='field'>
+                <label>VPS IPv4</label>
+                <input id='add-vps-ip' type='text' value='${escAttr(form.ip)}' oninput="setAddField('ip', this.value)" placeholder='203.0.113.10'>
               </div>
               <div class='field'>
                 <label>VPS user name</label>
@@ -9489,11 +9581,11 @@
                 </select>
               </div>
               <div class='field'>
-                <label>PBRemote Bucket</label>
-                <input type='text' value='${escAttr(form.bucket || config.bucket || config.master_name || '')}' oninput="setAddField('bucket', this.value)">
+                <label>PBRemote Bucket (optional)</label>
+                <input type='text' value='${escAttr(form.bucket || config.bucket || '')}' oninput="setAddField('bucket', this.value)">
               </div>
               <div class='field'>
-                <label>CoinMarketCap API Key</label>
+                <label>CoinMarketCap API Key (optional)</label>
                 ${renderVisibilityInput('password', form.coinmarketcap_api_key || config.coinmarketcap_api_key || '', "setAddField('coinmarketcap_api_key', this.value)", 'Show or hide CoinMarketCap API key', 'add.coinmarketcap_api_key')}
               </div>
               <div class='field'>
@@ -9502,7 +9594,7 @@
               </div>
               <div class='field span-2'>
                 <label>Allowed SSH IPs</label>
-                <input type='text' value='${escAttr(form.firewall_ssh_ips)}' oninput="setAddField('firewall_ssh_ips', this.value)" placeholder='198.51.100.1, 203.0.113.7'>
+                <input id='add-firewall-ssh-ips' type='text' value='${escAttr(form.firewall_ssh_ips)}' oninput="setAddField('firewall_ssh_ips', this.value)" placeholder='198.51.100.1, 203.0.113.7'>
               </div>
               <div class='field'>
                 <label>&nbsp;</label>
@@ -9511,7 +9603,7 @@
             </div>
             <div class='button-row'>
               <label class='checkbox-row'><input type='checkbox' ${store.addDebug ? 'checked' : ''} onchange='store.addDebug = this.checked'> Debug</label>
-              <button class='btn ghost' type='button' onclick='store.addForm = defaultAddForm(); store.addDebug = false; renderUi({ forceView: true });'>Reset</button>
+              <button class='btn ghost' type='button' onclick='store.addForm = defaultAddForm(); store.addPublicIp = Object.assign({}, store.addPublicIp || {}, { applied: false }); store.addDebug = false; renderUi({ forceView: true });'>Reset</button>
               <button class='btn ok' id='add-init-btn' type='button' ${canInit ? '' : 'disabled'} onclick='initAddVps()'>Initialize &amp; Setup VPS</button>
             </div>
           </div>
@@ -9554,8 +9646,8 @@
       const cmcCheck = store.addCmcCheck || {};
       const hasBucket = !!String(currentForm.bucket || '').trim();
       const hasCmc = !!String(currentForm.coinmarketcap_api_key || '').trim();
-      const bucketOk = hasBucket && bucketCheck.ok;
-      const cmcOk = hasCmc && cmcCheck.ok;
+      const bucketOk = !hasBucket || bucketCheck.ok;
+      const cmcOk = !hasCmc || cmcCheck.ok;
       const fwCheck = validateFirewallIps(currentForm.firewall_ssh_ips);
       const fwOk = fwCheck.ok;
       const setupReady = !!installDir && bucketOk && cmcOk && fwOk;
@@ -9567,9 +9659,9 @@
       } else if (!setupReady) {
         if (!installDir) {
           initReadySub = 'Install path missing';
-        } else if (!bucketOk) {
+        } else if (hasBucket && !bucketOk) {
           initReadySub = String(bucketCheck.error || '') || 'PBRemote bucket check failed';
-        } else if (!cmcOk) {
+        } else if (hasCmc && !cmcOk) {
           initReadySub = String(cmcCheck.error || '') || 'CoinMarketCap API key check failed';
         } else if (!fwOk) {
           initReadySub = fwCheck.error || 'Invalid firewall IP';
@@ -10286,15 +10378,21 @@
         cards.push({ key:'setup_ok', label: 'Setup Ready', ok: false, sub: 'No successful setup yet' });
       }
       if (Object.prototype.hasOwnProperty.call(status, 'rclone_ok')) {
-        cards.push({ key:'rclone_ok', label: 'Rclone Ready', ok: !!status.rclone_ok, sub: status.rclone_ok ? 'PBRemote bucket available' : 'PBRemote bucket missing' });
+        const configured = Object.prototype.hasOwnProperty.call(status, 'pbremote_configured') ? !!status.pbremote_configured : true;
+        cards.push(configured
+          ? { key:'rclone_ok', label: 'Rclone Ready', ok: !!status.rclone_ok, sub: status.rclone_ok ? 'PBRemote bucket available' : 'PBRemote bucket missing' }
+          : { key:'rclone_ok', label: 'Rclone Ready', valueHtml: `<span class='dot info'></span>Skipped`, sub: 'PBRemote bucket not configured' });
       }
       if (Object.prototype.hasOwnProperty.call(status, 'coindata_ok')) {
+        const configured = Object.prototype.hasOwnProperty.call(status, 'coindata_configured') ? !!status.coindata_configured : true;
         const credits = status.cmc_credits;
-        let sub = status.coindata_ok ? 'CoinData API OK' : 'CoinData API missing/invalid';
-        if (credits !== null && credits !== undefined && String(credits).trim() !== '') {
+        let sub = configured ? (status.coindata_ok ? 'CoinData API OK' : 'CoinData API missing/invalid') : 'CoinMarketCap API key not configured';
+        if (configured && credits !== null && credits !== undefined && String(credits).trim() !== '') {
           sub = asCountLabel(credits, 'credit left', 'credits left');
         }
-        cards.push({ key:'coindata_ok', label: 'CoinData Ready', ok: !!status.coindata_ok, sub: sub });
+        cards.push(configured
+          ? { key:'coindata_ok', label: 'CoinData Ready', ok: !!status.coindata_ok, sub: sub }
+          : { key:'coindata_ok', label: 'CoinData Ready', valueHtml: `<span class='dot info'></span>Skipped`, sub: sub });
       }
       if (Object.prototype.hasOwnProperty.call(status, 'online')) {
         const telemetryAge = Number(status.telemetry_age);
@@ -10317,7 +10415,7 @@
       return `
         <div class='status-grid'>
           ${cards.map(function (card) {
-            return `<div class='status-item' data-flag='${escAttr(card.key || '')}'><div class='status-label'>${esc(card.label)}</div><div class='status-value'>${boolDot(card.ok)}</div><div class='status-sub'>${esc(card.sub || '')}</div></div>`;
+            return `<div class='status-item' data-flag='${escAttr(card.key || '')}'><div class='status-label'>${esc(card.label)}</div><div class='status-value'>${card.valueHtml || boolDot(card.ok)}</div><div class='status-sub'>${esc(card.sub || '')}</div></div>`;
           }).join('')}
         </div>`;
     }
@@ -10476,11 +10574,11 @@
                 </select>
               </div>
               <div class='field'>
-                <label>PBRemote Bucket</label>
+                <label>PBRemote Bucket (optional)</label>
                 <input type='text' value='${escAttr(ui.form.bucket || '')}' oninput="setVpsField(${js(detail.hostname)}, 'bucket', this.value)">
               </div>
               <div class='field'>
-                <label>CoinMarketCap API Key</label>
+                <label>CoinMarketCap API Key (optional)</label>
                 ${renderVisibilityInput('password', ui.form.coinmarketcap_api_key || '', `setVpsField(${js(detail.hostname)}, 'coinmarketcap_api_key', this.value)`, 'Show or hide CoinMarketCap API key', vpsCoinmarketcapKeyVisibilityKey)}
               </div>
               <div class='field'>
