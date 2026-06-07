@@ -10,6 +10,7 @@ import os
 import psutil
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -39,6 +40,7 @@ PB7_UPSTREAM_REMOTE_URL = "https://github.com/enarjord/passivbot.git"
 SWAP_OPTIONS = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"]
 INIT_METHODS = ["root", "password", "private_key"]
 SESSION_SECRET_TTL_SECONDS = 15 * 60
+IMPORT_KEY_INSTALL_WARNING = "SSH key login is not available yet; saving the import will attempt to install this master's SSH public key for live monitoring."
 # Guardrail: every field listed here is sensitive bootstrap/auth material and
 # must never be written to host JSON or included in normal config/detail payloads.
 SECRET_FIELDS = (
@@ -288,6 +290,83 @@ def _import_process_line_is_legacy(line: str, pbgui_dir: str) -> bool:
     if len(parts) >= 4:
         return parts[2] != "systemd"
     return True
+
+
+def _read_existing_import_public_key() -> tuple[Path, Path, str] | None:
+    """Return an existing default SSH public/private key pair for import monitoring."""
+    ssh_dir = Path.home() / ".ssh"
+    for public_key_path, private_key_path in (
+        (ssh_dir / "id_ed25519.pub", ssh_dir / "id_ed25519"),
+        (ssh_dir / "id_rsa.pub", ssh_dir / "id_rsa"),
+    ):
+        if not public_key_path.exists() or not private_key_path.exists():
+            continue
+        for line in public_key_path.read_text(encoding="utf-8").splitlines():
+            key = line.strip()
+            if key:
+                return public_key_path, private_key_path, key
+    return None
+
+
+def _ensure_import_public_key() -> tuple[Path, str]:
+    """Return a default local public key, generating one when none exists."""
+    existing = _read_existing_import_public_key()
+    if existing:
+        public_key_path, _private_key_path, public_key = existing
+        return public_key_path, public_key
+
+    ssh_keygen = shutil.which("ssh-keygen")
+    if not ssh_keygen:
+        raise RuntimeError("ssh-keygen is required to create an SSH key for VPS monitoring.")
+
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(mode=0o700, exist_ok=True)
+    private_key_path = ssh_dir / "id_ed25519"
+    public_key_path = ssh_dir / "id_ed25519.pub"
+    if private_key_path.exists() and not public_key_path.exists():
+        proc = subprocess.run(
+            [ssh_keygen, "-y", "-f", str(private_key_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        public_key = str(proc.stdout or "").strip()
+        if proc.returncode != 0 or not public_key:
+            output = ((proc.stderr or "") + (proc.stdout or "")).strip()
+            raise RuntimeError(output or f"Could not derive public key from {private_key_path}.")
+        tmp_path = public_key_path.with_suffix(public_key_path.suffix + ".tmp")
+        tmp_path.write_text(public_key + "\n", encoding="utf-8")
+        os.replace(tmp_path, public_key_path)
+        return public_key_path, public_key
+
+    if private_key_path.exists() or public_key_path.exists():
+        raise RuntimeError(f"Incomplete SSH key pair at {private_key_path}; expected both private and public key files.")
+
+    subprocess.run(
+        [ssh_keygen, "-t", "ed25519", "-f", str(private_key_path), "-N", "", "-C", "pbgui-vps-monitor"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    public_key = public_key_path.read_text(encoding="utf-8").strip()
+    if not public_key:
+        raise RuntimeError(f"Generated SSH public key is empty: {public_key_path}")
+    return public_key_path, public_key
+
+
+def _set_import_key_check(probe: dict[str, Any], ok: bool, detail: str) -> None:
+    """Replace the import probe monitoring-key check with the latest result."""
+    checks = probe.get("checks") if isinstance(probe, dict) else None
+    if not isinstance(checks, list):
+        return
+    for check in checks:
+        if isinstance(check, dict) and check.get("label") == "SSH key login for monitoring":
+            check["ok"] = bool(ok)
+            check["detail"] = str(detail or "")
+            return
+    checks.append({"label": "SSH key login for monitoring", "ok": bool(ok), "detail": str(detail or "")})
 
 
 def _now_ts() -> int:
@@ -4182,6 +4261,66 @@ printf 'SECTION\tprocesses\tEND\n'
             except Exception:
                 pass
 
+    def _install_import_monitoring_key(self, *, ssh_host: str, user: str, user_pw: str) -> tuple[bool, str]:
+        """Install this master's SSH public key so imported VPS monitoring can use key auth."""
+        import paramiko
+
+        try:
+            public_key_path, public_key = _ensure_import_public_key()
+        except Exception as exc:
+            return False, str(exc) or "Could not prepare local SSH public key."
+
+        ssh = paramiko.SSHClient()
+        ssh.load_system_host_keys()
+        try:
+            known_hosts = _user_known_hosts_path()
+            if known_hosts.exists():
+                ssh.load_host_keys(str(known_hosts))
+        except Exception:
+            pass
+        ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+        try:
+            ssh.connect(
+                hostname=ssh_host,
+                username=user,
+                password=user_pw,
+                timeout=8,
+                banner_timeout=8,
+                auth_timeout=8,
+                allow_agent=False,
+                look_for_keys=False,
+            )
+            key_literal = shlex.quote(public_key)
+            install_cmd = f"""set -eu
+umask 077
+mkdir -p "$HOME/.ssh"
+touch "$HOME/.ssh/authorized_keys"
+chmod 700 "$HOME/.ssh"
+chmod 600 "$HOME/.ssh/authorized_keys"
+key={key_literal}
+if grep -qxF "$key" "$HOME/.ssh/authorized_keys"; then
+  printf 'SSH key already present in authorized_keys.\n'
+else
+  printf '%s\n' "$key" >> "$HOME/.ssh/authorized_keys"
+  printf 'SSH key added to authorized_keys.\n'
+fi"""
+            rc, out, err = self._exec_import_ssh_command(ssh, install_cmd, timeout=10)
+            if rc != 0:
+                output = ((err or "") + (out or "")).strip()
+                return False, output or "Could not install SSH key on the VPS."
+        except Exception as exc:
+            return False, str(exc) or "Could not install SSH key on the VPS."
+        finally:
+            try:
+                ssh.close()
+            except Exception:
+                pass
+
+        key_auth_ok, key_auth_detail = self._test_import_key_login(ssh_host=ssh_host, user=user)
+        if key_auth_ok:
+            return True, f"Installed {public_key_path}; key authentication succeeded."
+        return False, key_auth_detail or "SSH key was installed, but key authentication still failed."
+
     def probe_existing_vps_import(self, form: dict[str, Any]) -> dict[str, Any]:
         import paramiko
 
@@ -4674,7 +4813,7 @@ done"""
         result["detected"]["key_auth_ok"] = key_auth_ok
         add_check("SSH key login for monitoring", key_auth_ok, key_auth_detail)
         if not key_auth_ok:
-            add_warning("Live monitoring will stay disabled until this master can SSH to the VPS with key authentication.")
+            add_warning(IMPORT_KEY_INSTALL_WARNING)
 
         result["can_save"] = not result["blockers"] and not result["needs_host_key_confirmation"]
         return result
@@ -4705,12 +4844,25 @@ done"""
 
         detected = probe.get("detected") or {}
         user_pw = str(form.get("user_pw") or "")
+        user = str(probe.get("user") or "").strip()
+        if not detected.get("key_auth_ok") and user and user_pw:
+            key_auth_ok, key_auth_detail = self._install_import_monitoring_key(ssh_host=hostname, user=user, user_pw=user_pw)
+            detected["key_auth_ok"] = key_auth_ok
+            _set_import_key_check(probe, key_auth_ok, key_auth_detail)
+            warnings = probe.get("warnings")
+            if isinstance(warnings, list):
+                if key_auth_ok:
+                    probe["warnings"] = [warning for warning in warnings if warning != IMPORT_KEY_INSTALL_WARNING]
+                else:
+                    install_warning = f"Automatic SSH key installation failed: {key_auth_detail}"
+                    if install_warning not in warnings:
+                        warnings.append(install_warning)
         self._store_session_secrets(token, hostname, {"user_pw": user_pw})
 
         vps = VPS()
         vps.hostname = hostname
         vps.ip = str(probe.get("ip") or "").strip()
-        vps.user = str(probe.get("user") or "").strip()
+        vps.user = user
         vps.remote_pbgui_dir = str(detected.get("remote_pbgui_dir") or detected.get("pbgui_dir") or "").strip()
         vps.swap = str(detected.get("swap") or "0") if str(detected.get("swap") or "0") in SWAP_OPTIONS else "0"
         vps.bucket = str(detected.get("bucket") or "")
