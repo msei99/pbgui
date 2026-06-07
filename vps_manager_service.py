@@ -1459,6 +1459,92 @@ class VPSManagerService:
     def _host_meta(self, host_state: dict[str, Any] | None) -> dict[str, Any]:
         return (host_state or {}).get("meta") or {}
 
+    def _sync_vps_config_from_host_meta(self, vps: VPS, host_state: dict[str, Any] | None) -> None:
+        if not vps or not self._host_telemetry_fresh(host_state):
+            return
+        meta = self._host_meta(host_state)
+        changed = False
+        if "pbremote_bucket" in meta:
+            bucket = str(meta.get("pbremote_bucket") or "").strip()
+            if str(vps.bucket or "") != bucket:
+                vps.bucket = bucket
+                changed = True
+        if "coinmarketcap_api_key" in meta:
+            api_key = str(meta.get("coinmarketcap_api_key") or "").strip()
+            if str(vps.coinmarketcap_api_key or "") != api_key:
+                vps.coinmarketcap_api_key = api_key
+                changed = True
+        if changed:
+            vps.save()
+
+    def _refresh_vps_instances_now(self, hostname: str) -> None:
+        monitor = get_monitor()
+        if monitor is None:
+            return
+        host = str(hostname or "").strip()
+        if not host:
+            return
+        try:
+            loop = getattr(monitor, "loop", None)
+            if loop is None or loop.is_closed():
+                return
+            asyncio.run_coroutine_threadsafe(monitor.collect_instances_now(host), loop).result(timeout=30)
+        except Exception as exc:
+            _log(SERVICE, f"immediate instance refresh failed for {host}: {exc}", level="WARNING")
+
+    def _local_v7_dynamic_ignore_enabled_on(self, name: str, hostname: str) -> bool:
+        safe_name = str(name or "").strip()
+        host = str(hostname or "").strip()
+        if not safe_name or not host or safe_name in {".", ".."} or any(ch in safe_name for ch in ("/", "\\", "\x00")):
+            return False
+        config_path = Path(PBGDIR) / "data" / "run_v7" / safe_name / "config.json"
+        if not config_path.is_file():
+            return False
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return False
+        pbgui = cfg.get("pbgui") if isinstance(cfg, dict) else None
+        if not isinstance(pbgui, dict) or not bool(pbgui.get("dynamic_ignore")):
+            return False
+        enabled_on = str(pbgui.get("enabled_on") or "").strip()
+        return not enabled_on or enabled_on == host
+
+    def _running_dynamic_ignore_v7_bots(self, hostname: str, host_state: dict[str, Any] | None) -> list[str]:
+        host = str(hostname or "").strip()
+        out: list[str] = []
+        for instance in (host_state or {}).get("v7_instances") or []:
+            if not _truthy((instance or {}).get("running")):
+                continue
+            name = str((instance or {}).get("name") or "").strip()
+            if not name:
+                continue
+            if _truthy((instance or {}).get("di")) or _truthy((instance or {}).get("dynamic_ignore")):
+                out.append(name)
+                continue
+            if self._local_v7_dynamic_ignore_enabled_on(name, host):
+                out.append(name)
+        return sorted(dict.fromkeys(out))
+
+    def _ensure_coinmarketcap_key_clear_allowed(self, vps: VPS, next_key: str) -> None:
+        if _configured_optional_secret(next_key) or not _configured_optional_secret(vps.coinmarketcap_api_key):
+            return
+        hostname = str(vps.hostname or "").strip()
+        if not hostname:
+            return
+        self._refresh_vps_instances_now(hostname)
+        monitor_state = self._get_monitor_state()
+        host_state = self._get_host_telemetry(monitor_state, hostname)
+        running_dynamic = self._running_dynamic_ignore_v7_bots(hostname, host_state)
+        if not running_dynamic:
+            return
+        names = ", ".join(running_dynamic[:5])
+        suffix = "" if len(running_dynamic) <= 5 else f" and {len(running_dynamic) - 5} more"
+        raise ValueError(
+            "Cannot remove the CoinMarketCap API key while dynamic_ignore bot(s) "
+            f"are running on {hostname}: {names}{suffix}. Stop them first."
+        )
+
     def _refresh_host_meta_now(self, hostname: str, *, include_package_status: bool = True) -> None:
         monitor = get_monitor()
         if monitor is None:
@@ -1926,6 +2012,7 @@ class VPSManagerService:
         self._apply_session_secrets_to_vps(token, vps)
         monitor_state = self._get_monitor_state()
         host_state = self._get_host_telemetry(monitor_state, hostname)
+        self._sync_vps_config_from_host_meta(vps, host_state)
         # Quick detail may be less fresh, but it must not regress fields that
         # were already validated by the full-detail path.
         coindata_ok = bool(self._vps_coindata_status_cache.get(hostname, False)) if quick else False
@@ -1998,6 +2085,7 @@ class VPSManagerService:
                 continue
             managed_hostnames.add(hostname)
             host_state = self._get_host_telemetry(monitor_state, hostname)
+            self._sync_vps_config_from_host_meta(vps, host_state)
             rows.append(self._build_vps_overview_row(pbremote, hostname, host_state))
         return rows
 
@@ -2229,8 +2317,10 @@ class VPSManagerService:
         telemetry_fresh = self._host_telemetry_fresh(host_state)
         telemetry_age = self._host_telemetry_age(host_state)
         host_meta = self._host_meta(host_state)
-        pbremote_configured = _configured_optional_secret(vps.bucket) or bool(host_meta.get("pbremote_configured"))
-        coindata_configured = _configured_optional_secret(vps.coinmarketcap_api_key) or bool(host_meta.get("coindata_configured"))
+        pbremote_meta = host_meta.get("pbremote_configured")
+        coindata_meta = host_meta.get("coindata_configured")
+        pbremote_configured = bool(pbremote_meta) if pbremote_meta is not None else _configured_optional_secret(vps.bucket)
+        coindata_configured = bool(coindata_meta) if coindata_meta is not None else _configured_optional_secret(vps.coinmarketcap_api_key)
         if quick:
             if not ssh_online:
                 ssh_ok = False
@@ -2428,6 +2518,7 @@ class VPSManagerService:
         monitor_state = self._get_monitor_state()
         pbremote = self._ensure_pbremote()
         host_state = self._get_host_telemetry(monitor_state, hostname)
+        self._sync_vps_config_from_host_meta(vps, host_state)
         coindata_ok = bool(self._vps_coindata_status_cache.get(hostname, False)) if quick else False
         if quick:
             self._maybe_auto_sync_api_after_setup(vps)
@@ -3941,9 +4032,19 @@ class VPSManagerService:
         self._apply_session_secrets_to_vps(token, vps)
         if command == COMMAND_VPS_MIGRATE_SYSTEMD and not getattr(vps, "user_pw", None):
             raise ValueError(f"VPS user password missing for {hostname}. It is required for sudo/become during systemd migration.")
+        command_extra_vars = dict(extra_vars or {})
+        if command in {COMMAND_VPS_UPDATE_PBGUI, COMMAND_VPS_UPDATE_PB}:
+            monitor_state = self._get_monitor_state()
+            host_state = self._get_host_telemetry(monitor_state, hostname)
+            self._sync_vps_config_from_host_meta(vps, host_state)
+            host_meta = self._host_meta(host_state)
+            if host_meta.get("pbremote_configured") is False and "bucket" not in command_extra_vars:
+                command_extra_vars["bucket"] = ""
+            if host_meta.get("coindata_configured") is False and "coinmarketcap_api_key" not in command_extra_vars:
+                command_extra_vars["coinmarketcap_api_key"] = ""
         vps.command = command
         vps.command_text = command_text
-        self.vpsmanager.update_vps(vps, debug=debug, extra_vars=extra_vars)
+        self.vpsmanager.update_vps(vps, debug=debug, extra_vars=command_extra_vars or None)
 
     def delete_vps(self, hostname: str) -> None:
         vps = self._require_vps(hostname)
@@ -3953,13 +4054,12 @@ class VPSManagerService:
         self._invalidate_bucket_cleanup_indicator()
 
     def read_vps_settings(self, token: str, hostname: str) -> dict[str, Any]:
-        pbremote = self._ensure_pbremote()
         vps = self._require_vps(hostname)
         vps.user_pw = self._require_user_password(token, hostname)
         if not vps.can_login_ssh():
             raise ValueError("Cannot login via SSH. Please check username and password.")
-        vps.bucket = pbremote.bucket
         info = vps.fetch_vps_info()
+        vps.bucket = str(info.get("bucket") or "")
         vps.coinmarketcap_api_key = info["coinmarketcap"]
         vps.swap = info.get("swap", "0") if info.get("swap") in SWAP_OPTIONS else "0"
         vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
@@ -5024,6 +5124,7 @@ done"""
         vps.swap = swap
         bucket = form.get("bucket") if "bucket" in form else vps.bucket
         coinmarketcap_api_key = form.get("coinmarketcap_api_key") if "coinmarketcap_api_key" in form else vps.coinmarketcap_api_key
+        self._ensure_coinmarketcap_key_clear_allowed(vps, str(coinmarketcap_api_key or "").strip())
         vps.bucket = str(bucket or "").strip()
         vps.coinmarketcap_api_key = str(coinmarketcap_api_key or "").strip()
         install_dir = _normalize_vps_install_dir(form.get("install_dir"), vps.user)

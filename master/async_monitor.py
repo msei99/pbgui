@@ -1848,21 +1848,22 @@ try:
 except Exception: pass
 
 for name, cfg_dir in sorted(running.items()):
-    # config version + enabled_on
-    version = 0; enabled_on = 'disabled'
+    # config version + enabled_on + dynamic_ignore
+    version = 0; enabled_on = 'disabled'; dynamic_ignore = False
     cf = os.path.join(cfg_dir, 'config.json')
     if os.path.isfile(cf):
         try:
             pbgui = json.load(open(cf)).get('pbgui', {})
             version = pbgui.get('version', 0)
             enabled_on = pbgui.get('enabled_on', 'disabled')
+            dynamic_ignore = bool(pbgui.get('dynamic_ignore'))
         except Exception: pass
     rv = 0
     rvf = os.path.join(cfg_dir, 'running_version.txt')
     if os.path.isfile(rvf):
         try: rv = int(open(rvf).read().strip())
         except Exception: pass
-    v7.append({'name': name, 'running': True, 'cv': version, 'eo': enabled_on, 'rv': rv})
+    v7.append({'name': name, 'running': True, 'cv': version, 'eo': enabled_on, 'rv': rv, 'di': dynamic_ignore})
 
     # passivbot monitor dir (for start time)
     monitor_dir = None
@@ -2125,8 +2126,11 @@ try:
 except Exception:
     pass
 
-def configured_value(section, option):
+def config_value(section, option):
     value = str(cfg.get(section, option, fallback='') or '').strip()
+    return value
+
+def configured_text(value):
     if not value:
         return False
     lowered = value.lower()
@@ -2139,8 +2143,10 @@ def configured_value(section, option):
 role = cfg.get('main', 'role', fallback='slave')
 pb7dir = cfg.get('main', 'pb7dir', fallback='')
 pb7venv = cfg.get('main', 'pb7venv', fallback='')
-pbremote_configured = configured_value('pbremote', 'bucket')
-coindata_configured = configured_value('coinmarketcap', 'api_key')
+pbremote_bucket = config_value('pbremote', 'bucket')
+coinmarketcap_api_key = config_value('coinmarketcap', 'api_key')
+pbremote_configured = configured_text(pbremote_bucket)
+coindata_configured = configured_text(coinmarketcap_api_key)
 
 result = {
     'role': role,
@@ -2159,6 +2165,8 @@ result = {
     'pb7py': 'N/A',
     'pbremote_configured': pbremote_configured,
     'coindata_configured': coindata_configured,
+    'pbremote_bucket': pbremote_bucket,
+    'coinmarketcap_api_key': coinmarketcap_api_key,
     'optional_services': {
         'PBRemote': pbremote_configured,
         'PBCoinData': coindata_configured,

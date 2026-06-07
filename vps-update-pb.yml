@@ -105,6 +105,24 @@
         var: pbgui_repo
       tags: debug,never
 
+    - name: Sync PBRemote bucket
+      ini_file:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        section: pbremote
+        option: bucket
+        value: "{{ bucket | default('') | string | trim }}"
+      when: bucket is defined
+      notify: restart pbgui
+
+    - name: Sync CoinMarketCap API key
+      ini_file:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        section: coinmarketcap
+        option: api_key
+        value: "{{ coinmarketcap_api_key | default('') | string | trim }}"
+      when: coinmarketcap_api_key is defined
+      notify: restart pbgui
+
     - name: Get current pb7 branch
       command: git rev-parse --abbrev-ref HEAD
       args:

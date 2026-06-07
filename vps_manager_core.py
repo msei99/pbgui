@@ -452,7 +452,7 @@ class VPS:
         return False
 
     def fetch_vps_info(self):
-        result = {"coinmarketcap": None, "swap": "0"}
+        result = {"bucket": None, "coinmarketcap": None, "swap": "0"}
         if not self.ip or not self.user:
             _log("VPSManager", "Missing VPS IP or username.", level="WARNING")
             return result
@@ -518,6 +518,12 @@ class VPS:
             except Exception as exc:
                 _log("VPSManager", f"Error parsing config file from VPS {self.hostname} ({self.ip}): {exc}", level="WARNING")
                 return result
+
+            if config_data.has_section("pbremote") and config_data.has_option("pbremote", "bucket"):
+                result["bucket"] = config_data.get("pbremote", "bucket")
+                _log("VPSManager", f"Successfully fetched PBRemote bucket from {self.hostname}", level="INFO")
+            else:
+                _log("VPSManager", f"'bucket' not found in [pbremote] section on VPS {self.hostname}", level="WARNING")
 
             if config_data.has_section("coinmarketcap") and config_data.has_option("coinmarketcap", "api_key"):
                 result["coinmarketcap"] = config_data.get("coinmarketcap", "api_key")
@@ -1008,7 +1014,8 @@ class VPSManager:
             "user": vps.user,
             "user_pw": vps.user_pw,
             "swap_size": vps.swap,
-            "coinmarketcap_api_key": vps.coinmarketcap_api_key,
+            "bucket": str(vps.bucket or ""),
+            "coinmarketcap_api_key": str(vps.coinmarketcap_api_key or ""),
             "firewall": vps.firewall,
             "firewall_ssh_port": vps.firewall_ssh_port,
             "firewall_ssh_ips": vps.firewall_ssh_ips.split(","),
