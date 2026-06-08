@@ -1,5 +1,5 @@
 ---
-# Apply optional VPS PBGui configuration without updating code.
+# Apply saved VPS configuration without updating code.
 
 - hosts: "{{ hostname }}"
   gather_facts: yes
@@ -7,6 +7,7 @@
   vars:
     user: "{{ user }}"
     install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
+    ansible_become_password: "{{ user_pw }}"
 
   tasks:
     - name: display facts
@@ -20,7 +21,7 @@
         section: pbremote
         option: bucket
         value: "{{ bucket | default('') | string | trim }}"
-      when: bucket is defined
+      when: apply_optional_config | default(false) | bool
 
     - name: Sync CoinMarketCap API key
       ini_file:
@@ -28,7 +29,7 @@
         section: coinmarketcap
         option: api_key
         value: "{{ coinmarketcap_api_key | default('') | string | trim }}"
-      when: coinmarketcap_api_key is defined
+      when: apply_optional_config | default(false) | bool
 
     - name: Start or stop optional PBGui services
       script: setup/vps_service_control.sh restart PBRemote PBCoinData
@@ -40,8 +41,178 @@
       retries: 8
       delay: 3
       until: pbgui_process_health.rc == 0
+      when: apply_optional_config | default(false) | bool
+
+    - name: Check if swapfile exists
+      stat:
+        path: /swapfile
+      register: swapfile_status
+      when: apply_swap | default(false) | bool
+
+    - name: Remove existing swapfile before resize
+      block:
+        - name: Make sure PBRun is stopped
+          script: setup/vps_service_control.sh stop PBRun
+          environment:
+            PBGUI_DIR: "{{ install_dir }}/pbgui"
+            PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+            PBGUI_USER: "{{ user }}"
+
+        - name: Kill all pb7 processes
+          shell: |
+            pids="$(ps -ef | grep "{{ install_dir }}/pb7/src/main.py" | grep -v grep | awk '{print $2}')"
+            if [ -n "$pids" ]; then
+              kill $pids
+            fi
+          args:
+            executable: /bin/bash
+          changed_when: false
+          ignore_errors: yes
+
+        - name: Disable swapfile
+          command: swapoff /swapfile
+          ignore_errors: yes
+
+        - name: Remove swapfile entry from fstab
+          lineinfile:
+            path: /etc/fstab
+            regexp: '^/swapfile\s+'
+            state: absent
+          ignore_errors: yes
+
+        - name: Remove swapfile
+          file:
+            path: /swapfile
+            state: absent
+      become: yes
+      when:
+        - apply_swap | default(false) | bool
+        - swapfile_status.stat.exists | default(false)
+
+    - name: Create swapfile after resize
+      block:
+        - name: Create swapfile
+          command: fallocate -l {{ swap_size }} /swapfile
+
+        - name: Set permissions on swapfile
+          command: chmod 600 /swapfile
+
+        - name: Make swapfile
+          command: mkswap /swapfile
+
+        - name: Enable swapfile
+          command: swapon /swapfile
+
+        - name: Add swapfile to fstab
+          mount:
+            name: /swapfile
+            src: /swapfile
+            fstype: swap
+            opts: sw
+            state: present
+
+        - name: Set swappiness
+          sysctl:
+            name: vm.swappiness
+            value: 10
+            state: present
+
+        - name: Set vfs_cache_pressure
+          sysctl:
+            name: vm.vfs_cache_pressure
+            value: 50
+            state: present
+      become: yes
+      when:
+        - apply_swap | default(false) | bool
+        - (swap_size | string) != '0'
+
+    - name: Make sure PBRun is running after swap resize
+      script: setup/vps_service_control.sh start PBRun
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"
+      when: apply_swap | default(false) | bool
+
+    - name: Configure firewall
+      block:
+        - name: Disable IPv6
+          lineinfile:
+            dest: /etc/default/ufw
+            regexp: '^IPV6='
+            line: "IPV6=no"
+            state: present
+
+        - name: Reset ufw to default
+          ufw:
+            state: reset
+
+        - name: Allow ssh from any ipv4
+          ufw:
+            rule: allow
+            port: "{{ firewall_ssh_port }}"
+            proto: tcp
+            direction: in
+            state: enabled
+            log: yes
+            from: "0.0.0.0/0"
+            to: "0.0.0.0/0"
+          when: (firewall_ssh_ips | default([]) | reject('equalto', '') | list | length) == 0
+
+        - name: Allow ssh from specific IPs
+          ufw:
+            rule: allow
+            port: "{{ firewall_ssh_port }}"
+            proto: tcp
+            direction: in
+            state: enabled
+            log: yes
+            from_ip: "{{ item }}"
+          loop: "{{ firewall_ssh_ips | default([]) | reject('equalto', '') | list }}"
+          when: (firewall_ssh_ips | default([]) | reject('equalto', '') | list | length) > 0
+      become: yes
+      when:
+        - apply_firewall | default(false) | bool
+        - firewall | bool
+
+    - name: Disable ufw
+      ufw:
+        state: disabled
+      become: yes
+      when:
+        - apply_firewall | default(false) | bool
+        - not (firewall | bool)
+
+    - name: Ufw status verbose
+      command: ufw status verbose
+      become: yes
+      register: ufw_status
+      when: apply_firewall | default(false) | bool
+
+    - name: Store firewall config in pbgui.ini
+      ini_file:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        section: firewall
+        option: "{{ item.option }}"
+        value: "{{ item.value }}"
+      loop:
+        - option: enabled
+          value: "{{ (firewall | bool) | ternary('true', 'false') }}"
+        - option: ssh_port
+          value: "{{ firewall_ssh_port | default(22) }}"
+        - option: ssh_ips
+          value: "{{ firewall_ssh_ips if firewall_ssh_ips is string else (firewall_ssh_ips | default([]) | reject('equalto', '') | list | join(',')) }}"
+      when: apply_firewall | default(false) | bool
 
     - name: print service control result
       debug:
         var: pbgui_process_health
       tags: debug,never
+      when: apply_optional_config | default(false) | bool
+
+    - name: Display ufw status
+      debug:
+        var: ufw_status.stdout_lines
+      tags: debug,never
+      when: apply_firewall | default(false) | bool

@@ -4,7 +4,6 @@ import json
 import os
 import platform
 import re
-import shlex
 import shutil
 import socket
 import subprocess
@@ -54,6 +53,12 @@ def _ansible_envvars() -> dict[str, str]:
 def strip_ansi(text: str) -> str:
     ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     return ansi_escape.sub("", text or "")
+
+
+def _ini_truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _task_log_history_limit() -> int:
@@ -452,7 +457,7 @@ class VPS:
         return False
 
     def fetch_vps_info(self):
-        result = {"bucket": None, "coinmarketcap": None, "swap": "0"}
+        result = {"bucket": None, "coinmarketcap": None, "swap": "0", "firewall": None, "firewall_ssh_port": None, "firewall_ssh_ips": None}
         if not self.ip or not self.user:
             _log("VPSManager", "Missing VPS IP or username.", level="WARNING")
             return result
@@ -530,10 +535,96 @@ class VPS:
                 _log("VPSManager", f"Successfully fetched API key from {self.hostname}", level="INFO")
             else:
                 _log("VPSManager", f"'api_key' not found in [coinmarketcap] section on VPS {self.hostname}", level="WARNING")
+
+            if config_data.has_section("firewall"):
+                result["firewall"] = _ini_truthy(config_data.get("firewall", "enabled", fallback=""))
+                result["firewall_ssh_port"] = config_data.get("firewall", "ssh_port", fallback="").strip() or None
+                result["firewall_ssh_ips"] = config_data.get("firewall", "ssh_ips", fallback="").strip()
         except Exception as exc:
             _log("VPSManager", f"Error connecting to VPS {self.hostname} ({self.ip}): {exc}", level="ERROR")
 
         return result
+
+    def write_vps_firewall_info(self) -> bool:
+        if not self.ip or not self.user:
+            _log("VPSManager", "Missing VPS IP or username.", level="WARNING")
+            return False
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(self.ip, username=self.user, password=self.user_pw, timeout=5)
+            sftp = ssh.open_sftp()
+            try:
+                remote_dirs = []
+                for item in (self.remote_pbgui_dir, "software/pbgui", "pbgui"):
+                    value = str(item or "").strip().rstrip("/")
+                    if value and value not in remote_dirs:
+                        remote_dirs.append(value)
+                remote_path = ""
+                content = ""
+                for remote_dir in remote_dirs:
+                    candidate = f"{remote_dir}/pbgui.ini"
+                    try:
+                        with sftp.file(candidate, mode="r") as config_file:
+                            content = config_file.read().decode()
+                        remote_path = candidate
+                        if remote_dir != self.remote_pbgui_dir:
+                            self.remote_pbgui_dir = remote_dir
+                        break
+                    except FileNotFoundError:
+                        continue
+                if not remote_path:
+                    _log("VPSManager", f"pbgui.ini not found on VPS {self.hostname} ({self.ip})", level="WARNING")
+                    return False
+
+                script = f"""python3 - <<'PY'
+import configparser
+import os
+import tempfile
+
+path = {json.dumps(remote_path)}
+updates = {{
+    'enabled': {json.dumps('true' if self.firewall else 'false')},
+    'ssh_port': {json.dumps(str(self.firewall_ssh_port or 22))},
+    'ssh_ips': {json.dumps(str(self.firewall_ssh_ips or '').strip())},
+}}
+
+config = configparser.ConfigParser()
+config.read(path)
+if not config.has_section('firewall'):
+    config.add_section('firewall')
+for key, value in updates.items():
+    config.set('firewall', key, value)
+
+directory = os.path.dirname(path) or '.'
+fd, tmp = tempfile.mkstemp(prefix='.pbgui.ini.', suffix='.tmp', dir=directory, text=True)
+try:
+    with os.fdopen(fd, 'w') as handle:
+        config.write(handle)
+    os.replace(tmp, path)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+PY"""
+                stdin, stdout, stderr = ssh.exec_command(script, timeout=10)
+                del stdin
+                rc = stdout.channel.recv_exit_status()
+                if rc != 0:
+                    error = stderr.read().decode(errors="ignore").strip()
+                    _log("VPSManager", f"Remote firewall config write failed on {self.hostname}: {error or rc}", level="WARNING")
+                    return False
+                return True
+            finally:
+                try:
+                    sftp.close()
+                finally:
+                    ssh.close()
+        except Exception as exc:
+            _log("VPSManager", f"Failed to write firewall settings to pbgui.ini on {self.hostname}: {exc}", level="WARNING")
+            return False
 
     def fetch_ufw_settings(self, timeout: int = 5) -> tuple:
         allowed_ips = []
@@ -557,9 +648,10 @@ class VPS:
                 allow_agent=False,
             )
 
-            command = f"echo {shlex.quote(self.user_pw)} | sudo -S ufw status"
-            stdin, stdout, stderr = ssh.exec_command(command, timeout=timeout)
-            del stdin
+            command = "LANG=C sudo -S -p '' ufw status"
+            stdin, stdout, stderr = ssh.exec_command(command, timeout=timeout, get_pty=True)
+            stdin.write(self.user_pw + "\n")
+            stdin.flush()
             output = stdout.read().decode(errors="ignore")
             errors = stderr.read().decode(errors="ignore")
             errors = re.sub(r"\[sudo\] password for .*?:\s*", "", errors).strip()
@@ -587,17 +679,41 @@ class VPS:
             else:
                 _log("VPSManager", "Firewall is disabled!", level="WARNING")
 
-            pattern = re.compile(r"^22/tcp\s+ALLOW\s+([0-9.:/A-Za-z]+)", re.IGNORECASE)
+            preferred_port = int(self.firewall_ssh_port or 22)
+            detected_port = None
+            rules: list[tuple[int, str]] = []
+            pattern = re.compile(r"^(\d+)(?:/tcp)?(?:\s+\(v6\))?\s+ALLOW(?:\s+IN)?\s+(.+)$", re.IGNORECASE)
             for line in output.splitlines():
                 line = line.strip()
                 match = pattern.search(line)
                 if match:
-                    ip = match.group(1)
-                    allowed_ips.append(ip)
-                    if ip.lower() in ("anywhere", "anywhere (v6)", "0.0.0.0/0"):
-                        _log("VPSManager", "SSH is open to any IP!", level="WARNING")
+                    try:
+                        port = int(match.group(1))
+                    except Exception:
+                        continue
+                    source = match.group(2).strip()
+                    if source:
+                        rules.append((port, source))
 
-            _log("VPSManager", f"Firewall enabled: {fw_enabled}, Allowed SSH IPs: {allowed_ips}", level="INFO")
+            matching_rules = [item for item in rules if item[0] == preferred_port] or rules
+            if matching_rules:
+                detected_port = matching_rules[0][0]
+                self.firewall_ssh_port = detected_port
+            for port, source in matching_rules:
+                if detected_port is not None and port != detected_port:
+                    continue
+                source_lower = source.lower()
+                if "(v6)" in source_lower:
+                    continue
+                if source_lower.startswith("anywhere") or source_lower == "0.0.0.0/0":
+                    allowed_ips = []
+                    _log("VPSManager", "SSH is open to any IP!", level="WARNING")
+                    break
+                ip = source.split()[0].strip()
+                if ip and ip not in allowed_ips:
+                    allowed_ips.append(ip)
+
+            _log("VPSManager", f"Firewall enabled: {fw_enabled}, SSH port: {self.firewall_ssh_port}, Allowed SSH IPs: {allowed_ips}", level="INFO")
         except paramiko.AuthenticationException:
             _log("VPSManager", f"SSH authentication failed for {self.user}@{self.ip}.", level="ERROR")
         except (paramiko.SSHException, socket.timeout) as exc:

@@ -2130,6 +2130,12 @@ def config_value(section, option):
     value = str(cfg.get(section, option, fallback='') or '').strip()
     return value
 
+def config_bool(section, option, default=False):
+    raw = config_value(section, option)
+    if raw == '':
+        return bool(default)
+    return raw.lower() in ('1', 'true', 'yes', 'on')
+
 def configured_text(value):
     if not value:
         return False
@@ -2145,6 +2151,10 @@ pb7dir = cfg.get('main', 'pb7dir', fallback='')
 pb7venv = cfg.get('main', 'pb7venv', fallback='')
 pbremote_bucket = config_value('pbremote', 'bucket')
 coinmarketcap_api_key = config_value('coinmarketcap', 'api_key')
+firewall_settings_present = cfg.has_section('firewall')
+firewall_enabled = config_bool('firewall', 'enabled', False)
+firewall_ssh_port = config_value('firewall', 'ssh_port') or '22'
+firewall_ssh_ips = config_value('firewall', 'ssh_ips')
 pbremote_configured = configured_text(pbremote_bucket)
 coindata_configured = configured_text(coinmarketcap_api_key)
 
@@ -2167,6 +2177,10 @@ result = {
     'coindata_configured': coindata_configured,
     'pbremote_bucket': pbremote_bucket,
     'coinmarketcap_api_key': coinmarketcap_api_key,
+    'firewall_settings_present': firewall_settings_present,
+    'firewall': firewall_enabled,
+    'firewall_ssh_port': firewall_ssh_port,
+    'firewall_ssh_ips': firewall_ssh_ips,
     'optional_services': {
         'PBRemote': pbremote_configured,
         'PBCoinData': coindata_configured,

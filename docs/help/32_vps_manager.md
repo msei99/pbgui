@@ -94,7 +94,7 @@ Sidebar actions:
 | **Back** | Return from branch/log/setup subviews to the normal VPS detail view |
 | **Task Logs** | Open the dedicated shared log-viewer screen for all stored VPS playbook logs and their history |
 | **Host Logs** | Open the dedicated shared log-viewer screen for VPS service logs and file targets |
-| **Setup VPS** | Open the VPS setup/configuration view |
+| **Change VPS** | Open the VPS configuration view for saved host settings |
 | **PBGui Branch** | Open the PBGui branch management view |
 | **PB7 Branch** | Open the PB7 branch management view |
 | **Initialize** | Run initial VPS setup wizard |
@@ -104,18 +104,16 @@ Sidebar actions:
 | **Update Linux** | Run `apt upgrade` (optional reboot checkbox) |
 | **Reboot VPS** | Restart the VPS |
 | **Cleanup VPS** | Remove old packages and logs |
-| **Resize Swap** | Resize swap file to configured size |
-| **Update Firewall Settings** | Apply ufw firewall rules |
 | **Update CoinData API** | Push updated CoinMarketCap API key |
 
 The **VPS** content area also contains:
-- a setup/config grid for password, swap, bucket, CoinMarketCap key and firewall fields
+- a setup/config grid for password, swap, bucket, CoinMarketCap key and firewall fields; **Apply VPS Changes** saves changes locally and applies changed swap, firewall, PBRemote, and CoinMarketCap settings on the VPS
 - **PBGui Branch Management** and **PB7 Branch Management** with the same switch / update workflow as the Master page
 - a **Remote Monitor** section with server metrics plus PB7 activity data; if live monitor rows are missing, the page still lists running PB7 bot names from `status_v7.json`
 - a **Progress** section with separate status buckets for init, setup and update runs; use the sidebar action buttons to open the shared **Command Log Viewer** whenever you need the full ansible output
 
 The sidebar keeps the detailed log workflows separate from the normal host overview:
-- utility actions such as **Task Logs**, **Host Logs**, **Setup VPS**, **Initialize**, or **Delete VPS** stay above a divider, while the executable ansible playbook buttons are grouped below it
+- utility actions such as **Task Logs**, **Host Logs**, **Change VPS**, **Initialize**, or **Delete VPS** stay above a divider, while the executable ansible playbook buttons are grouped below it
 - **Task Logs** opens a dedicated filtered viewer for all stored playbook logs of the selected VPS, including rotated history files
 - actions such as **Initialize**, **Setup VPS**, **Update PBGui**, **Update PBGui and PB7**, **Update Linux**, **Cleanup VPS**, or **Update CoinData API** switch the main pane to the shared **Command Log Viewer** automatically
 - **Host Logs** opens a dedicated **Host Log Viewer** screen for service logs, running bot logs, and file-style targets such as `sync.log`
@@ -146,11 +144,11 @@ The reveal state is preserved during live updates, so opening an eye button does
    - prepare an Ubuntu VPS
    - add the hostname to your local `/etc/hosts`
    - save the VPS record first
-   - run **Initialize & Setup VPS** from the Add view, or open the host later and finish with **Setup VPS** from the detail page
+   - run **Initialize & Setup VPS** from the Add view, or open the host later and finish the initial setup from the **Change VPS** page
 3. Fill the **Step 4: Initialize & Setup your VPS** form and the **Save VPS Entry** defaults.
 4. Click **Save VPS** to create or update the stored record.
 5. Click **Initialize & Setup VPS** to start the bootstrap run directly from the Add view.
-6. After initialization succeeds, open the VPS detail page and click **Setup VPS** whenever you want to rerun the saved setup.
+6. After initialization succeeds, use **Change VPS** and **Apply VPS Changes** for normal saved setting changes.
 
 ---
 

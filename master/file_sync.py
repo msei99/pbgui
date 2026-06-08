@@ -601,10 +601,31 @@ class FileSyncWorker:
         tmp = LOCAL_API_KEYS.with_suffix(".tmp")
         tmp.write_bytes(raw)
         tmp.replace(LOCAL_API_KEYS)
+        self._remote_content[hostname] = raw
+        self._remote_md5s[hostname] = {"pb7": hashlib.md5(raw).hexdigest()}
+        self._remote_serials[hostname] = remote_serial
+        self._broadcast_current_sync_status()
+        self._save_last_push()
 
         _log(SERVICE, f"[pull] Updated local api-keys.json from {hostname} "
              f"(serial {local_serial} → {remote_serial})")
         return True
+
+    def _broadcast_current_sync_status(self, hostnames: list[str] | None = None) -> None:
+        """Broadcast current API sync status after local content changes."""
+        local_serial = self._read_local_serial()
+        local_md5 = self._compute_local_md5()
+        targets = hostnames or self.pool.connected_hosts()
+        for hostname in targets:
+            entry = self.pool.get_connection(hostname)
+            in_sync = self._check_in_sync(hostname, local_md5, entry)
+            self._broadcast_serial_full(
+                hostname,
+                self._remote_serials.get(hostname),
+                local_serial,
+                in_sync,
+                self._last_push.get(hostname),
+            )
 
     # ── Watchers (inotifywait) ───────────────────────────────
 

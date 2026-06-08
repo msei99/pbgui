@@ -359,6 +359,20 @@
         - { regexp: '<bucket_name>:', replace: "{{ bucket_name }}" }
         - { regexp: '<api_key>', replace: "{{ api_key }}" }
 
+    - name: store firewall config in pbgui.ini
+      ini_file:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        section: firewall
+        option: "{{ item.option }}"
+        value: "{{ item.value }}"
+      loop:
+        - option: enabled
+          value: "{{ (firewall | bool) | ternary('true', 'false') }}"
+        - option: ssh_port
+          value: "{{ firewall_ssh_port | default(22) }}"
+        - option: ssh_ips
+          value: "{{ firewall_ssh_ips if firewall_ssh_ips is string else (firewall_ssh_ips | default([]) | reject('equalto', '') | list | join(',')) }}"
+
     - name: Build enabled PBGui service list
       set_fact:
         pbgui_enabled_services: "{{ ['pbrun'] + (['pbremote'] if (bucket_name | default('') | string | trim) else []) + (['pbcoindata'] if (api_key | default('') | string | trim) else []) }}"

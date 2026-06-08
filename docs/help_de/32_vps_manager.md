@@ -94,7 +94,7 @@ Sidebar-Aktionen:
 | **Back** | Von Branch-/Log-/Setup-Unteransichten zurück zur normalen VPS-Detailansicht |
 | **Task Logs** | Den dedizierten Shared-Log-Viewer für alle gespeicherten VPS-Playbook-Logs inklusive Historie öffnen |
 | **Host Logs** | Den dedizierten Shared-Log-Viewer für VPS-Service-Logs und dateibasierte Ziele öffnen |
-| **Setup VPS** | Die VPS-Setup-/Konfigurationsansicht öffnen |
+| **Change VPS** | Die VPS-Konfigurationsansicht für gespeicherte Host-Einstellungen öffnen |
 | **PBGui Branch** | Die PBGui-Branch-Verwaltung öffnen |
 | **PB7 Branch** | Die PB7-Branch-Verwaltung öffnen |
 | **Initialize** | Ersteinrichtungs-Assistent starten |
@@ -104,18 +104,16 @@ Sidebar-Aktionen:
 | **Update Linux** | `apt upgrade` ausführen (optionale Reboot-Checkbox) |
 | **Reboot VPS** | VPS neu starten |
 | **Cleanup VPS** | Alte Pakete und Logs entfernen |
-| **Resize Swap** | Swap-Datei auf konfigurierte Größe anpassen |
-| **Update Firewall Settings** | ufw-Firewall-Regeln anwenden |
 | **Update CoinData API** | Aktualisierten CoinMarketCap-API-Key übertragen |
 
 Der **VPS**-Inhaltsbereich enthält zusätzlich:
-- ein Setup-/Konfigurationsraster für Passwort, Swap, Bucket, CoinMarketCap-Key und Firewall-Felder
+- ein Setup-/Konfigurationsraster für Passwort, Swap, Bucket, CoinMarketCap-Key und Firewall-Felder; **Apply VPS Changes** speichert Änderungen lokal und wendet geänderte Swap-, Firewall-, PBRemote- und CoinMarketCap-Einstellungen auf der VPS an
 - **PBGui Branch Management** und **PB7 Branch Management** mit demselben Switch-/Update-Workflow wie beim Master
 - einen **Remote Monitor** mit Server-Metriken plus PB7-Aktivität; falls Live-Monitor-Zeilen fehlen, listet die Seite die laufenden PB7-Botnamen weiterhin aus `status_v7.json`
 - einen **Progress**-Bereich mit getrennten Status-Buckets für Init-, Setup- und Update-Läufe; für die vollständige Ansible-Ausgabe werden die Sidebar-Aktionsknöpfe auf den gemeinsamen **Command Log Viewer** umgeschaltet
 
 Die Sidebar trennt die Log-Workflows jetzt bewusst von der normalen Host-Ansicht:
-- Utility-Aktionen wie **Task Logs**, **Host Logs**, **Setup VPS**, **Initialize** oder **Delete VPS** bleiben oberhalb eines Trenners, während die ausführbaren Ansible-Playbook-Knöpfe darunter gruppiert sind
+- Utility-Aktionen wie **Task Logs**, **Host Logs**, **Change VPS**, **Initialize** oder **Delete VPS** bleiben oberhalb eines Trenners, während die ausführbaren Ansible-Playbook-Knöpfe darunter gruppiert sind
 - **Task Logs** öffnet einen eigenen gefilterten Viewer für alle gespeicherten Playbook-Logs des ausgewählten VPS inklusive rotierter Historie
 - Aktionen wie **Initialize**, **Setup VPS**, **Update PBGui**, **Update PBGui and PB7**, **Update Linux**, **Cleanup VPS** oder **Update CoinData API** schalten die Hauptfläche automatisch auf den gemeinsamen **Command Log Viewer** um
 - **Host Logs** öffnet einen eigenen **Host Log Viewer** für Service-Logs, laufende Bot-Logs und dateibasierte Ziele wie `sync.log`
@@ -146,11 +144,11 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
    - Ubuntu-VPS vorbereiten
    - Hostname in die lokale `/etc/hosts` eintragen
    - VPS-Eintrag zuerst speichern
-   - **Initialize & Setup VPS** in der Add-Ansicht ausführen oder den Host später öffnen und **Setup VPS** in der Detailseite abschließen
+   - **Initialize & Setup VPS** in der Add-Ansicht ausführen oder den Host später öffnen und die Ersteinrichtung auf der **Change VPS**-Seite abschließen
 3. Das Formular **Step 4: Initialize & Setup your VPS** und die **Save VPS Entry**-Vorgaben ausfüllen.
 4. Mit **Save VPS** den Eintrag anlegen oder aktualisieren.
 5. Mit **Initialize & Setup VPS** den Bootstrap-Lauf direkt aus der Add-Ansicht starten.
-6. Nach erfolgreicher Initialisierung die VPS-Detailseite öffnen und **Setup VPS** klicken, wenn das gespeicherte Setup erneut ausgeführt werden soll.
+6. Nach erfolgreicher Initialisierung für normale gespeicherte Einstellungsänderungen **Change VPS** und **Apply VPS Changes** verwenden.
 
 ---
 

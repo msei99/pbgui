@@ -2566,6 +2566,86 @@
       transition: background 0.25s ease;
     }
 
+    .read-settings-progress {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--shell-border-2);
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.55);
+    }
+
+    .read-settings-progress.error {
+      border-color: rgba(239, 106, 112, 0.45);
+      background: rgba(239, 106, 112, 0.08);
+    }
+
+    .read-settings-progress-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .read-settings-progress-title {
+      font-weight: 700;
+      color: var(--shell-text);
+    }
+
+    .read-settings-progress-percent {
+      font-weight: 700;
+      color: var(--shell-text);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .read-settings-task-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .read-settings-task {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 28px;
+      padding: 4px 9px;
+      border: 1px solid var(--shell-border-2);
+      border-radius: 999px;
+      color: var(--shell-dim);
+      background: rgba(255, 255, 255, 0.03);
+      font-size: var(--fs-sm);
+    }
+
+    .read-settings-task.done {
+      color: var(--shell-text);
+      border-color: rgba(45, 212, 191, 0.35);
+      background: rgba(45, 212, 191, 0.1);
+    }
+
+    .read-settings-task.running {
+      color: var(--shell-text);
+      border-color: rgba(99, 179, 237, 0.45);
+      background: rgba(99, 179, 237, 0.12);
+    }
+
+    .read-settings-task.error {
+      color: var(--danger);
+      border-color: rgba(239, 106, 112, 0.5);
+      background: rgba(239, 106, 112, 0.12);
+    }
+
+    .read-settings-task-state {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: inherit;
+      opacity: 0.82;
+    }
+
     .page-header {
       margin-bottom: 1rem;
     }
@@ -2898,6 +2978,7 @@
       pendingConfirm: null,
       pendingLocalSudoAction: null,
       pendingSecretReveal: {},
+      suppressVpsDomSyncHost: '',
       selectedOverviewHosts: [],
       selectedOverviewHostsHydrated: false,
       vpsLoggingDeployHosts: [],
@@ -3036,6 +3117,8 @@
         initialized: false,
         debug: false,
         updateReboot: true,
+        readSettingsLoading: false,
+        readSettingsProgress: { current: '', status: '', steps: [] },
         form: {},
         savedForm: {},
         dirtyFields: {},
@@ -3980,6 +4063,16 @@
       if (node.className !== className) node.className = className;
     }
 
+    function isActiveVpsSetupFormField() {
+      if (typeof document === 'undefined') return false;
+      if (store.view !== 'vps-setup' || !store.hostname) return false;
+      const node = document.activeElement;
+      if (!node || typeof node.getAttribute !== 'function') return false;
+      const fieldName = String(node.getAttribute('data-vps-field') || '');
+      if (!fieldName) return false;
+      return String(node.getAttribute('data-vps-host') || '') === String(store.hostname || '');
+    }
+
     function getOverviewVersionCore(ver) {
       return String(ver || '-').split(' /')[0].trim() || '-';
     }
@@ -4309,6 +4402,7 @@
     function syncCurrentVpsFormFromDom(hostname, ui) {
       if (typeof document === 'undefined') return false;
       if (store.view !== 'vps-setup' || store.hostname !== hostname || !ui) return false;
+      if (store.suppressVpsDomSyncHost === hostname) return false;
       const nodes = Array.from(document.querySelectorAll('[data-vps-field]'));
       let changed = false;
       nodes.forEach(function (node) {
@@ -5651,8 +5745,7 @@
         }
         setPasswordPromptStatus('', 'error');
         if (persistToForm) {
-          const ui = ensureVpsUi(hostname, null);
-          ui.form.user_pw = pw;
+          setPromptedVpsUserPassword(hostname, pw);
         }
         const shouldClose = typeof onConfirm === 'function' ? onConfirm(pw) : true;
         if (shouldClose !== false) {
@@ -5768,69 +5861,6 @@
       const showing = input.type === 'text';
       input.type = showing ? 'password' : 'text';
       btn.textContent = showing ? '👁' : '🙈';
-    }
-
-    function openSwapResizePrompt(hostname) {
-      const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
-      const options = (((store.state || {}).config || {}).swap_options || ['0']).map(function (option) {
-        return String(option || '0');
-      });
-      const currentSwap = String((ui.form && ui.form.swap) || (store.detail && store.detail.config && store.detail.config.swap) || '0');
-      document.getElementById('alertModalTitle').textContent = 'Resize Swap';
-      const box = document.getElementById('alertModalBody');
-      box.className = 'notice';
-      box.innerHTML = `
-        <div style="margin-bottom:10px">Select the new swap size for <strong>${esc(hostname)}</strong>.</div>
-        <select id="swap-resize-select" class="sb-select" style="width:100%">
-          ${options.map(function (option) {
-            return `<option value="${escAttr(option)}"${option === currentSwap ? ' selected' : ''}>${esc(option)}</option>`;
-          }).join('')}
-        </select>`;
-      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" id="swap-resize-confirm">Confirm</button>';
-      document.getElementById('alertModalOverlay').classList.add('visible');
-      document.getElementById('swap-resize-confirm').onclick = function () {
-        const select = document.getElementById('swap-resize-select');
-        const swapSize = select ? String(select.value || '0') : '0';
-        ui.form.swap = swapSize;
-        closeAlertModal();
-        runVpsWithLog(hostname, 'vps-resize-swap', 'Resize Swap', { swap_size: swapSize });
-      };
-      setTimeout(function () {
-        const select = document.getElementById('swap-resize-select');
-        if (select) select.focus();
-      }, 100);
-    }
-
-    function openFirewallSettingsPrompt(hostname) {
-      const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
-      document.getElementById('alertModalTitle').textContent = 'Update Firewall Settings';
-      const box = document.getElementById('alertModalBody');
-      box.className = 'notice';
-      box.innerHTML = `
-        <div style="display:grid;gap:12px">
-          <label class="checkbox-row"><input type="checkbox" id="fw-enable-input" ${ui.form.firewall ? 'checked' : ''}> Enable UFW</label>
-          <div>
-            <label style="display:block;margin-bottom:6px">SSH Port</label>
-            <input type="number" id="fw-port-input" value="${escAttr(ui.form.firewall_ssh_port || 22)}" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none">
-          </div>
-          <div>
-            <label style="display:block;margin-bottom:6px">Allowed SSH IPs</label>
-            <input type="text" id="fw-ips-input" value="${escAttr(ui.form.firewall_ssh_ips || '')}" placeholder="198.51.100.1, 203.0.113.7" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none">
-          </div>
-        </div>`;
-      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" id="fw-confirm">Confirm</button>';
-      document.getElementById('alertModalOverlay').classList.add('visible');
-      document.getElementById('fw-confirm').onclick = function () {
-        ui.form.firewall = !!document.getElementById('fw-enable-input').checked;
-        ui.form.firewall_ssh_port = document.getElementById('fw-port-input').value || 22;
-        ui.form.firewall_ssh_ips = document.getElementById('fw-ips-input').value || '';
-        closeAlertModal();
-        runVpsWithLog(hostname, 'vps-update-firewall', 'Update Firewall Settings');
-      };
-      setTimeout(function () {
-        const input = document.getElementById('fw-port-input');
-        if (input) input.focus();
-      }, 100);
     }
 
     function openCoinDataPrompt(hostname) {
@@ -6588,6 +6618,36 @@
       scheduleVpsDetailFetch(hostname);
     }
 
+    function updateReadSettingsProgress(hostname, data, options) {
+      const host = String(hostname || '');
+      if (!host) return;
+      const ui = ensureVpsUi(host, store.detail && store.detail.hostname === host ? store.detail : null);
+      const step = String((data || {}).step || 'progress');
+      const label = String((data || {}).label || step);
+      const status = String((data || {}).status || 'running');
+      const progress = ui.readSettingsProgress || { current: '', status: '', steps: [] };
+      const steps = Array.isArray(progress.steps) ? progress.steps.map(function (item) { return Object.assign({}, item || {}); }) : [];
+      if (status === 'running' || status === 'done') {
+        steps.forEach(function (item) {
+          if (String(item.status || '') === 'running') item.status = 'done';
+        });
+      }
+      const existingIndex = steps.findIndex(function (item) { return String((item || {}).step || '') === step; });
+      const entry = { step: step, label: label, status: status };
+      if (existingIndex >= 0) {
+        steps[existingIndex] = entry;
+      } else {
+        steps.push(entry);
+      }
+      ui.readSettingsProgress = { current: step, label: label, status: status, steps: steps };
+      if (status === 'done' || status === 'error') {
+        ui.readSettingsLoading = false;
+      }
+      if (!options || options.render !== false) {
+        renderUi({ forceSidebarActions: true, forceView: isVpsContextView() && store.hostname === host });
+      }
+    }
+
     function handleMessage(msg) {
       if (!msg || typeof msg !== 'object') return;
       if (msg.type === 'state') {
@@ -6669,6 +6729,10 @@
         renderUi({ forceSidebarActions: true, forceView: true });
         return;
       }
+      if (msg.type === 'vps_read_settings_progress') {
+        updateReadSettingsProgress(msg.hostname || store.hostname, msg);
+        return;
+      }
       if (msg.type === 'result') {
         handleResult(msg);
         return;
@@ -6732,6 +6796,11 @@
         }
         if (msg.cmd === 'dry_run_bucket_cleanup' || msg.cmd === 'run_bucket_cleanup') {
           setBucketCleanupActionLoading(false);
+        }
+        if (msg.cmd === 'read_vps_settings' && store.hostname && store.vps[store.hostname]) {
+          store.vps[store.hostname].readSettingsLoading = false;
+          updateReadSettingsProgress(store.hostname, { step: 'error', label: msg.error || 'Read VPS settings failed.', status: 'error' }, { render: false });
+          renderUi({ forceSidebarActions: true, forceView: true });
         }
         toast(msg.error || 'Unknown error', 'error');
         return;
@@ -7022,7 +7091,7 @@
       } else if (cmd === 'save_vps_config') {
         const remoteApply = (msg.data || {}).remote_apply || {};
         if (remoteApply.started) {
-          toast('VPS configuration saved. Applying optional settings on the VPS...', 'success');
+          toast('VPS configuration saved. Applying settings on the VPS...', 'success');
         } else if (remoteApply.error) {
           toast('VPS configuration saved locally. Remote apply could not start: ' + remoteApply.error, 'warning');
         } else {
@@ -7151,15 +7220,27 @@
         return;
       } else if (cmd === 'read_vps_settings') {
         if (isVpsContextView() && store.hostname && msg.data) {
-          const ui = ensureVpsUi(store.hostname, store.detail && store.detail.hostname === store.hostname ? store.detail : null);
+          const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
+          const ui = ensureVpsUi(store.hostname, detail);
           const pw = ui.form.user_pw;
-          ui.form = Object.assign({}, ui.form, msg.data);
+          const nextConfig = Object.assign({}, (detail || {}).config || {}, msg.data || {});
+          if (detail) {
+            store.detail = Object.assign({}, detail, { config: nextConfig });
+          }
+          ui.form = Object.assign({}, nextConfig);
           if (pw) ui.form.user_pw = pw;
           ui.savedForm = Object.assign({}, ui.form);
           ui.dirtyFields = {};
-          renderUi({ forceSidebarActions: true, forceView: true });
+          ui.readSettingsLoading = false;
+          store.suppressVpsDomSyncHost = store.hostname;
+          try {
+            renderUi({ forceSidebarActions: true, forceView: true });
+          } finally {
+            store.suppressVpsDomSyncHost = '';
+          }
         }
         toast('VPS settings refreshed.', 'success');
+        return;
       } else if (cmd === 'delete_vps') {
         toast('VPS deleted.', 'success');
         resetBucketCleanupIndicator();
@@ -7882,8 +7963,32 @@
       selectView('add');
     }
 
+    function vpsFirewallSettingsChanged(form, savedForm) {
+      const current = form || {};
+      const saved = savedForm || {};
+      return !!current.firewall !== !!saved.firewall
+        || String(current.firewall_ssh_port || 22) !== String(saved.firewall_ssh_port || 22)
+        || String(current.firewall_ssh_ips || '').trim() !== String(saved.firewall_ssh_ips || '').trim();
+    }
+
+    function vpsSwapSettingsChanged(form, savedForm) {
+      const current = form || {};
+      const saved = savedForm || {};
+      return String(current.swap || '0') !== String(saved.swap || '0');
+    }
+
     function saveVpsConfig(hostname) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
+      if ((vpsFirewallSettingsChanged(ui.form, ui.savedForm) || vpsSwapSettingsChanged(ui.form, ui.savedForm)) && !String(getEffectiveVpsUserPw(hostname) || '').trim() && !hasSessionSecret(hostname, 'user_pw')) {
+        openPasswordPrompt(hostname, function () {
+          saveVpsConfig(hostname);
+        }, {
+          title: 'VPS User Password Required',
+          message: 'Enter the VPS user password to apply the saved changes on the VPS:',
+          confirmLabel: 'Apply Changes'
+        });
+        return;
+      }
       send({ cmd: 'save_vps_config', hostname: hostname, form: buildSecretAwareForm(hostname, ui.form) });
     }
 
@@ -8429,8 +8534,51 @@
       send({ cmd: 'setup_vps', hostname: hostname, form: buildSecretAwareForm(hostname, ui.form), debug: !!ui.debug });
     }
 
+    function setPromptedVpsUserPassword(hostname, password) {
+      const host = String(hostname || '');
+      const pw = String(password || '');
+      const previousSuppressedHost = store.suppressVpsDomSyncHost;
+      store.suppressVpsDomSyncHost = host;
+      try {
+        const ui = ensureVpsUi(host, store.detail && store.detail.hostname === host ? store.detail : null);
+        ui.form.user_pw = pw;
+        if (typeof document !== 'undefined') {
+          const input = Array.from(document.querySelectorAll('[data-vps-field="user_pw"]')).find(function (node) {
+            return String(node.getAttribute('data-vps-host') || '') === host;
+          });
+          if (input) input.value = pw;
+        }
+        return ui;
+      } finally {
+        store.suppressVpsDomSyncHost = previousSuppressedHost || '';
+      }
+    }
+
     function refreshVpsSettings(hostname) {
-      send({ cmd: 'read_vps_settings', hostname: hostname });
+      const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
+      if (ui.readSettingsLoading) return;
+      if (!String(getEffectiveVpsUserPw(hostname) || '').trim() && !hasSessionSecret(hostname, 'user_pw')) {
+        openPasswordPrompt(hostname, function (pw) {
+          setPromptedVpsUserPassword(hostname, pw);
+          setTimeout(function () {
+            refreshVpsSettings(hostname);
+          }, 0);
+        }, {
+          title: 'VPS User Password Required',
+          message: 'Enter the VPS user password to read the VPS settings:',
+          confirmLabel: 'Read Settings'
+        });
+        return;
+      }
+      ui.readSettingsLoading = true;
+      ui.readSettingsProgress = {
+        current: 'queued',
+        label: 'Queued settings refresh',
+        status: 'running',
+        steps: [{ step: 'queued', label: 'Queued settings refresh', status: 'running' }]
+      };
+      renderUi({ forceSidebarActions: true, forceView: true });
+      send({ cmd: 'read_vps_settings', hostname: hostname, form: buildSecretAwareForm(hostname, ui.form) });
     }
 
     function fetchVpsLog(hostname) {
@@ -9120,7 +9268,7 @@
           ${store.view !== 'vps' ? `<button class='sb-btn' type='button' onclick='selectView("vps", ${js(selectedHost)})'>Back</button>` : ''}
           <button class='sb-btn' type='button' onclick='openVpsTaskLogs(${js(selectedHost)})'>Task Logs</button>
           <button class='sb-btn' type='button' onclick='openVpsHostLogs(${js(selectedHost)})'>Host Logs</button>
-          <button class='sb-btn' type='button' onclick='selectView("vps-setup", ${js(selectedHost)})'>Setup VPS</button>
+          <button class='sb-btn' type='button' onclick='selectView("vps-setup", ${js(selectedHost)})'>Change VPS</button>
           <button class='sb-btn' type='button' onclick='selectView("vps-pbgui-branch", ${js(selectedHost)})'>PBGui Branch</button>
           <button class='sb-btn' type='button' onclick='selectView("vps-pb7-branch", ${js(selectedHost)})'>PB7 Branch</button>
           <button class='sb-btn' type='button' onclick='openExistingAsInit(${js(selectedHost)})'>Initialize</button>
@@ -9138,8 +9286,6 @@
           <button class='${linuxUpdateBtnClass}' type='button' onclick='updateLinuxVpsAction(${js(selectedHost)})'>Update Linux</button>
           <button class='${rebootBtnClass}' type='button' onclick='vpsActionWithPw(${js(selectedHost)}, "vps-reboot", "Reboot VPS")'>Reboot VPS</button>
           <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='vpsActionWithPw(${js(selectedHost)}, "vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
-          <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='openSwapResizePrompt(${js(selectedHost)})'>Resize Swap</button>
-          <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='openFirewallSettingsPrompt(${js(selectedHost)})'>Update Firewall Settings</button>
           <button class='sb-btn' type='button' onclick='openCoinDataPrompt(${js(selectedHost)})'>Update CoinData API</button>
           <button class='${systemdMigrationBtn.className}' type='button' title='${escAttr(systemdMigrationBtn.title)}' onclick='previewVpsSystemdMigration(${js(selectedHost)})'>${esc(systemdMigrationBtn.text)}</button>`;
       } else if (store.view === 'add') {
@@ -10556,6 +10702,75 @@
         </div>`;
     }
 
+    function renderReadSettingsProgress(ui) {
+      const progress = (ui || {}).readSettingsProgress || {};
+      const steps = Array.isArray(progress.steps) ? progress.steps : [];
+      if (!steps.length) return '';
+      const current = String(progress.current || '');
+      const status = String(progress.status || 'running');
+      const expectedTasks = [
+        { step: 'queued', label: 'Queued' },
+        { step: 'start', label: 'Prepare' },
+        { step: 'password', label: 'Password' },
+        { step: 'ssh', label: 'Connect' },
+        { step: 'remote_config', label: 'Config' },
+        { step: 'firewall', label: 'Firewall' },
+        { step: 'save', label: 'Save' },
+        { step: 'done', label: 'Done' }
+      ];
+      const seenByStep = {};
+      steps.forEach(function (item) {
+        const step = String((item || {}).step || '');
+        if (step) seenByStep[step] = item || {};
+      });
+      const tasks = expectedTasks.map(function (task) {
+        const seen = seenByStep[task.step] || null;
+        return {
+          step: task.step,
+          label: seen && seen.label ? String(seen.label) : task.label,
+          status: seen ? String(seen.status || 'running') : (status === 'done' ? 'done' : 'pending')
+        };
+      });
+      steps.forEach(function (item) {
+        const step = String((item || {}).step || '');
+        if (step && !expectedTasks.some(function (task) { return task.step === step; })) {
+          tasks.push({
+            step: step,
+            label: String((item || {}).label || step),
+            status: String((item || {}).status || 'running')
+          });
+        }
+      });
+      const doneCount = tasks.filter(function (item) { return String(item.status || '') === 'done'; }).length;
+      const percent = status === 'done'
+        ? 100
+        : Math.max(status === 'error' ? 0 : 5, Math.min(99, Math.round((doneCount / Math.max(1, tasks.length)) * 100)));
+      const color = status === 'error' ? 'var(--danger)' : (status === 'done' ? 'var(--ok)' : 'var(--accent)');
+      const title = status === 'done'
+        ? 'Read VPS settings completed'
+        : (status === 'error' ? 'Read VPS settings failed' : 'Reading VPS settings...');
+      const currentEntry = steps.find(function (item) { return String((item || {}).step || '') === current; }) || steps[steps.length - 1] || {};
+      const currentLabel = String(currentEntry.label || progress.label || title);
+      return `
+        <div class='read-settings-progress ${status === 'error' ? 'error' : ''}'>
+          <div class='read-settings-progress-head'>
+            <div>
+              <div class='read-settings-progress-title'>${esc(title)}</div>
+              <div class='field-help'>${esc(currentLabel)}</div>
+            </div>
+            <div class='read-settings-progress-percent'>${esc(String(percent))}%</div>
+          </div>
+          <div class='deploy-progress-bar'><div class='deploy-progress-fill' style='width:${escAttr(String(percent))}%;background:${escAttr(color)}'></div></div>
+          <div class='read-settings-task-grid'>
+            ${tasks.map(function (item) {
+              const itemStatus = String(item.status || 'pending');
+              const stateLabel = itemStatus === 'done' ? 'Done' : (itemStatus === 'error' ? 'Error' : (itemStatus === 'running' ? 'Active' : 'Open'));
+              return `<div class='read-settings-task ${escAttr(itemStatus)}'><span>${esc(item.label || '')}</span><span class='read-settings-task-state'>${esc(stateLabel)}</span></div>`;
+            }).join('')}
+          </div>
+        </div>`;
+    }
+
     function renderVpsView() {
       const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
       if (!detail) {
@@ -10598,12 +10813,14 @@
       const summary = status.summary_row || {};
       const canSetup = canSetupForm(Object.assign({ hostname: detail.hostname }, ui.form || {}));
       const canSave = canSaveForm(ui.form || {}, ui.savedForm);
+      const readSettingsLoading = !!ui.readSettingsLoading;
+      const setupPending = !status.setup_ok && !(summary || {}).pbgui;
       const formHostAttr = `data-vps-host='${escAttr(detail.hostname)}'`;
       const vpsUserPwVisibilityKey = 'vps:' + detail.hostname + ':user_pw';
       const vpsCoinmarketcapKeyVisibilityKey = 'vps:' + detail.hostname + ':coinmarketcap_api_key';
       return `
 
-        <h2 class='page-section-title'>${esc(detail.hostname)} &mdash; Setup VPS</h2>
+        <h2 class='page-section-title'>${esc(detail.hostname)} &mdash; Change VPS</h2>
         <div class='panel'>
           <div class='panel-head'>
             <div>
@@ -10619,8 +10836,8 @@
         <div class='panel'>
           <div class='panel-head'>
             <div>
-              <div class='panel-title'>Setup VPS</div>
-              <div class='panel-sub'>Adjust the saved VPS settings, then run Setup VPS.</div>
+              <div class='panel-title'>Change VPS</div>
+              <div class='panel-sub'>Adjust the saved VPS settings. Apply VPS Changes saves them locally and runs the required remote changes.</div>
             </div>
           </div>
           <div class='panel-body'>
@@ -10665,10 +10882,11 @@
               </div>
             </div>
             <div class='button-row'>
-              <button class='btn ghost' type='button' onclick='refreshVpsSettings(${js(detail.hostname)})'>Read VPS settings</button>
-              <button class='btn' id='vps-save-btn' type='button' ${canSave ? '' : 'disabled'} onclick='saveVpsConfig(${js(detail.hostname)})'>Save VPS</button>
-              <button class='btn ok' id='vps-setup-btn' type='button' ${canSetup ? '' : 'disabled'} onclick='setupVps(${js(detail.hostname)})'>Setup VPS</button>
+              <button class='btn ghost' type='button' ${readSettingsLoading ? 'disabled' : ''} onclick='refreshVpsSettings(${js(detail.hostname)})'>${readSettingsLoading ? 'Reading...' : 'Read VPS settings'}</button>
+              <button class='btn ok' id='vps-save-btn' type='button' ${canSave ? '' : 'disabled'} onclick='saveVpsConfig(${js(detail.hostname)})'>Apply VPS Changes</button>
+              ${setupPending ? `<button class='btn' id='vps-setup-btn' type='button' ${canSetup ? '' : 'disabled'} onclick='setupVps(${js(detail.hostname)})'>Initial Setup VPS</button>` : ''}
             </div>
+            ${renderReadSettingsProgress(ui)}
           </div>
         </div>`;
     }
@@ -11120,7 +11338,8 @@
       renderSummaryBar();
       const holdPb7BranchView = store.pb7BranchSelectInteracting && isPb7BranchView();
       const holdPbguiBranchView = store.pbguiBranchSelectInteracting && isPbguiBranchView();
-      if (!holdPb7BranchView && !holdPbguiBranchView) {
+      const holdVpsSetupFieldView = !opts.forceView && isActiveVpsSetupFormField();
+      if (!holdPb7BranchView && !holdPbguiBranchView && !holdVpsSetupFieldView) {
         renderView(!!opts.forceView);
       }
       if (!holdPb7BranchView && !holdPbguiBranchView && store.view === 'master-pb7-branch' && store.detail && store.detail.kind === 'master') {

@@ -20,7 +20,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 import yaml
 
 from api.vps import get_monitor, get_monitor_state_snapshot, get_metric_history_snapshot
@@ -1537,6 +1537,19 @@ class VPSManagerService:
             sync_optional_field("pbremote_bucket", "bucket", "bucket")
         if "coinmarketcap_api_key" in meta:
             sync_optional_field("coinmarketcap_api_key", "coinmarketcap_api_key", "coinmarketcap_api_key")
+        if _truthy(meta.get("firewall_settings_present")):
+            remote_firewall = _truthy(meta.get("firewall"))
+            remote_firewall_port = _safe_int(meta.get("firewall_ssh_port"), 22)
+            remote_firewall_ips = str(meta.get("firewall_ssh_ips") or "").strip()
+            if bool(getattr(vps, "firewall", False)) != remote_firewall:
+                vps.firewall = remote_firewall
+                changed = True
+            if _safe_int(getattr(vps, "firewall_ssh_port", 22), 22) != remote_firewall_port:
+                vps.firewall_ssh_port = remote_firewall_port
+                changed = True
+            if str(getattr(vps, "firewall_ssh_ips", "") or "").strip() != remote_firewall_ips:
+                vps.firewall_ssh_ips = remote_firewall_ips
+                changed = True
         if remaining_pending != pending:
             self._write_vps_optional_config_pending(vps, remaining_pending)
         if changed:
@@ -2451,10 +2464,11 @@ class VPSManagerService:
         systemctl_exists = values.get("systemctl_exists") == "yes"
         user_manager_ok = values.get("systemd_user_manager") == "yes"
         start_sh_exists = values.get("start_sh_exists") == "yes"
-        units_missing = [item for item in units if item.get("exists") != "yes"]
-        units_not_enabled = [item for item in units if item.get("enabled") != "enabled"]
-        units_inactive = [item for item in units if item.get("active") != "active"]
-        units_ready = bool(units) and not units_missing and not units_not_enabled and not units_inactive
+        required_units = self._systemd_migration_required_units(units, values)
+        units_missing = [item for item in required_units if item.get("exists") != "yes"]
+        units_not_enabled = [item for item in required_units if item.get("enabled") != "enabled"]
+        units_inactive = [item for item in required_units if item.get("active") != "active"]
+        units_ready = bool(required_units) and not units_missing and not units_not_enabled and not units_inactive
         blockers = []
         if not pbgui_exists:
             blockers.append("PBGui directory missing")
@@ -2477,6 +2491,20 @@ class VPSManagerService:
             "error": "",
             "blockers": blockers,
         }
+
+    def _systemd_migration_required_units(self, units: list[dict[str, str]], values: dict[str, str]) -> list[dict[str, str]]:
+        """Return systemd units required for currently configured optional services."""
+        pbremote_configured = values.get("pbremote_configured") == "yes"
+        coindata_configured = values.get("coindata_configured") == "yes"
+        required: list[dict[str, str]] = []
+        for item in units:
+            unit = item.get("unit")
+            if unit == "pbgui-pbremote.service" and not pbremote_configured:
+                continue
+            if unit == "pbgui-pbcoindata.service" and not coindata_configured:
+                continue
+            required.append(item)
+        return required
 
     def _get_vps_systemd_migration_status(self, vps: VPS, host_state: dict[str, Any], *, quick: bool = False) -> dict[str, Any]:
         hostname = str(vps.hostname or "").strip()
@@ -4112,18 +4140,22 @@ class VPSManagerService:
         vps.command_text = command_text
         self.vpsmanager.update_vps(vps, debug=debug, extra_vars=command_extra_vars or None)
 
-    def _start_vps_optional_config_apply(self, token: str, vps: VPS) -> dict[str, Any]:
+    def _start_vps_optional_config_apply(self, token: str, vps: VPS, *, apply_optional_config: bool, apply_firewall: bool, apply_swap: bool = False) -> dict[str, Any]:
         self._apply_session_secrets_to_vps(token, vps)
         vps.command = COMMAND_VPS_APPLY_CONFIG
         vps.command_text = "Apply VPS Config"
         extra_vars = {
-            "bucket": str(getattr(vps, "bucket", "") or "").strip(),
-            "coinmarketcap_api_key": str(getattr(vps, "coinmarketcap_api_key", "") or "").strip(),
+            "apply_optional_config": bool(apply_optional_config),
+            "apply_firewall": bool(apply_firewall),
+            "apply_swap": bool(apply_swap),
         }
+        if apply_optional_config:
+            extra_vars["bucket"] = str(getattr(vps, "bucket", "") or "").strip()
+            extra_vars["coinmarketcap_api_key"] = str(getattr(vps, "coinmarketcap_api_key", "") or "").strip()
         try:
             self.vpsmanager.update_vps(vps, debug=False, extra_vars=extra_vars)
         except Exception as exc:
-            _log(SERVICE, f"failed to start VPS optional config apply for {vps.hostname}: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
+            _log(SERVICE, f"failed to start VPS config apply for {vps.hostname}: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
             return {
                 "started": False,
                 "command": COMMAND_VPS_APPLY_CONFIG,
@@ -4150,18 +4182,34 @@ class VPSManagerService:
         self._set_vps_monitor_enabled(hostname, enabled=False)
         self._invalidate_bucket_cleanup_indicator()
 
-    def read_vps_settings(self, token: str, hostname: str) -> dict[str, Any]:
+    def read_vps_settings(self, token: str, hostname: str, form: dict[str, Any] | None = None, progress: Callable[[str, str, str], None] | None = None) -> dict[str, Any]:
+        def emit(step: str, label: str, status: str = "running") -> None:
+            if progress:
+                progress(step, label, status)
+
+        emit("start", "Preparing settings refresh")
         vps = self._require_vps(hostname)
+        form = form or {}
+        emit("password", "Checking VPS password")
+        self._store_session_secrets(token, hostname, form)
         vps.user_pw = self._require_user_password(token, hostname)
+        emit("ssh", "Connecting to VPS")
         if not vps.can_login_ssh():
             raise ValueError("Cannot login via SSH. Please check username and password.")
+        emit("remote_config", "Reading remote pbgui.ini")
         info = vps.fetch_vps_info()
         vps.bucket = str(info.get("bucket") or "")
         vps.coinmarketcap_api_key = info["coinmarketcap"]
         vps.swap = info.get("swap", "0") if info.get("swap") in SWAP_OPTIONS else "0"
+        if info.get("firewall_ssh_port") is not None:
+            vps.firewall_ssh_port = _safe_int(info.get("firewall_ssh_port"), 22)
+        emit("firewall", "Reading UFW firewall settings")
         vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
+        emit("save", "Saving refreshed VPS settings")
         vps.save()
+        vps.write_vps_firewall_info()
         self._clear_vps_optional_config_pending(vps)
+        emit("done", "VPS settings refreshed", "done")
         return self._build_vps_config(token, vps)
 
     def preview_vps_systemd_migration(self, token: str, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
@@ -4228,10 +4276,11 @@ class VPSManagerService:
         systemctl_exists = values.get("systemctl_exists") == "yes"
         user_manager_ok = values.get("systemd_user_manager") == "yes"
         start_sh_exists = values.get("start_sh_exists") == "yes"
-        units_missing = [item for item in units if item.get("exists") != "yes"]
-        units_not_enabled = [item for item in units if item.get("enabled") != "enabled"]
-        units_inactive = [item for item in units if item.get("active") != "active"]
-        units_ready = bool(units) and not units_missing and not units_not_enabled and not units_inactive
+        required_units = self._systemd_migration_required_units(units, values)
+        units_missing = [item for item in required_units if item.get("exists") != "yes"]
+        units_not_enabled = [item for item in required_units if item.get("enabled") != "enabled"]
+        units_inactive = [item for item in required_units if item.get("active") != "active"]
+        units_ready = bool(required_units) and not units_missing and not units_not_enabled and not units_inactive
         blockers: list[str] = []
         if not pbgui_exists:
             blockers.append(f"PBGui directory not found: {pbgui_dir}")
@@ -4245,9 +4294,10 @@ class VPSManagerService:
             warnings.append("The systemd user manager is not active yet. Migration will enable linger and start it.")
 
         migration_complete = bool(pbgui_exists and python_exists and systemctl_exists and user_manager_ok and units_ready and not processes and not cron_lines and not start_sh_exists)
+        required_unit_names = [item.get("unit") or "" for item in required_units if item.get("unit")]
         actions = [
             {"label": "Copy/update systemd setup helper", "needed": not migration_complete, "detail": f"{pbgui_dir}/setup/setup_systemd.sh"},
-            {"label": "Install/enable/start systemd units", "needed": bool(units_missing or units_not_enabled or units_inactive), "detail": ", ".join(VPS_SYSTEMD_MIGRATION_UNITS)},
+            {"label": "Install/enable/start required systemd units", "needed": bool(units_missing or units_not_enabled or units_inactive), "detail": ", ".join(required_unit_names) or "No required units"},
             {"label": "Stop legacy PBGui processes", "needed": bool(processes), "detail": f"{len(processes)} matching process(es)" if processes else "No matching legacy processes found"},
             {"label": "Remove legacy pbgui crontab", "needed": bool(cron_lines), "detail": f"{len(cron_lines)} matching crontab line(s)" if cron_lines else "No matching crontab lines found"},
             {"label": "Delete legacy start.sh", "needed": bool(start_sh_exists), "detail": f"{pbgui_dir}/start.sh"},
@@ -4291,6 +4341,23 @@ printf 'KV\tpython_exists\t%s\n' "$([ -x "$python_bin" ] && printf yes || printf
 printf 'KV\tstart_sh_exists\t%s\n' "$([ -e "$pbgui_dir/start.sh" ] && printf yes || printf no)"
 printf 'KV\tsystemctl_exists\t%s\n' "$([ -n "$systemctl_path" ] && printf yes || printf no)"
 printf 'KV\tsystemctl_path\t%s\n' "$systemctl_path"
+PBGUI_CONFIG_PATH="$pbgui_dir/pbgui.ini" python3 - <<'PY' 2>/dev/null || {{ printf 'KV\tpbremote_configured\tno\n'; printf 'KV\tcoindata_configured\tno\n'; }}
+import configparser
+import os
+
+config = configparser.ConfigParser()
+config.read(os.environ.get('PBGUI_CONFIG_PATH') or '')
+
+def configured(value):
+    normalized = str(value or '').strip()
+    lowered = normalized.lower()
+    if not normalized or lowered in {{'none', 'null', 'false', '<api_key>', '<bucket_name>', '<bucket_name>:'}}:
+        return False
+    return not normalized.startswith('<')
+
+print('KV\tpbremote_configured\t' + ('yes' if configured(config.get('pbremote', 'bucket', fallback='')) else 'no'))
+print('KV\tcoindata_configured\t' + ('yes' if configured(config.get('coinmarketcap', 'api_key', fallback='')) else 'no'))
+PY
 if [ -n "$systemctl_path" ] && env XDG_RUNTIME_DIR="${{XDG_RUNTIME_DIR:-/run/user/$uid}}" systemctl --user show-environment >/dev/null 2>&1; then
   printf 'KV\tsystemd_user_manager\tyes\n'
   printf 'KV\tsystemd_user_manager_detail\tactive\n'
@@ -4344,8 +4411,30 @@ def is_systemd_managed(pid, script):
         return False
     return unit in cgroup
 
+def ignored_process_ids():
+    ignored = {{str(os.getpid())}}
+    pid = os.getpid()
+    while True:
+        try:
+            stat = Path(f'/proc/{{pid}}/stat').read_text(encoding='utf-8', errors='replace')
+            ppid = stat.rsplit(') ', 1)[1].split()[1]
+        except Exception:
+            break
+        if not ppid or ppid == '0' or ppid in ignored:
+            break
+        ignored.add(ppid)
+        try:
+            pid = int(ppid)
+        except ValueError:
+            break
+    return ignored
+
+ignored_pids = ignored_process_ids()
+
 for entry in Path('/proc').iterdir():
     if not entry.name.isdigit():
+        continue
+    if entry.name in ignored_pids:
         continue
     try:
         raw = (entry / 'cmdline').read_bytes()
@@ -4997,6 +5086,10 @@ done"""
                     pb7_venv = config.get("main", "pb7venv", fallback=default_pb7_venv).strip() or default_pb7_venv
                     bucket = config.get("pbremote", "bucket", fallback="").strip()
                     cmc_key = config.get("coinmarketcap", "api_key", fallback="").strip()
+                    if config.has_section("firewall"):
+                        result["detected"]["firewall"] = _truthy(config.get("firewall", "enabled", fallback=""))
+                        result["detected"]["firewall_ssh_port"] = _safe_int(config.get("firewall", "ssh_port", fallback="22"), 22)
+                        result["detected"]["firewall_ssh_ips"] = config.get("firewall", "ssh_ips", fallback="").strip()
                     result["detected"]["pb7_dir"] = pb7_dir
                     result["detected"]["pb7_venv"] = pb7_venv
                     result["detected"]["bucket"] = bucket
@@ -5116,21 +5209,44 @@ done"""
             "bucket": str(getattr(vps, "bucket", "") or "").strip(),
             "coinmarketcap_api_key": str(getattr(vps, "coinmarketcap_api_key", "") or "").strip(),
         }
+        previous_firewall = {
+            "firewall": bool(getattr(vps, "firewall", False)),
+            "firewall_ssh_port": _safe_int(getattr(vps, "firewall_ssh_port", 22), 22),
+            "firewall_ssh_ips": str(getattr(vps, "firewall_ssh_ips", "") or "").strip(),
+        }
+        previous_swap = str(getattr(vps, "swap", "0") or "0")
         self._apply_vps_setup_form(token, vps, form)
         vps.save()
         current_optional = {
             "bucket": str(getattr(vps, "bucket", "") or "").strip(),
             "coinmarketcap_api_key": str(getattr(vps, "coinmarketcap_api_key", "") or "").strip(),
         }
+        current_firewall = {
+            "firewall": bool(getattr(vps, "firewall", False)),
+            "firewall_ssh_port": _safe_int(getattr(vps, "firewall_ssh_port", 22), 22),
+            "firewall_ssh_ips": str(getattr(vps, "firewall_ssh_ips", "") or "").strip(),
+        }
+        current_swap = str(getattr(vps, "swap", "0") or "0")
         optional_changed = current_optional != previous_optional
+        firewall_changed = current_firewall != previous_firewall
+        swap_changed = current_swap != previous_swap
         remote_apply = {"started": False, "command": COMMAND_VPS_APPLY_CONFIG, "command_text": "Apply VPS Config"}
-        if optional_changed:
-            self._write_vps_optional_config_pending(vps, current_optional)
-            remote_apply = self._start_vps_optional_config_apply(token, vps)
+        if optional_changed or firewall_changed or swap_changed:
+            if optional_changed:
+                self._write_vps_optional_config_pending(vps, current_optional)
+            remote_apply = self._start_vps_optional_config_apply(
+                token,
+                vps,
+                apply_optional_config=optional_changed,
+                apply_firewall=firewall_changed,
+                apply_swap=swap_changed,
+            )
         return {
             "config": self._build_vps_config(token, vps),
             "remote_apply": remote_apply,
             "optional_changed": optional_changed,
+            "firewall_changed": firewall_changed,
+            "swap_changed": swap_changed,
         }
 
     def init_vps(self, token: str, form: dict[str, Any], *, debug: bool = False) -> dict[str, Any]:
@@ -5393,21 +5509,25 @@ done"""
             new_lines.append(f"{ip}\t{hostname}\n")
 
         content = "".join(new_lines)
+        sudo_check = self.validate_local_sudo_password(pw)
+        if not sudo_check.get("ok"):
+            return {"ok": False, "error": str(sudo_check.get("error") or "Sudo validation failed")}
         try:
             proc = subprocess.Popen(
-                ["sudo", "-S", "tee", "/etc/hosts"],
+                ["sudo", "-n", "tee", "/etc/hosts"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            _, err = proc.communicate(input=pw + "\n" + content, timeout=15)
+            _, err = proc.communicate(input=content, timeout=15)
             if proc.returncode != 0:
                 return {"ok": False, "error": err.strip() or "sudo tee failed"}
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "sudo tee timed out"}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+        return {"ok": True, "ip": ip, "hostname": hostname}
 
     def validate_local_sudo_password(self, sudo_pw: str) -> dict[str, Any]:
         import subprocess

@@ -278,7 +278,31 @@ async def ws_vps_manager(websocket: WebSocket):
                     await asyncio.to_thread(service.delete_vps, str(msg.get("hostname") or ""))
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True})
                 elif cmd == "read_vps_settings":
-                    data = await asyncio.to_thread(service.read_vps_settings, token, str(msg.get("hostname") or ""))
+                    hostname = str(msg.get("hostname") or "")
+                    loop = asyncio.get_running_loop()
+
+                    def send_read_progress(step: str, label: str, status: str = "running") -> None:
+                        payload = {
+                            "type": "vps_read_settings_progress",
+                            "cmd": cmd,
+                            "hostname": hostname,
+                            "step": step,
+                            "label": label,
+                            "status": status,
+                        }
+                        future = asyncio.run_coroutine_threadsafe(websocket.send_json(payload), loop)
+                        try:
+                            future.result(timeout=3)
+                        except Exception:
+                            pass
+
+                    data = await asyncio.to_thread(
+                        service.read_vps_settings,
+                        token,
+                        hostname,
+                        msg.get("form") or {},
+                        send_read_progress,
+                    )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "reveal_secret":
                     data = await asyncio.to_thread(
@@ -462,6 +486,15 @@ async def ws_vps_manager(websocket: WebSocket):
                     await websocket.send_json({"type": "error", "error": f"Unknown command: {cmd}"})
             except Exception as exc:
                 _log(SERVICE, f"command {cmd} failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
+                if cmd == "read_vps_settings":
+                    await websocket.send_json({
+                        "type": "vps_read_settings_progress",
+                        "cmd": cmd,
+                        "hostname": str(msg.get("hostname") or ""),
+                        "step": "error",
+                        "label": str(exc),
+                        "status": "error",
+                    })
                 await websocket.send_json({"type": "error", "error": str(exc), "cmd": cmd})
     except WebSocketDisconnect:
         pass

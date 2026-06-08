@@ -332,10 +332,15 @@ def refresh_token(token: str, extends_seconds: int = 86400) -> Optional[SessionT
             return None
 
         session.expires_at = time.time() + extends_seconds
-        token_file.write_text(
-            json.dumps(session.model_dump(), indent=2),
-            encoding="utf-8",
-        )
+        tmp_path = token_file.with_name(f".{token_file.name}.{uuid4().hex}.tmp")
+        try:
+            tmp_path.write_text(
+                json.dumps(session.model_dump(), indent=4),
+                encoding="utf-8",
+            )
+            os.replace(str(tmp_path), str(token_file))
+        finally:
+            tmp_path.unlink(missing_ok=True)
         return session
     except Exception:
         return None

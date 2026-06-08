@@ -1,6 +1,9 @@
 """Regression tests for Existing VPS import process and key handling."""
 
 import asyncio
+import builtins
+import io
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +25,51 @@ class _FakeStdout:
     def read(self) -> bytes:
         """Return the configured payload."""
         return self._payload
+
+
+class _FakeStdin:
+    """Small stdin double capturing written sudo passwords."""
+
+    def __init__(self) -> None:
+        """Initialize the write capture."""
+        self.writes: list[str] = []
+
+    def write(self, value: str) -> None:
+        """Capture stdin writes."""
+        self.writes.append(value)
+
+    def flush(self) -> None:
+        """No-op flush."""
+        return None
+
+
+class _FakeUfwSshClient:
+    """Paramiko SSHClient double for fetch_ufw_settings()."""
+
+    output = ""
+    errors = ""
+    command = ""
+    kwargs: dict[str, object] = {}
+    stdin = _FakeStdin()
+
+    def set_missing_host_key_policy(self, policy) -> None:
+        """Accept the configured host-key policy."""
+        del policy
+
+    def connect(self, *args, **kwargs) -> None:
+        """No-op SSH connection."""
+        del args, kwargs
+
+    def exec_command(self, command: str, **kwargs):
+        """Return fake UFW output."""
+        self.__class__.command = command
+        self.__class__.kwargs = dict(kwargs)
+        self.__class__.stdin = _FakeStdin()
+        return self.__class__.stdin, _FakeStdout(self.output.encode("utf-8")), _FakeStdout(self.errors.encode("utf-8"))
+
+    def close(self) -> None:
+        """No-op close."""
+        return None
 
 
 class _FakeSftpFile:
@@ -175,6 +223,11 @@ bucket = remote-bucket:
 
 [coinmarketcap]
 api_key = remote-api-key
+
+[firewall]
+enabled = true
+ssh_port = 2222
+ssh_ips = 198.51.100.1,203.0.113.7
 """
     monkeypatch.setattr(core.paramiko, "SSHClient", _FakeSshClient)
 
@@ -189,6 +242,63 @@ api_key = remote-api-key
     assert info["bucket"] == "remote-bucket:"
     assert info["coinmarketcap"] == "remote-api-key"
     assert info["swap"] == "2G"
+    assert info["firewall"] is True
+    assert info["firewall_ssh_port"] == "2222"
+    assert info["firewall_ssh_ips"] == "198.51.100.1,203.0.113.7"
+
+
+def test_fetch_ufw_settings_reads_specific_ips_without_pbgui_ini(monkeypatch) -> None:
+    """Remote UFW reads parse real firewall rules independently of pbgui.ini."""
+    _FakeUfwSshClient.output = """
+Status: active
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     ALLOW IN    198.51.100.1
+22/tcp                     ALLOW       203.0.113.7
+22/tcp (v6)                ALLOW IN    Anywhere (v6)
+"""
+    _FakeUfwSshClient.errors = ""
+    monkeypatch.setattr(core.paramiko, "SSHClient", _FakeUfwSshClient)
+    vps = core.VPS()
+    vps.hostname = "test-vps"
+    vps.ip = "127.0.0.1"
+    vps.user = "mani"
+    vps.user_pw = "fresh-password"
+    vps.firewall_ssh_port = 22
+
+    enabled, allowed_ips = vps.fetch_ufw_settings()
+
+    assert enabled is True
+    assert allowed_ips == "198.51.100.1,203.0.113.7"
+    assert vps.firewall_ssh_port == 22
+    assert _FakeUfwSshClient.command == "LANG=C sudo -S -p '' ufw status"
+    assert _FakeUfwSshClient.kwargs["get_pty"] is True
+    assert _FakeUfwSshClient.stdin.writes == ["fresh-password\n"]
+
+
+def test_fetch_ufw_settings_maps_anywhere_to_empty_ip_list(monkeypatch) -> None:
+    """Open-to-any IPv4 UFW rules map to the existing empty Allowed SSH IPs form value."""
+    _FakeUfwSshClient.output = """
+Status: active
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     ALLOW IN    Anywhere
+22/tcp (v6)                ALLOW IN    Anywhere (v6)
+"""
+    _FakeUfwSshClient.errors = ""
+    monkeypatch.setattr(core.paramiko, "SSHClient", _FakeUfwSshClient)
+    vps = core.VPS()
+    vps.hostname = "test-vps"
+    vps.ip = "127.0.0.1"
+    vps.user = "mani"
+    vps.user_pw = "fresh-password"
+
+    enabled, allowed_ips = vps.fetch_ufw_settings()
+
+    assert enabled is True
+    assert allowed_ips == ""
 
 
 def test_vps_status_prefers_remote_optional_meta_over_stale_local_config() -> None:
@@ -368,6 +478,74 @@ def test_sync_vps_config_from_host_meta_keeps_pending_local_optional_values(tmp_
     assert saves == []
 
 
+def test_sync_vps_config_from_host_meta_persists_remote_firewall_values() -> None:
+    """Fresh VPS metadata updates locally saved firewall settings on other masters."""
+    saves: list[tuple[bool, int, str]] = []
+    service = object.__new__(VPSManagerService)
+    service._host_telemetry_fresh = lambda state: True
+    service._load_vps_optional_config_pending = lambda vps: {}
+    service._write_vps_optional_config_pending = lambda vps, values: None
+    vps = SimpleNamespace(
+        firewall=False,
+        firewall_ssh_port=22,
+        firewall_ssh_ips="",
+        bucket="",
+        coinmarketcap_api_key="",
+        save=lambda: saves.append((vps.firewall, vps.firewall_ssh_port, vps.firewall_ssh_ips)),
+    )
+    host_state = {
+        "connection": {"status": "connected"},
+        "stream": {"last_update": 1_700_000_000},
+        "meta": {
+            "firewall_settings_present": True,
+            "firewall": True,
+            "firewall_ssh_port": "2222",
+            "firewall_ssh_ips": "198.51.100.1,203.0.113.7",
+        },
+    }
+
+    service._sync_vps_config_from_host_meta(vps, host_state)
+
+    assert vps.firewall is True
+    assert vps.firewall_ssh_port == 2222
+    assert vps.firewall_ssh_ips == "198.51.100.1,203.0.113.7"
+    assert saves == [(True, 2222, "198.51.100.1,203.0.113.7")]
+
+
+def test_sync_vps_config_from_host_meta_ignores_missing_firewall_section() -> None:
+    """Old VPS metadata without [firewall] does not overwrite saved firewall settings."""
+    saves: list[tuple[bool, int, str]] = []
+    service = object.__new__(VPSManagerService)
+    service._host_telemetry_fresh = lambda state: True
+    service._load_vps_optional_config_pending = lambda vps: {}
+    service._write_vps_optional_config_pending = lambda vps, values: None
+    vps = SimpleNamespace(
+        firewall=True,
+        firewall_ssh_port=2222,
+        firewall_ssh_ips="198.51.100.1",
+        bucket="",
+        coinmarketcap_api_key="",
+        save=lambda: saves.append((vps.firewall, vps.firewall_ssh_port, vps.firewall_ssh_ips)),
+    )
+    host_state = {
+        "connection": {"status": "connected"},
+        "stream": {"last_update": 1_700_000_000},
+        "meta": {
+            "firewall_settings_present": False,
+            "firewall": False,
+            "firewall_ssh_port": "22",
+            "firewall_ssh_ips": "",
+        },
+    }
+
+    service._sync_vps_config_from_host_meta(vps, host_state)
+
+    assert vps.firewall is True
+    assert vps.firewall_ssh_port == 2222
+    assert vps.firewall_ssh_ips == "198.51.100.1"
+    assert saves == []
+
+
 def test_run_vps_command_uses_fresh_remote_optional_values() -> None:
     """A second master's update command uses the VPS-reported optional values."""
     captured: dict[str, object] = {}
@@ -472,13 +650,272 @@ def test_save_vps_config_starts_remote_optional_apply(tmp_path: Path) -> None:
 
     assert captured["command"] == "vps-apply-config"
     assert captured["command_text"] == "Apply VPS Config"
-    assert captured["extra_vars"] == {"bucket": "", "coinmarketcap_api_key": ""}
+    assert captured["extra_vars"] == {
+        "apply_optional_config": True,
+        "apply_firewall": False,
+        "apply_swap": False,
+        "bucket": "",
+        "coinmarketcap_api_key": "",
+    }
     assert result["optional_changed"] is True
     assert result["remote_apply"]["started"] is True
     assert result["remote_apply"]["run_id"] == "run-123"
     assert result["config"] == {"bucket": "", "coinmarketcap_api_key": ""}
     assert service._load_vps_optional_config_pending(vps) == {"bucket": "", "coinmarketcap_api_key": ""}
     assert saves
+
+
+def test_save_vps_config_starts_remote_firewall_apply_without_optional_pending(tmp_path: Path) -> None:
+    """Saving changed firewall settings starts targeted apply without optional pending state."""
+    captured: dict[str, object] = {}
+
+    def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
+        """Capture the targeted firewall apply instead of running Ansible."""
+        del debug
+        captured["command"] = vps.command
+        captured["command_text"] = vps.command_text
+        captured["extra_vars"] = extra_vars or {}
+        vps.command_run_id = "run-firewall"
+
+    service = object.__new__(VPSManagerService)
+    service.vpsmanager = SimpleNamespace(update_vps=fake_update_vps)
+    service._store_session_secrets = lambda token, hostname, form: None
+    service._session_secret_value = lambda token, hostname, field: "fresh-password"
+    service._ensure_coinmarketcap_key_clear_allowed = lambda vps, next_key: None
+    service._apply_session_secrets_to_vps = lambda token, vps: setattr(vps, "user_pw", "fresh-password")
+    service._build_vps_config = lambda token, vps: {
+        "bucket": vps.bucket,
+        "coinmarketcap_api_key": vps.coinmarketcap_api_key,
+        "firewall": vps.firewall,
+        "firewall_ssh_ips": vps.firewall_ssh_ips,
+    }
+    vps = SimpleNamespace(
+        hostname="test-vps",
+        path=tmp_path,
+        user="mani",
+        user_pw=None,
+        swap="2G",
+        bucket="same-bucket:",
+        coinmarketcap_api_key="same-api-key",
+        remote_pbgui_dir="/home/mani/software/pbgui",
+        firewall=False,
+        firewall_ssh_port=22,
+        firewall_ssh_ips="",
+        command_run_id="",
+        save=lambda: None,
+        _task_log_path=lambda command, fallback: tmp_path / f"{command}.log",
+    )
+    service._require_vps = lambda hostname: vps
+
+    result = service.save_vps_config(
+        "token",
+        "test-vps",
+        {
+            "swap": "2G",
+            "bucket": "same-bucket:",
+            "coinmarketcap_api_key": "same-api-key",
+            "install_dir": "/home/mani/software",
+            "firewall": True,
+            "firewall_ssh_port": 22,
+            "firewall_ssh_ips": "198.51.100.1",
+        },
+    )
+
+    assert captured["command"] == "vps-apply-config"
+    assert captured["command_text"] == "Apply VPS Config"
+    assert captured["extra_vars"] == {"apply_optional_config": False, "apply_firewall": True, "apply_swap": False}
+    assert result["optional_changed"] is False
+    assert result["firewall_changed"] is True
+    assert result["remote_apply"]["started"] is True
+    assert result["remote_apply"]["run_id"] == "run-firewall"
+    assert result["config"]["firewall"] is True
+    assert result["config"]["firewall_ssh_ips"] == "198.51.100.1"
+    assert service._load_vps_optional_config_pending(vps) == {}
+
+
+def test_save_vps_config_starts_remote_swap_apply(tmp_path: Path) -> None:
+    """Saving a changed swap size starts targeted apply through Save VPS."""
+    captured: dict[str, object] = {}
+
+    def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
+        """Capture the targeted swap apply instead of running Ansible."""
+        del debug
+        captured["command"] = vps.command
+        captured["command_text"] = vps.command_text
+        captured["extra_vars"] = extra_vars or {}
+        vps.command_run_id = "run-swap"
+
+    service = object.__new__(VPSManagerService)
+    service.vpsmanager = SimpleNamespace(update_vps=fake_update_vps)
+    service._store_session_secrets = lambda token, hostname, form: None
+    service._session_secret_value = lambda token, hostname, field: "fresh-password"
+    service._ensure_coinmarketcap_key_clear_allowed = lambda vps, next_key: None
+    service._apply_session_secrets_to_vps = lambda token, vps: setattr(vps, "user_pw", "fresh-password")
+    service._build_vps_config = lambda token, vps: {"swap": vps.swap}
+    vps = SimpleNamespace(
+        hostname="test-vps",
+        path=tmp_path,
+        user="mani",
+        user_pw=None,
+        swap="2G",
+        bucket="same-bucket:",
+        coinmarketcap_api_key="same-api-key",
+        remote_pbgui_dir="/home/mani/software/pbgui",
+        firewall=True,
+        firewall_ssh_port=22,
+        firewall_ssh_ips="",
+        command_run_id="",
+        save=lambda: None,
+        _task_log_path=lambda command, fallback: tmp_path / f"{command}.log",
+    )
+    service._require_vps = lambda hostname: vps
+
+    result = service.save_vps_config(
+        "token",
+        "test-vps",
+        {
+            "swap": "4G",
+            "bucket": "same-bucket:",
+            "coinmarketcap_api_key": "same-api-key",
+            "install_dir": "/home/mani/software",
+            "firewall": True,
+            "firewall_ssh_port": 22,
+            "firewall_ssh_ips": "",
+        },
+    )
+
+    assert captured["command"] == "vps-apply-config"
+    assert captured["command_text"] == "Apply VPS Config"
+    assert captured["extra_vars"] == {"apply_optional_config": False, "apply_firewall": False, "apply_swap": True}
+    assert result["optional_changed"] is False
+    assert result["firewall_changed"] is False
+    assert result["swap_changed"] is True
+    assert result["remote_apply"]["started"] is True
+    assert result["remote_apply"]["run_id"] == "run-swap"
+    assert result["config"]["swap"] == "4G"
+    assert service._load_vps_optional_config_pending(vps) == {}
+
+
+def test_read_vps_settings_uses_form_user_password() -> None:
+    """Read VPS settings accepts a freshly entered form password."""
+    saves: list[tuple[str, str, bool, str]] = []
+    progress: list[tuple[str, str, str]] = []
+    service = object.__new__(VPSManagerService)
+    service._session_secrets = {}
+    vps = SimpleNamespace(
+        hostname="test-vps",
+        user_pw=None,
+        bucket="",
+        coinmarketcap_api_key="",
+        swap="0",
+        can_login_ssh=lambda: vps.user_pw == "fresh-password",
+        fetch_vps_info=lambda: {"bucket": "remote-bucket:", "coinmarketcap": "remote-cmc", "swap": "2G"},
+        fetch_ufw_settings=lambda: (True, "82.165.176.129"),
+        write_vps_firewall_info=lambda: True,
+        save=lambda: saves.append((vps.bucket, vps.coinmarketcap_api_key, vps.firewall, vps.firewall_ssh_ips)),
+    )
+    service._require_vps = lambda hostname: vps
+    service._clear_vps_optional_config_pending = lambda vps: None
+    service._build_vps_config = lambda token, vps: {
+        "bucket": vps.bucket,
+        "coinmarketcap_api_key": vps.coinmarketcap_api_key,
+        "swap": vps.swap,
+        "firewall": vps.firewall,
+        "firewall_ssh_ips": vps.firewall_ssh_ips,
+    }
+
+    result = service.read_vps_settings(
+        "token",
+        "test-vps",
+        {"user_pw": "fresh-password"},
+        lambda step, label, status: progress.append((step, label, status)),
+    )
+
+    assert vps.user_pw == "fresh-password"
+    assert service._session_secret_value("token", "test-vps", "user_pw") == "fresh-password"
+    assert result["bucket"] == "remote-bucket:"
+    assert result["coinmarketcap_api_key"] == "remote-cmc"
+    assert result["swap"] == "2G"
+    assert result["firewall"] is True
+    assert result["firewall_ssh_ips"] == "82.165.176.129"
+    assert saves == [("remote-bucket:", "remote-cmc", True, "82.165.176.129")]
+    assert [item[0] for item in progress] == ["start", "password", "ssh", "remote_config", "firewall", "save", "done"]
+    assert progress[-1] == ("done", "VPS settings refreshed", "done")
+
+
+def test_write_hosts_entry_returns_success_without_password_in_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Writing /etc/hosts returns ok and never sends the sudo password to tee."""
+    captured: dict[str, object] = {}
+    service = object.__new__(VPSManagerService)
+    monkeypatch.setattr(
+        VPSManagerService,
+        "validate_local_sudo_password",
+        lambda self, sudo_pw: {"ok": True},
+    )
+
+    def fake_open(path: str, mode: str = "r", *args, **kwargs):
+        """Serve a minimal /etc/hosts file for the test."""
+        del args, kwargs
+        assert path == "/etc/hosts"
+        assert mode == "r"
+        return io.StringIO("127.0.0.1 localhost\n")
+
+    class FakePopen:
+        """Capture sudo tee invocation without touching the real file."""
+
+        returncode = 0
+
+        def __init__(self, args, **kwargs) -> None:
+            """Store process construction arguments."""
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+        def communicate(self, input=None, timeout=None):
+            """Record stdin payload and pretend tee succeeded."""
+            captured["input"] = input
+            captured["timeout"] = timeout
+            return "", ""
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+
+    result = service.write_hosts_entry("82.165.176.129", "manibot02", "local-sudo-password")
+
+    assert result == {"ok": True, "ip": "82.165.176.129", "hostname": "manibot02"}
+    assert captured["args"] == ["sudo", "-n", "tee", "/etc/hosts"]
+    assert "local-sudo-password" not in str(captured["input"])
+    assert "82.165.176.129\tmanibot02" in str(captured["input"])
+
+
+def test_systemd_migration_complete_with_unconfigured_optional_units() -> None:
+    """Unconfigured PBRemote/CoinData units do not keep systemd migration pending."""
+    service = object.__new__(VPSManagerService)
+    output = """KV\tpbgui_dir_exists\tyes
+KV\tpython_exists\tyes
+KV\tstart_sh_exists\tno
+KV\tsystemctl_exists\tyes
+KV\tsystemctl_path\t/usr/bin/systemctl
+KV\tpbremote_configured\tno
+KV\tcoindata_configured\tno
+KV\tsystemd_user_manager\tyes
+KV\tsystemd_user_manager_detail\tactive
+SECTION\tunits\tBEGIN
+pbgui-pbrun.service\tyes\tenabled\tactive
+pbgui-pbremote.service\tno\tnot-found\tinactive
+pbgui-pbcoindata.service\tyes\tdisabled\tinactive
+SECTION\tunits\tEND
+SECTION\tcron\tBEGIN
+SECTION\tcron\tEND
+SECTION\tprocesses\tBEGIN
+SECTION\tprocesses\tEND
+"""
+
+    parsed = service._parse_vps_systemd_migration_preview(output)
+    status = service._build_vps_systemd_migration_status_from_preview(parsed)
+
+    assert status["migration_complete"] is True
+    assert status["migration_needed"] is False
+    assert status["units_ready"] is True
 
 
 def test_instance_collect_script_reports_dynamic_ignore_flag() -> None:
