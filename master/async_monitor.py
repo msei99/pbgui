@@ -2025,7 +2025,7 @@ print(json.dumps({'monitors': monitors, 'v7': v7, 'cache': new_cache,
 
 
 HOST_META_SCRIPT = r'''python3 -u - <<'PY'
-import configparser, hashlib, json, os, re, subprocess, sys
+import configparser, hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 
 HOME = os.path.expanduser('~')
@@ -2047,6 +2047,20 @@ def run(cmd, timeout=10):
     except Exception:
         pass
     return ''
+
+
+def run_with_result(cmd, timeout=10, env=None):
+    try:
+        return subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    except Exception:
+        return None
 
 
 def read_pbgui_version(root):
@@ -2146,6 +2160,185 @@ def configured_text(value):
         return False
     return True
 
+
+def systemd_user_env():
+    env = os.environ.copy()
+    env['XDG_RUNTIME_DIR'] = env.get('XDG_RUNTIME_DIR') or f"/run/user/{os.getuid()}"
+    return env
+
+
+def systemctl_user(args, timeout=5):
+    return run_with_result(['systemctl', '--user'] + list(args), timeout=timeout, env=systemd_user_env())
+
+
+def systemd_user_manager_ok(systemctl_exists):
+    if not systemctl_exists:
+        return False, 'systemctl missing'
+    res = systemctl_user(['show-environment'], timeout=5)
+    if res is not None and res.returncode == 0:
+        return True, 'active'
+    return False, 'not active'
+
+
+def systemd_unit_status(unit, systemctl_exists):
+    unit_dir = Path(HOME) / '.config' / 'systemd' / 'user'
+    exists = (unit_dir / unit).exists()
+    active = 'unknown'
+    enabled = 'unknown'
+    if systemctl_exists:
+        active_res = systemctl_user(['is-active', unit], timeout=5)
+        enabled_res = systemctl_user(['is-enabled', unit], timeout=5)
+        if active_res is not None:
+            active = (active_res.stdout or '').strip() or 'unknown'
+        if enabled_res is not None:
+            enabled = (enabled_res.stdout or '').strip() or 'unknown'
+    return {
+        'unit': unit,
+        'exists': 'yes' if exists else 'no',
+        'enabled': enabled,
+        'active': active,
+    }
+
+
+def ignored_process_ids():
+    ignored = {str(os.getpid())}
+    pid = os.getpid()
+    while True:
+        try:
+            stat = Path(f'/proc/{pid}/stat').read_text(encoding='utf-8', errors='replace')
+            ppid = stat.rsplit(') ', 1)[1].split()[1]
+        except Exception:
+            break
+        if not ppid or ppid == '0' or ppid in ignored:
+            break
+        ignored.add(ppid)
+        try:
+            pid = int(ppid)
+        except ValueError:
+            break
+    return ignored
+
+
+def collect_legacy_pbgui_processes(pbgui_dir):
+    target_dir = os.path.realpath(pbgui_dir)
+    target_prefix = target_dir + os.sep
+    scripts = ('PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
+    unit_by_script = {
+        'PBRun.py': 'pbgui-pbrun.service',
+        'PBRemote.py': 'pbgui-pbremote.service',
+        'PBCoinData.py': 'pbgui-pbcoindata.service',
+    }
+    ignored = ignored_process_ids()
+    out = []
+
+    def matching_script(cmd):
+        for script in scripts:
+            if script in cmd:
+                return script
+        return None
+
+    def is_systemd_managed(pid, script):
+        unit = unit_by_script.get(script)
+        if not unit:
+            return False
+        try:
+            cgroup = Path(f'/proc/{pid}/cgroup').read_text(encoding='utf-8', errors='replace')
+        except Exception:
+            return False
+        return unit in cgroup
+
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit() or entry.name in ignored:
+            continue
+        try:
+            raw = (entry / 'cmdline').read_bytes()
+        except Exception:
+            continue
+        cmd = raw.replace(b'\0', b' ').decode('utf-8', errors='replace').strip()
+        try:
+            cwd = os.path.realpath(os.readlink(entry / 'cwd'))
+        except Exception:
+            cwd = ''
+        script = matching_script(cmd)
+        if cmd and script and (target_prefix in cmd or cwd == target_dir) and not is_systemd_managed(entry.name, script):
+            out.append(f'{entry.name} {cmd}')
+    return out
+
+
+def collect_legacy_cron_lines(pbgui_dir):
+    legacy_start = str(Path(pbgui_dir) / 'start.sh')
+    tokens = {legacy_start}
+    home = str(Path(HOME).resolve())
+    if legacy_start.startswith(home.rstrip('/') + '/'):
+        rel = legacy_start[len(home.rstrip('/')) + 1:]
+        tokens.update({f'~/{rel}', '$HOME/' + rel, '$' + '{HOME}/' + rel})
+    res = run_with_result(['crontab', '-l'], timeout=5)
+    if res is None or res.returncode != 0:
+        return []
+    return [line for line in (res.stdout or '').splitlines() if any(token in line for token in tokens) or line.strip() == '#Ansible: pbgui']
+
+
+def build_systemd_migration_status(pbgui_dir, pbremote_configured, coindata_configured):
+    pbgui_path = Path(pbgui_dir)
+    python_bin = pbgui_path.parent / 'venv_pbgui' / 'bin' / 'python'
+    systemctl_path = run(['which', 'systemctl'], timeout=5)
+    systemctl_exists = bool(systemctl_path)
+    user_manager_ok, user_manager_detail = systemd_user_manager_ok(systemctl_exists)
+    all_unit_names = ['pbgui-pbrun.service', 'pbgui-pbremote.service', 'pbgui-pbcoindata.service']
+    required_unit_names = ['pbgui-pbrun.service']
+    if pbremote_configured:
+        required_unit_names.append('pbgui-pbremote.service')
+    if coindata_configured:
+        required_unit_names.append('pbgui-pbcoindata.service')
+    units = [systemd_unit_status(unit, systemctl_exists) for unit in all_unit_names]
+    by_name = {item['unit']: item for item in units}
+    required_units = [by_name[unit] for unit in required_unit_names if unit in by_name]
+    units_missing = [item for item in required_units if item.get('exists') != 'yes']
+    units_not_enabled = [item for item in required_units if item.get('enabled') != 'enabled']
+    units_inactive = [item for item in required_units if item.get('active') != 'active']
+    units_ready = bool(required_units) and not units_missing and not units_not_enabled and not units_inactive
+    legacy_processes = collect_legacy_pbgui_processes(str(pbgui_path)) if pbgui_path.exists() else []
+    legacy_cron_lines = collect_legacy_cron_lines(str(pbgui_path))
+    start_sh_exists = (pbgui_path / 'start.sh').exists()
+    blockers = []
+    if not pbgui_path.is_dir():
+        blockers.append('PBGui directory missing')
+    if not python_bin.exists():
+        blockers.append('PBGui virtualenv Python missing')
+    if not systemctl_exists:
+        blockers.append('systemctl missing')
+    migration_complete = bool(
+        pbgui_path.is_dir()
+        and python_bin.exists()
+        and systemctl_exists
+        and user_manager_ok
+        and units_ready
+        and not legacy_processes
+        and not legacy_cron_lines
+        and not start_sh_exists
+    )
+    state = 'complete' if migration_complete else ('blocked' if blockers else 'needed')
+    return {
+        'state': state,
+        'available': True,
+        'migration_complete': migration_complete,
+        'migration_needed': not migration_complete,
+        'units_ready': units_ready,
+        'required_units': required_units,
+        'units': units,
+        'legacy_process_count': len(legacy_processes),
+        'legacy_cron_count': len(legacy_cron_lines),
+        'legacy_start_sh_exists': start_sh_exists,
+        'systemd_user_manager': user_manager_ok,
+        'systemd_user_manager_detail': user_manager_detail,
+        'pbgui_dir_exists': pbgui_path.is_dir(),
+        'python_exists': python_bin.exists(),
+        'systemctl_exists': systemctl_exists,
+        'checked_at': int(time.time()),
+        'error': '',
+        'blockers': blockers,
+    }
+
 role = cfg.get('main', 'role', fallback='slave')
 pb7dir = cfg.get('main', 'pb7dir', fallback='')
 pb7venv = cfg.get('main', 'pb7venv', fallback='')
@@ -2241,6 +2434,7 @@ if os.path.isdir(logs_dir):
         if os.path.isfile(full) and (f.endswith('.log') or f.endswith('.log.old')):
             available.append('data/logs/' + f)
 result['available_logs'] = available
+result['systemd_migration'] = build_systemd_migration_status(PBGDIR, pbremote_configured, coindata_configured)
 
 print(json.dumps(result))
 PY'''

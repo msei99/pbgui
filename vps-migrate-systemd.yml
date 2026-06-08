@@ -11,7 +11,7 @@
     install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
     pbgui_dir: "{{ install_dir }}/pbgui"
     python_bin: "{{ install_dir }}/venv_pbgui/bin/python"
-    systemd_units:
+    all_systemd_units:
       - pbgui-pbrun.service
       - pbgui-pbremote.service
       - pbgui-pbcoindata.service
@@ -48,6 +48,37 @@
         state: directory
         mode: "0755"
 
+    - name: read PBGui optional service config
+      shell: |
+        PBGUI_CONFIG_PATH={{ pbgui_dir | quote }}/pbgui.ini python3 - <<'PY'
+        import configparser
+        import os
+
+        config = configparser.ConfigParser()
+        config.read(os.environ.get('PBGUI_CONFIG_PATH') or '')
+
+        def configured(value):
+            normalized = str(value or '').strip()
+            lowered = normalized.lower()
+            if not normalized or lowered in {'none', 'null', 'false', '<api_key>', '<bucket_name>', '<bucket_name>:'}:
+                return False
+            return not normalized.startswith('<')
+
+        print('pbremote_configured=' + ('yes' if configured(config.get('pbremote', 'bucket', fallback='')) else 'no'))
+        print('coindata_configured=' + ('yes' if configured(config.get('coinmarketcap', 'api_key', fallback='')) else 'no'))
+        PY
+      args:
+        executable: /bin/bash
+      register: optional_service_config
+      changed_when: false
+
+    - name: build enabled PBGui migration service list
+      set_fact:
+        pbgui_pbremote_configured: "{{ 'pbremote_configured=yes' in optional_service_config.stdout_lines }}"
+        pbgui_coindata_configured: "{{ 'coindata_configured=yes' in optional_service_config.stdout_lines }}"
+        pbgui_enabled_services: "{{ ['pbrun'] + (['pbremote'] if ('pbremote_configured=yes' in optional_service_config.stdout_lines) else []) + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
+        systemd_units: "{{ ['pbgui-pbrun.service'] + (['pbgui-pbremote.service'] if ('pbremote_configured=yes' in optional_service_config.stdout_lines) else []) + (['pbgui-pbcoindata.service'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
+
     - name: copy systemd setup helper
       copy:
         src: setup/setup_systemd.sh
@@ -72,7 +103,7 @@
           - --python
           - "{{ python_bin }}"
           - --enable
-          - pbrun,pbremote,pbcoindata
+          - "{{ pbgui_enabled_services | join(',') }}"
           - --include-pbremote
           - --no-start
       become: yes
@@ -81,7 +112,7 @@
     - name: stop existing PBGui systemd user services before migration
       shell: |
         uid="$(id -u {{ user | quote }})"
-        for unit in {{ systemd_units | join(' ') }}; do
+        for unit in {{ all_systemd_units | join(' ') }}; do
           sudo -H -u {{ user | quote }} env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user stop "$unit" >/dev/null 2>&1 || true
         done
       args:
@@ -214,7 +245,7 @@
           - --python
           - "{{ python_bin }}"
           - --enable
-          - pbrun,pbremote,pbcoindata
+          - "{{ pbgui_enabled_services | join(',') }}"
           - --include-pbremote
       become: yes
       register: systemd_setup_result

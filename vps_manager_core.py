@@ -251,7 +251,7 @@ class VPS:
         with open(file_path, "r", encoding="utf-8") as handle:
             config = json.load(handle)
         if "_hostname" in config:
-            self._hostname = config["_hostname"]
+            self._hostname = config["_hostname"] or Path(file_path).stem
             self.path = Path(f"{PBGDIR}/data/vpsmanager/hosts/{self.hostname}")
         if "ip" in config:
             self.ip = config["ip"]

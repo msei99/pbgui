@@ -28,6 +28,7 @@ class ExistingVpsImportRequest(BaseModel):
     ip: str = ""
     user: str = ""
     user_pw: str = ""
+    local_sudo_pw: str = ""
     install_dir: str = ""
     accept_unknown_host: bool = False
     accepted_host_key_fingerprint: str = ""

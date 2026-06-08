@@ -5915,26 +5915,27 @@
       const st = (detail && detail.status) || {};
       const summary = st.summary_row || {};
       const apiStatus = st.systemd_migration || {};
-      const cached = (ui && ui.systemdMigrationPreview) || {};
+      void ui;
       const command = String(st.task_command || summary.task_command || '').trim();
       const status = String(st.task_status || summary.task_status || '').trim().toLowerCase();
+      const state = String(apiStatus.state || '').trim().toLowerCase();
       const failedTask = command === 'vps-migrate-systemd' && ['failed', 'error', 'timeout', 'canceled', 'cancelled', 'unreachable'].includes(status);
+      if (state === 'running') {
+        return { className: 'sb-btn warning', text: 'Systemd migration running', title: 'Migration is currently running.' };
+      }
+      if (state === 'failed' || failedTask) {
+        return { className: 'sb-btn danger', text: 'Systemd migration failed', title: String(apiStatus.error || 'Last migration task failed. Click to preview current state.') };
+      }
       if (apiStatus.migration_complete) {
         return { className: 'sb-btn ok', text: 'Systemd migration complete', title: 'Migration appears complete. Click to preview current state.' };
       }
-      if (String(apiStatus.state || '') === 'blocked') {
+      if (state === 'blocked') {
         return { className: 'sb-btn danger', text: 'Systemd migration blocked', title: String(apiStatus.error || 'Migration prerequisites are not met. Click to preview current state.') };
       }
-      if (apiStatus.migration_needed || String(apiStatus.state || '') === 'needed') {
+      if (state === 'needed' || apiStatus.migration_needed === true) {
         return { className: 'sb-btn warning', text: 'Preview systemd migration', title: 'Migration is still needed. Click to preview and run it.' };
       }
-      if (cached.migration_complete || cached.migration_needed === false) {
-        return { className: 'sb-btn ok', text: 'Systemd migration complete', title: 'Last preview reported the migration complete. Click to refresh current state.' };
-      }
-      if (failedTask) {
-        return { className: 'sb-btn danger', text: 'Systemd migration failed', title: 'Last migration task failed. Click to preview current state.' };
-      }
-      return { className: 'sb-btn warning', text: 'Preview systemd migration', title: 'Preview and run the VPS systemd migration.' };
+      return { className: 'sb-btn', text: 'Preview systemd migration', title: 'Monitor has not reported migration status yet. Click to preview current state.' };
     }
 
     function renderVpsSystemdMigrationPreview(data) {
@@ -7366,6 +7367,14 @@
       }
     }
 
+    function selectSidebarVpsHost(hostname) {
+      const nextHost = String(hostname || '').trim();
+      if (!nextHost) return;
+      const keepViews = ['vps-setup', 'vps-pbgui-branch', 'vps-pb7-branch', 'vps-host-logs'];
+      const nextView = keepViews.indexOf(store.view) >= 0 ? store.view : 'vps';
+      selectView(nextView, nextHost);
+    }
+
     function restoreViewFromHash() {
       const hash = location.hash.replace(/^#/, '');
       if (!hash || hash === 'overview') return;
@@ -7420,7 +7429,7 @@
       }).catch(function () {});
     }
 
-    function existingVpsImportPayload() {
+    function existingVpsImportPayload(includeLocalSudo) {
       const flow = store.importExistingVps || defaultExistingVpsImportState();
       const form = flow.form || {};
       return {
@@ -7428,6 +7437,7 @@
         ip: String(form.ip || '').trim(),
         user: String(form.user || '').trim(),
         user_pw: String(form.user_pw || ''),
+        local_sudo_pw: includeLocalSudo ? String(form.local_sudo_pw || '') : '',
         install_dir: String(form.install_dir || '').trim(),
         accept_unknown_host: !!form.accept_unknown_host,
         accepted_host_key_fingerprint: String(form.accepted_host_key_fingerprint || '').trim()
@@ -7568,6 +7578,35 @@
         </div>`;
     }
 
+    function renderExistingVpsImportSaving(flow) {
+      const probe = (flow || {}).probe || {};
+      const needsHosts = !!probe.local_hosts_update_required;
+      const tasks = [
+        { label: 'Probe VPS', status: 'done' },
+        { label: 'Update /etc/hosts', status: needsHosts ? 'running' : 'done' },
+        { label: 'Save VPS record', status: needsHosts ? 'pending' : 'running' },
+        { label: 'Enable monitoring', status: 'pending' }
+      ];
+      return `
+        <div class='read-settings-progress'>
+          <div class='read-settings-progress-head'>
+            <div>
+              <div class='read-settings-progress-title'>Saving imported VPS...</div>
+              <div class='field-help'>Updating local state only. Existing VPS import does not run Ansible.</div>
+            </div>
+            <div class='read-settings-progress-percent'>${needsHosts ? '50' : '65'}%</div>
+          </div>
+          <div class='deploy-progress-bar'><div class='deploy-progress-fill' style='width:${needsHosts ? '50' : '65'}%;background:var(--accent)'></div></div>
+          <div class='read-settings-task-grid'>
+            ${tasks.map(function (item) {
+              const status = String(item.status || 'pending');
+              const stateLabel = status === 'done' ? 'Done' : (status === 'running' ? 'Active' : 'Open');
+              return `<div class='read-settings-task ${escAttr(status)}'><span>${esc(item.label)}</span><span class='read-settings-task-state'>${esc(stateLabel)}</span></div>`;
+            }).join('')}
+          </div>
+        </div>`;
+    }
+
     function renderExistingVpsImportModal() {
       const flow = store.importExistingVps || defaultExistingVpsImportState();
       const form = flow.form || {};
@@ -7576,7 +7615,9 @@
       const box = document.getElementById('alertModalBody');
       box.className = 'notice bucket-cleanup-body';
       const errorHtml = `<div id='existing-vps-import-error'>${flow.error ? `<div class='notice error'>${esc(flow.error)}</div>` : ''}</div>`;
-      const probeHtml = flow.probe ? renderExistingVpsImportPreview(flow.probe) : `<div class='notice info'>Probe reads the existing VPS over SSH and does not run init, setup, Ansible, or remote writes.</div>`;
+      const probeHtml = flow.saving
+        ? renderExistingVpsImportSaving(flow)
+        : (flow.probe ? renderExistingVpsImportPreview(flow.probe) : `<div class='notice info'>Probe reads the existing VPS over SSH and does not run init, setup, Ansible, or remote writes.</div>`);
       box.innerHTML = `
         <div style='display:grid;gap:14px'>
           ${errorHtml}
@@ -7584,7 +7625,7 @@
             <div class='field'>
               <label>Hostname</label>
               <input id='existing-vps-import-hostname' type='text' value='${escAttr(form.hostname || '')}' oninput="setExistingVpsImportField('hostname', this.value)" placeholder='vps-hostname'>
-              <div class='field-help'>Must already resolve in local /etc/hosts.</div>
+              <div class='field-help'>Used after import. Probe can use VPS IPv4 before /etc/hosts is updated.</div>
             </div>
             <div class='field'>
               <label>VPS IPv4</label>
@@ -7647,7 +7688,7 @@
       flow.error = '';
       store.importExistingVps = flow;
       renderExistingVpsImportModal();
-      vpsManagerPost('/import/probe', existingVpsImportPayload())
+      vpsManagerPost('/import/probe', existingVpsImportPayload(false))
         .then(function (data) {
           const next = store.importExistingVps || defaultExistingVpsImportState();
           next.loading = false;
@@ -7688,11 +7729,21 @@
     function saveExistingVpsImport() {
       const flow = store.importExistingVps || defaultExistingVpsImportState();
       if (!flow.probe || !flow.probe.can_save) return;
+      if (flow.probe.local_hosts_update_required && !String(store.master.sudoPw || '').trim()) {
+        openMasterPasswordPrompt(function () {
+          setTimeout(function () {
+            saveExistingVpsImport();
+          }, 0);
+        }, 'Save Imported VPS');
+        return;
+      }
+      flow.form = flow.form || {};
+      flow.form.local_sudo_pw = flow.probe.local_hosts_update_required ? String(store.master.sudoPw || '') : '';
       flow.saving = true;
       flow.error = '';
       store.importExistingVps = flow;
       renderExistingVpsImportModal();
-      vpsManagerPost('/import/save', existingVpsImportPayload())
+      vpsManagerPost('/import/save', existingVpsImportPayload(true))
         .then(function (data) {
           const hostname = String((data && data.hostname) || (((data || {}).config || {}).hostname) || '');
           closeAlertModal();
@@ -9259,7 +9310,7 @@
         html = `
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>
           <div class='sb-field'>
-            <select class='sb-select' onfocus='store.sidebarSelectInteracting = true' onmousedown='store.sidebarSelectInteracting = true' onblur='store.sidebarSelectInteracting = false' onchange='store.sidebarSelectInteracting = false; selectView("vps", this.value)'>
+            <select class='sb-select' onfocus='store.sidebarSelectInteracting = true' onmousedown='store.sidebarSelectInteracting = true' onblur='store.sidebarSelectInteracting = false' onchange='store.sidebarSelectInteracting = false; selectSidebarVpsHost(this.value)'>
               ${managedRows.map(function (row) {
                 return `<option value='${escAttr(row.hostname)}'${row.hostname === selectedHost ? ' selected' : ''}>${esc(row.hostname)}</option>`;
               }).join('')}
@@ -9951,10 +10002,11 @@
       return 'ok';
     }
 
-    function renderResourceMeter(label, metric) {
+    function renderResourceMeter(label, metric, historyHost) {
       if (!metric) return '';
       var meterKey = {'Memory':'mem','Disk':'disk','Swap':'swap'}[label] || label.toLowerCase();
       var historyKey = {'Memory':'memory','Disk':'disk','Swap':'swap'}[label] || label.toLowerCase();
+      var host = String(historyHost || store.hostname || '').trim();
       var usage = Number.isFinite(Number(metric.usage_pct)) ? Math.max(0, Math.min(Number(metric.usage_pct), 100)) : 0;
       var peak60 = Number.isFinite(Number(metric.usage_60s_peak)) ? Math.max(0, Math.min(Number(metric.usage_60s_peak), 100)) : 0;
       var peak60Window = Number.isFinite(Number(metric.usage_60s_window)) ? Number(metric.usage_60s_window) : 0;
@@ -9966,7 +10018,7 @@
         peak60Text = 'warming ' + Math.min(60, Math.floor(peak60Window)) + 's';
       }
       return `
-        <div class='resource-meter cpu-clickable' data-meter='${escAttr(meterKey)}' data-history-host='${escAttr(store.hostname || "")}' data-history-metric='${escAttr(historyKey)}'>
+        <div class='resource-meter cpu-clickable' data-meter='${escAttr(meterKey)}' data-history-host='${escAttr(host)}' data-history-metric='${escAttr(historyKey)}'>
           <div class='resource-meter-title'>${esc(label)} Free: ${esc(metric.free_mb || 0)} MB | Used: ${esc(metric.used_mb || 0)} MB | Total: ${esc(metric.total_mb || 0)} MB</div>
           <div class='cpu-meter'>
             <div class='cpu-meter-row' data-resource-row='live'>
@@ -11172,6 +11224,7 @@
       const pb7Rows = Array.isArray(monitor.v7) ? monitor.v7 : [];
       const pb7Fallback = Array.isArray(monitor.v7_running) ? monitor.v7_running : [];
       const summary = status && status.summary_row ? status.summary_row : {};
+      const historyHost = String(summary.hostname || summary.name || store.hostname || '').trim();
       let pb7Content = '';
       if (pb7Rows.length) {
         pb7Content = renderServiceRows(pb7Rows);
@@ -11191,12 +11244,12 @@
           ${staleNotice}
           <div class='resource-grid'>
             <div class='stack'>
-              ${renderResourceMeter('Memory', serverMetrics.mem)}
-              ${renderResourceMeter('Disk', serverMetrics.disk)}
+              ${renderResourceMeter('Memory', serverMetrics.mem, historyHost)}
+              ${renderResourceMeter('Disk', serverMetrics.disk, historyHost)}
             </div>
             <div class='stack'>
-              ${renderResourceMeter('Swap', serverMetrics.swap)}
-              <div class='resource-meter cpu-clickable' data-meter='cpu' data-history-host='${escAttr(summary.hostname || summary.name || store.hostname || "")}' data-history-metric='cpu' data-cpu-history-host='${escAttr(summary.hostname || summary.name || store.hostname || "")}'>
+              ${renderResourceMeter('Swap', serverMetrics.swap, historyHost)}
+              <div class='resource-meter cpu-clickable' data-meter='cpu' data-history-host='${escAttr(historyHost)}' data-history-metric='cpu' data-cpu-history-host='${escAttr(historyHost)}'>
                 <div class='resource-meter-title'>${esc(cpuTelemetry.title)}</div>
                 <div class='cpu-meter'>
                   <div class='cpu-meter-row' data-cpu-row='live'>

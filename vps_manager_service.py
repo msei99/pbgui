@@ -2450,9 +2450,40 @@ class VPSManagerService:
             "legacy_process_count": 0,
             "legacy_cron_count": 0,
             "legacy_start_sh_exists": False,
+            "required_units": [],
+            "units": [],
             "checked_at": 0,
             "error": error,
         }
+
+    def _vps_systemd_migration_task_overlay(self, vps: VPS, base: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        command = str(getattr(vps, "command", "") or "").strip()
+        if command != COMMAND_VPS_MIGRATE_SYSTEMD:
+            return None
+        status = str(getattr(vps, "update_status", "") or "").strip().lower()
+        failed_states = {"failed", "error", "timeout", "canceled", "cancelled", "unreachable"}
+        running_states = {"", "queued", "pending", "starting", "running", "in_progress"}
+        if status in failed_states:
+            out = dict(base or self._empty_vps_systemd_migration_status("failed"))
+            out.update({
+                "state": "failed",
+                "available": True,
+                "migration_complete": False,
+                "migration_needed": True,
+                "error": "Last systemd migration task failed. Click to preview current state.",
+            })
+            return out
+        if status in running_states:
+            out = dict(base or self._empty_vps_systemd_migration_status("running"))
+            out.update({
+                "state": "running",
+                "available": True,
+                "migration_complete": False,
+                "migration_needed": True,
+                "error": "",
+            })
+            return out
+        return None
 
     def _build_vps_systemd_migration_status_from_preview(self, parsed: dict[str, Any]) -> dict[str, Any]:
         values = parsed.get("values") or {}
@@ -2484,6 +2515,8 @@ class VPSManagerService:
             "migration_complete": migration_complete,
             "migration_needed": not migration_complete,
             "units_ready": units_ready,
+            "required_units": required_units,
+            "units": units,
             "legacy_process_count": len(processes),
             "legacy_cron_count": len(cron_lines),
             "legacy_start_sh_exists": start_sh_exists,
@@ -2508,68 +2541,31 @@ class VPSManagerService:
 
     def _get_vps_systemd_migration_status(self, vps: VPS, host_state: dict[str, Any], *, quick: bool = False) -> dict[str, Any]:
         hostname = str(vps.hostname or "").strip()
-        cached = self._vps_systemd_migration_status_cache.get(hostname) if hostname else None
-        if cached:
-            age = time.time() - float(cached.get("checked_at") or 0)
-            if age < VPS_SYSTEMD_MIGRATION_STATUS_TTL_SECONDS:
-                return dict(cached)
+        self._vps_systemd_migration_status_cache.pop(hostname, None)
+        meta = self._host_meta(host_state)
+        raw_status = meta.get("systemd_migration") if isinstance(meta, dict) else None
+        status = dict(raw_status) if isinstance(raw_status, dict) else self._empty_vps_systemd_migration_status("unknown", "Monitor has not reported systemd migration status yet.")
+        status.setdefault("available", isinstance(raw_status, dict))
+        status.setdefault("migration_complete", False)
+        status.setdefault("migration_needed", False)
+        status.setdefault("units_ready", False)
+        status.setdefault("legacy_process_count", 0)
+        status.setdefault("legacy_cron_count", 0)
+        status.setdefault("legacy_start_sh_exists", False)
+        status.setdefault("required_units", [])
+        status.setdefault("units", [])
+        status.setdefault("checked_at", 0)
+        status.setdefault("error", "")
+        task_overlay = self._vps_systemd_migration_task_overlay(vps, status)
+        if task_overlay is not None:
+            return task_overlay
         if quick:
-            return dict(cached or self._empty_vps_systemd_migration_status("unknown", "Full status not checked yet."))
+            return status
         if not hostname:
             return self._empty_vps_systemd_migration_status("unknown", "Hostname missing.")
-        if not self._host_online(host_state):
-            return dict(cached or self._empty_vps_systemd_migration_status("unknown", "Host is offline."))
-
-        install_dir = _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user)
-        pbgui_dir = f"{install_dir.rstrip('/')}/pbgui"
-        python_bin = f"{install_dir.rstrip('/')}/venv_pbgui/bin/python"
-        ssh_host = str(getattr(vps, "hostname", "") or vps.ip or "").strip()
-        if not ssh_host or not str(vps.user or "").strip():
-            return self._empty_vps_systemd_migration_status("unknown", "SSH host or user missing.")
-
-        import paramiko
-
-        ssh = paramiko.SSHClient()
-        ssh.load_system_host_keys()
-        try:
-            known_hosts = _user_known_hosts_path()
-            if known_hosts.exists():
-                ssh.load_host_keys(str(known_hosts))
-        except Exception:
-            pass
-        ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
-        try:
-            connect_kwargs = {
-                "hostname": ssh_host,
-                "username": vps.user,
-                "timeout": 3,
-                "banner_timeout": 3,
-                "auth_timeout": 3,
-            }
-            if getattr(vps, "user_pw", None):
-                connect_kwargs.update({"password": vps.user_pw, "allow_agent": False, "look_for_keys": False})
-            else:
-                connect_kwargs.update({"allow_agent": True, "look_for_keys": True})
-            ssh.connect(**connect_kwargs)
-            script = self._vps_systemd_migration_preview_script(pbgui_dir, python_bin)
-            _stdin, stdout, stderr = ssh.exec_command(script, timeout=5)
-            out = stdout.read().decode("utf-8", errors="replace")
-            err = stderr.read().decode("utf-8", errors="replace")
-            rc = int(stdout.channel.recv_exit_status())
-            if rc != 0:
-                raise RuntimeError((err or out or "systemd migration status probe failed").strip())
-            status = self._build_vps_systemd_migration_status_from_preview(self._parse_vps_systemd_migration_preview(out))
-            self._vps_systemd_migration_status_cache[hostname] = status
-            return dict(status)
-        except Exception as exc:
-            status = dict(cached or self._empty_vps_systemd_migration_status("unknown"))
-            status.update({"state": "unknown", "available": False, "error": str(exc) or "Status probe failed.", "checked_at": int(time.time())})
-            return status
-        finally:
-            try:
-                ssh.close()
-            except Exception:
-                pass
+        if not self._host_online(host_state) and not isinstance(raw_status, dict):
+            return self._empty_vps_systemd_migration_status("unknown", "Monitor is offline or has no host metadata yet.")
+        return status
 
     def _maybe_auto_sync_api_after_setup(self, vps: VPS) -> None:
         hostname = str(vps.hostname or "").strip()
@@ -2811,7 +2807,42 @@ class VPSManagerService:
             round(elapsed, 1),
         )
 
-    def _build_local_master_server_metrics(self) -> dict[str, Any] | None:
+    def _record_local_master_server_metric_history(self, hostname: str, payload: dict[str, Any] | None) -> None:
+        hostname = str(hostname or "").strip()
+        if not hostname or not payload:
+            return
+        monitor = get_monitor()
+        stores = getattr(monitor, "_host_metric_history", None) if monitor else None
+        if not isinstance(stores, dict):
+            return
+        minute = int(time.time() // 60)
+        try:
+            cpu_store = stores.get("cpu")
+            if cpu_store is not None:
+                cpu_store.record(
+                    hostname,
+                    minute=minute,
+                    value=payload.get("cpu_60s"),
+                    confirmed=_safe_float(payload.get("cpu_60s_window")) >= ROLLING_PEAK_WINDOW_SECONDS,
+                )
+                cpu_store.maybe_flush()
+            for metric, payload_key in (("memory", "mem"), ("disk", "disk"), ("swap", "swap")):
+                store = stores.get(metric)
+                data = payload.get(payload_key) if isinstance(payload.get(payload_key), dict) else {}
+                if store is None:
+                    continue
+                store.record(
+                    hostname,
+                    minute=minute,
+                    value=(data or {}).get("usage_pct"),
+                    confirmed=_safe_float((data or {}).get("total_mb")) > 0.0,
+                    same_minute_mode="peak",
+                )
+                store.maybe_flush()
+        except Exception as exc:
+            _log(SERVICE, f"local master history record failed: {exc}", level="WARNING")
+
+    def _build_local_master_server_metrics(self, hostname: str = "") -> dict[str, Any] | None:
         """Build current local master server telemetry without remote/PBRemote probes."""
         try:
             mem = psutil.virtual_memory()
@@ -2822,7 +2853,7 @@ class VPSManagerService:
             _log(SERVICE, f"local master server telemetry failed: {exc}", level="WARNING")
             return None
         cpu, cpu_60s, cpu_60s_window = self._local_master_cpu_stats()
-        return self._build_server_metrics(SimpleNamespace(
+        payload = self._build_server_metrics(SimpleNamespace(
             rtd=0,
             boot=boot,
             cpu=cpu,
@@ -2832,6 +2863,8 @@ class VPSManagerService:
             disk=disk,
             swap=swap,
         ))
+        self._record_local_master_server_metric_history(hostname, payload)
+        return payload
 
     def _empty_monitor_payload(self) -> dict[str, Any]:
         return {"server": None, "v7": [], "v7_running": [], "multi": [], "single": [], "logfiles": []}
@@ -3016,10 +3049,10 @@ class VPSManagerService:
 
     def _build_local_master_monitor_payload(self, pbremote: PBRemote, *, refresh: bool) -> dict[str, Any]:
         if not refresh and self._master_monitor_payload_cache is not None:
-            self._master_monitor_payload_cache["server"] = self._build_local_master_server_metrics()
+            self._master_monitor_payload_cache["server"] = self._build_local_master_server_metrics(pbremote.name)
             return self._master_monitor_payload_cache
         payload = self._empty_monitor_payload()
-        payload["server"] = self._build_local_master_server_metrics()
+        payload["server"] = self._build_local_master_server_metrics(pbremote.name)
         snapshot = self._collect_local_master_monitor_snapshot()
         live_stats = self._collect_local_master_live_bot_stats()
         cfg = self.monitor_config
@@ -4658,6 +4691,8 @@ fi"""
             "warnings": [],
             "blockers": [],
             "host_key": {},
+            "local_hosts_ok": False,
+            "local_hosts_update_required": False,
             "needs_host_key_confirmation": False,
             "detected": {
                 "remote_pbgui_dir": pbgui_dir,
@@ -4811,20 +4846,24 @@ fi"""
         add_check("VPS Manager record", True, "Hostname is not saved yet.")
 
         hosts_status = _hosts_entry_status(hostname, ip)
+        ssh_target = hostname
         if hosts_status.get("ok"):
             add_check("/etc/hosts", True, f"{hostname} resolves to {ip}.")
+            result["local_hosts_ok"] = True
         elif hosts_status.get("has_hostname"):
             current_ip = str(hosts_status.get("current_ip") or "")
             add_check("/etc/hosts", False, f"Hostname maps to {current_ip}, expected {ip}.")
-            add_blocker(f"Local /etc/hosts maps {hostname} to {current_ip} instead of {ip}.")
+            add_warning(f"Local /etc/hosts maps {hostname} to {current_ip} instead of {ip}; saving the import will replace it with {ip}.")
+            result["local_hosts_update_required"] = True
+            ssh_target = ip
         else:
             add_check("/etc/hosts", False, "Hostname is missing locally.")
-            add_blocker(f"Add '{ip} {hostname}' to local /etc/hosts before importing.")
-        if not hosts_status.get("ok"):
-            return result
+            add_warning(f"Local /etc/hosts is missing '{ip} {hostname}'; saving the import will add it after local sudo confirmation.")
+            result["local_hosts_update_required"] = True
+            ssh_target = ip
 
         try:
-            remote_key = _fetch_remote_host_key(hostname, 22, timeout=8)
+            remote_key = _fetch_remote_host_key(ssh_target, 22, timeout=8)
             fingerprint = _ssh_fingerprint_sha256(remote_key)
             status = _known_host_key_status(hostname, 22, remote_key)
             host_key = {
@@ -4860,10 +4899,14 @@ fi"""
                 add_blocker("Accepted SSH host key fingerprint does not match the presented key.")
                 return result
             _remember_known_host_key(hostname, 22, remote_key)
+            if ssh_target != hostname:
+                _remember_known_host_key(ssh_target, 22, remote_key)
             result["host_key"]["status"] = "known"
             result["host_key"]["known"] = True
             add_check("SSH host key", True, f"Trusted {remote_key.get_name()} {fingerprint}.")
         else:
+            if ssh_target != hostname:
+                _remember_known_host_key(ssh_target, 22, remote_key)
             add_check("SSH host key", True, "Known host key matches.")
 
         if not user_pw:
@@ -4882,7 +4925,7 @@ fi"""
         ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
         try:
             ssh.connect(
-                hostname=hostname,
+                hostname=ssh_target,
                 username=user,
                 password=user_pw,
                 timeout=8,
@@ -5119,7 +5162,7 @@ done"""
             except Exception:
                 pass
 
-        key_auth_ok, key_auth_detail = self._test_import_key_login(ssh_host=hostname, user=user)
+        key_auth_ok, key_auth_detail = self._test_import_key_login(ssh_host=ssh_target, user=user)
         result["detected"]["key_auth_ok"] = key_auth_ok
         add_check("SSH key login for monitoring", key_auth_ok, key_auth_detail)
         if not key_auth_ok:
@@ -5151,6 +5194,14 @@ done"""
             raise ValueError("Hostname is required.")
         if hostname in self.vpsmanager.list():
             raise ValueError("Hostname already exists.")
+
+        if probe.get("local_hosts_update_required"):
+            local_sudo_pw = str(form.get("local_sudo_pw") or "")
+            if not local_sudo_pw:
+                raise ValueError(f"Local sudo password is required to add '{probe.get('ip')} {hostname}' to /etc/hosts.")
+            hosts_result = self.write_hosts_entry(str(probe.get("ip") or ""), hostname, local_sudo_pw)
+            if not hosts_result.get("ok"):
+                raise ValueError(str(hosts_result.get("error") or "Failed to update local /etc/hosts."))
 
         detected = probe.get("detected") or {}
         user_pw = str(form.get("user_pw") or "")

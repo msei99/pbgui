@@ -395,6 +395,78 @@ class TestVpsManagerFrontendLogic:
             assertions=assertions,
         )
 
+    def test_save_existing_vps_import_prompts_for_local_sudo_when_hosts_missing(self) -> None:
+        """Saving an import asks for local sudo before adding /etc/hosts."""
+        bootstrap = """
+        var prompts = [];
+        var posts = [];
+        var rendered = 0;
+        var closed = 0;
+        var toasts = [];
+        const store = {
+          master: { sudoPw: '' },
+          importExistingVps: {
+            loading: false,
+            saving: false,
+            form: {
+              hostname: 'manibot90',
+              ip: '23.94.74.212',
+              user: 'mani',
+              user_pw: 'fresh-password',
+              install_dir: '/home/mani/software'
+            },
+            probe: {
+              can_save: true,
+              local_hosts_update_required: true
+            }
+          }
+        };
+        global.setTimeout = function(fn, delay) {
+          fn();
+          return 1;
+        };
+        function defaultExistingVpsImportState() { return { form: {}, probe: null }; }
+        function openMasterPasswordPrompt(onConfirm, commandText) {
+          prompts.push(commandText);
+          store.master.sudoPw = 'local-sudo-password';
+          onConfirm();
+        }
+        function renderExistingVpsImportModal() { rendered += 1; }
+        function vpsManagerPost(path, payload) {
+          posts.push({ path: path, payload: payload });
+          return {
+            then: function(onResolve) {
+              onResolve({ hostname: 'manibot90', message: 'Imported VPS saved.' });
+              return { catch: function() {} };
+            }
+          };
+        }
+        function closeAlertModal() { closed += 1; }
+        function toast(message, kind) { toasts.push({ message: message, kind: kind }); }
+        function sendContext() {}
+        function scheduleVpsDetailFetch(hostname) {}
+        function renderUi(options) {}
+        function send(payload) {}
+        """
+        assertions = """
+        saveExistingVpsImport();
+
+        assert.deepEqual(prompts, ['Save Imported VPS']);
+        assert.equal(posts.length, 1);
+        assert.equal(posts[0].path, '/import/save');
+        assert.equal(posts[0].payload.hostname, 'manibot90');
+        assert.equal(posts[0].payload.ip, '23.94.74.212');
+        assert.equal(posts[0].payload.local_sudo_pw, 'local-sudo-password');
+        assert.equal(rendered, 1);
+        assert.equal(closed, 1);
+        assert.equal(toasts[0].message, 'Imported VPS saved.');
+        """
+        _run_node_assertions(
+            ["existingVpsImportPayload", "saveExistingVpsImport"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
     def test_read_vps_settings_progress_updates_steps(self) -> None:
         """Read VPS settings progress events update and render ordered steps."""
         bootstrap = """
@@ -573,6 +645,113 @@ class TestVpsManagerFrontendLogic:
         """
         _run_node_assertions(
             ["isActiveVpsSetupFormField"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_sidebar_host_switch_keeps_change_vps_view(self) -> None:
+        """Switching hosts from Change VPS stays in the Change VPS subview."""
+        bootstrap = """
+        var selected = [];
+        const store = { view: 'vps-setup', hostname: 'manibot90' };
+        function selectView(view, hostname) {
+          selected.push({ view: view, hostname: hostname });
+          store.view = view;
+          store.hostname = hostname;
+        }
+        """
+        assertions = """
+        selectSidebarVpsHost('manibot91');
+
+        assert.deepEqual(selected, [{ view: 'vps-setup', hostname: 'manibot91' }]);
+        assert.equal(store.view, 'vps-setup');
+        assert.equal(store.hostname, 'manibot91');
+
+        store.view = 'vps';
+        selectSidebarVpsHost('manibot90');
+        assert.equal(selected[1].view, 'vps');
+        """
+        _run_node_assertions(
+            ["selectSidebarVpsHost"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_master_resource_meters_use_master_history_host(self) -> None:
+        """Master memory/disk/swap history links use the master hostname, not store.hostname."""
+        bootstrap = """
+        const store = { view: 'master', hostname: '' };
+        function esc(value) { return String(value == null ? '' : value); }
+        function escAttr(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;'); }
+        function resourceTone() { return 'ok'; }
+        function formatLatency() { return '1s'; }
+        function formatCpuTelemetry() {
+          return {
+            title: 'CPU Utilisation:',
+            liveTone: 'ok',
+            livePct: 1,
+            liveValueText: '1.0%',
+            avg60Confirmed: true,
+            avg60Tone: 'ok',
+            avg60Pct: 1,
+            avg60ValueText: '1.0%'
+          };
+        }
+        function renderServiceRows() { return ''; }
+        function renderRunningPb7Fallback() { return ''; }
+        """
+        assertions = """
+        const metric = { free_mb: 1, used_mb: 2, total_mb: 3, usage_pct: 4, usage_60s_peak: 5, usage_60s_window: 60 };
+        const html = renderMonitorPanel(
+          { server: { mem: metric, disk: metric, swap: metric, cpu: 1, cpu_60s: 1, cpu_60s_window: 60 }, v7: [], v7_running: [] },
+          true,
+          { summary_row: { hostname: 'magicnucpro', name: 'magicnucpro (local)' } }
+        );
+
+        assert.equal((html.match(/data-history-host='magicnucpro'/g) || []).length, 4);
+        assert.equal(html.includes("data-history-host=''"), false);
+        assert.equal(html.includes("data-history-metric='memory'"), true);
+        assert.equal(html.includes("data-history-metric='disk'"), true);
+        assert.equal(html.includes("data-history-metric='swap'"), true);
+        """
+        _run_node_assertions(
+            ["renderResourceMeter", "renderMonitorPanel"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_systemd_migration_button_shows_running_state(self) -> None:
+        """The sidebar distinguishes a running migration from a stale needed preview."""
+        bootstrap = """
+        """
+        assertions = """
+        const model = getVpsSystemdMigrationButtonModel(
+          'manibot92',
+          { status: { systemd_migration: { state: 'running', migration_complete: false, migration_needed: true } } },
+          {}
+        );
+
+        assert.equal(model.className, 'sb-btn warning');
+        assert.equal(model.text, 'Systemd migration running');
+        """
+        _run_node_assertions(
+            ["getVpsSystemdMigrationButtonModel"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_systemd_migration_button_unknown_state_is_neutral(self) -> None:
+        """Unknown migration state should be a neutral preview action, not a warning."""
+        bootstrap = """
+        """
+        assertions = """
+        const model = getVpsSystemdMigrationButtonModel('manibot91', { status: {} }, {});
+
+        assert.equal(model.className, 'sb-btn');
+        assert.equal(model.text, 'Preview systemd migration');
+        """
+        _run_node_assertions(
+            ["getVpsSystemdMigrationButtonModel"],
             bootstrap=bootstrap,
             assertions=assertions,
         )

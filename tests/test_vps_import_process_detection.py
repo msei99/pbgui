@@ -12,6 +12,7 @@ import pytest
 import api.v7_instances as v7_instances
 from master.async_monitor import INSTANCE_COLLECT_SCRIPT
 import vps_manager_core as core
+import vps_manager_service as service_mod
 from vps_manager_service import VPSManagerService, _ensure_import_public_key, _import_process_line_is_legacy, _set_import_key_check
 
 
@@ -184,6 +185,98 @@ def test_set_import_key_check_updates_existing_check() -> None:
     assert probe["checks"] == [
         {"label": "SSH key login for monitoring", "ok": True, "detail": "Key authentication succeeded."}
     ]
+
+
+def test_existing_vps_probe_allows_missing_local_hosts_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Existing VPS probe can continue via entered IPv4 before local /etc/hosts is updated."""
+    service = object.__new__(VPSManagerService)
+    service.vpsmanager = SimpleNamespace(list=lambda: [])
+
+    class FakeKey:
+        """Minimal SSH key double for host-key probe."""
+
+        def get_name(self) -> str:
+            """Return a deterministic key type."""
+            return "ssh-ed25519"
+
+    fetched_hosts: list[str] = []
+
+    def fake_fetch_remote_host_key(host: str, port: int = 22, timeout: int = 10) -> FakeKey:
+        """Capture the host used for key lookup."""
+        del port, timeout
+        fetched_hosts.append(host)
+        return FakeKey()
+
+    monkeypatch.setattr(service_mod, "_hosts_entry_status", lambda hostname, ip: {"ok": False, "has_hostname": False, "current_ip": ""})
+    monkeypatch.setattr(service_mod, "_fetch_remote_host_key", fake_fetch_remote_host_key)
+    monkeypatch.setattr(service_mod, "_ssh_fingerprint_sha256", lambda key: "SHA256:test")
+    monkeypatch.setattr(service_mod, "_known_host_key_status", lambda host, port, key: "unknown")
+
+    result = service.probe_existing_vps_import({
+        "hostname": "manibot90",
+        "ip": "23.94.74.212",
+        "user": "mani",
+        "user_pw": "fresh-password",
+        "install_dir": "/home/mani/software",
+    })
+
+    assert fetched_hosts == ["23.94.74.212"]
+    assert result["local_hosts_ok"] is False
+    assert result["local_hosts_update_required"] is True
+    assert result["needs_host_key_confirmation"] is True
+    assert result["blockers"] == []
+    assert any("saving the import will add it" in warning for warning in result["warnings"])
+
+
+def test_save_existing_vps_import_writes_missing_hosts_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Saving an import writes /etc/hosts with local sudo when the probe requires it."""
+    writes: list[tuple[str, str, str]] = []
+    saved: list[str] = []
+    service = object.__new__(VPSManagerService)
+    service.vpsmanager = SimpleNamespace(list=lambda: [], vpss=[])
+    service.probe_existing_vps_import = lambda form: {
+        "hostname": "manibot90",
+        "ip": "23.94.74.212",
+        "user": "mani",
+        "local_hosts_update_required": True,
+        "needs_host_key_confirmation": False,
+        "blockers": [],
+        "detected": {
+            "remote_pbgui_dir": "/home/mani/software/pbgui",
+            "swap": "2G",
+            "bucket": "",
+            "coinmarketcap_api_key": "",
+            "firewall": True,
+            "firewall_ssh_port": 22,
+            "firewall_ssh_ips": "198.51.100.1",
+            "key_auth_ok": True,
+        },
+    }
+    service.write_hosts_entry = lambda ip, hostname, sudo_pw: writes.append((ip, hostname, sudo_pw)) or {"ok": True}
+    service._store_session_secrets = lambda token, hostname, values: None
+    service._set_vps_monitor_enabled = lambda hostname, enabled: None
+    service._invalidate_bucket_cleanup_indicator = lambda: None
+    service._build_vps_config = lambda token, vps: {"hostname": vps.hostname, "ip": vps.ip}
+
+    def fake_save(self) -> None:
+        """Capture saved VPS hostnames."""
+        saved.append(self.hostname)
+
+    monkeypatch.setattr(service_mod.VPS, "save", fake_save)
+
+    result = service.save_existing_vps_import(
+        "token",
+        {
+            "hostname": "manibot90",
+            "ip": "23.94.74.212",
+            "user_pw": "fresh-password",
+            "local_sudo_pw": "local-sudo-password",
+        },
+    )
+
+    assert writes == [("23.94.74.212", "manibot90", "local-sudo-password")]
+    assert saved == ["manibot90"]
+    assert result["hostname"] == "manibot90"
 
 
 def test_update_vps_passes_empty_optional_values(monkeypatch, tmp_path: Path) -> None:
@@ -887,6 +980,31 @@ def test_write_hosts_entry_returns_success_without_password_in_content(monkeypat
     assert "82.165.176.129\tmanibot02" in str(captured["input"])
 
 
+def test_vps_load_recovers_missing_hostname_from_file_path(tmp_path: Path) -> None:
+    """Legacy/corrupt host JSON with missing hostname is recovered from file name."""
+    host_dir = tmp_path / "manibot90"
+    host_dir.mkdir()
+    path = host_dir / "manibot90.json"
+    path.write_text('{"_hostname": null, "ip": "23.94.74.212", "user": "mani"}', encoding="utf-8")
+
+    vps = core.VPS()
+    vps.load(str(path))
+
+    assert vps.hostname == "manibot90"
+    assert vps.ip == "23.94.74.212"
+
+
+def test_vps_manager_context_detail_uses_quick_detail_for_fluid_switching() -> None:
+    """WebSocket context changes should stay quick so host switching remains fluid."""
+    source = Path("api/vps_manager.py").read_text(encoding="utf-8")
+    start = source.index("async def _send_current_context_detail")
+    next_def = source.find("\n\n", start + 1)
+    end = next_def if next_def >= 0 else len(source)
+    body = source[start:end]
+
+    assert "_build_quick_detail_for_context" in body
+
+
 def test_systemd_migration_complete_with_unconfigured_optional_units() -> None:
     """Unconfigured PBRemote/CoinData units do not keep systemd migration pending."""
     service = object.__new__(VPSManagerService)
@@ -916,6 +1034,140 @@ SECTION\tprocesses\tEND
     assert status["migration_complete"] is True
     assert status["migration_needed"] is False
     assert status["units_ready"] is True
+
+
+def test_systemd_migration_running_status_does_not_reuse_stale_cache() -> None:
+    """A running migration clears stale preview cache instead of keeping the sidebar orange."""
+    service = object.__new__(VPSManagerService)
+    service._vps_systemd_migration_status_cache = {
+        "manibot92": {
+            "state": "needed",
+            "available": True,
+            "migration_complete": False,
+            "migration_needed": True,
+            "units_ready": False,
+            "checked_at": 9999999999,
+        }
+    }
+    vps = SimpleNamespace(hostname="manibot92", command="vps-migrate-systemd", update_status="running")
+
+    status = service._get_vps_systemd_migration_status(vps, {}, quick=False)
+
+    assert status["state"] == "running"
+    assert status["available"] is True
+    assert status["migration_complete"] is False
+    assert "manibot92" not in service._vps_systemd_migration_status_cache
+
+
+def test_systemd_migration_status_uses_monitor_host_meta() -> None:
+    """Migration status is read from monitor host metadata."""
+    service = object.__new__(VPSManagerService)
+    service._vps_systemd_migration_status_cache = {}
+    vps = SimpleNamespace(
+        hostname="manibot72",
+        ip="167.86.69.219",
+        user="mani",
+        user_pw=None,
+        remote_pbgui_dir="/home/mani/software/pbgui",
+        command="vps-update",
+        update_status="successful",
+    )
+    host_state = {
+        "connection": {"status": "connected"},
+        "meta": {
+            "systemd_migration": {
+                "state": "needed",
+                "available": True,
+                "migration_complete": False,
+                "migration_needed": True,
+                "units_ready": False,
+                "legacy_start_sh_exists": True,
+            }
+        },
+    }
+
+    status = service._get_vps_systemd_migration_status(vps, host_state, quick=False)
+
+    assert status["state"] == "needed"
+    assert status["migration_needed"] is True
+    assert status["legacy_start_sh_exists"] is True
+
+
+def test_systemd_migration_status_unknown_without_monitor_meta() -> None:
+    """Missing monitor host metadata stays neutral/unknown."""
+    service = object.__new__(VPSManagerService)
+    service._vps_systemd_migration_status_cache = {}
+    service._host_online = lambda host_state: True
+    vps = SimpleNamespace(hostname="manibot72", command="vps-update", update_status="successful")
+
+    status = service._get_vps_systemd_migration_status(vps, {"connection": {"status": "connected"}}, quick=False)
+
+    assert status["state"] == "unknown"
+    assert status["migration_needed"] is False
+    assert status["available"] is False
+
+
+def test_monitor_host_meta_collects_systemd_migration_status() -> None:
+    """Host metadata collector publishes systemd migration status for the sidebar."""
+    source = Path("master/async_monitor.py").read_text(encoding="utf-8")
+    assert "result['systemd_migration'] = build_systemd_migration_status" in source
+    assert "required_units" in source
+    assert "legacy_process_count" in source
+
+
+def test_systemd_migration_playbook_enables_only_configured_optional_units() -> None:
+    """The migration playbook must not always start PBRemote/PBCoinData."""
+    playbook = Path("vps-migrate-systemd.yml").read_text(encoding="utf-8")
+
+    assert "read PBGui optional service config" in playbook
+    assert "pbgui_enabled_services" in playbook
+    assert "{{ pbgui_enabled_services | join(',') }}" in playbook
+    assert "- pbrun,pbremote,pbcoindata" not in playbook
+    assert "for unit in {{ all_systemd_units | join(' ') }}" in playbook
+
+
+def test_local_master_metrics_are_recorded_in_host_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Local master telemetry uses the same host metric history stores as VPS hosts."""
+    service = object.__new__(VPSManagerService)
+    recorded: list[tuple[str, str, object, bool, str]] = []
+
+    class FakeStore:
+        """Capture host metric history writes."""
+
+        def __init__(self, name: str) -> None:
+            """Store the metric name for assertions."""
+            self.name = name
+            self.flushes = 0
+
+        def record(self, hostname: str, **kwargs) -> None:
+            """Capture a history sample."""
+            recorded.append((self.name, hostname, kwargs.get("value"), bool(kwargs.get("confirmed")), str(kwargs.get("same_minute_mode") or "")))
+
+        def maybe_flush(self) -> None:
+            """Capture flush attempts."""
+            self.flushes += 1
+
+    stores = {name: FakeStore(name) for name in ("cpu", "memory", "disk", "swap")}
+    monkeypatch.setattr(service_mod, "get_monitor", lambda: SimpleNamespace(_host_metric_history=stores))
+
+    service._record_local_master_server_metric_history(
+        "magicnucpro",
+        {
+            "cpu_60s": 12.5,
+            "cpu_60s_window": 60.0,
+            "mem": {"usage_pct": 27, "total_mb": 63852},
+            "disk": {"usage_pct": 58, "total_mb": 936737},
+            "swap": {"usage_pct": 43, "total_mb": 8191},
+        },
+    )
+
+    assert recorded == [
+        ("cpu", "magicnucpro", 12.5, True, ""),
+        ("memory", "magicnucpro", 27, True, "peak"),
+        ("disk", "magicnucpro", 58, True, "peak"),
+        ("swap", "magicnucpro", 43, True, "peak"),
+    ]
+    assert all(store.flushes == 1 for store in stores.values())
 
 
 def test_instance_collect_script_reports_dynamic_ignore_flag() -> None:
