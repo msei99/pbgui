@@ -1023,8 +1023,8 @@ button, input, textarea, select { font: inherit; }
   min-height: auto;
 }
 
-.limits-inline-stack input[type="number"],
-.limits-inline-range input[type="number"] {
+.limits-inline-stack input.limits-number-input,
+.limits-inline-range input.limits-number-input {
   font-family: var(--mono);
 }
 
@@ -1851,6 +1851,42 @@ textarea.json-invalid:focus {
   text-overflow: ellipsis;
 }
 
+.optlog-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sm);
+}
+
+.optlog-mini-actions {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.optlog-mini-btn {
+  border: 1px solid rgba(77,166,255,.32);
+  border-radius: 4px;
+  background: rgba(77,166,255,.10);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 6px;
+}
+
+.optlog-mini-btn:hover:not(:disabled) {
+  background: rgba(77,166,255,.18);
+  border-color: rgba(77,166,255,.55);
+  color: var(--text);
+}
+
+.optlog-mini-btn:disabled {
+  cursor: not-allowed;
+  opacity: .38;
+}
+
 .optlog-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2344,7 +2380,16 @@ textarea.json-invalid:focus {
     </div>
     <div class="optlog-summary-grid">
       <div class="optlog-card"><div class="optlog-label">Phase</div><div id="optlog-phase" class="optlog-value">-</div></div>
-      <div class="optlog-card"><div class="optlog-label">Pareto Front</div><div id="optlog-pareto" class="optlog-value">-</div></div>
+      <div class="optlog-card">
+        <div class="optlog-card-row">
+          <div class="optlog-label">Pareto Front</div>
+          <div class="optlog-mini-actions">
+            <button type="button" class="optlog-mini-btn" id="optlog-open-results" title="Show matching optimize results">Results</button>
+            <button type="button" class="optlog-mini-btn" id="optlog-open-pareto-explorer" title="Open matching result in Pareto Explorer">Pareto Explorer</button>
+          </div>
+        </div>
+        <div id="optlog-pareto" class="optlog-value">-</div>
+      </div>
       <div class="optlog-card"><div class="optlog-label">Backend</div><div id="optlog-backend" class="optlog-value">-</div></div>
       <div class="optlog-card"><div class="optlog-label">Elapsed</div><div id="optlog-elapsed" class="optlog-value">-</div></div>
       <div class="optlog-card"><div class="optlog-label">CPU</div><div id="optlog-cpu" class="optlog-value" data-tip-mono="true">-</div></div>
@@ -2469,6 +2514,7 @@ var state = {
   logViewer: null,
   logFile: '',
   logFilename: '',
+  logResultName: '',
   plotSessionId: '',
   plotSessionKind: '',
   logStatusTimer: null,
@@ -2832,7 +2878,9 @@ function isLimitRangePenalize(penalizeIf) {
 }
 
 function normalizeLimitNumber(raw, fallback) {
-  var parsed = parseFloat(raw);
+  var text = String(raw == null ? '' : raw).trim();
+  if (text.indexOf(',') >= 0 && text.indexOf('.') < 0) text = text.replace(',', '.');
+  var parsed = parseFloat(text);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
@@ -2929,6 +2977,10 @@ function normalizeLimitEntries(rawLimits) {
     return legacyLimitsDictToEntries(source);
   }
   return [];
+}
+
+function isLimitNumberFormField(field) {
+  return field === 'value' || field === 'range_low' || field === 'range_high';
 }
 
 function defaultLimitForm(metricType) {
@@ -3037,7 +3089,7 @@ function renderLimitSelectControl(id, options, selectedValue, onChange, defaultL
 }
 
 function renderLimitNumberControl(id, value, onChange) {
-  return '<input type="number" id="' + id + '" step="0.000001" value="' + escAttr(String(value == null ? '' : value)) + '" oninput="' + onChange + '">';
+  return '<input type="text" class="limits-number-input" id="' + id + '" inputmode="decimal" autocomplete="off" value="' + escAttr(String(value == null ? '' : value)) + '" oninput="' + onChange + '">';
 }
 
 function renderLimitField(label, controlHtml, tip, span, extraClass) {
@@ -3050,7 +3102,7 @@ function renderInlineSelectControl(options, selectedValue, onChange, defaultLabe
 }
 
 function renderInlineNumberInput(value, onChange) {
-  return '<input type="number" step="0.000001" value="' + escAttr(String(value == null ? '' : value)) + '" oninput="' + onChange + '">';
+  return '<input type="text" class="limits-number-input" inputmode="decimal" autocomplete="off" value="' + escAttr(String(value == null ? '' : value)) + '" oninput="' + onChange + '">';
 }
 
 function renderInlineMetricEditor(form, updateFnName) {
@@ -3156,8 +3208,8 @@ function getLimitEntries() {
 function updateLimitAddField(field, value) {
   var next = Object.assign({}, state.limitAddForm || defaultLimitForm());
   next[field] = value;
-  state.limitAddForm = normalizeLimitForm(next);
-  renderOptimizeLimitsEditor();
+  state.limitAddForm = isLimitNumberFormField(field) ? next : normalizeLimitForm(next);
+  if (!isLimitNumberFormField(field)) renderOptimizeLimitsEditor();
 }
 
 function startLimitAdd() {
@@ -3178,8 +3230,8 @@ function updateLimitEditField(field, value) {
   if (state.limitEditIndex < 0) return;
   var next = Object.assign({}, state.limitEditForm || defaultLimitForm());
   next[field] = value;
-  state.limitEditForm = normalizeLimitForm(next);
-  renderOptimizeLimitsEditor();
+  state.limitEditForm = isLimitNumberFormField(field) ? next : normalizeLimitForm(next);
+  if (!isLimitNumberFormField(field)) renderOptimizeLimitsEditor();
 }
 
 function startLimitEdit(index) {
@@ -4522,8 +4574,12 @@ function buildOptimizeCpuTooltip(system, runtime, process) {
 
 function renderOptimizeLogDashboard(status) {
   var cpuEl = el('optlog-cpu');
+  var resultName = status && status.name ? String(status.name) : state.logResultName;
+  var hasLogResult = !!String(resultName || state.logFilename || '').trim();
   var tooltipState = window.__pbguiTooltipState || null;
   el('opt-log-dashboard').classList.add('visible');
+  el('optlog-open-results').disabled = !hasLogResult;
+  el('optlog-open-pareto-explorer').disabled = !hasLogResult;
   if (!status) {
     el('optlog-progress-fill').style.width = '0%';
     el('optlog-progress-label').textContent = 'Waiting for optimize status...';
@@ -4543,6 +4599,7 @@ function renderOptimizeLogDashboard(status) {
     el('optlog-error').textContent = '-';
     return;
   }
+  if (resultName) state.logResultName = resultName;
   var progress = status.progress || {};
   var runtime = status.runtime || {};
   var system = status.system || {};
@@ -4633,6 +4690,83 @@ function stopOptimizeLogStatusPolling() {
     state.logStatusTimer = null;
   }
   state.logFilename = '';
+  state.logResultName = '';
+}
+
+function logPanelResultQuery() {
+  return String(state.logResultName || state.logFilename || '').trim();
+}
+
+function findLogPanelResult() {
+  var query = logPanelResultQuery().toLowerCase();
+  if (!query) return null;
+  var matches = (state.results || []).filter(function(result) {
+    var name = String(result && (result.name || result.result) || '').toLowerCase();
+    var path = String(result && result.path || '').toLowerCase();
+    return name === query || path.split('/').pop() === query;
+  });
+  if (!matches.length) {
+    matches = (state.results || []).filter(function(result) {
+      return String(result && (result.name || result.result || result.path) || '').toLowerCase().indexOf(query) >= 0;
+    });
+  }
+  matches.sort(function(a, b) {
+    var aTime = a && a.modified ? new Date(a.modified).getTime() : 0;
+    var bTime = b && b.modified ? new Date(b.modified).getTime() : 0;
+    return (isNaN(bTime) ? 0 : bTime) - (isNaN(aTime) ? 0 : aTime);
+  });
+  return matches[0] || null;
+}
+
+function showLogPanelResultsFallback(query) {
+  state.resultSearch = query;
+  el('result-search').value = query;
+  setPanel('results');
+  renderResults();
+}
+
+function openLogPanelParetosForResult(result) {
+  if (!result || !result.path) return false;
+  state.selectedResultPath = result.path;
+  state.selectedResultName = result.name || result.result || state.selectedResultName;
+  setPanel('paretos');
+  loadParetos(result.path, state.selectedResultName).catch(handleError);
+  return true;
+}
+
+function openLogPanelResults() {
+  var query = logPanelResultQuery();
+  if (!query) {
+    toast('No optimize result is linked to this log.', 'warn');
+    return;
+  }
+  if (openLogPanelParetosForResult(findLogPanelResult())) return;
+  loadResults().then(function() {
+    if (openLogPanelParetosForResult(findLogPanelResult())) return;
+    showLogPanelResultsFallback(query);
+    toast('Matching result not found yet.', 'warn');
+  }).catch(handleError);
+}
+
+async function openLogPanelParetoExplorer() {
+  var query = logPanelResultQuery();
+  if (!query) {
+    toast('No optimize result is linked to this log.', 'warn');
+    return;
+  }
+  var result = findLogPanelResult();
+  if (!result) {
+    await loadResults();
+    result = findLogPanelResult();
+  }
+  if (!result) {
+    showLogPanelResultsFallback(query);
+    toast('Matching result not found yet.', 'warn');
+    return;
+  }
+  state.selectedResultPath = result.path;
+  state.selectedResultName = result.name || result.result || state.selectedResultName;
+  openFastApiParetoExplorer(result.path);
 }
 
 function deepClone(value) {
@@ -10128,6 +10262,7 @@ function ensureLogViewer() {
 function openLogPanel(filename, name) {
   state.logFile = 'optimizes/' + filename + '.log';
   state.logFilename = filename;
+  state.logResultName = name || '';
   var panel = el('log-panel');
   el('log-panel-title').textContent = 'Optimize log - ' + (name || filename);
   if (state.logViewer) {
@@ -10727,6 +10862,10 @@ function attachEventHandlers() {
     saveEditor(true).catch(handleError);
   });
   el('log-panel-close').addEventListener('click', closeLogPanel);
+  el('optlog-open-results').addEventListener('click', openLogPanelResults);
+  el('optlog-open-pareto-explorer').addEventListener('click', function() {
+    openLogPanelParetoExplorer().catch(handleError);
+  });
 
   el('configs-tbody').addEventListener('click', function(event) {
     var target = event.target.closest('button');

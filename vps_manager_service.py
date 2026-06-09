@@ -529,6 +529,23 @@ def _configured_optional_secret(value: Any) -> bool:
     return not (normalized.startswith("<") and normalized.endswith(">"))
 
 
+def _pbremote_bucket_configured(pbremote: Any) -> bool:
+    return _configured_optional_secret(getattr(pbremote, "bucket", None)) or _configured_optional_secret(load_ini("pbremote", "bucket"))
+
+
+def _pbremote_error_is_optional_unconfigured(error: str) -> bool:
+    lowered = str(error or "").strip().lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "rclone not installed",
+            "rclone not configured",
+            "no buckets found",
+            "bucket not configured",
+        )
+    )
+
+
 def _python_major_minor(executable: str | None) -> str:
     candidate = str(executable or "").strip()
     if not candidate:
@@ -2149,8 +2166,9 @@ class VPSManagerService:
 
     def _build_errors(self, pbremote: PBRemote) -> list[str]:
         out: list[str] = []
-        if pbremote.error:
-            out.append(str(pbremote.error))
+        error = str(getattr(pbremote, "error", "") or "").strip()
+        if error and (_pbremote_bucket_configured(pbremote) or not _pbremote_error_is_optional_unconfigured(error)):
+            out.append(error)
         return out
 
     def _build_overview_rows(self, pbremote: PBRemote,
@@ -2182,7 +2200,7 @@ class VPSManagerService:
             "name": f"{pbremote.name} (local)",
             "hostname": pbremote.name,
             "nav": "master",
-            "online": pbremote.is_running(),
+            "online": True,
             "role": "master",
             "role_icon": "🧠",
             "start": datetime.fromtimestamp(boot_ts).strftime("%Y-%m-%d %H:%M:%S"),
@@ -2345,16 +2363,17 @@ class VPSManagerService:
     def _build_master_status(self, pbremote: PBRemote, coindata_ok: bool) -> dict[str, Any]:
         summary_row = self._build_master_overview_row(pbremote)
         local_coindata = getattr(pbremote.local_run, "coindata", None)
-        pbremote_configured = _configured_optional_secret(getattr(pbremote, "bucket", None))
+        pbremote_configured = _pbremote_bucket_configured(pbremote)
         coindata_configured = _configured_optional_secret(getattr(local_coindata, "api_key", None))
+        pbremote_error = str(getattr(pbremote, "error", "") or "").strip()
         local_no_new_privs = _local_no_new_privileges()
         local_sudo_blocked_reason = "Local sudo blocked by runtime (`NoNewPrivs`)." if local_no_new_privs else ""
         pbgui_github = str(summary_row.get("pbgui_github") or "")
         pb7_github = str(summary_row.get("pb7_github") or "")
         return {
             "name": pbremote.name,
-            "online": pbremote.is_online(),
-            "rclone_ok": pbremote_configured,
+            "online": bool(summary_row.get("online")),
+            "rclone_ok": not bool(pbremote_error) if pbremote_configured else False,
             "pbremote_configured": pbremote_configured,
             "coindata_ok": coindata_ok,
             "coindata_configured": coindata_configured,

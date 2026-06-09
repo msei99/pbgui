@@ -101,7 +101,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 ### Do NOT Modify Without Approval
 - PB7/passivbot code (`pb7/` or upstream repo).
 - PB6 legacy modules: `Multi.py`, `Backtest.py`, `Optimize.py`, `BacktestMulti.py`, `OptimizeMulti.py`, `Instance.py`.
-- Do not deploy/copy files to manibot01 or any remote server without explicit permission.
+- Do not deploy/copy files to any bot/VPS host or remote server without explicit permission.
 
 ### General Rules
 - Never make large unsolicited design changes. Propose first, wait for "Yes".
@@ -109,6 +109,11 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 - Never silently do more than requested.
 - Always ask before committing or pushing.
 - Never build modal windows/dialogs that close when the user clicks outside them; require an explicit button/action to close.
+
+### Remote Bot Operations
+- Never update, pull, deploy, copy files, stash changes, restart services, or otherwise modify any bot/VPS host without explicit confirmation for that exact remote action.
+- A generic release, commit, tag, or push approval does not imply permission to update any bot/VPS host.
+- Read-only inspection of remote hosts is allowed when needed for debugging, but any command that changes files, git state, services, processes, or runtime state requires a separate question first.
 
 ### Release Workflow
 - Steps in `RELEASING.md`.

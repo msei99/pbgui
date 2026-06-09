@@ -433,6 +433,68 @@ def test_vps_status_prefers_remote_optional_meta_over_stale_local_config() -> No
     assert status["coindata_configured"] is False
 
 
+def test_master_errors_skip_unconfigured_pbremote_rclone_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unconfigured optional PBRemote does not surface a red rclone warning."""
+    service = object.__new__(VPSManagerService)
+    monkeypatch.setattr(service_mod, "load_ini", lambda section, parameter: "")
+
+    errors = service._build_errors(SimpleNamespace(error="rclone not installed", bucket=None))
+
+    assert errors == []
+
+
+def test_master_errors_keep_configured_pbremote_rclone_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configured PBRemote still reports rclone failures."""
+    service = object.__new__(VPSManagerService)
+    monkeypatch.setattr(service_mod, "load_ini", lambda section, parameter: "remote-bucket:")
+
+    errors = service._build_errors(SimpleNamespace(error="rclone not installed", bucket=None))
+
+    assert errors == ["rclone not installed"]
+
+
+def test_master_overview_row_is_online_without_pbremote_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The local master overview row reflects the responding local API, not PBRemote."""
+    service = object.__new__(VPSManagerService)
+    service._get_pbgui_release = lambda: {"version": "v1.0", "current_branch": "main", "current_commit": "abcdef123"}
+    service._get_pb7_release = lambda: {"version": "v7.0", "current_branch": "master", "current_commit": "123abcdef"}
+    service._get_local_package_status = lambda: {"reboot": False, "upgrades": "0"}
+    service._build_master_pbgui_github_status = lambda pbremote, branch, commit: ""
+    service._build_master_pb7_github_status = lambda pbremote, branch, commit: ""
+    monkeypatch.setattr(service_mod, "load_ini", lambda section, parameter: "")
+    pbremote = SimpleNamespace(name="local-master", boot=0, is_running=lambda: False)
+
+    row = service._build_master_overview_row(pbremote)
+
+    assert row["online"] is True
+
+
+def test_master_status_marks_configured_pbremote_error_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configured PBRemote with a startup error is not reported as rclone-ready."""
+    service = object.__new__(VPSManagerService)
+    service._build_master_overview_row = lambda pbremote: {
+        "online": True,
+        "updates": "N/A",
+        "pbgui_github": "",
+        "pb7_github": "",
+    }
+    service.vpsmanager = SimpleNamespace(update_status="successful", command_text="", last_update="")
+    monkeypatch.setattr(service_mod, "load_ini", lambda section, parameter: "remote-bucket:")
+    monkeypatch.setattr(service_mod, "_local_no_new_privileges", lambda: False)
+    pbremote = SimpleNamespace(
+        name="local-master",
+        bucket=None,
+        error="rclone not installed",
+        local_run=SimpleNamespace(coindata=SimpleNamespace(api_key="")),
+    )
+
+    status = service._build_master_status(pbremote, coindata_ok=False)
+
+    assert status["online"] is True
+    assert status["pbremote_configured"] is True
+    assert status["rclone_ok"] is False
+
+
 def test_run_vps_command_blocks_stale_optional_reenable_from_remote_meta() -> None:
     """A second master does not re-enable VPS optional services from stale local config."""
     captured: dict[str, object] = {}
