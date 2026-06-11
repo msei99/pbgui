@@ -2314,6 +2314,7 @@ class VPSManagerService:
         row = {
             "name": hostname,
             "hostname": hostname,
+            "user": str(getattr(vps, "user", "") or "") if vps else "",
             "nav": "vps",
             "online": online,
             "ssh_online": ssh_online,

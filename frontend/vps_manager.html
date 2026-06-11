@@ -3368,6 +3368,14 @@
       return hosts.join(', ');
     }
 
+    function getOverviewRowByHostname(hostname) {
+      const target = String(hostname || '').trim();
+      if (!target) return null;
+      return getOverviewRows().find(function (row) {
+        return String((row || {}).hostname || '').trim() === target;
+      }) || null;
+    }
+
     function cancelOverviewDeployPasswordFlow(options) {
       const flow = store.pendingOverviewDeploy;
       if (!flow) return;
@@ -5753,10 +5761,11 @@
       const persistToForm = opts.persistToForm !== false;
       const targetHost = String(hostname || '').trim();
       const targetUi = targetHost ? ensureVpsUi(targetHost, store.detail && store.detail.hostname === targetHost ? store.detail : null) : null;
-      const targetUser = String(opts.user || (targetUi && targetUi.form ? targetUi.form.user : '') || '').trim();
+      const overviewRow = getOverviewRowByHostname(targetHost);
+      const targetUser = String(opts.user || (targetUi && targetUi.form ? targetUi.form.user : '') || (overviewRow ? overviewRow.user : '') || '').trim();
       const targetRows = [];
-      if (targetHost) targetRows.push('<div><span class="field-sub">Host</span><strong>' + esc(targetHost) + '</strong></div>');
-      if (targetUser) targetRows.push('<div><span class="field-sub">User</span><strong>' + esc(targetUser) + '</strong></div>');
+      if (targetHost) targetRows.push('<div style="display:grid;gap:3px"><span class="field-sub" style="display:block">Host</span><strong>' + esc(targetHost) + '</strong></div>');
+      if (targetUser) targetRows.push('<div style="display:grid;gap:3px"><span class="field-sub" style="display:block">User</span><strong>' + esc(targetUser) + '</strong></div>');
       const targetHtml = targetRows.length
         ? '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:4px;padding:10px;border:1px solid rgba(255,255,255,0.08);border-radius:10px;background:rgba(15,23,42,0.55)">' + targetRows.join('') + '</div>'
         : '';
