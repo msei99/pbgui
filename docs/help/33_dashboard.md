@@ -133,6 +133,22 @@ Columns: User · Symbol · Side · Size · uPnL · Entry · Price · DCA · Next
 - **Click a row** to select that position — the linked **📝 ORDERS** widget immediately loads the price chart for that symbol with order markers.
 - The Users dropdown in the widget header filters by account.
 
+#### Manage positions
+
+The **Manage** button next to the Positions title opens a draggable, resizable dialog for the currently visible positions.
+
+Per-row actions:
+- **Market close amount** sends a direct reduce-only market order for the selected row amount.
+- **Panic symbol** saves a per-symbol PB7 forced-mode override and syncs the config.
+- **Graceful stop symbol** saves a per-symbol `graceful_stop` forced-mode override and syncs the config.
+- **Take profit only symbol** saves a per-symbol `tp_only` forced-mode override and syncs the config.
+
+All-position actions at the bottom of the dialog:
+- **Preview Panic**, **Preview Graceful stop**, **Preview TP only** show the config that would be saved without writing or syncing anything.
+- **Panic**, **Graceful stop**, **Take Profit Only** save the corresponding global PB7 forced mode for long and short positions, then sync the config to the bot host.
+
+Panic, Graceful Stop and Take Profit Only are Passivbot config/sync actions. They do not submit direct exchange orders. Use **Market close amount** when you explicitly want PBGui to send a direct reduce-only market order.
+
 ### 📝 ORDERS
 
 A **candlestick chart** with overlaid order markers (entries, take-profits, DCA orders) for the position selected in the linked Positions widget.

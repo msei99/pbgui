@@ -133,6 +133,22 @@ Spalten: User · Symbol · Side · Size · uPnL · Entry · Price · DCA · Next
 - **Auf eine Zeile klicken** wählt diese Position aus — das verknüpfte **📝 ORDERS**-Widget lädt sofort den Kurs-Chart für dieses Symbol mit Order-Markierungen.
 - Das Benutzer-Dropdown im Widget-Kopf filtert nach Konto.
 
+#### Positionen verwalten
+
+Der **Manage**-Button neben dem Positions-Titel öffnet einen verschiebbaren und skalierbaren Dialog für die aktuell sichtbaren Positionen.
+
+Aktionen pro Zeile:
+- **Market close amount** sendet eine direkte reduce-only Market-Order für die ausgewählte Menge dieser Position.
+- **Panic symbol** speichert einen symbolbezogenen PB7 Forced-Mode-Override und synchronisiert die Config.
+- **Graceful stop symbol** speichert einen symbolbezogenen `graceful_stop` Forced-Mode-Override und synchronisiert die Config.
+- **Take profit only symbol** speichert einen symbolbezogenen `tp_only` Forced-Mode-Override und synchronisiert die Config.
+
+Aktionen für alle Positionen unten im Dialog:
+- **Preview Panic**, **Preview Graceful stop**, **Preview TP only** zeigen die Config, die gespeichert würde, ohne zu schreiben oder zu synchronisieren.
+- **Panic**, **Graceful stop**, **Take Profit Only** speichern den entsprechenden globalen PB7 Forced Mode für Long und Short und synchronisieren die Config zum Bot-Host.
+
+Panic, Graceful Stop und Take Profit Only sind Passivbot-Config-/Sync-Aktionen. Sie senden keine direkten Exchange-Orders. **Market close amount** verwenden, wenn PBGui explizit eine direkte reduce-only Market-Order senden soll.
+
 ### 📝 ORDERS
 
 Ein **Candlestick-Chart** mit eingeblendeten Order-Markierungen (Entries, Take-Profits, DCA-Orders) für die im Positions-Widget ausgewählte Position.

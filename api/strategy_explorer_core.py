@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from pb7_config import load_pb7_config
-from pbgui_purefunc import PBGDIR, pb7dir
+from pbgui_purefunc import PBGDIR, pb7dir, pb7venv
 from strategy_explorer_types import (
     BotParams,
     EmaBands,
@@ -130,10 +130,57 @@ def _resolve_safe_backtest_dir(backtest_dir: str | None) -> str | None:
     return resolved
 
 
+def _pb7_venv_site_packages() -> list[str]:
+    try:
+        venv_python = str(pb7venv() or "").strip()
+    except Exception:
+        return []
+    if not venv_python:
+        return []
+
+    # Do not resolve symlinks here. The configured venv path is the source of truth.
+    venv_root = os.path.dirname(os.path.dirname(venv_python))
+    py_tag = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    candidates = [
+        os.path.join(venv_root, "lib", py_tag, "site-packages"),
+        os.path.join(venv_root, "local", "lib", py_tag, "dist-packages"),
+        os.path.join(venv_root, "lib", py_tag, "dist-packages"),
+    ]
+    return [path for path in candidates if os.path.isdir(path)]
+
+
+def _normalize_pb7_src_dir(pb7_path: str) -> str:
+    path = str(pb7_path or "").strip()
+    if not path:
+        return ""
+    if os.path.exists(os.path.join(path, "passivbot.py")):
+        return path
+    src_path = os.path.join(path, "src")
+    if os.path.exists(os.path.join(src_path, "passivbot.py")):
+        return src_path
+    return path
+
+
 def _import_passivbot_rust(pb7_src_dir: str):
-    if pb7_src_dir and pb7_src_dir not in sys.path:
-        sys.path.insert(0, pb7_src_dir)
-    import passivbot_rust as pbr  # type: ignore
+    search_paths = [*_pb7_venv_site_packages()]
+    src_dir = _normalize_pb7_src_dir(pb7_src_dir)
+    if src_dir:
+        search_paths.append(src_dir)
+
+    for path in reversed(search_paths):
+        if path and path not in sys.path:
+            sys.path.insert(0, path)
+
+    try:
+        import passivbot_rust as pbr  # type: ignore
+    except ModuleNotFoundError as exc:
+        if exc.name == "passivbot_rust":
+            searched = ", ".join(search_paths) or "none"
+            raise ModuleNotFoundError(
+                "No module named 'passivbot_rust' in configured PB7 environment. "
+                f"Searched: {searched}"
+            ) from exc
+        raise
     return pbr
 
 

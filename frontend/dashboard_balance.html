@@ -83,7 +83,7 @@
         }
     }
 
-    var DR_VERSION = '20260410a';
+    var DR_VERSION = '20260610k';
 
     /* Load dashboard_render.js once (CSS + shared render primitives) */
     function _loadRenderScript(cb) {
@@ -121,12 +121,30 @@
     var lastRows      = [];     // cached rows for re-sorting
     var sortCol       = null;   // current sort column key
     var sortAsc       = true;   // sort direction
+    var statusSource  = 'db';
+    var statusTs      = 0;
 
     function tweColor(v)  { return v < 100 ? '#22c55e' : v < 200 ? '#f59e0b' : '#ef4444'; }
     function upnlColor(v) { return v >= 0  ? '#22c55e' : '#ef4444'; }
     function tweBarPct(v) { return Math.min(100, (v / 300) * 100).toFixed(1); }
     function signedFmt(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); }
     function setStatus(m) { var e = document.getElementById('db-status'); if (e) e.textContent = m; }
+    function statusLabel(source) {
+        var src = String(source || 'db').toLowerCase();
+        return src === 'live' ? 'Live' : (src === 'mixed' ? 'Mixed live/DB' : 'DB fallback');
+    }
+    function ageLabel(ts) {
+        var age = Math.max(0, Math.round((Date.now() - (ts || Date.now())) / 1000));
+        if (age <= 1) return 'now';
+        if (age < 60) return age + 's ago';
+        var min = Math.floor(age / 60);
+        if (min < 60) return min + 'm ago';
+        return Math.floor(min / 60) + 'h ago';
+    }
+    function refreshStatusAge() {
+        if (!statusTs) return;
+        setStatus(statusLabel(statusSource) + ': ' + ageLabel(statusTs));
+    }
 
     function renderRows(rows) {
         var tbody  = document.getElementById('db-body');
@@ -335,10 +353,16 @@
     function fetchBalance() {
         if (isStale()) return;
         if (!TOKEN || !API_BASE) return;
-        var url = API_BASE + '/dashboard/balance?users=' + usersParam();
+        var url = API_BASE + '/dashboard/balance?users=' + usersParam() + '&live=1';
         fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
             .then(function(r) { if (isStale()) return; if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-            .then(function(d) { if (isStale() || !d) return; renderData(d); setStatus('Updated: ' + new Date().toLocaleTimeString()); })
+            .then(function(d) {
+                if (isStale() || !d) return;
+                statusSource = d.source || 'db';
+                statusTs = Date.now();
+                renderData(d);
+                refreshStatusAge();
+            })
             .catch(function(e) { if (!isStale()) setStatus('\u26a0 Data unavailable'); });
     }
 
@@ -408,6 +432,7 @@
     /* Load shared CSS + render module, then connect */
     _loadRenderScript(function () {
         if (window.DashRender) { DashRender.injectCSS(); }
+        setInterval(refreshStatusAge, 1000);
         connect();
         fetchBalance();
     });

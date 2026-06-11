@@ -7,16 +7,25 @@ All endpoints require auth (Bearer token).
 from __future__ import annotations
 
 import asyncio as _asyncio
+import json
+import math
 import threading
 import time as _time
+import urllib.request
+from copy import deepcopy
 from datetime import datetime
+from pathlib import Path
 from typing import Any, List
 
-from fastapi import APIRouter, Body, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from api.auth import SessionToken, require_auth
+from logging_helpers import human_log as _log
+from pbgui_purefunc import PBGDIR
+
+SERVICE = "Dashboard"
 
 router = APIRouter()
 
@@ -33,6 +42,11 @@ _pending_full_configs: dict[str, dict[str, Any]] = {}
 
 # Cache connected Exchange instances per user so CCXT init only runs once per user.
 _exchange_cache: dict[str, Any] = {}
+
+_PANIC_GLOBAL_MODE = "p"
+_PANIC_OVERRIDE_MODE = "panic"
+_GRACEFUL_STOP_MODE = "graceful_stop"
+_TP_ONLY_MODE = "tp_only"
 
 
 def _classify_position_orders(orders: list, side: str) -> tuple[int, float, float]:
@@ -183,6 +197,489 @@ def _filter_live_orders_for_side(orders: list[dict], side: str) -> tuple[list[di
     return filtered, has_ambiguous
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    """Convert exchange payload values to finite floats."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return result if math.isfinite(result) else default
+
+
+def _dashboard_symbol_from_ccxt(raw_symbol: Any) -> str:
+    """Normalize CCXT symbols like DOGE/USDC:USDC to dashboard DOGEUSDC."""
+    symbol = str(raw_symbol or "").strip().upper()
+    if not symbol:
+        return ""
+    if "/" in symbol:
+        base = symbol.split("/", 1)[0]
+        quote = symbol.split("/", 1)[1].split(":", 1)[0]
+        return (base + quote).replace("-", "")
+    if ":" in symbol:
+        symbol = symbol.split(":", 1)[0]
+    return symbol.replace("/", "").replace("-", "")
+
+
+def _live_position_side(position: dict) -> str:
+    """Return a dashboard long/short side from a CCXT position payload."""
+    for source in (position, position.get("info", {}) if isinstance(position.get("info"), dict) else {}):
+        for key in ("side", "positionSide", "position_side", "posSide"):
+            side = _normalize_position_side(source.get(key))
+            if side in {"long", "short"}:
+                return side
+    signed_size = _safe_float(position.get("contracts") or position.get("size") or position.get("positionAmt"))
+    return "short" if signed_size < 0 else "long"
+
+
+def _live_position_size(position: dict) -> float:
+    """Return dashboard position size from CCXT contracts and contractSize."""
+    contracts = _safe_float(position.get("contracts"), 0.0)
+    if contracts == 0.0:
+        contracts = _safe_float(position.get("size") or position.get("positionAmt"), 0.0)
+    contract_size = _safe_float(position.get("contractSize"), 1.0) or 1.0
+    return abs(contracts * contract_size)
+
+
+def _live_position_price(position: dict, exchange: Any, symbol_ccxt: str) -> float:
+    """Return a fresh-ish position price, preferring exchange position fields."""
+    info = position.get("info", {}) if isinstance(position.get("info"), dict) else {}
+    for source in (position, info):
+        for key in ("markPrice", "mark_price", "lastPrice", "last_price", "indexPrice", "oraclePrice"):
+            price = _safe_float(source.get(key), 0.0)
+            if price > 0.0:
+                return price
+    try:
+        ticker = exchange.instance.fetch_ticker(symbol_ccxt)
+        for key in ("last", "mark", "bid", "ask"):
+            price = _safe_float(ticker.get(key), 0.0)
+            if price > 0.0:
+                return price
+    except Exception:
+        pass
+    return 0.0
+
+
+def _hyperliquid_user_state(user_obj: Any) -> dict[str, Any]:
+    """Fetch Hyperliquid clearinghouse state for the configured wallet/vault address."""
+    wallet = str(getattr(user_obj, "wallet_address", "") or "").strip()
+    if not wallet:
+        raise HTTPException(status_code=400, detail=f"Hyperliquid user '{user_obj.name}' has no wallet_address configured")
+    payload = json.dumps({"type": "clearinghouseState", "user": wallet}).encode()
+    req = urllib.request.Request(
+        "https://api.hyperliquid.xyz/info",
+        data=payload,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode() or "{}")
+
+
+def _hyperliquid_open_orders(user_obj: Any, symbol: str | None = None) -> list[dict[str, Any]]:
+    """Fetch Hyperliquid open orders for the configured wallet/vault address."""
+    wallet = str(getattr(user_obj, "wallet_address", "") or "").strip()
+    if not wallet:
+        raise HTTPException(status_code=400, detail=f"Hyperliquid user '{user_obj.name}' has no wallet_address configured")
+    payload = json.dumps({"type": "openOrders", "user": wallet}).encode()
+    req = urllib.request.Request(
+        "https://api.hyperliquid.xyz/info",
+        data=payload,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        raw_orders = json.loads(resp.read().decode() or "[]")
+    wanted_symbol = str(symbol or "").upper()
+    result = []
+    for order in raw_orders or []:
+        if not isinstance(order, dict):
+            continue
+        coin = str(order.get("coin") or "").strip().upper()
+        candidates = {coin, f"{coin}USDC", f"{coin}USDT"}
+        if wanted_symbol and wanted_symbol not in candidates:
+            continue
+        raw_side = str(order.get("side") or "").strip().upper()
+        result.append({
+            "price": _safe_float(order.get("limitPx") or order.get("price"), 0.0),
+            "amount": _safe_float(order.get("sz") or order.get("origSz") or order.get("amount"), 0.0),
+            "side": "buy" if raw_side in {"B", "BUY"} else "sell",
+            "info": order,
+        })
+    return result
+
+
+def _live_open_orders_for_symbol(user_obj: Any, symbol: str) -> list[dict[str, Any]]:
+    """Fetch normalized live open orders for a dashboard symbol."""
+    if str(getattr(user_obj, "exchange", "")).lower() == "hyperliquid":
+        return _hyperliquid_open_orders(user_obj, symbol)
+    exchange = _get_exchange(user_obj)
+    symbol_ccxt = _symbol_to_ccxt(symbol)
+    raw_orders = exchange.instance.fetch_open_orders(symbol=symbol_ccxt)
+    result = []
+    for order in raw_orders or []:
+        if str(order.get("status") or "open").lower() not in {"open", "new"}:
+            continue
+        normalized_order = dict(order)
+        normalized_order.update({
+            "price": _safe_float(order.get("price"), 0.0),
+            "amount": _safe_float(order.get("amount") or order.get("qty"), 0.0),
+            "side": str(order.get("side") or "buy").lower(),
+            "info": order.get("info", order),
+        })
+        result.append(normalized_order)
+    return result
+
+
+def _order_rows_from_live_orders(orders: list[dict[str, Any]]) -> list[list[Any]]:
+    """Convert normalized live orders to the DB row shape used by DCA/TP helpers."""
+    rows = []
+    for order in orders or []:
+        rows.append([0, 0, 0, _safe_float(order.get("amount"), 0.0), _safe_float(order.get("price"), 0.0), str(order.get("side") or "").lower()])
+    return rows
+
+
+def _dashboard_orders_for_position(user_obj: Any, db: Any, symbol: str, side: str, live: bool = True) -> tuple[list[dict[str, Any]], bool, str]:
+    """Return open orders for a position side, live-first with DB fallback."""
+    if live:
+        try:
+            live_orders = _live_open_orders_for_symbol(user_obj, symbol)
+            filtered, unknown = _filter_live_orders_for_side(live_orders, side)
+            if not filtered and unknown:
+                filtered = [_build_order_line(order) for order in live_orders]
+            return filtered, unknown, "live"
+        except Exception as exc:
+            _log(SERVICE, f"Live orders fetch failed for '{user_obj.name}/{symbol}', falling back to DB: {exc}", level="WARNING", user=user_obj.name)
+    db_orders = db.fetch_orders_by_symbol(user_obj.name, symbol) or []
+    orders = []
+    for o in sorted(db_orders, key=lambda x: x[4], reverse=True):
+        orders.append({"price": o[4], "amount": o[3], "side": o[5]})
+    return orders, False, "db"
+
+
+def _classify_orders_for_position(user_obj: Any, db: Any, symbol: str, side: str, live: bool = True) -> tuple[int, float, float]:
+    """Classify DCA/TP from live open orders with DB fallback."""
+    if live:
+        try:
+            live_orders = _live_open_orders_for_symbol(user_obj, symbol)
+            filtered, _unknown = _filter_live_orders_for_side(live_orders, side)
+            if not filtered:
+                filtered = [_build_order_line(order) for order in live_orders]
+            return _classify_position_orders(_order_rows_from_live_orders(filtered), side)
+        except Exception as exc:
+            _log(SERVICE, f"Live order classification failed for '{user_obj.name}/{symbol}', falling back to DB: {exc}", level="WARNING", user=user_obj.name)
+    orders = db.fetch_orders_by_symbol(user_obj.name, symbol) or []
+    return _classify_position_orders(orders, side)
+
+
+def _hyperliquid_live_positions_for_user(user_obj: Any, db: Any) -> list[dict[str, Any]]:
+    """Build dashboard positions from Hyperliquid's authoritative account state."""
+    state = _hyperliquid_user_state(user_obj)
+    result: list[dict[str, Any]] = []
+    for item in state.get("assetPositions") or []:
+        position = item.get("position", {}) if isinstance(item, dict) else {}
+        if not isinstance(position, dict):
+            continue
+        raw_size = _safe_float(position.get("szi"), 0.0)
+        if raw_size == 0.0:
+            continue
+        coin = str(position.get("coin") or "").strip().upper()
+        if not coin:
+            continue
+        symbol = coin if coin.endswith(("USDT", "USDC")) else f"{coin}USDC"
+        side = "long" if raw_size > 0.0 else "short"
+        size = abs(raw_size)
+        entry = _safe_float(position.get("entryPx"), 0.0)
+        upnl = _safe_float(position.get("unrealizedPnl"), 0.0)
+        position_value = _safe_float(position.get("positionValue"), 0.0)
+        price = position_value / size if size > 0.0 and position_value > 0.0 else entry
+        dca = 0
+        next_dca = 0.0
+        next_tp = 0.0
+        try:
+            dca, next_dca, next_tp = _classify_orders_for_position(user_obj, db, symbol, side, live=True)
+        except Exception:
+            pass
+        result.append({
+            "user":     user_obj.name,
+            "exchange": user_obj.exchange,
+            "symbol":   symbol,
+            "side":     side,
+            "size":     size,
+            "upnl":     round(upnl, 8),
+            "entry":    entry,
+            "price":    price,
+            "dca":      dca,
+            "next_dca": next_dca,
+            "next_tp":  next_tp,
+            "pos_value": round(position_value if position_value > 0.0 else size * price, 2),
+        })
+    return result
+
+
+def _hyperliquid_live_balance_for_user(user_obj: Any) -> tuple[float, float]:
+    """Return Hyperliquid wallet balance and uPnL from authoritative account state."""
+    state = _hyperliquid_user_state(user_obj)
+    account_value = _safe_float((state.get("marginSummary") or {}).get("accountValue"), 0.0)
+    upnl = 0.0
+    for item in state.get("assetPositions") or []:
+        position = item.get("position", {}) if isinstance(item, dict) else {}
+        if isinstance(position, dict):
+            upnl += _safe_float(position.get("unrealizedPnl"), 0.0)
+    return account_value - upnl, upnl
+
+
+def _live_balance_for_user(user_obj: Any, db: Any) -> tuple[float, float, float]:
+    """Return live balance, uPnL and position entry exposure for a dashboard user."""
+    if str(getattr(user_obj, "exchange", "")).lower() == "hyperliquid":
+        balance, upnl = _hyperliquid_live_balance_for_user(user_obj)
+        positions = _hyperliquid_live_positions_for_user(user_obj, db)
+    else:
+        exchange = _get_exchange(user_obj)
+        balance = _safe_float(exchange.fetch_balance("swap"), 0.0)
+        positions = _live_positions_for_user(user_obj, db)
+        upnl = sum(_safe_float(pos.get("upnl"), 0.0) for pos in positions)
+    pprices = sum(_safe_float(pos.get("size"), 0.0) * _safe_float(pos.get("entry"), 0.0) for pos in positions)
+    return balance, upnl, pprices
+
+
+def _live_positions_for_user(user_obj: Any, db: Any) -> list[dict[str, Any]]:
+    """Fetch open positions directly from the user's exchange for dashboard display."""
+    if str(getattr(user_obj, "exchange", "")).lower() == "hyperliquid":
+        return _hyperliquid_live_positions_for_user(user_obj, db)
+    exchange = _get_exchange(user_obj)
+    raw_positions = exchange.fetch_positions() or []
+    result: list[dict[str, Any]] = []
+    for position in raw_positions:
+        if not isinstance(position, dict):
+            continue
+        size = _live_position_size(position)
+        if size <= 0.0:
+            continue
+        symbol_ccxt = str(position.get("symbol") or "")
+        symbol = _dashboard_symbol_from_ccxt(symbol_ccxt)
+        if not symbol:
+            continue
+        side = _live_position_side(position)
+        entry = _safe_float(position.get("entryPrice") or position.get("entry_price"), 0.0)
+        upnl = _safe_float(position.get("unrealizedPnl") or position.get("unrealisedPnl"), 0.0)
+        price = _live_position_price(position, exchange, symbol_ccxt or _symbol_to_ccxt(symbol))
+        dca = 0
+        next_dca = 0.0
+        next_tp = 0.0
+        try:
+            dca, next_dca, next_tp = _classify_orders_for_position(user_obj, db, symbol, side, live=True)
+        except Exception:
+            pass
+        result.append({
+            "user":     user_obj.name,
+            "exchange": user_obj.exchange,
+            "symbol":   symbol,
+            "side":     side,
+            "size":     size,
+            "upnl":     round(upnl, 8),
+            "entry":    entry,
+            "price":    price,
+            "dca":      dca,
+            "next_dca": next_dca,
+            "next_tp":  next_tp,
+            "pos_value": round(size * price, 2) if price > 0.0 else 0.0,
+        })
+    return result
+
+
+def _position_close_order_side(side: str) -> str:
+    """Return the market order side needed to reduce a position side."""
+    normalized = str(side or "long").strip().lower()
+    if normalized == "short":
+        return "buy"
+    if normalized == "long":
+        return "sell"
+    raise HTTPException(status_code=400, detail="side must be long or short")
+
+
+def _dashboard_coin_key(symbol: str) -> str:
+    """Normalize a position symbol to the coin_overrides key used by PBGui."""
+    key = str(symbol or "").strip().upper()
+    for quote in ("USDT", "USDC", "BUSD", "USD"):
+        if len(key) > len(quote) and key.endswith(quote):
+            key = key[:-len(quote)]
+            break
+    # Match the coin override editor: 1000BONKUSDT -> BONK, kSHIB -> SHIB.
+    for prefix in ("1000", "100", "10"):
+        if key.startswith(prefix) and len(key) > len(prefix):
+            key = key[len(prefix):]
+            break
+    if len(key) > 1 and key[0] == "K" and key[1] != "K" and key[1:].isalpha():
+        key = key[1:]
+    if not key:
+        raise HTTPException(status_code=400, detail="symbol required")
+    return key
+
+
+def _resolve_close_amount(position_size: float, amount: float | None, percent: float | None) -> float:
+    """Resolve requested close amount and reject unsafe partial/full close values."""
+    size = abs(float(position_size or 0.0))
+    if not math.isfinite(size) or size <= 0.0:
+        raise HTTPException(status_code=400, detail="Position size is zero")
+    requested = None
+    if amount is not None:
+        requested = float(amount)
+    elif percent is not None:
+        pct = float(percent)
+        if not math.isfinite(pct) or pct <= 0.0 or pct > 100.0:
+            raise HTTPException(status_code=400, detail="percent must be between 0 and 100")
+        requested = size * pct / 100.0
+    if requested is None:
+        raise HTTPException(status_code=400, detail="amount or percent required")
+    if not math.isfinite(requested) or requested <= 0.0:
+        raise HTTPException(status_code=400, detail="amount must be greater than zero")
+    if requested > size:
+        raise HTTPException(status_code=400, detail="amount exceeds position size")
+    return requested
+
+
+def _apply_symbol_forced_mode(cfg: dict, symbol: str, side: str, mode: str) -> str:
+    """Set a per-symbol long/short forced_mode override."""
+    normalized_side = str(side or "long").strip().lower()
+    if normalized_side not in {"long", "short"}:
+        raise HTTPException(status_code=400, detail="side must be long or short")
+    coin = _dashboard_coin_key(symbol)
+    forced_key = "forced_mode_long" if normalized_side == "long" else "forced_mode_short"
+    coin_cfg = cfg.setdefault("coin_overrides", {}).setdefault(coin, {})
+    live_cfg = coin_cfg.setdefault("live", {})
+    live_cfg[forced_key] = mode
+    return coin
+
+
+def _apply_all_forced_mode(cfg: dict, mode: str) -> None:
+    """Set global PB7 forced modes for all long and short positions."""
+    live = cfg.setdefault("live", {})
+    live["forced_mode_long"] = mode
+    live["forced_mode_short"] = mode
+
+
+def _apply_panic_symbol(cfg: dict, symbol: str, side: str) -> str:
+    """Set a per-symbol long/short forced_mode override to PB7 panic."""
+    return _apply_symbol_forced_mode(cfg, symbol, side, _PANIC_OVERRIDE_MODE)
+
+
+def _apply_panic_all(cfg: dict) -> None:
+    """Set global PB7 forced modes to panic for all long and short positions."""
+    _apply_all_forced_mode(cfg, _PANIC_GLOBAL_MODE)
+
+
+def _apply_graceful_stop_symbol(cfg: dict, symbol: str, side: str) -> str:
+    """Set a per-symbol long/short forced_mode override to graceful stop."""
+    return _apply_symbol_forced_mode(cfg, symbol, side, _GRACEFUL_STOP_MODE)
+
+
+def _apply_graceful_stop_all(cfg: dict) -> None:
+    """Set global PB7 forced modes to graceful stop for all long and short positions."""
+    _apply_all_forced_mode(cfg, _GRACEFUL_STOP_MODE)
+
+
+def _apply_tp_only_symbol(cfg: dict, symbol: str, side: str) -> str:
+    """Set a per-symbol long/short forced_mode override to take profit only."""
+    return _apply_symbol_forced_mode(cfg, symbol, side, _TP_ONLY_MODE)
+
+
+def _apply_tp_only_all(cfg: dict) -> None:
+    """Set global PB7 forced modes to take profit only for all long and short positions."""
+    _apply_all_forced_mode(cfg, _TP_ONLY_MODE)
+
+
+def _find_dashboard_position(positions: list, symbol: str, side: str) -> list | None:
+    """Find a DB position row by symbol and normalized side."""
+    normalized_side = str(side or "long").strip().lower()
+    for pos in positions or []:
+        pos_side = str(pos[7] if len(pos) > 7 else "long").strip().lower()
+        if pos[1] == symbol and pos_side == normalized_side:
+            return pos
+    return None
+
+
+def _dashboard_row_from_live_position(pos: dict[str, Any]) -> list:
+    """Convert a live dashboard position dict to the DB row shape used by helpers."""
+    return [
+        0,
+        pos.get("symbol", ""),
+        0,
+        _safe_float(pos.get("size"), 0.0),
+        _safe_float(pos.get("upnl"), 0.0),
+        _safe_float(pos.get("entry"), 0.0),
+        pos.get("user", ""),
+        str(pos.get("side") or "long").lower(),
+    ]
+
+
+def _run_v7_dir() -> Path:
+    """Return the local V7 run instances directory."""
+    return Path(PBGDIR) / "data" / "run_v7"
+
+
+def _load_dashboard_instance_config(config_path: Path) -> dict:
+    """Load an instance config through the PB7 config pipeline."""
+    from pb7_config import load_pb7_config
+    return load_pb7_config(config_path, neutralize_added=False)
+
+
+def _find_instance_config_for_user(user_name: str) -> tuple[str, Path, dict]:
+    """Find exactly one local V7 instance config for a live.user value."""
+    user = str(user_name or "").strip()
+    if not user:
+        raise HTTPException(status_code=400, detail="user required")
+    matches: list[tuple[str, Path, dict]] = []
+    base_dir = _run_v7_dir()
+    if not base_dir.is_dir():
+        raise HTTPException(status_code=404, detail="No V7 instances directory found")
+    for config_path in sorted(base_dir.glob("*/config.json")):
+        try:
+            cfg = _load_dashboard_instance_config(config_path)
+        except Exception as exc:
+            _log(SERVICE, f"Skipping unreadable V7 config {config_path}: {exc}", level="WARNING")
+            continue
+        if str(cfg.get("live", {}).get("user", "")).strip() == user:
+            matches.append((config_path.parent.name, config_path, cfg))
+    if not matches:
+        raise HTTPException(status_code=404, detail=f"No V7 instance found for user '{user}'")
+    if len(matches) > 1:
+        names = ", ".join(name for name, _, _ in matches)
+        raise HTTPException(status_code=409, detail=f"Multiple V7 instances found for user '{user}': {names}")
+    return matches[0]
+
+
+def _backup_dashboard_instance_config(instance_dir: Path, name: str, cfg: dict) -> None:
+    """Create the same versioned JSON backup shape used by the V7 editor."""
+    try:
+        old_version = cfg.get("pbgui", {}).get("version", 0)
+        backup_dir = instance_dir.parent.parent / "backup" / "v7" / name / str(old_version)
+        if backup_dir.exists():
+            return
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        for item in instance_dir.iterdir():
+            if item.suffix == ".json" and item.name not in (
+                "config.json.tmp", "ignored_coins.json", "approved_coins.json", "config_run.json"
+            ):
+                import shutil
+                shutil.copy2(str(item), str(backup_dir / item.name))
+    except Exception as exc:
+        _log(SERVICE, f"Failed to create dashboard panic backup for '{name}': {exc}", level="WARNING")
+
+
+async def _save_dashboard_panic_config(name: str, config_path: Path, cfg: dict) -> dict:
+    """Save a panic config mutation and trigger the existing V7 SSH sync."""
+    from api.v7_instances import _ensure_target_runtime_compatible, _ssh_sync_instance
+    from pb7_config import save_pb7_config
+
+    await _ensure_target_runtime_compatible(name, cfg)
+    _backup_dashboard_instance_config(config_path.parent, name, cfg)
+    cfg.setdefault("pbgui", {})["version"] = cfg["pbgui"].get("version", 0) + 1
+    save_pb7_config(cfg, config_path)
+    sync_result = await _ssh_sync_instance(name)
+    version = cfg["pbgui"]["version"]
+    return {"name": name, "version": version, "sync": sync_result}
+
+
 def _get_exchange(user_obj):
     """Return a cached, connected Exchange instance for the given user object."""
     from Exchange import Exchange
@@ -192,6 +689,173 @@ def _get_exchange(user_obj):
         ex.connect()
         _exchange_cache[key] = ex
     return _exchange_cache[key]
+
+
+def _market_close_params(exchange_id: str, side: str, hedged_symbol: bool = False) -> dict[str, Any]:
+    """Build conservative reduce-only params for one-way and hedge-mode swaps."""
+    normalized_side = str(side or "long").strip().lower()
+    ex_id = str(exchange_id or "").strip().lower()
+    params: dict[str, Any] = {"reduceOnly": True}
+    if ex_id == "bitget":
+        params["holdSide"] = "short" if normalized_side == "short" else "long"
+        params["oneWayMode"] = False
+        return params
+    if ex_id == "gateio":
+        params["reduce_only"] = True
+        return params
+    if ex_id == "okx":
+        params["hedged"] = True
+        params["posSide"] = "short" if normalized_side == "short" else "long"
+        return params
+    if not hedged_symbol:
+        return params
+    if ex_id == "binance":
+        params["positionSide"] = "SHORT" if normalized_side == "short" else "LONG"
+    elif ex_id == "bybit":
+        params["positionIdx"] = 2 if normalized_side == "short" else 1
+    return params
+
+
+def _market_close_param_candidates(exchange_id: str, side: str, hedged_symbol: bool = False) -> list[dict[str, Any]]:
+    """Return reduce-only order param candidates, including hedge/one-way fallbacks."""
+    ex_id = str(exchange_id or "").strip().lower()
+    normalized_side = str(side or "long").strip().lower()
+    if ex_id == "binance":
+        hedge_params = {"positionSide": "SHORT" if normalized_side == "short" else "LONG"}
+        one_way_params = {"reduceOnly": True}
+        return [hedge_params, one_way_params]
+    if ex_id != "bybit":
+        return [_market_close_params(exchange_id, side, hedged_symbol)]
+    hedge_params = {"reduceOnly": True, "positionIdx": 2 if normalized_side == "short" else 1}
+    one_way_params = {"reduceOnly": True}
+    return [hedge_params, one_way_params]
+
+
+def _is_position_mode_mismatch(exc: Exception) -> bool:
+    """Detect exchange errors caused by hedge/one-way position mode mismatch."""
+    text = str(exc).lower()
+    return (
+        "position idx not match position mode" in text
+        or "positionidx" in text and "position mode" in text
+        or "position side does not match" in text
+    )
+
+
+def _is_amount_precision_error(exc: Exception) -> bool:
+    """Detect user-correctable exchange amount precision/minimum errors."""
+    text = str(exc).lower()
+    return "minimum amount precision" in text or "amount" in text and "precision" in text and "minimum" in text
+
+
+def _dashboard_price_from_rows(prices: list, symbol: str) -> float:
+    """Return the latest dashboard price for a symbol from DB price rows."""
+    for row in prices or []:
+        if len(row) > 3 and row[1] == symbol:
+            try:
+                price = float(row[3])
+            except (TypeError, ValueError):
+                price = 0.0
+            if math.isfinite(price) and price > 0.0:
+                return price
+    return 0.0
+
+
+def _market_close_price_arg(exchange_instance: Any, exchange_id: str, symbol_ccxt: str, side: str, db_price: float) -> float | None:
+    """Return the market-order price argument required by Hyperliquid CCXT."""
+    if str(exchange_id or "").strip().lower() != "hyperliquid":
+        return None
+    normalized_side = str(side or "").strip().lower()
+    preferred_keys = ("ask", "last", "mark", "index", "bid") if normalized_side == "buy" else ("bid", "last", "mark", "index", "ask")
+    try:
+        ticker = exchange_instance.fetch_ticker(symbol_ccxt)
+        for key in preferred_keys:
+            price = float(ticker.get(key) or 0.0)
+            if math.isfinite(price) and price > 0.0:
+                return price
+    except Exception as exc:
+        _log(SERVICE, f"Failed to fetch Hyperliquid ticker for market close {symbol_ccxt}: {exc}", level="WARNING")
+    if math.isfinite(float(db_price or 0.0)) and float(db_price or 0.0) > 0.0:
+        return float(db_price)
+    raise HTTPException(status_code=400, detail="Market price unavailable for Hyperliquid market close")
+
+
+def _apply_market_close_user_params(params: dict[str, Any], exchange_id: str, user_obj: Any) -> dict[str, Any]:
+    """Add account-specific order params needed by selected exchanges."""
+    ex_id = str(exchange_id or "").strip().lower()
+    if ex_id == "hyperliquid" and bool(getattr(user_obj, "is_vault", False)):
+        wallet_address = str(getattr(user_obj, "wallet_address", "") or "").strip()
+        if wallet_address:
+            params = dict(params)
+            params["vaultAddress"] = wallet_address
+    return params
+
+
+def _market_close_min_cost(exchange_instance: Any, exchange_id: str, symbol_ccxt: str) -> float:
+    """Return exchange minimum market-close value when known."""
+    if str(exchange_id or "").strip().lower() != "hyperliquid":
+        return 0.0
+    try:
+        market = exchange_instance.market(symbol_ccxt)
+        min_cost = float(((market.get("limits") or {}).get("cost") or {}).get("min") or 0.0)
+        if math.isfinite(min_cost) and min_cost > 0.0:
+            return min_cost
+    except Exception:
+        pass
+    return 10.0
+
+
+def _validate_market_close_min_cost(exchange_id: str, amount: float, price: float | None, min_cost: float) -> None:
+    """Reject Hyperliquid closes below the minimum order value before submission."""
+    if str(exchange_id or "").strip().lower() != "hyperliquid" or min_cost <= 0.0:
+        return
+    value = abs(float(amount or 0.0)) * abs(float(price or 0.0))
+    if not math.isfinite(value) or value >= min_cost:
+        return
+    min_amount = min_cost / abs(float(price or 1.0)) if price else 0.0
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Hyperliquid minimum order value is ${min_cost:g}. "
+            f"Selected close value is ${value:g}; use at least {min_amount:.8g} amount."
+        ),
+    )
+
+
+def _market_close_price_snapshot(user_obj: Any, symbol: str, side: str) -> dict[str, Any]:
+    """Return the current market close reference price and minimum value."""
+    exchange = _get_exchange(user_obj)
+    if not getattr(exchange, "instance", None):
+        raise HTTPException(status_code=500, detail="Exchange is not connected")
+    symbol_ccxt = _symbol_to_ccxt(symbol)
+    db_price = _dashboard_price_from_rows(_get_db().fetch_prices(user_obj) or [], symbol)
+    close_side = _position_close_order_side(side)
+    price = _market_close_price_arg(exchange.instance, user_obj.exchange, symbol_ccxt, close_side, db_price)
+    min_cost = _market_close_min_cost(exchange.instance, user_obj.exchange, symbol_ccxt)
+    return {"price": price, "min_cost": min_cost}
+
+
+def _precision_amount(exchange_instance: Any, symbol: str, amount: float) -> float:
+    """Apply exchange amount precision when CCXT exposes it."""
+    try:
+        precise = exchange_instance.amount_to_precision(symbol, amount)
+        value = float(precise)
+        if value > 0.0:
+            return value
+    except Exception:
+        pass
+    return amount
+
+
+class PositionManagePayload(BaseModel):
+    """Dashboard position action payload."""
+
+    user: str
+    symbol: str = ""
+    side: str = "long"
+    action: str = "market_close"
+    amount: float | None = None
+    percent: float | None = None
+    dry_run: bool = False
 
 
 # ── OHLCV in-memory cache ──────────────────────────────────────────────────
@@ -718,6 +1382,7 @@ def _get_users():
 @router.get("/balance")
 def get_balance(
     users: str = Query(default="ALL", description="Comma-separated user names, or ALL"),
+    live: bool = Query(default=False),
     session: SessionToken = Depends(require_auth),
 ) -> dict[str, Any]:
     """
@@ -735,11 +1400,67 @@ def get_balance(
         users_selected = [u for u in requested if u in all_users.list()]
 
     if not users_selected:
-        return {"rows": [], "totals": {"balance": 0, "upnl": 0, "we": 0}}
+        return {"rows": [], "totals": {"balance": 0, "upnl": 0, "we": 0}, "source": "db"}
+
+    if live:
+        rows = []
+        total_balance = 0.0
+        total_upnl = 0.0
+        all_pprices = 0.0
+        used_live = False
+        used_db = False
+
+        for user_name in users_selected:
+            user_obj = all_users.find_user(user_name)
+            if not user_obj:
+                continue
+            try:
+                balance, upnl, pprices = _live_balance_for_user(user_obj, db)
+                used_live = True
+                date_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            except Exception as exc:
+                used_db = True
+                _log(SERVICE, f"Live balance fetch failed for '{user_name}', falling back to DB: {exc}", level="WARNING", user=user_name)
+                db_rows = db.fetch_balances([user_name]) or []
+                if not db_rows:
+                    continue
+                db_row = db_rows[-1]
+                balance = _safe_float(db_row[2], 0.0)
+                try:
+                    date_str = datetime.utcfromtimestamp(db_row[1] / 1000).strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    date_str = str(db_row[1])
+                positions = db.fetch_positions(user_obj) or []
+                upnl = sum(_safe_float(pos[4], 0.0) for pos in positions)
+                pprices = sum(_safe_float(pos[3], 0.0) * _safe_float(pos[5], 0.0) for pos in positions)
+            total_balance += balance
+            total_upnl += upnl
+            all_pprices += pprices
+            twe = (100 / balance * pprices) if balance and pprices else 0.0
+            rows.append({
+                "id": 0,
+                "user": user_name,
+                "date": date_str,
+                "balance": round(balance, 2),
+                "upnl": round(upnl, 2),
+                "we": round(twe, 2),
+            })
+
+        total_twe = (100 / total_balance * all_pprices) if total_balance and all_pprices else 0.0
+        source = "mixed" if used_live and used_db else ("live" if used_live else "db")
+        return {
+            "rows": rows,
+            "totals": {
+                "balance": round(total_balance, 2),
+                "upnl": round(total_upnl, 2),
+                "we": round(total_twe, 2),
+            },
+            "source": source,
+        }
 
     balances = db.fetch_balances(users_selected)
     if not balances:
-        return {"rows": [], "totals": {"balance": 0, "upnl": 0, "we": 0}}
+        return {"rows": [], "totals": {"balance": 0, "upnl": 0, "we": 0}, "source": "db"}
 
     rows = []
     total_balance = 0.0
@@ -791,6 +1512,7 @@ def get_balance(
             "upnl": round(total_upnl, 2),
             "we": round(total_twe, 2),
         },
+        "source": "db",
     }
 
 
@@ -1480,6 +2202,7 @@ def _pbdata_start():
 @router.get("/positions_data")
 def get_positions_data(
     users:   str = Query(default="ALL"),
+    live:    bool = Query(default=False),
     session: SessionToken = Depends(require_auth),
 ):
     """Return enriched positions data (with prices, DCA count, next DCA/TP)."""
@@ -1496,12 +2219,24 @@ def get_positions_data(
         return {"positions": []}
 
     all_positions = []
+    used_live = False
+    used_db = False
     for user_name in users_selected:
         user_obj = all_users.find_user(user_name)
         if not user_obj:
             continue
+        if live:
+            try:
+                live_positions = _live_positions_for_user(user_obj, db)
+                all_positions.extend(live_positions)
+                used_live = True
+                continue
+            except Exception as exc:
+                used_db = True
+                _log(SERVICE, f"Live positions fetch failed for '{user_name}', falling back to DB: {exc}", level="WARNING", user=user_name)
         positions = db.fetch_positions(user_obj) or []
         prices = db.fetch_prices(user_obj) or []
+        used_db = True
         for pos in positions:
             symbol = pos[1]
             uname = pos[6]
@@ -1515,6 +2250,7 @@ def get_positions_data(
             pos_value = pos[3] * price
             all_positions.append({
                 "user":     uname,
+                "exchange": user_obj.exchange,
                 "symbol":   symbol,
                 "side":     side,
                 "size":     pos[3],
@@ -1528,7 +2264,197 @@ def get_positions_data(
             })
 
     all_positions.sort(key=lambda x: (x["user"], x["symbol"]))
-    return {"positions": all_positions}
+    if used_live and used_db:
+        source = "mixed"
+    elif used_live:
+        source = "live"
+    else:
+        source = "db"
+    return {"positions": all_positions, "source": source}
+
+
+def _execute_market_close(payload: PositionManagePayload) -> dict[str, Any]:
+    """Execute a synchronous reduce-only market close order."""
+    all_users = _get_users()
+    user_obj = all_users.find_user(payload.user)
+    if not user_obj:
+        raise HTTPException(status_code=404, detail=f"User '{payload.user}' not found")
+    db = _get_db()
+    positions = []
+    live_position_price = 0.0
+    live_lookup_failed = False
+    try:
+        live_positions = _live_positions_for_user(user_obj, db)
+        positions = [_dashboard_row_from_live_position(row) for row in live_positions]
+        for row in live_positions:
+            if row.get("symbol") == payload.symbol and str(row.get("side") or "long").lower() == str(payload.side or "long").lower():
+                live_position_price = _safe_float(row.get("price"), 0.0)
+                break
+    except Exception as exc:
+        live_lookup_failed = True
+        _log(SERVICE, f"Live position lookup failed for market close '{payload.user}', falling back to DB: {exc}", level="WARNING", user=payload.user)
+    if live_lookup_failed:
+        positions = db.fetch_positions(user_obj) or []
+    pos = _find_dashboard_position(positions, payload.symbol, payload.side)
+    if not pos:
+        raise HTTPException(status_code=404, detail="Position not found")
+    close_amount = _resolve_close_amount(float(pos[3]), payload.amount, payload.percent)
+    close_side = _position_close_order_side(payload.side)
+    exchange = _get_exchange(user_obj)
+    if not getattr(exchange, "instance", None):
+        raise HTTPException(status_code=500, detail="Exchange is not connected")
+    symbol_ccxt = _symbol_to_ccxt(payload.symbol)
+    order_amount = _precision_amount(exchange.instance, symbol_ccxt, close_amount)
+    if order_amount <= 0.0:
+        raise HTTPException(status_code=400, detail="Amount is below exchange precision")
+    order_price = _market_close_price_arg(
+        exchange.instance,
+        user_obj.exchange,
+        symbol_ccxt,
+        close_side,
+        live_position_price or _dashboard_price_from_rows(db.fetch_prices(user_obj) or [], payload.symbol),
+    )
+    _validate_market_close_min_cost(
+        user_obj.exchange,
+        order_amount,
+        order_price,
+        _market_close_min_cost(exchange.instance, user_obj.exchange, symbol_ccxt),
+    )
+    hedged_symbol = _has_hedged_symbol_positions(positions, payload.symbol)
+    param_candidates = _market_close_param_candidates(user_obj.exchange, payload.side, hedged_symbol)
+    order = None
+    last_exc: Exception | None = None
+    for idx, params in enumerate(param_candidates):
+        params = _apply_market_close_user_params(params, user_obj.exchange, user_obj)
+        try:
+            order = exchange.instance.create_order(
+                symbol_ccxt,
+                "market",
+                close_side,
+                order_amount,
+                order_price,
+                params,
+            )
+            break
+        except HTTPException:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            if idx + 1 < len(param_candidates) and _is_position_mode_mismatch(exc):
+                _log(
+                    SERVICE,
+                    f"Market close retry with alternate position mode params for {payload.user}/{payload.symbol}/{payload.side}: {exc}",
+                    level="WARNING",
+                )
+                continue
+            _log(SERVICE, f"Market close failed for {payload.user}/{payload.symbol}/{payload.side}: {exc}", level="ERROR")
+            if _is_amount_precision_error(exc):
+                raise HTTPException(status_code=400, detail=f"Market close failed: {exc}") from exc
+            raise HTTPException(status_code=502, detail=f"Market close failed: {exc}") from exc
+    if order is None:
+        detail = f"Market close failed: {last_exc}" if last_exc else "Market close failed"
+        raise HTTPException(status_code=502, detail=detail)
+    _log(
+        SERVICE,
+        f"Market close sent for {payload.user}/{payload.symbol}/{payload.side}: {order_amount} {close_side}",
+        level="WARNING",
+    )
+    return {
+        "ok": True,
+        "action": "market_close",
+        "user": payload.user,
+        "symbol": payload.symbol,
+        "side": payload.side,
+        "amount": order_amount,
+        "order": order,
+    }
+
+
+@router.get("/positions/close_price")
+def get_position_close_price(
+    user: str = Query(...),
+    symbol: str = Query(...),
+    side: str = Query(default="long"),
+    session: SessionToken = Depends(require_auth),
+):
+    """Return fresh price metadata used by direct dashboard market closes."""
+    user_obj = _get_users().find_user(user)
+    if not user_obj:
+        raise HTTPException(status_code=404, detail=f"User '{user}' not found")
+    snapshot = _market_close_price_snapshot(user_obj, symbol, side)
+    return {"ok": True, "user": user, "symbol": symbol, "side": side, **snapshot}
+
+
+@router.post("/positions/manage")
+async def manage_position(
+    payload: PositionManagePayload,
+    session: SessionToken = Depends(require_auth),
+):
+    """Manage a dashboard position with market close or PB7 forced-mode config sync."""
+    action = str(payload.action or "").strip().lower()
+    if action == "market_close":
+        return await _asyncio.to_thread(_execute_market_close, payload)
+
+    if action not in {"panic_symbol", "panic_all", "graceful_stop_symbol", "graceful_stop_all", "tp_only_symbol", "tp_only_all"}:
+        raise HTTPException(status_code=400, detail="Unsupported action")
+
+    name, config_path, cfg = await _asyncio.to_thread(_find_instance_config_for_user, payload.user)
+    working_cfg = deepcopy(cfg) if payload.dry_run else cfg
+    if action in {"panic_symbol", "graceful_stop_symbol", "tp_only_symbol"}:
+        # Require the selected row to still exist before changing a per-symbol mode.
+        all_users = _get_users()
+        user_obj = all_users.find_user(payload.user)
+        if not user_obj:
+            raise HTTPException(status_code=404, detail=f"User '{payload.user}' not found")
+        pos = _find_dashboard_position(_get_db().fetch_positions(user_obj) or [], payload.symbol, payload.side)
+        if not pos:
+            raise HTTPException(status_code=404, detail="Position not found")
+        if action == "panic_symbol":
+            coin = _apply_panic_symbol(working_cfg, payload.symbol, payload.side)
+        elif action == "graceful_stop_symbol":
+            coin = _apply_graceful_stop_symbol(working_cfg, payload.symbol, payload.side)
+        else:
+            coin = _apply_tp_only_symbol(working_cfg, payload.symbol, payload.side)
+    else:
+        if action == "panic_all":
+            _apply_panic_all(working_cfg)
+        elif action == "graceful_stop_all":
+            _apply_graceful_stop_all(working_cfg)
+        else:
+            _apply_tp_only_all(working_cfg)
+        coin = ""
+
+    if payload.dry_run:
+        preview_cfg = working_cfg
+        preview_cfg.setdefault("pbgui", {})["version"] = preview_cfg["pbgui"].get("version", 0) + 1
+        return {
+            "ok": True,
+            "dry_run": True,
+            "action": action,
+            "user": payload.user,
+            "symbol": payload.symbol,
+            "side": payload.side,
+            "coin": coin,
+            "name": name,
+            "version": preview_cfg["pbgui"]["version"],
+            "config": preview_cfg,
+        }
+
+    result = await _save_dashboard_panic_config(name, config_path, working_cfg)
+    _log(
+        SERVICE,
+        f"Dashboard {action} saved for user={payload.user} symbol={payload.symbol} side={payload.side} instance={name}",
+        level="WARNING",
+    )
+    return {
+        "ok": True,
+        "action": action,
+        "user": payload.user,
+        "symbol": payload.symbol,
+        "side": payload.side,
+        "coin": coin,
+        **result,
+    }
 
 
 # ---------------------------------------------------------------- /orders_data
@@ -1541,6 +2467,7 @@ def get_orders_data(
     timeframe: str = Query(default="4h"),
     since:     int = Query(default=None),
     limit:     int = Query(default=500),
+    live:      bool = Query(default=True),
     session:   SessionToken = Depends(require_auth),
 ):
     """Return OHLCV candles + orders + position for a symbol/user.
@@ -1594,23 +2521,44 @@ def get_orders_data(
                     "l": c[3], "c": c[4], "v": c[5]} for c in (ohlcv or [])]
 
     normalized_side = str(side or "long").lower()
-    positions = db.fetch_positions(user_obj) or []
+    positions = []
+    live_positions = []
+    if live:
+        try:
+            live_positions = _live_positions_for_user(user_obj, db)
+            positions = [_dashboard_row_from_live_position(row) for row in live_positions]
+        except Exception as exc:
+            _log(SERVICE, f"Live position lookup failed for orders chart '{user}/{symbol}', falling back to DB: {exc}", level="WARNING", user=user)
+    if not positions:
+        positions = db.fetch_positions(user_obj) or []
     hedged_symbol = _has_hedged_symbol_positions(positions, symbol)
 
-    db_orders = [] if hedged_symbol else (db.fetch_orders_by_symbol(user, symbol) or [])
-    orders_list = []
-    for o in sorted(db_orders, key=lambda x: x[4], reverse=True):
-        orders_list.append({"price": o[4], "amount": o[3], "side": o[5]})
+    orders_list, orders_unknown, orders_source = _dashboard_orders_for_position(
+        user_obj, db, symbol, normalized_side, live=live and not hedged_symbol
+    )
 
     prices = db.fetch_prices(user_obj) or []
     current_price = 0.0
+    for row in live_positions:
+        if row.get("symbol") == symbol and str(row.get("side") or "long").lower() == normalized_side:
+            current_price = _safe_float(row.get("price"), 0.0)
+            break
     for p in prices:
-        if p[1] == symbol:
+        if current_price <= 0.0 and p[1] == symbol:
             current_price = p[3]
 
     position_data = None
+    for live_pos in live_positions:
+        if live_pos.get("symbol") == symbol and str(live_pos.get("side") or "long").lower() == normalized_side:
+            position_data = {
+                "entry": live_pos.get("entry", 0),
+                "size":  live_pos.get("size", 0),
+                "upnl":  live_pos.get("upnl", 0),
+                "side":  live_pos.get("side", "long"),
+            }
+            break
     for pos in positions:
-        if pos[1] == symbol and str(pos[7] if len(pos) > 7 else "long").lower() == normalized_side:
+        if position_data is None and pos[1] == symbol and str(pos[7] if len(pos) > 7 else "long").lower() == normalized_side:
             position_data = {
                 "entry": pos[5], "size": pos[3],
                 "upnl":  pos[4], "side": pos[7] if len(pos) > 7 else "long",
@@ -1624,6 +2572,7 @@ def get_orders_data(
         "current_price": current_price,
         "user":          user,
         "symbol":        symbol,
-        "orders_unknown": hedged_symbol,
+        "orders_unknown": bool(hedged_symbol or orders_unknown),
+        "orders_source":  orders_source,
         "timeframe":     timeframe,
     }

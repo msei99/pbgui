@@ -909,13 +909,20 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     reportHeight();
   }
 
+   var DR_VERSION = '20260610k';
+
   /* ── lazy-load shared render module ── */
   function _ensureRenderScript(cb) {
+    if (window.DashRender && window.DashRender.VERSION !== DR_VERSION) {
+      window.DashRender = null;
+      var old = document.getElementById('dr-css');
+      if (old) old.parentNode.removeChild(old);
+    }
     if (window.DashRender) { cb(); return; }
     if (window._drLoading) { setTimeout(function () { _ensureRenderScript(cb); }, 50); return; }
     window._drLoading = true;
     var s = document.createElement('script');
-    s.src = API_BASE.replace(/\/api$/, '') + '/app/dashboard_render.js?v=' + Date.now();
+    s.src = API_BASE.replace(/\/api$/, '') + '/app/dashboard_render.js?v=' + DR_VERSION;
     s.onload  = function () { window._drLoading = false; if (window.DashRender) { DashRender.injectCSS(); } cb(); };
     s.onerror = function () { window._drLoading = false; cb(); };
     document.head.appendChild(s);
@@ -952,6 +959,29 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     s.style.color = '#22c55e';
   }
 
+  function _sourceLabel(source) {
+    var src = String(source || 'db').toLowerCase();
+    if (src === 'live') return 'Live';
+    if (src === 'mixed') return 'Mixed live/DB';
+    return 'DB fallback';
+  }
+
+  function _ageLabel(ts) {
+    var age = Math.max(0, Math.round((Date.now() - (ts || Date.now())) / 1000));
+    if (age <= 1) return 'now';
+    if (age < 60) return age + 's ago';
+    var min = Math.floor(age / 60);
+    if (min < 60) return min + 'm ago';
+    return Math.floor(min / 60) + 'h ago';
+  }
+
+  function _setSourceStatus(container, cls, source, ts) {
+    var s = container.querySelector(cls);
+    if (!s || !container.isConnected) return;
+    s.textContent = _sourceLabel(source) + ': ' + _ageLabel(ts);
+    s.style.color = String(source || '').toLowerCase() === 'live' ? '#22c55e' : '';
+  }
+
   function _clearBadge(container, cls) {
     var s = container.querySelector(cls);
     if (s) s.style.color = '';
@@ -969,86 +999,72 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     var lKey = 'pos_' + pos;
     /* Reuse existing connection if alive and users unchanged (widget rebuild after WS event) */
     var _ex = _liveState[lKey];
-    if (_ex && _ex.es && _ex.es.readyState !== EventSource.CLOSED &&
+    if (_ex && _ex.timer &&
         (_ex.users || []).join(',') === (users || []).join(',')) return;
     _disconnectLive(lKey);
     if (!users || users.indexOf('ALL') >= 0 || users.length === 0 || users.length > MAX_LIVE) return;
-    var url = API_BASE + '/live/stream?users=' + encodeURIComponent(users.join(',')) + '&token=' + encodeURIComponent(TOKEN);
-    var es  = new EventSource(url);
-    var st  = { es: es, timer: null, lastTs: 0, posCache: {}, users: users.slice() };
+    var st  = { es: null, timer: null, loading: false, users: users.slice(), source: 'db', lastTs: 0, lastFetch: 0 };
     _liveState[lKey] = st;
-    es.onopen = function () {
+    function refreshLivePositions() {
       if (!container.isConnected) { _disconnectLive(lKey); return; }
-      st.lastTs = 0;
-      _setBadge(container, '.dt-status', st.lastTs);
-      if (!st.timer) st.timer = setInterval(function () {
-        if (!container.isConnected) { _disconnectLive(lKey); return; }
-        _setBadge(container, '.dt-status', st.lastTs);
-      }, 1000);
-    };
-    es.onmessage = function (evt) {
-      if (!container.isConnected) { _disconnectLive(lKey); return; }
-      try {
-        var m = JSON.parse(evt.data);
-        if (m.type === 'position_update' && m.user && users.indexOf(m.user) >= 0) {
-          st.posCache[m.user] = m.data.positions;
-          if (typeof container._dpUpdate === 'function') {
-            var merged = [];
-            users.forEach(function (u) { if (st.posCache[u]) merged = merged.concat(st.posCache[u]); });
-            merged.sort(function (a, b) { return a.symbol < b.symbol ? -1 : 1; });
-            container._dpUpdate(merged);
-          }
+      if (st.loading) return;
+      if (st.lastFetch && Date.now() - st.lastFetch < 5000) return;
+      st.lastFetch = Date.now();
+      st.loading = true;
+      var url = API_BASE + '/dashboard/positions_data?users=' + encodeURIComponent(users.join(',')) + '&live=1';
+      fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
+        .then(function (d) {
+          st.loading = false;
+          st.source = d.source || 'db';
           st.lastTs = Date.now();
-          _setBadge(container, '.dt-status', st.lastTs);
-        }
-      } catch (_) {}
-    };
-    es.onerror = function () { _disconnectLive(lKey); _clearBadge(container, '.dt-status'); };
+          if (typeof container._dpUpdate === 'function') container._dpUpdate(d.positions || [], d.source || 'db');
+          _setSourceStatus(container, '.dt-status', st.source, st.lastTs);
+        })
+        .catch(function () { st.loading = false; _clearBadge(container, '.dt-status'); });
+    }
+    refreshLivePositions();
+    st.timer = setInterval(function () {
+      _setSourceStatus(container, '.dt-status', st.source, st.lastTs);
+      refreshLivePositions();
+    }, 1000);
   }
 
   function _connectLiveBal(container, pos, users) {
     var lKey = 'bal_' + pos;
     /* Reuse existing connection if alive and users unchanged (widget rebuild after WS event) */
     var _ex = _liveState[lKey];
-    if (_ex && _ex.es && _ex.es.readyState !== EventSource.CLOSED &&
+    if (_ex && _ex.timer &&
         (_ex.users || []).join(',') === (users || []).join(',')) return;
     _disconnectLive(lKey);
     if (!users || users.indexOf('ALL') >= 0 || users.length === 0 || users.length > MAX_LIVE) return;
-    var url = API_BASE + '/live/stream?users=' + encodeURIComponent(users.join(',')) + '&token=' + encodeURIComponent(TOKEN);
     _liveBal[lKey] = {};
-    var es  = new EventSource(url);
-    var st  = { es: es, timer: null, lastTs: 0, users: users.slice() };
+    var st  = { es: null, timer: null, loading: false, users: users.slice(), source: 'db', lastTs: 0, lastFetch: 0 };
     _liveState[lKey] = st;
-    es.onopen = function () {
+    function refreshLiveBalance() {
       if (!container.isConnected) { _disconnectLive(lKey); return; }
-      st.lastTs = 0;
-      _setBadge(container, '.db-status', st.lastTs);
-      if (!st.timer) st.timer = setInterval(function () {
-        if (!container.isConnected) { _disconnectLive(lKey); return; }
-        _setBadge(container, '.db-status', st.lastTs);
-      }, 1000);
-    };
-    es.onmessage = function (evt) {
-      if (!container.isConnected) { _disconnectLive(lKey); return; }
-      try {
-        var m = JSON.parse(evt.data);
-        if (m.type === 'balance_update' && m.user && users.indexOf(m.user) >= 0) {
-          _liveBal[lKey][m.user] = { balance: m.data.balance, upnl: m.data.upnl || 0 };
-          var lastData = _lastRestBal[lKey] || { rows: [], totals: {} };
-          var merged = lastData.rows.map(function (row) {
-            var live = _liveBal[lKey][row.user];
-            if (!live) return row;
-            return { user: row.user, date: new Date().toISOString(), balance: live.balance, upnl: live.upnl !== 0 ? live.upnl : row.upnl, we: row.we };
-          });
-          var tot = { balance: 0, upnl: 0, we: (lastData.totals || {}).we || 0 };
-          merged.forEach(function (row) { tot.balance += row.balance || 0; tot.upnl += row.upnl || 0; });
-          DashRender.buildBalance(container, { rows: merged, totals: tot }, {});
+      if (st.loading) return;
+      if (st.lastFetch && Date.now() - st.lastFetch < 5000) return;
+      st.lastFetch = Date.now();
+      st.loading = true;
+      var url = API_BASE + '/dashboard/balance?users=' + encodeURIComponent(users.join(',')) + '&live=1';
+      fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
+        .then(function (d) {
+          st.loading = false;
+          st.source = d.source || 'db';
           st.lastTs = Date.now();
-          _setBadge(container, '.db-status', st.lastTs);
-        }
-      } catch (_) {}
-    };
-    es.onerror = function () { _disconnectLive(lKey); _clearBadge(container, '.db-status'); };
+          _lastRestBal[lKey] = d;
+          DashRender.buildBalance(container, d, {});
+          _setSourceStatus(container, '.db-status', st.source, st.lastTs);
+        })
+        .catch(function () { st.loading = false; _clearBadge(container, '.db-status'); });
+    }
+    refreshLiveBalance();
+    st.timer = setInterval(function () {
+      _setSourceStatus(container, '.db-status', st.source, st.lastTs);
+      refreshLiveBalance();
+    }, 1000);
   }
 
   /* ── inline BALANCE preview — delegates to DashRender.buildBalance ── */
@@ -1067,7 +1083,8 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       container.appendChild(loading);
     }
     var url = API_BASE + '/dashboard/balance'
-      + '?users=' + encodeURIComponent(usersParam);
+      + '?users=' + encodeURIComponent(usersParam)
+      + '&live=1';
     fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (d) {
@@ -1827,7 +1844,8 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       container.appendChild(loading);
     }
     var url = API_BASE + '/dashboard/positions_data'
-      + '?users=' + encodeURIComponent(usersParam);
+      + '?users=' + encodeURIComponent(usersParam)
+      + '&live=1';
     fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
       .then(function (d) {
@@ -1839,7 +1857,8 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
           });
           DashRender.buildPositions(container, d, {
             usersControl: usersCtrl, position: pos,
-            icon: _widgetIcon('POSITIONS'), onDelete: _makeDeleteCb(r, c)
+            icon: _widgetIcon('POSITIONS'), onDelete: _makeDeleteCb(r, c),
+            apiBase: API_BASE, token: TOKEN, onReload: function () { buildPositionsInline(container, r, c); }
           });
           _attachViewDrag(container, r, c);
           _connectLivePos(container, pos, users);
@@ -1945,7 +1964,8 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         + '&symbol='    + encodeURIComponent(selectedPosition.symbol)
         + '&side='      + encodeURIComponent(selectedPosition.side || 'long')
         + '&timeframe=' + encodeURIComponent(currentTimeframe)
-        + '&limit='     + _tfLimit(currentTimeframe);
+        + '&limit='     + _tfLimit(currentTimeframe)
+        + '&live=1';
       fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
         .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
         .then(function (d) {
@@ -1962,7 +1982,8 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                   + '&symbol='    + encodeURIComponent(selectedPosition.symbol)
                   + '&side='      + encodeURIComponent(selectedPosition.side || 'long')
                   + '&timeframe=' + encodeURIComponent(tf)
-                  + '&limit='     + _tfLimit(tf);
+                  + '&limit='     + _tfLimit(tf)
+                  + '&live=1';
                 fetch(tfUrl, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
                   .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
                   .then(function (d2) {
@@ -1985,7 +2006,8 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                   + '&side='      + encodeURIComponent(selectedPosition.side || 'long')
                   + '&timeframe=' + encodeURIComponent(fetchTf)
                   + '&since='     + since
-                  + '&limit=300';
+                  + '&limit=300'
+                  + '&live=1';
                 fetch(moreUrl, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
                   .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
                   .then(function (older) {

@@ -48,7 +48,7 @@ def _resolve_log_path(service_or_path: str) -> str:
 def _is_home_relative_log_path(log_path: str) -> bool:
     """Return True for remote paths rooted from HOME, not remote pbgui dir."""
     normalized = str(log_path or "").lstrip("./")
-    return normalized.startswith("software/")
+    return normalized.startswith("software/") or normalized.startswith("pb7/logs/")
 
 
 def resolve_bot_log_path(instance_name: str, pb_version: str) -> str:
@@ -71,10 +71,12 @@ def _pb7dir_for_host(pool: AsyncSSHPool, hostname: str) -> str:
 
 def _remote_log_shell_path(pool: AsyncSSHPool, hostname: str, log_path: str) -> str:
     """Resolve a remote log path to a shell-safe absolute/HOME expression."""
-    if log_path.startswith("software/pb7/logs/"):
+    if log_path.startswith("software/pb7/logs/") or log_path.startswith("pb7/logs/"):
         pb7dir_value = _pb7dir_for_host(pool, hostname)
         if pb7dir_value:
             return remote_shell_path(remote_path_join(pb7dir_value, "logs", Path(log_path).name))
+        if log_path.startswith("pb7/logs/"):
+            return remote_shell_path(remote_path_join("software", log_path))
     return remote_shell_path(log_path)
 
 

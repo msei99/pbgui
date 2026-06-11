@@ -10181,10 +10181,10 @@ async function saveEditor(andQueue) {
     }
     configPayload = parsed.value;
   }
-  var sourceQuery = state.editorSourceName && state.editorSourceName !== name
+  var sourceQuery = !queueAfterSave && state.editorSourceName && state.editorSourceName !== name
     ? '?source_name=' + encodeURIComponent(state.editorSourceName)
     : '';
-  isNewName = !!sourceQuery;
+  isNewName = !!(state.editorSourceName && state.editorSourceName !== name);
   await apiFetch('/configs/' + encodeURIComponent(name) + sourceQuery, {
     method: 'PUT',
     body: JSON.stringify(configPayload)

@@ -157,11 +157,18 @@ def _rotate_task_log(path: Path, history_count: int) -> None:
         path.replace(_rotated_task_log_path(path, 1))
 
 
-def _prepare_runner_private_data_dir(base_dir: Path) -> Path:
+def _prepare_runner_private_data_dir(base_dir: Path, run_id: str | None = None) -> Path:
     private_dir = base_dir / "tmp"
+    if run_id:
+        private_dir = private_dir / str(run_id)
     shutil.rmtree(private_dir, ignore_errors=True)
     private_dir.mkdir(parents=True, exist_ok=True)
     return private_dir
+
+
+def _cleanup_runner_private_data_dir(private_data_dir) -> None:
+    if private_data_dir:
+        shutil.rmtree(str(private_data_dir), ignore_errors=True)
 
 
 class VPS:
@@ -851,11 +858,11 @@ PY"""
         self.save()
         shutil.rmtree(f"{self.path}/tmp", ignore_errors=True)
 
-    def update_finished(self, runner_config=None):
+    def update_finished(self, runner_config=None, private_data_dir=None):
         del runner_config
         self.last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.save()
-        shutil.rmtree(f"{self.path}/tmp", ignore_errors=True)
+        _cleanup_runner_private_data_dir(private_data_dir or self.privat_data_dir or f"{self.path}/tmp")
 
     def fetch_log_finished(self, runner_config=None):
         del runner_config
@@ -1115,7 +1122,8 @@ class VPSManager:
         vps.last_update = None
         vps.command_run_id = f"run-{int(datetime.now().timestamp() * 1000)}"
         vps.save()
-        vps.privat_data_dir = _prepare_runner_private_data_dir(vps.path)
+        vps.privat_data_dir = _prepare_runner_private_data_dir(vps.path, vps.command_run_id)
+        private_data_dir = vps.privat_data_dir
         vps.remove_update_log()
         vps.update_log = ""
         if debug:
@@ -1157,13 +1165,16 @@ class VPSManager:
                 envvars=_ansible_envvars(),
                 tags=tags,
                 verbosity=verbosity,
-                private_data_dir=vps.privat_data_dir,
+                private_data_dir=private_data_dir,
                 event_handler=vps.update_event_handler,
                 status_handler=vps.update_status_handler,
-                finished_callback=vps.update_finished,
+                finished_callback=lambda runner_config=None: vps.update_finished(
+                    runner_config,
+                    private_data_dir=private_data_dir,
+                ),
             )
         except Exception:
-            shutil.rmtree(vps.privat_data_dir, ignore_errors=True)
+            _cleanup_runner_private_data_dir(private_data_dir)
             raise
 
     def fetch_log(self, vps: VPS, debug=False):

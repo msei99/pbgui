@@ -878,6 +878,8 @@ class VPSManagerService:
         self._deploy_threads: dict[str, threading.Thread] = {}
         self._deploy_sessions: dict[str, dict[str, Any]] = {}
         self._deploy_sessions_lock = threading.Lock()
+        self._host_task_start_locks: dict[str, threading.Lock] = {}
+        self._host_task_start_locks_lock = threading.Lock()
         self._deploy_history_lock = threading.Lock()
         self._deploy_progress_cache_lock = threading.Lock()
         self._deploy_progress_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -990,11 +992,15 @@ class VPSManagerService:
     def _is_vps_playbook_process_running(self, vps: VPS) -> bool:
         if not self._should_treat_vps_process_as_active(vps):
             return False
-        host_tmp_dir = str((Path(vps.path) / "tmp").resolve()) if vps.path else ""
+        return self._vps_playbook_process_exists(vps)
+
+    def _vps_playbook_process_exists(self, vps: VPS) -> bool:
+        host_path = getattr(vps, "path", None)
+        host_tmp_dir = str((Path(host_path) / "tmp").resolve()) if host_path else ""
         inventory_path = str((Path(host_tmp_dir) / "inventory" / "hosts").resolve()) if host_tmp_dir else ""
-        playbook_path = str((Path(PBGDIR) / f"{str(vps.command or '').strip()}.yml").resolve())
         if not host_tmp_dir:
             return False
+        playbook_path = str((Path(PBGDIR) / f"{str(getattr(vps, 'command', '') or '').strip()}.yml").resolve())
         try:
             for proc in psutil.process_iter(["cmdline"]):
                 try:
@@ -1014,6 +1020,24 @@ class VPSManagerService:
         except Exception as exc:
             _log(SERVICE, f"failed to inspect VPS playbook processes for {vps.hostname}: {exc}", level="WARNING")
             return False
+
+    def _host_task_start_lock(self, hostname: str) -> threading.Lock:
+        clean_hostname = str(hostname or "").strip()
+        if not hasattr(self, "_host_task_start_locks"):
+            self._host_task_start_locks = {}
+        if not hasattr(self, "_host_task_start_locks_lock"):
+            self._host_task_start_locks_lock = threading.Lock()
+        with self._host_task_start_locks_lock:
+            lock = self._host_task_start_locks.get(clean_hostname)
+            if lock is None:
+                lock = threading.Lock()
+                self._host_task_start_locks[clean_hostname] = lock
+            return lock
+
+    def _raise_if_vps_task_active(self, vps: VPS, command_text: str) -> None:
+        if self._should_treat_vps_process_as_active(vps) or self._vps_playbook_process_exists(vps):
+            label = str(command_text or "this action").strip() or "this action"
+            raise ValueError(f"{vps.hostname} already has an active VPS task. Wait for it to finish before starting {label}.")
 
     def _should_treat_vps_process_as_active(self, vps: VPS) -> bool:
         if _status_running(getattr(vps, "init_status", None)) or _status_running(getattr(vps, "setup_status", None)):
@@ -3501,17 +3525,20 @@ class VPSManagerService:
         extra_vars: dict[str, Any] | None,
     ) -> dict[str, Any]:
         normalized_command = _normalize_vps_deploy_command(command)
-        vps = self._require_vps(hostname)
-        self._apply_session_secrets_to_vps(token, vps)
-        if _vps_deploy_requires_user_password(normalized_command) and not getattr(vps, "user_pw", None):
-            raise ValueError(f"VPS user password missing for {hostname}.")
-        vps.command = normalized_command
-        vps.command_text = _vps_deploy_command_text(normalized_command)
-        self.vpsmanager.update_vps(vps, debug=debug, extra_vars=extra_vars or None)
-        task_log_name = vps._task_log_path(vps.command, COMMAND_VPS_UPDATE).name
+        command_text = _vps_deploy_command_text(normalized_command)
+        with self._host_task_start_lock(hostname):
+            vps = self._require_vps(hostname)
+            self._apply_session_secrets_to_vps(token, vps)
+            if _vps_deploy_requires_user_password(normalized_command) and not getattr(vps, "user_pw", None):
+                raise ValueError(f"VPS user password missing for {hostname}.")
+            self._raise_if_vps_task_active(vps, command_text)
+            vps.command = normalized_command
+            vps.command_text = command_text
+            self.vpsmanager.update_vps(vps, debug=debug, extra_vars=extra_vars or None)
+            task_log_name = vps._task_log_path(vps.command, COMMAND_VPS_UPDATE).name
         return {
             "command": normalized_command,
-            "command_text": _vps_deploy_command_text(normalized_command),
+            "command_text": command_text,
             "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "run_id": str(vps.command_run_id or ""),
             "filename": task_log_name,
@@ -3811,22 +3838,18 @@ class VPSManagerService:
         host_logs: dict[str, dict[str, Any]] = {}
         if normalized_mode == "parallel" or (normalized_mode == "sequential" and len(unique_hosts) == 1):
             for hostname in unique_hosts:
-                vps = self._require_vps(hostname)
-                self._apply_session_secrets_to_vps(token, vps)
-                if _vps_deploy_requires_user_password(normalized_command) and not getattr(vps, "user_pw", None):
-                    raise ValueError(f"VPS sudo password missing for {hostname}. Validate it before starting {_vps_deploy_command_text(normalized_command)}.")
-                vps.command = normalized_command
-                vps.command_text = _vps_deploy_command_text(normalized_command)
-                self.vpsmanager.update_vps(vps, debug=debug, extra_vars=base_extra_vars or None)
-                task_log_name = vps._task_log_path(vps.command, COMMAND_VPS_UPDATE).name
-                host_logs[hostname] = {
-                    "command": normalized_command,
-                    "command_text": _vps_deploy_command_text(normalized_command),
-                    "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "run_id": str(vps.command_run_id or ""),
-                    "filename": task_log_name,
-                    "file_alias": f"VPSAction:{hostname}:{task_log_name}",
-                }
+                try:
+                    host_logs[hostname] = self._start_vps_deploy_host(
+                        token,
+                        hostname=hostname,
+                        command=normalized_command,
+                        debug=debug,
+                        extra_vars=base_extra_vars or None,
+                    )
+                except ValueError as exc:
+                    if "VPS user password missing" in str(exc):
+                        raise ValueError(f"VPS sudo password missing for {hostname}. Validate it before starting {_vps_deploy_command_text(normalized_command)}.") from exc
+                    raise
 
         options: dict[str, Any] = {}
         if normalized_command == COMMAND_VPS_UPDATE:
@@ -4173,24 +4196,26 @@ class VPSManagerService:
         self.vpsmanager.update_master(debug=debug, sudo_pw=sudo_pw, extra_vars=extra_vars)
 
     def run_vps_command(self, *, token: str, hostname: str, command: str, command_text: str, debug: bool = False, extra_vars: dict[str, Any] | None = None) -> None:
-        vps = self._require_vps(hostname)
-        self._apply_session_secrets_to_vps(token, vps)
-        if command == COMMAND_VPS_MIGRATE_SYSTEMD and not getattr(vps, "user_pw", None):
-            raise ValueError(f"VPS user password missing for {hostname}. It is required for sudo/become during systemd migration.")
-        command_extra_vars = dict(extra_vars or {})
-        if command in {COMMAND_VPS_UPDATE_PBGUI, COMMAND_VPS_UPDATE_PB}:
-            monitor_state = self._get_monitor_state()
-            host_state = self._get_host_telemetry(monitor_state, hostname)
-            self._sync_vps_config_from_host_meta(vps, host_state)
-            host_meta = self._host_meta(host_state)
-            pending_optional = self._load_vps_optional_config_pending(vps)
-            if host_meta.get("pbremote_configured") is False and "bucket" not in command_extra_vars and "bucket" not in pending_optional:
-                command_extra_vars["bucket"] = ""
-            if host_meta.get("coindata_configured") is False and "coinmarketcap_api_key" not in command_extra_vars and "coinmarketcap_api_key" not in pending_optional:
-                command_extra_vars["coinmarketcap_api_key"] = ""
-        vps.command = command
-        vps.command_text = command_text
-        self.vpsmanager.update_vps(vps, debug=debug, extra_vars=command_extra_vars or None)
+        with self._host_task_start_lock(hostname):
+            vps = self._require_vps(hostname)
+            self._apply_session_secrets_to_vps(token, vps)
+            if command == COMMAND_VPS_MIGRATE_SYSTEMD and not getattr(vps, "user_pw", None):
+                raise ValueError(f"VPS user password missing for {hostname}. It is required for sudo/become during systemd migration.")
+            command_extra_vars = dict(extra_vars or {})
+            if command in {COMMAND_VPS_UPDATE_PBGUI, COMMAND_VPS_UPDATE_PB}:
+                monitor_state = self._get_monitor_state()
+                host_state = self._get_host_telemetry(monitor_state, hostname)
+                self._sync_vps_config_from_host_meta(vps, host_state)
+                host_meta = self._host_meta(host_state)
+                pending_optional = self._load_vps_optional_config_pending(vps)
+                if host_meta.get("pbremote_configured") is False and "bucket" not in command_extra_vars and "bucket" not in pending_optional:
+                    command_extra_vars["bucket"] = ""
+                if host_meta.get("coindata_configured") is False and "coinmarketcap_api_key" not in command_extra_vars and "coinmarketcap_api_key" not in pending_optional:
+                    command_extra_vars["coinmarketcap_api_key"] = ""
+            self._raise_if_vps_task_active(vps, command_text)
+            vps.command = command
+            vps.command_text = command_text
+            self.vpsmanager.update_vps(vps, debug=debug, extra_vars=command_extra_vars or None)
 
     def _start_vps_optional_config_apply(self, token: str, vps: VPS, *, apply_optional_config: bool, apply_firewall: bool, apply_swap: bool = False) -> dict[str, Any]:
         self._apply_session_secrets_to_vps(token, vps)

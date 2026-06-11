@@ -21,6 +21,9 @@ Tabellenspalten:
 
 | Spalte | Beschreibung |
 |--------|-------------|
+| **P** | Globalen Panic Forced Mode für Long und Short setzen, Config speichern und nach Sicherheitsabfrage synchronisieren |
+| **G** | Globalen Graceful Stop Forced Mode für Long und Short setzen, Config speichern und nach Sicherheitsabfrage synchronisieren |
+| **T** | Globalen Take Profit Only Forced Mode für Long und Short setzen, Config speichern und nach Sicherheitsabfrage synchronisieren |
 | **Edit** | Instanz im Bearbeitungsformular öffnen |
 | **User** | Der dieser Instanz zugewiesene API-Key-Benutzer |
 | **Enabled On** | VPS, auf dem der Bot läuft (`disabled` = nicht aktiviert) |
@@ -30,6 +33,8 @@ Tabellenspalten:
 | **Remote Version** | Derzeit auf dem VPS laufende Config-Version |
 | **Note** | Freitext-Notiz für eigene Zwecke |
 | **Delete** | Instanz löschen (nicht möglich während sie läuft) |
+
+Die Zeilenbuttons `P`, `G` und `T` schreiben PB7 `live.forced_mode_long` und `live.forced_mode_short` in `config.json`, erhöhen die Config-Version, erstellen ein Backup der vorherigen Config und synchronisieren die Änderung zum Ziel-Host. Es sind Passivbot-Forced-Mode-Aktionen, keine direkten Exchange-Orders.
 
 **Remote-Status-Icons:**
 

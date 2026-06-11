@@ -237,6 +237,77 @@
         '.dp-table tr.dp-sel td{background:#2a3a5c;}',
         '.dp-upnl-pos{color:var(--db-pos);}',
         '.dp-upnl-neg{color:var(--db-neg);}',
+        '.dp-manage-btn{background:rgba(99,179,237,0.12);color:var(--db-title);border:1px solid rgba(99,179,237,0.35);',
+        '  border-radius:4px;padding:0.12rem 0.45rem;font-size:0.68rem;font-weight:600;cursor:pointer;line-height:1.35;}',
+        '.dp-manage-btn:hover{background:rgba(99,179,237,0.2);border-color:var(--db-title);color:var(--db-text);}',
+        '.dp-modal-ovl{position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:30000;display:block;',
+        '  padding:1rem;backdrop-filter:blur(2px);}',
+        '.dp-modal{position:fixed;width:calc(100vw - 32px);height:auto;min-width:640px;min-height:220px;',
+        '  max-width:calc(100vw - 16px);max-height:calc(100vh - 24px);background:#131b2b;',
+        '  border:1px solid var(--db-surface2);border-radius:12px;box-shadow:0 20px 70px rgba(0,0,0,0.85);',
+        '  overflow:visible;color:var(--db-text);font-family:var(--db-font);display:flex;flex-direction:column;}',
+        '.dp-resize-handle{position:absolute;z-index:5;}',
+        '.dp-resize-n{top:-4px;left:10px;right:10px;height:8px;cursor:ns-resize;}',
+        '.dp-resize-s{bottom:-4px;left:10px;right:10px;height:8px;cursor:ns-resize;}',
+        '.dp-resize-e{right:-4px;top:10px;bottom:10px;width:8px;cursor:ew-resize;}',
+        '.dp-resize-w{left:-4px;top:10px;bottom:10px;width:8px;cursor:ew-resize;}',
+        '.dp-resize-ne{right:-5px;top:-5px;width:12px;height:12px;cursor:nesw-resize;}',
+        '.dp-resize-nw{left:-5px;top:-5px;width:12px;height:12px;cursor:nwse-resize;}',
+        '.dp-resize-se{right:-5px;bottom:-5px;width:12px;height:12px;cursor:nwse-resize;}',
+        '.dp-resize-sw{left:-5px;bottom:-5px;width:12px;height:12px;cursor:nesw-resize;}',
+        '.dp-modal-head{display:flex;align-items:center;justify-content:space-between;gap:0.5rem;padding:0.75rem 1rem;',
+        '  background:#111827;border-bottom:1px solid #1e2736;cursor:move;user-select:none;}',
+        '.dp-modal-title{font-size:0.9rem;font-weight:700;color:var(--db-text);}',
+        '.dp-modal-close{background:transparent;border:none;color:var(--db-text-dim);font-size:1rem;cursor:pointer;border-radius:5px;padding:0.2rem 0.35rem;}',
+        '.dp-modal-close:hover{color:var(--db-text);background:rgba(255,255,255,0.06);}',
+        '.dp-modal-body{display:flex;flex-direction:column;gap:0.7rem;padding:0.85rem;flex:1;min-height:0;overflow:hidden;}',
+        '.dp-manage-wrap{overflow:auto;flex:0 0 auto;min-height:0;border:1px solid var(--db-surface2);border-radius:8px;background:#0e1117;}',
+        '.dp-manage-table{width:100%;border-collapse:collapse;font-size:0.76rem;min-width:1320px;}',
+        '.dp-manage-table th{position:sticky;top:0;background:var(--db-surface);color:var(--db-text-muted);font-weight:600;',
+        '  padding:0.35rem 0.45rem;text-align:left;border-bottom:1px solid var(--db-surface2);white-space:nowrap;z-index:1;}',
+        '.dp-manage-table td{padding:0.35rem 0.45rem;border-bottom:1px solid var(--db-surface);white-space:nowrap;vertical-align:middle;}',
+        '.dp-manage-table tr:hover td{background:#1e2a3a;}',
+        '.dp-manage-table tr.dp-sel td{background:#2a3a5c;}',
+        '.dp-exec-col{min-width:124px;width:124px;}',
+        '.dp-manage-action{height:28px;min-width:176px;background:#0f172a;color:var(--db-text);border:1px solid var(--db-surface2);',
+        '  border-radius:6px;padding:0 0.4rem;font-size:0.75rem;outline:none;}',
+        '.dp-manage-amount{height:28px;width:86px;background:#0f172a;color:var(--db-text);border:1px solid var(--db-surface2);',
+        '  border-radius:6px;padding:0 0.4rem;font-size:0.75rem;outline:none;}',
+        '.dp-manage-action:focus,.dp-manage-amount:focus{border-color:var(--db-title);box-shadow:0 0 0 1px rgba(99,179,237,0.35);}',
+        '.dp-manage-amount:disabled{opacity:0.45;cursor:not-allowed;}',
+        '.dp-quick-col{min-width:142px;width:142px;overflow:hidden;}',
+        '.dp-quick{display:flex;gap:0.25rem;flex-wrap:nowrap;min-width:132px;}',
+        '.dp-quick button,.dp-modal-actions button,.dp-row-run{height:28px;border-radius:6px;border:1px solid var(--db-surface3);',
+        '  background:var(--db-surface2);color:var(--db-text);font-size:0.72rem;font-weight:600;cursor:pointer;padding:0 0.45rem;}',
+        '.dp-quick button{min-width:40px;padding:0 0.35rem;}',
+        '.dp-quick button:hover,.dp-modal-actions button:hover,.dp-row-run:hover{background:var(--db-surface3);}',
+        '.dp-row-run{min-width:104px;}',
+        '.dp-row-run.danger{background:#742a2a;border-color:#9b2c2c;color:#fff;}',
+        '.dp-row-run.danger:hover{background:#9b2c2c;}',
+        '.dp-row-run.warn{background:#8a4b05;border-color:#c96b00;color:#fff;}',
+        '.dp-row-run.warn:hover{background:#a85c08;}',
+        '.dp-row-run.ok{background:#166534;border-color:#21c354;color:#fff;}',
+        '.dp-row-run.ok:hover{background:#15803d;}',
+        '.dp-row-run:disabled{opacity:0.45;cursor:not-allowed;}',
+        '.dp-note{font-size:0.74rem;line-height:1.45;color:var(--db-text-muted);}',
+        '.dp-status-msg{font-size:0.76rem;line-height:1.4;color:var(--db-text-muted);min-height:1.2em;}',
+        '.dp-status-msg.ok{color:var(--db-pos);}',
+        '.dp-status-msg.err{color:var(--db-neg);}',
+        '.dp-preview{flex:1 1 auto;min-height:0;margin:0;overflow:auto;background:#070b12;border:1px solid var(--db-surface2);',
+        '  border-radius:6px;padding:0.6rem;color:var(--db-text);font-size:0.68rem;line-height:1.35;white-space:pre-wrap;}',
+        '.dp-preview-modal{position:fixed;width:min(1200px,calc(100vw - 48px));height:min(760px,calc(100vh - 72px));',
+        '  min-width:560px;min-height:320px;max-width:calc(100vw - 16px);max-height:calc(100vh - 24px);background:#131b2b;',
+        '  border:1px solid var(--db-surface2);border-radius:12px;box-shadow:0 20px 70px rgba(0,0,0,0.85);',
+        '  overflow:visible;color:var(--db-text);font-family:var(--db-font);display:flex;flex-direction:column;}',
+        '.dp-preview-body{display:flex;flex-direction:column;gap:0.55rem;padding:0.85rem;flex:1;min-height:0;overflow:hidden;}',
+        '.dp-modal-actions{display:flex;justify-content:flex-end;gap:0.5rem;flex-wrap:wrap;align-items:center;}',
+        '.dp-modal-actions .spacer{flex:1;}',
+        '.dp-modal-actions .danger{background:#742a2a;border-color:#9b2c2c;color:#fff;}',
+        '.dp-modal-actions .danger:hover{background:#9b2c2c;}',
+        '.dp-modal-actions .warn{background:#8a4b05;border-color:#c96b00;color:#fff;}',
+        '.dp-modal-actions .warn:hover{background:#a85c08;}',
+        '.dp-modal-actions .ok{background:#166534;border-color:#21c354;color:#fff;}',
+        '.dp-modal-actions .ok:hover{background:#15803d;}',
 
         /* ── Orders widget (Lightweight Charts) ── */
         '.do-tf-bar{display:flex;gap:0.25rem;align-items:center;flex-wrap:wrap;}',
@@ -286,6 +357,20 @@
             ? lastPrice <= entryPrice
             : lastPrice >= entryPrice;
         return isProfit ? '#48bb78' : '#f56565';
+    }
+    function liveAgeText(ts) {
+        var age = Math.max(0, Math.round((Date.now() - (ts || Date.now())) / 1000));
+        if (age <= 1) return 'now';
+        if (age < 60) return age + 's ago';
+        var min = Math.floor(age / 60);
+        if (min < 60) return min + 'm ago';
+        return Math.floor(min / 60) + 'h ago';
+    }
+    function positionsStatusText(source, ts) {
+        var normalized = String(source || 'db').toLowerCase();
+        var label = normalized === 'live' ? 'Live' : 'DB fallback';
+        if (normalized === 'mixed') label = 'Mixed live/DB';
+        return label + ': ' + liveAgeText(ts);
     }
     function tweBarPct(v) { return Math.min(100, (v / 300) * 100).toFixed(1); }
     function signedFmt(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); }
@@ -351,10 +436,16 @@
     function buildBalance(container, data, opts) {
         injectCSS();
         opts = opts || {};
+        function updateBalanceStatus(source, ts) {
+            var st = container.querySelector('.db-status');
+            if (st) st.textContent = positionsStatusText(source, ts);
+        }
         /* Fast-path: update existing balance widget in-place (avoids blank-frame flicker) */
         var _dbRoot = container.querySelector('.db-root');
         var _dbTbody = _dbRoot && _dbRoot.querySelector('.db-table tbody');
         if (_dbRoot && _dbTbody && data && (data.rows || []).length > 0) {
+            container._dbStatusSource = data.source || container._dbStatusSource || 'db';
+            container._dbStatusTs = Date.now();
             var _t = (data.totals) ? data.totals : {};
             var _totDiv = _dbRoot.querySelector('.db-totals');
             if (_totDiv) {
@@ -366,12 +457,14 @@
                     '<div class="db-total-item"><label>Total TWE</label>' +
                     '<span style="color:' + tweColor(_t.we || 0) + '">' + (_t.we || 0).toFixed(2) + ' %</span></div>';
             }
-            var _st = _dbRoot.querySelector('.db-status');
-            if (_st) _st.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+            updateBalanceStatus(container._dbStatusSource, container._dbStatusTs);
             renderBalanceRows(_dbTbody, data.rows);
             return;
         }
+        if (container._dbStatusTimer) clearInterval(container._dbStatusTimer);
         container.innerHTML = '';
+        container._dbStatusSource = (data && data.source) || 'db';
+        container._dbStatusTs = Date.now();
 
         var t    = (data && data.totals) ? data.totals : {};
         var rows = (data && data.rows)   ? data.rows   : [];
@@ -436,7 +529,7 @@
         /* status / updated timestamp */
         var statusDiv = document.createElement('div');
         statusDiv.className = 'db-status';
-        statusDiv.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+        statusDiv.textContent = positionsStatusText(container._dbStatusSource, container._dbStatusTs);
         root.appendChild(statusDiv);
 
         if (rows.length === 0) {
@@ -464,6 +557,10 @@
         wrap.appendChild(tbl);
         root.appendChild(wrap);
         container.appendChild(root);
+        container._dbStatusTimer = setInterval(function () {
+            if (!container.isConnected) { clearInterval(container._dbStatusTimer); container._dbStatusTimer = null; return; }
+            updateBalanceStatus(container._dbStatusSource, container._dbStatusTs);
+        }, 1000);
     }
 
     /* ──────────────────────── Top Symbols helpers ───────────────────────── */
@@ -1960,12 +2057,19 @@
     function buildPositions(container, data, opts) {
         injectCSS();
         opts = opts || {};
+        function updatePositionsStatus() {
+            var st = container.querySelector('.dt-status');
+            if (st) st.textContent = positionsStatusText(container._dpStatusSource, container._dpStatusTs);
+        }
         /* Fast-path: update existing positions widget in-place (avoids blank-frame flicker) */
         if (typeof container._dpUpdate === 'function' && data && data.positions) {
-            container._dpUpdate(data.positions);
+            container._dpUpdate(data.positions, data.source || 'db');
             return;
         }
+        if (container._dpStatusTimer) clearInterval(container._dpStatusTimer);
         container.innerHTML = '';
+        container._dpStatusSource = (data && data.source) || 'db';
+        container._dpStatusTs = Date.now();
 
         var root = document.createElement('div');
         root.className = 'dt-root';
@@ -1977,6 +2081,19 @@
         titleSpan.className = 'dt-title';
         titleSpan.textContent = 'Positions';
         hdr.appendChild(titleSpan);
+
+        if (opts.apiBase && opts.token) {
+            var manageBtn = document.createElement('button');
+            manageBtn.className = 'dp-manage-btn';
+            manageBtn.type = 'button';
+            manageBtn.textContent = 'Manage';
+            manageBtn.title = 'Manage selected position';
+            manageBtn.addEventListener('click', function (event) {
+                event.stopPropagation();
+                openManageModal();
+            });
+            hdr.appendChild(manageBtn);
+        }
 
         if (opts.usersControl) {
             var metaDiv = document.createElement('div');
@@ -2000,7 +2117,7 @@
         /* status */
         var statusDiv = document.createElement('div');
         statusDiv.className = 'dt-status';
-        statusDiv.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+        statusDiv.textContent = positionsStatusText(container._dpStatusSource, container._dpStatusTs);
         root.appendChild(statusDiv);
 
         var rows = (data && data.positions) ? data.positions : [];
@@ -2066,7 +2183,928 @@
 
         container.appendChild(root);
 
-        var selectedIdx = -1;
+        var selectedRowData = null;
+        var manageState = { overlay: null, modal: null, tbody: null, tableWrap: null, status: null, panicAllBtn: null, previewAllBtn: null, gracefulAllBtn: null, previewGracefulBtn: null, tpOnlyAllBtn: null, previewTpOnlyBtn: null, controls: {}, pendingRefresh: false, actionInFlight: false };
+
+        function manageTableHeightForRows() {
+            return 38 + Math.min(Math.max(rows.length, 1), 8) * 46;
+        }
+
+        function updateManageDialogSize() {
+            var tableHeight = manageTableHeightForRows();
+            if (manageState.tableWrap) manageState.tableWrap.style.maxHeight = tableHeight + 'px';
+            if (manageState.modal && manageState.modal.getAttribute('data-user-resized') !== '1') {
+                var nextHeight = Math.min(window.innerHeight - 96, Math.max(280, Math.min(640, 190 + tableHeight)));
+                manageState.modal.style.height = nextHeight + 'px';
+                if (manageState.modal.getAttribute('data-user-moved') !== '1') {
+                    manageState.modal.style.top = Math.max(12, Math.floor((window.innerHeight - nextHeight) / 2)) + 'px';
+                }
+            }
+        }
+
+        function rowLabel(row) {
+            return String(row.user) + ' | ' + String(row.symbol) + ' | ' + String(row.side) + ' | size ' + Number(row.size || 0).toFixed(3);
+        }
+
+        function rowKey(row) {
+            return row ? String(row.user) + '|' + String(row.symbol) + '|' + String(row.side) : '';
+        }
+
+        function parseAmountValue(value) {
+            var text = String(value == null ? '' : value).trim().replace(',', '.');
+            var parsed = parseFloat(text);
+            return isNaN(parsed) ? NaN : parsed;
+        }
+
+        function formatManageNumber(value, decimals) {
+            var num = Number(value);
+            if (!isFinite(num)) return '';
+            return num.toFixed(decimals).replace(/0+$/, '').replace(/\.$/, '');
+        }
+
+        function quoteCurrencyForRow(row) {
+            var symbol = String(row && row.symbol || '').toUpperCase();
+            if (symbol.slice(-4) === 'USDC') return 'USDC';
+            return 'USDT';
+        }
+
+        function closePriceForRow(row, state) {
+            var fresh = Number(state && state.closePrice || 0);
+            if (fresh > 0) return fresh;
+            return Math.abs(Number(row && row.price || 0));
+        }
+
+        function quoteValueForAmount(row, amount, state) {
+            var qty = Math.abs(Number(amount || 0));
+            var price = closePriceForRow(row, state);
+            return qty > 0 && price > 0 ? qty * price : 0;
+        }
+
+        function minCloseValueForRow(row, state) {
+            var freshMin = Number(state && state.minCloseValue || 0);
+            if (freshMin > 0) return freshMin;
+            var exchange = String(row && row.exchange || '').toLowerCase();
+            return exchange === 'hyperliquid' ? 10 : 0;
+        }
+
+        function minCloseAmountForRow(row, state) {
+            var price = closePriceForRow(row, state);
+            var minValue = minCloseValueForRow(row, state);
+            return price > 0 && minValue > 0 ? minValue / price : 0;
+        }
+
+        function marketCloseMinMessage(row, amount, state) {
+            var qty = Math.abs(Number(amount || 0));
+            var minQty = Number(state && state.minCloseAmount || 0);
+            if (minQty > 0 && qty > 0 && qty < minQty) {
+                return 'Exchange minimum close amount is ' + formatManageNumber(minQty, 8) + '.';
+            }
+            var minValue = minCloseValueForRow(row, state);
+            if (minValue <= 0) return '';
+            var value = quoteValueForAmount(row, amount, state);
+            if (value >= minValue) return '';
+            var minValueAmount = minCloseAmountForRow(row, state);
+            return 'Hyperliquid minimum order value is $' + formatManageNumber(minValue, 2) + '. Selected close value is $' + formatManageNumber(value, 6) + '; use at least ' + formatManageNumber(minValueAmount, 8) + ' amount.';
+        }
+
+        function rememberMarketCloseErrorHint(body, message) {
+            if (!body || body.action !== 'market_close') return;
+            var match = String(message || '').match(/minimum amount precision of\s+([0-9.]+)/i);
+            if (!match) return;
+            var minAmount = parseFloat(match[1]);
+            if (!isFinite(minAmount) || minAmount <= 0) return;
+            var key = String(body.user || '') + '|' + String(body.symbol || '') + '|' + String(body.side || 'long');
+            if (!manageState.controls[key]) return;
+            manageState.controls[key].minCloseAmount = minAmount;
+        }
+
+        function shouldLoadFreshClosePrice(row, state) {
+            return String(row && row.exchange || '').toLowerCase() === 'hyperliquid' && !state.closePriceLoaded && !state.closePriceLoading;
+        }
+
+        function fetchFreshClosePrice(row, state, tr, amountInput, quoteInput) {
+            if (!shouldLoadFreshClosePrice(row, state)) return;
+            state.closePriceLoading = true;
+            fetch((opts.apiBase || '') + '/dashboard/positions/close_price?token=' + encodeURIComponent(opts.token || '') + '&user=' + encodeURIComponent(row.user || '') + '&symbol=' + encodeURIComponent(row.symbol || '') + '&side=' + encodeURIComponent(row.side || ''), {
+                headers: { 'Authorization': 'Bearer ' + (opts.token || '') }
+            })
+            .then(function (resp) {
+                return resp.json().then(function (data) {
+                    if (!resp.ok) throw new Error(data && data.detail ? data.detail : resp.statusText);
+                    return data;
+                });
+            })
+            .then(function (data) {
+                state.closePriceLoading = false;
+                state.closePriceLoaded = true;
+                state.closePrice = Number(data.price || 0) || 0;
+                state.minCloseValue = Number(data.min_cost || 0) || 0;
+                if (quoteInput) quoteInput.value = formatManageNumber(quoteValueForAmount(row, state.amount, state), 4);
+                updateManageRowControls(tr, row, state);
+            })
+            .catch(function (err) {
+                state.closePriceLoading = false;
+                state.closePriceLoaded = true;
+                setStatus(manageState.status, err.message || 'Could not load fresh close price.', 'err');
+                updateManageRowControls(tr, row, state);
+            });
+        }
+
+        function setStatus(statusEl, msg, kind) {
+            statusEl.className = 'dp-status-msg' + (kind ? ' ' + kind : '');
+            statusEl.textContent = msg || '';
+        }
+
+        function openConfigPreviewModal(config, titleText) {
+            var old = document.getElementById('dp-preview-modal');
+            if (old && old.parentNode) old.parentNode.removeChild(old);
+            var overlay = document.createElement('div');
+            overlay.className = 'dp-modal-ovl';
+            overlay.id = 'dp-preview-modal';
+            var modal = document.createElement('div');
+            modal.className = 'dp-preview-modal';
+            var width = Math.min(1200, Math.max(560, window.innerWidth - 48));
+            var height = Math.min(760, Math.max(320, window.innerHeight - 72));
+            modal.style.width = width + 'px';
+            modal.style.height = height + 'px';
+            modal.style.left = Math.max(12, Math.floor((window.innerWidth - width) / 2)) + 'px';
+            modal.style.top = Math.max(12, Math.floor((window.innerHeight - height) / 2)) + 'px';
+            overlay.appendChild(modal);
+
+            var head = document.createElement('div');
+            head.className = 'dp-modal-head';
+            var title = document.createElement('div');
+            title.className = 'dp-modal-title';
+            title.textContent = titleText || 'Panic config preview';
+            var closeBtn = document.createElement('button');
+            closeBtn.type = 'button';
+            closeBtn.className = 'dp-modal-close';
+            closeBtn.innerHTML = '&#x2715;';
+            head.appendChild(title);
+            head.appendChild(closeBtn);
+            modal.appendChild(head);
+
+            var body = document.createElement('div');
+            body.className = 'dp-preview-body';
+            var note = document.createElement('div');
+            note.className = 'dp-status-msg ok';
+            note.textContent = 'Preview only. No config was saved and no SSH sync was started.';
+            var pre = document.createElement('pre');
+            pre.className = 'dp-preview';
+            pre.textContent = JSON.stringify(config || {}, null, 2);
+            var actions = document.createElement('div');
+            actions.className = 'dp-modal-actions';
+            var spacer = document.createElement('span');
+            spacer.className = 'spacer';
+            var closeOnlyBtn = document.createElement('button');
+            closeOnlyBtn.type = 'button';
+            closeOnlyBtn.textContent = 'Close';
+            actions.appendChild(spacer);
+            actions.appendChild(closeOnlyBtn);
+            body.appendChild(note);
+            body.appendChild(pre);
+            body.appendChild(actions);
+            modal.appendChild(body);
+
+            function closePreview() {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            }
+            closeBtn.addEventListener('click', closePreview);
+            closeOnlyBtn.addEventListener('click', closePreview);
+            document.body.appendChild(overlay);
+        }
+
+        function requestManageAction(body, statusEl, confirmBtn) {
+            if (manageState.actionInFlight) {
+                setStatus(statusEl, 'Another manage action is still running.', 'err');
+                updateManageLiveRows();
+                return;
+            }
+            confirmBtn.disabled = true;
+            manageState.actionInFlight = true;
+            updateManageLiveRows();
+            setStatus(statusEl, 'Working...', '');
+            fetch((opts.apiBase || '') + '/dashboard/positions/manage?token=' + encodeURIComponent(opts.token || ''), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + (opts.token || '')
+                },
+                body: JSON.stringify(body)
+            })
+            .then(function (resp) {
+                return resp.json().then(function (data) {
+                    if (!resp.ok) throw new Error(data && data.detail ? data.detail : resp.statusText);
+                    return data;
+                });
+            })
+            .then(function (data) {
+                if (data && data.dry_run) {
+                    var previewLabel = body.action === 'graceful_stop_all' ? 'Graceful stop' : (body.action === 'tp_only_all' ? 'Take Profit Only' : 'Panic');
+                    openConfigPreviewModal(data.config || null, previewLabel + ' config preview for ' + (body.user || 'user'));
+                    setStatus(statusEl, 'Preview only. No config was saved and no SSH sync was started.', 'ok');
+                } else if (body.action === 'market_close') {
+                    setStatus(statusEl, 'Market close order sent.', 'ok');
+                } else if (body.action === 'panic_symbol') {
+                    setStatus(statusEl, 'Panic synced for ' + (data.coin || body.symbol) + '.', 'ok');
+                } else if (body.action === 'graceful_stop_symbol') {
+                    setStatus(statusEl, 'Graceful stop synced for ' + (data.coin || body.symbol) + '.', 'ok');
+                } else if (body.action === 'tp_only_symbol') {
+                    setStatus(statusEl, 'Take Profit Only synced for ' + (data.coin || body.symbol) + '.', 'ok');
+                } else if (body.action === 'graceful_stop_all') {
+                    setStatus(statusEl, 'Global graceful stop synced for user ' + body.user + '.', 'ok');
+                } else if (body.action === 'tp_only_all') {
+                    setStatus(statusEl, 'Global Take Profit Only synced for user ' + body.user + '.', 'ok');
+                } else {
+                    setStatus(statusEl, 'Global panic synced for user ' + body.user + '.', 'ok');
+                }
+                if ((!data || !data.dry_run) && typeof opts.onReload === 'function') setTimeout(opts.onReload, 600);
+                manageState.actionInFlight = false;
+                confirmBtn.disabled = false;
+                updateManageLiveRows();
+                if (manageState.pendingRefresh && !isManageEditing()) refreshManageRowsAfterEdit();
+            })
+            .catch(function (err) {
+                manageState.actionInFlight = false;
+                confirmBtn.disabled = false;
+                rememberMarketCloseErrorHint(body, err.message);
+                updateManageLiveRows();
+                setStatus(statusEl, err.message || 'Action failed.', 'err');
+                if (manageState.pendingRefresh && !isManageEditing()) refreshManageRowsAfterEdit();
+            });
+        }
+
+        function isManageEditing() {
+            var active = document.activeElement;
+            if (!manageState.overlay || !active || !manageState.overlay.contains(active)) return false;
+            var tag = String(active.tagName || '').toUpperCase();
+            return tag === 'SELECT' || tag === 'INPUT';
+        }
+
+        function refreshManageRowsAfterEdit() {
+            setTimeout(function () {
+                if (!manageState.pendingRefresh || isManageEditing()) return;
+                if (manageState.actionInFlight) {
+                    refreshManageRowsAfterEdit();
+                    return;
+                }
+                renderManageRows();
+            }, 120);
+        }
+
+        function formatManageValue(row, col) {
+            var val = row[col.key];
+            if (col.fmt) {
+                try { return col.fmt(val); } catch (_) { return String(val); }
+            }
+            return String(val);
+        }
+
+        function defaultAmountForRow(row) {
+            return formatManageNumber(Math.abs(Number(row && row.size || 0)), 8);
+        }
+
+        function controlStateForRow(row) {
+            var key = rowKey(row);
+            if (!manageState.controls[key]) {
+                manageState.controls[key] = {
+                    action: 'market_close',
+                    amount: defaultAmountForRow(row),
+                    amountTouched: false,
+                    quickPct: null
+                };
+            }
+            return manageState.controls[key];
+        }
+
+        function syncManageAmountInputs(row, state, tr) {
+            if (!tr || !state) return;
+            if (state.quickPct != null) {
+                state.amount = formatManageNumber(Math.abs(Number(row.size || 0)) * Number(state.quickPct || 0) / 100, 8);
+            } else if (!state.amountTouched) {
+                state.amount = defaultAmountForRow(row);
+            }
+            var amountInput = tr.querySelector('.dp-manage-amount:not(.dp-manage-quote)');
+            var quoteInput = tr.querySelector('.dp-manage-quote');
+            var nextAmount = state.amount || '';
+            var nextQuote = formatManageNumber(quoteValueForAmount(row, state.amount, state), 4);
+            if (amountInput && document.activeElement !== amountInput && amountInput.value !== nextAmount) amountInput.value = nextAmount;
+            if (quoteInput && document.activeElement !== quoteInput && quoteInput.value !== nextQuote) quoteInput.value = nextQuote;
+        }
+
+        function manageRowsSignature() {
+            return rows.map(function (row) { return rowKey(row); }).join('\n');
+        }
+
+        function manageDomSignature() {
+            if (!manageState.tbody) return '';
+            var trs = manageState.tbody.querySelectorAll('tr[data-row-key]');
+            var keys = [];
+            for (var i = 0; i < trs.length; i++) keys.push(trs[i].getAttribute('data-row-key') || '');
+            return keys.join('\n');
+        }
+
+        function findManageRowByKey(key) {
+            if (!manageState.tbody) return null;
+            var trs = manageState.tbody.querySelectorAll('tr[data-row-key]');
+            for (var i = 0; i < trs.length; i++) {
+                if (trs[i].getAttribute('data-row-key') === key) return trs[i];
+            }
+            return null;
+        }
+
+        function currentManageRow(tr, fallback) {
+            var key = tr && tr.getAttribute('data-row-key');
+            if (key) {
+                for (var i = 0; i < rows.length; i++) {
+                    if (rowKey(rows[i]) === key) return rows[i];
+                }
+            }
+            return fallback;
+        }
+
+        function updateManageLiveRows() {
+            if (!manageState.tbody) return;
+            updateManageDialogSize();
+            for (var ri = 0; ri < rows.length; ri++) {
+                var row = rows[ri];
+                var tr = findManageRowByKey(rowKey(row));
+                if (!tr) continue;
+                for (var ci = 0; ci < COLS.length; ci++) {
+                    var col = COLS[ci];
+                    var td = tr.querySelector('td[data-col-key="' + col.key + '"]');
+                    if (!td) continue;
+                    var nextText = formatManageValue(row, col);
+                    if (td.textContent !== nextText) td.textContent = nextText;
+                    if (col.key === 'upnl') td.className = Number(row.upnl || 0) >= 0 ? 'dp-upnl-pos' : 'dp-upnl-neg';
+                }
+                var state = controlStateForRow(row);
+                syncManageAmountInputs(row, state, tr);
+                updateManageRowControls(tr, row, state);
+            }
+            updatePanicAllButton();
+        }
+
+        function syncManageRowsAfterLiveUpdate() {
+            if (!manageState.tbody) return;
+            if (manageDomSignature() === manageRowsSignature()) {
+                updateManageLiveRows();
+            } else {
+                renderManageRows();
+            }
+        }
+
+        function updateManageRowControls(tr, row, state) {
+            var isMarket = state.action === 'market_close';
+            var amountInput = tr.querySelector('.dp-manage-amount');
+            var quoteInput = tr.querySelector('.dp-manage-quote');
+            var quick = tr.querySelector('.dp-quick');
+            var runBtn = tr.querySelector('.dp-row-run');
+            if (amountInput) amountInput.disabled = !isMarket;
+            if (quoteInput) quoteInput.disabled = !isMarket || Number(row && row.price || 0) <= 0;
+            if (quick) quick.style.visibility = isMarket ? 'visible' : 'hidden';
+            if (runBtn) {
+                var minMessage = isMarket ? marketCloseMinMessage(row, state.amount, state) : '';
+                var modeClass = state.action === 'panic_symbol' ? ' danger' : (state.action === 'graceful_stop_symbol' ? ' warn' : (state.action === 'tp_only_symbol' ? ' ok' : ''));
+                var modeText = state.action === 'panic_symbol' ? 'Panic' : (state.action === 'graceful_stop_symbol' ? 'Graceful stop' : (state.action === 'tp_only_symbol' ? 'Take Profit Only' : ''));
+                runBtn.textContent = isMarket ? 'Market Close' : modeText;
+                runBtn.className = 'dp-row-run' + (isMarket ? ' danger' : modeClass);
+                runBtn.disabled = manageState.actionInFlight || !!minMessage || (isMarket && state.closePriceLoading);
+                runBtn.title = manageState.actionInFlight ? 'Another manage action is still running.' : (state.closePriceLoading ? 'Loading fresh close price...' : (minMessage || ''));
+            }
+        }
+
+        function selectedManageUser() {
+            var row = selectedRowData || rows[0];
+            return row ? String(row.user || '') : '';
+        }
+
+        function updatePanicAllButton() {
+            var user = selectedManageUser();
+            if (manageState.previewAllBtn) {
+                manageState.previewAllBtn.disabled = !user || manageState.actionInFlight;
+                manageState.previewAllBtn.textContent = 'Preview Panic';
+                manageState.previewAllBtn.title = manageState.actionInFlight ? 'Another manage action is still running.' : (user ? ('Build the panic-all config for ' + user + ' without saving or syncing.') : 'Select a user position first.');
+            }
+            if (manageState.panicAllBtn) {
+                manageState.panicAllBtn.disabled = !user || manageState.actionInFlight;
+                manageState.panicAllBtn.textContent = 'Panic';
+                manageState.panicAllBtn.title = manageState.actionInFlight ? 'Another manage action is still running.' : (user ? ('Save Panic for all positions of ' + user + ' and sync it to the bot host.') : 'Select a user position first.');
+            }
+            if (manageState.previewGracefulBtn) {
+                manageState.previewGracefulBtn.disabled = !user || manageState.actionInFlight;
+                manageState.previewGracefulBtn.textContent = 'Preview Graceful stop';
+                manageState.previewGracefulBtn.title = manageState.actionInFlight ? 'Another manage action is still running.' : (user ? ('Build the Graceful Stop config for ' + user + ' without saving or syncing.') : 'Select a user position first.');
+            }
+            if (manageState.gracefulAllBtn) {
+                manageState.gracefulAllBtn.disabled = !user || manageState.actionInFlight;
+                manageState.gracefulAllBtn.textContent = 'Graceful stop';
+                manageState.gracefulAllBtn.title = manageState.actionInFlight ? 'Another manage action is still running.' : (user ? ('Save Graceful Stop for all positions of ' + user + ' and sync it to the bot host.') : 'Select a user position first.');
+            }
+            if (manageState.previewTpOnlyBtn) {
+                manageState.previewTpOnlyBtn.disabled = !user || manageState.actionInFlight;
+                manageState.previewTpOnlyBtn.textContent = 'Preview TP only';
+                manageState.previewTpOnlyBtn.title = manageState.actionInFlight ? 'Another manage action is still running.' : (user ? ('Build the Take Profit Only config for ' + user + ' without saving or syncing.') : 'Select a user position first.');
+            }
+            if (manageState.tpOnlyAllBtn) {
+                manageState.tpOnlyAllBtn.disabled = !user || manageState.actionInFlight;
+                manageState.tpOnlyAllBtn.textContent = 'Take Profit Only';
+                manageState.tpOnlyAllBtn.title = manageState.actionInFlight ? 'Another manage action is still running.' : (user ? ('Save Take Profit Only for all positions of ' + user + ' and sync it to the bot host.') : 'Select a user position first.');
+            }
+        }
+
+        function renderManageRows() {
+            if (!manageState.tbody) return;
+            updateManageDialogSize();
+            if (isManageEditing() && rows.length) {
+                manageState.pendingRefresh = true;
+                updateManageLiveRows();
+                return;
+            }
+            manageState.pendingRefresh = false;
+            manageState.tbody.innerHTML = '';
+            updatePanicAllButton();
+            if (!rows.length) {
+                var emptyTr = document.createElement('tr');
+                var emptyTd = document.createElement('td');
+                emptyTd.colSpan = COLS.length + 5;
+                emptyTd.textContent = 'No open positions.';
+                emptyTd.style.color = 'var(--db-text-muted)';
+                emptyTd.style.textAlign = 'center';
+                emptyTd.style.padding = '1.25rem';
+                emptyTr.appendChild(emptyTd);
+                manageState.tbody.appendChild(emptyTr);
+                return;
+            }
+
+            for (var ri = 0; ri < rows.length; ri++) {
+                (function (row) {
+                    var state = controlStateForRow(row);
+                    var tr = document.createElement('tr');
+                    tr.setAttribute('data-row-key', rowKey(row));
+                    if (row === selectedRowData) tr.className = 'dp-sel';
+                    tr.addEventListener('click', function () {
+                        selectedRowData = currentManageRow(tr, row);
+                        renderRows();
+                        renderManageRows();
+                    });
+
+                    for (var ci = 0; ci < COLS.length; ci++) {
+                        var col = COLS[ci];
+                        var td = document.createElement('td');
+                        td.setAttribute('data-col-key', col.key);
+                        td.textContent = formatManageValue(row, col);
+                        if (col.key === 'upnl') td.className = Number(row.upnl || 0) >= 0 ? 'dp-upnl-pos' : 'dp-upnl-neg';
+                        tr.appendChild(td);
+                    }
+
+                    var actionTd = document.createElement('td');
+                    var actionSelect = document.createElement('select');
+                    actionSelect.className = 'dp-manage-action';
+                    [
+                        ['market_close', 'Market close amount'],
+                        ['panic_symbol', 'Panic symbol'],
+                        ['graceful_stop_symbol', 'Graceful stop symbol'],
+                        ['tp_only_symbol', 'Take profit only symbol']
+                    ].forEach(function (item) {
+                        var opt = document.createElement('option');
+                        opt.value = item[0];
+                        opt.textContent = item[1];
+                        if (state.action === item[0]) opt.selected = true;
+                        actionSelect.appendChild(opt);
+                    });
+                    actionSelect.addEventListener('click', function (event) { event.stopPropagation(); });
+                    actionSelect.addEventListener('blur', refreshManageRowsAfterEdit);
+                    actionSelect.addEventListener('change', function () {
+                        var currentRow = currentManageRow(tr, row);
+                        state.action = actionSelect.value;
+                        updateManageRowControls(tr, currentRow, state);
+                        setStatus(manageState.status, '', '');
+                    });
+                    actionTd.appendChild(actionSelect);
+                    tr.appendChild(actionTd);
+
+                    var amountTd = document.createElement('td');
+                    var amountInput = document.createElement('input');
+                    amountInput.className = 'dp-manage-amount';
+                    amountInput.type = 'text';
+                    amountInput.inputMode = 'decimal';
+                    amountInput.value = state.amount || defaultAmountForRow(row);
+                    amountInput.addEventListener('click', function (event) { event.stopPropagation(); });
+                    amountInput.addEventListener('input', function () {
+                        var currentRow = currentManageRow(tr, row);
+                        state.amountTouched = true;
+                        state.quickPct = null;
+                        state.amount = amountInput.value;
+                        quoteInput.value = formatManageNumber(quoteValueForAmount(currentRow, state.amount, state), 4);
+                        updateManageRowControls(tr, currentRow, state);
+                    });
+                    amountInput.addEventListener('blur', refreshManageRowsAfterEdit);
+                    amountTd.appendChild(amountInput);
+                    tr.appendChild(amountTd);
+
+                    var quoteTd = document.createElement('td');
+                    var quoteInput = document.createElement('input');
+                    quoteInput.className = 'dp-manage-amount dp-manage-quote';
+                    quoteInput.type = 'text';
+                    quoteInput.inputMode = 'decimal';
+                    quoteInput.title = 'Close value in ' + quoteCurrencyForRow(row) + '; edits are converted to amount.';
+                    quoteInput.placeholder = quoteCurrencyForRow(row);
+                    quoteInput.value = formatManageNumber(quoteValueForAmount(row, state.amount || defaultAmountForRow(row), state), 4);
+                    quoteInput.addEventListener('click', function (event) { event.stopPropagation(); });
+                    quoteInput.addEventListener('input', function () {
+                        var currentRow = currentManageRow(tr, row);
+                        state.amountTouched = true;
+                        state.quickPct = null;
+                        var quoteValue = parseAmountValue(quoteInput.value);
+                        var price = closePriceForRow(currentRow, state);
+                        if (!isNaN(quoteValue) && quoteValue >= 0 && price > 0) {
+                            state.amount = formatManageNumber(quoteValue / price, 8);
+                            amountInput.value = state.amount;
+                        }
+                        updateManageRowControls(tr, currentRow, state);
+                    });
+                    quoteInput.addEventListener('blur', refreshManageRowsAfterEdit);
+                    quoteTd.appendChild(quoteInput);
+                    tr.appendChild(quoteTd);
+
+                    var quickTd = document.createElement('td');
+                    quickTd.className = 'dp-quick-col';
+                    var quick = document.createElement('div');
+                    quick.className = 'dp-quick';
+                    [25, 50, 100].forEach(function (pct) {
+                        var btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.textContent = pct + '%';
+                        btn.addEventListener('click', function (event) {
+                            event.stopPropagation();
+                            var currentRow = currentManageRow(tr, row);
+                            state.amountTouched = true;
+                            state.quickPct = pct;
+                            state.amount = formatManageNumber(Math.abs(Number(currentRow.size || 0)) * pct / 100, 8);
+                            amountInput.value = state.amount;
+                            quoteInput.value = formatManageNumber(quoteValueForAmount(currentRow, state.amount, state), 4);
+                            updateManageRowControls(tr, currentRow, state);
+                        });
+                        quick.appendChild(btn);
+                    });
+                    quickTd.appendChild(quick);
+                    tr.appendChild(quickTd);
+
+                    var runTd = document.createElement('td');
+                    runTd.className = 'dp-exec-col';
+                    var runBtn = document.createElement('button');
+                    runBtn.type = 'button';
+                    runBtn.className = 'dp-row-run';
+                    runBtn.addEventListener('click', function (event) {
+                        event.stopPropagation();
+                        var currentRow = currentManageRow(tr, row);
+                        selectedRowData = currentRow;
+                        renderRows();
+                        var payload = {
+                            user: currentRow.user,
+                            symbol: currentRow.symbol,
+                            side: currentRow.side,
+                            action: state.action
+                        };
+                        if (state.action === 'market_close') {
+                            var amount = parseAmountValue(state.amount);
+                            if (isNaN(amount) || amount <= 0) {
+                                setStatus(manageState.status, 'Enter an amount greater than zero.', 'err');
+                                return;
+                            }
+                            var minMessage = marketCloseMinMessage(currentRow, amount, state);
+                            if (minMessage) {
+                                setStatus(manageState.status, minMessage, 'err');
+                                updateManageRowControls(tr, currentRow, state);
+                                return;
+                            }
+                            payload.amount = amount;
+                        }
+                        requestManageAction(payload, manageState.status, runBtn);
+                    });
+                    runTd.appendChild(runBtn);
+                    tr.appendChild(runTd);
+
+                    manageState.tbody.appendChild(tr);
+                    updateManageRowControls(tr, row, state);
+                    fetchFreshClosePrice(row, state, tr, amountInput, quoteInput);
+                })(rows[ri]);
+            }
+        }
+
+        function openManageModal() {
+            if (!rows.length || !opts.apiBase || !opts.token) return;
+            var old = document.getElementById('dp-manage-modal');
+            if (old && old.parentNode) old.parentNode.removeChild(old);
+            manageState.overlay = null;
+            manageState.modal = null;
+            manageState.tbody = null;
+            manageState.tableWrap = null;
+            manageState.status = null;
+            manageState.panicAllBtn = null;
+            manageState.previewAllBtn = null;
+            manageState.gracefulAllBtn = null;
+            manageState.previewGracefulBtn = null;
+            manageState.tpOnlyAllBtn = null;
+            manageState.previewTpOnlyBtn = null;
+            manageState.pendingRefresh = false;
+
+            var overlay = document.createElement('div');
+            overlay.className = 'dp-modal-ovl';
+            overlay.id = 'dp-manage-modal';
+            var modal = document.createElement('div');
+            modal.className = 'dp-modal';
+            var initialWidth = Math.max(760, window.innerWidth - 32);
+            var manageTableHeight = manageTableHeightForRows();
+            var initialHeight = Math.min(window.innerHeight - 96, Math.max(280, Math.min(640, 190 + manageTableHeight)));
+            modal.style.width = initialWidth + 'px';
+            modal.style.height = initialHeight + 'px';
+            modal.style.left = Math.max(12, Math.floor((window.innerWidth - initialWidth) / 2)) + 'px';
+            modal.style.top = Math.max(12, Math.floor((window.innerHeight - initialHeight) / 2)) + 'px';
+            overlay.appendChild(modal);
+
+            var head = document.createElement('div');
+            head.className = 'dp-modal-head';
+            var title = document.createElement('div');
+            title.className = 'dp-modal-title';
+            title.textContent = 'Manage positions';
+            var closeBtn = document.createElement('button');
+            closeBtn.type = 'button';
+            closeBtn.className = 'dp-modal-close';
+            closeBtn.innerHTML = '&#x2715;';
+            head.appendChild(title);
+            head.appendChild(closeBtn);
+            modal.appendChild(head);
+
+            var body = document.createElement('div');
+            body.className = 'dp-modal-body';
+            modal.appendChild(body);
+
+            var tableWrap = document.createElement('div');
+            tableWrap.className = 'dp-manage-wrap';
+            tableWrap.style.maxHeight = manageTableHeight + 'px';
+            var manageTable = document.createElement('table');
+            manageTable.className = 'dp-manage-table';
+            var manageHead = document.createElement('thead');
+            var manageHeadRow = document.createElement('tr');
+            COLS.forEach(function (col) {
+                var th = document.createElement('th');
+                th.textContent = col.label;
+                manageHeadRow.appendChild(th);
+            });
+            ['Action', 'Amount', 'USDT/USDC', 'Quick', 'Execute'].forEach(function (label) {
+                var th = document.createElement('th');
+                th.textContent = label;
+                if (label === 'Quick') th.className = 'dp-quick-col';
+                if (label === 'Execute') th.className = 'dp-exec-col';
+                manageHeadRow.appendChild(th);
+            });
+            manageHead.appendChild(manageHeadRow);
+            manageTable.appendChild(manageHead);
+            var manageBody = document.createElement('tbody');
+            manageTable.appendChild(manageBody);
+            tableWrap.appendChild(manageTable);
+            body.appendChild(tableWrap);
+
+            var note = document.createElement('div');
+            note.className = 'dp-note';
+            note.textContent = 'Market close sends a direct reduce-only market order for the row amount. Panic, Graceful Stop and Take Profit Only actions save the Passivbot config and sync it. Use preview to inspect all-position configs without saving or syncing.';
+            body.appendChild(note);
+
+            var statusMsg = document.createElement('div');
+            statusMsg.className = 'dp-status-msg';
+            body.appendChild(statusMsg);
+
+            var actions = document.createElement('div');
+            actions.className = 'dp-modal-actions';
+            var previewAllBtn = document.createElement('button');
+            previewAllBtn.type = 'button';
+            var panicAllBtn = document.createElement('button');
+            panicAllBtn.type = 'button';
+            panicAllBtn.className = 'danger';
+            var previewGracefulBtn = document.createElement('button');
+            previewGracefulBtn.type = 'button';
+            var gracefulAllBtn = document.createElement('button');
+            gracefulAllBtn.type = 'button';
+            gracefulAllBtn.className = 'warn';
+            var previewTpOnlyBtn = document.createElement('button');
+            previewTpOnlyBtn.type = 'button';
+            var tpOnlyAllBtn = document.createElement('button');
+            tpOnlyAllBtn.type = 'button';
+            tpOnlyAllBtn.className = 'ok';
+            var spacer = document.createElement('span');
+            spacer.className = 'spacer';
+            var closeOnlyBtn = document.createElement('button');
+            closeOnlyBtn.type = 'button';
+            closeOnlyBtn.textContent = 'Close';
+            actions.appendChild(previewAllBtn);
+            actions.appendChild(panicAllBtn);
+            actions.appendChild(previewGracefulBtn);
+            actions.appendChild(gracefulAllBtn);
+            actions.appendChild(previewTpOnlyBtn);
+            actions.appendChild(tpOnlyAllBtn);
+            actions.appendChild(spacer);
+            actions.appendChild(closeOnlyBtn);
+            body.appendChild(actions);
+
+            var cleanupDrag = null;
+            var cleanupResize = null;
+
+            function closeModal() {
+                if (cleanupDrag) cleanupDrag();
+                if (cleanupResize) cleanupResize();
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                manageState.overlay = null;
+                manageState.modal = null;
+                manageState.tbody = null;
+                manageState.tableWrap = null;
+                manageState.status = null;
+                manageState.panicAllBtn = null;
+                manageState.previewAllBtn = null;
+                manageState.gracefulAllBtn = null;
+                manageState.previewGracefulBtn = null;
+                manageState.tpOnlyAllBtn = null;
+                manageState.previewTpOnlyBtn = null;
+                manageState.pendingRefresh = false;
+            }
+
+            closeBtn.addEventListener('click', closeModal);
+            closeOnlyBtn.addEventListener('click', closeModal);
+            previewAllBtn.addEventListener('click', function () {
+                var user = selectedManageUser();
+                if (!user) {
+                    setStatus(statusMsg, 'Select a user position first.', 'err');
+                    return;
+                }
+                requestManageAction({ user: user, action: 'panic_all', dry_run: true }, statusMsg, previewAllBtn);
+            });
+            panicAllBtn.addEventListener('click', function () {
+                var user = selectedManageUser();
+                if (!user) {
+                    setStatus(statusMsg, 'Select a user position first.', 'err');
+                    return;
+                }
+                requestManageAction({ user: user, action: 'panic_all' }, statusMsg, panicAllBtn);
+            });
+            previewGracefulBtn.addEventListener('click', function () {
+                var user = selectedManageUser();
+                if (!user) {
+                    setStatus(statusMsg, 'Select a user position first.', 'err');
+                    return;
+                }
+                requestManageAction({ user: user, action: 'graceful_stop_all', dry_run: true }, statusMsg, previewGracefulBtn);
+            });
+            gracefulAllBtn.addEventListener('click', function () {
+                var user = selectedManageUser();
+                if (!user) {
+                    setStatus(statusMsg, 'Select a user position first.', 'err');
+                    return;
+                }
+                requestManageAction({ user: user, action: 'graceful_stop_all' }, statusMsg, gracefulAllBtn);
+            });
+            previewTpOnlyBtn.addEventListener('click', function () {
+                var user = selectedManageUser();
+                if (!user) {
+                    setStatus(statusMsg, 'Select a user position first.', 'err');
+                    return;
+                }
+                requestManageAction({ user: user, action: 'tp_only_all', dry_run: true }, statusMsg, previewTpOnlyBtn);
+            });
+            tpOnlyAllBtn.addEventListener('click', function () {
+                var user = selectedManageUser();
+                if (!user) {
+                    setStatus(statusMsg, 'Select a user position first.', 'err');
+                    return;
+                }
+                requestManageAction({ user: user, action: 'tp_only_all' }, statusMsg, tpOnlyAllBtn);
+            });
+
+            (function enableDrag() {
+                var dragging = false;
+                var startX = 0, startY = 0, startLeft = 0, startTop = 0;
+                function onHeadMouseDown(event) {
+                    if (event.target === closeBtn) return;
+                    dragging = true;
+                    modal.setAttribute('data-user-moved', '1');
+                    startX = event.clientX;
+                    startY = event.clientY;
+                    startLeft = parseFloat(modal.style.left || '0') || 0;
+                    startTop = parseFloat(modal.style.top || '0') || 0;
+                    event.preventDefault();
+                }
+                function onDocMouseMove(event) {
+                    if (!dragging) return;
+                    var nextLeft = startLeft + event.clientX - startX;
+                    var nextTop = startTop + event.clientY - startY;
+                    nextLeft = Math.max(0, Math.min(window.innerWidth - 80, nextLeft));
+                    nextTop = Math.max(0, Math.min(window.innerHeight - 48, nextTop));
+                    modal.style.left = nextLeft + 'px';
+                    modal.style.top = nextTop + 'px';
+                }
+                function onDocMouseUp() { dragging = false; }
+                head.addEventListener('mousedown', onHeadMouseDown);
+                document.addEventListener('mousemove', onDocMouseMove);
+                document.addEventListener('mouseup', onDocMouseUp);
+                cleanupDrag = function () {
+                    head.removeEventListener('mousedown', onHeadMouseDown);
+                    document.removeEventListener('mousemove', onDocMouseMove);
+                    document.removeEventListener('mouseup', onDocMouseUp);
+                    cleanupDrag = null;
+                };
+            })();
+
+            (function enableResizeHandles() {
+                var minW = 640;
+                var minH = 280;
+                var activeDir = '';
+                var startX = 0, startY = 0, startLeft = 0, startTop = 0, startWidth = 0, startHeight = 0;
+                var handles = [];
+                function onHandleMouseDown(event) {
+                    modal.setAttribute('data-user-resized', '1');
+                    activeDir = event.currentTarget.getAttribute('data-dir') || '';
+                    var rect = modal.getBoundingClientRect();
+                    startX = event.clientX;
+                    startY = event.clientY;
+                    startLeft = rect.left;
+                    startTop = rect.top;
+                    startWidth = rect.width;
+                    startHeight = rect.height;
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+                function onDocMouseMove(event) {
+                    if (!activeDir) return;
+                    var dx = event.clientX - startX;
+                    var dy = event.clientY - startY;
+                    var nextLeft = startLeft;
+                    var nextTop = startTop;
+                    var nextWidth = startWidth;
+                    var nextHeight = startHeight;
+                    if (activeDir.indexOf('e') !== -1) nextWidth = startWidth + dx;
+                    if (activeDir.indexOf('s') !== -1) nextHeight = startHeight + dy;
+                    if (activeDir.indexOf('w') !== -1) {
+                        nextWidth = startWidth - dx;
+                        nextLeft = startLeft + dx;
+                    }
+                    if (activeDir.indexOf('n') !== -1) {
+                        nextHeight = startHeight - dy;
+                        nextTop = startTop + dy;
+                    }
+                    if (nextWidth < minW) {
+                        if (activeDir.indexOf('w') !== -1) nextLeft -= minW - nextWidth;
+                        nextWidth = minW;
+                    }
+                    if (nextHeight < minH) {
+                        if (activeDir.indexOf('n') !== -1) nextTop -= minH - nextHeight;
+                        nextHeight = minH;
+                    }
+                    nextLeft = Math.max(0, Math.min(window.innerWidth - 80, nextLeft));
+                    nextTop = Math.max(0, Math.min(window.innerHeight - 48, nextTop));
+                    nextWidth = Math.min(nextWidth, window.innerWidth - nextLeft - 12);
+                    nextHeight = Math.min(nextHeight, window.innerHeight - nextTop - 12);
+                    modal.style.left = nextLeft + 'px';
+                    modal.style.top = nextTop + 'px';
+                    modal.style.width = nextWidth + 'px';
+                    modal.style.height = nextHeight + 'px';
+                }
+                function onDocMouseUp() { activeDir = ''; }
+                ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].forEach(function (dir) {
+                    var handle = document.createElement('div');
+                    handle.className = 'dp-resize-handle dp-resize-' + dir;
+                    handle.setAttribute('data-dir', dir);
+                    handle.addEventListener('mousedown', onHandleMouseDown);
+                    modal.appendChild(handle);
+                    handles.push(handle);
+                });
+                document.addEventListener('mousemove', onDocMouseMove);
+                document.addEventListener('mouseup', onDocMouseUp);
+                cleanupResize = function () {
+                    for (var hi = 0; hi < handles.length; hi++) {
+                        handles[hi].removeEventListener('mousedown', onHandleMouseDown);
+                        if (handles[hi].parentNode) handles[hi].parentNode.removeChild(handles[hi]);
+                    }
+                    document.removeEventListener('mousemove', onDocMouseMove);
+                    document.removeEventListener('mouseup', onDocMouseUp);
+                    cleanupResize = null;
+                };
+            })();
+
+            document.body.appendChild(overlay);
+            manageState.overlay = overlay;
+            manageState.modal = modal;
+            manageState.tbody = manageBody;
+            manageState.tableWrap = tableWrap;
+            manageState.status = statusMsg;
+            manageState.panicAllBtn = panicAllBtn;
+            manageState.previewAllBtn = previewAllBtn;
+            manageState.gracefulAllBtn = gracefulAllBtn;
+            manageState.previewGracefulBtn = previewGracefulBtn;
+            manageState.tpOnlyAllBtn = tpOnlyAllBtn;
+            manageState.previewTpOnlyBtn = previewTpOnlyBtn;
+            updatePanicAllButton();
+            renderManageRows();
+        }
 
         function renderRows() {
             var sorted = rows.slice();
@@ -2095,7 +3133,7 @@
             for (var i = 0; i < sorted.length; i++) {
                 var row = sorted[i];
                 var tr = document.createElement('tr');
-                if (i === selectedIdx) tr.className = 'dp-sel';
+                if (row === selectedRowData) tr.className = 'dp-sel';
                 for (var ci = 0; ci < COLS.length; ci++) {
                     var td = document.createElement('td');
                     var val = row[COLS[ci].key];
@@ -2109,8 +3147,10 @@
                 }
                 (function (idx, rowData) {
                     tr.addEventListener('click', function () {
-                        selectedIdx = idx;
+                        selectedRowData = rowData;
                         renderRows();
+                        renderManageRows();
+                        updatePanicAllButton();
                         /* Notify Orders widgets */
                         var pos = opts.position || '';
                         window['_dashPosSelected_' + pos] = rowData;
@@ -2124,13 +3164,29 @@
         }
         renderRows();
         /* Expose in-place update hook for WS fast-path (preserves sort state, avoids DOM rebuild) */
-        container._dpUpdate = function (newPositions) {
+        container._dpUpdate = function (newPositions, source) {
+            var oldSelectedKey = rowKey(selectedRowData);
             rows.length = 0;
             Array.prototype.push.apply(rows, newPositions);
-            var _s = container.querySelector('.dt-status');
-            if (_s) _s.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+            selectedRowData = null;
+            if (oldSelectedKey) {
+                for (var si = 0; si < rows.length; si++) {
+                    if (rowKey(rows[si]) === oldSelectedKey) {
+                        selectedRowData = rows[si];
+                        break;
+                    }
+                }
+            }
+            container._dpStatusSource = source || 'db';
+            container._dpStatusTs = Date.now();
+            updatePositionsStatus();
             renderRows();
+            syncManageRowsAfterLiveUpdate();
         };
+        container._dpStatusTimer = setInterval(function () {
+            if (!container.isConnected) { clearInterval(container._dpStatusTimer); container._dpStatusTimer = null; return; }
+            updatePositionsStatus();
+        }, 1000);
     }
 
 
@@ -2986,7 +4042,7 @@
     /* ──────────────────────────── Export ───────────────────────────────── */
 
     global.DashRender = {
-        VERSION:            '20260410a',
+        VERSION:            '20260610k',
         injectCSS:          injectCSS,
         tweColor:           tweColor,
         upnlColor:          upnlColor,

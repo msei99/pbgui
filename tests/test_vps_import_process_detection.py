@@ -4,6 +4,7 @@ import asyncio
 import builtins
 import io
 import subprocess
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -308,6 +309,38 @@ def test_update_vps_passes_empty_optional_values(monkeypatch, tmp_path: Path) ->
     assert extravars["coinmarketcap_api_key"] == ""
 
 
+def test_update_vps_cleans_only_its_runner_private_dir(monkeypatch, tmp_path: Path) -> None:
+    """Overlapping VPS runs do not let one callback delete another run's tmp dir."""
+    observed: dict[str, Path] = {}
+
+    def fake_run_async(**kwargs) -> None:
+        """Capture runner dirs and invoke the finish callback immediately."""
+        private_dir = Path(kwargs["private_data_dir"])
+        other_dir = private_dir.parent / "other-run"
+        other_dir.mkdir(parents=True)
+        observed["private_dir"] = private_dir
+        observed["other_dir"] = other_dir
+        vps.privat_data_dir = other_dir
+        kwargs["finished_callback"]()
+
+    monkeypatch.setattr(core, "PBGDIR", tmp_path)
+    monkeypatch.setattr(core.ansible_runner, "run_async", fake_run_async)
+    monkeypatch.setattr(core, "_ansible_envvars", lambda: {})
+
+    vps = core.VPS()
+    vps.hostname = "test-vps"
+    vps.user = "mani"
+    vps.command = "vps-update-pb"
+
+    manager = core.VPSManager()
+    manager.update_vps(vps)
+
+    assert observed["private_dir"].parent == tmp_path / "data" / "vpsmanager" / "hosts" / "test-vps" / "tmp"
+    assert observed["private_dir"].name.startswith("run-")
+    assert not observed["private_dir"].exists()
+    assert observed["other_dir"].exists()
+
+
 def test_fetch_vps_info_reads_bucket_from_remote_ini(monkeypatch) -> None:
     """Remote settings refresh reads PBRemote bucket from the VPS pbgui.ini."""
     _FakeSshClient.config_content = """
@@ -525,6 +558,36 @@ def test_run_vps_command_blocks_stale_optional_reenable_from_remote_meta() -> No
 
     assert captured["extra_vars"]["bucket"] == ""
     assert captured["extra_vars"]["coinmarketcap_api_key"] == ""
+
+
+def test_start_vps_deploy_host_blocks_active_vps_task() -> None:
+    """A VPS deploy cannot start a second playbook for the same active host."""
+    calls: list[str] = []
+    service = object.__new__(VPSManagerService)
+    service._host_task_start_locks = {}
+    service._host_task_start_locks_lock = threading.Lock()
+    service.vpsmanager = SimpleNamespace(update_vps=lambda *args, **kwargs: calls.append("update"))
+    service._apply_session_secrets_to_vps = lambda token, vps: None
+    service._should_treat_vps_process_as_active = lambda vps: True
+    service._vps_playbook_process_exists = lambda vps: False
+    service._require_vps = lambda hostname: SimpleNamespace(
+        hostname=hostname,
+        path=Path("/tmp") / hostname,
+        user_pw="pw",
+        command="vps-update-pb",
+        command_text="Update PBGui and PB7",
+    )
+
+    with pytest.raises(ValueError, match="already has an active VPS task"):
+        service._start_vps_deploy_host(
+            "token",
+            hostname="test-vps",
+            command="vps-update-pb",
+            debug=False,
+            extra_vars=None,
+        )
+
+    assert calls == []
 
 
 def test_run_vps_command_keeps_pending_optional_values() -> None:

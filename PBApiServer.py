@@ -804,6 +804,8 @@ async def internal_notify_positions(request: Request):
 
     Reads the updated positions from DB and pushes them directly to all chart
     WebSocket subscribers watching that user (via dashboard._refresh_positions_for_user).
+    Also broadcasts a dashboard positions update so Positions widgets reload the
+    fresh local DB snapshot instead of waiting for the next income/balance event.
     This ensures the Orders widget entry line is corrected when PBData reconciles
     a position that was missed due to a WebSocket keepalive outage.
     Only accepts requests from localhost.
@@ -823,7 +825,14 @@ async def internal_notify_positions(request: Request):
         )
     except Exception:
         pass
-    return {"ok": True}
+    dead: set[WebSocket] = set()
+    for ws in list(dashboard_ws_clients):
+        try:
+            await ws.send_json({"type": "positions_updated", "user": user_name})
+        except Exception:
+            dead.add(ws)
+    dashboard_ws_clients.difference_update(dead)
+    return {"ok": True, "notified": len(dashboard_ws_clients)}
 
 
 @app.post("/api/nav/request")

@@ -21,6 +21,9 @@ Table columns:
 
 | Column | Description |
 |--------|-------------|
+| **P** | Set global Panic forced mode for long and short positions, save the config, and sync it after a safety confirmation |
+| **G** | Set global Graceful Stop forced mode for long and short positions, save the config, and sync it after a safety confirmation |
+| **T** | Set global Take Profit Only forced mode for long and short positions, save the config, and sync it after a safety confirmation |
 | **Edit** | Open the instance in the edit form |
 | **User** | API-key user assigned to this instance |
 | **Enabled On** | VPS where the bot is deployed (`disabled` = not deployed) |
@@ -30,6 +33,8 @@ Table columns:
 | **Remote Version** | Config version currently running on the VPS |
 | **Note** | Free-text note for your own reference |
 | **Delete** | Remove the instance (not allowed while running) |
+
+The `P`, `G`, and `T` row buttons write PB7 `live.forced_mode_long` and `live.forced_mode_short` in `config.json`, bump the instance config version, create a backup of the previous config, and sync the changed config to the target host. They are Passivbot forced-mode actions, not direct exchange orders.
 
 **Remote status icons:**
 

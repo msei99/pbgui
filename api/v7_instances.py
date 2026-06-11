@@ -7,7 +7,9 @@ Endpoints:
     POST   /activate-all                → SSH-push all instances that need activation
     DELETE /instances/{name}             → backup + delete instance locally + on VPS
     GET    /backups                      → list all instance backups
+    POST   /backups/{name}/{timestamp}/draft → load backup as editor draft
     POST   /restore/{name}/{timestamp}   → restore/rollback instance from backup + SSH activate
+    POST   /instances/{name}/forced-mode → set global PB7 forced mode + SSH activate
     DELETE /backups/{name}/{timestamp}    → delete a specific backup
     GET    /main_page                    → serve the standalone HTML page
 """
@@ -25,6 +27,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
@@ -676,8 +679,28 @@ def get_draft(
         cfg = prepare_pb7_config_dict(entry[1], neutralize_added=True)
     except Exception as exc:
         raise HTTPException(400, f"Invalid draft config: {exc}") from exc
+    override_configs = {}
+    backup_info = cfg.get("pbgui", {}).get("from_backup_config")
+    if isinstance(backup_info, dict):
+        backup_name = str(backup_info.get("name") or "").strip()
+        backup_ts = str(backup_info.get("timestamp") or "").strip()
+        try:
+            _validate_name(backup_name)
+            _validate_name(backup_ts)
+            backup_dir = Path(PBGDIR) / "data" / "backup" / "v7" / backup_name / backup_ts
+            for coin, override in (cfg.get("coin_overrides") or {}).items():
+                if not isinstance(override, dict) or not override.get("override_config_path"):
+                    continue
+                filename = Path(str(override["override_config_path"])).name
+                src_file = backup_dir / filename
+                if not src_file.is_file():
+                    continue
+                data = load_pb7_config(src_file, neutralize_added=False)
+                override_configs[str(coin)] = {"bot": data.get("bot", {})}
+        except Exception as exc:
+            _log(SERVICE, f"Failed to load backup override configs for draft {draft_id}: {exc}", level="WARNING")
     param_status = cfg.pop("_pbgui_param_status", {})
-    return {"config": cfg, "param_status": param_status}
+    return {"config": cfg, "param_status": param_status, "override_configs": override_configs}
 
 
 @router.get("/instances")
@@ -756,6 +779,73 @@ async def activate_all(session: SessionToken = Depends(require_auth)):
 
     ok = sum(1 for r in results if r.get("ok", 0) > 0)
     return {"activated": len(to_activate), "ok": ok, "results": results}
+
+
+@router.post("/instances/{name}/forced-mode")
+async def set_instance_forced_mode(
+    name: str,
+    body: dict = Body(...),
+    session: SessionToken = Depends(require_auth),
+):
+    """Set global PB7 forced mode for all long and short positions, then sync."""
+    _validate_name(name)
+    requested = str(body.get("mode") or "").strip().lower()
+    if requested == "panic":
+        mode = "p"
+        label = "panic"
+    elif requested == "graceful_stop":
+        mode = "graceful_stop"
+        label = "graceful stop"
+    elif requested in {"tp_only", "take_profit_only"}:
+        mode = "tp_only"
+        label = "take profit only"
+    else:
+        raise HTTPException(status_code=400, detail="mode must be panic, graceful_stop or tp_only")
+
+    instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
+    config_path = instance_dir / "config.json"
+    if not config_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Instance '{name}' not found")
+
+    try:
+        cfg = load_pb7_config(config_path, neutralize_added=False)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read config for '{name}': {exc}") from exc
+
+    try:
+        old_version = int(cfg.get("pbgui", {}).get("version", 0) or 0)
+    except (TypeError, ValueError):
+        old_version = 0
+    try:
+        backup_dir = Path(PBGDIR) / "data" / "backup" / "v7" / name / str(old_version)
+        if not backup_dir.exists():
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            for item in _iter_backup_json_files(instance_dir):
+                shutil.copy2(str(item), str(backup_dir / item.name))
+    except Exception as exc:
+        _log(SERVICE, f"Failed to backup '{name}' before forced-mode change: {exc}", level="WARNING")
+
+    live = cfg.setdefault("live", {})
+    live["forced_mode_long"] = mode
+    live["forced_mode_short"] = mode
+    cfg.setdefault("pbgui", {})["version"] = old_version + 1
+
+    try:
+        save_pb7_config(cfg, config_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not save config for '{name}': {exc}") from exc
+
+    _update_status_v7(name)
+    sync_result = await _ssh_sync_instance(name)
+    _log(SERVICE, f"Set forced mode '{label}' for all positions on '{name}' (v{cfg['pbgui']['version']})", level="WARNING")
+    return {
+        "ok": True,
+        "name": name,
+        "mode": requested,
+        "forced_mode": mode,
+        "version": cfg["pbgui"]["version"],
+        "sync": sync_result,
+    }
 
 
 @router.delete("/instances/{name}")
@@ -966,6 +1056,18 @@ def _bump_restored_instance_version(target_dir: Path, previous_version: int) -> 
     return cfg["pbgui"]["version"]
 
 
+def _instance_config_version(name: str) -> int:
+    """Return the current local instance config version, or 0 when absent/unreadable."""
+    config_path = Path(PBGDIR) / "data" / "run_v7" / name / "config.json"
+    if not config_path.is_file():
+        return 0
+    try:
+        current = json.loads(config_path.read_text(encoding="utf-8"))
+        return int(current.get("pbgui", {}).get("version", 0) or 0)
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        return 0
+
+
 def _highest_backup_version(name: str) -> int:
     """Return the highest numeric backup version for an instance."""
     backup_root = Path(PBGDIR) / "data" / "backup" / "v7" / name
@@ -980,6 +1082,23 @@ def _highest_backup_version(name: str) -> int:
         except ValueError:
             continue
     return highest
+
+
+def _backup_config_payload(name: str, timestamp: str) -> tuple[Path, dict]:
+    """Return backup directory and parsed config.json for a backup."""
+    backup_dir = Path(PBGDIR) / "data" / "backup" / "v7" / name / timestamp
+    if not backup_dir.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Backup '{name}/{timestamp}' not found",
+        )
+    config_path = backup_dir / "config.json"
+    if not config_path.is_file():
+        raise HTTPException(status_code=500, detail=f"Backup '{name}/{timestamp}' has no config.json")
+    try:
+        return backup_dir, json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise HTTPException(status_code=500, detail=f"Restore failed: invalid backup config.json: {exc}") from exc
 
 
 @router.get("/backups")
@@ -1018,7 +1137,7 @@ def list_backups(session: SessionToken = Depends(require_auth)):
                 "backup_items": backup_items,
                 "currently_exists": exists,
                 "running_on": running_on,
-                "can_restore": not running_on,
+                "can_restore": True,
             })
     return {"backups": result}
 
@@ -1065,7 +1184,7 @@ async def restore_instance(
             hosts = ", ".join(inst["running_on"])
             raise HTTPException(
                 status_code=409,
-                detail=f"Instance '{name}' is running on {hosts} — stop it first",
+                detail=f"Instance '{name}' is running on {hosts} — load the backup in the editor and save it explicitly",
             )
 
     # Create a safety snapshot before overwriting an existing instance.
@@ -1158,6 +1277,45 @@ def put_backup_settings(
     return {"ok": True, "max_versions": val}
 
 
+@router.post("/backups/{name}/{timestamp}/draft")
+def create_backup_draft(
+    name: str,
+    timestamp: str,
+    request: Request,
+    session: SessionToken = Depends(require_auth),
+):
+    """Load a backup into a temporary editor draft without writing or syncing it."""
+    _validate_name(name)
+    _validate_name(timestamp)
+    backup_dir, cfg = _backup_config_payload(name, timestamp)
+    next_version = max(_instance_config_version(name), int(cfg.get("pbgui", {}).get("version", 0) or 0)) + 1
+    cfg.setdefault("pbgui", {})["version"] = next_version
+    cfg["pbgui"]["from_backup_config"] = {"name": name, "timestamp": timestamp}
+    _clean_drafts()
+    draft_id = _secrets.token_urlsafe(16)
+    _draft_configs[draft_id] = (time.time(), cfg)
+
+    exists = (Path(PBGDIR) / "data" / "run_v7" / name).is_dir()
+    params = {
+        "token": session.token,
+        "draft_id": draft_id,
+    }
+    if exists:
+        params["name"] = name
+    else:
+        params["new"] = "1"
+    edit_url = str(request.url_for("get_edit_page")) + "?" + urlencode(params)
+    return {
+        "ok": True,
+        "name": name,
+        "timestamp": timestamp,
+        "draft_id": draft_id,
+        "version": next_version,
+        "edit_url": edit_url,
+        "backup_files": [item.name for item in _iter_backup_json_files(backup_dir) if item.name != "config.json"],
+    }
+
+
 @router.delete("/backups/{name}/{timestamp}")
 def delete_backup(
     name: str,
@@ -1245,7 +1403,10 @@ async def save_instance_config(
     # Copy coin override files from source backtest config on first save of a new instance.
     # The JS sets pbgui.from_backtest_config when navigating from "Add to Run".
     # Only copy files that are actually referenced in coin_overrides to avoid stale USDT-named files.
-    from_bt_config = cfg.get("pbgui", {}).pop("from_backtest_config", None)
+    pbgui_meta = cfg.setdefault("pbgui", {})
+    from_bt_config = pbgui_meta.pop("from_backtest_config", None)
+    from_backup_config = pbgui_meta.pop("from_backup_config", None)
+    is_backup_draft = isinstance(from_backup_config, dict)
     if from_bt_config and not config_path.is_file():
         bt_src_dir = Path(PBGDIR) / "data" / "bt_v7" / from_bt_config
         if bt_src_dir.is_dir():
@@ -1267,8 +1428,30 @@ async def save_instance_config(
             if copied:
                 _log(SERVICE, f"Copied {len(copied)} coin override file(s) from backtest config '{from_bt_config}' to instance '{name}'")
 
-    # Increment version
-    cfg.setdefault("pbgui", {})["version"] = cfg["pbgui"].get("version", 0) + 1
+    backup_src_dir = None
+    if isinstance(from_backup_config, dict):
+        backup_name = str(from_backup_config.get("name") or "").strip()
+        backup_ts = str(from_backup_config.get("timestamp") or "").strip()
+        if backup_name == name and backup_ts:
+            try:
+                _validate_name(backup_name)
+                _validate_name(backup_ts)
+                candidate = Path(PBGDIR) / "data" / "backup" / "v7" / backup_name / backup_ts
+                if candidate.is_dir():
+                    backup_src_dir = candidate
+            except HTTPException:
+                backup_src_dir = None
+
+    # Increment version. Backup drafts are already opened as the next version;
+    # keep that value unless the live config advanced while the editor was open.
+    if is_backup_draft:
+        try:
+            draft_version = int(cfg["pbgui"].get("version", 0) or 0)
+        except (TypeError, ValueError):
+            draft_version = 0
+        cfg["pbgui"]["version"] = max(draft_version, _instance_config_version(name) + 1)
+    else:
+        cfg["pbgui"]["version"] = cfg["pbgui"].get("version", 0) + 1
 
     # Set backtest.exchange from user→exchange mapping
     live_user = cfg.get("live", {}).get("user", "")
@@ -1300,6 +1483,16 @@ async def save_instance_config(
                         shutil.copy2(str(item), str(backup_dir / item.name))
         except Exception:
             pass  # backup failure must never block the save
+
+    if backup_src_dir is not None:
+        copied = []
+        for item in _iter_backup_json_files(backup_src_dir):
+            if item.name == "config.json":
+                continue
+            shutil.copy2(str(item), str(instance_dir / item.name))
+            copied.append(item.name)
+        if copied:
+            _log(SERVICE, f"Copied {len(copied)} coin override file(s) from backup '{name}/{backup_src_dir.name}' before saving")
 
     save_pb7_config(cfg, config_path)
 

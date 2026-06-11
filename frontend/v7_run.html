@@ -136,6 +136,24 @@ tr.row-inactive td  { opacity: 0.45; }
   margin-left: 4px;
 }
 .btn-del:hover { background: var(--bg3); }
+.btn-panic,
+.btn-graceful,
+.btn-tp-only {
+  height: 24px; width: 28px;
+  padding: 0;
+  font-size: var(--fs-sm);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  margin-left: 4px;
+  font-weight: 700;
+}
+.btn-panic { background: var(--red); color: #fff; border-color: var(--red); }
+.btn-panic:hover { opacity: 0.85; }
+.btn-graceful { background: var(--orange); color: #000; border-color: var(--orange); }
+.btn-graceful:hover { opacity: 0.85; }
+.btn-tp-only { background: var(--green); color: #000; border-color: var(--green); }
+.btn-tp-only:hover { opacity: 0.85; }
 
 /* Confirmation modal */
 .modal-overlay {
@@ -169,6 +187,10 @@ tr.row-inactive td  { opacity: 0.45; }
 .modal-btn-cancel:hover { background: var(--border); }
 .modal-btn-delete { background: var(--red); color: #fff; border-color: var(--red); }
 .modal-btn-delete:hover { opacity: 0.85; }
+.modal-btn-graceful { background: var(--orange); color: #000; border-color: var(--orange); }
+.modal-btn-graceful:hover { opacity: 0.85; }
+.modal-btn-tp-only { background: var(--green); color: #000; border-color: var(--green); }
+.modal-btn-tp-only:hover { opacity: 0.85; }
 .modal-btn-restore { background: var(--green); color: #fff; border-color: var(--green); }
 .modal-btn-restore:hover { opacity: 0.85; }
 
@@ -366,6 +388,10 @@ tr.row-inactive td  { opacity: 0.45; }
 .backup-confirm-detail {
   color: #94a3b8;
   font-size: var(--fs-sm);
+}
+.backup-confirm-detail.warn {
+  color: var(--orange);
+  font-weight: 600;
 }
 .backup-confirm-actions {
   display: flex;
@@ -594,6 +620,9 @@ function buildCells(r) {
     esc(r.twe || '\u2013'),
     esc(runOn),
     esc(r.note || ''),
+    '<button class="btn-panic" data-forced-mode="panic" data-forced-name="' + esc(r.name) + '" title="Panic all positions">P</button>' +
+    '<button class="btn-graceful" data-forced-mode="graceful_stop" data-forced-name="' + esc(r.name) + '" title="Graceful stop all positions">G</button>' +
+    '<button class="btn-tp-only" data-forced-mode="tp_only" data-forced-name="' + esc(r.name) + '" title="Take Profit Only all positions">T</button>' +
     '<button class="btn-edit" data-edit="' + esc(r.name) + '" title="Edit">\u270E</button>' +
     '<button class="btn-del" data-delete="' + esc(r.name) + '" title="Delete">\u2716</button>',
   ];
@@ -804,6 +833,55 @@ function executeDelete(name) {
   });
 }
 
+function confirmForcedMode(name, mode) {
+  var modes = {
+    panic: { title: 'Panic All Positions?', text: 'Panic', css: 'modal-btn-delete', value: 'panic' },
+    graceful_stop: { title: 'Graceful Stop All Positions?', text: 'Graceful Stop', css: 'modal-btn-graceful', value: 'graceful_stop' },
+    tp_only: { title: 'Take Profit Only All Positions?', text: 'Take Profit Only', css: 'modal-btn-tp-only', value: 'tp_only' }
+  };
+  var info = modes[mode] || modes.panic;
+  var detail = 'This sets Passivbot global forced modes to ' + info.value + ' for long and short positions, saves the config, and syncs it to the target host.';
+  var root = document.getElementById('modal-root');
+  root.innerHTML =
+    '<div class="modal-overlay" id="modal-overlay">' +
+      '<div class="modal-box" role="dialog" aria-modal="true">' +
+        '<h3>' + info.title + '</h3>' +
+        '<p class="warn">' + esc(name) + '</p>' +
+        '<p>' + detail + '</p>' +
+        '<div class="modal-btns">' +
+          '<button class="modal-btn-cancel" id="modal-cancel">Cancel</button>' +
+          '<button class="' + info.css + '" id="modal-confirm">' + info.text + '</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.getElementById('modal-cancel').onclick = closeModal;
+  document.getElementById('modal-confirm').onclick = function() {
+    executeForcedMode(name, mode, info.text);
+  };
+}
+
+function executeForcedMode(name, mode, actionText) {
+  var confirmBtn = document.getElementById('modal-confirm');
+  if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Syncing...'; }
+  apiFetch('/instances/' + encodeURIComponent(name) + '/forced-mode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: mode })
+  }).then(function(res) {
+    if (!res.ok) {
+      return res.json().then(function(d) { throw new Error(d.detail || 'HTTP ' + res.status); });
+    }
+    return res.json();
+  }).then(function(data) {
+    closeModal();
+    toast(actionText + ' synced for ' + name + ' (v' + data.version + ')', 'ok');
+    loadInstances();
+  }).catch(function(e) {
+    closeModal();
+    toast(actionText + ' failed: ' + e.message, 'err');
+  });
+}
+
 function closeModal() {
   document.body.style.overflow = '';
   document.getElementById('modal-root').innerHTML = '';
@@ -814,10 +892,11 @@ function closeBackupConfirm() {
   if (el) el.remove();
 }
 
-function openBackupConfirm(name, ts, onConfirm) {
+function openBackupConfirm(name, ts, onConfirm, runningHosts) {
   closeBackupConfirm();
   var root = document.getElementById('modal-root');
   var wrapper = document.createElement('div');
+  var runningDetail = runningHosts ? '<p class="backup-confirm-detail warn">This instance is running on ' + esc(runningHosts) + '. The restored config will be synced to the running target.</p>' : '';
   wrapper.id = 'backup-confirm-overlay';
   wrapper.className = 'backup-confirm-overlay';
   wrapper.innerHTML =
@@ -829,6 +908,7 @@ function openBackupConfirm(name, ts, onConfirm) {
       '<div class="backup-confirm-body">' +
         '<p>Rollback ' + esc(name) + ' to backup ' + esc(ts) + '?</p>' +
         '<p class="backup-confirm-detail">The current config.json and coin override files will be replaced. A pre-restore backup of the current state will be created automatically.</p>' +
+        runningDetail +
         '<div class="backup-confirm-actions">' +
           '<button type="button" class="btn-cancel" id="backup-confirm-cancel">Cancel</button>' +
           '<button type="button" class="btn-confirm" id="backup-confirm-ok">Rollback</button>' +
@@ -1037,7 +1117,6 @@ function fetchBackups() {
       var b = entry.backup;
       var items = entry.items;
       var canRestore = b.can_restore !== false;
-      var restoreLabel = b.currently_exists ? 'Rollback' : 'Restore';
       html += '\x3Cdiv class="backup-instance">';
       html += '\x3Cdiv class="backup-instance-name">' + esc(b.name);
       if (b.currently_exists) html += ' \x3Cspan class="badge-exists">active\x3C/span>';
@@ -1048,7 +1127,7 @@ function fetchBackups() {
         html += '\x3Cspan class="ts">' + esc(item.id) + '\x3C/span>';
         html += '\x3Cspan class="created-at">' + esc(item.created_at || '-') + '\x3C/span>';
         if (canRestore) {
-          html += '\x3Cbutton class="btn-restore" data-restore-name="' + esc(b.name) + '" data-restore-ts="' + esc(item.id) + '" data-restore-mode="' + (b.currently_exists ? 'rollback' : 'restore') + '">' + restoreLabel + '\x3C/button>';
+          html += '\x3Cbutton class="btn-restore" data-restore-name="' + esc(b.name) + '" data-restore-ts="' + esc(item.id) + '">Load in editor\x3C/button>';
         }
         html += '\x3Cbutton class="btn-del-backup" data-del-name="' + esc(b.name) + '" data-del-ts="' + esc(item.id) + '">\u2716\x3C/button>';
         html += '\x3C/div>';
@@ -1059,7 +1138,7 @@ function fetchBackups() {
     /* event delegation */
     container.onclick = function(e) {
       var btn = e.target.closest('[data-restore-name]');
-      if (btn) { doRestore(btn.dataset.restoreName, btn.dataset.restoreTs, btn.dataset.restoreMode === 'rollback'); return; }
+      if (btn) { loadBackupInEditor(btn.dataset.restoreName, btn.dataset.restoreTs); return; }
       btn = e.target.closest('[data-del-name]');
       if (btn) { doDeleteBackup(btn.dataset.delName, btn.dataset.delTs); return; }
     };
@@ -1069,31 +1148,26 @@ function fetchBackups() {
   });
 }
 
-function doRestore(name, ts, isRollback) {
-  function executeRestore() {
-    var url = '/restore/' + encodeURIComponent(name) + '/' + encodeURIComponent(ts);
-    apiFetch(url, { method: 'POST' }).then(function(res) {
-      if (res.status === 409) {
-        return res.json().then(function(d) { throw new Error(d.detail); });
-      }
-      if (!res.ok) {
-        return res.json().then(function(d) { throw new Error(d.detail || 'HTTP ' + res.status); });
-      }
-      return res.json();
-    }).then(function(data) {
-      toast(name + (data.rollback ? ' rolled back to ' : ' restored from ') + ts, 'ok');
-      closeModal();
-      loadInstances();
-    }).catch(function(e) {
-      toast('Restore failed: ' + e.message, 'err');
-    });
-  }
-
-  if (isRollback) {
-    openBackupConfirm(name, ts, executeRestore);
-    return;
-  }
-  executeRestore();
+function loadBackupInEditor(name, ts) {
+  var url = '/backups/' + encodeURIComponent(name) + '/' + encodeURIComponent(ts) + '/draft';
+  apiFetch(url, { method: 'POST' }).then(function(res) {
+    if (!res.ok) {
+      return res.text().then(function(text) {
+        var detail = text || ('HTTP ' + res.status);
+        try {
+          var data = JSON.parse(text);
+          detail = data.detail || detail;
+        } catch (_) {}
+        throw new Error(detail);
+      });
+    }
+    return res.json();
+  }).then(function(data) {
+    if (!data.edit_url) throw new Error('Missing editor URL');
+    window.location.href = data.edit_url;
+  }).catch(function(e) {
+    toast('Load backup failed: ' + e.message, 'err');
+  });
 }
 
 function doDeleteBackup(name, ts) {
@@ -1153,12 +1227,14 @@ document.getElementById('f-status').onchange = function(e) {
 document.getElementById('tbody').addEventListener('click', function(e) {
   var btn = e.target.closest('[data-edit]');
   if (btn) { editInstance(btn.dataset.edit); return; }
+  btn = e.target.closest('[data-forced-mode]');
+  if (btn) { confirmForcedMode(btn.dataset.forcedName, btn.dataset.forcedMode); return; }
   btn = e.target.closest('[data-delete]');
   if (btn) { confirmDelete(btn.dataset.delete); return; }
 });
 
 document.getElementById('tbody').addEventListener('dblclick', function(e) {
-  if (e.target.closest('[data-edit],[data-delete]')) return;
+  if (e.target.closest('[data-edit],[data-delete],[data-forced-mode]')) return;
   var tr = e.target.closest('tr[data-key]');
   if (tr) editInstance(tr.dataset.key);
 });

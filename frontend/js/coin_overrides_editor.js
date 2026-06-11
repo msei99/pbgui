@@ -525,6 +525,15 @@ function coinOvSetConfigName(name) {
   _covState.configName = name || '';
 }
 
+/** Preload override_config_path file contents, e.g. from an editor draft. */
+function coinOvSetOverrideConfigs(configs) {
+  configs = configs || {};
+  for (var coin in configs) {
+    if (!configs.hasOwnProperty(coin)) continue;
+    _covState.overrideConfigs[_covNormalizeCoin(coin)] = JSON.parse(JSON.stringify(configs[coin] || {}));
+  }
+}
+
 /** Load an override config file for a coin. Returns a promise resolving to the raw file dict.
  *  Auto-filters to allowed override params on load. */
 function _covLoadOverrideFile(coin) {

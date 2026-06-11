@@ -1044,12 +1044,14 @@ var allUsers = [];       // [{name, exchange}]
 var allHosts = [];       // [string]
 var hostDetailsByName = {}; // {host: {coinmarketcap_configured, dynamic_ignore_allowed}}
 var dirty = false;
+var draftOverrideConfigs = {};
 var _extraLiveKeys = []; // unknown live.* keys not in the GUI form
 var _rawEditorSyncing = false;
 var _rawEditorLastApplied = '';
 var _structuredEditorSyncing = false;
 var _runJsonSync = null;
 var _symbolsAndTagsLoadSeq = 0;
+var _symbolsAndTagsLoadPromise = Promise.resolve();
 
 /* live.* keys handled by the GUI form or intentionally hidden/deprecated. */
 var KNOWN_LIVE_PARAMS = new Set([
@@ -1587,32 +1589,40 @@ async function init() {
     });
 
     // Load config or create new
-    if (IS_NEW === 'true') {
-      if (DRAFT_ID) {
-        // Pre-load config from draft (e.g. from backtest "Add to Run")
-        var draftResp = null;
-        try {
-          draftResp = await fetchPreparedDraftConfig(DRAFT_ID);
-        } catch (e) {
-          draftResp = null;
-        }
-        if (draftResp && draftResp.config) {
-          cfg = draftResp.config;
-          paramStatus = draftResp.param_status || {};
-          _fromBacktestConfig = (cfg.pbgui || {}).from_backtest_config || '';
-        } else {
-          cfg = await fetchTemplateConfig(allUsers.length > 0 ? allUsers[0].name : '');
-          paramStatus = {};
-          toast('Draft config not found or expired, using defaults', 'warn');
-        }
+    var draftResp = null;
+    if (DRAFT_ID) {
+      try {
+        draftResp = await fetchPreparedDraftConfig(DRAFT_ID);
+      } catch (e) {
+        draftResp = null;
+      }
+    }
+    if (draftResp && draftResp.config) {
+      cfg = draftResp.config;
+      paramStatus = draftResp.param_status || {};
+      draftOverrideConfigs = draftResp.override_configs || {};
+      _fromBacktestConfig = (cfg.pbgui || {}).from_backtest_config || '';
+      coinOvInit('coin-overrides-container', { apiBase: API_BASE });
+      coinOvSetConfigName(IS_NEW === 'true' ? '' : INSTANCE_NAME);
+      populateForm();
+      if (typeof coinOvSetOverrideConfigs === 'function') {
+        coinOvSetOverrideConfigs(draftOverrideConfigs);
       } else {
+        console.error('coinOvSetOverrideConfigs is not available; backup override files will be loaded on demand');
+      }
+      queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
+      var backupInfo = (cfg.pbgui || {}).from_backup_config || null;
+      if (backupInfo) toast('Loaded backup ' + backupInfo.name + '/' + backupInfo.timestamp + ' as an editor draft. Save to apply and sync.', 'warn');
+    } else if (IS_NEW === 'true') {
+      if (DRAFT_ID) {
+        toast('Draft config not found or expired, using defaults', 'warn');
+      }
         cfg = await fetchTemplateConfig(allUsers.length > 0 ? allUsers[0].name : '');
         paramStatus = {};
-      }
       coinOvInit('coin-overrides-container', { apiBase: API_BASE });
       coinOvSetConfigName('');
       populateForm();
-      loadSymbolsAndTags(cfg, { preferConfigValues: true });
+      queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
     } else {
       var cfgResp = await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/config').then(function(r) { return r.json(); });
       cfg = cfgResp.config || {};
@@ -1620,12 +1630,12 @@ async function init() {
       coinOvInit('coin-overrides-container', { apiBase: API_BASE });
       coinOvSetConfigName(INSTANCE_NAME);
       populateForm();
-      loadSymbolsAndTags(cfg, { preferConfigValues: true });
+      queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
     }
 
     // User change → reload symbols/tags
     document.getElementById('f-user').addEventListener('change', function() {
-      loadSymbolsAndTags();
+      queueSymbolsAndTagsLoad();
     });
 
   } catch (e) {
@@ -1826,6 +1836,13 @@ async function loadSymbolsAndTags(sourceCfg, opts) {
     console.error('Failed to load symbols/tags:', e);
     await refreshCoinStatuses('');
   }
+}
+
+function queueSymbolsAndTagsLoad(sourceCfg, opts) {
+  _symbolsAndTagsLoadPromise = loadSymbolsAndTags(sourceCfg, opts).catch(function(e) {
+    console.error('Failed to load symbols/tags:', e);
+  });
+  return _symbolsAndTagsLoadPromise;
 }
 
 function getCoins(key, side) {
@@ -2070,7 +2087,7 @@ async function syncEditorFromParsed(parsed) {
   var anchor = captureRawEditorAnchor();
   cfg = parsed || {};
   populateForm({ skipRawUpdate: true });
-  await loadSymbolsAndTags(cfg, { preferConfigValues: true });
+  await queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
   restoreRawEditorAnchor(anchor);
 }
 
@@ -2279,6 +2296,7 @@ async function saveConfig() {
   btnSave.disabled = true;
   btnSave.innerHTML = '<span class="spinner"></span> Saving...';
   try {
+    await _symbolsAndTagsLoadPromise;
     if (!ensureRawJsonValidForSave()) return;
     if (!ensureStructuredJsonFieldsValidForSave()) return;
     if (!validateExecutionSyncFieldsForSave()) return;
@@ -2386,7 +2404,7 @@ async function doImport() {
   cfg = prepared.config;
   paramStatus = prepared.param_status || {};
   populateForm();
-  loadSymbolsAndTags(cfg, { preferConfigValues: true });
+  queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
   closeImportModal();
   toast('Config imported', 'ok');
 }
@@ -3027,7 +3045,7 @@ window.PBGUI_NAV_CONFIG = {
 };
 </script>
 <script src="/app/js/log_viewer_panel.js?v=23"></script>
-<script src="/app/js/coin_overrides_editor.js?v=8"></script>
+<script src="/app/js/coin_overrides_editor.js?v=13"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */
 (function() {
