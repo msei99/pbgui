@@ -590,6 +590,97 @@ def test_start_vps_deploy_host_blocks_active_vps_task() -> None:
     assert calls == []
 
 
+def test_run_vps_deploy_skips_active_hosts_and_starts_free_hosts() -> None:
+    """Overview deploys continue with free hosts and report already-running hosts."""
+    service = object.__new__(VPSManagerService)
+    service.get_vps_deploy_settings = lambda: {}
+    service._vps_deploy_extra_vars = lambda command, settings: {}
+
+    def fake_start(token, *, hostname, command, debug, extra_vars):
+        """Start free hosts and reject one active host."""
+        del token, debug, extra_vars
+        if hostname == "busy-vps":
+            raise ValueError("busy-vps already has an active VPS task. Wait for it to finish before starting Update PBGui and PB7.")
+        return {
+            "command": command,
+            "command_text": "Update PBGui and PB7",
+            "started_at": "2026-06-11 18:00:00",
+            "run_id": f"run-{hostname}",
+            "filename": f"{command}--run-{hostname}.log",
+            "file_alias": f"VPSAction:{hostname}:{command}--run-{hostname}.log",
+        }
+
+    service._start_vps_deploy_host = fake_start
+
+    result = service.run_vps_deploy(
+        "token",
+        ["busy-vps", "free-vps"],
+        command="vps-update-pb",
+        mode="parallel",
+        record_history=False,
+    )
+
+    assert result["count"] == 2
+    assert result["started_count"] == 1
+    assert result["skipped_hosts"] == [{
+        "hostname": "busy-vps",
+        "reason": "busy-vps already has an active VPS task. Wait for it to finish before starting Update PBGui and PB7.",
+    }]
+    assert result["entry"]["host_logs"]["busy-vps"]["status"] == "skipped"
+    assert result["entry"]["host_logs"]["free-vps"]["run_id"] == "run-free-vps"
+
+
+def test_validate_and_stage_vps_deploy_host_skips_active_host() -> None:
+    """Password deploy flow returns skipped for active hosts instead of failing the batch."""
+    updates: list[dict[str, dict[str, object]]] = []
+    service = object.__new__(VPSManagerService)
+    service._deploy_sessions = {}
+    service._deploy_sessions_lock = threading.Lock()
+    service._validate_vps_user_password = lambda hostname, password, accept_unknown_host=False: None
+    service._store_session_secrets = lambda token, hostname, values: None
+    service.get_vps_deploy_settings = lambda: {}
+    service._vps_deploy_extra_vars = lambda command, settings: {}
+    service._record_vps_deploy = lambda **kwargs: {
+        "id": "entry-1",
+        "command": kwargs["command"],
+        "command_text": "Update Linux",
+        "mode": kwargs["mode"],
+        "hostnames": list(kwargs["hostnames"]),
+        "host_logs": dict(kwargs["host_logs"]),
+    }
+
+    def fake_update(entry_id, *, host_logs=None):
+        """Capture host-log updates."""
+        updates.append(dict(host_logs or {}))
+        return {
+            "id": entry_id,
+            "command": "vps-update",
+            "command_text": "Update Linux",
+            "mode": "parallel",
+            "hostnames": ["busy-vps"],
+            "host_logs": dict(host_logs or {}),
+        }
+
+    service._update_vps_deploy_entry = fake_update
+    service._start_vps_deploy_host = lambda *args, **kwargs: (_ for _ in ()).throw(
+        ValueError("busy-vps already has an active VPS task. Wait for it to finish before starting Update Linux.")
+    )
+
+    result = service.validate_and_stage_vps_deploy_host(
+        "token",
+        hostnames=["busy-vps"],
+        hostname="busy-vps",
+        password="pw",
+        command="vps-update",
+        mode="parallel",
+    )
+
+    assert result["started"] is False
+    assert result["skipped"] is True
+    assert result["hostname"] == "busy-vps"
+    assert updates[0]["busy-vps"]["status"] == "skipped"
+
+
 def test_run_vps_command_keeps_pending_optional_values() -> None:
     """Pending local optional values override stale missing remote metadata during updates."""
     captured: dict[str, object] = {}

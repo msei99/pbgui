@@ -3360,12 +3360,21 @@
       return normalized === 'vps-update' || normalized === 'vps-cleanup';
     }
 
+    function formatSkippedDeployHosts(skippedHosts) {
+      const hosts = Array.isArray(skippedHosts)
+        ? skippedHosts.map(function (item) { return String((item || {}).hostname || item || '').trim(); }).filter(Boolean)
+        : [];
+      if (!hosts.length) return '';
+      return hosts.join(', ');
+    }
+
     function cancelOverviewDeployPasswordFlow(options) {
       const flow = store.pendingOverviewDeploy;
       if (!flow) return;
       const opts = options || {};
       const entryId = String(flow.entry_id || '');
       const validatedCount = Array.isArray(flow.started_hosts) ? flow.started_hosts.length : 0;
+      const skippedHosts = Array.isArray(flow.skipped_hosts) ? flow.skipped_hosts : [];
       const totalCount = Array.isArray(flow.hostnames) ? flow.hostnames.length : 0;
       if (entryId) {
         send({ cmd: 'finalize_vps_deploy_session', entry_id: entryId });
@@ -3374,7 +3383,7 @@
       store.pendingOverviewDeploy = null;
       if (!opts.silent) {
         if (validatedCount > 0) {
-          toast(String(flow.command_text || 'Update Linux') + ' continues for ' + validatedCount + ' of ' + totalCount + ' selected host' + (totalCount === 1 ? '' : 's') + '.', 'info');
+          toast(String(flow.command_text || 'Update Linux') + ' continues for ' + validatedCount + ' of ' + totalCount + ' selected host' + (totalCount === 1 ? '' : 's') + (skippedHosts.length ? '. Not started because already running: ' + formatSkippedDeployHosts(skippedHosts) + '.' : '.'), 'info');
         } else {
           toast(String(flow.command_text || 'Update Linux') + ' cancelled.', 'info');
         }
@@ -3391,13 +3400,17 @@
         : [];
       if (!flow.remaining_hosts.length) {
         const validatedCount = Array.isArray(flow.started_hosts) ? flow.started_hosts.length : 0;
+        const skippedHosts = Array.isArray(flow.skipped_hosts) ? flow.skipped_hosts : [];
+        const skippedLabel = formatSkippedDeployHosts(skippedHosts);
         const totalCount = Array.isArray(flow.hostnames) ? flow.hostnames.length : 0;
         if (!flow.summary_toast_shown) {
           flow.summary_toast_shown = true;
           if (validatedCount === totalCount && totalCount > 0) {
             toast(String(flow.command_text || 'Update Linux') + ' started for ' + validatedCount + ' host' + (validatedCount === 1 ? '' : 's') + '.', 'success');
           } else if (validatedCount > 0) {
-            toast(String(flow.command_text || 'Update Linux') + ' started for ' + validatedCount + ' of ' + totalCount + ' selected host' + (totalCount === 1 ? '' : 's') + '.', 'info');
+            toast(String(flow.command_text || 'Update Linux') + ' started for ' + validatedCount + ' of ' + totalCount + ' selected host' + (totalCount === 1 ? '' : 's') + (skippedLabel ? '. Not started because already running: ' + skippedLabel + '.' : '.'), 'info');
+          } else if (skippedLabel) {
+            toast(String(flow.command_text || 'Update Linux') + ' not started. Already running: ' + skippedLabel + '.', 'warning');
           } else {
             toast(String(flow.command_text || 'Update Linux') + ' cancelled.', 'info');
           }
@@ -3465,6 +3478,7 @@
         hostnames: selectedHosts.slice(),
         remaining_hosts: selectedHosts.slice(),
         started_hosts: [],
+        skipped_hosts: [],
         mode: String(mode || 'parallel'),
         debug: !!debug,
         extra_vars: extraVars || null,
@@ -5373,6 +5387,9 @@
       if (status.indexOf('fail') >= 0 || status.indexOf('error') >= 0 || status.indexOf('unreachable') >= 0) {
         return { percent: 100, color: 'var(--danger)', label: step || 'Failed' };
       }
+      if (status === 'skipped') {
+        return { percent: 0, color: 'var(--warning)', label: step || 'Not started' };
+      }
       if (step) {
         return { percent: Number(progressState.percent || 0), color: 'var(--accent)', label: step };
       }
@@ -5433,7 +5450,7 @@
       });
       const runningCount = relevant.filter(function (row) {
         const status = String(row.task_status || '').toLowerCase();
-        return status && status !== 'none' && status !== 'successful' && status.indexOf('fail') < 0 && status.indexOf('error') < 0;
+        return status && status !== 'none' && status !== 'successful' && status !== 'skipped' && status.indexOf('fail') < 0 && status.indexOf('error') < 0;
       }).length;
       const successCount = relevant.filter(function (row) {
         return String(row.task_status || '').toLowerCase().indexOf('success') >= 0;
@@ -5441,6 +5458,9 @@
       const failedCount = relevant.filter(function (row) {
         const status = String(row.task_status || '').toLowerCase();
         return status.indexOf('fail') >= 0 || status.indexOf('error') >= 0;
+      }).length;
+      const skippedCount = relevant.filter(function (row) {
+        return String(row.task_status || '').toLowerCase() === 'skipped';
       }).length;
       return `
         <div class='panel'>
@@ -5451,7 +5471,7 @@
             </div>
           </div>
           <div class='panel-body'>
-            <div class='notice info'>Running: ${esc(String(runningCount))}, Successful: ${esc(String(successCount))}, Failed: ${esc(String(failedCount))}. Click a host to open its deploy log.</div>
+            <div class='notice info'>Running: ${esc(String(runningCount))}, Successful: ${esc(String(successCount))}, Failed: ${esc(String(failedCount))}, Not started: ${esc(String(skippedCount))}. Click a host to open its deploy log.</div>
             <div class='table-wrap'>
               <table class='deploy-progress-table'>
                 <thead>
@@ -5731,10 +5751,19 @@
       const message = String(opts.message || 'Enter the VPS user password to run this command:');
       const confirmLabel = String(opts.confirmLabel || 'Confirm');
       const persistToForm = opts.persistToForm !== false;
+      const targetHost = String(hostname || '').trim();
+      const targetUi = targetHost ? ensureVpsUi(targetHost, store.detail && store.detail.hostname === targetHost ? store.detail : null) : null;
+      const targetUser = String(opts.user || (targetUi && targetUi.form ? targetUi.form.user : '') || '').trim();
+      const targetRows = [];
+      if (targetHost) targetRows.push('<div><span class="field-sub">Host</span><strong>' + esc(targetHost) + '</strong></div>');
+      if (targetUser) targetRows.push('<div><span class="field-sub">User</span><strong>' + esc(targetUser) + '</strong></div>');
+      const targetHtml = targetRows.length
+        ? '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:4px;padding:10px;border:1px solid rgba(255,255,255,0.08);border-radius:10px;background:rgba(15,23,42,0.55)">' + targetRows.join('') + '</div>'
+        : '';
       document.getElementById('alertModalTitle').textContent = title;
       const box = document.getElementById('alertModalBody');
       box.className = 'notice';
-      box.innerHTML = '<div style="display:grid;gap:10px"><div>' + esc(message) + '</div><div id="pw-prompt-error" class="field-sub error" style="display:none"></div><div class="pw-wrap"><input type="password" id="pw-prompt-input" class="pw-input" placeholder="VPS user password" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none"><button type="button" id="pw-prompt-eye" class="pw-eye" onclick="togglePwPromptVisibility()" title="Show or hide password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px;padding:4px">👁</button></div></div>';
+      box.innerHTML = '<div style="display:grid;gap:10px"><div>' + esc(message) + '</div>' + targetHtml + '<div id="pw-prompt-error" class="field-sub error" style="display:none"></div><div class="pw-wrap"><input type="password" id="pw-prompt-input" class="pw-input" placeholder="VPS user password" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none"><button type="button" id="pw-prompt-eye" class="pw-eye" onclick="togglePwPromptVisibility()" title="Show or hide password" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px;padding:4px">👁</button></div></div>';
       document.getElementById('alertModalBtnRow').innerHTML = '<button class=\'btn ghost\' type=\'button\' id=\'pw-prompt-cancel\' onclick=\'closeAlertModal()\'>Cancel</button> <button class=\'btn primary\' type=\'button\' id=\'pw-prompt-confirm\'>' + esc(confirmLabel) + '</button>';
       document.getElementById('alertModalOverlay').classList.add('visible');
       document.getElementById('pw-prompt-confirm').onclick = function () {
@@ -7146,8 +7175,19 @@
           }
         }
         const count = Number(((msg.data || {}).count) || 0);
+        const skippedHosts = Array.isArray((msg.data || {}).skipped_hosts) ? (msg.data || {}).skipped_hosts : [];
+        const skippedLabel = formatSkippedDeployHosts(skippedHosts);
+        const startedCount = Math.max(0, Number(((msg.data || {}).started_count) ?? (count - skippedHosts.length)) || 0);
         const commandText = String((((msg.data || {}).entry || {}).command_text) || (msg.data || {}).command_text || 'Deploy');
-        toast(commandText + ' started for ' + count + ' host' + (count === 1 ? '' : 's') + '.', 'success');
+        if (startedCount > 0 && skippedLabel) {
+          toast(commandText + ' started for ' + startedCount + ' of ' + count + ' selected host' + (count === 1 ? '' : 's') + '. Not started because already running: ' + skippedLabel + '.', 'info');
+        } else if (startedCount > 0) {
+          toast(commandText + ' started for ' + startedCount + ' host' + (startedCount === 1 ? '' : 's') + '.', 'success');
+        } else if (skippedLabel) {
+          toast(commandText + ' not started. Already running: ' + skippedLabel + '.', 'warning');
+        } else {
+          toast(commandText + ' started for ' + count + ' host' + (count === 1 ? '' : 's') + '.', 'success');
+        }
         if (store.view === 'overview' || isDeploysView()) {
           renderUi({ forceView: true });
         }
@@ -7176,9 +7216,16 @@
         const startedHost = String(((msg.data || {}).hostname) || '');
         if (startedHost) {
           flow.remaining_hosts = (flow.remaining_hosts || []).filter(function (item) { return String(item || '') !== startedHost; });
-          flow.started_hosts = Array.isArray(flow.started_hosts) ? flow.started_hosts : [];
-          if (flow.started_hosts.indexOf(startedHost) < 0) {
-            flow.started_hosts.push(startedHost);
+          if ((msg.data || {}).skipped) {
+            flow.skipped_hosts = Array.isArray(flow.skipped_hosts) ? flow.skipped_hosts : [];
+            if (!flow.skipped_hosts.some(function (item) { return String((item || {}).hostname || '') === startedHost; })) {
+              flow.skipped_hosts.push({ hostname: startedHost, reason: String((msg.data || {}).skip_reason || 'Already running on this host.') });
+            }
+          } else if ((msg.data || {}).started || (msg.data || {}).queued) {
+            flow.started_hosts = Array.isArray(flow.started_hosts) ? flow.started_hosts : [];
+            if (flow.started_hosts.indexOf(startedHost) < 0) {
+              flow.started_hosts.push(startedHost);
+            }
           }
         }
         flow.closing_from_result = true;

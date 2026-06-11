@@ -1039,6 +1039,22 @@ class VPSManagerService:
             label = str(command_text or "this action").strip() or "this action"
             raise ValueError(f"{vps.hostname} already has an active VPS task. Wait for it to finish before starting {label}.")
 
+    def _is_vps_task_active_error(self, exc: Exception) -> bool:
+        return "already has an active VPS task" in str(exc)
+
+    def _skipped_vps_deploy_host_log(self, hostname: str, command: str, reason: str) -> dict[str, Any]:
+        normalized_command = _normalize_vps_deploy_command(command)
+        return {
+            "command": normalized_command,
+            "command_text": _vps_deploy_command_text(normalized_command),
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "run_id": "",
+            "filename": "",
+            "file_alias": "",
+            "status": "skipped",
+            "reason": str(reason or "Already running on this host."),
+        }
+
     def _should_treat_vps_process_as_active(self, vps: VPS) -> bool:
         if _status_running(getattr(vps, "init_status", None)) or _status_running(getattr(vps, "setup_status", None)):
             return True
@@ -1964,6 +1980,30 @@ class VPSManagerService:
             expected_run_id = str(host_log_meta.get("run_id") or "").strip()
             file_alias = str(host_log_meta.get("file_alias") or "").strip()
             filename = str(host_log_meta.get("filename") or "").strip()
+            host_log_status = str(host_log_meta.get("status") or "").strip().lower()
+            host_log_reason = str(host_log_meta.get("reason") or "").strip()
+
+            if host_log_status == "skipped":
+                progress_rows.append(
+                    {
+                        **base_row,
+                        "task_command": latest_command,
+                        "task_command_text": latest_command_text,
+                        "task_status": "skipped",
+                        "task_started": expected_started_at or latest_started_at,
+                        "task_step": "",
+                        "task_step_kind": "",
+                        "task_result": "skipped",
+                        "task_recap": None,
+                        "task_current_index": 0,
+                        "task_total_steps": 0,
+                        "task_current_label": host_log_reason or "Not started: active VPS task already running",
+                        "task_progress": {"done": 0, "total": 0, "percent": 0},
+                        "task_log_file": file_alias,
+                        "task_log_filename": filename,
+                    }
+                )
+                continue
 
             parsed_progress: dict[str, Any] | None = None
             parsed_status = ""
@@ -3325,6 +3365,8 @@ class VPSManagerService:
                 "run_id": str(payload.get("run_id") or ""),
                 "filename": str(payload.get("filename") or ""),
                 "file_alias": str(payload.get("file_alias") or ""),
+                "status": str(payload.get("status") or ""),
+                "reason": str(payload.get("reason") or ""),
             }
         for hostname in hostnames:
             if hostname in host_logs and host_logs[hostname].get("file_alias"):
@@ -3729,13 +3771,20 @@ class VPSManagerService:
         try:
             if mode == "sequential":
                 for hostname in hostnames:
-                    host_log = self._start_vps_deploy_host(
-                        token,
-                        hostname=hostname,
-                        command=command,
-                        debug=debug,
-                        extra_vars=extra_vars,
-                    )
+                    try:
+                        host_log = self._start_vps_deploy_host(
+                            token,
+                            hostname=hostname,
+                            command=command,
+                            debug=debug,
+                            extra_vars=extra_vars,
+                        )
+                    except ValueError as exc:
+                        if not self._is_vps_task_active_error(exc):
+                            raise
+                        host_log = self._skipped_vps_deploy_host_log(hostname, command, str(exc))
+                        self._update_vps_deploy_entry(entry_id, host_logs={hostname: host_log})
+                        continue
                     self._update_vps_deploy_entry(entry_id, host_logs={hostname: host_log})
                     run_id = str(host_log.get("run_id") or "").strip()
                     self._wait_for_vps_command_finish(hostname, run_id)
@@ -3849,7 +3898,9 @@ class VPSManagerService:
                 except ValueError as exc:
                     if "VPS user password missing" in str(exc):
                         raise ValueError(f"VPS sudo password missing for {hostname}. Validate it before starting {_vps_deploy_command_text(normalized_command)}.") from exc
-                    raise
+                    if not self._is_vps_task_active_error(exc):
+                        raise
+                    host_logs[hostname] = self._skipped_vps_deploy_host_log(hostname, normalized_command, str(exc))
 
         options: dict[str, Any] = {}
         if normalized_command == COMMAND_VPS_UPDATE:
@@ -3899,6 +3950,12 @@ class VPSManagerService:
             "mode": normalized_mode,
             "hostnames": unique_hosts,
             "count": len(unique_hosts),
+            "started_count": len([item for item in host_logs.values() if str(item.get("status") or "") != "skipped"]),
+            "skipped_hosts": [
+                {"hostname": host, "reason": str(payload.get("reason") or "Already running on this host.")}
+                for host, payload in host_logs.items()
+                if str(payload.get("status") or "") == "skipped"
+            ],
             "entry": entry,
         }
 
@@ -4007,13 +4064,33 @@ class VPSManagerService:
                 queued = True
 
         if start_now:
-            host_log = self._start_vps_deploy_host(
-                token,
-                hostname=clean_hostname,
-                command=normalized_command,
-                debug=debug,
-                extra_vars=base_extra_vars or None,
-            )
+            try:
+                host_log = self._start_vps_deploy_host(
+                    token,
+                    hostname=clean_hostname,
+                    command=normalized_command,
+                    debug=debug,
+                    extra_vars=base_extra_vars or None,
+                )
+            except ValueError as exc:
+                if not self._is_vps_task_active_error(exc):
+                    raise
+                host_log = self._skipped_vps_deploy_host_log(clean_hostname, normalized_command, str(exc))
+                entry = self._update_vps_deploy_entry(target_entry_id, host_logs={clean_hostname: host_log})
+                return {
+                    "command": normalized_command,
+                    "command_text": _vps_deploy_command_text(normalized_command),
+                    "mode": normalized_mode,
+                    "hostnames": unique_hosts,
+                    "count": len(unique_hosts),
+                    "hostname": clean_hostname,
+                    "started": False,
+                    "queued": False,
+                    "skipped": True,
+                    "skip_reason": str(exc),
+                    "entry_id": target_entry_id,
+                    "entry": entry,
+                }
             entry = self._update_vps_deploy_entry(target_entry_id, host_logs={clean_hostname: host_log})
             started = True
             with self._deploy_sessions_lock:
