@@ -39,6 +39,7 @@ MASTER_CONTEXT_VIEWS = {
     "master-host-logs",
     "master-pbgui-branch",
     "master-pb7-branch",
+    "master-ufw",
 }
 VPS_CONTEXT_VIEWS = {
     "vps",
@@ -47,6 +48,7 @@ VPS_CONTEXT_VIEWS = {
     "vps-setup",
     "vps-pbgui-branch",
     "vps-pb7-branch",
+    "vps-ufw",
 }
 
 
@@ -461,6 +463,29 @@ async def ws_vps_manager(websocket: WebSocket):
                         str(msg.get("sudo_pw") or ""),
                     )
                     await websocket.send_json({"type": "write_hosts_result", "data": data})
+                elif cmd == "read_ufw_rules":
+                    data = await asyncio.to_thread(
+                        service.read_ufw_rules,
+                        str(msg.get("hostname") or ""),
+                        str(msg.get("sudo_pw") or "") or None,
+                    )
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "preview_ufw_rules":
+                    data = await asyncio.to_thread(
+                        service.preview_ufw_rules,
+                        str(msg.get("hostname") or ""),
+                        msg.get("payload") or {},
+                        str(msg.get("sudo_pw") or "") or None,
+                    )
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "apply_ufw_rules":
+                    data = await asyncio.to_thread(
+                        service.apply_ufw_rules,
+                        str(msg.get("hostname") or ""),
+                        msg.get("payload") or {},
+                        str(msg.get("sudo_pw") or "") or None,
+                    )
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "validate_local_sudo_password":
                     data = await asyncio.to_thread(
                         service.validate_local_sudo_password,

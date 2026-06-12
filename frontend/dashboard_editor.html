@@ -909,7 +909,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     reportHeight();
   }
 
-   var DR_VERSION = '20260610k';
+   var DR_VERSION = '20260610l';
 
   /* ── lazy-load shared render module ── */
   function _ensureRenderScript(cb) {
@@ -950,6 +950,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
   var _liveBal     = {};  // 'bal_R_C' → { userName → { balance, upnl } }
   var _lastRestBal = {};  // 'bal_R_C' → last REST { rows, totals }
   var MAX_LIVE     = 10;
+  var MAX_LIVE_POSITIONS = 10;
 
   function _setBadge(container, cls, lastTs) {
     var s = container.querySelector(cls);
@@ -995,7 +996,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     delete _liveState[lKey];
   }
 
-  function _connectLivePos(container, pos, users) {
+  function _connectLivePos(container, pos, users, initialRows) {
     var lKey = 'pos_' + pos;
     /* Reuse existing connection if alive and users unchanged (widget rebuild after WS event) */
     var _ex = _liveState[lKey];
@@ -1003,6 +1004,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         (_ex.users || []).join(',') === (users || []).join(',')) return;
     _disconnectLive(lKey);
     if (!users || users.indexOf('ALL') >= 0 || users.length === 0 || users.length > MAX_LIVE) return;
+    if ((initialRows || []).length > MAX_LIVE_POSITIONS) return;
     var st  = { es: null, timer: null, loading: false, users: users.slice(), source: 'db', lastTs: 0, lastFetch: 0 };
     _liveState[lKey] = st;
     function refreshLivePositions() {
@@ -1018,8 +1020,10 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
           st.loading = false;
           st.source = d.source || 'db';
           st.lastTs = Date.now();
-          if (typeof container._dpUpdate === 'function') container._dpUpdate(d.positions || [], d.source || 'db');
-          _setSourceStatus(container, '.dt-status', st.source, st.lastTs);
+          if (st.source === 'live' || st.source === 'mixed') {
+            if (typeof container._dpUpdate === 'function') container._dpUpdate(d.positions || [], d.source || 'db');
+            _setSourceStatus(container, '.dt-status', st.source, st.lastTs);
+          }
         })
         .catch(function () { st.loading = false; _clearBadge(container, '.dt-status'); });
     }
@@ -1054,9 +1058,11 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
           st.loading = false;
           st.source = d.source || 'db';
           st.lastTs = Date.now();
-          _lastRestBal[lKey] = d;
-          DashRender.buildBalance(container, d, {});
-          _setSourceStatus(container, '.db-status', st.source, st.lastTs);
+          if (st.source === 'live' || st.source === 'mixed') {
+            _lastRestBal[lKey] = d;
+            DashRender.buildBalance(container, d, {});
+            _setSourceStatus(container, '.db-status', st.source, st.lastTs);
+          }
         })
         .catch(function () { st.loading = false; _clearBadge(container, '.db-status'); });
     }
@@ -1083,8 +1089,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       container.appendChild(loading);
     }
     var url = API_BASE + '/dashboard/balance'
-      + '?users=' + encodeURIComponent(usersParam)
-      + '&live=1';
+      + '?users=' + encodeURIComponent(usersParam);
     fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (d) {
@@ -1844,8 +1849,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       container.appendChild(loading);
     }
     var url = API_BASE + '/dashboard/positions_data'
-      + '?users=' + encodeURIComponent(usersParam)
-      + '&live=1';
+      + '?users=' + encodeURIComponent(usersParam);
     fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
       .then(function (d) {
@@ -1861,7 +1865,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             apiBase: API_BASE, token: TOKEN, onReload: function () { buildPositionsInline(container, r, c); }
           });
           _attachViewDrag(container, r, c);
-          _connectLivePos(container, pos, users);
+          _connectLivePos(container, pos, users, d.positions || []);
           /* shrink cell to content when no explicit height has been stored */
           var _posCell = container.closest('.editor-cell');
           var _posHKey = 'dashboard_height_' + r + '_' + c;

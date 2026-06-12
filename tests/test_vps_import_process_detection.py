@@ -427,6 +427,86 @@ To                         Action      From
     assert allowed_ips == ""
 
 
+def test_parse_ufw_numbered_status_returns_acl_rows() -> None:
+    """Numbered UFW status output is parsed as ACL rows with comments."""
+    output = """
+Status: active
+
+     To                         Action      From
+     --                         ------      ----
+[ 1] 1194/udp                   ALLOW IN    Anywhere                   # OpenVPN UDP
+[ 2] 22/tcp                     ALLOW IN    213.188.243.180            # SSH from public IP
+[ 3] 8000/tcp                   ALLOW IN    10.8.1.0/24                # PBGui via VPN
+[ 4] 1194/udp (v6)              ALLOW IN    Anywhere (v6)              # OpenVPN UDP
+"""
+
+    parsed = service_mod._parse_ufw_numbered_status(output)
+
+    assert parsed["enabled"] is True
+    assert parsed["rules"][0] == {
+        "number": 1,
+        "to": "1194/udp",
+        "action": "ALLOW IN",
+        "from": "Anywhere",
+        "comment": "OpenVPN UDP",
+    }
+    assert parsed["rules"][2]["from"] == "10.8.1.0/24"
+    assert parsed["fingerprint"]
+
+
+def test_ufw_safety_blocks_current_ssh_and_vpn_lockout() -> None:
+    """UFW safety blocks changes that would drop the current SSH/VPN path."""
+    rules = [
+        {"number": 1, "to": "22/tcp", "action": "ALLOW IN", "from": "10.8.1.0/24", "comment": "SSH from VPN"},
+        {"number": 2, "to": "1194/udp", "action": "ALLOW IN", "from": "Anywhere", "comment": "OpenVPN UDP"},
+        {"number": 3, "to": "8000/tcp", "action": "ALLOW IN", "from": "10.8.1.0/24", "comment": "PBGui via VPN"},
+    ]
+
+    ssh_blocked = service_mod._simulate_ufw_changes(rules, [1], [], True, "10.8.1.23")
+    vpn_blocked = service_mod._simulate_ufw_changes(rules, [2], [], True, "10.8.1.23")
+    pbgui_warning = service_mod._simulate_ufw_changes(rules, [3], [], True, "10.8.1.23")
+
+    assert ssh_blocked["ok"] is False
+    assert any("SSH" in item for item in ssh_blocked["blocking"])
+    assert vpn_blocked["ok"] is False
+    assert any("1194/udp" in item for item in vpn_blocked["blocking"])
+    assert pbgui_warning["ok"] is True
+    assert any("8000/tcp" in item for item in pbgui_warning["warnings"])
+
+
+def test_apply_ufw_rules_rejects_stale_fingerprint(monkeypatch) -> None:
+    """Applying UFW changes rejects stale rule fingerprints before running commands."""
+    service = object.__new__(VPSManagerService)
+    current = {
+        "enabled": True,
+        "rules": [{"number": 1, "to": "22/tcp", "action": "ALLOW IN", "from": "Anywhere", "comment": "SSH"}],
+        "fingerprint": "fresh",
+        "ssh_client_ip": "203.0.113.5",
+    }
+
+    monkeypatch.setattr(service, "read_ufw_rules", lambda hostname, sudo_pw=None: current)
+    monkeypatch.setattr(service, "_run_ufw_shell", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not run ufw")))
+
+    with pytest.raises(ValueError, match="changed since they were loaded"):
+        service.apply_ufw_rules("", {"fingerprint": "stale", "enabled": True, "delete_numbers": [], "add_rules": []}, "pw")
+
+
+def test_build_ufw_apply_script_deletes_descending_and_never_resets() -> None:
+    """UFW apply script deletes numbered rules descending without resetting the firewall."""
+    service = object.__new__(VPSManagerService)
+
+    script = service._build_ufw_apply_script(
+        True,
+        [2, 10, 2],
+        [{"port": "8000", "proto": "tcp", "from": "10.8.1.0/24", "comment": "PBGui via VPN"}],
+    )
+
+    assert "ufw reset" not in script
+    assert script.index("ufw delete 10") < script.index("ufw delete 2")
+    assert "ufw allow from 10.8.1.0/24 to any port 8000 proto tcp comment 'PBGui via VPN'" in script
+    assert "ufw --force enable" in script
+
+
 def test_vps_status_prefers_remote_optional_meta_over_stale_local_config() -> None:
     """A second master displays the VPS-reported optional service state."""
     service = object.__new__(VPSManagerService)

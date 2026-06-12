@@ -1328,7 +1328,8 @@
 
     .inventory-table {
       width: 100%;
-      border-collapse: collapse;
+      border-collapse: separate;
+      border-spacing: 0;
       min-width: 1180px;
     }
 
@@ -1336,7 +1337,7 @@
       position: sticky;
       top: 0;
       z-index: 1;
-      background: rgba(20, 28, 41, 0.98);
+      background: var(--bg2);
     }
 
     .inventory-table th,
@@ -1354,6 +1355,8 @@
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--text-dim);
+      background: var(--bg2);
+      border-bottom: 2px solid var(--border);
     }
 
     .inventory-sort-btn {
@@ -1393,8 +1396,12 @@
       background: rgba(99, 179, 237, 0.08);
     }
 
-    .inventory-table tbody tr.is-selected {
-      background: rgba(38, 166, 154, 0.14);
+    .inventory-table tbody tr.is-selected td {
+      background: rgba(77, 166, 255, 0.12);
+    }
+
+    .inventory-table tbody tr.is-selected td:first-child {
+      border-left: 3px solid var(--accent);
     }
 
     .inventory-empty {
@@ -1802,14 +1809,6 @@
 
     .coin-picker-row.disabled:hover {
       background: transparent;
-    }
-
-    .coin-picker-row input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
-      margin: 0;
-      accent-color: var(--accent);
-      flex-shrink: 0;
     }
 
     .coin-picker-coin {
@@ -3085,6 +3084,9 @@
         selectedCoins: new Set(),
         coinFilter: '',
         autoEnableNewCoins: false,
+        dragStart: null,
+        dragSelecting: false,
+        dragMode: null,
         activeSubsection: 'normal',
         baselineRequest: '',
         isDirty: false
@@ -5101,13 +5103,18 @@
           list.innerHTML = visibleCoins.map(function (coin) {
             var checked = settingsState.selectedCoins.has(coin);
             return ''
-              + '<label class="coin-picker-row' + (checked ? ' selected' : '') + (autoEnableNewCoins ? ' disabled' : '') + '">'
-              +   '<input type="checkbox" data-coin="' + esc(coin) + '"' + (checked ? ' checked' : '') + (autoEnableNewCoins ? ' disabled' : '') + '>'
+              + '<button class="coin-picker-row coin-picker-button settings-coin-row' + (checked ? ' selected' : '') + (autoEnableNewCoins ? ' disabled' : '') + '" type="button" data-settings-coin-row="' + esc(coin) + '" aria-pressed="' + (checked ? 'true' : 'false') + '"' + (autoEnableNewCoins ? ' disabled' : '') + '>'
               +   '<span class="coin-picker-coin">' + esc(coin) + '</span>'
-              + '</label>';
+              + '</button>';
           }).join('');
         }
 
+        updateSettingsCoinSelectionSummary(visibleCoins);
+      }
+
+      function updateSettingsCoinSelectionSummary(visibleCoins) {
+        var allCoins = getAllCoins();
+        var autoEnableNewCoins = Boolean(settingsState.autoEnableNewCoins);
         var autoEnableNote = document.getElementById('settings-auto-enable-note');
         if (autoEnableNote) {
           autoEnableNote.hidden = !autoEnableNewCoins;
@@ -5124,7 +5131,55 @@
         document.getElementById('settings-enabled-count').textContent =
           settingsState.selectedCoins.size + ' selected / ' + allCoins.length + ' total';
         document.getElementById('settings-filtered-count').textContent =
-          visibleCoins.length + ' visible';
+          (Array.isArray(visibleCoins) ? visibleCoins.length : getVisibleCoins(allCoins).length) + ' visible';
+      }
+
+      function getSettingsCoinRows() {
+        return Array.from(document.querySelectorAll('#settings-enabled-coins [data-settings-coin-row]'));
+      }
+
+      function setSettingsCoinRowSelected(row, selected) {
+        if (!row || settingsState.autoEnableNewCoins) return;
+        row.classList.toggle('selected', !!selected);
+        row.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      }
+
+      function applySettingsCoinDragPath(fromX, fromY, toX, toY) {
+        var dx = toX - fromX;
+        var dy = toY - fromY;
+        var distance = Math.max(Math.abs(dx), Math.abs(dy));
+        var steps = Math.max(1, Math.ceil(distance / 8));
+        for (var index = 0; index <= steps; index++) {
+          var ratio = steps === 0 ? 1 : (index / steps);
+          var x = fromX + dx * ratio;
+          var y = fromY + dy * ratio;
+          var hit = document.elementFromPoint(x, y);
+          var row = hit && hit.closest ? hit.closest('#settings-enabled-coins [data-settings-coin-row]') : null;
+          if (!row) continue;
+          setSettingsCoinRowSelected(row, settingsState.dragMode === 'add');
+        }
+      }
+
+      function syncSettingsSelectionFromDom(markDirty) {
+        if (settingsState.autoEnableNewCoins) return;
+        var visibleCoins = new Set(getVisibleCoins(getAllCoins()));
+        var nextSelected = new Set(Array.from(settingsState.selectedCoins).filter(function (coin) {
+          return !visibleCoins.has(coin);
+        }));
+        getSettingsCoinRows().forEach(function (row) {
+          var coin = String(row.getAttribute('data-settings-coin-row') || '');
+          if (!coin) return;
+          if (row.classList.contains('selected')) nextSelected.add(coin);
+        });
+        settingsState.selectedCoins = nextSelected;
+        updateSettingsCoinSelectionSummary();
+        if (markDirty) syncSettingsDirtyState();
+      }
+
+      function resetSettingsCoinDragSelection() {
+        settingsState.dragStart = null;
+        settingsState.dragSelecting = false;
+        settingsState.dragMode = null;
       }
 
       function getBest1mSelectedCoins() {
@@ -6885,6 +6940,15 @@
           best1mState.coinFilter = String(event.target.value || '');
           renderBest1mCoinPicker();
         });
+        document.getElementById('settings-enabled-coins').addEventListener('keydown', function (event) {
+          if (!event || (event.key !== 'Enter' && event.key !== ' ')) return;
+          if (settingsState.autoEnableNewCoins) return;
+          var row = event.target && event.target.closest ? event.target.closest('[data-settings-coin-row]') : null;
+          if (!row) return;
+          event.preventDefault();
+          setSettingsCoinRowSelected(row, !row.classList.contains('selected'));
+          syncSettingsSelectionFromDom(true);
+        });
         document.getElementById('best1m-coin-picker').addEventListener('keydown', function (event) {
           if (!event || (event.key !== 'Enter' && event.key !== ' ')) return;
           var row = event.target && event.target.closest ? event.target.closest('[data-best1m-coin-row]') : null;
@@ -6946,6 +7010,20 @@
         });
         document.addEventListener('mousedown', function (event) {
           if (event.button !== 0) return;
+          var settingsCoinRow = event.target && event.target.closest ? event.target.closest('#settings-enabled-coins [data-settings-coin-row]') : null;
+          if (settingsCoinRow && !settingsState.autoEnableNewCoins) {
+            event.preventDefault();
+            settingsState.dragStart = {
+              coin: String(settingsCoinRow.getAttribute('data-settings-coin-row') || ''),
+              x: event.clientX,
+              y: event.clientY,
+              lastX: event.clientX,
+              lastY: event.clientY
+            };
+            settingsState.dragSelecting = false;
+            settingsState.dragMode = settingsCoinRow.classList.contains('selected') ? 'remove' : 'add';
+            return;
+          }
           var best1mRow = event.target && event.target.closest ? event.target.closest('#best1m-coin-picker [data-best1m-coin-row]') : null;
           if (best1mRow) {
             event.preventDefault();
@@ -6968,6 +7046,22 @@
           inventoryRowDragMode = null;
         });
         document.addEventListener('mousemove', function (event) {
+          if (settingsState.dragStart) {
+            if (!settingsState.dragSelecting && Math.max(Math.abs(event.clientX - settingsState.dragStart.x), Math.abs(event.clientY - settingsState.dragStart.y)) > 5) {
+              settingsState.dragSelecting = true;
+            }
+            if (settingsState.dragSelecting) {
+              event.preventDefault();
+              var settingsAnchor = getSettingsCoinRows().find(function (row) {
+                return String(row.getAttribute('data-settings-coin-row') || '') === settingsState.dragStart.coin;
+              });
+              setSettingsCoinRowSelected(settingsAnchor, settingsState.dragMode === 'add');
+              applySettingsCoinDragPath(settingsState.dragStart.lastX, settingsState.dragStart.lastY, event.clientX, event.clientY);
+              settingsState.dragStart.lastX = event.clientX;
+              settingsState.dragStart.lastY = event.clientY;
+            }
+            return;
+          }
           if (best1mState.dragStart) {
             if (!best1mState.dragSelecting && Math.max(Math.abs(event.clientX - best1mState.dragStart.x), Math.abs(event.clientY - best1mState.dragStart.y)) > 5) {
               best1mState.dragSelecting = true;
@@ -7003,6 +7097,17 @@
           });
         });
         document.addEventListener('mouseup', function () {
+          if (settingsState.dragStart) {
+            var settingsAnchor = getSettingsCoinRows().find(function (row) {
+              return String(row.getAttribute('data-settings-coin-row') || '') === settingsState.dragStart.coin;
+            });
+            if (!settingsState.dragSelecting) {
+              setSettingsCoinRowSelected(settingsAnchor, !(settingsAnchor && settingsAnchor.classList.contains('selected')));
+            }
+            syncSettingsSelectionFromDom(true);
+            resetSettingsCoinDragSelection();
+            return;
+          }
           if (best1mState.dragStart) {
             var best1mAnchor = getBest1mCoinRows().find(function (row) {
               return String(row.getAttribute('data-best1m-coin-row') || '') === best1mState.dragStart.coin;
@@ -7144,10 +7249,6 @@
           if (!target) return;
           if (target.id && target.id.indexOf('settings-') === 0 && target.id !== 'settings-coin-filter') {
             syncSettingsDirtyState();
-            return;
-          }
-          if (target.hasAttribute('data-coin')) {
-            syncSettingsDirtyState();
           }
         });
         document.getElementById('settings-coin-filter').addEventListener('input', function (event) {
@@ -7194,16 +7295,6 @@
           if (!event.target || event.target.id !== 'tradfi-search-window-query') return;
           event.preventDefault();
           runTradfiTickerSearch();
-        });
-        document.getElementById('settings-enabled-coins').addEventListener('change', function (event) {
-          if (settingsState.autoEnableNewCoins) return;
-          var target = event.target;
-          if (!target || target.type !== 'checkbox') return;
-          var coin = String(target.getAttribute('data-coin') || '');
-          if (!coin) return;
-          if (target.checked) settingsState.selectedCoins.add(coin);
-          else settingsState.selectedCoins.delete(coin);
-          renderCoinOptions();
         });
         document.getElementById('btn-select-all-coins').addEventListener('click', function () {
           if (settingsState.autoEnableNewCoins) return;

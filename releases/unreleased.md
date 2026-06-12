@@ -1,3 +1,33 @@
 # Unreleased
 
+- VPS Manager: add Change UFW for local and remote masters with rule-list editing, quick allow rules for SSH/PBGui/OpenVPN, stale-rule protection, and lockout safety checks.
+- DB Tools: change Sync Jobs to run without backups, copy large history tables incrementally by timestamp, replace small state tables directly, and verify source/target row counts after each target sync.
+- DB Tools: add readable per-job Sync Job logs under data/logs/jobs using the job name in the filename and standard movable LogViewerPanel.
+- DB Tools: keep saved Sync Job sources visible in the editor and fall back to the persisted VPS monitor snapshot when live master metadata is not populated yet.
+- DB Tools: remove repeated remote master probing from target validation and use existing VPS Monitor master/connection state instead.
+- DB Tools: speed up remote user lists and previews by running read-only SQLite count helpers on the remote master and returning compact JSON instead of staging full DB files.
+- DB Tools: make the Sync Jobs editor explicitly open/close so users can leave a selected job and return to the list-only view.
+- DB Tools: fix Sync Jobs table rows to use the standard dark selectable table style instead of native button styling.
+- DB Tools: make Sync Jobs list-first with selectable configured jobs, status columns, and a separate editor below.
+- DB Tools: show Sync Jobs safety checks as a user-readable progress flow with per-user green/red status bubbles instead of raw JSON.
+- DB Tools: add one-way user Sync Jobs with target PBData writer safety checks, multi-target fan-out, manual run-now, and scheduled row sync.
+- Optimize V7: align selected table rows visually with the Backtest V7 row-selection style.
+- Pareto Explorer: show Display Range refresh progress directly on the range slider while larger visible ranges load.
+- Docs: document the standard selection styles for full table rows and compact multi-column item grids.
+- API Keys: replace backup compare checkboxes with standard selectable table rows.
+- API Keys: replace SSH sync host checkboxes with standard selectable rows.
+- Dashboard: replace Income table checkboxes with standard selectable rows and click-drag selection.
+- Dashboard: add selectable sidebar rows with Ctrl/Cmd-click toggles, a straight accent edge, and selected-dashboard deletion even when no dashboard is open.
+- Dashboard Templates: replace template and user dropdown checkboxes with selectable rows.
+- VPS Manager: align Overview selected rows and table headers with the project-standard table style.
+- Market Data: align Inventory table headers and selected rows with the project-standard table style.
+- Market Data: replace Settings enabled-coin checkboxes with clickable and drag-selectable coin rows.
+- DB Tools: replace checkbox-based item pickers with project-standard clickable selected rows.
+- DB Tools: clear source item lists immediately while loading after master changes to prevent stale selections.
+- DB Tools: keep operation progress details scrolled to the newest step while copy/cleanup jobs run.
+- DB Tools: prevent copy source and target selectors from choosing the same master by filtering each side out of the other selector.
+- DB Tools: use the shared PBGui calendar date field for cleanup cutoff dates instead of the browser-native date input.
+- Dashboard: load Balance and Positions widgets from the DB first, then refresh live data in the background only when the live scope stays within limits.
+- DB Tools: add FastAPI cleanup and migration page with real operation progress, direct SQL user cleanup/copy, and WAL-safe SQLite full database copy, dashboards, and templates between known masters.
+- DB Tools: add a full-height Backup Manager table with total backup size, sortable timestamp, operation, file, size, and backup-name columns plus restore/delete actions per master.
 - VPS Manager: fix Host/User layout and user resolution in VPS password prompts.

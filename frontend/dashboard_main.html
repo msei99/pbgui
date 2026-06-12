@@ -201,11 +201,16 @@ html, body {
 }
 .sb-item:hover { background: #1a202c; color: #cbd5e0; }
 .sb-item.active {
-  background: rgba(99,179,237,0.07);
-  border-left-color: #63b3ed;
   color: #e2e8f0;
   font-weight: 600;
 }
+.sb-item.selected {
+  background: rgba(77,166,255,.12);
+  border-left: 3px solid #63b3ed;
+  border-radius: 0 6px 6px 0;
+  padding-left: calc(0.7rem - 1px);
+}
+.sb-item.selected:hover { background: rgba(77,166,255,.16); }
 .sb-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sb-item-edit-icon {
   display: none;
@@ -797,6 +802,9 @@ html, body {
   var currentDash = CURRENT || '';
   var editMode    = false;
   var viewDirty   = false;
+  var selectedDashboards = currentDash ? [currentDash] : [];
+  var sidebarDrag = null;
+  var sidebarSuppressClick = false;
 
   /* ── DOM refs ── */
   var editBanner     = document.getElementById('edit-mode-banner');
@@ -821,6 +829,7 @@ html, body {
   function loadView(name) {
     if (!name) return;
     currentDash = name;
+    if (selectedDashboards.length <= 1) selectedDashboards = [name];
     editMode = false;
     viewDirty = false;
     updateViewSaveBtn();
@@ -870,7 +879,9 @@ html, body {
         DASHBOARDS = (d.dashboards || []).sort(function (a, b) {
           return a.toLowerCase().localeCompare(b.toLowerCase());
         });
+        pruneSelectedDashboards();
         renderList();
+        renderToolbar();
         updateCount();
         if (thenLoad) thenLoad();
       })
@@ -904,6 +915,7 @@ html, body {
 
   /* ── Render sidebar toolbar based on mode ── */
   function renderToolbar() {
+    var deleteTargets = getDeleteTargets();
     if (editMode) {
       sidebarToolbar.innerHTML =
         '<button class="sb-btn edit-mode-save" id="sb-save" title="Save dashboard">&#128190;</button>' +
@@ -922,10 +934,8 @@ html, body {
       sidebarToolbar.innerHTML =
         '<button class="sb-btn" id="sb-refresh"   title="Refresh list">&#x21BB;</button>' +
         '<button class="sb-btn" id="sb-new"       title="New dashboard">&#x2795;</button>' +
-        (currentDash ?
-          '<button class="sb-btn" id="sb-edit"      title="Edit current dashboard">&#x270E;</button>' +
-          '<button class="sb-btn danger" id="sb-del" title="Delete current dashboard">&#128465;</button>'
-          : '') +
+        (currentDash ? '<button class="sb-btn" id="sb-edit" title="Edit current dashboard">&#x270E;</button>' : '') +
+        (deleteTargets.length ? '<button class="sb-btn danger" id="sb-del" title="Delete ' + (deleteTargets.length > 1 ? 'selected dashboards' : 'selected dashboard') + '">&#128465;</button>' : '') +
         '<button class="sb-btn" id="sb-templates" title="Templates">&#128203;</button>';
       document.getElementById('sb-refresh').addEventListener('click', function () {
         refreshList();
@@ -939,12 +949,13 @@ html, body {
       });
       var delBtn = document.getElementById('sb-del');
       if (delBtn) delBtn.addEventListener('click', function () {
-        openDeleteDialog(currentDash);
+        openDeleteDialog(getDeleteTargets());
       });
       document.getElementById('sb-templates').addEventListener('click', function () {
         openTemplates();
       });
     }
+    updateViewSaveBtn();
   }
 
   /* ── Build the dashboard list HTML ── */
@@ -959,7 +970,8 @@ html, body {
     for (var i = 0; i < names.length; i++) {
       var n = names[i];
       var active = (n === currentDash) ? ' active' : '';
-      h += '<div class="sb-item' + active + '" data-name="' + escAttr(n) + '">';
+      var selected = (selectedDashboards.indexOf(n) >= 0) ? ' selected' : '';
+      h += '<div class="sb-item' + active + selected + '" data-name="' + escAttr(n) + '" tabindex="0" role="option" aria-selected="' + (selected ? 'true' : 'false') + '">';
       h += '<span class="sb-item-name">' + escHtml(n) + '</span>';
       if (n === currentDash && !editMode) {
         h += '<span class="sb-item-edit-icon" title="Edit">&#x270E;</span>';
@@ -976,6 +988,76 @@ html, body {
       : DASHBOARDS;
     listWrap.innerHTML = buildList(names);
     updateCount(q ? names.length : null);
+  }
+
+  function pruneSelectedDashboards() {
+    selectedDashboards = selectedDashboards.filter(function (name) {
+      return DASHBOARDS.indexOf(name) >= 0;
+    });
+    if (!selectedDashboards.length && currentDash && DASHBOARDS.indexOf(currentDash) >= 0) {
+      selectedDashboards = [currentDash];
+    }
+  }
+
+  function getDeleteTargets() {
+    pruneSelectedDashboards();
+    return selectedDashboards.length ? selectedDashboards.slice() : (currentDash ? [currentDash] : []);
+  }
+
+  function syncSidebarSelection() {
+    listWrap.querySelectorAll('.sb-item').forEach(function (item) {
+      var name = item.getAttribute('data-name') || '';
+      var selected = selectedDashboards.indexOf(name) >= 0;
+      item.classList.toggle('selected', selected);
+      item.setAttribute('aria-selected', selected ? 'true' : 'false');
+    });
+    renderToolbar();
+  }
+
+  function setDashboardSelected(name, isSelected) {
+    if (!name) return;
+    var ix = selectedDashboards.indexOf(name);
+    if (isSelected && ix < 0) selectedDashboards.push(name);
+    else if (!isSelected && ix >= 0) selectedDashboards.splice(ix, 1);
+  }
+
+  function selectSingleDashboard(name) {
+    if (!name) return;
+    selectedDashboards = [name];
+    syncSidebarSelection();
+    if (name !== currentDash) loadView(name);
+  }
+
+  function applySidebarDragAt(x, y) {
+    var hit = document.elementFromPoint(x, y);
+    var item = hit && hit.closest ? hit.closest('.sb-item') : null;
+    if (!item || !listWrap.contains(item)) return;
+    setDashboardSelected(item.getAttribute('data-name') || '', sidebarDrag.mode === 'add');
+    syncSidebarSelection();
+  }
+
+  function onSidebarDragMove(event) {
+    if (!sidebarDrag) return;
+    if (!sidebarDrag.selecting && Math.max(Math.abs(event.clientX - sidebarDrag.x), Math.abs(event.clientY - sidebarDrag.y)) > 5) {
+      sidebarDrag.selecting = true;
+      setDashboardSelected(sidebarDrag.name, sidebarDrag.mode === 'add');
+      syncSidebarSelection();
+    }
+    if (!sidebarDrag.selecting) return;
+    event.preventDefault();
+    applySidebarDragAt(event.clientX, event.clientY);
+  }
+
+  function onSidebarDragUp(event) {
+    if (!sidebarDrag) return;
+    sidebarSuppressClick = true;
+    if (!sidebarDrag.selecting) {
+      selectSingleDashboard(sidebarDrag.name);
+    }
+    sidebarDrag = null;
+    document.removeEventListener('mousemove', onSidebarDragMove);
+    document.removeEventListener('mouseup', onSidebarDragUp);
+    setTimeout(function () { sidebarSuppressClick = false; }, 0);
   }
 
   function updateCount(filtered) {
@@ -997,6 +1079,7 @@ html, body {
 
   /* ── Sidebar list event delegation ── */
   listWrap.addEventListener('click', function (e) {
+    if (sidebarSuppressClick) return;
     var editIcon = e.target.closest('.sb-item-edit-icon');
     if (editIcon) {
       e.stopPropagation();
@@ -1006,9 +1089,42 @@ html, body {
     var item = e.target.closest('.sb-item');
     if (item) {
       var name = item.getAttribute('data-name');
-      if (name !== currentDash) {
-        loadView(name);
+      if (e.ctrlKey || e.metaKey) {
+        setDashboardSelected(name, selectedDashboards.indexOf(name) < 0);
+        syncSidebarSelection();
+        return;
       }
+      selectSingleDashboard(name);
+    }
+  });
+  listWrap.addEventListener('mousedown', function (e) {
+    var item = e.target.closest('.sb-item');
+    if (!item || e.button !== 0 || e.target.closest('.sb-item-edit-icon')) return;
+    e.preventDefault();
+    var name = item.getAttribute('data-name') || '';
+    sidebarDrag = {
+      name: name,
+      x: e.clientX,
+      y: e.clientY,
+      selecting: false,
+      mode: selectedDashboards.indexOf(name) >= 0 ? 'remove' : 'add'
+    };
+    document.addEventListener('mousemove', onSidebarDragMove);
+    document.addEventListener('mouseup', onSidebarDragUp);
+  });
+  listWrap.addEventListener('keydown', function (e) {
+    var item = e.target.closest('.sb-item');
+    if (!item) return;
+    var name = item.getAttribute('data-name') || '';
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      selectSingleDashboard(name);
+      return;
+    }
+    if (e.key === ' ') {
+      e.preventDefault();
+      setDashboardSelected(name, selectedDashboards.indexOf(name) < 0);
+      syncSidebarSelection();
     }
   });
 
@@ -1098,11 +1214,14 @@ html, body {
   /* ── Delete dialog ── */
   var delDialog      = document.getElementById('del-dash-dialog');
   var delConfirmName = document.getElementById('del-confirm-name');
-  var _pendingDelete = '';
+  var _pendingDelete = [];
 
-  function openDeleteDialog(name) {
-    _pendingDelete = name;
-    delConfirmName.textContent = '\u201c' + name + '\u201d';
+  function openDeleteDialog(names) {
+    _pendingDelete = Array.isArray(names) ? names.slice() : (names ? [names] : []);
+    if (!_pendingDelete.length) return;
+    delConfirmName.textContent = _pendingDelete.length === 1
+      ? '\u201c' + _pendingDelete[0] + '\u201d'
+      : _pendingDelete.length + ' dashboards';
     delDialog.classList.add('visible');
   }
   document.getElementById('del-cancel').addEventListener('click', function () {
@@ -1110,10 +1229,19 @@ html, body {
   });
   document.getElementById('del-ok').addEventListener('click', function () {
     delDialog.classList.remove('visible');
-    apiFetch('/dashboards/' + encodeURIComponent(_pendingDelete), { method: 'DELETE' })
+    var names = _pendingDelete.slice();
+    var deletedCurrent = names.indexOf(currentDash) >= 0;
+    Promise.all(names.map(function (name) {
+      return apiFetch('/dashboards/' + encodeURIComponent(name), { method: 'DELETE' }).then(function (r) {
+        if (!r.ok) throw new Error('delete failed');
+      });
+    }))
       .then(function () {
+        selectedDashboards = selectedDashboards.filter(function (name) {
+          return names.indexOf(name) < 0;
+        });
         refreshList(function () {
-          if (_pendingDelete === currentDash) {
+          if (deletedCurrent) {
             currentDash = '';
             editMode = false;
             editBanner.classList.remove('visible');

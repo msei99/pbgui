@@ -367,6 +367,36 @@
             border-bottom: 1px solid #1e2533;
             font-size: var(--fs-sm);
         }
+        .backup-compare-table {
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+        .backup-compare-table th {
+            background: #1a202c;
+            border-bottom: 2px solid #2d3748;
+        }
+        .backup-compare-table .backup-row {
+            cursor: pointer;
+        }
+        .backup-compare-table .backup-row:hover td {
+            background: rgba(255,255,255,0.03);
+        }
+        .backup-compare-table .backup-row.selected td {
+            background: rgba(77,166,255,.12);
+        }
+        .backup-compare-table .backup-row.selected td:first-child {
+            border-left: 3px solid #26a69a;
+        }
+        .ssh-row {
+            cursor: pointer;
+        }
+        .ssh-row:hover {
+            background: rgba(255,255,255,0.03);
+        }
+        .ssh-row.selected {
+            background: rgba(77,166,255,.12);
+            box-shadow: inset 3px 0 0 #26a69a;
+        }
 
         /* Toast notifications (success only) */
         .toast {
@@ -453,8 +483,6 @@
             border-bottom: 1px solid #2d3748; font-family: monospace;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; position: sticky; top: 0;
         }
-        .backup-chk { cursor: pointer; width: 14px; height: 14px; accent-color: #26a69a; }
-
         /* Loading spinner */
         .spinner {
             display: inline-block;
@@ -2706,9 +2734,10 @@
     // ── State ────────────────────────────────────────────────
     var _sshHosts   = [];   // [{hostname, label}]
     var _sshHostMap = {};   // hostname → {watcher_active, last_push:{ts,serial,success}}
+    var _sshDragState = null;
 
-    // Grid: cb | VPS | Last Sync | Serial | Days | Min Ver | Set | Sync Keys
-    var SSH_COLS = "22px minmax(160px,1fr) 148px 52px 68px 62px 45px 82px";
+    // Grid: VPS | Last Sync | Serial | Days | Min Ver | Set | Sync Keys
+    var SSH_COLS = "minmax(160px,1fr) 148px 52px 68px 62px 45px 82px";
 
     function _lpBadge(lp) {
         if (!lp || !lp.ts) return '<span style="color:#475569; font-size:var(--fs-sm);">never</span>';
@@ -2727,11 +2756,9 @@
         var serial = (lp && lp.serial) ? lp.serial : '—';
         var watcherDot = (hostInfo && hostInfo.watcher_active)
             ? ' <span title="watcher active" style="color:#86efac; font-size:var(--fs-xs);">&#9679;</span>' : '';
-        return '<div class="ssh-row" data-label="' + escapeAttr(h.label) + '" ' +
+        return '<div class="ssh-row selected" data-hostname="' + escapeAttr(h.hostname) + '" data-label="' + escapeAttr(h.label) + '" tabindex="0" aria-selected="true" ' +
             'style="display:grid; grid-template-columns:' + SSH_COLS + '; gap:6px; align-items:center; ' +
             'padding:6px 8px; border-bottom:1px solid #1e293b;">' +
-            '<input type="checkbox" class="ssh-cb" value="' + escapeAttr(h.hostname) + '" checked ' +
-                'style="cursor:pointer;" onchange="updateSshSelCount()">' +
             '<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + escapeAttr(h.label) + '">' +
                 escapeHtml(h.label) + watcherDot + '</span>' +
             '<span id="ssh-lp-' + escapeAttr(h.hostname) + '">' + _lpBadge(lp) + '</span>' +
@@ -2762,18 +2789,17 @@
         var hdr = '<div style="display:grid; grid-template-columns:' + S + '; gap:6px; align-items:center; ' +
             'padding:6px 8px 7px; border-bottom:1px solid #334155; color:#64748b; font-size:var(--fs-sm); ' +
             'text-transform:uppercase; letter-spacing:.05em; position:sticky; top:0; background:#0f172a; z-index:2;">' +
-            '<span></span><span>VPS</span><span>Last Sync</span>' +
+            '<span>VPS</span><span>Last Sync</span>' +
             '<span style="text-align:right">Serial</span>' +
             '<span style="text-align:right">Days</span><span style="text-align:right">Min Ver</span>' +
             '<span style="text-align:center" title="Save retention settings">Set</span>' +
             '<span style="text-align:center" title="Push api-keys.json">Sync Keys</span>' +
         '</div>';
-        // ALL row — acts on all selected (checked) VPS rows
+        // ALL row — acts on all selected VPS rows
         var allRow = '<div style="display:grid; grid-template-columns:' + S + '; gap:6px; align-items:center; ' +
             'padding:6px 8px; border-bottom:1px solid #26a69a55; background:#0d1e2e; position:sticky; top:36px; z-index:1;">' +
-            '<span></span>' +
             '<span style="font-weight:700; color:#26a69a; font-size:var(--fs-base); white-space:nowrap;">&#9654; All Selected</span>' +
-            '<span style="color:#475569; font-size:var(--fs-sm); white-space:nowrap;">acts on checked rows</span>' +
+            '<span style="color:#475569; font-size:var(--fs-sm); white-space:nowrap;">acts on selected rows</span>' +
             '<span></span>' +
             '<input type="number" id="globalRetDays" min="1" max="3650" value="180" ' +
                 'style="width:100%; font-size:var(--fs-sm); background:#1e293b; color:#93c5fd; border:1px solid #475569; border-radius:4px; padding:3px 5px; text-align:right;" placeholder="days">' +
@@ -2787,6 +2813,7 @@
         var rows = hosts.map(function(h) { return _sshVpsRowHtml(h, hostMap[h.hostname]); }).join('');
         var spacer = '<div style="height:6px; background:#0f172a;"></div>';
         list.innerHTML = hdr + allRow + spacer + rows;
+        bindSshSelectionRows(list);
         updateSshSelCount();
     }
 
@@ -2853,15 +2880,14 @@
     function sshSelectAll(sel) {
         document.getElementById("sshVpsList").querySelectorAll(".ssh-row").forEach(function(row) {
             if (row.style.display !== "none") {
-                var cb = row.querySelector(".ssh-cb");
-                if (cb) cb.checked = sel;
+                setSshRowSelected(row, sel);
             }
         });
         updateSshSelCount();
     }
 
     function updateSshSelCount() {
-        var n = document.getElementById("sshVpsList").querySelectorAll(".ssh-cb:checked").length;
+        var n = getVisibleSshRows().filter(function(row) { return row.classList.contains("selected"); }).length;
         document.getElementById("sshSelCount").textContent = n + " selected";
     }
 
@@ -2869,13 +2895,85 @@
         // Only return hosts from visible (non-filtered) rows
         var res = [];
         document.getElementById("sshVpsList").querySelectorAll(".ssh-row").forEach(function(row) {
-            if (row.style.display !== "none") {
-                var cb = row.querySelector(".ssh-cb:checked");
-                if (cb) res.push(cb.value);
+            if (row.style.display !== "none" && row.classList.contains("selected")) {
+                var hostname = row.getAttribute("data-hostname") || "";
+                if (hostname) res.push(hostname);
             }
         });
         return res;
     }
+
+    function getVisibleSshRows() {
+        return Array.from(document.getElementById("sshVpsList").querySelectorAll(".ssh-row")).filter(function(row) {
+            return row.style.display !== "none";
+        });
+    }
+
+    function setSshRowSelected(row, selected) {
+        if (!row) return;
+        row.classList.toggle("selected", !!selected);
+        row.setAttribute("aria-selected", selected ? "true" : "false");
+    }
+
+    function toggleSshRow(row) {
+        setSshRowSelected(row, !row.classList.contains("selected"));
+        updateSshSelCount();
+    }
+
+    function setSshSelectionRange(anchorRow, targetRow, mode) {
+        var rows = getVisibleSshRows();
+        var anchor = rows.indexOf(anchorRow);
+        var target = rows.indexOf(targetRow);
+        if (anchor < 0 || target < 0) return;
+        var low = Math.min(anchor, target);
+        var high = Math.max(anchor, target);
+        rows.forEach(function(row, index) {
+            if (index < low || index > high) return;
+            setSshRowSelected(row, mode === "add");
+        });
+        updateSshSelCount();
+    }
+
+    function bindSshSelectionRows(list) {
+        list.onmousedown = function(event) {
+            if (event.button !== 0) return;
+            if (event.target && event.target.closest && event.target.closest("button,input,select,textarea")) return;
+            var row = event.target && event.target.closest ? event.target.closest(".ssh-row[data-hostname]") : null;
+            if (!row) return;
+            event.preventDefault();
+            _sshDragState = {
+                row: row,
+                y: event.clientY,
+                selecting: false,
+                mode: row.classList.contains("selected") ? "remove" : "add"
+            };
+        };
+        list.onkeydown = function(event) {
+            if (!event || (event.key !== "Enter" && event.key !== " ")) return;
+            var row = event.target && event.target.closest ? event.target.closest(".ssh-row[data-hostname]") : null;
+            if (!row) return;
+            event.preventDefault();
+            toggleSshRow(row);
+        };
+    }
+
+    document.addEventListener("mousemove", function(event) {
+        if (!_sshDragState) return;
+        if (!_sshDragState.selecting && Math.abs(event.clientY - _sshDragState.y) > 5) {
+            _sshDragState.selecting = true;
+        }
+        if (!_sshDragState.selecting) return;
+        event.preventDefault();
+        var row = event.target && event.target.closest ? event.target.closest("#sshVpsList .ssh-row[data-hostname]") : null;
+        if (!row) return;
+        setSshSelectionRange(_sshDragState.row, row, _sshDragState.mode);
+    });
+
+    document.addEventListener("mouseup", function() {
+        if (!_sshDragState) return;
+        if (!_sshDragState.selecting) toggleSshRow(_sshDragState.row);
+        _sshDragState = null;
+    });
 
     function _setSshBusy(busy) {
         document.getElementById("sshSpinner").style.display = busy ? "" : "none";
@@ -3102,23 +3200,22 @@
         html += '<span style="font-size:var(--fs-sm); color:#94a3b8;">Select 2 to compare:</span>';
         html += '<button class="btn btn-sm btn-secondary" id="btnDiffSelected" onclick="openDiffSelected()" disabled style="opacity:0.4;">&#9654; Compare Selected</button>';
         html += '</div>';
-        html += '<table class="hl-expiry-table"><thead><tr>';
-        html += '<th style="width:28px;"></th>';
+        html += '<table class="hl-expiry-table backup-compare-table"><thead><tr>';
         html += '<th>File</th><th>Date / Time</th><th>Target</th><th>Size</th><th style="width:80px;"></th>';
         html += '</tr></thead><tbody>';
         for (const b of data) {
             const dt = b.ts.replace("T", " ");
-            html += '<tr>';
-            html += '<td><input type="checkbox" class="backup-chk" data-fn="' + escapeHtml(b.filename) + '" onchange="toggleBackupSelect(\'' + escapeHtml(b.filename) + '\')" /></td>';
+            html += '<tr class="backup-row" data-backup-fn="' + escapeAttr(b.filename) + '" tabindex="0" aria-selected="false">';
             html += '<td style="font-size:var(--fs-xs);font-family:monospace;color:#94a3b8;word-break:break-all;">' + escapeHtml(b.filename) + '</td>';
             html += '<td>' + escapeHtml(dt) + '</td>';
             html += '<td><span class="badge-exchange">' + escapeHtml(b.target) + '</span></td>';
             html += '<td>' + b.size_kb + ' KB</td>';
-            html += '<td><button class="btn btn-sm btn-warning" onclick="restoreBackup(\'' + escapeHtml(b.filename) + '\')">Restore</button></td>';
+            html += '<td><button class="btn btn-sm btn-warning backup-restore-btn" type="button" data-restore-fn="' + escapeAttr(b.filename) + '">Restore</button></td>';
             html += '</tr>';
         }
         html += '</tbody></table>';
         container.innerHTML = html;
+        bindBackupSelectionTable(container);
     }
 
     async function restoreBackup(filename) {
@@ -3146,27 +3243,98 @@
     let selectedBackups = [];
     let diffData = null;
     let diffMode = "unified";
+    let backupDragState = null;
 
-    function toggleBackupSelect(filename) {
-        const idx = selectedBackups.indexOf(filename);
-        if (idx >= 0) {
-            selectedBackups.splice(idx, 1);
-        } else {
-            if (selectedBackups.length >= 2) {
-                // Uncheck this checkbox — only 2 allowed
-                document.querySelectorAll(".backup-chk").forEach(chk => {
-                    if (chk.dataset.fn === filename) chk.checked = false;
-                });
-                return;
-            }
-            selectedBackups.push(filename);
-        }
+    function syncBackupSelectionRows() {
+        document.querySelectorAll("#backupsList .backup-row").forEach(function(row) {
+            var filename = row.getAttribute("data-backup-fn") || "";
+            row.classList.toggle("selected", selectedBackups.indexOf(filename) >= 0);
+            row.setAttribute("aria-selected", selectedBackups.indexOf(filename) >= 0 ? "true" : "false");
+        });
         const btn = document.getElementById("btnDiffSelected");
         if (btn) {
             btn.disabled = selectedBackups.length !== 2;
             btn.style.opacity = selectedBackups.length === 2 ? "1" : "0.4";
         }
     }
+
+    function toggleBackupSelect(filename) {
+        filename = String(filename || "");
+        if (!filename) return;
+        const idx = selectedBackups.indexOf(filename);
+        if (idx >= 0) {
+            selectedBackups.splice(idx, 1);
+        } else {
+            if (selectedBackups.length >= 2) {
+                return;
+            }
+            selectedBackups.push(filename);
+        }
+        syncBackupSelectionRows();
+    }
+
+    function applyBackupDragRow(row) {
+        if (!row || !backupDragState) return;
+        var filename = row.getAttribute("data-backup-fn") || "";
+        if (!filename) return;
+        if (backupDragState.mode === "remove") {
+            var idx = selectedBackups.indexOf(filename);
+            if (idx >= 0) selectedBackups.splice(idx, 1);
+        } else if (selectedBackups.indexOf(filename) < 0 && selectedBackups.length < 2) {
+            selectedBackups.push(filename);
+        }
+    }
+
+    function bindBackupSelectionTable(container) {
+        container.querySelectorAll(".backup-restore-btn").forEach(function(btn) {
+            btn.addEventListener("click", function(event) {
+                event.stopPropagation();
+                restoreBackup(btn.getAttribute("data-restore-fn") || "");
+            });
+        });
+        container.onmousedown = function(event) {
+            if (event.button !== 0) return;
+            if (event.target && event.target.closest && event.target.closest("button")) return;
+            var row = event.target && event.target.closest ? event.target.closest(".backup-row[data-backup-fn]") : null;
+            if (!row) return;
+            event.preventDefault();
+            backupDragState = {
+                row: row,
+                y: event.clientY,
+                selecting: false,
+                mode: row.classList.contains("selected") ? "remove" : "add"
+            };
+        };
+        container.onkeydown = function(event) {
+            if (!event || (event.key !== "Enter" && event.key !== " ")) return;
+            var row = event.target && event.target.closest ? event.target.closest(".backup-row[data-backup-fn]") : null;
+            if (!row) return;
+            event.preventDefault();
+            toggleBackupSelect(row.getAttribute("data-backup-fn") || "");
+        };
+    }
+
+    document.addEventListener("mousemove", function(event) {
+        if (!backupDragState) return;
+        if (!backupDragState.selecting && Math.abs(event.clientY - backupDragState.y) > 5) {
+            backupDragState.selecting = true;
+        }
+        if (!backupDragState.selecting) return;
+        event.preventDefault();
+        var row = event.target && event.target.closest ? event.target.closest("#backupsList .backup-row[data-backup-fn]") : null;
+        if (!row) return;
+        applyBackupDragRow(backupDragState.row);
+        applyBackupDragRow(row);
+        syncBackupSelectionRows();
+    });
+
+    document.addEventListener("mouseup", function() {
+        if (!backupDragState) return;
+        if (!backupDragState.selecting) {
+            toggleBackupSelect(backupDragState.row.getAttribute("data-backup-fn") || "");
+        }
+        backupDragState = null;
+    });
 
     async function openDiffSelected() {
         if (selectedBackups.length !== 2) return;

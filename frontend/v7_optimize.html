@@ -141,7 +141,8 @@ button, input, textarea, select { font: inherit; }
 .tbl tr:hover td { background: rgba(255,255,255,.03); }
 .tbl tbody tr { cursor: pointer; }
 .tbl tr.selected td { background: rgba(77,166,255,.12); }
-.tbl tr.selected .queue-grab-bar { background: var(--accent); }
+.tbl tr.selected td:first-child { border-left: 3px solid var(--accent); }
+.tbl tr.selected .queue-grab-bar { background: transparent; }
 .tbl tr.queue-dragging td { opacity: 0.72; }
 .tbl tr.queue-drop-before td { border-top: 2px solid var(--accent); }
 .tbl tr.queue-drop-after td { border-bottom: 2px solid var(--accent); }
@@ -9182,7 +9183,7 @@ function renderConfigs() {
     if (seedMode === 'self') flags.push('<span class="metric-pill">seed: self</span>');
     if (seedMode === 'path') flags.push('<span class="metric-pill">seed: path</span>');
     tr.innerHTML = ''
-      + '<td><strong>' + escapeHtml(cfg.name) + '</strong></td>'
+      + '<td title="' + escapeHtml(cfg.name) + '">' + escapeHtml(cfg.name) + '</td>'
       + '<td>' + escapeHtml(formatExchange(cfg.exchange)) + '</td>'
       + '<td>' + escapeHtml(String(cfg.backtest_count || 0)) + '</td>'
       + '<td class="muted">' + escapeHtml(cfg.start_date || '-') + '</td>'
@@ -9241,7 +9242,7 @@ function renderQueue() {
     actions += '<button class="icon-btn danger queue-delete" data-filename="' + escapeHtml(item.filename) + '" title="Delete queue item">🗑</button>';
     tr.innerHTML = ''
       + '<td class="queue-order-cell queue-grab-zone" draggable="true" title="Drag to reorder"><span class="queue-grab-bar"></span></td>'
-      + '<td><strong>' + escapeHtml(item.name || item.filename) + '</strong></td>'
+      + '<td title="' + escapeHtml(item.name || item.filename) + '">' + escapeHtml(item.name || item.filename) + '</td>'
       + '<td>' + escapeHtml(formatExchange(item.exchange)) + '</td>'
       + '<td><span class="badge badge-' + escapeHtml(item.status || 'queued') + '">' + escapeHtml(item.status || 'queued') + '</span></td>'
       + '<td class="muted">' + escapeHtml(formatIso(item.created)) + '</td>'

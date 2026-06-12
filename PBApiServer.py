@@ -37,6 +37,8 @@ from api.auth import SessionToken, build_root_entry_response, optional_auth, req
 from api.api_keys import router as api_keys_router
 from api.dashboard import router as dashboard_router
 from api.dashboards import router as dashboards_router
+from api.db_tools import init as db_tools_init
+from api.db_tools import router as db_tools_router
 from api.jobs import router as jobs_router
 from api.logging import router as logging_router
 from api.market_data import router as market_data_router
@@ -366,6 +368,7 @@ async def _lifespan(app: FastAPI):
     init_file_sync(file_sync)
     v7_sync = V7ConfigSyncWorker(monitor.pool, monitor.store, monitor)
     v7_init(monitor, v7_sync)
+    db_tools_init(monitor)
 
     # Register on-connect callbacks so inotify watchers start automatically
     # whenever a VPS connects or reconnects (including after network outages).
@@ -472,6 +475,7 @@ app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(api_keys_router, prefix="/api/api-keys", tags=["api-keys"])
 app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(dashboards_router, prefix="/api/dashboards", tags=["dashboards"])
+app.include_router(db_tools_router, prefix="/api/db-tools", tags=["db-tools"])
 app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(logging_router, prefix="/api/logging", tags=["logging"])
 app.include_router(market_data_router, prefix="/api", tags=["market-data"])

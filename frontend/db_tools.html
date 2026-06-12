@@ -1,0 +1,1230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DB Tools - PBGui</title>
+  <style>
+    :root {
+      --fs-xs: 11px; --fs-sm: 13px; --fs-base: 14px; --fs-md: 15px; --fs-lg: 18px; --fs-xl: 24px;
+      --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 20px; --btn-h: 32px;
+      --bg: #0e1117; --bg2: #131b2b; --bg3: #1a202c; --line: #1e2736; --line2: #2d3748;
+      --text: #e2e8f0; --muted: #94a3b8; --dim: #64748b; --accent: #63b3ed;
+      --ok: #4ade80; --warn: #fcd34d; --danger: #f87171;
+    }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: var(--fs-base); }
+    * { box-sizing: border-box; }
+    #page-body { display: flex; height: calc(100vh - 52px); overflow: hidden; }
+    #sidebar { width: 230px; min-width: 190px; flex-shrink: 0; border-right: 1px solid var(--line); background: #0b101a; padding: var(--sp-md); display: flex; flex-direction: column; gap: var(--sp-sm); }
+    .sb-title { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .08em; font-weight: 700; margin-bottom: var(--sp-xs); }
+    .sb-btn { width: 100%; text-align: left; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); padding: .55rem .7rem; cursor: pointer; font: inherit; transition: background .12s, color .12s, border-color .12s; }
+    .sb-btn:hover { background: #151d2d; color: var(--text); }
+    .sb-btn.active { color: var(--text); background: rgba(99,179,237,.12); border-color: rgba(99,179,237,.35); font-weight: 700; }
+    #main-content { flex: 1; min-width: 0; overflow-y: auto; padding: var(--sp-lg); }
+    .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-md); margin-bottom: var(--sp-lg); }
+    .page-title { font-size: var(--fs-xl); font-weight: 800; margin: 0 0 4px; }
+    .page-sub { color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; max-width: 920px; }
+    .panel { display: none; background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+    .panel.active { display: block; }
+    .panel-head { padding: var(--sp-lg); border-bottom: 1px solid var(--line); background: #111827; }
+    .panel-title { font-size: var(--fs-lg); font-weight: 800; }
+    .panel-desc { color: var(--muted); font-size: var(--fs-sm); margin-top: 4px; line-height: 1.45; }
+    .panel-body { padding: var(--sp-lg); display: grid; gap: var(--sp-lg); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--sp-md); }
+    .field { display: grid; gap: 6px; }
+    label { color: var(--muted); font-size: var(--fs-sm); font-weight: 700; }
+    select, input[type="text"], input[type="number"] { width: 100%; height: var(--btn-h); border: 1px solid var(--line2); border-radius: 8px; background: #0f1724; color: var(--text); padding: 0 .65rem; font: inherit; }
+    .check-line { display: inline-flex; align-items: center; gap: .5rem; color: var(--text); font-weight: 700; min-height: var(--btn-h); }
+    .actions { display: flex; flex-wrap: wrap; gap: var(--sp-sm); align-items: center; }
+    .btn { height: var(--btn-h); border: 1px solid transparent; border-radius: 8px; padding: 0 var(--sp-md); font: inherit; font-weight: 700; cursor: pointer; transition: background .12s, border-color .12s, opacity .12s; }
+    .btn.primary { background: var(--accent); color: #08111f; border-color: var(--accent); }
+    .btn.secondary { background: #1a202c; color: var(--text); border-color: var(--line2); }
+    .btn.danger { background: #7f1d1d; color: #fecaca; border-color: #991b1b; }
+    .btn.warning { background: #713f12; color: #fde68a; border-color: #92400e; }
+    .btn:hover { opacity: .9; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .list-card { border: 1px solid var(--line); border-radius: 10px; background: #0f1724; overflow: hidden; }
+    .list-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-sm); padding: .65rem .8rem; border-bottom: 1px solid var(--line); background: #111827; }
+    .list-title { font-size: var(--fs-sm); font-weight: 800; color: var(--text); }
+    .list-actions { display: flex; gap: var(--sp-xs); }
+    .list-summary { color: var(--muted); font-size: var(--fs-xs); font-weight: 800; margin-right: var(--sp-sm); align-self: center; }
+    .mini { height: 24px; padding: 0 .5rem; font-size: var(--fs-xs); border-radius: 6px; }
+    .select-list { max-height: 300px; overflow: auto; padding: 0; display: block; user-select: none; }
+    .select-row { width: 100%; min-height: 34px; display: flex; align-items: center; gap: .55rem; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--text); cursor: pointer; text-align: left; font: inherit; appearance: none; }
+    .select-row:hover { background: rgba(255,255,255,.03); }
+    .select-row:focus { outline: none; }
+    .select-row.selected { background: rgba(77,166,255,.12); box-shadow: inset 3px 0 0 var(--accent); color: #fff; }
+    .select-row.loading { color: var(--muted); cursor: wait; font-style: italic; }
+    #panel-backups { min-height: calc(100vh - 120px); }
+    #panel-backups .panel-body { min-height: calc(100vh - 235px); grid-template-rows: auto auto minmax(360px, 1fr) auto auto auto; }
+    .backup-list-card { min-height: 0; display: flex; flex-direction: column; }
+    #backup-list { flex: 1; max-height: none; min-height: 360px; }
+    .backup-table-head, .backup-row { display: grid; grid-template-columns: 180px 150px 120px 110px minmax(300px, 1fr); gap: 12px; align-items: center; min-width: 980px; }
+    .backup-table-head { position: sticky; top: 0; z-index: 2; background: var(--bg2); border-bottom: 2px solid var(--line2); padding: 8px 12px; color: var(--muted); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; font-weight: 800; }
+    .backup-table-head button { border: 0; background: transparent; color: inherit; font: inherit; text-align: left; padding: 0; cursor: pointer; text-transform: inherit; letter-spacing: inherit; }
+    .backup-table-head button:hover { color: var(--text); }
+    .backup-row { min-height: 42px; padding: 8px 12px; }
+    .backup-cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .backup-date { color: var(--text); font-weight: 800; }
+    .backup-badge { display: inline-flex; align-items: center; border: 1px solid rgba(99,179,237,.24); border-radius: 999px; padding: 1px 8px; color: #bfdbfe; background: rgba(99,179,237,.09); font-size: var(--fs-xs); font-weight: 800; }
+    .backup-size { color: var(--text); font-weight: 800; text-align: right; }
+    .backup-file { color: var(--muted); font-size: var(--fs-sm); }
+    .row-meta { margin-left: auto; color: var(--dim); font-size: var(--fs-xs); }
+    .status { white-space: pre-wrap; min-height: 44px; border: 1px solid var(--line); border-radius: 10px; background: #0b1220; color: var(--muted); padding: var(--sp-md); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-sm); line-height: 1.45; }
+    .status.ok { color: #bbf7d0; border-color: rgba(74,222,128,.35); }
+    .status.err { color: #fecaca; border-color: rgba(248,113,113,.42); }
+    .safety-summary { display: grid; gap: 12px; color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; }
+    .safety-title { font-size: var(--fs-md); font-weight: 900; color: var(--text); }
+    .safety-title.ok { color: #bbf7d0; }
+    .safety-title.err { color: #fecaca; }
+    .safety-block { display: grid; gap: 7px; }
+    .safety-target { font-weight: 900; color: var(--text); }
+    .safety-user-list { display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
+    .safety-bubble { display: inline-flex; align-items: center; gap: 7px; border-radius: 999px; padding: 3px 10px; font-weight: 800; font-size: var(--fs-sm); }
+    .safety-bubble::before { content: ''; width: 8px; height: 8px; border-radius: 999px; background: currentColor; }
+    .safety-bubble.ok { color: #bbf7d0; background: rgba(74,222,128,.12); border: 1px solid rgba(74,222,128,.3); }
+    .safety-bubble.err { color: #fecaca; background: rgba(248,113,113,.12); border: 1px solid rgba(248,113,113,.35); }
+    .safety-muted { color: var(--muted); font-size: var(--fs-sm); }
+    .sync-job-table-head, .sync-job-row { display: grid; grid-template-columns: minmax(180px, 1.4fr) 90px minmax(130px, .8fr) minmax(150px, 1fr) minmax(150px, .9fr) minmax(150px, .9fr) 70px 90px; gap: 12px; align-items: center; min-width: 1160px; }
+    .sync-job-table-head { position: sticky; top: 0; z-index: 2; background: var(--bg2); border-bottom: 2px solid var(--line2); padding: 8px 12px; color: var(--muted); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; font-weight: 800; }
+    .sync-job-row { width: 100%; min-height: 44px; padding: 8px 12px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; appearance: none; }
+    .sync-job-row:hover { background: rgba(255,255,255,.03); }
+    .sync-job-row:focus { outline: none; }
+    .sync-job-row.selected { background: rgba(77,166,255,.12); color: #fff; }
+    .sync-job-row.selected .sync-job-cell:first-child { box-shadow: inset 3px 0 0 var(--accent); padding-left: 8px; }
+    .sync-job-cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sync-job-name { color: var(--text); font-weight: 900; }
+    .sync-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 8px; font-size: var(--fs-xs); font-weight: 900; border: 1px solid var(--line2); }
+    .sync-pill.enabled { color: #bbf7d0; background: rgba(74,222,128,.12); border-color: rgba(74,222,128,.3); }
+    .sync-pill.disabled { color: var(--muted); background: rgba(148,163,184,.1); }
+    .sync-pill.error { color: #fecaca; background: rgba(248,113,113,.12); border-color: rgba(248,113,113,.35); }
+    .sync-editor { display: none; gap: var(--sp-lg); }
+    .sync-editor.visible { display: grid; }
+    .sync-editor-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-md); padding: .65rem .8rem; border: 1px solid var(--line); border-radius: 10px; background: #111827; }
+    .sync-editor-title { font-weight: 900; color: var(--text); }
+    #dbtools-log-panel { position: fixed; right: 0; bottom: 0; width: 50%; height: 62vh; min-width: 360px; min-height: 260px; background: var(--bg2); border: 2px solid var(--accent); border-radius: 6px 6px 0 0; z-index: 950; display: none; flex-direction: column; overflow: hidden; }
+    #dbtools-log-panel.visible { display: flex; }
+    #dbtools-log-panel-header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-sm); padding: var(--sp-sm) var(--sp-md); background: var(--bg3); border-bottom: 1px solid var(--line); flex-shrink: 0; cursor: move; user-select: none; }
+    #dbtools-log-panel-title { font-size: var(--fs-sm); font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #dbtools-log-panel-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: var(--fs-lg); line-height: 1; }
+    #dbtools-log-panel-close:hover { color: var(--text); }
+    #dbtools-log-viewer-target { flex: 1; min-height: 0; overflow: hidden; padding: var(--sp-sm); }
+    .lp-resize { position: absolute; z-index: 2; }
+    .lp-resize-n  { top: -4px; left: 6px; right: 6px; height: 8px; cursor: n-resize; }
+    .lp-resize-s  { bottom: -4px; left: 6px; right: 6px; height: 8px; cursor: s-resize; }
+    .lp-resize-w  { left: -4px; top: 6px; bottom: 6px; width: 8px; cursor: w-resize; }
+    .lp-resize-e  { right: -4px; top: 6px; bottom: 6px; width: 8px; cursor: e-resize; }
+    .lp-resize-nw { top: -4px; left: -4px; width: 12px; height: 12px; cursor: nw-resize; }
+    .lp-resize-ne { top: -4px; right: -4px; width: 12px; height: 12px; cursor: ne-resize; }
+    .lp-resize-sw { bottom: -4px; left: -4px; width: 12px; height: 12px; cursor: sw-resize; }
+    .lp-resize-se { bottom: -4px; right: -4px; width: 12px; height: 12px; cursor: se-resize; }
+    .progress-card { display: none; border: 1px solid var(--line); border-radius: 10px; background: #0b1220; overflow: hidden; }
+    .progress-card.visible { display: block; }
+    .progress-top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-md); padding: .7rem .8rem; border-bottom: 1px solid var(--line); }
+    .progress-title { font-weight: 800; color: var(--text); }
+    .progress-meta { color: var(--muted); font-size: var(--fs-sm); }
+    .progress-bar { height: 8px; background: #111827; overflow: hidden; }
+    .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #3182ce, #63b3ed); transition: width .2s ease; }
+    .progress-current { padding: .65rem .8rem; color: var(--muted); font-size: var(--fs-sm); border-bottom: 1px solid var(--line); }
+    .progress-steps { max-height: 170px; overflow: auto; padding: .45rem .8rem .7rem; display: grid; gap: 4px; }
+    .progress-step { color: #cbd5e1; font-size: var(--fs-sm); }
+    .progress-step::before { content: '✓'; color: var(--ok); margin-right: 7px; }
+    .progress-card.error .progress-fill { background: var(--danger); }
+    .notice { color: var(--warn); background: #1c1a08; border: 1px solid rgba(180,83,9,.45); border-radius: 10px; padding: var(--sp-md); font-size: var(--fs-sm); line-height: 1.45; }
+    #confirm-ovl { display: none; position: fixed; inset: 0; z-index: 8000; background: rgba(0,0,0,.72); align-items: center; justify-content: center; backdrop-filter: blur(2px); }
+    #confirm-ovl.visible { display: flex; }
+    #confirm-box { width: min(480px, 92vw); background: var(--bg2); border: 1px solid var(--line2); border-radius: 14px; box-shadow: 0 24px 80px rgba(0,0,0,.85); overflow: hidden; }
+    #confirm-head { padding: .9rem 1rem; background: #111827; border-bottom: 1px solid var(--line); font-weight: 800; }
+    #confirm-body { padding: var(--sp-lg); display: grid; gap: var(--sp-md); }
+    #confirm-msg { color: var(--text); line-height: 1.45; }
+    #confirm-detail { color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; }
+    #confirm-actions { display: flex; justify-content: flex-end; gap: var(--sp-sm); }
+    @media (max-width: 760px) { #page-body { flex-direction: column; } #sidebar { width: 100%; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); } .sb-title { display: none; } .sb-btn { white-space: nowrap; } }
+  </style>
+</head>
+<body>
+  <nav id="topnav"></nav>
+  <div id="page-body">
+    <aside id="sidebar">
+      <div class="sb-title">DB Tools</div>
+      <button class="sb-btn active" data-panel="cleanup">Cleanup</button>
+      <button class="sb-btn" data-panel="copy-users">Copy Users</button>
+      <button class="sb-btn" data-panel="copy-db">Copy Database</button>
+      <button class="sb-btn" data-panel="sync-jobs">Sync Jobs</button>
+      <button class="sb-btn" data-panel="backups">Backup Manager</button>
+      <button class="sb-btn" data-panel="copy-dashboards">Dashboards</button>
+    </aside>
+    <main id="main-content">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Database Tools</h1>
+          <div class="page-sub">Cleanup and migration helpers for PBGui database data. Every write action creates a backup first.</div>
+        </div>
+      </div>
+
+      <section class="panel active" id="panel-cleanup">
+        <div class="panel-head"><div class="panel-title">Cleanup User Data</div><div class="panel-desc">Remove all rows for selected users, or only rows older than a cutoff date.</div></div>
+        <div class="panel-body">
+          <div class="grid">
+            <div class="field"><label for="cleanup-target">Target master</label><select id="cleanup-target"></select></div>
+            <div class="field"><label for="cleanup-mode">Cleanup mode</label><select id="cleanup-mode"><option value="all">Remove all data for users</option><option value="older">Remove data older than date</option></select></div>
+            <div class="field"><label for="cleanup-date">Cutoff date</label><div class="date-input-wrap"><input id="cleanup-date" type="text" placeholder="YYYY-MM-DD" autocomplete="off"><button type="button" class="calendar-trigger" data-dp="cleanup-date" onclick="window.__dp.show('cleanup-date', this)" title="Open calendar">📅</button></div></div>
+          </div>
+          <div class="list-card"><div class="list-head"><div class="list-title">Users</div><div class="list-actions"><button class="btn secondary mini" data-select="cleanup-users">All</button><button class="btn secondary mini" data-clear="cleanup-users">None</button></div></div><div class="select-list" id="cleanup-users"></div></div>
+          <div class="actions"><button class="btn secondary" id="cleanup-refresh">Refresh Users</button><button class="btn primary" id="cleanup-preview">Preview</button><button class="btn danger" id="cleanup-run" disabled>Run Cleanup</button></div>
+          <div class="progress-card" id="cleanup-progress"></div>
+          <div class="status" id="cleanup-status">Load users to start.</div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-copy-users">
+        <div class="panel-head"><div class="panel-title">Copy User Data</div><div class="panel-desc">Copy selected users from one known master to another. Choose whether target user data should be replaced or only missing rows added.</div></div>
+        <div class="panel-body">
+          <div class="grid">
+            <div class="field"><label for="users-source">Source master</label><select id="users-source"></select></div>
+            <div class="field"><label for="users-target">Target master</label><select id="users-target"></select></div>
+            <div class="field"><label for="users-mode">Copy mode</label><select id="users-mode"><option value="add_missing">Add only missing</option><option value="replace">Replace user data</option></select></div>
+          </div>
+          <div class="list-card"><div class="list-head"><div class="list-title">Users from source</div><div class="list-actions"><button class="btn secondary mini" data-select="copy-users-list">All</button><button class="btn secondary mini" data-clear="copy-users-list">None</button></div></div><div class="select-list" id="copy-users-list"></div></div>
+          <div class="actions"><button class="btn secondary" id="users-refresh">Refresh Source Users</button><button class="btn primary" id="users-preview">Preview</button><button class="btn warning" id="users-run" disabled>Copy Users</button></div>
+          <div class="progress-card" id="users-progress"></div>
+          <div class="status" id="users-status">Load users to start.</div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-copy-db">
+        <div class="panel-head"><div class="panel-title">Copy Complete Database</div><div class="panel-desc">Replace the target master database files with the source master database files.</div></div>
+        <div class="panel-body">
+          <div class="notice">This copies both <strong>pbgui.db</strong> and <strong>pbgui_trades.db</strong>. A target backup is created before replacement.</div>
+          <div class="grid">
+            <div class="field"><label for="db-source">Source master</label><select id="db-source"></select></div>
+            <div class="field"><label for="db-target">Target master</label><select id="db-target"></select></div>
+          </div>
+          <div class="actions"><button class="btn primary" id="db-preview">Preview</button><button class="btn danger" id="db-run" disabled>Copy Database</button></div>
+          <div class="progress-card" id="db-progress"></div>
+          <div class="status" id="db-status">Preview the database copy before running it.</div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-sync-jobs">
+        <div class="panel-head"><div class="panel-title">Sync Jobs</div><div class="panel-desc">One-way user row sync from one source master to one or more targets. Targets are blocked when PBData is actively writing a selected user.</div></div>
+        <div class="panel-body">
+          <div class="notice">Sync jobs add only missing rows and create target backups before each run. They never delete rows and never overwrite existing target rows.</div>
+          <div class="list-card"><div class="list-head"><div class="list-title">Configured Sync Jobs</div><div class="list-actions"><button class="btn secondary mini" id="sync-reload">Reload</button><button class="btn primary mini" id="sync-new">New Job</button></div></div><div class="select-list" id="sync-job-list"></div></div>
+          <div class="sync-editor" id="sync-editor">
+            <div class="sync-editor-head"><div class="sync-editor-title" id="sync-editor-title">New Sync Job</div><button class="btn secondary mini" id="sync-close">Close Editor</button></div>
+            <div class="grid">
+              <div class="field"><label for="sync-name">Job name</label><input id="sync-name" type="text" placeholder="e.g. manibot01 to replicas"></div>
+              <div class="field"><label for="sync-source">Source master</label><select id="sync-source"></select></div>
+              <div class="field"><label for="sync-interval">Interval seconds</label><input id="sync-interval" type="number" min="30" step="30" value="300"></div>
+              <div class="field"><label>Status</label><label class="check-line"><input id="sync-enabled" type="checkbox"> Enabled</label></div>
+            </div>
+            <div class="grid">
+              <div class="list-card"><div class="list-head"><div class="list-title">Target masters</div><div class="list-actions"><button class="btn secondary mini" data-select="sync-targets">All</button><button class="btn secondary mini" data-clear="sync-targets">None</button></div></div><div class="select-list" id="sync-targets"></div></div>
+              <div class="list-card"><div class="list-head"><div class="list-title">Users from source</div><div class="list-actions"><button class="btn secondary mini" data-select="sync-users">All</button><button class="btn secondary mini" data-clear="sync-users">None</button></div></div><div class="select-list" id="sync-users"></div></div>
+            </div>
+            <div class="actions"><button class="btn secondary" id="sync-refresh-users">Refresh Users</button><button class="btn primary" id="sync-safety">Check Safety</button><button class="btn warning" id="sync-save">Save Job</button><button class="btn primary" id="sync-run">Run Now</button><button class="btn danger" id="sync-delete">Delete Job</button></div>
+          </div>
+          <div class="progress-card" id="sync-progress"></div>
+          <div class="status" id="sync-status">Load or create a sync job.</div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-backups">
+        <div class="panel-head"><div class="panel-title">Backup Manager</div><div class="panel-desc">Restore database backups created by DB Tools or delete backup files that are no longer needed.</div></div>
+        <div class="panel-body">
+          <div class="notice">Restore stops PBData for the selected master, creates a fresh safety backup, replaces the selected DB file(s), removes stale WAL/SHM files, and restarts PBData if it was running.</div>
+          <div class="grid">
+            <div class="field"><label for="backup-target">Backup master</label><select id="backup-target"></select></div>
+          </div>
+          <div class="list-card backup-list-card"><div class="list-head"><div class="list-title">Database Backups</div><div class="list-actions"><span class="list-summary" id="backup-total-summary">0 files | 0 MB</span><button class="btn secondary mini" data-select="backup-list">All</button><button class="btn secondary mini" data-clear="backup-list">None</button></div></div><div class="select-list" id="backup-list"></div></div>
+          <div class="actions"><button class="btn secondary" id="backup-refresh">Refresh Backups</button><button class="btn warning" id="backup-restore">Restore Selected</button><button class="btn danger" id="backup-delete">Delete Selected</button></div>
+          <div class="progress-card" id="backup-progress"></div>
+          <div class="status" id="backup-status">Load backups to start.</div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-copy-dashboards">
+        <div class="panel-head"><div class="panel-title">Copy Dashboards and Templates</div><div class="panel-desc">Copy dashboard JSON files and template JSON files between masters.</div></div>
+        <div class="panel-body">
+          <div class="grid">
+            <div class="field"><label for="dash-source">Source master</label><select id="dash-source"></select></div>
+            <div class="field"><label for="dash-target">Target master</label><select id="dash-target"></select></div>
+            <div class="field"><label for="dash-mode">Copy mode</label><select id="dash-mode"><option value="add_missing">Add only missing</option><option value="replace_all">Replace all selected</option></select></div>
+          </div>
+          <div class="grid">
+            <div class="list-card"><div class="list-head"><div class="list-title">Dashboards</div><div class="list-actions"><button class="btn secondary mini" data-select="dash-list">All</button><button class="btn secondary mini" data-clear="dash-list">None</button></div></div><div class="select-list" id="dash-list"></div></div>
+            <div class="list-card"><div class="list-head"><div class="list-title">Templates</div><div class="list-actions"><button class="btn secondary mini" data-select="template-list">All</button><button class="btn secondary mini" data-clear="template-list">None</button></div></div><div class="select-list" id="template-list"></div></div>
+          </div>
+          <div class="actions"><button class="btn secondary" id="dash-refresh">Refresh Source Items</button><button class="btn primary" id="dash-preview">Preview</button><button class="btn warning" id="dash-run" disabled>Copy Dashboards</button></div>
+          <div class="progress-card" id="dash-progress"></div>
+          <div class="status" id="dash-status">Load dashboard files to start.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="dbtools-log-panel">
+    <div class="lp-resize lp-resize-n" data-dir="n"></div>
+    <div class="lp-resize lp-resize-s" data-dir="s"></div>
+    <div class="lp-resize lp-resize-w" data-dir="w"></div>
+    <div class="lp-resize lp-resize-e" data-dir="e"></div>
+    <div class="lp-resize lp-resize-nw" data-dir="nw"></div>
+    <div class="lp-resize lp-resize-ne" data-dir="ne"></div>
+    <div class="lp-resize lp-resize-sw" data-dir="sw"></div>
+    <div class="lp-resize lp-resize-se" data-dir="se"></div>
+    <div id="dbtools-log-panel-header">
+      <span id="dbtools-log-panel-title">DB Tools log</span>
+      <button id="dbtools-log-panel-close" title="Close">✕</button>
+    </div>
+    <div id="dbtools-log-viewer-target"></div>
+  </div>
+
+  <div id="confirm-ovl" aria-hidden="true">
+    <div id="confirm-box" role="dialog" aria-modal="true" aria-labelledby="confirm-head">
+      <div id="confirm-head">Confirm</div>
+      <div id="confirm-body">
+        <div id="confirm-msg"></div>
+        <div id="confirm-detail"></div>
+        <div id="confirm-actions"><button class="btn secondary" id="confirm-cancel">Cancel</button><button class="btn danger" id="confirm-ok">Confirm</button></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.TOKEN = "%%TOKEN%%";
+    window.API_BASE = "%%API_BASE%%";
+    window.WS_BASE = "%%WS_BASE%%";
+    window.PBGUI_VERSION = "%%VERSION%%";
+    window.PBGUI_SERIAL = "%%SERIAL%%";
+    window.PBGUI_NAV_CONFIG = { subtitle: 'DB TOOLS', current: 'system_db_tools' };
+  </script>
+  <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+  <script src="/app/js/pbgui_datepicker.js?v=1"></script>
+  <script src="/app/js/log_viewer_panel.js?v=23"></script>
+  <script>
+  (function () {
+    'use strict';
+    const state = { targets: [], cleanupPreview: null, usersPreview: null, dbPreview: null, dashPreview: null, backups: [], syncJobs: [], syncJobId: '', logViewer: null, listLoads: {}, backupSort: { key: 'created', dir: 'desc' } };
+    function el(id) { return document.getElementById(id); }
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
+    function apiFetch(path, options) {
+      options = options || {};
+      const headers = options.headers || {};
+      headers.Authorization = 'Bearer ' + TOKEN;
+      if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+      return fetch(API_BASE + path, Object.assign({}, options, { headers: headers, cache: 'no-store' })).then(function (resp) {
+        if (!resp.ok) return resp.json().catch(function () { return {}; }).then(function (data) { throw new Error(data.detail || ('HTTP ' + resp.status)); });
+        return resp.json();
+      });
+    }
+    function setStatus(id, data, cls) {
+      const node = el(id);
+      node.className = 'status' + (cls ? ' ' + cls : '');
+      node.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    }
+    function setStatusHtml(id, html, cls) {
+      const node = el(id);
+      node.className = 'status' + (cls ? ' ' + cls : '');
+      node.innerHTML = html;
+    }
+    function selected(listId) {
+      return Array.from(el(listId).querySelectorAll('.select-row.selected')).map(function (row) { return row.dataset.value; }).filter(Boolean);
+    }
+    function syncRowAria(listId) {
+      el(listId).querySelectorAll('.select-row[data-value]').forEach(function (row) {
+        row.setAttribute('aria-pressed', row.classList.contains('selected') ? 'true' : 'false');
+      });
+    }
+    function restoreSelection(listId, values) {
+      const keep = new Set(values || []);
+      el(listId).querySelectorAll('.select-row[data-value]').forEach(function (row) {
+        row.classList.toggle('selected', keep.has(row.dataset.value));
+      });
+      syncRowAria(listId);
+    }
+    function resetSelectionPreview(listId) {
+      if (listId === 'cleanup-users') { state.cleanupPreview = null; el('cleanup-run').disabled = true; resetProgress('cleanup-progress'); }
+      if (listId === 'copy-users-list') resetUsersPreview();
+      if (listId === 'sync-targets' || listId === 'sync-users') resetProgress('sync-progress');
+      if (listId === 'dash-list' || listId === 'template-list') resetDashPreview();
+    }
+    function renderChecks(listId, items, withTotals) {
+      const list = el(listId);
+      if (!items || !items.length) { list.innerHTML = '<div class="select-row" aria-disabled="true">No items found.</div>'; return; }
+      list.innerHTML = items.map(function (item) {
+        const name = typeof item === 'string' ? item : item.user;
+        const meta = withTotals && item.total !== undefined ? '<span class="row-meta">' + esc(item.total) + ' rows</span>' : '';
+        return '<button class="select-row" type="button" data-value="' + esc(name) + '" aria-pressed="false"><span>' + esc(name) + '</span>' + meta + '</button>';
+      }).join('');
+    }
+    function renderListLoading(listId, message) {
+      const list = el(listId);
+      list.innerHTML = '<div class="select-row loading" aria-disabled="true">' + esc(message || 'Loading...') + '</div>';
+    }
+    function renderBackups(items) {
+      const list = el('backup-list');
+      const totalBytes = (items || []).reduce(function (sum, item) { return sum + Number(item.size || 0); }, 0);
+      const totalSummary = el('backup-total-summary');
+      if (totalSummary) totalSummary.textContent = String((items || []).length) + ' files | ' + formatBytes(totalBytes);
+      const header = renderBackupHeader();
+      if (!items || !items.length) { list.innerHTML = header + '<div class="select-row" aria-disabled="true">No backups found.</div>'; return; }
+      const sorted = items.slice().sort(compareBackups);
+      list.innerHTML = header + sorted.map(function (item) {
+        const name = String(item.name || '');
+        const sizeMb = Number(item.size || 0) / 1024 / 1024;
+        const label = String(item.label || '').replace(/-/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+        const dbName = String(item.db_name || '');
+        const dbLabel = dbName === 'pbgui.db' ? 'Main DB' : (dbName === 'pbgui_trades.db' ? 'Trades DB' : dbName);
+        const created = backupCreatedLabel(name, item.mtime);
+        return '<button class="select-row backup-row" type="button" data-value="' + esc(name) + '" aria-pressed="false">'
+          + '<span class="backup-cell backup-date">' + esc(created) + '</span>'
+          + '<span class="backup-cell"><span class="backup-badge">' + esc(label || 'Backup') + '</span></span>'
+          + '<span class="backup-cell"><span class="backup-badge">' + esc(dbLabel) + '</span></span>'
+          + '<span class="backup-cell backup-size">' + esc(sizeMb.toFixed(1)) + ' MB</span>'
+          + '<span class="backup-cell backup-file">' + esc(name) + '</span>'
+          + '</button>';
+      }).join('');
+    }
+    function formatBytes(bytes) {
+      const value = Number(bytes || 0);
+      if (value >= 1024 * 1024 * 1024) return (value / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+      if (value >= 1024 * 1024) return (value / 1024 / 1024).toFixed(1) + ' MB';
+      if (value >= 1024) return (value / 1024).toFixed(1) + ' KB';
+      return String(Math.round(value)) + ' B';
+    }
+    function renderBackupHeader() {
+      function head(key, label) {
+        const mark = state.backupSort.key === key ? (state.backupSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+        return '<button type="button" data-backup-sort="' + esc(key) + '">' + esc(label + mark) + '</button>';
+      }
+      return '<div class="backup-table-head">'
+        + head('created', 'Created')
+        + head('label', 'Operation')
+        + head('db', 'File')
+        + head('size', 'Size')
+        + head('name', 'Backup name')
+        + '</div>';
+    }
+    function backupSortValue(item, key) {
+      if (key === 'created') return backupCreatedSort(item.name, item.mtime);
+      if (key === 'label') return String(item.label || '').toLowerCase();
+      if (key === 'db') return String(item.db_name || '').toLowerCase();
+      if (key === 'size') return Number(item.size || 0);
+      return String(item.name || '').toLowerCase();
+    }
+    function compareBackups(a, b) {
+      const key = state.backupSort.key;
+      const av = backupSortValue(a, key);
+      const bv = backupSortValue(b, key);
+      const dir = state.backupSort.dir === 'asc' ? 1 : -1;
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    }
+    function backupCreatedLabel(name, fallback) {
+      const match = String(name || '').match(/^db-tools-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-/);
+      if (match) return match[1] + '-' + match[2] + '-' + match[3] + ' ' + match[4] + ':' + match[5] + ':' + match[6] + ' UTC';
+      return fallback ? String(fallback).replace('T', ' ').replace(/\.\d+\+00:00$/, ' UTC') : 'Unknown time';
+    }
+    function backupCreatedSort(name, fallback) {
+      const match = String(name || '').match(/^db-tools-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-/);
+      if (match) return match.slice(1).join('');
+      return fallback ? String(fallback) : '';
+    }
+    function targetOption(target) {
+      const text = target.label + (target.id === 'local' ? ' (local)' : ' (' + target.id + ')');
+      return '<option value="' + esc(target.id) + '">' + esc(text) + '</option>';
+    }
+    function ensureSelectOption(selectId, value, label) {
+      const select = el(selectId);
+      const raw = String(value || '').trim();
+      if (!raw || Array.from(select.options).some(function (option) { return option.value === raw; })) return;
+      const option = document.createElement('option');
+      option.value = raw;
+      option.textContent = label || (raw + ' (unavailable)');
+      select.appendChild(option);
+    }
+    function renderTargetSelect(id, excludeId, preferredId) {
+      const select = el(id);
+      const options = state.targets.filter(function (target) { return target.id !== excludeId; });
+      select.innerHTML = options.map(targetOption).join('');
+      select.disabled = options.length === 0;
+      if (!options.length) return '';
+      if (preferredId && options.some(function (target) { return target.id === preferredId; })) {
+        select.value = preferredId;
+      } else {
+        select.selectedIndex = 0;
+      }
+      return select.value;
+    }
+    function syncTargetPair(sourceId, targetId, changedSide) {
+      const sourceValue = el(sourceId).value;
+      const targetValue = el(targetId).value;
+      if (changedSide === 'target') {
+        const nextSource = renderTargetSelect(sourceId, targetValue, sourceValue);
+        renderTargetSelect(targetId, nextSource, targetValue);
+      } else {
+        const nextTarget = renderTargetSelect(targetId, sourceValue, targetValue);
+        renderTargetSelect(sourceId, nextTarget, sourceValue);
+      }
+    }
+    function resetUsersPreview() {
+      state.usersPreview = null;
+      el('users-run').disabled = true;
+      resetProgress('users-progress');
+    }
+    function resetDbPreview() {
+      state.dbPreview = null;
+      el('db-run').disabled = true;
+      resetProgress('db-progress');
+    }
+    function resetDashPreview() {
+      state.dashPreview = null;
+      el('dash-run').disabled = true;
+      resetProgress('dash-progress');
+    }
+    function fillTargets() {
+      const html = state.targets.map(targetOption).join('');
+      el('cleanup-target').innerHTML = html;
+      el('backup-target').innerHTML = html;
+      ['users-source','db-source','dash-source','sync-source'].forEach(function (id) { el(id).innerHTML = html; });
+      ['users-target','db-target','dash-target'].forEach(function (id) { el(id).innerHTML = html; if (el(id).options.length > 1) el(id).selectedIndex = 1; });
+      syncTargetPair('users-source', 'users-target', 'source');
+      syncTargetPair('db-source', 'db-target', 'source');
+      syncTargetPair('dash-source', 'dash-target', 'source');
+      renderSyncTargets();
+    }
+    function loadTargets() {
+      return apiFetch('/targets').then(function (data) { state.targets = data.targets || []; fillTargets(); });
+    }
+    function loadUsers(target, listId, statusId) {
+      const loadKey = String(Date.now()) + ':' + Math.random();
+      state.listLoads[listId] = loadKey;
+      renderListLoading(listId, 'Loading users...');
+      setStatus(statusId, 'Loading users...');
+      return apiFetch('/users?target=' + encodeURIComponent(target)).then(function (data) {
+        if (state.listLoads[listId] !== loadKey) return;
+        renderChecks(listId, data.users || [], true);
+        setStatus(statusId, 'Loaded ' + (data.users || []).length + ' user(s).', 'ok');
+      }).catch(function (err) {
+        if (state.listLoads[listId] !== loadKey) return;
+        renderChecks(listId, [], true);
+        setStatus(statusId, err.message, 'err');
+      });
+    }
+    function loadBackups() {
+      const loadKey = String(Date.now()) + ':' + Math.random();
+      state.listLoads.backups = loadKey;
+      renderListLoading('backup-list', 'Loading backups...');
+      setStatus('backup-status', 'Loading backups...');
+      resetProgress('backup-progress');
+      return apiFetch('/backups?target=' + encodeURIComponent(el('backup-target').value)).then(function (data) {
+        if (state.listLoads.backups !== loadKey) return;
+        state.backups = data.backups || [];
+        renderBackups(state.backups);
+        setStatus('backup-status', 'Loaded ' + (data.backups || []).length + ' backup file(s).', 'ok');
+      }).catch(function (err) {
+        if (state.listLoads.backups !== loadKey) return;
+        state.backups = [];
+        renderBackups([]);
+        setStatus('backup-status', err.message, 'err');
+      });
+    }
+    function renderSyncTargets(values) {
+      const selectedTargets = values || selected('sync-targets');
+      const source = el('sync-source').value;
+      const items = state.targets.filter(function (target) { return target.id !== source; }).map(function (target) { return target.id; });
+      renderChecks('sync-targets', items, false);
+      restoreSelection('sync-targets', selectedTargets.filter(function (target) { return target !== source; }));
+    }
+    function syncPayload() {
+      return {
+        id: state.syncJobId || null,
+        name: el('sync-name').value,
+        source: el('sync-source').value,
+        targets: selected('sync-targets'),
+        users: selected('sync-users'),
+        interval_seconds: Number(el('sync-interval').value || 300),
+        enabled: el('sync-enabled').checked
+      };
+    }
+    function formatSyncSafetyResult(data) {
+      const blocked = data.blocked || {};
+      const conflicts = data.conflicts || [];
+      const targets = data.targets || {};
+      const targetNames = Object.keys(targets);
+      const users = data.job && Array.isArray(data.job.users) ? data.job.users : selected('sync-users');
+      let html = '<div class="safety-summary">'
+        + '<div class="safety-title ' + (data.ok ? 'ok' : 'err') + '">' + esc(data.ok ? 'Safety check passed' : 'Safety check blocked this job') + '</div>'
+        + '<div class="safety-muted">Checked known masters, source/target separation, active target PBData writers, and conflicting enabled sync sources.</div>';
+      if (targetNames.length) {
+        html += '<div class="safety-block"><div class="safety-target">Targets</div>';
+        targetNames.forEach(function (target) {
+          const status = targets[target] || {};
+          const hits = blocked[target] || [];
+          const hitSet = new Set(hits);
+          const running = status.running ? 'PBData running' : 'PBData not running';
+          html += '<div class="safety-block">'
+            + '<div class="safety-target">' + esc(target) + ': ' + esc(hits.length ? 'BLOCKED' : 'safe') + ' <span class="safety-muted">(' + esc(running) + ')</span></div>'
+            + '<div class="safety-user-list">';
+          if (users.length) {
+            users.forEach(function (user) {
+              const blockedUser = hitSet.has(user);
+              html += '<span class="safety-bubble ' + (blockedUser ? 'err' : 'ok') + '">' + esc(user) + (blockedUser ? ' is active on target' : ' safe') + '</span>';
+            });
+          } else {
+            html += '<span class="safety-muted">No users selected.</span>';
+          }
+          html += '</div></div>';
+        });
+        html += '</div>';
+      } else {
+        html += '<div class="safety-muted">No targets selected.</div>';
+      }
+      if (conflicts.length) {
+        html += '<div class="safety-block"><div class="safety-target">Job conflicts</div>';
+        conflicts.forEach(function (item) {
+          html += '<div class="safety-bubble err">' + esc(item.job_name || item.job_id || 'Existing job') + ': source ' + esc(item.source || '-') + ', users ' + esc((item.users || []).join(', ')) + '</div>';
+        });
+        html += '</div>';
+      }
+      return html + '</div>';
+    }
+    function mergeSyncSafetyResults(results, basePayload) {
+      const merged = { ok: true, job: Object.assign({}, basePayload), targets: {}, blocked: {}, conflicts: [] };
+      const seenConflicts = new Set();
+      results.forEach(function (data) {
+        merged.ok = merged.ok && !!data.ok;
+        Object.assign(merged.targets, data.targets || {});
+        Object.keys(data.blocked || {}).forEach(function (target) { merged.blocked[target] = data.blocked[target]; });
+        (data.conflicts || []).forEach(function (item) {
+          const key = String(item.job_id || '') + ':' + String((item.users || []).join(','));
+          if (!seenConflicts.has(key)) {
+            seenConflicts.add(key);
+            merged.conflicts.push(item);
+          }
+        });
+      });
+      if (Object.keys(merged.blocked).length || merged.conflicts.length) merged.ok = false;
+      return merged;
+    }
+    function checkSyncSafetyWithProgress() {
+      const payload = syncPayload();
+      const targets = payload.targets.slice();
+      const checks = targets.length ? targets : [''];
+      const results = [];
+      renderProgress('sync-progress', { kind: 'safety-check', status: 'running', completed: 0, total: checks.length, percent: 0, current: 'Starting safety check', steps: [] });
+      setStatus('sync-status', 'Checking safety...');
+      let chain = Promise.resolve();
+      checks.forEach(function (target, idx) {
+        chain = chain.then(function () {
+          const label = target || 'configuration';
+          renderProgress('sync-progress', { kind: 'safety-check', status: 'running', completed: idx, total: checks.length, percent: Math.round((idx / checks.length) * 100), current: 'Checking ' + label, steps: results.map(function (_item, stepIdx) { return { label: 'Checked ' + (checks[stepIdx] || 'configuration') }; }) });
+          const stepPayload = Object.assign({}, payload, { targets: target ? [target] : [] });
+          return postJson('/sync/safety', stepPayload).then(function (data) {
+            results.push(data);
+            renderProgress('sync-progress', { kind: 'safety-check', status: 'running', completed: idx + 1, total: checks.length, percent: Math.round(((idx + 1) / checks.length) * 100), current: 'Checked ' + label, steps: results.map(function (_item, stepIdx) { return { label: 'Checked ' + (checks[stepIdx] || 'configuration') }; }) });
+          });
+        });
+      });
+      return chain.then(function () {
+        const merged = mergeSyncSafetyResults(results, payload);
+        renderProgress('sync-progress', { kind: 'safety-check', status: 'done', completed: checks.length, total: checks.length, percent: 100, current: 'Completed', steps: checks.map(function (target) { return { label: 'Checked ' + (target || 'configuration') }; }) });
+        setStatusHtml('sync-status', formatSyncSafetyResult(merged), merged.ok ? 'ok' : 'err');
+      }).catch(function (err) {
+        renderProgress('sync-progress', { kind: 'safety-check', status: 'error', completed: results.length, total: checks.length, percent: Math.round((results.length / checks.length) * 100), current: 'Failed', steps: results.map(function (_item, stepIdx) { return { label: 'Checked ' + (checks[stepIdx] || 'configuration') }; }) });
+        setStatus('sync-status', err.message, 'err');
+      });
+    }
+    function resetSyncForm() {
+      state.syncJobId = '';
+      el('sync-name').value = '';
+      el('sync-interval').value = '300';
+      el('sync-enabled').checked = false;
+      renderSyncTargets([]);
+      restoreSelection('sync-users', []);
+      renderSyncJobList();
+      resetProgress('sync-progress');
+      setStatus('sync-status', 'Create a new sync job or select an existing one.');
+    }
+    function openSyncEditor(title) {
+      el('sync-editor').classList.add('visible');
+      el('sync-editor-title').textContent = title || 'Sync Job Editor';
+    }
+    function closeSyncEditor() {
+      state.syncJobId = '';
+      el('sync-editor').classList.remove('visible');
+      renderSyncJobList();
+      resetProgress('sync-progress');
+      setStatus('sync-status', 'Select a sync job to edit it, or click New Job to create one.');
+    }
+    function newSyncJob() {
+      resetSyncForm();
+      openSyncEditor('New Sync Job');
+      loadUsers(el('sync-source').value, 'sync-users', 'sync-status');
+    }
+    function shortSyncTime(value) {
+      if (!value) return '-';
+      const text = String(value).replace('T', ' ').replace(/\.\d+\+00:00$/, ' UTC').replace(/\+00:00$/, ' UTC');
+      return text.length > 22 ? text.slice(0, 22) : text;
+    }
+    function syncJobStatusText(job) {
+      const lines = [];
+      lines.push('Selected job: ' + (job.name || job.id));
+      lines.push('Status: ' + (job.last_error ? 'error' : (job.enabled ? 'enabled' : 'disabled')));
+      lines.push('Source: ' + (job.source || '-'));
+      lines.push('Targets: ' + ((job.targets || []).join(', ') || '-'));
+      lines.push('Users: ' + ((job.users || []).join(', ') || '-'));
+      lines.push('Last run: ' + shortSyncTime(job.last_run));
+      lines.push('Next run: ' + shortSyncTime(job.next_run));
+      if (job.last_error) lines.push('Last error: ' + job.last_error);
+      return lines.join('\n');
+    }
+    function renderSyncJobList() {
+      const list = el('sync-job-list');
+      const jobs = state.syncJobs || [];
+      const header = '<div class="sync-job-table-head"><span>Name</span><span>Status</span><span>Source</span><span>Targets</span><span>Last run</span><span>Next run</span><span>Users</span><span>Log</span></div>';
+      if (!jobs.length) {
+        list.innerHTML = header + '<div class="select-row" aria-disabled="true">No sync jobs configured. Click New Job to create one.</div>';
+        return;
+      }
+      list.innerHTML = header + jobs.map(function (job) {
+        const hasError = !!job.last_error;
+        const pillClass = hasError ? 'error' : (job.enabled ? 'enabled' : 'disabled');
+        const pillText = hasError ? 'error' : (job.enabled ? 'enabled' : 'disabled');
+        return '<div class="sync-job-row" role="button" tabindex="0" data-job-id="' + esc(job.id) + '">'
+          + '<span class="sync-job-cell sync-job-name">' + esc(job.name || job.id) + '</span>'
+          + '<span class="sync-job-cell"><span class="sync-pill ' + pillClass + '">' + esc(pillText) + '</span></span>'
+          + '<span class="sync-job-cell">' + esc(job.source || '-') + '</span>'
+          + '<span class="sync-job-cell">' + esc((job.targets || []).join(', ') || '-') + '</span>'
+          + '<span class="sync-job-cell">' + esc(shortSyncTime(job.last_run)) + '</span>'
+          + '<span class="sync-job-cell">' + esc(shortSyncTime(job.next_run)) + '</span>'
+          + '<span class="sync-job-cell">' + esc((job.users || []).length) + '</span>'
+          + '<span class="sync-job-cell"><button class="btn secondary mini" type="button" data-log-job="' + esc(job.id) + '">Log</button></span>'
+          + '</div>';
+      }).join('');
+      list.querySelectorAll('.sync-job-row[data-job-id]').forEach(function (row) {
+        row.classList.toggle('selected', row.dataset.jobId === state.syncJobId);
+      });
+    }
+    function selectSyncJob(jobId) {
+      const job = (state.syncJobs || []).find(function (item) { return item.id === jobId; });
+      if (!job) { resetSyncForm(); return; }
+      state.syncJobId = job.id;
+      openSyncEditor('Edit Sync Job');
+      renderSyncJobList();
+      el('sync-name').value = job.name || '';
+      ensureSelectOption('sync-source', job.source || 'local', (job.source || 'local') + ' (saved source)');
+      el('sync-source').value = job.source || 'local';
+      el('sync-interval').value = String(job.interval_seconds || 300);
+      el('sync-enabled').checked = !!job.enabled;
+      renderSyncTargets(job.targets || []);
+      loadUsers(el('sync-source').value, 'sync-users', 'sync-status').then(function () {
+        restoreSelection('sync-users', job.users || []);
+        setStatus('sync-status', syncJobStatusText(job), job.last_error ? 'err' : 'ok');
+      });
+    }
+    function loadSyncJobs(quiet) {
+      return apiFetch('/sync/jobs').then(function (data) {
+        state.syncJobs = data.jobs || [];
+        renderSyncJobList();
+        if (quiet) return;
+        if (state.syncJobId) selectSyncJob(state.syncJobId);
+        else setStatus('sync-status', 'Loaded ' + state.syncJobs.length + ' sync job(s).', 'ok');
+      }).catch(function (err) { setStatus('sync-status', err.message, 'err'); });
+    }
+    function ensureDbToolsLogViewer() {
+      if (state.logViewer) return state.logViewer;
+      if (typeof LogViewerPanel !== 'function') return null;
+      state.logViewer = new LogViewerPanel({
+        containerId: 'dbtools-log-viewer-target',
+        wsBase: WS_BASE,
+        token: TOKEN,
+        defaultHost: 'local',
+        defaultFile: '',
+        presets: 'system',
+        showRestart: false,
+        height: '100%',
+        startLocalAtEnd: false
+      });
+      return state.logViewer;
+    }
+    function syncJobLogFallbackName(job) {
+      const raw = String((job && job.name) || 'sync-job').trim();
+      const slug = raw.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^[_-]+|[_-]+$/g, '').slice(0, 80) || 'sync-job';
+      return 'jobs/db-tools-sync-' + slug + '.log';
+    }
+    function openDbToolsLogPanel(jobId) {
+      const job = (state.syncJobs || []).find(function (item) { return item.id === jobId; }) || {};
+      const logFile = job.log_file || syncJobLogFallbackName(job);
+      const panel = el('dbtools-log-panel');
+      el('dbtools-log-panel-title').textContent = 'Sync job log - ' + (job.name || jobId || 'Sync Jobs');
+      if (state.logViewer) {
+        state.logViewer.close();
+        state.logViewer = null;
+      }
+      const viewer = ensureDbToolsLogViewer();
+      if (viewer) {
+        viewer.open();
+        viewer.setHost('local');
+        viewer.setFile(logFile);
+      }
+      if (!panel.style.left) {
+        panel.style.right = '0';
+        panel.style.bottom = '0';
+        panel.style.left = '';
+        panel.style.top = '';
+      }
+      panel.classList.add('visible');
+      bindDbToolsLogPanelDragResize();
+    }
+    function closeDbToolsLogPanel() {
+      el('dbtools-log-panel').classList.remove('visible');
+      if (state.logViewer) state.logViewer.close();
+    }
+    function bindDbToolsLogPanelDragResize() {
+      const panel = el('dbtools-log-panel');
+      if (!panel._dragBound) {
+        panel._dragBound = true;
+        el('dbtools-log-panel-header').addEventListener('mousedown', function (event) {
+          if (event.target === el('dbtools-log-panel-close')) return;
+          const rect = panel.getBoundingClientRect();
+          panel.style.left = rect.left + 'px';
+          panel.style.top = rect.top + 'px';
+          panel.style.right = 'auto';
+          panel.style.bottom = 'auto';
+          const startX = event.clientX;
+          const startY = event.clientY;
+          const startL = rect.left;
+          const startT = rect.top;
+          function onMove(moveEvent) {
+            panel.style.left = (startL + moveEvent.clientX - startX) + 'px';
+            panel.style.top = (startT + moveEvent.clientY - startY) + 'px';
+          }
+          function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          }
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+          event.preventDefault();
+        });
+      }
+      if (!panel._resizeBound) {
+        panel._resizeBound = true;
+        panel.querySelectorAll('.lp-resize').forEach(function (handle) {
+          handle.addEventListener('mousedown', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            const dir = handle.dataset.dir;
+            const rect = panel.getBoundingClientRect();
+            panel.style.left = rect.left + 'px';
+            panel.style.top = rect.top + 'px';
+            panel.style.right = 'auto';
+            panel.style.bottom = 'auto';
+            panel.style.width = rect.width + 'px';
+            panel.style.height = rect.height + 'px';
+            const startX = event.clientX;
+            const startY = event.clientY;
+            const startL = rect.left;
+            const startT = rect.top;
+            const startW = rect.width;
+            const startH = rect.height;
+            function onMove(moveEvent) {
+              const dx = moveEvent.clientX - startX;
+              const dy = moveEvent.clientY - startY;
+              let nextL = startL;
+              let nextT = startT;
+              let nextW = startW;
+              let nextH = startH;
+              if (dir.indexOf('w') >= 0) { nextL = startL + dx; nextW = startW - dx; }
+              if (dir.indexOf('e') >= 0) nextW = startW + dx;
+              if (dir.indexOf('n') >= 0) { nextT = startT + dy; nextH = startH - dy; }
+              if (dir.indexOf('s') >= 0) nextH = startH + dy;
+              if (nextW < 360) { if (dir.indexOf('w') >= 0) nextL = startL + startW - 360; nextW = 360; }
+              if (nextH < 260) { if (dir.indexOf('n') >= 0) nextT = startT + startH - 260; nextH = 260; }
+              panel.style.left = nextL + 'px';
+              panel.style.top = nextT + 'px';
+              panel.style.width = nextW + 'px';
+              panel.style.height = nextH + 'px';
+            }
+            function onUp() {
+              document.removeEventListener('mousemove', onMove);
+              document.removeEventListener('mouseup', onUp);
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+          });
+        });
+      }
+    }
+    function cutoffMs() {
+      const value = String(el('cleanup-date').value || '').trim();
+      if (!value) return null;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+      const parsed = new Date(value + 'T00:00:00Z');
+      if (isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) return null;
+      return new Date(value + 'T23:59:59.999Z').getTime();
+    }
+    function confirmModal(title, message, detail, danger) {
+      return new Promise(function (resolve) {
+        const ovl = el('confirm-ovl');
+        el('confirm-head').textContent = title;
+        el('confirm-msg').textContent = message;
+        el('confirm-detail').textContent = detail || '';
+        const ok = el('confirm-ok');
+        ok.className = 'btn ' + (danger ? 'danger' : 'warning');
+        function close(result) {
+          ovl.classList.remove('visible');
+          ovl.setAttribute('aria-hidden', 'true');
+          ok.onclick = null; el('confirm-cancel').onclick = null;
+          resolve(result);
+        }
+        ok.onclick = function () { close(true); };
+        el('confirm-cancel').onclick = function () { close(false); };
+        ovl.classList.add('visible');
+        ovl.setAttribute('aria-hidden', 'false');
+        el('confirm-cancel').focus();
+      });
+    }
+    function postJson(path, payload) { return apiFetch(path, { method: 'POST', body: JSON.stringify(payload) }); }
+    function renderProgress(progressId, operation) {
+      const node = el(progressId);
+      if (!node || !operation) return;
+      const percent = Math.max(0, Math.min(100, Number(operation.percent || 0)));
+      const steps = Array.isArray(operation.steps) ? operation.steps : [];
+      node.className = 'progress-card visible' + (operation.status === 'error' ? ' error' : '');
+      node.innerHTML = ''
+        + '<div class="progress-top"><div class="progress-title">' + esc(operation.kind || 'Operation') + '</div><div class="progress-meta">' + esc(operation.completed || 0) + ' / ' + esc(operation.total || 0) + ' (' + percent + '%)</div></div>'
+        + '<div class="progress-bar"><div class="progress-fill" style="width:' + percent + '%"></div></div>'
+        + '<div class="progress-current">' + esc(operation.current || '') + '</div>'
+        + '<div class="progress-steps">' + steps.slice(-20).map(function (step) { return '<div class="progress-step">' + esc(step.label || '') + '</div>'; }).join('') + '</div>';
+      const stepsNode = node.querySelector('.progress-steps');
+      if (stepsNode) stepsNode.scrollTop = stepsNode.scrollHeight;
+    }
+    function resetProgress(progressId) {
+      const node = el(progressId);
+      if (!node) return;
+      node.className = 'progress-card';
+      node.innerHTML = '';
+    }
+    function pollOperation(operationId, statusId, progressId, doneCallback) {
+      return apiFetch('/operations/' + encodeURIComponent(operationId)).then(function (data) {
+        const operation = data.operation || {};
+        renderProgress(progressId, operation);
+        if (operation.status === 'done') {
+          setStatus(statusId, operation.result || {}, 'ok');
+          if (typeof doneCallback === 'function') doneCallback(operation.result || {});
+          return;
+        }
+        if (operation.status === 'error') {
+          setStatus(statusId, operation.error || 'Operation failed.', 'err');
+          return;
+        }
+        setTimeout(function () { pollOperation(operationId, statusId, progressId, doneCallback); }, 700);
+      }).catch(function (err) { setStatus(statusId, err.message, 'err'); });
+    }
+    function startOperation(path, payload, statusId, progressId, doneCallback) {
+      setStatus(statusId, 'Starting operation...');
+      resetProgress(progressId);
+      return postJson(path, payload).then(function (data) {
+        const operation = data.operation;
+        if (!operation || !operation.id) {
+          setStatus(statusId, data, 'ok');
+          if (typeof doneCallback === 'function') doneCallback(data);
+          return;
+        }
+        renderProgress(progressId, operation);
+        pollOperation(operation.id, statusId, progressId, doneCallback);
+      }).catch(function (err) { setStatus(statusId, err.message, 'err'); });
+    }
+
+    document.querySelectorAll('.sb-btn[data-panel]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('.sb-btn').forEach(function (b) { b.classList.remove('active'); });
+        document.querySelectorAll('.panel').forEach(function (p) { p.classList.remove('active'); });
+        btn.classList.add('active');
+        el('panel-' + btn.dataset.panel).classList.add('active');
+      });
+    });
+    const listDrag = { listId: '', row: null, y: 0, selecting: false, mode: 'add', snapshot: null };
+    function selectRowsInRange(listId, anchorRow, currentRow, mode, snapshot) {
+      const rows = Array.from(el(listId).querySelectorAll('.select-row[data-value]'));
+      const anchor = rows.indexOf(anchorRow);
+      const current = rows.indexOf(currentRow);
+      if (anchor < 0 || current < 0) return;
+      const lo = Math.min(anchor, current);
+      const hi = Math.max(anchor, current);
+      rows.forEach(function (row, idx) {
+        const selected = snapshot.has(row.dataset.value) || (idx >= lo && idx <= hi && mode === 'add');
+        const removed = idx >= lo && idx <= hi && mode === 'remove';
+        row.classList.toggle('selected', selected && !removed);
+      });
+      syncRowAria(listId);
+    }
+    document.addEventListener('mousedown', function (event) {
+      if (event.button !== 0) return;
+      const row = event.target.closest('.select-list .select-row[data-value]');
+      if (!row) return;
+      event.preventDefault();
+      const list = row.closest('.select-list');
+      listDrag.listId = list ? list.id : '';
+      listDrag.row = row;
+      listDrag.y = event.clientY;
+      listDrag.selecting = false;
+      listDrag.mode = row.classList.contains('selected') ? 'remove' : 'add';
+      listDrag.snapshot = new Set(selected(listDrag.listId));
+    });
+    document.addEventListener('mousemove', function (event) {
+      if (!listDrag.row || !listDrag.listId) return;
+      if (!listDrag.selecting && Math.abs(event.clientY - listDrag.y) > 5) listDrag.selecting = true;
+      if (!listDrag.selecting) return;
+      event.preventDefault();
+      const pointer = document.elementFromPoint(event.clientX, event.clientY);
+      const row = pointer ? pointer.closest('#' + listDrag.listId + ' .select-row[data-value]') : null;
+      if (!row) return;
+      selectRowsInRange(listDrag.listId, listDrag.row, row, listDrag.mode, listDrag.snapshot || new Set());
+    });
+    document.addEventListener('mouseup', function () {
+      if (!listDrag.row || !listDrag.listId) return;
+      if (!listDrag.selecting) listDrag.row.classList.toggle('selected');
+      syncRowAria(listDrag.listId);
+      resetSelectionPreview(listDrag.listId);
+      listDrag.listId = '';
+      listDrag.row = null;
+      listDrag.selecting = false;
+      listDrag.snapshot = null;
+    });
+    document.querySelectorAll('[data-select]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        el(btn.dataset.select).querySelectorAll('.select-row[data-value]').forEach(function (row) { row.classList.add('selected'); });
+        syncRowAria(btn.dataset.select);
+        resetSelectionPreview(btn.dataset.select);
+      });
+    });
+    document.querySelectorAll('[data-clear]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        el(btn.dataset.clear).querySelectorAll('.select-row[data-value]').forEach(function (row) { row.classList.remove('selected'); });
+        syncRowAria(btn.dataset.clear);
+        resetSelectionPreview(btn.dataset.clear);
+      });
+    });
+    document.addEventListener('click', function (event) {
+      const btn = event.target.closest('[data-backup-sort]');
+      if (!btn) return;
+      const key = btn.dataset.backupSort;
+      const selectedBackups = selected('backup-list');
+      if (state.backupSort.key === key) {
+        state.backupSort.dir = state.backupSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.backupSort.key = key;
+        state.backupSort.dir = key === 'created' ? 'desc' : 'asc';
+      }
+      renderBackups(state.backups || []);
+      restoreSelection('backup-list', selectedBackups);
+    });
+
+    el('cleanup-refresh').onclick = function () { state.cleanupPreview = null; el('cleanup-run').disabled = true; resetProgress('cleanup-progress'); loadUsers(el('cleanup-target').value, 'cleanup-users', 'cleanup-status'); };
+    el('cleanup-target').onchange = el('cleanup-refresh').onclick;
+    el('cleanup-preview').onclick = function () {
+      const payload = { target: el('cleanup-target').value, users: selected('cleanup-users'), cutoff_ms: el('cleanup-mode').value === 'older' ? cutoffMs() : null };
+      if (el('cleanup-mode').value === 'older' && payload.cutoff_ms == null) { setStatus('cleanup-status', 'Select a cutoff date.', 'err'); return; }
+      resetProgress('cleanup-progress');
+      postJson('/cleanup/preview', payload).then(function (data) { state.cleanupPreview = payload; el('cleanup-run').disabled = false; setStatus('cleanup-status', data, 'ok'); }).catch(function (err) { setStatus('cleanup-status', err.message, 'err'); });
+    };
+    el('cleanup-run').onclick = function () {
+      const mode = el('cleanup-mode').value;
+      const payload = Object.assign({}, state.cleanupPreview || {}, { mode: mode });
+      confirmModal('Run cleanup', 'Delete selected user data?', 'A backup will be created before changing the database.', true).then(function (ok) {
+        if (!ok) return;
+        el('cleanup-run').disabled = true;
+        startOperation('/cleanup/run', payload, 'cleanup-status', 'cleanup-progress', function (result) {
+          loadUsers(el('cleanup-target').value, 'cleanup-users', 'cleanup-status').then(function () { setStatus('cleanup-status', result, 'ok'); });
+        });
+      });
+    };
+
+    el('users-refresh').onclick = function () { resetUsersPreview(); loadUsers(el('users-source').value, 'copy-users-list', 'users-status'); };
+    el('users-source').onchange = function () { syncTargetPair('users-source', 'users-target', 'source'); el('users-refresh').onclick(); };
+    el('users-target').onchange = function () { syncTargetPair('users-source', 'users-target', 'target'); resetUsersPreview(); };
+    el('users-preview').onclick = function () {
+      const payload = { source: el('users-source').value, target: el('users-target').value, users: selected('copy-users-list'), mode: el('users-mode').value };
+      resetProgress('users-progress');
+      postJson('/users/copy/preview', payload).then(function (data) { state.usersPreview = payload; el('users-run').disabled = false; setStatus('users-status', data, 'ok'); }).catch(function (err) { setStatus('users-status', err.message, 'err'); });
+    };
+    el('users-run').onclick = function () {
+      const payload = state.usersPreview;
+      confirmModal('Copy users', 'Copy selected users to the target master?', 'A target backup will be created before importing data.', payload && payload.mode === 'replace').then(function (ok) {
+        if (!ok) return;
+        el('users-run').disabled = true;
+        startOperation('/users/copy/run', payload, 'users-status', 'users-progress');
+      });
+    };
+
+    el('db-preview').onclick = function () {
+      const payload = { source: el('db-source').value, target: el('db-target').value };
+      resetProgress('db-progress');
+      postJson('/database/copy/preview', payload).then(function (data) { state.dbPreview = payload; el('db-run').disabled = false; setStatus('db-status', data, 'ok'); }).catch(function (err) { setStatus('db-status', err.message, 'err'); });
+    };
+    el('db-run').onclick = function () {
+      confirmModal('Copy database', 'Replace the target database files?', 'A target backup will be created before replacement.', true).then(function (ok) {
+        if (!ok) return;
+        el('db-run').disabled = true;
+        startOperation('/database/copy/run', state.dbPreview, 'db-status', 'db-progress');
+      });
+    };
+    el('db-source').onchange = function () { syncTargetPair('db-source', 'db-target', 'source'); resetDbPreview(); };
+    el('db-target').onchange = function () { syncTargetPair('db-source', 'db-target', 'target'); resetDbPreview(); };
+
+    el('sync-job-list').addEventListener('click', function (event) {
+      const logBtn = event.target.closest('[data-log-job]');
+      if (logBtn) {
+        event.stopPropagation();
+        openDbToolsLogPanel(logBtn.dataset.logJob || '');
+        return;
+      }
+      const row = event.target.closest('.sync-job-row[data-job-id]');
+      if (!row) return;
+      if (row.dataset.jobId === state.syncJobId) closeSyncEditor();
+      else selectSyncJob(row.dataset.jobId);
+    });
+    el('sync-job-list').addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const row = event.target.closest('.sync-job-row[data-job-id]');
+      if (!row) return;
+      event.preventDefault();
+      if (row.dataset.jobId === state.syncJobId) closeSyncEditor();
+      else selectSyncJob(row.dataset.jobId);
+    });
+    el('dbtools-log-panel-close').onclick = closeDbToolsLogPanel;
+    el('sync-source').onchange = function () {
+      renderSyncTargets();
+      resetProgress('sync-progress');
+      loadUsers(el('sync-source').value, 'sync-users', 'sync-status');
+    };
+    el('sync-new').onclick = newSyncJob;
+    el('sync-close').onclick = closeSyncEditor;
+    el('sync-reload').onclick = loadSyncJobs;
+    el('sync-refresh-users').onclick = function () { loadUsers(el('sync-source').value, 'sync-users', 'sync-status'); };
+    el('sync-safety').onclick = function () {
+      resetProgress('sync-progress');
+      checkSyncSafetyWithProgress();
+    };
+    el('sync-save').onclick = function () {
+      resetProgress('sync-progress');
+      postJson('/sync/jobs', syncPayload()).then(function (data) {
+        state.syncJobId = data.job && data.job.id ? data.job.id : '';
+        setStatus('sync-status', data.job || data, 'ok');
+        loadSyncJobs();
+      }).catch(function (err) { setStatus('sync-status', err.message, 'err'); });
+    };
+    el('sync-run').onclick = function () {
+      if (!state.syncJobId) { setStatus('sync-status', 'Save the sync job before running it.', 'err'); return; }
+      confirmModal('Run sync job', 'Run this sync job now?', 'Target backups will be created before missing rows are imported.', false).then(function (ok) {
+        if (!ok) return;
+        startOperation('/sync/jobs/' + encodeURIComponent(state.syncJobId) + '/run', {}, 'sync-status', 'sync-progress', function (result) {
+          loadSyncJobs().then(function () { setStatus('sync-status', result, 'ok'); });
+        });
+      });
+    };
+    el('sync-delete').onclick = function () {
+      if (!state.syncJobId) { setStatus('sync-status', 'Select a sync job to delete.', 'err'); return; }
+      confirmModal('Delete sync job', 'Delete this sync job?', 'This removes the schedule only. It does not change database rows.', true).then(function (ok) {
+        if (!ok) return;
+        apiFetch('/sync/jobs/' + encodeURIComponent(state.syncJobId), { method: 'DELETE' }).then(function (data) {
+          state.syncJobId = '';
+          closeSyncEditor();
+          loadSyncJobs().then(function () { setStatus('sync-status', data, 'ok'); });
+        }).catch(function (err) { setStatus('sync-status', err.message, 'err'); });
+      });
+    };
+
+    el('backup-refresh').onclick = loadBackups;
+    el('backup-target').onchange = loadBackups;
+    el('backup-restore').onclick = function () {
+      const payload = { target: el('backup-target').value, backups: selected('backup-list') };
+      if (!payload.backups.length) { setStatus('backup-status', 'Select at least one backup.', 'err'); return; }
+      confirmModal('Restore backup', 'Restore selected database backup file(s)?', 'A fresh safety backup will be created before replacing live database files.', true).then(function (ok) {
+        if (!ok) return;
+        el('backup-restore').disabled = true;
+        startOperation('/backups/restore/run', payload, 'backup-status', 'backup-progress', function (result) {
+          el('backup-restore').disabled = false;
+          loadBackups().then(function () { setStatus('backup-status', result, 'ok'); });
+        });
+      });
+    };
+    el('backup-delete').onclick = function () {
+      const payload = { target: el('backup-target').value, backups: selected('backup-list') };
+      if (!payload.backups.length) { setStatus('backup-status', 'Select at least one backup.', 'err'); return; }
+      confirmModal('Delete backups', 'Delete selected backup file(s)?', 'Deleted backups cannot be restored.', true).then(function (ok) {
+        if (!ok) return;
+        el('backup-delete').disabled = true;
+        postJson('/backups/delete', payload).then(function (data) {
+          el('backup-delete').disabled = false;
+          loadBackups().then(function () { setStatus('backup-status', data, 'ok'); });
+        }).catch(function (err) {
+          el('backup-delete').disabled = false;
+          setStatus('backup-status', err.message, 'err');
+        });
+      });
+    };
+
+    function loadDashboards() {
+      const loadKey = String(Date.now()) + ':' + Math.random();
+      state.listLoads.dashboards = loadKey;
+      setStatus('dash-status', 'Loading dashboards and templates...');
+      renderListLoading('dash-list', 'Loading dashboards...');
+      renderListLoading('template-list', 'Loading templates...');
+      resetDashPreview();
+      apiFetch('/dashboards?target=' + encodeURIComponent(el('dash-source').value)).then(function (data) {
+        if (state.listLoads.dashboards !== loadKey) return;
+        renderChecks('dash-list', data.dashboards || [], false);
+        renderChecks('template-list', data.templates || [], false);
+        setStatus('dash-status', 'Loaded ' + (data.dashboards || []).length + ' dashboard(s) and ' + (data.templates || []).length + ' template(s).', 'ok');
+      }).catch(function (err) {
+        if (state.listLoads.dashboards !== loadKey) return;
+        renderChecks('dash-list', [], false);
+        renderChecks('template-list', [], false);
+        setStatus('dash-status', err.message, 'err');
+      });
+    }
+    el('dash-refresh').onclick = loadDashboards;
+    el('dash-source').onchange = function () { syncTargetPair('dash-source', 'dash-target', 'source'); loadDashboards(); };
+    el('dash-target').onchange = function () { syncTargetPair('dash-source', 'dash-target', 'target'); resetDashPreview(); };
+    el('dash-preview').onclick = function () {
+      const payload = { source: el('dash-source').value, target: el('dash-target').value, dashboards: selected('dash-list'), templates: selected('template-list'), mode: el('dash-mode').value };
+      resetProgress('dash-progress');
+      postJson('/dashboards/copy/preview', payload).then(function (data) { state.dashPreview = payload; el('dash-run').disabled = false; setStatus('dash-status', data, 'ok'); }).catch(function (err) { setStatus('dash-status', err.message, 'err'); });
+    };
+    el('dash-run').onclick = function () {
+      confirmModal('Copy dashboards', 'Copy selected dashboard/template files?', 'Existing files are overwritten only in replace mode.', false).then(function (ok) {
+        if (!ok) return;
+        el('dash-run').disabled = true;
+        startOperation('/dashboards/copy/run', state.dashPreview, 'dash-status', 'dash-progress');
+      });
+    };
+
+    loadTargets().then(function () {
+      loadUsers(el('cleanup-target').value, 'cleanup-users', 'cleanup-status');
+      loadUsers(el('users-source').value, 'copy-users-list', 'users-status');
+      loadSyncJobs();
+      loadBackups();
+      loadDashboards();
+    }).catch(function (err) {
+      setStatus('cleanup-status', err.message, 'err');
+      setStatus('users-status', err.message, 'err');
+      setStatus('db-status', err.message, 'err');
+      setStatus('sync-status', err.message, 'err');
+      setStatus('backup-status', err.message, 'err');
+      setStatus('dash-status', err.message, 'err');
+    });
+    setInterval(function () {
+      const panel = el('panel-sync-jobs');
+      if (!panel || !panel.classList.contains('active')) return;
+      loadSyncJobs(true);
+    }, 10000);
+  })();
+  </script>
+</body>
+</html>

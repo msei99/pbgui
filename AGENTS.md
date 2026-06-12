@@ -65,6 +65,8 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 - Log viewing: always use shared `LogViewerPanel` from `frontend/js/log_viewer_panel.js`.
 - Navigation: `pbgui_nav.js` via `PBGUI_NAV_CONFIG` + `window.TOKEN`.
 - Cache busting: use `?v=N` on JS/CSS asset URLs, increment when file changes.
+- Selection UI standard, full table rows: use clickable rows with `.selected`/`.is-selected`, no visible checkbox column for bulk row selection. Selected rows use `background: rgba(77,166,255,.12)` on cells and `border-left: 3px solid var(--accent)` on the first cell. Table headers use the standard sticky dark header style (`background: var(--bg2)`, `border-bottom: 2px solid var(--border)`) so the first data row is clearly separated. Support click and click-drag range selection when multiple rows can be selected.
+- Selection UI standard, compact multi-column item grids: use button-like item rows such as Market Data coin pickers (`.coin-picker-row.coin-picker-button.selected`). Keep the compact rounded field look with the selected state provided by `.coin-picker-row.selected` (`border-color: rgba(99,179,237,.24)`, `background: rgba(99,179,237,.12)`). Do not add the full-table left accent bar here. Support click, keyboard toggle, and click-drag selection for large lists.
 - **Confirm dialogs**: never use native `window.confirm()` / `window.alert()` for security prompts or destructive actions. Use the page's shared modal system (e.g., `openConfirmModal(title, message, onConfirm)`) so the UI stays visually consistent and testable.
 
 ### Logging
@@ -131,24 +133,24 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **pbgui** (20047 symbols, 40108 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **pbgui** (10289 symbols, 29977 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
-> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
+> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
 ## Always Do
 
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
+- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
+- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
 - **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
+- When exploring unfamiliar code, use `query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
+- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
 
 ## Never Do
 
-- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
+- NEVER edit a function, class, or method without first running `impact` on it.
 - NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
-- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
+- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
+- NEVER commit changes without running `detect_changes()` to check affected scope.
 
 ## Resources
 

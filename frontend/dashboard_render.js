@@ -186,17 +186,18 @@
 
         /* ── Income widget specific ── */
         '.di-table-wrap{overflow-x:auto;overflow-y:auto;flex:1;min-height:0;}',
-        '.di-table{width:100%;border-collapse:collapse;font-size:0.78rem;}',
+        '.di-table{width:100%;border-collapse:separate;border-spacing:0;font-size:0.78rem;user-select:none;}',
         '.di-table th{position:sticky;top:0;background:var(--db-surface);color:var(--db-text-muted);font-weight:600;',
-        '  padding:0.35rem 0.5rem;text-align:left;border-bottom:1px solid var(--db-surface2);white-space:nowrap;cursor:pointer;user-select:none;}',
+        '  padding:0.35rem 0.5rem;text-align:left;border-bottom:2px solid var(--db-surface2);white-space:nowrap;cursor:pointer;user-select:none;}',
         '.di-table th:hover{color:var(--db-text);}',
         '.di-table th .di-sort{font-size:0.65rem;margin-left:0.2rem;color:var(--db-text-dim);}',
         '.di-table td{padding:0.3rem 0.5rem;border-bottom:1px solid var(--db-surface);white-space:nowrap;}',
-        '.di-table tr:hover{background:var(--db-surface);}',
-        '.di-table tr.di-sel{background:#2a3a5c;}',
+        '.di-table tbody tr{cursor:pointer;}',
+        '.di-table tbody tr:hover td{background:var(--db-surface);}',
+        '.di-table tr.di-sel td{background:rgba(77,166,255,.12);}',
+        '.di-table tr.di-sel td:first-child{border-left:3px solid var(--db-title);}',
         '.di-inc-pos{color:var(--db-pos);}',
         '.di-inc-neg{color:var(--db-neg);}',
-        '.di-table input[type=checkbox]{cursor:pointer;accent-color:var(--db-accent);width:13px;height:13px;}',
         '.di-jump-input{margin-left:0.4rem;background:var(--db-surface2);color:var(--db-text);',
         '  border:1px solid var(--db-surface3);border-radius:4px;padding:0.1rem 0.25rem;',
         '  font-size:0.72rem;outline:none;cursor:pointer;width:108px;font-weight:400;}',
@@ -1020,6 +1021,9 @@
         var sortCol = 'date';   /* current sort column key */
         var sortAsc = false;    /* current sort direction */
         var sortedRows = rows.slice(); /* working copy */
+        var rowDragStart = null;
+        var rowDragSelecting = false;
+        var rowDragMode = null;
 
         var wrap = document.createElement('div');
         wrap.className = 'di-table-wrap';
@@ -1028,7 +1032,6 @@
 
         /* columns definition */
         var cols = [
-            { key: 'sel',    label: '', sortable: false },
             { key: 'date',   label: 'Date', sortable: true },
             { key: 'user',   label: 'User', sortable: true },
             { key: 'symbol', label: 'Symbol', sortable: true },
@@ -1042,85 +1045,69 @@
             var hrow = document.createElement('tr');
             cols.forEach(function (c) {
                 var th = document.createElement('th');
-                if (c.key === 'sel') {
-                    var cbAll = document.createElement('input');
-                    cbAll.type = 'checkbox';
-                    cbAll.checked = sortedRows.length > 0 && sortedRows.every(function (r) { return !!selected[r.id]; });
-                    cbAll.addEventListener('change', function () {
-                        sortedRows.forEach(function (r) {
-                            if (cbAll.checked) selected[r.id] = true;
-                            else delete selected[r.id];
-                        });
-                        renderTable();
-                        updateActions();
-                    });
-                    th.appendChild(cbAll);
-                } else {
-                    th.textContent = c.label;
-                    if (c.key === 'date') {
-                        var jumpTh = th;
-                        var jumpInput = document.createElement('input');
-                        jumpInput.type = 'date';
-                        jumpInput.className = 'di-jump-input';
-                        jumpInput.title = 'Go to date';
-                        jumpInput.addEventListener('click', function (e) { e.stopPropagation(); });
-                        var _jumpDebounce = null;
-                        jumpInput.addEventListener('change', (function (ji) {
-                            return function (e) {
-                                e.stopPropagation();
-                                var target = ji.value;
-                                if (!target) return;
-                                var trs = table.querySelectorAll('tbody tr');
-                                var theadH = table.querySelector('thead') ? table.querySelector('thead').offsetHeight : 0;
-                                function scrollToRow(tr) {
-                                    var rTop = tr.getBoundingClientRect().top;
-                                    var wTop = wrap.getBoundingClientRect().top;
-                                    wrap.scrollTop = wrap.scrollTop + (rTop - wTop) - theadH;
-                                }
-                                /* exact match → scroll immediately */
-                                for (var ii = 0; ii < sortedRows.length; ii++) {
-                                    if (sortedRows[ii].date.slice(0, 10) === target) {
-                                        scrollToRow(trs[ii]);
-                                        if (_jumpDebounce) { clearTimeout(_jumpDebounce); _jumpDebounce = null; }
-                                        return;
-                                    }
-                                }
-                                /* date not in current rows → debounced reload */
-                                if (typeof opts.onJumpToDate === 'function') {
-                                    if (_jumpDebounce) clearTimeout(_jumpDebounce);
-                                    _jumpDebounce = setTimeout(function () {
-                                        _jumpDebounce = null;
-                                        if (ji.value === target) opts.onJumpToDate(target);
-                                    }, 600);
+                th.textContent = c.label;
+                if (c.key === 'date') {
+                    var jumpInput = document.createElement('input');
+                    jumpInput.type = 'date';
+                    jumpInput.className = 'di-jump-input';
+                    jumpInput.title = 'Go to date';
+                    jumpInput.addEventListener('click', function (e) { e.stopPropagation(); });
+                    var _jumpDebounce = null;
+                    jumpInput.addEventListener('change', (function (ji) {
+                        return function (e) {
+                            e.stopPropagation();
+                            var target = ji.value;
+                            if (!target) return;
+                            var trs = table.querySelectorAll('tbody tr');
+                            var theadH = table.querySelector('thead') ? table.querySelector('thead').offsetHeight : 0;
+                            function scrollToRow(tr) {
+                                var rTop = tr.getBoundingClientRect().top;
+                                var wTop = wrap.getBoundingClientRect().top;
+                                wrap.scrollTop = wrap.scrollTop + (rTop - wTop) - theadH;
+                            }
+                            /* exact match → scroll immediately */
+                            for (var ii = 0; ii < sortedRows.length; ii++) {
+                                if (sortedRows[ii].date.slice(0, 10) === target) {
+                                    scrollToRow(trs[ii]);
+                                    if (_jumpDebounce) { clearTimeout(_jumpDebounce); _jumpDebounce = null; }
                                     return;
                                 }
-                                /* fallback: scroll to closest entry */
-                                var targetMs = new Date(target).getTime();
-                                var bestIdx = 0, bestDiff = Infinity;
-                                for (var jj = 0; jj < sortedRows.length; jj++) {
-                                    var diff2 = Math.abs(new Date(sortedRows[jj].date.slice(0, 10)).getTime() - targetMs);
-                                    if (diff2 < bestDiff) { bestDiff = diff2; bestIdx = jj; }
-                                }
-                                if (trs[bestIdx]) scrollToRow(trs[bestIdx]);
-                            };
-                        })(jumpInput));
-                        /* appended after sort arrow below */
-                    }
-                    if (c.sortable) {
-                        var arrow = document.createElement('span');
-                        arrow.className = 'di-sort';
-                        if (sortCol === c.key) arrow.textContent = sortAsc ? ' \u25B2' : ' \u25BC';
-                        th.appendChild(arrow);
-                        if (c.key === 'date' && jumpInput) th.appendChild(jumpInput);
-                        th.addEventListener('click', (function (ck) {
-                            return function () {
-                                if (sortCol === ck) sortAsc = !sortAsc;
-                                else { sortCol = ck; sortAsc = true; }
-                                doSort();
-                                renderTable();
-                            };
-                        })(c.key));
-                    }
+                            }
+                            /* date not in current rows → debounced reload */
+                            if (typeof opts.onJumpToDate === 'function') {
+                                if (_jumpDebounce) clearTimeout(_jumpDebounce);
+                                _jumpDebounce = setTimeout(function () {
+                                    _jumpDebounce = null;
+                                    if (ji.value === target) opts.onJumpToDate(target);
+                                }, 600);
+                                return;
+                            }
+                            /* fallback: scroll to closest entry */
+                            var targetMs = new Date(target).getTime();
+                            var bestIdx = 0, bestDiff = Infinity;
+                            for (var jj = 0; jj < sortedRows.length; jj++) {
+                                var diff2 = Math.abs(new Date(sortedRows[jj].date.slice(0, 10)).getTime() - targetMs);
+                                if (diff2 < bestDiff) { bestDiff = diff2; bestIdx = jj; }
+                            }
+                            if (trs[bestIdx]) scrollToRow(trs[bestIdx]);
+                        };
+                    })(jumpInput));
+                    /* appended after sort arrow below */
+                }
+                if (c.sortable) {
+                    var arrow = document.createElement('span');
+                    arrow.className = 'di-sort';
+                    if (sortCol === c.key) arrow.textContent = sortAsc ? ' \u25B2' : ' \u25BC';
+                    th.appendChild(arrow);
+                    if (c.key === 'date' && jumpInput) th.appendChild(jumpInput);
+                    th.addEventListener('click', (function (ck) {
+                        return function () {
+                            if (sortCol === ck) sortAsc = !sortAsc;
+                            else { sortCol = ck; sortAsc = true; }
+                            doSort();
+                            renderTable();
+                        };
+                    })(c.key));
                 }
                 hrow.appendChild(th);
             });
@@ -1131,23 +1118,10 @@
             var tbody = document.createElement('tbody');
             sortedRows.forEach(function (r) {
                 var tr = document.createElement('tr');
+                tr.setAttribute('data-income-id', String(r.id));
+                tr.setAttribute('tabindex', '0');
+                tr.setAttribute('aria-selected', selected[r.id] ? 'true' : 'false');
                 if (selected[r.id]) tr.className = 'di-sel';
-                /* checkbox */
-                var tdCb = document.createElement('td');
-                var cb = document.createElement('input');
-                cb.type = 'checkbox';
-                cb.checked = !!selected[r.id];
-                cb.addEventListener('change', function () {
-                    if (cb.checked) selected[r.id] = true;
-                    else delete selected[r.id];
-                    tr.className = cb.checked ? 'di-sel' : '';
-                    updateActions();
-                    /* update header checkbox */
-                    var hcb = table.querySelector('thead input[type=checkbox]');
-                    if (hcb) hcb.checked = sortedRows.every(function (r2) { return !!selected[r2.id]; });
-                });
-                tdCb.appendChild(cb);
-                tr.appendChild(tdCb);
                 /* date */
                 var tdD = document.createElement('td');
                 tdD.textContent = r.date;
@@ -1171,6 +1145,72 @@
             table.appendChild(tbody);
         }
 
+        function getIncomeRows() {
+            return Array.prototype.slice.call(table.querySelectorAll('tbody tr[data-income-id]'));
+        }
+
+        function setIncomeRowSelected(row, isSelected) {
+            if (!row) return;
+            var id = row.getAttribute('data-income-id');
+            if (!id) return;
+            if (isSelected) selected[id] = true;
+            else delete selected[id];
+            row.classList.toggle('di-sel', !!isSelected);
+            row.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+        }
+
+        function toggleIncomeRow(row) {
+            if (!row) return;
+            setIncomeRowSelected(row, !row.classList.contains('di-sel'));
+            updateActions();
+        }
+
+        function rowIndexAtY(rows, y) {
+            var idx = 0;
+            for (var i = 0; i < rows.length; i++) {
+                if (y >= rows[i].getBoundingClientRect().top) idx = i;
+            }
+            return idx;
+        }
+
+        function setIncomeSelectionRange(anchorRow, y, mode) {
+            var rows = getIncomeRows();
+            var anchor = rows.indexOf(anchorRow);
+            if (anchor < 0) return;
+            var current = rowIndexAtY(rows, y);
+            var low = Math.min(anchor, current);
+            var high = Math.max(anchor, current);
+            rows.forEach(function (row, index) {
+                if (index < low || index > high) return;
+                setIncomeRowSelected(row, mode === 'add');
+            });
+            updateActions();
+        }
+
+        function resetIncomeDrag() {
+            document.removeEventListener('mousemove', handleIncomeMouseMove);
+            document.removeEventListener('mouseup', handleIncomeMouseUp);
+            rowDragStart = null;
+            rowDragSelecting = false;
+            rowDragMode = null;
+        }
+
+        function handleIncomeMouseMove(event) {
+            if (!rowDragStart) return;
+            if (!rowDragSelecting && Math.abs(event.clientY - rowDragStart.y) > 5) {
+                rowDragSelecting = true;
+            }
+            if (!rowDragSelecting) return;
+            event.preventDefault();
+            setIncomeSelectionRange(rowDragStart.tr, event.clientY, rowDragMode);
+        }
+
+        function handleIncomeMouseUp() {
+            if (!rowDragStart) return;
+            if (!rowDragSelecting) toggleIncomeRow(rowDragStart.tr);
+            resetIncomeDrag();
+        }
+
         function doSort() {
             sortedRows.sort(function (a, b) {
                 var va = a[sortCol], vb = b[sortCol];
@@ -1185,6 +1225,26 @@
 
         wrap.appendChild(table);
         root.appendChild(wrap);
+
+        table.addEventListener('mousedown', function (event) {
+            if (event.button !== 0) return;
+            var tr = event.target && event.target.closest ? event.target.closest('tbody tr[data-income-id]') : null;
+            if (!tr || !table.contains(tr)) return;
+            event.preventDefault();
+            rowDragStart = { tr: tr, y: event.clientY };
+            rowDragSelecting = false;
+            rowDragMode = tr.classList.contains('di-sel') ? 'remove' : 'add';
+            document.addEventListener('mousemove', handleIncomeMouseMove);
+            document.addEventListener('mouseup', handleIncomeMouseUp);
+        });
+
+        table.addEventListener('keydown', function (event) {
+            if (!event || (event.key !== 'Enter' && event.key !== ' ')) return;
+            var tr = event.target && event.target.closest ? event.target.closest('tbody tr[data-income-id]') : null;
+            if (!tr || !table.contains(tr)) return;
+            event.preventDefault();
+            toggleIncomeRow(tr);
+        });
 
         /* ── action bar ── */
         var actionsDiv = document.createElement('div');
@@ -4042,7 +4102,7 @@
     /* ──────────────────────────── Export ───────────────────────────────── */
 
     global.DashRender = {
-        VERSION:            '20260610k',
+        VERSION:            '20260610l',
         injectCSS:          injectCSS,
         tweColor:           tweColor,
         upnlColor:          upnlColor,

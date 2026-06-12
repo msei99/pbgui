@@ -566,6 +566,9 @@ input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   --range-fill: 50%;
+  --range-load-fill: var(--range-fill);
+  --range-loaded-color: var(--accent);
+  --range-active-color: var(--accent);
   width: 100%;
   height: 18px;
   background: transparent;
@@ -574,8 +577,13 @@ input[type="range"] {
 
 input[type="range"]::-webkit-slider-runnable-track {
   height: 8px;
-  background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--range-fill, 50%), rgba(255,255,255,0.22) var(--range-fill, 50%), rgba(255,255,255,0.22) 100%);
+  background: linear-gradient(to right, var(--range-loaded-color) 0%, var(--range-loaded-color) var(--range-load-fill, var(--range-fill, 50%)), var(--range-active-color) var(--range-load-fill, var(--range-fill, 50%)), var(--range-active-color) var(--range-fill, 50%), rgba(255,255,255,0.22) var(--range-fill, 50%), rgba(255,255,255,0.22) 100%);
   border-radius: 999px;
+}
+
+.range-slider.range-loading {
+  --range-loaded-color: var(--green);
+  --range-active-color: var(--accent);
 }
 
 input[type="range"]::-webkit-slider-thumb {
@@ -599,7 +607,7 @@ input[type="range"]::-moz-range-track {
 
 input[type="range"]::-moz-range-progress {
   height: 8px;
-  background: var(--accent);
+  background: var(--range-loaded-color);
   border-radius: 999px;
   border: 0;
 }
@@ -1669,6 +1677,11 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     persistDefaults: true,
     viewRange: null,
     pendingViewRange: null,
+    displayRangeLoading: false,
+    displayRangeLoadingRange: null,
+    displayRangeProgressDisplay: 0,
+    displayRangeProgressTarget: 0,
+    displayRangeProgressTimer: null,
     loadPayload: null,
     commandCenter: null,
     selectedConfigIndex: null,
@@ -2110,6 +2123,73 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     node.style.setProperty('--range-fill', String(Math.max(0, Math.min(100, percent))) + '%');
   }
 
+  function setDisplayRangeLoadFill(percent, active) {
+    var slider = el('display-range-end');
+    if (!slider) return;
+    var clamped = Math.max(0, Math.min(100, percent || 0));
+    slider.style.setProperty('--range-load-fill', String(clamped) + '%');
+    slider.classList.toggle('range-loading', !!active);
+  }
+
+  function displayRangePercent(end, total) {
+    total = parseInt(total || 0, 10) || 0;
+    if (total <= 0) return 0;
+    return Math.max(0, Math.min(100, (Number(end || 0) / total) * 100));
+  }
+
+  function updateDisplayRangeProgressSummary() {
+    if (!state.displayRangeLoading || !state.displayRangeLoadingRange) return;
+    var summary = el('display-range-summary');
+    if (!summary) return;
+    var total = currentRangeMax(state.loadPayload);
+    var range = state.displayRangeLoadingRange;
+    var loadedEnd = Math.min(range.end, Math.max(range.start, Math.round((state.displayRangeProgressDisplay / 100) * total)));
+    var loadedVisible = Math.max(0, loadedEnd - range.start);
+    var targetVisible = Math.max(0, range.end - range.start);
+    summary.textContent = 'Loading display range: ' + String(loadedVisible) + ' / ' + String(targetVisible) + ' configs (Rank ' + String(range.start + 1) + '-' + String(range.end) + ')';
+  }
+
+  function stopDisplayRangeProgressAnimation() {
+    if (state.displayRangeProgressTimer) {
+      window.clearInterval(state.displayRangeProgressTimer);
+      state.displayRangeProgressTimer = null;
+    }
+  }
+
+  function startDisplayRangeProgress(range) {
+    var total = currentRangeMax(state.loadPayload);
+    var currentEnd = state.viewRange && state.viewRange.end != null ? state.viewRange.end : range.start;
+    var startPercent = displayRangePercent(Math.min(range.end, currentEnd), total);
+    var targetPercent = displayRangePercent(range.end, total);
+    state.displayRangeLoading = true;
+    state.displayRangeLoadingRange = Object.assign({}, range);
+    state.displayRangeProgressDisplay = targetPercent <= startPercent ? targetPercent : startPercent;
+    state.displayRangeProgressTarget = targetPercent;
+    setDisplayRangeLoadFill(state.displayRangeProgressDisplay, true);
+    updateDisplayRangeProgressSummary();
+    stopDisplayRangeProgressAnimation();
+    state.displayRangeProgressTimer = window.setInterval(function() {
+      var cap = Math.max(state.displayRangeProgressDisplay, state.displayRangeProgressTarget - 0.8);
+      if (state.displayRangeProgressDisplay >= cap) return;
+      var diff = cap - state.displayRangeProgressDisplay;
+      state.displayRangeProgressDisplay = Math.min(cap, state.displayRangeProgressDisplay + Math.max(0.25, diff * 0.035));
+      setDisplayRangeLoadFill(state.displayRangeProgressDisplay, true);
+      updateDisplayRangeProgressSummary();
+    }, 120);
+  }
+
+  function finishDisplayRangeProgress(success) {
+    stopDisplayRangeProgressAnimation();
+    if (success) {
+      state.displayRangeProgressDisplay = state.displayRangeProgressTarget;
+      setDisplayRangeLoadFill(state.displayRangeProgressTarget, false);
+    } else {
+      setDisplayRangeLoadFill(displayRangePercent(state.viewRange && state.viewRange.end, currentRangeMax(state.loadPayload)), false);
+    }
+    state.displayRangeLoading = false;
+    state.displayRangeLoadingRange = null;
+  }
+
   function updateAllRangeFills() {
     Array.prototype.forEach.call(document.querySelectorAll('input[type="range"]'), function(node) {
       updateRangeFill(node);
@@ -2272,6 +2352,12 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     totalChip.textContent = 'Loaded: ' + String(total);
     summary.textContent = 'Showing ' + String(Math.max(0, range.end - range.start)) + ' configs (Rank ' + String(range.start + 1) + '-' + String(range.end) + ')';
     updateRangeFill(slider);
+    if (state.displayRangeLoading) {
+      setDisplayRangeLoadFill(state.displayRangeProgressDisplay, true);
+      updateDisplayRangeProgressSummary();
+    } else {
+      setDisplayRangeLoadFill(displayRangePercent(range.end, total), false);
+    }
   }
 
   function updatePendingDisplayRange(nextRange) {
@@ -2288,10 +2374,17 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     var normalized = normalizeViewRange(state.pendingViewRange, total);
     if (!normalized) return Promise.resolve(null);
     state.pendingViewRange = Object.assign({}, normalized);
+    startDisplayRangeProgress(normalized);
     return loadParetoData({ forceSynchronous: true }).then(function(data) {
       state.viewRange = data && data.view_range ? normalizeViewRange(data.view_range, currentRangeMax(data)) : Object.assign({}, normalized);
       state.pendingViewRange = state.viewRange ? Object.assign({}, state.viewRange) : null;
+      finishDisplayRangeProgress(true);
+      renderDisplayRange(state.loadPayload);
       return data;
+    }).catch(function(err) {
+      finishDisplayRangeProgress(false);
+      renderDisplayRange(state.loadPayload);
+      throw err;
     });
   }
 

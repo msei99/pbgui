@@ -83,7 +83,7 @@
         }
     }
 
-    var DR_VERSION = '20260610k';
+    var DR_VERSION = '20260610l';
 
     /* Load dashboard_render.js once (CSS + shared render primitives) */
     function _loadRenderScript(cb) {
@@ -123,6 +123,8 @@
     var sortAsc       = true;   // sort direction
     var statusSource  = 'db';
     var statusTs      = 0;
+    var fetchSeq      = 0;
+    var MAX_LIVE_USERS = 10;
 
     function tweColor(v)  { return v < 100 ? '#22c55e' : v < 200 ? '#f59e0b' : '#ef4444'; }
     function upnlColor(v) { return v >= 0  ? '#22c55e' : '#ef4444'; }
@@ -350,18 +352,40 @@
         return selectedUsers.join(',');
     }
 
+    function liveAllowed() {
+        return selectedUsers.length > 0 && selectedUsers.indexOf('ALL') < 0 && selectedUsers.length <= MAX_LIVE_USERS;
+    }
+
+    function fetchBalanceData(live, seq) {
+        var url = API_BASE + '/dashboard/balance?users=' + encodeURIComponent(usersParam()) + (live ? '&live=1' : '');
+        return fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+            .then(function(r) { if (isStale() || seq !== fetchSeq) return null; if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function(d) { if (isStale() || seq !== fetchSeq) return null; return d; });
+    }
+
     function fetchBalance() {
         if (isStale()) return;
         if (!TOKEN || !API_BASE) return;
-        var url = API_BASE + '/dashboard/balance?users=' + usersParam() + '&live=1';
-        fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
-            .then(function(r) { if (isStale()) return; if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        var seq = ++fetchSeq;
+        fetchBalanceData(false, seq)
             .then(function(d) {
                 if (isStale() || !d) return;
                 statusSource = d.source || 'db';
                 statusTs = Date.now();
                 renderData(d);
                 refreshStatusAge();
+                if (!liveAllowed()) return;
+                fetchBalanceData(true, seq)
+                    .then(function(liveData) {
+                        if (isStale() || !liveData || seq !== fetchSeq) return;
+                        var source = String(liveData.source || 'db').toLowerCase();
+                        if (source !== 'live' && source !== 'mixed') return;
+                        statusSource = liveData.source || 'db';
+                        statusTs = Date.now();
+                        renderData(liveData);
+                        refreshStatusAge();
+                    })
+                    .catch(function() {});
             })
             .catch(function(e) { if (!isStale()) setStatus('\u26a0 Data unavailable'); });
     }
@@ -373,7 +397,7 @@
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
         ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
         window._dbBalanceWs = ws;
-        ws.onopen    = function() { if (isStale()) { ws.close(); return; } reconnDelay = 1000; setStatus('Connected \u2014 fetching\u2026'); fetchBalance(); };
+        ws.onopen    = function() { if (isStale()) { ws.close(); return; } reconnDelay = 1000; };
         ws.onmessage = function(evt) {
             if (isStale()) { ws.close(); return; }
             try { var m = JSON.parse(evt.data); if (m.type === 'balance_updated') fetchBalance(); } catch(_) {}

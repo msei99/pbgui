@@ -1018,7 +1018,8 @@
       text-transform: uppercase;
       letter-spacing: 0.08em;
       font-weight: 700;
-      background: rgba(14, 22, 36, 0.96);
+      background: var(--bg2);
+      border-bottom: 2px solid var(--border);
       position: sticky;
       top: 0;
       z-index: 1;
@@ -1147,13 +1148,17 @@
       cursor: pointer;
     }
 
-    tr.selectable-row.selected {
-      background: rgba(19, 55, 92, 0.78);
-      box-shadow: inset 3px 0 0 rgba(93, 196, 255, 0.78);
+    tr.selectable-row.selected td {
+      background: rgba(77,166,255,.12);
     }
 
-    tr.selectable-row.selected:hover {
-      background: rgba(23, 66, 110, 0.84);
+    tr.selectable-row.selected td:first-child {
+      border-left: 3px solid var(--accent);
+      padding-left: 9px;
+    }
+
+    tr.selectable-row.selected:hover td {
+      background: rgba(77,166,255,.16);
     }
 
     .table-button {
@@ -2964,6 +2969,7 @@
       importExistingVps: defaultExistingVpsImportState(),
       pendingAutoSetupSwitch: null,
       master: defaultMasterUi(),
+      ufw: defaultUfwState(),
       taskLog: defaultTaskLog(),
       deployLogWindows: [],
       pendingOverviewDeploy: null,
@@ -3096,6 +3102,27 @@
         bucketCleanupIndicatorRequested: false,
         bucketCleanupPreview: null,
         bucketCleanupPreviewRefreshOnly: false
+      };
+    }
+
+    function defaultUfwState() {
+      return {
+        target: '',
+        targetKind: 'local',
+        loading: false,
+        applying: false,
+        enabled: false,
+        loadedEnabled: false,
+        rules: [],
+        fingerprint: '',
+        sshClientIp: '',
+        vpnManagement: false,
+        addRules: [],
+        deleteNumbers: {},
+        sudoPwByTarget: {},
+        error: '',
+        safety: null,
+        form: { port: '22', proto: 'tcp', from: '', comment: '' }
       };
     }
 
@@ -3645,11 +3672,11 @@
     }
 
     function isMasterContextView() {
-      return store.view === 'master' || store.view === 'master-task-log' || store.view === 'master-host-logs' || store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch';
+      return store.view === 'master' || store.view === 'master-task-log' || store.view === 'master-host-logs' || store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch' || store.view === 'master-ufw';
     }
 
     function isVpsContextView() {
-      return !!store.hostname && (store.view === 'vps' || store.view === 'vps-task-log' || store.view === 'vps-host-logs' || store.view === 'vps-setup' || store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch');
+      return !!store.hostname && (store.view === 'vps' || store.view === 'vps-task-log' || store.view === 'vps-host-logs' || store.view === 'vps-setup' || store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch' || store.view === 'vps-ufw');
     }
 
     function isOverviewSettingsView() {
@@ -3994,6 +4021,23 @@
           hasV7Rows: Array.isArray(monitor.v7) && monitor.v7.length > 0,
           hasV7Fallback: Array.isArray(monitor.v7_running) && monitor.v7_running.length > 0,
           remoteBranches: Array.isArray(store.master.remoteBranches) ? store.master.remoteBranches : []
+        });
+      }
+      if (store.view === 'master-ufw' || store.view === 'vps-ufw') {
+        return stableStringify({
+          view: store.view,
+          hostname: store.hostname || '',
+          target: store.ufw.target || '',
+          loading: !!store.ufw.loading,
+          applying: !!store.ufw.applying,
+          enabled: !!store.ufw.enabled,
+          rules: store.ufw.rules || [],
+          addRules: store.ufw.addRules || [],
+          deleteNumbers: store.ufw.deleteNumbers || {},
+          fingerprint: store.ufw.fingerprint || '',
+          error: store.ufw.error || '',
+          safety: store.ufw.safety || null,
+          form: store.ufw.form || {}
         });
       }
       if (store.view === 'master-pbgui-branch') {
@@ -6841,6 +6885,15 @@
           updateReadSettingsProgress(store.hostname, { step: 'error', label: msg.error || 'Read VPS settings failed.', status: 'error' }, { render: false });
           renderUi({ forceSidebarActions: true, forceView: true });
         }
+        if (msg.cmd === 'read_ufw_rules' || msg.cmd === 'preview_ufw_rules' || msg.cmd === 'apply_ufw_rules') {
+          store.ufw.loading = false;
+          store.ufw.applying = false;
+          store.ufw.error = String(msg.error || 'UFW command failed.');
+          if (store.ufw.error.toLowerCase().indexOf('sudo') >= 0 || store.ufw.error.toLowerCase().indexOf('password') >= 0) {
+            setUfwSudoPw('');
+          }
+          renderUi({ forceView: true });
+        }
         toast(msg.error || 'Unknown error', 'error');
         return;
       }
@@ -7298,6 +7351,29 @@
         }
         toast('VPS settings refreshed.', 'success');
         return;
+      } else if (cmd === 'read_ufw_rules') {
+        store.ufw.loading = false;
+        store.ufw.applying = false;
+        applyUfwData(msg.data || {}, true);
+        toast('UFW rules loaded.', 'success');
+        renderUi({ forceView: true });
+        return;
+      } else if (cmd === 'preview_ufw_rules') {
+        store.ufw.loading = false;
+        store.ufw.applying = false;
+        const data = msg.data || {};
+        if (data.current) applyUfwData(data.current, false);
+        store.ufw.safety = ((data.preview || {}).safety) || null;
+        openUfwPreviewModal(data);
+        renderUi({ forceView: true });
+        return;
+      } else if (cmd === 'apply_ufw_rules') {
+        store.ufw.loading = false;
+        store.ufw.applying = false;
+        applyUfwData(msg.data || {}, true);
+        toast('UFW changes applied.', 'success');
+        renderUi({ forceView: true });
+        return;
       } else if (cmd === 'delete_vps') {
         toast('VPS deleted.', 'success');
         resetBucketCleanupIndicator();
@@ -7375,11 +7451,13 @@
       if (view === 'master-host-logs') return '#master/host-logs';
       if (view === 'master-pbgui-branch') return '#master/pbgui-branch';
       if (view === 'master-pb7-branch') return '#master/pb7-branch';
+      if (view === 'master-ufw') return '#master/ufw';
       if (hostname) {
         if (view === 'vps') return '#vps/' + encodeURIComponent(hostname);
         if (view === 'vps-setup') return '#vps/' + encodeURIComponent(hostname) + '/setup';
         if (view === 'vps-pbgui-branch') return '#vps/' + encodeURIComponent(hostname) + '/pbgui-branch';
         if (view === 'vps-pb7-branch') return '#vps/' + encodeURIComponent(hostname) + '/pb7-branch';
+        if (view === 'vps-ufw') return '#vps/' + encodeURIComponent(hostname) + '/ufw';
       }
       return '#overview';
     }
@@ -7394,7 +7472,7 @@
       store.view = view;
       if (typeof hostname === 'string') {
         store.hostname = hostname;
-      } else if (view !== 'vps' && view !== 'vps-task-log' && view !== 'vps-host-logs' && view !== 'vps-setup' && view !== 'vps-pbgui-branch' && view !== 'vps-pb7-branch') {
+      } else if (view !== 'vps' && view !== 'vps-task-log' && view !== 'vps-host-logs' && view !== 'vps-setup' && view !== 'vps-pbgui-branch' && view !== 'vps-pb7-branch' && view !== 'vps-ufw') {
         store.hostname = '';
       }
       if (view === 'add') {
@@ -7426,7 +7504,7 @@
     function selectSidebarVpsHost(hostname) {
       const nextHost = String(hostname || '').trim();
       if (!nextHost) return;
-      const keepViews = ['vps-setup', 'vps-pbgui-branch', 'vps-pb7-branch', 'vps-host-logs'];
+      const keepViews = ['vps-setup', 'vps-pbgui-branch', 'vps-pb7-branch', 'vps-host-logs', 'vps-ufw'];
       const nextView = keepViews.indexOf(store.view) >= 0 ? store.view : 'vps';
       selectView(nextView, nextHost);
     }
@@ -7458,6 +7536,10 @@
         selectView('master-pb7-branch');
         return;
       }
+      if (hash === 'master/ufw') {
+        selectView('master-ufw');
+        return;
+      }
       const m = hash.match(/^vps\/([^/]+)(?:\/(.+))?/);
       if (m) {
         const hostname = decodeURIComponent(m[1]);
@@ -7465,6 +7547,7 @@
         if (sub === 'setup') selectView('vps-setup', hostname);
         else if (sub === 'pbgui-branch') selectView('vps-pbgui-branch', hostname);
         else if (sub === 'pb7-branch') selectView('vps-pb7-branch', hostname);
+        else if (sub === 'ufw') selectView('vps-ufw', hostname);
         else selectView('vps', hostname);
       }
     }
@@ -8178,6 +8261,206 @@
 
     function rebootMasterAction() {
       masterActionWithSudo('master-reboot', 'Reboot Master');
+    }
+
+    function currentUfwHostname() {
+      return store.view === 'vps-ufw' ? String(store.hostname || '').trim() : '';
+    }
+
+    function currentUfwKey() {
+      return currentUfwHostname() || 'local';
+    }
+
+    function currentUfwLabel() {
+      return currentUfwHostname() || 'Local Master';
+    }
+
+    function getUfwSudoPw() {
+      const key = currentUfwKey();
+      if (key === 'local') return store.master.sudoPw || (store.ufw.sudoPwByTarget || {}).local || '';
+      return (store.ufw.sudoPwByTarget || {})[key] || '';
+    }
+
+    function setUfwSudoPw(pw) {
+      const key = currentUfwKey();
+      store.ufw.sudoPwByTarget = store.ufw.sudoPwByTarget || {};
+      store.ufw.sudoPwByTarget[key] = String(pw || '');
+      if (key === 'local') store.master.sudoPw = String(pw || '');
+    }
+
+    function openUfwSudoPrompt(actionLabel, onConfirm) {
+      document.getElementById('alertModalTitle').textContent = 'UFW sudo password required';
+      const box = document.getElementById('alertModalBody');
+      box.className = 'notice';
+      box.innerHTML = '<div style="margin-bottom:10px">Enter sudo password for <strong>' + esc(actionLabel || 'UFW') + '</strong> on ' + esc(currentUfwLabel()) + ':</div><input type="password" id="ufw-sudo-input" class="pw-input" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none">';
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" id="ufw-sudo-confirm">Continue</button>';
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      const confirm = document.getElementById('ufw-sudo-confirm');
+      confirm.onclick = function () {
+        const input = document.getElementById('ufw-sudo-input');
+        const pw = input ? input.value : '';
+        if (!pw) return;
+        setUfwSudoPw(pw);
+        closeAlertModal();
+        if (typeof onConfirm === 'function') onConfirm(pw);
+      };
+      setTimeout(function () {
+        const input = document.getElementById('ufw-sudo-input');
+        if (input) {
+          input.focus();
+          input.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') confirm.click();
+          });
+        }
+      }, 50);
+    }
+
+    function withUfwSudo(actionLabel, callback) {
+      const pw = getUfwSudoPw();
+      if (pw) {
+        callback(pw);
+        return;
+      }
+      openUfwSudoPrompt(actionLabel, callback);
+    }
+
+    function applyUfwData(data, clearPending) {
+      const payload = data || {};
+      store.ufw.target = String(payload.target || currentUfwKey());
+      store.ufw.targetKind = String(payload.target_kind || (currentUfwHostname() ? 'remote' : 'local'));
+      store.ufw.enabled = !!payload.enabled;
+      store.ufw.loadedEnabled = !!payload.enabled;
+      store.ufw.rules = Array.isArray(payload.rules) ? payload.rules : [];
+      store.ufw.fingerprint = String(payload.fingerprint || '');
+      store.ufw.sshClientIp = String(payload.ssh_client_ip || '');
+      store.ufw.vpnManagement = !!payload.vpn_management;
+      store.ufw.error = '';
+      if (payload.safety) store.ufw.safety = payload.safety;
+      if (clearPending) {
+        store.ufw.addRules = [];
+        store.ufw.deleteNumbers = {};
+        store.ufw.safety = null;
+      }
+    }
+
+    function readUfwRules() {
+      withUfwSudo('Read UFW', function (pw) {
+        store.ufw.loading = true;
+        store.ufw.error = '';
+        renderUi({ forceView: true });
+        send({ cmd: 'read_ufw_rules', hostname: currentUfwHostname(), sudo_pw: pw });
+      });
+    }
+
+    function setUfwEnabled(value) {
+      store.ufw.enabled = !!value;
+      store.ufw.safety = null;
+      renderUi({ forceView: true });
+    }
+
+    function setUfwFormField(field, value) {
+      store.ufw.form = Object.assign({}, store.ufw.form || {}, { [field]: value });
+      renderUi({ forceView: true });
+    }
+
+    function normalizeUfwFrom(value) {
+      return String(value || '').trim() || 'Anywhere';
+    }
+
+    function addUfwPendingRule(rule) {
+      const next = Object.assign({ port: '', proto: 'tcp', from: 'Anywhere', comment: '' }, rule || {});
+      next.port = String(next.port || '').trim();
+      next.proto = String(next.proto || 'tcp').toLowerCase();
+      next.from = normalizeUfwFrom(next.from);
+      next.comment = String(next.comment || '').trim();
+      if (!/^\d+$/.test(next.port) || Number(next.port) < 1 || Number(next.port) > 65535) {
+        toast('Port must be between 1 and 65535.', 'warning');
+        return;
+      }
+      if (next.proto !== 'tcp' && next.proto !== 'udp') {
+        toast('Protocol must be tcp or udp.', 'warning');
+        return;
+      }
+      store.ufw.addRules = (store.ufw.addRules || []).concat([next]);
+      store.ufw.safety = null;
+      renderUi({ forceView: true });
+    }
+
+    function addUfwCustomRule() {
+      const form = store.ufw.form || {};
+      addUfwPendingRule({ port: form.port, proto: form.proto, from: form.from, comment: form.comment });
+      store.ufw.form = { port: '22', proto: 'tcp', from: '', comment: '' };
+    }
+
+    function quickAddUfwRule(kind) {
+      const preferredIp = String((store.ufw.form || {}).from || store.ufw.sshClientIp || '').trim();
+      if (kind === 'ssh-ip') {
+        if (!preferredIp) {
+          toast('Enter an IP/CIDR in the From field first.', 'warning');
+          return;
+        }
+        addUfwPendingRule({ port: '22', proto: 'tcp', from: preferredIp, comment: 'SSH from ' + preferredIp });
+      }
+      else if (kind === 'ssh-vpn') addUfwPendingRule({ port: '22', proto: 'tcp', from: '10.8.1.0/24', comment: 'SSH from VPN' });
+      else if (kind === 'pbgui-vpn') addUfwPendingRule({ port: '8000', proto: 'tcp', from: '10.8.1.0/24', comment: 'PBGui via VPN' });
+      else if (kind === 'openvpn') addUfwPendingRule({ port: '1194', proto: 'udp', from: 'Anywhere', comment: 'OpenVPN UDP' });
+    }
+
+    function removeUfwPendingRule(index) {
+      const rows = (store.ufw.addRules || []).slice();
+      rows.splice(Number(index), 1);
+      store.ufw.addRules = rows;
+      store.ufw.safety = null;
+      renderUi({ forceView: true });
+    }
+
+    function toggleUfwDelete(number, checked) {
+      const next = Object.assign({}, store.ufw.deleteNumbers || {});
+      if (checked) next[String(number)] = true;
+      else delete next[String(number)];
+      store.ufw.deleteNumbers = next;
+      store.ufw.safety = null;
+      renderUi({ forceView: true });
+    }
+
+    function buildUfwPayload() {
+      const deletes = Object.keys(store.ufw.deleteNumbers || {}).filter(function (key) { return !!store.ufw.deleteNumbers[key]; }).map(function (key) { return Number(key); });
+      return {
+        enabled: !!store.ufw.enabled,
+        fingerprint: store.ufw.fingerprint || '',
+        delete_numbers: deletes,
+        add_rules: (store.ufw.addRules || []).slice()
+      };
+    }
+
+    function hasPendingUfwChanges() {
+      const payload = buildUfwPayload();
+      return payload.enabled !== !!store.ufw.loadedEnabled || payload.delete_numbers.length > 0 || payload.add_rules.length > 0;
+    }
+
+    function previewApplyUfwRules() {
+      if (!store.ufw.fingerprint) {
+        toast('Read UFW rules first.', 'warning');
+        return;
+      }
+      if (!hasPendingUfwChanges()) {
+        toast('No UFW changes to apply.', 'info');
+        return;
+      }
+      withUfwSudo('Preview UFW changes', function (pw) {
+        store.ufw.applying = true;
+        store.ufw.error = '';
+        renderUi({ forceView: true });
+        send({ cmd: 'preview_ufw_rules', hostname: currentUfwHostname(), sudo_pw: pw, payload: buildUfwPayload() });
+      });
+    }
+
+    function applyUfwRules() {
+      withUfwSudo('Apply UFW changes', function (pw) {
+        store.ufw.applying = true;
+        renderUi({ forceView: true });
+        send({ cmd: 'apply_ufw_rules', hostname: currentUfwHostname(), sudo_pw: pw, payload: buildUfwPayload() });
+      });
     }
 
     function runVps(hostname, command, commandText, extraVars, saveConfigFirst) {
@@ -9329,6 +9612,7 @@
           ${store.view !== 'master' ? `<button class='sb-btn' type='button' onclick='selectView("master")'>Back to Master Overview</button>` : ''}
           <button class='sb-btn' type='button' onclick='openMasterTaskLogs()'>Task Logs</button>
           <button class='sb-btn' type='button' onclick='openMasterHostLogs()'>Host Logs</button>
+          <button class='sb-btn' type='button' onclick='selectView("master-ufw")'>Change UFW</button>
           <button class='sb-btn' type='button' onclick='selectView("master-pbgui-branch")'>PBGui Branch</button>
           <button class='sb-btn' type='button' onclick='selectView("master-pb7-branch")'>PB7 Branch</button>
           <div class='sb-separator'>Tasks</div>
@@ -9352,6 +9636,7 @@
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
         const ui = ensureVpsUi(store.hostname, detail);
         const selectedHost = store.hostname;
+        const isRemoteMaster = String(((st.summary_row || {}).role) || '').toLowerCase() === 'master';
         const canRunRemote = !!String(getEffectiveVpsUserPw(selectedHost) || '').trim() || hasSessionSecret(selectedHost, 'user_pw') || !!(detail && detail.status && detail.status.update_ready);
         const st = (detail && detail.status) || {};
         const pbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
@@ -9375,6 +9660,7 @@
           ${store.view !== 'vps' ? `<button class='sb-btn' type='button' onclick='selectView("vps", ${js(selectedHost)})'>Back</button>` : ''}
           <button class='sb-btn' type='button' onclick='openVpsTaskLogs(${js(selectedHost)})'>Task Logs</button>
           <button class='sb-btn' type='button' onclick='openVpsHostLogs(${js(selectedHost)})'>Host Logs</button>
+          ${isRemoteMaster ? `<button class='sb-btn' type='button' onclick='selectView("vps-ufw", ${js(selectedHost)})'>Change UFW</button>` : ''}
           <button class='sb-btn' type='button' onclick='selectView("vps-setup", ${js(selectedHost)})'>Change VPS</button>
           <button class='sb-btn' type='button' onclick='selectView("vps-pbgui-branch", ${js(selectedHost)})'>PBGui Branch</button>
           <button class='sb-btn' type='button' onclick='selectView("vps-pb7-branch", ${js(selectedHost)})'>PB7 Branch</button>
@@ -10743,6 +11029,156 @@
         </div>`;
     }
 
+    function renderUfwSafetySummary(safety) {
+      if (!safety) return '';
+      const blocking = Array.isArray(safety.blocking) ? safety.blocking : [];
+      const warnings = Array.isArray(safety.warnings) ? safety.warnings : [];
+      if (!blocking.length && !warnings.length) return `<div class='notice ok'>Safety check passed.</div>`;
+      return `
+        ${blocking.length ? `<div class='notice error'><strong>Blocked</strong><br>${blocking.map(esc).join('<br>')}</div>` : ''}
+        ${warnings.length ? `<div class='notice warning'><strong>Warnings</strong><br>${warnings.map(esc).join('<br>')}</div>` : ''}`;
+    }
+
+    function renderUfwRulesTable() {
+      const rules = Array.isArray(store.ufw.rules) ? store.ufw.rules : [];
+      if (!rules.length) return `<div class='empty-state'>No UFW rules loaded. Click Read UFW.</div>`;
+      return `
+        <table class='data-table'>
+          <thead><tr><th>#</th><th>To</th><th>Action</th><th>From</th><th>Comment</th><th>Delete</th></tr></thead>
+          <tbody>
+            ${rules.map(function (rule) {
+              const number = Number(rule.number || 0);
+              const checked = !!(store.ufw.deleteNumbers || {})[String(number)];
+              const sshRule = String(rule.to || '').indexOf('22') >= 0;
+              return `<tr class='${checked ? 'selected' : ''}'>
+                <td>${esc(number)}</td>
+                <td>${esc(rule.to || '')}</td>
+                <td>${esc(rule.action || '')}</td>
+                <td>${esc(rule.from || '')}</td>
+                <td>${esc(rule.comment || '')}</td>
+                <td><label class='checkbox-row'><input type='checkbox' ${checked ? 'checked' : ''} onchange='toggleUfwDelete(${js(number)}, this.checked)'> ${sshRule ? 'Delete SSH rule' : 'Delete'}</label></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`;
+    }
+
+    function renderUfwPendingAdds() {
+      const rows = Array.isArray(store.ufw.addRules) ? store.ufw.addRules : [];
+      if (!rows.length) return `<div class='field-help'>No pending rules to add.</div>`;
+      return `
+        <table class='data-table compact'>
+          <thead><tr><th>Port</th><th>Proto</th><th>From</th><th>Comment</th><th></th></tr></thead>
+          <tbody>
+            ${rows.map(function (rule, index) {
+              return `<tr>
+                <td>${esc(rule.port)}</td>
+                <td>${esc(rule.proto)}</td>
+                <td>${esc(rule.from)}</td>
+                <td>${esc(rule.comment || '')}</td>
+                <td><button class='btn danger' type='button' onclick='removeUfwPendingRule(${js(index)})'>Remove</button></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`;
+    }
+
+    function renderUfwPreviewHtml(data) {
+      const preview = (data || {}).preview || {};
+      const safety = preview.safety || {};
+      const deletes = Array.isArray(preview.delete_numbers) ? preview.delete_numbers : [];
+      const adds = Array.isArray(preview.add_rules) ? preview.add_rules : [];
+      return `
+        <div class='stack'>
+          ${(data || {}).stale ? `<div class='notice error'>UFW rules changed since they were loaded. Refresh UFW first.</div>` : ''}
+          ${renderUfwSafetySummary(safety)}
+          <div class='panel-sub'>Review changes for ${esc(currentUfwLabel())}.</div>
+          <div><strong>Firewall status after apply:</strong> ${preview.enabled ? 'active' : 'inactive'}</div>
+          <div><strong>Delete:</strong> ${deletes.length ? deletes.map(function (n) { return '[' + esc(n) + ']'; }).join(', ') : 'none'}</div>
+          <div><strong>Add:</strong></div>
+          ${adds.length ? `<ul>${adds.map(function (rule) { return `<li>${esc(rule.port)}/${esc(rule.proto)} from ${esc(rule.from)}${rule.comment ? ' # ' + esc(rule.comment) : ''}</li>`; }).join('')}</ul>` : `<div class='field-help'>none</div>`}
+        </div>`;
+    }
+
+    function openUfwPreviewModal(data) {
+      const preview = (data || {}).preview || {};
+      const safety = preview.safety || {};
+      const blocked = !!(data || {}).stale || (Array.isArray(safety.blocking) && safety.blocking.length > 0);
+      prepareAlertModalWindow(820, 620);
+      document.getElementById('alertModalTitle').textContent = 'Apply UFW Changes';
+      const box = document.getElementById('alertModalBody');
+      box.className = 'notice';
+      box.innerHTML = renderUfwPreviewHtml(data);
+      document.getElementById('alertModalBtnRow').innerHTML = blocked
+        ? '<button class="btn ghost" type="button" onclick="closeAlertModal()">Close</button>'
+        : '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" id="ufw-apply-confirm">Apply Changes</button>';
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      const confirm = document.getElementById('ufw-apply-confirm');
+      if (confirm) {
+        confirm.onclick = function () {
+          closeAlertModal();
+          applyUfwRules();
+        };
+      }
+    }
+
+    function renderUfwView() {
+      const isRemote = store.view === 'vps-ufw';
+      const target = currentUfwLabel();
+      const form = store.ufw.form || {};
+      const loaded = !!store.ufw.fingerprint;
+      const pending = hasPendingUfwChanges();
+      return `
+        <h2 class='page-section-title'>${esc(target)} &mdash; Change UFW</h2>
+        <div class='panel'>
+          <div class='panel-head'>
+            <div>
+              <div class='panel-title'>Firewall ACL</div>
+              <div class='panel-sub'>Manage UFW rules without resetting unrelated firewall entries. Deletes are applied by rule number after a fresh safety check.</div>
+            </div>
+          </div>
+          <div class='panel-body stack'>
+            <div class='button-row'>
+              <button class='btn' type='button' ${store.ufw.loading ? 'disabled' : ''} onclick='readUfwRules()'>${store.ufw.loading ? 'Reading...' : 'Read UFW'}</button>
+              <button class='btn ok' type='button' ${!loaded || !pending || store.ufw.applying ? 'disabled' : ''} onclick='previewApplyUfwRules()'>${store.ufw.applying ? 'Checking...' : 'Review & Apply'}</button>
+            </div>
+            ${store.ufw.error ? `<div class='notice error'>${esc(store.ufw.error)}</div>` : ''}
+            <div class='summary-grid'>
+              <div class='status-item'><div class='status-label'>Target</div><div class='status-value'>${esc(target)}</div><div class='status-sub'>${isRemote ? 'Remote master' : 'Local master'}</div></div>
+              <div class='status-item'><div class='status-label'>UFW</div><div class='status-value'>${loaded ? (store.ufw.enabled ? 'active' : 'inactive') : '-'}</div><div class='status-sub'>Current loaded state</div></div>
+              <div class='status-item'><div class='status-label'>SSH Client</div><div class='status-value'>${esc(store.ufw.sshClientIp || '-')}</div><div class='status-sub'>Used for lockout safety</div></div>
+            </div>
+            <label class='checkbox-row'><input type='checkbox' ${store.ufw.enabled ? 'checked' : ''} ${loaded ? '' : 'disabled'} onchange='setUfwEnabled(this.checked)'> Enable UFW after apply</label>
+            ${renderUfwSafetySummary(store.ufw.safety)}
+            ${renderUfwRulesTable()}
+          </div>
+        </div>
+        <div class='panel'>
+          <div class='panel-head'>
+            <div>
+              <div class='panel-title'>Add Rule</div>
+              <div class='panel-sub'>Quick-add common master rules or define a simple allow rule.</div>
+            </div>
+          </div>
+          <div class='panel-body stack'>
+            <div class='button-row'>
+              <button class='btn' type='button' onclick='quickAddUfwRule("ssh-ip")'>SSH 22/tcp from IP</button>
+              <button class='btn' type='button' onclick='quickAddUfwRule("ssh-vpn")'>SSH 22/tcp from VPN</button>
+              <button class='btn' type='button' onclick='quickAddUfwRule("pbgui-vpn")'>PBGui 8000/tcp from VPN</button>
+              <button class='btn' type='button' onclick='quickAddUfwRule("openvpn")'>OpenVPN 1194/udp</button>
+            </div>
+            <div class='field-grid'>
+              <div class='field'><label>Port</label><input type='number' value='${escAttr(form.port || '22')}' oninput='setUfwFormField("port", this.value)'></div>
+              <div class='field'><label>Protocol</label><select onchange='setUfwFormField("proto", this.value)'><option value='tcp'${String(form.proto || 'tcp') === 'tcp' ? ' selected' : ''}>tcp</option><option value='udp'${String(form.proto || '') === 'udp' ? ' selected' : ''}>udp</option></select></div>
+              <div class='field'><label>From</label><input type='text' value='${escAttr(form.from || '')}' oninput='setUfwFormField("from", this.value)' placeholder='Anywhere, IP, or CIDR'></div>
+              <div class='field'><label>Comment</label><input type='text' value='${escAttr(form.comment || '')}' oninput='setUfwFormField("comment", this.value)' placeholder='Rule comment'></div>
+            </div>
+            <div class='button-row'><button class='btn' type='button' onclick='addUfwCustomRule()'>Add Pending Rule</button></div>
+            ${renderUfwPendingAdds()}
+          </div>
+        </div>`;
+    }
+
     function renderMasterView() {
       const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
       if (!detail) {
@@ -11394,6 +11830,8 @@
         html = renderMasterBranchView('pbgui');
       } else if (store.view === 'master-pb7-branch') {
         html = renderMasterBranchView('pb7');
+      } else if (store.view === 'master-ufw' || store.view === 'vps-ufw') {
+        html = renderUfwView();
       } else if (store.view === 'master') {
         html = renderMasterView();
       } else if (store.view === 'vps-task-log') {

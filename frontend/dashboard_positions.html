@@ -28,31 +28,66 @@
     var reconnTimer = null;
     var reconnDelay = 1000;
     var container   = document.getElementById('dp-container-' + POSITION);
+    var MAX_LIVE_USERS = 10;
+    var MAX_LIVE_POSITIONS = 10;
+    var loadSeq = 0;
 
     function reportHeight() {
     }
 
-    function load() {
-        var usersParam = (Array.isArray(USERS) && USERS.length > 0) ? USERS.join(',') : 'ALL';
+    function usersParam() {
+        return (Array.isArray(USERS) && USERS.length > 0) ? USERS.join(',') : 'ALL';
+    }
 
+    function liveAllowedFromDb(data) {
+        if (!Array.isArray(USERS) || USERS.length === 0 || USERS.indexOf('ALL') >= 0) return false;
+        if (USERS.length > MAX_LIVE_USERS) return false;
+        var rows = data && data.positions ? data.positions : [];
+        return rows.length <= MAX_LIVE_POSITIONS;
+    }
+
+    function renderPositions(d) {
+        DashRender.buildPositions(container, d, {
+            users:    USERS,
+            position: POSITION,
+            height:   HEIGHT > 0 ? HEIGHT : null,
+            apiBase:  API_BASE,
+            token:    TOKEN,
+            onReload: load
+        });
+        reportHeight();
+    }
+
+    function fetchPositions(live, seq) {
         var url = API_BASE + '/dashboard/positions_data'
-            + '?users=' + encodeURIComponent(usersParam)
-            + '&live=1';
-
-        fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+            + '?users=' + encodeURIComponent(usersParam())
+            + (live ? '&live=1' : '');
+        return fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (d) {
-                DashRender.buildPositions(container, d, {
-                    users:    USERS,
-                    position: POSITION,
-                    height:   HEIGHT > 0 ? HEIGHT : null,
-                    apiBase:  API_BASE,
-                    token:    TOKEN,
-                    onReload: load
-                });
-                reportHeight();
+                if (seq !== loadSeq) return null;
+                return d;
+            });
+    }
+
+    function load() {
+        var seq = ++loadSeq;
+
+        fetchPositions(false, seq)
+            .then(function (d) {
+                if (!d || seq !== loadSeq) return;
+                renderPositions(d);
+                if (!liveAllowedFromDb(d)) return;
+                fetchPositions(true, seq)
+                    .then(function (liveData) {
+                        if (!liveData || seq !== loadSeq) return;
+                        var source = String(liveData.source || 'db').toLowerCase();
+                        if (source === 'live' || source === 'mixed') renderPositions(liveData);
+                    })
+                    .catch(function () {});
             })
             .catch(function (e) {
+                if (seq !== loadSeq) return;
                 container.innerHTML = '';
                 var st = document.createElement('div');
                 st.className = 'dt-status';
@@ -68,7 +103,7 @@
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
         ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
         window[_wsKey] = ws;
-        ws.onopen = function () { reconnDelay = 1000; load(); };
+        ws.onopen = function () { reconnDelay = 1000; };
         ws.onmessage = function (evt) {
             try {
                 var m = JSON.parse(evt.data);
@@ -87,7 +122,7 @@
         ws.onerror = function () { ws.close(); };
     }
 
-    var DR_VERSION = '20260610k';
+    var DR_VERSION = '20260610l';
 
     function _loadRenderScript(cb) {
         if (window.DashRender && window.DashRender.VERSION !== DR_VERSION) {
@@ -108,6 +143,7 @@
 
     _loadRenderScript(function () {
         if (window.DashRender) { DashRender.injectCSS(); }
+        load();
         connect();
     });
 }());

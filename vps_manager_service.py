@@ -5,6 +5,7 @@ import base64
 import configparser
 import getpass
 import hashlib
+import ipaddress
 import json
 import os
 import psutil
@@ -272,6 +273,151 @@ def _parse_ufw_status(output: str) -> tuple[bool, str]:
         if value and _valid_ipv4(value) and value not in allowed_ips:
             allowed_ips.append(value)
     return fw_enabled, ",".join(allowed_ips)
+
+
+def _parse_ufw_numbered_status(output: str) -> dict[str, Any]:
+    text = str(output or "")
+    enabled = bool(re.search(r"^Status:\s+active\b", text, re.IGNORECASE | re.MULTILINE))
+    rules: list[dict[str, Any]] = []
+    action_re = re.compile(r"\s{2,}(ALLOW(?:\s+IN)?|DENY(?:\s+IN)?|REJECT(?:\s+IN)?|LIMIT(?:\s+IN)?)\s{2,}", re.IGNORECASE)
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        match = re.match(r"^\[\s*(\d+)\]\s+(.+)$", line)
+        if not match:
+            continue
+        number = int(match.group(1))
+        body = match.group(2).strip()
+        comment = ""
+        if " #" in body:
+            body, comment = body.split(" #", 1)
+            comment = comment.strip()
+        action_match = action_re.search(body)
+        if not action_match:
+            continue
+        to_value = body[: action_match.start()].strip()
+        action = " ".join(action_match.group(1).upper().split())
+        from_value = body[action_match.end() :].strip()
+        rules.append({"number": number, "to": to_value, "action": action, "from": from_value, "comment": comment})
+    fingerprint_src = json.dumps({"enabled": enabled, "rules": rules}, sort_keys=True)
+    return {"enabled": enabled, "rules": rules, "fingerprint": hashlib.sha256(fingerprint_src.encode("utf-8")).hexdigest()}
+
+
+def _ufw_rule_port_proto(rule: dict[str, Any]) -> tuple[int | None, str]:
+    value = str(rule.get("to") or "").strip().lower()
+    value = re.sub(r"\s*\(v6\)\s*$", "", value).strip()
+    match = re.search(r"\b(\d{1,5})(?:/(tcp|udp))?\b", value)
+    if not match:
+        return None, ""
+    port = int(match.group(1))
+    proto = str(match.group(2) or "tcp").lower()
+    return port, proto
+
+
+def _ufw_from_allows(from_value: str, client_ip: str) -> bool:
+    source = str(from_value or "").strip()
+    ip_text = str(client_ip or "").strip()
+    if not ip_text:
+        return False
+    lowered = source.lower()
+    if lowered in {"anywhere", "anywhere (v4)", "0.0.0.0/0"}:
+        return True
+    if "(v6)" in lowered or lowered in {"anywhere (v6)", "::/0"}:
+        return False
+    source = source.split()[0]
+    try:
+        ip_obj = ipaddress.ip_address(ip_text)
+        if "/" in source:
+            return ip_obj in ipaddress.ip_network(source, strict=False)
+        return ip_obj == ipaddress.ip_address(source)
+    except ValueError:
+        return False
+
+
+def _ufw_has_allow_rule(rules: list[dict[str, Any]], port: int, proto: str, client_ip: str | None = None) -> bool:
+    proto = str(proto or "tcp").lower()
+    for rule in rules:
+        action = str(rule.get("action") or "").upper()
+        if not action.startswith("ALLOW"):
+            continue
+        rule_port, rule_proto = _ufw_rule_port_proto(rule)
+        if rule_port != int(port) or rule_proto != proto:
+            continue
+        if client_ip is None or _ufw_from_allows(str(rule.get("from") or ""), client_ip):
+            return True
+    return False
+
+
+def _normalize_ufw_rule(raw: dict[str, Any]) -> dict[str, str]:
+    port_raw = str(raw.get("port") or "").strip()
+    if not port_raw.isdigit() or not 1 <= int(port_raw) <= 65535:
+        raise ValueError("UFW rule port must be between 1 and 65535.")
+    proto = str(raw.get("proto") or "tcp").strip().lower()
+    if proto not in {"tcp", "udp"}:
+        raise ValueError("UFW rule protocol must be tcp or udp.")
+    from_value = str(raw.get("from") or "Anywhere").strip() or "Anywhere"
+    if from_value.lower() not in {"anywhere", "anywhere (v4)", "0.0.0.0/0"}:
+        try:
+            if "/" in from_value:
+                ipaddress.ip_network(from_value, strict=False)
+            else:
+                ipaddress.ip_address(from_value)
+        except ValueError as exc:
+            raise ValueError(f"Invalid UFW source: {from_value}") from exc
+    comment = re.sub(r"[\r\n\x00]+", " ", str(raw.get("comment") or "")).strip()[:80]
+    return {"port": str(int(port_raw)), "proto": proto, "from": from_value, "comment": comment}
+
+
+def _ssh_client_ip_from_connection(value: str) -> str:
+    parts = str(value or "").strip().split()
+    return parts[0] if parts else ""
+
+
+def _is_vpn_management_ip(client_ip: str) -> bool:
+    try:
+        ip_obj = ipaddress.ip_address(str(client_ip or "").strip())
+    except ValueError:
+        return False
+    return ip_obj.version == 4 and ip_obj in ipaddress.ip_network("10.8.0.0/16")
+
+
+def _simulate_ufw_changes(
+    current_rules: list[dict[str, Any]],
+    delete_numbers: list[int],
+    add_rules: list[dict[str, str]],
+    enabled: bool,
+    client_ip: str = "",
+) -> dict[str, Any]:
+    delete_set = {int(number) for number in delete_numbers}
+    existing_numbers = {int(rule.get("number") or 0) for rule in current_rules}
+    missing = sorted(number for number in delete_set if number not in existing_numbers)
+    if missing:
+        return {"ok": False, "blocking": [f"Selected UFW rule number(s) no longer exist: {', '.join(map(str, missing))}. Refresh UFW first."], "warnings": [], "rules": []}
+    simulated = [dict(rule) for rule in current_rules if int(rule.get("number") or 0) not in delete_set]
+    next_number = max(existing_numbers or {0}) + 1
+    for rule in add_rules:
+        from_value = str(rule.get("from") or "Anywhere")
+        simulated.append({
+            "number": next_number,
+            "to": f"{rule['port']}/{rule['proto']}",
+            "action": "ALLOW IN",
+            "from": from_value,
+            "comment": str(rule.get("comment") or ""),
+        })
+        next_number += 1
+    blocking: list[str] = []
+    warnings: list[str] = []
+    if enabled:
+        if client_ip and not _ufw_has_allow_rule(simulated, 22, "tcp", client_ip):
+            blocking.append(f"SSH would no longer allow the current management IP {client_ip}.")
+        elif not _ufw_has_allow_rule(simulated, 22, "tcp"):
+            blocking.append("No SSH allow rule for 22/tcp would remain while UFW is enabled.")
+        if _is_vpn_management_ip(client_ip) and not _ufw_has_allow_rule(simulated, 1194, "udp"):
+            blocking.append("Current management connection appears to use VPN, but no 1194/udp allow rule would remain.")
+        if not _ufw_has_allow_rule(simulated, 8000, "tcp"):
+            warnings.append("No PBGui 8000/tcp allow rule would remain.")
+        if not _ufw_has_allow_rule(simulated, 1194, "udp"):
+            warnings.append("No OpenVPN 1194/udp allow rule would remain.")
+    return {"ok": not blocking, "blocking": blocking, "warnings": warnings, "rules": simulated}
 
 
 def _parse_import_systemd_units(output: str) -> list[dict[str, str]]:
@@ -5538,6 +5684,176 @@ done"""
         vps.firewall_ssh_port = _safe_int(form.get("firewall_ssh_port"), 22)
         vps.firewall_ssh_ips = firewall_ips
         vps.save()
+
+    def _is_local_ufw_target(self, hostname: str | None) -> bool:
+        value = str(hostname or "").strip()
+        return not value or value in {"master", "local", str(getattr(self.vpsmanager, "hostname", "") or "")}
+
+    def _require_remote_master_ufw_target(self, hostname: str) -> None:
+        host = str(hostname or "").strip()
+        if not host:
+            raise ValueError("Remote master hostname is required.")
+        monitor = get_monitor()
+        if monitor is None or not getattr(monitor, "pool", None):
+            raise ValueError("VPS monitor SSH pool is not ready.")
+        entry = monitor.pool.get_connection(host)
+        if not entry:
+            raise ValueError(f"Unknown VPS host: {host}")
+        monitor_state = self._get_monitor_state()
+        host_state = self._get_host_telemetry(monitor_state, host)
+        role = str(self._host_meta(host_state).get("role") or "").strip().lower()
+        if role != "master":
+            raise ValueError(f"Host {host} is not a master.")
+
+    def _run_local_sudo_shell(self, script: str, sudo_pw: str | None, timeout: int = 30) -> tuple[int, str, str]:
+        pw = str(sudo_pw or "")
+        if pw:
+            command = ["sudo", "-S", "-p", "", "bash", "-lc", script]
+            stdin = pw + "\n"
+        else:
+            command = ["sudo", "-n", "bash", "-lc", script]
+            stdin = None
+        try:
+            proc = subprocess.run(command, input=stdin, text=True, capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return 124, "", "Command timed out"
+        return int(proc.returncode), str(proc.stdout or ""), str(proc.stderr or "")
+
+    def _run_remote_sudo_shell(self, hostname: str, script: str, sudo_pw: str | None, timeout: int = 30) -> tuple[int, str, str]:
+        host = str(hostname or "").strip()
+        monitor = get_monitor()
+        if monitor is None or not getattr(monitor, "pool", None):
+            raise ValueError("VPS monitor SSH pool is not ready.")
+        loop = getattr(monitor, "loop", None)
+        if loop is None or loop.is_closed():
+            raise ValueError("VPS monitor loop is not ready.")
+        pool = monitor.pool
+        pw = str(sudo_pw or "")
+        sudo_cmd = f"sudo -S -p '' bash -lc {shlex.quote(script)}" if pw else f"sudo -n bash -lc {shlex.quote(script)}"
+        command = "printf '__PBGUISSH_CONNECTION__=%s\\n' \"$SSH_CONNECTION\"; " + sudo_cmd
+
+        async def run() -> tuple[int, str, str]:
+            entry = await pool._ensure_live_connection(host)
+            if not entry or not getattr(entry, "conn", None):
+                return 255, "", "SSH connection is not available"
+            result = await entry.conn.run(command, input=(pw + "\n") if pw else None, check=False)
+            return int(result.returncode), str(result.stdout or ""), str(result.stderr or "")
+
+        future = asyncio.run_coroutine_threadsafe(run(), loop)
+        try:
+            return future.result(timeout=timeout + 5)
+        except Exception as exc:
+            return 124, "", str(exc)
+
+    def _run_ufw_shell(self, hostname: str | None, script: str, sudo_pw: str | None, timeout: int = 30) -> tuple[int, str, str]:
+        if self._is_local_ufw_target(hostname):
+            return self._run_local_sudo_shell(script, sudo_pw, timeout=timeout)
+        host = str(hostname or "").strip()
+        self._require_remote_master_ufw_target(host)
+        return self._run_remote_sudo_shell(host, script, sudo_pw, timeout=timeout)
+
+    def _extract_ufw_ssh_connection(self, stdout: str) -> tuple[str, str]:
+        ssh_connection = ""
+        kept: list[str] = []
+        for line in str(stdout or "").splitlines():
+            if line.startswith("__PBGUISSH_CONNECTION__="):
+                ssh_connection = line.split("=", 1)[1].strip()
+                continue
+            kept.append(line)
+        return "\n".join(kept), ssh_connection
+
+    def _format_ufw_command_error(self, stderr: str, stdout: str) -> str:
+        combined = "\n".join(part for part in (str(stderr or "").strip(), str(stdout or "").strip()) if part).strip()
+        if not combined:
+            return "UFW command failed."
+        lower = combined.lower()
+        if "a password is required" in lower or "password" in lower or "sudo" in lower:
+            return "Sudo password required or invalid."
+        return combined.splitlines()[0].strip()
+
+    def read_ufw_rules(self, hostname: str | None = None, sudo_pw: str | None = None) -> dict[str, Any]:
+        host = str(hostname or "").strip()
+        target_kind = "local" if self._is_local_ufw_target(host) else "remote"
+        rc, out, err = self._run_ufw_shell(host, "ufw status numbered", sudo_pw, timeout=30)
+        out, ssh_connection = self._extract_ufw_ssh_connection(out)
+        if rc != 0:
+            raise ValueError(self._format_ufw_command_error(err, out))
+        parsed = _parse_ufw_numbered_status(out)
+        client_ip = _ssh_client_ip_from_connection(ssh_connection)
+        return {
+            "target": host or "local",
+            "target_kind": target_kind,
+            "enabled": bool(parsed.get("enabled")),
+            "rules": parsed.get("rules") or [],
+            "fingerprint": str(parsed.get("fingerprint") or ""),
+            "ssh_connection": ssh_connection,
+            "ssh_client_ip": client_ip,
+            "vpn_management": _is_vpn_management_ip(client_ip),
+            "raw": out,
+        }
+
+    def _build_ufw_apply_script(self, enabled: bool, delete_numbers: list[int], add_rules: list[dict[str, str]]) -> str:
+        commands = ["set -e"]
+        for number in sorted({int(item) for item in delete_numbers}, reverse=True):
+            commands.append(f"printf 'y\\n' | ufw delete {number}")
+        for rule in add_rules:
+            port = shlex.quote(str(rule["port"]))
+            proto = shlex.quote(str(rule["proto"]))
+            from_value = str(rule.get("from") or "Anywhere").strip()
+            if from_value.lower() in {"anywhere", "anywhere (v4)", "0.0.0.0/0"}:
+                command = f"ufw allow {port}/{proto}"
+            else:
+                command = f"ufw allow from {shlex.quote(from_value)} to any port {port} proto {proto}"
+            comment = str(rule.get("comment") or "").strip()
+            if comment:
+                command += f" comment {shlex.quote(comment)}"
+            commands.append(command)
+        commands.append("ufw --force enable" if enabled else "ufw disable")
+        commands.append("ufw status numbered")
+        return "\n".join(commands)
+
+    def preview_ufw_changes(self, current: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        add_rules = [_normalize_ufw_rule(item) for item in (payload.get("add_rules") or []) if isinstance(item, dict)]
+        delete_numbers = sorted({int(item) for item in (payload.get("delete_numbers") or [])})
+        enabled = bool(payload.get("enabled"))
+        safety = _simulate_ufw_changes(
+            list(current.get("rules") or []),
+            delete_numbers,
+            add_rules,
+            enabled,
+            str(current.get("ssh_client_ip") or ""),
+        )
+        return {"enabled": enabled, "delete_numbers": delete_numbers, "add_rules": add_rules, "safety": safety}
+
+    def preview_ufw_rules(self, hostname: str | None, payload: dict[str, Any], sudo_pw: str | None = None) -> dict[str, Any]:
+        current = self.read_ufw_rules(hostname, sudo_pw)
+        expected_fingerprint = str(payload.get("fingerprint") or "").strip()
+        stale = bool(expected_fingerprint and expected_fingerprint != str(current.get("fingerprint") or ""))
+        preview = self.preview_ufw_changes(current, payload)
+        return {"current": current, "preview": preview, "stale": stale}
+
+    def apply_ufw_rules(self, hostname: str | None, payload: dict[str, Any], sudo_pw: str | None = None) -> dict[str, Any]:
+        current = self.read_ufw_rules(hostname, sudo_pw)
+        expected_fingerprint = str(payload.get("fingerprint") or "").strip()
+        if expected_fingerprint and expected_fingerprint != str(current.get("fingerprint") or ""):
+            raise ValueError("UFW rules changed since they were loaded. Refresh UFW before applying changes.")
+        preview = self.preview_ufw_changes(current, payload)
+        safety = preview["safety"]
+        if not safety.get("ok"):
+            blocking = safety.get("blocking") or ["UFW safety check failed."]
+            raise ValueError(" ".join(str(item) for item in blocking))
+        script = self._build_ufw_apply_script(bool(preview["enabled"]), preview["delete_numbers"], preview["add_rules"])
+        rc, out, err = self._run_ufw_shell(hostname, script, sudo_pw, timeout=45)
+        if rc != 0:
+            raise ValueError(self._format_ufw_command_error(err, out))
+        refreshed = self.read_ufw_rules(hostname, sudo_pw)
+        refreshed["applied"] = {
+            "deleted": preview["delete_numbers"],
+            "added": preview["add_rules"],
+            "enabled": bool(preview["enabled"]),
+        }
+        refreshed["safety"] = safety
+        return refreshed
 
     def browse_files(self, path: str) -> dict[str, Any]:
         import os

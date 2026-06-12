@@ -41,6 +41,7 @@
       { page: '/',                    icon: '&#128682;', label: 'Welcome'           },
       { page: 'system_api_keys',      icon: '&#128273;', label: 'API-Keys'          },
       { page: 'system_services',      icon: '&#128295;', label: 'PBGUI Services'    },
+      { page: 'system_db_tools',      icon: '&#128736;', label: 'DB Tools'          },
       { page: 'system_vps_manager_fastapi', icon: '&#128421;', label: 'VPS Manager' },
       { page: 'system_vps_monitor',   icon: '&#128223;', label: 'VPS Monitor'       },
       { page: 'system_logging',       icon: '&#128196;', label: 'Logging'           }
@@ -868,6 +869,7 @@
     'system_logging':     '/api/logging/main_page',
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',
+    'system_db_tools':    '/api/db-tools/main_page',
     'help':               '/app/help.html',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',

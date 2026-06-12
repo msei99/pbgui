@@ -261,7 +261,10 @@ body {
   color: #e2e8f0; white-space: nowrap;
 }
 .msel-item:hover { background: #2d3748; }
-.msel-item input[type="checkbox"] { accent-color: #63b3ed; margin: 0; cursor: pointer; }
+.msel-item.selected {
+  background: rgba(77,166,255,.12);
+  box-shadow: inset 3px 0 0 #63b3ed;
+}
 .msel-sep { border-top: 1px solid #2d3748; margin: 0.15rem 0; }
 </style>
 </head>
@@ -361,6 +364,7 @@ body {
     var uid      = 'msel' + (++_mselCounter);
     var selected = (initSelected && initSelected.length) ? initSelected.slice() : [];
     var opts     = _templates.slice();
+    var dragState = null;
 
     var wrap   = el('div', 'msel-wrap');
     var btn    = el('div', 'msel-btn');
@@ -386,32 +390,90 @@ body {
       else                            btnLbl.textContent = selected.length + ' templates';
     }
 
+    function setItemSelected(item, isSelected) {
+      if (!item) return;
+      var value = item.getAttribute('data-template') || '';
+      if (!value) return;
+      var ix = selected.indexOf(value);
+      if (isSelected && ix < 0) selected.push(value);
+      else if (!isSelected && ix >= 0) selected.splice(ix, 1);
+      item.classList.toggle('selected', !!isSelected);
+      item.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+    }
+
+    function syncTplDropdown() {
+      list.querySelectorAll('.tpl-msel-item').forEach(function(item) {
+        var value = item.getAttribute('data-template') || '';
+        var isSelected = selected.indexOf(value) >= 0;
+        item.classList.toggle('selected', isSelected);
+        item.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+      });
+      updateLabel();
+      onChange(selected.slice());
+    }
+
+    function toggleItem(item) {
+      if (!item) return;
+      setItemSelected(item, !item.classList.contains('selected'));
+      syncTplDropdown();
+    }
+
+    function applyDragAt(x, y) {
+      var hit = document.elementFromPoint(x, y);
+      var item = hit && hit.closest ? hit.closest('.tpl-msel-item') : null;
+      if (!item || !list.contains(item)) return;
+      setItemSelected(item, dragState.mode === 'add');
+      syncTplDropdown();
+    }
+
+    function onDragMove(event) {
+      if (!dragState) return;
+      if (!dragState.selecting && Math.max(Math.abs(event.clientX - dragState.x), Math.abs(event.clientY - dragState.y)) > 5) {
+        dragState.selecting = true;
+        setItemSelected(dragState.item, dragState.mode === 'add');
+        syncTplDropdown();
+      }
+      if (!dragState.selecting) return;
+      event.preventDefault();
+      applyDragAt(event.clientX, event.clientY);
+    }
+
+    function onDragUp() {
+      if (!dragState) return;
+      if (!dragState.selecting) toggleItem(dragState.item);
+      dragState = null;
+      document.removeEventListener('mousemove', onDragMove);
+      document.removeEventListener('mouseup', onDragUp);
+    }
+
     function buildList() {
       list.innerHTML = '';
       opts.forEach(function(t) {
-        var item = el('div', 'msel-item');
+        var item = el('div', 'msel-item tpl-msel-item');
         item.setAttribute('data-u', t.toLowerCase());
-        var cb = el('input');
-        cb.type = 'checkbox'; cb.value = t;
-        cb.checked = selected.indexOf(t) >= 0;
-        cb.addEventListener('change', (function(val) {
-          return function() {
-            var ix = selected.indexOf(val);
-            if (this.checked && ix < 0) selected.push(val);
-            else if (!this.checked && ix >= 0) selected.splice(ix, 1);
-            updateLabel();
-            onChange(selected.slice());
-          };
-        })(t));
+        item.setAttribute('data-template', t);
+        item.setAttribute('tabindex', '0');
+        item.setAttribute('aria-selected', selected.indexOf(t) >= 0 ? 'true' : 'false');
+        if (selected.indexOf(t) >= 0) item.classList.add('selected');
         var lbl = el('span', null, t);
-        item.appendChild(cb);
         item.appendChild(lbl);
-        item.addEventListener('click', function(e) {
-          if (e.target.tagName !== 'INPUT') {
-            var c = this.querySelector('input');
-            c.checked = !c.checked;
-            c.dispatchEvent(new Event('change'));
-          }
+        item.addEventListener('mousedown', function(e) {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          dragState = {
+            item: item,
+            x: e.clientX,
+            y: e.clientY,
+            selecting: false,
+            mode: item.classList.contains('selected') ? 'remove' : 'add'
+          };
+          document.addEventListener('mousemove', onDragMove);
+          document.addEventListener('mouseup', onDragUp);
+        });
+        item.addEventListener('keydown', function(e) {
+          if (!e || (e.key !== 'Enter' && e.key !== ' ')) return;
+          e.preventDefault();
+          toggleItem(item);
         });
         list.appendChild(item);
       });
@@ -448,6 +510,7 @@ body {
     var uid      = 'msel' + (++_mselCounter);
     var selected = (initSelected && initSelected.length) ? initSelected.slice() : ['ALL'];
     var opts     = ['ALL'].concat(_users);
+    var dragState = null;
 
     var wrap   = el('div', 'msel-wrap');
     var btn    = el('div', 'msel-btn');
@@ -474,54 +537,102 @@ body {
       else                                   btnLbl.textContent = selected.length + ' users';
     }
 
+    function setValueSelected(value, isSelected, allowEmpty) {
+      if (!value) return;
+      if (value === 'ALL') {
+        selected = isSelected ? ['ALL'] : [];
+        return;
+      }
+      var ai = selected.indexOf('ALL');
+      if (ai >= 0) selected.splice(ai, 1);
+      var ix = selected.indexOf(value);
+      if (isSelected && ix < 0) selected.push(value);
+      else if (!isSelected && ix >= 0) selected.splice(ix, 1);
+      if (!allowEmpty && selected.length === 0) selected = ['ALL'];
+    }
+
+    function setItemSelected(item, isSelected, allowEmpty) {
+      if (!item) return;
+      setValueSelected(item.getAttribute('data-user') || '', isSelected, allowEmpty);
+    }
+
+    function syncUsersDropdown() {
+      list.querySelectorAll('.user-msel-item').forEach(function(item) {
+        var value = item.getAttribute('data-user') || '';
+        var isSelected = selected.indexOf(value) >= 0;
+        item.classList.toggle('selected', isSelected);
+        item.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+      });
+      updateLabel();
+      onChange(selected.slice());
+    }
+
+    function toggleItem(item) {
+      if (!item) return;
+      setItemSelected(item, !item.classList.contains('selected'), false);
+      syncUsersDropdown();
+    }
+
+    function applyDragAt(x, y) {
+      var hit = document.elementFromPoint(x, y);
+      var item = hit && hit.closest ? hit.closest('.user-msel-item') : null;
+      if (!item || !list.contains(item)) return;
+      setItemSelected(item, dragState.mode === 'add', true);
+      syncUsersDropdown();
+    }
+
+    function onDragMove(event) {
+      if (!dragState) return;
+      if (!dragState.selecting && Math.max(Math.abs(event.clientX - dragState.x), Math.abs(event.clientY - dragState.y)) > 5) {
+        dragState.selecting = true;
+        setItemSelected(dragState.item, dragState.mode === 'add', true);
+        syncUsersDropdown();
+      }
+      if (!dragState.selecting) return;
+      event.preventDefault();
+      applyDragAt(event.clientX, event.clientY);
+    }
+
+    function onDragUp() {
+      if (!dragState) return;
+      if (!dragState.selecting) toggleItem(dragState.item);
+      else if (!selected.length) {
+        selected = ['ALL'];
+        syncUsersDropdown();
+      }
+      dragState = null;
+      document.removeEventListener('mousemove', onDragMove);
+      document.removeEventListener('mouseup', onDragUp);
+    }
+
     function buildList() {
       list.innerHTML = '';
       opts.forEach(function(u) {
-        var item = el('div', 'msel-item');
+        var item = el('div', 'msel-item user-msel-item');
         item.setAttribute('data-u', u.toLowerCase());
-        var cb = el('input');
-        cb.type = 'checkbox'; cb.value = u;
-        cb.checked = selected.indexOf(u) >= 0;
-        cb.addEventListener('change', (function(val) {
-          return function() {
-            if (val === 'ALL') {
-              if (this.checked) {
-                selected = ['ALL'];
-                list.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
-                  c.checked = (c.value === 'ALL');
-                });
-              } else {
-                selected = [];
-              }
-            } else {
-              var ai = selected.indexOf('ALL');
-              if (ai >= 0) selected.splice(ai, 1);
-              var ix = selected.indexOf(val);
-              if (this.checked && ix < 0) selected.push(val);
-              else if (!this.checked && ix >= 0) selected.splice(ix, 1);
-              list.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
-                if (c.value === 'ALL') c.checked = false;
-              });
-              if (selected.length === 0) {
-                selected = ['ALL'];
-                list.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
-                  c.checked = (c.value === 'ALL');
-                });
-              }
-            }
-            updateLabel();
-            onChange(selected.slice());
-          };
-        })(u));
+        item.setAttribute('data-user', u);
+        item.setAttribute('tabindex', '0');
+        item.setAttribute('aria-selected', selected.indexOf(u) >= 0 ? 'true' : 'false');
+        if (selected.indexOf(u) >= 0) item.classList.add('selected');
         var lbl = el('span', null, u);
-        item.appendChild(cb);
         item.appendChild(lbl);
-        item.addEventListener('click', function(e) {
-          if (e.target.tagName !== 'INPUT') {
-            var c = this.querySelector('input');
-            c.checked = !c.checked;
-            c.dispatchEvent(new Event('change'));
-          }
+        item.addEventListener('mousedown', function(e) {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          dragState = {
+            item: item,
+            x: e.clientX,
+            y: e.clientY,
+            selecting: false,
+            mode: item.classList.contains('selected') ? 'remove' : 'add'
+          };
+          document.addEventListener('mousemove', onDragMove);
+          document.addEventListener('mouseup', onDragUp);
+        });
+        item.addEventListener('keydown', function(e) {
+          if (!e || (e.key !== 'Enter' && e.key !== ' ')) return;
+          e.preventDefault();
+          toggleItem(item);
         });
         list.appendChild(item);
         if (u === 'ALL') list.appendChild(el('div', 'msel-sep'));
