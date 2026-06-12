@@ -7,6 +7,7 @@ import os
 import shlex
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import traceback
 import uuid
@@ -2197,21 +2198,34 @@ print(json.dumps(deleted))
     return [str(item) for item in data if isinstance(item, str)] if isinstance(data, list) else []
 
 
-def _pbdata_stop_local() -> bool:
+def _pbdata_stop_local() -> str:
     try:
+        svc = subprocess.run(["systemctl", "--user", "is-active", "--quiet", "pbgui-pbdata.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if svc.returncode == 0:
+            stopped = subprocess.run(["systemctl", "--user", "stop", "pbgui-pbdata.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return "systemd" if stopped.returncode == 0 else "none"
+
         from PBData import PBData
 
         pb = PBData()
         if pb.is_running():
             pb.stop()
-            return True
+            return "legacy"
     except Exception as exc:
         _log(SERVICE, f"local PBData stop failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
-    return False
+    return "none"
 
 
-def _pbdata_start_local() -> None:
+def _pbdata_start_local(marker: str) -> None:
+    if marker == "none":
+        return
     try:
+        if marker == "systemd":
+            started = subprocess.run(["systemctl", "--user", "start", "pbgui-pbdata.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if started.returncode != 0:
+                _log(SERVICE, "local PBData systemd start failed", level="WARNING")
+            return
+
         from PBData import PBData
 
         PBData().run()
@@ -2261,10 +2275,10 @@ async def _stop_target_pbdata(target: str, operation: OperationProgress | None =
 
     if operation:
         operation.set_current(f"Stop PBData on {target}")
-    marker: bool | str
+    marker: str
     if target == "local":
         marker = _pbdata_stop_local()
-        detail = {"was_running": bool(marker)}
+        detail = {"was_running": bool(marker and marker != "none"), "mode": marker}
     else:
         marker = await _pbdata_stop_remote(target)
         detail = {"was_running": bool(marker and marker != "none")}
@@ -2281,7 +2295,7 @@ async def _start_target_pbdata(target: str, marker: bool | str, operation: Opera
         operation.set_current(f"Restart PBData on {target}")
     if target == "local":
         if was_running:
-            _pbdata_start_local()
+            _pbdata_start_local(str(marker or "none"))
             label = f"Restarted PBData on {target}"
         else:
             label = f"PBData restart not needed on {target}"

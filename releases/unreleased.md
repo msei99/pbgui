@@ -1,5 +1,7 @@
 # Unreleased
 
+- PBData: classify Binance watch_tickers subscribe timeouts as transient websocket timeouts with backoff instead of generic errors.
+- DB Tools: restart local PBData through its systemd user service when available so database copy operations do not leave systemd fighting a legacy PBData process.
 - DB Tools: allow swapping source and target masters without selector deadlocks by auto-moving the opposite selector away from conflicts.
 - VPS Manager: hide and block the legacy Change VPS form for imported masters so master firewall settings are only managed through Change UFW.
 - VPS Manager: fix remote master import/details sidebar crash caused by reading VPS status before initialization.

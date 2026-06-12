@@ -448,6 +448,42 @@ def test_run_sync_job_does_not_create_backups(tmp_path: Path, monkeypatch) -> No
         db_tools._sync_job_locks.discard("job1")
 
 
+def test_local_pbdata_stop_start_prefers_systemd(monkeypatch) -> None:
+    """Local PBData restart helpers use systemd when the PBData user service is active."""
+
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(args, **kwargs):
+        del kwargs
+        calls.append(tuple(args))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(db_tools.subprocess, "run", fake_run)
+
+    marker = db_tools._pbdata_stop_local()
+    db_tools._pbdata_start_local(marker)
+
+    assert marker == "systemd"
+    assert calls == [
+        ("systemctl", "--user", "is-active", "--quiet", "pbgui-pbdata.service"),
+        ("systemctl", "--user", "stop", "pbgui-pbdata.service"),
+        ("systemctl", "--user", "start", "pbgui-pbdata.service"),
+    ]
+
+
+def test_start_target_pbdata_preserves_local_marker(monkeypatch) -> None:
+    """Target PBData restart passes the original local stop marker through."""
+
+    markers: list[str] = []
+    operation = SimpleNamespace(set_current=lambda label: None, advance=lambda label, detail: None)
+
+    monkeypatch.setattr(db_tools, "_pbdata_start_local", lambda marker: markers.append(marker))
+
+    asyncio.run(db_tools._start_target_pbdata("local", "systemd", operation))
+
+    assert markers == ["systemd"]
+
+
 def test_remote_list_users_script_returns_counts(tmp_path: Path) -> None:
     """Remote user listing helper returns compact JSON counts without copying DB files."""
 

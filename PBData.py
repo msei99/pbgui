@@ -3214,6 +3214,18 @@ class PBData():
                                         self._price_subscribed_symbols[exchange] = subscribed
                                         # reset backoff on success of any chunk
                                         subscribe_backoff = 0
+                                    except asyncio.TimeoutError:
+                                        _human_log('PBData', f"[ws] watch_tickers subscribe TIMEOUT for exchange {exchange} (chunk {i}-{i+chunk_size}); backing off", level='WARNING')
+                                        subscribe_backoff = min(subscribe_backoff + 1, 6)
+                                        if subscribe_backoff >= 3:
+                                            try:
+                                                await Exchange.close_shared_ws_client(exchange)
+                                            except Exception:
+                                                pass
+                                            await asyncio.sleep(30)
+                                        else:
+                                            await asyncio.sleep(min(5 * subscribe_backoff, 30))
+                                        raise RuntimeError("subscribe_chunk_failed")
                                     except Exception as e:
                                         raw = str(e)
                                         lower = raw.lower()
