@@ -9660,7 +9660,7 @@
           <button class='sb-btn' type='button' onclick='openVpsTaskLogs(${js(selectedHost)})'>Task Logs</button>
           <button class='sb-btn' type='button' onclick='openVpsHostLogs(${js(selectedHost)})'>Host Logs</button>
           ${isRemoteMaster ? `<button class='sb-btn' type='button' onclick='selectView("vps-ufw", ${js(selectedHost)})'>Change UFW</button>` : ''}
-          <button class='sb-btn' type='button' onclick='selectView("vps-setup", ${js(selectedHost)})'>Change VPS</button>
+          ${!isRemoteMaster ? `<button class='sb-btn' type='button' onclick='selectView("vps-setup", ${js(selectedHost)})'>Change VPS</button>` : ''}
           <button class='sb-btn' type='button' onclick='selectView("vps-pbgui-branch", ${js(selectedHost)})'>PBGui Branch</button>
           <button class='sb-btn' type='button' onclick='selectView("vps-pb7-branch", ${js(selectedHost)})'>PB7 Branch</button>
           <button class='sb-btn' type='button' onclick='openExistingAsInit(${js(selectedHost)})'>Initialize</button>
@@ -11354,6 +11354,25 @@
       const ui = ensureVpsUi(detail.hostname, detail);
       const status = detail.status || {};
       const summary = status.summary_row || {};
+      if (String(summary.role || '').toLowerCase() === 'master') {
+        return `
+          <h2 class='page-section-title'>${esc(detail.hostname)} &mdash; Master Settings</h2>
+          <div class='panel'>
+            <div class='panel-head'>
+              <div>
+                <div class='panel-title'>Change VPS is disabled for masters</div>
+                <div class='panel-sub'>Master firewall rules must be managed through Change UFW so existing ACL entries are preserved.</div>
+              </div>
+            </div>
+            <div class='panel-body stack'>
+              <div class='notice warning'>This host is reported as a master. The VPS setup form is hidden to avoid changing master firewall settings through the legacy VPS apply path.</div>
+              <div class='button-row'>
+                <button class='btn' type='button' onclick='selectView("vps", ${js(detail.hostname)})'>Back to Host</button>
+                <button class='btn primary' type='button' onclick='selectView("vps-ufw", ${js(detail.hostname)})'>Change UFW</button>
+              </div>
+            </div>
+          </div>`;
+      }
       const canSetup = canSetupForm(Object.assign({ hostname: detail.hostname }, ui.form || {}));
       const canSave = canSaveForm(ui.form || {}, ui.savedForm);
       const readSettingsLoading = !!ui.readSettingsLoading;

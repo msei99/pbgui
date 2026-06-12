@@ -445,13 +445,16 @@
       option.textContent = label || (raw + ' (unavailable)');
       select.appendChild(option);
     }
-    function renderTargetSelect(id, excludeId, preferredId) {
+    function firstDifferentTargetId(blockedId) {
+      const match = state.targets.find(function (target) { return target.id !== blockedId; });
+      return match ? match.id : '';
+    }
+    function renderTargetSelect(id, preferredId) {
       const select = el(id);
-      const options = state.targets.filter(function (target) { return target.id !== excludeId; });
-      select.innerHTML = options.map(targetOption).join('');
-      select.disabled = options.length === 0;
-      if (!options.length) return '';
-      if (preferredId && options.some(function (target) { return target.id === preferredId; })) {
+      select.innerHTML = state.targets.map(targetOption).join('');
+      select.disabled = state.targets.length === 0;
+      if (!state.targets.length) return '';
+      if (preferredId && state.targets.some(function (target) { return target.id === preferredId; })) {
         select.value = preferredId;
       } else {
         select.selectedIndex = 0;
@@ -461,12 +464,15 @@
     function syncTargetPair(sourceId, targetId, changedSide) {
       const sourceValue = el(sourceId).value;
       const targetValue = el(targetId).value;
-      if (changedSide === 'target') {
-        const nextSource = renderTargetSelect(sourceId, targetValue, sourceValue);
-        renderTargetSelect(targetId, nextSource, targetValue);
+      if (changedSide === 'target' && targetValue === sourceValue) {
+        renderTargetSelect(sourceId, firstDifferentTargetId(targetValue));
+        renderTargetSelect(targetId, targetValue);
+      } else if (changedSide === 'source' && sourceValue === targetValue) {
+        renderTargetSelect(sourceId, sourceValue);
+        renderTargetSelect(targetId, firstDifferentTargetId(sourceValue));
       } else {
-        const nextTarget = renderTargetSelect(targetId, sourceValue, targetValue);
-        renderTargetSelect(sourceId, nextTarget, sourceValue);
+        renderTargetSelect(sourceId, sourceValue);
+        renderTargetSelect(targetId, targetValue);
       }
     }
     function resetUsersPreview() {

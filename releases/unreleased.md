@@ -1,5 +1,7 @@
 # Unreleased
 
+- DB Tools: allow swapping source and target masters without selector deadlocks by auto-moving the opposite selector away from conflicts.
+- VPS Manager: hide and block the legacy Change VPS form for imported masters so master firewall settings are only managed through Change UFW.
 - VPS Manager: fix remote master import/details sidebar crash caused by reading VPS status before initialization.
 - VPS Manager: make PBGui branch switching match normal updates by overwriting tracked local changes and fetching all origin branches before checkout.
 - VPS Manager: keep focus in UFW add-rule fields while typing custom rule comments or sources.
