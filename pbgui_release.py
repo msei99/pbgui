@@ -58,6 +58,19 @@ def _run_git(args: list[str], repo_dir: Path) -> str:
     return str(result.stdout or "").strip()
 
 
+def _run_git_in_worktree(args: list[str], repo_dir: Path, timeout: int = 20) -> bool:
+    if not (repo_dir / ".git").exists():
+        return False
+    result = _run_subprocess(["git", "-C", str(repo_dir)] + list(args), timeout=timeout, suppress_stderr=True)
+    return bool(result and result.returncode == 0)
+
+
+def _fetch_pbgui_remote_heads(repo_dir: Path) -> None:
+    if _run_git_in_worktree(["fetch", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"], repo_dir, timeout=45):
+        return
+    _run_git_in_worktree(["fetch", "origin"], repo_dir, timeout=20)
+
+
 def _read_origin_version(repo_dir: Path, ref: str = "origin/main") -> str:
     version_text = _run_git(["show", f"{ref}:pbgui_purefunc.py"], repo_dir)
     if version_text:
@@ -101,7 +114,7 @@ def load_pbgui_origin_version(repo_dir: Path | None = None) -> str:
 
 def load_pbgui_branch_history(repo_dir: Path | None = None, limit: int = 50) -> dict[str, list[dict[str, str]]]:
     root = Path(repo_dir or PBGDIR)
-    _run_git(["fetch", "origin"], root)
+    _fetch_pbgui_remote_heads(root)
     git_dir = root / ".git"
     if not git_dir.exists():
         return {}
@@ -164,7 +177,7 @@ def load_more_pbgui_commits(branch_name: str, repo_dir: Path | None = None, limi
     git_dir = root / ".git"
     if not git_dir.exists() or not branch_name:
         return []
-    _run_git(["fetch", "origin"], root)
+    _fetch_pbgui_remote_heads(root)
     current_branch, _ = get_current_pbgui_status(root)
     branch_ref = f"remotes/origin/{branch_name}" if branch_name != current_branch else branch_name
     commits_result = _run_subprocess(

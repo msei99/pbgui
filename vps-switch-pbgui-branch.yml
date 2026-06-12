@@ -1,8 +1,8 @@
 ---
 # Switch pbgui branch/commit on VPS
 # Steps:
-# 1. Fetch from origin
-# 2. Check for uncommitted changes (fail if found)
+# 1. Fetch all branches from origin
+# 2. Discard tracked local changes by default, matching normal PBGui updates
 # 3. Checkout specified branch
 # 4. Optionally reset to specific commit (stays on branch)
 # 5. Pull if on branch HEAD (no specific commit)
@@ -24,8 +24,8 @@
         var: ansible_facts
       tags: debug,never
 
-    - name: Fetch from origin
-      command: git fetch origin
+    - name: Fetch all branches from origin
+      command: git fetch --prune origin +refs/heads/*:refs/remotes/origin/*
       args:
         chdir: "{{ pbgdir }}"
       changed_when: false
@@ -37,10 +37,16 @@
       register: git_status
       changed_when: false
 
-    - name: Fail if uncommitted changes exist
+    - name: Discard uncommitted tracked changes when forced
+      command: git reset --hard
+      args:
+        chdir: "{{ pbgdir }}"
+      when: git_status.stdout != "" and (force_local_changes | default(true) | bool)
+
+    - name: Fail if uncommitted changes exist and force is disabled
       fail:
         msg: "Uncommitted changes detected. Please commit or stash changes before switching branches."
-      when: git_status.stdout != ""
+      when: git_status.stdout != "" and not (force_local_changes | default(true) | bool)
 
     - name: Check if branch exists locally
       command: git rev-parse --verify "{{ target_branch }}"
@@ -51,7 +57,7 @@
       changed_when: false
 
     - name: Create and checkout local branch from remote if it doesn't exist
-      command: git checkout -b "{{ target_branch }}" --track "origin/{{ target_branch }}"
+      command: git checkout -b "{{ target_branch }}" "refs/remotes/origin/{{ target_branch }}"
       args:
         chdir: "{{ pbgdir }}"
       when: branch_exists.rc != 0

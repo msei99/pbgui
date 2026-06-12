@@ -8360,7 +8360,6 @@
 
     function setUfwFormField(field, value) {
       store.ufw.form = Object.assign({}, store.ufw.form || {}, { [field]: value });
-      renderUi({ forceView: true });
     }
 
     function normalizeUfwFrom(value) {

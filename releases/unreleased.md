@@ -1,5 +1,8 @@
 # Unreleased
 
+- VPS Manager: make PBGui branch switching match normal updates by overwriting tracked local changes and fetching all origin branches before checkout.
+- VPS Manager: keep focus in UFW add-rule fields while typing custom rule comments or sources.
+- VPS Manager: make PBGui branch selection discover all remote branches on single-branch master installs without manual git remote configuration.
 - VPS Manager: add Change UFW for local and remote masters with rule-list editing, quick allow rules for SSH/PBGui/OpenVPN, stale-rule protection, and lockout safety checks.
 - DB Tools: change Sync Jobs to run without backups, copy large history tables incrementally by timestamp, replace small state tables directly, and verify source/target row counts after each target sync.
 - DB Tools: add readable per-job Sync Job logs under data/logs/jobs using the job name in the filename and standard movable LogViewerPanel.
