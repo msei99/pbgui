@@ -1,5 +1,6 @@
 # Unreleased
 
+- PBData: use Binance bookTicker websocket data as the price feed when ticker streams do not emit, deriving prices from bid/ask midpoint.
 - PBData: avoid repeated Binance watch_tickers subscribe attempts by using stable chunked receive loops instead of treating watch_tickers as a subscribe acknowledgement.
 - PBData: classify Binance watch_tickers subscribe timeouts as transient websocket timeouts with backoff instead of generic errors.
 - DB Tools: restart local PBData through its systemd user service when available so database copy operations do not leave systemd fighting a legacy PBData process.

@@ -3180,7 +3180,10 @@ class PBData():
                         self._price_ticks_count[exchange] = 0
                         last_heartbeat_ts = now_ts
                     if not started_logged:
-                        mode = 'batch watch_tickers' if supports_batch else 'per-symbol watch_ticker'
+                        if supports_batch and exchange == 'binance' and hasattr(ex, 'watch_bids_asks'):
+                            mode = 'batch watch_bids_asks'
+                        else:
+                            mode = 'batch watch_tickers' if supports_batch else 'per-symbol watch_ticker'
                         _human_log('PBData', f"[ws] Price stream active for exchange {exchange}: {len(symbols)} symbol(s), mode={mode}", level='INFO')
                         started_logged = True
 
@@ -3209,14 +3212,22 @@ class PBData():
                         batch_chunk_index = (batch_chunk_index + 1) % len(chunks)
                         chunk_start = chunk_index * chunk_size
                         chunk_end = chunk_start + len(chunk)
+                        use_bids_asks = exchange == 'binance' and hasattr(ex, 'watch_bids_asks')
+                        watch_name = 'watch_bids_asks' if use_bids_asks else 'watch_tickers'
                         try:
                             timeout_val = getattr(self, '_price_watch_timeout', None)
                             if timeout_val:
-                                tickers = await asyncio.wait_for(ex.watch_tickers(chunk), timeout=timeout_val)
+                                if use_bids_asks:
+                                    tickers = await asyncio.wait_for(ex.watch_bids_asks(chunk), timeout=timeout_val)
+                                else:
+                                    tickers = await asyncio.wait_for(ex.watch_tickers(chunk), timeout=timeout_val)
                             else:
-                                tickers = await ex.watch_tickers(chunk)
+                                if use_bids_asks:
+                                    tickers = await ex.watch_bids_asks(chunk)
+                                else:
+                                    tickers = await ex.watch_tickers(chunk)
                         except asyncio.TimeoutError:
-                            _human_log('PBData', f"[ws] watch_tickers TIMEOUT for exchange {exchange} (chunk {chunk_start}-{chunk_end} of {len(requested_symbols)}); backing off", level='WARNING')
+                            _human_log('PBData', f"[ws] {watch_name} TIMEOUT for exchange {exchange} (chunk {chunk_start}-{chunk_end} of {len(requested_symbols)}); backing off", level='WARNING')
                             subscribe_backoff = min(subscribe_backoff + 1, 6)
                             if subscribe_backoff >= 3:
                                 try:
@@ -3236,7 +3247,7 @@ class PBData():
                             lower = raw.lower()
                             # If this was a benign/normal close (e.g. code 1000) attempt lightweight reconnect
                             if self._is_normal_ws_close(raw):
-                                _human_log('PBData', f"[ws] watch_tickers normal websocket close for exchange {exchange}: {e}; attempting reconnect", level='WARNING')
+                                _human_log('PBData', f"[ws] {watch_name} normal websocket close for exchange {exchange}: {e}; attempting reconnect", level='WARNING')
                                 ex = await Exchange.get_shared_ws_client(exchange)
                                 if not ex:
                                     _human_log('PBData', f"[ws] ccxtpro unavailable (price) after normal close reconnect for exchange {exchange}", level='WARNING')
@@ -3246,7 +3257,7 @@ class PBData():
                             # If the exchange enforces a hard subscribe limit, close client and backoff
                             if 'cannot track more than' in lower or 'cannot track more than' in raw:
                                 try:
-                                    _human_log('PBData', f"[ws] watch_tickers subscribe REJECTED by exchange {exchange}: {e}; users={len(unique_users_all)}; closing shared client and entering backoff", level='ERROR')
+                                    _human_log('PBData', f"[ws] {watch_name} subscribe REJECTED by exchange {exchange}: {e}; users={len(unique_users_all)}; closing shared client and entering backoff", level='ERROR')
                                 except Exception:
                                     pass
                                 try:
@@ -3261,7 +3272,7 @@ class PBData():
                                 continue
                             # Treat ccxt RequestTimeout / connection timeouts as transient here too
                             if 'timeout' in lower or 'requesttimeout' in lower or 'connection timeout' in lower:
-                                _human_log('PBData', f"[ws] watch_tickers REQUESTTIMEOUT for exchange {exchange} (chunk {chunk_start}-{chunk_end} of {len(requested_symbols)}): {e}; backing off", level='WARNING')
+                                _human_log('PBData', f"[ws] {watch_name} REQUESTTIMEOUT for exchange {exchange} (chunk {chunk_start}-{chunk_end} of {len(requested_symbols)}): {e}; backing off", level='WARNING')
                                 subscribe_backoff = min(subscribe_backoff + 1, 6)
                                 if subscribe_backoff >= 3:
                                     try:
@@ -3280,10 +3291,10 @@ class PBData():
                             # 'already subscribed' error when a topic is re-subscribed.
                             # Treat this as non-fatal.
                             if 'already subscribed' in lower:
-                                _human_log('PBData', f"[ws] watch_tickers: already subscribed for exchange {exchange}: {e}; ignoring and continuing", level='DEBUG')
+                                _human_log('PBData', f"[ws] {watch_name}: already subscribed for exchange {exchange}: {e}; ignoring and continuing", level='DEBUG')
                                 await asyncio.sleep(1)
                                 continue
-                            _human_log('PBData', f"[ws] watch_tickers ERROR for exchange {exchange} (chunk {chunk_start}-{chunk_end} of {len(requested_symbols)}): {e}", level='ERROR')
+                            _human_log('PBData', f"[ws] {watch_name} ERROR for exchange {exchange} (chunk {chunk_start}-{chunk_end} of {len(requested_symbols)}): {e}", level='ERROR')
                             subscribe_backoff = min(subscribe_backoff + 1, 6)
                             if subscribe_backoff >= 3:
                                 try:
@@ -3307,6 +3318,18 @@ class PBData():
                             if not isinstance(ticker, dict):
                                 continue
                             last = ticker.get('last')
+                            if last is None:
+                                bid = ticker.get('bid')
+                                ask = ticker.get('ask')
+                                try:
+                                    if bid is not None and ask is not None:
+                                        last = (float(bid) + float(ask)) / 2.0
+                                    elif bid is not None:
+                                        last = float(bid)
+                                    elif ask is not None:
+                                        last = float(ask)
+                                except Exception:
+                                    last = None
                             ts = ticker.get('timestamp') or ts_now
                             if last is None:
                                 continue
