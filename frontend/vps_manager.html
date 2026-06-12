@@ -9635,9 +9635,9 @@
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
         const ui = ensureVpsUi(store.hostname, detail);
         const selectedHost = store.hostname;
+        const st = (detail && detail.status) || {};
         const isRemoteMaster = String(((st.summary_row || {}).role) || '').toLowerCase() === 'master';
         const canRunRemote = !!String(getEffectiveVpsUserPw(selectedHost) || '').trim() || hasSessionSecret(selectedHost, 'user_pw') || !!(detail && detail.status && detail.status.update_ready);
-        const st = (detail && detail.status) || {};
         const pbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
         const pb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : 'sb-btn ok';
         const bothBtnClass = (st.pbgui_update_available || st.pb7_update_available) ? 'sb-btn warning' : 'sb-btn ok';
