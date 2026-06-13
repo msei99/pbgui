@@ -1,5 +1,9 @@
 # Unreleased
 
+- VPS Monitor: record local master CPU history from the monitor loop and keep confirmed same-minute samples from being cleared by unconfirmed refreshes.
+- Auth: verify a session is actually invalid before the shared navigation redirects on a background 401 response.
+- VPS Monitor: close metric stream SSH subprocesses fully and generate systemd units with a higher file descriptor limit.
+- Services: avoid PBRemote status-poll log spam when no bucket is configured, expose systemd autostart state, and make Enable/Disable start or stop services with autostart.
 - PBData: set Bybit price websocket chunks to one symbol so low-frequency active positions do not keep stale price snapshots.
 - Services: auto-refresh the Price Snapshot overlay, calculate age correctly for millisecond timestamps, and remove the manual refresh button.
 - PBData: use Binance bookTicker websocket data as the price feed when ticker streams do not emit, deriving prices from bid/ask midpoint.

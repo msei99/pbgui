@@ -1328,20 +1328,41 @@
   /* Periodically call /api/token-refresh to extend token expiry.
      Interval: 30 minutes.  If the refresh itself returns 401 we redirect. */
   var _refreshTimer = null;
-  function startTokenRefresh() {
-    if (_refreshTimer) return;
-    var c = cfg();
-    if (!c.token) return;
-    /* Derive the API root from known page-specific API_BASE values.
-       API_BASE is e.g. "http://host:port/api/services" or "/api/services".
-       Token-refresh lives at /api/token-refresh.  */
+  var _authCheckPending = false;
+  function tokenRefreshUrl(token) {
     var apiRoot = '';
     if (window.API_BASE) {
       var m = String(window.API_BASE).match(/^(https?:\/\/[^/]+)/);
       apiRoot = m ? m[1] : '';
     }
+    return apiRoot + '/api/token-refresh?token=' + encodeURIComponent(token || '');
+  }
+
+  function confirmTokenStillValid() {
+    if (_authCheckPending) return;
+    var c = cfg();
+    if (!c.token) {
+      redirectToLogin();
+      return;
+    }
+    _authCheckPending = true;
+    _origFetch(tokenRefreshUrl(c.token), { method: 'POST' })
+      .then(function (r) {
+        if (r.status === 401) {
+          redirectToLogin();
+          return;
+        }
+        _authCheckPending = false;
+      })
+      .catch(function () { _authCheckPending = false; });
+  }
+
+  function startTokenRefresh() {
+    if (_refreshTimer) return;
+    var c = cfg();
+    if (!c.token) return;
     function doRefresh() {
-      fetch(apiRoot + '/api/token-refresh?token=' + encodeURIComponent(c.token), { method: 'POST' })
+      _origFetch(tokenRefreshUrl(c.token), { method: 'POST' })
         .then(function (r) {
           if (r.status === 401) { redirectToLogin(); }
         })
@@ -1351,13 +1372,13 @@
     _refreshTimer = setInterval(doRefresh, 30 * 60 * 1000);  /* every 30 min */
   }
 
-  /* Global 401 interceptor — monkey-patch window.fetch so ANY fetch returning 401
-     triggers a redirect.  This catches background polling, WebSocket auth, etc. */
+  /* Global 401 interceptor — confirm the session token is actually invalid before
+     redirecting, so one transient background 401 does not drop the whole page. */
   var _origFetch = window.fetch;
   window.fetch = function () {
     return _origFetch.apply(this, arguments).then(function (response) {
       if (response.status === 401) {
-        redirectToLogin();
+        confirmTokenStillValid();
       }
       return response;
     });

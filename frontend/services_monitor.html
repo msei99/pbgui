@@ -67,6 +67,8 @@
     .ctrl-btn.start { border-color: #166534; color: #4ade80; background: #052e16; }
     .ctrl-btn.stop { border-color: #7f1d1d; color: #fca5a5; background: #2d1515; }
     .ctrl-btn.restart { border-color: #b45309; color: #fcd34d; background: #1c1a08; }
+    .ctrl-btn.enable { border-color: #1d4ed8; color: #93c5fd; background: #10213f; }
+    .ctrl-btn.disable { border-color: #475569; color: #cbd5e1; background: #1e293b; }
 
     /* ── Tabs ── */
     .tab-bar { display: flex; gap: 2px; padding: 0.25rem 1rem 0; border-bottom: 1px solid #1e2736; flex-shrink: 0; background: #0e1117; }
@@ -103,6 +105,8 @@
     .card-btn.start { border-color: #166534; color: #4ade80; background: #052e16; }
     .card-btn.stop  { border-color: #7f1d1d; color: #fca5a5; background: #2d1515; }
     .card-btn.restart { border-color: #b45309; color: #fcd34d; background: #1c1a08; }
+    .card-btn.enable { border-color: #1d4ed8; color: #93c5fd; background: #10213f; }
+    .card-btn.disable { border-color: #475569; color: #cbd5e1; background: #1e293b; }
 
     /* ── Workers ── */
     .workers-shell {
@@ -1040,35 +1044,76 @@ window.PBGUI_NAV_CONFIG = {
     _statusTimer = setTimeout(fetchStatus, 5000);
   }
 
+  function serviceSkipped(item) {
+    return item.expected === false && !item.running;
+  }
+
+  function serviceStatusClass(item) {
+    return serviceSkipped(item) ? '' : (item.running ? 'running' : 'stopped');
+  }
+
+  function serviceStatusText(item) {
+    var base = serviceSkipped(item) ? 'Skipped' : (item.running ? 'Running' : 'Stopped');
+    if (item.can_enable) {
+      base += ' · ' + (item.enabled ? 'Enabled' : 'Disabled');
+    }
+    return base;
+  }
+
+  function serviceStatusTitle(item) {
+    var parts = [];
+    if (item.reason) parts.push(item.reason);
+    if (item.unit) parts.push('Unit: ' + item.unit);
+    if (item.systemd_state) parts.push('State: ' + item.systemd_state);
+    if (item.systemd_enabled_state) parts.push('Autostart: ' + item.systemd_enabled_state);
+    return parts.join('\n');
+  }
+
+  function renderServiceButtons(svc, item, compact) {
+    var cls = compact ? 'card-btn' : 'ctrl-btn';
+    var stopProp = compact ? ';event.stopPropagation()' : '';
+    var running = !!item.running;
+    var skipped = serviceSkipped(item);
+    var html = '';
+    if (!skipped) {
+      if (svc.isApiServer) {
+        html += running
+          ? '<button class="' + cls + ' restart" onclick="restartApiServer()' + stopProp + '">&#8635; Restart</button>'
+          : '<button class="' + cls + ' start" onclick="svcAction(\'' + svc.id + '\',\'start\')' + stopProp + '">&#9654; Start</button>';
+      } else {
+        html += running
+          ? '<button class="' + cls + ' stop" onclick="svcAction(\'' + svc.id + '\',\'stop\')' + stopProp + '">&#9632; Stop</button>'
+            + '<button class="' + cls + ' restart" onclick="svcAction(\'' + svc.id + '\',\'stop\');setTimeout(function(){svcAction(\'' + svc.id + '\',\'start\');},1500)' + stopProp + '">&#8635; Restart</button>'
+          : '<button class="' + cls + ' start" onclick="svcAction(\'' + svc.id + '\',\'start\')' + stopProp + '">&#9654; Start</button>';
+      }
+    }
+    if (item.can_enable) {
+      if (item.enabled) {
+        html += '<button class="' + cls + ' disable" onclick="svcAction(\'' + svc.id + '\',\'disable\')' + stopProp + '">Disable</button>';
+      } else if (!item.enable_blocked_reason) {
+        html += '<button class="' + cls + ' enable" onclick="svcAction(\'' + svc.id + '\',\'enable\')' + stopProp + '">Enable</button>';
+      }
+    }
+    return html;
+  }
+
   function updateStatusUI() {
     SERVICES.forEach(function (svc) {
       var item = _status[svc.id] || {};
-      var running = item.running;
-      var skipped = item.expected === false && !running;
+      var cls = serviceStatusClass(item);
       var dotSb = document.getElementById('dot-' + svc.id);
       var dotCs = document.getElementById('cs-' + svc.id);
       var lbl   = document.getElementById('sl-' + svc.id);
-      if (dotSb) dotSb.className = 'sb-dot ' + (skipped ? '' : (running ? 'running' : 'stopped'));
-      if (dotCs) dotCs.className = 'status-dot ' + (skipped ? '' : (running ? 'running' : 'stopped'));
+      if (dotSb) dotSb.className = 'sb-dot ' + cls;
+      if (dotCs) dotCs.className = 'status-dot ' + cls;
       if (lbl) {
-        lbl.textContent = skipped ? 'Skipped' : (running ? 'Running' : 'Stopped');
-        lbl.title = skipped ? (item.reason || 'Service is not configured') : '';
+        lbl.textContent = serviceStatusText(item);
+        lbl.title = serviceStatusTitle(item);
       }
       /* ctrl-strip buttons */
       var ctrlSlot = document.getElementById('ctrl-btns-' + svc.id);
       if (ctrlSlot) {
-        if (skipped) {
-          ctrlSlot.innerHTML = '';
-        } else if (svc.isApiServer) {
-          ctrlSlot.innerHTML = running
-            ? '<button class="ctrl-btn restart" onclick="restartApiServer()">&#8635; Restart</button>'
-            : '';
-        } else {
-          ctrlSlot.innerHTML = running
-            ? '<button class="ctrl-btn stop" onclick="svcAction(\'' + svc.id + '\',\'stop\')">&#9632; Stop</button>'
-              + '<button class="ctrl-btn restart" onclick="svcAction(\'' + svc.id + '\',\'stop\');setTimeout(function(){svcAction(\'' + svc.id + '\',\'start\');},1500)">&#8635; Restart</button>'
-            : '<button class="ctrl-btn start" onclick="svcAction(\'' + svc.id + '\',\'start\')">&#9654; Start</button>';
-        }
+        ctrlSlot.innerHTML = renderServiceButtons(svc, item, false);
       }
     });
     updateWorkersSummary();
@@ -1601,23 +1646,15 @@ window.PBGUI_NAV_CONFIG = {
     var html = '';
     SERVICES.forEach(function (svc) {
       var item = _status[svc.id] || {};
-      var running = item.running;
-      var skipped = item.expected === false && !running;
-      var cls = skipped ? '' : (running ? 'running' : 'stopped');
-      var label = skipped ? 'Skipped' : (running ? 'Running' : 'Stopped');
-      var btns = skipped ? '' : (svc.isApiServer
-        ? (running
-            ? '<button class="card-btn restart" onclick="restartApiServer();event.stopPropagation()">&#8635; Restart</button>'
-            : '<button class="card-btn start" onclick="svcAction(\'' + svc.id + '\',\'start\');event.stopPropagation()">&#9654; Start</button>')
-        : (running
-            ? '<button class="card-btn stop" onclick="svcAction(\'' + svc.id + '\',\'stop\');event.stopPropagation()">&#9632; Stop</button>'
-              + '<button class="card-btn restart" onclick="svcAction(\'' + svc.id + '\',\'stop\');setTimeout(function(){svcAction(\'' + svc.id + '\',\'start\');},1500);event.stopPropagation()">&#8635; Restart</button>'
-            : '<button class="card-btn start" onclick="svcAction(\'' + svc.id + '\',\'start\');event.stopPropagation()">&#9654; Start</button>'));
+      var cls = serviceStatusClass(item);
+      var label = serviceStatusText(item);
+      var title = serviceStatusTitle(item);
+      var btns = renderServiceButtons(svc, item, true);
       html += '<div class="svc-card ' + cls + '" onclick="selectPanel(\'' + svc.id + '\')">'
-           +  '<div class="card-name">' + svc.label + '</div>'
-           +  '<div class="card-status-row"><span class="card-dot ' + cls + '"></span>' + label + '</div>'
-           +  '<div style="display:flex;gap:4px;flex-wrap:wrap;">' + btns + '</div>'
-           +  '</div>';
+            +  '<div class="card-name">' + svc.label + '</div>'
+            +  '<div class="card-status-row" title="' + esc(title) + '"><span class="card-dot ' + cls + '"></span>' + esc(label) + '</div>'
+            +  '<div style="display:flex;gap:4px;flex-wrap:wrap;">' + btns + '</div>'
+            +  '</div>';
     });
         var workerCounts = _workers.counts || { total: 0, running: 0 };
         var workerCls = Number(workerCounts.running || 0) > 0 ? 'running' : 'stopped';
@@ -1737,10 +1774,35 @@ window.PBGUI_NAV_CONFIG = {
 
   /* ── Service actions ───────────────────────────────────── */
   window.svcAction = function (svcId, action) {
-    fetch(API_BASE + '/' + svcId + '/' + action + '?token=' + TOKEN, { method: 'POST' })
-      .then(function (r) { return r.json(); })
-      .then(function (d) { if (d.running !== undefined) { _status[svcId] = d; updateStatusUI(); } })
-      .catch(function () {});
+    return fetch(API_BASE + '/' + svcId + '/' + action + '?token=' + TOKEN, { method: 'POST' })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (data) {
+          if (!r.ok) {
+            throw new Error(data.detail || data.error || ('Service ' + action + ' failed.'));
+          }
+          return data;
+        });
+      })
+      .then(function (d) {
+        if (d.running !== undefined) {
+          _status[svcId] = d;
+          updateStatusUI();
+        }
+        if (d.error) {
+          throw new Error(d.error);
+        }
+        fetchStatus();
+      })
+      .catch(function (err) {
+        _resultPopup(
+          'Service action failed',
+          'Could not ' + action + ' ' + svcId + '.',
+          err && err.message ? err.message : 'Service action failed.',
+          false,
+          false
+        );
+        fetchStatus();
+      });
   };
 
   window.restartApiServer = function () {

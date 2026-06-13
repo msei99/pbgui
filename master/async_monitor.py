@@ -586,6 +586,8 @@ class CpuHistoryStore:
             return
         elif minute == last_minute:
             head = int(meta.get("head") or 0)
+            if encoded <= 0 < int(buf[head]):
+                return
             next_value = encoded
             if same_minute_mode == "peak":
                 next_value = max(int(buf[head]), encoded)
@@ -3180,6 +3182,8 @@ class VPSMonitor:
             self._ini_watcher.changed.clear()
             await self._apply_config_changes()
 
+        self._record_local_master_metric_history()
+
         enabled = self.enabled_hosts
         if not enabled:
             return
@@ -3296,6 +3300,170 @@ class VPSMonitor:
         if startup_age > METRICS_STREAM_STARTUP_GRACE_SECONDS:
             return startup_age
         return None
+
+    def _local_master_hostname(self) -> str:
+        configured = str(load_ini("main", "pbname") or "").strip()
+        return configured or socket.gethostname().strip() or "master"
+
+    def _read_local_cpu_times(self) -> tuple[float, float] | None:
+        try:
+            line = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0]
+            parts = line.split()
+            if len(parts) < 5 or parts[0] != "cpu":
+                return None
+            values = [float(value) for value in parts[1:]]
+            return values[3], sum(values)
+        except Exception as exc:
+            _log(SERVICE, f"local master CPU probe failed: {exc}", level="WARNING")
+            return None
+
+    def _local_master_cpu_stats(self, now: float) -> tuple[float, float, float, int] | None:
+        current = self._read_local_cpu_times()
+        if current is None:
+            return None
+        idle, total = current
+        if total <= 0:
+            return None
+
+        history = self._local_master_cpu_history
+        cutoff = now - (CPU_HISTORY_STEP_SECONDS + 2.0)
+        history[:] = [sample for sample in history if sample[0] >= cutoff]
+        previous = history[-1] if history else None
+        history.append((now, idle, total))
+
+        live_cpu = 0.0
+        if previous is not None:
+            total_delta = total - previous[2]
+            if total_delta > 0:
+                live_cpu = (1.0 - ((idle - previous[1]) / total_delta)) * 100.0
+
+        base_sample = None
+        for sample in history:
+            if now - sample[0] >= CPU_HISTORY_STEP_SECONDS:
+                base_sample = sample
+            else:
+                break
+
+        if base_sample is None:
+            window = round(now - history[0][0], 1) if history else 0.0
+            return round(max(0.0, min(live_cpu, 100.0)), 1), 0.0, window, len(history)
+
+        elapsed = now - base_sample[0]
+        total_delta = total - base_sample[2]
+        if elapsed <= 0 or total_delta <= 0:
+            return round(max(0.0, min(live_cpu, 100.0)), 1), 0.0, round(max(elapsed, 0.0), 1), len(history)
+        cpu_60s = (1.0 - ((idle - base_sample[1]) / total_delta)) * 100.0
+        return (
+            round(max(0.0, min(live_cpu, 100.0)), 1),
+            round(max(0.0, min(cpu_60s, 100.0)), 1),
+            round(elapsed, 1),
+            len(history),
+        )
+
+    def _read_local_memory_metrics(self) -> tuple[int, int, float, int, int, int, int, float]:
+        data: dict[str, int] = {}
+        try:
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                key, _, value = line.partition(":")
+                if key in {"MemTotal", "MemAvailable", "SwapTotal", "SwapFree"}:
+                    data[key] = int(value.split()[0]) * 1024
+        except Exception as exc:
+            _log(SERVICE, f"local master memory probe failed: {exc}", level="WARNING")
+        mem_total = int(data.get("MemTotal") or 0)
+        mem_available = int(data.get("MemAvailable") or 0)
+        mem_used = max(mem_total - mem_available, 0)
+        mem_percent = round(mem_used / mem_total * 100, 1) if mem_total else 0.0
+        swap_total = int(data.get("SwapTotal") or 0)
+        swap_free = int(data.get("SwapFree") or 0)
+        swap_used = max(swap_total - swap_free, 0)
+        swap_percent = round(swap_used / swap_total * 100, 1) if swap_total else 0.0
+        return mem_total, mem_available, mem_percent, mem_used, swap_total, swap_used, swap_free, swap_percent
+
+    def _read_local_disk_metrics(self) -> tuple[int, int, int, float]:
+        try:
+            stat = os.statvfs("/")
+        except Exception as exc:
+            _log(SERVICE, f"local master disk probe failed: {exc}", level="WARNING")
+            return 0, 0, 0, 0.0
+        total = stat.f_frsize * stat.f_blocks
+        used = stat.f_frsize * (stat.f_blocks - stat.f_bfree)
+        free = stat.f_frsize * stat.f_bavail
+        percent = round(used / total * 100, 1) if total else 0.0
+        return total, used, free, percent
+
+    def _local_master_metric_peak(self, metric: str, value: float, now: float, *, enabled: bool = True) -> tuple[float, float]:
+        history = self._local_master_metric_history.get(metric)
+        if history is None:
+            return 0.0, 0.0
+        if not enabled:
+            history.clear()
+            return 0.0, 0.0
+        history.append((now, max(0.0, float(value))))
+        cutoff = now - (CPU_HISTORY_STEP_SECONDS + 2.0)
+        history[:] = [sample for sample in history if sample[0] >= cutoff]
+        if not history:
+            return 0.0, 0.0
+        peak = round(max(sample[1] for sample in history), 1)
+        window = round(now - history[0][0], 1)
+        return peak, window
+
+    def _build_local_master_system_metrics(self) -> SystemMetrics | None:
+        now = time.time()
+        cpu_stats = self._local_master_cpu_stats(now)
+        if cpu_stats is None:
+            return None
+        cpu, cpu_60s, cpu_60s_window, cpu_samples = cpu_stats
+        (
+            mem_total,
+            mem_available,
+            mem_percent,
+            mem_used,
+            swap_total,
+            swap_used,
+            swap_free,
+            swap_percent,
+        ) = self._read_local_memory_metrics()
+        disk_total, disk_used, disk_free, disk_percent = self._read_local_disk_metrics()
+        mem_peak, mem_window = self._local_master_metric_peak("memory", mem_percent, now, enabled=mem_total > 0)
+        disk_peak, disk_window = self._local_master_metric_peak("disk", disk_percent, now, enabled=disk_total > 0)
+        swap_peak, swap_window = self._local_master_metric_peak("swap", swap_percent, now, enabled=swap_total > 0)
+        return SystemMetrics(
+            timestamp=now,
+            cpu=cpu,
+            cpu_60s=cpu_60s,
+            cpu_60s_window=cpu_60s_window,
+            cpu_60s_samples=cpu_samples,
+            mem_total=mem_total,
+            mem_available=mem_available,
+            mem_percent=mem_percent,
+            mem_60s_peak=mem_peak,
+            mem_60s_window=mem_window,
+            mem_used=mem_used,
+            disk_total=disk_total,
+            disk_used=disk_used,
+            disk_free=disk_free,
+            disk_percent=disk_percent,
+            disk_60s_peak=disk_peak,
+            disk_60s_window=disk_window,
+            swap_total=swap_total,
+            swap_used=swap_used,
+            swap_free=swap_free,
+            swap_percent=swap_percent,
+            swap_60s_peak=swap_peak,
+            swap_60s_window=swap_window,
+        )
+
+    def _record_local_master_metric_history(self) -> None:
+        hostname = self._local_master_hostname()
+        if not hostname:
+            return
+        metrics = self._build_local_master_system_metrics()
+        if metrics is None:
+            return
+        self.store.update_system(hostname, metrics)
+        self._record_host_metric_history(hostname, metrics)
+        for store in self._host_metric_history.values():
+            store.maybe_flush(now_ts=metrics.timestamp)
 
     async def _restart_stale_metrics_stream(self, hostname: str, stale_age: float, now: float):
         count = self._stream_stale_counts.get(hostname, 0) + 1
@@ -3431,6 +3599,9 @@ class VPSMonitor:
             if proc is not None:
                 try:
                     proc.close()
+                    wait_closed = getattr(proc, "wait_closed", None)
+                    if callable(wait_closed):
+                        await asyncio.wait_for(wait_closed(), timeout=5)
                 except Exception:
                     pass
             if self._stream_generations.get(hostname) == generation:

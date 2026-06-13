@@ -136,6 +136,7 @@ RestartSec=5
 KillSignal=SIGTERM
 TimeoutStopSec=30
 Environment=PYTHONUNBUFFERED=1
+LimitNOFILE=65536
 
 [Install]
 WantedBy=default.target

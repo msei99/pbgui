@@ -11,7 +11,8 @@ from types import SimpleNamespace
 import pytest
 
 import api.v7_instances as v7_instances
-from master.async_monitor import INSTANCE_COLLECT_SCRIPT
+from master.async_monitor import INSTANCE_COLLECT_SCRIPT, CpuHistoryStore, VPSMonitor
+from master.async_store import SystemMetrics
 import vps_manager_core as core
 import vps_manager_service as service_mod
 from vps_manager_service import VPSManagerService, _ensure_import_public_key, _import_process_line_is_legacy, _set_import_key_check
@@ -1437,7 +1438,13 @@ def test_local_master_metrics_are_recorded_in_host_history(monkeypatch: pytest.M
 
         def record(self, hostname: str, **kwargs) -> None:
             """Capture a history sample."""
-            recorded.append((self.name, hostname, kwargs.get("value"), bool(kwargs.get("confirmed")), str(kwargs.get("same_minute_mode") or "")))
+            recorded.append((
+                self.name,
+                hostname,
+                kwargs.get("value"),
+                bool(kwargs.get("confirmed")),
+                str(kwargs.get("same_minute_mode") or ""),
+            ))
 
         def maybe_flush(self) -> None:
             """Capture flush attempts."""
@@ -1462,6 +1469,71 @@ def test_local_master_metrics_are_recorded_in_host_history(monkeypatch: pytest.M
         ("memory", "magicnucpro", 27, True, "peak"),
         ("disk", "magicnucpro", 58, True, "peak"),
         ("swap", "magicnucpro", 43, True, "peak"),
+    ]
+    assert all(store.flushes == 1 for store in stores.values())
+
+
+def test_cpu_history_store_keeps_confirmed_sample_for_same_minute(tmp_path: Path) -> None:
+    """Unconfirmed same-minute CPU samples must not erase a confirmed value."""
+    store = CpuHistoryStore(tmp_path, "cpu_history")
+
+    store.record("master", minute=12345, value=12.5, confirmed=True)
+    store.record("master", minute=12345, value=0.0, confirmed=False)
+
+    payload = store.build_payload("master", hostname="master", end_minute=12345)
+    assert payload["points"][-1] == 12.5
+
+
+def test_vps_monitor_records_local_master_history_without_ui(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The monitor loop writes local master samples without relying on VPS Manager UI polling."""
+    monitor = object.__new__(VPSMonitor)
+    recorded: list[tuple[str, str, object, bool, str]] = []
+    updated: list[tuple[str, SystemMetrics]] = []
+
+    class FakeStore:
+        """Capture monitor history writes."""
+
+        def __init__(self, name: str) -> None:
+            """Store the metric name for assertions."""
+            self.name = name
+            self.flushes = 0
+
+        def record(self, hostname: str, **kwargs) -> None:
+            """Capture a history sample."""
+            recorded.append((self.name, hostname, kwargs.get("value"), bool(kwargs.get("confirmed")), str(kwargs.get("same_minute_mode") or "")))
+
+        def maybe_flush(self, **kwargs) -> None:
+            """Capture flush attempts."""
+            del kwargs
+            self.flushes += 1
+
+    stores = {name: FakeStore(name) for name in ("cpu", "memory", "disk", "swap")}
+    metrics = SystemMetrics(
+        timestamp=120.0,
+        cpu_60s=14.5,
+        cpu_60s_window=61.0,
+        mem_total=1024,
+        mem_percent=25.0,
+        disk_total=2048,
+        disk_percent=50.0,
+        swap_total=4096,
+        swap_percent=5.0,
+    )
+    monitor.store = SimpleNamespace(
+        update_system=lambda hostname, item: updated.append((hostname, item))
+    )
+    monitor._host_metric_history = stores
+    monkeypatch.setattr(monitor, "_local_master_hostname", lambda: "master01")
+    monkeypatch.setattr(monitor, "_build_local_master_system_metrics", lambda: metrics)
+
+    monitor._record_local_master_metric_history()
+
+    assert updated == [("master01", metrics)]
+    assert recorded == [
+        ("cpu", "master01", 14.5, True, ""),
+        ("memory", "master01", 25.0, True, "peak"),
+        ("disk", "master01", 50.0, True, "peak"),
+        ("swap", "master01", 5.0, True, "peak"),
     ]
     assert all(store.flushes == 1 for store in stores.values())
 

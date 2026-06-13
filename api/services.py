@@ -41,12 +41,20 @@ _SYSTEMD_SERVICE_UNITS = {
     "api-server": "pbgui-api.service",
 }
 _SYSTEMD_RUNNING_STATES = {"active", "activating", "reloading"}
+_SYSTEMD_ENABLED_STATES = {"enabled", "enabled-runtime"}
 _SERVICE_SCRIPT_NAMES = {
     "pbrun": "PBRun.py",
     "pbremote": "PBRemote.py",
     "pbdata": "PBData.py",
     "pbcoindata": "PBCoinData.py",
     "api-server": "PBApiServer.py",
+}
+_SERVICE_PID_FILES = {
+    "pbrun": "pbrun.pid",
+    "pbremote": "pbremote.pid",
+    "pbdata": "pbdata.pid",
+    "pbcoindata": "pbcoindata.pid",
+    "api-server": "api_server.pid",
 }
 _MIGRATION_DEFAULT_SERVICES = ["api", "pbrun", "pbdata", "pbcoindata"]
 _MIGRATION_LEGACY_STOP_SERVICES = ["pbrun", "pbremote", "pbdata", "pbcoindata"]
@@ -143,24 +151,90 @@ def _systemd_service_status(name: str) -> dict[str, Any] | None:
         "manager": "systemd",
         "unit": unit,
         "systemd_state": state,
+        **_systemd_enable_status(name, unit),
+    }
+
+
+def _systemd_enable_status(name: str, unit: str | None = None) -> dict[str, Any]:
+    """Return user-systemd enablement fields for a service."""
+    unit = unit or _systemd_unit_for_service(name)
+    if not unit:
+        return {"enabled": False, "can_enable": False}
+    try:
+        proc = _run_user_systemctl(["is-enabled", unit], timeout=5)
+    except Exception as exc:
+        return {
+            "enabled": False,
+            "can_enable": True,
+            "systemd_enabled_state": "unknown",
+            "systemd_enabled_error": str(exc),
+        }
+    state = (proc.stdout.strip().splitlines() or ["unknown"])[0]
+    return {
+        "enabled": proc.returncode == 0 and state in _SYSTEMD_ENABLED_STATES,
+        "can_enable": True,
+        "systemd_enabled_state": state,
     }
 
 
 def _systemd_service_action(name: str, action: str) -> dict[str, Any] | None:
-    """Run a start/stop/restart action through systemd when a unit is installed."""
-    if action not in {"start", "stop", "restart"}:
+    """Run a lifecycle/autostart action through systemd when a unit is installed."""
+    if action not in {"start", "stop", "restart", "enable", "disable"}:
         raise ValueError(f"Unsupported service action: {action}")
     unit = _systemd_unit_for_service(name)
     if not unit:
         return None
-    proc = _run_user_systemctl([action, unit], timeout=30)
+    args = [action, "--now", unit] if action in {"enable", "disable"} else [action, unit]
+    proc = _run_user_systemctl(args, timeout=30)
     if proc.returncode != 0:
         output = ((proc.stderr or "") + (proc.stdout or "")).strip()
-        raise RuntimeError(output or f"systemctl --user {action} {unit} failed")
+        raise RuntimeError(output or f"systemctl --user {' '.join(args)} failed")
     status = _systemd_service_status(name)
     if status is not None:
         return status
-    return {"running": action != "stop", "manager": "systemd", "unit": unit}
+    running = _legacy_service_running(name) if action in {"enable", "disable"} else action != "stop"
+    return {"running": running, "manager": "systemd", "unit": unit, **_systemd_enable_status(name, unit)}
+
+
+def _service_pid_file(name: str) -> Path | None:
+    pid_name = _SERVICE_PID_FILES.get(name)
+    if not pid_name:
+        return None
+    return Path(PBGDIR) / "data" / "pid" / pid_name
+
+
+def _read_service_pid(name: str) -> int | None:
+    pid_file = _service_pid_file(name)
+    if not pid_file or not pid_file.exists():
+        return None
+    try:
+        raw = pid_file.read_text(encoding="utf-8").strip()
+        return int(raw) if raw.isnumeric() else None
+    except Exception:
+        return None
+
+
+def _pid_matches_service(pid: int, name: str) -> bool:
+    script = _SERVICE_SCRIPT_NAMES.get(name, "").lower()
+    if not pid or not script:
+        return False
+    try:
+        import psutil  # type: ignore
+
+        if not psutil.pid_exists(pid):
+            return False
+        cmdline = [str(part).lower() for part in psutil.Process(pid).cmdline()]
+        return any(Path(part).name == script or part.endswith(script) for part in cmdline)
+    except Exception:
+        return False
+
+
+def _legacy_service_running(name: str) -> bool:
+    """Check legacy daemon status without instantiating service classes."""
+    pid = _read_service_pid(name)
+    if pid and _pid_matches_service(pid, name):
+        return True
+    return any(item.get("service") == name for item in _collect_pbgui_daemon_processes())
 
 
 def _service_status(name: str) -> dict[str, Any]:
@@ -169,13 +243,15 @@ def _service_status(name: str) -> dict[str, Any]:
     systemd_status = _systemd_service_status(name)
     if systemd_status is not None and systemd_status.get("running"):
         return systemd_status
-    obj = _get_service(name)
-    legacy_running = bool(obj.is_running())
+    legacy_running = _legacy_service_running(name)
     if legacy_running:
         result = {"running": True, "manager": "legacy"}
         if systemd_status is not None:
             result["unit"] = systemd_status.get("unit")
             result["systemd_state"] = systemd_status.get("systemd_state")
+            result.update(_systemd_enable_status(name, str(systemd_status.get("unit") or "") or None))
+        else:
+            result.update(_systemd_enable_status(name))
         return result
     if blocker:
         result = {
@@ -183,31 +259,35 @@ def _service_status(name: str) -> dict[str, Any]:
             "manager": "disabled",
             "expected": False,
             "reason": blocker,
+            "can_start": False,
+            "enable_blocked_reason": blocker,
         }
         if systemd_status is not None:
             result["unit"] = systemd_status.get("unit")
             result["systemd_state"] = systemd_status.get("systemd_state")
+            result.update(_systemd_enable_status(name, str(systemd_status.get("unit") or "") or None))
+        else:
+            result.update(_systemd_enable_status(name))
         return result
     if systemd_status is not None:
         return systemd_status
-    return {"running": False, "manager": "legacy"}
+    return {"running": False, "manager": "legacy", **_systemd_enable_status(name)}
 
 
 def _service_action(name: str, action: str) -> dict[str, Any]:
-    """Start, stop, or restart a PBGui service using the active service manager."""
-    if action in {"start", "restart"}:
+    """Start, stop, restart, enable, or disable a PBGui service."""
+    if action in {"start", "restart", "enable"}:
         blocker = _optional_service_blocker(name)
         if blocker:
-            return {
-                "running": False,
-                "manager": "disabled",
-                "expected": False,
-                "reason": blocker,
-                "error": blocker,
-            }
+            result = _service_status(name)
+            result["error"] = blocker
+            return result
     systemd_status = _systemd_service_action(name, action)
     if systemd_status is not None:
-        return systemd_status
+        return _service_status(name) if action in {"enable", "disable"} else systemd_status
+
+    if action in {"enable", "disable"}:
+        raise RuntimeError(f"systemd unit is not installed for {name}")
 
     obj = _get_service(name)
     if action == "start":
@@ -1227,6 +1307,28 @@ def stop_service(service: str, session: SessionToken = Depends(require_auth)) ->
         return _service_action(service, "stop")
     except Exception as e:
         _log(SERVICE, f"stop {service} failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{service}/enable")
+def enable_service(service: str, session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    if service not in _SERVICES:
+        raise HTTPException(status_code=404, detail=f"Unknown service: {service}")
+    try:
+        return _service_action(service, "enable")
+    except Exception as e:
+        _log(SERVICE, f"enable {service} failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{service}/disable")
+def disable_service(service: str, session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    if service not in _SERVICES:
+        raise HTTPException(status_code=404, detail=f"Unknown service: {service}")
+    try:
+        return _service_action(service, "disable")
+    except Exception as e:
+        _log(SERVICE, f"disable {service} failed: {e}\n{traceback.format_exc()}", level="ERROR")
         raise HTTPException(status_code=500, detail=str(e))
 
 
