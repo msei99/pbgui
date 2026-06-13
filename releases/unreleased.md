@@ -1,5 +1,6 @@
 # Unreleased
 
+- VPS Manager: queue commands while the main or log-viewer websocket reconnects so the first Restart click after an update is not lost.
 - VPS Monitor: record local master CPU history from the monitor loop and keep confirmed same-minute samples from being cleared by unconfirmed refreshes.
 - Auth: verify a session is actually invalid before the shared navigation redirects on a background 401 response.
 - VPS Monitor: close metric stream SSH subprocesses fully and generate systemd units with a higher file descriptor limit.

@@ -301,6 +301,7 @@ class LogViewerPanel {
         this._fileSize     = null;
         this._restartResetTimer = 0;
         this._restartTargetService = null;
+        this._pendingRestartCommand = null;
         this._startRemoteAtEnd = false;
 
         this._MAX    = 5000;
@@ -606,6 +607,7 @@ class LogViewerPanel {
             if (ce) ce.textContent = 'connected';
             ws.send(JSON.stringify({ cmd: 'list_local_logs' }));
             me._subscribe();
+            me._flushPendingRestart(ws);
         };
         ws.onmessage = function(evt) {
             try { me._handleMsg(JSON.parse(evt.data)); } catch(e) { /* ignore parse errors */ }
@@ -635,6 +637,25 @@ class LogViewerPanel {
     _send(obj) {
         if (this._ws && this._ws.readyState === WebSocket.OPEN)
             this._ws.send(JSON.stringify(obj));
+    }
+
+    _sendRestart(obj) {
+        if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+            this._ws.send(JSON.stringify(obj));
+            return true;
+        }
+        this._pendingRestartCommand = obj;
+        if (!this._ws || this._ws.readyState === WebSocket.CLOSING || this._ws.readyState === WebSocket.CLOSED) {
+            this._connect();
+        }
+        return false;
+    }
+
+    _flushPendingRestart(ws) {
+        if (!this._pendingRestartCommand || this._ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+        var cmd = this._pendingRestartCommand;
+        this._pendingRestartCommand = null;
+        ws.send(JSON.stringify(cmd));
     }
 
     /* ── Message handling ─────────────────────────────────────── */
@@ -1537,9 +1558,13 @@ class LogViewerPanel {
 
         if (svc.indexOf('Bot:') === 0) {
             var parts = svc.substring(4).split(':');
-            this._send({ cmd: 'kill_instance', host: host, name: parts[0], pb_version: parts[1] || '7' });
+            if (!this._sendRestart({ cmd: 'kill_instance', host: host, name: parts[0], pb_version: parts[1] || '7' }) && rb) {
+                rb.textContent = 'Connecting...';
+            }
         } else {
-            this._send({ cmd: 'restart_service', host: host, service: svc });
+            if (!this._sendRestart({ cmd: 'restart_service', host: host, service: svc }) && rb) {
+                rb.textContent = 'Connecting...';
+            }
         }
         var me = this;
         setTimeout(function() {

@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 HTML_PATH = ROOT / "frontend" / "vps_manager.html"
+LOG_VIEWER_PATH = ROOT / "frontend" / "js" / "log_viewer_panel.js"
 
 
 def _extract_function(source: str, name: str) -> str:
@@ -80,6 +81,24 @@ def _run_node_assertions(function_names: list[str], *, bootstrap: str, assertion
 
 class TestVpsManagerFrontendLogic:
     """Lock down VPS Manager form behavior against live metadata refreshes."""
+
+    def test_log_viewer_restart_waits_for_websocket_reconnect(self) -> None:
+        """Restart commands must not be dropped when the log WebSocket reconnects."""
+        source = LOG_VIEWER_PATH.read_text(encoding="utf-8")
+
+        assert "this._pendingRestartCommand = obj" in source
+        assert "me._flushPendingRestart(ws)" in source
+        assert "!this._sendRestart({ cmd: 'restart_service'" in source
+        assert "!this._sendRestart({ cmd: 'kill_instance'" in source
+
+    def test_vps_manager_send_queues_commands_while_websocket_reconnects(self) -> None:
+        """VPS Manager commands must not be dropped while its WebSocket reconnects."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+
+        assert "pendingWsMessages: []" in source
+        assert "queueWsMessage(payload)" in source
+        assert "flushPendingWsMessages()" in source
+        assert "store.pendingWsMessages = []" in source
 
     def test_dirty_optional_fields_survive_live_config_refresh(self) -> None:
         """Cleared optional fields must stay dirty while remote metadata is stale."""

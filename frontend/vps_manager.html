@@ -2924,7 +2924,7 @@
     </main>
   </div>
 
-  <script src='/app/js/log_viewer_panel.js?v=23'></script>
+  <script src='/app/js/log_viewer_panel.js?v=24'></script>
   <script src="/app/js/api_sync_status.js?v=2"></script>
   <script>
     const TOKEN = "%%TOKEN%%";
@@ -2955,6 +2955,7 @@
     const store = {
       ws: null,
       reconnectTimer: 0,
+      pendingWsMessages: [],
       connected: false,
       state: null,
       detail: null,
@@ -6522,6 +6523,7 @@
         if (isVpsContextView() && store.hostname) {
           scheduleVpsDetailFetch(store.hostname);
         }
+        flushPendingWsMessages();
       };
       ws.onmessage = function (event) {
         try {
@@ -6554,8 +6556,38 @@
     }
 
     function send(payload) {
-      if (!store.ws || store.ws.readyState !== WebSocket.OPEN) return;
+      if (!store.ws || store.ws.readyState !== WebSocket.OPEN) {
+        queueWsMessage(payload);
+        if (!store.ws || store.ws.readyState === WebSocket.CLOSED || store.ws.readyState === WebSocket.CLOSING) {
+          scheduleReconnect();
+        }
+        return false;
+      }
       store.ws.send(JSON.stringify(payload));
+      return true;
+    }
+
+    function queueWsMessage(payload) {
+      if (!payload || !payload.cmd) return;
+      if (payload.cmd === 'set_context') {
+        store.pendingWsMessages = (store.pendingWsMessages || []).filter(function (item) {
+          return !item || item.cmd !== 'set_context';
+        });
+      }
+      store.pendingWsMessages = (store.pendingWsMessages || []).concat([payload]).slice(-25);
+    }
+
+    function flushPendingWsMessages() {
+      if (!store.ws || store.ws.readyState !== WebSocket.OPEN) return;
+      const pending = (store.pendingWsMessages || []).slice();
+      store.pendingWsMessages = [];
+      pending.forEach(function (payload) {
+        if (store.ws && store.ws.readyState === WebSocket.OPEN) {
+          store.ws.send(JSON.stringify(payload));
+        } else {
+          queueWsMessage(payload);
+        }
+      });
     }
 
     function vpsManagerPost(path, payload) {
