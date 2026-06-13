@@ -1901,6 +1901,7 @@ function populateForm(opts) {
   var bot = cfg.bot || {};
 
   // Row 1
+  ensureSelectOption('f-user', live.user || '');
   setVal('f-user', live.user || '');
   setVal('f-enabled-on', pbgui.enabled_on || 'disabled');
   setVal('f-version', pbgui.version || 0);
@@ -2060,6 +2061,21 @@ function setVal(id, v) {
   var el = document.getElementById(id);
   if (el) el.value = v;
 }
+
+function ensureSelectOption(id, value) {
+  var text = String(value || '').trim();
+  if (!text) return;
+  var el = document.getElementById(id);
+  if (!el || String(el.tagName || '').toLowerCase() !== 'select') return;
+  for (var i = 0; i < el.options.length; i++) {
+    if (el.options[i].value === text) return;
+  }
+  var opt = document.createElement('option');
+  opt.value = text;
+  opt.textContent = text;
+  el.insertBefore(opt, el.firstChild);
+}
+
 function setChk(id, v) {
   var el = document.getElementById(id);
   if (el) el.checked = !!v;

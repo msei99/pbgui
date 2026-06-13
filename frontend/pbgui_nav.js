@@ -40,6 +40,7 @@
     { id: 'system', label: 'System', items: [
       { page: '/',                    icon: '&#128682;', label: 'Welcome'           },
       { page: 'system_api_keys',      icon: '&#128273;', label: 'API-Keys'          },
+      { page: 'system_cluster',       icon: '&#128260;', label: 'Cluster Sync'      },
       { page: 'system_services',      icon: '&#128295;', label: 'PBGUI Services'    },
       { page: 'system_db_tools',      icon: '&#128736;', label: 'DB Tools'          },
       { page: 'system_vps_manager_fastapi', icon: '&#128421;', label: 'VPS Manager' },
@@ -865,6 +866,7 @@
     'info_coin_data':    '/api/coin-data/main_page',
     'info_market_data_fastapi': '/api/market-data/main_page',
     'system_api_keys':   '/api/api-keys/main_page',
+    'system_cluster':    '/api/cluster/main_page',
     'system_vps_manager_fastapi': '/api/vps-manager/main_page',
     'system_logging':     '/api/logging/main_page',
     'system_vps_monitor': '/api/vps/main_page',

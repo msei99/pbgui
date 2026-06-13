@@ -35,6 +35,15 @@ from fastapi.responses import HTMLResponse
 from api.auth import SessionToken, require_auth, validate_token
 from api.pb7_bridge import get_allowed_override_params, get_template_config
 from logging_helpers import human_log as _log
+from master.cluster_state import (
+    append_operation,
+    build_config_manifest,
+    compute_config_manifest_hash,
+    default_cluster_root,
+    ensure_local_identity,
+    generate_node_id,
+    rebuild_materialized_state,
+)
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config, strip_pbgui_param_status
 from master.async_pool import (
     SFTP_RETRY_ATTEMPTS,
@@ -56,6 +65,8 @@ import secrets as _secrets
 
 _draft_configs: dict[str, tuple[float, dict]] = {}  # id → (created_ts, config)
 _DRAFT_TTL = 300  # 5 minutes
+
+_CLUSTER_HOST_NODE_IDS_FILE = "host_node_ids.json"
 
 
 
@@ -81,6 +92,214 @@ def _get_master_hostname() -> str:
     if pb_config.has_option("main", "pbname"):
         return pb_config.get("main", "pbname")
     return platform.node()
+
+
+def _cluster_root() -> Path:
+    """Return the local cluster state root for this PBGui install."""
+
+    return default_cluster_root(Path(PBGDIR))
+
+
+def _read_cluster_host_node_ids(cluster_root: Path) -> dict:
+    """Read host→node_id mappings used until remote nodes provide identities."""
+
+    path = cluster_root / _CLUSTER_HOST_NODE_IDS_FILE
+    if not path.is_file():
+        return {"schema_version": 1, "hosts": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"schema_version": 1, "hosts": {}}
+    if not isinstance(data, dict):
+        return {"schema_version": 1, "hosts": {}}
+    hosts = data.get("hosts")
+    if not isinstance(hosts, dict):
+        hosts = {}
+    return {"schema_version": 1, "hosts": hosts}
+
+
+def _write_cluster_host_node_ids(cluster_root: Path, data: dict) -> None:
+    """Atomically write host→node_id mappings."""
+
+    path = cluster_root / _CLUSTER_HOST_NODE_IDS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=4, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _cluster_node_known(cluster_root: Path, node_id: str, pending: set[str]) -> bool:
+    """Return True when a node is already materialized or queued this call."""
+
+    if node_id in pending:
+        return True
+    path = cluster_root / "cluster_nodes.json"
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    nodes = data.get("nodes") if isinstance(data, dict) else None
+    return isinstance(nodes, dict) and node_id in nodes
+
+
+def _cluster_node_payload(node_id: str, hostname: str, role: str) -> dict:
+    """Build a cluster membership payload for a local or known VPS host."""
+
+    payload = {
+        "node_id": node_id,
+        "role": role,
+        "pbname": hostname,
+        "hostname": hostname,
+        "sync_enabled": True,
+    }
+    if role == "vps" and _monitor and _monitor.pool:
+        entry = _monitor.pool.get_connection(hostname)
+        if entry:
+            payload.update({
+                "ssh_host": entry.config.ip,
+                "ssh_port": entry.config.ssh_port,
+                "ssh_user": entry.config.user,
+            })
+    return payload
+
+
+def _ensure_cluster_node_record(
+    cluster_root: Path,
+    node_id: str,
+    hostname: str,
+    role: str,
+    pending: set[str],
+) -> None:
+    """Append a membership op for a node when cluster_nodes does not know it yet."""
+
+    if _cluster_node_known(cluster_root, node_id, pending):
+        return
+    append_operation(
+        cluster_root,
+        "ADD_NODE",
+        _cluster_node_payload(node_id, hostname, role),
+    )
+    pending.add(node_id)
+
+
+def _cluster_node_for_enabled_host(
+    cluster_root: Path,
+    identity: dict,
+    enabled_on: str,
+) -> tuple[str, str, str]:
+    """Resolve a PBGui enabled_on host name to a stable cluster node id."""
+
+    hostname = str(enabled_on or "").strip()
+    master_hostname = _get_master_hostname()
+    if not hostname or hostname == "disabled" or hostname == master_hostname:
+        return str(identity["node_id"]), master_hostname, "master"
+
+    mapping = _read_cluster_host_node_ids(cluster_root)
+    hosts = mapping.setdefault("hosts", {})
+    entry = hosts.get(hostname)
+    if not isinstance(entry, dict):
+        entry = {}
+    node_id = str(entry.get("node_id") or "")
+    if not node_id:
+        node_id = generate_node_id()
+        hosts[hostname] = {
+            "node_id": node_id,
+            "created_at": int(time.time()),
+            "role": "vps",
+        }
+        _write_cluster_host_node_ids(cluster_root, mapping)
+    return node_id, hostname, "vps"
+
+
+def _record_cluster_config_upsert(
+    name: str,
+    instance_dir: Path,
+    cfg: dict,
+    *,
+    parent_version: int | str | None = None,
+    allow_tombstone_recreate: bool = False,
+) -> None:
+    """Record a V7 config write in the local cluster oplog without blocking saves."""
+
+    try:
+        cluster_root = _cluster_root()
+        identity = ensure_local_identity(
+            cluster_root,
+            role="master",
+            pbname=_get_master_hostname(),
+        )
+        raw_pbgui = cfg.get("pbgui", {}) if isinstance(cfg, dict) else {}
+        pbgui = raw_pbgui if isinstance(raw_pbgui, dict) else {}
+        enabled_on = str(pbgui.get("enabled_on") or "disabled").strip() or "disabled"
+        version = str(pbgui.get("version", 0))
+        desired_state = "running" if enabled_on != "disabled" else "stopped"
+        assigned_node_id, assigned_hostname, assigned_role = _cluster_node_for_enabled_host(
+            cluster_root,
+            identity,
+            enabled_on,
+        )
+        recorded_nodes: set[str] = set()
+        _ensure_cluster_node_record(
+            cluster_root,
+            str(identity["node_id"]),
+            _get_master_hostname(),
+            "master",
+            recorded_nodes,
+        )
+        _ensure_cluster_node_record(
+            cluster_root,
+            assigned_node_id,
+            assigned_hostname,
+            assigned_role,
+            recorded_nodes,
+        )
+        manifest = build_config_manifest(instance_dir)
+        payload = {
+            "instance": name,
+            "version": version,
+            "assigned_host": assigned_node_id,
+            "desired_state": desired_state,
+            "config_manifest_hash": compute_config_manifest_hash(manifest),
+            "enabled_on": enabled_on,
+        }
+        if parent_version is not None:
+            payload["parent_version"] = str(parent_version)
+        if allow_tombstone_recreate:
+            payload["allow_tombstone_recreate"] = True
+        append_operation(cluster_root, "UPSERT_CONFIG", payload)
+        rebuild_materialized_state(cluster_root)
+    except Exception as exc:
+        _log(SERVICE, f"Cluster oplog update skipped for V7 config '{name}': {exc}", level="WARNING")
+
+
+def _record_cluster_instance_delete(name: str, version: int | str | None) -> None:
+    """Record a V7 instance delete in the local cluster oplog without blocking deletes."""
+
+    try:
+        cluster_root = _cluster_root()
+        identity = ensure_local_identity(
+            cluster_root,
+            role="master",
+            pbname=_get_master_hostname(),
+        )
+        recorded_nodes: set[str] = set()
+        _ensure_cluster_node_record(
+            cluster_root,
+            str(identity["node_id"]),
+            _get_master_hostname(),
+            "master",
+            recorded_nodes,
+        )
+        append_operation(
+            cluster_root,
+            "DELETE_INSTANCE",
+            {"instance": name, "version": str(version if version is not None else 0)},
+        )
+        rebuild_materialized_state(cluster_root)
+    except Exception as exc:
+        _log(SERVICE, f"Cluster oplog delete skipped for V7 instance '{name}': {exc}", level="WARNING")
 
 
 def _load_local_running_v7() -> dict[str, dict]:
@@ -835,6 +1054,7 @@ async def set_instance_forced_mode(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not save config for '{name}': {exc}") from exc
 
+    _record_cluster_config_upsert(name, instance_dir, cfg, parent_version=old_version)
     _update_status_v7(name)
     sync_result = await _ssh_sync_instance(name)
     _log(SERVICE, f"Set forced mode '{label}' for all positions on '{name}' (v{cfg['pbgui']['version']})", level="WARNING")
@@ -861,6 +1081,7 @@ async def delete_instance(
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     if not instance_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"Instance '{name}' not found")
+    deleted_version = _instance_config_version(name)
 
     # Check if running on any VPS or locally
     instances = _load_local_instances()
@@ -893,6 +1114,7 @@ async def delete_instance(
     _log(SERVICE, f"Deleted instance '{name}' locally")
 
     # 3) Remove from status_v7.json and push to all VPS
+    _record_cluster_instance_delete(name, deleted_version)
     _update_status_v7(name, remove=True)
     status_content = STATUS_V7_FILE.read_bytes() if STATUS_V7_FILE.is_file() else None
 
@@ -1118,6 +1340,8 @@ def list_backups(session: SessionToken = Depends(require_auth)):
         for backup_dir in inst_dir.iterdir():
             if not backup_dir.is_dir():
                 continue
+            if not (backup_dir / "config.json").is_file():
+                continue
             try:
                 created_ts = backup_dir.stat().st_mtime
             except OSError:
@@ -1211,6 +1435,18 @@ async def restore_instance(
         raise HTTPException(status_code=500, detail=f"Restore failed: {e}")
 
     restored_version = _bump_restored_instance_version(instance_dir, previous_version)
+    if restored_version is not None:
+        try:
+            restored_cfg = load_pb7_config(instance_dir / "config.json", neutralize_added=False)
+            _record_cluster_config_upsert(
+                name,
+                instance_dir,
+                restored_cfg,
+                parent_version=previous_version,
+                allow_tombstone_recreate=not rollback,
+            )
+        except Exception as exc:
+            _log(SERVICE, f"Cluster oplog update skipped for restored V7 config '{name}': {exc}", level="WARNING")
 
     _log(
         SERVICE,
@@ -1295,15 +1531,11 @@ def create_backup_draft(
     draft_id = _secrets.token_urlsafe(16)
     _draft_configs[draft_id] = (time.time(), cfg)
 
-    exists = (Path(PBGDIR) / "data" / "run_v7" / name).is_dir()
     params = {
         "token": session.token,
+        "name": name,
         "draft_id": draft_id,
     }
-    if exists:
-        params["name"] = name
-    else:
-        params["new"] = "1"
     edit_url = str(request.url_for("get_edit_page")) + "?" + urlencode(params)
     return {
         "ok": True,
@@ -1399,6 +1631,7 @@ async def save_instance_config(
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     instance_dir.mkdir(parents=True, exist_ok=True)
     config_path = instance_dir / "config.json"
+    previous_version = _instance_config_version(name)
 
     # Copy coin override files from source backtest config on first save of a new instance.
     # The JS sets pbgui.from_backtest_config when navigating from "Add to Run".
@@ -1449,7 +1682,7 @@ async def save_instance_config(
             draft_version = int(cfg["pbgui"].get("version", 0) or 0)
         except (TypeError, ValueError):
             draft_version = 0
-        cfg["pbgui"]["version"] = max(draft_version, _instance_config_version(name) + 1)
+        cfg["pbgui"]["version"] = max(draft_version, previous_version + 1)
     else:
         cfg["pbgui"]["version"] = cfg["pbgui"].get("version", 0) + 1
 
@@ -1518,6 +1751,14 @@ async def save_instance_config(
             )
 
     version = cfg["pbgui"]["version"]
+
+    _record_cluster_config_upsert(
+        name,
+        instance_dir,
+        cfg,
+        parent_version=previous_version,
+        allow_tombstone_recreate=backup_src_dir is not None,
+    )
 
     # Update status_v7.json
     _update_status_v7(name)

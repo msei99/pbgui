@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cluster Sync - PBGui</title>
+  <style>
+    :root {
+      --bg: #0e1117;
+      --bg2: #131b2b;
+      --bg3: #111827;
+      --border: #1e2736;
+      --border2: #2d3748;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --faint: #64748b;
+      --accent: #63b3ed;
+      --good: #4ade80;
+      --warn: #f59e0b;
+      --bad: #f87171;
+      --fs-xs: 11px;
+      --fs-sm: 13px;
+      --fs-base: 14px;
+      --fs-md: 16px;
+      --fs-lg: 20px;
+      --sp-xs: 4px;
+      --sp-sm: 8px;
+      --sp-md: 12px;
+      --sp-lg: 20px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: var(--fs-base); }
+    button { font-family: inherit; }
+
+    #page-body { height: calc(100vh - 52px); overflow: auto; padding: var(--sp-lg); }
+    .page-shell { max-width: 1480px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-lg); }
+
+    .hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--sp-lg);
+      background: linear-gradient(135deg, rgba(99,179,237,0.12), rgba(19,27,43,0.92));
+      border: 1px solid rgba(99,179,237,0.22);
+      border-radius: 14px;
+      padding: var(--sp-lg);
+    }
+    .hero-title { font-size: 26px; font-weight: 750; letter-spacing: 0.01em; margin-bottom: 6px; }
+    .hero-subtitle { color: var(--muted); max-width: 780px; line-height: 1.45; }
+    .hero-actions { display: flex; gap: var(--sp-sm); flex-wrap: wrap; justify-content: flex-end; }
+
+    .btn {
+      min-height: 34px;
+      padding: 0.45rem 0.85rem;
+      border-radius: 7px;
+      border: 1px solid var(--border2);
+      background: #1a202c;
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color 0.12s, background 0.12s;
+    }
+    .btn:hover { border-color: var(--accent); background: #16243a; }
+    .btn.primary { border-color: rgba(99,179,237,0.42); color: var(--accent); background: rgba(99,179,237,0.08); }
+    .btn.primary:hover { background: rgba(99,179,237,0.16); }
+    .btn.warn { border-color: rgba(245,158,11,0.38); color: #fcd34d; background: rgba(245,158,11,0.08); }
+    .btn.warn:hover { background: rgba(245,158,11,0.16); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; border-color: var(--border2); background: #1a202c; color: var(--faint); }
+
+    #status-msg {
+      display: none;
+      padding: 0.6rem 0.85rem;
+      border-radius: 9px;
+      border: 1px solid var(--border2);
+      background: var(--bg3);
+      color: var(--muted);
+    }
+    #status-msg.visible { display: block; }
+    #status-msg.ok { border-color: rgba(74,222,128,0.32); color: var(--good); background: rgba(74,222,128,0.08); }
+    #status-msg.warn { border-color: rgba(245,158,11,0.35); color: #fcd34d; background: rgba(245,158,11,0.08); }
+    #status-msg.err { border-color: rgba(248,113,113,0.35); color: var(--bad); background: rgba(248,113,113,0.08); }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(5, minmax(140px, 1fr)); gap: var(--sp-md); }
+    .stat-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: var(--sp-md);
+      min-width: 0;
+    }
+    .stat-label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+    .stat-value { font-size: 24px; font-weight: 750; }
+    .stat-value.good { color: var(--good); }
+    .stat-value.warn { color: var(--warn); }
+    .stat-value.bad { color: var(--bad); }
+
+    .panel {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-md);
+      padding: 0.8rem 1rem;
+      background: var(--bg3);
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-title { font-size: var(--fs-md); font-weight: 750; }
+    .panel-note { color: var(--faint); font-size: var(--fs-sm); }
+    .panel-body { padding: 1rem; }
+
+    .identity-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: var(--sp-md); }
+    .field {
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: #101724;
+      padding: var(--sp-md);
+      min-width: 0;
+    }
+    .field-label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px; }
+    .field-value { color: var(--text); word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-sm); }
+
+    .warning-list { display: flex; flex-direction: column; gap: var(--sp-sm); margin-top: var(--sp-md); }
+    .warning-item { border: 1px solid rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); color: #fcd34d; border-radius: 8px; padding: 0.55rem 0.75rem; }
+
+    .bootstrap-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-md); flex-wrap: wrap; margin-bottom: var(--sp-md); }
+    .bootstrap-summary { color: var(--muted); line-height: 1.45; }
+    .bootstrap-actions { display: flex; gap: var(--sp-sm); flex-wrap: wrap; }
+
+    .table-wrap { overflow: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--bg2);
+      color: var(--muted);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      text-align: left;
+      padding: 0.55rem 0.7rem;
+      border-bottom: 2px solid var(--border);
+    }
+    th.is-sort-active { color: var(--accent); }
+    .sort-btn {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0;
+      font: inherit;
+      letter-spacing: inherit;
+      text-transform: inherit;
+      text-align: left;
+    }
+    .sort-btn:hover { color: var(--accent); }
+    .sort-indicator { min-width: 8px; color: var(--faint); }
+    th.is-sort-active .sort-indicator { color: var(--accent); }
+    td { padding: 0.58rem 0.7rem; border-bottom: 1px solid rgba(30,39,54,0.85); color: #cbd5e1; vertical-align: top; }
+    tr:hover td { background: rgba(255,255,255,0.025); }
+    .empty { color: var(--faint); padding: 1rem; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-sm); }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 8px;
+      border: 1px solid var(--border2);
+      background: #111827;
+      color: var(--muted);
+      font-size: var(--fs-xs);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    .pill.good { color: var(--good); border-color: rgba(74,222,128,0.35); background: rgba(74,222,128,0.08); }
+    .pill.warn { color: #fcd34d; border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); }
+    .pill.bad { color: var(--bad); border-color: rgba(248,113,113,0.35); background: rgba(248,113,113,0.08); }
+    .pill.blue { color: var(--accent); border-color: rgba(99,179,237,0.35); background: rgba(99,179,237,0.08); }
+
+    .hash { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+
+    @media (max-width: 980px) {
+      #page-body { padding: var(--sp-md); }
+      .hero { flex-direction: column; }
+      .hero-actions { justify-content: flex-start; }
+      .stats-grid { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
+      .identity-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 560px) {
+      .stats-grid { grid-template-columns: 1fr; }
+      .hero-title { font-size: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <nav id="topnav"></nav>
+  <div id="page-body">
+    <div class="page-shell">
+      <section class="hero">
+        <div>
+          <div class="hero-title">Cluster Sync</div>
+          <div class="hero-subtitle">Local visibility and bootstrap for the multi-master cluster state. Bootstrap writes local oplog entries only; this page does not start, stop, delete, deploy, connect to, or push anything to remote nodes.</div>
+        </div>
+        <div class="hero-actions">
+          <button class="btn primary" id="refresh-btn" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <div id="status-msg"></div>
+      <section class="stats-grid" id="stats-grid"></section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Local Identity</div>
+          <div class="panel-note">Stable cluster/node identity for this PBGui install.</div>
+        </div>
+        <div class="panel-body">
+          <div class="identity-grid" id="identity-grid"></div>
+          <div class="warning-list" id="warning-list"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Bootstrap Cluster State</div>
+          <div class="panel-note">Automatically preview and explicitly register known VPS nodes plus existing local V7 configs.</div>
+        </div>
+        <div class="panel-body">
+          <div class="bootstrap-toolbar">
+            <div class="bootstrap-summary" id="bootstrap-summary">Bootstrap preview not loaded yet.</div>
+            <div class="bootstrap-actions">
+              <button class="btn warn" id="bootstrap-apply-btn" type="button" disabled>Apply Bootstrap</button>
+            </div>
+          </div>
+          <div class="panel-note" style="margin-bottom:0.75rem;">Bootstrap writes ADD_NODE operations for known VPS hosts and UPSERT_CONFIG operations for local configs. It never infers deletes from missing files or missing VPS entries. Tombstoned instances stay blocked and must be restored explicitly.</div>
+          <div class="table-wrap" id="bootstrap-table"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Cluster Nodes</div>
+          <div class="panel-note" id="nodes-note"></div>
+        </div>
+        <div class="table-wrap" id="nodes-table"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">V7 Desired State</div>
+          <div class="panel-note" id="instances-note"></div>
+        </div>
+        <div class="table-wrap" id="instances-table"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Tombstones</div>
+          <div class="panel-note">Explicit deletes that prevent stale config resurrection.</div>
+        </div>
+        <div class="table-wrap" id="tombstones-table"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Recent Oplog</div>
+          <div class="panel-note" id="oplog-note"></div>
+        </div>
+        <div class="table-wrap" id="oplog-table"></div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    window.TOKEN = "%%TOKEN%%";
+    window.API_BASE = "%%API_BASE%%";
+    window.WS_BASE = "%%WS_BASE%%";
+    window.PBGUI_VERSION = "%%VERSION%%";
+    window.PBGUI_SERIAL = "%%SERIAL%%";
+    window.PBGUI_NAV_CONFIG = { subtitle: 'CLUSTER SYNC', current: 'system_cluster' };
+  </script>
+  <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+  <script>
+    (function () {
+      'use strict';
+
+      var TOKEN = window.TOKEN || '';
+      var API_BASE = window.API_BASE || '';
+      var nodeMap = {};
+      var remoteProbeMap = {};
+      var tableSort = {
+        bootstrap: { key: 'target', dir: 'asc' },
+        nodes: { key: 'pbname', dir: 'asc' },
+        instances: { key: 'instance', dir: 'asc' },
+        tombstones: { key: 'instance', dir: 'asc' },
+        oplog: { key: 'created_at', dir: 'desc' }
+      };
+      var lastBootstrapPlan = null;
+      var lastNodesPayload = null;
+      var lastInstancesPayload = null;
+      var lastTombstonesPayload = null;
+      var lastOplogPayload = null;
+
+      function esc(value) {
+        return String(value === undefined || value === null ? '' : value).replace(/[&<>'"]/g, function (ch) {
+          return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[ch];
+        });
+      }
+
+      function shortId(value) {
+        var text = String(value || '');
+        if (text.length <= 18) return text || 'n/a';
+        return text.slice(0, 12) + '...' + text.slice(-6);
+      }
+
+      function timeText(ts) {
+        var n = Number(ts || 0);
+        if (!n) return 'n/a';
+        try { return new Date(n * 1000).toLocaleString(); } catch (_) { return 'n/a'; }
+      }
+
+      function setMessage(text, kind) {
+        var el = document.getElementById('status-msg');
+        if (!el) return;
+        el.className = text ? 'visible ' + (kind || '') : '';
+        el.textContent = text || '';
+      }
+
+      function fetchJson(path, options) {
+        options = options || {};
+        var headers = options.headers || {};
+        headers.Authorization = 'Bearer ' + TOKEN;
+        headers.Accept = 'application/json';
+        options.headers = headers;
+        options.cache = 'no-store';
+        return fetch(API_BASE + path, options).then(function (res) {
+          if (!res.ok) {
+            return res.text().then(function (body) { throw new Error(body || ('HTTP ' + res.status)); });
+          }
+          return res.json();
+        });
+      }
+
+      function sortValue(value) {
+        if (typeof value === 'number' && isFinite(value)) return value;
+        if (typeof value === 'boolean') return value ? 1 : 0;
+        return String(value === undefined || value === null ? '' : value).toLowerCase();
+      }
+
+      function compareValues(a, b) {
+        var left = sortValue(a);
+        var right = sortValue(b);
+        if (typeof left === 'number' && typeof right === 'number') return left - right;
+        return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' });
+      }
+
+      function sortedRows(tableId, rows, getters) {
+        var state = tableSort[tableId] || { key: '', dir: 'asc' };
+        var getter = getters[state.key] || function () { return ''; };
+        return rows.slice().sort(function (a, b) {
+          var result = compareValues(getter(a), getter(b));
+          return state.dir === 'desc' ? -result : result;
+        });
+      }
+
+      function sortHeader(tableId, key, label) {
+        var state = tableSort[tableId] || {};
+        var active = state.key === key;
+        var indicator = active ? (state.dir === 'asc' ? '^' : 'v') : '';
+        return '<th class="' + (active ? 'is-sort-active' : '') + '"><button class="sort-btn" type="button" data-sort-table="' + esc(tableId) + '" data-sort-key="' + esc(key) + '"><span>' + esc(label) + '</span><span class="sort-indicator">' + esc(indicator) + '</span></button></th>';
+      }
+
+      function attachSortHandlers(containerId) {
+        var container = document.getElementById(containerId);
+        if (!container) return;
+        container.querySelectorAll('.sort-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var tableId = btn.getAttribute('data-sort-table') || '';
+            var key = btn.getAttribute('data-sort-key') || '';
+            var current = tableSort[tableId] || { key: key, dir: 'asc' };
+            tableSort[tableId] = {
+              key: key,
+              dir: current.key === key && current.dir === 'asc' ? 'desc' : 'asc'
+            };
+            if (tableId === 'bootstrap' && lastBootstrapPlan) renderBootstrap(lastBootstrapPlan);
+            if (tableId === 'nodes' && lastNodesPayload) renderNodes(lastNodesPayload);
+            if (tableId === 'instances' && lastInstancesPayload) renderInstances(lastInstancesPayload);
+            if (tableId === 'tombstones' && lastTombstonesPayload) renderTombstones(lastTombstonesPayload);
+            if (tableId === 'oplog' && lastOplogPayload) renderOplog(lastOplogPayload);
+          });
+        });
+      }
+
+      function renderStats(status) {
+        var counts = status.counts || {};
+        var items = [
+          ['Nodes', counts.nodes || 0, ''],
+          ['V7 Instances', counts.instances || 0, 'good'],
+          ['Conflicts', counts.conflicts || 0, counts.conflicts ? 'bad' : 'good'],
+          ['Tombstones', counts.tombstones || 0, counts.tombstones ? 'warn' : ''],
+          ['Oplog Ops', counts.oplog || 0, '']
+        ];
+        document.getElementById('stats-grid').innerHTML = items.map(function (item) {
+          return '<div class="stat-card"><div class="stat-label">' + esc(item[0]) + '</div>'
+               + '<div class="stat-value ' + esc(item[2]) + '">' + esc(item[1]) + '</div></div>';
+        }).join('');
+      }
+
+      function renderIdentity(status) {
+        var identity = status.identity || {};
+        var rows = [
+          ['Cluster ID', identity.cluster_id],
+          ['Node ID', identity.node_id],
+          ['Role', identity.role || 'master'],
+          ['Created From PBName', identity.created_from_pbname || 'n/a'],
+          ['Cluster Root', status.cluster_root],
+          ['Generated At', timeText(status.generated_at)]
+        ];
+        document.getElementById('identity-grid').innerHTML = rows.map(function (row) {
+          return '<div class="field"><div class="field-label">' + esc(row[0]) + '</div>'
+               + '<div class="field-value">' + esc(row[1] || 'n/a') + '</div></div>';
+        }).join('');
+
+        var warnings = Array.isArray(status.warnings) ? status.warnings : [];
+        document.getElementById('warning-list').innerHTML = warnings.map(function (text) {
+          return '<div class="warning-item">' + esc(text) + '</div>';
+        }).join('');
+      }
+
+      function actionPill(action) {
+        if (action === 'add') return 'good';
+        if (action === 'update') return 'warn';
+        if (action === 'blocked_tombstone' || action === 'error') return 'bad';
+        return '';
+      }
+
+      function probePill(status) {
+        if (status === 'ok' || status === 'local') return 'good';
+        if (status === 'not_initialized' || status === 'command_unavailable' || status === 'unreachable' || status === 'monitor_unavailable') return 'warn';
+        if (status === 'foreign_cluster' || status === 'node_mismatch' || status === 'auth_failed' || status === 'error') return 'bad';
+        return '';
+      }
+
+      function probeLabel(status) {
+        var labels = {
+          ok: 'OK',
+          local: 'Local',
+          disabled: 'Disabled',
+          not_initialized: 'No Identity',
+          command_unavailable: 'No Command',
+          unreachable: 'Unreachable',
+          monitor_unavailable: 'No Monitor',
+          foreign_cluster: 'Foreign',
+          node_mismatch: 'Mismatch',
+          auth_failed: 'Auth Failed',
+          invalid_response: 'Invalid',
+          missing_hostname: 'No Hostname',
+          error: 'Error'
+        };
+        return labels[status] || (status || 'Unknown');
+      }
+
+      function renderBootstrap(plan) {
+        lastBootstrapPlan = plan;
+        var counts = plan.counts || {};
+        var items = Array.isArray(plan.items) ? plan.items : [];
+        var nodeItems = items.filter(function (item) { return item.type === 'node'; });
+        var configItems = items.filter(function (item) { return item.type !== 'node'; });
+        var applyBtn = document.getElementById('bootstrap-apply-btn');
+        var summary = document.getElementById('bootstrap-summary');
+        var table = document.getElementById('bootstrap-table');
+        if (summary) {
+          summary.textContent = (counts.add || 0) + ' add, ' + (counts.update || 0) + ' update, '
+            + (counts.skip || 0) + ' already current, ' + (counts.blocked_tombstone || 0) + ' tombstone-blocked, '
+            + (counts.error || 0) + ' error.';
+        }
+        var actionable = (counts.add || 0) + (counts.update || 0);
+        var blockers = (counts.blocked_tombstone || 0) + (counts.error || 0);
+        if (applyBtn) {
+          applyBtn.disabled = actionable === 0;
+          applyBtn.style.display = actionable === 0 ? 'none' : '';
+        }
+        if (!table) return;
+        if (!items.length) {
+          table.innerHTML = '<div class="empty">No known VPS hosts or local V7 configs found for bootstrap.</div>';
+          return;
+        }
+        if (actionable === 0 && blockers === 0) {
+          table.innerHTML = '<div class="empty">Bootstrap complete. ' + esc(nodeItems.length) + ' VPS node(s) and ' + esc(configItems.length) + ' local V7 config(s) are registered in cluster state.</div>';
+          return;
+        }
+        var bootstrapRows = sortedRows('bootstrap', items, {
+          target: function (item) { return item.type === 'node' ? (item.hostname || item.pbname || '') : (item.instance || ''); },
+          type: function (item) { return item.type === 'node' ? 'vps node' : 'v7 config'; },
+          action: function (item) { return item.action || ''; },
+          reason: function (item) { return item.reason || ''; },
+          version: function (item) { return item.type === 'node' ? Number(item.ssh_port || 0) : (item.version || ''); },
+          desired: function (item) { return item.type === 'node' ? (item.node_role || '') : (item.desired_state || ''); },
+          assigned: function (item) { return item.type === 'node' ? (item.ssh_host || item.hostname || '') : (item.assigned_label || item.assigned_host || ''); },
+          manifest: function (item) { return item.type === 'node' ? (item.node_id || '') : (item.config_manifest_hash || ''); }
+        });
+        var html = '<table><thead><tr>'
+          + sortHeader('bootstrap', 'target', 'Target')
+          + sortHeader('bootstrap', 'type', 'Type')
+          + sortHeader('bootstrap', 'action', 'Action')
+          + sortHeader('bootstrap', 'reason', 'Reason')
+          + sortHeader('bootstrap', 'version', 'Version / Port')
+          + sortHeader('bootstrap', 'desired', 'Desired / Role')
+          + sortHeader('bootstrap', 'assigned', 'Assigned / Address')
+          + sortHeader('bootstrap', 'manifest', 'Manifest / Node')
+          + '</tr></thead><tbody>';
+        bootstrapRows.forEach(function (item) {
+          var isNode = item.type === 'node';
+          var target = isNode ? (item.hostname || item.pbname || '') : (item.instance || '');
+          var typeText = isNode ? 'VPS Node' : 'V7 Config';
+          var assigned = item.assigned_label || item.assigned_host || 'n/a';
+          var assignedTitle = item.assigned_host || '';
+          var versionText = item.version || 'n/a';
+          var desiredText = item.desired_state || 'n/a';
+          var desiredClass = item.desired_state === 'running' ? 'good' : '';
+          var manifestText = item.config_manifest_hash || 'n/a';
+          var manifestTitle = item.config_manifest_hash || '';
+          if (isNode) {
+            assigned = (item.ssh_user ? item.ssh_user + '@' : '') + (item.ssh_host || item.hostname || 'n/a');
+            if (item.ssh_port) assigned += ':' + item.ssh_port;
+            if (item.will_create_node_mapping) assigned += ' (new node mapping)';
+            assignedTitle = item.remote_pbgui_dir || item.config_path || '';
+            versionText = item.ssh_port || '22';
+            desiredText = item.node_role || 'vps';
+            desiredClass = 'blue';
+            manifestText = item.node_id ? shortId(item.node_id) : 'new node';
+            manifestTitle = item.node_id || 'new node id will be generated on apply';
+          } else if (item.will_create_node_mapping) {
+            assigned += ' (new node mapping)';
+          }
+          html += '<tr>'
+            + '<td class="mono">' + esc(target) + '</td>'
+            + '<td><span class="pill blue">' + esc(typeText) + '</span></td>'
+            + '<td><span class="pill ' + actionPill(item.action) + '">' + esc(item.action || 'unknown') + '</span></td>'
+            + '<td>' + esc(item.reason || '') + '</td>'
+            + '<td class="mono">' + esc(versionText) + (item.current_version ? ' / current ' + esc(item.current_version) : '') + '</td>'
+            + '<td><span class="pill ' + esc(desiredClass) + '">' + esc(desiredText) + '</span></td>'
+            + '<td title="' + esc(assignedTitle) + '">' + esc(assigned) + '</td>'
+            + '<td><span class="mono hash" title="' + esc(manifestTitle) + '">' + esc(manifestText) + '</span></td>'
+            + '</tr>';
+        });
+        html += '</tbody></table>';
+        table.innerHTML = html;
+        attachSortHandlers('bootstrap-table');
+      }
+
+      function loadBootstrapPreview(silent) {
+        if (!silent) setMessage('Loading bootstrap preview...', '');
+        return fetchJson('/bootstrap-preview').then(function (plan) {
+          renderBootstrap(plan);
+          if (!silent) setMessage('Bootstrap preview loaded.', 'ok');
+          return plan;
+        }).catch(function (err) {
+          var table = document.getElementById('bootstrap-table');
+          if (table) table.innerHTML = '<div class="empty">Failed to load bootstrap preview: ' + esc(err.message) + '</div>';
+          if (!silent) setMessage('Failed to load bootstrap preview: ' + err.message, 'err');
+          throw err;
+        });
+      }
+
+      function applyBootstrap() {
+        var btn = document.getElementById('bootstrap-apply-btn');
+        if (btn && btn.disabled) return;
+        if (btn) { btn.disabled = true; btn.textContent = 'Applying...'; }
+        setMessage('Applying bootstrap operations...', '');
+        return fetchJson('/bootstrap', { method: 'POST' }).then(function (payload) {
+          renderBootstrap(payload.after || {});
+          var counts = (payload.result && payload.result.counts) || {};
+          var kind = counts.failed ? 'warn' : 'ok';
+          setMessage('Bootstrap applied: ' + (counts.applied || 0) + ' written, ' + (counts.skipped || 0) + ' skipped, ' + (counts.failed || 0) + ' failed.', kind);
+          return loadCluster();
+        }).catch(function (err) {
+          setMessage('Bootstrap failed: ' + err.message, 'err');
+        }).finally(function () {
+          if (btn) btn.textContent = 'Apply Bootstrap';
+        });
+      }
+
+      function nodeLabel(nodeId) {
+        var node = nodeMap[nodeId] || {};
+        return node.pbname || node.hostname || shortId(nodeId);
+      }
+
+      function renderNodes(payload) {
+        lastNodesPayload = payload;
+        var nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
+        nodeMap = {};
+        nodes.forEach(function (node) { if (node.node_id) nodeMap[node.node_id] = node; });
+        document.getElementById('nodes-note').textContent = nodes.length + ' node(s)';
+        if (!nodes.length) {
+          document.getElementById('nodes-table').innerHTML = '<div class="empty">No node membership operations have been materialized yet.</div>';
+          return;
+        }
+        var nodeRows = sortedRows('nodes', nodes, {
+          node: function (node) { return node.node_id || ''; },
+          role: function (node) { return node.role || ''; },
+          pbname: function (node) { return node.pbname || node.hostname || ''; },
+          address: function (node) { return (node.ssh_host || node.hostname || '') + ':' + (node.ssh_port || ''); },
+          sync: function (node) { return node.enabled !== false && node.sync_enabled !== false; },
+          probe: function (node) { return (remoteProbeMap[node.node_id] || {}).status || ''; },
+          updated: function (node) { return Number(node.updated_at || 0); }
+        });
+        var html = '<table><thead><tr>'
+          + sortHeader('nodes', 'node', 'Node')
+          + sortHeader('nodes', 'role', 'Role')
+          + sortHeader('nodes', 'pbname', 'PBName')
+          + sortHeader('nodes', 'address', 'Address')
+          + sortHeader('nodes', 'sync', 'Sync')
+          + sortHeader('nodes', 'probe', 'Probe')
+          + sortHeader('nodes', 'updated', 'Updated')
+          + '</tr></thead><tbody>';
+        nodeRows.forEach(function (node) {
+          var enabled = node.enabled !== false && node.sync_enabled !== false;
+          var probe = remoteProbeMap[node.node_id] || {};
+          var probeStatus = probe.status || 'unknown';
+          var probeTitle = probe.error || probe.remote_node_id || probe.remote_cluster_id || probeStatus;
+          html += '<tr>'
+            + '<td class="mono" title="' + esc(node.node_id) + '">' + esc(shortId(node.node_id)) + '</td>'
+            + '<td><span class="pill blue">' + esc(node.role || 'node') + '</span></td>'
+            + '<td>' + esc(node.pbname || node.hostname || 'n/a') + '</td>'
+            + '<td>' + esc(node.ssh_host || node.hostname || 'local') + (node.ssh_port ? ':' + esc(node.ssh_port) : '') + '</td>'
+            + '<td><span class="pill ' + (enabled ? 'good' : 'bad') + '">' + (enabled ? 'Enabled' : 'Disabled') + '</span></td>'
+            + '<td title="' + esc(probeTitle) + '"><span class="pill ' + probePill(probeStatus) + '">' + esc(probeLabel(probeStatus)) + '</span></td>'
+            + '<td>' + esc(timeText(node.updated_at)) + '</td>'
+            + '</tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('nodes-table').innerHTML = html;
+        attachSortHandlers('nodes-table');
+      }
+
+      function renderInstances(payload) {
+        lastInstancesPayload = payload;
+        var instances = Array.isArray(payload.instances) ? payload.instances : [];
+        document.getElementById('instances-note').textContent = instances.length + ' instance(s)';
+        if (!instances.length) {
+          document.getElementById('instances-table').innerHTML = '<div class="empty">No V7 desired state has been recorded yet. Existing bots need bootstrap/migration before this becomes complete.</div>';
+          return;
+        }
+        var instanceRows = sortedRows('instances', instances, {
+          instance: function (item) { return item.instance || ''; },
+          desired: function (item) { return item.desired_state || ''; },
+          assigned: function (item) { return nodeLabel(item.assigned_host); },
+          version: function (item) { return item.version || ''; },
+          manifest: function (item) { return item.config_manifest_hash || ''; },
+          updated: function (item) { return Number(item.updated_at || 0); },
+          conflict: function (item) { return item.conflicted === true; }
+        });
+        var html = '<table><thead><tr>'
+          + sortHeader('instances', 'instance', 'Instance')
+          + sortHeader('instances', 'desired', 'Desired')
+          + sortHeader('instances', 'assigned', 'Assigned Node')
+          + sortHeader('instances', 'version', 'Version')
+          + sortHeader('instances', 'manifest', 'Manifest')
+          + sortHeader('instances', 'updated', 'Updated')
+          + sortHeader('instances', 'conflict', 'Conflict')
+          + '</tr></thead><tbody>';
+        instanceRows.forEach(function (item) {
+          var running = item.desired_state === 'running';
+          var conflicted = item.conflicted === true;
+          html += '<tr>'
+            + '<td class="mono">' + esc(item.instance) + '</td>'
+            + '<td><span class="pill ' + (running ? 'good' : '') + '">' + esc(item.desired_state || 'stopped') + '</span></td>'
+            + '<td title="' + esc(item.assigned_host || '') + '">' + esc(nodeLabel(item.assigned_host)) + '</td>'
+            + '<td class="mono">' + esc(item.version || 'n/a') + '</td>'
+            + '<td><span class="mono hash" title="' + esc(item.config_manifest_hash || '') + '">' + esc(item.config_manifest_hash || 'n/a') + '</span></td>'
+            + '<td>' + esc(timeText(item.updated_at)) + '</td>'
+            + '<td><span class="pill ' + (conflicted ? 'bad' : 'good') + '">' + (conflicted ? 'Conflict' : 'Clean') + '</span></td>'
+            + '</tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('instances-table').innerHTML = html;
+        attachSortHandlers('instances-table');
+      }
+
+      function renderTombstones(payload) {
+        lastTombstonesPayload = payload;
+        var tombstones = Array.isArray(payload.tombstones) ? payload.tombstones : [];
+        if (!tombstones.length) {
+          document.getElementById('tombstones-table').innerHTML = '<div class="empty">No tombstones recorded.</div>';
+          return;
+        }
+        var tombstoneRows = sortedRows('tombstones', tombstones, {
+          instance: function (item) { return item.instance || ''; },
+          version: function (item) { return item.version || ''; },
+          deleted_by: function (item) { return nodeLabel(item.deleted_by); },
+          deleted_at: function (item) { return Number(item.deleted_at || 0); },
+          op_id: function (item) { return item.op_id || ''; }
+        });
+        var html = '<table><thead><tr>'
+          + sortHeader('tombstones', 'instance', 'Instance')
+          + sortHeader('tombstones', 'version', 'Version')
+          + sortHeader('tombstones', 'deleted_by', 'Deleted By')
+          + sortHeader('tombstones', 'deleted_at', 'Deleted At')
+          + sortHeader('tombstones', 'op_id', 'Op ID')
+          + '</tr></thead><tbody>';
+        tombstoneRows.forEach(function (item) {
+          html += '<tr>'
+            + '<td class="mono">' + esc(item.instance) + '</td>'
+            + '<td class="mono">' + esc(item.version || 'n/a') + '</td>'
+            + '<td title="' + esc(item.deleted_by || '') + '">' + esc(nodeLabel(item.deleted_by)) + '</td>'
+            + '<td>' + esc(timeText(item.deleted_at)) + '</td>'
+            + '<td class="mono">' + esc(item.op_id || 'n/a') + '</td>'
+            + '</tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('tombstones-table').innerHTML = html;
+        attachSortHandlers('tombstones-table');
+      }
+
+      function renderOplog(payload) {
+        lastOplogPayload = payload;
+        var operations = Array.isArray(payload.operations) ? payload.operations : [];
+        document.getElementById('oplog-note').textContent = operations.length + ' shown of ' + (payload.count || 0);
+        if (!operations.length) {
+          document.getElementById('oplog-table').innerHTML = '<div class="empty">No local cluster operations recorded.</div>';
+          return;
+        }
+        var operationRows = sortedRows('oplog', operations, {
+          created_at: function (op) { return Number(op.created_at || 0); },
+          op: function (op) { return op.op || ''; },
+          target: function (op) { return op.instance || op.node_id || (op.api_serial ? 'api-keys' : 'cluster'); },
+          actor: function (op) { return nodeLabel(op.actor); },
+          seq: function (op) { return Number(op.seq || 0); },
+          op_id: function (op) { return op.op_id || ''; }
+        });
+        var html = '<table><thead><tr>'
+          + sortHeader('oplog', 'created_at', 'Created')
+          + sortHeader('oplog', 'op', 'Operation')
+          + sortHeader('oplog', 'target', 'Target')
+          + sortHeader('oplog', 'actor', 'Actor')
+          + sortHeader('oplog', 'seq', 'Seq')
+          + sortHeader('oplog', 'op_id', 'Op ID')
+          + '</tr></thead><tbody>';
+        operationRows.forEach(function (op) {
+          var target = op.instance || op.node_id || (op.api_serial ? 'api-keys' : 'cluster');
+          html += '<tr>'
+            + '<td>' + esc(timeText(op.created_at)) + '</td>'
+            + '<td><span class="pill blue">' + esc(op.op || 'op') + '</span></td>'
+            + '<td class="mono">' + esc(target) + '</td>'
+            + '<td title="' + esc(op.actor || '') + '">' + esc(nodeLabel(op.actor)) + '</td>'
+            + '<td class="mono">' + esc(op.seq || '') + '</td>'
+            + '<td class="mono">' + esc(op.op_id || '') + '</td>'
+            + '</tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('oplog-table').innerHTML = html;
+        attachSortHandlers('oplog-table');
+      }
+
+      function loadCluster() {
+        setMessage('Refreshing cluster state...', '');
+        return Promise.all([
+          fetchJson('/status'),
+          fetchJson('/nodes'),
+          fetchJson('/desired-state'),
+          fetchJson('/oplog?limit=50'),
+          fetchJson('/remote-status')
+        ]).then(function (parts) {
+          remoteProbeMap = {};
+          ((parts[4] && parts[4].probes) || []).forEach(function (probe) {
+            if (probe.node_id) remoteProbeMap[probe.node_id] = probe;
+          });
+          renderStats(parts[0]);
+          renderIdentity(parts[0]);
+          renderNodes(parts[1]);
+          renderInstances(parts[2]);
+          renderTombstones(parts[2]);
+          renderOplog(parts[3]);
+          setMessage('Cluster state refreshed.', 'ok');
+          loadBootstrapPreview(true).catch(function () {});
+        }).catch(function (err) {
+          setMessage('Failed to load cluster state: ' + err.message, 'err');
+        });
+      }
+
+      document.getElementById('refresh-btn').addEventListener('click', loadCluster);
+      document.getElementById('bootstrap-apply-btn').addEventListener('click', applyBootstrap);
+      loadCluster();
+    })();
+  </script>
+</body>
+</html>

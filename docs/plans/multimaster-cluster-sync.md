@@ -1,282 +1,291 @@
-# Multi-Master Cluster Sync Plan
+# Multi-Master Cluster Sync Spec
 
-## Goal
+## Scope
 
-PBGui should support robust multi-master and multi-VPS synchronization without external services such as rclone, Synology, Upstash, or Supabase.
+In scope:
 
-The system should:
+- Multi-master and multi-VPS replicated cluster state.
+- V7 desired state: config upserts, moves, starts, stops, deletes, tombstones.
+- Explicit V7 forced-mode config changes such as Panic, Graceful Stop, and Take Profit Only.
+- Syncable V7 JSON config files, including coin override JSON files.
+- `api-keys.json` distribution and metadata.
+- Restricted cluster-sync SSH keys.
+- Dedicated Cluster UI page.
 
-- support multiple masters
-- support multiple VPS runners
-- support masters behind firewalls with no inbound access
-- support VPS nodes without DNS names
-- track IP addresses and SSH access explicitly
-- synchronize config updates, moves, starts, stops, and deletes as explicit operations
-- avoid deriving deletes from missing files
-- prevent stale VPS nodes from starting moved/deleted bots when they can learn newer cluster state from peers
-- allow normal VPS reboot operation from local cluster state when no master is online
-- replace `status_v7.json` as the long-term source of truth
+Out of scope:
 
-## Non-Goals
+- DB Tools row sync and database file copy.
+- Dashboard/template sync.
+- External state services.
+- Master-to-master inbound connectivity requirement.
+- Automatic panic decisions, automatic forced selling, or duplicate-bot liquidation behavior.
 
-- No large implementation in the current `test-installer` branch.
-- No external SaaS state backend.
-- No master-to-master inbound connectivity requirement.
-- No passivbot log based duplicate detection as a primary safety mechanism.
-- No panic or forced-sell behavior for suspected duplicate bots.
-
-## Core Idea
-
-Every master and every VPS stores a local replicated cluster state.
-
-Cluster state lives under:
+## State Directory
 
 ```text
 data/cluster/
   cluster_id
   node_id
+  node_identity.json
   cluster_nodes.json
   desired_state.json
   state_vector.json
   oplog/
-  config_blobs/
-```
-
-Sync is done over SSH/SFTP between nodes that can reach each other.
-
-Masters do not need inbound connections. Masters push/pull cluster state outbound to VPS nodes. VPS nodes may also sync with other VPS peers if firewall and SSH keys allow it.
-
-## File Layout
-
-```text
-data/cluster/
-  cluster_id
-  node_id
-  cluster_nodes.json
-  desired_state.json
-  state_vector.json
-  oplog/
-    magicnuc1/
-      00000001.json
-      00000002.json
-    magicnuc2/
+    <actor_node_id>/
       00000001.json
   config_blobs/
-    sha256/
-      ab/
-        abcdef....json
+    sha256/<first2>/<hash>.json
+  secret_blobs/
+    sha256/<first2>/<hash>.json
 ```
 
-## Node Identity
+Rules:
 
-Each node gets a stable `node_id`.
+- JSON files use `indent=4`.
+- Local writes use temp file in the same directory plus `os.replace()`.
+- Remote writes use the restricted cluster command wrapper and temp file plus rename.
+- Direct overwrite of materialized state files is forbidden.
+- `secret_blobs/` stores sensitive payloads such as `api-keys.json` and must use owner-only permissions.
 
-Examples:
+## Identity
 
-```text
-magicnuc1
-magicnuc2
-manibot93
-manibot94
-```
+`cluster_id`:
 
-The `node_id` is not DNS. IP address, SSH user, SSH port, and host key fingerprint are tracked separately.
+- Format: `pbgui-cluster-<uuid4>`.
+- Stored in `data/cluster/cluster_id`.
+- Generated once on the first cluster master.
+- Copied to joining nodes.
+- Never changes automatically.
+- Different remote `cluster_id` means foreign cluster; block sync.
 
-## Cluster Membership
+`node_id`:
 
-`cluster_nodes.json` is a materialized snapshot built from membership operations in the oplog.
+- Format: `pbgui-node-<uuid4>`.
+- Stored in `data/cluster/node_id`.
+- Generated once per PBGui installation.
+- Never changes for hostname, IP, SSH port, VPS Manager name, or `pbname` changes.
+- Used for oplog `actor`, `op_id`, `assigned_host`, and `state_vector.json` keys.
+- `pbname`, hostname, IP, SSH user, SSH port, and host key are mutable metadata only.
 
-Example:
+`node_identity.json`:
 
 ```json
 {
-  "cluster_id": "pbgui-main",
-  "generation": 42,
-  "nodes": {
-    "magicnuc1": {
-      "node_id": "magicnuc1",
-      "role": "master",
-      "reachable_by_peers": false,
-      "actor_enabled": true,
-      "sync_enabled": true,
-      "enabled": true
-    },
-    "manibot93": {
-      "node_id": "manibot93",
-      "role": "vps",
-      "ssh_host": "167.160.188.196",
-      "ssh_port": 22,
-      "ssh_user": "mani",
-      "ssh_host_key_sha256": "SHA256:...",
-      "remote_pbgui_dir": "/home/mani/software/pbgui",
-      "cluster_dir": "/home/mani/software/pbgui/data/cluster",
-      "bot_runner": true,
-      "state_replica": true,
-      "sync_enabled": true,
-      "enabled": true,
-      "last_seen": 1780734910
-    }
-  }
+    "schema_version": 1,
+    "cluster_id": "pbgui-cluster-...",
+    "node_id": "pbgui-node-...",
+    "created_at": 1780734910,
+    "created_from_pbname": "magicnuc1",
+    "role": "master"
 }
 ```
 
-## Membership Operations
+Join rules:
 
-Membership changes are written as operations, not direct JSON edits.
+- No remote cluster files: install local `cluster_id`, create/install remote `node_id`, write `ADD_NODE`.
+- Same `cluster_id`: accept existing node or write `ADD_NODE`.
+- Different `cluster_id`: block sync.
+- Duplicate `node_id` on two reachable installations: block sync until resolved.
+- Data directory survived reinstall: keep `node_id`.
+- Data directory lost: create new `node_id`; old node must be disabled or replaced explicitly.
 
-Examples:
+## Materialized Files
+
+`cluster_nodes.json` is rebuilt from membership operations:
 
 ```json
-{"op": "ADD_NODE", "node_id": "manibot93", "role": "vps", "ssh_host": "167.160.188.196"}
+{
+    "schema_version": 1,
+    "cluster_id": "pbgui-cluster-...",
+    "generation": 42,
+    "nodes": {
+        "pbgui-node-...": {
+            "node_id": "pbgui-node-...",
+            "role": "master",
+            "pbname": "magicnuc1",
+            "display_name": "magicnuc1",
+            "ssh_host": "167.160.188.196",
+            "ssh_port": 22,
+            "ssh_user": "mani",
+            "ssh_host_key_sha256": "SHA256:...",
+            "remote_pbgui_dir": "/home/mani/software/pbgui",
+            "cluster_dir": "/home/mani/software/pbgui/data/cluster",
+            "bot_runner": true,
+            "state_replica": true,
+            "sync_enabled": true,
+            "enabled": true,
+            "last_seen": 1780734910
+        }
+    }
+}
 ```
 
-```json
-{"op": "UPDATE_NODE_ADDRESS", "node_id": "manibot93", "ssh_host": "167.160.188.200"}
-```
+`desired_state.json` is rebuilt from instance and API-key operations:
 
 ```json
-{"op": "UPDATE_NODE_KEY", "node_id": "manibot93", "public_key": "ssh-ed25519 ..."}
+{
+    "schema_version": 1,
+    "cluster_id": "pbgui-cluster-...",
+    "generated_at": 1780735200,
+    "instances": {
+        "bybit_BTC": {
+            "version": "v19",
+            "desired_state": "running",
+            "assigned_host": "pbgui-node-...",
+            "config_manifest_hash": "sha256:...",
+            "updated_by": "pbgui-node-...",
+            "updated_at": 1780735010,
+            "conflicted": false
+        }
+    },
+    "tombstones": {},
+    "api_keys": {
+        "serial": 42,
+        "payload_hash": "sha256:...",
+        "updated_by": "pbgui-node-...",
+        "updated_at": 1780735010
+    }
+}
 ```
 
+`state_vector.json` maps actor node IDs to highest known sequence:
+
 ```json
-{"op": "DISABLE_NODE", "node_id": "old-vps"}
+{
+    "pbgui-node-...": 124
+}
 ```
 
 ## Operation Log
 
-Every instance change is an append-only operation.
+Path:
 
-Examples:
+```text
+data/cluster/oplog/<actor_node_id>/<seq:08d>.json
+```
+
+Envelope required on every operation:
 
 ```json
 {
-  "op_id": "magicnuc1:00000123",
-  "actor": "magicnuc1",
-  "seq": 123,
-  "op": "UPSERT_CONFIG",
-  "instance": "bybit_BTC",
-  "parent_version": "v17",
-  "version": "v18",
-  "config_hash": "sha256:...",
-  "assigned_host": "manibot93",
-  "desired_state": "running",
-  "created_at": 1780734910
+    "schema_version": 1,
+    "cluster_id": "pbgui-cluster-...",
+    "op_id": "pbgui-node-...:00000124",
+    "actor": "pbgui-node-...",
+    "seq": 124,
+    "op": "MOVE_INSTANCE",
+    "created_at": 1780735010
 }
 ```
-
-```json
-{
-  "op_id": "magicnuc1:00000124",
-  "actor": "magicnuc1",
-  "seq": 124,
-  "op": "MOVE_INSTANCE",
-  "instance": "bybit_BTC",
-  "parent_version": "v18",
-  "version": "v19",
-  "from": "manibot93",
-  "to": "manibot94",
-  "created_at": 1780735010
-}
-```
-
-```json
-{
-  "op_id": "magicnuc1:00000125",
-  "actor": "magicnuc1",
-  "seq": 125,
-  "op": "DELETE_INSTANCE",
-  "instance": "bybit_BTC",
-  "parent_version": "v19",
-  "version": "v20",
-  "created_at": 1780735110
-}
-```
-
-Required operation types:
-
-- `ADD_NODE`
-- `UPDATE_NODE`
-- `UPDATE_NODE_ADDRESS`
-- `UPDATE_NODE_KEY`
-- `DISABLE_NODE`
-- `UPSERT_CONFIG`
-- `MOVE_INSTANCE`
-- `START_INSTANCE`
-- `STOP_INSTANCE`
-- `DELETE_INSTANCE`
-- `TOMBSTONE_INSTANCE`
-
-## Desired State
-
-`desired_state.json` is built deterministically from the oplog.
-
-Example:
-
-```json
-{
-  "cluster_id": "pbgui-main",
-  "generated_at": 1780735200,
-  "instances": {
-    "bybit_BTC": {
-      "version": "v19",
-      "desired_state": "running",
-      "assigned_host": "manibot94",
-      "config_hash": "sha256:...",
-      "updated_by": "magicnuc1",
-      "updated_at": 1780735010,
-      "conflicted": false
-    }
-  },
-  "tombstones": {
-    "old_bot": {
-      "version": "v20",
-      "deleted_by": "magicnuc1",
-      "deleted_at": 1780735110
-    }
-  }
-}
-```
-
-## Conflict Handling
-
-If two masters change the same instance from the same `parent_version`, the result is a conflict.
 
 Rules:
 
-- Do not use blind last-write-wins.
-- Mark the instance as `conflicted=true`.
+- `op_id` is `<actor>:<seq:08d>`.
+- `seq` is `1 + max(seq)` for the local actor, allocated under a local write lock.
+- Operation file path must match `actor` and `seq`.
+- Apply is idempotent.
+- Rebuild order is `(actor, seq, op_id)`.
+- Reject unknown `schema_version`, foreign `cluster_id`, invalid names, path traversal, and malformed payloads.
+
+Membership operations:
+
+- `ADD_NODE`: create or update node metadata.
+- `UPDATE_NODE`: update mutable display/role/flags metadata.
+- `UPDATE_NODE_ADDRESS`: update SSH host/port/address fields.
+- `UPDATE_NODE_SSH`: update SSH user, port, remote path, or host key fields.
+- `UPDATE_NODE_KEY`: update cluster-sync public key metadata.
+- `DISABLE_NODE`: set `enabled=false` and stop scheduling sync to the node.
+
+V7 operations:
+
+- `UPSERT_CONFIG`: set instance version, desired state, assigned host, config manifest hash, and explicit forced-mode changes saved through Dashboard or Run Config UI.
+- `MOVE_INSTANCE`: change assigned host and version.
+- `START_INSTANCE`: set `desired_state=running`.
+- `STOP_INSTANCE`: set `desired_state=stopped`.
+- `DELETE_INSTANCE`: remove active instance and create tombstone.
+- `TOMBSTONE_INSTANCE`: prevent deleted config resurrection.
+
+API-key operation:
+
+- `UPSERT_API_KEYS`: set API-key serial, payload hash, and secret blob hash.
+
+## V7 Config Manifest
+
+Manifest input:
+
+- Include every syncable JSON file in `data/run_v7/<instance>/`.
+- Include `config.json` and coin override JSON files.
+- Exclude `config_run.json`, `running_version.txt`, `ignored_coins.json`, `approved_coins.json`, logs, and non-JSON runtime files.
+
+Manifest format before hashing:
+
+```json
+{
+    "schema_version": 1,
+    "files": {
+        "BTC.json": {"sha256": "...", "size": 1234},
+        "config.json": {"sha256": "...", "size": 5678}
+    }
+}
+```
+
+Hash rule:
+
+- Sort filenames lexicographically.
+- Serialize manifest with stable JSON separators.
+- `config_manifest_hash = "sha256:" + sha256(serialized_manifest)`.
+- Blob paths are content-addressed by each file hash under `config_blobs/`.
+
+## API Keys
+
+`UPSERT_API_KEYS` operation payload:
+
+```json
+{
+    "api_serial": 42,
+    "payload_hash": "sha256:...",
+    "secret_blob_hash": "sha256:..."
+}
+```
+
+Rules:
+
+- Do not log API-key content.
+- Do not place API-key content in `desired_state.json`.
+- Store payload bytes only in `secret_blobs/` with owner-only permissions.
+- Install through the same backup, verify, and bot restart rules as current API Sync.
+
+## Conflict Rules
+
+Conflict condition:
+
+- Two or more operations modify the same instance from the same `parent_version` and produce different versions, hosts, desired states, or manifest hashes.
+
+Conflict result:
+
+- Set `conflicted=true` in `desired_state.json`.
+- Store competing `op_id`, parent version, proposed version, assigned host, desired state, and manifest hash.
 - PBRun must not auto-start conflicted instances.
-- UI must show conflict details and offer explicit resolution.
-- Conflict resolution creates a new operation with a new version.
+- Resolution writes a new operation with a new version.
 
-## Delete Rule
+No blind last-write-wins for instance conflicts.
 
-Delete must never be inferred from missing remote files or missing remote instances.
+## Delete And Move Rules
 
-Only explicit operations may delete:
+Delete:
 
-- `DELETE_INSTANCE`
-- `TOMBSTONE_INSTANCE`
+- Never infer delete from missing files, missing remote instances, or missing `status_v7.json` entries.
+- Only `DELETE_INSTANCE` and `TOMBSTONE_INSTANCE` delete or archive local files.
+- Tombstones prevent old configs from being reintroduced by stale peers.
 
-Local files may only be deleted or archived after a valid delete/tombstone operation exists in desired state.
+Move:
 
-## Move Rule
+- Move is explicit and versioned.
+- A moved instance must not start on the old host after the old host learns the move operation.
 
-Move is explicit and versioned.
+## PBRun Gate
 
-A move updates:
-
-- `assigned_host`
-- `version`
-- optionally `desired_state`
-
-The old VPS must not start the bot after it learns the move operation.
-
-## PBRun Start Gate
-
-PBRun checks cluster state before each bot start.
-
-Required conditions:
+Before starting a V7 bot, PBRun must verify:
 
 - `desired_state.json` exists and is readable.
 - Instance exists in desired state.
@@ -284,218 +293,147 @@ Required conditions:
 - Instance is not conflicted.
 - `desired_state == "running"`.
 - `assigned_host == local node_id`.
-- Local config hash matches `config_hash`.
+- Local config manifest hash matches `config_manifest_hash`.
 - Local config version matches `version`.
 
-If any condition fails:
+If any check fails:
 
 - Do not start the bot.
-- Write a clear log entry.
-- Surface the blocked-start state in PBGui.
+- Log the blocked reason.
+- Surface blocked state in PBGui.
 
-## Normal VPS Reboot
+Stale-state policy:
 
-A VPS should keep working without an online master.
+- Stale local desired state is warning-only.
+- PBRun must not block startup only because cluster state is old.
+- If no peer can refresh state, log and surface a stale-state warning.
 
-Boot flow:
+## Sync Protocol
 
-1. VPS starts.
-2. Cluster sync tries to contact known peer VPS nodes for a short time.
-3. If peers are reachable, pull missing operations and rebuild desired state.
-4. If no peers are reachable, use local desired state.
-5. PBRun starts only bots assigned to this VPS in local desired state.
+Normal replication uses restricted cluster-sync SSH keys and forced commands, not unrestricted shell or SFTP.
 
-Open policy decision:
+Bootstrap may use existing VPS Manager SSH credentials only for import, key installation, and recovery.
 
-- Whether to block starts if desired state is older than a configured age.
-- Proposed default: allow normal reboot from local desired state, but show warnings for stale state.
+Required verbs:
 
-## Critical Move Scenario
+- `hello`: return node identity and protocol version.
+- `get-state-vector`: return `state_vector.json`.
+- `put-op`: validate and atomically write one operation.
+- `put-blob`: validate hash and atomically write one config blob.
+- `put-secret-blob`: validate hash and atomically write one secret blob with restricted permissions.
+- `rebuild`: rebuild materialized files from oplog.
+- `get-desired-state`: return `desired_state.json`.
+- `install-api-keys`: install validated API-key payload with backup, verify, and restart rules.
 
-Scenario:
+Implementation note: the first restricted wrapper implements identity, state-vector, operation, blob, secret-blob, rebuild, and desired-state verbs. `install-api-keys` remains a later safety subphase because it must reuse the existing API-key backup, validation, and bot-restart rules.
 
-- `manibot93` is down.
-- Bot is moved to `manibot94`.
-- All masters go down.
-- `manibot93` starts again.
+Sync loop:
 
-Expected behavior:
+1. Node A calls Node B `hello`.
+2. Node A verifies matching `cluster_id`.
+3. Node A reads Node B `state_vector.json`.
+4. Node A sends missing operations.
+5. Node A sends required config and secret blobs.
+6. Node A requests rebuild on Node B.
+7. Optional reverse sync repeats the same steps.
 
-- Move operation was pushed to at least `manibot94`.
-- `manibot93` boots and tries peer sync.
-- If `manibot94` is reachable, `manibot93` learns the move.
-- Desired state says `assigned_host=manibot94`.
-- PBRun on `manibot93` does not start the old bot.
+## Restricted SSH Key Model
 
-Extreme case:
+Each node has a dedicated cluster-sync key.
 
-- `manibot93` cannot reach any peer.
-- No system can know about changes made during downtime.
-- Policy must decide between availability and safety.
-
-Recommendation:
-
-- Use local desired state for normal reboot.
-- Warn when state is stale.
-- Consider blocking starts when state is very stale and no peers are reachable.
-
-## Sync Topology
-
-Not every node must reach every other node.
-
-Example:
+Install public keys in `authorized_keys` with restrictions:
 
 ```text
-magicnuc1 -> manibot93
-magicnuc2 -> manibot94
-manibot93 <-> manibot94
-manibot94 <-> manibot95
+restrict,no-pty,no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc,command="/home/mani/software/pbgui/cluster_sync_command.py --remote-node <peer_node_id>" ssh-ed25519 AAAA... pbgui-cluster:<peer_node_id>
 ```
 
-Operations propagate through reachable paths.
+Optional when stable:
 
-## SSH/SFTP Sync Protocol
+- Add `from="ip1,ip2"`.
 
-Minimal protocol:
+Wrapper requirements:
 
-1. Node A reads Node B `state_vector.json`.
-2. Node A computes operations missing on B.
-3. Node A copies missing operations to B.
-4. Node A copies missing config blobs to B.
-5. Node B rebuilds `desired_state.json`.
-6. Optionally repeat in the opposite direction.
+- Read `SSH_ORIGINAL_COMMAND`.
+- Reject unknown verbs.
+- Enforce matching `cluster_id`.
+- Enforce known or explicitly joining peer `node_id`.
+- Reject path traversal and caller-provided absolute paths.
+- Allow writes only under `data/cluster/`, except `install-api-keys`.
+- Enforce size limits.
+- Verify hashes.
+- Use atomic writes.
+- Do not allow shell execution, command chaining, unrestricted SFTP, port forwarding, pty, or agent forwarding.
 
-`state_vector.json` example:
+## Firewall Rules
 
-```json
-{
-  "magicnuc1": 124,
-  "magicnuc2": 55,
-  "manibot93": 8
-}
-```
+VPS-to-VPS SSH firewall rules are managed automatically.
 
-## SSH Keys
+Rules:
 
-Password should be used only for bootstrap/import.
+- Derive peer allow rules from enabled nodes in `cluster_nodes.json` with `state_replica=true` and `sync_enabled=true`.
+- Allow peer VPS IPs to reach the configured SSH port used for restricted cluster-sync commands.
+- Apply new allow rules before enabling peer sync to that node.
+- Remove obsolete allow rules only after replacement connectivity has been confirmed.
+- Do not remove non-PBGui SSH rules.
+- Log every firewall change and show failures on the Cluster page.
 
-Long-term approach:
+## `status_v7.json` Compatibility
 
-- Each node has a cluster-sync SSH key.
-- Public keys are distributed as `UPDATE_NODE_KEY` operations.
-- Master installs keys on reachable VPS nodes.
-- VPS nodes maintain authorized keys for known sync peers.
-- Keys should be tagged with comments like `pbgui-cluster:<node_id>`.
+- First cluster-sync release: keep generating and consuming `status_v7.json` for compatibility.
+- During compatibility, `desired_state.json` is authority and `status_v7.json` is generated output.
+- Next version after cluster-sync: remove old `status_v7.json` authority/reconcile behavior.
 
-## Firewall
+## Cluster UI
 
-For VPS-to-VPS sync:
+Dedicated page: `Cluster`.
 
-- `cluster_nodes.json` includes each VPS IP and SSH port.
-- PBGui can derive UFW rules from membership.
-- Master IPs may access SSH.
-- Peer VPS IPs may access SSH when `state_replica=true`.
-- Old IP rules are removed only after replacement connectivity is confirmed.
+The first local page shows local cluster identity, materialized nodes, V7 desired state, tombstones, recent oplog entries, and a local bootstrap preview/apply action. Bootstrap writes explicit `ADD_NODE` operations for known VPS Manager hosts and `UPSERT_CONFIG` operations for local V7 configs; it uses VPS Monitor role metadata when available, does not infer deletes from missing files or missing VPS entries, and does not clear tombstones. Later versions must add:
 
-## Role Of status_v7.json
-
-`status_v7.json` remains a compatibility layer during migration.
-
-Long term:
-
-- `desired_state.json` becomes the authority.
-- `status_v7.json` may be generated from desired state while old code still needs it.
-- UI and PBRun should eventually read desired state directly.
+- Remote node reachability, sync enabled state, and last seen. Initial read-only `hello` probe status is implemented before write sync.
+- Desired-state generation time and stale warnings.
+- V7 conflicts and competing operations.
+- API-key sync status per node.
+- Foreign cluster and duplicate node-id blockers.
 
 ## Migration Phases
 
-### Phase 1: Cluster State Skeleton
-
-- Add `data/cluster` structure.
-- Generate `cluster_nodes.json` from VPS Manager hosts.
-- Existing VPS import writes `ADD_NODE`.
-- VPS setup writes `ADD_NODE`.
-- No PBRun behavior change yet.
-
-### Phase 2: V7 Operation Log
-
-- Write operations for V7 config save, activate, move, stop, start, and delete.
-- Build `desired_state.json` locally from oplog.
-- Stop deriving deletes from missing remote data.
-- Keep writing `status_v7.json` for compatibility.
-
-### Phase 3: Master-to-VPS State Distribution
-
-- Master pushes cluster state to all reachable VPS nodes via SSH/SFTP.
-- VPS stores `data/cluster` locally.
-- UI shows cluster sync status per node.
-
-### Phase 4: PBRun Start Gate
-
-- PBRun checks desired state before starting bots.
-- Block starts for tombstoned, conflicted, wrong-host, wrong-version, or wrong-hash instances.
-- Surface blocked starts in logs/UI.
-
-### Phase 5: VPS-to-VPS Peer Sync
-
-- VPS nodes sync cluster ops with peer VPS nodes on boot and periodically.
-- Manage cluster SSH keys.
-- Optionally manage firewall rules for peer SSH.
-
-### Phase 6: Conflict UI
-
-- Show conflicted instances.
-- Show competing operations and config hashes.
-- Let user choose a winning version or create a merged config.
-- Resolution writes a new operation.
+1. Cluster state skeleton: identity files, operation writer, rebuild logic, membership ops, tests.
+2. V7 operation log: V7 ops, manifest hash, desired state, tombstones, no delete inference.
+3. API-key operation log: `UPSERT_API_KEYS`, secret blobs, install path compatibility.
+4. Restricted SSH transport: key generation, authorized-key install, forced command wrapper, master-to-VPS sync.
+5. PBRun gate: desired-state checks and stale warning-only policy.
+6. VPS-to-VPS peer sync: peer keys, automatic firewall rules, boot sync, periodic sync.
+7. Cluster UI: node status, stale warnings, conflicts, API-key status.
+8. Remove old `status_v7.json` authority in the next version.
 
 ## Tests
 
 Unit tests:
 
-- Oplog apply/rebuild desired state.
-- Membership operations materialize `cluster_nodes.json`.
-- `UPSERT_CONFIG`, `MOVE_INSTANCE`, `DELETE_INSTANCE` update desired state correctly.
-- Tombstone prevents old config resurrection.
-- Conflict detection for two ops with same parent version.
-- PBRun start gate allows only correct `assigned_host`.
-- PBRun blocks tombstoned/conflicted/wrong-host instances.
+- Identity creation and migration from `pbname`.
+- Foreign cluster rejection.
+- Duplicate `node_id` rejection.
+- Operation envelope validation.
+- Oplog idempotent apply and deterministic rebuild.
+- Membership materializes `cluster_nodes.json`.
+- Bootstrap registers known VPS Manager hosts as nodes without remote mutation.
+- `UPSERT_CONFIG`, `MOVE_INSTANCE`, `START_INSTANCE`, `STOP_INSTANCE`, `DELETE_INSTANCE`, `TOMBSTONE_INSTANCE` materialize correctly.
+- Tombstone prevents stale config resurrection.
+- Conflict detection for same parent version.
+- `config_manifest_hash` changes when any syncable V7 JSON changes.
+- `UPSERT_API_KEYS` updates metadata without exposing secrets in logs or desired state.
+- Restricted command rejects unknown verbs, path traversal, foreign cluster, and malformed payloads.
+- PBRun gate blocks tombstoned, conflicted, wrong-host, wrong-version, wrong-hash instances.
+- PBRun warns but does not block on stale local state.
 
 Integration tests:
 
-- Master imports VPS and distributes cluster state.
-- VPS reboots and starts only assigned bots.
-- Bot moves from offline VPS to another VPS.
-- Old VPS returns and learns the move from a peer.
+- Master imports VPS and installs cluster identity.
+- Master distributes cluster state to VPS through restricted command.
+- VPS reboot starts only locally assigned bots.
+- Bot move from offline VPS to another VPS.
+- Old VPS returns, peer sync learns move, old bot stays stopped.
 - Master offline, VPS reboot uses local desired state.
-- No peer reachable and local desired state stale.
-
-## Open Decisions
-
-- How stale may local desired state be before PBRun blocks starts?
-- Should stale state be warning-only or blocking?
-- Should VPS-to-VPS SSH firewall rules be fully automatic?
-- Should cluster sync use a dedicated SSH key or the existing user key?
-- How long should `status_v7.json` compatibility be maintained?
-- Where should the UI show cluster conflicts and node sync status?
-
-## Recommendation
-
-Do not build this as a big bang.
-
-Start with:
-
-- cluster state file layout
-- membership operations
-- V7 operation log
-- desired state builder
-- explicit tombstones and moves
-
-Then add:
-
-- master-to-VPS distribution
-- PBRun start gate
-- VPS-to-VPS peer sync
-- conflict UI
-
-This keeps the current branch focused on v1.83/installer stability while providing a clear path to robust multi-master sync later.
+- No peer reachable plus stale local desired state produces warning-only boot.
+- Automatic firewall rule creation for VPS-to-VPS peer sync.
+- Obsolete PBGui-managed firewall rules are removed only after replacement connectivity is confirmed.

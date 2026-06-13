@@ -1,1 +1,19 @@
 # Unreleased
+
+- Cluster Sync: added automatic bootstrap preview/apply actions to register known VPS nodes and existing run_v7 configs in local cluster state without inferring deletes or clearing tombstones.
+- Cluster Sync: bootstrap now preserves VPS Manager monitor roles so known remote masters are registered as master nodes instead of VPS nodes.
+- Cluster Sync: cluster page tables now default to name-based ordering where appropriate and support click-to-sort column headers.
+- Cluster Sync: added the restricted cluster sync command wrapper foundation for hello, state-vector, operation, blob, secret-blob, rebuild, and desired-state verbs.
+- Cluster Sync: added read-only remote hello probes for Cluster nodes to show local, reachable, uninitialized, foreign, mismatched, or unavailable sync identities.
+- V7 Run: saving a backup draft for a deleted instance now clears the matching Cluster Sync tombstone as an explicit restore.
+- V7 Edit: preserve and display a backup config user even when that user is not present in the current API-key user dropdown.
+- Cluster Sync: fixed a startup race where parallel Cluster page status requests could collide while rewriting materialized state temp files.
+- V7 Run: keep the original instance name when loading a deleted instance backup into the editor so saving restores the intended bot instead of a nameless draft.
+- Cluster Sync: added a read-only FastAPI status API and standalone Cluster Sync page for local identity, nodes, V7 desired state, tombstones, and recent oplog visibility.
+- Cluster Sync: record local V7 instance saves, restores, deletes, and forced-mode changes in the cluster oplog with materialized desired state.
+- Cluster Sync: added the local cluster state skeleton with identity files, oplog validation, deterministic rebuilds, V7 config manifest hashing, API-key metadata materialization, and unit tests.
+- V7 Run: hide incomplete backup folders without config.json from the restoreable backup list.
+- Docs: condensed the multi-master cluster sync plan into an implementation-focused specification.
+- Docs: added English and German user guides explaining Cluster Sync behavior.
+- Docs: clarified that explicit V7 forced-mode config changes are included in Cluster Sync.
+- Docs: recorded automatic VPS-to-VPS firewall rule management for Cluster Sync.
