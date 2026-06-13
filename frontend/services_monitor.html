@@ -435,7 +435,6 @@
   <div id="prices-overlay-title">
     <span>&#128202; Price Snapshot</span>
     <div style="display:flex;gap:0.4rem;align-items:center;">
-      <button class="po-btn" onclick="loadPricesOverlay()" title="Refresh">&#8635;</button>
       <button class="po-btn" onclick="closePricesOverlay()" title="Close">&#10005;</button>
     </div>
   </div>
@@ -3021,6 +3020,9 @@ window.PBGUI_NAV_CONFIG = {
   (function () {
     var _isDragging = false, _dragOX = 0, _dragOY = 0;
     var _allRows = [];
+    var _pricesRefreshTimer = null;
+    var _pricesAgeTimer = null;
+    var _pricesLoading = false;
 
     function fmtPrice(p) {
       if (p == null) return '\u2014';
@@ -3030,15 +3032,50 @@ window.PBGUI_NAV_CONFIG = {
       return p.toPrecision(4);
     }
     function fmtAge(ts) {
-      if (!ts) return '\u2014';
-      var s = Math.floor(Date.now() / 1000) - ts;
+      var s = ageSeconds(ts);
+      if (s == null) return '\u2014';
       if (s < 0) s = 0;
       return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : Math.floor(s / 3600) + 'h';
     }
     function ageCol(ts) {
-      if (!ts) return '#4a5568';
-      var s = Math.floor(Date.now() / 1000) - ts;
+      var s = ageSeconds(ts);
+      if (s == null) return '#4a5568';
       return s < 60 ? '#4ade80' : s < 300 ? '#f59e0b' : '#ff4b4b';
+    }
+    function tsSeconds(ts) {
+      var n = Number(ts);
+      if (!Number.isFinite(n) || n <= 0) return null;
+      return n > 100000000000 ? Math.floor(n / 1000) : Math.floor(n);
+    }
+    function ageSeconds(ts) {
+      var sec = tsSeconds(ts);
+      if (sec == null) return null;
+      var s = Math.floor(Date.now() / 1000) - sec;
+      return s < 0 ? 0 : s;
+    }
+    function filteredPriceRows() {
+      var si = document.getElementById('po-search');
+      var q = si ? si.value.trim().toLowerCase() : '';
+      if (!q) return _allRows;
+      return _allRows.filter(function (r) {
+        return String(r.symbol || '').toLowerCase().indexOf(q) !== -1
+          || String(r.exchange || '').toLowerCase().indexOf(q) !== -1;
+      });
+    }
+    function renderCurrentPriceTable() {
+      if (_pricesLoading && !_allRows.length) return;
+      renderTable(filteredPriceRows());
+    }
+    function startPricesAutoRefresh() {
+      stopPricesAutoRefresh();
+      _pricesRefreshTimer = setInterval(function () { window.loadPricesOverlay({ silent: true }); }, 5000);
+      _pricesAgeTimer = setInterval(renderCurrentPriceTable, 1000);
+    }
+    function stopPricesAutoRefresh() {
+      if (_pricesRefreshTimer) clearInterval(_pricesRefreshTimer);
+      if (_pricesAgeTimer) clearInterval(_pricesAgeTimer);
+      _pricesRefreshTimer = null;
+      _pricesAgeTimer = null;
     }
 
     function renderTable(rows) {
@@ -3073,30 +3110,35 @@ window.PBGUI_NAV_CONFIG = {
       ov.classList.add('active');
       var si = document.getElementById('po-search');
       if (si) si.value = '';
-      loadPricesOverlay();
+      startPricesAutoRefresh();
+      window.loadPricesOverlay();
     };
     window.closePricesOverlay = function () {
+      stopPricesAutoRefresh();
       document.getElementById('prices-overlay').classList.remove('active');
     };
-    window.loadPricesOverlay = function () {
+    window.loadPricesOverlay = function (opts) {
+      opts = opts || {};
+      if (_pricesLoading) return;
+      _pricesLoading = true;
       var body = document.getElementById('prices-overlay-body');
-      if (body) body.innerHTML = '<div style="color:#64748b;padding:1rem;">Loading\u2026</div>';
+      if (!opts.silent && body) body.innerHTML = '<div style="color:#64748b;padding:1rem;">Loading\u2026</div>';
       fetch(API_BASE + '/prices-snapshot?token=' + TOKEN)
         .then(function (r) { return r.json(); })
         .then(function (d) {
           _allRows = d.rows || [];
-          var si = document.getElementById('po-search');
-          var q = si ? si.value.trim().toLowerCase() : '';
-          renderTable(q ? _allRows.filter(function (r) { return r.symbol.toLowerCase().indexOf(q) !== -1; }) : _allRows);
+          renderCurrentPriceTable();
         })
         .catch(function () {
           var body = document.getElementById('prices-overlay-body');
-          if (body) body.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Failed to load prices.</div>';
+          if (!opts.silent && body) body.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Failed to load prices.</div>';
+        })
+        .finally(function () {
+          _pricesLoading = false;
         });
     };
     window.filterPricesOverlay = function (q) {
-      var lq = q.trim().toLowerCase();
-      renderTable(lq ? _allRows.filter(function (r) { return r.symbol.toLowerCase().indexOf(lq) !== -1 || (r.exchange || '').toLowerCase().indexOf(lq) !== -1; }) : _allRows);
+      renderCurrentPriceTable();
     };
 
     /* drag logic */
