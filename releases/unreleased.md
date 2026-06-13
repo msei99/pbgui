@@ -6,6 +6,7 @@
 - Cluster Sync: added the restricted cluster sync command wrapper foundation for hello, state-vector, operation, blob, secret-blob, rebuild, and desired-state verbs.
 - Cluster Sync: added read-only remote hello probes for Cluster nodes to show local, reachable, uninitialized, foreign, mismatched, or unavailable sync identities.
 - Cluster Sync: remote hello probes now use the remote PBGui virtualenv when available and no longer wait for stdin on read-only commands.
+- Cluster Sync: bootstrap preview no longer downgrades already registered master nodes to VPS nodes when monitor role metadata is temporarily unavailable.
 - V7 Run: saving a backup draft for a deleted instance now clears the matching Cluster Sync tombstone as an explicit restore.
 - V7 Edit: preserve and display a backup config user even when that user is not present in the current API-key user dropdown.
 - Cluster Sync: fixed a startup race where parallel Cluster page status requests could collide while rewriting materialized state temp files.

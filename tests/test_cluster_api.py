@@ -421,6 +421,43 @@ def test_bootstrap_preview_skips_registered_vps_node(monkeypatch, tmp_path: Path
     assert preview["items"][0]["reason"] == "VPS node already registered"
 
 
+def test_bootstrap_preview_preserves_registered_master_without_monitor_role(monkeypatch, tmp_path: Path) -> None:
+    """Missing monitor role metadata must not downgrade an existing master node."""
+
+    root = _init_cluster(tmp_path)
+    _write_vps_config(tmp_path, "remote-master", ip="203.0.113.11", user="bot", ssh_port=2222)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(cluster, "get_monitor_state_snapshot", lambda: {"host_meta": {}})
+    append_operation(
+        root,
+        "ADD_NODE",
+        {
+            "node_id": NODE_B,
+            "role": "master",
+            "pbname": "remote-master",
+            "hostname": "remote-master",
+            "sync_enabled": True,
+            "ssh_host": "203.0.113.11",
+            "ssh_user": "bot",
+            "ssh_port": 2222,
+            "remote_pbgui_dir": "/home/bot/software/pbgui",
+        },
+        created_at=101,
+    )
+    (tmp_path / "data" / "cluster" / "host_node_ids.json").write_text(
+        json.dumps({"schema_version": 1, "hosts": {"remote-master": {"node_id": NODE_B, "role": "master"}}}),
+        encoding="utf-8",
+    )
+
+    preview = cluster.get_bootstrap_preview(session=None)
+
+    assert preview["counts"]["skip"] == 1
+    assert preview["can_apply"] is False
+    assert preview["items"][0]["node_role"] == "master"
+    assert preview["items"][0]["action"] == "skip"
+    assert preview["items"][0]["reason"] == "VPS node already registered"
+
+
 def test_bootstrap_preview_ignores_auxiliary_vps_json(monkeypatch, tmp_path: Path) -> None:
     """Bootstrap reads only the main VPS host JSON and ignores pending helper files."""
 

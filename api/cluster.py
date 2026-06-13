@@ -223,7 +223,7 @@ def _known_vps_configs() -> list[dict[str, Any]]:
             continue
         result.append({
             "hostname": hostname,
-            "role": host_roles.get(hostname, "vps"),
+            "role": host_roles.get(hostname),
             "ssh_host": str(data.get("ip") or "").strip(),
             "ssh_user": str(data.get("user") or "").strip(),
             "ssh_port": _coerce_ssh_port(data.get("firewall_ssh_port")),
@@ -483,15 +483,19 @@ def _build_bootstrap_plan() -> dict[str, Any]:
 
     for vps_config in _known_vps_configs():
         hostname = str(vps_config.get("hostname") or "").strip()
-        node_role = _cluster_role_from_monitor_role(vps_config.get("role"))
-        item: dict[str, Any] = {"type": "node", "node_role": node_role, "hostname": hostname, "config_path": vps_config.get("config_path")}
+        item: dict[str, Any] = {"type": "node", "hostname": hostname, "config_path": vps_config.get("config_path")}
         try:
             _validate_instance_name(hostname)
             node_id, current = _current_node_for_host(cluster_nodes, hostname, host_node_ids)
             mapping = host_node_ids.get(hostname)
             mapped_node_id = str(mapping.get("node_id") or "") if isinstance(mapping, dict) else ""
             mapping_matches = bool(node_id) and mapped_node_id == node_id
-            desired_payload = _node_payload_from_vps_config(node_id or "pending", vps_config)
+            monitor_role = str(vps_config.get("role") or "").strip()
+            current_role = str(current.get("role") or "").strip() if current else ""
+            node_role = _cluster_role_from_monitor_role(monitor_role or current_role or "vps")
+            desired_config = dict(vps_config)
+            desired_config["role"] = node_role
+            desired_payload = _node_payload_from_vps_config(node_id or "pending", desired_config)
             item.update({
                 "node_id": node_id,
                 "pbname": hostname,
