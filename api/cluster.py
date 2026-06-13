@@ -324,12 +324,17 @@ def _node_metadata_matches(current: dict[str, Any], desired: dict[str, Any]) -> 
 def _cluster_hello_command(remote_pbgui_dir: str | None, local_node_id: str) -> str:
     """Build the read-only remote Cluster Sync hello command."""
 
-    base = remote_shell_path(remote_pbgui_dir)
-    script = f"{base}/cluster_sync_command.py"
-    cluster_root = f"{base}/data/cluster"
+    base = remote_shell_path(remote_pbgui_dir or "software/pbgui")
+    local_node = shlex.quote(str(local_node_id))
     return (
-        f"python3 {script} --cluster-root {cluster_root} "
-        f"--remote-node {shlex.quote(str(local_node_id))} --allow-join hello"
+        f"base={base}; "
+        "parent=\"${base%/*}\"; "
+        "if [ -x \"$parent/venv_pbgui/bin/python\" ]; then py=\"$parent/venv_pbgui/bin/python\"; "
+        "elif [ -x \"$parent/venv_pbgui312/bin/python\" ]; then py=\"$parent/venv_pbgui312/bin/python\"; "
+        "elif [ -x \"$base/.venv/bin/python\" ]; then py=\"$base/.venv/bin/python\"; "
+        "else py=python3; fi; "
+        "\"$py\" \"$base/cluster_sync_command.py\" --cluster-root \"$base/data/cluster\" "
+        f"--remote-node {local_node} --allow-join hello"
     )
 
 

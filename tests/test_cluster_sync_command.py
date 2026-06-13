@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import stat
+import sys
 from pathlib import Path
 
 import pytest
 
-from cluster_sync_command import ClusterSyncCommandError, run_command
+from cluster_sync_command import ClusterSyncCommandError, main, run_command
 from master.cluster_state import append_operation, ensure_local_identity, load_operations
 
 
@@ -177,3 +178,24 @@ def test_get_desired_state_returns_materialized_snapshot(tmp_path: Path) -> None
     payload = run_command(root, NODE_B, "get-desired-state")
 
     assert payload["desired_state"]["instances"]["bybit_BTCUSDT"]["version"] == "7"
+
+
+def test_main_does_not_read_stdin_for_hello(monkeypatch, tmp_path: Path, capsys) -> None:
+    """The CLI hello command must not block waiting for stdin."""
+
+    class BlockingStdin:
+        class Buffer:
+            def read(self, size: int = -1) -> bytes:
+                raise AssertionError("stdin should not be read")
+
+        buffer = Buffer()
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(sys, "stdin", BlockingStdin())
+
+    exit_code = main(["--cluster-root", str(root), "--remote-node", NODE_B, "hello"])
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert output["ok"] is True
+    assert output["remote_node"] == NODE_B

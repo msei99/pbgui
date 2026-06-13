@@ -257,6 +257,7 @@ def test_remote_status_reports_successful_hello(monkeypatch, tmp_path: Path) -> 
     assert calls[0][0] == "vps-a"
     assert calls[0][2] == 10
     assert "cluster_sync_command.py" in calls[0][1]
+    assert "venv_pbgui/bin/python" in calls[0][1]
     assert "--allow-join hello" in calls[0][1]
 
 

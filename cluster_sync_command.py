@@ -37,6 +37,7 @@ MAX_SECRET_BLOB_BYTES = 1024 * 1024
 
 READ_VERBS = frozenset({"hello", "get-state-vector", "get-desired-state"})
 WRITE_VERBS = frozenset({"put-op", "put-blob", "put-secret-blob", "rebuild"})
+STDIN_VERBS = frozenset({"put-op", "put-blob", "put-secret-blob"})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
 
 
@@ -115,9 +116,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
 
-    command_text = os.environ.get("SSH_ORIGINAL_COMMAND") or " ".join(args.command).strip()
-    stdin_data = sys.stdin.buffer.read(max(MAX_CONFIG_BLOB_BYTES, MAX_OPERATION_BYTES) + 1)
     try:
+        command_text = os.environ.get("SSH_ORIGINAL_COMMAND") or " ".join(args.command).strip()
+        stdin_data = _read_stdin_for_command(command_text)
         payload = run_command(
             Path(args.cluster_root),
             str(args.remote_node),
@@ -131,6 +132,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     sys.stdout.write(json.dumps(payload, sort_keys=True) + "\n")
     return 0
+
+
+def _read_stdin_for_command(command_text: str) -> bytes:
+    """Read stdin only for commands that carry an upload payload."""
+
+    tokens = _parse_command(command_text)
+    if tokens[0] not in STDIN_VERBS:
+        return b""
+    return sys.stdin.buffer.read(max(MAX_CONFIG_BLOB_BYTES, MAX_OPERATION_BYTES) + 1)
 
 
 def _parse_command(command_text: str) -> list[str]:
