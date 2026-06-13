@@ -2590,6 +2590,12 @@ class VPSMonitor:
             'tracebacks': BotCountHistoryStore(history_dir, 'bots_tracebacks_4w'),
         }
         self._bot_pnl_history = BotPnlHistoryStore(history_dir, 'bots_pnl_history')
+        self._local_master_cpu_history: list[tuple[float, float, float]] = []
+        self._local_master_metric_history: dict[str, list[tuple[float, float]]] = {
+            'memory': [],
+            'disk': [],
+            'swap': [],
+        }
 
         # Debug logging
         self._debug_logging: Optional[bool] = None

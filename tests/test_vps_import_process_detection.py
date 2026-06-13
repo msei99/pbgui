@@ -1538,6 +1538,18 @@ def test_vps_monitor_records_local_master_history_without_ui(monkeypatch: pytest
     assert all(store.flushes == 1 for store in stores.values())
 
 
+def test_vps_monitor_initializes_local_master_history_buffers() -> None:
+    """VPSMonitor startup must create local master history buffers before the loop runs."""
+    monitor = VPSMonitor()
+
+    assert monitor._local_master_cpu_history == []
+    assert monitor._local_master_metric_history == {
+        "memory": [],
+        "disk": [],
+        "swap": [],
+    }
+
+
 def test_instance_collect_script_reports_dynamic_ignore_flag() -> None:
     """Remote v7 instance telemetry includes dynamic_ignore state."""
     assert "dynamic_ignore = bool(pbgui.get('dynamic_ignore'))" in INSTANCE_COLLECT_SCRIPT
