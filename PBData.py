@@ -345,8 +345,9 @@ class PBData():
             'hyperliquid': 5,
             'bitget': 5,
             'binance': 5,
-            # bybit can be sensitive to large batch subscribes — use smaller chunks
-            'bybit': 10,
+            # Bybit watch_tickers often yields one symbol per await; single-symbol
+            # chunks prevent active positions from being starved by faster symbols.
+            'bybit': 1,
         }
         # Stagger (ms) between starting private ws watchers to avoid bursts
         self._private_ws_stagger_ms = 200

@@ -1,5 +1,6 @@
 # Unreleased
 
+- PBData: set Bybit price websocket chunks to one symbol so low-frequency active positions do not keep stale price snapshots.
 - Services: auto-refresh the Price Snapshot overlay, calculate age correctly for millisecond timestamps, and remove the manual refresh button.
 - PBData: use Binance bookTicker websocket data as the price feed when ticker streams do not emit, deriving prices from bid/ask midpoint.
 - PBData: avoid repeated Binance watch_tickers subscribe attempts by using stable chunked receive loops instead of treating watch_tickers as a subscribe acknowledgement.
