@@ -16,6 +16,7 @@
 - Cluster Sync: remote operation pushes now run as one backend job with local progress polling, so progress feedback does not slow remote sync.
 - Cluster Sync: remote operation pushes now prefer a bulk `put-ops` wrapper command and fall back to per-operation upload only for older remotes.
 - Cluster Sync: remote operation pushes now upload current V7 config manifest/file blobs with a bulk `put-blobs` wrapper command before pushing oplog entries.
+- Cluster Sync: remote bulk upload payloads now stream over SSH stdin instead of the command line so large config blob batches do not reset the SSH connection.
 - V7 Run: saving a backup draft for a deleted instance now clears the matching Cluster Sync tombstone as an explicit restore.
 - V7 Edit: preserve and display a backup config user even when that user is not present in the current API-key user dropdown.
 - Cluster Sync: fixed a startup race where parallel Cluster page status requests could collide while rewriting materialized state temp files.

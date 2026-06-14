@@ -476,6 +476,46 @@ def test_remote_push_ops_writes_missing_local_ops_and_rebuilds(monkeypatch, tmp_
     assert "rebuild" in calls[2]
 
 
+def test_cluster_payload_command_streams_payload_over_stdin() -> None:
+    """Upload payloads must not be embedded in the SSH command line."""
+
+    commands: list[str] = []
+    received: list[str] = []
+
+    class FakeProc:
+        exit_status = 0
+
+        async def communicate(self, input=None):
+            received.append(str(input or ""))
+            return json.dumps({"ok": True}), ""
+
+        def close(self):
+            return None
+
+    class FakePool:
+        async def start_process(self, hostname: str, command: str):
+            commands.append(command)
+            return FakeProc()
+
+    payload = json.dumps({"blobs": [{"content_b64": "A" * 4096}]})
+
+    result = asyncio.run(
+        cluster._run_cluster_payload_command(
+            FakePool(),
+            "vps-a",
+            "software/pbgui",
+            NODE_A,
+            "put-blobs",
+            payload,
+        )
+    )
+
+    assert result.exit_status == 0
+    assert received == [payload]
+    assert "put-blobs" in commands[0]
+    assert "A" * 128 not in commands[0]
+
+
 def test_remote_push_ops_uploads_current_config_blobs_before_ops(monkeypatch, tmp_path: Path) -> None:
     """Remote push sends current config manifest and file blobs before the oplog."""
 

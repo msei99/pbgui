@@ -12,6 +12,7 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -440,6 +441,39 @@ def _cluster_payload_command(remote_pbgui_dir: str | None, local_node_id: str, c
 
     command = _cluster_remote_command(remote_pbgui_dir, local_node_id, command_text)
     return f"printf '%s' {shlex.quote(str(payload))} | {{ {command}; }}"
+
+
+async def _run_cluster_payload_command(
+    pool: Any,
+    hostname: str,
+    remote_pbgui_dir: str | None,
+    local_node_id: str,
+    command_text: str,
+    payload: str,
+    *,
+    timeout: int = 30,
+) -> Any:
+    """Run a remote Cluster Sync upload command and stream its payload over stdin."""
+
+    command = _cluster_remote_command(remote_pbgui_dir, local_node_id, command_text)
+    start_process = getattr(pool, "start_process", None)
+    if not callable(start_process):
+        return await pool.run(hostname, _cluster_payload_command(remote_pbgui_dir, local_node_id, command_text, payload), timeout=timeout)
+    proc = await start_process(hostname, command)
+    if proc is None:
+        return None
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(input=str(payload)), timeout=timeout)
+    except Exception:
+        close = getattr(proc, "close", None)
+        if callable(close):
+            close()
+        raise
+    return SimpleNamespace(
+        exit_status=int(getattr(proc, "exit_status", 1) or 0),
+        stdout=stdout or "",
+        stderr=stderr or "",
+    )
 
 
 def _cluster_join_command(
@@ -1003,9 +1037,8 @@ async def _push_config_blobs_to_remote(
     progress_callback({"phase": "blobs", "done": 0, "total": len(blobs), "remaining": len(blobs)})
     for chunk in _chunk_config_blobs(blobs):
         payload = _blob_batch_payload(chunk)
-        command = _cluster_payload_command(remote_dir, local_node_id, "put-blobs", payload)
         try:
-            result = await pool.run(hostname, command, timeout=60)
+            result = await _run_cluster_payload_command(pool, hostname, remote_dir, local_node_id, "put-blobs", payload, timeout=60)
         except Exception as exc:
             _log(SERVICE, f"Remote cluster put-blobs failed for {hostname}: {exc}", level="ERROR")
             raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -1028,9 +1061,16 @@ async def _push_config_blobs_to_remote(
                 text_payload = raw.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise HTTPException(status_code=409, detail="Config blob is not UTF-8; remote bulk upload is required") from exc
-            command = _cluster_payload_command(remote_dir, local_node_id, f"put-blob {shlex.quote(str(blob.get('hash') or ''))}", text_payload)
             try:
-                single_result = await pool.run(hostname, command, timeout=30)
+                single_result = await _run_cluster_payload_command(
+                    pool,
+                    hostname,
+                    remote_dir,
+                    local_node_id,
+                    f"put-blob {shlex.quote(str(blob.get('hash') or ''))}",
+                    text_payload,
+                    timeout=30,
+                )
             except Exception as exc:
                 _log(SERVICE, f"Remote cluster put-blob failed for {hostname}: {exc}", level="ERROR")
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -1099,10 +1139,9 @@ async def _push_missing_operations_to_remote(
     blob_counts = await _push_config_blobs_to_remote(pool, hostname, remote_dir, local_node_id, config_blobs, report_progress)
 
     bulk_payload = json.dumps({"operations": operations}, sort_keys=True, separators=(",", ":"))
-    bulk_command = _cluster_payload_command(remote_dir, local_node_id, "put-ops", bulk_payload)
     bulk_unsupported = False
     try:
-        bulk_result = await pool.run(hostname, bulk_command, timeout=60)
+        bulk_result = await _run_cluster_payload_command(pool, hostname, remote_dir, local_node_id, "put-ops", bulk_payload, timeout=60)
     except Exception as exc:
         _log(SERVICE, f"Remote cluster put-ops failed for {hostname}: {exc}", level="ERROR")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -1133,9 +1172,8 @@ async def _push_missing_operations_to_remote(
     if bulk_unsupported:
         for operation in operations:
             payload = json.dumps(operation, sort_keys=True, separators=(",", ":"))
-            command = _cluster_payload_command(remote_dir, local_node_id, "put-op", payload)
             try:
-                result = await pool.run(hostname, command, timeout=30)
+                result = await _run_cluster_payload_command(pool, hostname, remote_dir, local_node_id, "put-op", payload, timeout=30)
             except Exception as exc:
                 _log(SERVICE, f"Remote cluster put-op failed for {hostname}: {exc}", level="ERROR")
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
