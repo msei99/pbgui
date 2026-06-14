@@ -419,9 +419,291 @@ def test_remote_preview_compares_state_without_writes(monkeypatch, tmp_path: Pat
     assert payload["state_vector"]["counts"] == {"equal": 0, "local_ahead": 1, "remote_ahead": 1}
     assert payload["desired_state"]["instances"]["missing_on_remote"] == ["local_inst"]
     assert payload["desired_state"]["instances"]["missing_locally"] == ["remote_inst"]
+    assert payload["operation_sync"]["counts"]["local_ops_to_push"] == 1
+    assert payload["operation_sync"]["counts"]["remote_ops_to_pull"] == 1
+    assert payload["operation_sync"]["push_by_op"] == {"UPSERT_CONFIG": 1}
+    assert payload["operation_sync"]["local_ops_missing_on_remote"][0]["target"] == "local_inst"
     assert len(calls) == 2
     assert "get-state-vector" in calls[0]
     assert "get-desired-state" in calls[1]
+
+
+def test_remote_push_ops_writes_missing_local_ops_and_rebuilds(monkeypatch, tmp_path: Path) -> None:
+    """Remote push sends missing local operations and then rebuilds remote state."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    op = append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=102,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            if "get-state-vector" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_A: 1}}
+            elif "put-ops" in command:
+                payload = {"ok": True, "count": 1, "operations": [{"op_id": op["op_id"], "actor": op["actor"], "seq": op["seq"]}]}
+            elif "rebuild" in command:
+                payload = {"ok": True, "generation": 2, "nodes": 1, "instances": 1}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.push_remote_operations(NODE_B, session=None))
+
+    assert payload["ok"] is True
+    assert payload["counts"]["pushed"] == 1
+    assert payload["counts"]["rebuilt"] == 1
+    assert payload["pushed"] == [{"op_id": op["op_id"], "actor": NODE_A, "seq": 2, "op": "UPSERT_CONFIG", "target": "local_inst"}]
+    assert len(calls) == 3
+    assert "get-state-vector" in calls[0]
+    assert "put-ops" in calls[1]
+    assert op["op_id"] in calls[1]
+    assert "rebuild" in calls[2]
+
+
+def test_remote_push_ops_rejects_when_remote_has_unknown_ops(monkeypatch, tmp_path: Path) -> None:
+    """Remote push refuses to write when the remote has operations missing locally."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=102,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_A: 2, NODE_B: 1}}
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(cluster.push_remote_operations(NODE_B, session=None))
+
+    assert exc.value.status_code == 409
+    assert "Remote has operations missing locally" in exc.value.detail
+    assert len(calls) == 1
+    assert "get-state-vector" in calls[0]
+
+
+def test_remote_push_ops_noops_when_remote_is_current(monkeypatch, tmp_path: Path) -> None:
+    """Remote push avoids put-op and rebuild when the remote already has all local operations."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=102,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_A: 2}}
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.push_remote_operations(NODE_B, session=None))
+
+    assert payload["ok"] is True
+    assert payload["counts"] == {"pushed": 0, "rebuilt": 0, "local_ops_remaining": 0, "total_missing_before": 0}
+    assert payload["pushed"] == []
+    assert len(calls) == 1
+    assert "get-state-vector" in calls[0]
+
+
+def test_remote_push_ops_can_defer_rebuild_for_progress_batches(monkeypatch, tmp_path: Path) -> None:
+    """Remote push can send a bounded batch without rebuilding until the final batch."""
+
+    root = _init_cluster(tmp_path)
+    op1 = append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=102,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            if "get-state-vector" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {}}
+            elif "put-ops" in command:
+                payload = {"ok": True, "op_id": op1["op_id"], "actor": op1["actor"], "seq": op1["seq"]}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.push_remote_operations(NODE_B, limit=1, rebuild=False, session=None))
+
+    assert payload["ok"] is True
+    assert payload["counts"]["pushed"] == 1
+    assert payload["counts"]["rebuilt"] == 0
+    assert payload["counts"]["local_ops_remaining"] == 1
+    assert payload["counts"]["total_missing_before"] == 2
+    assert len(calls) == 2
+    assert "get-state-vector" in calls[0]
+    assert "put-ops" in calls[1]
+    assert "rebuild" not in " ".join(calls)
+
+
+def test_remote_push_ops_falls_back_when_bulk_is_unavailable(monkeypatch, tmp_path: Path) -> None:
+    """Remote push falls back to put-op when the remote wrapper lacks put-ops."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    op = append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=102,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            if "get-state-vector" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_A: 1}}
+                return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+            if "put-ops" in command:
+                return SimpleNamespace(exit_status=1, stdout="", stderr=json.dumps({"ok": False, "error": "unsupported command: put-ops"}))
+            if "put-op" in command:
+                payload = {"ok": True, "op_id": op["op_id"], "actor": op["actor"], "seq": op["seq"]}
+                return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+            if "rebuild" in command:
+                payload = {"ok": True, "generation": 2, "nodes": 1, "instances": 1}
+                return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+            raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.push_remote_operations(NODE_B, session=None))
+
+    assert payload["ok"] is True
+    assert payload["counts"]["pushed"] == 1
+    assert len(calls) == 4
+    assert "put-ops" in calls[1]
+    assert "put-op" in calls[2]
+    assert "rebuild" in calls[3]
+
+
+def test_remote_push_job_reports_progress_without_splitting_frontend_batches(monkeypatch, tmp_path: Path) -> None:
+    """Remote push jobs run the full backend push while exposing local progress."""
+
+    cluster._REMOTE_PUSH_JOBS.clear()
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=102,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+    scheduled: list = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            if "get-state-vector" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {}}
+            elif "put-ops" in command:
+                payload = {"ok": True, "count": 2, "operations": []}
+            elif "rebuild" in command:
+                payload = {"ok": True, "generation": 2, "nodes": 1, "instances": 1}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    def fake_create_task(coro):
+        scheduled.append(coro)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+    monkeypatch.setattr(cluster.asyncio, "create_task", fake_create_task)
+
+    start = asyncio.run(cluster.start_remote_push_operations(NODE_B, session=None))
+    assert start["status"] == "queued"
+    assert len(scheduled) == 1
+
+    asyncio.run(scheduled[0])
+    job = cluster.get_remote_push_job(start["job_id"], session=None)
+
+    assert job["status"] == "done"
+    assert job["phase"] == "done"
+    assert job["done"] == 2
+    assert job["total"] == 2
+    assert job["remaining"] == 0
+    assert job["result"]["counts"]["rebuilt"] == 1
+    assert len(calls) == 3
+    assert "get-state-vector" in calls[0]
+    assert "put-ops" in calls[1]
+    assert "rebuild" in calls[-1]
+    cluster._REMOTE_PUSH_JOBS.clear()
 
 
 def test_bootstrap_preview_reports_known_vps_without_local_configs(monkeypatch, tmp_path: Path) -> None:

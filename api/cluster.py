@@ -9,8 +9,9 @@ import platform
 import shlex
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
@@ -37,11 +38,91 @@ SERVICE = "Cluster"
 
 router = APIRouter()
 
+_REMOTE_PUSH_JOBS: dict[str, dict[str, Any]] = {}
+_REMOTE_PUSH_JOB_TTL_SECONDS = 3600
+_REMOTE_PUSH_ACTIVE_STATES = frozenset({"queued", "running"})
+
 
 def _cluster_root() -> Path:
     """Return the local cluster state root for this PBGui install."""
 
     return default_cluster_root(Path(PBGDIR))
+
+
+def _prune_remote_push_jobs() -> None:
+    """Forget stale remote-push progress records."""
+
+    cutoff = int(time.time()) - _REMOTE_PUSH_JOB_TTL_SECONDS
+    for job_id, job in list(_REMOTE_PUSH_JOBS.items()):
+        if int(job.get("updated_at") or 0) < cutoff:
+            _REMOTE_PUSH_JOBS.pop(job_id, None)
+
+
+def _public_remote_push_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Return a JSON-safe view of one remote-push progress record."""
+
+    return {
+        "job_id": str(job.get("job_id") or ""),
+        "node_id": str(job.get("node_id") or ""),
+        "hostname": str(job.get("hostname") or ""),
+        "status": str(job.get("status") or "queued"),
+        "phase": str(job.get("phase") or "queued"),
+        "done": int(job.get("done") or 0),
+        "total": int(job.get("total") or 0),
+        "remaining": int(job.get("remaining") or 0),
+        "created_at": int(job.get("created_at") or 0),
+        "updated_at": int(job.get("updated_at") or 0),
+        "error": str(job.get("error") or ""),
+        "result": job.get("result") if isinstance(job.get("result"), dict) else None,
+    }
+
+
+def _find_active_remote_push_job(node_id: str) -> dict[str, Any] | None:
+    """Return an active remote-push job for one node, if present."""
+
+    _prune_remote_push_jobs()
+    for job in _REMOTE_PUSH_JOBS.values():
+        if str(job.get("node_id") or "") == node_id and str(job.get("status") or "") in _REMOTE_PUSH_ACTIVE_STATES:
+            return job
+    return None
+
+
+def _create_remote_push_job(node: dict[str, Any]) -> dict[str, Any]:
+    """Create a new local progress record for one remote-push job."""
+
+    node_id = str(node.get("node_id") or "")
+    active = _find_active_remote_push_job(node_id)
+    if active:
+        raise HTTPException(status_code=409, detail="Remote operation push is already running for this node")
+    now = int(time.time())
+    job_id = uuid.uuid4().hex
+    job = {
+        "job_id": job_id,
+        "node_id": node_id,
+        "hostname": str(node.get("pbname") or node.get("hostname") or ""),
+        "status": "queued",
+        "phase": "queued",
+        "done": 0,
+        "total": 0,
+        "remaining": 0,
+        "created_at": now,
+        "updated_at": now,
+        "error": "",
+        "result": None,
+    }
+    _REMOTE_PUSH_JOBS[job_id] = job
+    return job
+
+
+def _update_remote_push_job(job_id: str, **updates: Any) -> dict[str, Any]:
+    """Update and return one local remote-push progress record."""
+
+    job = _REMOTE_PUSH_JOBS.get(str(job_id or ""))
+    if not job:
+        return {}
+    job.update(updates)
+    job["updated_at"] = int(time.time())
+    return job
 
 
 def _get_master_pbname() -> str:
@@ -350,6 +431,13 @@ def _cluster_state_read_command(remote_pbgui_dir: str | None, local_node_id: str
     if verb not in {"get-state-vector", "get-desired-state"}:
         raise ValueError("unsupported read command")
     return _cluster_remote_command(remote_pbgui_dir, local_node_id, verb)
+
+
+def _cluster_payload_command(remote_pbgui_dir: str | None, local_node_id: str, command_text: str, payload: str) -> str:
+    """Build a remote Cluster Sync command that receives a JSON payload on stdin."""
+
+    command = _cluster_remote_command(remote_pbgui_dir, local_node_id, command_text)
+    return f"printf '%s' {shlex.quote(str(payload))} | {{ {command}; }}"
 
 
 def _cluster_join_command(
@@ -690,6 +778,322 @@ def _compare_desired_states(local: dict[str, Any], remote: dict[str, Any]) -> di
     }
 
 
+def _operation_target(operation: dict[str, Any]) -> str:
+    """Return a compact target label for one operation."""
+
+    if operation.get("instance"):
+        return str(operation.get("instance") or "")
+    if operation.get("node_id"):
+        return str(operation.get("node_id") or "")
+    if operation.get("api_serial") is not None:
+        return "api-keys"
+    return "cluster"
+
+
+def _operation_hash_refs(operation: dict[str, Any]) -> dict[str, list[str]]:
+    """Return hash references that a later write phase may need to ship."""
+
+    refs = {"config": [], "api_payload": [], "secret": []}
+    config_hash = str(operation.get("config_manifest_hash") or "")
+    if config_hash:
+        refs["config"].append(config_hash)
+    payload_hash = str(operation.get("payload_hash") or "")
+    if payload_hash:
+        refs["api_payload"].append(payload_hash)
+    secret_hash = str(operation.get("secret_blob_hash") or "")
+    if secret_hash:
+        refs["secret"].append(secret_hash)
+    return refs
+
+
+def _pushed_operation_summary(operation: dict[str, Any], payload_result: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return the compact API summary for one pushed operation."""
+
+    payload_result = payload_result if isinstance(payload_result, dict) else {}
+    return {
+        "op_id": str(payload_result.get("op_id") or operation.get("op_id") or ""),
+        "actor": str(payload_result.get("actor") or operation.get("actor") or ""),
+        "seq": int(payload_result.get("seq") or operation.get("seq") or 0),
+        "op": str(operation.get("op") or ""),
+        "target": _operation_target(operation),
+    }
+
+
+def _build_operation_sync_preview(local_operations: list[dict[str, Any]], remote_vector: dict[str, int]) -> dict[str, Any]:
+    """Build a read-only preview of operations missing across the boundary."""
+
+    local_vector: dict[str, int] = {}
+    local_missing_remote: list[dict[str, Any]] = []
+    push_by_op: dict[str, int] = {}
+    hashes = {"config": set(), "api_payload": set(), "secret": set()}
+    for operation in local_operations:
+        actor = str(operation.get("actor") or "")
+        seq = int(operation.get("seq") or 0)
+        if not actor or seq < 1:
+            continue
+        local_vector[actor] = max(local_vector.get(actor, 0), seq)
+        if seq <= int(remote_vector.get(actor, 0)):
+            continue
+        op_name = str(operation.get("op") or "")
+        refs = _operation_hash_refs(operation)
+        for key, values in refs.items():
+            hashes[key].update(values)
+        push_by_op[op_name] = push_by_op.get(op_name, 0) + 1
+        local_missing_remote.append({
+            "op_id": str(operation.get("op_id") or ""),
+            "actor": actor,
+            "seq": seq,
+            "op": op_name,
+            "target": _operation_target(operation),
+            "created_at": int(operation.get("created_at") or 0),
+            "hash_refs": refs,
+        })
+
+    remote_missing_local: list[dict[str, Any]] = []
+    for actor in sorted(set(remote_vector) | set(local_vector)):
+        remote_seq = int(remote_vector.get(actor, 0))
+        local_seq = int(local_vector.get(actor, 0))
+        if remote_seq <= local_seq:
+            continue
+        remote_missing_local.append({
+            "actor": actor,
+            "local_seq": local_seq,
+            "remote_seq": remote_seq,
+            "missing_count": remote_seq - local_seq,
+        })
+
+    return {
+        "read_only": True,
+        "local_ops_missing_on_remote": local_missing_remote,
+        "remote_ops_missing_locally": remote_missing_local,
+        "counts": {
+            "local_ops_to_push": len(local_missing_remote),
+            "remote_ops_to_pull": sum(item["missing_count"] for item in remote_missing_local),
+            "actors_to_push": len({item["actor"] for item in local_missing_remote}),
+            "actors_to_pull": len(remote_missing_local),
+            "config_hash_refs": len(hashes["config"]),
+            "api_payload_hash_refs": len(hashes["api_payload"]),
+            "secret_blob_hash_refs": len(hashes["secret"]),
+        },
+        "push_by_op": {key: push_by_op[key] for key in sorted(push_by_op)},
+    }
+
+
+def _select_operations_missing_on_remote(local_operations: list[dict[str, Any]], remote_vector: dict[str, int]) -> list[dict[str, Any]]:
+    """Return full local operations whose actor/seq is above the remote vector."""
+
+    result: list[dict[str, Any]] = []
+    for operation in local_operations:
+        actor = str(operation.get("actor") or "")
+        try:
+            seq = int(operation.get("seq") or 0)
+        except (TypeError, ValueError):
+            continue
+        if actor and seq > int(remote_vector.get(actor, 0)):
+            result.append(dict(operation))
+    result.sort(key=lambda item: (str(item.get("actor") or ""), int(item.get("seq") or 0), str(item.get("op_id") or "")))
+    return result
+
+
+async def _push_missing_operations_to_remote(
+    node: dict[str, Any],
+    identity: dict[str, Any],
+    *,
+    limit: int | None = None,
+    rebuild: bool = True,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Push missing local oplog entries to a remote node and optionally rebuild its materialized state."""
+
+    def report_progress(update: dict[str, Any]) -> None:
+        if progress_callback:
+            progress_callback(dict(update))
+
+    node_id, hostname, local_node_id = _require_remote_node_ready(node, identity)
+    monitor = get_monitor()
+    pool = getattr(monitor, "pool", None) if monitor else None
+    if not pool:
+        raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
+
+    remote_vector_payload = await _run_remote_read_command(node, identity, "get-state-vector")
+    remote_vector = _as_state_vector(remote_vector_payload.get("state_vector") or {})
+    local_operations = load_operations(_cluster_root(), expected_cluster_id=str(identity.get("cluster_id") or ""))
+    preview = _build_operation_sync_preview(local_operations, remote_vector)
+    counts = preview.get("counts") if isinstance(preview, dict) else {}
+    if int((counts or {}).get("remote_ops_to_pull") or 0) > 0:
+        raise HTTPException(status_code=409, detail="Remote has operations missing locally; pull or resolve before pushing local ops")
+    operations = _select_operations_missing_on_remote(local_operations, remote_vector)
+    total_missing = len(operations)
+    report_progress({"phase": "pushing", "done": 0, "total": total_missing, "remaining": total_missing})
+    if limit is not None and limit > 0:
+        operations = operations[:limit]
+    remaining_after_batch = max(0, total_missing - len(operations))
+    if not operations:
+        result = {
+            "ok": True,
+            "node_id": node_id,
+            "hostname": hostname,
+            "pushed": [],
+            "counts": {"pushed": 0, "rebuilt": 0, "local_ops_remaining": 0, "total_missing_before": 0},
+            "message": "Remote already has all local operations.",
+        }
+        report_progress({"phase": "done", "done": 0, "total": 0, "remaining": 0})
+        return result
+
+    pushed: list[dict[str, Any]] = []
+    remote_dir = str(node.get("remote_pbgui_dir") or "")
+
+    bulk_payload = json.dumps({"operations": operations}, sort_keys=True, separators=(",", ":"))
+    bulk_command = _cluster_payload_command(remote_dir, local_node_id, "put-ops", bulk_payload)
+    bulk_unsupported = False
+    try:
+        bulk_result = await pool.run(hostname, bulk_command, timeout=60)
+    except Exception as exc:
+        _log(SERVICE, f"Remote cluster put-ops failed for {hostname}: {exc}", level="ERROR")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if bulk_result is None:
+        raise HTTPException(status_code=502, detail="Remote host is unreachable")
+    if int(getattr(bulk_result, "exit_status", 1) or 0) == 0:
+        payload_result = _parse_remote_json_result(bulk_result, "Remote put-ops")
+        returned = payload_result.get("operations") if isinstance(payload_result, dict) else []
+        returned = returned if isinstance(returned, list) else []
+        for index, operation in enumerate(operations):
+            item_result = returned[index] if index < len(returned) and isinstance(returned[index], dict) else None
+            pushed.append(_pushed_operation_summary(operation, item_result))
+        report_progress({
+            "phase": "pushing",
+            "done": len(pushed),
+            "total": total_missing,
+            "remaining": max(0, total_missing - len(pushed)),
+            "bulk": True,
+        })
+    else:
+        error = _probe_error_text(bulk_result)
+        bulk_unsupported = "unsupported command: put-ops" in error.lower()
+        if not bulk_unsupported:
+            _log(SERVICE, f"Remote cluster put-ops rejected by {hostname}: {error}", level="WARNING")
+            raise HTTPException(status_code=409, detail=error)
+        _log(SERVICE, f"Remote cluster put-ops unavailable on {hostname}; falling back to put-op", level="WARNING")
+
+    if bulk_unsupported:
+        for operation in operations:
+            payload = json.dumps(operation, sort_keys=True, separators=(",", ":"))
+            command = _cluster_payload_command(remote_dir, local_node_id, "put-op", payload)
+            try:
+                result = await pool.run(hostname, command, timeout=30)
+            except Exception as exc:
+                _log(SERVICE, f"Remote cluster put-op failed for {hostname}: {exc}", level="ERROR")
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            if result is None:
+                raise HTTPException(status_code=502, detail="Remote host is unreachable")
+            exit_status = int(getattr(result, "exit_status", 1) or 0)
+            if exit_status != 0:
+                error = _probe_error_text(result)
+                _log(SERVICE, f"Remote cluster put-op rejected by {hostname}: {error}", level="WARNING")
+                raise HTTPException(status_code=409, detail=error)
+            payload_result = _parse_remote_json_result(result, "Remote put-op")
+            pushed.append(_pushed_operation_summary(operation, payload_result))
+            report_progress({
+                "phase": "pushing",
+                "done": len(pushed),
+                "total": total_missing,
+                "remaining": max(0, total_missing - len(pushed)),
+                "current": pushed[-1],
+                "bulk": False,
+            })
+
+    if not rebuild:
+        return {
+            "ok": True,
+            "node_id": node_id,
+            "hostname": hostname,
+            "pushed": pushed,
+            "counts": {
+                "pushed": len(pushed),
+                "rebuilt": 0,
+                "local_ops_remaining": remaining_after_batch,
+                "total_missing_before": total_missing,
+                "config_hash_refs": int((counts or {}).get("config_hash_refs") or 0),
+                "api_payload_hash_refs": int((counts or {}).get("api_payload_hash_refs") or 0),
+                "secret_blob_hash_refs": int((counts or {}).get("secret_blob_hash_refs") or 0),
+            },
+            "message": "Missing local operations were pushed. Remote materialized state was not rebuilt yet.",
+        }
+
+    report_progress({
+        "phase": "rebuilding",
+        "done": len(pushed),
+        "total": total_missing,
+        "remaining": remaining_after_batch,
+    })
+    rebuild_command = _cluster_remote_command(remote_dir, local_node_id, "rebuild")
+    rebuild_result = await pool.run(hostname, rebuild_command, timeout=30)
+    if rebuild_result is None:
+        raise HTTPException(status_code=502, detail="Remote host became unreachable before rebuild")
+    if int(getattr(rebuild_result, "exit_status", 1) or 0) != 0:
+        error = _probe_error_text(rebuild_result)
+        _log(SERVICE, f"Remote cluster rebuild failed on {hostname}: {error}", level="WARNING")
+        raise HTTPException(status_code=409, detail=error)
+    rebuild_payload = _parse_remote_json_result(rebuild_result, "Remote rebuild")
+    result = {
+        "ok": True,
+        "node_id": node_id,
+        "hostname": hostname,
+        "pushed": pushed,
+        "rebuild": rebuild_payload,
+        "counts": {
+            "pushed": len(pushed),
+            "rebuilt": 1,
+            "local_ops_remaining": remaining_after_batch,
+            "total_missing_before": total_missing,
+            "config_hash_refs": int((counts or {}).get("config_hash_refs") or 0),
+            "api_payload_hash_refs": int((counts or {}).get("api_payload_hash_refs") or 0),
+            "secret_blob_hash_refs": int((counts or {}).get("secret_blob_hash_refs") or 0),
+        },
+        "message": "Missing local operations were pushed and remote materialized state was rebuilt. Config/API/secret blobs were not copied in this phase.",
+    }
+    report_progress({"phase": "done", "done": len(pushed), "total": total_missing, "remaining": remaining_after_batch})
+    return result
+
+
+async def _run_remote_push_job(job_id: str, node: dict[str, Any], identity: dict[str, Any]) -> None:
+    """Run one remote operation push in the background and update local progress."""
+
+    def progress(update: dict[str, Any]) -> None:
+        _update_remote_push_job(job_id, status="running", **update)
+
+    _update_remote_push_job(job_id, status="running", phase="starting", done=0, total=0, remaining=0, error="")
+    try:
+        result = await _push_missing_operations_to_remote(node, identity, progress_callback=progress)
+    except HTTPException as exc:
+        _update_remote_push_job(
+            job_id,
+            status="error",
+            phase="error",
+            error=str(exc.detail),
+            result={"status_code": exc.status_code, "detail": exc.detail},
+        )
+        return
+    except Exception as exc:
+        _log(SERVICE, f"Remote cluster push job failed: {exc}", level="ERROR")
+        _update_remote_push_job(job_id, status="error", phase="error", error=str(exc))
+        return
+
+    counts = result.get("counts") if isinstance(result, dict) else {}
+    pushed = int((counts or {}).get("pushed") or 0)
+    total = int((counts or {}).get("total_missing_before") or pushed)
+    _update_remote_push_job(
+        job_id,
+        status="done",
+        phase="done",
+        done=pushed,
+        total=max(total, pushed),
+        remaining=0,
+        error="",
+        result=result,
+    )
+
+
 async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], local_materialized: dict[str, Any]) -> dict[str, Any]:
     """Read remote state and compare it with the local materialized state."""
 
@@ -712,6 +1116,10 @@ async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], 
         "remote_node_id": str(remote_desired_payload.get("node_id") or remote_vector_payload.get("node_id") or node_id),
         "state_vector": _compare_state_vectors(local_vector, remote_vector),
         "desired_state": _compare_desired_states(local_desired, remote_desired),
+        "operation_sync": _build_operation_sync_preview(
+            load_operations(_cluster_root(), expected_cluster_id=str(identity.get("cluster_id") or "")),
+            remote_vector,
+        ),
     }
 
 
@@ -1006,6 +1414,48 @@ async def get_remote_preview(node_id: str, session: SessionToken = Depends(requi
     if not node:
         raise HTTPException(status_code=404, detail="Cluster node not found")
     return await _build_remote_preview(node, snapshot["identity"], snapshot)
+
+
+@router.post("/remote-push-ops/{node_id}/start")
+async def start_remote_push_operations(node_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Start a background remote operation push and return its local progress job."""
+
+    snapshot = _load_cluster_snapshot()
+    nodes = _node_list(snapshot["cluster_nodes"])
+    node = _node_for_id(nodes, str(node_id or ""))
+    if not node:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    job = _create_remote_push_job(node)
+    asyncio.create_task(_run_remote_push_job(str(job["job_id"]), node, dict(snapshot["identity"])))
+    return _public_remote_push_job(job)
+
+
+@router.get("/remote-push-jobs/{job_id}")
+def get_remote_push_job(job_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Return local progress for one background remote operation push."""
+
+    _prune_remote_push_jobs()
+    job = _REMOTE_PUSH_JOBS.get(str(job_id or ""))
+    if not job:
+        raise HTTPException(status_code=404, detail="Remote push job not found")
+    return _public_remote_push_job(job)
+
+
+@router.post("/remote-push-ops/{node_id}")
+async def push_remote_operations(
+    node_id: str,
+    limit: Annotated[int | None, Query(ge=1, le=100)] = None,
+    rebuild: Annotated[bool, Query()] = True,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Push missing local operations to one remote node and rebuild remote state."""
+
+    snapshot = _load_cluster_snapshot()
+    nodes = _node_list(snapshot["cluster_nodes"])
+    node = _node_for_id(nodes, str(node_id or ""))
+    if not node:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    return await _push_missing_operations_to_remote(node, snapshot["identity"], limit=limit, rebuild=rebuild)
 
 
 @router.get("/desired-state")

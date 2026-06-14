@@ -192,7 +192,9 @@ Bootstrap schreibt explizite lokale `ADD_NODE`-Operationen für bekannte VPS-Man
 
 Wenn ein Node **No Identity** zeigt, schreibt die **Join**-Aktion nur `cluster_id`, `node_id` und `node_identity.json` unter dem remote PBGui-Verzeichnis `data/cluster`. Eine abweichende bestehende Identität wird nicht überschrieben. Join synchronisiert keine Configs, installiert keine restricted Keys, startet oder stoppt keine Bots, deployed keine Dateien und verändert keinen lokalen Desired State. Last-Seen-Status, Node-zu-Node-Sync-Status und Conflict-Resolution-Aktionen folgen in späteren Phasen.
 
-Wenn ein gejointer Node **OK** zeigt, liest die **Preview**-Aktion den Remote-State-Vector und Desired State. Sie vergleicht Actor-Sequenzen, V7-Instance-Metadaten, Tombstones und API-Key-Metadaten mit lokalem State. Preview ist read-only; es kopiert keine Operationen, Blobs oder Configs.
+Wenn ein gejointer Node **OK** zeigt, liest die **Preview**-Aktion den Remote-State-Vector und Desired State. Sie vergleicht Actor-Sequenzen, V7-Instance-Metadaten, Tombstones und API-Key-Metadaten mit lokalem State. Zusätzlich berechnet sie, welche lokalen Operationen remote fehlen, welche Remote-Operationsbereiche lokal fehlen und welche Hash-Referenzen eine spätere Write-Phase brauchen würde. Preview ist read-only; es kopiert keine Operationen, Blobs oder Configs.
+
+Im Preview-Fenster ist **Push Missing Ops + Rebuild** eine explizite Remote-Write-Aktion. Sie ist nur verfügbar, wenn dem lokalen Node keine Remote-Operationen fehlen. Die Aktion startet einen Backend-Push-Job, sendet die lokalen Oplog-Einträge, die dem Remote-State-Vector fehlen, gesammelt in einem Bulk-Upload, meldet lokalen Fortschritt während der Job läuft und führt danach remote `rebuild` aus. Die Fortschrittsanzeige teilt oder verlangsamt den Remote-Sync nicht. Wenn der Remote-Wrapper noch zu alt für Bulk ist, fällt PBGui auf den langsameren Upload pro Operation zurück. Sie kopiert keine Config-Blobs, API-Key-Payloads oder Secret-Blobs, deployed keine Dateien und startet oder stoppt keine Bots.
 
 ---
 

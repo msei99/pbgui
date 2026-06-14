@@ -192,7 +192,9 @@ Bootstrap writes explicit local `ADD_NODE` operations for known VPS Manager host
 
 When a node shows **No Identity**, the **Join** action writes only `cluster_id`, `node_id` and `node_identity.json` under the remote PBGui `data/cluster` directory. It refuses to overwrite a different existing identity. It does not sync configs, install restricted keys, start bots, stop bots, deploy files or mutate local desired state. Last-seen status, node-to-node sync status and conflict-resolution actions are later phases.
 
-When a joined node shows **OK**, the **Preview** action reads the remote state vector and desired state. It compares actor sequence numbers, V7 instance metadata, tombstones and API-key metadata against local state. Preview is read-only; it does not copy operations, blobs or configs.
+When a joined node shows **OK**, the **Preview** action reads the remote state vector and desired state. It compares actor sequence numbers, V7 instance metadata, tombstones and API-key metadata against local state. It also calculates which local operations the remote is missing, which remote operation ranges are missing locally, and which hash references a later write phase would need. Preview is read-only; it does not copy operations, blobs or configs.
+
+From the Preview window, **Push Missing Ops + Rebuild** is an explicit remote write action. It is available only when the remote has no operations missing locally. It starts one backend push job that bulk-sends the local oplog entries the remote state-vector lacks, reports local progress while the job runs, and then runs remote `rebuild`. Progress reporting does not split or slow the remote sync. If the remote wrapper is older and cannot accept the bulk command yet, PBGui falls back to the slower per-operation upload. It does not copy config blobs, API-key payloads or secret blobs, deploy files, start bots or stop bots.
 
 ---
 

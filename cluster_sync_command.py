@@ -33,12 +33,13 @@ from pbgui_purefunc import PBGDIR
 PROTOCOL_VERSION = 1
 MAX_COMMAND_BYTES = 4096
 MAX_OPERATION_BYTES = 1024 * 1024
+MAX_OPERATION_BATCH_BYTES = 16 * 1024 * 1024
 MAX_CONFIG_BLOB_BYTES = 16 * 1024 * 1024
 MAX_SECRET_BLOB_BYTES = 1024 * 1024
 
 READ_VERBS = frozenset({"hello", "get-state-vector", "get-desired-state"})
-WRITE_VERBS = frozenset({"join", "put-op", "put-blob", "put-secret-blob", "rebuild"})
-STDIN_VERBS = frozenset({"put-op", "put-blob", "put-secret-blob"})
+WRITE_VERBS = frozenset({"join", "put-op", "put-ops", "put-blob", "put-secret-blob", "rebuild"})
+STDIN_VERBS = frozenset({"put-op", "put-ops", "put-blob", "put-secret-blob"})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
 
 
@@ -108,6 +109,16 @@ def run_command(
         _safe_state_call(lambda: validate_operation(operation, expected_cluster_id=cluster_id))
         _safe_state_call(lambda: write_operation(root, operation))
         return {"ok": True, "op_id": str(operation["op_id"]), "actor": str(operation["actor"]), "seq": int(operation["seq"])}
+    if verb == "put-ops":
+        _require_arity(tokens, 1)
+        operations = _read_operation_batch_payload(stdin_data)
+        for operation in operations:
+            _safe_state_call(lambda op=operation: validate_operation(op, expected_cluster_id=cluster_id))
+        written: list[dict[str, Any]] = []
+        for operation in operations:
+            _safe_state_call(lambda op=operation: write_operation(root, op))
+            written.append({"op_id": str(operation["op_id"]), "actor": str(operation["actor"]), "seq": int(operation["seq"])})
+        return {"ok": True, "count": len(written), "operations": written}
     if verb == "put-blob":
         _require_arity(tokens, 2)
         blob_hash = _validate_hash(tokens[1])
@@ -155,7 +166,7 @@ def _read_stdin_for_command(command_text: str) -> bytes:
     tokens = _parse_command(command_text)
     if tokens[0] not in STDIN_VERBS:
         return b""
-    return sys.stdin.buffer.read(max(MAX_CONFIG_BLOB_BYTES, MAX_OPERATION_BYTES) + 1)
+    return sys.stdin.buffer.read(max(MAX_CONFIG_BLOB_BYTES, MAX_OPERATION_BATCH_BYTES) + 1)
 
 
 def _join_cluster(cluster_root: Path, remote_node: str, tokens: list[str], *, allow_join: bool) -> dict[str, Any]:
@@ -246,6 +257,28 @@ def _read_json_payload(raw: bytes, max_size: int) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ClusterSyncCommandError("payload must be a JSON object")
     return payload
+
+
+def _read_operation_batch_payload(raw: bytes) -> list[dict[str, Any]]:
+    """Read a bounded JSON batch payload containing operation objects."""
+
+    if len(raw) > MAX_OPERATION_BATCH_BYTES:
+        raise ClusterSyncCommandError("operation batch payload too large")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ClusterSyncCommandError("operation batch payload must be a JSON object") from exc
+    if not isinstance(payload, dict):
+        raise ClusterSyncCommandError("operation batch payload must be a JSON object")
+    operations = payload.get("operations")
+    if not isinstance(operations, list):
+        raise ClusterSyncCommandError("operation batch payload missing operations list")
+    result: list[dict[str, Any]] = []
+    for item in operations:
+        if not isinstance(item, dict):
+            raise ClusterSyncCommandError("operation batch contains a non-object operation")
+        result.append(item)
+    return result
 
 
 def _write_blob(base_dir: Path, blob_hash: str, raw: bytes, max_size: int, *, secret: bool) -> Path:

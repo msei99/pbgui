@@ -196,33 +196,59 @@
     .modal-backdrop {
       position: fixed;
       inset: 0;
-      z-index: 20;
+      z-index: 6000;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: var(--sp-lg);
-      background: rgba(0,0,0,0.58);
+      background: rgba(0,0,0,0.72);
+      backdrop-filter: blur(2px);
     }
     .modal-backdrop[hidden] { display: none; }
     .modal-card {
       width: min(560px, 100%);
-      border: 1px solid rgba(99,179,237,0.28);
-      border-radius: 12px;
+      max-width: 92vw;
+      border: 1px solid #2d3748;
+      border-radius: 14px;
       background: var(--bg2);
-      box-shadow: 0 18px 45px rgba(0,0,0,0.38);
+      box-shadow: 0 20px 70px rgba(0,0,0,0.9);
       overflow: hidden;
     }
-    .modal-head { padding: 0.85rem 1rem; background: var(--bg3); border-bottom: 1px solid var(--border); font-weight: 750; }
-    .modal-body { padding: 1rem; color: var(--muted); line-height: 1.45; display: grid; gap: var(--sp-md); max-height: calc(100vh - 160px); overflow: auto; }
-    .modal-actions { display: flex; justify-content: flex-end; gap: var(--sp-sm); padding: 0 1rem 1rem; }
+    .modal-card.preview-modal-card {
+      position: fixed;
+      display: flex;
+      flex-direction: column;
+      width: min(1180px, calc(100vw - 48px));
+      height: min(760px, calc(100vh - 48px));
+      min-width: min(560px, calc(100vw - 48px));
+      min-height: 360px;
+      max-width: calc(100vw - 24px);
+      max-height: calc(100vh - 24px);
+      resize: both;
+    }
+    .modal-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-sm); padding: 0.85rem 1.1rem; background: var(--bg3); border-bottom: 1px solid var(--border); font-weight: 750; }
+    .preview-modal-card .modal-head { cursor: move; user-select: none; flex: 0 0 auto; }
+    .modal-close { background: transparent; border: none; color: var(--faint); font-size: var(--fs-lg); cursor: pointer; padding: 0.2rem 0.35rem; border-radius: 5px; line-height: 1; }
+    .modal-close:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+    .modal-body { padding: var(--sp-lg); color: var(--muted); line-height: 1.45; display: grid; gap: var(--sp-md); max-height: calc(100vh - 160px); overflow: auto; }
+    .preview-modal-card .modal-body { flex: 1 1 auto; min-height: 0; max-height: none; }
+    .modal-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-sm); flex-wrap: wrap; padding: 0 var(--sp-lg) var(--sp-lg); }
+    .preview-modal-card .modal-actions { flex: 0 0 auto; }
     .modal-error { display: none; color: var(--bad); border: 1px solid rgba(248,113,113,0.35); background: rgba(248,113,113,0.08); border-radius: 8px; padding: 0.55rem 0.75rem; }
     .modal-error.visible { display: block; }
-    .preview-grid { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: var(--sp-sm); }
+    .push-progress { flex: 1 1 340px; min-width: min(340px, 100%); margin-right: auto; border: 1px solid var(--border); border-radius: 9px; background: #101724; padding: var(--sp-sm); }
+    .push-progress[hidden] { display: none; }
+    .push-progress-label { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-sm); color: var(--muted); font-size: var(--fs-sm); margin-bottom: 7px; }
+    .push-progress-count { color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .push-progress-track { height: 8px; border-radius: 999px; overflow: hidden; background: rgba(15,23,42,0.95); border: 1px solid rgba(99,179,237,0.16); }
+    .push-progress-fill { width: 0%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, rgba(99,179,237,0.95), rgba(74,222,128,0.9)); transition: width 0.18s ease; }
+    .preview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--sp-sm); }
     .preview-card { border: 1px solid var(--border); border-radius: 9px; padding: var(--sp-sm); background: #101724; }
     .preview-label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; }
     .preview-value { margin-top: 4px; color: var(--text); font-size: var(--fs-md); font-weight: 750; }
     .preview-section { display: grid; gap: var(--sp-sm); }
-    .preview-list { color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; }
+    .preview-list { color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; overflow-wrap: anywhere; }
+    #preview-modal table { min-width: 0; }
 
     @media (max-width: 980px) {
       #page-body { padding: var(--sp-md); }
@@ -319,7 +345,10 @@
 
   <div class="modal-backdrop" id="join-modal" hidden>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="join-modal-title">
-      <div class="modal-head" id="join-modal-title">Join Remote Cluster Identity</div>
+      <div class="modal-head">
+        <div id="join-modal-title">Join Remote Cluster Identity</div>
+        <button class="modal-close" id="join-close-btn" type="button" aria-label="Close">&#x2715;</button>
+      </div>
       <div class="modal-body">
         <div id="join-modal-message"></div>
         <div class="field">
@@ -336,14 +365,25 @@
   </div>
 
   <div class="modal-backdrop" id="preview-modal" hidden>
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="preview-modal-title">
-      <div class="modal-head" id="preview-modal-title">Remote State Preview</div>
+    <div class="modal-card preview-modal-card" id="preview-modal-card" role="dialog" aria-modal="true" aria-labelledby="preview-modal-title">
+      <div class="modal-head">
+        <div id="preview-modal-title">Remote State Preview</div>
+        <button class="modal-close" id="preview-close-x-btn" type="button" aria-label="Close">&#x2715;</button>
+      </div>
       <div class="modal-body">
         <div id="preview-modal-message">Loading remote state preview...</div>
         <div id="preview-modal-content"></div>
         <div class="modal-error" id="preview-modal-error"></div>
       </div>
       <div class="modal-actions">
+        <div class="push-progress" id="preview-push-progress" hidden>
+          <div class="push-progress-label">
+            <span id="preview-push-progress-label">Pushing cluster operations...</span>
+            <span class="push-progress-count" id="preview-push-progress-count"></span>
+          </div>
+          <div class="push-progress-track"><div class="push-progress-fill" id="preview-push-progress-fill"></div></div>
+        </div>
+        <button class="btn warn" id="preview-push-ops-btn" type="button" hidden>Push Missing Ops + Rebuild</button>
         <button class="btn" id="preview-close-btn" type="button">Close</button>
       </div>
     </div>
@@ -358,6 +398,7 @@
     window.PBGUI_NAV_CONFIG = { subtitle: 'CLUSTER SYNC', current: 'system_cluster' };
   </script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+  <script src="/app/js/pbgui_dialogs.js?v=3"></script>
   <script>
     (function () {
       'use strict';
@@ -379,6 +420,9 @@
       var lastTombstonesPayload = null;
       var lastOplogPayload = null;
       var pendingJoinNode = null;
+      var pendingPreviewNode = null;
+      var lastPreviewPayload = null;
+      var pushProgressTimer = null;
 
       function esc(value) {
         return String(value === undefined || value === null ? '' : value).replace(/[&<>'"]/g, function (ch) {
@@ -417,6 +461,91 @@
             return res.text().then(function (body) { throw new Error(body || ('HTTP ' + res.status)); });
           }
           return res.json();
+        });
+      }
+
+      function setPushProgress(done, total, label) {
+        var box = document.getElementById('preview-push-progress');
+        var labelEl = document.getElementById('preview-push-progress-label');
+        var countEl = document.getElementById('preview-push-progress-count');
+        var fillEl = document.getElementById('preview-push-progress-fill');
+        if (!box || !labelEl || !countEl || !fillEl) return;
+        total = Math.max(0, Number(total || 0));
+        done = Math.min(total, Math.max(0, Number(done || 0)));
+        if (!total && !label) {
+          box.hidden = true;
+          fillEl.style.width = '0%';
+          labelEl.textContent = 'Pushing cluster operations...';
+          countEl.textContent = '';
+          return;
+        }
+        box.hidden = false;
+        var pct = total ? Math.round((done / total) * 100) : 0;
+        labelEl.textContent = label || 'Pushing cluster operations...';
+        countEl.textContent = total ? (done + ' / ' + total) : '';
+        fillEl.style.width = Math.min(100, Math.max(0, pct)) + '%';
+      }
+
+      function resetPushProgress() {
+        setPushProgress(0, 0, '');
+      }
+
+      function stopPushProgressPolling() {
+        if (pushProgressTimer) {
+          clearTimeout(pushProgressTimer);
+          pushProgressTimer = null;
+        }
+      }
+
+      function pushProgressLabel(job) {
+        var phase = String((job || {}).phase || 'queued');
+        var status = String((job || {}).status || 'queued');
+        if (status === 'error') return 'Push failed; see error message.';
+        if (phase === 'rebuilding') return 'Rebuilding remote materialized state...';
+        if (phase === 'done' || status === 'done') return 'Remote oplog push complete. Refreshing preview...';
+        if (phase === 'starting' || phase === 'queued') return 'Starting remote oplog push...';
+        return 'Pushing cluster operations on the backend...';
+      }
+
+      function applyPushJobProgress(job, fallbackTotal) {
+        var total = Number((job || {}).total || fallbackTotal || 0);
+        var done = Number((job || {}).done || 0);
+        var btn = document.getElementById('preview-push-ops-btn');
+        setPushProgress(done, total, pushProgressLabel(job));
+        if (btn) {
+          btn.textContent = total ? ('Pushing ' + Math.min(total, done) + '/' + total + '...') : 'Pushing...';
+        }
+      }
+
+      function pollPushJob(jobId, node, fallbackTotal) {
+        stopPushProgressPolling();
+        fetchJson('/remote-push-jobs/' + encodeURIComponent(jobId)).then(function (job) {
+          applyPushJobProgress(job, fallbackTotal);
+          if (job.status === 'done') {
+            var resultCounts = ((job.result || {}).counts) || {};
+            var pushed = Number(resultCounts.pushed || job.done || 0);
+            setMessage('Pushed ' + pushed + ' operation(s) and rebuilt remote state.', 'ok');
+            var btn = document.getElementById('preview-push-ops-btn');
+            if (btn) btn.textContent = 'Refreshing...';
+            openRemotePreview(node);
+            return;
+          }
+          if (job.status === 'error') {
+            throw new Error(job.error || 'Remote operation push failed.');
+          }
+          pushProgressTimer = setTimeout(function () {
+            pollPushJob(jobId, node, fallbackTotal);
+          }, 500);
+        }).catch(function (err) {
+          setMessage('Remote operation push failed: ' + err.message, 'err');
+          setPushProgress(0, fallbackTotal, 'Push failed; see error message.');
+          var error = document.getElementById('preview-modal-error');
+          if (error) {
+            error.textContent = err.message || 'Remote operation push failed.';
+            error.className = 'modal-error visible';
+          }
+          var btn = document.getElementById('preview-push-ops-btn');
+          if (btn) { btn.disabled = false; btn.textContent = 'Push Missing Ops + Rebuild'; }
         });
       }
 
@@ -468,15 +597,77 @@
       }
 
       function closePreviewModal() {
+        pendingPreviewNode = null;
+        lastPreviewPayload = null;
         var modal = document.getElementById('preview-modal');
         if (modal) modal.hidden = true;
         var content = document.getElementById('preview-modal-content');
         if (content) content.innerHTML = '';
+        syncPushOpsButton(null);
+        stopPushProgressPolling();
+        resetPushProgress();
         var error = document.getElementById('preview-modal-error');
         if (error) {
           error.textContent = '';
           error.className = 'modal-error';
         }
+      }
+
+      function placePreviewModal() {
+        var card = document.getElementById('preview-modal-card');
+        if (!card) return;
+        var width = Math.min(1180, Math.max(560, window.innerWidth - 48));
+        var height = Math.min(760, Math.max(360, window.innerHeight - 48));
+        card.style.width = width + 'px';
+        card.style.height = height + 'px';
+        card.style.left = Math.max(12, Math.round((window.innerWidth - width) / 2)) + 'px';
+        card.style.top = Math.max(12, Math.round((window.innerHeight - height) / 2)) + 'px';
+      }
+
+      function keepPreviewModalInViewport() {
+        var card = document.getElementById('preview-modal-card');
+        if (!card || document.getElementById('preview-modal').hidden) return;
+        var rect = card.getBoundingClientRect();
+        var left = Math.min(Math.max(12, rect.left), Math.max(12, window.innerWidth - 80));
+        var top = Math.min(Math.max(12, rect.top), Math.max(12, window.innerHeight - 80));
+        card.style.left = left + 'px';
+        card.style.top = top + 'px';
+      }
+
+      function bindPreviewWindowDrag() {
+        var card = document.getElementById('preview-modal-card');
+        if (!card || card.dataset.dragBound === '1') return;
+        card.dataset.dragBound = '1';
+        var head = card.querySelector('.modal-head');
+        if (!head) return;
+        head.addEventListener('mousedown', function (event) {
+          if (event.button !== 0) return;
+          if (event.target && event.target.closest && event.target.closest('button')) return;
+          event.preventDefault();
+          var rect = card.getBoundingClientRect();
+          card.style.left = rect.left + 'px';
+          card.style.top = rect.top + 'px';
+          card.style.width = rect.width + 'px';
+          card.style.height = rect.height + 'px';
+          var startX = event.clientX;
+          var startY = event.clientY;
+          var startLeft = rect.left;
+          var startTop = rect.top;
+          function onMove(moveEvent) {
+            var nextLeft = startLeft + moveEvent.clientX - startX;
+            var nextTop = startTop + moveEvent.clientY - startY;
+            var maxLeft = Math.max(12, window.innerWidth - 80);
+            var maxTop = Math.max(12, window.innerHeight - 80);
+            card.style.left = Math.min(Math.max(12, nextLeft), maxLeft) + 'px';
+            card.style.top = Math.min(Math.max(12, nextTop), maxTop) + 'px';
+          }
+          function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          }
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
       }
 
       function previewList(values) {
@@ -491,13 +682,36 @@
         }).join(', ');
       }
 
+      function operationPreviewList(values) {
+        if (!values || !values.length) return 'none';
+        return values.slice(0, 24).map(function (item) {
+          return esc(item.op_id || '') + ' ' + esc(item.op || '') + ' ' + esc(item.target || '');
+        }).join('<br>') + (values.length > 24 ? '<br>...' + esc(values.length - 24) + ' more' : '');
+      }
+
+      function remotePullList(values) {
+        if (!values || !values.length) return 'none';
+        return values.map(function (item) {
+          return esc(shortId(item.actor)) + ': local ' + esc(item.local_seq) + ', remote ' + esc(item.remote_seq) + ' (' + esc(item.missing_count) + ' missing)';
+        }).join('<br>');
+      }
+
+      function opTypeList(values) {
+        var keys = Object.keys(values || {}).sort();
+        if (!keys.length) return 'none';
+        return keys.map(function (key) { return esc(key) + ': ' + esc(values[key]); }).join(', ');
+      }
+
       function renderRemotePreview(payload) {
         var content = document.getElementById('preview-modal-content');
         if (!content) return;
+        lastPreviewPayload = payload || null;
         var vectorCounts = ((payload.state_vector || {}).counts) || {};
         var desired = payload.desired_state || {};
         var instances = desired.instances || {};
         var tombstones = desired.tombstones || {};
+        var operationSync = payload.operation_sync || {};
+        var opCounts = operationSync.counts || {};
         var actorRows = (((payload.state_vector || {}).actors) || []).map(function (actor) {
           return '<tr>'
             + '<td class="mono" title="' + esc(actor.actor) + '">' + esc(shortId(actor.actor)) + '</td>'
@@ -511,27 +725,93 @@
           + '<div class="preview-card"><div class="preview-label">Equal Actors</div><div class="preview-value">' + esc(vectorCounts.equal || 0) + '</div></div>'
           + '<div class="preview-card"><div class="preview-label">Local Ahead</div><div class="preview-value">' + esc(vectorCounts.local_ahead || 0) + '</div></div>'
           + '<div class="preview-card"><div class="preview-label">Remote Ahead</div><div class="preview-value">' + esc(vectorCounts.remote_ahead || 0) + '</div></div>'
+          + '<div class="preview-card"><div class="preview-label">Ops To Push</div><div class="preview-value">' + esc(opCounts.local_ops_to_push || 0) + '</div></div>'
+          + '<div class="preview-card"><div class="preview-label">Ops To Pull</div><div class="preview-value">' + esc(opCounts.remote_ops_to_pull || 0) + '</div></div>'
           + '</div>'
           + '<div class="preview-section">'
+          + '<div class="field"><div class="field-label">Operation Sync Preview</div><div class="preview-list">Read-only. No operations or blobs are copied here.<br>Push by type: ' + opTypeList(operationSync.push_by_op) + '<br>Hash refs for later push: config ' + esc(opCounts.config_hash_refs || 0) + ', api payload ' + esc(opCounts.api_payload_hash_refs || 0) + ', secrets ' + esc(opCounts.secret_blob_hash_refs || 0) + '<br>Local ops missing on remote:<br>' + operationPreviewList(operationSync.local_ops_missing_on_remote) + '<br>Remote ops missing locally:<br>' + remotePullList(operationSync.remote_ops_missing_locally) + '</div></div>'
           + '<div class="field"><div class="field-label">Instances</div><div class="preview-list">Local: ' + esc(instances.local_count || 0) + ', Remote: ' + esc(instances.remote_count || 0) + '<br>Missing on remote: ' + previewList(instances.missing_on_remote) + '<br>Missing locally: ' + previewList(instances.missing_locally) + '<br>Mismatches: ' + mismatchList(instances.mismatches) + '</div></div>'
           + '<div class="field"><div class="field-label">Tombstones</div><div class="preview-list">Local: ' + esc(tombstones.local_count || 0) + ', Remote: ' + esc(tombstones.remote_count || 0) + '<br>Missing on remote: ' + previewList(tombstones.missing_on_remote) + '<br>Missing locally: ' + previewList(tombstones.missing_locally) + '<br>Mismatches: ' + mismatchList(tombstones.mismatches) + '</div></div>'
           + '<div class="field"><div class="field-label">API Keys</div><div class="preview-list">Metadata match: ' + esc(desired.api_keys_match ? 'yes' : 'no') + '</div></div>'
           + '</div>'
           + '<table><thead><tr><th>Actor</th><th>Local Seq</th><th>Remote Seq</th><th>Status</th></tr></thead><tbody>' + actorRows + '</tbody></table>';
+        syncPushOpsButton(payload);
+      }
+
+      function syncPushOpsButton(payload) {
+        var btn = document.getElementById('preview-push-ops-btn');
+        if (!btn) return;
+        var counts = (((payload || {}).operation_sync || {}).counts) || {};
+        var pushCount = Number(counts.local_ops_to_push || 0);
+        var pullCount = Number(counts.remote_ops_to_pull || 0);
+        btn.hidden = pushCount <= 0;
+        btn.disabled = pullCount > 0;
+        btn.textContent = pullCount > 0 ? 'Cannot Push Yet' : 'Push Missing Ops + Rebuild';
+        btn.title = pullCount > 0
+          ? 'Remote has operations missing locally. Pull/resolve must happen before pushing local operations.'
+          : 'Write missing local operations to the remote oplog and rebuild remote materialized state.';
+      }
+
+      function confirmAndPushRemoteOps() {
+        if (!pendingPreviewNode || !lastPreviewPayload) return;
+        var counts = ((lastPreviewPayload.operation_sync || {}).counts) || {};
+        var pushCount = Number(counts.local_ops_to_push || 0);
+        var pullCount = Number(counts.remote_ops_to_pull || 0);
+        if (pushCount <= 0 || pullCount > 0) return;
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: 'Push Missing Cluster Ops',
+          message: 'Write ' + pushCount + ' missing local operation(s) to ' + (pendingPreviewNode.pbname || pendingPreviewNode.hostname || pendingPreviewNode.node_id) + ' and rebuild its materialized cluster state?',
+          detail: 'This is a remote write. It sends oplog entries and runs rebuild. It does not copy config blobs, API-key payloads, secret blobs, deploy files, start bots or stop bots.',
+          confirmText: 'Push Ops + Rebuild'
+        }).then(function (accepted) {
+          if (!accepted) return;
+          var btn = document.getElementById('preview-push-ops-btn');
+          var node = pendingPreviewNode;
+          if (btn) { btn.disabled = true; btn.textContent = 'Pushing 0/' + pushCount + '...'; }
+          setPushProgress(0, pushCount, 'Starting remote oplog push...');
+          setMessage('Pushing missing cluster operations to remote...', 'warn');
+          stopPushProgressPolling();
+          fetchJson('/remote-push-ops/' + encodeURIComponent(node.node_id) + '/start', { method: 'POST' }).then(function (job) {
+            applyPushJobProgress(job, pushCount);
+            pollPushJob(job.job_id, node, pushCount);
+          }).catch(function (err) {
+            setMessage('Remote operation push failed: ' + err.message, 'err');
+            setPushProgress(0, pushCount, 'Push failed; see error message.');
+            var error = document.getElementById('preview-modal-error');
+            if (error) {
+              error.textContent = err.message || 'Remote operation push failed.';
+              error.className = 'modal-error visible';
+            }
+            if (btn) { btn.disabled = false; btn.textContent = 'Push Missing Ops + Rebuild'; }
+          });
+        });
       }
 
       function openRemotePreview(node) {
+        pendingPreviewNode = node || null;
+        lastPreviewPayload = null;
         var modal = document.getElementById('preview-modal');
         var message = document.getElementById('preview-modal-message');
         var content = document.getElementById('preview-modal-content');
         var error = document.getElementById('preview-modal-error');
         if (content) content.innerHTML = '';
+        syncPushOpsButton(null);
+        stopPushProgressPolling();
+        resetPushProgress();
         if (error) {
           error.textContent = '';
           error.className = 'modal-error';
         }
         if (message) message.textContent = 'Reading remote state from ' + (node.pbname || node.hostname || node.node_id || 'node') + '. This is read-only and performs no replication writes.';
-        if (modal) modal.hidden = false;
+        if (modal) {
+          modal.hidden = false;
+          placePreviewModal();
+          bindPreviewWindowDrag();
+        }
         fetchJson('/remote-preview/' + encodeURIComponent(node.node_id)).then(function (payload) {
           if (message) message.textContent = 'Remote state preview for ' + (payload.hostname || node.pbname || node.hostname || node.node_id) + '.';
           renderRemotePreview(payload);
@@ -1002,9 +1282,13 @@
 
       document.getElementById('refresh-btn').addEventListener('click', loadCluster);
       document.getElementById('bootstrap-apply-btn').addEventListener('click', applyBootstrap);
+      document.getElementById('join-close-btn').addEventListener('click', closeJoinModal);
       document.getElementById('join-cancel-btn').addEventListener('click', closeJoinModal);
       document.getElementById('join-confirm-btn').addEventListener('click', joinRemoteNode);
+      document.getElementById('preview-close-x-btn').addEventListener('click', closePreviewModal);
       document.getElementById('preview-close-btn').addEventListener('click', closePreviewModal);
+      document.getElementById('preview-push-ops-btn').addEventListener('click', confirmAndPushRemoteOps);
+      window.addEventListener('resize', keepPreviewModalInViewport);
       loadCluster();
     })();
   </script>

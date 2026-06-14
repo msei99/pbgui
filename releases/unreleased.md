@@ -9,6 +9,12 @@
 - Cluster Sync: bootstrap preview no longer downgrades already registered master nodes to VPS nodes when monitor role metadata is temporarily unavailable.
 - Cluster Sync: added an explicit remote Join action for reachable nodes without cluster identity; it writes only remote identity files and refuses mismatched existing identities.
 - Cluster Sync: added a read-only remote state preview for joined nodes to compare state vectors, desired V7 instances, tombstones and API-key metadata before any replication writes.
+- Cluster Sync: made the remote state Preview window wider, draggable, resizable and aligned with PBGui window styling.
+- Cluster Sync: remote state Preview now includes a read-only operation sync preview showing local ops missing on the remote, remote ops missing locally, and hash references needed by a later write phase.
+- Cluster Sync: added an explicit Preview action to push missing local oplog entries to a joined remote node and rebuild its remote materialized state when the remote has no unknown operations.
+- Cluster Sync: fixed the remote Preview confirmation dialog so remote write confirmations appear above the Preview window.
+- Cluster Sync: remote operation pushes now run as one backend job with local progress polling, so progress feedback does not slow remote sync.
+- Cluster Sync: remote operation pushes now prefer a bulk `put-ops` wrapper command and fall back to per-operation upload only for older remotes.
 - V7 Run: saving a backup draft for a deleted instance now clears the matching Cluster Sync tombstone as an explicit restore.
 - V7 Edit: preserve and display a backup config user even when that user is not present in the current API-key user dropdown.
 - Cluster Sync: fixed a startup race where parallel Cluster page status requests could collide while rewriting materialized state temp files.

@@ -136,6 +136,24 @@ def test_put_op_writes_valid_operation(tmp_path: Path) -> None:
     assert any(item["op_id"] == f"{NODE_B}:00000001" for item in operations)
 
 
+def test_put_ops_writes_valid_operation_batch(tmp_path: Path) -> None:
+    """put-ops validates and writes a batch of remote operation files."""
+
+    root = _init_cluster(tmp_path)
+    op1 = _operation()
+    op2 = dict(op1)
+    op2.update({"op_id": f"{NODE_B}:00000002", "seq": 2, "node_id": NODE_A})
+
+    payload = run_command(root, NODE_B, "put-ops", json.dumps({"operations": [op1, op2]}).encode("utf-8"))
+    operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
+
+    assert payload["ok"] is True
+    assert payload["count"] == 2
+    assert [item["op_id"] for item in payload["operations"]] == [f"{NODE_B}:00000001", f"{NODE_B}:00000002"]
+    assert any(item["op_id"] == f"{NODE_B}:00000001" for item in operations)
+    assert any(item["op_id"] == f"{NODE_B}:00000002" for item in operations)
+
+
 def test_put_op_rejects_foreign_cluster(tmp_path: Path) -> None:
     """put-op rejects operations from another cluster before writing."""
 
