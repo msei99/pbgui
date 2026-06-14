@@ -1,5 +1,7 @@
 # Unreleased
 
+- V7 Monitor: keep the remote `running_version.txt` inotify watcher active on cluster-mode so monitoring refreshes still happen immediately while legacy `status_v7.json` config reconciliation remains disabled.
+- V7 Run: PBRun now enforces Cluster Sync desired state before starting or continuing V7 bots, records the block reason in status data, and shows blocked instances in the V7 Run list.
 - V7 Run: disabled the legacy FastAPI SSH sync path on cluster-mode so saving, activating, restoring or forced-mode edits no longer push `run_v7` files or trigger PBRun starts on VPS hosts outside explicit Cluster Sync materialization.
 - VPS Manager: optional PBRemote/PBCoinData service control now treats explicit remote unconfigured state as disabled and clears failed systemd user units when optional config is removed.
 - Cluster Sync: disabled legacy V7 config sync and legacy API-key file sync on the cluster-mode branch so remote `run_v7` and `api-keys.json` writes are owned by explicit Cluster Sync materialization.

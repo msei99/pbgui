@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 from api import v7_instances
 
@@ -78,6 +79,38 @@ def test_set_instance_forced_mode_graceful_stop(monkeypatch, tmp_path):
     assert result["version"] == 9
     assert saved["live"]["forced_mode_long"] == "graceful_stop"
     assert saved["live"]["forced_mode_short"] == "graceful_stop"
+
+
+def test_enrich_with_vps_data_reports_cluster_block(monkeypatch):
+    """V7 Run API exposes remote PBRun Cluster gate block status."""
+
+    store = SimpleNamespace(
+        v7_instances={
+            "manibot90": [
+                {
+                    "name": "bot-a",
+                    "running": False,
+                    "cv": 3,
+                    "rv": 0,
+                    "eo": "manibot90",
+                    "blocked": True,
+                    "blocked_reason": "Cluster desired state is not running",
+                    "cluster_gate": "desired_stopped",
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(v7_instances, "_monitor", SimpleNamespace(store=store))
+    monkeypatch.setattr(v7_instances, "_load_local_running_v7", lambda: {})
+
+    result = v7_instances._enrich_with_vps_data([
+        {"name": "bot-a", "enabled_on": "manibot90", "version": 3}
+    ])
+
+    assert result[0]["status"] == "blocked"
+    assert result[0]["blocked_on"] == ["manibot90"]
+    assert result[0]["blocked_reason"] == "Cluster desired state is not running"
+    assert result[0]["cluster_gate"] == "desired_stopped"
 
 
 def test_set_instance_forced_mode_tp_only(monkeypatch, tmp_path):

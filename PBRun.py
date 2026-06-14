@@ -25,6 +25,12 @@ import copy as copy_module
 from Status import InstanceStatus, InstancesStatus
 from PBCoinData import CoinData
 from logging_helpers import human_log as _log, get_rotate_settings, rotate_logfile_if_oversize
+from master.cluster_state import (
+    build_config_manifest,
+    compute_config_manifest_hash,
+    default_cluster_root,
+    read_local_identity,
+)
 
 
 def _arg_matches_path(arg: str, expected_path: Path) -> bool:
@@ -124,6 +130,26 @@ def _memory_usage_bytes(memory_info) -> int:
         return int(memory_info[0]) + int(memory_info[9])
     except Exception:
         return 0
+
+
+def _read_json_file(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _cluster_gate_is_configured(cluster_root: Path) -> bool:
+    if not cluster_root.exists():
+        return False
+    markers = (
+        "cluster_id",
+        "node_id",
+        "node_identity.json",
+        "cluster_nodes.json",
+        "desired_state.json",
+        "state_vector.json",
+    )
+    return any((cluster_root / marker).exists() for marker in markers)
 
 
 def _kill_process(process: psutil.Process, context: str):
@@ -422,9 +448,102 @@ class RunV7():
         self._dynamic_bootstrap_refresh_ts = 0
         self._dynamic_watch_ts = 0
         self._dynamic_watch_sig = None
+        self._cluster_gate_log_ts = 0
+        self.cluster_blocked = False
+        self.cluster_blocked_reason = ""
+        self.cluster_gate = "not_checked"
         self.start_time = 0
         self.memory = None
         self.cpu = None
+
+    def _cluster_gate_result(self) -> dict:
+        """Return whether Cluster Sync desired state allows this V7 bot to run."""
+
+        pbgdir = Path(self.pbgdir or Path.cwd())
+        cluster_root = default_cluster_root(pbgdir)
+        if not _cluster_gate_is_configured(cluster_root):
+            return {"ok": True, "status": "not_configured", "reason": "Cluster Sync is not initialized"}
+
+        try:
+            identity = read_local_identity(cluster_root)
+        except Exception as exc:
+            return {"ok": False, "status": "identity_error", "reason": f"Cluster identity is invalid: {exc}"}
+
+        desired_path = cluster_root / "desired_state.json"
+        if not desired_path.is_file():
+            return {"ok": False, "status": "missing_desired_state", "reason": "Cluster desired_state.json is missing"}
+        try:
+            desired = _read_json_file(desired_path)
+        except Exception as exc:
+            return {"ok": False, "status": "desired_state_error", "reason": f"Cluster desired_state.json is unreadable: {exc}"}
+
+        cluster_id = str(identity.get("cluster_id") or "")
+        if str(desired.get("cluster_id") or "") != cluster_id:
+            return {"ok": False, "status": "foreign_desired_state", "reason": "Cluster desired_state.json belongs to another cluster"}
+
+        instance_name = str(self.user or Path(str(self.path or "")).name)
+        tombstones = desired.get("tombstones") if isinstance(desired.get("tombstones"), dict) else {}
+        if instance_name in tombstones:
+            return {"ok": False, "status": "tombstoned", "reason": "Cluster desired state tombstoned this instance"}
+
+        instances = desired.get("instances") if isinstance(desired.get("instances"), dict) else {}
+        item = instances.get(instance_name)
+        if not isinstance(item, dict):
+            return {"ok": False, "status": "missing_instance", "reason": "Instance is missing from Cluster desired state"}
+        if item.get("conflicted") is True:
+            return {"ok": False, "status": "conflicted", "reason": "Cluster desired state marks this instance as conflicted"}
+        if str(item.get("desired_state") or "") != "running":
+            return {"ok": False, "status": "desired_stopped", "reason": "Cluster desired state is not running"}
+
+        local_node_id = str(identity.get("node_id") or "")
+        assigned_host = str(item.get("assigned_host") or "")
+        if assigned_host != local_node_id:
+            return {"ok": False, "status": "wrong_host", "reason": "Cluster desired state assigns this instance to another node"}
+
+        expected_hash = str(item.get("config_manifest_hash") or "")
+        try:
+            actual_hash = compute_config_manifest_hash(build_config_manifest(Path(str(self.path))))
+        except Exception as exc:
+            return {"ok": False, "status": "manifest_error", "reason": f"Cluster config manifest check failed: {exc}"}
+        if actual_hash != expected_hash:
+            return {"ok": False, "status": "manifest_mismatch", "reason": "Local config manifest does not match Cluster desired state"}
+
+        expected_version = str(item.get("version") or "")
+        if str(self.version or "") != expected_version:
+            return {"ok": False, "status": "version_mismatch", "reason": "Local config version does not match Cluster desired state"}
+
+        return {"ok": True, "status": "allowed", "reason": "Cluster desired state allows start"}
+
+    def _set_cluster_gate_state(self, result: dict) -> None:
+        """Record the last Cluster Sync gate result on this runner."""
+
+        self.cluster_gate = str(result.get("status") or "")
+        self.cluster_blocked = not bool(result.get("ok"))
+        self.cluster_blocked_reason = "" if result.get("ok") else str(result.get("reason") or "")
+
+    def _block_cluster_gate_start(self, result: dict) -> None:
+        """Stop or delay this bot because Cluster Sync desired state blocks it."""
+
+        self._set_cluster_gate_state(result)
+        _atomic_write_text(Path(self.path) / "running_version.txt", "0")
+        now_ts = int(datetime.now().timestamp())
+        if now_ts - self._cluster_gate_log_ts >= 60:
+            _log(
+                "PBRun",
+                f"Cluster gate blocked passivbot_v7 {self.path}/config_run.json: {self.cluster_blocked_reason}",
+                level="WARNING",
+            )
+            self._cluster_gate_log_ts = now_ts
+
+    def _cluster_gate_allows_run(self) -> bool:
+        """Return True when this bot is allowed to run under Cluster Sync."""
+
+        result = self._cluster_gate_result()
+        self._set_cluster_gate_state(result)
+        if result.get("ok"):
+            return True
+        self._block_cluster_gate_start(result)
+        return False
 
     def _dynamic_watch_signature(self):
         if self.dynamic_ignore is None:
@@ -528,6 +647,9 @@ class RunV7():
 
     def watch(self):
         if self.is_running():
+            if not self._cluster_gate_allows_run():
+                self.stop()
+                return
             version_file = Path(f'{self.path}/running_version.txt')
             current_version = 0
             if version_file.exists():
@@ -589,6 +711,8 @@ class RunV7():
 
     def start(self):
         if not self.is_running():
+            if not self._cluster_gate_allows_run():
+                return
             if self.dynamic_ignore is not None and not _ensure_dynamic_ignore_ready(self.dynamic_ignore):
                 if not self._dynamic_ignore_api_key_configured():
                     self._delay_dynamic_ignore_start("requires CoinMarketCap API key for dynamic_ignore")
@@ -1163,10 +1287,13 @@ class PBRun():
                 run_v7.pbgdir = self.pbgdir
                 if run_v7.load():
                     if run_v7.is_running():
-                        running_version = self.find_running_version(v7_instance)
-                        if running_version < run_v7.version:
+                        if not run_v7._cluster_gate_allows_run():
                             run_v7.stop()
-                            run_v7.start()
+                        else:
+                            running_version = self.find_running_version(v7_instance)
+                            if running_version < run_v7.version:
+                                run_v7.stop()
+                                run_v7.start()
                     else:
                         run_v7.start()
                     self.add_v7(run_v7)
@@ -1179,6 +1306,9 @@ class PBRun():
                 status.enabled_on = run_v7.name
                 # Restore per-instance activate_ts
                 status.activate_ts = old_ts.get(status.name, 0)
+                status.blocked = bool(getattr(run_v7, "cluster_blocked", False))
+                status.blocked_reason = str(getattr(run_v7, "cluster_blocked_reason", "") or "")
+                status.cluster_gate = str(getattr(run_v7, "cluster_gate", "") or "")
                 self.instances_status_v7.add(status)
         # Remove non existing instances from status
         for instance in self.instances_status_v7:

@@ -108,6 +108,7 @@ tbody tr { cursor: pointer; }
 .st-outdated        { color: var(--orange); font-weight: 600; }
 .st-activate_needed { color: var(--orange); }
 .st-stop_needed     { color: var(--red); }
+.st-blocked         { color: var(--red); font-weight: 600; }
 .st-disabled        { color: var(--text-dim); }
 .st-collecting      { color: var(--text-dim); font-style: italic; }
 tr.row-inactive td  { opacity: 0.45; }
@@ -473,6 +474,7 @@ tr.row-inactive td  { opacity: 0.45; }
           <option value="outdated">Outdated</option>
           <option value="activate_needed">Needs Sync</option>
           <option value="stop_needed">Stop Needed</option>
+          <option value="blocked">Blocked</option>
           <option value="disabled">Disabled</option>
           <option value="collecting">Collecting</option>
         </select>
@@ -600,6 +602,7 @@ var STATUS_LABELS = {
   outdated:        'outdated',
   activate_needed: 'sync needed',
   stop_needed:     'stop needed',
+  blocked:         'blocked',
   disabled:        'disabled',
   collecting:      'collecting…',
 };
@@ -610,11 +613,15 @@ var rowMap = {};  /* name -> { tr, cells: string[] } */
 function buildCells(r) {
   var stClass = 'st-' + (r.status || 'disabled');
   var stLabel = STATUS_LABELS[r.status] || r.status || '\u2013';
+  var stTitle = r.blocked_reason ? ' title="' + esc(r.blocked_reason) + '"' : '';
   var runOn = (r.running_on || []).join(', ') || '\u2013';
+  if ((!r.running_on || !r.running_on.length) && r.blocked_on && r.blocked_on.length) {
+    runOn = 'blocked on ' + r.blocked_on.join(', ');
+  }
   return [
     esc(r.name),
     esc(r.enabled_on || '\u2013'),
-    '<span class="' + stClass + '">' + stLabel + '</span>',
+    '<span class="' + stClass + '"' + stTitle + '>' + stLabel + '</span>',
     (r.version != null ? String(r.version) : '\u2013'),
     (r.running_version != null ? String(r.running_version) : '\u2013'),
     esc(r.twe || '\u2013'),

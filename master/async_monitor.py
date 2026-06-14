@@ -1821,6 +1821,18 @@ monitors = []
 v7 = []
 new_cache = {'_version': EXPECTED_CACHE_VERSION}
 
+status_v7 = {}
+try:
+    sf = os.path.join(PBGDIR, 'data', 'cmd', 'status_v7.json')
+    if os.path.isfile(sf):
+        with open(sf) as f:
+            payload = json.load(f)
+        instances = payload.get('instances', {}) if isinstance(payload, dict) else {}
+        if isinstance(instances, dict):
+            status_v7 = instances
+except Exception:
+    status_v7 = {}
+
 # collect bot log files for sidebar selector and history rebuild
 bot_logs = {}
 try:
@@ -1866,7 +1878,18 @@ for name, cfg_dir in sorted(running.items()):
     if os.path.isfile(rvf):
         try: rv = int(open(rvf).read().strip())
         except Exception: pass
-    v7.append({'name': name, 'running': True, 'cv': version, 'eo': enabled_on, 'rv': rv, 'di': dynamic_ignore})
+    status_item = status_v7.get(name, {}) if isinstance(status_v7.get(name), dict) else {}
+    v7.append({
+        'name': name,
+        'running': True,
+        'cv': version,
+        'eo': enabled_on,
+        'rv': rv,
+        'di': dynamic_ignore,
+        'blocked': bool(status_item.get('blocked', False)),
+        'blocked_reason': str(status_item.get('blocked_reason', '') or ''),
+        'cluster_gate': str(status_item.get('cluster_gate', '') or ''),
+    })
 
     # passivbot monitor dir (for start time)
     monitor_dir = None
@@ -2020,6 +2043,21 @@ for name, cfg_dir in sorted(running.items()):
         'ct': bc['ct'], 'pt': bc['pt'],
         'log_off': bc['log_off'], 'err_off': bc['err_off'], 'log_fp': bc['log_fp'], 'log_sig': bc['log_sig'], 'err_sig': bc['err_sig'],
     }
+
+for name, status_item in sorted(status_v7.items()):
+    if name in running or not isinstance(status_item, dict):
+        continue
+    v7.append({
+        'name': name,
+        'running': False,
+        'cv': status_item.get('version', 0),
+        'eo': status_item.get('enabled_on', 'disabled'),
+        'rv': 0,
+        'di': False,
+        'blocked': bool(status_item.get('blocked', False)),
+        'blocked_reason': str(status_item.get('blocked_reason', '') or ''),
+        'cluster_gate': str(status_item.get('cluster_gate', '') or ''),
+    })
 
 print(json.dumps({'monitors': monitors, 'v7': v7, 'cache': new_cache,
     'bot_logs': bot_logs}))

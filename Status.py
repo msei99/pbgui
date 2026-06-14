@@ -20,6 +20,9 @@ class InstanceStatus():
         self.enabled_on = None
         self.running = None
         self.activate_ts = 0
+        self.blocked = False
+        self.blocked_reason = ""
+        self.cluster_gate = ""
 
 class InstancesStatus():
     """Stores every InstanceStatus into status.json, manages and loads them."""
@@ -140,6 +143,9 @@ class InstancesStatus():
                             status.enabled_on = idata["enabled_on"]
                             status.running = idata["running"]
                             status.activate_ts = idata.get("activate_ts", 0)
+                            status.blocked = bool(idata.get("blocked", False))
+                            status.blocked_reason = str(idata.get("blocked_reason", "") or "")
+                            status.cluster_gate = str(idata.get("cluster_gate", "") or "")
                             self.add(status)
                 except json.JSONDecodeError as e:
                     _log('Status', f'Error loading status file: {e}', level='ERROR')
@@ -154,6 +160,9 @@ class InstancesStatus():
                 "multi": instance.multi,
                 "running": instance.running,
                 "activate_ts": instance.activate_ts,
+                "blocked": bool(getattr(instance, "blocked", False)),
+                "blocked_reason": str(getattr(instance, "blocked_reason", "") or ""),
+                "cluster_gate": str(getattr(instance, "cluster_gate", "") or ""),
             })
         status = {
             "activate_ts": self.activate_ts,

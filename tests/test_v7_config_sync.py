@@ -33,6 +33,18 @@ class _FakePool:
         return []
 
 
+class _RunningVersionPool(_FakePool):
+    """Pool stub with one remote V7 instance directory."""
+
+    async def stat_remote(self, hostname: str, path: str) -> bool:
+        """Only the remote bot directory exists for monitoring."""
+        return path.endswith("/data/run_v7/bybit_SANDUSDT")
+
+    async def list_remote_dir(self, hostname: str, path: str) -> list[str]:
+        """Return one visible instance plus one hidden entry."""
+        return ["bybit_SANDUSDT", ".hidden"]
+
+
 class _StatusPool:
     """Pool stub that must not be read while legacy sync is disabled."""
 
@@ -49,8 +61,20 @@ class _StatusPool:
         raise AssertionError("legacy V7 sync should not read remote status")
 
 
-def test_start_watchers_is_noop_when_legacy_sync_disabled() -> None:
-    """Starting legacy V7 watchers does not create tasks on cluster-mode."""
+class _CollectMonitor:
+    """Monitor stub recording immediate collection requests."""
+
+    def __init__(self) -> None:
+        """Initialize an empty collect call list."""
+        self.collected: list[str] = []
+
+    async def collect_instances_now(self, hostname: str) -> None:
+        """Record a forced instance collection request."""
+        self.collected.append(hostname)
+
+
+def test_start_watchers_has_no_task_without_monitor_paths() -> None:
+    """Starting V7 watchers creates no tasks when no monitoring paths exist."""
 
     worker = V7ConfigSyncWorker(_FakePool(), object(), object())
 
@@ -59,14 +83,48 @@ def test_start_watchers_is_noop_when_legacy_sync_disabled() -> None:
     assert worker._watchers == {}
 
 
-def test_start_watchdog_is_noop_when_legacy_sync_disabled() -> None:
-    """Starting the legacy V7 watchdog does not create a background task."""
+def test_start_watchdog_still_runs_for_monitoring() -> None:
+    """The V7 watchdog remains active for monitoring-only watchers."""
 
-    worker = V7ConfigSyncWorker(_FakePool(), object(), object())
+    async def run_case() -> None:
+        """Start and stop the watchdog inside an event loop."""
+        worker = V7ConfigSyncWorker(_FakePool(), object(), object())
 
-    worker.start_watchdog()
+        worker.start_watchdog()
 
-    assert worker._watchdog is None
+        assert worker._watchdog is not None
+        worker.stop_watchdog()
+        await asyncio.sleep(0)
+
+    asyncio.run(run_case())
+
+
+def test_discover_watch_paths_keeps_running_version_monitoring() -> None:
+    """Cluster-mode watcher discovery keeps running_version but skips status_v7."""
+
+    worker = V7ConfigSyncWorker(_RunningVersionPool(), object(), object())
+
+    paths = asyncio.run(worker._discover_remote_configs("manibot93"))
+
+    assert paths == [
+        "/home/mani/software/pbgui/data/run_v7/bybit_SANDUSDT/running_version.txt"
+    ]
+
+
+def test_running_version_callback_triggers_collect_when_legacy_sync_disabled() -> None:
+    """Cluster-mode still uses running_version events for monitoring refreshes."""
+
+    monitor = _CollectMonitor()
+    worker = V7ConfigSyncWorker(_FakePool(), object(), monitor)
+
+    asyncio.run(
+        worker._watcher_callback(
+            "manibot93",
+            "/home/mani/software/pbgui/data/run_v7/bybit_SANDUSDT/running_version.txt",
+        )
+    )
+
+    assert monitor.collected == ["manibot93"]
 
 
 def test_reconcile_is_noop_when_legacy_sync_disabled(

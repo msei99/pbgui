@@ -421,16 +421,30 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
     # for this instance (even if running=False). Used to distinguish
     # "confirmed not running" from "no data yet" — the latter must not
     # show "disabled" when the bot might still be running.
-    vps_info = {}  # name → {running_on: [...], rv, cv_remote, has_data}
+    vps_info = {}  # name → {running_on: [...], rv, cv_remote, has_data, blocked...}
     for host, items in v7_data.items():
         for item in items:
             name = item.get("name", "")
             if name not in vps_info:
-                vps_info[name] = {"running_on": [], "rv": 0, "cv_remote": 0, "has_data": False}
+                vps_info[name] = {
+                    "running_on": [],
+                    "rv": 0,
+                    "cv_remote": 0,
+                    "has_data": False,
+                    "blocked_on": [],
+                    "blocked_reason": "",
+                    "cluster_gate": "",
+                }
             vps_info[name]["has_data"] = True
             if item.get("running"):
                 vps_info[name]["running_on"].append(host)
                 vps_info[name]["rv"] = item.get("rv", 0)
+            if item.get("blocked"):
+                vps_info[name]["blocked_on"].append(host)
+                if not vps_info[name]["blocked_reason"]:
+                    vps_info[name]["blocked_reason"] = str(item.get("blocked_reason") or "")
+                if not vps_info[name]["cluster_gate"]:
+                    vps_info[name]["cluster_gate"] = str(item.get("cluster_gate") or "")
             vps_info[name]["cv_remote"] = max(
                 vps_info[name]["cv_remote"], item.get("cv", 0)
             )
@@ -456,10 +470,16 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
             inst["running_on"] = info["running_on"]
             inst["running_version"] = info["rv"]
             inst["config_version_remote"] = info["cv_remote"]
+            inst["blocked_on"] = info.get("blocked_on", [])
+            inst["blocked_reason"] = info.get("blocked_reason", "")
+            inst["cluster_gate"] = info.get("cluster_gate", "")
         else:
             inst["running_on"] = []
             inst["running_version"] = 0
             inst["config_version_remote"] = 0
+            inst["blocked_on"] = []
+            inst["blocked_reason"] = ""
+            inst["cluster_gate"] = ""
 
         # Compute sync status
         enabled = inst["enabled_on"]
@@ -468,7 +488,9 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
         rv = inst["running_version"]
         has_data = info.get("has_data", False) if info else False
 
-        if enabled == "disabled":
+        if inst["blocked_on"] and not running_on:
+            inst["status"] = "blocked"
+        elif enabled == "disabled":
             if running_on:
                 inst["status"] = "stop_needed"
             else:

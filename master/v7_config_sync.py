@@ -144,7 +144,6 @@ class V7ConfigSyncWorker:
         """Start inotify watchers on connected VPS(es)."""
         if LEGACY_V7_CONFIG_SYNC_DISABLED:
             _log_legacy_disabled("watcher")
-            return
         targets = hostnames or self.pool.connected_hosts()
         for h in targets:
             if h in self._watchers and not self._watchers[h].done():
@@ -167,11 +166,12 @@ class V7ConfigSyncWorker:
             self._watchers[h] = task
             _log(SERVICE, f"[watcher] Started for {h} "
                  f"({len(paths)} path(s))", level="DEBUG")
-            try:
-                await self._reconcile_status_v7(h)
-            except Exception as e:
-                _log(SERVICE, f"[reconcile] {h}: initial reconcile failed: {e}",
-                     level="WARNING", meta={"traceback": traceback.format_exc()})
+            if not LEGACY_V7_CONFIG_SYNC_DISABLED:
+                try:
+                    await self._reconcile_status_v7(h)
+                except Exception as e:
+                    _log(SERVICE, f"[reconcile] {h}: initial reconcile failed: {e}",
+                         level="WARNING", meta={"traceback": traceback.format_exc()})
 
     async def start_watchers_single(self, hostname: str):
         """Start watcher for a single host (on-connect callback)."""
@@ -200,7 +200,6 @@ class V7ConfigSyncWorker:
         """Start the background watchdog (call once at startup)."""
         if LEGACY_V7_CONFIG_SYNC_DISABLED:
             _log_legacy_disabled("watchdog")
-            return
         if self._watchdog and not self._watchdog.done():
             return
         self._watchdog = asyncio.create_task(
@@ -219,7 +218,7 @@ class V7ConfigSyncWorker:
         """List status_v7.json + running_version.txt paths to watch.
 
         Watched via inotify:
-        - status_v7.json in data/cmd/  → reconcile configs across masters
+        - status_v7.json in data/cmd/  → reconcile configs across masters (legacy only)
         - running_version.txt per inst → trigger immediate instance collection
         """
         paths = []
@@ -228,7 +227,7 @@ class V7ConfigSyncWorker:
 
         # Watch status_v7.json in data/cmd/
         remote_cmd_dir = remote_path_join(remote_pbgui_dir, "data", "cmd")
-        if await self.pool.stat_remote(hostname, remote_cmd_dir):
+        if not LEGACY_V7_CONFIG_SYNC_DISABLED and await self.pool.stat_remote(hostname, remote_cmd_dir):
             paths.append(f"{remote_cmd_dir}/status_v7.json")
 
         # Watch running_version.txt per instance
@@ -345,14 +344,14 @@ class V7ConfigSyncWorker:
 
     async def _watcher_callback(self, hostname: str, changed_path: str):
         """Handle an inotify event for status_v7.json or running_version.txt."""
-        if LEGACY_V7_CONFIG_SYNC_DISABLED:
-            _log_legacy_disabled("callback")
-            return
         parts = changed_path.replace("\\", "/").split("/")
         filename = parts[-1] if parts else ""
 
         # ── status_v7.json → reconcile across masters ────────
         if filename == "status_v7.json" and "data/cmd" in changed_path:
+            if LEGACY_V7_CONFIG_SYNC_DISABLED:
+                _log_legacy_disabled("callback")
+                return
             await self._reconcile_status_v7(hostname)
             return
 
