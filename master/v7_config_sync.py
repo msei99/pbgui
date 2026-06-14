@@ -31,9 +31,25 @@ from master.async_pool import remote_path_join
 from pbgui_purefunc import PBGDIR, STATUS_V7_FILE, SYNC_EXCLUDE_FILES
 
 SERVICE = "V7ConfigSync"
+LEGACY_V7_CONFIG_SYNC_DISABLED = True
+_LEGACY_DISABLED_LOGGED = False
 
 # Local v7 config directory
 LOCAL_RUN_V7 = Path(PBGDIR) / "data" / "run_v7"
+
+
+def _log_legacy_disabled(scope: str) -> None:
+    """Log once that legacy V7 config sync is intentionally disabled."""
+
+    global _LEGACY_DISABLED_LOGGED
+    if _LEGACY_DISABLED_LOGGED:
+        return
+    _LEGACY_DISABLED_LOGGED = True
+    _log(
+        SERVICE,
+        f"[{scope}] Legacy V7 config sync disabled on cluster-mode; Cluster Sync owns run_v7 materialization.",
+        level="WARNING",
+    )
 
 # Persistent inotify script — runs continuously on VPS, prints every
 # matched event as a line to stdout (not one-shot).
@@ -126,6 +142,9 @@ class V7ConfigSyncWorker:
 
     async def start_watchers(self, hostnames: list[str] | None = None):
         """Start inotify watchers on connected VPS(es)."""
+        if LEGACY_V7_CONFIG_SYNC_DISABLED:
+            _log_legacy_disabled("watcher")
+            return
         targets = hostnames or self.pool.connected_hosts()
         for h in targets:
             if h in self._watchers and not self._watchers[h].done():
@@ -179,6 +198,9 @@ class V7ConfigSyncWorker:
 
     def start_watchdog(self) -> None:
         """Start the background watchdog (call once at startup)."""
+        if LEGACY_V7_CONFIG_SYNC_DISABLED:
+            _log_legacy_disabled("watchdog")
+            return
         if self._watchdog and not self._watchdog.done():
             return
         self._watchdog = asyncio.create_task(
@@ -323,6 +345,9 @@ class V7ConfigSyncWorker:
 
     async def _watcher_callback(self, hostname: str, changed_path: str):
         """Handle an inotify event for status_v7.json or running_version.txt."""
+        if LEGACY_V7_CONFIG_SYNC_DISABLED:
+            _log_legacy_disabled("callback")
+            return
         parts = changed_path.replace("\\", "/").split("/")
         filename = parts[-1] if parts else ""
 
@@ -363,6 +388,9 @@ class V7ConfigSyncWorker:
         - Instance in remote but not local → create + pull.
         - Instance in local but not remote → backup + delete locally.
         """
+        if LEGACY_V7_CONFIG_SYNC_DISABLED:
+            _log_legacy_disabled("reconcile")
+            return
         remote_path = remote_path_join(
             self.pool.get_remote_pbgui_dir(hostname), "data", "cmd", "status_v7.json"
         )

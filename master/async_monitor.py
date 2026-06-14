@@ -2683,17 +2683,22 @@ class VPSMonitor:
         if service_name not in OPTIONAL_SERVICE_REQUIREMENTS:
             return True
         local_expected = self._local_optional_service_expected(hostname, service_name)
-        if local_expected is not None:
-            return local_expected
-
         meta = self.store.host_meta.get(hostname, {}) if self.store else {}
+        remote_expected: bool | None = None
         optional_services = meta.get("optional_services") if isinstance(meta, dict) else None
         if isinstance(optional_services, dict) and service_name in optional_services:
-            return bool(optional_services.get(service_name))
-        if service_name == "PBRemote" and isinstance(meta, dict) and "pbremote_configured" in meta:
-            return bool(meta.get("pbremote_configured"))
-        if service_name == "PBCoinData" and isinstance(meta, dict) and "coindata_configured" in meta:
-            return bool(meta.get("coindata_configured"))
+            remote_expected = bool(optional_services.get(service_name))
+        elif service_name == "PBRemote" and isinstance(meta, dict) and "pbremote_configured" in meta:
+            remote_expected = bool(meta.get("pbremote_configured"))
+        elif service_name == "PBCoinData" and isinstance(meta, dict) and "coindata_configured" in meta:
+            remote_expected = bool(meta.get("coindata_configured"))
+
+        if local_expected is False or remote_expected is False:
+            return False
+        if local_expected is True:
+            return True
+        if remote_expected is not None:
+            return remote_expected
 
         # Unknown capability should be treated as expected to avoid hiding real failures.
         return True

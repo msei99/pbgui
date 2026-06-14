@@ -1,5 +1,8 @@
 # Unreleased
 
+- V7 Run: disabled the legacy FastAPI SSH sync path on cluster-mode so saving, activating, restoring or forced-mode edits no longer push `run_v7` files or trigger PBRun starts on VPS hosts outside explicit Cluster Sync materialization.
+- VPS Manager: optional PBRemote/PBCoinData service control now treats explicit remote unconfigured state as disabled and clears failed systemd user units when optional config is removed.
+- Cluster Sync: disabled legacy V7 config sync and legacy API-key file sync on the cluster-mode branch so remote `run_v7` and `api-keys.json` writes are owned by explicit Cluster Sync materialization.
 - Cluster Sync: added API-key operation recording, payload/secret blob replication, and explicit remote `api-keys.json` materialization with backup, atomic write and hash verification.
 - Cluster Sync: added explicit remote V7 config materialization from replicated config blobs into `data/run_v7`, with read-only preview, sync-state safety checks, missing-blob blocking and no deletes or bot start/stop actions.
 - Cluster Sync: added automatic bootstrap preview/apply actions to register known VPS nodes and existing run_v7 configs in local cluster state without inferring deletes or clearing tombstones.

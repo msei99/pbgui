@@ -122,9 +122,12 @@ disable_optional_service() {
 
   echo "Skipping $service: required configuration is missing in pbgui.ini"
   if command -v systemctl >/dev/null 2>&1 && [[ -f "$target_home/.config/systemd/user/$unit" ]]; then
+    run_as_service_user systemctl --user daemon-reload >/dev/null 2>&1 || true
     run_as_service_user systemctl --user stop "$unit" >/dev/null 2>&1 || true
     run_as_service_user systemctl --user disable "$unit" >/dev/null 2>&1 || true
+    run_as_service_user systemctl --user reset-failed "$unit" >/dev/null 2>&1 || true
     rm -f "$target_home/.config/systemd/user/default.target.wants/$unit"
+    run_as_service_user systemctl --user daemon-reload >/dev/null 2>&1 || true
   fi
 
   if [[ -x "$python_bin" && -f "$pbgui_dir/starter.py" ]]; then

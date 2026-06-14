@@ -135,6 +135,25 @@ def test_record_cluster_config_upsert_missing_instance_dir_is_warning_only(monke
     assert not (tmp_path / "data" / "cluster" / "desired_state.json").exists()
 
 
+def test_legacy_v7_api_ssh_sync_is_disabled(monkeypatch, tmp_path: Path) -> None:
+    """The old V7 API sync path must not write to VPS hosts on cluster-mode."""
+
+    instance_dir = tmp_path / "data" / "run_v7" / "test_inst"
+    _write_config(instance_dir, 9, "vps-a")
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+
+    def fail_update_status(name: str) -> None:
+        raise AssertionError("legacy sync must not update status_v7.json")
+
+    monkeypatch.setattr(v7_instances, "_update_status_v7", fail_update_status)
+    result = asyncio.run(v7_instances._ssh_sync_instance("test_inst"))
+
+    assert result["disabled"] is True
+    assert result["hosts"] == {}
+    assert result["ok"] == 0
+    assert result["failed"] == 0
+
+
 def test_backup_draft_save_clears_tombstone(monkeypatch, tmp_path: Path) -> None:
     """Saving a backup draft is an explicit restore and removes the tombstone."""
 

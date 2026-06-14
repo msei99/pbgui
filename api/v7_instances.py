@@ -57,6 +57,10 @@ from pbgui_purefunc import (PBGDIR, STATUS_V7_FILE, SYNC_EXCLUDE_FILES,
                              get_syncable_files as _get_syncable_files)
 
 SERVICE = "V7Instances"
+LEGACY_V7_API_SSH_SYNC_DISABLED = True
+LEGACY_V7_API_SSH_SYNC_DISABLED_REASON = (
+    "Legacy V7 API SSH sync is disabled on cluster-mode; use explicit Cluster Sync materialization."
+)
 
 router = APIRouter()
 
@@ -722,6 +726,17 @@ async def _ssh_sync_instance(name: str) -> dict:
     config_path = Path(f"{PBGDIR}/data/run_v7/{name}/config.json")
     if not config_path.is_file():
         return {"name": name, "error": f"Config not found: {name}"}
+    if LEGACY_V7_API_SSH_SYNC_DISABLED:
+        _log(SERVICE, f"Skipped legacy V7 SSH sync for '{name}': {LEGACY_V7_API_SSH_SYNC_DISABLED_REASON}")
+        return {
+            "name": name,
+            "local": True,
+            "hosts": {},
+            "ok": 0,
+            "failed": 0,
+            "disabled": True,
+            "reason": LEGACY_V7_API_SSH_SYNC_DISABLED_REASON,
+        }
 
     try:
         cfg_for_schema_check = json.loads(config_path.read_text(encoding="utf-8"))

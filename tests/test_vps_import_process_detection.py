@@ -986,6 +986,26 @@ def test_run_vps_command_uses_fresh_remote_optional_values() -> None:
     assert captured["extra_vars"] is None
 
 
+def test_optional_service_remote_unconfigured_overrides_stale_local_config() -> None:
+    """Remote PBRemote=false prevents stale local config from auto-restarting PBRemote."""
+
+    monitor = object.__new__(VPSMonitor)
+    monitor.store = SimpleNamespace(host_meta={"manibot90": {"optional_services": {"PBRemote": False}}})
+    monitor._local_optional_service_expected = lambda hostname, service_name: True
+
+    assert monitor._optional_service_expected("manibot90", "PBRemote") is False
+
+
+def test_optional_service_local_disabled_overrides_stale_remote_config() -> None:
+    """A local clear request still prevents optional service auto-restart."""
+
+    monitor = object.__new__(VPSMonitor)
+    monitor.store = SimpleNamespace(host_meta={"manibot90": {"optional_services": {"PBRemote": True}}})
+    monitor._local_optional_service_expected = lambda hostname, service_name: False
+
+    assert monitor._optional_service_expected("manibot90", "PBRemote") is False
+
+
 def test_save_vps_config_starts_remote_optional_apply(tmp_path: Path) -> None:
     """Saving changed optional settings starts the targeted remote apply playbook."""
     captured: dict[str, object] = {}

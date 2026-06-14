@@ -26,6 +26,22 @@ from master.async_pool import remote_path_join
 from pbgui_purefunc import PBGDIR, pb7dir as _pb7dir
 
 SERVICE = "FileSync"
+LEGACY_API_KEY_FILE_SYNC_DISABLED = True
+_LEGACY_DISABLED_LOGGED = False
+
+
+def _log_legacy_disabled(scope: str) -> None:
+    """Log once that legacy API-key file sync is intentionally disabled."""
+
+    global _LEGACY_DISABLED_LOGGED
+    if _LEGACY_DISABLED_LOGGED:
+        return
+    _LEGACY_DISABLED_LOGGED = True
+    _log(
+        SERVICE,
+        f"[{scope}] Legacy API-key file sync disabled on cluster-mode; Cluster Sync owns api-keys.json materialization.",
+        level="WARNING",
+    )
 
 # Minimal Python inotify watcher — uses ctypes to call Linux inotify syscalls
 # directly, no packages needed beyond stdlib.
@@ -197,6 +213,10 @@ class FileSyncWorker:
         Returns:
             Dict of {hostname: result_dict} per VPS.
         """
+        if LEGACY_API_KEY_FILE_SYNC_DISABLED:
+            _log_legacy_disabled("push")
+            return {"error": "Legacy API-key file sync is disabled; use Cluster Sync materialization"}
+
         if not LOCAL_API_KEYS.exists():
             _log(SERVICE, "Local api-keys.json not found", level="ERROR")
             return {"error": "Local api-keys.json not found"}
@@ -563,6 +583,10 @@ class FileSyncWorker:
 
     async def _pull_from_vps(self, hostname: str) -> bool:
         """Pull api-keys.json from a VPS to local (multi-master sync)."""
+        if LEGACY_API_KEY_FILE_SYNC_DISABLED:
+            _log_legacy_disabled("pull")
+            return False
+
         entry = self.pool.get_connection(hostname)
         if not entry:
             return False
@@ -631,6 +655,10 @@ class FileSyncWorker:
 
     async def start_watchers(self, hostnames: list[str] | None = None):
         """Start inotifywait watchers on connected VPS(es)."""
+        if LEGACY_API_KEY_FILE_SYNC_DISABLED:
+            _log_legacy_disabled("watcher")
+            return
+
         targets = hostnames or self.pool.connected_hosts()
         for h in targets:
             if h in self._watchers and not self._watchers[h].done():
@@ -677,6 +705,10 @@ class FileSyncWorker:
 
     def start_watchdog(self) -> None:
         """Start the background watchdog (call once at startup)."""
+        if LEGACY_API_KEY_FILE_SYNC_DISABLED:
+            _log_legacy_disabled("watchdog")
+            return
+
         if self._watchdog and not self._watchdog.done():
             return
         self._watchdog = asyncio.create_task(
@@ -740,6 +772,10 @@ class FileSyncWorker:
         Reads the pb7 copy, computes MD5, and compares
         with the local file to determine in_sync status.
         """
+        if LEGACY_API_KEY_FILE_SYNC_DISABLED:
+            _log_legacy_disabled("state-init")
+            return
+
         try:
             entry = self.pool.get_connection(hostname)
             if not entry:
@@ -907,6 +943,10 @@ class FileSyncWorker:
         compares with the local file, and broadcasts in_sync status.
         If the remote serial is higher, triggers a pull.
         """
+        if LEGACY_API_KEY_FILE_SYNC_DISABLED:
+            _log_legacy_disabled("callback")
+            return
+
         _log(SERVICE, f"[watcher] {hostname}: file changed ({data})",
              level="DEBUG")
 
@@ -1087,6 +1127,8 @@ class FileSyncWorker:
             }
 
         return {
+            "disabled": LEGACY_API_KEY_FILE_SYNC_DISABLED,
+            "disabled_reason": "Legacy API-key file sync is disabled; Cluster Sync owns api-keys.json materialization.",
             "connected_hosts": connected,
             "hosts": hosts,
             "summary_hostnames": summary_hostnames,
