@@ -363,6 +363,67 @@ def test_remote_join_rejects_foreign_remote_identity(monkeypatch, tmp_path: Path
     assert "existing cluster_id differs" in exc.value.detail
 
 
+def test_remote_preview_compares_state_without_writes(monkeypatch, tmp_path: Path) -> None:
+    """Remote preview reads vector and desired state and returns a compact diff."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=102,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            if "get-state-vector" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_A: 1, NODE_B: 1}}
+            else:
+                payload = {
+                    "ok": True,
+                    "cluster_id": CLUSTER_ID,
+                    "node_id": NODE_B,
+                    "desired_state": {
+                        "schema_version": 1,
+                        "cluster_id": CLUSTER_ID,
+                        "generated_at": 103,
+                        "instances": {
+                            "remote_inst": {
+                                "version": "1",
+                                "desired_state": "stopped",
+                                "assigned_host": NODE_B,
+                                "config_manifest_hash": HASH_A,
+                            }
+                        },
+                        "tombstones": {},
+                    },
+                }
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.get_remote_preview(NODE_B, session=None))
+
+    assert payload["read_only"] is True
+    assert payload["remote_node_id"] == NODE_B
+    assert payload["state_vector"]["counts"] == {"equal": 0, "local_ahead": 1, "remote_ahead": 1}
+    assert payload["desired_state"]["instances"]["missing_on_remote"] == ["local_inst"]
+    assert payload["desired_state"]["instances"]["missing_locally"] == ["remote_inst"]
+    assert len(calls) == 2
+    assert "get-state-vector" in calls[0]
+    assert "get-desired-state" in calls[1]
+
+
 def test_bootstrap_preview_reports_known_vps_without_local_configs(monkeypatch, tmp_path: Path) -> None:
     """Bootstrap preview includes VPS Manager hosts even when no local bots use them yet."""
 

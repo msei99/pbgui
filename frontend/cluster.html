@@ -213,10 +213,16 @@
       overflow: hidden;
     }
     .modal-head { padding: 0.85rem 1rem; background: var(--bg3); border-bottom: 1px solid var(--border); font-weight: 750; }
-    .modal-body { padding: 1rem; color: var(--muted); line-height: 1.45; display: grid; gap: var(--sp-md); }
+    .modal-body { padding: 1rem; color: var(--muted); line-height: 1.45; display: grid; gap: var(--sp-md); max-height: calc(100vh - 160px); overflow: auto; }
     .modal-actions { display: flex; justify-content: flex-end; gap: var(--sp-sm); padding: 0 1rem 1rem; }
     .modal-error { display: none; color: var(--bad); border: 1px solid rgba(248,113,113,0.35); background: rgba(248,113,113,0.08); border-radius: 8px; padding: 0.55rem 0.75rem; }
     .modal-error.visible { display: block; }
+    .preview-grid { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: var(--sp-sm); }
+    .preview-card { border: 1px solid var(--border); border-radius: 9px; padding: var(--sp-sm); background: #101724; }
+    .preview-label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; }
+    .preview-value { margin-top: 4px; color: var(--text); font-size: var(--fs-md); font-weight: 750; }
+    .preview-section { display: grid; gap: var(--sp-sm); }
+    .preview-list { color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; }
 
     @media (max-width: 980px) {
       #page-body { padding: var(--sp-md); }
@@ -239,7 +245,7 @@
       <section class="hero">
         <div>
           <div class="hero-title">Cluster Sync</div>
-          <div class="hero-subtitle">Local visibility and bootstrap for the multi-master cluster state. Bootstrap writes local oplog entries only; this page does not start, stop, delete, deploy, connect to, or push anything to remote nodes.</div>
+          <div class="hero-subtitle">Local visibility, bootstrap, remote probes and explicit identity join for the multi-master cluster state. Bootstrap writes local oplog entries only; remote writes happen only through explicit actions such as Join.</div>
         </div>
         <div class="hero-actions">
           <button class="btn primary" id="refresh-btn" type="button">Refresh</button>
@@ -325,6 +331,20 @@
       <div class="modal-actions">
         <button class="btn" id="join-cancel-btn" type="button">Cancel</button>
         <button class="btn warn" id="join-confirm-btn" type="button">Write Identity</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="preview-modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="preview-modal-title">
+      <div class="modal-head" id="preview-modal-title">Remote State Preview</div>
+      <div class="modal-body">
+        <div id="preview-modal-message">Loading remote state preview...</div>
+        <div id="preview-modal-content"></div>
+        <div class="modal-error" id="preview-modal-error"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="preview-close-btn" type="button">Close</button>
       </div>
     </div>
   </div>
@@ -444,6 +464,83 @@
           setMessage('Remote join failed: ' + err.message, 'err');
         }).finally(function () {
           if (btn) { btn.disabled = false; btn.textContent = 'Write Identity'; }
+        });
+      }
+
+      function closePreviewModal() {
+        var modal = document.getElementById('preview-modal');
+        if (modal) modal.hidden = true;
+        var content = document.getElementById('preview-modal-content');
+        if (content) content.innerHTML = '';
+        var error = document.getElementById('preview-modal-error');
+        if (error) {
+          error.textContent = '';
+          error.className = 'modal-error';
+        }
+      }
+
+      function previewList(values) {
+        if (!values || !values.length) return 'none';
+        return values.map(function (value) { return esc(value); }).join(', ');
+      }
+
+      function mismatchList(values) {
+        if (!values || !values.length) return 'none';
+        return values.map(function (item) {
+          return esc(item.name) + ' (' + esc((item.fields || []).join(', ')) + ')';
+        }).join(', ');
+      }
+
+      function renderRemotePreview(payload) {
+        var content = document.getElementById('preview-modal-content');
+        if (!content) return;
+        var vectorCounts = ((payload.state_vector || {}).counts) || {};
+        var desired = payload.desired_state || {};
+        var instances = desired.instances || {};
+        var tombstones = desired.tombstones || {};
+        var actorRows = (((payload.state_vector || {}).actors) || []).map(function (actor) {
+          return '<tr>'
+            + '<td class="mono" title="' + esc(actor.actor) + '">' + esc(shortId(actor.actor)) + '</td>'
+            + '<td class="mono">' + esc(actor.local_seq) + '</td>'
+            + '<td class="mono">' + esc(actor.remote_seq) + '</td>'
+            + '<td><span class="pill ' + (actor.status === 'equal' ? 'good' : 'warn') + '">' + esc(actor.status) + '</span></td>'
+            + '</tr>';
+        }).join('') || '<tr><td colspan="4" class="empty">No actor state-vector entries.</td></tr>';
+        content.innerHTML = ''
+          + '<div class="preview-grid">'
+          + '<div class="preview-card"><div class="preview-label">Equal Actors</div><div class="preview-value">' + esc(vectorCounts.equal || 0) + '</div></div>'
+          + '<div class="preview-card"><div class="preview-label">Local Ahead</div><div class="preview-value">' + esc(vectorCounts.local_ahead || 0) + '</div></div>'
+          + '<div class="preview-card"><div class="preview-label">Remote Ahead</div><div class="preview-value">' + esc(vectorCounts.remote_ahead || 0) + '</div></div>'
+          + '</div>'
+          + '<div class="preview-section">'
+          + '<div class="field"><div class="field-label">Instances</div><div class="preview-list">Local: ' + esc(instances.local_count || 0) + ', Remote: ' + esc(instances.remote_count || 0) + '<br>Missing on remote: ' + previewList(instances.missing_on_remote) + '<br>Missing locally: ' + previewList(instances.missing_locally) + '<br>Mismatches: ' + mismatchList(instances.mismatches) + '</div></div>'
+          + '<div class="field"><div class="field-label">Tombstones</div><div class="preview-list">Local: ' + esc(tombstones.local_count || 0) + ', Remote: ' + esc(tombstones.remote_count || 0) + '<br>Missing on remote: ' + previewList(tombstones.missing_on_remote) + '<br>Missing locally: ' + previewList(tombstones.missing_locally) + '<br>Mismatches: ' + mismatchList(tombstones.mismatches) + '</div></div>'
+          + '<div class="field"><div class="field-label">API Keys</div><div class="preview-list">Metadata match: ' + esc(desired.api_keys_match ? 'yes' : 'no') + '</div></div>'
+          + '</div>'
+          + '<table><thead><tr><th>Actor</th><th>Local Seq</th><th>Remote Seq</th><th>Status</th></tr></thead><tbody>' + actorRows + '</tbody></table>';
+      }
+
+      function openRemotePreview(node) {
+        var modal = document.getElementById('preview-modal');
+        var message = document.getElementById('preview-modal-message');
+        var content = document.getElementById('preview-modal-content');
+        var error = document.getElementById('preview-modal-error');
+        if (content) content.innerHTML = '';
+        if (error) {
+          error.textContent = '';
+          error.className = 'modal-error';
+        }
+        if (message) message.textContent = 'Reading remote state from ' + (node.pbname || node.hostname || node.node_id || 'node') + '. This is read-only and performs no replication writes.';
+        if (modal) modal.hidden = false;
+        fetchJson('/remote-preview/' + encodeURIComponent(node.node_id)).then(function (payload) {
+          if (message) message.textContent = 'Remote state preview for ' + (payload.hostname || node.pbname || node.hostname || node.node_id) + '.';
+          renderRemotePreview(payload);
+        }).catch(function (err) {
+          if (error) {
+            error.textContent = err.message || 'Remote preview failed.';
+            error.className = 'modal-error visible';
+          }
+          if (message) message.textContent = 'Remote state preview failed.';
         });
       }
 
@@ -726,9 +823,12 @@
           var probe = remoteProbeMap[node.node_id] || {};
           var probeStatus = probe.status || 'unknown';
           var probeTitle = probe.error || probe.remote_node_id || probe.remote_cluster_id || probeStatus;
-          var action = probeStatus === 'not_initialized'
-            ? '<button class="btn small warn join-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Join</button>'
-            : '';
+          var action = '';
+          if (probeStatus === 'not_initialized') {
+            action = '<button class="btn small warn join-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Join</button>';
+          } else if (probeStatus === 'ok') {
+            action = '<button class="btn small primary preview-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Preview</button>';
+          }
           html += '<tr>'
             + '<td class="mono" title="' + esc(node.node_id) + '">' + esc(shortId(node.node_id)) + '</td>'
             + '<td><span class="pill blue">' + esc(node.role || 'node') + '</span></td>'
@@ -746,6 +846,11 @@
         document.getElementById('nodes-table').querySelectorAll('.join-node-btn').forEach(function (btn) {
           btn.addEventListener('click', function () {
             openJoinModal(nodeMap[btn.getAttribute('data-node-id')] || {});
+          });
+        });
+        document.getElementById('nodes-table').querySelectorAll('.preview-node-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            openRemotePreview(nodeMap[btn.getAttribute('data-node-id')] || {});
           });
         });
       }
@@ -899,6 +1004,7 @@
       document.getElementById('bootstrap-apply-btn').addEventListener('click', applyBootstrap);
       document.getElementById('join-cancel-btn').addEventListener('click', closeJoinModal);
       document.getElementById('join-confirm-btn').addEventListener('click', joinRemoteNode);
+      document.getElementById('preview-close-btn').addEventListener('click', closePreviewModal);
       loadCluster();
     })();
   </script>

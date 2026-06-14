@@ -186,10 +186,13 @@ Die erste local-only Version zeigt:
 - eine Bootstrap-Preview/Apply-Aktion für bekannte VPS-Nodes und bestehende lokale V7-Configs
 - read-only Remote-Hello-Probe-Status für bekannte Cluster-Nodes
 - eine explizite Join-Aktion für Nodes, die erreichbar sind, aber noch keine Cluster-Identität haben
+- eine read-only Preview-Aktion für gejointe Nodes, die Remote-State vor Replikation vergleicht
 
 Bootstrap schreibt explizite lokale `ADD_NODE`-Operationen für bekannte VPS-Manager-Hosts und `UPSERT_CONFIG`-Operationen für lokale Configs. Wenn VPS-Monitor-Metadaten verfügbar sind, übernimmt Bootstrap, ob ein bekannter Host Master oder VPS-Runner ist. Fehlende Dateien oder fehlende VPS-Einträge werden nie als Delete interpretiert und Tombstones werden dadurch nicht entfernt. Die Probe-Spalte führt, wenn verfügbar, nur ein read-only restricted `hello` aus; sie installiert keine Keys, schreibt keine Remote-Dateien, startet oder stoppt keine Bots und deployed nichts.
 
 Wenn ein Node **No Identity** zeigt, schreibt die **Join**-Aktion nur `cluster_id`, `node_id` und `node_identity.json` unter dem remote PBGui-Verzeichnis `data/cluster`. Eine abweichende bestehende Identität wird nicht überschrieben. Join synchronisiert keine Configs, installiert keine restricted Keys, startet oder stoppt keine Bots, deployed keine Dateien und verändert keinen lokalen Desired State. Last-Seen-Status, Node-zu-Node-Sync-Status und Conflict-Resolution-Aktionen folgen in späteren Phasen.
+
+Wenn ein gejointer Node **OK** zeigt, liest die **Preview**-Aktion den Remote-State-Vector und Desired State. Sie vergleicht Actor-Sequenzen, V7-Instance-Metadaten, Tombstones und API-Key-Metadaten mit lokalem State. Preview ist read-only; es kopiert keine Operationen, Blobs oder Configs.
 
 ---
 

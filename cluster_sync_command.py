@@ -80,10 +80,20 @@ def run_command(
         }
     if verb == "get-state-vector":
         materialized = _safe_state_call(lambda: rebuild_materialized_state(root, write=False))
-        return {"ok": True, "state_vector": materialized.get("state_vector") or {}}
+        return {
+            "ok": True,
+            "cluster_id": cluster_id,
+            "node_id": str(identity["node_id"]),
+            "state_vector": materialized.get("state_vector") or {},
+        }
     if verb == "get-desired-state":
         materialized = _safe_state_call(lambda: rebuild_materialized_state(root, write=False))
-        return {"ok": True, "desired_state": materialized.get("desired_state") or {}}
+        return {
+            "ok": True,
+            "cluster_id": cluster_id,
+            "node_id": str(identity["node_id"]),
+            "desired_state": materialized.get("desired_state") or {},
+        }
     if verb == "rebuild":
         materialized = _safe_state_call(lambda: rebuild_materialized_state(root))
         return {

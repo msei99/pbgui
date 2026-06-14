@@ -157,6 +157,8 @@ def test_rebuild_and_get_state_vector(tmp_path: Path) -> None:
     state = run_command(root, NODE_B, "get-state-vector")
 
     assert rebuild["generation"] == 2
+    assert state["cluster_id"] == CLUSTER_ID
+    assert state["node_id"] == NODE_A
     assert state["state_vector"] == {NODE_A: 1, NODE_B: 1}
 
 

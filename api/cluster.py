@@ -344,6 +344,14 @@ def _cluster_hello_command(remote_pbgui_dir: str | None, local_node_id: str) -> 
     return _cluster_remote_command(remote_pbgui_dir, local_node_id, "hello")
 
 
+def _cluster_state_read_command(remote_pbgui_dir: str | None, local_node_id: str, verb: str) -> str:
+    """Build one read-only remote Cluster Sync state command."""
+
+    if verb not in {"get-state-vector", "get-desired-state"}:
+        raise ValueError("unsupported read command")
+    return _cluster_remote_command(remote_pbgui_dir, local_node_id, verb)
+
+
 def _cluster_join_command(
     remote_pbgui_dir: str | None,
     local_node_id: str,
@@ -389,6 +397,19 @@ def _probe_error_text(result: Any) -> str:
         if isinstance(payload, dict) and payload.get("error"):
             return str(payload.get("error"))
     return "remote hello failed"
+
+
+def _parse_remote_json_result(result: Any, failure_label: str) -> dict[str, Any]:
+    """Parse the last JSON line from an SSH command result."""
+
+    stdout = str(getattr(result, "stdout", "") or "").strip()
+    try:
+        payload = json.loads(stdout.splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=502, detail=f"{failure_label} returned an invalid response") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail=f"{failure_label} returned an invalid response")
+    return payload
 
 
 async def _probe_cluster_node(node: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
@@ -535,6 +556,162 @@ async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> di
         "remote_cluster_id": remote_cluster_id,
         "remote_node_id": remote_node_id,
         "role": payload.get("role") if isinstance(payload, dict) else node.get("role"),
+    }
+
+
+def _require_remote_node_ready(node: dict[str, Any], identity: dict[str, Any]) -> tuple[str, str, str]:
+    """Validate a materialized node is usable for remote reads."""
+
+    node_id = str(node.get("node_id") or "")
+    hostname = str(node.get("pbname") or node.get("hostname") or "")
+    local_node_id = str(identity.get("node_id") or "")
+    if not node_id or node_id == local_node_id:
+        raise HTTPException(status_code=400, detail="Cannot read the local node as a remote")
+    if node.get("enabled") is False or node.get("sync_enabled") is False:
+        raise HTTPException(status_code=400, detail="Cluster node is disabled")
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Cluster node has no hostname")
+    return node_id, hostname, local_node_id
+
+
+async def _run_remote_read_command(node: dict[str, Any], identity: dict[str, Any], verb: str) -> dict[str, Any]:
+    """Run one read-only Cluster Sync command against a remote node."""
+
+    node_id, hostname, local_node_id = _require_remote_node_ready(node, identity)
+    monitor = get_monitor()
+    pool = getattr(monitor, "pool", None) if monitor else None
+    if not pool:
+        raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
+    command = _cluster_state_read_command(str(node.get("remote_pbgui_dir") or ""), local_node_id, verb)
+    try:
+        result = await pool.run(hostname, command, timeout=15)
+    except Exception as exc:
+        _log(SERVICE, f"Remote cluster read failed for {hostname}: {exc}", level="ERROR")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=502, detail="Remote host is unreachable")
+    exit_status = int(getattr(result, "exit_status", 1) or 0)
+    if exit_status != 0:
+        error = _probe_error_text(result)
+        _log(SERVICE, f"Remote cluster read rejected by {hostname}: {error}", level="WARNING")
+        raise HTTPException(status_code=409, detail=error)
+    payload = _parse_remote_json_result(result, "Remote cluster read")
+    remote_cluster_id = str(payload.get("cluster_id") or "")
+    remote_node_id = str(payload.get("node_id") or "")
+    if remote_cluster_id and remote_cluster_id != str(identity.get("cluster_id") or ""):
+        raise HTTPException(status_code=409, detail="Remote belongs to a different cluster_id")
+    if remote_node_id and remote_node_id != node_id:
+        raise HTTPException(status_code=409, detail="Remote reports a different node_id")
+    return payload
+
+
+def _as_state_vector(value: Any) -> dict[str, int]:
+    """Normalize a state-vector payload into actor sequence integers."""
+
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, int] = {}
+    for actor, seq in value.items():
+        try:
+            result[str(actor)] = max(0, int(seq or 0))
+        except (TypeError, ValueError):
+            result[str(actor)] = 0
+    return result
+
+
+def _compare_state_vectors(local: dict[str, int], remote: dict[str, int]) -> dict[str, Any]:
+    """Return a compact read-only diff between local and remote state vectors."""
+
+    rows: list[dict[str, Any]] = []
+    counts = {"equal": 0, "local_ahead": 0, "remote_ahead": 0}
+    for actor in sorted(set(local) | set(remote)):
+        local_seq = int(local.get(actor, 0))
+        remote_seq = int(remote.get(actor, 0))
+        if local_seq == remote_seq:
+            status = "equal"
+        elif local_seq > remote_seq:
+            status = "local_ahead"
+        else:
+            status = "remote_ahead"
+        counts[status] += 1
+        rows.append({
+            "actor": actor,
+            "local_seq": local_seq,
+            "remote_seq": remote_seq,
+            "delta": remote_seq - local_seq,
+            "status": status,
+        })
+    return {"counts": counts, "actors": rows}
+
+
+def _compare_named_records(local: dict[str, Any], remote: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+    """Compare named desired-state records by a fixed set of top-level fields."""
+
+    local_names = set(local)
+    remote_names = set(remote)
+    mismatches: list[dict[str, Any]] = []
+    for name in sorted(local_names & remote_names):
+        local_item = local.get(name) if isinstance(local.get(name), dict) else {}
+        remote_item = remote.get(name) if isinstance(remote.get(name), dict) else {}
+        diff_fields = [field for field in fields if str(local_item.get(field) or "") != str(remote_item.get(field) or "")]
+        if diff_fields:
+            mismatches.append({"name": name, "fields": diff_fields})
+    return {
+        "local_count": len(local_names),
+        "remote_count": len(remote_names),
+        "missing_on_remote": sorted(local_names - remote_names),
+        "missing_locally": sorted(remote_names - local_names),
+        "mismatches": mismatches,
+    }
+
+
+def _compare_desired_states(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any]:
+    """Return a read-only desired-state comparison summary."""
+
+    local_instances = local.get("instances") if isinstance(local, dict) else {}
+    remote_instances = remote.get("instances") if isinstance(remote, dict) else {}
+    local_tombstones = local.get("tombstones") if isinstance(local, dict) else {}
+    remote_tombstones = remote.get("tombstones") if isinstance(remote, dict) else {}
+    local_instances = local_instances if isinstance(local_instances, dict) else {}
+    remote_instances = remote_instances if isinstance(remote_instances, dict) else {}
+    local_tombstones = local_tombstones if isinstance(local_tombstones, dict) else {}
+    remote_tombstones = remote_tombstones if isinstance(remote_tombstones, dict) else {}
+    instance_diff = _compare_named_records(
+        local_instances,
+        remote_instances,
+        ("version", "desired_state", "assigned_host", "config_manifest_hash", "conflicted"),
+    )
+    tombstone_diff = _compare_named_records(local_tombstones, remote_tombstones, ("version", "deleted_by", "op_id"))
+    api_keys_match = (local.get("api_keys") if isinstance(local, dict) else None) == (remote.get("api_keys") if isinstance(remote, dict) else None)
+    return {
+        "instances": instance_diff,
+        "tombstones": tombstone_diff,
+        "api_keys_match": api_keys_match,
+    }
+
+
+async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], local_materialized: dict[str, Any]) -> dict[str, Any]:
+    """Read remote state and compare it with the local materialized state."""
+
+    remote_vector_payload = await _run_remote_read_command(node, identity, "get-state-vector")
+    remote_desired_payload = await _run_remote_read_command(node, identity, "get-desired-state")
+    local_vector = _as_state_vector(local_materialized.get("state_vector") or {})
+    remote_vector = _as_state_vector(remote_vector_payload.get("state_vector") or {})
+    local_desired = local_materialized.get("desired_state") if isinstance(local_materialized, dict) else {}
+    remote_desired = remote_desired_payload.get("desired_state") if isinstance(remote_desired_payload, dict) else {}
+    local_desired = local_desired if isinstance(local_desired, dict) else {}
+    remote_desired = remote_desired if isinstance(remote_desired, dict) else {}
+    node_id = str(node.get("node_id") or "")
+    hostname = str(node.get("pbname") or node.get("hostname") or "")
+    return {
+        "ok": True,
+        "read_only": True,
+        "node_id": node_id,
+        "hostname": hostname,
+        "remote_cluster_id": str(remote_desired.get("cluster_id") or remote_desired_payload.get("cluster_id") or ""),
+        "remote_node_id": str(remote_desired_payload.get("node_id") or remote_vector_payload.get("node_id") or node_id),
+        "state_vector": _compare_state_vectors(local_vector, remote_vector),
+        "desired_state": _compare_desired_states(local_desired, remote_desired),
     }
 
 
@@ -817,6 +994,18 @@ async def join_remote_identity(node_id: str, session: SessionToken = Depends(req
         raise HTTPException(status_code=404, detail="Cluster node not found")
     result = await _run_remote_join(node, snapshot["identity"])
     return result
+
+
+@router.get("/remote-preview/{node_id}")
+async def get_remote_preview(node_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Read remote cluster state and compare it with local state without writing."""
+
+    snapshot = _load_cluster_snapshot()
+    nodes = _node_list(snapshot["cluster_nodes"])
+    node = _node_for_id(nodes, str(node_id or ""))
+    if not node:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    return await _build_remote_preview(node, snapshot["identity"], snapshot)
 
 
 @router.get("/desired-state")
