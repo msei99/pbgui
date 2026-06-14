@@ -436,6 +436,14 @@ def _cluster_state_read_command(remote_pbgui_dir: str | None, local_node_id: str
     return _cluster_remote_command(remote_pbgui_dir, local_node_id, verb)
 
 
+def _cluster_materialize_command(remote_pbgui_dir: str | None, local_node_id: str, verb: str) -> str:
+    """Build one remote V7 config materialization command."""
+
+    if verb not in {"materialize-v7-preview", "materialize-v7"}:
+        raise ValueError("unsupported materialize command")
+    return _cluster_remote_command(remote_pbgui_dir, local_node_id, verb)
+
+
 def _cluster_payload_command(remote_pbgui_dir: str | None, local_node_id: str, command_text: str, payload: str) -> str:
     """Build a remote Cluster Sync command that receives a JSON payload on stdin."""
 
@@ -720,6 +728,43 @@ async def _run_remote_read_command(node: dict[str, Any], identity: dict[str, Any
         _log(SERVICE, f"Remote cluster read rejected by {hostname}: {error}", level="WARNING")
         raise HTTPException(status_code=409, detail=error)
     payload = _parse_remote_json_result(result, "Remote cluster read")
+    remote_cluster_id = str(payload.get("cluster_id") or "")
+    remote_node_id = str(payload.get("node_id") or "")
+    if remote_cluster_id and remote_cluster_id != str(identity.get("cluster_id") or ""):
+        raise HTTPException(status_code=409, detail="Remote belongs to a different cluster_id")
+    if remote_node_id and remote_node_id != node_id:
+        raise HTTPException(status_code=409, detail="Remote reports a different node_id")
+    return payload
+
+
+async def _run_remote_materialize_command(
+    node: dict[str, Any],
+    identity: dict[str, Any],
+    verb: str,
+    *,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """Run one remote V7 config materialization command."""
+
+    node_id, hostname, local_node_id = _require_remote_node_ready(node, identity)
+    monitor = get_monitor()
+    pool = getattr(monitor, "pool", None) if monitor else None
+    if not pool:
+        raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
+    command = _cluster_materialize_command(str(node.get("remote_pbgui_dir") or ""), local_node_id, verb)
+    try:
+        result = await pool.run(hostname, command, timeout=timeout)
+    except Exception as exc:
+        _log(SERVICE, f"Remote cluster materialize failed for {hostname}: {exc}", level="ERROR")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=502, detail="Remote host is unreachable")
+    exit_status = int(getattr(result, "exit_status", 1) or 0)
+    if exit_status != 0:
+        error = _probe_error_text(result)
+        _log(SERVICE, f"Remote cluster materialize rejected by {hostname}: {error}", level="WARNING")
+        raise HTTPException(status_code=409, detail=error)
+    payload = _parse_remote_json_result(result, "Remote materialize")
     remote_cluster_id = str(payload.get("cluster_id") or "")
     remote_node_id = str(payload.get("node_id") or "")
     if remote_cluster_id and remote_cluster_id != str(identity.get("cluster_id") or ""):
@@ -1294,6 +1339,25 @@ async def _run_remote_push_job(job_id: str, node: dict[str, Any], identity: dict
     )
 
 
+async def _require_remote_state_current(
+    node: dict[str, Any],
+    identity: dict[str, Any],
+    local_materialized: dict[str, Any],
+) -> None:
+    """Block remote writes unless remote state matches local materialized state."""
+
+    remote_vector_payload = await _run_remote_read_command(node, identity, "get-state-vector")
+    local_vector = _as_state_vector(local_materialized.get("state_vector") or {})
+    remote_vector = _as_state_vector(remote_vector_payload.get("state_vector") or {})
+    if local_vector != remote_vector:
+        raise HTTPException(status_code=409, detail="Remote state is not synchronized; push or pull operations before materializing configs")
+    remote_desired_payload = await _run_remote_read_command(node, identity, "get-desired-state")
+    local_desired = local_materialized.get("desired_state") if isinstance(local_materialized, dict) else {}
+    remote_desired = remote_desired_payload.get("desired_state") if isinstance(remote_desired_payload, dict) else {}
+    if (local_desired if isinstance(local_desired, dict) else {}) != (remote_desired if isinstance(remote_desired, dict) else {}):
+        raise HTTPException(status_code=409, detail="Remote desired state differs; rebuild or resync before materializing configs")
+
+
 async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], local_materialized: dict[str, Any]) -> dict[str, Any]:
     """Read remote state and compare it with the local materialized state."""
 
@@ -1307,6 +1371,17 @@ async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], 
     remote_desired = remote_desired if isinstance(remote_desired, dict) else {}
     node_id = str(node.get("node_id") or "")
     hostname = str(node.get("pbname") or node.get("hostname") or "")
+    try:
+        materialization = await _run_remote_materialize_command(node, identity, "materialize-v7-preview")
+    except HTTPException as exc:
+        materialization = {
+            "ok": False,
+            "read_only": True,
+            "can_apply": False,
+            "counts": {},
+            "items": [],
+            "error": str(exc.detail),
+        }
     return {
         "ok": True,
         "read_only": True,
@@ -1320,6 +1395,7 @@ async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], 
             load_operations(_cluster_root(), expected_cluster_id=str(identity.get("cluster_id") or "")),
             remote_vector,
         ),
+        "materialization": materialization,
     }
 
 
@@ -1656,6 +1732,26 @@ async def push_remote_operations(
     if not node:
         raise HTTPException(status_code=404, detail="Cluster node not found")
     return await _push_missing_operations_to_remote(node, snapshot["identity"], limit=limit, rebuild=rebuild)
+
+
+@router.post("/remote-materialize-v7/{node_id}")
+async def materialize_remote_v7_configs(node_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Materialize assigned V7 config blobs on one synchronized remote node."""
+
+    snapshot = _load_cluster_snapshot()
+    nodes = _node_list(snapshot["cluster_nodes"])
+    node = _node_for_id(nodes, str(node_id or ""))
+    if not node:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    await _require_remote_state_current(node, snapshot["identity"], snapshot)
+    result = await _run_remote_materialize_command(node, snapshot["identity"], "materialize-v7", timeout=120)
+    return {
+        "ok": True,
+        "node_id": str(node.get("node_id") or ""),
+        "hostname": str(node.get("pbname") or node.get("hostname") or ""),
+        "materialization": result,
+        "message": "Remote V7 configs materialized. No files were deleted and no bots were started or stopped.",
+    }
 
 
 @router.get("/desired-state")

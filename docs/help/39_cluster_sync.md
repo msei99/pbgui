@@ -196,6 +196,8 @@ When a joined node shows **OK**, the **Preview** action reads the remote state v
 
 From the Preview window, **Push Missing Ops + Rebuild** is an explicit remote write action. It is available only when the remote has no operations missing locally. It starts one backend push job that sends current V7 config blobs, bulk-sends the local oplog entries the remote state-vector lacks, reports local progress while the job runs, and then runs remote `rebuild`. Progress reporting does not split or slow the remote sync. If the remote wrapper is older and cannot accept the bulk commands yet, PBGui falls back to slower per-item uploads. It does not copy API-key payloads or secret blobs yet, deploy files, start bots or stop bots.
 
+After operations and config blobs are synchronized, the Preview window also shows **V7 Config Materialization Preview**. **Materialize V7 Configs** is a separate explicit remote write that writes assigned, non-conflicted V7 JSON configs from verified config blobs into the remote `data/run_v7` directory. It refuses to run when the remote state-vector or desired state differs from local state, or when required blobs are missing or invalid. It skips configs assigned to other nodes, conflicted configs and tombstoned instances. It does not delete files, copy API-key payloads or secret blobs, deploy files, start bots or stop bots.
+
 ---
 
 ## What to do when something is wrong

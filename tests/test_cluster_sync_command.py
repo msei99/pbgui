@@ -55,6 +55,35 @@ def _operation(cluster_id: str = CLUSTER_ID) -> dict:
     }
 
 
+def _canonical_json_bytes(value: dict) -> bytes:
+    """Return the canonical JSON bytes used by config blob manifests."""
+
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _write_config_blob(root: Path, blob_hash: str, raw: bytes) -> None:
+    """Write one content-addressed config blob for materialization tests."""
+
+    digest = blob_hash.removeprefix("sha256:")
+    path = root / "config_blobs" / "sha256" / digest[:2] / f"{digest}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+
+
+def _write_config_blob_set(root: Path, files: dict[str, bytes]) -> str:
+    """Write file blobs plus their manifest and return the manifest hash."""
+
+    manifest_files = {}
+    for name, raw in files.items():
+        digest = hashlib.sha256(raw).hexdigest()
+        manifest_files[name] = {"sha256": digest, "size": len(raw)}
+        _write_config_blob(root, f"sha256:{digest}", raw)
+    manifest_raw = _canonical_json_bytes({"schema_version": 1, "files": manifest_files})
+    manifest_hash = "sha256:" + hashlib.sha256(manifest_raw).hexdigest()
+    _write_config_blob(root, manifest_hash, manifest_raw)
+    return manifest_hash
+
+
 def test_hello_returns_identity_for_registered_peer(tmp_path: Path) -> None:
     """hello returns local identity and protocol information for known peers."""
 
@@ -259,6 +288,110 @@ def test_get_desired_state_returns_materialized_snapshot(tmp_path: Path) -> None
     payload = run_command(root, NODE_B, "get-desired-state")
 
     assert payload["desired_state"]["instances"]["bybit_BTCUSDT"]["version"] == "7"
+
+
+def test_materialize_v7_preview_and_apply_write_assigned_config_blobs(tmp_path: Path) -> None:
+    """materialize-v7 writes only assigned, clean V7 JSON configs from verified blobs."""
+
+    root = _init_cluster(tmp_path)
+    manifest_hash = _write_config_blob_set(root, {"config.json": b'{"live":{"user":"local"}}'})
+    other_hash = _write_config_blob_set(root, {"config.json": b'{"live":{"user":"other"}}'})
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_A,
+            "desired_state": "running",
+            "config_manifest_hash": manifest_hash,
+        },
+        created_at=102,
+    )
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "other_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": other_hash,
+        },
+        created_at=103,
+    )
+    append_operation(root, "DELETE_INSTANCE", {"instance": "deleted_inst", "version": "1"}, created_at=104)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "conflict_inst",
+            "parent_version": "1",
+            "version": "2",
+            "assigned_host": NODE_A,
+            "desired_state": "running",
+            "config_manifest_hash": manifest_hash,
+        },
+        created_at=105,
+    )
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "conflict_inst",
+            "parent_version": "1",
+            "version": "3",
+            "assigned_host": NODE_A,
+            "desired_state": "running",
+            "config_manifest_hash": other_hash,
+        },
+        actor=NODE_B,
+        created_at=106,
+    )
+
+    preview = run_command(root, NODE_B, "materialize-v7-preview")
+    result = run_command(root, NODE_B, "materialize-v7")
+
+    assert preview["read_only"] is True
+    assert preview["counts"]["add"] == 1
+    assert preview["counts"]["not_assigned"] == 1
+    assert preview["counts"]["conflicted"] == 1
+    assert preview["counts"]["tombstoned"] == 1
+    assert result["counts"]["written_instances"] == 1
+    assert result["counts"]["written_files"] == 1
+    assert (root.parent / "run_v7" / "local_inst" / "config.json").read_bytes() == b'{"live":{"user":"local"}}'
+    assert not (root.parent / "run_v7" / "other_inst" / "config.json").exists()
+    assert not (root.parent / "run_v7" / "conflict_inst" / "config.json").exists()
+    assert not (root.parent / "run_v7" / "deleted_inst" / "config.json").exists()
+    after = run_command(root, NODE_B, "materialize-v7-preview")
+    assert after["counts"]["add"] == 0
+    assert after["counts"]["skip"] >= 1
+
+
+def test_materialize_v7_blocks_when_required_blob_is_missing(tmp_path: Path) -> None:
+    """materialize-v7 refuses to write when an assigned config blob is missing."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_A,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=102,
+    )
+
+    preview = run_command(root, NODE_B, "materialize-v7-preview")
+
+    assert preview["counts"]["error"] == 1
+    assert preview["can_apply"] is False
+    with pytest.raises(ClusterSyncCommandError, match="materialization blocked"):
+        run_command(root, NODE_B, "materialize-v7")
+    assert not (root.parent / "run_v7" / "local_inst" / "config.json").exists()
 
 
 def test_main_does_not_read_stdin_for_hello(monkeypatch, tmp_path: Path, capsys) -> None:

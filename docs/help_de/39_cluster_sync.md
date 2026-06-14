@@ -196,6 +196,8 @@ Wenn ein gejointer Node **OK** zeigt, liest die **Preview**-Aktion den Remote-St
 
 Im Preview-Fenster ist **Push Missing Ops + Rebuild** eine explizite Remote-Write-Aktion. Sie ist nur verfügbar, wenn dem lokalen Node keine Remote-Operationen fehlen. Die Aktion startet einen Backend-Push-Job, sendet aktuelle V7-Config-Blobs, sendet die lokalen Oplog-Einträge, die dem Remote-State-Vector fehlen, gesammelt in einem Bulk-Upload, meldet lokalen Fortschritt während der Job läuft und führt danach remote `rebuild` aus. Die Fortschrittsanzeige teilt oder verlangsamt den Remote-Sync nicht. Wenn der Remote-Wrapper noch zu alt für Bulk ist, fällt PBGui auf langsamere Einzel-Uploads zurück. Sie kopiert noch keine API-Key-Payloads oder Secret-Blobs, deployed keine Dateien und startet oder stoppt keine Bots.
 
+Wenn Operationen und Config-Blobs synchron sind, zeigt das Preview-Fenster zusätzlich **V7 Config Materialization Preview**. **Materialize V7 Configs** ist eine separate explizite Remote-Write-Aktion, die zugewiesene, konfliktfreie V7-JSON-Configs aus geprüften Config-Blobs in das remote `data/run_v7`-Verzeichnis schreibt. Sie verweigert den Lauf, wenn Remote-State-Vector oder Desired State vom lokalen State abweichen oder benötigte Blobs fehlen beziehungsweise ungültig sind. Configs für andere Nodes, Conflicts und Tombstones werden übersprungen. Die Aktion löscht keine Dateien, kopiert keine API-Key-Payloads oder Secret-Blobs, deployed nichts und startet oder stoppt keine Bots.
+
 ---
 
 ## Was tun, wenn etwas nicht stimmt

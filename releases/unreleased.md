@@ -1,5 +1,6 @@
 # Unreleased
 
+- Cluster Sync: added explicit remote V7 config materialization from replicated config blobs into `data/run_v7`, with read-only preview, sync-state safety checks, missing-blob blocking and no deletes or bot start/stop actions.
 - Cluster Sync: added automatic bootstrap preview/apply actions to register known VPS nodes and existing run_v7 configs in local cluster state without inferring deletes or clearing tombstones.
 - Cluster Sync: bootstrap now preserves VPS Manager monitor roles so known remote masters are registered as master nodes instead of VPS nodes.
 - Cluster Sync: cluster page tables now default to name-based ordering where appropriate and support click-to-sort column headers.

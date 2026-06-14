@@ -384,6 +384,7 @@
           <div class="push-progress-track"><div class="push-progress-fill" id="preview-push-progress-fill"></div></div>
         </div>
         <button class="btn warn" id="preview-push-ops-btn" type="button" hidden>Push Missing Ops + Rebuild</button>
+        <button class="btn primary" id="preview-materialize-btn" type="button" hidden>Materialize V7 Configs</button>
         <button class="btn" id="preview-close-btn" type="button">Close</button>
       </div>
     </div>
@@ -605,6 +606,7 @@
         var content = document.getElementById('preview-modal-content');
         if (content) content.innerHTML = '';
         syncPushOpsButton(null);
+        syncMaterializeButton(null);
         stopPushProgressPolling();
         resetPushProgress();
         var error = document.getElementById('preview-modal-error');
@@ -703,6 +705,15 @@
         return keys.map(function (key) { return esc(key) + ': ' + esc(values[key]); }).join(', ');
       }
 
+      function materializationPreviewList(values) {
+        if (!values || !values.length) return 'none';
+        return values.slice(0, 24).map(function (item) {
+          var files = Array.isArray(item.files) ? item.files.filter(function (file) { return file.action === 'write'; }).length : 0;
+          return esc(item.instance || '') + ' [' + esc(item.status || item.action || '') + '] '
+            + esc(item.reason || '') + (files ? ' (' + files + ' file(s))' : '');
+        }).join('<br>') + (values.length > 24 ? '<br>...' + esc(values.length - 24) + ' more' : '');
+      }
+
       function renderRemotePreview(payload) {
         var content = document.getElementById('preview-modal-content');
         if (!content) return;
@@ -713,6 +724,8 @@
         var tombstones = desired.tombstones || {};
         var operationSync = payload.operation_sync || {};
         var opCounts = operationSync.counts || {};
+        var materialization = payload.materialization || {};
+        var matCounts = materialization.counts || {};
         var actorRows = (((payload.state_vector || {}).actors) || []).map(function (actor) {
           return '<tr>'
             + '<td class="mono" title="' + esc(actor.actor) + '">' + esc(shortId(actor.actor)) + '</td>'
@@ -728,15 +741,18 @@
           + '<div class="preview-card"><div class="preview-label">Remote Ahead</div><div class="preview-value">' + esc(vectorCounts.remote_ahead || 0) + '</div></div>'
           + '<div class="preview-card"><div class="preview-label">Ops To Push</div><div class="preview-value">' + esc(opCounts.local_ops_to_push || 0) + '</div></div>'
           + '<div class="preview-card"><div class="preview-label">Ops To Pull</div><div class="preview-value">' + esc(opCounts.remote_ops_to_pull || 0) + '</div></div>'
+          + '<div class="preview-card"><div class="preview-label">Configs To Write</div><div class="preview-value">' + esc((matCounts.add || 0) + (matCounts.update || 0)) + '</div></div>'
           + '</div>'
           + '<div class="preview-section">'
           + '<div class="field"><div class="field-label">Operation Sync Preview</div><div class="preview-list">Read-only. No operations or blobs are copied here.<br>Push by type: ' + opTypeList(operationSync.push_by_op) + '<br>Hash refs for later push: config ' + esc(opCounts.config_hash_refs || 0) + ', api payload ' + esc(opCounts.api_payload_hash_refs || 0) + ', secrets ' + esc(opCounts.secret_blob_hash_refs || 0) + '<br>Local ops missing on remote:<br>' + operationPreviewList(operationSync.local_ops_missing_on_remote) + '<br>Remote ops missing locally:<br>' + remotePullList(operationSync.remote_ops_missing_locally) + '</div></div>'
+          + '<div class="field"><div class="field-label">V7 Config Materialization Preview</div><div class="preview-list">Read-only. No run_v7 files are written here.<br>' + (materialization.error ? 'Preview error: ' + esc(materialization.error) + '<br>' : '') + 'Run root: ' + esc(materialization.run_v7_root || 'n/a') + '<br>Add: ' + esc(matCounts.add || 0) + ', Update: ' + esc(matCounts.update || 0) + ', Current/Skipped: ' + esc(matCounts.skip || 0) + ', Not assigned: ' + esc(matCounts.not_assigned || 0) + ', Conflicted: ' + esc(matCounts.conflicted || 0) + ', Tombstoned: ' + esc(matCounts.tombstoned || 0) + ', Errors: ' + esc(matCounts.error || 0) + '<br>Files to write: ' + esc(matCounts.files_to_write || 0) + '<br>Items:<br>' + materializationPreviewList(materialization.items) + '</div></div>'
           + '<div class="field"><div class="field-label">Instances</div><div class="preview-list">Local: ' + esc(instances.local_count || 0) + ', Remote: ' + esc(instances.remote_count || 0) + '<br>Missing on remote: ' + previewList(instances.missing_on_remote) + '<br>Missing locally: ' + previewList(instances.missing_locally) + '<br>Mismatches: ' + mismatchList(instances.mismatches) + '</div></div>'
           + '<div class="field"><div class="field-label">Tombstones</div><div class="preview-list">Local: ' + esc(tombstones.local_count || 0) + ', Remote: ' + esc(tombstones.remote_count || 0) + '<br>Missing on remote: ' + previewList(tombstones.missing_on_remote) + '<br>Missing locally: ' + previewList(tombstones.missing_locally) + '<br>Mismatches: ' + mismatchList(tombstones.mismatches) + '</div></div>'
           + '<div class="field"><div class="field-label">API Keys</div><div class="preview-list">Metadata match: ' + esc(desired.api_keys_match ? 'yes' : 'no') + '</div></div>'
           + '</div>'
           + '<table><thead><tr><th>Actor</th><th>Local Seq</th><th>Remote Seq</th><th>Status</th></tr></thead><tbody>' + actorRows + '</tbody></table>';
         syncPushOpsButton(payload);
+        syncMaterializeButton(payload);
       }
 
       function syncPushOpsButton(payload) {
@@ -753,6 +769,23 @@
           : 'Write missing local operations to the remote oplog and rebuild remote materialized state.';
       }
 
+      function syncMaterializeButton(payload) {
+        var btn = document.getElementById('preview-materialize-btn');
+        if (!btn) return;
+        var opCounts = (((payload || {}).operation_sync || {}).counts) || {};
+        var materialization = ((payload || {}).materialization) || {};
+        var counts = materialization.counts || {};
+        var writeCount = Number(counts.add || 0) + Number(counts.update || 0);
+        var errorCount = Number(counts.error || 0);
+        var syncBlocked = Number(opCounts.local_ops_to_push || 0) > 0 || Number(opCounts.remote_ops_to_pull || 0) > 0;
+        btn.hidden = writeCount <= 0 && !materialization.error && errorCount <= 0;
+        btn.disabled = !materialization.ok || !materialization.can_apply || syncBlocked || errorCount > 0;
+        btn.textContent = btn.disabled ? 'Cannot Materialize' : 'Materialize V7 Configs';
+        btn.title = syncBlocked
+          ? 'Remote state must be synchronized before materializing run_v7 files.'
+          : (materialization.error || (errorCount > 0 ? 'Resolve missing or invalid config blobs before materializing.' : 'Write assigned V7 JSON configs from remote config blobs into remote data/run_v7.'));
+      }
+
       function confirmAndPushRemoteOps() {
         if (!pendingPreviewNode || !lastPreviewPayload) return;
         var counts = ((lastPreviewPayload.operation_sync || {}).counts) || {};
@@ -766,7 +799,7 @@
         window.PBGuiConfirm({
           title: 'Push Missing Cluster Ops',
           message: 'Write ' + pushCount + ' missing local operation(s) to ' + (pendingPreviewNode.pbname || pendingPreviewNode.hostname || pendingPreviewNode.node_id) + ' and rebuild its materialized cluster state?',
-          detail: 'This is a remote write. It sends oplog entries and runs rebuild. It does not copy config blobs, API-key payloads, secret blobs, deploy files, start bots or stop bots.',
+          detail: 'This is a remote write. It sends V7 config blobs, sends oplog entries and runs rebuild. It does not materialize run_v7 files, copy API-key payloads or secret blobs, deploy files, start bots or stop bots.',
           confirmText: 'Push Ops + Rebuild'
         }).then(function (accepted) {
           if (!accepted) return;
@@ -792,6 +825,50 @@
         });
       }
 
+      function confirmAndMaterializeV7() {
+        if (!pendingPreviewNode || !lastPreviewPayload) return;
+        var opCounts = ((lastPreviewPayload.operation_sync || {}).counts) || {};
+        var materialization = lastPreviewPayload.materialization || {};
+        var counts = materialization.counts || {};
+        var writeCount = Number(counts.add || 0) + Number(counts.update || 0);
+        var filesToWrite = Number(counts.files_to_write || 0);
+        if (writeCount <= 0 || !materialization.can_apply) return;
+        if (Number(opCounts.local_ops_to_push || 0) > 0 || Number(opCounts.remote_ops_to_pull || 0) > 0) return;
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: 'Materialize Remote V7 Configs',
+          message: 'Write ' + filesToWrite + ' V7 config file(s) for ' + writeCount + ' assigned instance(s) on ' + (pendingPreviewNode.pbname || pendingPreviewNode.hostname || pendingPreviewNode.node_id) + '?',
+          detail: 'This is a remote write under data/run_v7 only. It writes assigned V7 JSON configs from already replicated config blobs. It does not delete files, copy API-key payloads or secret blobs, deploy files, start bots or stop bots.',
+          confirmText: 'Materialize Configs'
+        }).then(function (accepted) {
+          if (!accepted) return;
+          var btn = document.getElementById('preview-materialize-btn');
+          var node = pendingPreviewNode;
+          if (btn) { btn.disabled = true; btn.textContent = 'Materializing...'; }
+          setPushProgress(0, filesToWrite, 'Materializing remote V7 configs...');
+          setMessage('Materializing remote V7 configs...', 'warn');
+          fetchJson('/remote-materialize-v7/' + encodeURIComponent(node.node_id), { method: 'POST' }).then(function (payload) {
+            var mat = (payload || {}).materialization || {};
+            var matCounts = mat.counts || {};
+            setMessage('Materialized ' + (matCounts.written_files || 0) + ' file(s) across ' + (matCounts.written_instances || 0) + ' instance(s).', 'ok');
+            setPushProgress(filesToWrite, filesToWrite, 'Remote V7 config materialization complete. Refreshing preview...');
+            openRemotePreview(node);
+          }).catch(function (err) {
+            setMessage('Remote V7 materialization failed: ' + err.message, 'err');
+            setPushProgress(0, filesToWrite, 'Materialization failed; see error message.');
+            var error = document.getElementById('preview-modal-error');
+            if (error) {
+              error.textContent = err.message || 'Remote V7 materialization failed.';
+              error.className = 'modal-error visible';
+            }
+            if (btn) { btn.disabled = false; btn.textContent = 'Materialize V7 Configs'; }
+          });
+        });
+      }
+
       function openRemotePreview(node) {
         pendingPreviewNode = node || null;
         lastPreviewPayload = null;
@@ -801,6 +878,7 @@
         var error = document.getElementById('preview-modal-error');
         if (content) content.innerHTML = '';
         syncPushOpsButton(null);
+        syncMaterializeButton(null);
         stopPushProgressPolling();
         resetPushProgress();
         if (error) {
@@ -1289,6 +1367,7 @@
       document.getElementById('preview-close-x-btn').addEventListener('click', closePreviewModal);
       document.getElementById('preview-close-btn').addEventListener('click', closePreviewModal);
       document.getElementById('preview-push-ops-btn').addEventListener('click', confirmAndPushRemoteOps);
+      document.getElementById('preview-materialize-btn').addEventListener('click', confirmAndMaterializeV7);
       window.addEventListener('resize', keepPreviewModalInViewport);
       loadCluster();
     })();

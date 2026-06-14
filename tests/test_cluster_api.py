@@ -386,7 +386,17 @@ def test_remote_preview_compares_state_without_writes(monkeypatch, tmp_path: Pat
     class FakePool:
         async def run(self, hostname: str, command: str, timeout: int = 30):
             calls.append(command)
-            if "get-state-vector" in command:
+            if "materialize-v7-preview" in command:
+                payload = {
+                    "ok": True,
+                    "cluster_id": CLUSTER_ID,
+                    "node_id": NODE_B,
+                    "read_only": True,
+                    "can_apply": True,
+                    "counts": {"add": 1, "update": 0, "skip": 0, "error": 0, "files_to_write": 1},
+                    "items": [],
+                }
+            elif "get-state-vector" in command:
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_A: 1, NODE_B: 1}}
             else:
                 payload = {
@@ -423,9 +433,100 @@ def test_remote_preview_compares_state_without_writes(monkeypatch, tmp_path: Pat
     assert payload["operation_sync"]["counts"]["remote_ops_to_pull"] == 1
     assert payload["operation_sync"]["push_by_op"] == {"UPSERT_CONFIG": 1}
     assert payload["operation_sync"]["local_ops_missing_on_remote"][0]["target"] == "local_inst"
-    assert len(calls) == 2
+    assert payload["materialization"]["counts"]["add"] == 1
+    assert len(calls) == 3
     assert "get-state-vector" in calls[0]
     assert "get-desired-state" in calls[1]
+    assert "materialize-v7-preview" in calls[2]
+
+
+def test_remote_materialize_v7_requires_synchronized_state(monkeypatch, tmp_path: Path) -> None:
+    """Remote materialization refuses to write when the remote state vector is stale."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=102,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_A: 1}}
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(cluster.materialize_remote_v7_configs(NODE_B, session=None))
+
+    assert exc.value.status_code == 409
+    assert "not synchronized" in exc.value.detail
+    assert len(calls) == 1
+    assert "materialize-v7" not in calls[0]
+
+
+def test_remote_materialize_v7_writes_after_state_match(monkeypatch, tmp_path: Path) -> None:
+    """Remote materialization runs only after vector and desired state match local state."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=102,
+    )
+    local = cluster.rebuild_materialized_state(root, write=False)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            if "get-state-vector" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": local["state_vector"]}
+            elif "get-desired-state" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "desired_state": local["desired_state"]}
+            elif "materialize-v7" in command:
+                payload = {
+                    "ok": True,
+                    "cluster_id": CLUSTER_ID,
+                    "node_id": NODE_B,
+                    "counts": {"written_instances": 1, "written_files": 2},
+                    "written": [{"instance": "local_inst", "files": 2}],
+                }
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.materialize_remote_v7_configs(NODE_B, session=None))
+
+    assert payload["ok"] is True
+    assert payload["materialization"]["counts"]["written_files"] == 2
+    assert len(calls) == 3
+    assert "get-state-vector" in calls[0]
+    assert "get-desired-state" in calls[1]
+    assert "materialize-v7" in calls[2]
 
 
 def test_remote_push_ops_writes_missing_local_ops_and_rebuilds(monkeypatch, tmp_path: Path) -> None:

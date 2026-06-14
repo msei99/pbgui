@@ -3,7 +3,7 @@
 
 The script is intended for OpenSSH forced-command use. It accepts one small
 Cluster Sync command through SSH_ORIGINAL_COMMAND, validates the peer node, and
-only reads/writes under data/cluster.
+limits writes to cluster state plus explicit V7 config materialization.
 """
 
 from __future__ import annotations
@@ -40,8 +40,8 @@ MAX_CONFIG_BLOB_BYTES = 16 * 1024 * 1024
 MAX_CONFIG_BLOB_BATCH_BYTES = 16 * 1024 * 1024
 MAX_SECRET_BLOB_BYTES = 1024 * 1024
 
-READ_VERBS = frozenset({"hello", "get-state-vector", "get-desired-state"})
-WRITE_VERBS = frozenset({"join", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "rebuild"})
+READ_VERBS = frozenset({"hello", "get-state-vector", "get-desired-state", "materialize-v7-preview"})
+WRITE_VERBS = frozenset({"join", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "rebuild", "materialize-v7"})
 STDIN_VERBS = frozenset({"put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob"})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
 
@@ -98,6 +98,8 @@ def run_command(
             "node_id": str(identity["node_id"]),
             "desired_state": materialized.get("desired_state") or {},
         }
+    if verb == "materialize-v7-preview":
+        return _materialize_v7_configs(root, write=False)
     if verb == "rebuild":
         materialized = _safe_state_call(lambda: rebuild_materialized_state(root))
         return {
@@ -106,6 +108,8 @@ def run_command(
             "nodes": len(((materialized.get("cluster_nodes") or {}).get("nodes") or {})),
             "instances": len(((materialized.get("desired_state") or {}).get("instances") or {})),
         }
+    if verb == "materialize-v7":
+        return _materialize_v7_configs(root, write=True)
     if verb == "put-op":
         _require_arity(tokens, 1)
         operation = _read_json_payload(stdin_data, MAX_OPERATION_BYTES)
@@ -256,6 +260,202 @@ def _verify_remote_node(cluster_root: Path, remote_node: str, *, allow_join: boo
         raise ClusterSyncCommandError("remote node is not registered")
 
 
+def _materialize_v7_configs(cluster_root: Path, *, write: bool) -> dict[str, Any]:
+    """Preview or write assigned V7 config blobs into data/run_v7."""
+
+    materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=write))
+    identity = _safe_state_call(lambda: read_local_identity(cluster_root))
+    desired_state = materialized.get("desired_state") if isinstance(materialized, dict) else {}
+    desired_state = desired_state if isinstance(desired_state, dict) else {}
+    node_id = str(identity["node_id"])
+    run_root = Path(cluster_root).parent / "run_v7"
+    plan = _build_materialize_v7_plan(Path(cluster_root), run_root, node_id, desired_state)
+    if not write:
+        plan.update({"ok": True, "read_only": True})
+        return plan
+
+    if int((plan.get("counts") or {}).get("error") or 0) > 0:
+        raise ClusterSyncCommandError("materialization blocked by missing or invalid blobs")
+
+    written: list[dict[str, Any]] = []
+    for item in plan.get("items") or []:
+        if not isinstance(item, dict) or item.get("action") not in {"add", "update"} or item.get("status") != "ready":
+            continue
+        instance = str(item.get("instance") or "")
+        _validate_relative_name(instance, "instance")
+        files_written = 0
+        for file_item in item.get("files") or []:
+            if not isinstance(file_item, dict) or file_item.get("action") != "write":
+                continue
+            filename = str(file_item.get("name") or "")
+            blob_hash = str(file_item.get("hash") or "")
+            _validate_relative_name(filename, "config filename")
+            raw = _read_verified_blob(ClusterPaths.from_root(cluster_root).config_blobs, blob_hash, f"file blob for {instance}/{filename}")
+            _atomic_write_bytes(run_root / instance / filename, raw, mode=0o644)
+            files_written += 1
+        written.append({"instance": instance, "files": files_written})
+
+    counts = dict(plan.get("counts") or {})
+    counts["written_instances"] = len(written)
+    counts["written_files"] = sum(int(item.get("files") or 0) for item in written)
+    plan.update({
+        "ok": True,
+        "read_only": False,
+        "counts": counts,
+        "written": written,
+        "message": "V7 config files were materialized. No files were deleted and no bots were started or stopped.",
+    })
+    return plan
+
+
+def _build_materialize_v7_plan(
+    cluster_root: Path,
+    run_root: Path,
+    node_id: str,
+    desired_state: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a read-only plan for V7 config materialization."""
+
+    paths = ClusterPaths.from_root(cluster_root)
+    instances = desired_state.get("instances") if isinstance(desired_state, dict) else {}
+    tombstones = desired_state.get("tombstones") if isinstance(desired_state, dict) else {}
+    instances = instances if isinstance(instances, dict) else {}
+    tombstones = tombstones if isinstance(tombstones, dict) else {}
+    counts: dict[str, int] = {
+        "add": 0,
+        "update": 0,
+        "skip": 0,
+        "not_assigned": 0,
+        "conflicted": 0,
+        "tombstoned": 0,
+        "error": 0,
+        "files_to_write": 0,
+    }
+    items: list[dict[str, Any]] = []
+
+    for name in sorted(instances):
+        item = instances.get(name) if isinstance(instances.get(name), dict) else {}
+        row: dict[str, Any] = {
+            "instance": str(name),
+            "assigned_host": str(item.get("assigned_host") or ""),
+            "desired_state": str(item.get("desired_state") or ""),
+            "version": str(item.get("version") or ""),
+            "config_manifest_hash": str(item.get("config_manifest_hash") or ""),
+            "files": [],
+        }
+        try:
+            _validate_relative_name(str(name), "instance")
+            if item.get("conflicted") is True:
+                _mark_materialize_skip(row, counts, "conflicted", "desired state is conflicted")
+            elif str(item.get("assigned_host") or "") != node_id:
+                _mark_materialize_skip(row, counts, "not_assigned", "instance is assigned to another node")
+            else:
+                _populate_materialize_files(paths.config_blobs, run_root / str(name), row)
+                files_to_write = sum(1 for file_item in row["files"] if file_item.get("action") == "write")
+                if files_to_write:
+                    row["action"] = "add" if not (run_root / str(name)).is_dir() else "update"
+                    row["status"] = "ready"
+                    row["reason"] = f"{files_to_write} file(s) need materialization"
+                    counts[row["action"]] += 1
+                    counts["files_to_write"] += files_to_write
+                else:
+                    _mark_materialize_skip(row, counts, "current", "local config files already match desired state")
+        except Exception as exc:
+            row.update({"action": "skip", "status": "error", "reason": str(exc)})
+            counts["error"] += 1
+        items.append(row)
+
+    for name in sorted(set(tombstones) - set(instances)):
+        item = tombstones.get(name) if isinstance(tombstones.get(name), dict) else {}
+        row = {
+            "instance": str(name),
+            "action": "skip",
+            "status": "tombstoned",
+            "reason": "instance is tombstoned; materialization never recreates tombstones",
+            "version": str(item.get("version") or ""),
+            "files": [],
+        }
+        counts["skip"] += 1
+        counts["tombstoned"] += 1
+        items.append(row)
+
+    return {
+        "cluster_id": str(desired_state.get("cluster_id") or ""),
+        "node_id": node_id,
+        "run_v7_root": str(run_root),
+        "counts": counts,
+        "items": items,
+        "can_apply": counts["error"] == 0 and (counts["add"] + counts["update"]) > 0,
+        "message": "Preview only. Apply writes assigned V7 JSON configs from config blobs without deleting files or starting/stopping bots.",
+    }
+
+
+def _mark_materialize_skip(row: dict[str, Any], counts: dict[str, int], status: str, reason: str) -> None:
+    """Mark one materialization plan row as skipped."""
+
+    row.update({"action": "skip", "status": status, "reason": reason})
+    counts["skip"] += 1
+    if status in counts:
+        counts[status] += 1
+
+
+def _populate_materialize_files(config_blobs_root: Path, target_dir: Path, row: dict[str, Any]) -> None:
+    """Populate materialization file rows for one assigned instance."""
+
+    manifest_hash = str(row.get("config_manifest_hash") or "")
+    if not manifest_hash:
+        raise ClusterSyncCommandError("missing config manifest hash")
+    manifest_raw = _read_verified_blob(config_blobs_root, manifest_hash, f"manifest blob for {row.get('instance')}")
+    try:
+        manifest = json.loads(manifest_raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ClusterSyncCommandError("manifest blob is not valid JSON") from exc
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    if not isinstance(files, dict):
+        raise ClusterSyncCommandError("manifest missing files object")
+
+    file_rows: list[dict[str, Any]] = []
+    for filename in sorted(files):
+        meta = files.get(filename) if isinstance(files.get(filename), dict) else {}
+        _validate_relative_name(str(filename), "config filename")
+        sha = str(meta.get("sha256") or "")
+        blob_hash = _validate_hash(f"sha256:{sha}")
+        raw = _read_verified_blob(config_blobs_root, blob_hash, f"file blob for {row.get('instance')}/{filename}")
+        expected_size = meta.get("size")
+        if expected_size is not None:
+            try:
+                size = int(expected_size)
+            except (TypeError, ValueError) as exc:
+                raise ClusterSyncCommandError(f"invalid size for {filename}") from exc
+            if len(raw) != size:
+                raise ClusterSyncCommandError(f"file blob size mismatch for {filename}")
+        target = target_dir / str(filename)
+        current_hash = hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else ""
+        file_rows.append({
+            "name": str(filename),
+            "hash": blob_hash,
+            "size": len(raw),
+            "action": "current" if current_hash == sha else "write",
+        })
+    row["files"] = file_rows
+
+
+def _read_verified_blob(base_dir: Path, blob_hash: str, label: str) -> bytes:
+    """Read one content-addressed blob and verify its sha256 digest."""
+
+    text = _validate_hash(blob_hash)
+    digest = text.removeprefix("sha256:")
+    path = Path(base_dir) / "sha256" / digest[:2] / f"{digest}.json"
+    if not path.is_file():
+        raise ClusterSyncCommandError(f"missing {label}: {text}")
+    raw = path.read_bytes()
+    if len(raw) > MAX_CONFIG_BLOB_BYTES:
+        raise ClusterSyncCommandError(f"{label} too large")
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise ClusterSyncCommandError(f"{label} hash mismatch: {text}")
+    return raw
+
+
 def _read_json_payload(raw: bytes, max_size: int) -> dict[str, Any]:
     """Read a bounded JSON object payload."""
 
@@ -403,6 +603,15 @@ def _validate_role(value: str) -> str:
     if role not in {"master", "vps"}:
         raise ClusterSyncCommandError("invalid node role")
     return role
+
+
+def _validate_relative_name(value: str, field: str) -> str:
+    """Reject names that can escape a cluster-managed directory."""
+
+    text = str(value or "")
+    if not text or text in {".", ".."} or "/" in text or "\\" in text or "\x00" in text:
+        raise ClusterSyncCommandError(f"invalid {field}")
+    return text
 
 
 def _relative_cluster_path(cluster_root: Path, path: Path) -> str:
