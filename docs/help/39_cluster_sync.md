@@ -185,8 +185,11 @@ The first local-only version shows:
 - recent local operation-log entries
 - a bootstrap preview/apply action for known VPS nodes and existing local V7 configs
 - read-only remote hello probe status for known cluster nodes
+- an explicit Join action for nodes that are reachable but do not yet have a cluster identity
 
-Bootstrap writes explicit local `ADD_NODE` operations for known VPS Manager hosts and `UPSERT_CONFIG` operations for local configs. When VPS Monitor metadata is available, Bootstrap preserves whether a known host is a master or VPS runner. It never infers deletes from missing files or missing VPS entries and it does not clear tombstones. The probe column runs a read-only restricted `hello` command when available; it does not install keys, write remote files, start bots, stop bots, or deploy anything. Last-seen status, node-to-node sync status and conflict-resolution actions are later phases.
+Bootstrap writes explicit local `ADD_NODE` operations for known VPS Manager hosts and `UPSERT_CONFIG` operations for local configs. When VPS Monitor metadata is available, Bootstrap preserves whether a known host is a master or VPS runner. It never infers deletes from missing files or missing VPS entries and it does not clear tombstones. The probe column runs a read-only restricted `hello` command when available; it does not install keys, write remote files, start bots, stop bots, or deploy anything.
+
+When a node shows **No Identity**, the **Join** action writes only `cluster_id`, `node_id` and `node_identity.json` under the remote PBGui `data/cluster` directory. It refuses to overwrite a different existing identity. It does not sync configs, install restricted keys, start bots, stop bots, deploy files or mutate local desired state. Last-seen status, node-to-node sync status and conflict-resolution actions are later phases.
 
 ---
 

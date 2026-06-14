@@ -321,8 +321,8 @@ def _node_metadata_matches(current: dict[str, Any], desired: dict[str, Any]) -> 
     return True
 
 
-def _cluster_hello_command(remote_pbgui_dir: str | None, local_node_id: str) -> str:
-    """Build the read-only remote Cluster Sync hello command."""
+def _cluster_remote_command(remote_pbgui_dir: str | None, local_node_id: str, command_text: str) -> str:
+    """Build one remote Cluster Sync wrapper command."""
 
     base = remote_shell_path(remote_pbgui_dir or "software/pbgui")
     local_node = shlex.quote(str(local_node_id))
@@ -334,8 +334,29 @@ def _cluster_hello_command(remote_pbgui_dir: str | None, local_node_id: str) -> 
         "elif [ -x \"$base/.venv/bin/python\" ]; then py=\"$base/.venv/bin/python\"; "
         "else py=python3; fi; "
         "\"$py\" \"$base/cluster_sync_command.py\" --cluster-root \"$base/data/cluster\" "
-        f"--remote-node {local_node} --allow-join hello"
+        f"--remote-node {local_node} --allow-join {command_text}"
     )
+
+
+def _cluster_hello_command(remote_pbgui_dir: str | None, local_node_id: str) -> str:
+    """Build the read-only remote Cluster Sync hello command."""
+
+    return _cluster_remote_command(remote_pbgui_dir, local_node_id, "hello")
+
+
+def _cluster_join_command(
+    remote_pbgui_dir: str | None,
+    local_node_id: str,
+    cluster_id: str,
+    node: dict[str, Any],
+) -> str:
+    """Build the remote Cluster Sync identity join command."""
+
+    node_id = shlex.quote(str(node.get("node_id") or ""))
+    role = shlex.quote(_cluster_role_from_monitor_role(node.get("role")))
+    pbname = shlex.quote(str(node.get("pbname") or node.get("hostname") or "").strip())
+    command_text = f"join {shlex.quote(str(cluster_id))} {node_id} {role} {pbname}"
+    return _cluster_remote_command(remote_pbgui_dir, local_node_id, command_text)
 
 
 def _classify_probe_error(text: str) -> str:
@@ -450,6 +471,71 @@ async def _probe_cluster_nodes(nodes: list[dict[str, Any]], identity: dict[str, 
             return await _probe_cluster_node(node, identity)
 
     return await asyncio.gather(*(run_one(node) for node in nodes))
+
+
+def _node_for_id(nodes: list[dict[str, Any]], node_id: str) -> dict[str, Any]:
+    """Return one materialized node by id, or an empty dict."""
+
+    for node in nodes:
+        if str(node.get("node_id") or "") == node_id:
+            return dict(node)
+    return {}
+
+
+async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
+    """Initialize remote cluster identity for one known node."""
+
+    node_id = str(node.get("node_id") or "")
+    hostname = str(node.get("pbname") or node.get("hostname") or "")
+    local_node_id = str(identity.get("node_id") or "")
+    if not node_id or node_id == local_node_id:
+        raise HTTPException(status_code=400, detail="Cannot join the local node")
+    if node.get("enabled") is False or node.get("sync_enabled") is False:
+        raise HTTPException(status_code=400, detail="Cluster node is disabled")
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Cluster node has no hostname")
+    monitor = get_monitor()
+    pool = getattr(monitor, "pool", None) if monitor else None
+    if not pool:
+        raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
+
+    command = _cluster_join_command(
+        str(node.get("remote_pbgui_dir") or ""),
+        local_node_id,
+        str(identity.get("cluster_id") or ""),
+        node,
+    )
+    try:
+        result = await pool.run(hostname, command, timeout=15)
+    except Exception as exc:
+        _log(SERVICE, f"Remote cluster join failed for {hostname}: {exc}", level="ERROR")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=502, detail="Remote host is unreachable")
+    exit_status = int(getattr(result, "exit_status", 1) or 0)
+    if exit_status != 0:
+        error = _probe_error_text(result)
+        _log(SERVICE, f"Remote cluster join rejected by {hostname}: {error}", level="WARNING")
+        raise HTTPException(status_code=409, detail=error)
+    stdout = str(getattr(result, "stdout", "") or "").strip()
+    try:
+        payload = json.loads(stdout.splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=502, detail="Remote join returned an invalid response") from exc
+    remote_cluster_id = str(payload.get("cluster_id") or "") if isinstance(payload, dict) else ""
+    remote_node_id = str(payload.get("node_id") or "") if isinstance(payload, dict) else ""
+    if remote_cluster_id != str(identity.get("cluster_id") or ""):
+        raise HTTPException(status_code=409, detail="Remote joined a different cluster_id")
+    if remote_node_id != node_id:
+        raise HTTPException(status_code=409, detail="Remote joined a different node_id")
+    return {
+        "ok": True,
+        "node_id": node_id,
+        "hostname": hostname,
+        "remote_cluster_id": remote_cluster_id,
+        "remote_node_id": remote_node_id,
+        "role": payload.get("role") if isinstance(payload, dict) else node.get("role"),
+    }
 
 
 def _current_instance_state(desired_state: dict[str, Any], name: str) -> dict[str, Any]:
@@ -718,6 +804,19 @@ async def get_remote_status(session: SessionToken = Depends(require_auth)) -> di
         "count": len(probes),
         "probes": probes,
     }
+
+
+@router.post("/remote-join/{node_id}")
+async def join_remote_identity(node_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Write a known cluster identity to one uninitialized remote node."""
+
+    snapshot = _load_cluster_snapshot()
+    nodes = _node_list(snapshot["cluster_nodes"])
+    node = _node_for_id(nodes, str(node_id or ""))
+    if not node:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    result = await _run_remote_join(node, snapshot["identity"])
+    return result
 
 
 @router.get("/desired-state")

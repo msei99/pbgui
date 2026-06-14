@@ -22,6 +22,7 @@ from master.cluster_state import (
     ClusterPaths,
     ClusterStateError,
     default_cluster_root,
+    ensure_local_identity,
     read_local_identity,
     rebuild_materialized_state,
     validate_operation,
@@ -36,7 +37,7 @@ MAX_CONFIG_BLOB_BYTES = 16 * 1024 * 1024
 MAX_SECRET_BLOB_BYTES = 1024 * 1024
 
 READ_VERBS = frozenset({"hello", "get-state-vector", "get-desired-state"})
-WRITE_VERBS = frozenset({"put-op", "put-blob", "put-secret-blob", "rebuild"})
+WRITE_VERBS = frozenset({"join", "put-op", "put-blob", "put-secret-blob", "rebuild"})
 STDIN_VERBS = frozenset({"put-op", "put-blob", "put-secret-blob"})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
 
@@ -56,12 +57,16 @@ def run_command(
     """Execute one restricted Cluster Sync command and return a JSON payload."""
 
     root = Path(cluster_root)
-    identity = read_local_identity(root)
-    cluster_id = str(identity["cluster_id"])
     _validate_node_id(remote_node, "remote_node")
-    _verify_remote_node(root, remote_node, allow_join=allow_join)
     tokens = _parse_command(command_text)
     verb = tokens[0]
+
+    if verb == "join":
+        return _join_cluster(root, remote_node, tokens, allow_join=allow_join)
+
+    identity = read_local_identity(root)
+    cluster_id = str(identity["cluster_id"])
+    _verify_remote_node(root, remote_node, allow_join=allow_join)
     paths = ClusterPaths.from_root(root)
 
     if verb == "hello":
@@ -141,6 +146,35 @@ def _read_stdin_for_command(command_text: str) -> bytes:
     if tokens[0] not in STDIN_VERBS:
         return b""
     return sys.stdin.buffer.read(max(MAX_CONFIG_BLOB_BYTES, MAX_OPERATION_BYTES) + 1)
+
+
+def _join_cluster(cluster_root: Path, remote_node: str, tokens: list[str], *, allow_join: bool) -> dict[str, Any]:
+    """Initialize local identity for an explicitly approved remote join."""
+
+    if not allow_join:
+        raise ClusterSyncCommandError("join requires allow_join")
+    _require_arity(tokens, 5)
+    cluster_id = _validate_cluster_id(tokens[1])
+    node_id = _validate_node_id(tokens[2], "node_id")
+    role = _validate_role(tokens[3])
+    pbname = str(tokens[4] or "").strip()
+    identity = _safe_state_call(
+        lambda: ensure_local_identity(
+            cluster_root,
+            role=role,
+            pbname=pbname,
+            cluster_id=cluster_id,
+            node_id=node_id,
+        )
+    )
+    return {
+        "ok": True,
+        "cluster_id": str(identity["cluster_id"]),
+        "node_id": str(identity["node_id"]),
+        "role": str(identity.get("role") or role),
+        "pbname": str(identity.get("created_from_pbname") or pbname),
+        "joined_by": remote_node,
+    }
 
 
 def _parse_command(command_text: str) -> list[str]:
@@ -245,7 +279,21 @@ def _validate_hash(value: str) -> str:
     return text
 
 
-def _validate_node_id(value: str, field: str) -> None:
+def _validate_cluster_id(value: str) -> str:
+    """Validate a pbgui-cluster UUID identifier."""
+
+    text = str(value or "")
+    prefix = "pbgui-cluster-"
+    if not text.startswith(prefix):
+        raise ClusterSyncCommandError("invalid cluster_id")
+    try:
+        uuid.UUID(text[len(prefix):])
+    except (TypeError, ValueError) as exc:
+        raise ClusterSyncCommandError("invalid cluster_id") from exc
+    return text
+
+
+def _validate_node_id(value: str, field: str) -> str:
     """Validate a pbgui-node UUID identifier."""
 
     text = str(value or "")
@@ -256,6 +304,16 @@ def _validate_node_id(value: str, field: str) -> None:
         uuid.UUID(text[len(prefix):])
     except (TypeError, ValueError) as exc:
         raise ClusterSyncCommandError(f"invalid {field}") from exc
+    return text
+
+
+def _validate_role(value: str) -> str:
+    """Validate a cluster node role."""
+
+    role = str(value or "").strip().lower()
+    if role not in {"master", "vps"}:
+        raise ClusterSyncCommandError("invalid node role")
+    return role
 
 
 def _relative_cluster_path(cluster_root: Path, path: Path) -> str:

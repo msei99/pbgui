@@ -7,6 +7,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
 from api import cluster
 from api import v7_instances
 from master.cluster_state import append_operation, ensure_local_identity, load_operations
@@ -306,6 +309,58 @@ def test_remote_status_reports_node_mismatch(monkeypatch, tmp_path: Path) -> Non
 
     assert payload["probes"][0]["status"] == "node_mismatch"
     assert payload["probes"][0]["remote_node_id"] == unexpected_node
+
+
+def test_remote_join_writes_identity_for_known_node(monkeypatch, tmp_path: Path) -> None:
+    """Remote join invokes the restricted wrapper for a known uninitialized node."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[tuple[str, str, int]] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append((hostname, command, timeout))
+            return SimpleNamespace(
+                exit_status=0,
+                stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "vps"}),
+                stderr="",
+            )
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.join_remote_identity(NODE_B, session=None))
+
+    assert payload["ok"] is True
+    assert payload["remote_node_id"] == NODE_B
+    assert calls[0][0] == "vps-a"
+    assert calls[0][2] == 15
+    assert f"join {CLUSTER_ID} {NODE_B} vps vps-a" in calls[0][1]
+
+
+def test_remote_join_rejects_foreign_remote_identity(monkeypatch, tmp_path: Path) -> None:
+    """Remote join surfaces wrapper rejections without hiding the safety error."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            return SimpleNamespace(
+                exit_status=1,
+                stdout="",
+                stderr=json.dumps({"ok": False, "error": "existing cluster_id differs from requested cluster_id"}),
+            )
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(cluster.join_remote_identity(NODE_B, session=None))
+
+    assert exc.value.status_code == 409
+    assert "existing cluster_id differs" in exc.value.detail
 
 
 def test_bootstrap_preview_reports_known_vps_without_local_configs(monkeypatch, tmp_path: Path) -> None:

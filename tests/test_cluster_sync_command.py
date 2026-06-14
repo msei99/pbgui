@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from cluster_sync_command import ClusterSyncCommandError, main, run_command
-from master.cluster_state import append_operation, ensure_local_identity, load_operations
+from master.cluster_state import append_operation, ensure_local_identity, load_operations, read_local_identity
 
 
 CLUSTER_ID = "pbgui-cluster-00000000-0000-4000-8000-000000000001"
@@ -78,6 +78,41 @@ def test_unknown_peer_is_rejected_without_join_mode(tmp_path: Path) -> None:
         run_command(root, unknown, "hello")
 
     assert run_command(root, unknown, "hello", allow_join=True)["remote_node"] == unknown
+
+
+def test_join_initializes_identity_for_approved_remote(tmp_path: Path) -> None:
+    """join writes identity files only when explicit join mode is enabled."""
+
+    root = tmp_path / "cluster"
+
+    payload = run_command(root, NODE_A, f"join {CLUSTER_ID} {NODE_B} vps vps-b", allow_join=True)
+    identity = read_local_identity(root)
+
+    assert payload["ok"] is True
+    assert payload["cluster_id"] == CLUSTER_ID
+    assert payload["node_id"] == NODE_B
+    assert payload["joined_by"] == NODE_A
+    assert identity["cluster_id"] == CLUSTER_ID
+    assert identity["node_id"] == NODE_B
+
+
+def test_join_rejects_overwriting_existing_identity(tmp_path: Path) -> None:
+    """join is idempotent for the same ids but refuses foreign identities."""
+
+    root = tmp_path / "cluster"
+    run_command(root, NODE_A, f"join {CLUSTER_ID} {NODE_B} vps vps-b", allow_join=True)
+
+    with pytest.raises(ClusterSyncCommandError, match="existing cluster_id differs"):
+        run_command(root, NODE_A, f"join {FOREIGN_CLUSTER_ID} {NODE_B} vps vps-b", allow_join=True)
+
+
+def test_join_requires_explicit_join_mode(tmp_path: Path) -> None:
+    """join cannot run unless the wrapper is invoked with allow_join."""
+
+    root = tmp_path / "cluster"
+
+    with pytest.raises(ClusterSyncCommandError, match="requires allow_join"):
+        run_command(root, NODE_A, f"join {CLUSTER_ID} {NODE_B} vps vps-b")
 
 
 def test_unknown_command_is_rejected(tmp_path: Path) -> None:

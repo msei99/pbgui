@@ -66,6 +66,7 @@
     .btn.primary:hover { background: rgba(99,179,237,0.16); }
     .btn.warn { border-color: rgba(245,158,11,0.38); color: #fcd34d; background: rgba(245,158,11,0.08); }
     .btn.warn:hover { background: rgba(245,158,11,0.16); }
+    .btn.small { min-height: 28px; padding: 0.28rem 0.55rem; font-size: var(--fs-xs); }
     .btn:disabled { opacity: 0.45; cursor: not-allowed; border-color: var(--border2); background: #1a202c; color: var(--faint); }
 
     #status-msg {
@@ -192,6 +193,31 @@
 
     .hash { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
 
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: var(--sp-lg);
+      background: rgba(0,0,0,0.58);
+    }
+    .modal-backdrop[hidden] { display: none; }
+    .modal-card {
+      width: min(560px, 100%);
+      border: 1px solid rgba(99,179,237,0.28);
+      border-radius: 12px;
+      background: var(--bg2);
+      box-shadow: 0 18px 45px rgba(0,0,0,0.38);
+      overflow: hidden;
+    }
+    .modal-head { padding: 0.85rem 1rem; background: var(--bg3); border-bottom: 1px solid var(--border); font-weight: 750; }
+    .modal-body { padding: 1rem; color: var(--muted); line-height: 1.45; display: grid; gap: var(--sp-md); }
+    .modal-actions { display: flex; justify-content: flex-end; gap: var(--sp-sm); padding: 0 1rem 1rem; }
+    .modal-error { display: none; color: var(--bad); border: 1px solid rgba(248,113,113,0.35); background: rgba(248,113,113,0.08); border-radius: 8px; padding: 0.55rem 0.75rem; }
+    .modal-error.visible { display: block; }
+
     @media (max-width: 980px) {
       #page-body { padding: var(--sp-md); }
       .hero { flex-direction: column; }
@@ -285,6 +311,24 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="join-modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="join-modal-title">
+      <div class="modal-head" id="join-modal-title">Join Remote Cluster Identity</div>
+      <div class="modal-body">
+        <div id="join-modal-message"></div>
+        <div class="field">
+          <div class="field-label">Remote Node</div>
+          <div class="field-value" id="join-modal-node"></div>
+        </div>
+        <div class="modal-error" id="join-modal-error"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="join-cancel-btn" type="button">Cancel</button>
+        <button class="btn warn" id="join-confirm-btn" type="button">Write Identity</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     window.TOKEN = "%%TOKEN%%";
     window.API_BASE = "%%API_BASE%%";
@@ -314,6 +358,7 @@
       var lastInstancesPayload = null;
       var lastTombstonesPayload = null;
       var lastOplogPayload = null;
+      var pendingJoinNode = null;
 
       function esc(value) {
         return String(value === undefined || value === null ? '' : value).replace(/[&<>'"]/g, function (ch) {
@@ -352,6 +397,53 @@
             return res.text().then(function (body) { throw new Error(body || ('HTTP ' + res.status)); });
           }
           return res.json();
+        });
+      }
+
+      function showJoinError(text) {
+        var el = document.getElementById('join-modal-error');
+        if (!el) return;
+        el.textContent = text || '';
+        el.className = text ? 'modal-error visible' : 'modal-error';
+      }
+
+      function openJoinModal(node) {
+        pendingJoinNode = node || null;
+        showJoinError('');
+        var modal = document.getElementById('join-modal');
+        var message = document.getElementById('join-modal-message');
+        var nodeEl = document.getElementById('join-modal-node');
+        if (message) {
+          message.textContent = 'This writes cluster_id and node_id to the remote PBGui data/cluster directory. It does not deploy files, start bots, stop bots, or sync configs.';
+        }
+        if (nodeEl) {
+          nodeEl.textContent = (node.pbname || node.hostname || 'unknown') + ' / ' + (node.node_id || 'unknown');
+        }
+        if (modal) modal.hidden = false;
+      }
+
+      function closeJoinModal() {
+        pendingJoinNode = null;
+        var modal = document.getElementById('join-modal');
+        if (modal) modal.hidden = true;
+        showJoinError('');
+      }
+
+      function joinRemoteNode() {
+        if (!pendingJoinNode || !pendingJoinNode.node_id) return;
+        var node = pendingJoinNode;
+        var btn = document.getElementById('join-confirm-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Writing...'; }
+        setMessage('Writing remote cluster identity for ' + (node.pbname || node.hostname || node.node_id) + '...', 'warn');
+        fetchJson('/remote-join/' + encodeURIComponent(node.node_id), { method: 'POST' }).then(function () {
+          closeJoinModal();
+          setMessage('Remote cluster identity written for ' + (node.pbname || node.hostname || node.node_id) + '.', 'ok');
+          return loadCluster();
+        }).catch(function (err) {
+          showJoinError(err.message || 'Remote join failed.');
+          setMessage('Remote join failed: ' + err.message, 'err');
+        }).finally(function () {
+          if (btn) { btn.disabled = false; btn.textContent = 'Write Identity'; }
         });
       }
 
@@ -626,6 +718,7 @@
           + sortHeader('nodes', 'address', 'Address')
           + sortHeader('nodes', 'sync', 'Sync')
           + sortHeader('nodes', 'probe', 'Probe')
+          + '<th>Action</th>'
           + sortHeader('nodes', 'updated', 'Updated')
           + '</tr></thead><tbody>';
         nodeRows.forEach(function (node) {
@@ -633,6 +726,9 @@
           var probe = remoteProbeMap[node.node_id] || {};
           var probeStatus = probe.status || 'unknown';
           var probeTitle = probe.error || probe.remote_node_id || probe.remote_cluster_id || probeStatus;
+          var action = probeStatus === 'not_initialized'
+            ? '<button class="btn small warn join-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Join</button>'
+            : '';
           html += '<tr>'
             + '<td class="mono" title="' + esc(node.node_id) + '">' + esc(shortId(node.node_id)) + '</td>'
             + '<td><span class="pill blue">' + esc(node.role || 'node') + '</span></td>'
@@ -640,12 +736,18 @@
             + '<td>' + esc(node.ssh_host || node.hostname || 'local') + (node.ssh_port ? ':' + esc(node.ssh_port) : '') + '</td>'
             + '<td><span class="pill ' + (enabled ? 'good' : 'bad') + '">' + (enabled ? 'Enabled' : 'Disabled') + '</span></td>'
             + '<td title="' + esc(probeTitle) + '"><span class="pill ' + probePill(probeStatus) + '">' + esc(probeLabel(probeStatus)) + '</span></td>'
+            + '<td>' + action + '</td>'
             + '<td>' + esc(timeText(node.updated_at)) + '</td>'
             + '</tr>';
         });
         html += '</tbody></table>';
         document.getElementById('nodes-table').innerHTML = html;
         attachSortHandlers('nodes-table');
+        document.getElementById('nodes-table').querySelectorAll('.join-node-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            openJoinModal(nodeMap[btn.getAttribute('data-node-id')] || {});
+          });
+        });
       }
 
       function renderInstances(payload) {
@@ -795,6 +897,8 @@
 
       document.getElementById('refresh-btn').addEventListener('click', loadCluster);
       document.getElementById('bootstrap-apply-btn').addEventListener('click', applyBootstrap);
+      document.getElementById('join-cancel-btn').addEventListener('click', closeJoinModal);
+      document.getElementById('join-confirm-btn').addEventListener('click', joinRemoteNode);
       loadCluster();
     })();
   </script>
