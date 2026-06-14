@@ -501,6 +501,7 @@
         var phase = String((job || {}).phase || 'queued');
         var status = String((job || {}).status || 'queued');
         if (status === 'error') return 'Push failed; see error message.';
+        if (phase === 'blobs') return 'Uploading config blobs to remote...';
         if (phase === 'rebuilding') return 'Rebuilding remote materialized state...';
         if (phase === 'done' || status === 'done') return 'Remote oplog push complete. Refreshing preview...';
         if (phase === 'starting' || phase === 'queued') return 'Starting remote oplog push...';

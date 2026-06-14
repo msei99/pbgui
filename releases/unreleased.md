@@ -15,6 +15,7 @@
 - Cluster Sync: fixed the remote Preview confirmation dialog so remote write confirmations appear above the Preview window.
 - Cluster Sync: remote operation pushes now run as one backend job with local progress polling, so progress feedback does not slow remote sync.
 - Cluster Sync: remote operation pushes now prefer a bulk `put-ops` wrapper command and fall back to per-operation upload only for older remotes.
+- Cluster Sync: remote operation pushes now upload current V7 config manifest/file blobs with a bulk `put-blobs` wrapper command before pushing oplog entries.
 - V7 Run: saving a backup draft for a deleted instance now clears the matching Cluster Sync tombstone as an explicit restore.
 - V7 Edit: preserve and display a backup config user even when that user is not present in the current API-key user dropdown.
 - Cluster Sync: fixed a startup race where parallel Cluster page status requests could collide while rewriting materialized state temp files.

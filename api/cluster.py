@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import configparser
 import json
 import platform
@@ -41,6 +42,7 @@ router = APIRouter()
 _REMOTE_PUSH_JOBS: dict[str, dict[str, Any]] = {}
 _REMOTE_PUSH_JOB_TTL_SECONDS = 3600
 _REMOTE_PUSH_ACTIVE_STATES = frozenset({"queued", "running"})
+_CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
 
 
 def _cluster_root() -> Path:
@@ -819,6 +821,93 @@ def _pushed_operation_summary(operation: dict[str, Any], payload_result: dict[st
     }
 
 
+def _canonical_json_bytes(value: Any) -> bytes:
+    """Return canonical JSON bytes used for cluster content-addressed blobs."""
+
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _collect_current_config_blobs(desired_state: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Collect current V7 config manifest and file blobs referenced by desired state."""
+
+    instances = desired_state.get("instances") if isinstance(desired_state, dict) else {}
+    instances = instances if isinstance(instances, dict) else {}
+    blobs_by_hash: dict[str, dict[str, Any]] = {}
+    skipped: list[dict[str, str]] = []
+    for name in sorted(instances):
+        item = instances.get(name) if isinstance(instances.get(name), dict) else {}
+        expected_manifest_hash = str(item.get("config_manifest_hash") or "")
+        if not expected_manifest_hash:
+            continue
+        try:
+            _validate_instance_name(str(name))
+            instance_dir = _run_v7_root() / str(name)
+            manifest = build_config_manifest(instance_dir)
+            actual_manifest_hash = compute_config_manifest_hash(manifest)
+            if actual_manifest_hash != expected_manifest_hash:
+                skipped.append({"instance": str(name), "reason": "local config manifest no longer matches desired state"})
+                continue
+            manifest_raw = _canonical_json_bytes(manifest)
+            blobs_by_hash.setdefault(expected_manifest_hash, {
+                "hash": expected_manifest_hash,
+                "raw": manifest_raw,
+                "kind": "manifest",
+                "instance": str(name),
+                "name": "manifest.json",
+            })
+            files = manifest.get("files") if isinstance(manifest, dict) else {}
+            files = files if isinstance(files, dict) else {}
+            for filename in sorted(files):
+                meta = files.get(filename) if isinstance(files.get(filename), dict) else {}
+                sha = str(meta.get("sha256") or "")
+                if not sha:
+                    continue
+                _validate_instance_name(str(filename))
+                path = instance_dir / str(filename)
+                raw = path.read_bytes()
+                blob_hash = f"sha256:{sha}"
+                blobs_by_hash.setdefault(blob_hash, {
+                    "hash": blob_hash,
+                    "raw": raw,
+                    "kind": "file",
+                    "instance": str(name),
+                    "name": str(filename),
+                })
+        except Exception as exc:
+            skipped.append({"instance": str(name), "reason": str(exc)})
+    return list(blobs_by_hash.values()), skipped
+
+
+def _blob_batch_payload(blobs: list[dict[str, Any]]) -> str:
+    """Build one JSON payload for the remote put-blobs command."""
+
+    return json.dumps({
+        "blobs": [
+            {"hash": str(blob.get("hash") or ""), "content_b64": base64.b64encode(blob.get("raw") or b"").decode("ascii")}
+            for blob in blobs
+        ]
+    }, sort_keys=True, separators=(",", ":"))
+
+
+def _chunk_config_blobs(blobs: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Split config blobs into bounded JSON payload chunks."""
+
+    chunks: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_size = len('{"blobs":[]}')
+    for blob in blobs:
+        encoded_size = len(str(blob.get("hash") or "")) + len(base64.b64encode(blob.get("raw") or b"")) + 64
+        if current and current_size + encoded_size > _CONFIG_BLOB_BATCH_TARGET_BYTES:
+            chunks.append(current)
+            current = []
+            current_size = len('{"blobs":[]}')
+        current.append(blob)
+        current_size += encoded_size
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def _build_operation_sync_preview(local_operations: list[dict[str, Any]], remote_vector: dict[str, int]) -> dict[str, Any]:
     """Build a read-only preview of operations missing across the boundary."""
 
@@ -895,6 +984,68 @@ def _select_operations_missing_on_remote(local_operations: list[dict[str, Any]],
     return result
 
 
+async def _push_config_blobs_to_remote(
+    pool: Any,
+    hostname: str,
+    remote_dir: str,
+    local_node_id: str,
+    blobs: list[dict[str, Any]],
+    progress_callback: Callable[[dict[str, Any]], None],
+) -> dict[str, int]:
+    """Push config blobs to a remote node, preferring bulk upload."""
+
+    if not blobs:
+        progress_callback({"phase": "blobs", "done": 0, "total": 0, "remaining": 0})
+        return {"pushed": 0, "total": 0, "fallback": 0}
+
+    pushed = 0
+    fallback = False
+    progress_callback({"phase": "blobs", "done": 0, "total": len(blobs), "remaining": len(blobs)})
+    for chunk in _chunk_config_blobs(blobs):
+        payload = _blob_batch_payload(chunk)
+        command = _cluster_payload_command(remote_dir, local_node_id, "put-blobs", payload)
+        try:
+            result = await pool.run(hostname, command, timeout=60)
+        except Exception as exc:
+            _log(SERVICE, f"Remote cluster put-blobs failed for {hostname}: {exc}", level="ERROR")
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if result is None:
+            raise HTTPException(status_code=502, detail="Remote host is unreachable")
+        if int(getattr(result, "exit_status", 1) or 0) == 0:
+            _parse_remote_json_result(result, "Remote put-blobs")
+            pushed += len(chunk)
+            progress_callback({"phase": "blobs", "done": pushed, "total": len(blobs), "remaining": len(blobs) - pushed, "bulk": True})
+            continue
+        error = _probe_error_text(result)
+        if "unsupported command: put-blobs" not in error.lower():
+            _log(SERVICE, f"Remote cluster put-blobs rejected by {hostname}: {error}", level="WARNING")
+            raise HTTPException(status_code=409, detail=error)
+        fallback = True
+        _log(SERVICE, f"Remote cluster put-blobs unavailable on {hostname}; falling back to put-blob", level="WARNING")
+        for blob in chunk:
+            raw = blob.get("raw") or b""
+            try:
+                text_payload = raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise HTTPException(status_code=409, detail="Config blob is not UTF-8; remote bulk upload is required") from exc
+            command = _cluster_payload_command(remote_dir, local_node_id, f"put-blob {shlex.quote(str(blob.get('hash') or ''))}", text_payload)
+            try:
+                single_result = await pool.run(hostname, command, timeout=30)
+            except Exception as exc:
+                _log(SERVICE, f"Remote cluster put-blob failed for {hostname}: {exc}", level="ERROR")
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            if single_result is None:
+                raise HTTPException(status_code=502, detail="Remote host is unreachable")
+            if int(getattr(single_result, "exit_status", 1) or 0) != 0:
+                error = _probe_error_text(single_result)
+                _log(SERVICE, f"Remote cluster put-blob rejected by {hostname}: {error}", level="WARNING")
+                raise HTTPException(status_code=409, detail=error)
+            _parse_remote_json_result(single_result, "Remote put-blob")
+            pushed += 1
+            progress_callback({"phase": "blobs", "done": pushed, "total": len(blobs), "remaining": len(blobs) - pushed, "bulk": False})
+    return {"pushed": pushed, "total": len(blobs), "fallback": 1 if fallback else 0}
+
+
 async def _push_missing_operations_to_remote(
     node: dict[str, Any],
     identity: dict[str, Any],
@@ -915,9 +1066,10 @@ async def _push_missing_operations_to_remote(
     if not pool:
         raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
 
+    root = _cluster_root()
     remote_vector_payload = await _run_remote_read_command(node, identity, "get-state-vector")
     remote_vector = _as_state_vector(remote_vector_payload.get("state_vector") or {})
-    local_operations = load_operations(_cluster_root(), expected_cluster_id=str(identity.get("cluster_id") or ""))
+    local_operations = load_operations(root, expected_cluster_id=str(identity.get("cluster_id") or ""))
     preview = _build_operation_sync_preview(local_operations, remote_vector)
     counts = preview.get("counts") if isinstance(preview, dict) else {}
     if int((counts or {}).get("remote_ops_to_pull") or 0) > 0:
@@ -942,6 +1094,9 @@ async def _push_missing_operations_to_remote(
 
     pushed: list[dict[str, Any]] = []
     remote_dir = str(node.get("remote_pbgui_dir") or "")
+    local_materialized = rebuild_materialized_state(root, write=False)
+    config_blobs, config_blob_skips = _collect_current_config_blobs(local_materialized.get("desired_state") or {})
+    blob_counts = await _push_config_blobs_to_remote(pool, hostname, remote_dir, local_node_id, config_blobs, report_progress)
 
     bulk_payload = json.dumps({"operations": operations}, sort_keys=True, separators=(",", ":"))
     bulk_command = _cluster_payload_command(remote_dir, local_node_id, "put-ops", bulk_payload)
@@ -1013,11 +1168,14 @@ async def _push_missing_operations_to_remote(
                 "rebuilt": 0,
                 "local_ops_remaining": remaining_after_batch,
                 "total_missing_before": total_missing,
+                "config_blobs_pushed": int(blob_counts.get("pushed") or 0),
+                "config_blobs_total": int(blob_counts.get("total") or 0),
+                "config_blobs_skipped": len(config_blob_skips),
                 "config_hash_refs": int((counts or {}).get("config_hash_refs") or 0),
                 "api_payload_hash_refs": int((counts or {}).get("api_payload_hash_refs") or 0),
                 "secret_blob_hash_refs": int((counts or {}).get("secret_blob_hash_refs") or 0),
             },
-            "message": "Missing local operations were pushed. Remote materialized state was not rebuilt yet.",
+            "message": "Config blobs and missing local operations were pushed. Remote materialized state was not rebuilt yet.",
         }
 
     report_progress({
@@ -1046,11 +1204,15 @@ async def _push_missing_operations_to_remote(
             "rebuilt": 1,
             "local_ops_remaining": remaining_after_batch,
             "total_missing_before": total_missing,
+            "config_blobs_pushed": int(blob_counts.get("pushed") or 0),
+            "config_blobs_total": int(blob_counts.get("total") or 0),
+            "config_blobs_skipped": len(config_blob_skips),
             "config_hash_refs": int((counts or {}).get("config_hash_refs") or 0),
             "api_payload_hash_refs": int((counts or {}).get("api_payload_hash_refs") or 0),
             "secret_blob_hash_refs": int((counts or {}).get("secret_blob_hash_refs") or 0),
         },
-        "message": "Missing local operations were pushed and remote materialized state was rebuilt. Config/API/secret blobs were not copied in this phase.",
+        "config_blob_skips": config_blob_skips,
+        "message": "Config blobs and missing local operations were pushed, then remote materialized state was rebuilt. API-key payloads and secret blobs were not copied in this phase.",
     }
     report_progress({"phase": "done", "done": len(pushed), "total": total_missing, "remaining": remaining_after_batch})
     return result

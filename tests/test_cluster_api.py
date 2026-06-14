@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 from api import cluster
 from api import v7_instances
-from master.cluster_state import append_operation, ensure_local_identity, load_operations
+from master.cluster_state import append_operation, build_config_manifest, compute_config_manifest_hash, ensure_local_identity, load_operations
 
 
 CLUSTER_ID = "pbgui-cluster-00000000-0000-4000-8000-000000000001"
@@ -474,6 +474,58 @@ def test_remote_push_ops_writes_missing_local_ops_and_rebuilds(monkeypatch, tmp_
     assert "put-ops" in calls[1]
     assert op["op_id"] in calls[1]
     assert "rebuild" in calls[2]
+
+
+def test_remote_push_ops_uploads_current_config_blobs_before_ops(monkeypatch, tmp_path: Path) -> None:
+    """Remote push sends current config manifest and file blobs before the oplog."""
+
+    root = _init_cluster(tmp_path)
+    instance_dir = _write_v7_config(tmp_path, "local_inst", 2)
+    (instance_dir / "override.json").write_text(json.dumps({"enabled": True}), encoding="utf-8")
+    manifest_hash = compute_config_manifest_hash(build_config_manifest(instance_dir))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    op = append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": manifest_hash,
+        },
+        created_at=102,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            if "get-state-vector" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_A: 1}}
+            elif "put-blobs" in command:
+                payload = {"ok": True, "count": 3, "blobs": []}
+            elif "put-ops" in command:
+                payload = {"ok": True, "count": 1, "operations": [{"op_id": op["op_id"], "actor": op["actor"], "seq": op["seq"]}]}
+            elif "rebuild" in command:
+                payload = {"ok": True, "generation": 2, "nodes": 1, "instances": 1}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.push_remote_operations(NODE_B, session=None))
+
+    assert payload["ok"] is True
+    assert payload["counts"]["config_blobs_pushed"] == 3
+    assert payload["counts"]["config_blobs_total"] == 3
+    assert payload["counts"]["config_blobs_skipped"] == 0
+    assert "put-blobs" in calls[1]
+    assert manifest_hash in calls[1]
+    assert "put-ops" in calls[2]
+    assert "rebuild" in calls[3]
 
 
 def test_remote_push_ops_rejects_when_remote_has_unknown_ops(monkeypatch, tmp_path: Path) -> None:

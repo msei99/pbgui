@@ -9,6 +9,8 @@ only reads/writes under data/cluster.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -35,11 +37,12 @@ MAX_COMMAND_BYTES = 4096
 MAX_OPERATION_BYTES = 1024 * 1024
 MAX_OPERATION_BATCH_BYTES = 16 * 1024 * 1024
 MAX_CONFIG_BLOB_BYTES = 16 * 1024 * 1024
+MAX_CONFIG_BLOB_BATCH_BYTES = 16 * 1024 * 1024
 MAX_SECRET_BLOB_BYTES = 1024 * 1024
 
 READ_VERBS = frozenset({"hello", "get-state-vector", "get-desired-state"})
-WRITE_VERBS = frozenset({"join", "put-op", "put-ops", "put-blob", "put-secret-blob", "rebuild"})
-STDIN_VERBS = frozenset({"put-op", "put-ops", "put-blob", "put-secret-blob"})
+WRITE_VERBS = frozenset({"join", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "rebuild"})
+STDIN_VERBS = frozenset({"put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob"})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
 
 
@@ -124,6 +127,14 @@ def run_command(
         blob_hash = _validate_hash(tokens[1])
         path = _write_blob(paths.config_blobs, blob_hash, stdin_data, MAX_CONFIG_BLOB_BYTES, secret=False)
         return {"ok": True, "hash": blob_hash, "path": _relative_cluster_path(paths.root, path)}
+    if verb == "put-blobs":
+        _require_arity(tokens, 1)
+        blobs = _read_blob_batch_payload(stdin_data)
+        written: list[dict[str, str]] = []
+        for blob in blobs:
+            path = _write_blob(paths.config_blobs, str(blob["hash"]), blob["raw"], MAX_CONFIG_BLOB_BYTES, secret=False)
+            written.append({"hash": str(blob["hash"]), "path": _relative_cluster_path(paths.root, path)})
+        return {"ok": True, "count": len(written), "blobs": written}
     if verb == "put-secret-blob":
         _require_arity(tokens, 2)
         blob_hash = _validate_hash(tokens[1])
@@ -166,7 +177,7 @@ def _read_stdin_for_command(command_text: str) -> bytes:
     tokens = _parse_command(command_text)
     if tokens[0] not in STDIN_VERBS:
         return b""
-    return sys.stdin.buffer.read(max(MAX_CONFIG_BLOB_BYTES, MAX_OPERATION_BATCH_BYTES) + 1)
+    return sys.stdin.buffer.read(max(MAX_CONFIG_BLOB_BATCH_BYTES, MAX_CONFIG_BLOB_BYTES, MAX_OPERATION_BATCH_BYTES) + 1)
 
 
 def _join_cluster(cluster_root: Path, remote_node: str, tokens: list[str], *, allow_join: bool) -> dict[str, Any]:
@@ -278,6 +289,41 @@ def _read_operation_batch_payload(raw: bytes) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             raise ClusterSyncCommandError("operation batch contains a non-object operation")
         result.append(item)
+    return result
+
+
+def _read_blob_batch_payload(raw: bytes) -> list[dict[str, Any]]:
+    """Read a bounded JSON batch payload containing base64 encoded config blobs."""
+
+    if len(raw) > MAX_CONFIG_BLOB_BATCH_BYTES:
+        raise ClusterSyncCommandError("blob batch payload too large")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ClusterSyncCommandError("blob batch payload must be a JSON object") from exc
+    if not isinstance(payload, dict):
+        raise ClusterSyncCommandError("blob batch payload must be a JSON object")
+    blobs = payload.get("blobs")
+    if not isinstance(blobs, list):
+        raise ClusterSyncCommandError("blob batch payload missing blobs list")
+    result: list[dict[str, Any]] = []
+    for item in blobs:
+        if not isinstance(item, dict):
+            raise ClusterSyncCommandError("blob batch contains a non-object blob")
+        blob_hash = _validate_hash(str(item.get("hash") or ""))
+        encoded = item.get("content_b64")
+        if not isinstance(encoded, str):
+            raise ClusterSyncCommandError("blob batch entry missing content_b64")
+        try:
+            raw_blob = base64.b64decode(encoded.encode("ascii"), validate=True)
+        except (UnicodeEncodeError, binascii.Error) as exc:
+            raise ClusterSyncCommandError("blob batch entry has invalid base64") from exc
+        if len(raw_blob) > MAX_CONFIG_BLOB_BYTES:
+            raise ClusterSyncCommandError("blob too large")
+        expected = blob_hash.removeprefix("sha256:")
+        if hashlib.sha256(raw_blob).hexdigest() != expected:
+            raise ClusterSyncCommandError("blob hash mismatch")
+        result.append({"hash": blob_hash, "raw": raw_blob})
     return result
 
 

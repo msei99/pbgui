@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import stat
@@ -194,6 +195,31 @@ def test_put_blob_validates_hash_and_writes_content_addressed_file(tmp_path: Pat
     assert payload["path"].startswith("config_blobs/sha256/")
     with pytest.raises(ClusterSyncCommandError, match="blob hash mismatch"):
         run_command(root, NODE_B, f"put-blob {'sha256:' + '0' * 64}", raw)
+
+
+def test_put_blobs_writes_valid_blob_batch(tmp_path: Path) -> None:
+    """put-blobs validates and writes multiple config blobs in one command."""
+
+    root = _init_cluster(tmp_path)
+    raw_a = b'{"config":true}'
+    raw_b = b'{"override":true}'
+    hash_a = "sha256:" + hashlib.sha256(raw_a).hexdigest()
+    hash_b = "sha256:" + hashlib.sha256(raw_b).hexdigest()
+    request = {
+        "blobs": [
+            {"hash": hash_a, "content_b64": base64.b64encode(raw_a).decode("ascii")},
+            {"hash": hash_b, "content_b64": base64.b64encode(raw_b).decode("ascii")},
+        ]
+    }
+
+    payload = run_command(root, NODE_B, "put-blobs", json.dumps(request).encode("utf-8"))
+
+    assert payload["ok"] is True
+    assert payload["count"] == 2
+    for blob_hash, raw in ((hash_a, raw_a), (hash_b, raw_b)):
+        expected = blob_hash.removeprefix("sha256:")
+        path = root / "config_blobs" / "sha256" / expected[:2] / f"{expected}.json"
+        assert path.read_bytes() == raw
 
 
 def test_put_secret_blob_uses_owner_only_permissions(tmp_path: Path) -> None:
