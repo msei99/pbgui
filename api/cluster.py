@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import configparser
+import hashlib
 import json
 import platform
 import shlex
@@ -437,9 +438,9 @@ def _cluster_state_read_command(remote_pbgui_dir: str | None, local_node_id: str
 
 
 def _cluster_materialize_command(remote_pbgui_dir: str | None, local_node_id: str, verb: str) -> str:
-    """Build one remote V7 config materialization command."""
+    """Build one remote materialization command."""
 
-    if verb not in {"materialize-v7-preview", "materialize-v7"}:
+    if verb not in {"materialize-v7-preview", "materialize-v7", "materialize-api-keys-preview", "materialize-api-keys"}:
         raise ValueError("unsupported materialize command")
     return _cluster_remote_command(remote_pbgui_dir, local_node_id, verb)
 
@@ -957,6 +958,61 @@ def _collect_current_config_blobs(desired_state: dict[str, Any]) -> tuple[list[d
     return list(blobs_by_hash.values()), skipped
 
 
+def _cluster_blob_path(base_dir: Path, blob_hash: str) -> Path:
+    """Return the content-addressed path for one sha256 blob hash."""
+
+    digest = str(blob_hash or "").removeprefix("sha256:")
+    return Path(base_dir) / "sha256" / digest[:2] / f"{digest}.json"
+
+
+def _read_cluster_blob(base_dir: Path, blob_hash: str) -> bytes:
+    """Read and verify one local Cluster Sync blob."""
+
+    text = str(blob_hash or "")
+    if not text.startswith("sha256:") or len(text) != len("sha256:") + 64:
+        raise ValueError("invalid blob hash")
+    path = _cluster_blob_path(base_dir, text)
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != text.removeprefix("sha256:"):
+        raise ValueError("blob hash mismatch")
+    return raw
+
+
+def _collect_current_api_key_blobs(desired_state: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, str]]]:
+    """Collect current API-key payload and secret blobs referenced by desired state."""
+
+    api_keys = desired_state.get("api_keys") if isinstance(desired_state, dict) else None
+    if not isinstance(api_keys, dict):
+        return [], [], []
+    root = _cluster_root()
+    payload_blobs: list[dict[str, Any]] = []
+    secret_blobs: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    payload_hash = str(api_keys.get("payload_hash") or "")
+    secret_hash = str(api_keys.get("secret_blob_hash") or "")
+    if payload_hash:
+        try:
+            payload_blobs.append({
+                "hash": payload_hash,
+                "raw": _read_cluster_blob(root / "config_blobs", payload_hash),
+                "kind": "api_payload",
+                "name": "api-keys-payload.json",
+            })
+        except Exception as exc:
+            skipped.append({"kind": "api_payload", "hash": payload_hash, "reason": str(exc)})
+    if secret_hash:
+        try:
+            secret_blobs.append({
+                "hash": secret_hash,
+                "raw": _read_cluster_blob(root / "secret_blobs", secret_hash),
+                "kind": "api_secret",
+                "name": "api-keys.json",
+            })
+        except Exception as exc:
+            skipped.append({"kind": "api_secret", "hash": secret_hash, "reason": str(exc)})
+    return payload_blobs, secret_blobs, skipped
+
+
 def _blob_batch_payload(blobs: list[dict[str, Any]]) -> str:
     """Build one JSON payload for the remote put-blobs command."""
 
@@ -1131,6 +1187,53 @@ async def _push_config_blobs_to_remote(
     return {"pushed": pushed, "total": len(blobs), "fallback": 1 if fallback else 0}
 
 
+async def _push_secret_blobs_to_remote(
+    pool: Any,
+    hostname: str,
+    remote_dir: str,
+    local_node_id: str,
+    blobs: list[dict[str, Any]],
+    progress_callback: Callable[[dict[str, Any]], None],
+) -> dict[str, int]:
+    """Push API-key secret blobs to a remote node."""
+
+    if not blobs:
+        progress_callback({"phase": "secrets", "done": 0, "total": 0, "remaining": 0})
+        return {"pushed": 0, "total": 0}
+
+    pushed = 0
+    progress_callback({"phase": "secrets", "done": 0, "total": len(blobs), "remaining": len(blobs)})
+    for blob in blobs:
+        raw = blob.get("raw") or b""
+        try:
+            text_payload = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status_code=409, detail="Secret blob is not UTF-8 JSON") from exc
+        try:
+            result = await _run_cluster_payload_command(
+                pool,
+                hostname,
+                remote_dir,
+                local_node_id,
+                f"put-secret-blob {shlex.quote(str(blob.get('hash') or ''))}",
+                text_payload,
+                timeout=30,
+            )
+        except Exception as exc:
+            _log(SERVICE, f"Remote cluster put-secret-blob failed for {hostname}: {exc}", level="ERROR")
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if result is None:
+            raise HTTPException(status_code=502, detail="Remote host is unreachable")
+        if int(getattr(result, "exit_status", 1) or 0) != 0:
+            error = _probe_error_text(result)
+            _log(SERVICE, f"Remote cluster put-secret-blob rejected by {hostname}: {error}", level="WARNING")
+            raise HTTPException(status_code=409, detail=error)
+        _parse_remote_json_result(result, "Remote put-secret-blob")
+        pushed += 1
+        progress_callback({"phase": "secrets", "done": pushed, "total": len(blobs), "remaining": len(blobs) - pushed})
+    return {"pushed": pushed, "total": len(blobs)}
+
+
 async def _push_missing_operations_to_remote(
     node: dict[str, Any],
     identity: dict[str, Any],
@@ -1181,7 +1284,16 @@ async def _push_missing_operations_to_remote(
     remote_dir = str(node.get("remote_pbgui_dir") or "")
     local_materialized = rebuild_materialized_state(root, write=False)
     config_blobs, config_blob_skips = _collect_current_config_blobs(local_materialized.get("desired_state") or {})
-    blob_counts = await _push_config_blobs_to_remote(pool, hostname, remote_dir, local_node_id, config_blobs, report_progress)
+    api_payload_blobs, secret_blobs, api_blob_skips = _collect_current_api_key_blobs(local_materialized.get("desired_state") or {})
+    blob_counts = await _push_config_blobs_to_remote(
+        pool,
+        hostname,
+        remote_dir,
+        local_node_id,
+        config_blobs + api_payload_blobs,
+        report_progress,
+    )
+    secret_blob_counts = await _push_secret_blobs_to_remote(pool, hostname, remote_dir, local_node_id, secret_blobs, report_progress)
 
     bulk_payload = json.dumps({"operations": operations}, sort_keys=True, separators=(",", ":"))
     bulk_unsupported = False
@@ -1254,11 +1366,16 @@ async def _push_missing_operations_to_remote(
                 "config_blobs_pushed": int(blob_counts.get("pushed") or 0),
                 "config_blobs_total": int(blob_counts.get("total") or 0),
                 "config_blobs_skipped": len(config_blob_skips),
+                "secret_blobs_pushed": int(secret_blob_counts.get("pushed") or 0),
+                "secret_blobs_total": int(secret_blob_counts.get("total") or 0),
+                "api_blobs_skipped": len(api_blob_skips),
                 "config_hash_refs": int((counts or {}).get("config_hash_refs") or 0),
                 "api_payload_hash_refs": int((counts or {}).get("api_payload_hash_refs") or 0),
                 "secret_blob_hash_refs": int((counts or {}).get("secret_blob_hash_refs") or 0),
             },
-            "message": "Config blobs and missing local operations were pushed. Remote materialized state was not rebuilt yet.",
+            "config_blob_skips": config_blob_skips,
+            "api_blob_skips": api_blob_skips,
+            "message": "Config/API blobs and missing local operations were pushed. Remote materialized state was not rebuilt yet.",
         }
 
     report_progress({
@@ -1290,12 +1407,16 @@ async def _push_missing_operations_to_remote(
             "config_blobs_pushed": int(blob_counts.get("pushed") or 0),
             "config_blobs_total": int(blob_counts.get("total") or 0),
             "config_blobs_skipped": len(config_blob_skips),
+            "secret_blobs_pushed": int(secret_blob_counts.get("pushed") or 0),
+            "secret_blobs_total": int(secret_blob_counts.get("total") or 0),
+            "api_blobs_skipped": len(api_blob_skips),
             "config_hash_refs": int((counts or {}).get("config_hash_refs") or 0),
             "api_payload_hash_refs": int((counts or {}).get("api_payload_hash_refs") or 0),
             "secret_blob_hash_refs": int((counts or {}).get("secret_blob_hash_refs") or 0),
         },
         "config_blob_skips": config_blob_skips,
-        "message": "Config blobs and missing local operations were pushed, then remote materialized state was rebuilt. API-key payloads and secret blobs were not copied in this phase.",
+        "api_blob_skips": api_blob_skips,
+        "message": "Config/API blobs and missing local operations were pushed, then remote materialized state was rebuilt. API-key files were not installed in this phase.",
     }
     report_progress({"phase": "done", "done": len(pushed), "total": total_missing, "remaining": remaining_after_batch})
     return result
@@ -1382,6 +1503,16 @@ async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], 
             "items": [],
             "error": str(exc.detail),
         }
+    try:
+        api_key_materialization = await _run_remote_materialize_command(node, identity, "materialize-api-keys-preview")
+    except HTTPException as exc:
+        api_key_materialization = {
+            "ok": False,
+            "read_only": True,
+            "can_apply": False,
+            "counts": {},
+            "error": str(exc.detail),
+        }
     return {
         "ok": True,
         "read_only": True,
@@ -1396,6 +1527,7 @@ async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], 
             remote_vector,
         ),
         "materialization": materialization,
+        "api_key_materialization": api_key_materialization,
     }
 
 
@@ -1751,6 +1883,26 @@ async def materialize_remote_v7_configs(node_id: str, session: SessionToken = De
         "hostname": str(node.get("pbname") or node.get("hostname") or ""),
         "materialization": result,
         "message": "Remote V7 configs materialized. No files were deleted and no bots were started or stopped.",
+    }
+
+
+@router.post("/remote-materialize-api-keys/{node_id}")
+async def materialize_remote_api_keys(node_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Materialize api-keys.json from the replicated secret blob on one synchronized remote node."""
+
+    snapshot = _load_cluster_snapshot()
+    nodes = _node_list(snapshot["cluster_nodes"])
+    node = _node_for_id(nodes, str(node_id or ""))
+    if not node:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    await _require_remote_state_current(node, snapshot["identity"], snapshot)
+    result = await _run_remote_materialize_command(node, snapshot["identity"], "materialize-api-keys", timeout=60)
+    return {
+        "ok": True,
+        "node_id": str(node.get("node_id") or ""),
+        "hostname": str(node.get("pbname") or node.get("hostname") or ""),
+        "materialization": result,
+        "message": "Remote api-keys.json materialized. No bots were restarted.",
     }
 
 

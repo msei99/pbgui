@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -75,6 +76,16 @@ def _read_json(path: Path) -> dict:
     """Read a JSON object from disk."""
 
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_cluster_blob(root: Path, base: str, raw: bytes) -> str:
+    """Write one content-addressed cluster blob and return its sha256 hash."""
+
+    digest = hashlib.sha256(raw).hexdigest()
+    path = root / base / "sha256" / digest[:2] / f"{digest}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+    return f"sha256:{digest}"
 
 
 def _patch_cluster_config_loader(monkeypatch) -> None:
@@ -386,7 +397,17 @@ def test_remote_preview_compares_state_without_writes(monkeypatch, tmp_path: Pat
     class FakePool:
         async def run(self, hostname: str, command: str, timeout: int = 30):
             calls.append(command)
-            if "materialize-v7-preview" in command:
+            if "materialize-api-keys-preview" in command:
+                payload = {
+                    "ok": True,
+                    "cluster_id": CLUSTER_ID,
+                    "node_id": NODE_B,
+                    "read_only": True,
+                    "can_apply": False,
+                    "counts": {"current": 1, "write": 0, "error": 0},
+                    "status": "current",
+                }
+            elif "materialize-v7-preview" in command:
                 payload = {
                     "ok": True,
                     "cluster_id": CLUSTER_ID,
@@ -434,10 +455,12 @@ def test_remote_preview_compares_state_without_writes(monkeypatch, tmp_path: Pat
     assert payload["operation_sync"]["push_by_op"] == {"UPSERT_CONFIG": 1}
     assert payload["operation_sync"]["local_ops_missing_on_remote"][0]["target"] == "local_inst"
     assert payload["materialization"]["counts"]["add"] == 1
-    assert len(calls) == 3
+    assert payload["api_key_materialization"]["status"] == "current"
+    assert len(calls) == 4
     assert "get-state-vector" in calls[0]
     assert "get-desired-state" in calls[1]
     assert "materialize-v7-preview" in calls[2]
+    assert "materialize-api-keys-preview" in calls[3]
 
 
 def test_remote_materialize_v7_requires_synchronized_state(monkeypatch, tmp_path: Path) -> None:
@@ -527,6 +550,52 @@ def test_remote_materialize_v7_writes_after_state_match(monkeypatch, tmp_path: P
     assert "get-state-vector" in calls[0]
     assert "get-desired-state" in calls[1]
     assert "materialize-v7" in calls[2]
+
+
+def test_remote_materialize_api_keys_writes_after_state_match(monkeypatch, tmp_path: Path) -> None:
+    """Remote API-key materialization runs only after vector and desired state match local state."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(
+        root,
+        "UPSERT_API_KEYS",
+        {"api_serial": 7, "payload_hash": HASH_A, "secret_blob_hash": "sha256:" + "b" * 64},
+        created_at=102,
+    )
+    local = cluster.rebuild_materialized_state(root, write=False)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            if "get-state-vector" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": local["state_vector"]}
+            elif "get-desired-state" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "desired_state": local["desired_state"]}
+            elif "materialize-api-keys" in command:
+                payload = {
+                    "ok": True,
+                    "cluster_id": CLUSTER_ID,
+                    "node_id": NODE_B,
+                    "counts": {"written": 1},
+                    "status": "written",
+                }
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.materialize_remote_api_keys(NODE_B, session=None))
+
+    assert payload["ok"] is True
+    assert payload["materialization"]["status"] == "written"
+    assert len(calls) == 3
+    assert "get-state-vector" in calls[0]
+    assert "get-desired-state" in calls[1]
+    assert "materialize-api-keys" in calls[2]
 
 
 def test_remote_push_ops_writes_missing_local_ops_and_rebuilds(monkeypatch, tmp_path: Path) -> None:
@@ -667,6 +736,54 @@ def test_remote_push_ops_uploads_current_config_blobs_before_ops(monkeypatch, tm
     assert manifest_hash in calls[1]
     assert "put-ops" in calls[2]
     assert "rebuild" in calls[3]
+
+
+def test_remote_push_ops_uploads_api_key_secret_blobs_before_ops(monkeypatch, tmp_path: Path) -> None:
+    """Remote push sends API-key payload and secret blobs before the oplog."""
+
+    root = _init_cluster(tmp_path)
+    payload_hash = _write_cluster_blob(root, "config_blobs", b'{"redacted":true}')
+    secret_hash = _write_cluster_blob(root, "secret_blobs", b'{"_api_serial":7,"user":{"secret":"s"}}')
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    op = append_operation(
+        root,
+        "UPSERT_API_KEYS",
+        {"api_serial": 7, "payload_hash": payload_hash, "secret_blob_hash": secret_hash},
+        created_at=102,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            if "get-state-vector" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_A: 1}}
+            elif "put-blobs" in command:
+                payload = {"ok": True, "count": 1, "blobs": []}
+            elif "put-secret-blob" in command:
+                payload = {"ok": True, "hash": secret_hash, "path": "secret_blobs/sha256/x.json"}
+            elif "put-ops" in command:
+                payload = {"ok": True, "count": 1, "operations": [{"op_id": op["op_id"], "actor": op["actor"], "seq": op["seq"]}]}
+            elif "rebuild" in command:
+                payload = {"ok": True, "generation": 2, "nodes": 1, "instances": 0}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.push_remote_operations(NODE_B, session=None))
+
+    assert payload["ok"] is True
+    assert payload["counts"]["secret_blobs_pushed"] == 1
+    assert payload["counts"]["secret_blobs_total"] == 1
+    assert "put-blobs" in calls[1]
+    assert payload_hash in calls[1]
+    assert "put-secret-blob" in calls[2]
+    assert secret_hash in calls[2]
+    assert "put-ops" in calls[3]
+    assert "rebuild" in calls[4]
 
 
 def test_remote_push_ops_rejects_when_remote_has_unknown_ops(monkeypatch, tmp_path: Path) -> None:

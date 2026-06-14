@@ -322,6 +322,7 @@ def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dic
             api_keys = {
                 "serial": int(operation["api_serial"]),
                 "payload_hash": str(operation["payload_hash"]),
+                "secret_blob_hash": str(operation["secret_blob_hash"]),
                 "updated_by": actor,
                 "updated_at": int(operation["created_at"]),
             }

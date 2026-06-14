@@ -336,8 +336,8 @@ def test_config_manifest_hash_changes_with_syncable_json(tmp_path: Path) -> None
     assert second.startswith("sha256:")
 
 
-def test_api_key_operation_materializes_metadata_without_secret_hash(tmp_path: Path) -> None:
-    """API-key desired state stores metadata but not secret blob location."""
+def test_api_key_operation_materializes_secret_hash_metadata(tmp_path: Path) -> None:
+    """API-key desired state stores metadata and the secret blob hash reference."""
 
     root = _init_cluster(tmp_path)
     append_operation(
@@ -352,6 +352,7 @@ def test_api_key_operation_materializes_metadata_without_secret_hash(tmp_path: P
     assert api_keys == {
         "serial": 42,
         "payload_hash": HASH_A,
+        "secret_blob_hash": SECRET_HASH,
         "updated_by": NODE_A,
         "updated_at": 101,
     }

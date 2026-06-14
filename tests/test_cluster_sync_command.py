@@ -70,6 +70,15 @@ def _write_config_blob(root: Path, blob_hash: str, raw: bytes) -> None:
     path.write_bytes(raw)
 
 
+def _write_secret_blob(root: Path, blob_hash: str, raw: bytes) -> None:
+    """Write one content-addressed secret blob for materialization tests."""
+
+    digest = blob_hash.removeprefix("sha256:")
+    path = root / "secret_blobs" / "sha256" / digest[:2] / f"{digest}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+
+
 def _write_config_blob_set(root: Path, files: dict[str, bytes]) -> str:
     """Write file blobs plus their manifest and return the manifest hash."""
 
@@ -392,6 +401,59 @@ def test_materialize_v7_blocks_when_required_blob_is_missing(tmp_path: Path) -> 
     with pytest.raises(ClusterSyncCommandError, match="materialization blocked"):
         run_command(root, NODE_B, "materialize-v7")
     assert not (root.parent / "run_v7" / "local_inst" / "config.json").exists()
+
+
+def test_materialize_api_keys_preview_and_apply_writes_secret_blob(monkeypatch, tmp_path: Path) -> None:
+    """materialize-api-keys writes api-keys.json from a verified secret blob."""
+
+    root = _init_cluster(tmp_path)
+    pb7 = tmp_path / "pb7"
+    pb7.mkdir()
+    target = pb7 / "api-keys.json"
+    target.write_text('{"_api_serial":1}', encoding="utf-8")
+    monkeypatch.setattr("cluster_sync_command.PBGDIR", str(tmp_path))
+    monkeypatch.setattr("cluster_sync_command.pb7dir", lambda: str(pb7))
+    raw_secret = b'{"_api_serial":7,"user":{"exchange":"binance","secret":"s"}}'
+    secret_hash = "sha256:" + hashlib.sha256(raw_secret).hexdigest()
+    payload_hash = "sha256:" + hashlib.sha256(b'{"redacted":true}').hexdigest()
+    _write_secret_blob(root, secret_hash, raw_secret)
+    append_operation(
+        root,
+        "UPSERT_API_KEYS",
+        {"api_serial": 7, "payload_hash": payload_hash, "secret_blob_hash": secret_hash},
+        created_at=102,
+    )
+
+    preview = run_command(root, NODE_B, "materialize-api-keys-preview")
+    result = run_command(root, NODE_B, "materialize-api-keys")
+
+    assert preview["can_apply"] is True
+    assert preview["counts"]["write"] == 1
+    assert result["status"] == "written"
+    assert target.read_bytes() == raw_secret
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert Path(result["backup"]).read_text(encoding="utf-8") == '{"_api_serial":1}'
+    after = run_command(root, NODE_B, "materialize-api-keys-preview")
+    assert after["counts"]["current"] == 1
+
+
+def test_materialize_api_keys_blocks_when_secret_blob_is_missing(tmp_path: Path) -> None:
+    """materialize-api-keys refuses to write when the desired secret blob is missing."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(
+        root,
+        "UPSERT_API_KEYS",
+        {"api_serial": 7, "payload_hash": HASH_A, "secret_blob_hash": "sha256:" + "d" * 64},
+        created_at=102,
+    )
+
+    preview = run_command(root, NODE_B, "materialize-api-keys-preview")
+
+    assert preview["can_apply"] is False
+    assert preview["counts"]["error"] == 1
+    with pytest.raises(ClusterSyncCommandError, match="missing api-keys secret blob"):
+        run_command(root, NODE_B, "materialize-api-keys")
 
 
 def test_main_does_not_read_stdin_for_hello(monkeypatch, tmp_path: Path, capsys) -> None:

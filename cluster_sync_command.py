@@ -17,6 +17,7 @@ import os
 import shlex
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +31,7 @@ from master.cluster_state import (
     validate_operation,
     write_operation,
 )
-from pbgui_purefunc import PBGDIR
+from pbgui_purefunc import PBGDIR, pb7dir
 
 PROTOCOL_VERSION = 1
 MAX_COMMAND_BYTES = 4096
@@ -40,8 +41,8 @@ MAX_CONFIG_BLOB_BYTES = 16 * 1024 * 1024
 MAX_CONFIG_BLOB_BATCH_BYTES = 16 * 1024 * 1024
 MAX_SECRET_BLOB_BYTES = 1024 * 1024
 
-READ_VERBS = frozenset({"hello", "get-state-vector", "get-desired-state", "materialize-v7-preview"})
-WRITE_VERBS = frozenset({"join", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "rebuild", "materialize-v7"})
+READ_VERBS = frozenset({"hello", "get-state-vector", "get-desired-state", "materialize-v7-preview", "materialize-api-keys-preview"})
+WRITE_VERBS = frozenset({"join", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "rebuild", "materialize-v7", "materialize-api-keys"})
 STDIN_VERBS = frozenset({"put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob"})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
 
@@ -100,6 +101,8 @@ def run_command(
         }
     if verb == "materialize-v7-preview":
         return _materialize_v7_configs(root, write=False)
+    if verb == "materialize-api-keys-preview":
+        return _materialize_api_keys(root, write=False)
     if verb == "rebuild":
         materialized = _safe_state_call(lambda: rebuild_materialized_state(root))
         return {
@@ -110,6 +113,8 @@ def run_command(
         }
     if verb == "materialize-v7":
         return _materialize_v7_configs(root, write=True)
+    if verb == "materialize-api-keys":
+        return _materialize_api_keys(root, write=True)
     if verb == "put-op":
         _require_arity(tokens, 1)
         operation = _read_json_payload(stdin_data, MAX_OPERATION_BYTES)
@@ -306,6 +311,97 @@ def _materialize_v7_configs(cluster_root: Path, *, write: bool) -> dict[str, Any
         "message": "V7 config files were materialized. No files were deleted and no bots were started or stopped.",
     })
     return plan
+
+
+def _materialize_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
+    """Preview or write api-keys.json from the desired secret blob."""
+
+    materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=write))
+    identity = _safe_state_call(lambda: read_local_identity(cluster_root))
+    desired_state = materialized.get("desired_state") if isinstance(materialized, dict) else {}
+    desired_state = desired_state if isinstance(desired_state, dict) else {}
+    plan = _build_materialize_api_keys_plan(Path(cluster_root), desired_state, str(identity["node_id"]))
+    if not write:
+        plan.update({"ok": True, "read_only": True})
+        return plan
+    if not plan.get("can_apply"):
+        raise ClusterSyncCommandError(str(plan.get("reason") or "api-keys materialization is not ready"))
+
+    target = Path(str(plan.get("path") or ""))
+    secret_hash = str(plan.get("secret_blob_hash") or "")
+    raw = _read_verified_blob(ClusterPaths.from_root(cluster_root).secret_blobs, secret_hash, "api-keys secret blob")
+    if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() != secret_hash.removeprefix("sha256:"):
+        backup_dir = Path(PBGDIR) / "data" / "backup" / "api-keys_cluster" / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        (backup_dir / "api-keys.json").write_bytes(target.read_bytes())
+        plan["backup"] = str(backup_dir / "api-keys.json")
+    _atomic_write_bytes(target, raw, mode=0o600)
+    if hashlib.sha256(target.read_bytes()).hexdigest() != secret_hash.removeprefix("sha256:"):
+        raise ClusterSyncCommandError("api-keys write verification failed")
+
+    counts = dict(plan.get("counts") or {})
+    counts["written"] = 1
+    plan.update({
+        "ok": True,
+        "read_only": False,
+        "counts": counts,
+        "action": "write",
+        "status": "written",
+        "message": "api-keys.json was materialized from the Cluster Sync secret blob. No bots were restarted.",
+    })
+    return plan
+
+
+def _build_materialize_api_keys_plan(cluster_root: Path, desired_state: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """Build a read-only plan for api-keys.json materialization."""
+
+    api_keys = desired_state.get("api_keys") if isinstance(desired_state, dict) else None
+    target = _api_keys_target_path()
+    base: dict[str, Any] = {
+        "cluster_id": str(desired_state.get("cluster_id") or ""),
+        "node_id": node_id,
+        "path": str(target),
+        "counts": {"write": 0, "current": 0, "error": 0, "missing": 0, "written": 0},
+        "can_apply": False,
+    }
+    if not isinstance(api_keys, dict):
+        base.update({"action": "skip", "status": "missing", "reason": "desired state has no api_keys metadata"})
+        base["counts"]["missing"] = 1
+        return base
+
+    secret_hash = str(api_keys.get("secret_blob_hash") or "")
+    payload_hash = str(api_keys.get("payload_hash") or "")
+    base.update({
+        "serial": int(api_keys.get("serial") or 0),
+        "payload_hash": payload_hash,
+        "secret_blob_hash": secret_hash,
+    })
+    try:
+        raw = _read_verified_blob(ClusterPaths.from_root(cluster_root).secret_blobs, secret_hash, "api-keys secret blob")
+        json.loads(raw.decode("utf-8"))
+        current_hash = hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else ""
+        if current_hash == secret_hash.removeprefix("sha256:"):
+            base.update({"action": "skip", "status": "current", "reason": "api-keys.json already matches desired secret blob"})
+            base["counts"]["current"] = 1
+        else:
+            base.update({"action": "write", "status": "ready", "reason": "api-keys.json differs from desired secret blob", "can_apply": True})
+            base["counts"]["write"] = 1
+    except Exception as exc:
+        base.update({"action": "skip", "status": "error", "reason": str(exc)})
+        base["counts"]["error"] = 1
+    return base
+
+
+def _api_keys_target_path() -> Path:
+    """Return the local api-keys.json target path for PB7."""
+
+    try:
+        directory = pb7dir()
+    except Exception:
+        directory = ""
+    if directory:
+        return Path(directory) / "api-keys.json"
+    return Path(PBGDIR) / "api-keys.json"
 
 
 def _build_materialize_v7_plan(
