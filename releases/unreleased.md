@@ -4,6 +4,7 @@
 - Cluster Sync: made automatic sync membership explicitly configurable per node; newly discovered VPS/master candidates now start with Sync Off, Cluster page refresh no longer probes remotes automatically, and only enabled nodes are touched by PBCluster.
 - VPS Manager: added PBCluster to remote service monitoring and VPS systemd migration checks, show remote PBGui service states in VPS detail/change views, and sync new PBGui systemd units during normal PBGui update/branch-switch actions.
 - VPS Monitor: treat PBCluster as alertable only for nodes with Cluster Sync enabled, silently clear false PBCluster alerts from Sync Off nodes, and prevent PBCluster auto-restart from creating legacy starter.py processes.
+- VPS Manager: resolve PBCluster in the remote Host Log Viewer to `data/logs/PBCluster.log` so joined hosts show the service log again.
 - Services: expose local PBCluster in the Services overview/control page and include it in local systemd migration defaults.
 - Cluster Sync: allow local PBCluster materialization to rebuild missing config blobs from matching existing run_v7 files so bootstrap-era local configs do not block automatic reconcile.
 - V7 Run: reload materialized Cluster Sync configs before a stopped bot start so `config_run.json` and the cached version match the desired state.

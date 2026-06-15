@@ -28,6 +28,7 @@ SERVICE = "VPSMonitor"
 # ── Known log file locations ─────────────────────────────────
 
 SERVICE_LOGS: dict[str, str] = {
+    "PBCluster": "data/logs/PBCluster.log",
     "PBRun":     "data/logs/PBRun.log",
     "PBRemote":  "data/logs/PBRemote.log",
     "PBCoinData": "data/logs/PBCoinData.log",
