@@ -7,6 +7,7 @@
 - Services: expose local PBCluster in the Services overview/control page and include it in local systemd migration defaults.
 - Cluster Sync: allow local PBCluster materialization to rebuild missing config blobs from matching existing run_v7 files so bootstrap-era local configs do not block automatic reconcile.
 - V7 Run: reload materialized Cluster Sync configs before a stopped bot start so `config_run.json` and the cached version match the desired state.
+- V7 Run: suppress repeated warning spam when stale local configs are correctly blocked by stable Cluster Sync stop, missing, tombstone or wrong-host states.
 - V7 Monitor: keep the remote `running_version.txt` inotify watcher active on cluster-mode so monitoring refreshes still happen immediately while legacy `status_v7.json` config reconciliation remains disabled.
 - V7 Run: PBRun now enforces Cluster Sync desired state before starting or continuing V7 bots, records the block reason in status data, and shows blocked instances in the V7 Run list.
 - V7 Run: disabled the legacy FastAPI SSH sync path on cluster-mode so saving, activating, restoring or forced-mode edits no longer push `run_v7` files or trigger PBRun starts on VPS hosts outside explicit Cluster Sync materialization.

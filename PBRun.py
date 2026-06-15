@@ -489,6 +489,7 @@ class RunV7():
         self._dynamic_watch_ts = 0
         self._dynamic_watch_sig = None
         self._cluster_gate_log_ts = 0
+        self._cluster_gate_log_key = None
         self.cluster_blocked = False
         self.cluster_blocked_reason = ""
         self.cluster_gate = "not_checked"
@@ -567,13 +568,18 @@ class RunV7():
         self._set_cluster_gate_state(result)
         _atomic_write_text(Path(self.path) / "running_version.txt", "0")
         now_ts = int(datetime.now().timestamp())
-        if now_ts - self._cluster_gate_log_ts >= 60:
+        log_key = (self.cluster_gate, self.cluster_blocked_reason)
+        quiet_states = {"desired_stopped", "missing_instance", "tombstoned", "wrong_host"}
+        quiet_state = self.cluster_gate in quiet_states
+        should_log = log_key != self._cluster_gate_log_key or (not quiet_state and now_ts - self._cluster_gate_log_ts >= 60)
+        if should_log:
             _log(
                 "PBRun",
                 f"Cluster gate blocked passivbot_v7 {self.path}/config_run.json: {self.cluster_blocked_reason}",
-                level="WARNING",
+                level="INFO" if quiet_state else "WARNING",
             )
             self._cluster_gate_log_ts = now_ts
+            self._cluster_gate_log_key = log_key
 
     def _cluster_gate_allows_run(self) -> bool:
         """Return True when this bot is allowed to run under Cluster Sync."""

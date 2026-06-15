@@ -1209,6 +1209,28 @@ class TestClusterDesiredStateGate:
         assert rv7.cluster_gate == "desired_stopped"
         assert (Path(rv7.path) / "running_version.txt").read_text(encoding="utf-8") == "0"
 
+    def test_runv7_start_logs_expected_cluster_stop_once(self, tmp_path, monkeypatch):
+        """Repeated expected Cluster stop blocks must not spam PBRun warnings."""
+
+        rv7 = _make_cluster_runv7(tmp_path)
+        _write_cluster_desired(tmp_path, Path(rv7.path), desired_state="stopped")
+        logs = []
+
+        monkeypatch.setattr(rv7, "is_running", lambda: False)
+        monkeypatch.setattr(PBRun_mod, "_log", lambda *args, **kwargs: logs.append((args, kwargs)))
+        monkeypatch.setattr(PBRun_mod.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("Popen must not run"))
+
+        rv7.start()
+        rv7.start()
+
+        expected_message = (
+            f"Cluster gate blocked passivbot_v7 {rv7.path}/config_run.json: "
+            "Cluster desired state is not running"
+        )
+        gate_logs = [item for item in logs if item[0][:2] == ("PBRun", expected_message)]
+        assert len(gate_logs) == 1
+        assert gate_logs[0][1]["level"] == "INFO"
+
     @pytest.mark.parametrize(
         ("desired_kwargs", "expected_gate"),
         [
