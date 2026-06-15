@@ -1471,6 +1471,48 @@ class Exchange:
                 else: 
                     self.save_income_other(history, self.user.name)
         elif self.id == "bitget":
+            if getattr(self, "_bitget_uta", False):
+                # UTA/Elite: classic fetch_ledger (v2) is rejected (40731); build
+                # income from v3 trade fills (execPnl + fees), matching the v2
+                # trade/fee filter used by the classic path below.
+                now = self.instance.milliseconds()
+                if not since:
+                    since = now - 365 * 24 * 60 * 60 * 1000
+                params = {"category": "USDT-FUTURES", "limit": "100"}
+                seen = set()
+                end = now
+                while True:
+                    params["endTime"] = int(end)
+                    params["startTime"] = int(since)
+                    fetched = self.instance.private_uta_get_v3_trade_fills(params)
+                    rows = (fetched.get("data") or {}).get("list") or []
+                    if not rows:
+                        break
+                    new = 0
+                    for x in rows:
+                        eid = x.get("execId")
+                        if not eid or eid in seen:
+                            continue
+                        seen.add(eid)
+                        new += 1
+                        fee = 0.0
+                        for fd in (x.get("feeDetail") or []):
+                            try:
+                                fee += float(fd.get("fee") or 0)
+                            except Exception:
+                                pass
+                        all.append({
+                            "symbol": x.get("symbol"),
+                            "timestamp": int(x.get("createdTime") or 0),
+                            # v3 feeDetail.fee is a positive cost -> subtract it.
+                            "income": float(x.get("execPnl") or 0) - fee,
+                            "uniqueid": eid,
+                        })
+                    oldest = int(rows[-1].get("createdTime") or 0)
+                    if new == 0 or oldest <= since:
+                        break
+                    end = oldest - 1
+                return all
             day = 24 * 60 * 60 * 1000
             week = 7 * day
             max = 365 * day
