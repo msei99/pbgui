@@ -1159,6 +1159,41 @@ class TestClusterDesiredStateGate:
         assert rv7.cluster_blocked is False
         assert rv7.cluster_gate == "allowed"
 
+    def test_runv7_start_reloads_materialized_cluster_config(self, tmp_path, monkeypatch):
+        """RunV7.start() must reload materialized config before Cluster gate checks."""
+
+        rv7 = _make_cluster_runv7(tmp_path)
+        instance_dir = Path(rv7.path)
+        _write_v7_config(instance_dir, version=4)
+        _write_cluster_desired(tmp_path, instance_dir, version="4")
+        assert rv7.version == 3
+        assert json.loads((instance_dir / "config_run.json").read_text(encoding="utf-8"))["pbgui"]["version"] == 3
+        monkeypatch.setattr(PBRun_mod, "sleep", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(PBRun_mod, "_log", lambda *_args, **_kwargs: None)
+
+        state = {"calls": 0}
+
+        def _is_running() -> bool:
+            state["calls"] += 1
+            return state["calls"] > 1
+
+        popen_calls = []
+
+        def _popen_stub(*args, **kwargs):
+            popen_calls.append((args, kwargs))
+            return SimpleNamespace(stderr=iter(()))
+
+        monkeypatch.setattr(rv7, "is_running", _is_running)
+        monkeypatch.setattr(PBRun_mod.subprocess, "Popen", _popen_stub)
+
+        rv7.start()
+
+        assert len(popen_calls) == 1
+        assert rv7.version == 4
+        assert json.loads((instance_dir / "config_run.json").read_text(encoding="utf-8"))["pbgui"]["version"] == 4
+        assert rv7.cluster_blocked is False
+        assert rv7.cluster_gate == "allowed"
+
     def test_runv7_start_blocks_stopped_cluster_desired_state(self, tmp_path, monkeypatch):
         """Cluster desired_state=stopped must prevent spawning a local bot."""
 

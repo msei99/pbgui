@@ -32,8 +32,9 @@ SERVICE = "Services"
 
 router = APIRouter()
 
-_SERVICES = ["pbrun", "pbremote", "pbdata", "pbcoindata", "api-server"]
+_SERVICES = ["pbcluster", "pbrun", "pbremote", "pbdata", "pbcoindata", "api-server"]
 _SYSTEMD_SERVICE_UNITS = {
+    "pbcluster": "pbgui-pbcluster.service",
     "pbrun": "pbgui-pbrun.service",
     "pbremote": "pbgui-pbremote.service",
     "pbdata": "pbgui-pbdata.service",
@@ -43,6 +44,7 @@ _SYSTEMD_SERVICE_UNITS = {
 _SYSTEMD_RUNNING_STATES = {"active", "activating", "reloading"}
 _SYSTEMD_ENABLED_STATES = {"enabled", "enabled-runtime"}
 _SERVICE_SCRIPT_NAMES = {
+    "pbcluster": "PBCluster.py",
     "pbrun": "PBRun.py",
     "pbremote": "PBRemote.py",
     "pbdata": "PBData.py",
@@ -50,20 +52,24 @@ _SERVICE_SCRIPT_NAMES = {
     "api-server": "PBApiServer.py",
 }
 _SERVICE_PID_FILES = {
+    "pbcluster": "pbcluster.pid",
     "pbrun": "pbrun.pid",
     "pbremote": "pbremote.pid",
     "pbdata": "pbdata.pid",
     "pbcoindata": "pbcoindata.pid",
     "api-server": "api_server.pid",
 }
-_MIGRATION_DEFAULT_SERVICES = ["api", "pbrun", "pbdata", "pbcoindata"]
-_MIGRATION_LEGACY_STOP_SERVICES = ["pbrun", "pbremote", "pbdata", "pbcoindata"]
+_MIGRATION_DEFAULT_SERVICES = ["api", "pbcluster", "pbrun", "pbdata", "pbcoindata"]
+_MIGRATION_LEGACY_STOP_SERVICES = ["pbcluster", "pbrun", "pbremote", "pbdata", "pbcoindata"]
 _fetch_summary_snapshot: Dict[str, Any] = {}
 _poller_metrics_snapshot: Dict[str, Any] = {}
 
 
 def _get_service(name: str):
     """Instantiate and return the service object for the given name."""
+    if name == "pbcluster":
+        from PBCluster import PBCluster
+        return PBCluster()
     if name == "pbrun":
         from PBRun import PBRun
         return PBRun()
@@ -496,7 +502,7 @@ def _migration_status_payload() -> dict[str, Any]:
     crontab = _read_legacy_crontab()
     processes = _collect_pbgui_daemon_processes()
     units = _migration_systemd_units()
-    default_units = {"api-server", "pbrun", "pbdata", "pbcoindata"}
+    default_units = {"api-server", "pbcluster", "pbrun", "pbdata", "pbcoindata"}
     missing_default_units = [row for row in units if row["service"] in default_units and not row["exists"]]
     legacy_entries = list(crontab.get("entries") or [])
     pbremote_needed = _detect_pbremote_migration_needed(legacy_entries, processes)

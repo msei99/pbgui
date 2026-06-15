@@ -751,6 +751,9 @@ class RunV7():
 
     def start(self):
         if not self.is_running():
+            if Path(f'{self.path}/config.json').exists() and not self.load():
+                self.stop()
+                return
             if not self._cluster_gate_allows_run():
                 return
             if self.dynamic_ignore is not None and not _ensure_dynamic_ignore_ready(self.dynamic_ignore):

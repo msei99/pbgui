@@ -24,6 +24,8 @@ from typing import Any
 from master.cluster_state import (
     ClusterPaths,
     ClusterStateError,
+    build_config_manifest,
+    compute_config_manifest_hash,
     default_cluster_root,
     ensure_local_identity,
     read_local_identity,
@@ -386,6 +388,12 @@ def _materialize_v7_configs(cluster_root: Path, *, write: bool) -> dict[str, Any
         return plan
 
     if int((plan.get("counts") or {}).get("error") or 0) > 0:
+        repaired = _repair_local_v7_config_blobs(Path(cluster_root), run_root, node_id, desired_state, plan)
+        if repaired:
+            plan = _build_materialize_v7_plan(Path(cluster_root), run_root, node_id, desired_state)
+            plan["repaired_config_blobs"] = repaired
+
+    if int((plan.get("counts") or {}).get("error") or 0) > 0:
         raise ClusterSyncCommandError("materialization blocked by missing or invalid blobs")
 
     written: list[dict[str, Any]] = []
@@ -417,6 +425,48 @@ def _materialize_v7_configs(cluster_root: Path, *, write: bool) -> dict[str, Any
         "message": "V7 config files were materialized. No files were deleted and no bots were started or stopped.",
     })
     return plan
+
+
+def _repair_local_v7_config_blobs(
+    cluster_root: Path,
+    run_root: Path,
+    node_id: str,
+    desired_state: dict[str, Any],
+    plan: dict[str, Any],
+) -> int:
+    """Rebuild missing local config blobs from already-materialized run_v7 files."""
+
+    instances = desired_state.get("instances") if isinstance(desired_state, dict) else {}
+    instances = instances if isinstance(instances, dict) else {}
+    error_instances = {
+        str(item.get("instance") or "")
+        for item in (plan.get("items") or [])
+        if isinstance(item, dict) and item.get("status") == "error"
+    }
+    paths = ClusterPaths.from_root(cluster_root)
+    repaired = 0
+    for instance in sorted(name for name in error_instances if name):
+        item = instances.get(instance) if isinstance(instances.get(instance), dict) else {}
+        if str(item.get("assigned_host") or "") != node_id:
+            continue
+        manifest_hash = _validate_hash(str(item.get("config_manifest_hash") or ""))
+        instance_dir = run_root / instance
+        if not instance_dir.is_dir():
+            continue
+        manifest = build_config_manifest(instance_dir)
+        if compute_config_manifest_hash(manifest) != manifest_hash:
+            continue
+        manifest_raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        _write_blob(paths.config_blobs, manifest_hash, manifest_raw, MAX_CONFIG_BLOB_BYTES, secret=False)
+        files = manifest.get("files") if isinstance(manifest, dict) else {}
+        files = files if isinstance(files, dict) else {}
+        for filename, meta in files.items():
+            _validate_relative_name(str(filename), "config filename")
+            sha = str((meta if isinstance(meta, dict) else {}).get("sha256") or "")
+            blob_hash = _validate_hash(f"sha256:{sha}")
+            _write_blob(paths.config_blobs, blob_hash, (instance_dir / str(filename)).read_bytes(), MAX_CONFIG_BLOB_BYTES, secret=False)
+        repaired += 1
+    return repaired
 
 
 def _materialize_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:

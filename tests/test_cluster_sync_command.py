@@ -430,6 +430,42 @@ def test_materialize_v7_blocks_when_required_blob_is_missing(tmp_path: Path) -> 
     assert not (root.parent / "run_v7" / "local_inst" / "config.json").exists()
 
 
+def test_materialize_v7_repairs_missing_local_blobs_from_existing_config(tmp_path: Path) -> None:
+    """materialize-v7 rebuilds missing blobs from matching local run_v7 files."""
+
+    root = _init_cluster(tmp_path)
+    instance_dir = root.parent / "run_v7" / "local_inst"
+    instance_dir.mkdir(parents=True)
+    raw_config = b'{"live":{"user":"local"}}'
+    (instance_dir / "config.json").write_bytes(raw_config)
+    file_hash = hashlib.sha256(raw_config).hexdigest()
+    manifest_raw = _canonical_json_bytes({"schema_version": 1, "files": {"config.json": {"sha256": file_hash, "size": len(raw_config)}}})
+    manifest_hash = "sha256:" + hashlib.sha256(manifest_raw).hexdigest()
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_A,
+            "desired_state": "running",
+            "config_manifest_hash": manifest_hash,
+        },
+        created_at=102,
+    )
+
+    preview = run_command(root, NODE_B, "materialize-v7-preview")
+    result = run_command(root, NODE_B, "materialize-v7")
+    after = run_command(root, NODE_B, "materialize-v7-preview")
+
+    assert preview["counts"]["error"] == 1
+    assert result["counts"]["error"] == 0
+    assert result["counts"]["written_instances"] == 0
+    assert result["repaired_config_blobs"] == 1
+    assert after["counts"]["error"] == 0
+    assert after["counts"]["skip"] >= 1
+
+
 def test_materialize_api_keys_preview_and_apply_writes_secret_blob(monkeypatch, tmp_path: Path) -> None:
     """materialize-api-keys writes api-keys.json from a verified secret blob."""
 

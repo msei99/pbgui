@@ -494,6 +494,9 @@
       <button class="sb-btn" data-panel="migration">
         <span class="sb-dot" id="dot-migration"></span>Migration
       </button>
+      <button class="sb-btn" data-panel="pbcluster">
+        <span class="sb-dot" id="dot-pbcluster"></span>PBCluster
+      </button>
       <button class="sb-btn" data-panel="pbrun">
         <span class="sb-dot" id="dot-pbrun"></span>PBRun
       </button>
@@ -563,6 +566,19 @@
       <div class="settings-wrap" id="migration-wrap">
         <div style="color:#4a5568;font-style:italic;">Loading migration status...</div>
       </div>
+    </div>
+
+    <!-- PBCluster panel -->
+    <div id="panel-pbcluster" class="svc-panel">
+      <div class="ctrl-strip">
+        <span class="ctrl-title">PBCluster</span>
+        <div class="ctrl-status">
+          <div class="status-dot" id="cs-pbcluster"></div>
+          <span class="status-label" id="sl-pbcluster">checking…</span>
+        </div>
+        <span id="ctrl-btns-pbcluster"></span>
+      </div>
+      <div class="log-wrap"><div id="log-pbcluster" style="height:100%;"></div></div>
     </div>
 
     <!-- PBRun panel -->
@@ -995,6 +1011,7 @@ window.PBGUI_NAV_CONFIG = {
 
   /* ── Service registry ─────────────────────────────────── */
   var SERVICES = [
+    { id: 'pbcluster',  label: 'PBCluster',   logFile: 'PBCluster.log',   isApiServer: false, guideKeyword: 'cluster_sync'       },
     { id: 'pbrun',      label: 'PBRun',       logFile: 'PBRun.log',       isApiServer: false, guideKeyword: 'pbrun_service'      },
     { id: 'pbremote',   label: 'PBRemote',    logFile: 'PBRemote.log',    isApiServer: false, guideKeyword: 'pbremote_service'   },
     { id: 'pbdata',     label: 'PBData',      logFile: 'PBData.log',      isApiServer: false, guideKeyword: 'pbdata'             },
