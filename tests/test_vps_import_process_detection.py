@@ -3,6 +3,7 @@
 import asyncio
 import builtins
 import io
+import json
 import subprocess
 import threading
 from pathlib import Path
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 import api.v7_instances as v7_instances
+import master.async_monitor as monitor_mod
 from master.async_monitor import INSTANCE_COLLECT_SCRIPT, CpuHistoryStore, VPSMonitor
 from master.async_store import SystemMetrics
 import vps_manager_core as core
@@ -1004,6 +1006,124 @@ def test_optional_service_local_disabled_overrides_stale_remote_config() -> None
     monitor._local_optional_service_expected = lambda hostname, service_name: False
 
     assert monitor._optional_service_expected("manibot90", "PBRemote") is False
+
+
+def test_pbcluster_expected_only_for_sync_enabled_nodes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PBCluster service alerts are tied to explicit Cluster Sync membership."""
+    cluster_dir = tmp_path / "data" / "cluster"
+    cluster_dir.mkdir(parents=True)
+    (cluster_dir / "cluster_nodes.json").write_text(json.dumps({
+        "nodes": {
+            "node-a": {"hostname": "manibot90", "pbname": "manibot90", "enabled": True, "sync_enabled": True},
+            "node-b": {"hostname": "manibot01", "pbname": "manibot01", "enabled": True, "sync_enabled": False},
+        }
+    }), encoding="utf-8")
+    monkeypatch.setattr(monitor_mod, "PBGDIR", str(tmp_path))
+    monitor = object.__new__(VPSMonitor)
+
+    assert monitor._optional_service_expected("manibot90", "PBCluster") is True
+    assert monitor._optional_service_expected("manibot01", "PBCluster") is False
+    assert monitor._optional_service_expected("unknown-host", "PBCluster") is False
+    assert monitor._disabled_service_check("PBCluster")["reason"] == "Cluster Sync is not enabled for this node"
+
+
+def test_pbcluster_sync_off_alerts_clear_without_recovery_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
+    """False PBCluster alerts from Sync Off nodes clear silently instead of spamming recoveries."""
+    monitor = object.__new__(VPSMonitor)
+    monitor._alerts = {
+        "service:manibot01:PBCluster": monitor_mod.AlertRecord(
+            id="service:manibot01:PBCluster",
+            kind=monitor_mod.ALERT_KIND_SERVICE,
+            host="manibot01",
+            name="PBCluster",
+            severity="error",
+            summary="PBCluster is down on manibot01",
+            details="PBCluster is down on manibot01.",
+            active=True,
+        )
+    }
+    monitor.pool = SimpleNamespace(get_status_summary=lambda: {"connections": {}})
+    monitor.store = SimpleNamespace(
+        system={},
+        instances={},
+        services={},
+        streams={},
+        changed=SimpleNamespace(set=lambda: None),
+    )
+    monitor._load_alert_routes = lambda: None
+    monitor._prune_alert_history = lambda now=None: False
+    monitor._save_alert_state = lambda: None
+    monitor._optional_service_expected = lambda host, service: False if service == "PBCluster" else True
+    recoveries: list[str] = []
+
+    async def fake_recovery(alert) -> None:
+        recoveries.append(alert.name)
+
+    monkeypatch.setattr(monitor, "_emit_recovery_event", fake_recovery)
+
+    asyncio.run(monitor._sync_live_alerts())
+
+    assert monitor._alerts["service:manibot01:PBCluster"].active is False
+    assert recoveries == []
+
+
+def test_pbcluster_check_requires_systemd_unit() -> None:
+    """PBCluster is not considered healthy from a legacy PID fallback."""
+    commands: list[str] = []
+
+    class FakePool:
+        """Return a missing systemd unit and fail if legacy fallback is used."""
+
+        async def run(self, hostname: str, command: str, timeout: int = 0):
+            """Capture commands and report the PBCluster unit as missing."""
+            del hostname, timeout
+            commands.append(command)
+            return SimpleNamespace(exit_status=0, stdout="LoadState=not-found\n", stderr="")
+
+        def get_remote_pbgui_dirs(self, hostname: str) -> list[str]:
+            """Legacy PID fallback must not be used for PBCluster."""
+            del hostname
+            raise AssertionError("PBCluster used legacy PID fallback")
+
+    monitor = object.__new__(VPSMonitor)
+    monitor.pool = FakePool()
+    monitor._optional_service_expected = lambda hostname, service: True
+
+    result = asyncio.run(monitor._check_service("manibot90", monitor_mod.MONITORED_SERVICES["PBCluster"]))
+
+    assert result["status"] == monitor_mod.ServiceStatus.STOPPED.value
+    assert result["manager"] == "systemd"
+    assert "systemd user unit" in result["error"]
+    assert not any("data/pid/pbcluster.pid" in command for command in commands)
+
+
+def test_pbcluster_restart_does_not_use_legacy_starter_fallback() -> None:
+    """PBCluster auto-restart does not create orphan starter.py processes."""
+    commands: list[str] = []
+
+    class FakePool:
+        """Return systemd-unit-missing for restart attempts."""
+
+        async def run(self, hostname: str, command: str, timeout: int = 0):
+            """Capture commands and simulate a missing unit from the systemd probe."""
+            del hostname, timeout
+            commands.append(command)
+            return SimpleNamespace(exit_status=3, stdout="", stderr="")
+
+        def get_remote_pbgui_dirs(self, hostname: str) -> list[str]:
+            """Legacy starter fallback must not be used for PBCluster."""
+            del hostname
+            return ["/home/mani/software/pbgui"]
+
+    monitor = object.__new__(VPSMonitor)
+    monitor.pool = FakePool()
+    monitor._optional_service_expected = lambda hostname, service: True
+    monitor._can_restart = lambda hostname, service: True
+
+    restarted = asyncio.run(monitor._restart_service("manibot90", "PBCluster"))
+
+    assert restarted is False
+    assert not any("starter.py" in command for command in commands)
 
 
 def test_save_vps_config_starts_remote_optional_apply(tmp_path: Path) -> None:

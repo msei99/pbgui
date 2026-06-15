@@ -2546,6 +2546,8 @@ MONITORED_SERVICE_SYSTEMD_UNITS = {
     "PBCoinData": "pbgui-pbcoindata.service",
 }
 
+PBCLUSTER_DISABLED_REASON = "Cluster Sync is not enabled for this node"
+
 OPTIONAL_SERVICE_REQUIREMENTS = {
     "PBRemote": {
         "config_key": "bucket",
@@ -2722,6 +2724,8 @@ class VPSMonitor:
         return self._configured_optional_value(config.get(requirement["config_key"]))
 
     def _optional_service_expected(self, hostname: str, service_name: str) -> bool:
+        if service_name == "PBCluster":
+            return self._pbcluster_expected(hostname)
         if service_name not in OPTIONAL_SERVICE_REQUIREMENTS:
             return True
         local_expected = self._local_optional_service_expected(hostname, service_name)
@@ -2745,6 +2749,35 @@ class VPSMonitor:
         # Unknown capability should be treated as expected to avoid hiding real failures.
         return True
 
+    def _pbcluster_expected(self, hostname: str) -> bool:
+        safe_host = str(hostname or "").strip()
+        if not safe_host:
+            return False
+        nodes_path = Path(PBGDIR) / "data" / "cluster" / "cluster_nodes.json"
+        try:
+            payload = json.loads(nodes_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return False
+        except Exception as exc:
+            _log(SERVICE, f"[service] Could not read Cluster node membership: {exc}", level="WARNING")
+            return False
+        nodes = payload.get("nodes") if isinstance(payload, dict) else None
+        if not isinstance(nodes, dict):
+            return False
+        for node in nodes.values():
+            if not isinstance(node, dict):
+                continue
+            names = {
+                str(node.get("hostname") or "").strip(),
+                str(node.get("pbname") or "").strip(),
+            }
+            if safe_host not in names:
+                continue
+            if node.get("enabled") is False:
+                return False
+            return bool(node.get("sync_enabled"))
+        return False
+
     def _disabled_service_check(self, service_name: str) -> dict[str, Any]:
         requirement = OPTIONAL_SERVICE_REQUIREMENTS.get(service_name) or {}
         return {
@@ -2753,7 +2786,7 @@ class VPSMonitor:
             "error": None,
             "was_restarted": False,
             "expected": False,
-            "reason": str(requirement.get("reason") or "Service is not configured"),
+            "reason": PBCLUSTER_DISABLED_REASON if service_name == "PBCluster" else str(requirement.get("reason") or "Service is not configured"),
         }
 
     @property
@@ -3013,7 +3046,13 @@ class VPSMonitor:
                 alert.active = False
                 alert.last_seen_ts = now
                 changed = True
-                await self._emit_recovery_event(alert)
+                suppress_recovery = (
+                    alert.kind == ALERT_KIND_SERVICE
+                    and alert.name == "PBCluster"
+                    and not self._optional_service_expected(alert.host, alert.name)
+                )
+                if not suppress_recovery:
+                    await self._emit_recovery_event(alert)
 
         if changed:
             self._save_alert_state()
@@ -4292,6 +4331,15 @@ class VPSMonitor:
         systemd_status = await self._check_systemd_service(hostname, svc.name)
         if systemd_status is not None:
             return systemd_status
+        if svc.name == "PBCluster":
+            return {
+                "status": ServiceStatus.STOPPED.value,
+                "pid": None,
+                "error": "PBCluster systemd user unit is missing or unavailable",
+                "was_restarted": False,
+                "manager": "systemd",
+                "unit": MONITORED_SERVICE_SYSTEMD_UNITS.get(svc.name),
+            }
 
         result = None
         for base_dir in self.pool.get_remote_pbgui_dirs(hostname):
@@ -4383,6 +4431,13 @@ class VPSMonitor:
             if result and result.exit_status not in (2, 3):
                 _log(SERVICE, f"[service] Failed to restart {service_name} on "
                      f"{hostname} through systemd", level="ERROR")
+                return False
+            if service_name == "PBCluster":
+                _log(
+                    SERVICE,
+                    f"[service] PBCluster restart on {hostname} requires the systemd user unit; not using legacy starter.py fallback",
+                    level="WARNING",
+                )
                 return False
 
         start_cmd = ""
