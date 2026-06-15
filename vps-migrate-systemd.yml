@@ -76,7 +76,7 @@
       set_fact:
         pbgui_pbremote_configured: "{{ 'pbremote_configured=yes' in optional_service_config.stdout_lines }}"
         pbgui_coindata_configured: "{{ 'coindata_configured=yes' in optional_service_config.stdout_lines }}"
-        pbgui_enabled_services: "{{ ['pbrun'] + (['pbremote'] if ('pbremote_configured=yes' in optional_service_config.stdout_lines) else []) + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun'] + (['pbremote'] if ('pbremote_configured=yes' in optional_service_config.stdout_lines) else []) + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
         systemd_units: "{{ ['pbgui-pbrun.service'] + (['pbgui-pbremote.service'] if ('pbremote_configured=yes' in optional_service_config.stdout_lines) else []) + (['pbgui-pbcoindata.service'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
 
     - name: copy systemd setup helper

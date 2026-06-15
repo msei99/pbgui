@@ -4,7 +4,7 @@ set -euo pipefail
 TARGET_USER="${USER:-}"
 PBGUI_DIR=""
 PYTHON_BIN=""
-ENABLE_SERVICES="api,pbrun,pbdata,pbcoindata"
+ENABLE_SERVICES="api,pbcluster,pbrun,pbdata,pbcoindata"
 START_SERVICES=true
 INSTALL_PBREMOTE=false
 
@@ -47,7 +47,7 @@ Options:
   --user USER                 Target Linux user. Default: current user.
   --pbgui-dir PATH            PBGui directory. Default: current directory.
   --python PATH               PBGui venv Python. Default: ../venv_pbgui/bin/python.
-  --enable LIST               Comma-separated services to enable. Default: api,pbrun,pbdata,pbcoindata.
+  --enable LIST               Comma-separated services to enable. Default: api,pbcluster,pbrun,pbdata,pbcoindata.
   --no-start                  Enable services but do not start/restart them now.
   --include-pbremote          Also install PBRemote unit template.
   -h, --help                  Show help.
@@ -147,6 +147,7 @@ EOF
 }
 
 write_unit "pbgui-api.service" "PBGui API Server" "PBApiServer.py"
+write_unit "pbgui-pbcluster.service" "PBGui PBCluster Service" "PBCluster.py"
 write_unit "pbgui-pbrun.service" "PBGui PBRun Service" "PBRun.py"
 write_unit "pbgui-pbdata.service" "PBGui PBData Service" "PBData.py"
 write_unit "pbgui-pbcoindata.service" "PBGui PBCoinData Service" "PBCoinData.py"
@@ -180,7 +181,7 @@ service_requested() {
   return 1
 }
 
-disable_optional_if_excluded() {
+disable_service_if_excluded() {
   local service="$1"
   local unit="pbgui-$service.service"
   if service_requested "$service"; then
@@ -190,13 +191,14 @@ disable_optional_if_excluded() {
   if [[ -f "$unit_dir/$unit" ]]; then
     run_user_systemctl stop "$unit" >/dev/null 2>&1 || true
     run_user_systemctl disable "$unit" >/dev/null 2>&1 || true
-    success "Disabled optional $unit"
+    success "Disabled $unit"
   fi
 }
 
 run_user_systemctl daemon-reload
-disable_optional_if_excluded pbremote
-disable_optional_if_excluded pbcoindata
+for managed_service in api pbcluster pbrun pbdata pbremote pbcoindata; do
+  disable_service_if_excluded "$managed_service"
+done
 
 for service in "${enabled[@]}"; do
   service="$(printf '%s' "$service" | tr -d '[:space:]')"

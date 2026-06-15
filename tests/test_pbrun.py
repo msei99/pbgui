@@ -21,7 +21,7 @@ ROOT_DIR = Path(__file__).parent.parent.resolve()
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from master.cluster_state import build_config_manifest, compute_config_manifest_hash, ensure_local_identity
+from master.cluster_state import build_config_manifest, compute_config_manifest_hash, default_cluster_root, ensure_local_identity
 
 
 # Load real PBCoinData module first, then inject into sys.modules so PBRun
@@ -1245,3 +1245,43 @@ class TestClusterDesiredStateGate:
         assert loaded.blocked is True
         assert loaded.blocked_reason == "Cluster desired state is not running"
         assert loaded.cluster_gate == "desired_stopped"
+
+
+class TestClusterBootSyncWait:
+    """Tests for PBRun's non-fatal PBCluster boot sync wait."""
+
+    def test_wait_for_cluster_boot_sync_skips_non_cluster_install(self, tmp_path):
+        """PBRun should not wait when Cluster Sync is not initialized."""
+
+        result = PBRun_mod._wait_for_cluster_boot_sync(tmp_path, timeout=0)
+
+        assert result["status"] == "not_configured"
+
+    def test_wait_for_cluster_boot_sync_accepts_fresh_status(self, tmp_path, monkeypatch):
+        """A fresh PBCluster sync_status should let PBRun continue immediately."""
+
+        cluster_root = default_cluster_root(tmp_path)
+        ensure_local_identity(cluster_root, pbname="runner-a")
+        (cluster_root / "sync_status.json").write_text(
+            json.dumps({"status": "local_reconciled", "finished_at": int(PBRun_mod.time())}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(PBRun_mod, "sleep", lambda *_args, **_kwargs: pytest.fail("sleep should not be needed"))
+
+        result = PBRun_mod._wait_for_cluster_boot_sync(tmp_path, timeout=0)
+
+        assert result["status"] == "local_reconciled"
+
+    def test_wait_for_cluster_boot_sync_timeout_is_warning_only(self, tmp_path, monkeypatch):
+        """Missing PBCluster status should warn but not block PBRun startup."""
+
+        cluster_root = default_cluster_root(tmp_path)
+        ensure_local_identity(cluster_root, pbname="runner-a")
+        logs = []
+        monkeypatch.setattr(PBRun_mod, "_log", lambda service, message, **kwargs: logs.append((service, message, kwargs)))
+
+        result = PBRun_mod._wait_for_cluster_boot_sync(tmp_path, timeout=0)
+
+        assert result["status"] == "timeout"
+        assert logs
+        assert "continuing with local desired state" in logs[0][1]

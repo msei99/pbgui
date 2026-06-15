@@ -314,10 +314,15 @@ Normal replication uses restricted cluster-sync SSH keys and forced commands, no
 
 Bootstrap may use existing VPS Manager SSH credentials only for import, key installation, and recovery.
 
+Regular replication is owned by a lightweight `PBCluster` daemon that runs on every cluster node, including runner VPS hosts. Runner VPS hosts must not require `PBApiServer.py` for Cluster Sync. `PBApiServer.py` remains a master/UI/API service only.
+
 Required verbs:
 
 - `hello`: return node identity and protocol version.
 - `get-state-vector`: return `state_vector.json`.
+- `get-ops`: return a bounded range of operation-log entries for one actor.
+- `get-blob` / `get-blobs`: return verified config blobs by hash.
+- `get-secret-blob`: return a verified secret blob by hash to an authenticated cluster peer.
 - `put-op`: validate and atomically write one operation.
 - `put-blob`: validate hash and atomically write one config blob.
 - `put-secret-blob`: validate hash and atomically write one secret blob with restricted permissions.
@@ -325,17 +330,33 @@ Required verbs:
 - `get-desired-state`: return `desired_state.json`.
 - `install-api-keys`: install validated API-key payload with backup, verify, and restart rules.
 
-Implementation note: the first restricted wrapper implements identity, state-vector, operation, blob, secret-blob, rebuild, and desired-state verbs. `install-api-keys` remains a later safety subphase because it must reuse the existing API-key backup, validation, and bot-restart rules.
+Implementation note: the restricted wrapper implements identity, state-vector, operation, blob, secret-blob, rebuild, desired-state, and materialization verbs. `install-api-keys` remains a later safety subphase because it must reuse the existing API-key backup, validation, and bot-restart rules.
 
-Sync loop:
+Peer reconcile loop:
 
 1. Node A calls Node B `hello`.
 2. Node A verifies matching `cluster_id`.
 3. Node A reads Node B `state_vector.json`.
-4. Node A sends missing operations.
-5. Node A sends required config and secret blobs.
-6. Node A requests rebuild on Node B.
-7. Optional reverse sync repeats the same steps.
+4. Node A pulls operation ranges and required blobs that it is missing.
+5. Node A sends operations and required blobs that Node B is missing.
+6. Any node that received new operations rebuilds materialized state.
+7. Any node that received new operations or blobs materializes local V7 configs and API keys assigned to itself.
+8. If Node A changed Node B, Node A requests remote rebuild and remote local materialization. Materialization never starts or stops bots directly.
+
+Propagation model:
+
+- Push-on-change is the fast path. When `PBCluster` sees a new local operation, it schedules immediate fanout to all reachable `sync_enabled` peers.
+- Received-operation fanout is also required. When a node receives a new operation from a peer, it rebuilds locally, materializes locally, and schedules fanout to other peers so updates can traverse the cluster even when the original writer cannot reach every node.
+- Periodic reconcile is the repair path. Each node periodically compares state vectors with peers and repairs missed operations, missing blobs, interrupted transfers, stale materialization and nodes that were offline during a change.
+- Boot reconcile is required for runner VPS hosts. On startup, `PBCluster` attempts a short peer sync window before PBRun relies on local desired state. If no peer is reachable, PBRun may continue with local desired state and a stale-state warning.
+- All transfers are idempotent. Operation identity is `(actor, seq, op_id)`, duplicate writes with identical content are accepted, and state-vector equality means no payload transfer is needed.
+
+Service responsibilities:
+
+- `PBCluster.py`: lightweight daemon on masters and runner VPS hosts. It performs boot sync, periodic sync, push-on-change fanout, received-operation fanout, local rebuild, local materialization, sync status writes and retry backoff.
+- `PBRun.py`: local bot supervisor only. It gates start/continue decisions against local desired state and surfaces blocked/stale reasons. It does not contact peers or write remote cluster files.
+- `PBApiServer.py`: master-only UI/API service. It writes local cluster operations through normal PBGui actions and exposes Cluster UI/status/repair endpoints. It is not required on runner VPS hosts.
+- `cluster_sync_command.py`: restricted SSH command wrapper used by `PBCluster` and master repair actions for remote peer RPC.
 
 ## Restricted SSH Key Model
 
@@ -395,15 +416,20 @@ The first local page shows local cluster identity, materialized nodes, V7 desire
 - API-key sync status per node.
 - Foreign cluster and duplicate node-id blockers.
 
-## Migration Phases
+## First Runnable Version Requirements
+
+The first runnable Cluster Sync version requires items 1-7. They may be implemented incrementally on the branch, but they are not optional post-release phases:
 
 1. Cluster state skeleton: identity files, operation writer, rebuild logic, membership ops, tests.
 2. V7 operation log: V7 ops, manifest hash, desired state, tombstones, no delete inference.
 3. API-key operation log: `UPSERT_API_KEYS`, secret blobs, install path compatibility.
-4. Restricted SSH transport: key generation, authorized-key install, forced command wrapper, master-to-VPS sync.
+4. Restricted SSH transport: key generation, authorized-key install, forced command wrapper, master-to-VPS and VPS-to-VPS RPC.
 5. PBRun gate: desired-state checks and stale warning-only policy.
-6. VPS-to-VPS peer sync: peer keys, automatic firewall rules, boot sync, periodic sync.
-7. Cluster UI: node status, stale warnings, conflicts, API-key status.
+6. `PBCluster` daemon on masters and runner VPS hosts: push-on-change fanout, received-operation fanout, boot sync, periodic reconcile, local rebuild and local materialization.
+7. Cluster UI: node status, stale warnings, conflicts, API-key status and repair/manual-sync actions.
+
+After the first runnable Cluster Sync version:
+
 8. Remove old `status_v7.json` authority in the next version.
 
 ## Tests

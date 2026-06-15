@@ -375,7 +375,7 @@
 
     - name: Build enabled PBGui service list
       set_fact:
-        pbgui_enabled_services: "{{ ['pbrun'] + (['pbremote'] if (bucket_name | default('') | string | trim) else []) + (['pbcoindata'] if (api_key | default('') | string | trim) else []) }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun'] + (['pbremote'] if (bucket_name | default('') | string | trim) else []) + (['pbcoindata'] if (api_key | default('') | string | trim) else []) }}"
 
     - name: apply VPS logging max bytes
       ini_file:

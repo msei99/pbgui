@@ -198,6 +198,54 @@ def test_get_status_initializes_empty_cluster_identity(monkeypatch, tmp_path: Pa
     assert not (tmp_path / "data" / "cluster" / "desired_state.json").exists()
 
 
+def test_set_node_sync_updates_membership_only(monkeypatch, tmp_path: Path) -> None:
+    """Cluster node sync toggles write UPDATE_NODE without changing role metadata."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(
+        root,
+        "ADD_NODE",
+        {
+            "node_id": NODE_B,
+            "role": "vps",
+            "pbname": "vps-a",
+            "sync_enabled": True,
+            "ssh_host": "203.0.113.10",
+        },
+        created_at=102,
+    )
+
+    result = cluster.set_node_sync(NODE_B, False, session=None)
+    repeat = cluster.set_node_sync(NODE_B, False, session=None)
+    operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
+    nodes = _read_json(tmp_path / "data" / "cluster" / "cluster_nodes.json")["nodes"]
+
+    assert result["changed"] is True
+    assert repeat["changed"] is False
+    assert operations[-1]["op"] == "UPDATE_NODE"
+    assert operations[-1]["node_id"] == NODE_B
+    assert operations[-1]["sync_enabled"] is False
+    assert len(operations) == 3
+    assert nodes[NODE_B]["role"] == "vps"
+    assert nodes[NODE_B]["ssh_host"] == "203.0.113.10"
+    assert nodes[NODE_B]["sync_enabled"] is False
+
+
+def test_set_node_sync_rejects_disabling_local_node(monkeypatch, tmp_path: Path) -> None:
+    """The local cluster node remains an active member for safety."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+
+    with pytest.raises(HTTPException) as exc:
+        cluster.set_node_sync(NODE_A, False, session=None)
+
+    assert exc.value.status_code == 400
+
+
 def test_bootstrap_preview_reports_missing_local_config(monkeypatch, tmp_path: Path) -> None:
     """Bootstrap preview lists local V7 configs not yet in desired state without writing state files."""
 
@@ -1034,6 +1082,7 @@ def test_bootstrap_preview_reports_known_vps_without_local_configs(monkeypatch, 
         "config_path": str(tmp_path / "data" / "vpsmanager" / "hosts" / "vps-a" / "vps-a.json"),
         "node_id": "",
         "pbname": "vps-a",
+        "sync_enabled": False,
         "ssh_host": "203.0.113.10",
         "ssh_user": "bot",
         "ssh_port": 2222,
@@ -1059,8 +1108,10 @@ def test_apply_bootstrap_records_known_vps_node(monkeypatch, tmp_path: Path) -> 
     assert result["result"]["counts"]["applied"] == 1
     assert result["after"]["counts"]["skip"] == 1
     assert operations[0]["op"] == "ADD_NODE"
+    assert operations[0]["sync_enabled"] is False
     assert node["role"] == "vps"
     assert node["pbname"] == "vps-a"
+    assert node["sync_enabled"] is False
     assert node["ssh_host"] == "203.0.113.10"
     assert node["ssh_user"] == "bot"
     assert node["ssh_port"] == 2222
@@ -1090,7 +1141,9 @@ def test_apply_bootstrap_uses_monitor_master_role(monkeypatch, tmp_path: Path) -
     assert preview["items"][0]["node_role"] == "master"
     assert result["result"]["counts"]["applied"] == 1
     assert operations[0]["role"] == "master"
+    assert operations[0]["sync_enabled"] is False
     assert node["role"] == "master"
+    assert node["sync_enabled"] is False
     assert mapping["hosts"]["remote-master"]["role"] == "master"
 
 

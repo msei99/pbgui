@@ -77,6 +77,7 @@ def test_record_cluster_config_upsert_uses_stable_node_id_for_remote_host(monkey
     assert instance["assigned_host"] == first_node_id
     assert nodes[first_node_id]["role"] == "vps"
     assert nodes[first_node_id]["pbname"] == "vps-a"
+    assert nodes[first_node_id]["sync_enabled"] is False
 
 
 def test_record_cluster_instance_delete_materializes_tombstone(monkeypatch, tmp_path: Path) -> None:

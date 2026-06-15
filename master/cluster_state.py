@@ -230,6 +230,7 @@ def write_operation(cluster_root: Path, operation: dict[str, Any]) -> Path:
             return op_path
         raise ClusterStateError(f"operation already exists with different content: {op_path}")
     _atomic_write_json(op_path, operation)
+    _touch_sync_request(paths.root)
     return op_path
 
 
@@ -381,6 +382,17 @@ def compute_config_manifest_hash(manifest: dict[str, Any]) -> str:
 
     raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
+
+def _touch_sync_request(cluster_root: Path) -> None:
+    """Best-effort notification for PBCluster that new oplog data exists."""
+
+    try:
+        paths = ClusterPaths.from_root(cluster_root)
+        paths.root.mkdir(parents=True, exist_ok=True)
+        (paths.root / "sync_request").touch()
+    except OSError:
+        pass
 
 
 def detect_duplicate_node_ids(records: Iterable[dict[str, Any]]) -> set[str]:

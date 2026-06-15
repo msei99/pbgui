@@ -40,8 +40,20 @@ MAX_OPERATION_BATCH_BYTES = 16 * 1024 * 1024
 MAX_CONFIG_BLOB_BYTES = 16 * 1024 * 1024
 MAX_CONFIG_BLOB_BATCH_BYTES = 16 * 1024 * 1024
 MAX_SECRET_BLOB_BYTES = 1024 * 1024
+MAX_GET_OPS = 1000
+MAX_GET_BLOBS = 100
 
-READ_VERBS = frozenset({"hello", "get-state-vector", "get-desired-state", "materialize-v7-preview", "materialize-api-keys-preview"})
+READ_VERBS = frozenset({
+    "hello",
+    "get-state-vector",
+    "get-desired-state",
+    "get-ops",
+    "get-blob",
+    "get-blobs",
+    "get-secret-blob",
+    "materialize-v7-preview",
+    "materialize-api-keys-preview",
+})
 WRITE_VERBS = frozenset({"join", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "rebuild", "materialize-v7", "materialize-api-keys"})
 STDIN_VERBS = frozenset({"put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob"})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
@@ -99,6 +111,32 @@ def run_command(
             "node_id": str(identity["node_id"]),
             "desired_state": materialized.get("desired_state") or {},
         }
+    if verb == "get-ops":
+        _require_arity_range(tokens, 3, 4)
+        actor = _validate_node_id(tokens[1], "actor")
+        from_seq = _parse_positive_int(tokens[2], "from_seq")
+        to_seq = _parse_positive_int(tokens[3], "to_seq") if len(tokens) == 4 else from_seq
+        operations, missing = _read_operation_range(root, actor, from_seq, to_seq, expected_cluster_id=cluster_id)
+        return {
+            "ok": True,
+            "cluster_id": cluster_id,
+            "node_id": str(identity["node_id"]),
+            "actor": actor,
+            "from_seq": from_seq,
+            "to_seq": to_seq,
+            "operations": operations,
+            "missing": missing,
+        }
+    if verb == "get-blob":
+        _require_arity(tokens, 2)
+        return _read_blob_response(paths.config_blobs, tokens[1], secret=False)
+    if verb == "get-blobs":
+        _require_arity_range(tokens, 2, MAX_GET_BLOBS + 1)
+        blobs = [_read_blob_response(paths.config_blobs, token, secret=False) for token in tokens[1:]]
+        return {"ok": True, "count": len(blobs), "blobs": blobs}
+    if verb == "get-secret-blob":
+        _require_arity(tokens, 2)
+        return _read_blob_response(paths.secret_blobs, tokens[1], secret=True)
     if verb == "materialize-v7-preview":
         return _materialize_v7_configs(root, write=False)
     if verb == "materialize-api-keys-preview":
@@ -252,6 +290,74 @@ def _require_arity(tokens: list[str], expected: int) -> None:
 
     if len(tokens) != expected:
         raise ClusterSyncCommandError(f"{tokens[0]} expects {expected - 1} argument(s)")
+
+
+def _require_arity_range(tokens: list[str], minimum: int, maximum: int) -> None:
+    """Require a token count within an inclusive range."""
+
+    if len(tokens) < minimum or len(tokens) > maximum:
+        raise ClusterSyncCommandError(
+            f"{tokens[0]} expects between {minimum - 1} and {maximum - 1} argument(s)"
+        )
+
+
+def _parse_positive_int(value: str, field: str) -> int:
+    """Parse a positive integer command argument."""
+
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ClusterSyncCommandError(f"{field} must be a positive integer") from exc
+    if number < 1:
+        raise ClusterSyncCommandError(f"{field} must be a positive integer")
+    return number
+
+
+def _read_operation_range(
+    cluster_root: Path,
+    actor: str,
+    from_seq: int,
+    to_seq: int,
+    *,
+    expected_cluster_id: str,
+) -> tuple[list[dict[str, Any]], list[int]]:
+    """Read a bounded operation range for one actor."""
+
+    if to_seq < from_seq:
+        raise ClusterSyncCommandError("to_seq must be greater than or equal to from_seq")
+    if to_seq - from_seq + 1 > MAX_GET_OPS:
+        raise ClusterSyncCommandError(f"get-ops range cannot exceed {MAX_GET_OPS} operation(s)")
+
+    operations: list[dict[str, Any]] = []
+    missing: list[int] = []
+    op_dir = ClusterPaths.from_root(cluster_root).oplog / actor
+    for seq in range(from_seq, to_seq + 1):
+        path = op_dir / f"{seq:08d}.json"
+        if not path.is_file():
+            missing.append(seq)
+            continue
+        try:
+            operation = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ClusterSyncCommandError(f"failed to read operation {actor}:{seq:08d}") from exc
+        _safe_state_call(lambda op=operation: validate_operation(op, expected_cluster_id=expected_cluster_id))
+        if str(operation.get("actor") or "") != actor or int(operation.get("seq") or 0) != seq:
+            raise ClusterSyncCommandError(f"operation path does not match actor/seq: {actor}:{seq:08d}")
+        operations.append(operation)
+    return operations, missing
+
+
+def _read_blob_response(base_dir: Path, blob_hash: str, *, secret: bool) -> dict[str, Any]:
+    """Return one verified blob as a base64 JSON response."""
+
+    validated_hash = _validate_hash(blob_hash)
+    raw = _read_verified_blob(base_dir, validated_hash, "secret blob" if secret else "config blob")
+    return {
+        "ok": True,
+        "hash": validated_hash,
+        "size": len(raw),
+        "content_b64": base64.b64encode(raw).decode("ascii"),
+    }
 
 
 def _verify_remote_node(cluster_root: Path, remote_node: str, *, allow_join: bool) -> None:

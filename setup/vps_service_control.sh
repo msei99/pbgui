@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: vps_service_control.sh start|stop|restart PBRun [PBRemote] [PBCoinData]
+Usage: vps_service_control.sh start|stop|restart PBRun [PBCluster] [PBRemote] [PBCoinData]
 
 Controls VPS PBGui services. Uses systemd user units when all requested units
 exist and the user manager is available; otherwise falls back to starter.py.
@@ -57,6 +57,7 @@ run_as_service_user() {
 unit_for() {
   case "$1" in
     PBRun) printf '%s\n' 'pbgui-pbrun.service' ;;
+    PBCluster) printf '%s\n' 'pbgui-pbcluster.service' ;;
     PBRemote) printf '%s\n' 'pbgui-pbremote.service' ;;
     PBCoinData) printf '%s\n' 'pbgui-pbcoindata.service' ;;
     *)
@@ -69,6 +70,7 @@ unit_for() {
 script_for() {
   case "$1" in
     PBRun) printf '%s\n' 'PBRun.py' ;;
+    PBCluster) printf '%s\n' 'PBCluster.py' ;;
     PBRemote) printf '%s\n' 'PBRemote.py' ;;
     PBCoinData) printf '%s\n' 'PBCoinData.py' ;;
     *) return 1 ;;
@@ -109,6 +111,7 @@ configured_value() {
 service_configured() {
   case "$1" in
     PBRun) return 0 ;;
+    PBCluster) return 0 ;;
     PBRemote) configured_value "$(ini_value pbremote bucket)" ;;
     PBCoinData) configured_value "$(ini_value coinmarketcap api_key)" ;;
     *) return 1 ;;

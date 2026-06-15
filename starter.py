@@ -5,11 +5,13 @@ import sys
 from pathlib import Path
 
 from PBRun import PBRun
+from PBCluster import PBCluster
 from PBRemote import PBRemote
 from PBCoinData import CoinData
 
 SYSTEMD_UNITS = {
     'PBRun': 'pbgui-pbrun.service',
+    'PBCluster': 'pbgui-pbcluster.service',
     'PBRemote': 'pbgui-pbremote.service',
     'PBCoinData': 'pbgui-pbcoindata.service',
 }
@@ -67,6 +69,9 @@ def _legacy_action(service: str, action: str) -> None:
         if service == 'PBRun':
             print('Start PBRun')
             PBRun().run()
+        elif service == 'PBCluster':
+            print('Start PBCluster')
+            PBCluster().run()
         elif service == 'PBRemote':
             print('Start PBRemote')
             PBRemote().run()
@@ -77,6 +82,9 @@ def _legacy_action(service: str, action: str) -> None:
         if service == 'PBRun':
             print('Stop PBRun')
             PBRun().stop()
+        elif service == 'PBCluster':
+            print('Stop PBCluster')
+            PBCluster().stop()
         elif service == 'PBRemote':
             print('Stop PBRemote')
             PBRemote().stop()
@@ -88,6 +96,10 @@ def _legacy_action(service: str, action: str) -> None:
             print('Restart PBRun')
             PBRun().stop()
             PBRun().run()
+        elif service == 'PBCluster':
+            print('Restart PBCluster')
+            PBCluster().stop()
+            PBCluster().run()
         elif service == 'PBRemote':
             print('Restart PBRemote')
             PBRemote().stop()
@@ -105,7 +117,7 @@ def main():
     group.add_argument('-s', '--start', action='store_true', help='Start')
     group.add_argument('-k', '--stop', action='store_true', help='Stop')
     group.add_argument('-r', '--restart', action='store_true', help='Restart')
-    parser.add_argument('command', choices=['PBRun', 'PBRemote', 'PBCoinData'], nargs='+')
+    parser.add_argument('command', choices=['PBRun', 'PBCluster', 'PBRemote', 'PBCoinData'], nargs='+')
 
     args = parser.parse_args()
     action = 'start' if args.start else 'stop' if args.stop else 'restart'

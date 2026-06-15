@@ -271,9 +271,10 @@
       <section class="hero">
         <div>
           <div class="hero-title">Cluster Sync</div>
-          <div class="hero-subtitle">Local visibility, bootstrap, remote probes and explicit identity join for the multi-master cluster state. Bootstrap writes local oplog entries only; remote writes happen only through explicit actions such as Join.</div>
+          <div class="hero-subtitle">Local visibility, explicit sync membership, remote probes and identity join for the multi-master cluster state. Bootstrap writes local oplog entries only; remote writes happen only through explicit actions such as Join.</div>
         </div>
         <div class="hero-actions">
+          <button class="btn" id="probe-btn" type="button">Probe Active Nodes</button>
           <button class="btn primary" id="refresh-btn" type="button">Refresh</button>
         </div>
       </section>
@@ -295,7 +296,7 @@
       <section class="panel">
         <div class="panel-head">
           <div class="panel-title">Bootstrap Cluster State</div>
-          <div class="panel-note">Automatically preview and explicitly register known VPS nodes plus existing local V7 configs.</div>
+          <div class="panel-note">Automatically preview and explicitly register known VPS nodes plus existing local V7 configs. New remote nodes start with automatic sync disabled.</div>
         </div>
         <div class="panel-body">
           <div class="bootstrap-toolbar">
@@ -304,7 +305,7 @@
               <button class="btn warn" id="bootstrap-apply-btn" type="button" disabled>Apply Bootstrap</button>
             </div>
           </div>
-          <div class="panel-note" style="margin-bottom:0.75rem;">Bootstrap writes ADD_NODE operations for known VPS hosts and UPSERT_CONFIG operations for local configs. It never infers deletes from missing files or missing VPS entries. Tombstoned instances stay blocked and must be restored explicitly.</div>
+          <div class="panel-note" style="margin-bottom:0.75rem;">Bootstrap writes ADD_NODE operations for known VPS hosts and UPSERT_CONFIG operations for local configs. New VPS nodes are candidates with Sync Off until enabled in Cluster Nodes. It never infers deletes from missing files or missing VPS entries. Tombstoned instances stay blocked and must be restored explicitly.</div>
           <div class="table-wrap" id="bootstrap-table"></div>
         </div>
       </section>
@@ -409,6 +410,7 @@
       var API_BASE = window.API_BASE || '';
       var nodeMap = {};
       var remoteProbeMap = {};
+      var localNodeId = '';
       var tableSort = {
         bootstrap: { key: 'target', dir: 'asc' },
         nodes: { key: 'pbname', dir: 'asc' },
@@ -597,6 +599,32 @@
           setMessage('Remote join failed: ' + err.message, 'err');
         }).finally(function () {
           if (btn) { btn.disabled = false; btn.textContent = 'Write Identity'; }
+        });
+      }
+
+      function toggleNodeSync(node, enable) {
+        if (!node || !node.node_id) return;
+        var label = node.pbname || node.hostname || node.node_id;
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: enable ? 'Enable Cluster Sync' : 'Disable Cluster Sync',
+          message: (enable ? 'Allow PBCluster to synchronize with ' : 'Stop PBCluster from synchronizing with ') + label + '?',
+          detail: enable
+            ? 'This only changes Cluster Sync membership. PBCluster may contact this node on later sync passes and can replicate ops/blobs/materialized files. It does not deploy services, start bots or stop bots.'
+            : 'This disables automatic Cluster Sync for this node. It does not stop services, stop bots, delete files or remove the node from VPS Manager.',
+          confirmText: enable ? 'Enable Sync' : 'Disable Sync'
+        }).then(function (accepted) {
+          if (!accepted) return;
+          setMessage((enable ? 'Enabling' : 'Disabling') + ' Cluster Sync for ' + label + '...', 'warn');
+          fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/sync?sync_enabled=' + (enable ? 'true' : 'false'), { method: 'POST' }).then(function () {
+            setMessage('Cluster Sync ' + (enable ? 'enabled' : 'disabled') + ' for ' + label + '.', 'ok');
+            return loadCluster();
+          }).catch(function (err) {
+            setMessage('Failed to update Cluster Sync membership: ' + err.message, 'err');
+          });
         });
       }
 
@@ -1034,6 +1062,7 @@
 
       function renderIdentity(status) {
         var identity = status.identity || {};
+        localNodeId = identity.node_id || '';
         var rows = [
           ['Cluster ID', identity.cluster_id],
           ['Node ID', identity.node_id],
@@ -1152,8 +1181,8 @@
             if (item.will_create_node_mapping) assigned += ' (new node mapping)';
             assignedTitle = item.remote_pbgui_dir || item.config_path || '';
             versionText = item.ssh_port || '22';
-            desiredText = item.node_role || 'vps';
-            desiredClass = 'blue';
+            desiredText = (item.node_role || 'vps') + (item.sync_enabled ? ' / sync on' : ' / sync off');
+            desiredClass = item.sync_enabled ? 'good' : 'warn';
             manifestText = item.node_id ? shortId(item.node_id) : 'new node';
             manifestTitle = item.node_id || 'new node id will be generated on apply';
           } else if (item.will_create_node_mapping) {
@@ -1243,23 +1272,27 @@
           + '</tr></thead><tbody>';
         nodeRows.forEach(function (node) {
           var enabled = node.enabled !== false && node.sync_enabled !== false;
+          var isLocal = node.node_id && node.node_id === localNodeId;
           var probe = remoteProbeMap[node.node_id] || {};
           var probeStatus = probe.status || 'unknown';
           var probeTitle = probe.error || probe.remote_node_id || probe.remote_cluster_id || probeStatus;
-          var action = '';
+          var actionParts = [];
           if (probeStatus === 'not_initialized') {
-            action = '<button class="btn small warn join-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Join</button>';
+            actionParts.push('<button class="btn small warn join-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Join</button>');
           } else if (probeStatus === 'ok') {
-            action = '<button class="btn small primary preview-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Preview</button>';
+            actionParts.push('<button class="btn small primary preview-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Preview</button>');
+          }
+          if (!isLocal) {
+            actionParts.push('<button class="btn small ' + (enabled ? 'warn' : 'primary') + ' toggle-sync-btn" type="button" data-node-id="' + esc(node.node_id) + '" data-enable="' + (enabled ? 'false' : 'true') + '">' + (enabled ? 'Disable Sync' : 'Enable Sync') + '</button>');
           }
           html += '<tr>'
             + '<td class="mono" title="' + esc(node.node_id) + '">' + esc(shortId(node.node_id)) + '</td>'
             + '<td><span class="pill blue">' + esc(node.role || 'node') + '</span></td>'
             + '<td>' + esc(node.pbname || node.hostname || 'n/a') + '</td>'
             + '<td>' + esc(node.ssh_host || node.hostname || 'local') + (node.ssh_port ? ':' + esc(node.ssh_port) : '') + '</td>'
-            + '<td><span class="pill ' + (enabled ? 'good' : 'bad') + '">' + (enabled ? 'Enabled' : 'Disabled') + '</span></td>'
+            + '<td><span class="pill ' + (enabled ? 'good' : 'warn') + '">' + (enabled ? 'Sync On' : 'Sync Off') + '</span></td>'
             + '<td title="' + esc(probeTitle) + '"><span class="pill ' + probePill(probeStatus) + '">' + esc(probeLabel(probeStatus)) + '</span></td>'
-            + '<td>' + action + '</td>'
+            + '<td>' + actionParts.join(' ') + '</td>'
             + '<td>' + esc(timeText(node.updated_at)) + '</td>'
             + '</tr>';
         });
@@ -1274,6 +1307,11 @@
         document.getElementById('nodes-table').querySelectorAll('.preview-node-btn').forEach(function (btn) {
           btn.addEventListener('click', function () {
             openRemotePreview(nodeMap[btn.getAttribute('data-node-id')] || {});
+          });
+        });
+        document.getElementById('nodes-table').querySelectorAll('.toggle-sync-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            toggleNodeSync(nodeMap[btn.getAttribute('data-node-id')] || {}, btn.getAttribute('data-enable') === 'true');
           });
         });
       }
@@ -1399,17 +1437,13 @@
 
       function loadCluster() {
         setMessage('Refreshing cluster state...', '');
+        remoteProbeMap = {};
         return Promise.all([
           fetchJson('/status'),
           fetchJson('/nodes'),
           fetchJson('/desired-state'),
-          fetchJson('/oplog?limit=50'),
-          fetchJson('/remote-status')
+          fetchJson('/oplog?limit=50')
         ]).then(function (parts) {
-          remoteProbeMap = {};
-          ((parts[4] && parts[4].probes) || []).forEach(function (probe) {
-            if (probe.node_id) remoteProbeMap[probe.node_id] = probe;
-          });
           renderStats(parts[0]);
           renderIdentity(parts[0]);
           renderNodes(parts[1]);
@@ -1423,7 +1457,26 @@
         });
       }
 
+      function loadRemoteStatus() {
+        var btn = document.getElementById('probe-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Probing...'; }
+        setMessage('Probing active Cluster Sync nodes...', 'warn');
+        return fetchJson('/remote-status').then(function (payload) {
+          remoteProbeMap = {};
+          ((payload && payload.probes) || []).forEach(function (probe) {
+            if (probe.node_id) remoteProbeMap[probe.node_id] = probe;
+          });
+          if (lastNodesPayload) renderNodes(lastNodesPayload);
+          setMessage('Remote probe complete for active Cluster Sync nodes.', 'ok');
+        }).catch(function (err) {
+          setMessage('Remote probe failed: ' + err.message, 'err');
+        }).finally(function () {
+          if (btn) { btn.disabled = false; btn.textContent = 'Probe Active Nodes'; }
+        });
+      }
+
       document.getElementById('refresh-btn').addEventListener('click', loadCluster);
+      document.getElementById('probe-btn').addEventListener('click', loadRemoteStatus);
       document.getElementById('bootstrap-apply-btn').addEventListener('click', applyBootstrap);
       document.getElementById('join-close-btn').addEventListener('click', closeJoinModal);
       document.getElementById('join-cancel-btn').addEventListener('click', closeJoinModal);

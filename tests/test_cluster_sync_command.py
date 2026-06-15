@@ -193,6 +193,22 @@ def test_put_ops_writes_valid_operation_batch(tmp_path: Path) -> None:
     assert any(item["op_id"] == f"{NODE_B}:00000002" for item in operations)
 
 
+def test_get_ops_returns_bounded_operation_range(tmp_path: Path) -> None:
+    """get-ops returns existing operations and reports missing seq numbers."""
+
+    root = _init_cluster(tmp_path)
+    op1 = _operation()
+    op3 = dict(op1)
+    op3.update({"op_id": f"{NODE_B}:00000003", "seq": 3, "node_id": NODE_A})
+    run_command(root, NODE_B, "put-ops", json.dumps({"operations": [op1, op3]}).encode("utf-8"))
+
+    payload = run_command(root, NODE_B, f"get-ops {NODE_B} 1 3")
+
+    assert payload["ok"] is True
+    assert [item["seq"] for item in payload["operations"]] == [1, 3]
+    assert payload["missing"] == [2]
+
+
 def test_put_op_rejects_foreign_cluster(tmp_path: Path) -> None:
     """put-op rejects operations from another cluster before writing."""
 
@@ -259,6 +275,13 @@ def test_put_blobs_writes_valid_blob_batch(tmp_path: Path) -> None:
         path = root / "config_blobs" / "sha256" / expected[:2] / f"{expected}.json"
         assert path.read_bytes() == raw
 
+    single = run_command(root, NODE_B, f"get-blob {hash_a}")
+    batch = run_command(root, NODE_B, f"get-blobs {hash_a} {hash_b}")
+
+    assert base64.b64decode(single["content_b64"]) == raw_a
+    assert [item["hash"] for item in batch["blobs"]] == [hash_a, hash_b]
+    assert [base64.b64decode(item["content_b64"]) for item in batch["blobs"]] == [raw_a, raw_b]
+
 
 def test_put_secret_blob_uses_owner_only_permissions(tmp_path: Path) -> None:
     """Secret blobs are stored with owner-only permissions."""
@@ -275,6 +298,10 @@ def test_put_secret_blob_uses_owner_only_permissions(tmp_path: Path) -> None:
     assert path.read_bytes() == raw
     assert payload["path"].startswith("secret_blobs/sha256/")
     assert mode == 0o600
+
+    fetched = run_command(root, NODE_B, f"get-secret-blob {blob_hash}")
+    assert fetched["hash"] == blob_hash
+    assert base64.b64decode(fetched["content_b64"]) == raw
 
 
 def test_get_desired_state_returns_materialized_snapshot(tmp_path: Path) -> None:

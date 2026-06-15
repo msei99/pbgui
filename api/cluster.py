@@ -355,7 +355,7 @@ def _node_payload_from_vps_config(node_id: str, config: dict[str, Any]) -> dict[
         "role": role,
         "pbname": hostname,
         "hostname": hostname,
-        "sync_enabled": True,
+        "sync_enabled": bool(config.get("sync_enabled", False)),
     }
     for source_key, target_key in (
         ("ssh_host", "ssh_host"),
@@ -394,6 +394,10 @@ def _node_metadata_matches(current: dict[str, Any], desired: dict[str, Any]) -> 
     """Return True when current node metadata already matches desired payload."""
 
     for key, value in desired.items():
+        if isinstance(value, bool):
+            if (current.get(key) is not False) != value:
+                return False
+            continue
         if key == "ssh_port":
             try:
                 if int(current.get(key) or 0) != int(value or 0):
@@ -1574,11 +1578,13 @@ def _build_bootstrap_plan() -> dict[str, Any]:
             node_role = _cluster_role_from_monitor_role(monitor_role or current_role or "vps")
             desired_config = dict(vps_config)
             desired_config["role"] = node_role
+            desired_config["sync_enabled"] = current.get("sync_enabled", False) if current else False
             desired_payload = _node_payload_from_vps_config(node_id or "pending", desired_config)
             item.update({
                 "node_id": node_id,
                 "pbname": hostname,
                 "node_role": node_role,
+                "sync_enabled": desired_payload.get("sync_enabled") is not False,
                 "ssh_host": vps_config.get("ssh_host") or "",
                 "ssh_user": vps_config.get("ssh_user") or "",
                 "ssh_port": vps_config.get("ssh_port") or 22,
@@ -1708,6 +1714,7 @@ def _apply_bootstrap_plan(plan: dict[str, Any]) -> dict[str, Any]:
                     _node_payload_from_vps_config(node_id, {
                         "hostname": name,
                         "role": item.get("node_role") or "vps",
+                        "sync_enabled": bool(item.get("sync_enabled", False)),
                         "ssh_host": item.get("ssh_host") or "",
                         "ssh_user": item.get("ssh_user") or "",
                         "ssh_port": item.get("ssh_port") or 22,
@@ -1784,6 +1791,41 @@ def get_nodes(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
         "cluster_nodes": cluster_nodes,
         "nodes": _node_list(cluster_nodes),
     }
+
+
+@router.post("/nodes/{node_id}/sync")
+def set_node_sync(
+    node_id: str,
+    sync_enabled: Annotated[bool, Query()],
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Enable or disable automatic Cluster Sync for one known node."""
+
+    snapshot = _load_cluster_snapshot()
+    nodes = _node_list(snapshot["cluster_nodes"])
+    node = _node_for_id(nodes, str(node_id or ""))
+    if not node:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    local_node_id = str(snapshot["identity"].get("node_id") or "")
+    if str(node.get("node_id") or "") == local_node_id and not sync_enabled:
+        raise HTTPException(status_code=400, detail="Local cluster node sync cannot be disabled")
+    if node.get("enabled") is False and sync_enabled:
+        raise HTTPException(status_code=400, detail="Disabled cluster nodes cannot be enabled for sync")
+    current = node.get("sync_enabled", True) is not False
+    if current == bool(sync_enabled):
+        return {"ok": True, "changed": False, "node": node}
+
+    append_operation(
+        _cluster_root(),
+        "UPDATE_NODE",
+        {
+            "node_id": str(node.get("node_id") or ""),
+            "sync_enabled": bool(sync_enabled),
+        },
+    )
+    materialized = rebuild_materialized_state(_cluster_root())
+    updated = _node_for_id(_node_list(materialized["cluster_nodes"]), str(node.get("node_id") or ""))
+    return {"ok": True, "changed": True, "node": updated}
 
 
 @router.get("/remote-status")

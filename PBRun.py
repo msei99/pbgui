@@ -10,7 +10,7 @@ import configparser
 import shlex
 import sys
 from pathlib import Path, PurePath
-from time import sleep
+from time import sleep, time
 import glob
 import json
 import hjson
@@ -150,6 +150,46 @@ def _cluster_gate_is_configured(cluster_root: Path) -> bool:
         "state_vector.json",
     )
     return any((cluster_root / marker).exists() for marker in markers)
+
+
+def _wait_for_cluster_boot_sync(pbgdir: Path, *, timeout: int = 20) -> dict:
+    """Wait briefly for PBCluster boot sync without making stale state fatal."""
+
+    cluster_root = default_cluster_root(Path(pbgdir))
+    if not _cluster_gate_is_configured(cluster_root):
+        return {"status": "not_configured", "waited": 0}
+
+    status_path = cluster_root / "sync_status.json"
+    started_at = int(time())
+    deadline = time() + max(0, int(timeout))
+    last_status: dict = {}
+    first_check = True
+    while first_check or time() <= deadline:
+        first_check = False
+        if status_path.is_file():
+            try:
+                payload = _read_json_file(status_path)
+            except Exception:
+                payload = {}
+            if payload:
+                last_status = payload
+                finished_at = int(payload.get("finished_at") or 0)
+                status = str(payload.get("status") or "")
+                if finished_at >= started_at - 2 and status:
+                    if status not in {"local_reconciled", "not_configured"}:
+                        _log("PBRun", f"PBCluster boot sync status: {status}", level="WARNING")
+                    return {"status": status, "waited": max(0, int(time()) - started_at)}
+        if timeout <= 0:
+            break
+        sleep(1)
+
+    previous_status = str(last_status.get("status") or "missing") if last_status else "missing"
+    _log(
+        "PBRun",
+        f"PBCluster boot sync did not complete within {max(0, int(timeout))}s; continuing with local desired state ({previous_status})",
+        level="WARNING",
+    )
+    return {"status": "timeout", "previous_status": previous_status, "waited": max(0, int(time()) - started_at)}
 
 
 def _kill_process(process: psutil.Process, context: str):
@@ -1406,6 +1446,7 @@ def main():
         sys.exit(1)
     _log("PBRun", "Start: PBRun")
     run.save_pid()
+    _wait_for_cluster_boot_sync(Path(run.pbgdir), timeout=20)
     if run.pb7dir:
         run.watch_v7()
     count = 0

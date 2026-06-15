@@ -174,6 +174,20 @@ def test_append_membership_and_rebuild_materializes_nodes(tmp_path: Path) -> Non
     assert saved == materialized["cluster_nodes"]
 
 
+def test_write_operation_requests_cluster_sync_once(monkeypatch, tmp_path: Path) -> None:
+    """A new operation wakes PBCluster, while replaying the same operation is idempotent."""
+
+    root = _init_cluster(tmp_path)
+    touched: list[Path] = []
+    monkeypatch.setattr(cluster_state_module, "_touch_sync_request", lambda cluster_root: touched.append(cluster_root))
+    operation = _operation(NODE_A, 1, "ADD_NODE", {"node_id": NODE_A, "role": "master"})
+
+    write_operation(root, operation)
+    write_operation(root, operation)
+
+    assert touched == [root]
+
+
 def test_v7_operations_materialize_move_stop_and_tombstone(tmp_path: Path) -> None:
     """V7 operations update desired state and tombstones deterministically."""
 
