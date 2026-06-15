@@ -2,7 +2,7 @@
 # Update pbgui on VPS
 # Steps:
 # 1. Clone pbgui repository
-# 2. Restart PBRun, PBRemote and PBCoinData if pbgui repository was updated
+# 2. Sync PBGui systemd units and restart PBCluster, PBRun, PBRemote and PBCoinData if pbgui repository was updated
 
 - hosts: "{{ hostname }}"
   gather_facts: yes
@@ -78,8 +78,58 @@
         state: absent
       listen: "restart pbgui"
 
-    - name: Restart PBRun, PBRemote and PBCoinData
-      script: setup/vps_service_control.sh restart PBRun PBRemote PBCoinData
+    - name: Read PBGui optional service config
+      shell: |
+        PBGUI_CONFIG_PATH={{ install_dir | quote }}/pbgui/pbgui.ini python3 - <<'PY'
+        import configparser
+        import os
+
+        config = configparser.ConfigParser()
+        config.read(os.environ.get('PBGUI_CONFIG_PATH') or '')
+
+        def configured(value):
+            normalized = str(value or '').strip()
+            lowered = normalized.lower()
+            if not normalized or lowered in {'none', 'null', 'false', '<api_key>', '<bucket_name>', '<bucket_name>:'}:
+                return False
+            return not normalized.startswith('<')
+
+        print('pbremote_configured=' + ('yes' if configured(config.get('pbremote', 'bucket', fallback='')) else 'no'))
+        print('coindata_configured=' + ('yes' if configured(config.get('coinmarketcap', 'api_key', fallback='')) else 'no'))
+        PY
+      args:
+        executable: /bin/bash
+      register: optional_service_config
+      changed_when: false
+      listen: "restart pbgui"
+
+    - name: Build enabled PBGui service list
+      set_fact:
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun'] + (['pbremote'] if ('pbremote_configured=yes' in optional_service_config.stdout_lines) else []) + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
+      listen: "restart pbgui"
+
+    - name: Sync PBGui systemd user services
+      command:
+        argv:
+          - /bin/bash
+          - "{{ install_dir }}/pbgui/setup/setup_systemd.sh"
+          - --user
+          - "{{ user }}"
+          - --pbgui-dir
+          - "{{ install_dir }}/pbgui"
+          - --python
+          - "{{ install_dir }}/venv_pbgui/bin/python"
+          - --enable
+          - "{{ pbgui_enabled_services | join(',') }}"
+          - --include-pbremote
+          - --no-start
+      register: systemd_setup_result
+      changed_when: systemd_setup_result.rc == 0
+      failed_when: false
+      listen: "restart pbgui"
+
+    - name: Restart PBCluster, PBRun, PBRemote and PBCoinData
+      script: setup/vps_service_control.sh restart PBCluster PBRun PBRemote PBCoinData
       environment:
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"

@@ -4858,6 +4858,7 @@
         syncSystemHeader('vps-system-header', status, summary, false, vRtd);
         _liveUpdateStatusFields('vps-status-fields', status, summary, false);
         _liveUpdateStatusFlags('vps-status-flags', status);
+        setHtmlIfChanged('vps-remote-services-panel', renderVpsRemoteServicesContent(detail.hostname, status));
         _liveUpdateServiceRows('vps-monitor-live', (detail.monitor || {}).v7 || []);
         _liveUpdateTelemetry((detail.monitor || {}).server || null);
       }
@@ -4872,6 +4873,8 @@
         'data/logs/PBCoinData.log': 'PBCoinData',
         'logs/PBRun.log': 'PBRun',
         'data/logs/PBRun.log': 'PBRun',
+        'logs/PBCluster.log': 'PBCluster',
+        'data/logs/PBCluster.log': 'PBCluster',
         'logs/PBRemote.log': 'PBRemote',
         'data/logs/PBRemote.log': 'PBRemote',
         'logs/PBData.log': 'PBData',
@@ -5385,6 +5388,84 @@
     function boolDot(ok) {
       if (ok === 'pending') return `<span class='dot warning'></span>Checking`;
       return `<span class='dot ${ok ? 'ok' : 'error'}'></span>${ok ? 'OK' : 'Missing'}`;
+    }
+
+    const VPS_REMOTE_SERVICE_ORDER = ['PBCluster', 'PBRun', 'PBRemote', 'PBCoinData'];
+    const VPS_REMOTE_SERVICE_UNITS = {
+      PBCluster: 'pbgui-pbcluster.service',
+      PBRun: 'pbgui-pbrun.service',
+      PBRemote: 'pbgui-pbremote.service',
+      PBCoinData: 'pbgui-pbcoindata.service'
+    };
+
+    function serviceStatusTone(status) {
+      const normalized = String(status || '').toLowerCase();
+      if (normalized === 'running' || normalized === 'restarting') return 'ok';
+      if (normalized === 'disabled') return 'info';
+      if (normalized === 'stopped' || normalized === 'failed' || normalized === 'missing') return 'error';
+      return 'warning';
+    }
+
+    function unitStatusForService(status, service) {
+      const wanted = VPS_REMOTE_SERVICE_UNITS[service] || '';
+      const migration = (status || {}).systemd_migration || {};
+      const units = Array.isArray(migration.units) ? migration.units : [];
+      for (let i = 0; i < units.length; i += 1) {
+        if (String(units[i].unit || '') === wanted) return units[i];
+      }
+      return { unit: wanted, exists: 'unknown', enabled: 'unknown', active: 'unknown' };
+    }
+
+    function remoteServiceStatus(hostname, status, service) {
+      const state = store.state || {};
+      const hostServices = ((state.services || {})[hostname] || {});
+      const optional = optionalServiceStatusFromDetail(status, service);
+      const monitored = hostServices[service] || optional || {};
+      const unit = unitStatusForService(status, service);
+      if (optional && optional.expected === false) {
+        return { status: 'disabled', label: 'Disabled', sub: optional.reason || 'Optional service is not configured', unit: unit };
+      }
+      if (unit.exists === 'no' || unit.enabled === 'not-found') {
+        return { status: 'missing', label: 'Unit missing', sub: unit.unit || 'systemd unit missing', unit: unit };
+      }
+      const rawStatus = String(monitored.status || '').trim() || (unit.active === 'active' ? 'running' : (unit.active || 'unknown'));
+      const label = rawStatus.charAt(0).toUpperCase() + rawStatus.slice(1);
+      const subParts = [];
+      if (unit.unit) subParts.push(unit.unit);
+      if (unit.enabled && unit.enabled !== 'unknown') subParts.push(unit.enabled);
+      if (monitored.manager) subParts.push(monitored.manager);
+      if (monitored.reason) subParts.push(monitored.reason);
+      if (monitored.error) subParts.push(monitored.error);
+      return { status: rawStatus, label: label, sub: subParts.join(' / ') || 'No live service status yet', unit: unit };
+    }
+
+    function renderVpsRemoteServicesContent(hostname, status) {
+      const migration = (status || {}).systemd_migration || {};
+      const migrationText = migration.migration_complete ? 'Systemd migration complete' : (migration.migration_needed ? 'Systemd migration needed' : 'Systemd migration status unknown');
+      return `<div class='panel-head'>
+          <div>
+            <div class='panel-title'>Remote Services</div>
+            <div class='panel-sub'>Read-only status from VPS Monitor and systemd migration checks. Use Systemd migration in the sidebar to install/update units.</div>
+          </div>
+        </div>
+        <div class='panel-body'>
+          <div class='notice ${migration.migration_complete ? 'ok' : 'warning'}'>${esc(migrationText)}</div>
+          <div class='status-grid'>
+            ${VPS_REMOTE_SERVICE_ORDER.map(function (service) {
+              const item = remoteServiceStatus(hostname, status, service);
+              return `<div class='status-item' data-service='${escAttr(service)}'>
+                <div class='status-label'>${esc(service)}</div>
+                <div class='status-value'><span class='dot ${escAttr(serviceStatusTone(item.status))}'></span>${esc(item.label)}</div>
+                <div class='status-sub'>${esc(item.sub)}</div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+      </div>`;
+    }
+
+    function renderVpsRemoteServices(hostname, status) {
+      return `<div class='panel' id='vps-remote-services-panel'>${renderVpsRemoteServicesContent(hostname, status)}</div>`;
     }
 
     function levelTag(level, label) {
@@ -11374,6 +11455,7 @@
             <div id='vps-status-flags'>${renderStatusFlags(status)}</div>
           </div>
         </div>
+        ${renderVpsRemoteServices(detail.hostname, status)}
         <div id='vps-monitor-live'>${renderMonitorPanel(detail.monitor || {}, false, status)}</div>`;
     }
 
@@ -11427,6 +11509,7 @@
             <div id='vps-status-flags'>${renderStatusFlags(status)}</div>
           </div>
         </div>
+        ${renderVpsRemoteServices(detail.hostname, status)}
         <div class='panel'>
           <div class='panel-head'>
             <div>

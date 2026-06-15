@@ -1335,6 +1335,7 @@ KV\tcoindata_configured\tno
 KV\tsystemd_user_manager\tyes
 KV\tsystemd_user_manager_detail\tactive
 SECTION\tunits\tBEGIN
+pbgui-pbcluster.service\tyes\tenabled\tactive
 pbgui-pbrun.service\tyes\tenabled\tactive
 pbgui-pbremote.service\tno\tnot-found\tinactive
 pbgui-pbcoindata.service\tyes\tdisabled\tinactive
@@ -1351,6 +1352,39 @@ SECTION\tprocesses\tEND
     assert status["migration_complete"] is True
     assert status["migration_needed"] is False
     assert status["units_ready"] is True
+
+
+def test_systemd_migration_requires_pbcluster_unit() -> None:
+    """PBCluster is a required VPS systemd service, not an optional unit."""
+    service = object.__new__(VPSManagerService)
+    output = """KV\tpbgui_dir_exists\tyes
+KV\tpython_exists\tyes
+KV\tstart_sh_exists\tno
+KV\tsystemctl_exists\tyes
+KV\tsystemctl_path\t/usr/bin/systemctl
+KV\tpbremote_configured\tno
+KV\tcoindata_configured\tno
+KV\tsystemd_user_manager\tyes
+KV\tsystemd_user_manager_detail\tactive
+SECTION\tunits\tBEGIN
+pbgui-pbcluster.service\tno\tnot-found\tinactive
+pbgui-pbrun.service\tyes\tenabled\tactive
+pbgui-pbremote.service\tno\tnot-found\tinactive
+pbgui-pbcoindata.service\tno\tnot-found\tinactive
+SECTION\tunits\tEND
+SECTION\tcron\tBEGIN
+SECTION\tcron\tEND
+SECTION\tprocesses\tBEGIN
+SECTION\tprocesses\tEND
+"""
+
+    parsed = service._parse_vps_systemd_migration_preview(output)
+    status = service._build_vps_systemd_migration_status_from_preview(parsed)
+
+    assert status["migration_complete"] is False
+    assert status["migration_needed"] is True
+    assert status["units_ready"] is False
+    assert [item["unit"] for item in status["required_units"]] == ["pbgui-pbcluster.service", "pbgui-pbrun.service"]
 
 
 def test_systemd_migration_running_status_does_not_reuse_stale_cache() -> None:
@@ -1429,6 +1463,7 @@ def test_monitor_host_meta_collects_systemd_migration_status() -> None:
     source = Path("master/async_monitor.py").read_text(encoding="utf-8")
     assert "result['systemd_migration'] = build_systemd_migration_status" in source
     assert "required_units" in source
+    assert "pbgui-pbcluster.service" in source
     assert "legacy_process_count" in source
 
 
@@ -1437,10 +1472,26 @@ def test_systemd_migration_playbook_enables_only_configured_optional_units() -> 
     playbook = Path("vps-migrate-systemd.yml").read_text(encoding="utf-8")
 
     assert "read PBGui optional service config" in playbook
+    assert "pbgui-pbcluster.service" in playbook
     assert "pbgui_enabled_services" in playbook
     assert "{{ pbgui_enabled_services | join(',') }}" in playbook
     assert "- pbrun,pbremote,pbcoindata" not in playbook
     assert "for unit in {{ all_systemd_units | join(' ') }}" in playbook
+
+
+@pytest.mark.parametrize("playbook_path", ["vps-update-pbgui.yml", "vps-update-pb.yml", "vps-switch-pbgui-branch.yml"])
+def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> None:
+    """PBGui code updates install new systemd units before restarting services."""
+    playbook = Path(playbook_path).read_text(encoding="utf-8")
+
+    assert "Read PBGui optional service config" in playbook
+    assert "pbgui_enabled_services" in playbook
+    assert "{{ pbgui_enabled_services | join(',') }}" in playbook
+    assert "setup/setup_systemd.sh" in playbook
+    assert "--include-pbremote" in playbook
+    assert "--no-start" in playbook
+    assert "failed_when: false" in playbook
+    assert "setup/vps_service_control.sh restart PBCluster PBRun PBRemote PBCoinData" in playbook
 
 
 def test_local_master_metrics_are_recorded_in_host_history(monkeypatch: pytest.MonkeyPatch) -> None:

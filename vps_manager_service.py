@@ -56,7 +56,7 @@ SECRET_FIELDS = (
 )
 
 ROLLING_PEAK_WINDOW_SECONDS = 60.0
-VPS_LOGGING_SERVICES = ("PBRun", "PBRemote", "PBCoinData", "sync", "vps_cleanup", "tradfi_sync")
+VPS_LOGGING_SERVICES = ("PBRun", "PBCluster", "PBRemote", "PBCoinData", "sync", "vps_cleanup", "tradfi_sync")
 VPS_LOGGING_DEFAULT_MB = 1
 VPS_LOGGING_CLEANUP_MB = 64 / 1024
 VPS_LOGGING_DEPLOY_HISTORY_FILE = Path(PBGDIR) / "data" / "vpsmanager" / "vps_logging_deploy_history.json"
@@ -89,7 +89,7 @@ DEPLOY_PROGRESS_LOG_TAIL_BYTES = 64 * 1024
 DEPLOY_PROGRESS_CACHE_LIMIT = 256
 DEPLOY_RUN_APPEAR_TIMEOUT_SECONDS = 30
 SAFE_VPS_INSTALL_PATH_RE = re.compile(r"^[A-Za-z0-9._~/-]+$")
-VPS_SYSTEMD_MIGRATION_SERVICES = ("pbrun", "pbremote", "pbcoindata")
+VPS_SYSTEMD_MIGRATION_SERVICES = ("pbcluster", "pbrun", "pbremote", "pbcoindata")
 VPS_SYSTEMD_MIGRATION_UNITS = tuple(f"pbgui-{service}.service" for service in VPS_SYSTEMD_MIGRATION_SERVICES)
 VPS_SYSTEMD_MIGRATION_STATUS_TTL_SECONDS = 90
 _PLAYBOOK_TASK_CACHE: dict[str, tuple[str, ...]] = {}
@@ -4689,8 +4689,9 @@ import os
 from pathlib import Path
 target_dir = os.path.realpath(os.environ['PBGUI_MIGRATION_DIR'])
 target_prefix = target_dir + os.sep
-scripts = ('PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
+scripts = ('PBCluster.py', 'PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
 unit_by_script = {{
+    'PBCluster.py': 'pbgui-pbcluster.service',
     'PBRun.py': 'pbgui-pbrun.service',
     'PBRemote.py': 'pbgui-pbremote.service',
     'PBCoinData.py': 'pbgui-pbcoindata.service',
@@ -5265,8 +5266,9 @@ fi"""
 import os
 from pathlib import Path
 
-scripts = ('PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
+scripts = ('PBCluster.py', 'PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
 unit_by_script = {
+    'PBCluster.py': 'pbgui-pbcluster.service',
     'PBRun.py': 'pbgui-pbrun.service',
     'PBRemote.py': 'pbgui-pbremote.service',
     'PBCoinData.py': 'pbgui-pbcoindata.service',

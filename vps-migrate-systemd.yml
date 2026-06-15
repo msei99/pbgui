@@ -12,6 +12,7 @@
     pbgui_dir: "{{ install_dir }}/pbgui"
     python_bin: "{{ install_dir }}/venv_pbgui/bin/python"
     all_systemd_units:
+      - pbgui-pbcluster.service
       - pbgui-pbrun.service
       - pbgui-pbremote.service
       - pbgui-pbcoindata.service
@@ -77,7 +78,7 @@
         pbgui_pbremote_configured: "{{ 'pbremote_configured=yes' in optional_service_config.stdout_lines }}"
         pbgui_coindata_configured: "{{ 'coindata_configured=yes' in optional_service_config.stdout_lines }}"
         pbgui_enabled_services: "{{ ['pbcluster', 'pbrun'] + (['pbremote'] if ('pbremote_configured=yes' in optional_service_config.stdout_lines) else []) + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
-        systemd_units: "{{ ['pbgui-pbrun.service'] + (['pbgui-pbremote.service'] if ('pbremote_configured=yes' in optional_service_config.stdout_lines) else []) + (['pbgui-pbcoindata.service'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
+        systemd_units: "{{ ['pbgui-pbcluster.service', 'pbgui-pbrun.service'] + (['pbgui-pbremote.service'] if ('pbremote_configured=yes' in optional_service_config.stdout_lines) else []) + (['pbgui-pbcoindata.service'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
 
     - name: copy systemd setup helper
       copy:
@@ -131,8 +132,9 @@
 
         target_dir = os.path.realpath(os.environ['PBGUI_MIGRATION_DIR'])
         target_prefix = target_dir + os.sep
-        scripts = ('PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
+        scripts = ('PBCluster.py', 'PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
         pidfiles = {
+            'PBCluster.py': 'pbcluster.pid',
             'PBRun.py': 'pbrun.pid',
             'PBRemote.py': 'pbremote.pid',
             'PBCoinData.py': 'pbcoindata.pid',

@@ -2,6 +2,7 @@
 
 - Cluster Sync: documented the first-runnable automatic `PBCluster` target architecture and added the lightweight PBCluster daemon/worker foundation with state-vector peer reconcile, operation/blob pull and push, local/remote materialization, sync-request wakeups from new oplog writes, sync status output and a PBRun boot-sync warning wait.
 - Cluster Sync: made automatic sync membership explicitly configurable per node; newly discovered VPS/master candidates now start with Sync Off, Cluster page refresh no longer probes remotes automatically, and only enabled nodes are touched by PBCluster.
+- VPS Manager: added PBCluster to remote service monitoring and VPS systemd migration checks, show remote PBGui service states in VPS detail/change views, and sync new PBGui systemd units during normal PBGui update/branch-switch actions.
 - V7 Monitor: keep the remote `running_version.txt` inotify watcher active on cluster-mode so monitoring refreshes still happen immediately while legacy `status_v7.json` config reconciliation remains disabled.
 - V7 Run: PBRun now enforces Cluster Sync desired state before starting or continuing V7 bots, records the block reason in status data, and shows blocked instances in the V7 Run list.
 - V7 Run: disabled the legacy FastAPI SSH sync path on cluster-mode so saving, activating, restoring or forced-mode edits no longer push `run_v7` files or trigger PBRun starts on VPS hosts outside explicit Cluster Sync materialization.

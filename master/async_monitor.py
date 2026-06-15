@@ -2263,8 +2263,9 @@ def ignored_process_ids():
 def collect_legacy_pbgui_processes(pbgui_dir):
     target_dir = os.path.realpath(pbgui_dir)
     target_prefix = target_dir + os.sep
-    scripts = ('PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
+    scripts = ('PBCluster.py', 'PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
     unit_by_script = {
+        'PBCluster.py': 'pbgui-pbcluster.service',
         'PBRun.py': 'pbgui-pbrun.service',
         'PBRemote.py': 'pbgui-pbremote.service',
         'PBCoinData.py': 'pbgui-pbcoindata.service',
@@ -2325,8 +2326,8 @@ def build_systemd_migration_status(pbgui_dir, pbremote_configured, coindata_conf
     systemctl_path = run(['which', 'systemctl'], timeout=5)
     systemctl_exists = bool(systemctl_path)
     user_manager_ok, user_manager_detail = systemd_user_manager_ok(systemctl_exists)
-    all_unit_names = ['pbgui-pbrun.service', 'pbgui-pbremote.service', 'pbgui-pbcoindata.service']
-    required_unit_names = ['pbgui-pbrun.service']
+    all_unit_names = ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-pbremote.service', 'pbgui-pbcoindata.service']
+    required_unit_names = ['pbgui-pbcluster.service', 'pbgui-pbrun.service']
     if pbremote_configured:
         required_unit_names.append('pbgui-pbremote.service')
     if coindata_configured:
@@ -2528,8 +2529,10 @@ class ServiceInfo:
 
 
 MONITORED_SERVICES = {
+    "PBCluster": ServiceInfo("PBCluster", "data/pid/pbcluster.pid",
+                             "PBCluster.py", "pbcluster.py"),
     "PBRun": ServiceInfo("PBRun", "data/pid/pbrun.pid",
-                         "PBRun.py", "pbrun.py"),
+                          "PBRun.py", "pbrun.py"),
     "PBRemote": ServiceInfo("PBRemote", "data/pid/pbremote.pid",
                              "PBRemote.py", "pbremote.py"),
     "PBCoinData": ServiceInfo("PBCoinData", "data/pid/pbcoindata.pid",
@@ -2537,6 +2540,7 @@ MONITORED_SERVICES = {
 }
 
 MONITORED_SERVICE_SYSTEMD_UNITS = {
+    "PBCluster": "pbgui-pbcluster.service",
     "PBRun": "pbgui-pbrun.service",
     "PBRemote": "pbgui-pbremote.service",
     "PBCoinData": "pbgui-pbcoindata.service",
