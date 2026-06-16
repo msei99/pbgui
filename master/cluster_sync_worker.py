@@ -32,6 +32,7 @@ from master.cluster_state import (
     compute_config_manifest_hash,
     default_cluster_root,
     load_operations,
+    normalize_node_sync_mode,
     read_local_identity,
     rebuild_materialized_state,
     validate_operation,
@@ -224,8 +225,15 @@ class ClusterSyncWorker:
             peer = nodes.get(peer_id) if isinstance(nodes.get(peer_id), dict) else {}
             if str(peer_id) == local_node_id:
                 continue
-            if not _peer_sync_enabled(peer):
+            peer_mode = _peer_sync_mode(peer)
+            if peer_mode == "disabled":
                 results.append(_peer_result(peer_id, peer, ok=False, status="disabled", reason="sync is disabled"))
+                continue
+            if peer_mode == "outbound_only":
+                results.append(_peer_result(peer_id, peer, ok=True, status="outbound_only", reason="peer is outbound-only"))
+                continue
+            if not str(peer.get("ssh_host") or "").strip():
+                results.append(_peer_result(peer_id, peer, ok=False, status="config_error", reason="reachable peer has no ssh_host"))
                 continue
             backoff = self._peer_backoff.get(str(peer_id)) or {}
             next_retry = float(backoff.get("next_retry") or 0)
@@ -442,9 +450,9 @@ class SshClusterPeerClient:
     def _ssh_command(self, peer: dict[str, Any], local_node_id: str, command_text: str) -> list[str]:
         """Build an ssh command for one peer."""
 
-        host = str(peer.get("ssh_host") or peer.get("hostname") or peer.get("pbname") or "").strip()
+        host = str(peer.get("ssh_host") or "").strip()
         if not host:
-            raise ClusterSyncWorkerError("peer has no ssh_host")
+            raise ClusterSyncWorkerError("reachable peer has no ssh_host")
         user = str(peer.get("ssh_user") or "").strip()
         target = f"{user}@{host}" if user else host
         try:
@@ -474,16 +482,16 @@ def _compact_materialization(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _peer_sync_enabled(peer: dict[str, Any]) -> bool:
-    """Return whether a materialized node should participate in peer sync."""
+def _peer_sync_mode(peer: dict[str, Any]) -> str:
+    """Return the effective peer sync mode for a materialized node."""
 
     if not isinstance(peer, dict):
-        return False
+        return "disabled"
     if peer.get("enabled", True) is False:
-        return False
-    if peer.get("sync_enabled", True) is False:
-        return False
-    return peer.get("state_replica", True) is not False
+        return "disabled"
+    if peer.get("state_replica", True) is False:
+        return "disabled"
+    return normalize_node_sync_mode(peer)
 
 
 def _peer_result(peer_id: str, peer: dict[str, Any], *, ok: bool, status: str, reason: str = "") -> dict[str, Any]:

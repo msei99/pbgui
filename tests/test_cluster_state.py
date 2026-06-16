@@ -168,7 +168,10 @@ def test_append_membership_and_rebuild_materializes_nodes(tmp_path: Path) -> Non
 
     nodes = materialized["cluster_nodes"]["nodes"]
     assert nodes[NODE_A]["role"] == "master"
+    assert nodes[NODE_A]["sync_mode"] == "outbound_only"
+    assert nodes[NODE_A]["sync_enabled"] is True
     assert nodes[NODE_B]["ssh_host"] == "10.0.0.3"
+    assert nodes[NODE_B]["sync_mode"] == "reachable"
     assert materialized["state_vector"] == {NODE_A: 3}
     saved = json.loads((root / "cluster_nodes.json").read_text(encoding="utf-8"))
     assert saved == materialized["cluster_nodes"]

@@ -47,6 +47,8 @@ def test_record_cluster_config_upsert_materializes_disabled_instance(monkeypatch
     assert instance["assigned_host"] in nodes
     assert nodes[instance["assigned_host"]]["role"] == "master"
     assert nodes[instance["assigned_host"]]["pbname"] == "master"
+    assert nodes[instance["assigned_host"]]["sync_mode"] == "outbound_only"
+    assert nodes[instance["assigned_host"]]["sync_enabled"] is True
 
 
 def test_record_cluster_config_upsert_uses_stable_node_id_for_remote_host(monkeypatch, tmp_path: Path) -> None:
@@ -77,6 +79,7 @@ def test_record_cluster_config_upsert_uses_stable_node_id_for_remote_host(monkey
     assert instance["assigned_host"] == first_node_id
     assert nodes[first_node_id]["role"] == "vps"
     assert nodes[first_node_id]["pbname"] == "vps-a"
+    assert nodes[first_node_id]["sync_mode"] == "disabled"
     assert nodes[first_node_id]["sync_enabled"] is False
 
 

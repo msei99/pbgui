@@ -41,6 +41,7 @@ V7_OPS = frozenset({
 })
 API_KEY_OPS = frozenset({"UPSERT_API_KEYS"})
 SUPPORTED_OPS = MEMBERSHIP_OPS | V7_OPS | API_KEY_OPS
+SYNC_MODES = frozenset({"disabled", "outbound_only", "reachable"})
 
 SYNC_EXCLUDE_FILES = frozenset({
     "approved_coins.json",
@@ -164,6 +165,30 @@ def ensure_local_identity(
             )
     _atomic_write_json(paths.node_identity, identity)
     return identity
+
+
+def normalize_node_sync_mode(node: dict[str, Any]) -> str:
+    """Return the effective Cluster Sync peer mode for a node record."""
+
+    if not isinstance(node, dict):
+        return "disabled"
+    raw_mode = str(node.get("sync_mode") or "").strip().lower()
+    if raw_mode in SYNC_MODES:
+        return raw_mode
+    if node.get("sync_enabled", True) is False:
+        return "disabled"
+    if str(node.get("ssh_host") or "").strip():
+        return "reachable"
+    return "outbound_only"
+
+
+def normalize_node_sync_fields(node: dict[str, Any]) -> dict[str, Any]:
+    """Normalize sync_mode and legacy sync_enabled on a node record."""
+
+    mode = normalize_node_sync_mode(node)
+    node["sync_mode"] = mode
+    node["sync_enabled"] = mode != "disabled"
+    return node
 
 
 def read_local_identity(cluster_root: Path) -> dict[str, Any]:
@@ -418,14 +443,19 @@ def _apply_membership(nodes: dict[str, dict[str, Any]], operation: dict[str, Any
     current = dict(nodes.get(node_id, {"node_id": node_id}))
     if op == "DISABLE_NODE":
         current["enabled"] = False
+        current["sync_mode"] = "disabled"
+        current["sync_enabled"] = False
         current["updated_at"] = int(operation["created_at"])
         nodes[node_id] = current
         return
+    if "sync_enabled" in operation and "sync_mode" not in operation:
+        current.pop("sync_mode", None)
     for key, value in operation.items():
         if key in {"schema_version", "cluster_id", "op_id", "actor", "seq", "op", "created_at"}:
             continue
         current[key] = value
     current.setdefault("enabled", True)
+    normalize_node_sync_fields(current)
     current["updated_at"] = int(operation["created_at"])
     nodes[node_id] = current
 
@@ -544,6 +574,8 @@ def _validate_membership_payload(operation: dict[str, Any]) -> None:
     _validate_node_id(str(operation["node_id"]))
     if "role" in operation and str(operation["role"]) not in {"master", "vps"}:
         raise ClusterStateError("node role must be master or vps")
+    if "sync_mode" in operation and str(operation["sync_mode"] or "").strip().lower() not in SYNC_MODES:
+        raise ClusterStateError("node sync_mode must be disabled, outbound_only or reachable")
 
 
 def _validate_v7_payload(operation: dict[str, Any]) -> None:

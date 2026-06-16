@@ -32,6 +32,7 @@ from master.cluster_state import (
     ensure_local_identity,
     generate_node_id,
     load_operations,
+    normalize_node_sync_mode,
     rebuild_materialized_state,
 )
 from pb7_config import load_pb7_config
@@ -45,6 +46,7 @@ _REMOTE_PUSH_JOBS: dict[str, dict[str, Any]] = {}
 _REMOTE_PUSH_JOB_TTL_SECONDS = 3600
 _REMOTE_PUSH_ACTIVE_STATES = frozenset({"queued", "running"})
 _CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
+_EDITABLE_NODE_SYNC_MODES = frozenset({"disabled", "outbound_only", "reachable"})
 
 
 def _cluster_root() -> Path:
@@ -350,12 +352,16 @@ def _node_payload_from_vps_config(node_id: str, config: dict[str, Any]) -> dict[
 
     hostname = str(config.get("hostname") or "").strip()
     role = _cluster_role_from_monitor_role(config.get("role"))
+    sync_mode = str(config.get("sync_mode") or "").strip().lower()
+    if sync_mode not in _EDITABLE_NODE_SYNC_MODES:
+        sync_mode = "disabled" if config.get("sync_enabled", False) is False else ("reachable" if str(config.get("ssh_host") or "").strip() else "outbound_only")
     payload: dict[str, Any] = {
         "node_id": node_id,
         "role": role,
         "pbname": hostname,
         "hostname": hostname,
-        "sync_enabled": bool(config.get("sync_enabled", False)),
+        "sync_mode": sync_mode,
+        "sync_enabled": sync_mode != "disabled",
     }
     for source_key, target_key in (
         ("ssh_host", "ssh_host"),
@@ -393,6 +399,8 @@ def _current_node_for_host(
 def _node_metadata_matches(current: dict[str, Any], desired: dict[str, Any]) -> bool:
     """Return True when current node metadata already matches desired payload."""
 
+    if normalize_node_sync_mode(current) != normalize_node_sync_mode(desired):
+        return False
     for key, value in desired.items():
         if isinstance(value, bool):
             if (current.get(key) is not False) != value:
@@ -408,6 +416,34 @@ def _node_metadata_matches(current: dict[str, Any], desired: dict[str, Any]) -> 
         if str(current.get(key) or "") != str(value or ""):
             return False
     return True
+
+
+def _validate_node_sync_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate editable Cluster node sync settings from the UI."""
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+    sync_mode = str(payload.get("sync_mode") or "").strip().lower()
+    if sync_mode not in _EDITABLE_NODE_SYNC_MODES:
+        raise HTTPException(status_code=400, detail="sync_mode must be disabled, outbound_only or reachable")
+    ssh_host = str(payload.get("ssh_host") or "").strip()
+    ssh_user = str(payload.get("ssh_user") or "").strip()
+    raw_port = payload.get("ssh_port", 22)
+    try:
+        ssh_port = int(raw_port or 22)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="ssh_port must be a number") from exc
+    if ssh_port < 1 or ssh_port > 65535:
+        raise HTTPException(status_code=400, detail="ssh_port must be between 1 and 65535")
+    if sync_mode == "reachable" and not ssh_host:
+        raise HTTPException(status_code=400, detail="Reachable nodes require an SSH host")
+    return {
+        "sync_mode": sync_mode,
+        "sync_enabled": sync_mode != "disabled",
+        "ssh_host": ssh_host,
+        "ssh_user": ssh_user,
+        "ssh_port": ssh_port,
+    }
 
 
 def _cluster_remote_command(remote_pbgui_dir: str | None, local_node_id: str, command_text: str) -> str:
@@ -557,8 +593,13 @@ async def _probe_cluster_node(node: dict[str, Any], identity: dict[str, Any]) ->
     local_node_id = str(identity.get("node_id") or "")
     if not node_id or node_id == local_node_id:
         return {"node_id": node_id, "hostname": hostname, "status": "local", "ok": True}
-    if node.get("enabled") is False or node.get("sync_enabled") is False:
+    sync_mode = normalize_node_sync_mode(node)
+    if node.get("enabled") is False or sync_mode == "disabled":
         return {"node_id": node_id, "hostname": hostname, "status": "disabled", "ok": False}
+    if sync_mode == "outbound_only":
+        return {"node_id": node_id, "hostname": hostname, "status": "outbound_only", "ok": True}
+    if not str(node.get("ssh_host") or "").strip():
+        return {"node_id": node_id, "hostname": hostname, "status": "config_error", "ok": False, "error": "reachable node has no SSH host"}
     if not hostname:
         return {"node_id": node_id, "hostname": hostname, "status": "missing_hostname", "ok": False}
     monitor = get_monitor()
@@ -648,8 +689,13 @@ async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> di
     local_node_id = str(identity.get("node_id") or "")
     if not node_id or node_id == local_node_id:
         raise HTTPException(status_code=400, detail="Cannot join the local node")
-    if node.get("enabled") is False or node.get("sync_enabled") is False:
+    sync_mode = normalize_node_sync_mode(node)
+    if node.get("enabled") is False or sync_mode == "disabled":
         raise HTTPException(status_code=400, detail="Cluster node is disabled")
+    if sync_mode == "outbound_only":
+        raise HTTPException(status_code=400, detail="Cluster node is outbound-only")
+    if not str(node.get("ssh_host") or "").strip():
+        raise HTTPException(status_code=400, detail="Reachable cluster node has no SSH host")
     if not hostname:
         raise HTTPException(status_code=400, detail="Cluster node has no hostname")
     monitor = get_monitor()
@@ -704,8 +750,13 @@ def _require_remote_node_ready(node: dict[str, Any], identity: dict[str, Any]) -
     local_node_id = str(identity.get("node_id") or "")
     if not node_id or node_id == local_node_id:
         raise HTTPException(status_code=400, detail="Cannot read the local node as a remote")
-    if node.get("enabled") is False or node.get("sync_enabled") is False:
+    sync_mode = normalize_node_sync_mode(node)
+    if node.get("enabled") is False or sync_mode == "disabled":
         raise HTTPException(status_code=400, detail="Cluster node is disabled")
+    if sync_mode == "outbound_only":
+        raise HTTPException(status_code=400, detail="Cluster node is outbound-only")
+    if not str(node.get("ssh_host") or "").strip():
+        raise HTTPException(status_code=400, detail="Reachable cluster node has no SSH host")
     if not hostname:
         raise HTTPException(status_code=400, detail="Cluster node has no hostname")
     return node_id, hostname, local_node_id
@@ -1578,12 +1629,14 @@ def _build_bootstrap_plan() -> dict[str, Any]:
             node_role = _cluster_role_from_monitor_role(monitor_role or current_role or "vps")
             desired_config = dict(vps_config)
             desired_config["role"] = node_role
-            desired_config["sync_enabled"] = current.get("sync_enabled", False) if current else False
+            desired_config["sync_mode"] = normalize_node_sync_mode(current) if current else "disabled"
+            desired_config["sync_enabled"] = desired_config["sync_mode"] != "disabled"
             desired_payload = _node_payload_from_vps_config(node_id or "pending", desired_config)
             item.update({
                 "node_id": node_id,
                 "pbname": hostname,
                 "node_role": node_role,
+                "sync_mode": desired_payload.get("sync_mode") or "disabled",
                 "sync_enabled": desired_payload.get("sync_enabled") is not False,
                 "ssh_host": vps_config.get("ssh_host") or "",
                 "ssh_user": vps_config.get("ssh_user") or "",
@@ -1714,7 +1767,7 @@ def _apply_bootstrap_plan(plan: dict[str, Any]) -> dict[str, Any]:
                     _node_payload_from_vps_config(node_id, {
                         "hostname": name,
                         "role": item.get("node_role") or "vps",
-                        "sync_enabled": bool(item.get("sync_enabled", False)),
+                        "sync_mode": item.get("sync_mode") or "disabled",
                         "ssh_host": item.get("ssh_host") or "",
                         "ssh_user": item.get("ssh_user") or "",
                         "ssh_port": item.get("ssh_port") or 22,
@@ -1821,6 +1874,54 @@ def set_node_sync(
         {
             "node_id": str(node.get("node_id") or ""),
             "sync_enabled": bool(sync_enabled),
+            "sync_mode": "reachable" if sync_enabled and str(node.get("ssh_host") or "").strip() else ("outbound_only" if sync_enabled else "disabled"),
+        },
+    )
+    materialized = rebuild_materialized_state(_cluster_root())
+    updated = _node_for_id(_node_list(materialized["cluster_nodes"]), str(node.get("node_id") or ""))
+    return {"ok": True, "changed": True, "node": updated}
+
+
+@router.post("/nodes/{node_id}/settings")
+async def update_node_settings(
+    node_id: str,
+    request: Request,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Update editable Cluster Sync settings for one known node."""
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from exc
+    settings = _validate_node_sync_settings(payload)
+    snapshot = _load_cluster_snapshot()
+    nodes = _node_list(snapshot["cluster_nodes"])
+    node = _node_for_id(nodes, str(node_id or ""))
+    if not node:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    local_node_id = str(snapshot["identity"].get("node_id") or "")
+    if str(node.get("node_id") or "") == local_node_id and settings["sync_mode"] == "disabled":
+        raise HTTPException(status_code=400, detail="Local cluster node sync cannot be disabled")
+    if node.get("enabled") is False and settings["sync_mode"] != "disabled":
+        raise HTTPException(status_code=400, detail="Disabled cluster nodes cannot be enabled for sync")
+
+    current = {
+        "sync_mode": normalize_node_sync_mode(node),
+        "sync_enabled": normalize_node_sync_mode(node) != "disabled",
+        "ssh_host": str(node.get("ssh_host") or ""),
+        "ssh_user": str(node.get("ssh_user") or ""),
+        "ssh_port": int(node.get("ssh_port") or 22),
+    }
+    if current == settings:
+        return {"ok": True, "changed": False, "node": node}
+
+    append_operation(
+        _cluster_root(),
+        "UPDATE_NODE",
+        {
+            "node_id": str(node.get("node_id") or ""),
+            **settings,
         },
     )
     materialized = rebuild_materialized_state(_cluster_root())

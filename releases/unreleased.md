@@ -2,6 +2,7 @@
 
 - Cluster Sync: documented the first-runnable automatic `PBCluster` target architecture and added the lightweight PBCluster daemon/worker foundation with state-vector peer reconcile, operation/blob pull and push, local/remote materialization, sync-request wakeups from new oplog writes, sync status output and a PBRun boot-sync warning wait.
 - Cluster Sync: made automatic sync membership explicitly configurable per node; newly discovered VPS/master candidates now start with Sync Off, Cluster page refresh no longer probes remotes automatically, and only enabled nodes are touched by PBCluster.
+- Cluster Sync: split node sync participation from inbound reachability with editable Disabled, Outbound Only and Reachable via SSH modes so local masters do not need public SSH endpoints.
 - VPS Manager: added PBCluster to remote service monitoring and VPS systemd migration checks, show remote PBGui service states in VPS detail/change views, and sync new PBGui systemd units during normal PBGui update/branch-switch actions.
 - VPS Monitor: treat PBCluster as alertable only for nodes with Cluster Sync enabled, silently clear false PBCluster alerts from Sync Off nodes, and prevent PBCluster auto-restart from creating legacy starter.py processes.
 - VPS Manager: resolve PBCluster in the remote Host Log Viewer to `data/logs/PBCluster.log` so joined hosts show the service log again.

@@ -156,6 +156,7 @@ def _cluster_node_payload(node_id: str, hostname: str, role: str) -> dict:
         "role": role,
         "pbname": hostname,
         "hostname": hostname,
+        "sync_mode": "outbound_only" if role == "master" else "disabled",
         "sync_enabled": role == "master",
     }
     if role == "vps" and _monitor and _monitor.pool:

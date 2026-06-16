@@ -33,6 +33,15 @@ class _LocalPeerClient:
         return run_command(self.roots[str(peer["node_id"])], local_node_id, command_text, raw, allow_join=True)
 
 
+class _FailingPeerClient:
+    """Peer client that fails if an outbound-only peer is contacted."""
+
+    def run(self, peer: dict, local_node_id: str, command_text: str, payload: str | bytes | None = None) -> dict:
+        """Fail when a test unexpectedly attempts peer transport."""
+
+        raise AssertionError("outbound-only peer must not be contacted")
+
+
 def _write_cluster_blob(cluster_root: Path, blob_hash: str, raw: bytes) -> None:
     """Write one verified config blob into a test cluster root."""
     assert hashlib.sha256(raw).hexdigest() == blob_hash.removeprefix("sha256:")
@@ -102,6 +111,49 @@ def test_cluster_sync_worker_consumes_sync_request_trigger(tmp_path: Path) -> No
 
     assert worker._consume_trigger_change() is True
     assert worker._consume_trigger_change() is False
+
+
+def test_cluster_sync_worker_skips_outbound_only_peer(tmp_path: Path) -> None:
+    """Outbound-only peers participate in state but are not contacted over SSH."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="vps", pbname="runner-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "vps", "pbname": "runner-a"}, created_at=100)
+    append_operation(
+        cluster_root,
+        "ADD_NODE",
+        {"node_id": NODE_B, "role": "master", "pbname": "master-b", "sync_mode": "outbound_only"},
+        created_at=101,
+    )
+    worker = ClusterSyncWorker(tmp_path, peer_client=_FailingPeerClient())
+
+    status = worker.run_once(reason="test")
+
+    assert status["ok"] is True
+    assert status["peers"][0]["status"] == "outbound_only"
+    assert status["peers"][0]["ok"] is True
+
+
+def test_cluster_sync_worker_reports_reachable_peer_without_ssh_host(tmp_path: Path) -> None:
+    """Reachable peers without ssh_host are config errors, not hostname fallback targets."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="vps", pbname="runner-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "vps", "pbname": "runner-a"}, created_at=100)
+    append_operation(
+        cluster_root,
+        "ADD_NODE",
+        {"node_id": NODE_B, "role": "master", "pbname": "master-b", "sync_mode": "reachable"},
+        created_at=101,
+    )
+    worker = ClusterSyncWorker(tmp_path, peer_client=_FailingPeerClient())
+
+    status = worker.run_once(reason="test")
+
+    assert status["ok"] is True
+    assert status["peers_ok"] == 0
+    assert status["peers"][0]["status"] == "config_error"
+    assert "ssh_host" in status["peers"][0]["reason"]
 
 
 def test_cluster_sync_worker_pushes_ops_blobs_and_remote_materializes(tmp_path: Path) -> None:

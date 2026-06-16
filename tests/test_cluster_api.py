@@ -78,6 +78,33 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _reachable_vps_payload(**overrides) -> dict:
+    """Return a node payload that is explicitly reachable over SSH."""
+
+    payload = {
+        "node_id": NODE_B,
+        "role": "vps",
+        "pbname": "vps-a",
+        "sync_mode": "reachable",
+        "sync_enabled": True,
+        "ssh_host": "vps-a",
+    }
+    payload.update(overrides)
+    return payload
+
+
+class _JsonRequest:
+    """Minimal async request object for direct route-handler tests."""
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    async def json(self) -> dict:
+        """Return the configured request payload."""
+
+        return self._payload
+
+
 def _write_cluster_blob(root: Path, base: str, raw: bytes) -> str:
     """Write one content-addressed cluster blob and return its sha256 hash."""
 
@@ -227,10 +254,12 @@ def test_set_node_sync_updates_membership_only(monkeypatch, tmp_path: Path) -> N
     assert operations[-1]["op"] == "UPDATE_NODE"
     assert operations[-1]["node_id"] == NODE_B
     assert operations[-1]["sync_enabled"] is False
+    assert operations[-1]["sync_mode"] == "disabled"
     assert len(operations) == 3
     assert nodes[NODE_B]["role"] == "vps"
     assert nodes[NODE_B]["ssh_host"] == "203.0.113.10"
     assert nodes[NODE_B]["sync_enabled"] is False
+    assert nodes[NODE_B]["sync_mode"] == "disabled"
 
 
 def test_set_node_sync_rejects_disabling_local_node(monkeypatch, tmp_path: Path) -> None:
@@ -242,6 +271,77 @@ def test_set_node_sync_rejects_disabling_local_node(monkeypatch, tmp_path: Path)
 
     with pytest.raises(HTTPException) as exc:
         cluster.set_node_sync(NODE_A, False, session=None)
+
+    assert exc.value.status_code == 400
+
+
+def test_update_node_settings_records_reachable_sync_mode(monkeypatch, tmp_path: Path) -> None:
+    """Node settings updates record sync mode and SSH endpoint metadata."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(
+        root,
+        "ADD_NODE",
+        {"node_id": NODE_B, "role": "vps", "pbname": "vps-a", "sync_mode": "outbound_only"},
+        created_at=102,
+    )
+
+    result = asyncio.run(
+        cluster.update_node_settings(
+            NODE_B,
+            _JsonRequest({"sync_mode": "reachable", "ssh_host": "203.0.113.10", "ssh_user": "bot", "ssh_port": "2222"}),
+            session=None,
+        )
+    )
+    repeat = asyncio.run(
+        cluster.update_node_settings(
+            NODE_B,
+            _JsonRequest({"sync_mode": "reachable", "ssh_host": "203.0.113.10", "ssh_user": "bot", "ssh_port": 2222}),
+            session=None,
+        )
+    )
+    operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
+    nodes = _read_json(tmp_path / "data" / "cluster" / "cluster_nodes.json")["nodes"]
+
+    assert result["changed"] is True
+    assert repeat["changed"] is False
+    assert operations[-1]["op"] == "UPDATE_NODE"
+    assert operations[-1]["sync_mode"] == "reachable"
+    assert operations[-1]["sync_enabled"] is True
+    assert operations[-1]["ssh_host"] == "203.0.113.10"
+    assert operations[-1]["ssh_user"] == "bot"
+    assert operations[-1]["ssh_port"] == 2222
+    assert len(operations) == 3
+    assert nodes[NODE_B]["sync_mode"] == "reachable"
+    assert nodes[NODE_B]["sync_enabled"] is True
+    assert nodes[NODE_B]["ssh_host"] == "203.0.113.10"
+
+
+def test_update_node_settings_rejects_reachable_without_host(monkeypatch, tmp_path: Path) -> None:
+    """Reachable nodes require an explicit SSH host instead of hostname fallback."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=102)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(cluster.update_node_settings(NODE_B, _JsonRequest({"sync_mode": "reachable", "ssh_host": ""}), session=None))
+
+    assert exc.value.status_code == 400
+
+
+def test_update_node_settings_rejects_disabling_local_node(monkeypatch, tmp_path: Path) -> None:
+    """The settings endpoint keeps the local node active."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(cluster.update_node_settings(NODE_A, _JsonRequest({"sync_mode": "disabled"}), session=None))
 
     assert exc.value.status_code == 400
 
@@ -289,7 +389,7 @@ def test_remote_status_reports_successful_hello(monkeypatch, tmp_path: Path) -> 
     append_operation(
         root,
         "ADD_NODE",
-        {"node_id": NODE_B, "role": "vps", "pbname": "vps-a", "remote_pbgui_dir": "software/pbgui"},
+        _reachable_vps_payload(remote_pbgui_dir="software/pbgui"),
         created_at=101,
     )
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
@@ -327,7 +427,7 @@ def test_remote_status_reports_uninitialized_remote(monkeypatch, tmp_path: Path)
     """Remote status classifies an uninitialized remote cluster identity."""
 
     root = _init_cluster(tmp_path)
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
 
     class FakePool:
@@ -351,7 +451,7 @@ def test_remote_status_reports_node_mismatch(monkeypatch, tmp_path: Path) -> Non
 
     root = _init_cluster(tmp_path)
     unexpected_node = "pbgui-node-00000000-0000-4000-8000-000000000099"
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
 
     class FakePool:
@@ -374,7 +474,7 @@ def test_remote_join_writes_identity_for_known_node(monkeypatch, tmp_path: Path)
     """Remote join invokes the restricted wrapper for a known uninitialized node."""
 
     root = _init_cluster(tmp_path)
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
     calls: list[tuple[str, str, int]] = []
 
@@ -402,7 +502,7 @@ def test_remote_join_rejects_foreign_remote_identity(monkeypatch, tmp_path: Path
     """Remote join surfaces wrapper rejections without hiding the safety error."""
 
     root = _init_cluster(tmp_path)
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
 
     class FakePool:
@@ -426,7 +526,7 @@ def test_remote_preview_compares_state_without_writes(monkeypatch, tmp_path: Pat
     """Remote preview reads vector and desired state and returns a compact diff."""
 
     root = _init_cluster(tmp_path)
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     append_operation(
         root,
         "UPSERT_CONFIG",
@@ -515,7 +615,7 @@ def test_remote_materialize_v7_requires_synchronized_state(monkeypatch, tmp_path
     """Remote materialization refuses to write when the remote state vector is stale."""
 
     root = _init_cluster(tmp_path)
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     append_operation(
         root,
         "UPSERT_CONFIG",
@@ -552,7 +652,7 @@ def test_remote_materialize_v7_writes_after_state_match(monkeypatch, tmp_path: P
     """Remote materialization runs only after vector and desired state match local state."""
 
     root = _init_cluster(tmp_path)
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     append_operation(
         root,
         "UPSERT_CONFIG",
@@ -604,7 +704,7 @@ def test_remote_materialize_api_keys_writes_after_state_match(monkeypatch, tmp_p
     """Remote API-key materialization runs only after vector and desired state match local state."""
 
     root = _init_cluster(tmp_path)
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     append_operation(
         root,
         "UPSERT_API_KEYS",
@@ -650,7 +750,7 @@ def test_remote_push_ops_writes_missing_local_ops_and_rebuilds(monkeypatch, tmp_
     """Remote push sends missing local operations and then rebuilds remote state."""
 
     root = _init_cluster(tmp_path)
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     op = append_operation(
         root,
         "UPSERT_CONFIG",
@@ -741,7 +841,7 @@ def test_remote_push_ops_uploads_current_config_blobs_before_ops(monkeypatch, tm
     instance_dir = _write_v7_config(tmp_path, "local_inst", 2)
     (instance_dir / "override.json").write_text(json.dumps({"enabled": True}), encoding="utf-8")
     manifest_hash = compute_config_manifest_hash(build_config_manifest(instance_dir))
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     op = append_operation(
         root,
         "UPSERT_CONFIG",
@@ -792,7 +892,7 @@ def test_remote_push_ops_uploads_api_key_secret_blobs_before_ops(monkeypatch, tm
     root = _init_cluster(tmp_path)
     payload_hash = _write_cluster_blob(root, "config_blobs", b'{"redacted":true}')
     secret_hash = _write_cluster_blob(root, "secret_blobs", b'{"_api_serial":7,"user":{"secret":"s"}}')
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     op = append_operation(
         root,
         "UPSERT_API_KEYS",
@@ -838,7 +938,7 @@ def test_remote_push_ops_rejects_when_remote_has_unknown_ops(monkeypatch, tmp_pa
     """Remote push refuses to write when the remote has operations missing locally."""
 
     root = _init_cluster(tmp_path)
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     append_operation(
         root,
         "UPSERT_CONFIG",
@@ -875,7 +975,7 @@ def test_remote_push_ops_noops_when_remote_is_current(monkeypatch, tmp_path: Pat
     """Remote push avoids put-op and rebuild when the remote already has all local operations."""
 
     root = _init_cluster(tmp_path)
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     append_operation(
         root,
         "UPSERT_CONFIG",
@@ -912,7 +1012,7 @@ def test_remote_push_ops_can_defer_rebuild_for_progress_batches(monkeypatch, tmp
     """Remote push can send a bounded batch without rebuilding until the final batch."""
 
     root = _init_cluster(tmp_path)
-    op1 = append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    op1 = append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     append_operation(
         root,
         "UPSERT_CONFIG",
@@ -958,7 +1058,7 @@ def test_remote_push_ops_falls_back_when_bulk_is_unavailable(monkeypatch, tmp_pa
     """Remote push falls back to put-op when the remote wrapper lacks put-ops."""
 
     root = _init_cluster(tmp_path)
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     op = append_operation(
         root,
         "UPSERT_CONFIG",
@@ -1007,7 +1107,7 @@ def test_remote_push_job_reports_progress_without_splitting_frontend_batches(mon
 
     cluster._REMOTE_PUSH_JOBS.clear()
     root = _init_cluster(tmp_path)
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     append_operation(
         root,
         "UPSERT_CONFIG",
@@ -1082,6 +1182,7 @@ def test_bootstrap_preview_reports_known_vps_without_local_configs(monkeypatch, 
         "config_path": str(tmp_path / "data" / "vpsmanager" / "hosts" / "vps-a" / "vps-a.json"),
         "node_id": "",
         "pbname": "vps-a",
+        "sync_mode": "disabled",
         "sync_enabled": False,
         "ssh_host": "203.0.113.10",
         "ssh_user": "bot",
@@ -1108,9 +1209,11 @@ def test_apply_bootstrap_records_known_vps_node(monkeypatch, tmp_path: Path) -> 
     assert result["result"]["counts"]["applied"] == 1
     assert result["after"]["counts"]["skip"] == 1
     assert operations[0]["op"] == "ADD_NODE"
+    assert operations[0]["sync_mode"] == "disabled"
     assert operations[0]["sync_enabled"] is False
     assert node["role"] == "vps"
     assert node["pbname"] == "vps-a"
+    assert node["sync_mode"] == "disabled"
     assert node["sync_enabled"] is False
     assert node["ssh_host"] == "203.0.113.10"
     assert node["ssh_user"] == "bot"
@@ -1141,8 +1244,10 @@ def test_apply_bootstrap_uses_monitor_master_role(monkeypatch, tmp_path: Path) -
     assert preview["items"][0]["node_role"] == "master"
     assert result["result"]["counts"]["applied"] == 1
     assert operations[0]["role"] == "master"
+    assert operations[0]["sync_mode"] == "disabled"
     assert operations[0]["sync_enabled"] is False
     assert node["role"] == "master"
+    assert node["sync_mode"] == "disabled"
     assert node["sync_enabled"] is False
     assert mapping["hosts"]["remote-master"]["role"] == "master"
 

@@ -236,6 +236,11 @@
     .preview-modal-card .modal-actions { flex: 0 0 auto; }
     .modal-error { display: none; color: var(--bad); border: 1px solid rgba(248,113,113,0.35); background: rgba(248,113,113,0.08); border-radius: 8px; padding: 0.55rem 0.75rem; }
     .modal-error.visible { display: block; }
+    .modal-form-grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: var(--sp-md); }
+    .modal-field { display: grid; gap: 5px; }
+    .modal-field label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; }
+    .modal-input { width: 100%; min-height: 34px; border: 1px solid var(--border2); border-radius: 7px; background: #0f1724; color: var(--text); padding: 0.45rem 0.55rem; }
+    .modal-input:disabled { color: var(--faint); background: #111827; }
     .push-progress { flex: 1 1 340px; min-width: min(340px, 100%); margin-right: auto; border: 1px solid var(--border); border-radius: 9px; background: #101724; padding: var(--sp-sm); }
     .push-progress[hidden] { display: none; }
     .push-progress-label { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-sm); color: var(--muted); font-size: var(--fs-sm); margin-bottom: 7px; }
@@ -365,6 +370,57 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="node-settings-modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="node-settings-title">
+      <div class="modal-head">
+        <div id="node-settings-title">Edit Cluster Node</div>
+        <button class="modal-close" id="node-settings-close-btn" type="button" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <div class="field-label">Node</div>
+          <div class="field-value" id="node-settings-node"></div>
+        </div>
+        <div class="modal-form-grid">
+          <div class="modal-field">
+            <label for="node-settings-role">Role</label>
+            <input class="modal-input" id="node-settings-role" type="text" disabled>
+          </div>
+          <div class="modal-field">
+            <label for="node-settings-remote-dir">Remote PBGui Dir</label>
+            <input class="modal-input" id="node-settings-remote-dir" type="text" disabled>
+          </div>
+          <div class="modal-field">
+            <label for="node-settings-mode">Sync Mode</label>
+            <select class="modal-input" id="node-settings-mode">
+              <option value="disabled">Disabled</option>
+              <option value="outbound_only">Outbound only</option>
+              <option value="reachable">Reachable via SSH</option>
+            </select>
+          </div>
+          <div class="modal-field">
+            <label for="node-settings-ssh-port">SSH Port</label>
+            <input class="modal-input" id="node-settings-ssh-port" type="number" min="1" max="65535" step="1">
+          </div>
+          <div class="modal-field">
+            <label for="node-settings-ssh-host">SSH Host</label>
+            <input class="modal-input" id="node-settings-ssh-host" type="text" placeholder="203.0.113.10">
+          </div>
+          <div class="modal-field">
+            <label for="node-settings-ssh-user">SSH User</label>
+            <input class="modal-input" id="node-settings-ssh-user" type="text" placeholder="mani">
+          </div>
+        </div>
+        <div class="panel-note">Role and Remote PBGui Dir are set by setup/discovery and are shown for diagnostics only.</div>
+        <div class="modal-error" id="node-settings-error"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="node-settings-cancel-btn" type="button">Cancel</button>
+        <button class="btn primary" id="node-settings-save-btn" type="button">Save</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop" id="preview-modal" hidden>
     <div class="modal-card preview-modal-card" id="preview-modal-card" role="dialog" aria-modal="true" aria-labelledby="preview-modal-title">
       <div class="modal-head">
@@ -424,6 +480,7 @@
       var lastTombstonesPayload = null;
       var lastOplogPayload = null;
       var pendingJoinNode = null;
+      var pendingSettingsNode = null;
       var pendingPreviewNode = null;
       var lastPreviewPayload = null;
       var pushProgressTimer = null;
@@ -602,29 +659,86 @@
         });
       }
 
-      function toggleNodeSync(node, enable) {
-        if (!node || !node.node_id) return;
-        var label = node.pbname || node.hostname || node.node_id;
-        if (typeof window.PBGuiConfirm !== 'function') {
-          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+      function showNodeSettingsError(text) {
+        var el = document.getElementById('node-settings-error');
+        if (!el) return;
+        el.textContent = text || '';
+        el.className = text ? 'modal-error visible' : 'modal-error';
+      }
+
+      function applyNodeSettingsMode() {
+        var modeEl = document.getElementById('node-settings-mode');
+        var hostEl = document.getElementById('node-settings-ssh-host');
+        var userEl = document.getElementById('node-settings-ssh-user');
+        var portEl = document.getElementById('node-settings-ssh-port');
+        var reachable = modeEl && modeEl.value === 'reachable';
+        [hostEl, userEl, portEl].forEach(function (el) {
+          if (el) el.disabled = !reachable;
+        });
+      }
+
+      function openNodeSettingsModal(node) {
+        pendingSettingsNode = node || null;
+        showNodeSettingsError('');
+        var modal = document.getElementById('node-settings-modal');
+        var label = (node.pbname || node.hostname || 'unknown') + ' / ' + (node.node_id || 'unknown');
+        var mode = syncMode(node);
+        var nodeEl = document.getElementById('node-settings-node');
+        var roleEl = document.getElementById('node-settings-role');
+        var remoteDirEl = document.getElementById('node-settings-remote-dir');
+        var modeEl = document.getElementById('node-settings-mode');
+        var hostEl = document.getElementById('node-settings-ssh-host');
+        var userEl = document.getElementById('node-settings-ssh-user');
+        var portEl = document.getElementById('node-settings-ssh-port');
+        if (nodeEl) nodeEl.textContent = label;
+        if (roleEl) roleEl.value = node.role || 'node';
+        if (remoteDirEl) remoteDirEl.value = node.remote_pbgui_dir || '';
+        if (modeEl) modeEl.value = mode;
+        if (hostEl) hostEl.value = node.ssh_host || '';
+        if (userEl) userEl.value = node.ssh_user || '';
+        if (portEl) portEl.value = node.ssh_port || 22;
+        applyNodeSettingsMode();
+        if (modal) modal.hidden = false;
+      }
+
+      function closeNodeSettingsModal() {
+        pendingSettingsNode = null;
+        var modal = document.getElementById('node-settings-modal');
+        if (modal) modal.hidden = true;
+        showNodeSettingsError('');
+      }
+
+      function saveNodeSettings() {
+        if (!pendingSettingsNode || !pendingSettingsNode.node_id) return;
+        var node = pendingSettingsNode;
+        var mode = document.getElementById('node-settings-mode').value;
+        var payload = {
+          sync_mode: mode,
+          ssh_host: document.getElementById('node-settings-ssh-host').value.trim(),
+          ssh_user: document.getElementById('node-settings-ssh-user').value.trim(),
+          ssh_port: Number(document.getElementById('node-settings-ssh-port').value || 22)
+        };
+        if (mode === 'reachable' && !payload.ssh_host) {
+          showNodeSettingsError('Reachable nodes require an SSH host.');
           return;
         }
-        window.PBGuiConfirm({
-          title: enable ? 'Enable Cluster Sync' : 'Disable Cluster Sync',
-          message: (enable ? 'Allow PBCluster to synchronize with ' : 'Stop PBCluster from synchronizing with ') + label + '?',
-          detail: enable
-            ? 'This only changes Cluster Sync membership. PBCluster may contact this node on later sync passes and can replicate ops/blobs/materialized files. It does not deploy services, start bots or stop bots.'
-            : 'This disables automatic Cluster Sync for this node. It does not stop services, stop bots, delete files or remove the node from VPS Manager.',
-          confirmText: enable ? 'Enable Sync' : 'Disable Sync'
-        }).then(function (accepted) {
-          if (!accepted) return;
-          setMessage((enable ? 'Enabling' : 'Disabling') + ' Cluster Sync for ' + label + '...', 'warn');
-          fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/sync?sync_enabled=' + (enable ? 'true' : 'false'), { method: 'POST' }).then(function () {
-            setMessage('Cluster Sync ' + (enable ? 'enabled' : 'disabled') + ' for ' + label + '.', 'ok');
-            return loadCluster();
-          }).catch(function (err) {
-            setMessage('Failed to update Cluster Sync membership: ' + err.message, 'err');
-          });
+        var label = node.pbname || node.hostname || node.node_id;
+        var btn = document.getElementById('node-settings-save-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+        setMessage('Updating Cluster node settings for ' + label + '...', 'warn');
+        fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }).then(function () {
+          closeNodeSettingsModal();
+          setMessage('Cluster node settings updated for ' + label + '.', 'ok');
+          return loadCluster();
+        }).catch(function (err) {
+          showNodeSettingsError(err.message || 'Failed to update node settings.');
+          setMessage('Failed to update node settings: ' + err.message, 'err');
+        }).finally(function () {
+          if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
         });
       }
 
@@ -1091,8 +1205,9 @@
 
       function probePill(status) {
         if (status === 'ok' || status === 'local') return 'good';
+        if (status === 'outbound_only') return 'blue';
         if (status === 'not_initialized' || status === 'command_unavailable' || status === 'unreachable' || status === 'monitor_unavailable') return 'warn';
-        if (status === 'foreign_cluster' || status === 'node_mismatch' || status === 'auth_failed' || status === 'error') return 'bad';
+        if (status === 'foreign_cluster' || status === 'node_mismatch' || status === 'auth_failed' || status === 'config_error' || status === 'error') return 'bad';
         return '';
       }
 
@@ -1110,9 +1225,30 @@
           auth_failed: 'Auth Failed',
           invalid_response: 'Invalid',
           missing_hostname: 'No Hostname',
+          outbound_only: 'Outbound Only',
+          config_error: 'Config Error',
           error: 'Error'
         };
         return labels[status] || (status || 'Unknown');
+      }
+
+      function syncMode(node) {
+        var mode = String((node || {}).sync_mode || '').toLowerCase();
+        if (mode === 'disabled' || mode === 'outbound_only' || mode === 'reachable') return mode;
+        if ((node || {}).sync_enabled === false) return 'disabled';
+        return String((node || {}).ssh_host || '').trim() ? 'reachable' : 'outbound_only';
+      }
+
+      function syncModeLabel(mode) {
+        if (mode === 'reachable') return 'Reachable';
+        if (mode === 'outbound_only') return 'Outbound Only';
+        return 'Disabled';
+      }
+
+      function syncModePill(mode) {
+        if (mode === 'reachable') return 'good';
+        if (mode === 'outbound_only') return 'blue';
+        return 'warn';
       }
 
       function renderBootstrap(plan) {
@@ -1181,8 +1317,8 @@
             if (item.will_create_node_mapping) assigned += ' (new node mapping)';
             assignedTitle = item.remote_pbgui_dir || item.config_path || '';
             versionText = item.ssh_port || '22';
-            desiredText = (item.node_role || 'vps') + (item.sync_enabled ? ' / sync on' : ' / sync off');
-            desiredClass = item.sync_enabled ? 'good' : 'warn';
+            desiredText = (item.node_role || 'vps') + ' / ' + syncModeLabel(syncMode(item));
+            desiredClass = syncModePill(syncMode(item));
             manifestText = item.node_id ? shortId(item.node_id) : 'new node';
             manifestTitle = item.node_id || 'new node id will be generated on apply';
           } else if (item.will_create_node_mapping) {
@@ -1255,8 +1391,8 @@
           node: function (node) { return node.node_id || ''; },
           role: function (node) { return node.role || ''; },
           pbname: function (node) { return node.pbname || node.hostname || ''; },
-          address: function (node) { return (node.ssh_host || node.hostname || '') + ':' + (node.ssh_port || ''); },
-          sync: function (node) { return node.enabled !== false && node.sync_enabled !== false; },
+          address: function (node) { return syncMode(node) === 'reachable' ? ((node.ssh_host || '') + ':' + (node.ssh_port || '')) : syncMode(node); },
+          sync: function (node) { return syncMode(node); },
           probe: function (node) { return (remoteProbeMap[node.node_id] || {}).status || ''; },
           updated: function (node) { return Number(node.updated_at || 0); }
         });
@@ -1271,8 +1407,7 @@
           + sortHeader('nodes', 'updated', 'Updated')
           + '</tr></thead><tbody>';
         nodeRows.forEach(function (node) {
-          var enabled = node.enabled !== false && node.sync_enabled !== false;
-          var isLocal = node.node_id && node.node_id === localNodeId;
+          var mode = syncMode(node);
           var probe = remoteProbeMap[node.node_id] || {};
           var probeStatus = probe.status || 'unknown';
           var probeTitle = probe.error || probe.remote_node_id || probe.remote_cluster_id || probeStatus;
@@ -1282,15 +1417,13 @@
           } else if (probeStatus === 'ok') {
             actionParts.push('<button class="btn small primary preview-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Preview</button>');
           }
-          if (!isLocal) {
-            actionParts.push('<button class="btn small ' + (enabled ? 'warn' : 'primary') + ' toggle-sync-btn" type="button" data-node-id="' + esc(node.node_id) + '" data-enable="' + (enabled ? 'false' : 'true') + '">' + (enabled ? 'Disable Sync' : 'Enable Sync') + '</button>');
-          }
+          actionParts.push('<button class="btn small primary edit-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Edit</button>');
           html += '<tr>'
             + '<td class="mono" title="' + esc(node.node_id) + '">' + esc(shortId(node.node_id)) + '</td>'
             + '<td><span class="pill blue">' + esc(node.role || 'node') + '</span></td>'
             + '<td>' + esc(node.pbname || node.hostname || 'n/a') + '</td>'
-            + '<td>' + esc(node.ssh_host || node.hostname || 'local') + (node.ssh_port ? ':' + esc(node.ssh_port) : '') + '</td>'
-            + '<td><span class="pill ' + (enabled ? 'good' : 'warn') + '">' + (enabled ? 'Sync On' : 'Sync Off') + '</span></td>'
+            + '<td title="' + esc(node.remote_pbgui_dir || '') + '">' + esc(mode === 'reachable' ? ((node.ssh_user ? node.ssh_user + '@' : '') + (node.ssh_host || 'n/a') + ':' + (node.ssh_port || 22)) : syncModeLabel(mode)) + '</td>'
+            + '<td><span class="pill ' + syncModePill(mode) + '">' + esc(syncModeLabel(mode)) + '</span></td>'
             + '<td title="' + esc(probeTitle) + '"><span class="pill ' + probePill(probeStatus) + '">' + esc(probeLabel(probeStatus)) + '</span></td>'
             + '<td>' + actionParts.join(' ') + '</td>'
             + '<td>' + esc(timeText(node.updated_at)) + '</td>'
@@ -1309,9 +1442,9 @@
             openRemotePreview(nodeMap[btn.getAttribute('data-node-id')] || {});
           });
         });
-        document.getElementById('nodes-table').querySelectorAll('.toggle-sync-btn').forEach(function (btn) {
+        document.getElementById('nodes-table').querySelectorAll('.edit-node-btn').forEach(function (btn) {
           btn.addEventListener('click', function () {
-            toggleNodeSync(nodeMap[btn.getAttribute('data-node-id')] || {}, btn.getAttribute('data-enable') === 'true');
+            openNodeSettingsModal(nodeMap[btn.getAttribute('data-node-id')] || {});
           });
         });
       }
@@ -1481,6 +1614,10 @@
       document.getElementById('join-close-btn').addEventListener('click', closeJoinModal);
       document.getElementById('join-cancel-btn').addEventListener('click', closeJoinModal);
       document.getElementById('join-confirm-btn').addEventListener('click', joinRemoteNode);
+      document.getElementById('node-settings-close-btn').addEventListener('click', closeNodeSettingsModal);
+      document.getElementById('node-settings-cancel-btn').addEventListener('click', closeNodeSettingsModal);
+      document.getElementById('node-settings-save-btn').addEventListener('click', saveNodeSettings);
+      document.getElementById('node-settings-mode').addEventListener('change', applyNodeSettingsMode);
       document.getElementById('preview-close-x-btn').addEventListener('click', closePreviewModal);
       document.getElementById('preview-close-btn').addEventListener('click', closePreviewModal);
       document.getElementById('preview-push-ops-btn').addEventListener('click', confirmAndPushRemoteOps);
