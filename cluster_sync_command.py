@@ -33,6 +33,7 @@ from master.cluster_state import (
     validate_operation,
     write_operation,
 )
+from master.cluster_ssh_keys import ensure_cluster_ssh_key
 from pbgui_purefunc import PBGDIR, pb7dir
 
 PROTOCOL_VERSION = 1
@@ -89,7 +90,7 @@ def run_command(
     paths = ClusterPaths.from_root(root)
 
     if verb == "hello":
-        return {
+        payload = {
             "ok": True,
             "protocol_version": PROTOCOL_VERSION,
             "cluster_id": cluster_id,
@@ -97,6 +98,16 @@ def run_command(
             "role": str(identity.get("role") or ""),
             "remote_node": remote_node,
         }
+        try:
+            key = ensure_cluster_ssh_key(root, node_id=str(identity.get("node_id") or ""))
+            payload.update({
+                "cluster_ssh_public_key": str(key.get("public_key") or ""),
+                "cluster_ssh_fingerprint": str(key.get("fingerprint") or ""),
+                "cluster_ssh_mode": "forced",
+            })
+        except Exception as exc:
+            payload["cluster_ssh_error"] = str(exc)
+        return payload
     if verb == "get-state-vector":
         materialized = _safe_state_call(lambda: rebuild_materialized_state(root, write=False))
         return {

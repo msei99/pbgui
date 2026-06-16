@@ -357,10 +357,11 @@ Service responsibilities:
 - `PBRun.py`: local bot supervisor only. It gates start/continue decisions against local desired state and surfaces blocked/stale reasons. It does not contact peers or write remote cluster files.
 - `PBApiServer.py`: master-only UI/API service. It writes local cluster operations through normal PBGui actions and exposes Cluster UI/status/repair endpoints. It is not required on runner VPS hosts.
 - `cluster_sync_command.py`: restricted SSH command wrapper used by `PBCluster` and master repair actions for remote peer RPC.
+- `cluster_ssh_setup.py`: local/update helper that creates the dedicated PBCluster key pair and installs restricted forced-command authorized_keys entries during normal PBGui VPS setup/update.
 
 ## Restricted SSH Key Model
 
-Each node has a dedicated cluster-sync key.
+Each node has a dedicated cluster-sync key. PBGui creates the key automatically under `data/cluster/ssh/` when PBCluster or the VPS setup/update helper runs. Normal users do not create or copy these keys manually. The Cluster page exposes a repair action that reads remote public keys back into node metadata and installs the source keys required by configured `sync_peers`.
 
 Install public keys in `authorized_keys` with restrictions:
 

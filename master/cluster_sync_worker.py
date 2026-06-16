@@ -26,6 +26,7 @@ from cluster_sync_command import (
 )
 from logging_helpers import human_log as _log
 from master.cluster_state import (
+    append_operation,
     ClusterPaths,
     ClusterStateError,
     build_config_manifest,
@@ -38,6 +39,7 @@ from master.cluster_state import (
     validate_operation,
     write_operation,
 )
+from master.cluster_ssh_keys import ensure_cluster_ssh_key
 from pbgui_purefunc import PBGDIR
 
 SERVICE = "PBCluster"
@@ -76,7 +78,7 @@ class ClusterSyncWorker:
         self.boot_window = max(0, int(boot_window))
         self.status_path = ClusterPaths.from_root(self.cluster_root).root / "sync_status.json"
         self.trigger_path = ClusterPaths.from_root(self.cluster_root).root / "sync_request"
-        self.peer_client = peer_client or SshClusterPeerClient()
+        self.peer_client = peer_client or SshClusterPeerClient(cluster_root=self.cluster_root)
         self._peer_backoff: dict[str, dict[str, Any]] = {}
         self._last_trigger_mtime = self._trigger_mtime()
         self._stop = threading.Event()
@@ -151,6 +153,11 @@ class ClusterSyncWorker:
 
         try:
             identity = read_local_identity(self.cluster_root)
+            try:
+                base["cluster_ssh"] = _compact_cluster_ssh_key(ensure_cluster_ssh_key(self.cluster_root, node_id=str(identity.get("node_id") or "")))
+            except Exception as exc:
+                base["cluster_ssh"] = {"ok": False, "error": str(exc)}
+                _log(SERVICE, f"Cluster SSH key setup failed: {exc}", level="WARNING")
         except ClusterStateError as exc:
             status = dict(base)
             status.update({
@@ -225,12 +232,17 @@ class ClusterSyncWorker:
             peer = nodes.get(peer_id) if isinstance(nodes.get(peer_id), dict) else {}
             if str(peer_id) == local_node_id:
                 continue
+            local_node = nodes.get(local_node_id) if isinstance(nodes.get(local_node_id), dict) else {}
             peer_mode = _peer_sync_mode(peer)
             if peer_mode == "disabled":
                 results.append(_peer_result(peer_id, peer, ok=False, status="disabled", reason="sync is disabled"))
                 continue
             if peer_mode == "outbound_only":
                 results.append(_peer_result(peer_id, peer, ok=True, status="outbound_only", reason="peer is outbound-only"))
+                continue
+            allowed, reason = _peer_topology_allows(local_node, str(peer_id), peer)
+            if not allowed:
+                results.append(_peer_result(peer_id, peer, ok=True, status="topology_skipped", reason=reason))
                 continue
             if not str(peer.get("ssh_host") or "").strip():
                 results.append(_peer_result(peer_id, peer, ok=False, status="config_error", reason="reachable peer has no ssh_host"))
@@ -271,6 +283,7 @@ class ClusterSyncWorker:
         remote_node_id = str(hello.get("node_id") or "")
         if peer_id and remote_node_id and remote_node_id != peer_id:
             raise ClusterSyncWorkerError("peer node_id does not match cluster_nodes")
+        key_changed = self._record_peer_cluster_ssh_metadata(peer, hello)
 
         remote_vector_payload = self.peer_client.run(peer, local_node_id, "get-state-vector")
         remote_vector = _as_state_vector(remote_vector_payload.get("state_vector") or {})
@@ -289,7 +302,7 @@ class ClusterSyncWorker:
         if pushed_ops:
             self._remote_rebuild_and_materialize(peer, local_node_id)
 
-        if pulled_ops or pushed_ops:
+        if pulled_ops or pushed_ops or key_changed:
             base_result["status"] = "changed"
         base_result.update({
             "remote_node_id": remote_node_id,
@@ -299,9 +312,36 @@ class ClusterSyncWorker:
             "pushed_ops": pushed_ops,
             "pushed_config_blobs": pushed_config_blobs,
             "pushed_secret_blobs": pushed_secret_blobs,
+            "cluster_ssh_key_updated": key_changed,
             "last_seen": int(time.time()),
         })
         return base_result
+
+    def _record_peer_cluster_ssh_metadata(self, peer: dict[str, Any], hello: dict[str, Any]) -> bool:
+        """Record peer Cluster SSH public key metadata when hello exposes it."""
+
+        peer_id = str(peer.get("node_id") or hello.get("node_id") or "")
+        public_key = str(hello.get("cluster_ssh_public_key") or "").strip()
+        fingerprint = str(hello.get("cluster_ssh_fingerprint") or "").strip()
+        if not peer_id or not public_key or not fingerprint:
+            return False
+        if (
+            str(peer.get("cluster_ssh_public_key") or "").strip() == public_key
+            and str(peer.get("cluster_ssh_fingerprint") or "").strip() == fingerprint
+            and str(peer.get("cluster_ssh_mode") or "forced").strip() == "forced"
+        ):
+            return False
+        append_operation(
+            self.cluster_root,
+            "UPDATE_NODE",
+            {
+                "node_id": peer_id,
+                "cluster_ssh_public_key": public_key,
+                "cluster_ssh_fingerprint": fingerprint,
+                "cluster_ssh_mode": "forced",
+            },
+        )
+        return True
 
     def _pull_missing_operations(
         self,
@@ -418,11 +458,12 @@ class ClusterSyncWorkerError(RuntimeError):
 class SshClusterPeerClient:
     """Small SSH client for restricted Cluster Sync peer commands."""
 
-    def __init__(self, *, timeout: int = DEFAULT_SSH_TIMEOUT, connect_timeout: int = 8) -> None:
+    def __init__(self, *, timeout: int = DEFAULT_SSH_TIMEOUT, connect_timeout: int = 8, cluster_root: Path | str | None = None) -> None:
         """Initialize subprocess SSH timeouts."""
 
         self.timeout = int(timeout)
         self.connect_timeout = int(connect_timeout)
+        self.cluster_root = Path(cluster_root) if cluster_root else default_cluster_root(Path(PBGDIR))
 
     def run(self, peer: dict[str, Any], local_node_id: str, command_text: str, payload: str | bytes | None = None) -> dict[str, Any]:
         """Run one Cluster Sync command on *peer* and parse its JSON response."""
@@ -459,13 +500,20 @@ class SshClusterPeerClient:
             port = int(peer.get("ssh_port") or 22)
         except (TypeError, ValueError):
             port = 22
+        key = ensure_cluster_ssh_key(self.cluster_root)
+        private_key = str(key.get("private_key_path") or "")
+        command = str(command_text or "")
+        if str(peer.get("cluster_ssh_mode") or "forced").strip().lower() == "direct":
+            command = _remote_cluster_command(str(peer.get("remote_pbgui_dir") or "software/pbgui"), local_node_id, command)
         return [
             "ssh",
+            "-i", private_key,
+            "-o", "IdentitiesOnly=yes",
             "-o", "BatchMode=yes",
             "-o", f"ConnectTimeout={self.connect_timeout}",
             "-p", str(port),
             target,
-            _remote_cluster_command(str(peer.get("remote_pbgui_dir") or "software/pbgui"), local_node_id, command_text),
+            command,
         ]
 
 
@@ -482,6 +530,17 @@ def _compact_materialization(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _compact_cluster_ssh_key(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return non-secret Cluster SSH key status details."""
+
+    return {
+        "ok": True,
+        "created": bool(payload.get("created")),
+        "public_key_path": str(payload.get("public_key_path") or ""),
+        "fingerprint": str(payload.get("fingerprint") or ""),
+    }
+
+
 def _peer_sync_mode(peer: dict[str, Any]) -> str:
     """Return the effective peer sync mode for a materialized node."""
 
@@ -492,6 +551,19 @@ def _peer_sync_mode(peer: dict[str, Any]) -> str:
     if peer.get("state_replica", True) is False:
         return "disabled"
     return normalize_node_sync_mode(peer)
+
+
+def _peer_topology_allows(local_node: dict[str, Any], peer_id: str, peer: dict[str, Any]) -> tuple[bool, str]:
+    """Return whether this node should actively contact *peer* by default."""
+
+    explicit = local_node.get("sync_peers") if isinstance(local_node, dict) else None
+    if isinstance(explicit, list):
+        if str(peer_id) in {str(item) for item in explicit}:
+            return True, "explicit sync peer"
+        return False, "peer is not in sync_peers"
+    if str((local_node or {}).get("role") or "").strip() == "vps":
+        return False, "VPS nodes do not initiate peer SSH without explicit sync_peers"
+    return True, ""
 
 
 def _peer_result(peer_id: str, peer: dict[str, Any], *, ok: bool, status: str, reason: str = "") -> dict[str, Any]:

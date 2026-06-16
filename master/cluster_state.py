@@ -576,6 +576,12 @@ def _validate_membership_payload(operation: dict[str, Any]) -> None:
         raise ClusterStateError("node role must be master or vps")
     if "sync_mode" in operation and str(operation["sync_mode"] or "").strip().lower() not in SYNC_MODES:
         raise ClusterStateError("node sync_mode must be disabled, outbound_only or reachable")
+    if "sync_peers" in operation:
+        sync_peers = operation.get("sync_peers")
+        if not isinstance(sync_peers, list):
+            raise ClusterStateError("node sync_peers must be a list")
+        for peer_id in sync_peers:
+            _validate_node_id(str(peer_id))
 
 
 def _validate_v7_payload(operation: dict[str, Any]) -> None:

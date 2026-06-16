@@ -323,6 +323,33 @@
         path: "{{ remote_home }}/.cache/pip"
         state: absent
 
+    - name: Ensure PBCluster SSH key exists
+      command:
+        argv:
+          - "{{ install_dir }}/venv_pbgui/bin/python"
+          - "{{ install_dir }}/pbgui/cluster_ssh_setup.py"
+          - ensure-local
+          - --pbgdir
+          - "{{ install_dir }}/pbgui"
+      register: cluster_sync_key_setup
+      changed_when: "'\"created\": true' in cluster_sync_key_setup.stdout"
+
+    - name: Install master PBCluster authorized key
+      command:
+        argv:
+          - "{{ install_dir }}/venv_pbgui/bin/python"
+          - "{{ install_dir }}/pbgui/cluster_ssh_setup.py"
+          - install-authorized-key
+          - --pbgdir
+          - "{{ install_dir }}/pbgui"
+          - --source-node
+          - "{{ cluster_sync_source_node_id }}"
+          - --source-public-key
+          - "{{ cluster_sync_source_public_key }}"
+      register: cluster_sync_authorized_key
+      changed_when: "'\"changed\": true' in cluster_sync_authorized_key.stdout"
+      when: (cluster_sync_source_node_id | default('') | string | length) > 0 and (cluster_sync_source_public_key | default('') | string | length) > 0
+
     - name: clean apt package cache after setup
       apt:
         autoremove: yes

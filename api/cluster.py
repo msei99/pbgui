@@ -35,6 +35,7 @@ from master.cluster_state import (
     normalize_node_sync_mode,
     rebuild_materialized_state,
 )
+from master.cluster_ssh_keys import ensure_local_cluster_ssh_material, public_key_fingerprint
 from pb7_config import load_pb7_config
 from pbgui_purefunc import PBGDIR
 
@@ -437,13 +438,50 @@ def _validate_node_sync_settings(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="ssh_port must be between 1 and 65535")
     if sync_mode == "reachable" and not ssh_host:
         raise HTTPException(status_code=400, detail="Reachable nodes require an SSH host")
+    sync_peers = _normalize_sync_peers(payload.get("sync_peers", []))
     return {
         "sync_mode": sync_mode,
         "sync_enabled": sync_mode != "disabled",
         "ssh_host": ssh_host,
         "ssh_user": ssh_user,
         "ssh_port": ssh_port,
+        "sync_peers": sync_peers,
     }
+
+
+def _normalize_sync_peers(value: Any) -> list[str]:
+    """Normalize a user-provided sync peer allowlist."""
+
+    if value is None or value == "":
+        return []
+    if not isinstance(value, list):
+        raise HTTPException(status_code=400, detail="sync_peers must be a list")
+    peers: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        node_id = str(item or "").strip()
+        if not node_id:
+            continue
+        try:
+            uuid.UUID(node_id.removeprefix("pbgui-node-"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="sync_peers contains an invalid node id") from exc
+        if node_id not in seen:
+            peers.append(node_id)
+            seen.add(node_id)
+    return peers
+
+
+def _validate_sync_peers_for_node(settings: dict[str, Any], node: dict[str, Any], nodes: list[dict[str, Any]]) -> None:
+    """Validate sync_peers references against current cluster nodes."""
+
+    node_id = str(node.get("node_id") or "")
+    known = {str(item.get("node_id") or "") for item in nodes if str(item.get("node_id") or "")}
+    for peer_id in settings.get("sync_peers") or []:
+        if peer_id == node_id:
+            raise HTTPException(status_code=400, detail="sync_peers cannot include the node itself")
+        if peer_id not in known:
+            raise HTTPException(status_code=400, detail=f"sync_peers contains unknown node {peer_id}")
 
 
 def _cluster_remote_command(remote_pbgui_dir: str | None, local_node_id: str, command_text: str) -> str:
@@ -538,6 +576,22 @@ def _cluster_join_command(
     pbname = shlex.quote(str(node.get("pbname") or node.get("hostname") or "").strip())
     command_text = f"join {shlex.quote(str(cluster_id))} {node_id} {role} {pbname}"
     return _cluster_remote_command(remote_pbgui_dir, local_node_id, command_text)
+
+
+def _cluster_ssh_setup_command(remote_pbgui_dir: str | None, args: list[str]) -> str:
+    """Build a remote Cluster SSH setup helper command."""
+
+    base = remote_shell_path(remote_pbgui_dir or "software/pbgui")
+    quoted_args = " ".join(shlex.quote(str(item)) for item in args)
+    return (
+        f"base={base}; "
+        "parent=\"${base%/*}\"; "
+        "if [ -x \"$parent/venv_pbgui/bin/python\" ]; then py=\"$parent/venv_pbgui/bin/python\"; "
+        "elif [ -x \"$parent/venv_pbgui312/bin/python\" ]; then py=\"$parent/venv_pbgui312/bin/python\"; "
+        "elif [ -x \"$base/.venv/bin/python\" ]; then py=\"$base/.venv/bin/python\"; "
+        "else py=python3; fi; "
+        f"\"$py\" \"$base/cluster_ssh_setup.py\" {quoted_args}"
+    )
 
 
 def _classify_probe_error(text: str) -> str:
@@ -657,6 +711,8 @@ async def _probe_cluster_node(node: dict[str, Any], identity: dict[str, Any]) ->
         "remote_node_id": remote_node_id,
         "protocol_version": payload.get("protocol_version") if isinstance(payload, dict) else None,
         "role": payload.get("role") if isinstance(payload, dict) else "",
+        "cluster_ssh_fingerprint": payload.get("cluster_ssh_fingerprint") if isinstance(payload, dict) else "",
+        "cluster_ssh_error": payload.get("cluster_ssh_error") if isinstance(payload, dict) else "",
     }
 
 
@@ -828,6 +884,126 @@ async def _run_remote_materialize_command(
     if remote_node_id and remote_node_id != node_id:
         raise HTTPException(status_code=409, detail="Remote reports a different node_id")
     return payload
+
+
+async def _run_remote_cluster_ssh_setup(node: dict[str, Any], identity: dict[str, Any], args: list[str], *, timeout: int = 15) -> dict[str, Any]:
+    """Run the remote Cluster SSH setup helper through the existing monitor SSH pool."""
+
+    node_id, hostname, _local_node_id = _require_remote_node_ready(node, identity)
+    monitor = get_monitor()
+    pool = getattr(monitor, "pool", None) if monitor else None
+    if not pool:
+        raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
+    command = _cluster_ssh_setup_command(str(node.get("remote_pbgui_dir") or ""), args)
+    try:
+        result = await pool.run(hostname, command, timeout=timeout)
+    except Exception as exc:
+        _log(SERVICE, f"Remote Cluster SSH setup failed for {hostname}: {exc}", level="ERROR")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=502, detail="Remote host is unreachable")
+    exit_status = int(getattr(result, "exit_status", 1) or 0)
+    if exit_status != 0:
+        error = _probe_error_text(result)
+        raise HTTPException(status_code=409, detail=error)
+    payload = _parse_remote_json_result(result, "Remote Cluster SSH setup")
+    if payload.get("ok") is False:
+        raise HTTPException(status_code=409, detail=str(payload.get("error") or "Remote Cluster SSH setup failed"))
+    payload.setdefault("node_id", node_id)
+    payload.setdefault("hostname", hostname)
+    return payload
+
+
+def _append_node_update_if_changed(node_id: str, current: dict[str, Any], updates: dict[str, Any]) -> bool:
+    """Append UPDATE_NODE when any requested field differs."""
+
+    clean_updates = {key: value for key, value in updates.items() if value not in {None, ""}}
+    if not clean_updates:
+        return False
+    if all(str(current.get(key) or "") == str(value or "") for key, value in clean_updates.items()):
+        return False
+    append_operation(_cluster_root(), "UPDATE_NODE", {"node_id": node_id, **clean_updates})
+    return True
+
+
+async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any], nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Repair Cluster SSH key trust for one node and persist discovered key metadata."""
+
+    node_id = str(node.get("node_id") or "")
+    local_node_id = str(identity.get("node_id") or "")
+    if not node_id:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    local_key = ensure_local_cluster_ssh_material(Path(PBGDIR), role=str(identity.get("role") or "master"), pbname=_get_master_pbname())
+    installed: list[dict[str, Any]] = []
+    missing_source_keys: list[dict[str, str]] = []
+    updates: dict[str, Any] = {}
+
+    if node_id == local_node_id:
+        updates = {
+            "cluster_ssh_public_key": str(local_key.get("public_key") or ""),
+            "cluster_ssh_fingerprint": str(local_key.get("fingerprint") or ""),
+            "cluster_ssh_mode": "forced",
+        }
+        changed = _append_node_update_if_changed(node_id, node, updates)
+        materialized = rebuild_materialized_state(_cluster_root()) if changed else _load_cluster_snapshot()
+        updated = _node_for_id(_node_list(materialized["cluster_nodes"]), node_id)
+        return {"ok": True, "node_id": node_id, "local": True, "changed": changed, "node": updated, "installed": []}
+
+    remote_key = await _run_remote_cluster_ssh_setup(node, identity, ["ensure-local", "--node-id", node_id])
+    remote_public_key = str(remote_key.get("public_key") or "").strip()
+    if not remote_public_key:
+        raise HTTPException(status_code=409, detail="Remote did not return a Cluster SSH public key")
+    remote_fingerprint = str(remote_key.get("fingerprint") or "").strip() or public_key_fingerprint(remote_public_key)
+
+    master_install = await _run_remote_cluster_ssh_setup(
+        node,
+        identity,
+        [
+            "install-authorized-key",
+            "--source-node",
+            local_node_id,
+            "--source-public-key",
+            str(local_key.get("public_key") or ""),
+        ],
+    )
+    installed.append({"source_node_id": local_node_id, "changed": bool(master_install.get("changed")), "role": "master"})
+
+    for source in nodes:
+        source_id = str(source.get("node_id") or "")
+        if not source_id or source_id in {local_node_id, node_id}:
+            continue
+        sync_peers = source.get("sync_peers") if isinstance(source.get("sync_peers"), list) else []
+        if node_id not in {str(item) for item in sync_peers}:
+            continue
+        source_public_key = str(source.get("cluster_ssh_public_key") or "").strip()
+        if not source_public_key:
+            missing_source_keys.append({"node_id": source_id, "reason": "source node has no known Cluster SSH public key"})
+            continue
+        result = await _run_remote_cluster_ssh_setup(
+            node,
+            identity,
+            ["install-authorized-key", "--source-node", source_id, "--source-public-key", source_public_key],
+        )
+        installed.append({"source_node_id": source_id, "changed": bool(result.get("changed")), "role": str(source.get("role") or "node")})
+
+    updates = {
+        "cluster_ssh_public_key": remote_public_key,
+        "cluster_ssh_fingerprint": remote_fingerprint,
+        "cluster_ssh_mode": "forced",
+    }
+    changed = _append_node_update_if_changed(node_id, node, updates)
+    materialized = rebuild_materialized_state(_cluster_root()) if changed else _load_cluster_snapshot()
+    updated = _node_for_id(_node_list(materialized["cluster_nodes"]), node_id)
+    return {
+        "ok": True,
+        "node_id": node_id,
+        "local": False,
+        "changed": changed,
+        "node": updated,
+        "remote_key": {"fingerprint": remote_fingerprint},
+        "installed": installed,
+        "missing_source_keys": missing_source_keys,
+    }
 
 
 def _as_state_vector(value: Any) -> dict[str, int]:
@@ -1840,9 +2016,19 @@ def get_nodes(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
 
     snapshot = _load_cluster_snapshot()
     cluster_nodes = snapshot["cluster_nodes"]
+    try:
+        local_cluster_ssh = ensure_local_cluster_ssh_material(Path(PBGDIR), role=str(snapshot["identity"].get("role") or "master"), pbname=_get_master_pbname())
+    except Exception as exc:
+        local_cluster_ssh = {"ok": False, "error": str(exc)}
     return {
         "cluster_nodes": cluster_nodes,
         "nodes": _node_list(cluster_nodes),
+        "local_cluster_ssh": {
+            "ok": local_cluster_ssh.get("ok", True) is not False,
+            "fingerprint": str(local_cluster_ssh.get("fingerprint") or ""),
+            "public_key_path": str(local_cluster_ssh.get("public_key_path") or ""),
+            "error": str(local_cluster_ssh.get("error") or ""),
+        },
     }
 
 
@@ -1905,6 +2091,7 @@ async def update_node_settings(
         raise HTTPException(status_code=400, detail="Local cluster node sync cannot be disabled")
     if node.get("enabled") is False and settings["sync_mode"] != "disabled":
         raise HTTPException(status_code=400, detail="Disabled cluster nodes cannot be enabled for sync")
+    _validate_sync_peers_for_node(settings, node, nodes)
 
     current = {
         "sync_mode": normalize_node_sync_mode(node),
@@ -1912,6 +2099,7 @@ async def update_node_settings(
         "ssh_host": str(node.get("ssh_host") or ""),
         "ssh_user": str(node.get("ssh_user") or ""),
         "ssh_port": int(node.get("ssh_port") or 22),
+        "sync_peers": _normalize_sync_peers(node.get("sync_peers") or []),
     }
     if current == settings:
         return {"ok": True, "changed": False, "node": node}
@@ -1927,6 +2115,18 @@ async def update_node_settings(
     materialized = rebuild_materialized_state(_cluster_root())
     updated = _node_for_id(_node_list(materialized["cluster_nodes"]), str(node.get("node_id") or ""))
     return {"ok": True, "changed": True, "node": updated}
+
+
+@router.post("/nodes/{node_id}/cluster-ssh/repair")
+async def repair_node_cluster_ssh(node_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Repair Cluster SSH key trust for one known node."""
+
+    snapshot = _load_cluster_snapshot()
+    nodes = _node_list(snapshot["cluster_nodes"])
+    node = _node_for_id(nodes, str(node_id or ""))
+    if not node:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    return await _repair_node_cluster_ssh(node, snapshot["identity"], nodes)
 
 
 @router.get("/remote-status")

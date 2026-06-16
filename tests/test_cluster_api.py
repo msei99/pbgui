@@ -20,6 +20,8 @@ CLUSTER_ID = "pbgui-cluster-00000000-0000-4000-8000-000000000001"
 NODE_A = "pbgui-node-00000000-0000-4000-8000-00000000000a"
 NODE_B = "pbgui-node-00000000-0000-4000-8000-00000000000b"
 HASH_A = "sha256:" + "a" * 64
+LOCAL_CLUSTER_PUBLIC_KEY = "ssh-ed25519 aGVsbG8= pbgui-cluster:local"
+REMOTE_CLUSTER_PUBLIC_KEY = "ssh-ed25519 d29ybGQ= pbgui-cluster:remote"
 
 
 def _init_cluster(tmp_path: Path) -> Path:
@@ -291,14 +293,14 @@ def test_update_node_settings_records_reachable_sync_mode(monkeypatch, tmp_path:
     result = asyncio.run(
         cluster.update_node_settings(
             NODE_B,
-            _JsonRequest({"sync_mode": "reachable", "ssh_host": "203.0.113.10", "ssh_user": "bot", "ssh_port": "2222"}),
+            _JsonRequest({"sync_mode": "reachable", "ssh_host": "203.0.113.10", "ssh_user": "bot", "ssh_port": "2222", "sync_peers": [NODE_A]}),
             session=None,
         )
     )
     repeat = asyncio.run(
         cluster.update_node_settings(
             NODE_B,
-            _JsonRequest({"sync_mode": "reachable", "ssh_host": "203.0.113.10", "ssh_user": "bot", "ssh_port": 2222}),
+            _JsonRequest({"sync_mode": "reachable", "ssh_host": "203.0.113.10", "ssh_user": "bot", "ssh_port": 2222, "sync_peers": [NODE_A]}),
             session=None,
         )
     )
@@ -313,10 +315,12 @@ def test_update_node_settings_records_reachable_sync_mode(monkeypatch, tmp_path:
     assert operations[-1]["ssh_host"] == "203.0.113.10"
     assert operations[-1]["ssh_user"] == "bot"
     assert operations[-1]["ssh_port"] == 2222
+    assert operations[-1]["sync_peers"] == [NODE_A]
     assert len(operations) == 3
     assert nodes[NODE_B]["sync_mode"] == "reachable"
     assert nodes[NODE_B]["sync_enabled"] is True
     assert nodes[NODE_B]["ssh_host"] == "203.0.113.10"
+    assert nodes[NODE_B]["sync_peers"] == [NODE_A]
 
 
 def test_update_node_settings_rejects_reachable_without_host(monkeypatch, tmp_path: Path) -> None:
@@ -344,6 +348,72 @@ def test_update_node_settings_rejects_disabling_local_node(monkeypatch, tmp_path
         asyncio.run(cluster.update_node_settings(NODE_A, _JsonRequest({"sync_mode": "disabled"}), session=None))
 
     assert exc.value.status_code == 400
+
+
+def test_update_node_settings_rejects_unknown_sync_peer(monkeypatch, tmp_path: Path) -> None:
+    """Node settings only accept peer allowlist entries for known cluster nodes."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=102)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            cluster.update_node_settings(
+                NODE_B,
+                _JsonRequest({"sync_mode": "outbound_only", "sync_peers": ["pbgui-node-00000000-0000-4000-8000-000000000099"]}),
+                session=None,
+            )
+        )
+
+    assert exc.value.status_code == 400
+
+
+def test_repair_node_cluster_ssh_reads_remote_key_and_installs_master_key(monkeypatch, tmp_path: Path) -> None:
+    """Cluster SSH repair stores the remote public key and installs the master key."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {
+            "node_id": NODE_A,
+            "public_key": LOCAL_CLUSTER_PUBLIC_KEY,
+            "fingerprint": "SHA256:local",
+            "public_key_path": str(tmp_path / "local.pub"),
+        },
+    )
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(remote_pbgui_dir="software/pbgui"), created_at=102)
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            if "ensure-local" in command:
+                payload = {"ok": True, "public_key": REMOTE_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:remote"}
+            elif "install-authorized-key" in command:
+                payload = {"ok": True, "changed": True}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    result = asyncio.run(cluster.repair_node_cluster_ssh(NODE_B, session=None))
+    nodes = _read_json(tmp_path / "data" / "cluster" / "cluster_nodes.json")["nodes"]
+
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert result["installed"] == [{"source_node_id": NODE_A, "changed": True, "role": "master"}]
+    assert nodes[NODE_B]["cluster_ssh_public_key"] == REMOTE_CLUSTER_PUBLIC_KEY
+    assert nodes[NODE_B]["cluster_ssh_fingerprint"] == "SHA256:remote"
+    assert nodes[NODE_B]["cluster_ssh_mode"] == "forced"
+    assert len(calls) == 2
+    assert "ensure-local" in calls[0]
+    assert "install-authorized-key" in calls[1]
 
 
 def test_bootstrap_preview_reports_missing_local_config(monkeypatch, tmp_path: Path) -> None:

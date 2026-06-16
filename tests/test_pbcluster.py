@@ -12,7 +12,7 @@ from master.cluster_state import (
     default_cluster_root,
     ensure_local_identity,
 )
-from master.cluster_sync_worker import ClusterSyncWorker
+from master.cluster_sync_worker import ClusterSyncWorker, SshClusterPeerClient
 
 
 CLUSTER_ID = "pbgui-cluster-00000000-0000-4000-8000-000000000010"
@@ -34,12 +34,12 @@ class _LocalPeerClient:
 
 
 class _FailingPeerClient:
-    """Peer client that fails if an outbound-only peer is contacted."""
+    """Peer client that fails if a skipped peer is contacted."""
 
     def run(self, peer: dict, local_node_id: str, command_text: str, payload: str | bytes | None = None) -> dict:
         """Fail when a test unexpectedly attempts peer transport."""
 
-        raise AssertionError("outbound-only peer must not be contacted")
+        raise AssertionError("skipped peer must not be contacted")
 
 
 def _write_cluster_blob(cluster_root: Path, blob_hash: str, raw: bytes) -> None:
@@ -117,8 +117,8 @@ def test_cluster_sync_worker_skips_outbound_only_peer(tmp_path: Path) -> None:
     """Outbound-only peers participate in state but are not contacted over SSH."""
 
     cluster_root = default_cluster_root(tmp_path)
-    ensure_local_identity(cluster_root, role="vps", pbname="runner-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
-    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "vps", "pbname": "runner-a"}, created_at=100)
+    ensure_local_identity(cluster_root, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "master", "pbname": "master-a"}, created_at=100)
     append_operation(
         cluster_root,
         "ADD_NODE",
@@ -138,8 +138,8 @@ def test_cluster_sync_worker_reports_reachable_peer_without_ssh_host(tmp_path: P
     """Reachable peers without ssh_host are config errors, not hostname fallback targets."""
 
     cluster_root = default_cluster_root(tmp_path)
-    ensure_local_identity(cluster_root, role="vps", pbname="runner-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
-    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "vps", "pbname": "runner-a"}, created_at=100)
+    ensure_local_identity(cluster_root, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "master", "pbname": "master-a"}, created_at=100)
     append_operation(
         cluster_root,
         "ADD_NODE",
@@ -154,6 +154,50 @@ def test_cluster_sync_worker_reports_reachable_peer_without_ssh_host(tmp_path: P
     assert status["peers_ok"] == 0
     assert status["peers"][0]["status"] == "config_error"
     assert "ssh_host" in status["peers"][0]["reason"]
+
+
+def test_cluster_sync_worker_skips_vps_peer_without_explicit_topology(tmp_path: Path) -> None:
+    """VPS nodes do not initiate SSH fanout unless sync_peers explicitly allows it."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="vps", pbname="runner-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "vps", "pbname": "runner-a"}, created_at=100)
+    append_operation(
+        cluster_root,
+        "ADD_NODE",
+        {"node_id": NODE_B, "role": "vps", "pbname": "runner-b", "sync_mode": "reachable", "ssh_host": "runner-b"},
+        created_at=101,
+    )
+    worker = ClusterSyncWorker(tmp_path, peer_client=_FailingPeerClient())
+
+    status = worker.run_once(reason="test")
+
+    assert status["ok"] is True
+    assert status["peers"][0]["status"] == "topology_skipped"
+
+
+def test_ssh_cluster_peer_client_uses_dedicated_key_and_forced_command(monkeypatch, tmp_path: Path) -> None:
+    """PBCluster SSH calls use the dedicated key and send only the wrapper verb."""
+
+    private_key = tmp_path / "cluster_key"
+    private_key.write_text("private", encoding="utf-8")
+    monkeypatch.setattr(
+        "master.cluster_sync_worker.ensure_cluster_ssh_key",
+        lambda cluster_root: {"private_key_path": str(private_key)},
+    )
+    client = SshClusterPeerClient(cluster_root=tmp_path / "data" / "cluster")
+
+    command = client._ssh_command(
+        {"node_id": NODE_B, "ssh_host": "203.0.113.10", "ssh_user": "bot", "ssh_port": 2222},
+        NODE_ID,
+        "hello",
+    )
+
+    assert "-i" in command
+    assert str(private_key) in command
+    assert "IdentitiesOnly=yes" in command
+    assert command[-1] == "hello"
+    assert "cluster_sync_command.py" not in command[-1]
 
 
 def test_cluster_sync_worker_pushes_ops_blobs_and_remote_materializes(tmp_path: Path) -> None:

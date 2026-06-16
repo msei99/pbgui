@@ -241,6 +241,10 @@
     .modal-field label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; }
     .modal-input { width: 100%; min-height: 34px; border: 1px solid var(--border2); border-radius: 7px; background: #0f1724; color: var(--text); padding: 0.45rem 0.55rem; }
     .modal-input:disabled { color: var(--faint); background: #111827; }
+    .modal-field-wide { grid-column: 1 / -1; }
+    .peer-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 7px; }
+    .peer-option { display: flex; align-items: center; gap: 7px; border: 1px solid var(--border2); border-radius: 7px; padding: 0.45rem 0.55rem; background: #0f1724; color: var(--muted); }
+    .peer-option input { accent-color: var(--accent); }
     .push-progress { flex: 1 1 340px; min-width: min(340px, 100%); margin-right: auto; border: 1px solid var(--border); border-radius: 9px; background: #101724; padding: var(--sp-sm); }
     .push-progress[hidden] { display: none; }
     .push-progress-label { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-sm); color: var(--muted); font-size: var(--fs-sm); margin-bottom: 7px; }
@@ -410,8 +414,12 @@
             <label for="node-settings-ssh-user">SSH User</label>
             <input class="modal-input" id="node-settings-ssh-user" type="text" placeholder="mani">
           </div>
+          <div class="modal-field modal-field-wide">
+            <label>Allowed Outbound Peers</label>
+            <div class="peer-list" id="node-settings-peers"></div>
+          </div>
         </div>
-        <div class="panel-note">Role and Remote PBGui Dir are set by setup/discovery and are shown for diagnostics only.</div>
+        <div class="panel-note">Role and Remote PBGui Dir are set by setup/discovery and are shown for diagnostics only. Outbound peers define which nodes this node is allowed to contact directly.</div>
         <div class="modal-error" id="node-settings-error"></div>
       </div>
       <div class="modal-actions">
@@ -677,6 +685,42 @@
         });
       }
 
+      function nodePeerList(node) {
+        return Array.isArray((node || {}).sync_peers) ? (node.sync_peers || []).map(String) : null;
+      }
+
+      function renderNodePeerOptions(node) {
+        var box = document.getElementById('node-settings-peers');
+        if (!box) return;
+        var nodeId = String((node || {}).node_id || '');
+        var explicit = nodePeerList(node);
+        var peers = Object.keys(nodeMap).map(function (id) { return nodeMap[id]; }).filter(function (peer) {
+          return peer && peer.node_id && peer.node_id !== nodeId;
+        }).sort(function (a, b) {
+          return String(a.pbname || a.hostname || a.node_id).localeCompare(String(b.pbname || b.hostname || b.node_id));
+        });
+        if (!peers.length) {
+          box.innerHTML = '<div class="empty">No other cluster nodes are known.</div>';
+          return;
+        }
+        var selected = new Set(explicit || []);
+        box.innerHTML = peers.map(function (peer) {
+          var checked = explicit ? selected.has(peer.node_id) : ((node.role || '') === 'master' && syncMode(peer) === 'reachable');
+          return '<label class="peer-option" title="' + esc(peer.node_id) + '">'
+            + '<input type="checkbox" data-peer-id="' + esc(peer.node_id) + '" ' + (checked ? 'checked' : '') + '>'
+            + '<span>' + esc(peer.pbname || peer.hostname || shortId(peer.node_id)) + ' <span class="faint">(' + esc(syncModeLabel(syncMode(peer))) + ')</span></span>'
+            + '</label>';
+        }).join('');
+      }
+
+      function selectedPeerIdsFromModal() {
+        var box = document.getElementById('node-settings-peers');
+        if (!box) return [];
+        return Array.prototype.slice.call(box.querySelectorAll('input[data-peer-id]:checked')).map(function (el) {
+          return el.getAttribute('data-peer-id');
+        }).filter(Boolean);
+      }
+
       function openNodeSettingsModal(node) {
         pendingSettingsNode = node || null;
         showNodeSettingsError('');
@@ -697,6 +741,7 @@
         if (hostEl) hostEl.value = node.ssh_host || '';
         if (userEl) userEl.value = node.ssh_user || '';
         if (portEl) portEl.value = node.ssh_port || 22;
+        renderNodePeerOptions(node);
         applyNodeSettingsMode();
         if (modal) modal.hidden = false;
       }
@@ -716,7 +761,8 @@
           sync_mode: mode,
           ssh_host: document.getElementById('node-settings-ssh-host').value.trim(),
           ssh_user: document.getElementById('node-settings-ssh-user').value.trim(),
-          ssh_port: Number(document.getElementById('node-settings-ssh-port').value || 22)
+          ssh_port: Number(document.getElementById('node-settings-ssh-port').value || 22),
+          sync_peers: selectedPeerIdsFromModal()
         };
         if (mode === 'reachable' && !payload.ssh_host) {
           showNodeSettingsError('Reachable nodes require an SSH host.');
@@ -739,6 +785,23 @@
           setMessage('Failed to update node settings: ' + err.message, 'err');
         }).finally(function () {
           if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+        });
+      }
+
+      function repairNodeClusterSsh(node) {
+        if (!node || !node.node_id) return;
+        var label = node.pbname || node.hostname || node.node_id;
+        setMessage('Repairing Cluster SSH for ' + label + '...', 'warn');
+        fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/cluster-ssh/repair', { method: 'POST' }).then(function (payload) {
+          var missing = Array.isArray(payload.missing_source_keys) ? payload.missing_source_keys.length : 0;
+          if (missing) {
+            setMessage('Cluster SSH repaired for ' + label + ', but ' + missing + ' source key(s) are not known yet. Repair those source nodes first.', 'warn');
+          } else {
+            setMessage('Cluster SSH repaired for ' + label + '.', 'ok');
+          }
+          return loadCluster();
+        }).catch(function (err) {
+          setMessage('Cluster SSH repair failed for ' + label + ': ' + err.message, 'err');
         });
       }
 
@@ -1251,6 +1314,20 @@
         return 'warn';
       }
 
+      function peerSummary(node) {
+        var peers = nodePeerList(node);
+        if (peers && peers.length) {
+          return peers.map(function (id) { return nodeLabel(id); }).join(', ');
+        }
+        if (peers) return 'None';
+        return (node.role || '') === 'master' ? 'Default reachable' : 'None';
+      }
+
+      function keySummary(node, probe) {
+        var fingerprint = (node || {}).cluster_ssh_fingerprint || (probe || {}).cluster_ssh_fingerprint || '';
+        return fingerprint ? shortId(fingerprint) : 'No key';
+      }
+
       function renderBootstrap(plan) {
         lastBootstrapPlan = plan;
         var counts = plan.counts || {};
@@ -1393,6 +1470,8 @@
           pbname: function (node) { return node.pbname || node.hostname || ''; },
           address: function (node) { return syncMode(node) === 'reachable' ? ((node.ssh_host || '') + ':' + (node.ssh_port || '')) : syncMode(node); },
           sync: function (node) { return syncMode(node); },
+          peers: function (node) { return peerSummary(node); },
+          key: function (node) { return node.cluster_ssh_fingerprint || ''; },
           probe: function (node) { return (remoteProbeMap[node.node_id] || {}).status || ''; },
           updated: function (node) { return Number(node.updated_at || 0); }
         });
@@ -1402,6 +1481,8 @@
           + sortHeader('nodes', 'pbname', 'PBName')
           + sortHeader('nodes', 'address', 'Address')
           + sortHeader('nodes', 'sync', 'Sync')
+          + sortHeader('nodes', 'peers', 'Peers')
+          + sortHeader('nodes', 'key', 'Key')
           + sortHeader('nodes', 'probe', 'Probe')
           + '<th>Action</th>'
           + sortHeader('nodes', 'updated', 'Updated')
@@ -1418,12 +1499,16 @@
             actionParts.push('<button class="btn small primary preview-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Preview</button>');
           }
           actionParts.push('<button class="btn small primary edit-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Edit</button>');
+          actionParts.push('<button class="btn small primary repair-node-ssh-btn" type="button" data-node-id="' + esc(node.node_id) + '">Repair SSH</button>');
+          var keyKnown = Boolean(node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint);
           html += '<tr>'
             + '<td class="mono" title="' + esc(node.node_id) + '">' + esc(shortId(node.node_id)) + '</td>'
             + '<td><span class="pill blue">' + esc(node.role || 'node') + '</span></td>'
             + '<td>' + esc(node.pbname || node.hostname || 'n/a') + '</td>'
             + '<td title="' + esc(node.remote_pbgui_dir || '') + '">' + esc(mode === 'reachable' ? ((node.ssh_user ? node.ssh_user + '@' : '') + (node.ssh_host || 'n/a') + ':' + (node.ssh_port || 22)) : syncModeLabel(mode)) + '</td>'
             + '<td><span class="pill ' + syncModePill(mode) + '">' + esc(syncModeLabel(mode)) + '</span></td>'
+            + '<td title="' + esc(peerSummary(node)) + '">' + esc(peerSummary(node)) + '</td>'
+            + '<td title="' + esc((node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint || '')) + '"><span class="pill ' + (keyKnown ? 'good' : 'warn') + '">' + esc(keySummary(node, probe)) + '</span></td>'
             + '<td title="' + esc(probeTitle) + '"><span class="pill ' + probePill(probeStatus) + '">' + esc(probeLabel(probeStatus)) + '</span></td>'
             + '<td>' + actionParts.join(' ') + '</td>'
             + '<td>' + esc(timeText(node.updated_at)) + '</td>'
@@ -1445,6 +1530,11 @@
         document.getElementById('nodes-table').querySelectorAll('.edit-node-btn').forEach(function (btn) {
           btn.addEventListener('click', function () {
             openNodeSettingsModal(nodeMap[btn.getAttribute('data-node-id')] || {});
+          });
+        });
+        document.getElementById('nodes-table').querySelectorAll('.repair-node-ssh-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            repairNodeClusterSsh(nodeMap[btn.getAttribute('data-node-id')] || {});
           });
         });
       }
