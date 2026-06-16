@@ -6,13 +6,11 @@ from pathlib import Path
 
 from PBRun import PBRun
 from PBCluster import PBCluster
-from PBRemote import PBRemote
 from PBCoinData import CoinData
 
 SYSTEMD_UNITS = {
     'PBRun': 'pbgui-pbrun.service',
     'PBCluster': 'pbgui-pbcluster.service',
-    'PBRemote': 'pbgui-pbremote.service',
     'PBCoinData': 'pbgui-pbcoindata.service',
 }
 
@@ -72,9 +70,6 @@ def _legacy_action(service: str, action: str) -> None:
         elif service == 'PBCluster':
             print('Start PBCluster')
             PBCluster().run()
-        elif service == 'PBRemote':
-            print('Start PBRemote')
-            PBRemote().run()
         elif service == 'PBCoinData':
             print('Start PBCoinData')
             CoinData().run()
@@ -85,9 +80,6 @@ def _legacy_action(service: str, action: str) -> None:
         elif service == 'PBCluster':
             print('Stop PBCluster')
             PBCluster().stop()
-        elif service == 'PBRemote':
-            print('Stop PBRemote')
-            PBRemote().stop()
         elif service == 'PBCoinData':
             print('Stop PBCoinData')
             CoinData().stop()
@@ -100,10 +92,6 @@ def _legacy_action(service: str, action: str) -> None:
             print('Restart PBCluster')
             PBCluster().stop()
             PBCluster().run()
-        elif service == 'PBRemote':
-            print('Restart PBRemote')
-            PBRemote().stop()
-            PBRemote().run()
         elif service == 'PBCoinData':
             print('Restart PBCoinData')
             CoinData().stop()
@@ -117,7 +105,7 @@ def main():
     group.add_argument('-s', '--start', action='store_true', help='Start')
     group.add_argument('-k', '--stop', action='store_true', help='Stop')
     group.add_argument('-r', '--restart', action='store_true', help='Restart')
-    parser.add_argument('command', choices=['PBRun', 'PBCluster', 'PBRemote', 'PBCoinData'], nargs='+')
+    parser.add_argument('command', choices=['PBRun', 'PBCluster', 'PBCoinData'], nargs='+')
 
     args = parser.parse_args()
     action = 'start' if args.start else 'stop' if args.stop else 'restart'

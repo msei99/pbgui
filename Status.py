@@ -5,7 +5,7 @@ The collected data are stored in a list of statuses (InsancesStatusList()), wher
 
 Each status includes informations such as the name, the version, where it is supposed to run, whether it is a multi configuration, and whether it is running on the local server. 
 
-This status list is then sent through PBRemote to the remote storage, enabling us to manage bots from the master server.
+This status list is consumed by PBRun and synchronized by PBCluster so PBGui can manage bots from the master server.
 """
 from pathlib import Path
 import json

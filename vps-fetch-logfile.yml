@@ -2,7 +2,7 @@
 # Fetch logfile from VPS
 # Steps:
 # 1. Clone pbgui repository
-# 2. Restart PBRun, PBRemote and PBCoinData if pbgui repository was updated
+# 2. Restart PBRun and PBCoinData if pbgui repository was updated
 
 - hosts: "{{ hostname }}"
   gather_facts: yes

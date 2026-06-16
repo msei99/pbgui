@@ -70,7 +70,6 @@ PYTHON_BIN="$DIR/venv_pbgui/bin/python"
 
 # Start scripts with nohup so they persist after cron exits
 nohup "\$PYTHON_BIN" PBRun.py &
-nohup "\$PYTHON_BIN" PBRemote.py &
 nohup "\$PYTHON_BIN" PBData.py &
 nohup "\$PYTHON_BIN" PBCoinData.py &
 nohup "\$PYTHON_BIN" PBApiServer.py &

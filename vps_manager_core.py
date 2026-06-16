@@ -222,7 +222,6 @@ class VPS:
         self.init_log = ""
         self.setup_log = ""
         self.update_log = ""
-        self.bucket = None
         self.coinmarketcap_api_key = None
         self.firewall = True
         self.firewall_ssh_port = 22
@@ -299,8 +298,6 @@ class VPS:
             self.init_status = config["init_status"]
         if "update_status" in config:
             self.update_status = config["update_status"]
-        if "bucket" in config:
-            self.bucket = config["bucket"]
         if "coinmarketcap_api_key" in config:
             self.coinmarketcap_api_key = config["coinmarketcap_api_key"]
         if "firewall" in config:
@@ -485,7 +482,7 @@ class VPS:
         return False
 
     def fetch_vps_info(self):
-        result = {"bucket": None, "coinmarketcap": None, "swap": "0", "firewall": None, "firewall_ssh_port": None, "firewall_ssh_ips": None}
+        result = {"coinmarketcap": None, "swap": "0", "firewall": None, "firewall_ssh_port": None, "firewall_ssh_ips": None}
         if not self.ip or not self.user:
             _log("VPSManager", "Missing VPS IP or username.", level="WARNING")
             return result
@@ -551,12 +548,6 @@ class VPS:
             except Exception as exc:
                 _log("VPSManager", f"Error parsing config file from VPS {self.hostname} ({self.ip}): {exc}", level="WARNING")
                 return result
-
-            if config_data.has_section("pbremote") and config_data.has_option("pbremote", "bucket"):
-                result["bucket"] = config_data.get("pbremote", "bucket")
-                _log("VPSManager", f"Successfully fetched PBRemote bucket from {self.hostname}", level="INFO")
-            else:
-                _log("VPSManager", f"'bucket' not found in [pbremote] section on VPS {self.hostname}", level="WARNING")
 
             if config_data.has_section("coinmarketcap") and config_data.has_option("coinmarketcap", "api_key"):
                 result["coinmarketcap"] = config_data.get("coinmarketcap", "api_key")
@@ -934,7 +925,6 @@ PY"""
                 "ip": self.ip,
                 "user": self.user,
                 "swap": self.swap,
-                "bucket": self.bucket,
                 "coinmarketcap_api_key": self.coinmarketcap_api_key,
                 "last_setup": self.last_setup,
                 "last_init": self.last_init,
@@ -1109,7 +1099,6 @@ class VPSManager:
             "user": vps.user,
             "user_pw": vps.user_pw,
             "swap_size": vps.swap,
-            "bucket": str(vps.bucket or ""),
             "coinmarketcap_api_key": str(vps.coinmarketcap_api_key or ""),
             "firewall": vps.firewall,
             "firewall_ssh_port": vps.firewall_ssh_port,
@@ -1160,7 +1149,6 @@ class VPSManager:
             "user": vps.user,
             "user_pw": vps.user_pw,
             "swap_size": vps.swap,
-            "bucket": str(vps.bucket or ""),
             "coinmarketcap_api_key": str(vps.coinmarketcap_api_key or ""),
             "firewall": vps.firewall,
             "firewall_ssh_port": vps.firewall_ssh_port,

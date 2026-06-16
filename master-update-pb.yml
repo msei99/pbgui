@@ -2,7 +2,7 @@
 # Update pbgui and pb7 on localhost
 # Steps:
 # 1. Clone pbgui repository
-# 2. Restart PBRun, PBRemote and PBCoinData if pbgui repository was updated
+# 2. Restart PBRun and PBCoinData if pbgui repository was updated
 # 3. Clone passivbot repository for pb7
 # 4. Restart all pb7 bots if pb7 repository was updated
 
@@ -100,9 +100,9 @@
         extra_args: --upgrade pip
       listen: "restart pbgui"
 
-    - name: Restart PBRun, PBRemote and PBCoinData
+    - name: Restart PBRun and PBCoinData
       shell: |
-        python "{{ pbgdir }}/starter.py" -r PBRun PBRemote PBCoinData
+        python "{{ pbgdir }}/starter.py" -r PBRun PBCoinData
       args:
         executable: /bin/bash
         chdir: "{{ pbgdir }}"

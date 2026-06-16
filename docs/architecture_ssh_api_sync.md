@@ -21,7 +21,7 @@
 | 9 | Push-history log (via `[FileSync]` tag in `data/logs/FileSync.log`) |
 | 10 | Generic `FileSyncWorker` reusable for future file types |
 | 11 | Generic remote `pbgui.ini` read/write over existing SSH sessions |
-| 12 | Backups follow existing PBRemote convention (`data/backup/api-keys_v7/` + `data/backup/api-keys/`) |
+| 12 | Backups use existing VPS backup directories (`data/backup/api-keys_v7/` + `data/backup/api-keys/`) |
 
 ---
 
@@ -82,7 +82,7 @@ User clicks "API Sync"
 │                                                  │
 │  a) Backup remote api-keys.json                  │
 │     → data/backup/api-keys_v7/{timestamp}/        │
-│       api-keys.json (matches PBRemote pattern)    │
+│       api-keys.json                               │
 │     → data/backup/api-keys/{timestamp}/           │
 │       api-keys.json (if pb6dir set)               │
 │                                                  │
@@ -208,15 +208,12 @@ VPS configuration persisted at `data/vpsmanager/hosts/{hostname}/{hostname}.json
 | `ip` | VPS IP address |
 | `user` | SSH user |
 | `firewall_ssh_port` | SSH port (default 22) |
-| `bucket` | rclone remote (legacy) |
 
 **`fetch_vps_info()`**: Reads remote `software/pbgui/pbgui.ini` via Paramiko SFTP. Currently only extracts `pbdir` (PB6). **We do NOT extend VPSManager** — it is scheduled for deprecation. Instead, remote path discovery and ini access are handled by the new `read_remote_ini()` / `write_remote_ini()` methods on `AsyncSSHPool` (see Section 6.2).
 
-### `PBRemote.py` — Remaining legacy duties
+### Removed remote-storage fallback
 
-`PBRemote.py` still handles bucket-based fallback sync for bot config/status data in the older remote-storage flows.
-
-It no longer distributes or installs `api-keys.json`. The active API key distribution path is now exclusively the FileSyncWorker-based `API Sync` flow.
+Bucket-based remote-storage sync has been removed. The active API key distribution path is the FileSyncWorker-based `API Sync` flow, and cluster-mode V7/API-key writes are owned by PBCluster materialization.
 
 ---
 
@@ -326,7 +323,7 @@ class FileSyncWorker:
 
 **Key changes from earlier design:**
 
-- `_backup_remote()` writes to `~/software/pbgui/data/backup/api-keys_v7/{timestamp}/api-keys.json` (PB7) and `~/software/pbgui/data/backup/api-keys/{timestamp}/api-keys.json` (PB6). Follows the existing PBRemote backup convention exactly — same directory structure on VPS as today.
+- `_backup_remote()` writes to `~/software/pbgui/data/backup/api-keys_v7/{timestamp}/api-keys.json` (PB7) and `~/software/pbgui/data/backup/api-keys/{timestamp}/api-keys.json` (PB6), keeping the existing VPS backup directory structure.
 - `_retention_cleanup()` reads `backup_retention_days` and `backup_min_versions` from the VPS's cached `pbgui.ini` `[filesync]` section (via `pool.get_remote_ini_value()`). Falls back to defaults (180 / 10) if section missing.
 - Remote paths (pb6dir, pb7dir) read from `pool.connections[hostname].data['pb6dir']` / `data['pb7dir']` — cached on SSH connect, no VPSManager dependency.
 
@@ -376,7 +373,7 @@ frontend/
 ├── pbgui.ini              # [filesync] section with retention config
 └── data/
     └── backup/
-        ├── api-keys_v7/   # PB7 api-keys backups (same pattern as PBRemote)
+        ├── api-keys_v7/   # PB7 api-keys backups
         │   ├── 2026-03-26_14-30-00/
         │   │   └── api-keys.json
         │   ├── 2026-03-25_10-00-00/
@@ -394,7 +391,7 @@ frontend/
 └── api-keys.json          # pushed by FileSyncWorker
 ```
 
-**Note**: Backups follow the existing PBRemote convention: `data/backup/api-keys_v7/{timestamp}/api-keys.json` for PB7 and `data/backup/api-keys/{timestamp}/api-keys.json` for PB6. Separate backup per passivbot version, consistent with how backups are already created today. The passivbot directories only contain the active `api-keys.json`.
+**Note**: Backups use `data/backup/api-keys_v7/{timestamp}/api-keys.json` for PB7 and `data/backup/api-keys/{timestamp}/api-keys.json` for PB6. Separate backup per passivbot version, consistent with how backups are already created today. The passivbot directories only contain the active `api-keys.json`.
 
 ---
 
@@ -429,7 +426,7 @@ Log entries include: hostname, operation, serial, success/failure, MD5 hashes, t
 ## 10. Migration Path
 
 1. **Initial rollout**: SSH sync coexisted with rclone during migration.
-2. **Completed cleanup**: the old FastAPI rclone compatibility path and the PBRemote `api-keys.json` staging/install path have been removed.
+2. **Completed cleanup**: the old FastAPI rclone compatibility path and remote-storage `api-keys.json` staging/install path have been removed.
 3. **Future**: Extend `FileSyncWorker` to sync PB7 configs (same pattern, different file paths).
 
 ---
@@ -457,7 +454,7 @@ Log entries include: hostname, operation, serial, success/failure, MD5 hashes, t
 | inotifywait over SSH (not polling) | < 1s latency, no loop overhead, reuses existing SSH. |
 | `_sync_lock` advisory only | Sufficient for test-push scenarios. No security claim. |
 | Retention configurable in VPS ini | Each VPS controls its own limits. Masters learn config on connect. No config drift. |
-| Backups in `pbgui/data/backup/api-keys[_v7]/` | Follows existing PBRemote convention. Same structure locally and on VPS. |
+| Backups in `pbgui/data/backup/api-keys[_v7]/` | Same structure locally and on VPS. |
 | No VPSManager extension | VPSManager is legacy/scheduled for deprecation. Remote config via SSH pool instead. |
 | Remote paths cached on connect | Read `pbgui.ini` on SSH connect, cache in `VPSConnection.data`. No extra round-trips. |
 | Metadata fields in JSON | Avoids sidecar files. Fields prefixed with `_` to avoid conflicts. |

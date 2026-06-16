@@ -70,10 +70,9 @@ Sidebar actions:
 | **Update Linux** | Run Linux package updates (optional reboot checkbox) |
 | **Reboot Master** | Restart the local server |
 | **Install or Update rustup** | Install or refresh the Rust toolchain |
-| **Install or Update rclone** | Install or refresh rclone |
 
 The **Master** content area also contains:
-- a live status grid for PBRemote / CoinData / last command state
+- a live status grid for CoinData / last command state
 - **PBGui Branch Management** for branch or commit switches
 - **PB7 Branch Management** with optional custom remote / fork URL support
 - a **Monitor** section with server metrics plus PB7 activity data; if live monitor rows are missing, the page still lists running PB7 bot names from `status_v7.json`
@@ -107,7 +106,7 @@ Sidebar actions:
 | **Update CoinData API** | Push updated CoinMarketCap API key |
 
 The **VPS** content area also contains:
-- a setup/config grid for password, swap, bucket, CoinMarketCap key and firewall fields; **Apply VPS Changes** saves changes locally and applies changed swap, firewall, PBRemote, and CoinMarketCap settings on the VPS
+- a setup/config grid for password, swap, CoinMarketCap key and firewall fields; **Apply VPS Changes** saves changes locally and applies changed swap, firewall, and CoinMarketCap settings on the VPS
 - **PBGui Branch Management** and **PB7 Branch Management** with the same switch / update workflow as the Master page
 - a **Remote Monitor** section with server metrics plus PB7 activity data; if live monitor rows are missing, the page still lists running PB7 bot names from `status_v7.json`
 - a **Progress** section with separate status buckets for init, setup and update runs; use the sidebar action buttons to open the shared **Command Log Viewer** whenever you need the full ansible output
@@ -125,8 +124,8 @@ The sidebar keeps the detailed log workflows separate from the normal host overv
 
 The status cards above the setup grid are live operator hints:
 - **Update Ready** turns green as soon as a VPS user password is entered locally and shows how many Linux updates are pending.
-- **CoinData Ready** shows the remaining CoinMarketCap credits when that value is available from PBRemote.
-- Pending Linux updates and reboot-needed hints are refreshed from a live SSH package-status probe, so the cards no longer wait for the slower hourly `PBRemote` alive refresh.
+- **CoinData Ready** shows the remaining CoinMarketCap credits when the monitor reports them.
+- Pending Linux updates and reboot-needed hints are refreshed from a live SSH package-status probe.
 - The detail page also includes a one-row summary table plus a remote server resource snapshot similar to the previous server view.
 
 `Cleanup VPS` also installs or refreshes two small daily cleanup cron jobs on the VPS: one user-level job for pip and rustup caches, plus one root-level job for `journalctl --vacuum-time=1d`. The periodic jobs run quietly and do not keep their own log history.

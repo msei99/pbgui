@@ -5,6 +5,7 @@
 - Cluster Sync: split node sync participation from inbound reachability with editable Disabled, Outbound Only and Reachable via SSH modes so local masters do not need public SSH endpoints.
 - Cluster Sync: automatically creates dedicated PBCluster SSH keys, installs restricted forced-command keys during normal VPS PBGui setup/update, and prevents VPS nodes from initiating peer SSH unless explicit peers are configured.
 - Cluster Sync: added configurable per-node outbound peer allowlists, Cluster SSH key status in the node table, and a Repair SSH action that reads remote public keys back into cluster metadata and installs required peer keys.
+- Cluster Sync: fixed the Guide button on the Cluster page so it opens the Cluster Sync topic in the inline help overlay instead of navigating away to the Help overview.
 - VPS Manager: added PBCluster to remote service monitoring and VPS systemd migration checks, show remote PBGui service states in VPS detail/change views, and sync new PBGui systemd units during normal PBGui update/branch-switch actions.
 - VPS Monitor: treat PBCluster as alertable only for nodes with Cluster Sync enabled, silently clear false PBCluster alerts from Sync Off nodes, and prevent PBCluster auto-restart from creating legacy starter.py processes.
 - VPS Manager: resolve PBCluster in the remote Host Log Viewer to `data/logs/PBCluster.log` so joined hosts show the service log again.
@@ -15,7 +16,8 @@
 - V7 Monitor: keep the remote `running_version.txt` inotify watcher active on cluster-mode so monitoring refreshes still happen immediately while legacy `status_v7.json` config reconciliation remains disabled.
 - V7 Run: PBRun now enforces Cluster Sync desired state before starting or continuing V7 bots, records the block reason in status data, and shows blocked instances in the V7 Run list.
 - V7 Run: disabled the legacy FastAPI SSH sync path on cluster-mode so saving, activating, restoring or forced-mode edits no longer push `run_v7` files or trigger PBRun starts on VPS hosts outside explicit Cluster Sync materialization.
-- VPS Manager: optional PBRemote/PBCoinData service control now treats explicit remote unconfigured state as disabled and clears failed systemd user units when optional config is removed.
+- Removed PBRemote service, API routes, rclone/bucket setup flows, VPS Manager cleanup UI and playbook/service-control paths; PBCluster is now the remote sync/materialization path, and setup/migration/uninstall cleanup removes obsolete PBRemote systemd units when found.
+- VPS Manager: optional PBCoinData service control now treats explicit remote unconfigured state as disabled and clears failed systemd user units when optional config is removed.
 - Cluster Sync: disabled legacy V7 config sync and legacy API-key file sync on the cluster-mode branch so remote `run_v7` and `api-keys.json` writes are owned by explicit Cluster Sync materialization.
 - Cluster Sync: added API-key operation recording, payload/secret blob replication, and explicit remote `api-keys.json` materialization with backup, atomic write and hash verification.
 - Cluster Sync: added explicit remote V7 config materialization from replicated config blobs into `data/run_v7`, with read-only preview, sync-state safety checks, missing-blob blocking and no deletes or bot start/stop actions.

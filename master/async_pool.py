@@ -777,10 +777,10 @@ class AsyncSSHPool:
         add_candidate(entry.data.get('remote_pbgui_dir'))
         add_candidate(entry.config.remote_pbgui_dir)
 
-        process_cmd = "ps -ef | grep -E 'PBRun\\.py|PBRemote\\.py|PBCoinData\\.py|PBApiServer\\.py|starter\\.py' | grep -v grep"
+        process_cmd = "ps -ef | grep -E 'PBRun\\.py|PBCluster\\.py|PBCoinData\\.py|PBApiServer\\.py|starter\\.py' | grep -v grep"
         process_result = await self._run_conn_command(entry, process_cmd, conn)
         process_output = (process_result.stdout or '') if process_result else ''
-        for match in re.findall(r'(/[^\s]+/(?:PBRun|PBRemote|PBCoinData|PBApiServer|starter)\.py)', process_output):
+        for match in re.findall(r'(/[^\s]+/(?:PBRun|PBCluster|PBCoinData|PBApiServer|starter)\.py)', process_output):
             add_candidate(str(Path(match).parent))
 
         add_candidate(REMOTE_PBGUI_DIR)

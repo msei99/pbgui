@@ -8,7 +8,7 @@ Er nutzt den PBAPIServer als Backend und erhält Updates per WebSocket, sodass d
 
 - Verbindungsstatus je Host (connected/disconnected)
 - Systemmetriken pro Host (CPU, RAM, Disk, Swap)
-- Service-Status je Host (PBRun, PBRemote, PBCoinData)
+- Service-Status je Host (PBCluster, PBRun, PBCoinData)
 - Bot-Instanzen über alle Hosts hinweg
 - Live-Logs für Services und Bots
 

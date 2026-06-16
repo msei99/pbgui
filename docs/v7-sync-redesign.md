@@ -25,7 +25,7 @@ Der separate "Activate"-Button im GUI für v7 wird entfernt — Save schreibt un
 - **Nicht gesynct** werden runtime/lokale Dateien:
   - `ignored_coins.json`, `approved_coins.json`, `config_run.json`
 - Nur von Mastern geschrieben
-- VPS bekommt sie per SSH (sofort) oder PBRemote/rclone (verzögert)
+- VPS bekommt sie über Cluster Sync/PBCluster-Materialisierung
 - `pbgui.version` für Config-Versionierung (wie bisher)
 
 ## Running-State
@@ -118,10 +118,11 @@ Master:
 - Für v7: **kein `activate_*.cmd` mehr** — nur status_v7 gilt
 - v6 Multi/Single System: **komplett unverändert** (activate_*.cmd bleibt für v6)
 
-## PBRemote
+## PBCluster
 
-- **Master**: synct config.json + Coin-Configs pro Instanz + status_v7 + alive
-- **Slave**: synct nur alive; bezieht configs + status_v7 **read-only**
+- Repliziert Cluster-Operationen, Config-Blobs und API-Key-Metadaten zwischen verbundenen Nodes
+- Materialisiert freigegebene V7-Configs und API-Keys explizit auf erreichbare Nodes
+- PBRun liest den lokal materialisierten gewünschten Zustand und startet/stoppt Bots entsprechend
 - v6 Multi/Single: **komplett unverändert**
 
 ## V7ConfigSyncWorker (Master)
@@ -143,7 +144,7 @@ Master:
 | **`PBRun.py`** | `watch_v7()` → nur status_v7 auswerten; `activate_*.cmd` für v7 entfernen (v6 bleibt!); Polling auf status_v7 mtime |
 | **`api/v7_instances.py`** | Delete: `delete_*.cmd` raus; Save/Create: alle .json + status_v7 per SSH auf VPS; status_v7 bei Save/Delete updaten |
 | **`master/v7_config_sync.py`** | `delete_*.cmd` Code raus; status_v7 als inotify Watch-Pfad; Reconciliation-Callback (Merge + Pull config.json + Coin-Configs / Delete); Startup-Abgleich |
-| **`PBRemote.py`** | Master: config.json + Coin-Configs pro Instanz + status_v7 + alive syncen; Slave: nur alive + configs/status_v7 read-only |
+| **`PBCluster.py`** | Cluster-Operationen/Blobs replizieren und V7/API-Key-Zielzustand auf verbundenen Nodes materialisieren |
 | **`RunV7.py`** | `save()`: auch status_v7 updaten; `activate()` für v7: entfällt komplett |
 | **`frontend/v7_run.html`** | Activate-Button entfernen; Save-Logik ggf. anpassen |
 

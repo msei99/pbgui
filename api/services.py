@@ -19,12 +19,12 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from api.auth import require_auth, SessionToken
-from api.vps import get_monitor, get_monitor_state_snapshot
+from api.vps import get_monitor
 from pbgui_purefunc import PBGDIR, load_ini, save_ini
 from logging_helpers import human_log as _log
 
@@ -32,11 +32,10 @@ SERVICE = "Services"
 
 router = APIRouter()
 
-_SERVICES = ["pbcluster", "pbrun", "pbremote", "pbdata", "pbcoindata", "api-server"]
+_SERVICES = ["pbcluster", "pbrun", "pbdata", "pbcoindata", "api-server"]
 _SYSTEMD_SERVICE_UNITS = {
     "pbcluster": "pbgui-pbcluster.service",
     "pbrun": "pbgui-pbrun.service",
-    "pbremote": "pbgui-pbremote.service",
     "pbdata": "pbgui-pbdata.service",
     "pbcoindata": "pbgui-pbcoindata.service",
     "api-server": "pbgui-api.service",
@@ -46,7 +45,6 @@ _SYSTEMD_ENABLED_STATES = {"enabled", "enabled-runtime"}
 _SERVICE_SCRIPT_NAMES = {
     "pbcluster": "PBCluster.py",
     "pbrun": "PBRun.py",
-    "pbremote": "PBRemote.py",
     "pbdata": "PBData.py",
     "pbcoindata": "PBCoinData.py",
     "api-server": "PBApiServer.py",
@@ -54,13 +52,12 @@ _SERVICE_SCRIPT_NAMES = {
 _SERVICE_PID_FILES = {
     "pbcluster": "pbcluster.pid",
     "pbrun": "pbrun.pid",
-    "pbremote": "pbremote.pid",
     "pbdata": "pbdata.pid",
     "pbcoindata": "pbcoindata.pid",
     "api-server": "api_server.pid",
 }
 _MIGRATION_DEFAULT_SERVICES = ["api", "pbcluster", "pbrun", "pbdata", "pbcoindata"]
-_MIGRATION_LEGACY_STOP_SERVICES = ["pbcluster", "pbrun", "pbremote", "pbdata", "pbcoindata"]
+_MIGRATION_LEGACY_STOP_SERVICES = ["pbcluster", "pbrun", "pbdata", "pbcoindata"]
 _fetch_summary_snapshot: Dict[str, Any] = {}
 _poller_metrics_snapshot: Dict[str, Any] = {}
 
@@ -73,9 +70,6 @@ def _get_service(name: str):
     if name == "pbrun":
         from PBRun import PBRun
         return PBRun()
-    if name == "pbremote":
-        from PBRemote import PBRemote
-        return PBRemote()
     if name == "pbdata":
         from PBData import PBData
         obj = PBData.__new__(PBData)
@@ -117,8 +111,6 @@ def _configured_optional_secret(value: Any) -> bool:
 
 
 def _optional_service_blocker(name: str) -> str:
-    if name == "pbremote" and not _configured_optional_secret(load_ini("pbremote", "bucket")):
-        return "PBRemote bucket is not configured"
     if name == "pbcoindata" and not _configured_optional_secret(load_ini("coinmarketcap", "api_key")):
         return "CoinMarketCap API key is not configured"
     return ""
@@ -487,15 +479,6 @@ def _migration_systemd_units() -> list[dict[str, Any]]:
     return rows
 
 
-def _detect_pbremote_migration_needed(cron_entries: list[str], processes: list[dict[str, Any]]) -> bool:
-    """Preserve PBRemote during migration only when this master already uses it."""
-    if any(item.get("service") == "pbremote" for item in processes):
-        return True
-    if any("PBRemote.py" in entry for entry in cron_entries):
-        return True
-    return _systemd_unit_path("pbgui-pbremote.service").exists()
-
-
 def _migration_status_payload() -> dict[str, Any]:
     """Build the migration preflight payload for the Services UI."""
     pbgdir = Path(PBGDIR)
@@ -505,9 +488,6 @@ def _migration_status_payload() -> dict[str, Any]:
     default_units = {"api-server", "pbcluster", "pbrun", "pbdata", "pbcoindata"}
     missing_default_units = [row for row in units if row["service"] in default_units and not row["exists"]]
     legacy_entries = list(crontab.get("entries") or [])
-    pbremote_needed = _detect_pbremote_migration_needed(legacy_entries, processes)
-    pbremote_unit_exists = _systemd_unit_path("pbgui-pbremote.service").exists()
-    pbremote_unit_missing = pbremote_needed and not pbremote_unit_exists
     warnings = []
     if crontab.get("warning"):
         warnings.append(
@@ -527,19 +507,14 @@ def _migration_status_payload() -> dict[str, Any]:
         "missing_default_units": missing_default_units,
         "legacy_crontab": {k: v for k, v in crontab.items() if k != "lines"},
         "processes": processes,
-        "pbremote_will_be_preserved": pbremote_needed,
-        "pbremote_unit_missing": pbremote_unit_missing,
-        "migration_needed": bool(missing_default_units or legacy_entries or pbremote_unit_missing),
+        "migration_needed": bool(missing_default_units or legacy_entries),
         "warnings": warnings,
     }
 
 
 def _migration_enable_services(status: dict[str, Any]) -> list[str]:
     """Return the service set that migration would enable."""
-    enable_services = list(_MIGRATION_DEFAULT_SERVICES)
-    if status.get("pbremote_will_be_preserved") and "pbremote" not in enable_services:
-        enable_services.append("pbremote")
-    return enable_services
+    return list(_MIGRATION_DEFAULT_SERVICES)
 
 
 def _migration_setup_command(status: dict[str, Any]) -> tuple[list[str], list[str], Path, str, Path, str]:
@@ -709,12 +684,7 @@ def _test_systemd_migration() -> dict[str, Any]:
     else:
         logs.append("Would not remove crontab entries because none were detected.")
 
-    if status.get("pbremote_will_be_preserved"):
-        logs.append("Would preserve PBRemote by installing/enabling pbgui-pbremote.service.")
-
     missing_units = [row.get("unit") or row.get("service") for row in status.get("missing_default_units") or []]
-    if status.get("pbremote_unit_missing"):
-        missing_units.append("pbgui-pbremote.service")
     if missing_units:
         logs.append("Would install missing systemd user unit(s): " + ", ".join(str(unit) for unit in missing_units))
     else:
@@ -768,8 +738,6 @@ def _run_systemd_migration() -> dict[str, Any]:
     elif linger.get("warning"):
         warnings.append(str(linger.get("warning")))
 
-    if before.get("pbremote_will_be_preserved") and "pbremote" in enable_services:
-        logs.append("PBRemote was detected and will be preserved as a systemd user service.")
     proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=120, cwd=str(pbgdir))
     output = ((proc.stdout or "") + (proc.stderr or "")).strip()
     if output:
@@ -1431,246 +1399,6 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
         return {"ok": True, "message": "Restarting\u2026"}
     except Exception as e:
         _log(SERVICE, f"restart api-server failed: {e}\n{traceback.format_exc()}", level="ERROR")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── PBRemote info + api-sync ─────────────────────────────────
-
-@router.get("/pbremote/info")
-def get_pbremote_info(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    """Return PBRemote config plus remote host state using worker-based API sync status."""
-    try:
-        from PBRemote import PBRemote
-        obj = PBRemote()
-        if obj.error:
-            return {"error": obj.error, "configured": False}
-        api_keys_mod = __import__("api.api_keys", fromlist=["_file_sync_worker"])
-        fs_worker = getattr(api_keys_mod, "_file_sync_worker", None)
-        if fs_worker is None:
-            return {"error": "FileSyncWorker not initialized", "configured": False}
-        sync_status = fs_worker.get_status()
-        monitor_state = get_monitor_state_snapshot()
-        connections = ((monitor_state.get("connections") or {}).get("connections") or {})
-        system_state = monitor_state.get("system") or {}
-        host_meta = monitor_state.get("host_meta") or {}
-        sync_hosts = sync_status.get("hosts") or {}
-        servers = []
-        connected_hosts = set(sync_status.get("connected_hosts") or [])
-        api_synced = True
-        for hostname in sorted({*connections.keys(), *host_meta.keys(), *connected_hosts, *sync_hosts.keys()}):
-            conn = connections.get(hostname) or {}
-            meta = host_meta.get(hostname) or {}
-            system = system_state.get(hostname) or {}
-            status = str(conn.get("status") or "")
-            online = status == "connected"
-            sync_info = sync_hosts.get(hostname) or {}
-            in_sync = sync_info.get("in_sync")
-            if hostname in connected_hosts and in_sync is False:
-                api_synced = False
-            last_seen_ts = float(system.get("timestamp") or 0)
-            servers.append({
-                "name": hostname,
-                "role": str(meta.get("role") or "unknown"),
-                "online": online,
-                "last_seen_s": (max(int(time.time() - last_seen_ts), 0) if last_seen_ts else None),
-                "pbgui_version": str(meta.get("pbgv") or "N/A"),
-                "api_in_sync": in_sync,
-            })
-        return {
-            "configured": True,
-            "error": None,
-            "role": obj.role,
-            "bucket": obj.bucket or "",
-            "api_synced": api_synced,
-            "servers": servers,
-        }
-    except Exception as e:
-        _log(SERVICE, f"pbremote info failed: {e}", level="WARNING")
-        return {"error": str(e), "configured": False}
-
-
-@router.post("/pbremote/api-sync")
-async def trigger_pbremote_api_sync(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    """Push local api-keys.json to connected VPS via SSH and report worker-based sync state."""
-    try:
-        api_keys_mod = __import__("api.api_keys", fromlist=["_file_sync_worker"])
-        fs_worker = getattr(api_keys_mod, "_file_sync_worker", None)
-        if fs_worker is None:
-            return {"ok": False, "configured": False, "api_synced": True, "error": "FileSyncWorker not initialized"}
-        results = await fs_worker.push_api_keys(dry_run=False, no_propagate=False)
-        if isinstance(results, dict) and "error" in results and len(results) == 1:
-            raise HTTPException(status_code=400, detail=results["error"])
-        status = fs_worker.get_status()
-        connected_hosts = status.get("connected_hosts") or []
-        synced = all((status.get("hosts") or {}).get(hostname, {}).get("in_sync") is not False for hostname in connected_hosts)
-        return {"ok": True, "configured": True, "api_synced": synced}
-    except HTTPException:
-        raise
-    except Exception as e:
-        _log(SERVICE, f"pbremote api-sync failed: {e}", level="ERROR")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/pbremote/instances")
-def get_pbremote_instances(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    """Return the current instance list and system metrics per host from the VPS monitor store."""
-    try:
-        from api.vps import _monitor
-        if _monitor is None:
-            return {"instances": {}, "system": {}, "available": False}
-        instances = dict(_monitor.store.instances)
-        system = {h: m.to_dict() for h, m in _monitor.store.system.items()}
-        return {"instances": instances, "system": system, "available": True}
-    except Exception as e:
-        _log(SERVICE, f"pbremote/instances failed: {e}", level="WARNING")
-        return {"instances": {}, "system": {}, "available": False, "error": str(e)}
-
-
-@router.get("/settings/pbremote/buckets")
-def get_pbremote_buckets(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    """List available rclone remotes (buckets) and currently selected bucket."""
-    try:
-        from PBRemote import PBRemote
-        obj = PBRemote()
-        obj.fetch_buckets()
-        return {
-            "buckets": obj.buckets or [],
-            "rclone_available": obj.rclone_installed,
-            "selected": obj.bucket or "",
-        }
-    except Exception as e:
-        return {"buckets": [], "rclone_available": False, "selected": "", "error": str(e)}
-
-
-@router.get("/settings/pbremote/bucket-config")
-def get_bucket_config(
-    bucket: str = Query(..., description="Bucket name (e.g. 'mybucket:')"),
-    session: SessionToken = Depends(require_auth),
-) -> Dict[str, Any]:
-    """Fetch rclone config for a specific bucket."""
-    try:
-        from PBRemote import PBRemote
-        obj = PBRemote()
-        obj.bucket = bucket
-        cfg = obj.fetch_bucket_config()
-        if cfg is None:
-            return {"ok": False, "error": "Could not load bucket config"}
-        return {
-            "ok": True,
-            "region": obj.bucket_region or "",
-            "endpoint": obj.bucket_endpoint or "",
-            "access_key_id": obj.bucket_access_key_id or "",
-            "secret_access_key": obj.bucket_secret_access_key or "",
-        }
-    except Exception as e:
-        _log(SERVICE, f"get bucket config: {e}", level="ERROR")
-        return {"ok": False, "error": str(e)}
-
-
-class BucketSaveRequest(BaseModel):
-    bucket_name: str
-    region: str = ""
-    endpoint: str = ""
-    access_key_id: str = ""
-    secret_access_key: str = ""
-
-
-@router.post("/settings/pbremote/bucket-save")
-def save_bucket_config(
-    body: BucketSaveRequest, session: SessionToken = Depends(require_auth)
-) -> Dict[str, Any]:
-    """Save (create/update) an rclone bucket config."""
-    try:
-        from PBRemote import PBRemote
-        obj = PBRemote()
-        name = body.bucket_name.strip()
-        if not name:
-            raise HTTPException(status_code=400, detail="Bucket name is required")
-        obj.bucket = name + ":" if not name.endswith(":") else name
-        obj.bucket_region = body.region
-        obj.bucket_endpoint = body.endpoint
-        obj.bucket_access_key_id = body.access_key_id
-        obj.bucket_secret_access_key = body.secret_access_key
-        ok, result = obj.save_bucket_config()
-        if ok:
-            # Update selected bucket in ini
-            save_ini("pbremote", "bucket", obj.bucket)
-            return {"ok": True, "message": result}
-        return {"ok": False, "error": result}
-    except HTTPException:
-        raise
-    except Exception as e:
-        _log(SERVICE, f"save bucket config: {e}", level="ERROR")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-class BucketActionRequest(BaseModel):
-    bucket: str
-
-
-class BucketTestRequest(BaseModel):
-    bucket: str
-    region: str = ""
-    endpoint: str = ""
-    access_key_id: str = ""
-    secret_access_key: str = ""
-
-
-@router.post("/settings/pbremote/bucket-test")
-def test_bucket(
-    body: BucketTestRequest, session: SessionToken = Depends(require_auth)
-) -> Dict[str, Any]:
-    """Test rclone bucket connection using the credentials currently in the form."""
-    import os, subprocess, tempfile
-    try:
-        bucket = body.bucket if body.bucket.endswith(':') else body.bucket + ':'
-        bucket_name = bucket.rstrip(':')
-        config_lines = [
-            f'[{bucket_name}]',
-            'type = s3',
-            'provider = Synology',
-            f'region = {body.region}',
-            f'endpoint = {body.endpoint}',
-            'no_check_bucket = true',
-            f'access_key_id = {body.access_key_id}',
-            f'secret_access_key = {body.secret_access_key}',
-        ]
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.conf', delete=False) as tmp:
-            tmp.write('\n'.join(config_lines) + '\n')
-            tmp_path = tmp.name
-        try:
-            result = subprocess.run(
-                ['rclone', '--config', tmp_path, 'ls', bucket],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30
-            )
-            if result.returncode == 0:
-                return {"ok": True, "message": result.stdout}
-            return {"ok": False, "message": result.stderr}
-        finally:
-            os.unlink(tmp_path)
-    except Exception as e:
-        _log(SERVICE, f"test bucket: {e}", level="ERROR")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/settings/pbremote/bucket-delete")
-def delete_bucket(
-    body: BucketActionRequest, session: SessionToken = Depends(require_auth)
-) -> Dict[str, Any]:
-    """Delete an rclone bucket config."""
-    try:
-        from PBRemote import PBRemote
-        obj = PBRemote()
-        obj.bucket = body.bucket
-        ok, result = obj.delete_bucket()
-        if ok:
-            # Clear selected bucket if it was the deleted one
-            current = load_ini("pbremote", "bucket")
-            if current and current.strip() == body.bucket.strip():
-                save_ini("pbremote", "bucket", "")
-        return {"ok": ok, "message": result}
-    except Exception as e:
-        _log(SERVICE, f"delete bucket: {e}", level="ERROR")
         raise HTTPException(status_code=500, detail=str(e))
 
 

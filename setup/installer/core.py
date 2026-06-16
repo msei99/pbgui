@@ -57,7 +57,6 @@ PBGUI_SERVICE_SCRIPTS = {
     "PBRun.py",
     "PBData.py",
     "PBCoinData.py",
-    "PBRemote.py",
 }
 
 
@@ -249,7 +248,6 @@ class RemoteMasterConfig:
     ssh_allowed_ips: list[str] = field(default_factory=list)
     install_dir: str = ""
     coinmarketcap_api_key: str = ""
-    enable_pbremote: bool = False
     local_public_key: str = ""
     installer_branch: str = field(default_factory=_current_installer_branch)
     confirm_fresh_host: bool = False
@@ -290,7 +288,6 @@ class RemoteMasterConfig:
             ssh_allowed_ips=allowed,
             install_dir=install_dir,
             coinmarketcap_api_key=str(data.get("coinmarketcap_api_key") or "").strip(),
-            enable_pbremote=bool(data.get("enable_pbremote")),
             installer_branch=normalize_installer_branch(data.get("installer_branch") or _current_installer_branch()),
             confirm_fresh_host=data.get("confirm_fresh_host") in {True, "true", "1", "yes", "on"},
             accept_unknown_host=data.get("accept_unknown_host") in {True, "true", "1", "yes", "on"},

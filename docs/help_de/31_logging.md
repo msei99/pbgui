@@ -102,8 +102,8 @@ Enthält Meldungen aller GUI-Hilfskomponenten:
 
 | Datei | Dienst | Was steht dort |
 |-------|--------|---------------|
+| `PBCluster.log` | PBCluster | Cluster-Sync-Daemon und Peer-Sync-Diagnose |
 | `PBRun.log` | PBRun | Live-Bot Start/Stop, Order-Loop |
-| `PBRemote.log` | PBRemote | Remote-Sync, VPS-Kommunikation |
 | `PBCoinData.log` | PBCoinData | CMC-Daten-Updates, Symbol-Listen |
 | `VPSMonitor.log` | VPS Monitor | SSH-Verbindungen, Host-Metriken, Service-Auto-Heal |
 | `PBApiServer.log` | PBAPIServer | FastAPI-Start, REST/WebSocket-Requests |

@@ -2,7 +2,7 @@
 # Update pbgui on localhost
 # Steps:
 # 1. Clone/update pbgui repository
-# 2. If updated, install requirements and restart PBRun, PBRemote and PBCoinData
+# 2. If updated, install requirements and restart PBRun and PBCoinData
 
 - hosts: localhost
   gather_facts: "{{ debug }}"
@@ -48,9 +48,9 @@
         extra_args: --upgrade pip
       listen: "restart pbgui"
 
-    - name: Restart PBRun, PBRemote and PBCoinData
+    - name: Restart PBRun and PBCoinData
       shell: |
-        python "{{ pbgdir }}/starter.py" -r PBRun PBRemote PBCoinData
+        python "{{ pbgdir }}/starter.py" -r PBRun PBCoinData
       args:
         executable: /bin/bash
         chdir: "{{ pbgdir }}"

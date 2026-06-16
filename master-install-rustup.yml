@@ -1,8 +1,8 @@
 ---
-# Install or Update rclone
+# Install or Update rustup
 # Steps:
-# 1. fetch install.sh from rclone website
-# 2. Run install.sh
+# 1. fetch rustup installer
+# 2. Run rustup installer
 
 - hosts: localhost
   # gather_facts: "{{ debug }}"

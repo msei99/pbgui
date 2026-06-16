@@ -41,8 +41,8 @@
         no_extra_spaces: true
       loop: "{{ vps_logging_services | default([]) }}"
 
-    - name: restart PBRun PBRemote and PBCoinData after logging deploy
-      script: setup/vps_service_control.sh restart PBRun PBRemote PBCoinData
+    - name: restart PBRun and PBCoinData after logging deploy
+      script: setup/vps_service_control.sh restart PBRun PBCoinData
       environment:
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"

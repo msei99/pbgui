@@ -70,10 +70,9 @@ Sidebar-Aktionen:
 | **Update Linux** | Linux-Paketupdates ausführen (optionale Reboot-Checkbox) |
 | **Reboot Master** | Den lokalen Server neu starten |
 | **Install or Update rustup** | Rust-Toolchain installieren oder aktualisieren |
-| **Install or Update rclone** | rclone installieren oder aktualisieren |
 
 Der **Master**-Inhaltsbereich enthält zusätzlich:
-- ein Live-Statusraster für PBRemote / CoinData / letzten Command
+- ein Live-Statusraster für CoinData / letzten Command
 - **PBGui Branch Management** für Branch- oder Commit-Wechsel
 - **PB7 Branch Management** mit optionaler Custom-Remote- / Fork-URL
 - einen **Monitor**-Bereich mit Server-Metriken plus PB7-Aktivität; falls Live-Monitor-Zeilen fehlen, listet die Seite die laufenden PB7-Botnamen weiterhin aus `status_v7.json`
@@ -107,7 +106,7 @@ Sidebar-Aktionen:
 | **Update CoinData API** | Aktualisierten CoinMarketCap-API-Key übertragen |
 
 Der **VPS**-Inhaltsbereich enthält zusätzlich:
-- ein Setup-/Konfigurationsraster für Passwort, Swap, Bucket, CoinMarketCap-Key und Firewall-Felder; **Apply VPS Changes** speichert Änderungen lokal und wendet geänderte Swap-, Firewall-, PBRemote- und CoinMarketCap-Einstellungen auf der VPS an
+- ein Setup-/Konfigurationsraster für Passwort, Swap, CoinMarketCap-Key und Firewall-Felder; **Apply VPS Changes** speichert Änderungen lokal und wendet geänderte Swap-, Firewall- und CoinMarketCap-Einstellungen auf der VPS an
 - **PBGui Branch Management** und **PB7 Branch Management** mit demselben Switch-/Update-Workflow wie beim Master
 - einen **Remote Monitor** mit Server-Metriken plus PB7-Aktivität; falls Live-Monitor-Zeilen fehlen, listet die Seite die laufenden PB7-Botnamen weiterhin aus `status_v7.json`
 - einen **Progress**-Bereich mit getrennten Status-Buckets für Init-, Setup- und Update-Läufe; für die vollständige Ansible-Ausgabe werden die Sidebar-Aktionsknöpfe auf den gemeinsamen **Command Log Viewer** umgeschaltet
@@ -125,8 +124,8 @@ Die Sidebar trennt die Log-Workflows jetzt bewusst von der normalen Host-Ansicht
 
 Die Status-Kacheln oberhalb des Setup-Rasters sind jetzt direkte Operator-Hinweise:
 - **Update Ready** wird sofort grün, sobald lokal ein VPS-User-Passwort eingetragen ist, und zeigt gleichzeitig die Anzahl ausstehender Linux-Updates.
-- **CoinData Ready** zeigt die verbleibenden CoinMarketCap-Credits, sobald dieser Wert über PBRemote verfügbar ist.
-- Ausstehende Linux-Updates und Reboot-Hinweise werden zusätzlich über eine Live-SSH-Paketstatus-Abfrage aktualisiert, sodass die Karten nicht mehr auf den langsameren stündlichen `PBRemote`-Alive-Refresh warten müssen.
+- **CoinData Ready** zeigt die verbleibenden CoinMarketCap-Credits, sobald der Monitor diesen Wert meldet.
+- Ausstehende Linux-Updates und Reboot-Hinweise werden zusätzlich über eine Live-SSH-Paketstatus-Abfrage aktualisiert.
 - Die Detailseite enthält außerdem wieder eine einzeilige Zusammenfassungstabelle plus einen Remote-Server-Ressourcenblock ähnlich zur früheren Serveransicht.
 
 `Cleanup VPS` installiert oder aktualisiert jetzt zusätzlich zwei kleine tägliche Cleanup-Cronjobs auf der VPS: einen User-Job für Pip- und Rustup-Caches sowie einen Root-Job für `journalctl --vacuum-time=1d`. Die periodischen Jobs laufen still und behalten keine eigene Log-Historie.

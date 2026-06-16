@@ -898,7 +898,7 @@ class RunV7():
                 _log("PBRun", "RunV7.load traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
 
 class PBRun():
-    """PBRun manages v7 passivbot instances, linking PBRemote, PBGui and Passivbot.
+    """PBRun manages v7 passivbot instances, linking PBGui and Passivbot.
 
     It processes update_status_*.cmd and activate_*.cmd files to install, start and stop v7 bots.
 
@@ -1169,7 +1169,7 @@ class PBRun():
         return int(version)
 
     def update_status(self, status_file : str, rserver : str):
-        """Function only called on PBRemote"""
+        """Queue a v7 status update command from a synced status file."""
         unique = str(uuid.uuid4())
         cfile = Path(f'{self.cmd_path}/update_status_{unique}.cmd')
         cfg = ({

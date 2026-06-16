@@ -2195,7 +2195,7 @@ def configured_text(value):
     if not value:
         return False
     lowered = value.lower()
-    if lowered in ('none', 'null', 'false', '<api_key>', '<bucket_name>:', '<bucket_name>'):
+    if lowered in ('none', 'null', 'false', '<api_key>'):
         return False
     if value.startswith('<') and value.endswith('>'):
         return False
@@ -2263,11 +2263,10 @@ def ignored_process_ids():
 def collect_legacy_pbgui_processes(pbgui_dir):
     target_dir = os.path.realpath(pbgui_dir)
     target_prefix = target_dir + os.sep
-    scripts = ('PBCluster.py', 'PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
+    scripts = ('PBCluster.py', 'PBRun.py', 'PBCoinData.py', 'starter.py')
     unit_by_script = {
         'PBCluster.py': 'pbgui-pbcluster.service',
         'PBRun.py': 'pbgui-pbrun.service',
-        'PBRemote.py': 'pbgui-pbremote.service',
         'PBCoinData.py': 'pbgui-pbcoindata.service',
     }
     ignored = ignored_process_ids()
@@ -2320,16 +2319,14 @@ def collect_legacy_cron_lines(pbgui_dir):
     return [line for line in (res.stdout or '').splitlines() if any(token in line for token in tokens) or line.strip() == '#Ansible: pbgui']
 
 
-def build_systemd_migration_status(pbgui_dir, pbremote_configured, coindata_configured):
+def build_systemd_migration_status(pbgui_dir, coindata_configured):
     pbgui_path = Path(pbgui_dir)
     python_bin = pbgui_path.parent / 'venv_pbgui' / 'bin' / 'python'
     systemctl_path = run(['which', 'systemctl'], timeout=5)
     systemctl_exists = bool(systemctl_path)
     user_manager_ok, user_manager_detail = systemd_user_manager_ok(systemctl_exists)
-    all_unit_names = ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-pbremote.service', 'pbgui-pbcoindata.service']
+    all_unit_names = ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-pbcoindata.service']
     required_unit_names = ['pbgui-pbcluster.service', 'pbgui-pbrun.service']
-    if pbremote_configured:
-        required_unit_names.append('pbgui-pbremote.service')
     if coindata_configured:
         required_unit_names.append('pbgui-pbcoindata.service')
     units = [systemd_unit_status(unit, systemctl_exists) for unit in all_unit_names]
@@ -2384,13 +2381,11 @@ def build_systemd_migration_status(pbgui_dir, pbremote_configured, coindata_conf
 role = cfg.get('main', 'role', fallback='slave')
 pb7dir = cfg.get('main', 'pb7dir', fallback='')
 pb7venv = cfg.get('main', 'pb7venv', fallback='')
-pbremote_bucket = config_value('pbremote', 'bucket')
 coinmarketcap_api_key = config_value('coinmarketcap', 'api_key')
 firewall_settings_present = cfg.has_section('firewall')
 firewall_enabled = config_bool('firewall', 'enabled', False)
 firewall_ssh_port = config_value('firewall', 'ssh_port') or '22'
 firewall_ssh_ips = config_value('firewall', 'ssh_ips')
-pbremote_configured = configured_text(pbremote_bucket)
 coindata_configured = configured_text(coinmarketcap_api_key)
 
 result = {
@@ -2408,16 +2403,13 @@ result = {
     'pb7c': '',
     'pb7b': 'unknown',
     'pb7py': 'N/A',
-    'pbremote_configured': pbremote_configured,
     'coindata_configured': coindata_configured,
-    'pbremote_bucket': pbremote_bucket,
     'coinmarketcap_api_key': coinmarketcap_api_key,
     'firewall_settings_present': firewall_settings_present,
     'firewall': firewall_enabled,
     'firewall_ssh_port': firewall_ssh_port,
     'firewall_ssh_ips': firewall_ssh_ips,
     'optional_services': {
-        'PBRemote': pbremote_configured,
         'PBCoinData': coindata_configured,
     },
 }
@@ -2476,7 +2468,7 @@ if os.path.isdir(logs_dir):
         if os.path.isfile(full) and (f.endswith('.log') or f.endswith('.log.old')):
             available.append('data/logs/' + f)
 result['available_logs'] = available
-result['systemd_migration'] = build_systemd_migration_status(PBGDIR, pbremote_configured, coindata_configured)
+result['systemd_migration'] = build_systemd_migration_status(PBGDIR, coindata_configured)
 
 print(json.dumps(result))
 PY'''
@@ -2533,8 +2525,6 @@ MONITORED_SERVICES = {
                              "PBCluster.py", "pbcluster.py"),
     "PBRun": ServiceInfo("PBRun", "data/pid/pbrun.pid",
                           "PBRun.py", "pbrun.py"),
-    "PBRemote": ServiceInfo("PBRemote", "data/pid/pbremote.pid",
-                             "PBRemote.py", "pbremote.py"),
     "PBCoinData": ServiceInfo("PBCoinData", "data/pid/pbcoindata.pid",
                                "PBCoinData.py", "pbcoindata.py"),
 }
@@ -2542,17 +2532,12 @@ MONITORED_SERVICES = {
 MONITORED_SERVICE_SYSTEMD_UNITS = {
     "PBCluster": "pbgui-pbcluster.service",
     "PBRun": "pbgui-pbrun.service",
-    "PBRemote": "pbgui-pbremote.service",
     "PBCoinData": "pbgui-pbcoindata.service",
 }
 
 PBCLUSTER_DISABLED_REASON = "Cluster Sync is not enabled for this node"
 
 OPTIONAL_SERVICE_REQUIREMENTS = {
-    "PBRemote": {
-        "config_key": "bucket",
-        "reason": "PBRemote bucket is not configured",
-    },
     "PBCoinData": {
         "config_key": "coinmarketcap_api_key",
         "reason": "CoinMarketCap API key is not configured",
@@ -2696,7 +2681,7 @@ class VPSMonitor:
         if not normalized:
             return False
         lowered = normalized.lower()
-        if lowered in {"none", "null", "false", "<api_key>", "<bucket_name>", "<bucket_name>:"}:
+        if lowered in {"none", "null", "false", "<api_key>"}:
             return False
         return not (normalized.startswith("<") and normalized.endswith(">"))
 
@@ -2734,8 +2719,6 @@ class VPSMonitor:
         optional_services = meta.get("optional_services") if isinstance(meta, dict) else None
         if isinstance(optional_services, dict) and service_name in optional_services:
             remote_expected = bool(optional_services.get(service_name))
-        elif service_name == "PBRemote" and isinstance(meta, dict) and "pbremote_configured" in meta:
-            remote_expected = bool(meta.get("pbremote_configured"))
         elif service_name == "PBCoinData" and isinstance(meta, dict) and "coindata_configured" in meta:
             remote_expected = bool(meta.get("coindata_configured"))
 

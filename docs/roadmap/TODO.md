@@ -112,7 +112,7 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 
 ### IniWatcher überall einbauen
 **Ziel**
-- Alle Daemons (PBCoinData, PBData, PBRun, PBRemote, PBMon) sollen sofort auf `pbgui.ini`-Änderungen reagieren, statt erst beim nächsten Loop-Zyklus.
+- Alle Daemons (PBCoinData, PBData, PBRun, PBCluster, PBMon) sollen sofort auf `pbgui.ini`-Änderungen reagieren, statt erst beim nächsten Loop-Zyklus.
 
 **Umfang**
 - `IniWatcher` (bereits als `ini_watcher.py` vorhanden) in jeden Daemon integrieren.
@@ -166,10 +166,10 @@ Ziel: Ideen sauber festhalten, priorisieren und mit klaren Ergebniskriterien ums
 - Sichtbarkeitslogik: Fehler erst wieder sichtbar wenn `current_et >= acked_et + delta` (delta konfigurierbar via MonitorConfig).
 - History: Array der letzten 20 Acks pro Key (Timestamp + Counts beim Ack).
 - Error-Banner (`vps_error_banner.html`): collapsible (localStorage), live via WS, Ack-Buttons pro Instanz + Ack All.
-- Ersetzt bestehende `has_vps_errors()` + `PBRemote.has_error()` Fehlerlogik.
+- Ersetzt bestehende `has_vps_errors()`-Fehlerlogik.
 
 **Future: Push-basierte Fehlererfassung**
-- PBRun/PBRemote auf Remote-VPS können bei Error-Detection direkt `POST /api/vps/error_event` an PBGui senden.
+- PBRun/PBCluster auf Remote-VPS können bei Error-Detection direkt `POST /api/vps/error_event` an PBGui senden.
 - VPSStore updated → WS push → Banner zeigt Fehler innerhalb 1 Sekunde (kein SSH-Polling-Delay).
 
 **Done wenn**

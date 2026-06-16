@@ -463,7 +463,12 @@
     window.PBGUI_VERSION = "%%VERSION%%";
     window.PBGUI_SERIAL = "%%SERIAL%%";
     window.PBGUI_NAV_CONFIG = { subtitle: 'CLUSTER SYNC', current: 'system_cluster' };
+    window.PBGUI_HELP_OPENER = function () {
+      if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+      window.PBGuiSharedHelp.open('cluster sync', { token: window.TOKEN || '' });
+    };
   </script>
+  <script src="/app/js/shared_help_overlay.js?v=4"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
   <script src="/app/js/pbgui_dialogs.js?v=3"></script>
   <script>

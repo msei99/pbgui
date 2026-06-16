@@ -9,7 +9,7 @@ PBRun runs a 5-second daemon loop that:
 - Starts/stops local Passivbot processes for configured instances (PB7, PB6 Multi, PB6 Single)
 - Monitors each running bot's resource usage (CPU, memory) and collects PnL/error/traceback counts from log files
 - Watches dynamic coin filters (via PBCoinData mappings) and writes `ignored_coins.json` / `approved_coins.json`
-- Reacts to activation and status command files from PBRemote (filesystem-based message queue in `data/cmd/`)
+- Enforces Cluster Sync desired state before starting or continuing V7 bots when cluster mode is enabled
 - Runs a memory watchdog: if free system memory drops below 250 MB, it restarts the bot with the highest memory usage
 - Writes service logs to `data/logs/PBRun.log`
 

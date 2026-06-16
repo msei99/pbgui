@@ -102,9 +102,9 @@
         extra_args: --upgrade
       listen: "restart pbgui"
 
-    - name: Restart PBRun, PBRemote and PBCoinData
+    - name: Restart PBRun and PBCoinData
       shell: |
-        python "{{ pbgdir }}/starter.py" -r PBRun PBRemote PBCoinData
+        python "{{ pbgdir }}/starter.py" -r PBRun PBCoinData
       args:
         executable: /bin/bash
         chdir: "{{ pbgdir }}"

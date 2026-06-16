@@ -1,7 +1,7 @@
 ---
 # Recreate PB7 venv with Python 3.12 on a VPS
 # Steps:
-# 1. Stop PBRun + PBRemote
+# 1. Stop PBRun
 # 2. Kill running PB7 processes (bots + workers)
 # 3. Install python3.12-venv
 # 4. Remove old venv_pb7
@@ -10,7 +10,7 @@
 # 7. Create new python3.12 venv for pb7 + install requirements
 # 8. Build passivbot-rust with maturin
 # 9. Clean rustup downloads/tmp and print disk usage summary
-# 10. Start PBRun + PBRemote
+# 10. Start PBRun
 
 - hosts: "{{ hostname }}"
   gather_facts: true
@@ -27,8 +27,8 @@
         var: ansible_facts
       tags: debug,never
 
-    - name: Stop PBRun + PBRemote
-      script: setup/vps_service_control.sh stop PBRun PBRemote
+    - name: Stop PBRun
+      script: setup/vps_service_control.sh stop PBRun
       environment:
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
@@ -243,8 +243,8 @@
         free_after_build_mb: "{{ (pb7_disk_after_build.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
         free_after_cleanup_mb: "{{ (pb7_disk_after_cleanup.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
 
-    - name: Start PBRun + PBRemote
-      script: setup/vps_service_control.sh start PBRun PBRemote
+    - name: Start PBRun
+      script: setup/vps_service_control.sh start PBRun
       environment:
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"

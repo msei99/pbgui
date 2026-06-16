@@ -1,11 +1,11 @@
 ---
 # Recreate PBGui venv with Python 3.12 on a VPS (in-place, not parallel)
 # Steps:
-# 1. Stop PBRun + PBRemote + PBCoinData
+# 1. Stop PBRun + PBCoinData
 # 2. Install python3.12-venv
 # 3. Remove old venv_pbgui
 # 4. Create new python3.12 venv for PBGui + install requirements (upgrade pip)
-# 5. Start PBRun + PBRemote + PBCoinData
+# 5. Start PBRun + PBCoinData
 
 - hosts: "{{ hostname }}"
   gather_facts: true
@@ -52,8 +52,8 @@
         var: pbgui_repo_update
       tags: debug,never
 
-    - name: Stop PBRun + PBRemote + PBCoinData
-      script: setup/vps_service_control.sh stop PBRun PBRemote PBCoinData
+    - name: Stop PBRun + PBCoinData
+      script: setup/vps_service_control.sh stop PBRun PBCoinData
       environment:
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
@@ -96,8 +96,8 @@
         clean: yes
       become: yes
 
-    - name: Start PBRun + PBRemote + PBCoinData
-      script: setup/vps_service_control.sh start PBRun PBRemote PBCoinData
+    - name: Start PBRun + PBCoinData
+      script: setup/vps_service_control.sh start PBRun PBCoinData
       environment:
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
