@@ -6,6 +6,7 @@ PBGUI_DIR=""
 PYTHON_BIN=""
 ENABLE_SERVICES="api,pbcluster,pbrun,pbdata,pbcoindata"
 START_SERVICES=true
+DISABLE_EXCLUDED=true
 
 info() { printf '\033[36m[INFO]\033[0m %s\n' "$*"; }
 success() { printf '\033[32m[ OK ]\033[0m %s\n' "$*"; }
@@ -48,6 +49,7 @@ Options:
   --python PATH               PBGui venv Python. Default: ../venv_pbgui/bin/python.
   --enable LIST               Comma-separated services to enable. Default: api,pbcluster,pbrun,pbdata,pbcoindata.
   --no-start                  Enable services but do not start/restart them now.
+  --no-disable-excluded       Do not stop/disable services missing from --enable.
   -h, --help                  Show help.
 EOF
 }
@@ -59,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --python) PYTHON_BIN="$2"; shift 2 ;;
     --enable) ENABLE_SERVICES="$2"; shift 2 ;;
     --no-start) START_SERVICES=false; shift ;;
+    --no-disable-excluded) DISABLE_EXCLUDED=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) err "Unknown option: $1"; usage; exit 2 ;;
   esac
@@ -206,9 +209,11 @@ remove_obsolete_unit() {
 
 remove_obsolete_unit "pbgui-pbremote.service"
 run_user_systemctl daemon-reload
-for managed_service in api pbcluster pbrun pbdata pbcoindata; do
-  disable_service_if_excluded "$managed_service"
-done
+if [[ "$DISABLE_EXCLUDED" == true ]]; then
+  for managed_service in api pbcluster pbrun pbdata pbcoindata; do
+    disable_service_if_excluded "$managed_service"
+  done
+fi
 
 for service in "${enabled[@]}"; do
   service="$(printf '%s' "$service" | tr -d '[:space:]')"

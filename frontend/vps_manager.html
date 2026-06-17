@@ -4575,16 +4575,12 @@
         const syncedSecrets = syncCurrentVpsSecretsFromDom();
         const ui = ensureVpsUi(store.hostname, store.detail && store.detail.hostname === store.hostname ? store.detail : null);
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
-        const canRunRemote = !!String(getEffectiveVpsUserPw(store.hostname) || '').trim() || hasSessionSecret(store.hostname, 'user_pw') || !!(detail && detail.status && detail.status.update_ready);
         if (syncedSecrets) {
           renderSidebarActions();
           if (detail) {
             setHtmlIfChanged('vps-status-flags', renderStatusFlags(detail.status || {}));
           }
         }
-        document.querySelectorAll('[data-vps-remote-required="true"]').forEach(function (btn) {
-          btn.disabled = !canRunRemote;
-        });
         const setupBtn = document.getElementById('vps-setup-btn');
         if (setupBtn) setupBtn.disabled = !canSetupForm(Object.assign({ hostname: store.hostname }, ui.form || {}));
       }
@@ -9390,7 +9386,6 @@
         const selectedHost = store.hostname;
         const st = (detail && detail.status) || {};
         const isRemoteMaster = String(((st.summary_row || {}).role) || '').toLowerCase() === 'master';
-        const canRunRemote = !!String(getEffectiveVpsUserPw(selectedHost) || '').trim() || hasSessionSecret(selectedHost, 'user_pw') || !!(detail && detail.status && detail.status.update_ready);
         const pbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
         const pb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : 'sb-btn ok';
         const bothBtnClass = (st.pbgui_update_available || st.pb7_update_available) ? 'sb-btn warning' : 'sb-btn ok';
@@ -9430,7 +9425,7 @@
           </div>
           <button class='${linuxUpdateBtnClass}' type='button' onclick='updateLinuxVpsAction(${js(selectedHost)})'>Update Linux</button>
           <button class='${rebootBtnClass}' type='button' onclick='vpsActionWithPw(${js(selectedHost)}, "vps-reboot", "Reboot VPS")'>Reboot VPS</button>
-          <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='vpsActionWithPw(${js(selectedHost)}, "vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
+          <button class='sb-btn' type='button' onclick='vpsActionWithPw(${js(selectedHost)}, "vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
           <button class='sb-btn' type='button' onclick='openCoinDataPrompt(${js(selectedHost)})'>Update CoinData API</button>
           <button class='${systemdMigrationBtn.className}' type='button' title='${escAttr(systemdMigrationBtn.title)}' onclick='previewVpsSystemdMigration(${js(selectedHost)})'>${esc(systemdMigrationBtn.text)}</button>`;
       } else if (store.view === 'add') {

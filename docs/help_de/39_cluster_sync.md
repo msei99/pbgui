@@ -4,6 +4,8 @@ Cluster Sync hält mehrere PBGui-Master und VPS-Runner auf demselben gewünschte
 
 Nutze Cluster Sync, wenn du mehr als einen Master betreibst, Bots auf mehrere VPS verteilst oder VPS-Nodes auch dann sauber neu starten sollen, wenn gerade kein Master online ist.
 
+Wenn du ein bestehendes PBRemote/API-Sync/V7-SSH-Sync-Setup aktualisierst, lies vor dem Join produktiver VPS-Nodes die [Cluster-Mode-Migration](40_cluster_migration.md).
+
 ---
 
 ## Was ein Cluster ist
@@ -185,13 +187,16 @@ Die erste local-only Version zeigt:
 - API-Key-Metadaten, falls vorhanden
 - aktuelle lokale Operation-Log-Einträge
 - eine Bootstrap-Preview/Apply-Aktion für bekannte VPS-Nodes und bestehende lokale V7-Configs
+- eine explizite Join-Existing-Cluster-Aktion für einen zweiten Master, der einen bestehenden Master outbound erreichen kann
 - read-only Remote-Hello-Probe-Status für bekannte Cluster-Nodes
-- eine explizite Join-Aktion für Nodes, die erreichbar sind, aber noch keine Cluster-Identität haben
-- eine read-only Preview-Aktion für gejointe Nodes, die Remote-State vor Replikation vergleicht
+- eine explizite Join-&-Sync-Aktion für erreichbare Nodes ohne Cluster-Identität
+- eine read-only Preview-Aktion für gejointe Nodes, die Remote-State für Diagnose oder Retry vergleicht
 
 Bootstrap schreibt explizite lokale `ADD_NODE`-Operationen für bekannte VPS-Manager-Hosts und `UPSERT_CONFIG`-Operationen für lokale Configs. Wenn VPS-Monitor-Metadaten verfügbar sind, übernimmt Bootstrap, ob ein bekannter Host Master oder VPS-Runner ist. Fehlende Dateien oder fehlende VPS-Einträge werden nie als Delete interpretiert und Tombstones werden dadurch nicht entfernt. Die Probe-Spalte führt, wenn verfügbar, nur ein read-only restricted `hello` aus; sie installiert keine Keys, schreibt keine Remote-Dateien, startet oder stoppt keine Bots und deployed nichts.
 
-Wenn ein Node **No Identity** zeigt, schreibt die **Join**-Aktion nur `cluster_id`, `node_id` und `node_identity.json` unter dem remote PBGui-Verzeichnis `data/cluster`. Eine abweichende bestehende Identität wird nicht überschrieben. Join synchronisiert keine Configs, installiert keine restricted Keys, startet oder stoppt keine Bots, deployed keine Dateien und verändert keinen lokalen Desired State. Last-Seen-Status, Node-zu-Node-Sync-Status und Conflict-Resolution-Aktionen folgen in späteren Phasen.
+Wenn ein Node **No Identity** zeigt, schreibt **Join & Sync** die Remote-Cluster-Identität und überschreibt keine abweichende bestehende Identität. Danach pusht PBGui fehlende lokale Operationen, baut den Remote-Cluster-State neu, materialisiert zugewiesene V7-Configs und API-Keys und startet PBRun wieder, wenn der Remote-State aktuell ist. Auf VPS-Runnern stoppt Join vorher PBRun, damit laufende Bots während der Übergangsphase nicht bewertet werden; passivbot-Prozesse bleiben unangetastet. Auf Master-Nodes wird PBRun nicht gestoppt oder gestartet.
+
+Nutze **Join Existing Cluster** auf einem zweiten Master, der vom primären Master nicht inbound erreichbar ist, aber selbst per SSH zum primären Master verbinden kann. Die Aktion nutzt den VPS-Monitor-SSH-Pool, liest den Upstream-Master, übernimmt dessen `cluster_id` nur bei leerem lokalen Oplog und bestätigter Checkbox, zieht Upstream-Operationen und Blobs, registriert den lokalen Master als `outbound_only`, installiert den lokalen Cluster-SSH-Key auf dem Upstream-Master und pusht die Registrierungsoperationen zurück. Wenn diese lokale Installation bereits Cluster-Operationen für einen anderen Cluster hat, verweigert Self-Join das Überschreiben.
 
 PBCluster-SSH-Zugriff ist technischer Setup-Status. Beim normalen PBGui-Setup/Update auf einem VPS erzeugt PBGui jetzt automatisch einen dedizierten lokalen PBCluster-SSH-Key und installiert den Public Key des Masters auf dem VPS mit einem Forced Command, das nur `cluster_sync_command.py` ausführen kann. PBCluster nutzt diesen dedizierten Key mit `IdentitiesOnly=yes`; User müssen keine SSH-Keys manuell erzeugen oder kopieren.
 
@@ -201,11 +206,11 @@ Nutze **Edit** an einem Node, um erlaubte Outbound-Peers zu konfigurieren. Nutze
 
 Wenn ein gejointer Node **OK** zeigt, liest die **Preview**-Aktion den Remote-State-Vector und Desired State. Sie vergleicht Actor-Sequenzen, V7-Instance-Metadaten, Tombstones und API-Key-Metadaten mit lokalem State. Zusätzlich berechnet sie, welche lokalen Operationen remote fehlen, welche Remote-Operationsbereiche lokal fehlen und welche Hash-Referenzen eine spätere Write-Phase brauchen würde. Preview ist read-only; es kopiert keine Operationen, Blobs oder Configs.
 
-Im Preview-Fenster ist **Push Missing Ops + Rebuild** eine explizite Remote-Write-Aktion. Sie ist nur verfügbar, wenn dem lokalen Node keine Remote-Operationen fehlen. Die Aktion startet einen Backend-Push-Job, sendet aktuelle V7-Config-Blobs, API-Key-Payload-Blobs und API-Key-Secret-Blobs, sendet die lokalen Oplog-Einträge, die dem Remote-State-Vector fehlen, gesammelt in einem Bulk-Upload, meldet lokalen Fortschritt während der Job läuft und führt danach remote `rebuild` aus. Die Fortschrittsanzeige teilt oder verlangsamt den Remote-Sync nicht. Wenn der Remote-Wrapper noch zu alt für Bulk ist, fällt PBGui, wo möglich, auf langsamere Einzel-Uploads zurück. Sie deployed nichts, materialisiert keine Configs, installiert kein `api-keys.json` und startet oder stoppt keine Bots.
+Im Preview-Fenster ist **Push Missing Ops + Rebuild** eine explizite Retry-/Diagnose-Remote-Write-Aktion. Sie ist nur verfügbar, wenn dem lokalen Node keine Remote-Operationen fehlen. Die Aktion startet einen Backend-Push-Job, sendet aktuelle V7-Config-Blobs, API-Key-Payload-Blobs und API-Key-Secret-Blobs, sendet die lokalen Oplog-Einträge, die dem Remote-State-Vector fehlen, gesammelt in einem Bulk-Upload, meldet lokalen Fortschritt während der Job läuft und führt danach remote `rebuild` aus. Die Fortschrittsanzeige teilt oder verlangsamt den Remote-Sync nicht. Wenn der Remote-Wrapper noch zu alt für Bulk ist, fällt PBGui, wo möglich, auf langsamere Einzel-Uploads zurück.
 
-Wenn Operationen und Config-Blobs synchron sind, zeigt das Preview-Fenster zusätzlich **V7 Config Materialization Preview**. **Materialize V7 Configs** ist eine separate explizite Remote-Write-Aktion, die zugewiesene, konfliktfreie V7-JSON-Configs aus geprüften Config-Blobs in das remote `data/run_v7`-Verzeichnis schreibt. Sie verweigert den Lauf, wenn Remote-State-Vector oder Desired State vom lokalen State abweichen oder benötigte Blobs fehlen beziehungsweise ungültig sind. Configs für andere Nodes, Conflicts und Tombstones werden übersprungen. Die Aktion löscht keine Dateien, installiert keine API-Keys, deployed nichts und startet oder stoppt keine Bots.
+Wenn Operationen und Config-Blobs synchron sind, zeigt das Preview-Fenster zusätzlich **V7 Config Materialization Preview**. **Materialize V7 Configs** ist die manuelle Retry-Aktion, die zugewiesene, konfliktfreie V7-JSON-Configs aus geprüften Config-Blobs in das remote `data/run_v7`-Verzeichnis schreibt. Sie verweigert den Lauf, wenn Remote-State-Vector oder Desired State vom lokalen State abweichen oder benötigte Blobs fehlen beziehungsweise ungültig sind. Configs für andere Nodes, Conflicts und Tombstones werden übersprungen.
 
-Das Preview-Fenster zeigt außerdem **API-key Materialization Preview**. **Materialize API Keys** ist eine separate explizite Remote-Write-Aktion, die `api-keys.json` aus dem replizierten Secret-Blob installiert. Master-Nodes erstellen zuerst ein normales `data/api-keys/`-Backup, wenn eine bestehende Datei abweicht; VPS-Runner ueberspringen lokale Backups. Danach schreibt PBGui atomisch, prueft den finalen Hash und startet keine Bots neu.
+Das Preview-Fenster zeigt außerdem **API-key Materialization Preview**. **Materialize API Keys** ist die manuelle Retry-Aktion, die `api-keys.json` aus dem replizierten Secret-Blob installiert. Master-Nodes erstellen zuerst ein normales `data/api-keys/`-Backup, wenn eine bestehende Datei abweicht; VPS-Runner ueberspringen lokale Backups. Danach schreibt PBGui atomisch und prueft den finalen Hash.
 
 ---
 

@@ -7,6 +7,11 @@
 - Cluster Sync: added configurable per-node outbound peer allowlists, Cluster SSH key status in the node table, and a Repair SSH action that reads remote public keys back into cluster metadata and installs required peer keys.
 - Cluster Sync: fixed the Guide button on the Cluster page so it opens the Cluster Sync topic in the inline help overlay instead of navigating away to the Help overview.
 - Navigation: show the configured local master name in the shared top navigation bar.
+- Docs: added a Cluster Mode migration guide for upgrading existing PBRemote/API Sync/V7 SSH Sync installations safely.
+- Master Update: sync PBCluster systemd user units during local PBGui update/branch-switch and restart PBCluster without forcing PBRun on master-only nodes.
+- Cluster Sync: make VPS runner Join a one-click migration step that stops PBRun, writes identity, pushes/rebuilds Cluster state, materializes V7 configs/API keys, then starts PBRun again when current.
+- Cluster Sync: added an explicit second-master self-join action that uses outbound SSH to an existing master, adopts the upstream cluster id only for empty local oplogs, pulls upstream ops/blobs, registers the local master as outbound-only and installs Cluster SSH trust.
+- VPS Manager: keep the Cleanup VPS action clickable when no VPS user password is stored so the normal password prompt can collect it.
 - VPS Manager: added PBCluster to remote service monitoring and VPS systemd migration checks, show remote PBGui service states in VPS detail/change views, and sync new PBGui systemd units during normal PBGui update/branch-switch actions.
 - VPS Monitor: treat PBCluster as alertable only for nodes with Cluster Sync enabled, silently clear false PBCluster alerts from Sync Off nodes, and prevent PBCluster auto-restart from creating legacy starter.py processes.
 - VPS Manager: resolve PBCluster in the remote Host Log Viewer to `data/logs/PBCluster.log` so joined hosts show the service log again.

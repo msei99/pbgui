@@ -321,6 +321,48 @@
 
       <section class="panel">
         <div class="panel-head">
+          <div class="panel-title">Join Existing Cluster</div>
+          <div class="panel-note">Use this on a second master that can SSH out to an existing PBGui master.</div>
+        </div>
+        <div class="panel-body">
+          <div class="panel-note" style="margin-bottom:0.75rem;">Self-join preserves this install's local node id, adopts the upstream cluster id only when the local oplog is empty, pulls upstream operations/blobs, registers this master as outbound-only, installs the local Cluster SSH key on the upstream master and pushes the registration back.</div>
+          <div class="modal-form-grid">
+            <div class="modal-field">
+              <label for="self-join-hostname">VPS Monitor Hostname</label>
+              <input class="modal-input" id="self-join-hostname" type="text" placeholder="existing-master">
+            </div>
+            <div class="modal-field">
+              <label for="self-join-remote-dir">Remote PBGui Dir</label>
+              <input class="modal-input" id="self-join-remote-dir" type="text" placeholder="/home/mani/software/pbgui">
+            </div>
+            <div class="modal-field">
+              <label for="self-join-ssh-host">SSH Host/IP</label>
+              <input class="modal-input" id="self-join-ssh-host" type="text" placeholder="203.0.113.10">
+            </div>
+            <div class="modal-field">
+              <label for="self-join-ssh-user">SSH User</label>
+              <input class="modal-input" id="self-join-ssh-user" type="text" placeholder="mani">
+            </div>
+            <div class="modal-field">
+              <label for="self-join-ssh-port">SSH Port</label>
+              <input class="modal-input" id="self-join-ssh-port" type="number" min="1" max="65535" step="1" placeholder="22">
+            </div>
+            <label class="peer-option modal-field-wide" for="self-join-adopt">
+              <input id="self-join-adopt" type="checkbox">
+              <span>Allow adopting the upstream cluster id when this local oplog is empty.</span>
+            </label>
+          </div>
+          <div class="bootstrap-toolbar" style="margin-top:0.75rem; margin-bottom:0;">
+            <div class="bootstrap-summary" id="self-join-status">Self-join has not run yet.</div>
+            <div class="bootstrap-actions">
+              <button class="btn warn" id="self-join-btn" type="button">Join Existing Cluster</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
           <div class="panel-title">Cluster Nodes</div>
           <div class="panel-note" id="nodes-note"></div>
         </div>
@@ -356,7 +398,7 @@
   <div class="modal-backdrop" id="join-modal" hidden>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="join-modal-title">
       <div class="modal-head">
-        <div id="join-modal-title">Join Remote Cluster Identity</div>
+        <div id="join-modal-title">Join Remote Cluster Node</div>
         <button class="modal-close" id="join-close-btn" type="button" aria-label="Close">&#x2715;</button>
       </div>
       <div class="modal-body">
@@ -369,7 +411,7 @@
       </div>
       <div class="modal-actions">
         <button class="btn" id="join-cancel-btn" type="button">Cancel</button>
-        <button class="btn warn" id="join-confirm-btn" type="button">Write Identity</button>
+        <button class="btn warn" id="join-confirm-btn" type="button">Join &amp; Sync</button>
       </div>
     </div>
   </div>
@@ -639,7 +681,7 @@
         var message = document.getElementById('join-modal-message');
         var nodeEl = document.getElementById('join-modal-node');
         if (message) {
-          message.textContent = 'This writes cluster_id and node_id to the remote PBGui data/cluster directory. It does not deploy files, start bots, stop bots, or sync configs.';
+          message.textContent = 'This joins the remote PBGui node. For VPS runner nodes, Join stops PBRun without stopping passivbot processes, syncs Cluster data, materializes assigned V7 configs/API keys and starts PBRun again when safe.';
         }
         if (nodeEl) {
           nodeEl.textContent = (node.pbname || node.hostname || 'unknown') + ' / ' + (node.node_id || 'unknown');
@@ -658,17 +700,77 @@
         if (!pendingJoinNode || !pendingJoinNode.node_id) return;
         var node = pendingJoinNode;
         var btn = document.getElementById('join-confirm-btn');
-        if (btn) { btn.disabled = true; btn.textContent = 'Writing...'; }
-        setMessage('Writing remote cluster identity for ' + (node.pbname || node.hostname || node.node_id) + '...', 'warn');
-        fetchJson('/remote-join/' + encodeURIComponent(node.node_id), { method: 'POST' }).then(function () {
+        if (btn) { btn.disabled = true; btn.textContent = 'Joining...'; }
+        setMessage('Joining and syncing ' + (node.pbname || node.hostname || node.node_id) + '...', 'warn');
+        fetchJson('/remote-join/' + encodeURIComponent(node.node_id), { method: 'POST' }).then(function (payload) {
           closeJoinModal();
-          setMessage('Remote cluster identity written for ' + (node.pbname || node.hostname || node.node_id) + '.', 'ok');
+          var completion = (payload || {}).completion || {};
+          var start = completion.pbrun_start || {};
+          var stopNote = payload && payload.pbrun_stopped ? ' PBRun was stopped on the VPS.' : '';
+          var completionNote = completion.skipped
+            ? ''
+            : completion.ok === false
+            ? ' Automatic sync/materialization needs attention: ' + (completion.error || 'unknown error')
+            : ' Cluster data synced and materialized.';
+          var startNote = pbrunStartNote(start);
+          setMessage('Remote cluster joined for ' + (node.pbname || node.hostname || node.node_id) + '.' + stopNote + completionNote + startNote, completion.ok === false ? 'warn' : 'ok');
           return loadCluster();
         }).catch(function (err) {
           showJoinError(err.message || 'Remote join failed.');
           setMessage('Remote join failed: ' + err.message, 'err');
         }).finally(function () {
-          if (btn) { btn.disabled = false; btn.textContent = 'Write Identity'; }
+          if (btn) { btn.disabled = false; btn.textContent = 'Join & Sync'; }
+        });
+      }
+
+      function showSelfJoinStatus(text, kind) {
+        var el = document.getElementById('self-join-status');
+        if (!el) return;
+        el.textContent = text || '';
+        el.style.color = kind === 'err' ? 'var(--bad)' : kind === 'ok' ? 'var(--good)' : 'var(--muted)';
+      }
+
+      function selfJoinExistingCluster() {
+        var hostname = document.getElementById('self-join-hostname').value.trim();
+        var adopt = document.getElementById('self-join-adopt').checked;
+        if (!hostname) {
+          showSelfJoinStatus('Enter the VPS Monitor hostname for the existing master.', 'err');
+          return;
+        }
+        if (!adopt) {
+          showSelfJoinStatus('Confirm local identity adoption before self-join. The backend still refuses non-empty foreign oplogs.', 'err');
+          return;
+        }
+        var payload = {
+          hostname: hostname,
+          ssh_host: document.getElementById('self-join-ssh-host').value.trim(),
+          ssh_user: document.getElementById('self-join-ssh-user').value.trim(),
+          ssh_port: Number(document.getElementById('self-join-ssh-port').value || 22),
+          remote_pbgui_dir: document.getElementById('self-join-remote-dir').value.trim(),
+          adopt_local_identity: adopt
+        };
+        var btn = document.getElementById('self-join-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Joining...'; }
+        showSelfJoinStatus('Joining existing cluster through ' + hostname + '...', 'warn');
+        setMessage('Joining existing cluster through ' + hostname + '...', 'warn');
+        fetchJson('/self-join', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }).then(function (result) {
+          var pull = (result || {}).pull || {};
+          var push = (result || {}).push || {};
+          var pushCounts = push.counts || {};
+          var text = 'Joined cluster ' + (result.cluster_id || '') + ': pulled ' + (pull.pulled_ops || 0) + ' op(s), pushed ' + (pushCounts.pushed || 0) + ' registration op(s).';
+          if (result.adopted_local_identity) text += ' Local identity adopted.';
+          showSelfJoinStatus(text, 'ok');
+          setMessage(text, 'ok');
+          return loadCluster();
+        }).catch(function (err) {
+          showSelfJoinStatus('Self-join failed: ' + err.message, 'err');
+          setMessage('Self-join failed: ' + err.message, 'err');
+        }).finally(function () {
+          if (btn) { btn.disabled = false; btn.textContent = 'Join Existing Cluster'; }
         });
       }
 
@@ -1020,6 +1122,15 @@
           : (materialization.error || (errorCount > 0 ? 'Resolve missing or invalid secret blobs before materializing api-keys.json.' : 'Write api-keys.json from the replicated Cluster Sync secret blob.'));
       }
 
+      function pbrunStartNote(start) {
+        var payload = start || {};
+        if (payload.started) return ' PBRun started.';
+        if (payload.reason === 'api_key_materialization_pending') return ' PBRun will start after API-key materialization.';
+        if (payload.reason === 'v7_materialization_pending') return ' PBRun will start after V7 config materialization.';
+        if (payload.attempted && payload.error) return ' PBRun could not be started: ' + payload.error;
+        return '';
+      }
+
       function confirmAndPushRemoteOps() {
         if (!pendingPreviewNode || !lastPreviewPayload) return;
         var counts = ((lastPreviewPayload.operation_sync || {}).counts) || {};
@@ -1075,7 +1186,7 @@
         window.PBGuiConfirm({
           title: 'Materialize Remote V7 Configs',
           message: 'Write ' + filesToWrite + ' V7 config file(s) for ' + writeCount + ' assigned instance(s) on ' + (pendingPreviewNode.pbname || pendingPreviewNode.hostname || pendingPreviewNode.node_id) + '?',
-          detail: 'This is a remote write under data/run_v7 only. It writes assigned V7 JSON configs from already replicated config blobs. It does not delete files, copy API-key payloads or secret blobs, deploy files, start bots or stop bots.',
+          detail: 'This is a remote write under data/run_v7 only. It writes assigned V7 JSON configs from already replicated config blobs. It does not delete files, copy API-key payloads or secret blobs, or deploy files. If no API-key materialization is pending afterward, PBRun is started automatically on VPS runners.',
           confirmText: 'Materialize Configs'
         }).then(function (accepted) {
           if (!accepted) return;
@@ -1087,7 +1198,7 @@
           fetchJson('/remote-materialize-v7/' + encodeURIComponent(node.node_id), { method: 'POST' }).then(function (payload) {
             var mat = (payload || {}).materialization || {};
             var matCounts = mat.counts || {};
-            setMessage('Materialized ' + (matCounts.written_files || 0) + ' file(s) across ' + (matCounts.written_instances || 0) + ' instance(s).', 'ok');
+            setMessage('Materialized ' + (matCounts.written_files || 0) + ' file(s) across ' + (matCounts.written_instances || 0) + ' instance(s).' + pbrunStartNote((payload || {}).pbrun_start), 'ok');
             setPushProgress(filesToWrite, filesToWrite, 'Remote V7 config materialization complete. Refreshing preview...');
             openRemotePreview(node);
           }).catch(function (err) {
@@ -1116,7 +1227,7 @@
         window.PBGuiConfirm({
           title: 'Materialize Remote API Keys',
           message: 'Write api-keys.json on ' + (pendingPreviewNode.pbname || pendingPreviewNode.hostname || pendingPreviewNode.node_id) + ' from the replicated Cluster Sync secret blob?',
-          detail: 'This is a remote write to api-keys.json only. Existing differing files are backed up on master nodes only; VPS runners skip local backups. It does not restart bots, deploy files, or materialize V7 configs.',
+          detail: 'This is a remote write to api-keys.json only. Existing differing files are backed up on master nodes only; VPS runners skip local backups. It does not deploy files or materialize V7 configs. If V7 configs are current afterward, PBRun is started automatically on VPS runners.',
           confirmText: 'Materialize API Keys'
         }).then(function (accepted) {
           if (!accepted) return;
@@ -1125,8 +1236,8 @@
           if (btn) { btn.disabled = true; btn.textContent = 'Materializing...'; }
           setPushProgress(0, 1, 'Materializing remote api-keys.json...');
           setMessage('Materializing remote api-keys.json...', 'warn');
-          fetchJson('/remote-materialize-api-keys/' + encodeURIComponent(node.node_id), { method: 'POST' }).then(function () {
-            setMessage('Remote api-keys.json materialized.', 'ok');
+          fetchJson('/remote-materialize-api-keys/' + encodeURIComponent(node.node_id), { method: 'POST' }).then(function (payload) {
+            setMessage('Remote api-keys.json materialized.' + pbrunStartNote((payload || {}).pbrun_start), 'ok');
             setPushProgress(1, 1, 'Remote API-key materialization complete. Refreshing preview...');
             openRemotePreview(node);
           }).catch(function (err) {
@@ -1706,6 +1817,7 @@
       document.getElementById('refresh-btn').addEventListener('click', loadCluster);
       document.getElementById('probe-btn').addEventListener('click', loadRemoteStatus);
       document.getElementById('bootstrap-apply-btn').addEventListener('click', applyBootstrap);
+      document.getElementById('self-join-btn').addEventListener('click', selfJoinExistingCluster);
       document.getElementById('join-close-btn').addEventListener('click', closeJoinModal);
       document.getElementById('join-cancel-btn').addEventListener('click', closeJoinModal);
       document.getElementById('join-confirm-btn').addEventListener('click', joinRemoteNode);

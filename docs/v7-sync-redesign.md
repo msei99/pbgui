@@ -6,7 +6,7 @@
 - `data/run_v7/<name>/` enthaelt lokal materialisierte Konfigurationen.
 - PBCluster repliziert Operationen/Blobs und materialisiert Dateien lokal oder remote.
 - PBRun bleibt der Runtime-Gatekeeper und startet/stoppt nur lokale Bots anhand lokal materialisierter Cluster-Zustaende.
-- Legacy `data/cmd/status_v7.json`, `activate_*.cmd` und direkte V7-SSH-Sync-Pfade sind fuer V7 retired.
+- Legacy `data/cmd/status_v7.json`, `activate_*.cmd` und direkte V7-SSH-Sync-Pfade sind aus dem V7-Cluster-Mode-Runtime-Pfad entfernt. PBGui erstellt, liest oder beachtet `status_v7.json` nicht mehr.
 
 ## Materialisierte V7-Dateien
 

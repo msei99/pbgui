@@ -6,7 +6,7 @@
 # 3. Checkout specified branch
 # 4. Optionally reset to specific commit (stays on branch)
 # 5. Pull if on branch HEAD (no specific commit)
-# 6. Restart pbgui services
+# 6. Sync systemd units and restart PBCluster/PBCoinData
 
 - hosts: localhost
   gather_facts: "{{ debug }}"
@@ -102,10 +102,27 @@
         extra_args: --upgrade
       listen: "restart pbgui"
 
-    - name: Restart PBRun and PBCoinData
-      shell: |
-        python "{{ pbgdir }}/starter.py" -r PBRun PBCoinData
-      args:
-        executable: /bin/bash
-        chdir: "{{ pbgdir }}"
+    - name: Sync PBGui systemd user services
+      command:
+        argv:
+          - /bin/bash
+          - "{{ pbgdir }}/setup/setup_systemd.sh"
+          - --pbgui-dir
+          - "{{ pbgdir }}"
+          - --python
+          - "{{ ansible_playbook_python }}"
+          - --enable
+          - api,pbcluster
+          - --no-disable-excluded
+          - --no-start
+      register: systemd_setup_result
+      changed_when: systemd_setup_result.rc == 0
+      failed_when: false
+      listen: "restart pbgui"
+
+    - name: Restart PBCluster and PBCoinData
+      script: setup/vps_service_control.sh restart PBCluster PBCoinData
+      environment:
+        PBGUI_DIR: "{{ pbgdir }}"
+        PBGUI_PYTHON: "{{ ansible_playbook_python }}"
       listen: "restart pbgui"

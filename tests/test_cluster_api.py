@@ -17,8 +17,10 @@ from master.cluster_state import append_operation, build_config_manifest, comput
 
 
 CLUSTER_ID = "pbgui-cluster-00000000-0000-4000-8000-000000000001"
+OTHER_CLUSTER_ID = "pbgui-cluster-00000000-0000-4000-8000-000000000099"
 NODE_A = "pbgui-node-00000000-0000-4000-8000-00000000000a"
 NODE_B = "pbgui-node-00000000-0000-4000-8000-00000000000b"
+NODE_C = "pbgui-node-00000000-0000-4000-8000-00000000000c"
 HASH_A = "sha256:" + "a" * 64
 LOCAL_CLUSTER_PUBLIC_KEY = "ssh-ed25519 aGVsbG8= pbgui-cluster:local"
 REMOTE_CLUSTER_PUBLIC_KEY = "ssh-ed25519 d29ybGQ= pbgui-cluster:remote"
@@ -551,10 +553,30 @@ def test_remote_join_writes_identity_for_known_node(monkeypatch, tmp_path: Path)
     class FakePool:
         async def run(self, hostname: str, command: str, timeout: int = 30):
             calls.append((hostname, command, timeout))
+            if "stop PBRun" in command:
+                return SimpleNamespace(exit_status=0, stdout="PBRun stopped", stderr="")
+            if "join " in command:
+                return SimpleNamespace(
+                    exit_status=0,
+                    stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "vps"}),
+                    stderr="",
+                )
+            if "get-state-vector" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {}}), stderr="")
+            if "put-ops" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "count": 1, "operations": [{"actor": NODE_A, "seq": 1}]}), stderr="")
+            if "rebuild" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "generation": 1, "nodes": 2, "instances": 0}), stderr="")
+            if "materialize-v7-preview" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "error": 0}, "can_apply": False}), stderr="")
+            if "materialize-api-keys-preview" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"write": 0, "error": 0}, "can_apply": False}), stderr="")
+            if "start PBRun" in command:
+                return SimpleNamespace(exit_status=0, stdout="PBRun started", stderr="")
             return SimpleNamespace(
-                exit_status=0,
-                stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "vps"}),
-                stderr="",
+                exit_status=1,
+                stdout="",
+                stderr=f"unexpected command: {command}",
             )
 
     monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
@@ -563,9 +585,75 @@ def test_remote_join_writes_identity_for_known_node(monkeypatch, tmp_path: Path)
 
     assert payload["ok"] is True
     assert payload["remote_node_id"] == NODE_B
+    assert payload["pbrun_stopped"] is True
     assert calls[0][0] == "vps-a"
-    assert calls[0][2] == 15
-    assert f"join {CLUSTER_ID} {NODE_B} vps vps-a" in calls[0][1]
+    assert calls[0][2] == 20
+    assert "stop PBRun" in calls[0][1]
+    assert calls[1][0] == "vps-a"
+    assert calls[1][2] == 15
+    assert f"join {CLUSTER_ID} {NODE_B} vps vps-a" in calls[1][1]
+    assert payload["completion"]["ok"] is True
+    assert payload["completion"]["pbrun_start"]["started"] is True
+    assert len(calls) == 8
+    assert "get-state-vector" in calls[2][1]
+    assert "put-ops" in calls[3][1]
+    assert "rebuild" in calls[4][1]
+    assert "materialize-v7-preview" in calls[5][1]
+    assert "materialize-api-keys-preview" in calls[6][1]
+    assert "start PBRun" in calls[7][1]
+
+
+def test_remote_join_does_not_stop_pbrun_for_master_node(monkeypatch, tmp_path: Path) -> None:
+    """Remote join leaves PBRun alone for remote master nodes."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(
+        root,
+        "ADD_NODE",
+        _reachable_vps_payload(role="master", pbname="remote-master", ssh_host="remote-master"),
+        created_at=101,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[tuple[str, str, int]] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append((hostname, command, timeout))
+            if "join " in command:
+                return SimpleNamespace(
+                    exit_status=0,
+                    stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "master"}),
+                    stderr="",
+                )
+            if "get-state-vector" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {}}), stderr="")
+            if "put-ops" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "count": 1, "operations": [{"actor": NODE_A, "seq": 1}]}), stderr="")
+            if "rebuild" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "generation": 1, "nodes": 2, "instances": 0}), stderr="")
+            if "materialize-v7-preview" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "error": 0}, "can_apply": False}), stderr="")
+            if "materialize-api-keys-preview" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"write": 0, "error": 0}, "can_apply": False}), stderr="")
+            return SimpleNamespace(
+                exit_status=1,
+                stdout="",
+                stderr=f"unexpected command: {command}",
+            )
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.join_remote_identity(NODE_B, session=None))
+
+    assert payload["ok"] is True
+    assert payload["remote_node_id"] == NODE_B
+    assert payload["pbrun_stopped"] is False
+    assert payload["completion"]["ok"] is True
+    assert payload["completion"]["pbrun_start"]["reason"] == "not_vps_runner"
+    assert len(calls) == 6
+    assert "stop PBRun" not in calls[0][1]
+    assert not any("start PBRun" in item[1] for item in calls)
+    assert f"join {CLUSTER_ID} {NODE_B} master remote-master" in calls[0][1]
 
 
 def test_remote_join_rejects_foreign_remote_identity(monkeypatch, tmp_path: Path) -> None:
@@ -577,6 +665,8 @@ def test_remote_join_rejects_foreign_remote_identity(monkeypatch, tmp_path: Path
 
     class FakePool:
         async def run(self, hostname: str, command: str, timeout: int = 30):
+            if "join " not in command:
+                return SimpleNamespace(exit_status=0, stdout="PBRun stopped", stderr="")
             return SimpleNamespace(
                 exit_status=1,
                 stdout="",
@@ -590,6 +680,146 @@ def test_remote_join_rejects_foreign_remote_identity(monkeypatch, tmp_path: Path
 
     assert exc.value.status_code == 409
     assert "existing cluster_id differs" in exc.value.detail
+
+
+def test_self_join_adopts_empty_local_identity_and_registers_master(monkeypatch, tmp_path: Path) -> None:
+    """Self-join pulls upstream state, registers the local master and pushes it back."""
+
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=second-master\n", encoding="utf-8")
+    root = tmp_path / "data" / "cluster"
+    ensure_local_identity(
+        root,
+        role="master",
+        pbname="second-master",
+        cluster_id=OTHER_CLUSTER_ID,
+        node_id=NODE_C,
+        created_at=100,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {"public_key": LOCAL_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:local"},
+    )
+    calls: list[tuple[str, str, int]] = []
+    upstream_op = {
+        "schema_version": 1,
+        "cluster_id": CLUSTER_ID,
+        "op_id": f"{NODE_B}:00000001",
+        "actor": NODE_B,
+        "seq": 1,
+        "op": "ADD_NODE",
+        "created_at": 101,
+        "node_id": NODE_B,
+        "role": "master",
+        "pbname": "upstream-master",
+        "hostname": "upstream-master",
+        "sync_mode": "reachable",
+        "sync_enabled": True,
+        "ssh_host": "198.51.100.10",
+        "ssh_port": 22,
+    }
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append((hostname, command, timeout))
+            if "cluster_ssh_setup.py" in command and "ensure-local" in command:
+                return SimpleNamespace(
+                    exit_status=0,
+                    stdout=json.dumps({"ok": True, "public_key": REMOTE_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:remote"}),
+                    stderr="",
+                )
+            if "cluster_ssh_setup.py" in command and "install-authorized-key" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "changed": True}), stderr="")
+            if "hello" in command:
+                return SimpleNamespace(
+                    exit_status=0,
+                    stdout=json.dumps({
+                        "ok": True,
+                        "cluster_id": CLUSTER_ID,
+                        "node_id": NODE_B,
+                        "role": "master",
+                        "cluster_ssh_public_key": REMOTE_CLUSTER_PUBLIC_KEY,
+                        "cluster_ssh_fingerprint": "SHA256:remote",
+                    }),
+                    stderr="",
+                )
+            if "get-state-vector" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_B: 1}}), stderr="")
+            if "get-ops" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "operations": [upstream_op], "missing": []}), stderr="")
+            if "put-ops" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "count": 2, "operations": []}), stderr="")
+            if "rebuild" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "generation": 3, "nodes": 2, "instances": 0}), stderr="")
+            return SimpleNamespace(exit_status=1, stdout="", stderr=f"unexpected command: {command}")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.self_join_existing_cluster(_JsonRequest({
+        "hostname": "upstream-master",
+        "ssh_host": "198.51.100.10",
+        "ssh_user": "mani",
+        "ssh_port": 22,
+        "remote_pbgui_dir": "/home/mani/software/pbgui",
+        "adopt_local_identity": True,
+    }), session=None))
+
+    assert payload["ok"] is True
+    assert payload["adopted_local_identity"] is True
+    assert payload["local_node_id"] == NODE_C
+    assert payload["upstream_node_id"] == NODE_B
+    assert payload["pull"]["pulled_ops"] == 1
+    assert payload["membership"]["local"]["operation"] == "ADD_NODE"
+    assert payload["push"]["counts"]["pushed"] == 2
+    assert any("install-authorized-key" in command and LOCAL_CLUSTER_PUBLIC_KEY in command for _host, command, _timeout in calls)
+    assert (root / "cluster_id").read_text(encoding="utf-8") == CLUSTER_ID
+    materialized = cluster.rebuild_materialized_state(root, write=False)
+    nodes = materialized["cluster_nodes"]["nodes"]
+    assert nodes[NODE_C]["sync_mode"] == "outbound_only"
+    assert nodes[NODE_C]["sync_peers"] == [NODE_B]
+    assert nodes[NODE_C]["cluster_ssh_fingerprint"] == "SHA256:local"
+    assert nodes[NODE_B]["ssh_user"] == "mani"
+    assert nodes[NODE_B]["cluster_ssh_fingerprint"] == "SHA256:remote"
+
+
+def test_self_join_refuses_to_adopt_non_empty_foreign_cluster(monkeypatch, tmp_path: Path) -> None:
+    """Self-join does not overwrite a local cluster that already has operations."""
+
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=second-master\n", encoding="utf-8")
+    root = tmp_path / "data" / "cluster"
+    ensure_local_identity(
+        root,
+        role="master",
+        pbname="second-master",
+        cluster_id=OTHER_CLUSTER_ID,
+        node_id=NODE_C,
+        created_at=100,
+    )
+    append_operation(root, "ADD_NODE", {"node_id": NODE_C, "role": "master", "pbname": "second-master"}, created_at=101)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            if "hello" in command:
+                return SimpleNamespace(
+                    exit_status=0,
+                    stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "master"}),
+                    stderr="",
+                )
+            return SimpleNamespace(exit_status=1, stdout="", stderr="unexpected command")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(cluster.self_join_existing_cluster(_JsonRequest({
+            "hostname": "upstream-master",
+            "ssh_host": "198.51.100.10",
+            "adopt_local_identity": True,
+        }), session=None))
+
+    assert exc.value.status_code == 409
+    assert "already has oplog entries" in exc.value.detail
 
 
 def test_remote_preview_compares_state_without_writes(monkeypatch, tmp_path: Path) -> None:
@@ -746,6 +976,10 @@ def test_remote_materialize_v7_writes_after_state_match(monkeypatch, tmp_path: P
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": local["state_vector"]}
             elif "get-desired-state" in command:
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "desired_state": local["desired_state"]}
+            elif "materialize-v7-preview" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "error": 0, "current": 1}, "can_apply": False}
+            elif "materialize-api-keys-preview" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"write": 0, "error": 0, "missing": 1}, "can_apply": False}
             elif "materialize-v7" in command:
                 payload = {
                     "ok": True,
@@ -754,6 +988,8 @@ def test_remote_materialize_v7_writes_after_state_match(monkeypatch, tmp_path: P
                     "counts": {"written_instances": 1, "written_files": 2},
                     "written": [{"instance": "local_inst", "files": 2}],
                 }
+            elif "start PBRun" in command:
+                return SimpleNamespace(exit_status=0, stdout="PBRun started", stderr="")
             else:
                 raise AssertionError(f"unexpected command: {command}")
             return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
@@ -764,10 +1000,64 @@ def test_remote_materialize_v7_writes_after_state_match(monkeypatch, tmp_path: P
 
     assert payload["ok"] is True
     assert payload["materialization"]["counts"]["written_files"] == 2
-    assert len(calls) == 3
+    assert payload["pbrun_start"]["started"] is True
+    assert len(calls) == 6
     assert "get-state-vector" in calls[0]
     assert "get-desired-state" in calls[1]
     assert "materialize-v7" in calls[2]
+    assert "materialize-v7-preview" in calls[3]
+    assert "materialize-api-keys-preview" in calls[4]
+    assert "start PBRun" in calls[5]
+
+
+def test_remote_materialize_v7_waits_to_start_pbrun_when_api_keys_pending(monkeypatch, tmp_path: Path) -> None:
+    """PBRun must not restart after V7 materialization while API-key writes are pending."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=102,
+    )
+    local = cluster.rebuild_materialized_state(root, write=False)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            if "get-state-vector" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": local["state_vector"]}
+            elif "get-desired-state" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "desired_state": local["desired_state"]}
+            elif "materialize-v7-preview" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "error": 0}, "can_apply": False}
+            elif "materialize-api-keys-preview" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"write": 1, "error": 0}, "can_apply": True}
+            elif "materialize-v7" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"written_instances": 1, "written_files": 2}}
+            elif "start PBRun" in command:
+                raise AssertionError("PBRun must not start while API-key materialization is pending")
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.materialize_remote_v7_configs(NODE_B, session=None))
+
+    assert payload["ok"] is True
+    assert payload["pbrun_start"]["started"] is False
+    assert payload["pbrun_start"]["reason"] == "api_key_materialization_pending"
+    assert not any("start PBRun" in command for command in calls)
 
 
 def test_remote_materialize_api_keys_writes_after_state_match(monkeypatch, tmp_path: Path) -> None:
@@ -792,6 +1082,10 @@ def test_remote_materialize_api_keys_writes_after_state_match(monkeypatch, tmp_p
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": local["state_vector"]}
             elif "get-desired-state" in command:
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "desired_state": local["desired_state"]}
+            elif "materialize-v7-preview" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "error": 0, "current": 1}, "can_apply": False}
+            elif "materialize-api-keys-preview" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"write": 0, "error": 0, "current": 1}, "can_apply": False}
             elif "materialize-api-keys" in command:
                 payload = {
                     "ok": True,
@@ -800,6 +1094,8 @@ def test_remote_materialize_api_keys_writes_after_state_match(monkeypatch, tmp_p
                     "counts": {"written": 1},
                     "status": "written",
                 }
+            elif "start PBRun" in command:
+                return SimpleNamespace(exit_status=0, stdout="PBRun started", stderr="")
             else:
                 raise AssertionError(f"unexpected command: {command}")
             return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
@@ -810,10 +1106,14 @@ def test_remote_materialize_api_keys_writes_after_state_match(monkeypatch, tmp_p
 
     assert payload["ok"] is True
     assert payload["materialization"]["status"] == "written"
-    assert len(calls) == 3
+    assert payload["pbrun_start"]["started"] is True
+    assert len(calls) == 6
     assert "get-state-vector" in calls[0]
     assert "get-desired-state" in calls[1]
     assert "materialize-api-keys" in calls[2]
+    assert "materialize-v7-preview" in calls[3]
+    assert "materialize-api-keys-preview" in calls[4]
+    assert "start PBRun" in calls[5]
 
 
 def test_remote_push_ops_writes_missing_local_ops_and_rebuilds(monkeypatch, tmp_path: Path) -> None:

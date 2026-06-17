@@ -151,6 +151,8 @@ PBData fills the dashboard database. Enable or restart it from `Services -> PBDa
 
 PBCluster replicates Cluster Sync operations and materializes assigned V7 configs/API keys on joined nodes. PBRun remains responsible for starting and stopping local bots from the materialized Cluster desired state.
 
+Existing PBRemote/API Sync/V7 SSH Sync installations should follow `docs/help/40_cluster_migration.md` before joining production VPS runners.
+
 ## PBCoinData CoinMarketCap Filters
 
 PBCoinData downloads CoinMarketCap data for symbols and helps maintain ignored symbols and ignored coins. It can filter low market-cap symbols or use volume/market-cap ratios to detect possible rug pulls early.

@@ -401,7 +401,7 @@ Rules:
 
 ## Legacy V7 Status File
 
-- `status_v7.json` is retired for Cluster Sync runtime decisions.
+- `status_v7.json` is removed from Cluster Sync runtime decisions. PBGui no longer creates, reads, or honors it.
 - `desired_state.json` is the authority for desired state, assignment, manifest hash, version and tombstones.
 - PBRun polls local `data/cluster/desired_state.json` and materialized `data/run_v7` configs directly.
 - VPS Monitor derives blocked/non-running rows from live processes, local `data/run_v7`, and Cluster Sync desired state.

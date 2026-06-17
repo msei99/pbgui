@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import configparser
 import hashlib
 import json
+import os
 import platform
 import shlex
 import time
@@ -34,6 +36,8 @@ from master.cluster_state import (
     load_operations,
     normalize_node_sync_mode,
     rebuild_materialized_state,
+    validate_operation,
+    write_operation,
 )
 from master.cluster_ssh_keys import ensure_local_cluster_ssh_material, public_key_fingerprint
 from pb7_config import load_pb7_config
@@ -626,6 +630,156 @@ def _probe_error_text(result: Any) -> str:
     return "remote hello failed"
 
 
+def _remote_pbrun_service_command(remote_pbgui_dir: str | None, action: str) -> str:
+    """Build a remote command that controls PBRun without touching bot processes directly."""
+
+    normalized = str(action or "").strip().lower()
+    if normalized not in {"start", "stop"}:
+        raise ValueError("unsupported PBRun action")
+    starter_flag = "-s" if normalized == "start" else "-k"
+
+    base = remote_shell_path(remote_pbgui_dir or "software/pbgui")
+    return (
+        f"base={base}; "
+        "parent=\"${base%/*}\"; "
+        "if [ -x \"$parent/venv_pbgui/bin/python\" ]; then py=\"$parent/venv_pbgui/bin/python\"; "
+        "elif [ -x \"$parent/venv_pbgui312/bin/python\" ]; then py=\"$parent/venv_pbgui312/bin/python\"; "
+        "elif [ -x \"$base/.venv/bin/python\" ]; then py=\"$base/.venv/bin/python\"; "
+        "else py=python3; fi; "
+        "if [ -x \"$base/setup/vps_service_control.sh\" ]; then "
+        f"PBGUI_DIR=\"$base\" PBGUI_PYTHON=\"$py\" \"$base/setup/vps_service_control.sh\" {normalized} PBRun; "
+        "elif command -v systemctl >/dev/null 2>&1 && "
+        "XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}\" systemctl --user show-environment >/dev/null 2>&1 && "
+        "[ -f \"$HOME/.config/systemd/user/pbgui-pbrun.service\" ]; then "
+        f"XDG_RUNTIME_DIR=\"${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}\" systemctl --user {normalized} pbgui-pbrun.service; "
+        "elif [ -f \"$base/starter.py\" ]; then "
+        f"cd \"$base\" && \"$py\" \"$base/starter.py\" {starter_flag} PBRun; "
+        "else echo 'PBRun service control helper not found' >&2; exit 1; fi"
+    )
+
+
+def _remote_stop_pbrun_command(remote_pbgui_dir: str | None) -> str:
+    """Build a remote command that stops PBRun without touching bot processes."""
+
+    return _remote_pbrun_service_command(remote_pbgui_dir, "stop")
+
+
+async def _run_remote_pbrun_service(pool: Any, hostname: str, node: dict[str, Any], action: str) -> dict[str, Any]:
+    """Start or stop PBRun on a remote node through the existing SSH pool."""
+
+    normalized = str(action or "").strip().lower()
+    command = _remote_pbrun_service_command(str(node.get("remote_pbgui_dir") or ""), normalized)
+    try:
+        result = await pool.run(hostname, command, timeout=20)
+    except Exception as exc:
+        _log(SERVICE, f"Remote PBRun {normalized} failed for {hostname}: {exc}", level="ERROR")
+        raise HTTPException(status_code=502, detail=f"Could not {normalized} remote PBRun: {exc}") from exc
+    if result is None:
+        raise HTTPException(status_code=502, detail=f"Remote host is unreachable while trying to {normalized} PBRun")
+    exit_status = int(getattr(result, "exit_status", 1) or 0)
+    if exit_status != 0:
+        error = _probe_error_text(result)
+        _log(SERVICE, f"Remote PBRun {normalized} failed for {hostname}: {error}", level="WARNING")
+        raise HTTPException(status_code=409, detail=f"Could not {normalized} remote PBRun: {error}")
+    return {"ok": True, "action": normalized, "stdout": str(getattr(result, "stdout", "") or "").strip()}
+
+
+async def _stop_remote_pbrun_for_join(pool: Any, hostname: str, node: dict[str, Any]) -> dict[str, Any]:
+    """Stop PBRun on a VPS before joining it to avoid transitional gate stops."""
+
+    result = await _run_remote_pbrun_service(pool, hostname, node, "stop")
+    result["stopped"] = True
+    return result
+
+
+def _v7_materialization_current(payload: dict[str, Any]) -> bool:
+    """Return True when remote V7 materialization preview has no pending writes."""
+
+    counts = payload.get("counts") if isinstance(payload, dict) else {}
+    counts = counts if isinstance(counts, dict) else {}
+    return bool(payload.get("ok")) and int(counts.get("error") or 0) == 0 and (int(counts.get("add") or 0) + int(counts.get("update") or 0)) == 0
+
+
+def _api_key_materialization_current(payload: dict[str, Any]) -> bool:
+    """Return True when remote API-key materialization preview has no pending writes."""
+
+    counts = payload.get("counts") if isinstance(payload, dict) else {}
+    counts = counts if isinstance(counts, dict) else {}
+    return bool(payload.get("ok")) and int(counts.get("error") or 0) == 0 and int(counts.get("write") or 0) == 0
+
+
+async def _maybe_start_remote_pbrun_after_materialization(node: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
+    """Start PBRun on a VPS runner once all remote materialization is current."""
+
+    if _cluster_role_from_monitor_role(node.get("role")) != "vps":
+        return {"attempted": False, "started": False, "reason": "not_vps_runner"}
+    try:
+        v7_preview = await _run_remote_materialize_command(node, identity, "materialize-v7-preview")
+        api_preview = await _run_remote_materialize_command(node, identity, "materialize-api-keys-preview")
+    except HTTPException as exc:
+        return {"attempted": False, "started": False, "reason": "preview_failed", "error": str(exc.detail)}
+    if not _v7_materialization_current(v7_preview):
+        return {"attempted": False, "started": False, "reason": "v7_materialization_pending"}
+    if not _api_key_materialization_current(api_preview):
+        return {"attempted": False, "started": False, "reason": "api_key_materialization_pending"}
+    hostname = str(node.get("pbname") or node.get("hostname") or "")
+    monitor = get_monitor()
+    pool = getattr(monitor, "pool", None) if monitor else None
+    if not pool:
+        return {"attempted": True, "started": False, "reason": "ssh_pool_unavailable"}
+    try:
+        result = await _run_remote_pbrun_service(pool, hostname, node, "start")
+    except HTTPException as exc:
+        return {"attempted": True, "started": False, "reason": "start_failed", "error": str(exc.detail)}
+    return {"attempted": True, "started": True, "result": result}
+
+
+async def _complete_remote_join_sync(node: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
+    """Push state, materialize files and restart PBRun after a successful join."""
+
+    completion: dict[str, Any] = {"ok": True}
+    push_result = await _push_missing_operations_to_remote(node, identity, rebuild=True)
+    completion["push"] = push_result
+
+    v7_preview = await _run_remote_materialize_command(node, identity, "materialize-v7-preview")
+    completion["v7_preview"] = v7_preview
+    v7_current = _v7_materialization_current(v7_preview)
+    if v7_preview.get("can_apply"):
+        completion["v7_materialization"] = await _run_remote_materialize_command(node, identity, "materialize-v7", timeout=120)
+        v7_current = True
+    else:
+        completion["v7_materialization"] = {"skipped": True, "reason": "current_or_not_applicable"}
+
+    api_key_preview = await _run_remote_materialize_command(node, identity, "materialize-api-keys-preview")
+    completion["api_key_preview"] = api_key_preview
+    api_key_current = _api_key_materialization_current(api_key_preview)
+    if api_key_preview.get("can_apply"):
+        completion["api_key_materialization"] = await _run_remote_materialize_command(node, identity, "materialize-api-keys", timeout=60)
+        api_key_current = True
+    else:
+        completion["api_key_materialization"] = {"skipped": True, "reason": "current_or_not_applicable"}
+
+    if _cluster_role_from_monitor_role(node.get("role")) != "vps":
+        completion["pbrun_start"] = {"attempted": False, "started": False, "reason": "not_vps_runner"}
+    elif not v7_current:
+        completion["pbrun_start"] = {"attempted": False, "started": False, "reason": "v7_materialization_pending"}
+    elif not api_key_current:
+        completion["pbrun_start"] = {"attempted": False, "started": False, "reason": "api_key_materialization_pending"}
+    else:
+        hostname = str(node.get("pbname") or node.get("hostname") or "")
+        monitor = get_monitor()
+        pool = getattr(monitor, "pool", None) if monitor else None
+        if not pool:
+            completion["pbrun_start"] = {"attempted": True, "started": False, "reason": "ssh_pool_unavailable"}
+        else:
+            try:
+                result = await _run_remote_pbrun_service(pool, hostname, node, "start")
+                completion["pbrun_start"] = {"attempted": True, "started": True, "result": result}
+            except HTTPException as exc:
+                completion["pbrun_start"] = {"attempted": True, "started": False, "reason": "start_failed", "error": str(exc.detail)}
+    return completion
+
+
 def _parse_remote_json_result(result: Any, failure_label: str) -> dict[str, Any]:
     """Parse the last JSON line from an SSH command result."""
 
@@ -737,6 +891,580 @@ def _node_for_id(nodes: list[dict[str, Any]], node_id: str) -> dict[str, Any]:
     return {}
 
 
+def _state_vector_from_operations(operations: list[dict[str, Any]]) -> dict[str, int]:
+    """Build a compact state vector from loaded operations."""
+
+    vector: dict[str, int] = {}
+    for operation in operations:
+        actor = str(operation.get("actor") or "")
+        try:
+            seq = int(operation.get("seq") or 0)
+        except (TypeError, ValueError):
+            continue
+        if actor and seq > 0:
+            vector[actor] = max(vector.get(actor, 0), seq)
+    return {key: vector[key] for key in sorted(vector)}
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Atomically write one small UTF-8 text file."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(str(text), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Atomically write one JSON object."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=4)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
+def _validate_cluster_identifier(value: Any) -> str:
+    """Validate and return a Cluster Sync cluster id."""
+
+    text = str(value or "").strip()
+    prefix = "pbgui-cluster-"
+    if not text.startswith(prefix):
+        raise HTTPException(status_code=409, detail="Remote returned an invalid cluster_id")
+    try:
+        uuid.UUID(text.removeprefix(prefix))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Remote returned an invalid cluster_id") from exc
+    return text
+
+
+def _validate_node_identifier(value: Any, label: str = "node_id") -> str:
+    """Validate and return a Cluster Sync node id."""
+
+    text = str(value or "").strip()
+    prefix = "pbgui-node-"
+    if not text.startswith(prefix):
+        raise HTTPException(status_code=409, detail=f"Remote returned an invalid {label}")
+    try:
+        uuid.UUID(text.removeprefix(prefix))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=f"Remote returned an invalid {label}") from exc
+    return text
+
+
+def _adopt_empty_local_cluster_identity(root: Path, identity: dict[str, Any], cluster_id: str) -> dict[str, Any]:
+    """Point an unused local identity at an existing cluster id."""
+
+    current_cluster_id = str(identity.get("cluster_id") or "")
+    if current_cluster_id == cluster_id:
+        return {"changed": False, "identity": dict(identity)}
+    try:
+        operations = load_operations(root, expected_cluster_id=current_cluster_id)
+    except ClusterStateError as exc:
+        raise HTTPException(status_code=409, detail=f"Local cluster state is not safe to adopt: {exc}") from exc
+    if operations:
+        raise HTTPException(status_code=409, detail="Local cluster already has oplog entries; refusing to adopt another cluster_id")
+
+    node_id = _validate_node_identifier(identity.get("node_id"), "local node_id")
+    node_identity_path = root / "node_identity.json"
+    node_identity = dict(identity)
+    node_identity.update({
+        "schema_version": 1,
+        "cluster_id": cluster_id,
+        "node_id": node_id,
+        "role": str(identity.get("role") or "master"),
+        "created_from_pbname": str(identity.get("created_from_pbname") or _get_master_pbname()),
+    })
+    _atomic_write_text(root / "cluster_id", cluster_id)
+    _atomic_write_text(root / "node_id", node_id)
+    _atomic_write_json(node_identity_path, node_identity)
+    return {"changed": True, "identity": node_identity}
+
+
+def _known_vps_config_by_hostname(hostname: str) -> dict[str, Any]:
+    """Return one known VPS Manager config by hostname, if present."""
+
+    wanted = str(hostname or "").strip()
+    for config in _known_vps_configs():
+        if str(config.get("hostname") or "").strip() == wanted:
+            return dict(config)
+    return {}
+
+
+def _validate_self_join_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate the explicit outbound self-join request."""
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+    hostname = str(payload.get("hostname") or payload.get("upstream_hostname") or "").strip()
+    if not hostname:
+        raise HTTPException(status_code=400, detail="hostname is required")
+    _validate_instance_name(hostname)
+    known = _known_vps_config_by_hostname(hostname)
+    ssh_host = str(payload.get("ssh_host") or known.get("ssh_host") or hostname).strip()
+    ssh_user = str(payload.get("ssh_user") or known.get("ssh_user") or "").strip()
+    raw_port = payload.get("ssh_port") or known.get("ssh_port") or 22
+    try:
+        ssh_port = int(raw_port or 22)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="ssh_port must be a number") from exc
+    if ssh_port < 1 or ssh_port > 65535:
+        raise HTTPException(status_code=400, detail="ssh_port must be between 1 and 65535")
+    remote_pbgui_dir = str(payload.get("remote_pbgui_dir") or known.get("remote_pbgui_dir") or "software/pbgui").strip() or "software/pbgui"
+    return {
+        "hostname": hostname,
+        "ssh_host": ssh_host,
+        "ssh_user": ssh_user,
+        "ssh_port": ssh_port,
+        "remote_pbgui_dir": remote_pbgui_dir,
+        "adopt_local_identity": bool(payload.get("adopt_local_identity") is True),
+    }
+
+
+async def _run_cluster_json_command_on_host(
+    pool: Any,
+    hostname: str,
+    remote_pbgui_dir: str,
+    local_node_id: str,
+    command_text: str,
+    *,
+    timeout: int = 30,
+    failure_label: str = "Remote cluster command",
+) -> dict[str, Any]:
+    """Run one restricted Cluster Sync command against a named SSH-pool host."""
+
+    command = _cluster_remote_command(remote_pbgui_dir, local_node_id, command_text)
+    try:
+        result = await pool.run(hostname, command, timeout=timeout)
+    except Exception as exc:
+        _log(SERVICE, f"{failure_label} failed for {hostname}: {exc}", level="ERROR")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=502, detail="Remote host is unreachable")
+    if int(getattr(result, "exit_status", 1) or 0) != 0:
+        error = _probe_error_text(result)
+        _log(SERVICE, f"{failure_label} rejected by {hostname}: {error}", level="WARNING")
+        raise HTTPException(status_code=409, detail=error)
+    return _parse_remote_json_result(result, failure_label)
+
+
+async def _run_cluster_ssh_setup_on_host(
+    pool: Any,
+    hostname: str,
+    remote_pbgui_dir: str,
+    args: list[str],
+    *,
+    timeout: int = 15,
+) -> dict[str, Any]:
+    """Run the Cluster SSH setup helper against a named SSH-pool host."""
+
+    command = _cluster_ssh_setup_command(remote_pbgui_dir, args)
+    try:
+        result = await pool.run(hostname, command, timeout=timeout)
+    except Exception as exc:
+        _log(SERVICE, f"Remote Cluster SSH setup failed for {hostname}: {exc}", level="ERROR")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=502, detail="Remote host is unreachable")
+    if int(getattr(result, "exit_status", 1) or 0) != 0:
+        raise HTTPException(status_code=409, detail=_probe_error_text(result))
+    payload = _parse_remote_json_result(result, "Remote Cluster SSH setup")
+    if payload.get("ok") is False:
+        raise HTTPException(status_code=409, detail=str(payload.get("error") or "Remote Cluster SSH setup failed"))
+    return payload
+
+
+def _write_cluster_blob(base_dir: Path, blob_hash: str, raw: bytes, *, secret: bool) -> None:
+    """Atomically write and verify one pulled content-addressed blob."""
+
+    text = str(blob_hash or "")
+    if not text.startswith("sha256:") or len(text) != len("sha256:") + 64:
+        raise HTTPException(status_code=409, detail="Remote returned an invalid blob hash")
+    if hashlib.sha256(raw).hexdigest() != text.removeprefix("sha256:"):
+        raise HTTPException(status_code=409, detail="Remote blob hash mismatch")
+    path = _cluster_blob_path(base_dir, text)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(raw)
+    os.chmod(tmp, 0o600 if secret else 0o644)
+    os.replace(tmp, path)
+
+
+def _manifest_file_hashes(manifest_raw: bytes) -> list[str]:
+    """Return file blob hashes referenced by a config manifest blob."""
+
+    try:
+        manifest = json.loads(manifest_raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=409, detail="Config manifest blob is not valid JSON") from exc
+    files = manifest.get("files") if isinstance(manifest, dict) else {}
+    files = files if isinstance(files, dict) else {}
+    hashes: list[str] = []
+    for meta in files.values():
+        sha = str((meta if isinstance(meta, dict) else {}).get("sha256") or "")
+        if sha:
+            hashes.append(f"sha256:{sha}")
+    return hashes
+
+
+async def _ensure_remote_blob_on_host(
+    pool: Any,
+    hostname: str,
+    remote_pbgui_dir: str,
+    local_node_id: str,
+    base_dir: Path,
+    blob_hash: str,
+    *,
+    secret: bool,
+) -> tuple[bytes, bool]:
+    """Ensure one local blob exists by pulling it from a reachable upstream host."""
+
+    try:
+        return _read_cluster_blob(base_dir, blob_hash), False
+    except Exception:
+        pass
+    verb = "get-secret-blob" if secret else "get-blob"
+    payload = await _run_cluster_json_command_on_host(
+        pool,
+        hostname,
+        remote_pbgui_dir,
+        local_node_id,
+        f"{verb} {shlex.quote(str(blob_hash))}",
+        timeout=30,
+        failure_label="Remote blob pull",
+    )
+    remote_hash = str(payload.get("hash") or blob_hash)
+    if remote_hash != str(blob_hash):
+        raise HTTPException(status_code=409, detail="Remote returned a different blob hash")
+    try:
+        raw = base64.b64decode(str(payload.get("content_b64") or ""), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="Remote blob payload is not valid base64") from exc
+    _write_cluster_blob(base_dir, remote_hash, raw, secret=secret)
+    return raw, True
+
+
+async def _pull_blobs_for_operations_from_host(
+    pool: Any,
+    hostname: str,
+    remote_pbgui_dir: str,
+    local_node_id: str,
+    operations: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Pull all config/API-key blobs required by received operations."""
+
+    counts = {"config": 0, "secret": 0}
+    root = _cluster_root()
+    config_dir = root / "config_blobs"
+    secret_dir = root / "secret_blobs"
+    for operation in operations:
+        refs = _operation_hash_refs(operation)
+        for manifest_hash in refs["config"]:
+            manifest_raw, fetched = await _ensure_remote_blob_on_host(
+                pool,
+                hostname,
+                remote_pbgui_dir,
+                local_node_id,
+                config_dir,
+                manifest_hash,
+                secret=False,
+            )
+            counts["config"] += 1 if fetched else 0
+            for file_hash in _manifest_file_hashes(manifest_raw):
+                _raw, file_fetched = await _ensure_remote_blob_on_host(
+                    pool,
+                    hostname,
+                    remote_pbgui_dir,
+                    local_node_id,
+                    config_dir,
+                    file_hash,
+                    secret=False,
+                )
+                counts["config"] += 1 if file_fetched else 0
+        for payload_hash in refs["api_payload"]:
+            _raw, fetched = await _ensure_remote_blob_on_host(
+                pool,
+                hostname,
+                remote_pbgui_dir,
+                local_node_id,
+                config_dir,
+                payload_hash,
+                secret=False,
+            )
+            counts["config"] += 1 if fetched else 0
+        for secret_hash in refs["secret"]:
+            _raw, fetched = await _ensure_remote_blob_on_host(
+                pool,
+                hostname,
+                remote_pbgui_dir,
+                local_node_id,
+                secret_dir,
+                secret_hash,
+                secret=True,
+            )
+            counts["secret"] += 1 if fetched else 0
+    return counts
+
+
+async def _pull_missing_operations_from_host(
+    pool: Any,
+    hostname: str,
+    remote_pbgui_dir: str,
+    local_node_id: str,
+    cluster_id: str,
+) -> dict[str, Any]:
+    """Pull upstream operations and their blobs into the local cluster state."""
+
+    root = _cluster_root()
+    vector_payload = await _run_cluster_json_command_on_host(
+        pool,
+        hostname,
+        remote_pbgui_dir,
+        local_node_id,
+        "get-state-vector",
+        timeout=30,
+        failure_label="Remote state-vector pull",
+    )
+    remote_vector = _as_state_vector(vector_payload.get("state_vector") or {})
+    local_operations = load_operations(root, expected_cluster_id=cluster_id)
+    local_vector = _state_vector_from_operations(local_operations)
+    pulled = 0
+    blob_counts = {"config": 0, "secret": 0}
+    for actor in sorted(remote_vector):
+        remote_seq = int(remote_vector.get(actor) or 0)
+        local_seq = int(local_vector.get(actor) or 0)
+        if remote_seq <= local_seq:
+            continue
+        start = local_seq + 1
+        while start <= remote_seq:
+            end = min(remote_seq, start + 999)
+            payload = await _run_cluster_json_command_on_host(
+                pool,
+                hostname,
+                remote_pbgui_dir,
+                local_node_id,
+                f"get-ops {shlex.quote(actor)} {start} {end}",
+                timeout=30,
+                failure_label="Remote operation pull",
+            )
+            missing = payload.get("missing") if isinstance(payload, dict) else []
+            if missing:
+                raise HTTPException(status_code=409, detail=f"Remote is missing operation(s) for {actor}: {missing}")
+            operations = payload.get("operations") if isinstance(payload, dict) else []
+            operations = operations if isinstance(operations, list) else []
+            pulled_blobs = await _pull_blobs_for_operations_from_host(pool, hostname, remote_pbgui_dir, local_node_id, operations)
+            blob_counts["config"] += int(pulled_blobs.get("config") or 0)
+            blob_counts["secret"] += int(pulled_blobs.get("secret") or 0)
+            for operation in operations:
+                validate_operation(operation, expected_cluster_id=cluster_id)
+                op_path = root / "oplog" / str(operation["actor"]) / f"{int(operation['seq']):08d}.json"
+                existed = op_path.exists()
+                write_operation(root, operation)
+                if not existed:
+                    pulled += 1
+            start = end + 1
+    return {
+        "remote_vector": remote_vector,
+        "local_vector_before": local_vector,
+        "pulled_ops": pulled,
+        "pulled_config_blobs": blob_counts["config"],
+        "pulled_secret_blobs": blob_counts["secret"],
+    }
+
+
+def _node_payload_updates(current: dict[str, Any], desired: dict[str, Any]) -> dict[str, Any]:
+    """Return desired node fields that differ from current materialized values."""
+
+    updates: dict[str, Any] = {}
+    for key, value in desired.items():
+        if key == "node_id":
+            continue
+        current_value = current.get(key)
+        if isinstance(value, list):
+            current_list = current_value if isinstance(current_value, list) else []
+            if [str(item) for item in current_list] != [str(item) for item in value]:
+                updates[key] = value
+        elif isinstance(value, bool):
+            if bool(current_value) != value:
+                updates[key] = value
+        elif isinstance(value, int):
+            try:
+                same = int(current_value) == value
+            except (TypeError, ValueError):
+                same = False
+            if not same:
+                updates[key] = value
+        elif str(current_value or "") != str(value or ""):
+            updates[key] = value
+    return updates
+
+
+def _append_node_membership_if_needed(current: dict[str, Any], desired: dict[str, Any]) -> dict[str, Any]:
+    """Append ADD_NODE/UPDATE_NODE for a desired node record when needed."""
+
+    node_id = str(desired.get("node_id") or "")
+    if not node_id:
+        return {"changed": False, "operation": "none"}
+    if not current:
+        append_operation(_cluster_root(), "ADD_NODE", desired)
+        return {"changed": True, "operation": "ADD_NODE"}
+    updates = _node_payload_updates(current, desired)
+    if not updates:
+        return {"changed": False, "operation": "none"}
+    append_operation(_cluster_root(), "UPDATE_NODE", {"node_id": node_id, **updates})
+    return {"changed": True, "operation": "UPDATE_NODE", "updated_fields": sorted(updates)}
+
+
+def _self_join_transport_node(upstream: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+    """Build a materialized node record usable with the monitor SSH pool."""
+
+    node = dict(upstream)
+    node.update({
+        "pbname": str(settings.get("hostname") or node.get("pbname") or node.get("hostname") or ""),
+        "hostname": str(settings.get("hostname") or node.get("hostname") or node.get("pbname") or ""),
+        "sync_mode": "reachable",
+        "sync_enabled": True,
+        "ssh_host": str(settings.get("ssh_host") or node.get("ssh_host") or ""),
+        "ssh_user": str(settings.get("ssh_user") or node.get("ssh_user") or ""),
+        "ssh_port": int(settings.get("ssh_port") or node.get("ssh_port") or 22),
+        "remote_pbgui_dir": str(settings.get("remote_pbgui_dir") or node.get("remote_pbgui_dir") or "software/pbgui"),
+    })
+    return node
+
+
+async def _self_join_existing_cluster(settings: dict[str, Any]) -> dict[str, Any]:
+    """Join this master to an existing cluster through an outbound SSH connection."""
+
+    root = _cluster_root()
+    try:
+        identity = ensure_local_identity(root, role="master", pbname=_get_master_pbname())
+    except ClusterStateError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    local_node_id = _validate_node_identifier(identity.get("node_id"), "local node_id")
+    monitor = get_monitor()
+    pool = getattr(monitor, "pool", None) if monitor else None
+    if not pool:
+        raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
+
+    hostname = str(settings["hostname"])
+    remote_dir = str(settings["remote_pbgui_dir"])
+    hello = await _run_cluster_json_command_on_host(
+        pool,
+        hostname,
+        remote_dir,
+        local_node_id,
+        "hello",
+        timeout=15,
+        failure_label="Upstream cluster hello",
+    )
+    upstream_cluster_id = _validate_cluster_identifier(hello.get("cluster_id"))
+    upstream_node_id = _validate_node_identifier(hello.get("node_id"), "upstream node_id")
+    if upstream_node_id == local_node_id:
+        raise HTTPException(status_code=409, detail="Upstream node_id matches the local node_id; refusing to self-join the same node")
+
+    local_cluster_id = str(identity.get("cluster_id") or "")
+    try:
+        local_operations = load_operations(root, expected_cluster_id=local_cluster_id)
+    except ClusterStateError as exc:
+        raise HTTPException(status_code=409, detail=f"Local cluster state is not safe to self-join: {exc}") from exc
+    adoption = {"changed": False}
+    if local_cluster_id != upstream_cluster_id:
+        if local_operations and not settings.get("adopt_local_identity"):
+            raise HTTPException(status_code=409, detail="Local cluster_id differs and local oplog is not empty")
+        if not settings.get("adopt_local_identity"):
+            raise HTTPException(status_code=409, detail="Local cluster_id differs; confirm adoption before joining")
+        adoption = _adopt_empty_local_cluster_identity(root, identity, upstream_cluster_id)
+        identity = dict(adoption["identity"])
+
+    local_key = ensure_local_cluster_ssh_material(Path(PBGDIR), role="master", pbname=_get_master_pbname())
+    pull_result = await _pull_missing_operations_from_host(pool, hostname, remote_dir, local_node_id, upstream_cluster_id)
+    materialized = rebuild_materialized_state(root)
+    nodes = _node_list(materialized["cluster_nodes"])
+    upstream_node = _node_for_id(nodes, upstream_node_id)
+    local_node = _node_for_id(nodes, local_node_id)
+
+    remote_key = await _run_cluster_ssh_setup_on_host(pool, hostname, remote_dir, ["ensure-local", "--node-id", upstream_node_id])
+    remote_public_key = str(remote_key.get("public_key") or hello.get("cluster_ssh_public_key") or "").strip()
+    remote_fingerprint = str(remote_key.get("fingerprint") or hello.get("cluster_ssh_fingerprint") or "").strip()
+    if not remote_public_key:
+        raise HTTPException(status_code=409, detail="Upstream did not return a Cluster SSH public key")
+    if not remote_fingerprint:
+        try:
+            remote_fingerprint = public_key_fingerprint(remote_public_key)
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail="Upstream returned an invalid Cluster SSH public key") from exc
+    install_result = await _run_cluster_ssh_setup_on_host(
+        pool,
+        hostname,
+        remote_dir,
+        [
+            "install-authorized-key",
+            "--source-node",
+            local_node_id,
+            "--source-public-key",
+            str(local_key.get("public_key") or ""),
+        ],
+    )
+
+    upstream_desired = {
+        "node_id": upstream_node_id,
+        "role": _cluster_role_from_monitor_role(upstream_node.get("role") or hello.get("role") or "master"),
+        "pbname": str(upstream_node.get("pbname") or upstream_node.get("hostname") or hostname),
+        "hostname": str(upstream_node.get("hostname") or upstream_node.get("pbname") or hostname),
+        "sync_mode": "reachable",
+        "sync_enabled": True,
+        "ssh_host": str(settings.get("ssh_host") or ""),
+        "ssh_port": int(settings.get("ssh_port") or 22),
+        "remote_pbgui_dir": remote_dir,
+        "cluster_ssh_public_key": remote_public_key,
+        "cluster_ssh_fingerprint": remote_fingerprint,
+        "cluster_ssh_mode": "forced",
+    }
+    if str(settings.get("ssh_user") or ""):
+        upstream_desired["ssh_user"] = str(settings.get("ssh_user") or "")
+    upstream_membership = _append_node_membership_if_needed(upstream_node, upstream_desired)
+
+    local_desired = {
+        "node_id": local_node_id,
+        "role": "master",
+        "pbname": _get_master_pbname(),
+        "hostname": _get_master_pbname(),
+        "sync_mode": "outbound_only",
+        "sync_enabled": True,
+        "sync_peers": [upstream_node_id],
+        "cluster_ssh_public_key": str(local_key.get("public_key") or ""),
+        "cluster_ssh_fingerprint": str(local_key.get("fingerprint") or ""),
+        "cluster_ssh_mode": "forced",
+    }
+    local_membership = _append_node_membership_if_needed(local_node, local_desired)
+    materialized = rebuild_materialized_state(root)
+    upstream_node = _node_for_id(_node_list(materialized["cluster_nodes"]), upstream_node_id)
+    transport_node = _self_join_transport_node(upstream_node, settings)
+    push_result = await _push_missing_operations_to_remote(transport_node, identity, rebuild=True)
+    return {
+        "ok": True,
+        "cluster_id": upstream_cluster_id,
+        "local_node_id": local_node_id,
+        "upstream_node_id": upstream_node_id,
+        "upstream_hostname": hostname,
+        "adopted_local_identity": bool(adoption.get("changed")),
+        "pull": pull_result,
+        "membership": {
+            "upstream": upstream_membership,
+            "local": local_membership,
+        },
+        "cluster_ssh": {
+            "upstream_fingerprint": remote_fingerprint,
+            "local_fingerprint": str(local_key.get("fingerprint") or ""),
+            "authorized_key_changed": bool(install_result.get("changed")),
+        },
+        "push": push_result,
+        "message": "Joined existing cluster through outbound SSH and pushed this master registration upstream.",
+    }
+
+
 async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
     """Initialize remote cluster identity for one known node."""
 
@@ -758,6 +1486,11 @@ async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> di
     pool = getattr(monitor, "pool", None) if monitor else None
     if not pool:
         raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
+
+    role = _cluster_role_from_monitor_role(node.get("role"))
+    pbrun_stop_result: dict[str, Any] | None = None
+    if role == "vps":
+        pbrun_stop_result = await _stop_remote_pbrun_for_join(pool, hostname, node)
 
     command = _cluster_join_command(
         str(node.get("remote_pbgui_dir") or ""),
@@ -788,6 +1521,13 @@ async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> di
         raise HTTPException(status_code=409, detail="Remote joined a different cluster_id")
     if remote_node_id != node_id:
         raise HTTPException(status_code=409, detail="Remote joined a different node_id")
+    try:
+        completion = await _complete_remote_join_sync(node, identity)
+    except HTTPException as exc:
+        completion = {"ok": False, "status_code": exc.status_code, "error": str(exc.detail)}
+    except Exception as exc:
+        _log(SERVICE, f"Remote post-join sync failed for {hostname}: {exc}", level="ERROR")
+        completion = {"ok": False, "error": str(exc)}
     return {
         "ok": True,
         "node_id": node_id,
@@ -795,6 +1535,8 @@ async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> di
         "remote_cluster_id": remote_cluster_id,
         "remote_node_id": remote_node_id,
         "role": payload.get("role") if isinstance(payload, dict) else node.get("role"),
+        "pbrun_stopped": bool(pbrun_stop_result),
+        "completion": completion,
     }
 
 
@@ -2142,6 +2884,27 @@ async def get_remote_status(session: SessionToken = Depends(require_auth)) -> di
     }
 
 
+@router.post("/self-join")
+async def self_join_existing_cluster(
+    request: Request,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Join this master to an existing cluster through an outbound SSH connection."""
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from exc
+    settings = _validate_self_join_payload(payload)
+    try:
+        return await _self_join_existing_cluster(settings)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log(SERVICE, f"Self-join failed for {settings.get('hostname')}: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Self-join failed") from exc
+
+
 @router.post("/remote-join/{node_id}")
 async def join_remote_identity(node_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Write a known cluster identity to one uninitialized remote node."""
@@ -2220,12 +2983,14 @@ async def materialize_remote_v7_configs(node_id: str, session: SessionToken = De
         raise HTTPException(status_code=404, detail="Cluster node not found")
     await _require_remote_state_current(node, snapshot["identity"], snapshot)
     result = await _run_remote_materialize_command(node, snapshot["identity"], "materialize-v7", timeout=120)
+    pbrun_start = await _maybe_start_remote_pbrun_after_materialization(node, snapshot["identity"])
     return {
         "ok": True,
         "node_id": str(node.get("node_id") or ""),
         "hostname": str(node.get("pbname") or node.get("hostname") or ""),
         "materialization": result,
-        "message": "Remote V7 configs materialized. No files were deleted and no bots were started or stopped.",
+        "pbrun_start": pbrun_start,
+        "message": "Remote V7 configs materialized.",
     }
 
 
@@ -2240,12 +3005,14 @@ async def materialize_remote_api_keys(node_id: str, session: SessionToken = Depe
         raise HTTPException(status_code=404, detail="Cluster node not found")
     await _require_remote_state_current(node, snapshot["identity"], snapshot)
     result = await _run_remote_materialize_command(node, snapshot["identity"], "materialize-api-keys", timeout=60)
+    pbrun_start = await _maybe_start_remote_pbrun_after_materialization(node, snapshot["identity"])
     return {
         "ok": True,
         "node_id": str(node.get("node_id") or ""),
         "hostname": str(node.get("pbname") or node.get("hostname") or ""),
         "materialization": result,
-        "message": "Remote api-keys.json materialized. No bots were restarted.",
+        "pbrun_start": pbrun_start,
+        "message": "Remote api-keys.json materialized.",
     }
 
 
