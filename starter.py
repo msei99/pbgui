@@ -13,6 +13,7 @@ SYSTEMD_UNITS = {
     'PBCluster': 'pbgui-pbcluster.service',
     'PBCoinData': 'pbgui-pbcoindata.service',
 }
+STARTER_COMMANDS = ['PBRun', 'PBCluster', 'PBCoinData', 'PBRemote']
 
 
 def _systemd_env():
@@ -105,13 +106,16 @@ def main():
     group.add_argument('-s', '--start', action='store_true', help='Start')
     group.add_argument('-k', '--stop', action='store_true', help='Stop')
     group.add_argument('-r', '--restart', action='store_true', help='Restart')
-    parser.add_argument('command', choices=['PBRun', 'PBCluster', 'PBCoinData'], nargs='+')
+    parser.add_argument('command', choices=STARTER_COMMANDS, nargs='+')
 
     args = parser.parse_args()
     action = 'start' if args.start else 'stop' if args.stop else 'restart'
     failed = False
 
     for service in args.command:
+        if service == 'PBRemote':
+            print('Skip removed legacy PBRemote service')
+            continue
         handled, ok = _systemd_action(service, action)
         if handled:
             if not ok:
