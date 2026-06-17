@@ -106,6 +106,19 @@ async def _restart_block_state() -> tuple[bool, str]:
     return restart_blocked, restart_block_reason
 
 
+def _local_master_name() -> str:
+    """Return the configured local PBGui master name for UI chrome."""
+
+    configured = str(load_ini("main", "pbname") or "").strip()
+    if configured:
+        return configured
+    try:
+        hostname = str(os.uname().nodename or "").strip()
+    except Exception:
+        hostname = ""
+    return hostname or "local"
+
+
 def _systemd_user_env() -> dict[str, str]:
     """Return an environment that can talk to the current user's systemd manager."""
     env = os.environ.copy()
@@ -1118,6 +1131,7 @@ async def server_status(session: SessionToken = Depends(require_auth)):
         "current_serial": current_serial,
         "restart_blocked": restart_blocked,
         "restart_block_reason": restart_block_reason,
+        "master_name": _local_master_name(),
     }
 
 

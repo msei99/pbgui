@@ -28,6 +28,7 @@
       apiBase:  c.apiBase  !== undefined ? c.apiBase  : (window.API_BASE || ''),
       version:  c.version  !== undefined ? c.version  : (window.PBGUI_VERSION || ''),
       serial:   c.serial   !== undefined ? c.serial   : (window.PBGUI_SERIAL  || ''),
+      masterName: c.masterName !== undefined ? c.masterName : (window.PBGUI_MASTER_NAME || ''),
       subtitle: c.subtitle || 'PBGui',
       current:  c.current  || ''
     };
@@ -113,6 +114,13 @@
 
     '#nav-right{display:flex;align-items:center;gap:0.25rem;padding-right:0.5rem;}',
     '.nav-divider{width:1px;height:18px;background:#1e2736;margin:0 0.15rem;}',
+    '#pbgui-master-pill{display:none;align-items:center;gap:0.35rem;max-width:240px;height:30px;',
+    'padding:0 0.65rem;border:1px solid rgba(99,179,237,.22);border-radius:999px;',
+    'background:rgba(99,179,237,.06);color:#cbd5e1;font-size:var(--fs-sm);white-space:nowrap;}',
+    '#pbgui-master-pill.visible{display:inline-flex;}',
+    '.pbgui-master-label{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#64748b;}',
+    '#pbgui-master-name{overflow:hidden;text-overflow:ellipsis;color:#e2e8f0;font-weight:600;}',
+    '@media(max-width:920px){#pbgui-master-pill{display:none!important;}}',
     '.nav-action-btn{display:flex;align-items:center;gap:0.35rem;padding:0.3rem 0.75rem;',
     'border-radius:6px;background:transparent;border:1px solid transparent;',
     'color:#64748b;font-size:var(--fs-sm);font-weight:500;cursor:pointer;',
@@ -314,6 +322,7 @@
     /* spacer + right buttons */
     html += '<div id="nav-spacer"></div>';
     html += '<div id="nav-right">'
+          + '<span id="pbgui-master-pill"><span class="pbgui-master-label">Master</span><span id="pbgui-master-name"></span></span>'
           + '<button class="nav-action-btn restart" id="pbgui-restart-btn"><span class="nav-restart-dot"></span>Restart</button>'
           + '<button class="nav-action-btn notify" id="pbgui-notify-btn" title="Notification log">&#128276;</button>'
           + '<span class="nav-divider" aria-hidden="true"></span>'
@@ -330,6 +339,23 @@
           + '</div>';
 
     nav.innerHTML = html;
+    updateMasterName(c.masterName);
+  }
+
+  function updateMasterName(name) {
+    var pill = document.getElementById('pbgui-master-pill');
+    var value = document.getElementById('pbgui-master-name');
+    if (!pill || !value) return;
+    var masterName = String(name || '').trim();
+    if (!masterName) {
+      value.textContent = '';
+      pill.title = '';
+      pill.classList.remove('visible');
+      return;
+    }
+    value.textContent = masterName;
+    pill.title = 'Master: ' + masterName;
+    pill.classList.add('visible');
   }
 
   /* ════════════════════════════════════
@@ -1229,6 +1255,7 @@
   }
 
   function updateRestartButtonState(state) {
+    if (state && state.master_name !== undefined) updateMasterName(state.master_name);
     var btn = document.getElementById('pbgui-restart-btn');
     if (!btn) return;
     var visible = !!(state && state.needs_restart);

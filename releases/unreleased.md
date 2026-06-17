@@ -6,6 +6,7 @@
 - Cluster Sync: automatically creates dedicated PBCluster SSH keys, installs restricted forced-command keys during normal VPS PBGui setup/update, and prevents VPS nodes from initiating peer SSH unless explicit peers are configured.
 - Cluster Sync: added configurable per-node outbound peer allowlists, Cluster SSH key status in the node table, and a Repair SSH action that reads remote public keys back into cluster metadata and installs required peer keys.
 - Cluster Sync: fixed the Guide button on the Cluster page so it opens the Cluster Sync topic in the inline help overlay instead of navigating away to the Help overview.
+- Navigation: show the configured local master name in the shared top navigation bar.
 - VPS Manager: added PBCluster to remote service monitoring and VPS systemd migration checks, show remote PBGui service states in VPS detail/change views, and sync new PBGui systemd units during normal PBGui update/branch-switch actions.
 - VPS Monitor: treat PBCluster as alertable only for nodes with Cluster Sync enabled, silently clear false PBCluster alerts from Sync Off nodes, and prevent PBCluster auto-restart from creating legacy starter.py processes.
 - VPS Manager: resolve PBCluster in the remote Host Log Viewer to `data/logs/PBCluster.log` so joined hosts show the service log again.
