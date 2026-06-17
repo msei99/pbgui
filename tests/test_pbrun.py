@@ -585,96 +585,58 @@ class TestDynamicIgnoreHardening:
         assert save_calls["count"] == 1
 
 
-class TestCommandFileGuard:
-    """Tests for malformed command file guard and quarantine behavior."""
+class TestV7RuntimeSignature:
+    """Tests for direct Cluster/run_v7 polling without status_v7.json."""
 
     @staticmethod
-    def _make_pbrun_stub(tmp_path):
+    def _make_pbrun_stub(tmp_path: Path):
         run = PBRun_mod.PBRun.__new__(PBRun_mod.PBRun)
-        run.cmd_path = str(tmp_path / "cmd")
-        Path(run.cmd_path).mkdir(parents=True, exist_ok=True)
-        run.failed_cmd_path = Path(run.cmd_path) / "failed"
-        run.failed_cmd_path.mkdir(parents=True, exist_ok=True)
-        run._bad_cmd_failures = {}
-        run._bad_cmd_quarantine_after = 3
-
-        run.v7_path = str(tmp_path / "run_v7")
-        run.multi_path = str(tmp_path / "multi")
-        run.single_path = str(tmp_path / "single")
-
-        run.update_from_status = lambda *_args, **_kwargs: None
-        run.update_from_status_single = lambda *_args, **_kwargs: None
-        run.update_from_status_v7 = lambda *_args, **_kwargs: None
-
-        run.update_activate_v7 = lambda *_args, **_kwargs: None
-        run.update_activate = lambda *_args, **_kwargs: None
-        run.update_activate_single = lambda *_args, **_kwargs: None
-        run.watch_v7 = lambda *_args, **_kwargs: None
-        run.watch_multi = lambda *_args, **_kwargs: None
-        run.watch_single = lambda *_args, **_kwargs: None
-
+        run.pbgdir = tmp_path
+        run.v7_path = str(tmp_path / "data" / "run_v7")
+        run.run_v7 = []
+        run._v7_runtime_signature = None
         return run
 
-    def test_invalid_update_status_command_quarantined_after_three_attempts(self, tmp_path):
-        """Malformed update_status command file should be quarantined after 3 failed parses."""
+    def test_cluster_desired_state_change_triggers_rescan(self, tmp_path):
+        """PBRun should rescan when Cluster desired_state.json changes."""
+
         run = self._make_pbrun_stub(tmp_path)
+        calls = []
+        run.watch_v7 = lambda: calls.append("watch")
 
-        bad_file = Path(run.cmd_path) / "update_status_bad.cmd"
-        bad_file.write_text("{broken json", encoding="utf-8")
+        assert run.has_v7_runtime_changed() is False
+        cluster_root = default_cluster_root(tmp_path)
+        ensure_local_identity(cluster_root, pbname="runner-a")
+        (cluster_root / "desired_state.json").write_text(json.dumps({"instances": {}}), encoding="utf-8")
 
-        run.has_update_status()
-        assert bad_file.exists(), "File should remain for retry after first failure"
-        assert not list(run.failed_cmd_path.glob("update_status_bad*.cmd"))
+        assert run.has_v7_runtime_changed() is True
+        assert calls == ["watch"]
 
-        run.has_update_status()
-        assert bad_file.exists(), "File should remain for retry after second failure"
-        assert not list(run.failed_cmd_path.glob("update_status_bad*.cmd"))
+    def test_run_v7_config_change_triggers_rescan(self, tmp_path):
+        """PBRun should rescan when local materialized V7 configs change."""
 
-        run.has_update_status()
-        assert not bad_file.exists(), "File should be moved away after third failure"
-        quarantined = list(run.failed_cmd_path.glob("update_status_bad.failed_*.cmd"))
-        assert len(quarantined) == 1, "Expected exactly one quarantined update_status command file"
-        assert str(bad_file) not in run._bad_cmd_failures, "Failure counter should be cleared after quarantine"
+        run = self._make_pbrun_stub(tmp_path)
+        calls = []
+        run.watch_v7 = lambda: calls.append("watch")
 
+        assert run.has_v7_runtime_changed() is False
+        _write_v7_config(tmp_path / "data" / "run_v7" / "bot-a")
 
-class TestActivateTimestampUpdates:
-    """Tests for robust activate timestamp persistence and in-memory sync."""
+        assert run.has_v7_runtime_changed() is True
+        assert calls == ["watch"]
 
-    @staticmethod
-    def _make_pbrun_stub():
-        run = PBRun_mod.PBRun.__new__(PBRun_mod.PBRun)
-        run.activate_v7_ts = 0
-        run.instances_status_v7 = SimpleNamespace(activate_ts=0)
-        return run
+    def test_watch_v7_removes_deleted_local_instance(self, tmp_path):
+        """Full scans should stop and forget runtime entries whose config dir vanished."""
 
-    @pytest.mark.parametrize(
-        "method_name,key,attr,status_attr",
-        [
-            ("update_activate_v7", "activate_v7_ts", "activate_v7_ts", "instances_status_v7"),
-        ],
-    )
-    def test_update_activate_persists_main_section_and_syncs_status(self, tmp_path, monkeypatch, method_name, key, attr, status_attr):
-        """update_activate* should create [main] if missing and sync both object + status timestamps."""
-        monkeypatch.chdir(tmp_path)
-        Path("pbgui.ini").write_text("[other]\nfoo=bar\n", encoding="utf-8")
+        run = self._make_pbrun_stub(tmp_path)
+        stopped = []
+        existing = SimpleNamespace(path=str(tmp_path / "data" / "run_v7" / "deleted"), stop=lambda: stopped.append("deleted"))
+        run.run_v7 = [existing]
 
-        run = self._make_pbrun_stub()
-        method = getattr(run, method_name)
-        method()
+        run.watch_v7()
 
-        cfg_text = Path("pbgui.ini").read_text(encoding="utf-8")
-        assert "[main]" in cfg_text
-
-        import configparser
-
-        cfg = configparser.ConfigParser()
-        cfg.read("pbgui.ini")
-        assert cfg.has_option("main", key), f"Expected {key} to be persisted in pbgui.ini"
-
-        ts_value = int(cfg.get("main", key))
-        assert ts_value > 0
-        assert getattr(run, attr) == ts_value
-        assert getattr(getattr(run, status_attr), "activate_ts") == ts_value
+        assert stopped == ["deleted"]
+        assert run.run_v7 == []
 
 
 class TestGitHardening:
@@ -1053,21 +1015,19 @@ class TestDynamicIgnoreStartupGate:
                 pass
 
         run = PBRun_mod.PBRun.__new__(PBRun_mod.PBRun)
-        run.instances_status_v7 = PBRun_mod.InstancesStatus(str(tmp_path / "status_v7.json"))
         run.run_v7 = []
         run.v7_path = str(tmp_path / "data" / "run_v7")
         run.pbgdir = str(tmp_path)
         run.pb7dir = str(tmp_path / "pb7")
         run.pb7venv = "/usr/bin/python3"
         run.name = "test-vps"
+        run._v7_runtime_signature = None
 
         monkeypatch.setattr(PBRun_mod, "RunV7", FakeRunV7)
 
         run.watch_v7([str(instance_dir)])
 
-        status = run.instances_status_v7.find_name("bot-a")
-        assert status is not None
-        assert status.running is False
+        assert len(run.run_v7) == 1
         assert run.run_v7[0].start_calls == 1
 
     def test_load_versions_keeps_defaults_when_files_missing_or_no_match(self, tmp_path):
@@ -1278,31 +1238,6 @@ class TestClusterDesiredStateGate:
         assert rv7.cluster_blocked is True
         assert rv7.cluster_gate == "desired_stopped"
         assert (Path(rv7.path) / "running_version.txt").read_text(encoding="utf-8") == "0"
-
-    def test_instance_status_persists_cluster_block_fields(self, tmp_path):
-        """InstancesStatus should round-trip cluster block metadata."""
-
-        status_path = tmp_path / "status_v7.json"
-        statuses = PBRun_mod.InstancesStatus(str(status_path))
-        item = PBRun_mod.InstanceStatus()
-        item.name = "bot-a"
-        item.version = 3
-        item.multi = False
-        item.enabled_on = "test-vps"
-        item.running = False
-        item.blocked = True
-        item.blocked_reason = "Cluster desired state is not running"
-        item.cluster_gate = "desired_stopped"
-        statuses.add(item)
-
-        statuses.save()
-        loaded = PBRun_mod.InstancesStatus(str(status_path)).find_name("bot-a")
-
-        assert loaded is not None
-        assert loaded.blocked is True
-        assert loaded.blocked_reason == "Cluster desired state is not running"
-        assert loaded.cluster_gate == "desired_stopped"
-
 
 class TestClusterBootSyncWait:
     """Tests for PBRun's non-fatal PBCluster boot sync wait."""

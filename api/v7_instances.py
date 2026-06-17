@@ -1,15 +1,14 @@
 """
-FastAPI router for v7 instance list + SSH activate.
+FastAPI router for v7 instance list and cluster materialization state.
 
 Endpoints:
     GET    /instances                   → list all v7 instances with sync status
-    POST   /activate/{name}             → SSH-push config + activate_cmd to all VPS
-    POST   /activate-all                → SSH-push all instances that need activation
-    DELETE /instances/{name}             → backup + delete instance locally + on VPS
+    POST   /activate-all                → mark instances that need cluster materialization
+    DELETE /instances/{name}             → backup + delete instance locally + record tombstone
     GET    /backups                      → list all instance backups
     POST   /backups/{name}/{timestamp}/draft → load backup as editor draft
-    POST   /restore/{name}/{timestamp}   → restore/rollback instance from backup + SSH activate
-    POST   /instances/{name}/forced-mode → set global PB7 forced mode + SSH activate
+    POST   /restore/{name}/{timestamp}   → restore/rollback instance from backup
+    POST   /instances/{name}/forced-mode → set global PB7 forced mode
     DELETE /backups/{name}/{timestamp}    → delete a specific backup
     GET    /main_page                    → serve the standalone HTML page
 """
@@ -23,7 +22,6 @@ import os
 import platform
 import shutil
 import time
-import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -45,16 +43,7 @@ from master.cluster_state import (
     rebuild_materialized_state,
 )
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config, strip_pbgui_param_status
-from master.async_pool import (
-    SFTP_RETRY_ATTEMPTS,
-    SFTP_RETRY_DELAY,
-    _is_transient_error,
-    remote_path_join,
-    remote_shell_path,
-)
-from pbgui_purefunc import (PBGDIR, STATUS_V7_FILE, SYNC_EXCLUDE_FILES,
-                             update_status_v7 as _update_status_v7,
-                             get_syncable_files as _get_syncable_files)
+from pbgui_purefunc import PBGDIR
 
 SERVICE = "V7Instances"
 LEGACY_V7_API_SSH_SYNC_DISABLED = True
@@ -77,14 +66,12 @@ _CLUSTER_HOST_NODE_IDS_FILE = "host_node_ids.json"
 # ── Injected at startup ─────────────────────────────────────
 
 _monitor = None  # VPSMonitor
-_v7_sync = None  # V7ConfigSyncWorker
 
 
-def init(monitor, v7_sync=None):
+def init(monitor):
     """Called by PBApiServer lifespan to inject shared objects."""
-    global _monitor, _v7_sync
+    global _monitor
     _monitor = monitor
-    _v7_sync = v7_sync
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -738,158 +725,24 @@ async def _ensure_target_runtime_compatible(name: str, cfg: dict) -> None:
         raise HTTPException(status_code=409, detail=detail)
 
 
-# ── SSH Sync ─────────────────────────────────────────────────
+# ── Cluster Sync Handoff ─────────────────────────────────────
 
 async def _ssh_sync_instance(name: str) -> dict:
-    """Update status_v7.json + push config files via SFTP to all VPS.
-
-    This replaces the old activate_*.cmd mechanism. PBRun on VPS polls
-    status_v7.json for mtime changes and rescans accordingly.
-    """
+    """Return the legacy activation payload without remote SSH writes."""
     config_path = Path(f"{PBGDIR}/data/run_v7/{name}/config.json")
     if not config_path.is_file():
         return {"name": name, "error": f"Config not found: {name}"}
-    if LEGACY_V7_API_SSH_SYNC_DISABLED:
-        _log(SERVICE, f"Skipped legacy V7 SSH sync for '{name}': {LEGACY_V7_API_SSH_SYNC_DISABLED_REASON}")
-        return {
-            "name": name,
-            "local": True,
-            "hosts": {},
-            "ok": 0,
-            "failed": 0,
-            "disabled": True,
-            "reason": LEGACY_V7_API_SSH_SYNC_DISABLED_REASON,
-        }
-
-    try:
-        cfg_for_schema_check = json.loads(config_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        return {"name": name, "error": f"Could not read config for schema check: {exc}"}
-    incompatibility = await _target_schema_incompatibility_detail(name, cfg_for_schema_check)
-    if incompatibility:
-        return {
-            "name": name,
-            "error": incompatibility,
-            "schema_incompatible": True,
-            "ok": 0,
-            "failed": 0,
-        }
-    incompatibility = await _target_dynamic_ignore_incompatibility_detail(name, cfg_for_schema_check)
-    if incompatibility:
-        return {
-            "name": name,
-            "error": incompatibility,
-            "runtime_incompatible": True,
-            "ok": 0,
-            "failed": 0,
-        }
-
-    # 1) Update local status_v7.json (bumps per-instance activate_ts)
-    _update_status_v7(name)
-
-    # 2) Gather all syncable config files for this instance
-    sync_files = _get_syncable_files(name)
-    if not sync_files:
-        return {"name": name, "error": "No config files to sync"}
-
-    # 3) Read status_v7.json content for pushing
-    status_content = STATUS_V7_FILE.read_bytes() if STATUS_V7_FILE.is_file() else None
-
-    if not _monitor or not _monitor.pool:
-        return {"name": name, "local": True,
-                "hosts": {}, "ok": 0, "failed": 0}
-
-    pool = _monitor.pool
-    connected = pool.connected_hosts()
-    if not connected:
-        return {"name": name, "local": True,
-                "hosts": {}, "ok": 0, "failed": 0}
-
-    results = {}
-
-    async def push_to_host(hostname: str):
-        for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
-            sftp = await pool._open_sftp(hostname)
-            if not sftp:
-                return {"success": False, "error": "SFTP failed"}
-
-            try:
-                remote_pbgui_dir = pool.get_remote_pbgui_dir(hostname)
-                remote_inst_dir = remote_path_join(remote_pbgui_dir, "data", "run_v7", name)
-                remote_cmd_dir = remote_path_join(remote_pbgui_dir, "data", "cmd")
-
-                # Ensure dirs exist
-                try:
-                    await sftp.makedirs(remote_inst_dir, exist_ok=True)
-                except Exception:
-                    pass
-                try:
-                    await sftp.makedirs(remote_cmd_dir, exist_ok=True)
-                except Exception:
-                    pass
-
-                # Write all config files
-                for filename, content in sync_files:
-                    async with sftp.open(
-                            f"{remote_inst_dir}/{filename}", "wb") as f:
-                        await f.write(content)
-
-                # Write status_v7.json
-                if status_content:
-                    async with sftp.open(
-                            f"{remote_cmd_dir}/status_v7.json", "wb") as f:
-                        await f.write(status_content)
-
-                return {"success": True}
-            except Exception as e:
-                if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
-                    _log("SSH", f"SSH sync {name} → {hostname} "
-                         f"failed (attempt {attempt}): {e} — retrying",
-                         level="WARNING")
-                    await asyncio.sleep(SFTP_RETRY_DELAY)
-                    continue
-                _log("SSH", f"SSH sync {name} → {hostname} failed: {e}",
-                     level="ERROR", meta={"traceback": traceback.format_exc()})
-                return {"success": False, "error": str(e)}
-            finally:
-                sftp.exit()
-        return {"success": False, "error": "All retry attempts failed"}
-
-    # Push to all connected hosts in parallel
-    tasks = {h: push_to_host(h) for h in connected}
-    raw = await asyncio.gather(*tasks.values(), return_exceptions=True)
-    for hostname, result in zip(tasks.keys(), raw):
-        if isinstance(result, Exception):
-            results[hostname] = {"success": False, "error": str(result)}
-        else:
-            results[hostname] = result
-
-    ok = sum(1 for r in results.values() if r.get("success"))
-    fail = len(results) - ok
-    _log("SSH", f"SSH sync '{name}': {ok}/{len(results)} hosts OK"
-         + (f", {fail} failed" if fail else ""), level="WARNING" if fail else "DEBUG")
-
-    # Schedule a delayed collect on the enabled_on host as fallback
-    if ok > 0 and _monitor:
-        try:
-            cfg = json.loads(config_path.read_bytes())
-            enabled_on = cfg.get("pbgui", {}).get("enabled_on", "")
-        except (json.JSONDecodeError, ValueError):
-            enabled_on = ""
-        if enabled_on and enabled_on != "disabled":
-            async def _delayed_collect(host: str):
-                await asyncio.sleep(8)
-                try:
-                    await _monitor.collect_instances_now(host)
-                except Exception:
-                    pass
-            asyncio.create_task(
-                _delayed_collect(enabled_on),
-                name=f"v7-delayed-collect-{enabled_on}",
-            )
-
-    return {"name": name, "local": True,
-            "hosts": results, "ok": ok, "failed": fail}
+    _log(SERVICE, f"Skipped legacy V7 remote write for '{name}': {LEGACY_V7_API_SSH_SYNC_DISABLED_REASON}")
+    return {
+        "name": name,
+        "local": True,
+        "hosts": {},
+        "ok": 0,
+        "failed": 0,
+        "disabled": True,
+        "cluster_sync": True,
+        "reason": LEGACY_V7_API_SSH_SYNC_DISABLED_REASON,
+    }
 
 
 # ── Endpoints ────────────────────────────────────────────────
@@ -1007,7 +860,7 @@ async def activate_instance(
     name: str,
     session: SessionToken = Depends(require_auth),
 ):
-    """Sync config files + status_v7.json to all VPS for a single instance."""
+    """Update local status metadata and return the cluster handoff result."""
     config_path = Path(f"{PBGDIR}/data/run_v7/{name}/config.json")
     if not config_path.is_file():
         raise HTTPException(status_code=404, detail=f"Instance '{name}' not found")
@@ -1017,7 +870,7 @@ async def activate_instance(
 
 @router.post("/activate-all")
 async def activate_all(session: SessionToken = Depends(require_auth)):
-    """SSH-push all instances that need activation."""
+    """Mark all locally outdated instances for cluster materialization."""
     instances = _load_local_instances()
     instances = _enrich_with_vps_data(instances)
 
@@ -1044,7 +897,7 @@ async def set_instance_forced_mode(
     body: dict = Body(...),
     session: SessionToken = Depends(require_auth),
 ):
-    """Set global PB7 forced mode for all long and short positions, then sync."""
+    """Set global PB7 forced mode for all long and short positions."""
     _validate_name(name)
     requested = str(body.get("mode") or "").strip().lower()
     if requested == "panic":
@@ -1093,7 +946,6 @@ async def set_instance_forced_mode(
         raise HTTPException(status_code=500, detail=f"Could not save config for '{name}': {exc}") from exc
 
     _record_cluster_config_upsert(name, instance_dir, cfg, parent_version=old_version)
-    _update_status_v7(name)
     sync_result = await _ssh_sync_instance(name)
     _log(SERVICE, f"Set forced mode '{label}' for all positions on '{name}' (v{cfg['pbgui']['version']})", level="WARNING")
     return {
@@ -1111,7 +963,7 @@ async def delete_instance(
     name: str,
     session: SessionToken = Depends(require_auth),
 ):
-    """Delete a v7 instance locally and on all connected VPS hosts."""
+    """Delete a v7 instance locally and record the cluster tombstone."""
     # Sanitise name — must be a plain directory name, no path traversal
     if not name or "/" in name or "\\" in name or name in (".", ".."):
         raise HTTPException(status_code=400, detail="Invalid instance name")
@@ -1151,92 +1003,15 @@ async def delete_instance(
 
     _log(SERVICE, f"Deleted instance '{name}' locally")
 
-    # 3) Remove from status_v7.json and push to all VPS
+    # 3) Record the Cluster tombstone; PBRun polls Cluster/run_v7 state locally.
     _record_cluster_instance_delete(name, deleted_version)
-    _update_status_v7(name, remove=True)
-    status_content = STATUS_V7_FILE.read_bytes() if STATUS_V7_FILE.is_file() else None
-
-    vps_results = {}
-    if _monitor and _monitor.pool:
-        pool = _monitor.pool
-        connected = pool.connected_hosts()
-
-        async def delete_on_host(hostname: str):
-            for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
-                try:
-                    remote_pbgui_dir = pool.get_remote_pbgui_dir(hostname)
-                    remote_dir = remote_path_join(remote_pbgui_dir, "data", "run_v7", name)
-                    # Remove instance directory
-                    result = await pool.run(
-                        hostname,
-                        f"rm -rf {remote_shell_path(remote_dir)}",
-                        timeout=15,
-                    )
-                    if result is None:
-                        return {"success": False, "error": "Not connected"}
-
-                    # Push updated status_v7.json (instance removed)
-                    if status_content:
-                        sftp = await pool._open_sftp(hostname)
-                        if sftp:
-                            try:
-                                remote_cmd_dir = remote_path_join(remote_pbgui_dir, "data", "cmd")
-                                try:
-                                    await sftp.makedirs(
-                                        remote_cmd_dir, exist_ok=True)
-                                except Exception:
-                                    pass
-                                async with sftp.open(
-                                        f"{remote_cmd_dir}/status_v7.json",
-                                        "wb") as f:
-                                    await f.write(status_content)
-                            finally:
-                                sftp.exit()
-
-                    return {"success": True}
-                except Exception as e:
-                    if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
-                        _log(SERVICE, f"SSH delete {name} → {hostname} "
-                             f"attempt {attempt} failed: {e} — retrying",
-                             level="WARNING")
-                        await asyncio.sleep(SFTP_RETRY_DELAY)
-                        continue
-                    _log(SERVICE, f"SSH delete {name} → {hostname} failed: {e}",
-                         level="ERROR", meta={"traceback": traceback.format_exc()})
-                    return {"success": False, "error": str(e)}
-            return {"success": False, "error": "All retry attempts failed"}
-
-        tasks = {h: delete_on_host(h) for h in connected}
-        raw = await asyncio.gather(*tasks.values(), return_exceptions=True)
-        for hostname, result in zip(tasks.keys(), raw):
-            if isinstance(result, Exception):
-                vps_results[hostname] = {"success": False, "error": str(result)}
-            else:
-                vps_results[hostname] = result
-
-        ok = sum(1 for r in vps_results.values() if r.get("success"))
-        fail = len(vps_results) - ok
-        _log(SERVICE, f"SSH delete '{name}': {ok}/{len(vps_results)} hosts OK"
-             + (f", {fail} failed" if fail else ""), level="INFO")
-
-        # 4) Delayed collect so UI refreshes
-        if ok > 0:
-            async def _delayed_collect():
-                await asyncio.sleep(3)
-                for h in connected:
-                    try:
-                        await _monitor.collect_instances_now(h)
-                    except Exception:
-                        pass
-            asyncio.create_task(
-                _delayed_collect(),
-                name=f"v7-delete-collect-{name}",
-            )
 
     return {
         "ok": True,
         "name": name,
-        "hosts": vps_results,
+        "hosts": {},
+        "cluster_sync": True,
+        "reason": LEGACY_V7_API_SSH_SYNC_DISABLED_REASON,
     }
 
 
@@ -1492,7 +1267,7 @@ async def restore_instance(
         + (f" as version {restored_version}" if restored_version is not None else ""),
     )
 
-    # Push restored config to all VPS
+    # Return a legacy activation payload; PBCluster owns remote materialization.
     result = await _ssh_sync_instance(name)
     return {
         "ok": True,
@@ -1654,8 +1429,7 @@ async def save_instance_config(
       - Sets backtest.exchange from user→exchange mapping
       - Creates versioned backup before overwriting
       - Atomic write via temp-file rename
-      - Updates status_v7.json
-      - Triggers SSH sync to all VPS
+      - Records PBCluster desired state for remote materialization
     """
     _validate_name(name)
     body = await request.json()
@@ -1798,10 +1572,7 @@ async def save_instance_config(
         allow_tombstone_recreate=backup_src_dir is not None,
     )
 
-    # Update status_v7.json
-    _update_status_v7(name)
-
-    # Trigger SSH sync
+    # Return a legacy sync payload; PBCluster owns remote materialization.
     sync_result = await _ssh_sync_instance(name)
 
     _log(SERVICE, f"Saved config for '{name}' (v{version})")

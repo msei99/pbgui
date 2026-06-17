@@ -2925,7 +2925,6 @@
   </div>
 
   <script src='/app/js/log_viewer_panel.js?v=24'></script>
-  <script src="/app/js/api_sync_status.js?v=2"></script>
   <script>
     const TOKEN = "%%TOKEN%%";
     const API_BASE = "%%API_BASE%%";
@@ -3939,12 +3938,8 @@
         });
       }
       if (store.view === 'overview' || isOverviewSettingsView() || isDeploysView()) {
-        const apiButtonModel = getOverviewApiSyncButtonModel();
         return stableStringify({
           view: store.view,
-          api_sync_text: apiButtonModel.text,
-          api_sync_class: apiButtonModel.statusClass,
-          api_sync_title: apiButtonModel.title,
           selected_hosts: getSelectedOverviewHosts(),
           vps_deploy: (((store.state || {}).config || {}).vps_deploy) || null,
           vps_logging: (((store.state || {}).config || {}).vps_logging) || null,
@@ -4188,16 +4183,6 @@
       return esc(text);
     }
 
-    function getDetailApiSyncLabel(summary) {
-      if (!summary || summary.nav !== 'vps') return summary && summary.nav === 'master' ? 'local' : '-';
-      const hostname = String(summary.hostname || '');
-      const syncState = (window.overviewApiSyncController && window.overviewApiSyncController.state.syncInfo[hostname]) || {};
-      if (syncState.in_sync === true) return 'OK';
-      if (syncState.in_sync === false) return syncState.disconnected ? 'Out/off' : 'Out';
-      if (syncState.disconnected) return 'Off';
-      return '-';
-    }
-
     function computeUptime(startValue) {
       if (startValue == null || startValue === '') return null;
       let ts = null;
@@ -4253,7 +4238,6 @@
       const pb7Ver = String(summary.pb7 || '-');
       const pbguiBranch = String(summary.pbgui_branch || '-');
       const pb7Branch = String(summary.pb7_branch || '-');
-      const apiSync = getDetailApiSyncLabel(summary);
       const pbguiTone = getOverviewVersionTone(summary.pbgui_github, summary.pbgui);
       const pb7Tone = getOverviewVersionTone(summary.pb7_github, summary.pb7);
       const pbguiSub = getVersionStatusSub(pbguiBranch, summary.pbgui_github, pbguiTone);
@@ -4286,7 +4270,6 @@
         pb7Branch,
         pbguiSub,
         pb7Sub,
-        apiSync,
         pbguiTone,
         pb7Tone,
         tagsHtml: tags.join(''),
@@ -4316,10 +4299,6 @@
               <div class='system-metric-label'>Reboot</div>
               <div class='system-metric-value'><span class='dot ${model.reboot ? 'error' : 'ok'}' data-role='reboot-dot'></span><span data-role='reboot-value'>${model.reboot ? 'Required' : 'OK'}</span></div>
               <div class='system-metric-sub' data-role='reboot-sub'>${model.reboot ? 'kernel update pending' : 'system current'}</div>
-            </div>
-            <div class='system-metric'>
-              <div class='system-metric-label'>API Sync</div>
-              <div class='system-metric-value' data-role='api-sync'>${esc(model.apiSync)}</div>
             </div>
             <div class='system-metric'>
               <div class='system-metric-label' data-role='pbgui-label'>PBGui ${model.pbguiTone !== 'ok' && model.pbguiVer !== '-' ? '⚠' : ''}</div>
@@ -4355,7 +4334,6 @@
       const rebootDot = header.querySelector('[data-role="reboot-dot"]');
       const rebootValueNode = header.querySelector('[data-role="reboot-value"]');
       const rebootSubNode = header.querySelector('[data-role="reboot-sub"]');
-      const apiSyncNode = header.querySelector('[data-role="api-sync"]');
       const pbguiLabelNode = header.querySelector('[data-role="pbgui-label"]');
       const pbguiDot = header.querySelector('[data-role="pbgui-dot"]');
       const pbguiVerNode = header.querySelector('[data-role="pbgui-ver"]');
@@ -4365,7 +4343,7 @@
       const pb7VerNode = header.querySelector('[data-role="pb7-ver"]');
       const pb7BranchNode = header.querySelector('[data-role="pb7-branch"]');
 
-      if (!onlineDot || !hostnameNode || !tagsNode || !bootTimeNode || !updatesDot || !updatesCountNode || !rebootDot || !apiSyncNode || !pbguiLabelNode || !pbguiDot || !pbguiVerNode || !pbguiBranchNode || !pb7LabelNode || !pb7Dot || !pb7VerNode || !pb7BranchNode) {
+      if (!onlineDot || !hostnameNode || !tagsNode || !bootTimeNode || !updatesDot || !updatesCountNode || !rebootDot || !pbguiLabelNode || !pbguiDot || !pbguiVerNode || !pbguiBranchNode || !pb7LabelNode || !pb7Dot || !pb7VerNode || !pb7BranchNode) {
         container.innerHTML = renderSystemHeader(status, summary, isMaster, rtd);
         return;
       }
@@ -4381,7 +4359,6 @@
       setNodeClassNameIfChanged(rebootDot, 'dot ' + (model.reboot ? 'error' : 'ok'));
       setNodeTextIfChanged(rebootValueNode, model.reboot ? 'Required' : 'OK');
       setNodeTextIfChanged(rebootSubNode, model.reboot ? 'kernel update pending' : 'system current');
-      setNodeTextIfChanged(apiSyncNode, model.apiSync);
       setNodeTextIfChanged(pbguiLabelNode, 'PBGui ' + (model.pbguiTone !== 'ok' && model.pbguiVer !== '-' ? '⚠' : ''));
       setNodeClassNameIfChanged(pbguiDot, 'dot ' + model.pbguiTone);
       setNodeTextIfChanged(pbguiVerNode, model.pbguiVer);
@@ -7375,18 +7352,6 @@
       send({ cmd: 'refresh' });
     }
 
-    function getOverviewApiSyncButtonModel() {
-      if (!window.overviewApiSyncController) return { text: 'API Sync', title: '', statusClass: 'ok' };
-      return window.overviewApiSyncController.getButtonModel();
-    }
-
-    function startApiSync() {
-      if (!window.overviewApiSyncController) return;
-      window.overviewApiSyncController.quickSync().then(function () {
-        refreshState();
-      }).catch(function () {});
-    }
-
     function existingVpsImportPayload(includeLocalSudo) {
       const flow = store.importExistingVps || defaultExistingVpsImportState();
       const form = flow.form || {};
@@ -9473,7 +9438,6 @@
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>
           <button class='sb-btn info' type='button' onclick='saveAddVps()'>Save VPS</button>`;
       } else if (store.view === 'overview' || isOverviewSettingsView() || isDeploysView()) {
-        const apiModel = getOverviewApiSyncButtonModel();
         const selectedHosts = getSelectedOverviewHosts();
         const deployConfig = getVpsDeployConfig();
         const hasSelectedHosts = selectedHosts.length > 0;
@@ -9487,7 +9451,6 @@
             <button class='sb-icon-btn' type='button' title='Refresh' aria-label='Refresh' onclick='refreshState()'>↻</button>
             <button class='sb-icon-btn' type='button' title='Add VPS' aria-label='Add VPS' onclick='selectView("add")'>+</button>
           </div>
-          <button class='sb-status-btn ${apiModel.statusClass}' id='overview-api-sync-btn' type='button' title='${escAttr(apiModel.title || '')}' onclick='startApiSync()'>${esc(apiModel.text)}</button>
           <button class='sb-btn info' type='button' onclick='openExistingVpsImportPrompt()'>Import Existing VPS</button>
           ${store.view !== 'overview' ? `<button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>` : ''}
           <button class='${settingsBtnClass}' type='button' onclick='selectView("settings-vps-logging")'>Settings</button>
@@ -11454,16 +11417,18 @@
         return `<div class='empty-state'>No running PB7 instances reported.</div>`;
       }
       return `
-        <div class='notice warning'>Live monitor details are currently unavailable. Running PB7 instances are listed from status_v7.json.</div>
+        <div class='notice warning'>Live monitor details are currently unavailable. Running PB7 instances are listed from process and Cluster Sync telemetry.</div>
         <div class='stack'>
           ${items.map(function (item) {
+            const gate = item.cluster_gate || (item.blocked ? 'blocked' : 'running');
             return `
               <div class='branch-summary'>
                 <span class='tag warning'>Running</span>
                 <span class='pill'><strong>Name</strong> ${esc(item.name || '-')}</span>
                 <span class='pill'><strong>Config Version</strong> ${esc(item.version || '-')}</span>
                 <span class='pill'><strong>Enabled On</strong> ${esc(item.enabled_on || '-')}</span>
-                <span class='pill'><strong>Activated</strong> ${esc(item.activate_ts || '-')}</span>
+                <span class='pill'><strong>Cluster Gate</strong> ${esc(gate || '-')}</span>
+                ${item.blocked_reason ? `<span class='pill'><strong>Blocked</strong> ${esc(item.blocked_reason)}</span>` : ''}
               </div>`;
           }).join('')}
         </div>`;
@@ -11694,25 +11659,6 @@
 
     loadOverviewPrefs();
     restoreViewFromHash();
-    window.overviewApiSyncController = createApiSyncStatusController({
-      apiFetch: apiKeysFetch,
-      buildStreamUrl: function () {
-        return API_BASE.replace('/api/vps-manager', '/api/api-keys') + '/sync/ssh-status/stream?token=' + encodeURIComponent(TOKEN);
-      },
-      getButton: function () {
-        return document.getElementById('overview-api-sync-btn');
-      },
-      showToast: toast,
-      onStateChange: function () {
-        renderSidebarActions();
-        renderSidebarList();
-        if (store.view === 'overview' || store.view === 'master' || isVpsContextView()) {
-          refreshCurrentViewLive();
-        }
-      }
-    });
-    window.overviewApiSyncController.refresh().catch(function () {});
-    window.overviewApiSyncController.openStream();
     renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
     initSidebarResize();
     initAlertModalInteractions();

@@ -140,12 +140,13 @@ Cluster Sync also tracks `api-keys.json` updates.
 
 The desired state stores only metadata such as serial and payload hash. The API-key content is stored as restricted secret data and must not appear in logs or normal desired-state JSON.
 
-Installing API keys on a node uses the same safety steps as API Sync:
+Installing API keys on a node uses the Cluster Sync materialization safety steps:
 
-- create a backup
+- create a backup on master nodes when an existing file differs
+- skip local backups on VPS runner nodes
 - write the new file
 - verify the payload
-- restart only bots affected by changed credentials
+- do not restart bots or deploy other files
 
 ---
 
@@ -204,7 +205,7 @@ From the Preview window, **Push Missing Ops + Rebuild** is an explicit remote wr
 
 After operations and config blobs are synchronized, the Preview window also shows **V7 Config Materialization Preview**. **Materialize V7 Configs** is a separate explicit remote write that writes assigned, non-conflicted V7 JSON configs from verified config blobs into the remote `data/run_v7` directory. It refuses to run when the remote state-vector or desired state differs from local state, or when required blobs are missing or invalid. It skips configs assigned to other nodes, conflicted configs and tombstoned instances. It does not delete files, install API keys, deploy files, start bots or stop bots.
 
-The Preview window also shows **API-key Materialization Preview**. **Materialize API Keys** is a separate explicit remote write that installs `api-keys.json` from the replicated secret blob. It creates a backup first when an existing remote file differs, writes atomically, verifies the final hash and does not restart bots.
+The Preview window also shows **API-key Materialization Preview**. **Materialize API Keys** is a separate explicit remote write that installs `api-keys.json` from the replicated secret blob. Master nodes create a normal `data/api-keys/` backup first when an existing file differs; VPS runner nodes skip local backups. The write is atomic, verifies the final hash and does not restart bots.
 
 ---
 

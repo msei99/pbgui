@@ -387,17 +387,6 @@
         .backup-compare-table .backup-row.selected td:first-child {
             border-left: 3px solid #26a69a;
         }
-        .ssh-row {
-            cursor: pointer;
-        }
-        .ssh-row:hover {
-            background: rgba(255,255,255,0.03);
-        }
-        .ssh-row.selected {
-            background: rgba(77,166,255,.12);
-            box-shadow: inset 3px 0 0 #26a69a;
-        }
-
         /* Toast notifications (success only) */
         .toast {
             position: fixed;
@@ -597,7 +586,6 @@
         .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
     </style>
     <script src="/app/js/log_viewer_panel.js?v=24"></script>
-    <script src="/app/js/api_sync_status.js?v=2"></script>
 </head>
 <body>
 
@@ -658,9 +646,6 @@
                 <button class="sb-btn" onclick="toggleTradfi()" id="btnTradfi">TradFi</button>
                 <button class="sb-btn" onclick="toggleComments()" id="btnComments">Comments</button>
                 <button class="sb-btn" onclick="toggleBackups()" id="btnBackups">&#x1F5C4; Backups</button>
-                <hr class="sb-sep">
-                <button class="sb-btn" id="btnSSHQuick" onclick="quickApiSync()">API Sync</button>
-                <button class="sb-btn" id="btnSSHSync" onclick="toggleSSHSync()">Advanced API Sync</button>
                 <button class="sb-btn" id="btnLogs" onclick="toggleLogPanel()">&#128203; Logs</button>
             </div>
         </div>
@@ -998,39 +983,6 @@
             </div>
         </div>
 
-        <!-- Advanced API Sync panel -->
-        <div id="sshSyncPanel" class="hl-expiry-panel" style="display:none;">
-            <!-- Header -->
-            <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
-                <button onclick="backToList()" style="width:auto; flex-shrink:0; padding:6px 14px; border-radius:5px; border:1px solid #26a69a; background:transparent; color:#26a69a; font-size:var(--fs-sm); cursor:pointer; font-weight:600;">&#8592; Back</button>
-                <h3 style="margin:0;">Advanced API Sync</h3>
-                <span style="flex:1"></span>
-                <label style="font-size:var(--fs-sm); color:#94a3b8; display:flex; align-items:center; gap:6px; cursor:pointer;">
-                    <input type="checkbox" id="sshDryRun"> Dry Run (preview only)
-                </label>
-                <label style="font-size:var(--fs-sm); color:#94a3b8; display:flex; align-items:center; gap:6px; cursor:pointer;" title="When checked, sets _sync_lock so other masters won't pull this push">
-                    <input type="checkbox" id="sshNoPropagate"> Don't sync to other masters
-                </label>
-                <span id="sshSpinner" style="display:none; margin-left:4px;"><span class="spinner"></span></span>
-            </div>
-            <!-- Filter row -->
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;">
-                <div style="position:relative; display:inline-flex; align-items:center;">
-                    <input type="text" id="sshFilter" placeholder="Filter VPS…" oninput="filterSshHosts(); document.getElementById('sshFilterClear').style.display=this.value?'flex':'none';"
-                           style="width:150px; font-size:var(--fs-sm); background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:5px; padding:4px 24px 4px 8px;">
-                    <button id="sshFilterClear" onclick="document.getElementById('sshFilter').value=''; filterSshHosts(); this.style.display='none'; document.getElementById('sshFilter').focus();"
-                            style="display:none; position:absolute; right:4px; background:none; border:none; color:#64748b; font-size:var(--fs-base); cursor:pointer; padding:0; line-height:1; align-items:center;" title="Clear">&times;</button>
-                </div>
-                <button class="btn btn-sm btn-secondary" onclick="sshSelectAll(true)"  style="font-size:var(--fs-xs); padding:3px 10px;">All</button>
-                <button class="btn btn-sm btn-secondary" onclick="sshSelectAll(false)" style="font-size:var(--fs-xs); padding:3px 10px;">None</button>
-                <span id="sshSelCount" style="font-size:var(--fs-xs); color:#94a3b8; min-width:60px;"></span>
-            </div>
-            <!-- Status -->
-            <div id="sshStatusLine" style="font-size:var(--fs-sm); color:#64748b; margin-bottom:6px;"></div>
-            <!-- VPS table: ALL row + per-VPS rows -->
-            <div id="sshVpsList" style="border:1px solid #334155; border-radius:6px; background:#0f172a; font-size:var(--fs-sm); color:#e2e8f0; max-height:calc(100vh - 240px); overflow-y:auto;"></div>
-        </div>
-
         <!-- Log viewer panel -->
         <div id="logPanel" class="hl-expiry-panel" style="display:none; flex-direction:column; padding:0; gap:0; height:calc(100vh - 120px);">
             <div style="display:flex; align-items:center; gap:10px; padding:8px 16px; border-bottom:1px solid #1e293b; flex-shrink:0;">
@@ -1144,7 +1096,7 @@
         // Escape closes any open panel and returns to the list
         document.addEventListener("keydown", (e) => {
             if (e.key === "Escape") {
-                const panels = ["editPanel","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"];
+                const panels = ["editPanel","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"];
                 const anyOpen = panels.some(id => {
                     const el = document.getElementById(id);
                     return el && el.style.display !== "none";
@@ -1179,15 +1131,10 @@
         } else if (hash === "#hl-config") {
             document.getElementById("userListView").style.display = "none";
             await Promise.all([loadUsers(), toggleHLConfig()]);
-        } else if (hash === "#ssh-sync") {
-            document.getElementById("userListView").style.display = "none";
-            await Promise.all([loadUsers(), toggleSSHSync()]);
         } else {
             await loadUsers();
             setTimeout(() => { const f = document.getElementById("userFilter"); if (f) f.focus(); }, 50);
         }
-        await apiSyncController.refresh();
-        apiSyncController.openStream();
     });
 
     // ── API helpers ─────────────────────────────────────────
@@ -1491,7 +1438,7 @@
 
     function showEditPanel(user) {
         formDirty = false;
-        ["hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+        ["hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
         });
         commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false;
@@ -1675,16 +1622,15 @@
             renderUserTable();
             renderBybitExpiryPanel(data);
             document.getElementById("userListView").style.display = "none";
-            ["editPanel","hlExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+            ["editPanel","hlExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
                 document.getElementById(id).style.display = "none";
             });
-            commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false; sshSyncVisible = false;
+            commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false;
             logPanelVisible = false; _closeLogWs();
             document.getElementById("btnComments").classList.remove("active");
             document.getElementById("btnHLConfig").classList.remove("active");
             document.getElementById("btnTradfi").classList.remove("active");
             document.getElementById("btnBackups").classList.remove("active");
-            document.getElementById("btnSSHSync").classList.remove("active");
             document.getElementById("btnLogs").classList.remove("active");
             document.getElementById("bybitExpiryPanel").style.display = "";
             showToast("Bybit expiry data refreshed", "success");
@@ -1749,7 +1695,7 @@
             }))) return;
         }
         formDirty = false;
-        ["editPanel","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+        ["editPanel","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
         });
         document.getElementById("userListView").style.display = "";
@@ -1757,9 +1703,7 @@
         hlConfigVisible = false;
         tradfiVisible = false;
         backupsVisible = false;
-        sshSyncVisible = false;
         logPanelVisible = false;
-        _closeSshSSE();
         _closeLogWs();
         editMode = null;
         editingName = null;
@@ -1768,7 +1712,6 @@
         document.getElementById("btnHLConfig").classList.remove("active");
         document.getElementById("btnTradfi").classList.remove("active");
         document.getElementById("btnBackups").classList.remove("active");
-        document.getElementById("btnSSHSync").classList.remove("active");
         document.getElementById("btnLogs").classList.remove("active");
         setTimeout(() => { const f = document.getElementById("userFilter"); if (f) f.focus(); }, 50);
     }
@@ -2024,16 +1967,15 @@
             renderHLExpiryPanel(data);
             // Switch to expiry panel view
             document.getElementById("userListView").style.display = "none";
-            ["editPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+            ["editPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
                 document.getElementById(id).style.display = "none";
             });
-            commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false; sshSyncVisible = false;
+            commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false;
             logPanelVisible = false; _closeLogWs();
             document.getElementById("btnComments").classList.remove("active");
             document.getElementById("btnHLConfig").classList.remove("active");
             document.getElementById("btnTradfi").classList.remove("active");
             document.getElementById("btnBackups").classList.remove("active");
-            document.getElementById("btnSSHSync").classList.remove("active");
             document.getElementById("btnLogs").classList.remove("active");
             document.getElementById("hlExpiryPanel").style.display = "";
             showToast("HL expiry data refreshed", "success");
@@ -2224,15 +2166,14 @@
     async function toggleComments() {
         if (commentsVisible) { backToList(); return; }
         commentsVisible = true;
-        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","hlConfigPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
         });
-        hlConfigVisible = false; tradfiVisible = false; backupsVisible = false; sshSyncVisible = false;
+        hlConfigVisible = false; tradfiVisible = false; backupsVisible = false;
         logPanelVisible = false; _closeLogWs();
         document.getElementById("btnHLConfig").classList.remove("active");
         document.getElementById("btnTradfi").classList.remove("active");
         document.getElementById("btnBackups").classList.remove("active");
-        document.getElementById("btnSSHSync").classList.remove("active");
         document.getElementById("btnLogs").classList.remove("active");
         document.getElementById("commentsPanel").style.display = "";
         document.getElementById("btnComments").classList.add("active");
@@ -2329,15 +2270,14 @@
     async function toggleHLConfig() {
         if (hlConfigVisible) { backToList(); return; }
         hlConfigVisible = true;
-        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","tradfiPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
         });
-        commentsVisible = false; tradfiVisible = false; backupsVisible = false; sshSyncVisible = false;
+        commentsVisible = false; tradfiVisible = false; backupsVisible = false;
         logPanelVisible = false; _closeLogWs();
         document.getElementById("btnComments").classList.remove("active");
         document.getElementById("btnTradfi").classList.remove("active");
         document.getElementById("btnBackups").classList.remove("active");
-        document.getElementById("btnSSHSync").classList.remove("active");
         document.getElementById("btnLogs").classList.remove("active");
         document.getElementById("hlConfigPanel").style.display = "";
         document.getElementById("btnHLConfig").classList.add("active");
@@ -2406,15 +2346,14 @@
     async function toggleTradfi() {
         if (tradfiVisible) { backToList(); return; }
         tradfiVisible = true;
-        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","backupsPanel","sshSyncPanel","logPanel"].forEach(id => {
+        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","backupsPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
         });
-        commentsVisible = false; hlConfigVisible = false; backupsVisible = false; sshSyncVisible = false;
+        commentsVisible = false; hlConfigVisible = false; backupsVisible = false;
         logPanelVisible = false; _closeLogWs();
         document.getElementById("btnComments").classList.remove("active");
         document.getElementById("btnHLConfig").classList.remove("active");
         document.getElementById("btnBackups").classList.remove("active");
-        document.getElementById("btnSSHSync").classList.remove("active");
         document.getElementById("btnLogs").classList.remove("active");
         document.getElementById("tradfiPanel").style.display = "";
         document.getElementById("btnTradfi").classList.add("active");
@@ -2656,521 +2595,20 @@
         }
     }
 
-    // ── API Sync ─────────────────────────────────────────────
-    let sshSyncVisible = false;
-    var apiSyncController = createApiSyncStatusController({
-        apiFetch: apiFetch,
-        showToast: showToast,
-        getButton: function () { return document.getElementById("btnSSHQuick"); },
-        getSerialCell: function (hostname) { return document.getElementById("ssh-ser-" + hostname); },
-        updateLastPushCell: function (hostname, lp) { _updateLpCell(hostname, lp); },
-        buildStreamUrl: function () {
-            var url = API_BASE + "/sync/ssh-status/stream";
-            if (TOKEN) url += "?token=" + encodeURIComponent(TOKEN);
-            return url;
-        }
-    });
-
-    function _sshHostLabel(hostname) {
-        var info = _sshHostMap[hostname] || {};
-        return info.pbname ? info.pbname + " (" + hostname + ")" : hostname;
-    }
-
-    function _md5Tooltip(md5_detail) {
-        if (!md5_detail || Object.keys(md5_detail).length === 0) return "";
-        var parts = [];
-        if ("pb7" in md5_detail) parts.push("api-keys.json: " + (md5_detail.pb7 === true ? "\u2705" : md5_detail.pb7 === false ? "\u274C mismatch" : "\u2753 not installed"));
-        return parts.join(" | ");
-    }
-
-    function _updateSerialCell(hostname, remote_serial, local_serial, in_sync, md5_detail) {
-        apiSyncController.updateSerialCell(hostname, remote_serial, local_serial, in_sync, md5_detail);
-    }
-
-    function _updateLpCell(hostname, lp) {
-        var cell = document.getElementById("ssh-lp-" + hostname);
-        if (!cell) return;
-        cell.innerHTML = _lpBadge(lp);
-    }
-
-    function _openSshSSE() {
-        apiSyncController.openStream();
-    }
-
-    function _closeSshSSE() {
-        apiSyncController.closeStream();
-    }
-
-    async function toggleSSHSync() {
-        if (sshSyncVisible) { backToList(); return; }
-        sshSyncVisible = true;
-        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
-            document.getElementById(id).style.display = "none";
-        });
-        commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false;
-        logPanelVisible = false; _closeLogWs();
-        document.getElementById("btnComments").classList.remove("active");
-        document.getElementById("btnHLConfig").classList.remove("active");
-        document.getElementById("btnTradfi").classList.remove("active");
-        document.getElementById("btnBackups").classList.remove("active");
-        document.getElementById("btnLogs").classList.remove("active");
-        document.getElementById("sshSyncPanel").style.display = "";
-        document.getElementById("btnSSHSync").classList.add("active");
-        location.hash = "#ssh-sync";
-        await loadSSHSyncStatus();
-        _openSshSSE();
-    }
-
-    async function checkSshSyncStatus() {
-        try {
-            await apiSyncController.refresh();
-        } catch (_) { /* sync status not configured or unreachable */ }
-    }
-
-    async function quickApiSync() {
-        await apiSyncController.quickSync({ dry_run: false, no_propagate: false });
-    }
-
-    // ── State ────────────────────────────────────────────────
-    var _sshHosts   = [];   // [{hostname, label}]
-    var _sshHostMap = {};   // hostname → {watcher_active, last_push:{ts,serial,success}}
-    var _sshDragState = null;
-
-    // Grid: VPS | Last Sync | Serial | Days | Min Ver | Set | Sync Keys
-    var SSH_COLS = "minmax(160px,1fr) 148px 52px 68px 62px 45px 82px";
-
-    function _lpBadge(lp) {
-        if (!lp || !lp.ts) return '<span style="color:#475569; font-size:var(--fs-sm);">never</span>';
-        var d = new Date(lp.ts);
-        var dateStr = d.toLocaleString('de-DE', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
-        var clr = lp.success ? '#86efac' : '#fca5a5';
-        var label = lp.success ? 'OK' : 'FAIL';
-        return '<span style="color:' + clr + '; font-weight:700; font-size:var(--fs-sm);">' + label + '</span>' +
-               '<span style="color:#64748b; margin-left:5px; font-size:var(--fs-sm);">' + dateStr + '</span>';
-    }
-
-    function escapeAttr(s) { return String(s).replace(/"/g, '&quot;'); }
-
-    function _sshVpsRowHtml(h, hostInfo) {
-        var lp = (hostInfo && hostInfo.last_push) || null;
-        var serial = (lp && lp.serial) ? lp.serial : '—';
-        var watcherDot = (hostInfo && hostInfo.watcher_active)
-            ? ' <span title="watcher active" style="color:#86efac; font-size:var(--fs-xs);">&#9679;</span>' : '';
-        return '<div class="ssh-row selected" data-hostname="' + escapeAttr(h.hostname) + '" data-label="' + escapeAttr(h.label) + '" tabindex="0" aria-selected="true" ' +
-            'style="display:grid; grid-template-columns:' + SSH_COLS + '; gap:6px; align-items:center; ' +
-            'padding:6px 8px; border-bottom:1px solid #1e293b;">' +
-            '<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + escapeAttr(h.label) + '">' +
-                escapeHtml(h.label) + watcherDot + '</span>' +
-            '<span id="ssh-lp-' + escapeAttr(h.hostname) + '">' + _lpBadge(lp) + '</span>' +
-            '<span id="ssh-ser-' + escapeAttr(h.hostname) + '" style="color:#64748b; font-size:var(--fs-sm); text-align:right;">' + serial + '</span>' +
-            '<input type="number" id="retdays-' + escapeAttr(h.hostname) + '" min="1" max="3650" value="180" ' +
-                'style="width:100%; font-size:var(--fs-sm); background:#1e293b; color:#93c5fd; border:1px solid #334155; border-radius:4px; padding:3px 5px; text-align:right;">' +
-            '<input type="number" id="retminver-' + escapeAttr(h.hostname) + '" min="1" max="1000" value="10" ' +
-                'style="width:100%; font-size:var(--fs-sm); background:#1e293b; color:#86efac; border:1px solid #334155; border-radius:4px; padding:3px 5px; text-align:right;">' +
-            '<button id="btnset-' + escapeAttr(h.hostname) + '" ' +
-                'data-hostname="' + escapeAttr(h.hostname) + '" ' +
-                'onclick="saveRetentionSettings(\'single\', this.dataset.hostname)" ' +
-                'style="font-size:var(--fs-sm); padding:4px 7px; background:#1e293b; color:#94a3b8; border:1px solid #334155; border-radius:4px; cursor:pointer;">Set</button>' +
-            '<button id="btnsync-' + escapeAttr(h.hostname) + '" ' +
-                'data-hostname="' + escapeAttr(h.hostname) + '" ' +
-                'onclick="triggerSSHPush(\'single\', this.dataset.hostname)" ' +
-                'style="font-size:var(--fs-sm); padding:4px 7px; background:#1e40af; color:#e2e8f0; border:none; border-radius:4px; cursor:pointer; white-space:nowrap;">Sync Keys</button>' +
-        '</div>';
-    }
-
-    function _buildSshTable(hosts, hostMap) {
-        var list = document.getElementById("sshVpsList");
-        if (!hosts.length) {
-            list.innerHTML = '<div style="padding:16px; color:#94a3b8;">No VPS connected via SSH.</div>';
-            return;
-        }
-        var S = SSH_COLS;
-        // Column header row
-        var hdr = '<div style="display:grid; grid-template-columns:' + S + '; gap:6px; align-items:center; ' +
-            'padding:6px 8px 7px; border-bottom:1px solid #334155; color:#64748b; font-size:var(--fs-sm); ' +
-            'text-transform:uppercase; letter-spacing:.05em; position:sticky; top:0; background:#0f172a; z-index:2;">' +
-            '<span>VPS</span><span>Last Sync</span>' +
-            '<span style="text-align:right">Serial</span>' +
-            '<span style="text-align:right">Days</span><span style="text-align:right">Min Ver</span>' +
-            '<span style="text-align:center" title="Save retention settings">Set</span>' +
-            '<span style="text-align:center" title="Push api-keys.json">Sync Keys</span>' +
-        '</div>';
-        // ALL row — acts on all selected VPS rows
-        var allRow = '<div style="display:grid; grid-template-columns:' + S + '; gap:6px; align-items:center; ' +
-            'padding:6px 8px; border-bottom:1px solid #26a69a55; background:#0d1e2e; position:sticky; top:36px; z-index:1;">' +
-            '<span style="font-weight:700; color:#26a69a; font-size:var(--fs-base); white-space:nowrap;">&#9654; All Selected</span>' +
-            '<span style="color:#475569; font-size:var(--fs-sm); white-space:nowrap;">acts on selected rows</span>' +
-            '<span></span>' +
-            '<input type="number" id="globalRetDays" min="1" max="3650" value="180" ' +
-                'style="width:100%; font-size:var(--fs-sm); background:#1e293b; color:#93c5fd; border:1px solid #475569; border-radius:4px; padding:3px 5px; text-align:right;" placeholder="days">' +
-            '<input type="number" id="globalRetMinVer" min="1" max="1000" value="10" ' +
-                'style="width:100%; font-size:var(--fs-sm); background:#1e293b; color:#86efac; border:1px solid #475569; border-radius:4px; padding:3px 5px; text-align:right;" placeholder="min ver">' +
-            '<button id="btnAllSet" onclick="saveRetentionSettings(\'selected\')" ' +
-                'style="font-size:var(--fs-sm); padding:4px 7px; background:#1e293b; color:#26a69a; border:1px solid #26a69a; border-radius:4px; cursor:pointer; font-weight:600;">Set</button>' +
-            '<button id="btnAllSync" onclick="triggerSSHPush(\'selected\')" ' +
-                'style="font-size:var(--fs-base); padding:5px 9px; background:#26a69a; color:#0f172a; border:none; border-radius:4px; cursor:pointer; font-weight:700; white-space:nowrap;">Sync Keys</button>' +
-        '</div>';
-        var rows = hosts.map(function(h) { return _sshVpsRowHtml(h, hostMap[h.hostname]); }).join('');
-        var spacer = '<div style="height:6px; background:#0f172a;"></div>';
-        list.innerHTML = hdr + allRow + spacer + rows;
-        bindSshSelectionRows(list);
-        updateSshSelCount();
-    }
-
-    async function loadSSHSyncStatus() {
-        var statusLine = document.getElementById("sshStatusLine");
-        statusLine.textContent = "Loading…";
-        try {
-            var data = await apiFetch("/sync/ssh-status");
-            var hosts = Array.isArray(data.summary_hostnames) ? data.summary_hostnames : (data.connected_hosts || []);
-            var lastPushAll = data.last_push || {};
-            _sshHosts = []; _sshHostMap = {};
-            hosts.forEach(function(h) {
-                var hInfo = (data.summary_hosts && data.summary_hosts[h]) ? data.summary_hosts[h] : ((data.hosts && data.hosts[h]) || {});
-                var label = hInfo.pbname ? hInfo.pbname + " (" + h + ")" : h;
-                hInfo.last_push = lastPushAll[h] || null;
-                _sshHosts.push({ hostname: h, label: label });
-                _sshHostMap[h] = hInfo;
-            });
-            var watcherCount = hosts.filter(function(h) {
-                return _sshHostMap[h] && _sshHostMap[h].watcher_active;
-            }).length;
-            var connectedCount = hosts.filter(function(h) {
-                return _sshHostMap[h] && _sshHostMap[h].connected;
-            }).length;
-            statusLine.innerHTML =
-                '<strong>' + hosts.length + '</strong> managed VPS' +
-                ' &middot; <strong>' + connectedCount + '</strong> connected' +
-                ' &middot; <strong>' + watcherCount + '</strong> watcher(s) active' +
-                ' &middot; Serial: <strong>' + (data.local_serial || '?') + '</strong>' +
-                ' &middot; Master: <strong>' + (data.local_hostname || '?') + '</strong>';
-            _buildSshTable(_sshHosts, _sshHostMap);
-            // Populate serial cells from cached remote_serials (if available)
-            var localSerial = data.local_serial || 0;
-            _sshHosts.forEach(function(h) {
-                var info = _sshHostMap[h.hostname];
-                _updateSerialCell(h.hostname, info.remote_serial != null ? info.remote_serial : null, localSerial, info.in_sync, info.md5_detail);
-            });
-            _loadAllRetention(_sshHosts);
-        } catch (e) {
-            statusLine.innerHTML = '<span style="color:#f87171;">Failed: ' + escapeHtml(e.message) + '</span>';
-        }
-    }
-
-    async function _loadAllRetention(hosts) {
-        await Promise.all(hosts.map(async function(h) {
-            try {
-                var d = await apiFetch("/sync/ssh-retention/" + encodeURIComponent(h.hostname));
-                var dEl = document.getElementById("retdays-" + h.hostname);
-                var mEl = document.getElementById("retminver-" + h.hostname);
-                if (dEl) dEl.value = d.backup_retention_days;
-                if (mEl) mEl.value = d.backup_min_versions;
-            } catch (e) { /* keep defaults */ }
-        }));
-    }
-
-    function filterSshHosts() {
-        var q = (document.getElementById("sshFilter").value || "").toLowerCase();
-        document.getElementById("sshVpsList").querySelectorAll(".ssh-row").forEach(function(row) {
-            row.style.display = row.dataset.label.toLowerCase().indexOf(q) !== -1 ? "grid" : "none";
-        });
-        updateSshSelCount();
-    }
-
-    function sshSelectAll(sel) {
-        document.getElementById("sshVpsList").querySelectorAll(".ssh-row").forEach(function(row) {
-            if (row.style.display !== "none") {
-                setSshRowSelected(row, sel);
-            }
-        });
-        updateSshSelCount();
-    }
-
-    function updateSshSelCount() {
-        var n = getVisibleSshRows().filter(function(row) { return row.classList.contains("selected"); }).length;
-        document.getElementById("sshSelCount").textContent = n + " selected";
-    }
-
-    function _getSelectedHosts() {
-        // Only return hosts from visible (non-filtered) rows
-        var res = [];
-        document.getElementById("sshVpsList").querySelectorAll(".ssh-row").forEach(function(row) {
-            if (row.style.display !== "none" && row.classList.contains("selected")) {
-                var hostname = row.getAttribute("data-hostname") || "";
-                if (hostname) res.push(hostname);
-            }
-        });
-        return res;
-    }
-
-    function getVisibleSshRows() {
-        return Array.from(document.getElementById("sshVpsList").querySelectorAll(".ssh-row")).filter(function(row) {
-            return row.style.display !== "none";
-        });
-    }
-
-    function setSshRowSelected(row, selected) {
-        if (!row) return;
-        row.classList.toggle("selected", !!selected);
-        row.setAttribute("aria-selected", selected ? "true" : "false");
-    }
-
-    function toggleSshRow(row) {
-        setSshRowSelected(row, !row.classList.contains("selected"));
-        updateSshSelCount();
-    }
-
-    function setSshSelectionRange(anchorRow, targetRow, mode) {
-        var rows = getVisibleSshRows();
-        var anchor = rows.indexOf(anchorRow);
-        var target = rows.indexOf(targetRow);
-        if (anchor < 0 || target < 0) return;
-        var low = Math.min(anchor, target);
-        var high = Math.max(anchor, target);
-        rows.forEach(function(row, index) {
-            if (index < low || index > high) return;
-            setSshRowSelected(row, mode === "add");
-        });
-        updateSshSelCount();
-    }
-
-    function bindSshSelectionRows(list) {
-        list.onmousedown = function(event) {
-            if (event.button !== 0) return;
-            if (event.target && event.target.closest && event.target.closest("button,input,select,textarea")) return;
-            var row = event.target && event.target.closest ? event.target.closest(".ssh-row[data-hostname]") : null;
-            if (!row) return;
-            event.preventDefault();
-            _sshDragState = {
-                row: row,
-                y: event.clientY,
-                selecting: false,
-                mode: row.classList.contains("selected") ? "remove" : "add"
-            };
-        };
-        list.onkeydown = function(event) {
-            if (!event || (event.key !== "Enter" && event.key !== " ")) return;
-            var row = event.target && event.target.closest ? event.target.closest(".ssh-row[data-hostname]") : null;
-            if (!row) return;
-            event.preventDefault();
-            toggleSshRow(row);
-        };
-    }
-
-    document.addEventListener("mousemove", function(event) {
-        if (!_sshDragState) return;
-        if (!_sshDragState.selecting && Math.abs(event.clientY - _sshDragState.y) > 5) {
-            _sshDragState.selecting = true;
-        }
-        if (!_sshDragState.selecting) return;
-        event.preventDefault();
-        var row = event.target && event.target.closest ? event.target.closest("#sshVpsList .ssh-row[data-hostname]") : null;
-        if (!row) return;
-        setSshSelectionRange(_sshDragState.row, row, _sshDragState.mode);
-    });
-
-    document.addEventListener("mouseup", function() {
-        if (!_sshDragState) return;
-        if (!_sshDragState.selecting) toggleSshRow(_sshDragState.row);
-        _sshDragState = null;
-    });
-
-    function _setSshBusy(busy) {
-        document.getElementById("sshSpinner").style.display = busy ? "" : "none";
-        var allSync = document.getElementById("btnAllSync");
-        var allSet  = document.getElementById("btnAllSet");
-        if (allSync) allSync.disabled = busy;
-        if (allSet)  allSet.disabled  = busy;
-    }
-
-    // mode: 'selected' | 'single'   singleHost: hostname string (only for 'single')
-    async function triggerSSHPush(mode, singleHost) {
-        var dryRun = document.getElementById("sshDryRun").checked;
-        var hostnames;
-        if (mode === 'single') {
-            hostnames = [singleHost];
-        } else {
-            hostnames = _getSelectedHosts();
-            if (!hostnames.length) { showToast("Select at least one VPS", "warning"); return; }
-        }
-        _setSshBusy(true);
-        hostnames.forEach(function(h) {
-            var btn = document.getElementById("btnsync-" + h);
-            if (btn) { btn.disabled = true; btn.textContent = "…"; }
-        });
-        try {
-            var noPropagate = document.getElementById("sshNoPropagate").checked;
-            var body = { dry_run: dryRun, hostnames: hostnames, no_propagate: noPropagate };
-            var data = await apiFetch("/sync/push-ssh", { method: "POST", body: JSON.stringify(body) });
-            if (data.error) { showToast("API Sync: " + data.error, "error"); return; }
-            var results = data.results || {};
-            var ok = 0, total = 0;
-            var okHosts = [];
-            var failedHosts = [];
-            for (var h in results) {
-                total++;
-                var r = results[h];
-                if (r.success || r.dry_run) {
-                    ok++;
-                    okHosts.push(h);
-                } else {
-                    failedHosts.push(h);
-                }
-                var lpEl  = document.getElementById("ssh-lp-"  + h);
-                var serEl = document.getElementById("ssh-ser-" + h);
-                if (lpEl) {
-                    var clr = r.success ? '#86efac' : r.dry_run ? '#93c5fd' : '#fca5a5';
-                    var lbl = r.success ? 'OK' : r.dry_run ? 'DRY' : 'FAIL';
-                    var now = new Date();
-                    var dateStr = now.toLocaleString('de-DE', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
-                    var detail = r.error ? ' (' + escapeHtml(r.error) + ')' :
-                        r.dry_run ? ' (' + (r.bots_affected || 0) + ' bots)' :
-                        [r.pushed_v7 && 'V7\u2713',
-                         r.bots_killed > 0 && r.bots_killed + ' killed'].filter(Boolean).join(' ');
-                    lpEl.innerHTML =
-                        '<span style="color:' + clr + '; font-weight:700; font-size:var(--fs-xs);">' + lbl + '</span>' +
-                        '<span style="color:#64748b; font-size:var(--fs-xs); margin-left:4px;">' + dateStr + '</span>' +
-                        (detail ? '<span style="color:#475569; font-size:var(--fs-xs); margin-left:3px;">' + detail + '</span>' : '');
-                }
-                if (serEl && r.serial) serEl.textContent = r.serial;
-            }
-            if (dryRun) {
-                var rows = Object.keys(results).map(function(h) {
-                    var r = results[h];
-                    var dirs = [r.pb7dir && 'V7: ' + escapeHtml(r.pb7dir)].filter(Boolean).join('<br>');
-                    return '<tr><td>' + escapeHtml(h) + '</td>' +
-                        '<td style="color:#64748b;font-size:var(--fs-xs)">' + (dirs || '—') + '</td>' +
-                        '<td style="text-align:right;color:#93c5fd">' + (r.serial || '—') + '</td>' +
-                        '<td style="text-align:right;color:#94a3b8">' + (r.bots_affected || 0) + '</td></tr>';
-                }).join('');
-                showDryRunModal('&#128274; Dry Run &mdash; Sync Keys Preview',
-                    '<p style="color:#94a3b8;margin:0 0 6px">Would push <code>api-keys.json</code> to ' + total + ' VPS:</p>' +
-                    '<table class="dry-run-table"><thead><tr>' +
-                    '<th>VPS</th><th>Target path(s)</th>' +
-                    '<th style="text-align:right">Serial</th><th style="text-align:right">Bots</th>' +
-                    '</tr></thead><tbody>' + rows + '</tbody></table>' +
-                    '<p style="color:#475569;font-size:var(--fs-xs);margin:8px 0 0">No files were written. Uncheck Dry Run to apply.</p>');
-            } else if (ok === total) {
-                showToast("Synced " + ok + "/" + total + " - " + okHosts.join(", "), "success");
-            } else {
-                var details = [];
-                if (okHosts.length) details.push("OK: " + okHosts.join(", "));
-                if (failedHosts.length) details.push("Failed: " + failedHosts.join(", "));
-                showToast("Sync: " + ok + "/" + total + " succeeded" + (details.length ? " - " + details.join(" | ") : ""), ok > 0 ? "warning" : "error");
-            }
-        } catch (e) {
-            showToast("SSH sync failed: " + e.message, "error");
-        } finally {
-            _setSshBusy(false);
-            hostnames.forEach(function(h) {
-                var btn = document.getElementById("btnsync-" + h);
-                if (btn) { btn.disabled = false; btn.textContent = "Sync Keys"; }
-            });
-        }
-    }
-
-    // mode: 'selected' | 'single'   singleHost: hostname string (only for 'single')
-    async function saveRetentionSettings(mode, singleHost) {
-        var dryRun = document.getElementById("sshDryRun").checked;
-        var toSave = [];
-        if (mode === 'single') {
-            var days   = parseInt((document.getElementById("retdays-"   + singleHost) || {}).value);
-            var minVer = parseInt((document.getElementById("retminver-" + singleHost) || {}).value);
-            if (!isNaN(days) && days >= 1 && !isNaN(minVer) && minVer >= 1)
-                toSave.push({ hostname: singleHost, days: days, minVer: minVer });
-        } else {
-            // 'selected' — global Days/MinVer from ALL row, only visible+checked VPS
-            var gDays   = parseInt(document.getElementById("globalRetDays").value);
-            var gMinVer = parseInt(document.getElementById("globalRetMinVer").value);
-            if (isNaN(gDays) || gDays < 1 || isNaN(gMinVer) || gMinVer < 1) {
-                showToast("Enter valid Days and Min Versions in the All Selected row", "warning"); return;
-            }
-            var selected = _getSelectedHosts();
-            if (!selected.length) { showToast("Select at least one VPS", "warning"); return; }
-            selected.forEach(function(h) { toSave.push({ hostname: h, days: gDays, minVer: gMinVer }); });
-        }
-        if (!toSave.length) { showToast("Nothing to save", "warning"); return; }
-
-        // Dry-run: preview only, no API call
-        if (dryRun) {
-            var rows = toSave.map(function(s) {
-                return '<tr><td>' + escapeHtml(s.hostname) + '</td>' +
-                    '<td style="text-align:right;color:#93c5fd">' + s.days + '</td>' +
-                    '<td style="text-align:right;color:#86efac">' + s.minVer + '</td></tr>';
-            }).join('');
-            showDryRunModal('&#128274; Dry Run &mdash; Retention Preview',
-                '<p style="color:#94a3b8;margin:0 0 6px">Would write these values to <code>pbgui.ini [filesync]</code> on ' + toSave.length + ' VPS:</p>' +
-                '<table class="dry-run-table"><thead><tr>' +
-                '<th>VPS</th><th style="text-align:right">Days</th><th style="text-align:right">Min Ver</th>' +
-                '</tr></thead><tbody>' + rows + '</tbody></table>' +
-                '<p style="color:#475569;font-size:var(--fs-xs);margin:8px 0 0">No changes were made. Uncheck Dry Run to apply.</p>');
-            return;
-        }
-
-        _setSshBusy(true);
-        var ok = 0, fail = 0;
-        try {
-            await Promise.all(toSave.map(async function(s) {
-                var btn = document.getElementById("btnset-" + s.hostname);
-                if (btn) { btn.disabled = true; btn.textContent = "…"; }
-                try {
-                    await apiFetch("/sync/ssh-retention", {
-                        method: "PUT",
-                        body: JSON.stringify({ hostname: s.hostname,
-                            backup_retention_days: s.days, backup_min_versions: s.minVer }),
-                    });
-                    ok++;
-                    // Mirror saved values back into per-row inputs
-                    var dEl = document.getElementById("retdays-"   + s.hostname);
-                    var mEl = document.getElementById("retminver-" + s.hostname);
-                    if (dEl) dEl.value = s.days;
-                    if (mEl) mEl.value = s.minVer;
-                } catch (e) { fail++; }
-                finally {
-                    if (btn) { btn.disabled = false; btn.textContent = "Set"; }
-                }
-            }));
-            if (fail === 0) {
-                var rows = toSave.map(function(s) {
-                    return '<tr><td>' + escapeHtml(s.hostname) + '</td>' +
-                        '<td style="text-align:right;color:#93c5fd">' + s.days + '</td>' +
-                        '<td style="text-align:right;color:#86efac">' + s.minVer + '</td></tr>';
-                }).join('');
-                showDryRunModal('&#10003; Retention Saved',
-                    '<p style="color:#94a3b8;margin:0 0 6px">Written to <code>pbgui.ini [filesync]</code> on ' + ok + ' VPS:</p>' +
-                    '<table class="dry-run-table"><thead><tr>' +
-                    '<th>VPS</th><th style="text-align:right">Days</th><th style="text-align:right">Min Ver</th>' +
-                    '</tr></thead><tbody>' + rows + '</tbody></table>');
-            } else {
-                showToast("Saved " + ok + ", failed " + fail, ok > 0 ? "warning" : "error");
-            }
-        } finally {
-            _setSshBusy(false);
-        }
-    }
-
-    // Kept for compat — no-op
-    async function loadRetentionSettings() {}
-    function filterRetentionHosts() {}
-    function retentionSelectAll() {}
-    function updateRetentionSelCount() {}
-    function applyGlobalRetention() {}
-
     // ── Backups / Restore ───────────────────────────────────
     let backupsVisible = false;
 
     async function toggleBackups() {
         if (backupsVisible) { backToList(); return; }
         backupsVisible = true;
-        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","sshSyncPanel","logPanel"].forEach(id => {
+        ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
         });
-        commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; sshSyncVisible = false;
+        commentsVisible = false; hlConfigVisible = false; tradfiVisible = false;
         logPanelVisible = false; _closeLogWs();
         document.getElementById("btnComments").classList.remove("active");
         document.getElementById("btnHLConfig").classList.remove("active");
         document.getElementById("btnTradfi").classList.remove("active");
-        document.getElementById("btnSSHSync").classList.remove("active");
         document.getElementById("btnLogs").classList.remove("active");
         document.getElementById("backupsPanel").style.display = "";
         document.getElementById("btnBackups").classList.add("active");
@@ -3505,16 +2943,14 @@
     function toggleLogPanel() {
         if (logPanelVisible) { backToList(); return; }
         logPanelVisible = true;
-        ['editPanel','userListView','hlExpiryPanel','bybitExpiryPanel','commentsPanel','hlConfigPanel','tradfiPanel','backupsPanel','sshSyncPanel'].forEach(id => {
+        ['editPanel','userListView','hlExpiryPanel','bybitExpiryPanel','commentsPanel','hlConfigPanel','tradfiPanel','backupsPanel'].forEach(id => {
             document.getElementById(id).style.display = 'none';
         });
-        commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false; sshSyncVisible = false;
-        _closeSshSSE();
+        commentsVisible = false; hlConfigVisible = false; tradfiVisible = false; backupsVisible = false;
         document.getElementById('btnComments').classList.remove('active');
         document.getElementById('btnHLConfig').classList.remove('active');
         document.getElementById('btnTradfi').classList.remove('active');
         document.getElementById('btnBackups').classList.remove('active');
-        document.getElementById('btnSSHSync').classList.remove('active');
         document.getElementById('logPanel').style.display = 'flex';
         document.getElementById('btnLogs').classList.add('active');
         if (!_logViewer) {

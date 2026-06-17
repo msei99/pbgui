@@ -1375,7 +1375,7 @@ while True:
 "'''
 
 INSTANCE_COLLECT_SCRIPT = r'''python3 -u -c "
-import json, os, re, subprocess, time
+import hashlib, json, os, re, subprocess, time
 from datetime import datetime, timezone
 
 HOME = os.path.expanduser('~')
@@ -1400,6 +1400,7 @@ YESTERDAY = datetime.fromtimestamp(YESTERDAY_START, timezone.utc).strftime('%Y-%
 # PNL regex (matches PBRun patterns)
 FILL_SUMMARY_RE = re.compile(r'\[fill\]\s+(\d+)\s+fills,\s+pnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\s+\w+')
 FILL_PNL_RE = re.compile(r'\bpnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\b')
+SYNC_EXCLUDE_FILES = {'approved_coins.json', 'config_run.json', 'ignored_coins.json', 'running_version.txt'}
 
 # shared helpers (used by both counting and dump mode)
 
@@ -1429,6 +1430,104 @@ def _extract_fill_summary(line):
     if m:
         return float(m.group(1)), 1
     return None
+
+def _read_json(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            return json.load(handle)
+    except Exception:
+        return None
+
+def _read_text(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            return handle.read().strip()
+    except Exception:
+        return ''
+
+def _load_cluster_context():
+    root = os.path.join(PBGDIR, 'data', 'cluster')
+    node_id = _read_text(os.path.join(root, 'node_id'))
+    cluster_id = _read_text(os.path.join(root, 'cluster_id'))
+    desired = _read_json(os.path.join(root, 'desired_state.json'))
+    desired_loaded = isinstance(desired, dict)
+    desired = desired if isinstance(desired, dict) else {}
+    instances = desired.get('instances') if isinstance(desired.get('instances'), dict) else {}
+    tombstones = desired.get('tombstones') if isinstance(desired.get('tombstones'), dict) else {}
+    configured = bool(node_id and cluster_id)
+    return {
+        'configured': configured,
+        'node_id': node_id,
+        'cluster_id': cluster_id,
+        'desired_loaded': desired_loaded,
+        'desired_cluster_id': str(desired.get('cluster_id') or ''),
+        'instances': instances,
+        'tombstones': tombstones,
+    }
+
+def _config_meta(config_dir):
+    cfg_path = os.path.join(config_dir, 'config.json')
+    cfg = _read_json(cfg_path)
+    pbgui = cfg.get('pbgui', {}) if isinstance(cfg, dict) else {}
+    return {
+        'version': pbgui.get('version', 0),
+        'enabled_on': pbgui.get('enabled_on', 'disabled'),
+        'dynamic_ignore': bool(pbgui.get('dynamic_ignore')),
+    }
+
+def _config_manifest_hash(config_dir):
+    files = {}
+    try:
+        filenames = sorted(os.listdir(config_dir))
+    except Exception:
+        filenames = []
+    for filename in filenames:
+        if filename in SYNC_EXCLUDE_FILES or not filename.endswith('.json'):
+            continue
+        path = os.path.join(config_dir, filename)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, 'rb') as handle:
+                raw = handle.read()
+        except Exception:
+            continue
+        files[filename] = {'sha256': hashlib.sha256(raw).hexdigest(), 'size': len(raw)}
+    manifest = json.dumps({'schema_version': 1, 'files': files}, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    return 'sha256:' + hashlib.sha256(manifest).hexdigest()
+
+def _cluster_gate_status(name, config_dir, version, cluster):
+    if not cluster.get('configured'):
+        return {'blocked': False, 'cluster_gate': 'not_configured', 'blocked_reason': ''}
+    if not cluster.get('desired_loaded'):
+        return {'blocked': True, 'cluster_gate': 'missing_desired_state', 'blocked_reason': 'Cluster desired_state.json is missing'}
+    if str(cluster.get('desired_cluster_id') or '') != str(cluster.get('cluster_id') or ''):
+        return {'blocked': True, 'cluster_gate': 'foreign_desired_state', 'blocked_reason': 'Cluster desired_state.json belongs to another cluster'}
+    tombstones = cluster.get('tombstones') if isinstance(cluster.get('tombstones'), dict) else {}
+    if name in tombstones:
+        return {'blocked': True, 'cluster_gate': 'tombstoned', 'blocked_reason': 'Cluster desired state tombstoned this instance'}
+    instances = cluster.get('instances') if isinstance(cluster.get('instances'), dict) else {}
+    item = instances.get(name)
+    if not isinstance(item, dict):
+        return {'blocked': True, 'cluster_gate': 'missing_instance', 'blocked_reason': 'Instance is missing from Cluster desired state'}
+    if item.get('conflicted') is True:
+        return {'blocked': True, 'cluster_gate': 'conflicted', 'blocked_reason': 'Cluster desired state marks this instance as conflicted'}
+    if str(item.get('desired_state') or '') != 'running':
+        return {'blocked': True, 'cluster_gate': 'desired_stopped', 'blocked_reason': 'Cluster desired state is not running'}
+    if str(item.get('assigned_host') or '') != str(cluster.get('node_id') or ''):
+        return {'blocked': True, 'cluster_gate': 'wrong_host', 'blocked_reason': 'Cluster desired state assigns this instance to another node'}
+    if not os.path.isdir(config_dir):
+        return {'blocked': True, 'cluster_gate': 'missing_local_config', 'blocked_reason': 'Assigned config is not materialized locally'}
+    expected_hash = str(item.get('config_manifest_hash') or '')
+    try:
+        if _config_manifest_hash(config_dir) != expected_hash:
+            return {'blocked': True, 'cluster_gate': 'manifest_mismatch', 'blocked_reason': 'Local config manifest does not match Cluster desired state'}
+    except Exception as exc:
+        return {'blocked': True, 'cluster_gate': 'manifest_error', 'blocked_reason': 'Cluster config manifest check failed: ' + str(exc)}
+    expected_version = str(item.get('version') or '')
+    if str(version or '') != expected_version:
+        return {'blocked': True, 'cluster_gate': 'version_mismatch', 'blocked_reason': 'Local config version does not match Cluster desired state'}
+    return {'blocked': False, 'cluster_gate': 'allowed', 'blocked_reason': ''}
 
 def _count_hourly_occurrences(lines, needle):
     buckets = {}
@@ -1821,17 +1920,7 @@ monitors = []
 v7 = []
 new_cache = {'_version': EXPECTED_CACHE_VERSION}
 
-status_v7 = {}
-try:
-    sf = os.path.join(PBGDIR, 'data', 'cmd', 'status_v7.json')
-    if os.path.isfile(sf):
-        with open(sf) as f:
-            payload = json.load(f)
-        instances = payload.get('instances', {}) if isinstance(payload, dict) else {}
-        if isinstance(instances, dict):
-            status_v7 = instances
-except Exception:
-    status_v7 = {}
+cluster_context = _load_cluster_context()
 
 # collect bot log files for sidebar selector and history rebuild
 bot_logs = {}
@@ -1878,7 +1967,7 @@ for name, cfg_dir in sorted(running.items()):
     if os.path.isfile(rvf):
         try: rv = int(open(rvf).read().strip())
         except Exception: pass
-    status_item = status_v7.get(name, {}) if isinstance(status_v7.get(name), dict) else {}
+    gate = _cluster_gate_status(name, cfg_dir, version, cluster_context)
     v7.append({
         'name': name,
         'running': True,
@@ -1886,9 +1975,9 @@ for name, cfg_dir in sorted(running.items()):
         'eo': enabled_on,
         'rv': rv,
         'di': dynamic_ignore,
-        'blocked': bool(status_item.get('blocked', False)),
-        'blocked_reason': str(status_item.get('blocked_reason', '') or ''),
-        'cluster_gate': str(status_item.get('cluster_gate', '') or ''),
+        'blocked': bool(gate.get('blocked', False)),
+        'blocked_reason': str(gate.get('blocked_reason', '') or ''),
+        'cluster_gate': str(gate.get('cluster_gate', '') or ''),
     })
 
     # passivbot monitor dir (for start time)
@@ -2044,19 +2133,37 @@ for name, cfg_dir in sorted(running.items()):
         'log_off': bc['log_off'], 'err_off': bc['err_off'], 'log_fp': bc['log_fp'], 'log_sig': bc['log_sig'], 'err_sig': bc['err_sig'],
     }
 
-for name, status_item in sorted(status_v7.items()):
-    if name in running or not isinstance(status_item, dict):
+candidate_names = set()
+run_v7_root = os.path.join(PBGDIR, 'data', 'run_v7')
+try:
+    if os.path.isdir(run_v7_root):
+        for item in os.listdir(run_v7_root):
+            if os.path.isfile(os.path.join(run_v7_root, item, 'config.json')):
+                candidate_names.add(item)
+except Exception:
+    pass
+if cluster_context.get('configured'):
+    node_id = str(cluster_context.get('node_id') or '')
+    for name, item in (cluster_context.get('instances') or {}).items():
+        if isinstance(item, dict) and str(item.get('assigned_host') or '') == node_id:
+            candidate_names.add(str(name))
+
+for name in sorted(candidate_names):
+    if name in running:
         continue
+    cfg_dir = os.path.join(run_v7_root, name)
+    meta = _config_meta(cfg_dir)
+    gate = _cluster_gate_status(name, cfg_dir, meta.get('version', 0), cluster_context)
     v7.append({
         'name': name,
         'running': False,
-        'cv': status_item.get('version', 0),
-        'eo': status_item.get('enabled_on', 'disabled'),
+        'cv': meta.get('version', 0),
+        'eo': meta.get('enabled_on', 'disabled'),
         'rv': 0,
-        'di': False,
-        'blocked': bool(status_item.get('blocked', False)),
-        'blocked_reason': str(status_item.get('blocked_reason', '') or ''),
-        'cluster_gate': str(status_item.get('cluster_gate', '') or ''),
+        'di': bool(meta.get('dynamic_ignore', False)),
+        'blocked': bool(gate.get('blocked', False)),
+        'blocked_reason': str(gate.get('blocked_reason', '') or ''),
+        'cluster_gate': str(gate.get('cluster_gate', '') or ''),
     })
 
 print(json.dumps({'monitors': monitors, 'v7': v7, 'cache': new_cache,
@@ -4002,8 +4109,7 @@ class VPSMonitor:
         """Public: immediately collect instances from a single VPS.
 
         Unlike _collect_instances_all() this bypasses the interval gate
-        so callers (e.g. V7ConfigSyncWorker) can trigger a refresh right
-        after an activation signal.
+        so callers can trigger a refresh right after an activation signal.
         """
         entry = self.pool.get_connection(hostname)
         if not entry:

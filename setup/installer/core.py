@@ -47,6 +47,7 @@ LOCAL_PREREQUISITE_COMMANDS = {
 }
 LOCAL_SYSTEMD_UNITS = (
     "pbgui-api.service",
+    "pbgui-pbcluster.service",
     "pbgui-pbrun.service",
     "pbgui-pbdata.service",
     "pbgui-pbcoindata.service",
@@ -54,6 +55,7 @@ LOCAL_SYSTEMD_UNITS = (
 )
 PBGUI_SERVICE_SCRIPTS = {
     "PBApiServer.py",
+    "PBCluster.py",
     "PBRun.py",
     "PBData.py",
     "PBCoinData.py",

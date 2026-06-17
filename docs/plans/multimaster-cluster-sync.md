@@ -253,7 +253,7 @@ Rules:
 - Do not log API-key content.
 - Do not place API-key content in `desired_state.json`.
 - Store payload bytes only in `secret_blobs/` with owner-only permissions.
-- Install through the same backup, verify, and bot restart rules as current API Sync.
+- Install through Cluster Sync materialization: backup, verified write, and no bot restart.
 
 ## Conflict Rules
 
@@ -274,7 +274,7 @@ No blind last-write-wins for instance conflicts.
 
 Delete:
 
-- Never infer delete from missing files, missing remote instances, or missing `status_v7.json` entries.
+- Never infer delete from missing files, missing remote instances, or missing desired-state entries.
 - Only `DELETE_INSTANCE` and `TOMBSTONE_INSTANCE` delete or archive local files.
 - Tombstones prevent old configs from being reintroduced by stale peers.
 
@@ -399,11 +399,12 @@ Rules:
 - Do not remove non-PBGui SSH rules.
 - Log every firewall change and show failures on the Cluster page.
 
-## `status_v7.json` Compatibility
+## Legacy V7 Status File
 
-- First cluster-sync release: keep generating and consuming `status_v7.json` for compatibility.
-- During compatibility, `desired_state.json` is authority and `status_v7.json` is generated output.
-- Next version after cluster-sync: remove old `status_v7.json` authority/reconcile behavior.
+- `status_v7.json` is retired for Cluster Sync runtime decisions.
+- `desired_state.json` is the authority for desired state, assignment, manifest hash, version and tombstones.
+- PBRun polls local `data/cluster/desired_state.json` and materialized `data/run_v7` configs directly.
+- VPS Monitor derives blocked/non-running rows from live processes, local `data/run_v7`, and Cluster Sync desired state.
 
 ## Cluster UI
 
@@ -431,7 +432,7 @@ The first runnable Cluster Sync version requires items 1-7. They may be implemen
 
 After the first runnable Cluster Sync version:
 
-8. Remove old `status_v7.json` authority in the next version.
+8. Keep removing legacy sync compatibility paths as Cluster Sync materialization becomes the only remote-write path.
 
 ## Tests
 

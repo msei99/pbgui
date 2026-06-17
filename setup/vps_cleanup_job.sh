@@ -105,11 +105,34 @@ if value:
 PY
 }
 
+read_cluster_role_from_identity() {
+    local identity_path="$1"
+
+    if [ ! -f "$identity_path" ]; then
+        return
+    fi
+    python3 - "$identity_path" <<'PY' 2>/dev/null || true
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding='utf-8'))
+except Exception:
+    raise SystemExit(0)
+role = str(payload.get('role') or '').strip().lower()
+if role:
+    print(role)
+PY
+}
+
 pbgui_dir="$(detect_pbgui_dir)"
 logs_dir="${pbgui_dir}/data/logs"
 log_file="${logs_dir}/vps_cleanup.log"
 pb7_dir="${PB7_DIR:-}"
 configured_cleanup_log_max_bytes="$(read_cleanup_log_max_bytes_from_ini "${pbgui_dir}/pbgui.ini")"
+cluster_role="$(read_cluster_role_from_identity "${pbgui_dir}/data/cluster/node_identity.json")"
 if [ -n "$configured_cleanup_log_max_bytes" ]; then
     log_max_bytes="$configured_cleanup_log_max_bytes"
 else
@@ -469,6 +492,19 @@ remove_tree "${home_dir}/.rustup/tmp" "rustup tmp"
 remove_tree "${pb7_rust_target_release_dir}" "pb7 rust target release"
 remove_tree "${pbgui_dir}/data/instances" "legacy instances directory"
 remove_tree "${pbgui_dir}/data/multi" "legacy multi directory"
+remove_file "${pbgui_dir}/data/logs/PBRemote.log" "legacy PBRemote log"
+remove_file "${pbgui_dir}/data/logs/sync.log" "legacy sync log"
+remove_file "${pbgui_dir}/data/logs/PBGui.log" "unexpected VPS PBGui log"
+remove_tree "${pbgui_dir}/data/remote" "legacy PBRemote data cache"
+remove_tree "${pbgui_dir}/data/state/pbremote" "legacy PBRemote state"
+remove_tree "${pbgui_dir}/data/cmd" "legacy PBRun command/status directory"
+remove_tree "${pbgui_dir}/cmd" "legacy root command directory"
+if [ "$cluster_role" = "vps" ]; then
+    remove_tree "${pbgui_dir}/data/backup" "legacy VPS backup directory"
+    remove_tree "${pbgui_dir}/data/backups" "legacy VPS backups directory"
+else
+    log "Skipping backup directory cleanup: cluster role is '${cluster_role:-unknown}', expected vps"
+fi
 cleanup_stale_bot_runtime
 if [ "$dry_run" -eq 1 ]; then
     log "Finished VPS cleanup job (dry-run)"

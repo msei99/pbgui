@@ -977,93 +977,6 @@ def _get_hlcvs_cleanup_worker_item() -> dict[str, Any]:
     )
 
 
-def _get_file_sync_worker_item() -> dict[str, Any]:
-    from api.api_keys import _file_sync_worker
-
-    if not _file_sync_worker:
-        return _worker_item(
-            worker_id="file-sync",
-            label="API Key File Sync",
-            group="sync",
-            worker_type="watcher + watchdog",
-            running=False,
-            summary="Worker not initialized",
-            description="Pushes api-keys.json updates and watches remote VPS copies for changes.",
-            note="Available only while PBAPIServer has initialized the FileSyncWorker.",
-            available=False,
-            can_start=False,
-            can_stop=False,
-            log_file="FileSync.log",
-        )
-
-    status = _file_sync_worker.get_status()
-    hosts = status.get("hosts", {})
-    connected = status.get("connected_hosts", [])
-    watcher_active = sum(1 for item in hosts.values() if item.get("watcher_active"))
-    in_sync = sum(1 for item in hosts.values() if item.get("in_sync") is True)
-    watchdog_active = _task_active(getattr(_file_sync_worker, "_watchdog", None))
-    running = bool(watchdog_active or watcher_active)
-    return _worker_item(
-        worker_id="file-sync",
-        label="API Key File Sync",
-        group="sync",
-        worker_type="watcher + watchdog",
-        running=running,
-        summary=f"{watcher_active}/{len(connected)} watcher(s) active",
-        description="Pushes api-keys.json updates and watches remote VPS copies for changes.",
-        note="Start/stop controls the inotify watchers and watchdog inside PBAPIServer.",
-        stats=[
-            _worker_stat("Connected hosts", len(connected)),
-            _worker_stat("Watchers active", watcher_active),
-            _worker_stat("Hosts in sync", in_sync),
-            _worker_stat("Watchdog", "On" if watchdog_active else "Off"),
-        ],
-        log_file="FileSync.log",
-    )
-
-
-def _get_v7_sync_worker_item() -> dict[str, Any]:
-    from api.v7_instances import _v7_sync
-
-    if not _v7_sync:
-        return _worker_item(
-            worker_id="v7-config-sync",
-            label="V7 Config Sync",
-            group="sync",
-            worker_type="watcher + watchdog",
-            running=False,
-            summary="Worker not initialized",
-            description="Watches remote V7 instance state and synchronizes config changes between masters.",
-            note="Available only while PBAPIServer has initialized the V7ConfigSyncWorker.",
-            available=False,
-            can_start=False,
-            can_stop=False,
-            log_file="V7ConfigSync.log",
-        )
-
-    watchers = getattr(_v7_sync, "_watchers", {})
-    connected = _v7_sync.pool.connected_hosts()
-    watcher_active = sum(1 for task in watchers.values() if _task_active(task))
-    watchdog_active = _task_active(getattr(_v7_sync, "_watchdog", None))
-    running = bool(watchdog_active or watcher_active)
-    return _worker_item(
-        worker_id="v7-config-sync",
-        label="V7 Config Sync",
-        group="sync",
-        worker_type="watcher + watchdog",
-        running=running,
-        summary=f"{watcher_active}/{len(connected)} watcher(s) active",
-        description="Watches remote V7 instance state and synchronizes config changes between masters.",
-        note="Start/stop controls the inotify watchers and watchdog inside PBAPIServer.",
-        stats=[
-            _worker_stat("Connected hosts", len(connected)),
-            _worker_stat("Watchers active", watcher_active),
-            _worker_stat("Watchdog", "On" if watchdog_active else "Off"),
-        ],
-        log_file="V7ConfigSync.log",
-    )
-
-
 async def _collect_worker_groups() -> list[dict[str, Any]]:
     groups = [
         {
@@ -1073,14 +986,6 @@ async def _collect_worker_groups() -> list[dict[str, Any]]:
                 _get_task_worker_item(),
                 await _get_backtest_worker_item(),
                 await _get_optimize_worker_item(),
-            ],
-        },
-        {
-            "id": "sync",
-            "label": "Sync / Watchers",
-            "items": [
-                _get_file_sync_worker_item(),
-                _get_v7_sync_worker_item(),
             ],
         },
         {
@@ -1136,20 +1041,6 @@ async def _start_worker(worker_id: str) -> None:
         import api.backtest_v7 as bt7
         bt7._hlcvs_cleanup_worker.start()
         return
-    if worker_id == "file-sync":
-        from api.api_keys import _file_sync_worker
-        if not _file_sync_worker:
-            raise HTTPException(status_code=409, detail="FileSyncWorker not initialized")
-        await _file_sync_worker.start_watchers()
-        _file_sync_worker.start_watchdog()
-        return
-    if worker_id == "v7-config-sync":
-        from api.v7_instances import _v7_sync
-        if not _v7_sync:
-            raise HTTPException(status_code=409, detail="V7ConfigSyncWorker not initialized")
-        await _v7_sync.start_watchers()
-        _v7_sync.start_watchdog()
-        return
     raise HTTPException(status_code=404, detail=f"Unknown worker: {worker_id}")
 
 
@@ -1180,20 +1071,6 @@ async def _stop_worker(worker_id: str) -> None:
     if worker_id == "hlcvs-cleanup":
         import api.backtest_v7 as bt7
         bt7._hlcvs_cleanup_worker.stop()
-        return
-    if worker_id == "file-sync":
-        from api.api_keys import _file_sync_worker
-        if not _file_sync_worker:
-            raise HTTPException(status_code=409, detail="FileSyncWorker not initialized")
-        await _file_sync_worker.stop_watchers()
-        _file_sync_worker.stop_watchdog()
-        return
-    if worker_id == "v7-config-sync":
-        from api.v7_instances import _v7_sync
-        if not _v7_sync:
-            raise HTTPException(status_code=409, detail="V7ConfigSyncWorker not initialized")
-        await _v7_sync.stop_watchers()
-        _v7_sync.stop_watchdog()
         return
     raise HTTPException(status_code=404, detail=f"Unknown worker: {worker_id}")
 

@@ -490,7 +490,7 @@ function syncInstallPreview() {
     + '<div><strong>' + action + 'PBGui:</strong> ' + escapeHtml(joinPath(parent, 'pbgui')) + '</div>'
     + '<div><strong>' + action + 'PB7:</strong> ' + escapeHtml(joinPath(parent, 'pb7')) + '</div>'
     + '<div><strong>' + action + 'Venvs:</strong> ' + escapeHtml(joinPath(parent, 'venv_pbgui')) + ', ' + escapeHtml(joinPath(parent, 'venv_pb7')) + '</div>'
-    + (installMode.value === 'local-uninstall' ? '<div><strong>Will remove systemd user units:</strong> pbgui-api, pbgui-pbrun, pbgui-pbdata, pbgui-pbcoindata, obsolete pbgui-pbremote if present</div>' : '');
+    + (installMode.value === 'local-uninstall' ? '<div><strong>Will remove systemd user units:</strong> pbgui-api, pbgui-pbcluster, pbgui-pbrun, pbgui-pbdata, pbgui-pbcoindata, obsolete pbgui-pbremote if present</div>' : '');
 }
 function syncMode() {
   if (installMode.value !== 'remote') {

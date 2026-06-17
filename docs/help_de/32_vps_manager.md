@@ -36,13 +36,12 @@ Linke Sidebar:
 |--------|--------|
 | **Add VPS** | Formular zum Hinzufügen / Initialisieren öffnen |
 | **Refresh** | Alle VPS-Status- und Versionsdaten über das Refresh-Icon neu laden |
-| **API Sync** | Zeigt den gemeinsamen API-Sync-Status (`API Sync`, `API X/Y out of sync`, `API all in sync`) an und pusht API-Zugangsdaten bei Klick an verbundene VPS |
 | **Overview / Settings / History** | Zwischen Live-Übersicht, gemeinsamen Deploy-Einstellungen und letzter Deploy-Historie wechseln |
 | **Import by Hostname** | Den manuellen Hostname-Import aus dem Sidebar-Bereich **Import Host** öffnen; der Hostname muss bereits lokal über `/etc/hosts` auflösbar sein |
 
 Die Übersicht nutzt jetzt die normale gemeinsame PBGui-FastAPI-Shell. Beim Wechsel zu **Master** oder zu einem konkreten **VPS** wird die linke Sidebar zu einer kontextabhängigen Aktionsliste umgeschaltet. Der Hauptbereich der Übersicht bleibt dabei auf die Tabelle fokussiert, während der Host-Import als manuelle Hostname-Aktion in der Sidebar verfügbar bleibt.
 
-Die Seite hält eine Live-WebSocket-Verbindung für Übersicht, Fortschritt, Branch-Status und API-Sync-Fortschritt offen.
+Die Seite hält eine Live-WebSocket-Verbindung für Übersicht, Fortschritt und Branch-Status offen.
 
 Die Live-Updates schließen die **VPS**-Auswahl in der Sidebar beim Umschalten zwischen Hosts nicht mehr.
 
@@ -75,7 +74,7 @@ Der **Master**-Inhaltsbereich enthält zusätzlich:
 - ein Live-Statusraster für CoinData / letzten Command
 - **PBGui Branch Management** für Branch- oder Commit-Wechsel
 - **PB7 Branch Management** mit optionaler Custom-Remote- / Fork-URL
-- einen **Monitor**-Bereich mit Server-Metriken plus PB7-Aktivität; falls Live-Monitor-Zeilen fehlen, listet die Seite die laufenden PB7-Botnamen weiterhin aus `status_v7.json`
+- einen **Monitor**-Bereich mit Server-Metriken plus PB7-Aktivität aus laufenden Prozessen, PB7-Logs und Cluster-Sync-Zielzustand
 - einen **Progress**-Bereich mit getrennten Status-Buckets; sobald eine Sidebar-Aktion einen Master-Ansible-Task startet, schaltet die Hauptfläche auf den gemeinsamen **Command Log Viewer** um, und **Home** bringt zurück zur normalen Master-Ansicht
 
 ---
@@ -108,14 +107,14 @@ Sidebar-Aktionen:
 Der **VPS**-Inhaltsbereich enthält zusätzlich:
 - ein Setup-/Konfigurationsraster für Passwort, Swap, CoinMarketCap-Key und Firewall-Felder; **Apply VPS Changes** speichert Änderungen lokal und wendet geänderte Swap-, Firewall- und CoinMarketCap-Einstellungen auf der VPS an
 - **PBGui Branch Management** und **PB7 Branch Management** mit demselben Switch-/Update-Workflow wie beim Master
-- einen **Remote Monitor** mit Server-Metriken plus PB7-Aktivität; falls Live-Monitor-Zeilen fehlen, listet die Seite die laufenden PB7-Botnamen weiterhin aus `status_v7.json`
+- einen **Remote Monitor** mit Server-Metriken plus PB7-Aktivität aus laufenden Prozessen, PB7-Logs und Cluster-Sync-Zielzustand
 - einen **Progress**-Bereich mit getrennten Status-Buckets für Init-, Setup- und Update-Läufe; für die vollständige Ansible-Ausgabe werden die Sidebar-Aktionsknöpfe auf den gemeinsamen **Command Log Viewer** umgeschaltet
 
 Die Sidebar trennt die Log-Workflows jetzt bewusst von der normalen Host-Ansicht:
 - Utility-Aktionen wie **Task Logs**, **Host Logs**, **Change VPS**, **Initialize** oder **Delete VPS** bleiben oberhalb eines Trenners, während die ausführbaren Ansible-Playbook-Knöpfe darunter gruppiert sind
 - **Task Logs** öffnet einen eigenen gefilterten Viewer für alle gespeicherten Playbook-Logs des ausgewählten VPS inklusive rotierter Historie
 - Aktionen wie **Initialize**, **Setup VPS**, **Update PBGui**, **Update PBGui and PB7**, **Update Linux**, **Cleanup VPS** oder **Update CoinData API** schalten die Hauptfläche automatisch auf den gemeinsamen **Command Log Viewer** um
-- **Host Logs** öffnet einen eigenen **Host Log Viewer** für Service-Logs, laufende Bot-Logs und dateibasierte Ziele wie `sync.log`
+- **Host Logs** öffnet einen eigenen **Host Log Viewer** für Service-Logs, laufende Bot-Logs und dateibasierte Ziele wie `PBCluster.log`
 - **Back** bringt von Branch-, Setup- oder Log-Screens zurück in die normale VPS-Detailansicht, ohne den gewählten Host-Kontext zu verlieren
 - jeder aufrufbare VPS-Manager-Task bekommt jetzt sein eigenes aktuelles Log plus rotierte Historie im gemeinsamen Viewer; standardmäßig bleiben 10 Historien-Dateien erhalten, konfigurierbar über `[vps_manager] task_log_history` in `pbgui.ini`
 - wenn die Ansible-Ausgabe bereits Terminal-ANSI-Farben enthält, übernimmt der gemeinsame Viewer diese Farben jetzt auch im Browser, statt nur über Textmuster zu raten
@@ -161,6 +160,6 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
 1. Master oder VPS-Detailansicht öffnen
 2. **Branch Management** aufklappen → Zielbranch auswählen → **Switch Branch** klicken
 
-### API-Key-Synchronisation prüfen
-- Am unteren Ende der Sidebar zeigt die gemeinsame **API Sync** Schaltfläche je nach verbundenen VPS **API X/Y out of sync** oder **API all in sync** an - ein Klick pusht die aktualisierten Keys über den neuen SSH-API-Sync-Flow
-- Pro VPS: VPS-Detailansicht öffnen → **Update CoinData API**
+### API-Keys materialisieren
+- Verwende **System -> Cluster Sync**, um `api-keys.json` auf erreichbaren Nodes zu prüfen und zu materialisieren.
+- Pro VPS: VPS-Detailansicht öffnen → **Update CoinData API** aktualisiert nur den CoinMarketCap-Key für Market-Data-Filter.

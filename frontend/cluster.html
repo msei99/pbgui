@@ -1116,7 +1116,7 @@
         window.PBGuiConfirm({
           title: 'Materialize Remote API Keys',
           message: 'Write api-keys.json on ' + (pendingPreviewNode.pbname || pendingPreviewNode.hostname || pendingPreviewNode.node_id) + ' from the replicated Cluster Sync secret blob?',
-          detail: 'This is a remote write to api-keys.json only. A backup is created first when an existing file differs. It does not restart bots, deploy files, or materialize V7 configs.',
+          detail: 'This is a remote write to api-keys.json only. Existing differing files are backed up on master nodes only; VPS runners skip local backups. It does not restart bots, deploy files, or materialize V7 configs.',
           confirmText: 'Materialize API Keys'
         }).then(function (accepted) {
           if (!accepted) return;

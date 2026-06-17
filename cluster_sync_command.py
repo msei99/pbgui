@@ -497,11 +497,18 @@ def _materialize_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
     target = Path(str(plan.get("path") or ""))
     secret_hash = str(plan.get("secret_blob_hash") or "")
     raw = _read_verified_blob(ClusterPaths.from_root(cluster_root).secret_blobs, secret_hash, "api-keys secret blob")
-    if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() != secret_hash.removeprefix("sha256:"):
-        backup_dir = Path(PBGDIR) / "data" / "backup" / "api-keys_cluster" / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    current_hash = hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else ""
+    needs_replacement_backup = bool(current_hash and current_hash != secret_hash.removeprefix("sha256:"))
+    is_vps_runner = str(identity.get("role") or "").strip().lower() == "vps"
+    if not is_vps_runner and needs_replacement_backup:
+        backup_dir = Path(PBGDIR) / "data" / "api-keys"
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        backup_file = backup_dir / f"api-keys7_cluster-materialize_{timestamp}.json"
         backup_dir.mkdir(parents=True, exist_ok=True)
-        (backup_dir / "api-keys.json").write_bytes(target.read_bytes())
-        plan["backup"] = str(backup_dir / "api-keys.json")
+        backup_file.write_bytes(target.read_bytes())
+        plan["backup"] = str(backup_file)
+    elif is_vps_runner and needs_replacement_backup:
+        plan["backup_skipped"] = "vps_runner"
     _atomic_write_bytes(target, raw, mode=0o600)
     if hashlib.sha256(target.read_bytes()).hexdigest() != secret_hash.removeprefix("sha256:"):
         raise ClusterSyncCommandError("api-keys write verification failed")

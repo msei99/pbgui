@@ -466,10 +466,25 @@ def test_materialize_v7_repairs_missing_local_blobs_from_existing_config(tmp_pat
     assert after["counts"]["skip"] >= 1
 
 
-def test_materialize_api_keys_preview_and_apply_writes_secret_blob(monkeypatch, tmp_path: Path) -> None:
-    """materialize-api-keys writes api-keys.json from a verified secret blob."""
+@pytest.mark.parametrize(("role", "expects_backup"), [("master", True), ("vps", False)])
+def test_materialize_api_keys_preview_and_apply_writes_secret_blob(
+    monkeypatch,
+    tmp_path: Path,
+    role: str,
+    expects_backup: bool,
+) -> None:
+    """materialize-api-keys writes api-keys.json and backs up only on masters."""
 
     root = _init_cluster(tmp_path)
+    if role != "master":
+        ensure_local_identity(
+            root,
+            role=role,
+            pbname="vps-a",
+            cluster_id=CLUSTER_ID,
+            node_id=NODE_A,
+            created_at=100,
+        )
     pb7 = tmp_path / "pb7"
     pb7.mkdir()
     target = pb7 / "api-keys.json"
@@ -495,7 +510,15 @@ def test_materialize_api_keys_preview_and_apply_writes_secret_blob(monkeypatch, 
     assert result["status"] == "written"
     assert target.read_bytes() == raw_secret
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
-    assert Path(result["backup"]).read_text(encoding="utf-8") == '{"_api_serial":1}'
+    if expects_backup:
+        backup_path = Path(result["backup"])
+        assert backup_path.parent == tmp_path / "data" / "api-keys"
+        assert backup_path.name.startswith("api-keys7_cluster-materialize_")
+        assert backup_path.read_text(encoding="utf-8") == '{"_api_serial":1}'
+    else:
+        assert result["backup_skipped"] == "vps_runner"
+        assert "backup" not in result
+        assert not (tmp_path / "data" / "api-keys").exists()
     after = run_command(root, NODE_B, "materialize-api-keys-preview")
     assert after["counts"]["current"] == 1
 

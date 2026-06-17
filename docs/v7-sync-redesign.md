@@ -2,155 +2,85 @@
 
 ## Grundprinzip
 
-`status_v7.json` ist die **Single Source of Truth** für den Instanz-Katalog.
-VPS-Verzeichnisse (`data/run_v7/*`) spiegeln diesen Katalog wider.
-`delete_*.cmd` und `activate_*.cmd` (für v7) entfallen komplett.
-Der separate "Activate"-Button im GUI für v7 wird entfernt — Save schreibt und synct alles.
+- Cluster Sync `desired_state.json` ist die Quelle fuer V7-Zielzustand, Host-Zuordnung, Version, Manifest-Hash und Tombstones.
+- `data/run_v7/<name>/` enthaelt lokal materialisierte Konfigurationen.
+- PBCluster repliziert Operationen/Blobs und materialisiert Dateien lokal oder remote.
+- PBRun bleibt der Runtime-Gatekeeper und startet/stoppt nur lokale Bots anhand lokal materialisierter Cluster-Zustaende.
+- Legacy `data/cmd/status_v7.json`, `activate_*.cmd` und direkte V7-SSH-Sync-Pfade sind fuer V7 retired.
 
----
+## Materialisierte V7-Dateien
 
-## `status_v7.json` — Zentrales Manifest
-
-- Enthält die Liste aller v7 Instanzen mit **per-Instance `activate_ts`**
-- **Nur von Mastern geschrieben**
-- PBRun auf VPS **liest nur** → startet/stoppt Bots entsprechend
-- Andere Master überwachen sie auf VPS per inotify → **Merge-Logik: höchster `activate_ts` pro Instanz gewinnt**
-
-## Per-Instance Config-Dateien
-
-- Weiterhin pro Instanz unter `data/run_v7/{name}/`
-- Eine Instanz kann aus **mehreren .json Dateien** bestehen:
-  - `config.json` — Haupt-Config (immer vorhanden)
-  - `{SYMBOL}.json` — Per-Coin Configs (z.B. `ALGOUSDT.json`, `DOGEUSDT.json`, `XRP.json`)
-- **Nicht gesynct** werden runtime/lokale Dateien:
-  - `ignored_coins.json`, `approved_coins.json`, `config_run.json`
-- Nur von Mastern geschrieben
-- VPS bekommt sie über Cluster Sync/PBCluster-Materialisierung
-- `pbgui.version` für Config-Versionierung (wie bisher)
+- Synchronisiert werden `config.json` und Coin-Override-Dateien wie `BTC.json`.
+- Nicht synchronisiert werden Runtime-Dateien wie `config_run.json`, `running_version.txt`, `ignored_coins.json`, `approved_coins.json` und Logs.
+- `pbgui.version` bleibt die lokale Config-Version.
+- Der Cluster-Manifest-Hash deckt alle syncbaren JSON-Dateien ab.
 
 ## Running-State
 
-- Läuft über `status_v7.json` plus SSH/VPS monitor state
-- Kein separates Alive- oder Monitor-File nötig
-- `running_version.txt` pro Instanz bleibt für inotify-Feedback
-
----
+- Ist-Zustand kommt aus echten Prozessen, PB7-Logs und `running_version.txt`.
+- Soll-/Blocked-Zustand kommt aus `data/cluster/desired_state.json`.
+- `running_version.txt` bleibt als schnelles Monitoring-Feedback erhalten, ist aber keine Quelle fuer gewuenschte Starts/Stops.
 
 ## Flows
 
 ### Save/Create
 
-```
-Master 1:
-  1. config.json + Coin-Configs schreiben (data/run_v7/{name}/)
-  2. status_v7.json updaten (activate_ts für diese Instanz setzen)
-  3. config.json + Coin-Configs + status_v7.json per SSH auf alle VPS pushen
-
-VPS:
-  PBRun erkennt neue status_v7 (Polling alle 5s)
-  → startet/stoppt Bots entsprechend
-
-Master 2/3:
-  inotify auf VPS status_v7.json
-  → Merge: per-Instance activate_ts vergleichen
-  → neue/geänderte Instanzen: config.json + Coin-Configs von VPS pullen
-  → gelöschte Instanzen: Backup + lokal löschen
-```
+1. Master schreibt lokal `data/run_v7/<name>/config.json` und Overrides.
+2. Master schreibt eine Cluster-Operation mit Version, Assignment, Desired State und Manifest-Hash.
+3. PBCluster repliziert Operationen/Blobs an konfigurierte Peers.
+4. PBCluster materialisiert zugewiesene Dateien auf dem Zielknoten.
+5. PBRun erkennt die lokale Aenderung und prueft Cluster Gate vor Start/Weiterlauf.
 
 ### Delete
 
-```
-Master 1:
-  1. rm -rf lokal (data/run_v7/{name})
-  2. rm -rf auf allen VPS per SSH
-  3. status_v7.json updaten (Instanz entfernt, activate_ts bumpen)
-  4. status_v7.json per SSH auf alle VPS pushen
+1. Master sichert und entfernt die lokale Instanz.
+2. Master schreibt eine Tombstone/Delete-Operation.
+3. PBCluster repliziert die Operation.
+4. PBRun stoppt lokale Bots, sobald der lokale Desired State Tombstone/Stop signalisiert.
+5. Fehlende Dateien oder fehlende Remote-Eintraege erzeugen niemals implizite Deletes.
 
-VPS:
-  PBRun erkennt neue status_v7 → stoppt Bot (falls laufend)
+### Move/Enable/Disable
 
-Master 2/3:
-  inotify → neue status_v7 → Instanz fehlt → Backup + lokal löschen
-```
+1. Master schreibt eine explizite Cluster-Operation fuer neues Assignment oder `desired_state`.
+2. PBCluster materialisiert nur auf dem zugewiesenen Node.
+3. PBRun auf dem alten Node stoppt durch `wrong_host`/`desired_stopped` Gate.
+4. PBRun auf dem neuen Node startet nur bei passendem Manifest, passender Version und `desired_state=running`.
 
-### Enable/Disable (enabled_on ändern)
+## PBRun Gate
 
-```
-Master 1:
-  1. config.json: enabled_on ändern
-  2. status_v7.json: activate_ts für Instanz bumpen
-  3. config.json + Coin-Configs + status_v7.json per SSH auf alle VPS
+PBRun startet oder laesst einen V7-Bot nur weiterlaufen, wenn alle Checks passen:
 
-VPS:
-  PBRun → startet oder stoppt Bot
+- Cluster ist nicht initialisiert, oder `desired_state.json` ist lesbar und gehoert zum lokalen Cluster.
+- Instanz existiert im Desired State.
+- Instanz ist nicht tombstoned oder conflicted.
+- `desired_state == "running"`.
+- `assigned_host == local node_id`.
+- Lokaler Manifest-Hash entspricht `config_manifest_hash`.
+- Lokale Config-Version entspricht `version`.
 
-Master 2/3:
-  inotify → config.json + Coin-Configs pullen + status_v7 mergen
-```
+Fehlschlaege werden als Blocked State in PBRun/Monitoring sichtbar gemacht.
 
-### Startup (Master war offline)
+## Legacy V7 SSH Sync
 
-```
-Master:
-  1. status_v7.json von VPS lesen (alle verbundenen)
-  2. Merge: per-Instance activate_ts vergleichen
-  3. Neuere Configs von VPS pullen (config.json + Coin-Configs)
-  4. Lokal vorhandene Instanzen die in keiner VPS-status_v7 mehr stehen → Backup + löschen
-```
+- `master/v7_config_sync.py` ist entfernt.
+- V7-Saves, Restores, Deletes und Forced-Mode-Aenderungen schreiben Cluster-Operationen statt Remote-SFTP-Pushes.
+- Remote `run_v7`-Dateien werden nur noch durch explizite Cluster Sync Materialisierung geschrieben.
+- PBCluster startet oder stoppt keine Bots direkt.
 
----
+## Aenderungen pro Datei
 
-## Merge-Logik
-
-- **Per-Instance `activate_ts`** (nicht per-File)
-- Wenn Master 1 Instanz A ändert (ts=100) und Master 2 Instanz B ändert (ts=101):
-  → Merge ergibt: Instanz A mit ts=100 + Instanz B mit ts=101
-- Datei-Level-Timestamp entscheidet NICHT — nur pro Instanz
-- Instanz fehlt komplett in einer status_v7 → wurde gelöscht (nur wenn activate_ts der
-  Remote-Version neuer als die lokale)
-
----
-
-## PBRun (VPS)
-
-- Überwacht **nur** `status_v7.json` per Polling (alle 5s mtime check)
-- Startet/stoppt Bots entsprechend bei neuer Version
-- Für v7: **kein `activate_*.cmd` mehr** — nur status_v7 gilt
-- v6 Multi/Single System: **komplett unverändert** (activate_*.cmd bleibt für v6)
-
-## PBCluster
-
-- Repliziert Cluster-Operationen, Config-Blobs und API-Key-Metadaten zwischen verbundenen Nodes
-- Materialisiert freigegebene V7-Configs und API-Keys explizit auf erreichbare Nodes
-- PBRun liest den lokal materialisierten gewünschten Zustand und startet/stoppt Bots entsprechend
-- v6 Multi/Single: **komplett unverändert**
-
-## V7ConfigSyncWorker (Master)
-
-- Überwacht `status_v7.json` auf allen VPS per inotify — **einziger Trigger für Config-Sync**
-- Überwacht `running_version.txt` pro Instanz (geschrieben von PBRun auf VPS — Running-Feedback im UI)
-- `config.json` Watch: **entfällt** — jede Config-Änderung bumpt `activate_ts` in status_v7, das reicht als Trigger
-- `delete_*.cmd` Watch + Verarbeitung: **komplett entfernt**
-- Startup: Reconciliation gegen VPS status_v7
-- Watchdog (120s): periodischer Abgleich als Fallback
-
----
-
-## Änderungen pro Datei
-
-| Datei | Änderungen |
-|-------|-----------|
-| **`Status.py`** | Per-Instance `activate_ts` im Schema |
-| **`PBRun.py`** | `watch_v7()` → nur status_v7 auswerten; `activate_*.cmd` für v7 entfernen (v6 bleibt!); Polling auf status_v7 mtime |
-| **`api/v7_instances.py`** | Delete: `delete_*.cmd` raus; Save/Create: alle .json + status_v7 per SSH auf VPS; status_v7 bei Save/Delete updaten |
-| **`master/v7_config_sync.py`** | `delete_*.cmd` Code raus; status_v7 als inotify Watch-Pfad; Reconciliation-Callback (Merge + Pull config.json + Coin-Configs / Delete); Startup-Abgleich |
-| **`PBCluster.py`** | Cluster-Operationen/Blobs replizieren und V7/API-Key-Zielzustand auf verbundenen Nodes materialisieren |
-| **`RunV7.py`** | `save()`: auch status_v7 updaten; `activate()` für v7: entfällt komplett |
-| **`frontend/v7_run.html`** | Activate-Button entfernen; Save-Logik ggf. anpassen |
+| Datei | Rolle |
+|-------|-------|
+| `PBRun.py` | Pollt Cluster Desired State und `data/run_v7`, fuehrt lokale Start/Stop-Entscheidungen aus |
+| `api/v7_instances.py` | Schreibt lokale Configs und Cluster-Operationen, keine direkten Remote-V7-Pushes |
+| `cluster_sync_command.py` | Materialisiert V7/API-Key Payloads ueber den eingeschraenkten SSH Wrapper |
+| `master/async_monitor.py` | Meldet Ist-Zustand aus Prozessen/Logs und Soll-/Blocked-Zustand aus Cluster Desired State |
+| `PBCluster.py` | Repliziert Operationen/Blobs und materialisiert lokale Dateien |
 
 ## Wichtige Regeln
 
-1. **config.json + Coin-Configs** ({SYMBOL}.json) werden gesynct — NICHT: ignored_coins.json, approved_coins.json, config_run.json
-2. **v6 Multi/Single bleibt komplett unverändert** — activate_*.cmd etc. bleibt für v6
-3. **PBRun Polling** (nicht inotify) zur Vermeidung neuer Komplexität
-4. **Kein Activate-Button** mehr für v7 im GUI — Save triggert alles
+1. Keine Delete-Inferenz aus fehlenden Dateien, fehlenden VPS-Eintraegen oder fehlendem Remote-Status.
+2. Tombstones werden nur durch explizites Restore/Recreate entfernt.
+3. PBCluster schreibt Dateien, startet/stoppt aber keine Bots.
+4. PBRun kontaktiert keine Peers und schreibt keine Remote-Dateien.
+5. Runner/VPS benoetigen PBCluster und PBRun, aber keinen laufenden PBApiServer.

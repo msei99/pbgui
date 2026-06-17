@@ -140,12 +140,13 @@ Cluster Sync verfolgt auch Änderungen an `api-keys.json`.
 
 Der Desired State speichert nur Metadaten wie Serial und Payload-Hash. Der API-Key-Inhalt wird als eingeschränkte Secret-Daten gespeichert und darf nicht in Logs oder im normalen Desired-State-JSON auftauchen.
 
-Die Installation von API-Keys auf einem Node nutzt dieselben Sicherheitsstufen wie API Sync:
+Die Installation von API-Keys auf einem Node nutzt die Sicherheitsstufen der Cluster-Sync-Materialisierung:
 
-- Backup erstellen
+- Backup auf Master-Nodes erstellen, wenn eine bestehende Datei abweicht
+- lokale Backups auf VPS-Runnern ueberspringen
 - neue Datei schreiben
 - Payload verifizieren
-- nur Bots neu starten, deren Credentials sich geändert haben
+- keine Bots neu starten und keine weiteren Dateien deployen
 
 ---
 
@@ -204,7 +205,7 @@ Im Preview-Fenster ist **Push Missing Ops + Rebuild** eine explizite Remote-Writ
 
 Wenn Operationen und Config-Blobs synchron sind, zeigt das Preview-Fenster zusätzlich **V7 Config Materialization Preview**. **Materialize V7 Configs** ist eine separate explizite Remote-Write-Aktion, die zugewiesene, konfliktfreie V7-JSON-Configs aus geprüften Config-Blobs in das remote `data/run_v7`-Verzeichnis schreibt. Sie verweigert den Lauf, wenn Remote-State-Vector oder Desired State vom lokalen State abweichen oder benötigte Blobs fehlen beziehungsweise ungültig sind. Configs für andere Nodes, Conflicts und Tombstones werden übersprungen. Die Aktion löscht keine Dateien, installiert keine API-Keys, deployed nichts und startet oder stoppt keine Bots.
 
-Das Preview-Fenster zeigt außerdem **API-key Materialization Preview**. **Materialize API Keys** ist eine separate explizite Remote-Write-Aktion, die `api-keys.json` aus dem replizierten Secret-Blob installiert. Wenn eine abweichende Remote-Datei existiert, wird zuerst ein Backup erstellt. Danach schreibt PBGui atomisch, prüft den finalen Hash und startet keine Bots neu.
+Das Preview-Fenster zeigt außerdem **API-key Materialization Preview**. **Materialize API Keys** ist eine separate explizite Remote-Write-Aktion, die `api-keys.json` aus dem replizierten Secret-Blob installiert. Master-Nodes erstellen zuerst ein normales `data/api-keys/`-Backup, wenn eine bestehende Datei abweicht; VPS-Runner ueberspringen lokale Backups. Danach schreibt PBGui atomisch, prueft den finalen Hash und startet keine Bots neu.
 
 ---
 

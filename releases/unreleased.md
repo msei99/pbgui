@@ -13,13 +13,16 @@
 - Cluster Sync: allow local PBCluster materialization to rebuild missing config blobs from matching existing run_v7 files so bootstrap-era local configs do not block automatic reconcile.
 - V7 Run: reload materialized Cluster Sync configs before a stopped bot start so `config_run.json` and the cached version match the desired state.
 - V7 Run: suppress repeated warning spam when stale local configs are correctly blocked by stable Cluster Sync stop, missing, tombstone or wrong-host states.
-- V7 Monitor: keep the remote `running_version.txt` inotify watcher active on cluster-mode so monitoring refreshes still happen immediately while legacy `status_v7.json` config reconciliation remains disabled.
-- V7 Run: PBRun now enforces Cluster Sync desired state before starting or continuing V7 bots, records the block reason in status data, and shows blocked instances in the V7 Run list.
+- V7 Monitor: keep the remote `running_version.txt` inotify watcher active on cluster-mode so monitoring refreshes still happen immediately while desired/blocked state comes from Cluster Sync.
+- V7 Run: PBRun now enforces Cluster Sync desired state before starting or continuing V7 bots, records the block reason in monitoring data, and shows blocked instances in the V7 Run list.
+- V7 Run: removed the legacy `data/cmd/status_v7.json` reconciliation path so PBRun polls local Cluster desired state and materialized `data/run_v7` configs directly.
 - V7 Run: disabled the legacy FastAPI SSH sync path on cluster-mode so saving, activating, restoring or forced-mode edits no longer push `run_v7` files or trigger PBRun starts on VPS hosts outside explicit Cluster Sync materialization.
 - Removed PBRemote service, API routes, rclone/bucket setup flows, VPS Manager cleanup UI and playbook/service-control paths; PBCluster is now the remote sync/materialization path, and setup/migration/uninstall cleanup removes obsolete PBRemote systemd units when found.
 - VPS Manager: optional PBCoinData service control now treats explicit remote unconfigured state as disabled and clears failed systemd user units when optional config is removed.
 - Cluster Sync: disabled legacy V7 config sync and legacy API-key file sync on the cluster-mode branch so remote `run_v7` and `api-keys.json` writes are owned by explicit Cluster Sync materialization.
-- Cluster Sync: added API-key operation recording, payload/secret blob replication, and explicit remote `api-keys.json` materialization with backup, atomic write and hash verification.
+- Cluster Sync: removed the legacy API-key FileSync worker, V7 config sync worker, `/api/api-keys/sync/*` endpoints, API Sync UI, VPS Manager API-sync status button and V7 status command directory cleanup targets so Cluster Sync is the only V7/API-key remote write path.
+- Cluster Sync: limit API-key materialization replacement backups to master nodes and store them in the normal `data/api-keys/` backup list so VPS runners atomically overwrite differing `api-keys.json` files without creating local backup folders.
+- Cluster Sync: added API-key operation recording, payload/secret blob replication, and explicit remote `api-keys.json` materialization with master-only replacement backup, atomic write and hash verification.
 - Cluster Sync: added explicit remote V7 config materialization from replicated config blobs into `data/run_v7`, with read-only preview, sync-state safety checks, missing-blob blocking and no deletes or bot start/stop actions.
 - Cluster Sync: added automatic bootstrap preview/apply actions to register known VPS nodes and existing run_v7 configs in local cluster state without inferring deletes or clearing tombstones.
 - Cluster Sync: bootstrap now preserves VPS Manager monitor roles so known remote masters are registered as master nodes instead of VPS nodes.

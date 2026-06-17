@@ -753,14 +753,6 @@ def _vps_deploy_requires_user_password(command: Any) -> bool:
     return normalized in {COMMAND_VPS_UPDATE, COMMAND_VPS_CLEANUP}
 
 
-def _get_file_sync_worker():
-    try:
-        from api.api_keys import _file_sync_worker
-        return _file_sync_worker
-    except Exception:
-        return None
-
-
 def _load_json_list(path: Path) -> list[dict[str, Any]]:
     try:
         if not path.exists():
@@ -1005,7 +997,6 @@ class VPSManagerService:
         self._vps_ssh_ok_cache: dict[str, bool] = {}
         self._vps_systemd_migration_status_cache: dict[str, dict[str, Any]] = {}
         self._session_secrets: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
-        self._setup_api_sync_done: dict[str, str] = {}
         self._deploy_threads: dict[str, threading.Thread] = {}
         self._deploy_sessions: dict[str, dict[str, Any]] = {}
         self._deploy_sessions_lock = threading.Lock()
@@ -2464,40 +2455,6 @@ class VPSManagerService:
             return self._empty_vps_systemd_migration_status("unknown", "Monitor is offline or has no host metadata yet.")
         return status
 
-    def _maybe_auto_sync_api_after_setup(self, vps: VPS) -> None:
-        hostname = str(vps.hostname or "").strip()
-        last_setup = str(vps.last_setup or "").strip()
-        if not hostname or not last_setup or str(vps.setup_status or "") != "successful":
-            return
-        if self._setup_api_sync_done.get(hostname) == last_setup:
-            return
-        file_sync_worker = _get_file_sync_worker()
-        if file_sync_worker is None:
-            return
-        entry = file_sync_worker.pool.get_connection(hostname)
-        if not entry:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        self._setup_api_sync_done[hostname] = last_setup
-
-        async def _push_new_host() -> None:
-            try:
-                results = await file_sync_worker.push_api_keys(hostnames=[hostname], dry_run=False, no_propagate=False)
-                result = results.get(hostname) if isinstance(results, dict) else None
-                if result and result.get("success"):
-                    _log(SERVICE, f"Auto-synced API keys to newly setup VPS {hostname}", level="INFO")
-                    return
-                self._setup_api_sync_done.pop(hostname, None)
-                _log(SERVICE, f"Auto-sync API keys failed for newly setup VPS {hostname}: {result}", level="WARNING")
-            except Exception as exc:
-                self._setup_api_sync_done.pop(hostname, None)
-                _log(SERVICE, f"Auto-sync API keys failed for newly setup VPS {hostname}: {exc}", level="WARNING")
-
-        loop.create_task(_push_new_host())
-
     def build_vps_status_with_session(self, token: str, hostname: str, *, quick: bool = False) -> dict[str, Any]:
         vps = self._require_vps(hostname)
         self._apply_session_secrets_to_vps(token, vps)
@@ -2505,8 +2462,6 @@ class VPSManagerService:
         host_state = self._get_host_telemetry(monitor_state, hostname)
         self._sync_vps_config_from_host_meta(vps, host_state)
         coindata_ok = bool(self._vps_coindata_status_cache.get(hostname, False)) if quick else False
-        if quick:
-            self._maybe_auto_sync_api_after_setup(vps)
         return self._build_vps_status(vps, host_state, coindata_ok, quick=quick)
 
     def _get_live_vps_package_status(self, vps: VPS, host_state: dict[str, Any]) -> dict[str, Any] | None:
@@ -2937,7 +2892,9 @@ class VPSManagerService:
                     "name": name,
                     "version": _safe_int(instance.get("cv")),
                     "enabled_on": str(instance.get("eo") or ""),
-                    "activate_ts": "",
+                    "blocked": _truthy(instance.get("blocked", False)),
+                    "blocked_reason": str(instance.get("blocked_reason") or ""),
+                    "cluster_gate": str(instance.get("cluster_gate") or ""),
                 }
             )
         items.sort(key=lambda item: item["name"])
@@ -4035,7 +3992,9 @@ class VPSManagerService:
                     "name": name,
                     "version": _safe_int(instance.get("cv")),
                     "enabled_on": str(instance.get("eo") or ""),
-                    "activate_ts": "",
+                    "blocked": _truthy(instance.get("blocked", False)),
+                    "blocked_reason": str(instance.get("blocked_reason") or ""),
+                    "cluster_gate": str(instance.get("cluster_gate") or ""),
                 }
             )
         items.sort(key=lambda item: item["name"])

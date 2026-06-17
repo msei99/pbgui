@@ -36,13 +36,12 @@ Left sidebar:
 |--------|--------|
 | **Add VPS** | Open the add / initialize form |
 | **Refresh** | Reload all VPS status and version data via the refresh icon |
-| **API Sync** | Shows the shared API sync state (`API Sync`, `API X/Y out of sync`, `API all in sync`) and pushes API credentials to connected VPS when clicked |
 | **Overview / Settings / History** | Switch between the live Overview table, shared deploy settings, and recent deploy history |
 | **Import by Hostname** | Open the manual hostname import dialog from the **Import Host** sidebar section; the hostname must already resolve via local `/etc/hosts` |
 
 The overview uses the normal shared PBGui FastAPI shell. When you switch to **Master** or a specific **VPS**, the left sidebar changes into the view-specific action list. The main overview area stays focused on the table, while host import stays available from the sidebar as a manual hostname-based action.
 
-The page keeps a live WebSocket connection for overview rows, progress logs, branch state, and API sync progress.
+The page keeps a live WebSocket connection for overview rows, progress logs, and branch state.
 
 Live updates do not close the **VPS** selector anymore while you are choosing another host from the sidebar.
 
@@ -75,7 +74,7 @@ The **Master** content area also contains:
 - a live status grid for CoinData / last command state
 - **PBGui Branch Management** for branch or commit switches
 - **PB7 Branch Management** with optional custom remote / fork URL support
-- a **Monitor** section with server metrics plus PB7 activity data; if live monitor rows are missing, the page still lists running PB7 bot names from `status_v7.json`
+- a **Monitor** section with server metrics plus PB7 activity data from live processes, PB7 logs, and Cluster Sync desired state
 - a **Progress** section with separate status buckets; when a sidebar action starts a master ansible task, the main pane switches to the shared **Command Log Viewer** for the full output, and **Home** returns to the normal master overview
 
 ---
@@ -108,14 +107,14 @@ Sidebar actions:
 The **VPS** content area also contains:
 - a setup/config grid for password, swap, CoinMarketCap key and firewall fields; **Apply VPS Changes** saves changes locally and applies changed swap, firewall, and CoinMarketCap settings on the VPS
 - **PBGui Branch Management** and **PB7 Branch Management** with the same switch / update workflow as the Master page
-- a **Remote Monitor** section with server metrics plus PB7 activity data; if live monitor rows are missing, the page still lists running PB7 bot names from `status_v7.json`
+- a **Remote Monitor** section with server metrics plus PB7 activity data from live processes, PB7 logs, and Cluster Sync desired state
 - a **Progress** section with separate status buckets for init, setup and update runs; use the sidebar action buttons to open the shared **Command Log Viewer** whenever you need the full ansible output
 
 The sidebar keeps the detailed log workflows separate from the normal host overview:
 - utility actions such as **Task Logs**, **Host Logs**, **Change VPS**, **Initialize**, or **Delete VPS** stay above a divider, while the executable ansible playbook buttons are grouped below it
 - **Task Logs** opens a dedicated filtered viewer for all stored playbook logs of the selected VPS, including rotated history files
 - actions such as **Initialize**, **Setup VPS**, **Update PBGui**, **Update PBGui and PB7**, **Update Linux**, **Cleanup VPS**, or **Update CoinData API** switch the main pane to the shared **Command Log Viewer** automatically
-- **Host Logs** opens a dedicated **Host Log Viewer** screen for service logs, running bot logs, and file-style targets such as `sync.log`
+- **Host Logs** opens a dedicated **Host Log Viewer** screen for service logs, running bot logs, and file-style targets such as `PBCluster.log`
 - **Back** returns from branch, setup, or log screens to the normal VPS detail view without losing the selected host context
 - every callable VPS Manager task now keeps its own current log plus rotated history entries in the shared viewer; the retention defaults to 10 history files and can be changed via `[vps_manager] task_log_history` in `pbgui.ini`
 - when ansible output already contains terminal ANSI colors, the shared viewer now preserves those colors in the browser instead of relying only on text-pattern guesses
@@ -161,6 +160,6 @@ The reveal state is preserved during live updates, so opening an eye button does
 1. Open Master or VPS detail
 2. Expand **Branch Management** → select the target branch → click **Switch Branch**
 
-### Check API key sync
-- Look at the bottom of the sidebar: the shared **API Sync** button shows **API X/Y out of sync** or **API all in sync** based on the connected VPS state — click it to push updated keys via the new SSH API sync flow
-- Per-VPS: open the VPS detail → **Update CoinData API**
+### Materialize API keys
+- Use **System -> Cluster Sync** to preview and materialize `api-keys.json` on reachable nodes.
+- Per-VPS: open the VPS detail → **Update CoinData API** only updates the CoinMarketCap key used by market-data filters.
