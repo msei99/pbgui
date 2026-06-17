@@ -10,6 +10,7 @@
 - Docs: added a Cluster Mode migration guide for upgrading existing PBRemote/API Sync/V7 SSH Sync installations safely.
 - Master Update: sync PBCluster systemd user units during local PBGui update/branch-switch and restart PBCluster without forcing PBRun on master-only nodes.
 - Master Update: let the cluster-mode starter ignore legacy PBRemote restart arguments from an already-parsed main-branch switch playbook so switching from main to cluster-mode completes cleanly.
+- Master Update: make branch-switch handlers detect the target branch service set after checkout so switching from cluster-mode back to main no longer calls PBCluster through main-branch service helpers.
 - Cluster Sync: make VPS runner Join a one-click migration step that stops PBRun, writes identity, pushes/rebuilds Cluster state, materializes V7 configs/API keys, then starts PBRun again when current.
 - Cluster Sync: added an explicit second-master self-join action that uses outbound SSH to an existing master, adopts the upstream cluster id only for empty local oplogs, pulls upstream ops/blobs, registers the local master as outbound-only and installs Cluster SSH trust.
 - VPS Manager: keep the Cleanup VPS action clickable when no VPS user password is stored so the normal password prompt can collect it.

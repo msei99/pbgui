@@ -103,25 +103,43 @@
       listen: "restart pbgui"
 
     - name: Sync PBGui systemd user services
-      command:
-        argv:
-          - /bin/bash
-          - "{{ pbgdir }}/setup/setup_systemd.sh"
-          - --pbgui-dir
-          - "{{ pbgdir }}"
-          - --python
-          - "{{ ansible_playbook_python }}"
-          - --enable
-          - api,pbcluster
-          - --no-disable-excluded
-          - --no-start
+      shell: |
+        set -euo pipefail
+        setup_script="{{ pbgdir }}/setup/setup_systemd.sh"
+        enable_services="api,pbrun,pbdata,pbcoindata"
+        starter_help="$({{ ansible_playbook_python }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
+        if printf '%s' "$starter_help" | grep -q 'PBCluster'; then
+          enable_services="api,pbcluster"
+        fi
+        args=("$setup_script" --pbgui-dir "{{ pbgdir }}" --python "{{ ansible_playbook_python }}" --enable "$enable_services" --no-start)
+        if /bin/bash "$setup_script" --help 2>&1 | grep -q -- '--no-disable-excluded'; then
+          args+=(--no-disable-excluded)
+        fi
+        /bin/bash "${args[@]}"
+      args:
+        executable: /bin/bash
       register: systemd_setup_result
       changed_when: systemd_setup_result.rc == 0
       failed_when: false
       listen: "restart pbgui"
 
-    - name: Restart PBCluster and PBCoinData
-      script: setup/vps_service_control.sh restart PBCluster PBCoinData
+    - name: Restart PBGui services for target branch
+      shell: |
+        set -euo pipefail
+        starter_help="$({{ ansible_playbook_python }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
+        if printf '%s' "$starter_help" | grep -q 'PBCluster'; then
+          PBGUI_DIR="{{ pbgdir }}" PBGUI_PYTHON="{{ ansible_playbook_python }}" \
+            /bin/bash "{{ pbgdir }}/setup/vps_service_control.sh" restart PBCluster PBCoinData
+          exit 0
+        fi
+        services=(PBRun PBCoinData)
+        if printf '%s' "$starter_help" | grep -q 'PBRemote'; then
+          services=(PBRun PBRemote PBCoinData)
+        fi
+        cd "{{ pbgdir }}"
+        "{{ ansible_playbook_python }}" "{{ pbgdir }}/starter.py" -r "${services[@]}"
+      args:
+        executable: /bin/bash
       environment:
         PBGUI_DIR: "{{ pbgdir }}"
         PBGUI_PYTHON: "{{ ansible_playbook_python }}"
