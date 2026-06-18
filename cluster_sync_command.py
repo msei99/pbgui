@@ -142,10 +142,13 @@ def run_command(
         }
     if verb == "get-blob":
         _require_arity(tokens, 2)
-        return _read_blob_response(paths.config_blobs, tokens[1], secret=False)
+        return _read_blob_response(paths.config_blobs, tokens[1], secret=False, cluster_root=root)
     if verb == "get-blobs":
         _require_arity_range(tokens, 2, MAX_GET_BLOBS + 1)
-        blobs = [_read_blob_response(paths.config_blobs, token, secret=False) for token in tokens[1:]]
+        blobs = [
+            _read_blob_response(paths.config_blobs, token, secret=False, cluster_root=root)
+            for token in tokens[1:]
+        ]
         return {"ok": True, "count": len(blobs), "blobs": blobs}
     if verb == "get-secret-blob":
         _require_arity(tokens, 2)
@@ -360,17 +363,81 @@ def _read_operation_range(
     return operations, missing
 
 
-def _read_blob_response(base_dir: Path, blob_hash: str, *, secret: bool) -> dict[str, Any]:
+def _read_blob_response(
+    base_dir: Path,
+    blob_hash: str,
+    *,
+    secret: bool,
+    cluster_root: Path | None = None,
+) -> dict[str, Any]:
     """Return one verified blob as a base64 JSON response."""
 
     validated_hash = _validate_hash(blob_hash)
-    raw = _read_verified_blob(base_dir, validated_hash, "secret blob" if secret else "config blob")
+    try:
+        raw = _read_verified_blob(base_dir, validated_hash, "secret blob" if secret else "config blob")
+    except ClusterSyncCommandError as exc:
+        if secret or cluster_root is None or not str(exc).startswith("missing config blob:"):
+            raise
+        if not _repair_config_blob_response_from_run_v7(Path(cluster_root), validated_hash):
+            raise
+        raw = _read_verified_blob(base_dir, validated_hash, "config blob")
     return {
         "ok": True,
         "hash": validated_hash,
         "size": len(raw),
         "content_b64": base64.b64encode(raw).decode("ascii"),
     }
+
+
+def _repair_config_blob_response_from_run_v7(cluster_root: Path, requested_hash: str) -> bool:
+    """Rebuild a missing config blob from matching local run_v7 files."""
+
+    requested = _validate_hash(requested_hash)
+    materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=False))
+    desired_state = materialized.get("desired_state") if isinstance(materialized, dict) else {}
+    desired_state = desired_state if isinstance(desired_state, dict) else {}
+    instances = desired_state.get("instances") if isinstance(desired_state, dict) else {}
+    instances = instances if isinstance(instances, dict) else {}
+    run_root = Path(cluster_root).parent / "run_v7"
+    paths = ClusterPaths.from_root(cluster_root)
+    for instance in sorted(str(name) for name in instances if str(name)):
+        item = instances.get(instance) if isinstance(instances.get(instance), dict) else {}
+        raw_manifest_hash = str(item.get("config_manifest_hash") or "")
+        if not raw_manifest_hash:
+            continue
+        try:
+            manifest_hash = _validate_hash(raw_manifest_hash)
+        except ClusterSyncCommandError:
+            continue
+        _validate_relative_name(instance, "instance")
+        instance_dir = run_root / instance
+        if not instance_dir.is_dir():
+            continue
+        try:
+            manifest = build_config_manifest(instance_dir)
+        except (ClusterStateError, OSError):
+            continue
+        if compute_config_manifest_hash(manifest) != manifest_hash:
+            continue
+        files = manifest.get("files") if isinstance(manifest, dict) else {}
+        files = files if isinstance(files, dict) else {}
+        file_hashes = {
+            f"sha256:{sha}"
+            for meta in files.values()
+            for sha in [str((meta if isinstance(meta, dict) else {}).get("sha256") or "")]
+            if sha
+        }
+        if requested != manifest_hash and requested not in file_hashes:
+            continue
+        manifest_raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        _write_blob(paths.config_blobs, manifest_hash, manifest_raw, MAX_CONFIG_BLOB_BYTES, secret=False)
+        for filename, meta in files.items():
+            _validate_relative_name(str(filename), "config filename")
+            sha = str((meta if isinstance(meta, dict) else {}).get("sha256") or "")
+            blob_hash = _validate_hash(f"sha256:{sha}")
+            _write_blob(paths.config_blobs, blob_hash, (instance_dir / str(filename)).read_bytes(), MAX_CONFIG_BLOB_BYTES, secret=False)
+        return True
+    return False
 
 
 def _verify_remote_node(cluster_root: Path, remote_node: str, *, allow_join: bool) -> None:

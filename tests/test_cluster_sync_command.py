@@ -93,6 +93,21 @@ def _write_config_blob_set(root: Path, files: dict[str, bytes]) -> str:
     return manifest_hash
 
 
+def _write_local_run_v7_config(root: Path, instance: str, raw_config: bytes) -> tuple[str, str, bytes]:
+    """Write a local run_v7 config without writing config blobs."""
+
+    instance_dir = root.parent / "run_v7" / instance
+    instance_dir.mkdir(parents=True)
+    (instance_dir / "config.json").write_bytes(raw_config)
+    file_hash = hashlib.sha256(raw_config).hexdigest()
+    manifest_raw = _canonical_json_bytes({
+        "schema_version": 1,
+        "files": {"config.json": {"sha256": file_hash, "size": len(raw_config)}},
+    })
+    manifest_hash = "sha256:" + hashlib.sha256(manifest_raw).hexdigest()
+    return manifest_hash, file_hash, manifest_raw
+
+
 def test_hello_returns_identity_for_registered_peer(tmp_path: Path) -> None:
     """hello returns local identity and protocol information for known peers."""
 
@@ -281,6 +296,61 @@ def test_put_blobs_writes_valid_blob_batch(tmp_path: Path) -> None:
     assert base64.b64decode(single["content_b64"]) == raw_a
     assert [item["hash"] for item in batch["blobs"]] == [hash_a, hash_b]
     assert [base64.b64decode(item["content_b64"]) for item in batch["blobs"]] == [raw_a, raw_b]
+
+
+def test_get_blob_repairs_missing_manifest_from_existing_run_v7_config(tmp_path: Path) -> None:
+    """get-blob rebuilds a missing manifest blob from matching local run_v7 files."""
+
+    root = _init_cluster(tmp_path)
+    raw_config = b'{"live":{"user":"local"}}'
+    manifest_hash, file_hash, manifest_raw = _write_local_run_v7_config(root, "local_inst", raw_config)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_A,
+            "desired_state": "running",
+            "config_manifest_hash": manifest_hash,
+        },
+        created_at=102,
+    )
+
+    payload = run_command(root, NODE_B, f"get-blob {manifest_hash}")
+
+    assert payload["hash"] == manifest_hash
+    assert base64.b64decode(payload["content_b64"]) == manifest_raw
+    assert (root / "config_blobs" / "sha256" / file_hash[:2] / f"{file_hash}.json").read_bytes() == raw_config
+
+
+def test_get_blob_repairs_missing_file_blob_from_existing_run_v7_config(tmp_path: Path) -> None:
+    """get-blob rebuilds missing file blobs referenced by matching local configs."""
+
+    root = _init_cluster(tmp_path)
+    raw_config = b'{"live":{"user":"local"}}'
+    manifest_hash, file_hash, manifest_raw = _write_local_run_v7_config(root, "local_inst", raw_config)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_A,
+            "desired_state": "running",
+            "config_manifest_hash": manifest_hash,
+        },
+        created_at=102,
+    )
+
+    payload = run_command(root, NODE_B, f"get-blob sha256:{file_hash}")
+    manifest_digest = manifest_hash.removeprefix("sha256:")
+
+    assert payload["hash"] == f"sha256:{file_hash}"
+    assert base64.b64decode(payload["content_b64"]) == raw_config
+    assert (
+        root / "config_blobs" / "sha256" / manifest_digest[:2] / f"{manifest_digest}.json"
+    ).read_bytes() == manifest_raw
 
 
 def test_put_secret_blob_uses_owner_only_permissions(tmp_path: Path) -> None:

@@ -24,6 +24,7 @@
 - VPS Manager: resolve PBCluster in the remote Host Log Viewer to `data/logs/PBCluster.log` so joined hosts show the service log again.
 - Services: expose local PBCluster in the Services overview/control page and include it in local systemd migration defaults.
 - Cluster Sync: allow local PBCluster materialization to rebuild missing config blobs from matching existing run_v7 files so bootstrap-era local configs do not block automatic reconcile.
+- Cluster Sync: let remote config blob reads rebuild missing manifest/file blobs from matching existing run_v7 files so second-master self-join can pull bootstrap-era configs from an upstream master.
 - V7 Run: reload materialized Cluster Sync configs before a stopped bot start so `config_run.json` and the cached version match the desired state.
 - V7 Run: suppress repeated warning spam when stale local configs are correctly blocked by stable Cluster Sync stop, missing, tombstone or wrong-host states.
 - V7 Monitor: keep the remote `running_version.txt` inotify watcher active on cluster-mode so monitoring refreshes still happen immediately while desired/blocked state comes from Cluster Sync.
