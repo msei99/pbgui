@@ -329,11 +329,6 @@
               <input class="modal-input" id="self-join-ssh-user" type="text" placeholder="ssh-user">
             </div>
             <div class="modal-field">
-              <label for="self-join-ssh-password">SSH Password (optional)</label>
-              <input class="modal-input" id="self-join-ssh-password" type="password" autocomplete="current-password" placeholder="Only needed before keys are installed">
-              <div class="field-help">Used only for this join request. It is not saved.</div>
-            </div>
-            <div class="modal-field">
               <label for="self-join-ssh-port">SSH Port</label>
               <input class="modal-input" id="self-join-ssh-port" type="number" min="1" max="65535" step="1" placeholder="22">
             </div>
@@ -419,6 +414,36 @@
       <div class="modal-actions">
         <button class="btn" id="join-cancel-btn" type="button">Cancel</button>
         <button class="btn warn" id="join-confirm-btn" type="button">Join &amp; Sync</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="self-join-password-modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="self-join-password-title">
+      <div class="modal-head">
+        <div id="self-join-password-title">SSH Password Required</div>
+        <button class="modal-close" id="self-join-password-close-btn" type="button" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div id="self-join-password-message">Key login is not available yet. Enter the upstream SSH password to retry the join.</div>
+        <div class="field">
+          <div class="field-label">Upstream Master</div>
+          <div class="field-value" id="self-join-password-host"></div>
+        </div>
+        <div class="field">
+          <div class="field-label">SSH User</div>
+          <div class="field-value" id="self-join-password-user"></div>
+        </div>
+        <div class="modal-field">
+          <label for="self-join-password-input">SSH Password</label>
+          <input class="modal-input" id="self-join-password-input" type="password" autocomplete="current-password" placeholder="SSH password">
+          <div class="field-help">Used only for this join request. It is not saved.</div>
+        </div>
+        <div class="modal-error" id="self-join-password-error"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="self-join-password-cancel-btn" type="button">Cancel</button>
+        <button class="btn warn" id="self-join-password-confirm-btn" type="button">Retry Join</button>
       </div>
     </div>
   </div>
@@ -542,6 +567,7 @@
       var lastTombstonesPayload = null;
       var lastOplogPayload = null;
       var pendingJoinNode = null;
+      var pendingSelfJoinPayload = null;
       var pendingSettingsNode = null;
       var pendingPreviewNode = null;
       var lastPreviewPayload = null;
@@ -737,44 +763,148 @@
         el.style.color = kind === 'err' ? 'var(--bad)' : kind === 'ok' ? 'var(--good)' : 'var(--muted)';
       }
 
-      function selfJoinExistingCluster() {
+      function selfJoinErrorMessage(err) {
+        var text = String((err && err.message) || err || 'Self-join failed.');
+        try {
+          var payload = JSON.parse(text);
+          if (payload && payload.detail) return String(payload.detail);
+        } catch (_) {}
+        return text;
+      }
+
+      function selfJoinPayload() {
         var hostname = document.getElementById('self-join-hostname').value.trim();
-        if (!hostname) {
-          showSelfJoinStatus('Enter the VPS Monitor hostname for the existing master.', 'err');
-          return;
-        }
-        var payload = {
+        return {
           hostname: hostname,
           ssh_host: document.getElementById('self-join-ssh-host').value.trim(),
           ssh_user: document.getElementById('self-join-ssh-user').value.trim(),
-          ssh_password: document.getElementById('self-join-ssh-password').value,
           ssh_port: Number(document.getElementById('self-join-ssh-port').value || 22),
           remote_pbgui_dir: document.getElementById('self-join-remote-dir').value.trim(),
           reset_local_cluster_state: document.getElementById('self-join-reset').checked
         };
-        var btn = document.getElementById('self-join-btn');
-        if (btn) { btn.disabled = true; btn.textContent = 'Joining...'; }
-        showSelfJoinStatus('Joining existing cluster through ' + hostname + '...', 'warn');
-        setMessage('Joining existing cluster through ' + hostname + '...', 'warn');
-        fetchJson('/self-join', {
+      }
+
+      function selfJoinNeedsPasswordPrompt(message) {
+        var text = String(message || '').toLowerCase();
+        return text.indexOf('remote host is unreachable') >= 0
+          || text.indexOf('vps monitor ssh pool is unavailable') >= 0
+          || text.indexOf('ssh authentication failed') >= 0
+          || text.indexOf('permission denied') >= 0
+          || text.indexOf('authentication') >= 0;
+      }
+
+      function sendSelfJoinPayload(payload) {
+        return fetchJson('/self-join', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
-        }).then(function (result) {
-          var pull = (result || {}).pull || {};
-          var push = (result || {}).push || {};
-          var pushCounts = push.counts || {};
-          var text = 'Joined cluster ' + (result.cluster_id || '') + ': pulled ' + (pull.pulled_ops || 0) + ' op(s), pushed ' + (pushCounts.pushed || 0) + ' registration op(s).';
-          if (result.remote_pbgui_dir) text += ' Remote PBGui dir: ' + result.remote_pbgui_dir + '.';
-          if (result.adopted_local_identity) text += ' Local identity adopted.';
-          if (((result || {}).archived_local_cluster_state || {}).changed) text += ' Previous local cluster state archived.';
-          document.getElementById('self-join-ssh-password').value = '';
-          showSelfJoinStatus(text, 'ok');
-          setMessage(text, 'ok');
-          return loadCluster();
+        });
+      }
+
+      function handleSelfJoinSuccess(result) {
+        var pull = (result || {}).pull || {};
+        var push = (result || {}).push || {};
+        var pushCounts = push.counts || {};
+        var text = 'Joined cluster ' + (result.cluster_id || '') + ': pulled ' + (pull.pulled_ops || 0) + ' op(s), pushed ' + (pushCounts.pushed || 0) + ' registration op(s).';
+        if (result.remote_pbgui_dir) text += ' Remote PBGui dir: ' + result.remote_pbgui_dir + '.';
+        if (result.adopted_local_identity) text += ' Local identity adopted.';
+        if (((result || {}).archived_local_cluster_state || {}).changed) text += ' Previous local cluster state archived.';
+        showSelfJoinStatus(text, 'ok');
+        setMessage(text, 'ok');
+        return loadCluster();
+      }
+
+      function showSelfJoinPasswordError(text) {
+        var el = document.getElementById('self-join-password-error');
+        if (!el) return;
+        el.textContent = text || '';
+        el.className = text ? 'modal-error visible' : 'modal-error';
+      }
+
+      function setSelfJoinPasswordBusy(busy) {
+        var input = document.getElementById('self-join-password-input');
+        var confirm = document.getElementById('self-join-password-confirm-btn');
+        var cancel = document.getElementById('self-join-password-cancel-btn');
+        var close = document.getElementById('self-join-password-close-btn');
+        [input, confirm, cancel, close].forEach(function (el) { if (el) el.disabled = !!busy; });
+        if (confirm) confirm.textContent = busy ? 'Joining...' : 'Retry Join';
+      }
+
+      function openSelfJoinPasswordPrompt(payload, reason) {
+        var target = payload || {};
+        pendingSelfJoinPayload = Object.assign({}, target);
+        var modal = document.getElementById('self-join-password-modal');
+        var hostEl = document.getElementById('self-join-password-host');
+        var userEl = document.getElementById('self-join-password-user');
+        var msgEl = document.getElementById('self-join-password-message');
+        var input = document.getElementById('self-join-password-input');
+        if (hostEl) hostEl.textContent = (target.ssh_host || target.hostname || 'unknown') + ':' + (target.ssh_port || 22);
+        if (userEl) userEl.textContent = target.ssh_user || 'unknown';
+        if (msgEl) msgEl.textContent = 'Key login is not available yet. Enter the upstream SSH password to retry the join. Previous error: ' + String(reason || 'SSH connection failed.');
+        if (input) input.value = '';
+        showSelfJoinPasswordError('');
+        setSelfJoinPasswordBusy(false);
+        if (modal) modal.hidden = false;
+        setTimeout(function () { if (input) input.focus(); }, 50);
+      }
+
+      function closeSelfJoinPasswordPrompt() {
+        pendingSelfJoinPayload = null;
+        var input = document.getElementById('self-join-password-input');
+        if (input) input.value = '';
+        var modal = document.getElementById('self-join-password-modal');
+        if (modal) modal.hidden = true;
+        showSelfJoinPasswordError('');
+        setSelfJoinPasswordBusy(false);
+      }
+
+      function submitSelfJoinPasswordPrompt() {
+        if (!pendingSelfJoinPayload) return;
+        var input = document.getElementById('self-join-password-input');
+        var password = input ? input.value : '';
+        if (!password) {
+          showSelfJoinPasswordError('Enter the SSH password first.');
+          return;
+        }
+        var payload = Object.assign({}, pendingSelfJoinPayload, { ssh_password: password });
+        setSelfJoinPasswordBusy(true);
+        showSelfJoinPasswordError('');
+        showSelfJoinStatus('Joining existing cluster through ' + payload.hostname + ' with password authentication...', 'warn');
+        setMessage('Joining existing cluster through ' + payload.hostname + ' with password authentication...', 'warn');
+        sendSelfJoinPayload(payload).then(function (result) {
+          closeSelfJoinPasswordPrompt();
+          return handleSelfJoinSuccess(result);
         }).catch(function (err) {
-          showSelfJoinStatus('Self-join failed: ' + err.message, 'err');
-          setMessage('Self-join failed: ' + err.message, 'err');
+          var message = selfJoinErrorMessage(err);
+          showSelfJoinPasswordError(message);
+          showSelfJoinStatus('Self-join failed: ' + message, 'err');
+          setMessage('Self-join failed: ' + message, 'err');
+        }).finally(function () {
+          setSelfJoinPasswordBusy(false);
+        });
+      }
+
+      function selfJoinExistingCluster() {
+        var payload = selfJoinPayload();
+        if (!payload.hostname) {
+          showSelfJoinStatus('Enter the VPS Monitor hostname for the existing master.', 'err');
+          return;
+        }
+        var btn = document.getElementById('self-join-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Joining...'; }
+        showSelfJoinStatus('Joining existing cluster through ' + payload.hostname + '...', 'warn');
+        setMessage('Joining existing cluster through ' + payload.hostname + '...', 'warn');
+        sendSelfJoinPayload(payload).then(function (result) {
+          return handleSelfJoinSuccess(result);
+        }).catch(function (err) {
+          var message = selfJoinErrorMessage(err);
+          if (selfJoinNeedsPasswordPrompt(message)) {
+            openSelfJoinPasswordPrompt(payload, message);
+            showSelfJoinStatus('SSH key login is not available. Enter the SSH password to continue.', 'warn');
+            return;
+          }
+          showSelfJoinStatus('Self-join failed: ' + message, 'err');
+          setMessage('Self-join failed: ' + message, 'err');
         }).finally(function () {
           if (btn) { btn.disabled = false; btn.textContent = 'Join Existing Cluster'; }
         });
@@ -1824,6 +1954,15 @@
       document.getElementById('probe-btn').addEventListener('click', loadRemoteStatus);
       document.getElementById('bootstrap-apply-btn').addEventListener('click', applyBootstrap);
       document.getElementById('self-join-btn').addEventListener('click', selfJoinExistingCluster);
+      document.getElementById('self-join-password-close-btn').addEventListener('click', closeSelfJoinPasswordPrompt);
+      document.getElementById('self-join-password-cancel-btn').addEventListener('click', closeSelfJoinPasswordPrompt);
+      document.getElementById('self-join-password-confirm-btn').addEventListener('click', submitSelfJoinPasswordPrompt);
+      document.getElementById('self-join-password-input').addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          submitSelfJoinPasswordPrompt();
+        }
+      });
       document.getElementById('join-close-btn').addEventListener('click', closeJoinModal);
       document.getElementById('join-cancel-btn').addEventListener('click', closeJoinModal);
       document.getElementById('join-confirm-btn').addEventListener('click', joinRemoteNode);

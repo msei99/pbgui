@@ -15,7 +15,8 @@
 - Cluster Sync: added an explicit second-master self-join action that uses outbound SSH to an existing master, adopts the upstream cluster id only for empty local oplogs, pulls upstream ops/blobs, registers the local master as outbound-only and installs Cluster SSH trust.
 - Cluster Sync: simplified second-master self-join so empty local identities automatically adopt the upstream cluster id, moved Join Existing Cluster before Bootstrap, and added a recovery option that archives accidental local cluster state before joining upstream.
 - Cluster Sync: made second-master self-join search Remote PBGui Dir candidates in the same order as VPS Manager and removed user-specific placeholder examples from the form.
-- Cluster Sync: let second-master self-join use a one-shot SSH password before Cluster SSH keys are installed, without saving the password.
+- Cluster Sync: let second-master self-join prompt for a one-shot SSH password before Cluster SSH keys are installed, without saving the password.
+- Cluster Sync: moved the self-join SSH password collection into an on-demand modal prompt instead of keeping a password field in the Join Existing Cluster panel.
 - VPS Manager: added an Import Cluster Nodes action that previews and imports safe metadata from reachable Cluster Sync nodes without copying passwords, CoinMarketCap keys or private keys.
 - VPS Manager: keep the Cleanup VPS action clickable when no VPS user password is stored so the normal password prompt can collect it.
 - VPS Manager: added PBCluster to remote service monitoring and VPS systemd migration checks, show remote PBGui service states in VPS detail/change views, and sync new PBGui systemd units during normal PBGui update/branch-switch actions.
