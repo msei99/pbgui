@@ -24,9 +24,9 @@ Cluster Sync ersetzt die alten Sync-Wege. PBRun wird nur auf Hosts benötigt, di
 
 ### 3. Zusätzliche Master joinen
 
-1. Füge auf jedem zusätzlichen Master den primären Master im VPS Manager hinzu, falls er dort noch nicht bekannt ist.
+1. Füge auf jedem zusätzlichen Master den primären Master im VPS Manager hinzu, falls er dort noch nicht bekannt ist, oder trage seine SSH-Daten direkt im Join-Formular ein.
 2. Öffne **System -> Cluster Sync** auf dem zusätzlichen Master.
-3. Nutze **Join Existing Cluster** mit dem VPS-Monitor-Hostnamen und den SSH-Daten des primären Masters.
+3. Nutze **Join Existing Cluster** mit dem VPS-Monitor-Hostnamen und den SSH-Daten des primären Masters. Trage das SSH-Passwort ein, wenn die Cluster-SSH-Keys noch nicht installiert sind; es wird nur für diesen Request verwendet und nicht gespeichert.
 4. PBGui übernimmt die `cluster_id` des primären Masters automatisch, wenn dieser zusätzliche Master noch keine lokalen Cluster-Oplog-Einträge hat.
 5. Wenn der Master versehentlich zuerst gebootstrappt wurde, aktiviere die Recovery-Option. PBGui archiviert den bisherigen lokalen Cluster-State unter `data/cluster/archives/` und joint danach den Cluster des primären Masters.
 

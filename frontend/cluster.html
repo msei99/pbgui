@@ -329,6 +329,11 @@
               <input class="modal-input" id="self-join-ssh-user" type="text" placeholder="ssh-user">
             </div>
             <div class="modal-field">
+              <label for="self-join-ssh-password">SSH Password (optional)</label>
+              <input class="modal-input" id="self-join-ssh-password" type="password" autocomplete="current-password" placeholder="Only needed before keys are installed">
+              <div class="field-help">Used only for this join request. It is not saved.</div>
+            </div>
+            <div class="modal-field">
               <label for="self-join-ssh-port">SSH Port</label>
               <input class="modal-input" id="self-join-ssh-port" type="number" min="1" max="65535" step="1" placeholder="22">
             </div>
@@ -742,6 +747,7 @@
           hostname: hostname,
           ssh_host: document.getElementById('self-join-ssh-host').value.trim(),
           ssh_user: document.getElementById('self-join-ssh-user').value.trim(),
+          ssh_password: document.getElementById('self-join-ssh-password').value,
           ssh_port: Number(document.getElementById('self-join-ssh-port').value || 22),
           remote_pbgui_dir: document.getElementById('self-join-remote-dir').value.trim(),
           reset_local_cluster_state: document.getElementById('self-join-reset').checked
@@ -762,6 +768,7 @@
           if (result.remote_pbgui_dir) text += ' Remote PBGui dir: ' + result.remote_pbgui_dir + '.';
           if (result.adopted_local_identity) text += ' Local identity adopted.';
           if (((result || {}).archived_local_cluster_state || {}).changed) text += ' Previous local cluster state archived.';
+          document.getElementById('self-join-ssh-password').value = '';
           showSelfJoinStatus(text, 'ok');
           setMessage(text, 'ok');
           return loadCluster();

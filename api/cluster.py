@@ -18,6 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any
 
+import asyncssh
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
@@ -52,6 +53,80 @@ _REMOTE_PUSH_JOB_TTL_SECONDS = 3600
 _REMOTE_PUSH_ACTIVE_STATES = frozenset({"queued", "running"})
 _CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
 _EDITABLE_NODE_SYNC_MODES = frozenset({"disabled", "outbound_only", "reachable"})
+
+
+class _SelfJoinPasswordSSHRunner:
+    """Short-lived SSH runner for self-join password authentication."""
+
+    def __init__(self, *, hostname: str, ssh_host: str, ssh_user: str, ssh_port: int, ssh_password: str) -> None:
+        self.hostname = str(hostname or "")
+        self.ssh_host = str(ssh_host or self.hostname or "")
+        self.ssh_user = str(ssh_user or "")
+        self.ssh_port = int(ssh_port or 22)
+        self._ssh_password = str(ssh_password or "")
+        self._conn: asyncssh.SSHClientConnection | None = None
+
+    def _is_alive(self) -> bool:
+        if self._conn is None:
+            return False
+        transport = getattr(self._conn, "_transport", None)
+        return bool(transport is not None and not transport.is_closing())
+
+    async def _connect(self) -> asyncssh.SSHClientConnection:
+        if self._is_alive() and self._conn is not None:
+            return self._conn
+        if not self.ssh_host:
+            raise ConnectionError("SSH host is required for self-join password login.")
+        if not self.ssh_user:
+            raise ConnectionError("SSH user is required for self-join password login.")
+        try:
+            self._conn = await asyncio.wait_for(
+                asyncssh.connect(
+                    host=self.ssh_host,
+                    port=self.ssh_port,
+                    username=self.ssh_user,
+                    password=self._ssh_password,
+                    known_hosts=None,
+                    keepalive_interval=10,
+                ),
+                timeout=10,
+            )
+        except asyncssh.PermissionDenied as exc:
+            raise ConnectionError("SSH authentication failed for upstream master.") from exc
+        except asyncio.TimeoutError as exc:
+            raise ConnectionError("SSH connection to upstream master timed out.") from exc
+        except Exception as exc:
+            raise ConnectionError(f"SSH connection to upstream master failed: {exc}") from exc
+        return self._conn
+
+    async def run(self, hostname: str, command: str, timeout: int | None = 30, check: bool = False) -> Any:
+        del hostname
+        conn = await self._connect()
+        try:
+            task = conn.run(command, check=check)
+            return await asyncio.wait_for(task, timeout=timeout) if timeout is not None else await task
+        except asyncssh.ProcessError:
+            raise
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError("SSH command on upstream master timed out.") from exc
+
+    async def start_process(self, hostname: str, command: str) -> Any:
+        del hostname
+        conn = await self._connect()
+        return await conn.create_process(command)
+
+    async def close(self) -> None:
+        conn = self._conn
+        self._conn = None
+        if conn is None:
+            return
+        conn.close()
+        wait_closed = getattr(conn, "wait_closed", None)
+        if callable(wait_closed):
+            try:
+                await wait_closed()
+            except Exception:
+                pass
 
 
 def _cluster_root() -> Path:
@@ -1048,11 +1123,13 @@ def _validate_self_join_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if ssh_port < 1 or ssh_port > 65535:
         raise HTTPException(status_code=400, detail="ssh_port must be between 1 and 65535")
     remote_pbgui_dir = str(payload.get("remote_pbgui_dir") or known.get("remote_pbgui_dir") or "software/pbgui").strip() or "software/pbgui"
+    ssh_password = str(payload.get("ssh_password") or "")
     return {
         "hostname": hostname,
         "ssh_host": ssh_host,
         "ssh_user": ssh_user,
         "ssh_port": ssh_port,
+        "ssh_password": ssh_password,
         "remote_pbgui_dir": remote_pbgui_dir,
         "reset_local_cluster_state": bool(payload.get("reset_local_cluster_state") is True),
     }
@@ -1408,135 +1485,150 @@ async def _self_join_existing_cluster(settings: dict[str, Any]) -> dict[str, Any
     except ClusterStateError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     local_node_id = _validate_node_identifier(identity.get("node_id"), "local node_id")
-    monitor = get_monitor()
-    pool = getattr(monitor, "pool", None) if monitor else None
-    if not pool:
-        raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
-
     hostname = str(settings["hostname"])
-    remote_dir_result = await _discover_remote_pbgui_dir_for_self_join(pool, hostname, str(settings["remote_pbgui_dir"]))
-    remote_dir = str(remote_dir_result["remote_pbgui_dir"])
-    settings["remote_pbgui_dir"] = remote_dir
-    hello = await _run_cluster_json_command_on_host(
-        pool,
-        hostname,
-        remote_dir,
-        local_node_id,
-        "hello",
-        timeout=15,
-        failure_label="Upstream cluster hello",
-    )
-    upstream_cluster_id = _validate_cluster_identifier(hello.get("cluster_id"))
-    upstream_node_id = _validate_node_identifier(hello.get("node_id"), "upstream node_id")
-    if upstream_node_id == local_node_id:
-        raise HTTPException(status_code=409, detail="Upstream node_id matches the local node_id; refusing to self-join the same node")
+    password_runner: _SelfJoinPasswordSSHRunner | None = None
+    if str(settings.get("ssh_password") or ""):
+        password_runner = _SelfJoinPasswordSSHRunner(
+            hostname=hostname,
+            ssh_host=str(settings.get("ssh_host") or hostname),
+            ssh_user=str(settings.get("ssh_user") or ""),
+            ssh_port=int(settings.get("ssh_port") or 22),
+            ssh_password=str(settings.get("ssh_password") or ""),
+        )
+        pool = password_runner
+    else:
+        monitor = get_monitor()
+        pool = getattr(monitor, "pool", None) if monitor else None
+        if not pool:
+            raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
 
-    local_cluster_id = str(identity.get("cluster_id") or "")
     try:
-        local_operations = load_operations(root, expected_cluster_id=local_cluster_id)
-    except ClusterStateError as exc:
-        raise HTTPException(status_code=409, detail=f"Local cluster state is not safe to self-join: {exc}") from exc
-    adoption = {"changed": False}
-    archive_result: dict[str, Any] = {"changed": False}
-    if local_cluster_id != upstream_cluster_id:
-        if local_operations:
-            if not settings.get("reset_local_cluster_state"):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Local cluster_id differs and local oplog is not empty; enable recovery to archive local cluster state before joining",
-                )
-            archive_result = _archive_local_cluster_state_for_join(root, local_cluster_id)
-        adoption = _adopt_empty_local_cluster_identity(root, identity, upstream_cluster_id)
-        identity = dict(adoption["identity"])
-
-    local_key = ensure_local_cluster_ssh_material(Path(PBGDIR), role="master", pbname=_get_master_pbname())
-    pull_result = await _pull_missing_operations_from_host(pool, hostname, remote_dir, local_node_id, upstream_cluster_id)
-    materialized = rebuild_materialized_state(root)
-    nodes = _node_list(materialized["cluster_nodes"])
-    upstream_node = _node_for_id(nodes, upstream_node_id)
-    local_node = _node_for_id(nodes, local_node_id)
-
-    remote_key = await _run_cluster_ssh_setup_on_host(pool, hostname, remote_dir, ["ensure-local", "--node-id", upstream_node_id])
-    remote_public_key = str(remote_key.get("public_key") or hello.get("cluster_ssh_public_key") or "").strip()
-    remote_fingerprint = str(remote_key.get("fingerprint") or hello.get("cluster_ssh_fingerprint") or "").strip()
-    if not remote_public_key:
-        raise HTTPException(status_code=409, detail="Upstream did not return a Cluster SSH public key")
-    if not remote_fingerprint:
-        try:
-            remote_fingerprint = public_key_fingerprint(remote_public_key)
-        except Exception as exc:
-            raise HTTPException(status_code=409, detail="Upstream returned an invalid Cluster SSH public key") from exc
-    install_result = await _run_cluster_ssh_setup_on_host(
-        pool,
-        hostname,
-        remote_dir,
-        [
-            "install-authorized-key",
-            "--source-node",
+        remote_dir_result = await _discover_remote_pbgui_dir_for_self_join(pool, hostname, str(settings["remote_pbgui_dir"]))
+        remote_dir = str(remote_dir_result["remote_pbgui_dir"])
+        settings["remote_pbgui_dir"] = remote_dir
+        hello = await _run_cluster_json_command_on_host(
+            pool,
+            hostname,
+            remote_dir,
             local_node_id,
-            "--source-public-key",
-            str(local_key.get("public_key") or ""),
-        ],
-    )
+            "hello",
+            timeout=15,
+            failure_label="Upstream cluster hello",
+        )
+        upstream_cluster_id = _validate_cluster_identifier(hello.get("cluster_id"))
+        upstream_node_id = _validate_node_identifier(hello.get("node_id"), "upstream node_id")
+        if upstream_node_id == local_node_id:
+            raise HTTPException(status_code=409, detail="Upstream node_id matches the local node_id; refusing to self-join the same node")
 
-    upstream_desired = {
-        "node_id": upstream_node_id,
-        "role": _cluster_role_from_monitor_role(upstream_node.get("role") or hello.get("role") or "master"),
-        "pbname": str(upstream_node.get("pbname") or upstream_node.get("hostname") or hostname),
-        "hostname": str(upstream_node.get("hostname") or upstream_node.get("pbname") or hostname),
-        "sync_mode": "reachable",
-        "sync_enabled": True,
-        "ssh_host": str(settings.get("ssh_host") or ""),
-        "ssh_port": int(settings.get("ssh_port") or 22),
-        "remote_pbgui_dir": remote_dir,
-        "cluster_ssh_public_key": remote_public_key,
-        "cluster_ssh_fingerprint": remote_fingerprint,
-        "cluster_ssh_mode": "forced",
-    }
-    if str(settings.get("ssh_user") or ""):
-        upstream_desired["ssh_user"] = str(settings.get("ssh_user") or "")
-    upstream_membership = _append_node_membership_if_needed(upstream_node, upstream_desired)
+        local_cluster_id = str(identity.get("cluster_id") or "")
+        try:
+            local_operations = load_operations(root, expected_cluster_id=local_cluster_id)
+        except ClusterStateError as exc:
+            raise HTTPException(status_code=409, detail=f"Local cluster state is not safe to self-join: {exc}") from exc
+        adoption = {"changed": False}
+        archive_result: dict[str, Any] = {"changed": False}
+        if local_cluster_id != upstream_cluster_id:
+            if local_operations:
+                if not settings.get("reset_local_cluster_state"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Local cluster_id differs and local oplog is not empty; enable recovery to archive local cluster state before joining",
+                    )
+                archive_result = _archive_local_cluster_state_for_join(root, local_cluster_id)
+            adoption = _adopt_empty_local_cluster_identity(root, identity, upstream_cluster_id)
+            identity = dict(adoption["identity"])
 
-    local_desired = {
-        "node_id": local_node_id,
-        "role": "master",
-        "pbname": _get_master_pbname(),
-        "hostname": _get_master_pbname(),
-        "sync_mode": "outbound_only",
-        "sync_enabled": True,
-        "sync_peers": [upstream_node_id],
-        "cluster_ssh_public_key": str(local_key.get("public_key") or ""),
-        "cluster_ssh_fingerprint": str(local_key.get("fingerprint") or ""),
-        "cluster_ssh_mode": "forced",
-    }
-    local_membership = _append_node_membership_if_needed(local_node, local_desired)
-    materialized = rebuild_materialized_state(root)
-    upstream_node = _node_for_id(_node_list(materialized["cluster_nodes"]), upstream_node_id)
-    transport_node = _self_join_transport_node(upstream_node, settings)
-    push_result = await _push_missing_operations_to_remote(transport_node, identity, rebuild=True)
-    return {
-        "ok": True,
-        "cluster_id": upstream_cluster_id,
-        "local_node_id": local_node_id,
-        "upstream_node_id": upstream_node_id,
-        "upstream_hostname": hostname,
-        "remote_pbgui_dir": remote_dir,
-        "remote_pbgui_dir_candidates": remote_dir_result.get("candidates") or [],
-        "adopted_local_identity": bool(adoption.get("changed")),
-        "archived_local_cluster_state": archive_result,
-        "pull": pull_result,
-        "membership": {
-            "upstream": upstream_membership,
-            "local": local_membership,
-        },
-        "cluster_ssh": {
-            "upstream_fingerprint": remote_fingerprint,
-            "local_fingerprint": str(local_key.get("fingerprint") or ""),
-            "authorized_key_changed": bool(install_result.get("changed")),
-        },
-        "push": push_result,
-        "message": "Joined existing cluster through outbound SSH and pushed this master registration upstream.",
-    }
+        local_key = ensure_local_cluster_ssh_material(Path(PBGDIR), role="master", pbname=_get_master_pbname())
+        pull_result = await _pull_missing_operations_from_host(pool, hostname, remote_dir, local_node_id, upstream_cluster_id)
+        materialized = rebuild_materialized_state(root)
+        nodes = _node_list(materialized["cluster_nodes"])
+        upstream_node = _node_for_id(nodes, upstream_node_id)
+        local_node = _node_for_id(nodes, local_node_id)
+
+        remote_key = await _run_cluster_ssh_setup_on_host(pool, hostname, remote_dir, ["ensure-local", "--node-id", upstream_node_id])
+        remote_public_key = str(remote_key.get("public_key") or hello.get("cluster_ssh_public_key") or "").strip()
+        remote_fingerprint = str(remote_key.get("fingerprint") or hello.get("cluster_ssh_fingerprint") or "").strip()
+        if not remote_public_key:
+            raise HTTPException(status_code=409, detail="Upstream did not return a Cluster SSH public key")
+        if not remote_fingerprint:
+            try:
+                remote_fingerprint = public_key_fingerprint(remote_public_key)
+            except Exception as exc:
+                raise HTTPException(status_code=409, detail="Upstream returned an invalid Cluster SSH public key") from exc
+        install_result = await _run_cluster_ssh_setup_on_host(
+            pool,
+            hostname,
+            remote_dir,
+            [
+                "install-authorized-key",
+                "--source-node",
+                local_node_id,
+                "--source-public-key",
+                str(local_key.get("public_key") or ""),
+            ],
+        )
+
+        upstream_desired = {
+            "node_id": upstream_node_id,
+            "role": _cluster_role_from_monitor_role(upstream_node.get("role") or hello.get("role") or "master"),
+            "pbname": str(upstream_node.get("pbname") or upstream_node.get("hostname") or hostname),
+            "hostname": str(upstream_node.get("hostname") or upstream_node.get("pbname") or hostname),
+            "sync_mode": "reachable",
+            "sync_enabled": True,
+            "ssh_host": str(settings.get("ssh_host") or ""),
+            "ssh_port": int(settings.get("ssh_port") or 22),
+            "remote_pbgui_dir": remote_dir,
+            "cluster_ssh_public_key": remote_public_key,
+            "cluster_ssh_fingerprint": remote_fingerprint,
+            "cluster_ssh_mode": "forced",
+        }
+        if str(settings.get("ssh_user") or ""):
+            upstream_desired["ssh_user"] = str(settings.get("ssh_user") or "")
+        upstream_membership = _append_node_membership_if_needed(upstream_node, upstream_desired)
+
+        local_desired = {
+            "node_id": local_node_id,
+            "role": "master",
+            "pbname": _get_master_pbname(),
+            "hostname": _get_master_pbname(),
+            "sync_mode": "outbound_only",
+            "sync_enabled": True,
+            "sync_peers": [upstream_node_id],
+            "cluster_ssh_public_key": str(local_key.get("public_key") or ""),
+            "cluster_ssh_fingerprint": str(local_key.get("fingerprint") or ""),
+            "cluster_ssh_mode": "forced",
+        }
+        local_membership = _append_node_membership_if_needed(local_node, local_desired)
+        materialized = rebuild_materialized_state(root)
+        upstream_node = _node_for_id(_node_list(materialized["cluster_nodes"]), upstream_node_id)
+        transport_node = _self_join_transport_node(upstream_node, settings)
+        push_result = await _push_missing_operations_to_remote(transport_node, identity, rebuild=True, pool=pool)
+        return {
+            "ok": True,
+            "cluster_id": upstream_cluster_id,
+            "local_node_id": local_node_id,
+            "upstream_node_id": upstream_node_id,
+            "upstream_hostname": hostname,
+            "remote_pbgui_dir": remote_dir,
+            "remote_pbgui_dir_candidates": remote_dir_result.get("candidates") or [],
+            "adopted_local_identity": bool(adoption.get("changed")),
+            "archived_local_cluster_state": archive_result,
+            "pull": pull_result,
+            "membership": {
+                "upstream": upstream_membership,
+                "local": local_membership,
+            },
+            "cluster_ssh": {
+                "upstream_fingerprint": remote_fingerprint,
+                "local_fingerprint": str(local_key.get("fingerprint") or ""),
+                "authorized_key_changed": bool(install_result.get("changed")),
+            },
+            "push": push_result,
+            "message": "Joined existing cluster through outbound SSH and pushed this master registration upstream.",
+        }
+    finally:
+        if password_runner is not None:
+            await password_runner.close()
 
 
 async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
@@ -1634,12 +1726,19 @@ def _require_remote_node_ready(node: dict[str, Any], identity: dict[str, Any]) -
     return node_id, hostname, local_node_id
 
 
-async def _run_remote_read_command(node: dict[str, Any], identity: dict[str, Any], verb: str) -> dict[str, Any]:
+async def _run_remote_read_command(
+    node: dict[str, Any],
+    identity: dict[str, Any],
+    verb: str,
+    *,
+    pool: Any | None = None,
+) -> dict[str, Any]:
     """Run one read-only Cluster Sync command against a remote node."""
 
     node_id, hostname, local_node_id = _require_remote_node_ready(node, identity)
-    monitor = get_monitor()
-    pool = getattr(monitor, "pool", None) if monitor else None
+    if pool is None:
+        monitor = get_monitor()
+        pool = getattr(monitor, "pool", None) if monitor else None
     if not pool:
         raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
     command = _cluster_state_read_command(str(node.get("remote_pbgui_dir") or ""), local_node_id, verb)
@@ -2288,6 +2387,7 @@ async def _push_missing_operations_to_remote(
     limit: int | None = None,
     rebuild: bool = True,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    pool: Any | None = None,
 ) -> dict[str, Any]:
     """Push missing local oplog entries to a remote node and optionally rebuild its materialized state."""
 
@@ -2296,13 +2396,14 @@ async def _push_missing_operations_to_remote(
             progress_callback(dict(update))
 
     node_id, hostname, local_node_id = _require_remote_node_ready(node, identity)
-    monitor = get_monitor()
-    pool = getattr(monitor, "pool", None) if monitor else None
+    if pool is None:
+        monitor = get_monitor()
+        pool = getattr(monitor, "pool", None) if monitor else None
     if not pool:
         raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
 
     root = _cluster_root()
-    remote_vector_payload = await _run_remote_read_command(node, identity, "get-state-vector")
+    remote_vector_payload = await _run_remote_read_command(node, identity, "get-state-vector", pool=pool)
     remote_vector = _as_state_vector(remote_vector_payload.get("state_vector") or {})
     local_operations = load_operations(root, expected_cluster_id=str(identity.get("cluster_id") or ""))
     preview = _build_operation_sync_preview(local_operations, remote_vector)

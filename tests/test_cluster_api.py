@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import HTTPException
@@ -805,6 +806,99 @@ def test_self_join_adopts_empty_local_identity_and_registers_master(monkeypatch,
     assert nodes[NODE_C]["cluster_ssh_fingerprint"] == "SHA256:local"
     assert nodes[NODE_B]["ssh_user"] == "mani"
     assert nodes[NODE_B]["cluster_ssh_fingerprint"] == "SHA256:remote"
+
+
+def test_self_join_uses_password_runner_without_monitor_pool(monkeypatch, tmp_path: Path) -> None:
+    """Self-join can use a one-shot SSH password before monitor keys exist."""
+
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=second-master\n", encoding="utf-8")
+    root = tmp_path / "data" / "cluster"
+    ensure_local_identity(
+        root,
+        role="master",
+        pbname="second-master",
+        cluster_id=OTHER_CLUSTER_ID,
+        node_id=NODE_C,
+        created_at=100,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {"public_key": LOCAL_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:local"},
+    )
+    upstream_op = {
+        "schema_version": 1,
+        "cluster_id": CLUSTER_ID,
+        "op_id": f"{NODE_B}:00000001",
+        "actor": NODE_B,
+        "seq": 1,
+        "op": "ADD_NODE",
+        "created_at": 101,
+        "node_id": NODE_B,
+        "role": "master",
+        "pbname": "upstream-master",
+        "hostname": "upstream-master",
+        "sync_mode": "reachable",
+        "sync_enabled": True,
+        "ssh_host": "198.51.100.10",
+        "ssh_port": 22,
+    }
+    runners: list[Any] = []
+
+    class FakePasswordRunner:
+        def __init__(self, *, hostname: str, ssh_host: str, ssh_user: str, ssh_port: int, ssh_password: str) -> None:
+            self.hostname = hostname
+            self.ssh_host = ssh_host
+            self.ssh_user = ssh_user
+            self.ssh_port = ssh_port
+            self.ssh_password = ssh_password
+            self.closed = False
+            runners.append(self)
+
+        async def run(self, hostname: str, command: str, timeout: int = 30, check: bool = False):
+            del hostname, timeout, check
+            if "pbgui.ini" in command:
+                return SimpleNamespace(exit_status=0, stdout="", stderr="")
+            if "cluster_ssh_setup.py" in command and "ensure-local" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "public_key": REMOTE_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:remote"}), stderr="")
+            if "cluster_ssh_setup.py" in command and "install-authorized-key" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "changed": True}), stderr="")
+            if "hello" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "master"}), stderr="")
+            if "get-state-vector" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_B: 1}}), stderr="")
+            if "get-ops" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "operations": [upstream_op], "missing": []}), stderr="")
+            if "put-ops" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "count": 2, "operations": []}), stderr="")
+            if "rebuild" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "generation": 3, "nodes": 2, "instances": 0}), stderr="")
+            return SimpleNamespace(exit_status=1, stdout="", stderr=f"unexpected command: {command}")
+
+        async def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(cluster, "_SelfJoinPasswordSSHRunner", FakePasswordRunner)
+    monkeypatch.setattr(cluster, "get_monitor", lambda: None)
+
+    payload = asyncio.run(cluster.self_join_existing_cluster(_JsonRequest({
+        "hostname": "upstream-master",
+        "ssh_host": "198.51.100.10",
+        "ssh_user": "mani",
+        "ssh_password": "secret-password",
+        "ssh_port": 22,
+        "remote_pbgui_dir": "/home/mani/software/pbgui",
+    }), session=None))
+
+    assert payload["ok"] is True
+    assert len(runners) == 1
+    assert runners[0].ssh_host == "198.51.100.10"
+    assert runners[0].ssh_user == "mani"
+    assert runners[0].ssh_password == "secret-password"
+    assert runners[0].closed is True
+    nodes = cluster.rebuild_materialized_state(root, write=False)["cluster_nodes"]["nodes"]
+    assert "ssh_password" not in nodes[NODE_B]
 
 
 def test_self_join_refuses_to_adopt_non_empty_foreign_cluster(monkeypatch, tmp_path: Path) -> None:
