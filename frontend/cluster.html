@@ -304,28 +304,11 @@
 
       <section class="panel">
         <div class="panel-head">
-          <div class="panel-title">Bootstrap Cluster State</div>
-          <div class="panel-note">Automatically preview and explicitly register known VPS nodes plus existing local V7 configs. New remote nodes start with automatic sync disabled.</div>
-        </div>
-        <div class="panel-body">
-          <div class="bootstrap-toolbar">
-            <div class="bootstrap-summary" id="bootstrap-summary">Bootstrap preview not loaded yet.</div>
-            <div class="bootstrap-actions">
-              <button class="btn warn" id="bootstrap-apply-btn" type="button" disabled>Apply Bootstrap</button>
-            </div>
-          </div>
-          <div class="panel-note" style="margin-bottom:0.75rem;">Bootstrap writes ADD_NODE operations for known VPS hosts and UPSERT_CONFIG operations for local configs. New VPS nodes are candidates with Sync Off until enabled in Cluster Nodes. It never infers deletes from missing files or missing VPS entries. Tombstoned instances stay blocked and must be restored explicitly.</div>
-          <div class="table-wrap" id="bootstrap-table"></div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
           <div class="panel-title">Join Existing Cluster</div>
           <div class="panel-note">Use this on a second master that can SSH out to an existing PBGui master.</div>
         </div>
         <div class="panel-body">
-          <div class="panel-note" style="margin-bottom:0.75rem;">Self-join preserves this install's local node id, adopts the upstream cluster id only when the local oplog is empty, pulls upstream operations/blobs, registers this master as outbound-only, installs the local Cluster SSH key on the upstream master and pushes the registration back.</div>
+          <div class="panel-note" style="margin-bottom:0.75rem;">Self-join preserves this install's local node id, automatically adopts the upstream cluster id when the local oplog is empty, pulls upstream operations/blobs, registers this master as outbound-only, installs the local Cluster SSH key on the upstream master and pushes the registration back. If the local oplog is not empty and belongs to another cluster, self-join is blocked.</div>
           <div class="modal-form-grid">
             <div class="modal-field">
               <label for="self-join-hostname">VPS Monitor Hostname</label>
@@ -347,9 +330,9 @@
               <label for="self-join-ssh-port">SSH Port</label>
               <input class="modal-input" id="self-join-ssh-port" type="number" min="1" max="65535" step="1" placeholder="22">
             </div>
-            <label class="peer-option modal-field-wide" for="self-join-adopt">
-              <input id="self-join-adopt" type="checkbox">
-              <span>Allow adopting the upstream cluster id when this local oplog is empty.</span>
+            <label class="peer-option modal-field-wide" for="self-join-reset">
+              <input id="self-join-reset" type="checkbox">
+              <span>Recovery: archive an existing local Cluster state if it belongs to another cluster, then join the upstream cluster.</span>
             </label>
           </div>
           <div class="bootstrap-toolbar" style="margin-top:0.75rem; margin-bottom:0;">
@@ -358,6 +341,23 @@
               <button class="btn warn" id="self-join-btn" type="button">Join Existing Cluster</button>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Bootstrap Cluster State</div>
+          <div class="panel-note">Use this only when this master should start a new local Cluster state instead of joining an existing cluster.</div>
+        </div>
+        <div class="panel-body">
+          <div class="bootstrap-toolbar">
+            <div class="bootstrap-summary" id="bootstrap-summary">Bootstrap preview not loaded yet.</div>
+            <div class="bootstrap-actions">
+              <button class="btn warn" id="bootstrap-apply-btn" type="button" disabled>Apply Bootstrap</button>
+            </div>
+          </div>
+          <div class="panel-note" style="margin-bottom:0.75rem;">Bootstrap writes ADD_NODE operations for known VPS hosts and UPSERT_CONFIG operations for local configs. New VPS nodes are candidates with Sync Off until enabled in Cluster Nodes. It never infers deletes from missing files or missing VPS entries. Tombstoned instances stay blocked and must be restored explicitly.</div>
+          <div class="table-wrap" id="bootstrap-table"></div>
         </div>
       </section>
 
@@ -732,13 +732,8 @@
 
       function selfJoinExistingCluster() {
         var hostname = document.getElementById('self-join-hostname').value.trim();
-        var adopt = document.getElementById('self-join-adopt').checked;
         if (!hostname) {
           showSelfJoinStatus('Enter the VPS Monitor hostname for the existing master.', 'err');
-          return;
-        }
-        if (!adopt) {
-          showSelfJoinStatus('Confirm local identity adoption before self-join. The backend still refuses non-empty foreign oplogs.', 'err');
           return;
         }
         var payload = {
@@ -747,7 +742,7 @@
           ssh_user: document.getElementById('self-join-ssh-user').value.trim(),
           ssh_port: Number(document.getElementById('self-join-ssh-port').value || 22),
           remote_pbgui_dir: document.getElementById('self-join-remote-dir').value.trim(),
-          adopt_local_identity: adopt
+          reset_local_cluster_state: document.getElementById('self-join-reset').checked
         };
         var btn = document.getElementById('self-join-btn');
         if (btn) { btn.disabled = true; btn.textContent = 'Joining...'; }
@@ -763,6 +758,7 @@
           var pushCounts = push.counts || {};
           var text = 'Joined cluster ' + (result.cluster_id || '') + ': pulled ' + (pull.pulled_ops || 0) + ' op(s), pushed ' + (pushCounts.pushed || 0) + ' registration op(s).';
           if (result.adopted_local_identity) text += ' Local identity adopted.';
+          if (((result || {}).archived_local_cluster_state || {}).changed) text += ' Previous local cluster state archived.';
           showSelfJoinStatus(text, 'ok');
           setMessage(text, 'ok');
           return loadCluster();

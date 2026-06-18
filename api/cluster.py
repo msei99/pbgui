@@ -983,6 +983,41 @@ def _adopt_empty_local_cluster_identity(root: Path, identity: dict[str, Any], cl
     return {"changed": True, "identity": node_identity}
 
 
+def _archive_local_cluster_state_for_join(root: Path, current_cluster_id: str) -> dict[str, Any]:
+    """Archive local cluster state files before replacing them with an upstream cluster."""
+
+    stamp = int(time.time())
+    suffix = uuid.uuid4().hex[:8]
+    archive_dir = root / "archives" / f"self-join-{stamp}-{suffix}"
+    archive_dir.mkdir(parents=True, exist_ok=False)
+    archived: list[str] = []
+    for name in (
+        "cluster_id",
+        "node_identity.json",
+        "cluster_nodes.json",
+        "desired_state.json",
+        "state_vector.json",
+        "sync_status.json",
+        "sync_request",
+        "oplog",
+        "config_blobs",
+        "secret_blobs",
+    ):
+        source = root / name
+        if not source.exists():
+            continue
+        target = archive_dir / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(target)
+        archived.append(name)
+    return {
+        "changed": bool(archived),
+        "path": str(archive_dir),
+        "cluster_id": str(current_cluster_id or ""),
+        "items": archived,
+    }
+
+
 def _known_vps_config_by_hostname(hostname: str) -> dict[str, Any]:
     """Return one known VPS Manager config by hostname, if present."""
 
@@ -1019,7 +1054,7 @@ def _validate_self_join_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "ssh_user": ssh_user,
         "ssh_port": ssh_port,
         "remote_pbgui_dir": remote_pbgui_dir,
-        "adopt_local_identity": bool(payload.get("adopt_local_identity") is True),
+        "reset_local_cluster_state": bool(payload.get("reset_local_cluster_state") is True),
     }
 
 
@@ -1370,11 +1405,15 @@ async def _self_join_existing_cluster(settings: dict[str, Any]) -> dict[str, Any
     except ClusterStateError as exc:
         raise HTTPException(status_code=409, detail=f"Local cluster state is not safe to self-join: {exc}") from exc
     adoption = {"changed": False}
+    archive_result: dict[str, Any] = {"changed": False}
     if local_cluster_id != upstream_cluster_id:
-        if local_operations and not settings.get("adopt_local_identity"):
-            raise HTTPException(status_code=409, detail="Local cluster_id differs and local oplog is not empty")
-        if not settings.get("adopt_local_identity"):
-            raise HTTPException(status_code=409, detail="Local cluster_id differs; confirm adoption before joining")
+        if local_operations:
+            if not settings.get("reset_local_cluster_state"):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Local cluster_id differs and local oplog is not empty; enable recovery to archive local cluster state before joining",
+                )
+            archive_result = _archive_local_cluster_state_for_join(root, local_cluster_id)
         adoption = _adopt_empty_local_cluster_identity(root, identity, upstream_cluster_id)
         identity = dict(adoption["identity"])
 
@@ -1450,6 +1489,7 @@ async def _self_join_existing_cluster(settings: dict[str, Any]) -> dict[str, Any
         "upstream_node_id": upstream_node_id,
         "upstream_hostname": hostname,
         "adopted_local_identity": bool(adoption.get("changed")),
+        "archived_local_cluster_state": archive_result,
         "pull": pull_result,
         "membership": {
             "upstream": upstream_membership,

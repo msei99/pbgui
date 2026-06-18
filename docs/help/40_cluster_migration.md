@@ -27,7 +27,8 @@ Cluster Sync replaces the old sync paths. PBRun is only needed on hosts that run
 1. On each additional master, add the primary master to VPS Manager if it is not already known there.
 2. Open **System -> Cluster Sync** on the additional master.
 3. Use **Join Existing Cluster** with the primary master's VPS Monitor hostname and SSH details.
-4. Confirm adoption only when this additional master has no local Cluster oplog entries yet.
+4. PBGui automatically adopts the primary master's `cluster_id` when this additional master has no local Cluster oplog entries yet.
+5. If the master was accidentally bootstrapped first, enable the recovery option. PBGui archives the previous local Cluster state under `data/cluster/archives/` and then joins the primary master's cluster.
 
 ### 4. Update VPS runners
 

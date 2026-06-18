@@ -762,7 +762,6 @@ def test_self_join_adopts_empty_local_identity_and_registers_master(monkeypatch,
         "ssh_user": "mani",
         "ssh_port": 22,
         "remote_pbgui_dir": "/home/mani/software/pbgui",
-        "adopt_local_identity": True,
     }), session=None))
 
     assert payload["ok"] is True
@@ -815,11 +814,67 @@ def test_self_join_refuses_to_adopt_non_empty_foreign_cluster(monkeypatch, tmp_p
         asyncio.run(cluster.self_join_existing_cluster(_JsonRequest({
             "hostname": "upstream-master",
             "ssh_host": "198.51.100.10",
-            "adopt_local_identity": True,
         }), session=None))
 
     assert exc.value.status_code == 409
-    assert "already has oplog entries" in exc.value.detail
+    assert "local oplog is not empty" in exc.value.detail
+
+
+def test_self_join_recovery_archives_non_empty_foreign_cluster(monkeypatch, tmp_path: Path) -> None:
+    """Self-join recovery archives accidental local state before adopting upstream."""
+
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=second-master\n", encoding="utf-8")
+    root = tmp_path / "data" / "cluster"
+    ensure_local_identity(
+        root,
+        role="master",
+        pbname="second-master",
+        cluster_id=OTHER_CLUSTER_ID,
+        node_id=NODE_C,
+        created_at=100,
+    )
+    append_operation(root, "ADD_NODE", {"node_id": NODE_C, "role": "master", "pbname": "wrong-cluster"}, created_at=101)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {"public_key": LOCAL_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:local"},
+    )
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            if "cluster_ssh_setup.py" in command and "ensure-local" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "public_key": REMOTE_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:remote"}), stderr="")
+            if "cluster_ssh_setup.py" in command and "install-authorized-key" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "changed": True}), stderr="")
+            if "hello" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "master"}), stderr="")
+            if "get-state-vector" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {}}), stderr="")
+            if "put-ops" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "count": 2, "operations": []}), stderr="")
+            if "rebuild" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "generation": 2, "nodes": 2, "instances": 0}), stderr="")
+            return SimpleNamespace(exit_status=1, stdout="", stderr=f"unexpected command: {command}")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.self_join_existing_cluster(_JsonRequest({
+        "hostname": "upstream-master",
+        "ssh_host": "198.51.100.10",
+        "reset_local_cluster_state": True,
+    }), session=None))
+
+    assert payload["ok"] is True
+    assert payload["adopted_local_identity"] is True
+    archive = payload["archived_local_cluster_state"]
+    assert archive["changed"] is True
+    archive_path = Path(archive["path"])
+    assert archive_path.name.startswith("self-join-")
+    assert (archive_path / "oplog" / NODE_C / "00000001.json").is_file()
+    assert (root / "cluster_id").read_text(encoding="utf-8") == CLUSTER_ID
+    operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
+    assert {item["node_id"] for item in operations if item["op"] == "ADD_NODE"} == {NODE_B, NODE_C}
 
 
 def test_remote_preview_compares_state_without_writes(monkeypatch, tmp_path: Path) -> None:

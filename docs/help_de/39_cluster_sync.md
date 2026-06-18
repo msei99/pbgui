@@ -186,8 +186,8 @@ Die erste local-only Version zeigt:
 - Conflict- und Tombstone-Status
 - API-Key-Metadaten, falls vorhanden
 - aktuelle lokale Operation-Log-Einträge
-- eine Bootstrap-Preview/Apply-Aktion für bekannte VPS-Nodes und bestehende lokale V7-Configs
 - eine explizite Join-Existing-Cluster-Aktion für einen zweiten Master, der einen bestehenden Master outbound erreichen kann
+- eine Bootstrap-Preview/Apply-Aktion für bekannte VPS-Nodes und bestehende lokale V7-Configs
 - read-only Remote-Hello-Probe-Status für bekannte Cluster-Nodes
 - eine explizite Join-&-Sync-Aktion für erreichbare Nodes ohne Cluster-Identität
 - eine read-only Preview-Aktion für gejointe Nodes, die Remote-State für Diagnose oder Retry vergleicht
@@ -196,7 +196,7 @@ Bootstrap schreibt explizite lokale `ADD_NODE`-Operationen für bekannte VPS-Man
 
 Wenn ein Node **No Identity** zeigt, schreibt **Join & Sync** die Remote-Cluster-Identität und überschreibt keine abweichende bestehende Identität. Danach pusht PBGui fehlende lokale Operationen, baut den Remote-Cluster-State neu, materialisiert zugewiesene V7-Configs und API-Keys und startet PBRun wieder, wenn der Remote-State aktuell ist. Auf VPS-Runnern stoppt Join vorher PBRun, damit laufende Bots während der Übergangsphase nicht bewertet werden; passivbot-Prozesse bleiben unangetastet. Auf Master-Nodes wird PBRun nicht gestoppt oder gestartet.
 
-Nutze **Join Existing Cluster** auf einem zweiten Master, der vom primären Master nicht inbound erreichbar ist, aber selbst per SSH zum primären Master verbinden kann. Die Aktion nutzt den VPS-Monitor-SSH-Pool, liest den Upstream-Master, übernimmt dessen `cluster_id` nur bei leerem lokalen Oplog und bestätigter Checkbox, zieht Upstream-Operationen und Blobs, registriert den lokalen Master als `outbound_only`, installiert den lokalen Cluster-SSH-Key auf dem Upstream-Master und pusht die Registrierungsoperationen zurück. Wenn diese lokale Installation bereits Cluster-Operationen für einen anderen Cluster hat, verweigert Self-Join das Überschreiben.
+Nutze **Join Existing Cluster** auf einem zweiten Master, der vom primären Master nicht inbound erreichbar ist, aber selbst per SSH zum primären Master verbinden kann. Tue das vor Bootstrap, wenn der Master einem bestehenden Cluster beitreten soll. Die Aktion nutzt den VPS-Monitor-SSH-Pool, liest den Upstream-Master, übernimmt dessen `cluster_id` automatisch bei leerem lokalen Oplog, zieht Upstream-Operationen und Blobs, registriert den lokalen Master als `outbound_only`, installiert den lokalen Cluster-SSH-Key auf dem Upstream-Master und pusht die Registrierungsoperationen zurück. Wenn diese lokale Installation bereits Cluster-Operationen für einen anderen Cluster hat, verweigert Self-Join das Überschreiben, außer die Recovery-Option ist aktiviert. Recovery archiviert den bisherigen lokalen Cluster-State unter `data/cluster/archives/`, bevor er durch den Upstream-Cluster-State ersetzt wird.
 
 PBCluster-SSH-Zugriff ist technischer Setup-Status. Beim normalen PBGui-Setup/Update auf einem VPS erzeugt PBGui jetzt automatisch einen dedizierten lokalen PBCluster-SSH-Key und installiert den Public Key des Masters auf dem VPS mit einem Forced Command, das nur `cluster_sync_command.py` ausführen kann. PBCluster nutzt diesen dedizierten Key mit `IdentitiesOnly=yes`; User müssen keine SSH-Keys manuell erzeugen oder kopieren.
 
