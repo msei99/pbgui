@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -806,6 +807,142 @@ def test_self_join_adopts_empty_local_identity_and_registers_master(monkeypatch,
     assert nodes[NODE_C]["cluster_ssh_fingerprint"] == "SHA256:local"
     assert nodes[NODE_B]["ssh_user"] == "mani"
     assert nodes[NODE_B]["cluster_ssh_fingerprint"] == "SHA256:remote"
+
+
+def test_self_join_defers_missing_historical_config_blobs(monkeypatch, tmp_path: Path) -> None:
+    """Self-join skips lost historical config blobs but pulls current desired blobs."""
+
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=second-master\n", encoding="utf-8")
+    root = tmp_path / "data" / "cluster"
+    ensure_local_identity(
+        root,
+        role="master",
+        pbname="second-master",
+        cluster_id=OTHER_CLUSTER_ID,
+        node_id=NODE_C,
+        created_at=100,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {"public_key": LOCAL_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:local"},
+    )
+    old_manifest_hash = "sha256:c2c814513553736dd8693dccd67a08cd84e06e949597b8c96737924285b89595"
+    current_raw = b'{"live":{"user":"current"}}'
+    current_file_sha = hashlib.sha256(current_raw).hexdigest()
+    current_file_hash = f"sha256:{current_file_sha}"
+    current_manifest = {
+        "schema_version": 1,
+        "files": {"config.json": {"sha256": current_file_sha, "size": len(current_raw)}},
+    }
+    current_manifest_raw = cluster._canonical_json_bytes(current_manifest)
+    current_manifest_hash = "sha256:" + hashlib.sha256(current_manifest_raw).hexdigest()
+    upstream_ops = [
+        {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_B}:00000001",
+            "actor": NODE_B,
+            "seq": 1,
+            "op": "ADD_NODE",
+            "created_at": 101,
+            "node_id": NODE_B,
+            "role": "master",
+            "pbname": "upstream-master",
+            "hostname": "upstream-master",
+            "sync_mode": "reachable",
+            "sync_enabled": True,
+            "ssh_host": "198.51.100.10",
+            "ssh_port": 22,
+        },
+        {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_B}:00000002",
+            "actor": NODE_B,
+            "seq": 2,
+            "op": "UPSERT_CONFIG",
+            "created_at": 102,
+            "instance": "local_inst",
+            "version": "1",
+            "assigned_host": NODE_C,
+            "desired_state": "running",
+            "config_manifest_hash": old_manifest_hash,
+        },
+        {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_B}:00000003",
+            "actor": NODE_B,
+            "seq": 3,
+            "op": "UPSERT_CONFIG",
+            "created_at": 103,
+            "instance": "local_inst",
+            "parent_version": "1",
+            "version": "2",
+            "assigned_host": NODE_C,
+            "desired_state": "running",
+            "config_manifest_hash": current_manifest_hash,
+        },
+    ]
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            del hostname, timeout
+            if "pbgui.ini" in command:
+                return SimpleNamespace(exit_status=0, stdout="", stderr="")
+            if "cluster_ssh_setup.py" in command and "ensure-local" in command:
+                return SimpleNamespace(
+                    exit_status=0,
+                    stdout=json.dumps({"ok": True, "public_key": REMOTE_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:remote"}),
+                    stderr="",
+                )
+            if "cluster_ssh_setup.py" in command and "install-authorized-key" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "changed": True}), stderr="")
+            if "hello" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "master"}), stderr="")
+            if "get-state-vector" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_B: 3}}), stderr="")
+            if "get-ops" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "operations": upstream_ops, "missing": []}), stderr="")
+            if old_manifest_hash in command and "get-blob" in command:
+                return SimpleNamespace(exit_status=1, stdout="", stderr=json.dumps({"ok": False, "error": f"missing config blob: {old_manifest_hash}"}))
+            if current_manifest_hash in command and "get-blob" in command:
+                return SimpleNamespace(
+                    exit_status=0,
+                    stdout=json.dumps({"ok": True, "hash": current_manifest_hash, "content_b64": base64.b64encode(current_manifest_raw).decode("ascii")}),
+                    stderr="",
+                )
+            if current_file_hash in command and "get-blob" in command:
+                return SimpleNamespace(
+                    exit_status=0,
+                    stdout=json.dumps({"ok": True, "hash": current_file_hash, "content_b64": base64.b64encode(current_raw).decode("ascii")}),
+                    stderr="",
+                )
+            if "put-blobs" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "count": 2, "blobs": []}), stderr="")
+            if "put-ops" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "count": 2, "operations": []}), stderr="")
+            if "rebuild" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "generation": 5, "nodes": 2, "instances": 1}), stderr="")
+            return SimpleNamespace(exit_status=1, stdout="", stderr=f"unexpected command: {command}")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    payload = asyncio.run(cluster.self_join_existing_cluster(_JsonRequest({
+        "hostname": "upstream-master",
+        "ssh_host": "198.51.100.10",
+    }), session=None))
+
+    assert payload["ok"] is True
+    assert payload["pull"]["deferred_missing_config_blobs"] == 1
+    assert payload["pull"]["pulled_config_blobs"] == 2
+    assert payload["pull"]["pulled_ops"] == 3
+    assert cluster._read_cluster_blob(root / "config_blobs", current_manifest_hash) == current_manifest_raw
+    assert cluster._read_cluster_blob(root / "config_blobs", current_file_hash) == current_raw
+    desired = cluster.rebuild_materialized_state(root, write=False)["desired_state"]
+    assert desired["instances"]["local_inst"]["config_manifest_hash"] == current_manifest_hash
 
 
 def test_self_join_uses_password_runner_without_monitor_pool(monkeypatch, tmp_path: Path) -> None:

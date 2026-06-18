@@ -1251,6 +1251,25 @@ def _manifest_file_hashes(manifest_raw: bytes) -> list[str]:
     return hashes
 
 
+def _missing_config_blob_hash(exc: HTTPException) -> str:
+    """Extract a missing config blob hash from a remote wrapper error."""
+
+    if int(getattr(exc, "status_code", 0) or 0) != 409:
+        return ""
+    detail = str(getattr(exc, "detail", "") or "")
+    marker = "missing config blob:"
+    if marker not in detail:
+        return ""
+    start = detail.find("sha256:", detail.find(marker))
+    if start < 0:
+        return ""
+    candidate = detail[start:start + len("sha256:") + 64]
+    digest = candidate.removeprefix("sha256:")
+    if len(digest) == 64 and all(char in "0123456789abcdefABCDEF" for char in digest):
+        return f"sha256:{digest.lower()}"
+    return ""
+
+
 async def _ensure_remote_blob_on_host(
     pool: Any,
     hostname: str,
@@ -1288,6 +1307,34 @@ async def _ensure_remote_blob_on_host(
     return raw, True
 
 
+async def _try_pull_historical_config_blob_on_host(
+    pool: Any,
+    hostname: str,
+    remote_pbgui_dir: str,
+    local_node_id: str,
+    base_dir: Path,
+    blob_hash: str,
+) -> tuple[bytes | None, bool, str]:
+    """Pull a historical config blob, deferring missing blobs for superseded ops."""
+
+    try:
+        raw, fetched = await _ensure_remote_blob_on_host(
+            pool,
+            hostname,
+            remote_pbgui_dir,
+            local_node_id,
+            base_dir,
+            blob_hash,
+            secret=False,
+        )
+        return raw, fetched, ""
+    except HTTPException as exc:
+        missing_hash = _missing_config_blob_hash(exc)
+        if missing_hash:
+            return None, False, missing_hash
+        raise
+
+
 async def _pull_blobs_for_operations_from_host(
     pool: Any,
     hostname: str,
@@ -1297,33 +1344,40 @@ async def _pull_blobs_for_operations_from_host(
 ) -> dict[str, int]:
     """Pull all config/API-key blobs required by received operations."""
 
-    counts = {"config": 0, "secret": 0}
+    counts = {"config": 0, "secret": 0, "missing_config": 0}
+    missing_config_hashes: set[str] = set()
     root = _cluster_root()
     config_dir = root / "config_blobs"
     secret_dir = root / "secret_blobs"
     for operation in operations:
         refs = _operation_hash_refs(operation)
         for manifest_hash in refs["config"]:
-            manifest_raw, fetched = await _ensure_remote_blob_on_host(
+            manifest_raw, fetched, missing_hash = await _try_pull_historical_config_blob_on_host(
                 pool,
                 hostname,
                 remote_pbgui_dir,
                 local_node_id,
                 config_dir,
                 manifest_hash,
-                secret=False,
             )
+            if missing_hash:
+                missing_config_hashes.add(missing_hash)
+                continue
+            if manifest_raw is None:
+                continue
             counts["config"] += 1 if fetched else 0
             for file_hash in _manifest_file_hashes(manifest_raw):
-                _raw, file_fetched = await _ensure_remote_blob_on_host(
+                _raw, file_fetched, missing_file_hash = await _try_pull_historical_config_blob_on_host(
                     pool,
                     hostname,
                     remote_pbgui_dir,
                     local_node_id,
                     config_dir,
                     file_hash,
-                    secret=False,
                 )
+                if missing_file_hash:
+                    missing_config_hashes.add(missing_file_hash)
+                    continue
                 counts["config"] += 1 if file_fetched else 0
         for payload_hash in refs["api_payload"]:
             _raw, fetched = await _ensure_remote_blob_on_host(
@@ -1337,6 +1391,77 @@ async def _pull_blobs_for_operations_from_host(
             )
             counts["config"] += 1 if fetched else 0
         for secret_hash in refs["secret"]:
+            _raw, fetched = await _ensure_remote_blob_on_host(
+                pool,
+                hostname,
+                remote_pbgui_dir,
+                local_node_id,
+                secret_dir,
+                secret_hash,
+                secret=True,
+            )
+            counts["secret"] += 1 if fetched else 0
+    counts["missing_config"] = len(missing_config_hashes)
+    return counts
+
+
+async def _pull_current_desired_blobs_from_host(
+    pool: Any,
+    hostname: str,
+    remote_pbgui_dir: str,
+    local_node_id: str,
+    desired_state: dict[str, Any],
+) -> dict[str, int]:
+    """Pull current desired config/API-key blobs and fail if any are missing."""
+
+    counts = {"config": 0, "secret": 0}
+    root = _cluster_root()
+    config_dir = root / "config_blobs"
+    secret_dir = root / "secret_blobs"
+    instances = desired_state.get("instances") if isinstance(desired_state, dict) else {}
+    instances = instances if isinstance(instances, dict) else {}
+    for name in sorted(instances):
+        item = instances.get(name) if isinstance(instances.get(name), dict) else {}
+        manifest_hash = str(item.get("config_manifest_hash") or "")
+        if not manifest_hash:
+            continue
+        manifest_raw, fetched = await _ensure_remote_blob_on_host(
+            pool,
+            hostname,
+            remote_pbgui_dir,
+            local_node_id,
+            config_dir,
+            manifest_hash,
+            secret=False,
+        )
+        counts["config"] += 1 if fetched else 0
+        for file_hash in _manifest_file_hashes(manifest_raw):
+            _raw, file_fetched = await _ensure_remote_blob_on_host(
+                pool,
+                hostname,
+                remote_pbgui_dir,
+                local_node_id,
+                config_dir,
+                file_hash,
+                secret=False,
+            )
+            counts["config"] += 1 if file_fetched else 0
+    api_keys = desired_state.get("api_keys") if isinstance(desired_state, dict) else None
+    if isinstance(api_keys, dict):
+        payload_hash = str(api_keys.get("payload_hash") or "")
+        if payload_hash:
+            _raw, fetched = await _ensure_remote_blob_on_host(
+                pool,
+                hostname,
+                remote_pbgui_dir,
+                local_node_id,
+                config_dir,
+                payload_hash,
+                secret=False,
+            )
+            counts["config"] += 1 if fetched else 0
+        secret_hash = str(api_keys.get("secret_blob_hash") or "")
+        if secret_hash:
             _raw, fetched = await _ensure_remote_blob_on_host(
                 pool,
                 hostname,
@@ -1373,7 +1498,7 @@ async def _pull_missing_operations_from_host(
     local_operations = load_operations(root, expected_cluster_id=cluster_id)
     local_vector = _state_vector_from_operations(local_operations)
     pulled = 0
-    blob_counts = {"config": 0, "secret": 0}
+    blob_counts = {"config": 0, "secret": 0, "missing_config": 0}
     for actor in sorted(remote_vector):
         remote_seq = int(remote_vector.get(actor) or 0)
         local_seq = int(local_vector.get(actor) or 0)
@@ -1399,6 +1524,7 @@ async def _pull_missing_operations_from_host(
             pulled_blobs = await _pull_blobs_for_operations_from_host(pool, hostname, remote_pbgui_dir, local_node_id, operations)
             blob_counts["config"] += int(pulled_blobs.get("config") or 0)
             blob_counts["secret"] += int(pulled_blobs.get("secret") or 0)
+            blob_counts["missing_config"] += int(pulled_blobs.get("missing_config") or 0)
             for operation in operations:
                 validate_operation(operation, expected_cluster_id=cluster_id)
                 op_path = root / "oplog" / str(operation["actor"]) / f"{int(operation['seq']):08d}.json"
@@ -1407,12 +1533,23 @@ async def _pull_missing_operations_from_host(
                 if not existed:
                     pulled += 1
             start = end + 1
+    materialized = rebuild_materialized_state(root, write=False)
+    current_blob_counts = await _pull_current_desired_blobs_from_host(
+        pool,
+        hostname,
+        remote_pbgui_dir,
+        local_node_id,
+        materialized.get("desired_state") if isinstance(materialized, dict) else {},
+    )
+    blob_counts["config"] += int(current_blob_counts.get("config") or 0)
+    blob_counts["secret"] += int(current_blob_counts.get("secret") or 0)
     return {
         "remote_vector": remote_vector,
         "local_vector_before": local_vector,
         "pulled_ops": pulled,
         "pulled_config_blobs": blob_counts["config"],
         "pulled_secret_blobs": blob_counts["secret"],
+        "deferred_missing_config_blobs": blob_counts["missing_config"],
     }
 
 
