@@ -2966,6 +2966,7 @@
       addCmcCheck: { ok: false, error: '', loading: false, credit_limit_monthly: null, credits_used_day: null, credits_used_month: null, credits_left: null, credit_limit_monthly_reset_timestamp: null },
       addPublicIp: { ip: '', loading: false, requested: false, applied: false },
       importExistingVps: defaultExistingVpsImportState(),
+      clusterNodesImport: defaultClusterNodesImportState(),
       pendingAutoSetupSwitch: null,
       master: defaultMasterUi(),
       ufw: defaultUfwState(),
@@ -3077,6 +3078,15 @@
         saving: false,
         error: '',
         probe: null
+      };
+    }
+
+    function defaultClusterNodesImportState() {
+      return {
+        loading: false,
+        applying: false,
+        error: '',
+        preview: null
       };
     }
 
@@ -7348,6 +7358,122 @@
       send({ cmd: 'refresh' });
     }
 
+    function clusterImportActionLevel(action) {
+      const normalized = String(action || '').toLowerCase();
+      if (normalized === 'add' || normalized === 'update') return 'ok';
+      if (normalized === 'error') return 'error';
+      return 'warning';
+    }
+
+    function renderClusterNodesImportPreview(preview) {
+      const payload = preview || {};
+      const counts = payload.counts || {};
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      const rows = items.length ? items.map(function (item) {
+        const action = String(item.action || 'skip');
+        const changes = Array.isArray(item.changes) ? item.changes : [];
+        return `
+          <tr>
+            <td>${levelTag(clusterImportActionLevel(action), action)}</td>
+            <td>${esc(item.hostname || '-')}</td>
+            <td>${esc(item.role || '-')}</td>
+            <td>${esc(item.sync_mode || '-')}</td>
+            <td>${esc(item.ssh_host || '-')}</td>
+            <td>${esc(item.ssh_user || '-')}</td>
+            <td>${esc(item.ssh_port == null ? '-' : String(item.ssh_port))}</td>
+            <td>${esc(item.remote_pbgui_dir || '-')}</td>
+            <td>${esc(changes.length ? changes.join(', ') : (item.reason || ''))}</td>
+          </tr>`;
+      }).join('') : `<tr><td colspan='9'>No Cluster nodes available for import.</td></tr>`;
+      return `
+        <div style='display:grid;gap:14px'>
+          <div class='notice info'>${esc(payload.message || 'Imports safe metadata from reachable Cluster nodes. Secrets are not imported.')}</div>
+          <div class='status-grid'>
+            <div class='status-item'><div class='status-label'>Add</div><div class='status-value'>${esc(String(counts.add || 0))}</div><div class='status-sub'>New VPS Manager entries</div></div>
+            <div class='status-item'><div class='status-label'>Update</div><div class='status-value'>${esc(String(counts.update || 0))}</div><div class='status-sub'>Safe metadata changes</div></div>
+            <div class='status-item'><div class='status-label'>Skip</div><div class='status-value'>${esc(String(counts.skip || 0))}</div><div class='status-sub'>Local, outbound-only, disabled or current</div></div>
+            <div class='status-item'><div class='status-label'>Error</div><div class='status-value'>${esc(String(counts.error || 0))}</div><div class='status-sub'>Must be fixed first</div></div>
+          </div>
+          <div class='table-wrap'>
+            <table>
+              <thead><tr><th>Action</th><th>Hostname</th><th>Role</th><th>Sync</th><th>SSH Host</th><th>SSH User</th><th>Port</th><th>Remote PBGui Dir</th><th>Reason / Changes</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>`;
+    }
+
+    function renderClusterNodesImportModal() {
+      const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+      prepareAlertModalWindow(980, 760);
+      document.getElementById('alertModalTitle').textContent = 'Import Cluster Nodes';
+      const box = document.getElementById('alertModalBody');
+      box.className = 'notice modal-scroll-body';
+      let body = '';
+      if (flow.error) {
+        body += `<div class='notice error'>${esc(flow.error)}</div>`;
+      }
+      if (flow.loading) {
+        body += `<div class='notice info'>Loading Cluster node import preview...</div>`;
+      } else if (flow.applying) {
+        body += `<div class='notice info'>Importing reachable Cluster nodes into local VPS Manager metadata...</div>`;
+      } else {
+        body += renderClusterNodesImportPreview(flow.preview);
+      }
+      box.innerHTML = body;
+      const canApply = !!(flow.preview && flow.preview.can_apply && !flow.loading && !flow.applying);
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" onclick="loadClusterNodesImportPreview()" ' + (flow.loading || flow.applying ? 'disabled' : '') + '>Reload Preview</button> <button class="btn ok" type="button" id="cluster-nodes-import-apply" ' + (canApply ? '' : 'disabled') + '>' + (flow.applying ? 'Importing...' : 'Import Reachable Nodes') + '</button>';
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      const applyBtn = document.getElementById('cluster-nodes-import-apply');
+      if (applyBtn) applyBtn.onclick = function () { applyClusterNodesImport(); };
+    }
+
+    function loadClusterNodesImportPreview() {
+      const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+      flow.loading = true;
+      flow.applying = false;
+      flow.error = '';
+      store.clusterNodesImport = flow;
+      renderClusterNodesImportModal();
+      vpsManagerGet('/cluster-import/preview', {})
+        .then(function (data) {
+          store.clusterNodesImport = { loading: false, applying: false, error: '', preview: data || null };
+          renderClusterNodesImportModal();
+        })
+        .catch(function (err) {
+          store.clusterNodesImport = { loading: false, applying: false, error: String(err && err.message ? err.message : err || 'Preview failed.'), preview: null };
+          renderClusterNodesImportModal();
+        });
+    }
+
+    function openClusterNodesImportPrompt() {
+      store.clusterNodesImport = defaultClusterNodesImportState();
+      loadClusterNodesImportPreview();
+    }
+
+    function applyClusterNodesImport() {
+      const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+      if (!flow.preview || !flow.preview.can_apply || flow.applying) return;
+      flow.applying = true;
+      flow.error = '';
+      store.clusterNodesImport = flow;
+      renderClusterNodesImportModal();
+      vpsManagerPost('/cluster-import/apply', {})
+        .then(function (data) {
+          closeAlertModal();
+          toast(String((data && data.message) || 'Cluster nodes imported.'), 'success');
+          send({ cmd: 'refresh' });
+          renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+        })
+        .catch(function (err) {
+          const next = store.clusterNodesImport || defaultClusterNodesImportState();
+          next.applying = false;
+          next.error = String(err && err.message ? err.message : err || 'Import failed.');
+          store.clusterNodesImport = next;
+          renderClusterNodesImportModal();
+        });
+    }
+
     function existingVpsImportPayload(includeLocalSudo) {
       const flow = store.importExistingVps || defaultExistingVpsImportState();
       const form = flow.form || {};
@@ -9447,6 +9573,7 @@
             <button class='sb-icon-btn' type='button' title='Add VPS' aria-label='Add VPS' onclick='selectView("add")'>+</button>
           </div>
           <button class='sb-btn info' type='button' onclick='openExistingVpsImportPrompt()'>Import Existing VPS</button>
+          <button class='sb-btn info' type='button' onclick='openClusterNodesImportPrompt()'>Import Cluster Nodes</button>
           ${store.view !== 'overview' ? `<button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>` : ''}
           <button class='${settingsBtnClass}' type='button' onclick='selectView("settings-vps-logging")'>Settings</button>
           <button class='${deployHistoryBtnClass}' type='button' onclick='selectView("deploys-vps-logging")'>History</button>
@@ -9496,6 +9623,13 @@
               <div class='tag ok'>Manual</div>
             </div>
             <div class='side-button-sub'>Probe an existing PBGui VPS over SSH, then save it without init or setup.</div>
+          </button>
+          <button class='side-button' type='button' onclick='openClusterNodesImportPrompt()'>
+            <div class='side-button-row'>
+              <div class='side-button-title'>Import Cluster Nodes</div>
+              <div class='tag ok'>Local</div>
+            </div>
+            <div class='side-button-sub'>Create local VPS Manager entries from reachable Cluster nodes without importing secrets.</div>
           </button>
         </div>`;
       if (sidebarList && sidebarList.innerHTML !== html) sidebarList.innerHTML = html;

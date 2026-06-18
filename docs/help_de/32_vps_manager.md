@@ -38,8 +38,11 @@ Linke Sidebar:
 | **Refresh** | Alle VPS-Status- und Versionsdaten über das Refresh-Icon neu laden |
 | **Overview / Settings / History** | Zwischen Live-Übersicht, gemeinsamen Deploy-Einstellungen und letzter Deploy-Historie wechseln |
 | **Import by Hostname** | Den manuellen Hostname-Import aus dem Sidebar-Bereich **Import Host** öffnen; der Hostname muss bereits lokal über `/etc/hosts` auflösbar sein |
+| **Import Cluster Nodes** | Sichere Metadaten aus erreichbaren Cluster-Sync-Nodes als lokale VPS-Manager-Hosts vorab anzeigen und importieren; Secrets werden nicht importiert |
 
-Die Übersicht nutzt jetzt die normale gemeinsame PBGui-FastAPI-Shell. Beim Wechsel zu **Master** oder zu einem konkreten **VPS** wird die linke Sidebar zu einer kontextabhängigen Aktionsliste umgeschaltet. Der Hauptbereich der Übersicht bleibt dabei auf die Tabelle fokussiert, während der Host-Import als manuelle Hostname-Aktion in der Sidebar verfügbar bleibt.
+Die Übersicht nutzt jetzt die normale gemeinsame PBGui-FastAPI-Shell. Beim Wechsel zu **Master** oder zu einem konkreten **VPS** wird die linke Sidebar zu einer kontextabhängigen Aktionsliste umgeschaltet. Der Hauptbereich der Übersicht bleibt dabei auf die Tabelle fokussiert, während der Host-Import als manuelle Hostname-Aktion oder nach einem Cluster-Sync-Join als **Import Cluster Nodes** in der Sidebar verfügbar bleibt.
+
+**Import Cluster Nodes** liest den lokal materialisierten `cluster_nodes`-State und importiert nur Nodes mit `sync_mode = reachable`. Lokale, outbound-only und deaktivierte Nodes werden übersprungen. Importiert werden nur sichere lokale VPS-Manager-Metadaten wie Hostname, SSH-Host, SSH-User, SSH-Port und Remote PBGui Dir; VPS-Passwörter, sudo-Passwörter, CoinMarketCap-Keys und Private Keys bleiben lokal und werden nicht aus Cluster Sync kopiert.
 
 Die Seite hält eine Live-WebSocket-Verbindung für Übersicht, Fortschritt und Branch-Status offen.
 

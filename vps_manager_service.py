@@ -27,6 +27,7 @@ import yaml
 from api.vps import get_monitor, get_monitor_state_snapshot, get_metric_history_snapshot
 from logging_helpers import human_log as _log
 from master.async_monitor import INSTANCE_COLLECT_SCRIPT, METRICS_STREAM_STALE_SECONDS, MONITOR_CACHE_VERSION
+from master.cluster_state import ClusterStateError, default_cluster_root, normalize_node_sync_mode, read_local_identity, rebuild_materialized_state
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits
@@ -1452,6 +1453,155 @@ class VPSManagerService:
                 _log(SERVICE, f"refresh local commit data failed: {exc}", level="WARNING")
 
         self._first_refresh_done = True
+
+    def _cluster_nodes_for_vps_import(self) -> tuple[list[dict[str, Any]], str]:
+        """Return materialized Cluster nodes and the local node id for VPS import."""
+
+        root = default_cluster_root(Path(PBGDIR))
+        try:
+            identity = read_local_identity(root)
+            materialized = rebuild_materialized_state(root, write=False)
+        except ClusterStateError as exc:
+            raise ValueError(f"Cluster state is not ready: {exc}") from exc
+        cluster_nodes = materialized.get("cluster_nodes") if isinstance(materialized, dict) else {}
+        nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes, dict) else {}
+        if not isinstance(nodes, dict):
+            return [], str(identity.get("node_id") or "")
+        result = [dict(node) for node in nodes.values() if isinstance(node, dict)]
+        result.sort(key=lambda item: str(item.get("pbname") or item.get("hostname") or item.get("node_id") or ""))
+        return result, str(identity.get("node_id") or "")
+
+    def _cluster_node_vps_import_item(self, node: dict[str, Any], local_node_id: str, existing: dict[str, VPS]) -> dict[str, Any]:
+        """Build one preview row for importing a reachable Cluster node into VPS Manager."""
+
+        node_id = str(node.get("node_id") or "").strip()
+        hostname = str(node.get("pbname") or node.get("hostname") or "").strip()
+        role = str(node.get("role") or "vps").strip() or "vps"
+        ssh_host = str(node.get("ssh_host") or "").strip()
+        ssh_user = str(node.get("ssh_user") or "").strip()
+        ssh_port = _safe_int(node.get("ssh_port"), 22) or 22
+        remote_pbgui_dir = str(node.get("remote_pbgui_dir") or "").strip()
+        sync_mode = normalize_node_sync_mode(node)
+        item: dict[str, Any] = {
+            "node_id": node_id,
+            "hostname": hostname,
+            "role": role,
+            "sync_mode": sync_mode,
+            "ssh_host": ssh_host,
+            "ssh_user": ssh_user,
+            "ssh_port": ssh_port,
+            "remote_pbgui_dir": remote_pbgui_dir,
+            "action": "skip",
+            "reason": "",
+            "changes": [],
+        }
+        if node_id == local_node_id:
+            item.update({"reason": "local Cluster node"})
+            return item
+        if sync_mode != "reachable":
+            item.update({"reason": f"Cluster node sync mode is {sync_mode}."})
+            return item
+        if not node_id:
+            item.update({"action": "error", "reason": "Cluster node has no node_id."})
+            return item
+        try:
+            _validate_import_hostname(hostname)
+        except ValueError as exc:
+            item.update({"action": "error", "reason": str(exc)})
+            return item
+        if not ssh_host:
+            item.update({"action": "error", "reason": "Reachable Cluster node has no ssh_host."})
+            return item
+        current = existing.get(hostname)
+        if current is None:
+            item.update({"action": "add", "reason": "VPS Manager host is missing."})
+            return item
+        changes: list[str] = []
+        comparisons = (
+            ("ip", str(getattr(current, "ip", "") or ""), ssh_host),
+            ("user", str(getattr(current, "user", "") or ""), ssh_user),
+            ("firewall_ssh_port", str(_safe_int(getattr(current, "firewall_ssh_port", 22), 22)), str(ssh_port)),
+            ("remote_pbgui_dir", str(getattr(current, "remote_pbgui_dir", "") or ""), remote_pbgui_dir),
+        )
+        for field_name, old_value, new_value in comparisons:
+            if new_value and old_value != new_value:
+                changes.append(field_name)
+        if changes:
+            item.update({"action": "update", "reason": "Safe VPS Manager metadata differs.", "changes": changes})
+        else:
+            item.update({"reason": "VPS Manager host already matches safe Cluster metadata."})
+        return item
+
+    def preview_cluster_nodes_import(self) -> dict[str, Any]:
+        """Preview reachable Cluster nodes that can become local VPS Manager hosts."""
+
+        self._sync_vps_inventory()
+        nodes, local_node_id = self._cluster_nodes_for_vps_import()
+        existing = {str(item.hostname or "").strip(): item for item in self.vpsmanager.vpss if str(item.hostname or "").strip()}
+        items = [self._cluster_node_vps_import_item(node, local_node_id, existing) for node in nodes]
+        counts: dict[str, int] = {"add": 0, "update": 0, "skip": 0, "error": 0}
+        for item in items:
+            action = str(item.get("action") or "skip")
+            counts[action] = counts.get(action, 0) + 1
+        return {
+            "items": items,
+            "counts": counts,
+            "can_apply": bool(counts.get("add") or counts.get("update")) and not bool(counts.get("error")),
+            "message": "Imports reachable Cluster nodes into local VPS Manager metadata only. Secrets are not imported.",
+        }
+
+    def import_cluster_nodes(self, token: str) -> dict[str, Any]:
+        """Import safe metadata for reachable Cluster nodes into VPS Manager host configs."""
+
+        plan = self.preview_cluster_nodes_import()
+        if plan.get("counts", {}).get("error"):
+            raise ValueError("Fix Cluster node import errors before applying.")
+        existing = {str(item.hostname or "").strip(): item for item in self.vpsmanager.vpss if str(item.hostname or "").strip()}
+        imported: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        for item in plan.get("items") or []:
+            action = str((item or {}).get("action") or "skip")
+            hostname = str((item or {}).get("hostname") or "").strip()
+            if action not in {"add", "update"}:
+                skipped.append({"hostname": hostname, "action": action, "reason": str((item or {}).get("reason") or "")})
+                continue
+            vps = existing.get(hostname)
+            is_new = vps is None
+            if vps is None:
+                vps = VPS()
+                vps.hostname = hostname
+                vps.swap = "0"
+                vps.firewall = False
+                vps.init_methode = "password"
+                vps.init_status = "successful"
+                vps.setup_status = "successful"
+                vps.command = "import-cluster-node"
+                vps.command_text = "Imported from Cluster Nodes"
+            vps.ip = str((item or {}).get("ssh_host") or vps.ip or "").strip()
+            if str((item or {}).get("ssh_user") or "").strip():
+                vps.user = str((item or {}).get("ssh_user") or "").strip()
+            vps.firewall_ssh_port = _safe_int((item or {}).get("ssh_port"), 22) or 22
+            if str((item or {}).get("remote_pbgui_dir") or "").strip():
+                vps.remote_pbgui_dir = str((item or {}).get("remote_pbgui_dir") or "").strip()
+            vps.user_pw = None
+            vps.save()
+            if is_new:
+                self.vpsmanager.vpss.append(vps)
+                existing[hostname] = vps
+            self._set_vps_monitor_enabled(hostname, enabled=True)
+            imported.append({"hostname": hostname, "action": action, "config": self._build_vps_config(token, vps)})
+        self.vpsmanager.vpss.sort(key=lambda entry: entry.hostname or "")
+        return {
+            "ok": True,
+            "counts": {
+                "imported": len(imported),
+                "skipped": len(skipped),
+            },
+            "imported": imported,
+            "skipped": skipped,
+            "preview": plan,
+            "message": f"Imported {len(imported)} Cluster node(s) into VPS Manager.",
+        }
 
     def _get_monitor_state(self) -> dict[str, Any]:
         try:

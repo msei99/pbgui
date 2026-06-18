@@ -187,6 +187,31 @@ def save_existing_vps_import(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.get("/cluster-import/preview")
+def preview_cluster_nodes_import(
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    del session
+    try:
+        data = _get_service().preview_cluster_nodes_import()
+        return JSONResponse(content=data)
+    except Exception as exc:
+        _log(SERVICE, f"Cluster node import preview failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/cluster-import/apply")
+def apply_cluster_nodes_import(
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    try:
+        data = _get_service().import_cluster_nodes(session.token)
+        return JSONResponse(content=data)
+    except Exception as exc:
+        _log(SERVICE, f"Cluster node import apply failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.websocket("/ws")
 async def ws_vps_manager(websocket: WebSocket):
     token = websocket.query_params.get("token", "")
