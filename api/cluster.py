@@ -1058,6 +1058,36 @@ def _validate_self_join_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _remote_pbgui_dir_candidates(remote_pbgui_dir: Any) -> list[str]:
+    """Return remote PBGui path candidates in the same order VPS Manager probes them."""
+
+    candidates: list[str] = []
+    for item in (remote_pbgui_dir, "software/pbgui", "pbgui"):
+        value = str(item or "").strip().rstrip("/")
+        if value and value not in candidates:
+            candidates.append(value)
+    return candidates
+
+
+async def _discover_remote_pbgui_dir_for_self_join(pool: Any, hostname: str, remote_pbgui_dir: str) -> dict[str, Any]:
+    """Find the upstream PBGui directory using the VPS Manager path candidate order."""
+
+    candidates = _remote_pbgui_dir_candidates(remote_pbgui_dir)
+    for candidate in candidates:
+        base = remote_shell_path(candidate)
+        command = f"base={base}; [ -f \"$base/pbgui.ini\" ]"
+        try:
+            result = await pool.run(hostname, command, timeout=8)
+        except Exception as exc:
+            _log(SERVICE, f"Remote PBGui dir discovery failed for {hostname}: {exc}", level="ERROR")
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if result is None:
+            raise HTTPException(status_code=502, detail="Remote host is unreachable")
+        if int(getattr(result, "exit_status", 1) or 0) == 0:
+            return {"remote_pbgui_dir": candidate, "candidates": candidates}
+    raise HTTPException(status_code=409, detail=f"pbgui.ini not found on upstream master in: {', '.join(candidates)}")
+
+
 async def _run_cluster_json_command_on_host(
     pool: Any,
     hostname: str,
@@ -1384,7 +1414,9 @@ async def _self_join_existing_cluster(settings: dict[str, Any]) -> dict[str, Any
         raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
 
     hostname = str(settings["hostname"])
-    remote_dir = str(settings["remote_pbgui_dir"])
+    remote_dir_result = await _discover_remote_pbgui_dir_for_self_join(pool, hostname, str(settings["remote_pbgui_dir"]))
+    remote_dir = str(remote_dir_result["remote_pbgui_dir"])
+    settings["remote_pbgui_dir"] = remote_dir
     hello = await _run_cluster_json_command_on_host(
         pool,
         hostname,
@@ -1488,6 +1520,8 @@ async def _self_join_existing_cluster(settings: dict[str, Any]) -> dict[str, Any
         "local_node_id": local_node_id,
         "upstream_node_id": upstream_node_id,
         "upstream_hostname": hostname,
+        "remote_pbgui_dir": remote_dir,
+        "remote_pbgui_dir_candidates": remote_dir_result.get("candidates") or [],
         "adopted_local_identity": bool(adoption.get("changed")),
         "archived_local_cluster_state": archive_result,
         "pull": pull_result,

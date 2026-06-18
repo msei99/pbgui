@@ -82,6 +82,29 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_self_join_discovers_remote_pbgui_dir_like_vps_manager() -> None:
+    """Self-join probes the same remote PBGui path candidates as VPS Manager."""
+
+    calls: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append(command)
+            if "bad/pbgui" in command:
+                return SimpleNamespace(exit_status=1, stdout="", stderr="missing")
+            if "software/pbgui" in command:
+                return SimpleNamespace(exit_status=0, stdout="", stderr="")
+            return SimpleNamespace(exit_status=1, stdout="", stderr="unexpected command")
+
+    result = asyncio.run(cluster._discover_remote_pbgui_dir_for_self_join(FakePool(), "upstream-master", "bad/pbgui"))
+
+    assert result["remote_pbgui_dir"] == "software/pbgui"
+    assert result["candidates"] == ["bad/pbgui", "software/pbgui", "pbgui"]
+    assert len(calls) == 2
+    assert "bad/pbgui" in calls[0]
+    assert "software/pbgui" in calls[1]
+
+
 def _reachable_vps_payload(**overrides) -> dict:
     """Return a node payload that is explicitly reachable over SSH."""
 
@@ -723,6 +746,8 @@ def test_self_join_adopts_empty_local_identity_and_registers_master(monkeypatch,
     class FakePool:
         async def run(self, hostname: str, command: str, timeout: int = 30):
             calls.append((hostname, command, timeout))
+            if "pbgui.ini" in command:
+                return SimpleNamespace(exit_status=0, stdout="", stderr="")
             if "cluster_ssh_setup.py" in command and "ensure-local" in command:
                 return SimpleNamespace(
                     exit_status=0,
@@ -800,6 +825,8 @@ def test_self_join_refuses_to_adopt_non_empty_foreign_cluster(monkeypatch, tmp_p
 
     class FakePool:
         async def run(self, hostname: str, command: str, timeout: int = 30):
+            if "pbgui.ini" in command:
+                return SimpleNamespace(exit_status=0, stdout="", stderr="")
             if "hello" in command:
                 return SimpleNamespace(
                     exit_status=0,
@@ -843,6 +870,8 @@ def test_self_join_recovery_archives_non_empty_foreign_cluster(monkeypatch, tmp_
 
     class FakePool:
         async def run(self, hostname: str, command: str, timeout: int = 30):
+            if "pbgui.ini" in command:
+                return SimpleNamespace(exit_status=0, stdout="", stderr="")
             if "cluster_ssh_setup.py" in command and "ensure-local" in command:
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "public_key": REMOTE_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:remote"}), stderr="")
             if "cluster_ssh_setup.py" in command and "install-authorized-key" in command:

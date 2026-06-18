@@ -239,6 +239,7 @@
     .modal-form-grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: var(--sp-md); }
     .modal-field { display: grid; gap: 5px; }
     .modal-field label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; }
+    .field-help { color: var(--faint); font-size: var(--fs-xs); line-height: 1.35; }
     .modal-input { width: 100%; min-height: 34px; border: 1px solid var(--border2); border-radius: 7px; background: #0f1724; color: var(--text); padding: 0.45rem 0.55rem; }
     .modal-input:disabled { color: var(--faint); background: #111827; }
     .modal-field-wide { grid-column: 1 / -1; }
@@ -315,8 +316,9 @@
               <input class="modal-input" id="self-join-hostname" type="text" placeholder="existing-master">
             </div>
             <div class="modal-field">
-              <label for="self-join-remote-dir">Remote PBGui Dir</label>
-              <input class="modal-input" id="self-join-remote-dir" type="text" placeholder="/home/mani/software/pbgui">
+              <label for="self-join-remote-dir">Remote PBGui Dir (optional)</label>
+              <input class="modal-input" id="self-join-remote-dir" type="text" placeholder="software/pbgui">
+              <div class="field-help">Leave empty to try VPS Manager metadata, <span class="mono">~/software/pbgui</span>, then <span class="mono">~/pbgui</span>.</div>
             </div>
             <div class="modal-field">
               <label for="self-join-ssh-host">SSH Host/IP</label>
@@ -324,7 +326,7 @@
             </div>
             <div class="modal-field">
               <label for="self-join-ssh-user">SSH User</label>
-              <input class="modal-input" id="self-join-ssh-user" type="text" placeholder="mani">
+              <input class="modal-input" id="self-join-ssh-user" type="text" placeholder="ssh-user">
             </div>
             <div class="modal-field">
               <label for="self-join-ssh-port">SSH Port</label>
@@ -454,7 +456,7 @@
           </div>
           <div class="modal-field">
             <label for="node-settings-ssh-user">SSH User</label>
-            <input class="modal-input" id="node-settings-ssh-user" type="text" placeholder="mani">
+            <input class="modal-input" id="node-settings-ssh-user" type="text" placeholder="ssh-user">
           </div>
           <div class="modal-field modal-field-wide">
             <label>Allowed Outbound Peers</label>
@@ -757,6 +759,7 @@
           var push = (result || {}).push || {};
           var pushCounts = push.counts || {};
           var text = 'Joined cluster ' + (result.cluster_id || '') + ': pulled ' + (pull.pulled_ops || 0) + ' op(s), pushed ' + (pushCounts.pushed || 0) + ' registration op(s).';
+          if (result.remote_pbgui_dir) text += ' Remote PBGui dir: ' + result.remote_pbgui_dir + '.';
           if (result.adopted_local_identity) text += ' Local identity adopted.';
           if (((result || {}).archived_local_cluster_state || {}).changed) text += ' Previous local cluster state archived.';
           showSelfJoinStatus(text, 'ok');

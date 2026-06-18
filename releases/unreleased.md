@@ -14,6 +14,7 @@
 - Cluster Sync: make VPS runner Join a one-click migration step that stops PBRun, writes identity, pushes/rebuilds Cluster state, materializes V7 configs/API keys, then starts PBRun again when current.
 - Cluster Sync: added an explicit second-master self-join action that uses outbound SSH to an existing master, adopts the upstream cluster id only for empty local oplogs, pulls upstream ops/blobs, registers the local master as outbound-only and installs Cluster SSH trust.
 - Cluster Sync: simplified second-master self-join so empty local identities automatically adopt the upstream cluster id, moved Join Existing Cluster before Bootstrap, and added a recovery option that archives accidental local cluster state before joining upstream.
+- Cluster Sync: made second-master self-join search Remote PBGui Dir candidates in the same order as VPS Manager and removed user-specific placeholder examples from the form.
 - VPS Manager: keep the Cleanup VPS action clickable when no VPS user password is stored so the normal password prompt can collect it.
 - VPS Manager: added PBCluster to remote service monitoring and VPS systemd migration checks, show remote PBGui service states in VPS detail/change views, and sync new PBGui systemd units during normal PBGui update/branch-switch actions.
 - VPS Monitor: treat PBCluster as alertable only for nodes with Cluster Sync enabled, silently clear false PBCluster alerts from Sync Off nodes, and prevent PBCluster auto-restart from creating legacy starter.py processes.
