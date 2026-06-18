@@ -339,6 +339,13 @@
           </div>
           <div class="bootstrap-toolbar" style="margin-top:0.75rem; margin-bottom:0;">
             <div class="bootstrap-summary" id="self-join-status">Self-join has not run yet.</div>
+            <div class="push-progress" id="self-join-progress" hidden>
+              <div class="push-progress-label">
+                <span id="self-join-progress-label">Starting self-join...</span>
+                <span class="push-progress-count" id="self-join-progress-count"></span>
+              </div>
+              <div class="push-progress-track"><div class="push-progress-fill" id="self-join-progress-fill"></div></div>
+            </div>
             <div class="bootstrap-actions">
               <button class="btn warn" id="self-join-btn" type="button">Join Existing Cluster</button>
             </div>
@@ -572,6 +579,7 @@
       var pendingPreviewNode = null;
       var lastPreviewPayload = null;
       var pushProgressTimer = null;
+      var selfJoinProgressTimer = null;
 
       function esc(value) {
         return String(value === undefined || value === null ? '' : value).replace(/[&<>'"]/g, function (ch) {
@@ -643,6 +651,35 @@
         if (pushProgressTimer) {
           clearTimeout(pushProgressTimer);
           pushProgressTimer = null;
+        }
+      }
+
+      function setSelfJoinProgress(done, total, label) {
+        var box = document.getElementById('self-join-progress');
+        var labelEl = document.getElementById('self-join-progress-label');
+        var countEl = document.getElementById('self-join-progress-count');
+        var fillEl = document.getElementById('self-join-progress-fill');
+        if (!box || !labelEl || !countEl || !fillEl) return;
+        total = Math.max(0, Number(total || 0));
+        done = Math.min(total, Math.max(0, Number(done || 0)));
+        if (!total && !label) {
+          box.hidden = true;
+          fillEl.style.width = '0%';
+          labelEl.textContent = 'Starting self-join...';
+          countEl.textContent = '';
+          return;
+        }
+        box.hidden = false;
+        var pct = total ? Math.round((done / total) * 100) : 0;
+        labelEl.textContent = label || 'Joining existing cluster...';
+        countEl.textContent = total ? (done + ' / ' + total) : '';
+        fillEl.style.width = Math.min(100, Math.max(0, pct)) + '%';
+      }
+
+      function stopSelfJoinProgressPolling() {
+        if (selfJoinProgressTimer) {
+          clearTimeout(selfJoinProgressTimer);
+          selfJoinProgressTimer = null;
         }
       }
 
@@ -793,11 +830,117 @@
           || text.indexOf('authentication') >= 0;
       }
 
-      function sendSelfJoinPayload(payload) {
-        return fetchJson('/self-join', {
+      function selfJoinJobLabel(job) {
+        var phase = String((job || {}).phase || 'queued');
+        var status = String((job || {}).status || 'queued');
+        if (status === 'error') return 'Self-join failed; see error message.';
+        if (phase === 'discovering') return 'Finding upstream PBGui directory...';
+        if (phase === 'hello') return 'Reading upstream cluster identity...';
+        if (phase === 'checking_local_state') return 'Checking local Cluster state...';
+        if (phase === 'preparing_keys') return 'Preparing local Cluster SSH key...';
+        if (phase === 'pulling_vector') return 'Reading upstream operation counters...';
+        if (phase === 'pulling_ops') return 'Pulling upstream operations...';
+        if (phase === 'pulling_blobs') return 'Pulling historical config/API blobs...';
+        if (phase === 'pulling_current_blobs') return 'Verifying current desired config/API blobs...';
+        if (phase === 'reading_upstream_key') return 'Reading upstream Cluster SSH key...';
+        if (phase === 'registering_nodes') return 'Recording master membership...';
+        if (phase === 'pushing_registration') return 'Pushing this master registration upstream...';
+        if (phase === 'blobs') return 'Uploading current config blobs upstream...';
+        if (phase === 'secrets') return 'Uploading current secret blobs upstream...';
+        if (phase === 'pushing') return 'Pushing local registration operations upstream...';
+        if (phase === 'rebuilding') return 'Rebuilding upstream materialized state...';
+        if (phase === 'done' || status === 'done') return 'Self-join complete. Refreshing Cluster page...';
+        if (phase === 'starting' || phase === 'queued') return 'Starting self-join job...';
+        return 'Joining existing cluster...';
+      }
+
+      function setSelfJoinButtonBusy(busy) {
+        var btn = document.getElementById('self-join-btn');
+        if (btn) {
+          btn.disabled = !!busy;
+          btn.textContent = busy ? 'Joining...' : 'Join Existing Cluster';
+        }
+      }
+
+      function startSelfJoinPayload(payload) {
+        return fetchJson('/self-join/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
+        });
+      }
+
+      function applySelfJoinJobProgress(job) {
+        var total = Number((job || {}).total || 9);
+        var done = Number((job || {}).done || 0);
+        var label = selfJoinJobLabel(job);
+        setSelfJoinProgress(done, total, label);
+        showSelfJoinStatus(label, (job || {}).status === 'error' ? 'err' : 'warn');
+      }
+
+      function finishSelfJoinJob(result, options) {
+        options = options || {};
+        stopSelfJoinProgressPolling();
+        setSelfJoinProgress(9, 9, 'Self-join complete. Refreshing Cluster page...');
+        if (options.passwordPrompt) closeSelfJoinPasswordPrompt();
+        setSelfJoinPasswordBusy(false);
+        setSelfJoinButtonBusy(false);
+        return handleSelfJoinSuccess(result || {});
+      }
+
+      function handleSelfJoinJobError(message, payload, options) {
+        options = options || {};
+        stopSelfJoinProgressPolling();
+        if (options.passwordPrompt) {
+          showSelfJoinPasswordError(message);
+          showSelfJoinStatus('Self-join failed: ' + message, 'err');
+          setMessage('Self-join failed: ' + message, 'err');
+          setSelfJoinPasswordBusy(false);
+          setSelfJoinButtonBusy(false);
+          return;
+        }
+        if (selfJoinNeedsPasswordPrompt(message)) {
+          openSelfJoinPasswordPrompt(payload, message);
+          showSelfJoinStatus('SSH key login is not available. Enter the SSH password to continue.', 'warn');
+          setSelfJoinProgress(0, 9, 'Waiting for SSH password...');
+          setSelfJoinButtonBusy(false);
+          return;
+        }
+        showSelfJoinStatus('Self-join failed: ' + message, 'err');
+        setSelfJoinProgress(0, 9, 'Self-join failed; see error message.');
+        setMessage('Self-join failed: ' + message, 'err');
+        setSelfJoinButtonBusy(false);
+      }
+
+      function pollSelfJoinJob(jobId, payload, options) {
+        options = options || {};
+        stopSelfJoinProgressPolling();
+        fetchJson('/self-join-jobs/' + encodeURIComponent(jobId)).then(function (job) {
+          applySelfJoinJobProgress(job);
+          if (job.status === 'done') {
+            return finishSelfJoinJob(job.result || {}, options);
+          }
+          if (job.status === 'error') {
+            handleSelfJoinJobError(job.error || 'Self-join failed.', payload, options);
+            return;
+          }
+          selfJoinProgressTimer = setTimeout(function () {
+            pollSelfJoinJob(jobId, payload, options);
+          }, 500);
+        }).catch(function (err) {
+          handleSelfJoinJobError(selfJoinErrorMessage(err), payload, options);
+        });
+      }
+
+      function beginSelfJoinJob(payload, options) {
+        options = options || {};
+        stopSelfJoinProgressPolling();
+        setSelfJoinProgress(0, 9, 'Starting self-join job...');
+        startSelfJoinPayload(payload).then(function (job) {
+          applySelfJoinJobProgress(job);
+          pollSelfJoinJob(job.job_id, payload, options);
+        }).catch(function (err) {
+          handleSelfJoinJobError(selfJoinErrorMessage(err), payload, options);
         });
       }
 
@@ -868,20 +1011,11 @@
         }
         var payload = Object.assign({}, pendingSelfJoinPayload, { ssh_password: password });
         setSelfJoinPasswordBusy(true);
+        setSelfJoinButtonBusy(true);
         showSelfJoinPasswordError('');
         showSelfJoinStatus('Joining existing cluster through ' + payload.hostname + ' with password authentication...', 'warn');
         setMessage('Joining existing cluster through ' + payload.hostname + ' with password authentication...', 'warn');
-        sendSelfJoinPayload(payload).then(function (result) {
-          closeSelfJoinPasswordPrompt();
-          return handleSelfJoinSuccess(result);
-        }).catch(function (err) {
-          var message = selfJoinErrorMessage(err);
-          showSelfJoinPasswordError(message);
-          showSelfJoinStatus('Self-join failed: ' + message, 'err');
-          setMessage('Self-join failed: ' + message, 'err');
-        }).finally(function () {
-          setSelfJoinPasswordBusy(false);
-        });
+        beginSelfJoinJob(payload, { passwordPrompt: true });
       }
 
       function selfJoinExistingCluster() {
@@ -890,24 +1024,10 @@
           showSelfJoinStatus('Enter the VPS Monitor hostname for the existing master.', 'err');
           return;
         }
-        var btn = document.getElementById('self-join-btn');
-        if (btn) { btn.disabled = true; btn.textContent = 'Joining...'; }
+        setSelfJoinButtonBusy(true);
         showSelfJoinStatus('Joining existing cluster through ' + payload.hostname + '...', 'warn');
         setMessage('Joining existing cluster through ' + payload.hostname + '...', 'warn');
-        sendSelfJoinPayload(payload).then(function (result) {
-          return handleSelfJoinSuccess(result);
-        }).catch(function (err) {
-          var message = selfJoinErrorMessage(err);
-          if (selfJoinNeedsPasswordPrompt(message)) {
-            openSelfJoinPasswordPrompt(payload, message);
-            showSelfJoinStatus('SSH key login is not available. Enter the SSH password to continue.', 'warn');
-            return;
-          }
-          showSelfJoinStatus('Self-join failed: ' + message, 'err');
-          setMessage('Self-join failed: ' + message, 'err');
-        }).finally(function () {
-          if (btn) { btn.disabled = false; btn.textContent = 'Join Existing Cluster'; }
-        });
+        beginSelfJoinJob(payload, { passwordPrompt: false });
       }
 
       function showNodeSettingsError(text) {

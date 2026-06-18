@@ -460,6 +460,49 @@ def test_bootstrap_preview_reports_missing_local_config(monkeypatch, tmp_path: P
     assert not (tmp_path / "data" / "cluster" / "desired_state.json").exists()
 
 
+def test_bootstrap_preview_errors_on_unknown_folder_without_config(monkeypatch, tmp_path: Path) -> None:
+    """Bootstrap preview reports unknown run_v7 folders that have no config.json."""
+
+    _init_cluster(tmp_path)
+    (tmp_path / "data" / "run_v7" / "empty_inst").mkdir(parents=True)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+
+    preview = cluster.get_bootstrap_preview(session=None)
+
+    assert preview["counts"]["error"] == 1
+    item = next(item for item in preview["items"] if item.get("instance") == "empty_inst")
+    assert item["action"] == "error"
+    assert item["reason"] == "missing config.json"
+
+
+def test_bootstrap_preview_skips_joined_instance_folder_without_config(monkeypatch, tmp_path: Path) -> None:
+    """Bootstrap preview does not flag empty local folders already tracked by desired state."""
+
+    root = _init_cluster(tmp_path)
+    (tmp_path / "data" / "run_v7" / "joined_inst").mkdir(parents=True)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "joined_inst",
+            "version": "5",
+            "assigned_host": NODE_A,
+            "desired_state": "stopped",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=101,
+    )
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+
+    preview = cluster.get_bootstrap_preview(session=None)
+
+    assert preview["counts"]["error"] == 0
+    item = next(item for item in preview["items"] if item.get("instance") == "joined_inst")
+    assert item["action"] == "skip"
+    assert "desired state already tracks" in item["reason"]
+    assert item["current_version"] == "5"
+
+
 def test_apply_bootstrap_records_missing_local_config(monkeypatch, tmp_path: Path) -> None:
     """Applying bootstrap writes UPSERT_CONFIG for local configs and materializes desired state."""
 
@@ -807,6 +850,41 @@ def test_self_join_adopts_empty_local_identity_and_registers_master(monkeypatch,
     assert nodes[NODE_C]["cluster_ssh_fingerprint"] == "SHA256:local"
     assert nodes[NODE_B]["ssh_user"] == "mani"
     assert nodes[NODE_B]["cluster_ssh_fingerprint"] == "SHA256:remote"
+
+
+def test_self_join_start_job_reports_progress(monkeypatch) -> None:
+    """Self-join start route returns a job that can be polled until completion."""
+
+    cluster._SELF_JOIN_JOBS.clear()
+
+    async def fake_self_join(settings: dict[str, Any], progress_callback=None) -> dict[str, Any]:
+        assert settings["hostname"] == "upstream-master"
+        if progress_callback:
+            progress_callback({"phase": "hello", "done": 1, "total": 9, "remaining": 8})
+        return {"ok": True, "cluster_id": CLUSTER_ID, "pull": {"pulled_ops": 0}, "push": {"counts": {"pushed": 0}}}
+
+    async def exercise() -> tuple[dict[str, Any], dict[str, Any]]:
+        start = await cluster.start_self_join_existing_cluster(_JsonRequest({
+            "hostname": "upstream-master",
+            "ssh_host": "198.51.100.10",
+        }), session=None)
+        await asyncio.sleep(0)
+        polled = cluster.get_self_join_job(start["job_id"], session=None)
+        return start, polled
+
+    monkeypatch.setattr(cluster, "_self_join_existing_cluster", fake_self_join)
+
+    try:
+        start_job, polled_job = asyncio.run(exercise())
+    finally:
+        cluster._SELF_JOIN_JOBS.clear()
+
+    assert start_job["status"] == "queued"
+    assert start_job["total"] == 9
+    assert polled_job["status"] == "done"
+    assert polled_job["phase"] == "done"
+    assert polled_job["done"] == 9
+    assert polled_job["result"]["ok"] is True
 
 
 def test_self_join_defers_missing_historical_config_blobs(monkeypatch, tmp_path: Path) -> None:

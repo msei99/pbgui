@@ -49,8 +49,10 @@ SERVICE = "Cluster"
 router = APIRouter()
 
 _REMOTE_PUSH_JOBS: dict[str, dict[str, Any]] = {}
+_SELF_JOIN_JOBS: dict[str, dict[str, Any]] = {}
 _REMOTE_PUSH_JOB_TTL_SECONDS = 3600
 _REMOTE_PUSH_ACTIVE_STATES = frozenset({"queued", "running"})
+_SELF_JOIN_ACTIVE_STATES = frozenset({"queued", "running"})
 _CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
 _EDITABLE_NODE_SYNC_MODES = frozenset({"disabled", "outbound_only", "reachable"})
 
@@ -207,6 +209,81 @@ def _update_remote_push_job(job_id: str, **updates: Any) -> dict[str, Any]:
     if not job:
         return {}
     job.update(updates)
+    job["updated_at"] = int(time.time())
+    return job
+
+
+def _prune_self_join_jobs() -> None:
+    """Forget stale self-join progress records."""
+
+    cutoff = int(time.time()) - _REMOTE_PUSH_JOB_TTL_SECONDS
+    for job_id, job in list(_SELF_JOIN_JOBS.items()):
+        if int(job.get("updated_at") or 0) < cutoff:
+            _SELF_JOIN_JOBS.pop(job_id, None)
+
+
+def _public_self_join_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Return a JSON-safe view of one self-join progress record."""
+
+    return {
+        "job_id": str(job.get("job_id") or ""),
+        "hostname": str(job.get("hostname") or ""),
+        "status": str(job.get("status") or "queued"),
+        "phase": str(job.get("phase") or "queued"),
+        "done": int(job.get("done") or 0),
+        "total": int(job.get("total") or 0),
+        "remaining": int(job.get("remaining") or 0),
+        "created_at": int(job.get("created_at") or 0),
+        "updated_at": int(job.get("updated_at") or 0),
+        "error": str(job.get("error") or ""),
+        "result": job.get("result") if isinstance(job.get("result"), dict) else None,
+    }
+
+
+def _find_active_self_join_job() -> dict[str, Any] | None:
+    """Return the active self-join job, if present."""
+
+    _prune_self_join_jobs()
+    for job in _SELF_JOIN_JOBS.values():
+        if str(job.get("status") or "") in _SELF_JOIN_ACTIVE_STATES:
+            return job
+    return None
+
+
+def _create_self_join_job(settings: dict[str, Any]) -> dict[str, Any]:
+    """Create a new local progress record for one self-join job."""
+
+    active = _find_active_self_join_job()
+    if active:
+        raise HTTPException(status_code=409, detail="Self-join is already running")
+    now = int(time.time())
+    job_id = uuid.uuid4().hex
+    job = {
+        "job_id": job_id,
+        "hostname": str(settings.get("hostname") or ""),
+        "status": "queued",
+        "phase": "queued",
+        "done": 0,
+        "total": 9,
+        "remaining": 9,
+        "created_at": now,
+        "updated_at": now,
+        "error": "",
+        "result": None,
+    }
+    _SELF_JOIN_JOBS[job_id] = job
+    return job
+
+
+def _update_self_join_job(job_id: str, **updates: Any) -> dict[str, Any]:
+    """Update and return one local self-join progress record."""
+
+    job = _SELF_JOIN_JOBS.get(str(job_id or ""))
+    if not job:
+        return {}
+    job.update(updates)
+    if "done" in job and "total" in job:
+        job["remaining"] = max(0, int(job.get("total") or 0) - int(job.get("done") or 0))
     job["updated_at"] = int(time.time())
     return job
 
@@ -1481,10 +1558,16 @@ async def _pull_missing_operations_from_host(
     remote_pbgui_dir: str,
     local_node_id: str,
     cluster_id: str,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Pull upstream operations and their blobs into the local cluster state."""
 
+    def report_progress(update: dict[str, Any]) -> None:
+        if progress_callback:
+            progress_callback(dict(update))
+
     root = _cluster_root()
+    report_progress({"phase": "pulling_vector", "done": 0, "total": 0, "remaining": 0})
     vector_payload = await _run_cluster_json_command_on_host(
         pool,
         hostname,
@@ -1497,8 +1580,10 @@ async def _pull_missing_operations_from_host(
     remote_vector = _as_state_vector(vector_payload.get("state_vector") or {})
     local_operations = load_operations(root, expected_cluster_id=cluster_id)
     local_vector = _state_vector_from_operations(local_operations)
+    total_missing_ops = sum(max(0, int(remote_vector.get(actor) or 0) - int(local_vector.get(actor) or 0)) for actor in remote_vector)
     pulled = 0
     blob_counts = {"config": 0, "secret": 0, "missing_config": 0}
+    report_progress({"phase": "pulling_ops", "done": 0, "total": total_missing_ops, "remaining": total_missing_ops})
     for actor in sorted(remote_vector):
         remote_seq = int(remote_vector.get(actor) or 0)
         local_seq = int(local_vector.get(actor) or 0)
@@ -1521,6 +1606,7 @@ async def _pull_missing_operations_from_host(
                 raise HTTPException(status_code=409, detail=f"Remote is missing operation(s) for {actor}: {missing}")
             operations = payload.get("operations") if isinstance(payload, dict) else []
             operations = operations if isinstance(operations, list) else []
+            report_progress({"phase": "pulling_blobs", "done": pulled, "total": total_missing_ops, "remaining": max(0, total_missing_ops - pulled)})
             pulled_blobs = await _pull_blobs_for_operations_from_host(pool, hostname, remote_pbgui_dir, local_node_id, operations)
             blob_counts["config"] += int(pulled_blobs.get("config") or 0)
             blob_counts["secret"] += int(pulled_blobs.get("secret") or 0)
@@ -1533,7 +1619,9 @@ async def _pull_missing_operations_from_host(
                 if not existed:
                     pulled += 1
             start = end + 1
+            report_progress({"phase": "pulling_ops", "done": pulled, "total": total_missing_ops, "remaining": max(0, total_missing_ops - pulled)})
     materialized = rebuild_materialized_state(root, write=False)
+    report_progress({"phase": "pulling_current_blobs", "done": pulled, "total": total_missing_ops, "remaining": 0})
     current_blob_counts = await _pull_current_desired_blobs_from_host(
         pool,
         hostname,
@@ -1613,10 +1701,24 @@ def _self_join_transport_node(upstream: dict[str, Any], settings: dict[str, Any]
     return node
 
 
-async def _self_join_existing_cluster(settings: dict[str, Any]) -> dict[str, Any]:
+async def _self_join_existing_cluster(
+    settings: dict[str, Any],
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     """Join this master to an existing cluster through an outbound SSH connection."""
 
+    total_steps = 9
+
+    def report_progress(phase: str, done: int, **extra: Any) -> None:
+        if not progress_callback:
+            return
+        update = {"phase": phase, "done": max(0, min(total_steps, int(done))), "total": total_steps}
+        update["remaining"] = max(0, total_steps - int(update["done"]))
+        update.update(extra)
+        progress_callback(update)
+
     root = _cluster_root()
+    report_progress("starting", 0)
     try:
         identity = ensure_local_identity(root, role="master", pbname=_get_master_pbname())
     except ClusterStateError as exc:
@@ -1640,9 +1742,11 @@ async def _self_join_existing_cluster(settings: dict[str, Any]) -> dict[str, Any
             raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
 
     try:
+        report_progress("discovering", 0)
         remote_dir_result = await _discover_remote_pbgui_dir_for_self_join(pool, hostname, str(settings["remote_pbgui_dir"]))
         remote_dir = str(remote_dir_result["remote_pbgui_dir"])
         settings["remote_pbgui_dir"] = remote_dir
+        report_progress("hello", 1, remote_pbgui_dir=remote_dir)
         hello = await _run_cluster_json_command_on_host(
             pool,
             hostname,
@@ -1657,6 +1761,7 @@ async def _self_join_existing_cluster(settings: dict[str, Any]) -> dict[str, Any
         if upstream_node_id == local_node_id:
             raise HTTPException(status_code=409, detail="Upstream node_id matches the local node_id; refusing to self-join the same node")
 
+        report_progress("checking_local_state", 2)
         local_cluster_id = str(identity.get("cluster_id") or "")
         try:
             local_operations = load_operations(root, expected_cluster_id=local_cluster_id)
@@ -1675,13 +1780,23 @@ async def _self_join_existing_cluster(settings: dict[str, Any]) -> dict[str, Any
             adoption = _adopt_empty_local_cluster_identity(root, identity, upstream_cluster_id)
             identity = dict(adoption["identity"])
 
+        report_progress("preparing_keys", 3)
         local_key = ensure_local_cluster_ssh_material(Path(PBGDIR), role="master", pbname=_get_master_pbname())
-        pull_result = await _pull_missing_operations_from_host(pool, hostname, remote_dir, local_node_id, upstream_cluster_id)
+        report_progress("pulling", 4)
+        pull_result = await _pull_missing_operations_from_host(
+            pool,
+            hostname,
+            remote_dir,
+            local_node_id,
+            upstream_cluster_id,
+            progress_callback=lambda update: report_progress(str(update.get("phase") or "pulling"), 4, pull=update),
+        )
         materialized = rebuild_materialized_state(root)
         nodes = _node_list(materialized["cluster_nodes"])
         upstream_node = _node_for_id(nodes, upstream_node_id)
         local_node = _node_for_id(nodes, local_node_id)
 
+        report_progress("reading_upstream_key", 5)
         remote_key = await _run_cluster_ssh_setup_on_host(pool, hostname, remote_dir, ["ensure-local", "--node-id", upstream_node_id])
         remote_public_key = str(remote_key.get("public_key") or hello.get("cluster_ssh_public_key") or "").strip()
         remote_fingerprint = str(remote_key.get("fingerprint") or hello.get("cluster_ssh_fingerprint") or "").strip()
@@ -1705,6 +1820,7 @@ async def _self_join_existing_cluster(settings: dict[str, Any]) -> dict[str, Any
             ],
         )
 
+        report_progress("registering_nodes", 6)
         upstream_desired = {
             "node_id": upstream_node_id,
             "role": _cluster_role_from_monitor_role(upstream_node.get("role") or hello.get("role") or "master"),
@@ -1739,7 +1855,15 @@ async def _self_join_existing_cluster(settings: dict[str, Any]) -> dict[str, Any
         materialized = rebuild_materialized_state(root)
         upstream_node = _node_for_id(_node_list(materialized["cluster_nodes"]), upstream_node_id)
         transport_node = _self_join_transport_node(upstream_node, settings)
-        push_result = await _push_missing_operations_to_remote(transport_node, identity, rebuild=True, pool=pool)
+        report_progress("pushing_registration", 7)
+        push_result = await _push_missing_operations_to_remote(
+            transport_node,
+            identity,
+            rebuild=True,
+            pool=pool,
+            progress_callback=lambda update: report_progress(str(update.get("phase") or "pushing_registration"), 7, push=update),
+        )
+        report_progress("done", 9)
         return {
             "ok": True,
             "cluster_id": upstream_cluster_id,
@@ -2745,6 +2869,41 @@ async def _run_remote_push_job(job_id: str, node: dict[str, Any], identity: dict
     )
 
 
+async def _run_self_join_job(job_id: str, settings: dict[str, Any]) -> None:
+    """Run one self-join in the background and update local progress."""
+
+    def progress(update: dict[str, Any]) -> None:
+        _update_self_join_job(job_id, status="running", error="", **update)
+
+    _update_self_join_job(job_id, status="running", phase="starting", done=0, total=9, remaining=9, error="")
+    try:
+        result = await _self_join_existing_cluster(settings, progress_callback=progress)
+    except HTTPException as exc:
+        _update_self_join_job(
+            job_id,
+            status="error",
+            phase="error",
+            error=str(exc.detail),
+            result={"status_code": exc.status_code, "detail": exc.detail},
+        )
+        return
+    except Exception as exc:
+        _log(SERVICE, f"Self-join job failed for {settings.get('hostname')}: {exc}", level="ERROR")
+        _update_self_join_job(job_id, status="error", phase="error", error="Self-join failed")
+        return
+
+    _update_self_join_job(
+        job_id,
+        status="done",
+        phase="done",
+        done=9,
+        total=9,
+        remaining=0,
+        error="",
+        result=result,
+    )
+
+
 async def _require_remote_state_current(
     node: dict[str, Any],
     identity: dict[str, Any],
@@ -2904,8 +3063,20 @@ def _build_bootstrap_plan() -> dict[str, Any]:
         try:
             _validate_instance_name(name)
             if not config_path.is_file():
-                item.update({"action": "error", "reason": "missing config.json"})
-                counts["error"] += 1
+                current = _current_instance_state(desired_state, name)
+                if current:
+                    item.update({
+                        "action": "skip",
+                        "reason": "local config.json is missing; desired state already tracks this instance",
+                        "current_version": str(current.get("version") or ""),
+                        "current_manifest_hash": str(current.get("config_manifest_hash") or ""),
+                        "desired_state": str(current.get("desired_state") or ""),
+                        "assigned_host": str(current.get("assigned_host") or ""),
+                    })
+                    counts["skip"] += 1
+                else:
+                    item.update({"action": "error", "reason": "missing config.json"})
+                    counts["error"] += 1
                 items.append(item)
                 continue
             cfg = load_pb7_config(config_path, neutralize_added=False)
@@ -3215,6 +3386,34 @@ async def self_join_existing_cluster(
     except Exception as exc:
         _log(SERVICE, f"Self-join failed for {settings.get('hostname')}: {exc}", level="ERROR")
         raise HTTPException(status_code=500, detail="Self-join failed") from exc
+
+
+@router.post("/self-join/start")
+async def start_self_join_existing_cluster(
+    request: Request,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Start a background self-join job and return its local progress record."""
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from exc
+    settings = _validate_self_join_payload(payload)
+    job = _create_self_join_job(settings)
+    asyncio.create_task(_run_self_join_job(str(job["job_id"]), settings))
+    return _public_self_join_job(job)
+
+
+@router.get("/self-join-jobs/{job_id}")
+def get_self_join_job(job_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Return local progress for one background self-join job."""
+
+    _prune_self_join_jobs()
+    job = _SELF_JOIN_JOBS.get(str(job_id or ""))
+    if not job:
+        raise HTTPException(status_code=404, detail="Self-join job not found")
+    return _public_self_join_job(job)
 
 
 @router.post("/remote-join/{node_id}")
