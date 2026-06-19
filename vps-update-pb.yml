@@ -12,7 +12,6 @@
   vars:
     # ansible_ssh_pass: "{{ user_pw }}"
     # ansible_become_password: "{{ user_pw }}"
-    user: "{{ user }}"
     # user_pw: "{{ user_pw }}"
     install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
 
@@ -133,7 +132,11 @@
 
     - name: Check required PBGui systemd units
       shell: |
-        target_home="$(getent passwd "{{ user }}" | cut -d: -f6)"
+        target_user={{ user | default('', true) | quote }}
+        target_home=""
+        if [ -n "$target_user" ]; then
+          target_home="$(getent passwd "$target_user" | cut -d: -f6)"
+        fi
         unit_dir="${target_home:-$HOME}/.config/systemd/user"
         for unit in pbgui-pbcluster.service pbgui-pbrun.service; do
           if [ ! -f "$unit_dir/$unit" ]; then

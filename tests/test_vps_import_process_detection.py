@@ -1671,6 +1671,9 @@ def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> N
     assert "Check required PBGui systemd units" in playbook
     assert "pbgui-pbcluster.service pbgui-pbrun.service" in playbook or "pbgui-pbcluster.service" in playbook
     assert "required_systemd_units" in playbook
+    assert 'user: "{{ user }}"' not in playbook
+    assert "target_user={{ user | default('', true) | quote }}" in playbook
+    assert 'getent passwd "$target_user"' in playbook
     assert "Read PBGui optional service config" in playbook
     assert "pbgui_enabled_services" in playbook
     assert "{{ pbgui_enabled_services | join(',') }}" in playbook
@@ -1691,6 +1694,9 @@ def test_master_update_playbooks_repair_pbcluster_systemd_unit(playbook_path: st
     assert "Check required PBGui systemd units" in playbook
     assert "pbgui-pbcluster.service" in playbook
     assert "required_systemd_units" in playbook
+    assert 'user: "{{ user }}"' not in playbook
+    assert "target_user={{ user | default('', true) | quote }}" in playbook
+    assert 'getent passwd "$target_user"' in playbook
     assert "setup/setup_systemd.sh" in playbook
     assert "--no-start" in playbook
     assert "failed_when: false" not in systemd_setup_block

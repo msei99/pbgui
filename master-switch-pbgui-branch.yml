@@ -12,7 +12,6 @@
   gather_facts: "{{ debug }}"
 
   vars:
-    user: "{{ user }}"
     pbgdir: "{{ pbgdir }}"
     target_branch: "{{ branch }}"
     target_commit: "{{ commit | default('') }}"
@@ -97,7 +96,11 @@
 
     - name: Check required PBGui systemd units
       shell: |
-        target_home="$(getent passwd "{{ user }}" | cut -d: -f6)"
+        target_user={{ user | default('', true) | quote }}
+        target_home=""
+        if [ -n "$target_user" ]; then
+          target_home="$(getent passwd "$target_user" | cut -d: -f6)"
+        fi
         unit_dir="${target_home:-$HOME}/.config/systemd/user"
         required_units="pbgui-api.service"
         starter_help="$({{ ansible_playbook_python }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
