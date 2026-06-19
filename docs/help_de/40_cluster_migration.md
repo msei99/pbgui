@@ -43,9 +43,12 @@ Cluster Sync ersetzt die alten Sync-Wege. PBRun wird nur auf Hosts benötigt, di
 ### 5. VPS-Nodes joinen
 
 1. Öffne **System -> Cluster Sync**.
-2. Wenn ein VPS-Node **No Identity** zeigt, nutze **Join**.
-3. **Join** schreibt die Cluster-Identität, synchronisiert Cluster-Daten, materialisiert V7-Configs/API-Keys und startet PBRun danach wieder, wenn alles passt.
-4. Bei VPS-Runnern stoppt **Join** PBRun währenddessen automatisch. Die laufenden passivbot-Prozesse bleiben unangetastet.
+2. Öffne beim VPS-Node **Edit**. Wenn der Node noch **Disabled** ist, stelle **Sync Mode** auf **Reachable via SSH**, prüfe SSH Host/User/Port und **Remote PBGui Dir**, und speichere.
+3. Nutze beim Node **Repair SSH**, damit die eingeschränkten PBCluster-SSH-Keys und Fingerprints installiert bzw. aktualisiert werden.
+4. Klicke **Probe Active Nodes** und warte, bis der Node erreichbar ist und **No Identity** meldet.
+5. Nutze danach **Join**.
+6. **Join** schreibt die Cluster-Identität, synchronisiert Cluster-Daten, materialisiert V7-Configs/API-Keys und startet PBRun danach wieder, wenn alles passt.
+7. Bei VPS-Runnern stoppt **Join** PBRun währenddessen automatisch. Die laufenden passivbot-Prozesse bleiben unangetastet.
 
 ### 6. Ergebnis prüfen
 
