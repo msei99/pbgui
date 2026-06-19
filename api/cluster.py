@@ -6,11 +6,15 @@ import asyncio
 import base64
 import binascii
 import configparser
+import getpass
 import hashlib
+import ipaddress
 import json
 import os
 import platform
 import shlex
+import socket
+import subprocess
 import time
 import uuid
 from collections.abc import Callable
@@ -153,12 +157,91 @@ def _local_pbgui_dir_value() -> str:
     return relative.as_posix() if relative.parts else str(pbgui_dir)
 
 
+def _local_ssh_user_value() -> str:
+    """Return the current local login user for Cluster SSH metadata."""
+
+    try:
+        return getpass.getuser().strip()
+    except Exception:
+        return str(os.environ.get("USER") or os.environ.get("LOGNAME") or "").strip()
+
+
+def _append_ip_candidate(candidates: list[str], value: Any) -> None:
+    """Append one usable IPv4 address candidate if it is not already present."""
+
+    text = str(value or "").strip()
+    if not text:
+        return
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError:
+        return
+    if address.version != 4 or address.is_loopback or address.is_link_local or address.is_multicast or address.is_unspecified:
+        return
+    normalized = str(address)
+    if normalized not in candidates:
+        candidates.append(normalized)
+
+
+def _source_ip_for_destination(destination_host: str, destination_port: int) -> str:
+    """Return the local source IP the OS would use to reach one peer."""
+
+    host = str(destination_host or "").strip()
+    if not host:
+        return ""
+    try:
+        port = int(destination_port or 22)
+    except (TypeError, ValueError):
+        port = 22
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect((host, port))
+            return str(sock.getsockname()[0] or "")
+    except OSError:
+        return ""
+
+
+def _local_ssh_host_value(destination_host: str | None = None, destination_port: int = 22) -> str:
+    """Return the best detected local IPv4 address for Cluster SSH metadata."""
+
+    candidates: list[str] = []
+    _append_ip_candidate(candidates, _source_ip_for_destination(str(destination_host or ""), destination_port))
+    try:
+        result = subprocess.run(["hostname", "-I"], capture_output=True, check=False, text=True, timeout=2)
+        for item in str(result.stdout or "").split():
+            _append_ip_candidate(candidates, item)
+    except Exception:
+        pass
+    try:
+        _append_ip_candidate(candidates, _source_ip_for_destination("1.1.1.1", 53))
+    except Exception:
+        pass
+    try:
+        for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET, socket.SOCK_DGRAM):
+            sockaddr = item[4]
+            if sockaddr:
+                _append_ip_candidate(candidates, sockaddr[0])
+    except OSError:
+        pass
+    return candidates[0] if candidates else ""
+
+
 def _node_with_local_defaults(node: dict[str, Any], local_node_id: str) -> dict[str, Any]:
     """Overlay local-only defaults onto a materialized node for API/UI use."""
 
     item = dict(node)
-    if str(item.get("node_id") or "") == str(local_node_id or "") and not str(item.get("remote_pbgui_dir") or "").strip():
+    if str(item.get("node_id") or "") != str(local_node_id or ""):
+        return item
+    if not str(item.get("remote_pbgui_dir") or "").strip():
         item["remote_pbgui_dir"] = _local_pbgui_dir_value()
+    if not str(item.get("ssh_host") or "").strip():
+        ssh_host = _local_ssh_host_value()
+        if ssh_host:
+            item["ssh_host"] = ssh_host
+    if not str(item.get("ssh_user") or "").strip():
+        ssh_user = _local_ssh_user_value()
+        if ssh_user:
+            item["ssh_user"] = ssh_user
     return item
 
 
@@ -1874,6 +1957,8 @@ async def _self_join_existing_cluster(
         if str(settings.get("ssh_user") or ""):
             upstream_desired["ssh_user"] = str(settings.get("ssh_user") or "")
         upstream_membership = _append_node_membership_if_needed(upstream_node, upstream_desired)
+        local_ssh_host = _local_ssh_host_value(str(settings.get("ssh_host") or hostname), int(settings.get("ssh_port") or 22))
+        local_ssh_user = _local_ssh_user_value()
 
         local_desired = {
             "node_id": local_node_id,
@@ -1888,6 +1973,11 @@ async def _self_join_existing_cluster(
             "cluster_ssh_fingerprint": str(local_key.get("fingerprint") or ""),
             "cluster_ssh_mode": "forced",
         }
+        if local_ssh_host:
+            local_desired["ssh_host"] = local_ssh_host
+            local_desired["ssh_port"] = 22
+        if local_ssh_user:
+            local_desired["ssh_user"] = local_ssh_user
         local_membership = _append_node_membership_if_needed(local_node, local_desired)
         materialized = rebuild_materialized_state(root)
         upstream_node = _node_for_id(_node_list(materialized["cluster_nodes"]), upstream_node_id)
@@ -3355,19 +3445,27 @@ async def update_node_settings(
     if str(node.get("node_id") or "") == local_node_id and settings["sync_mode"] == "disabled":
         raise HTTPException(status_code=400, detail="Local cluster node sync cannot be disabled")
     is_local_node = str(node.get("node_id") or "") == local_node_id
-    if is_local_node and not str(settings.get("remote_pbgui_dir") or "").strip():
-        settings["remote_pbgui_dir"] = _local_pbgui_dir_value()
+    if is_local_node:
+        if not str(settings.get("remote_pbgui_dir") or "").strip():
+            settings["remote_pbgui_dir"] = _local_pbgui_dir_value()
+        if not str(settings.get("ssh_user") or "").strip():
+            settings["ssh_user"] = _local_ssh_user_value()
+        if not str(settings.get("ssh_host") or "").strip():
+            peer_host = ""
+            for peer_id in settings.get("sync_peers") or []:
+                peer = _node_for_id(nodes, str(peer_id or ""))
+                peer_host = str(peer.get("ssh_host") or peer.get("hostname") or peer.get("pbname") or "").strip()
+                if peer_host:
+                    break
+            settings["ssh_host"] = _local_ssh_host_value(peer_host, int(settings.get("ssh_port") or 22))
     if node.get("enabled") is False and settings["sync_mode"] != "disabled":
         raise HTTPException(status_code=400, detail="Disabled cluster nodes cannot be enabled for sync")
     _validate_sync_peers_for_node(settings, node, nodes)
 
-    current_remote_dir = str(node.get("remote_pbgui_dir") or "")
-    if is_local_node and not current_remote_dir.strip():
-        current_remote_dir = _local_pbgui_dir_value()
     current = {
         "sync_mode": normalize_node_sync_mode(node),
         "sync_enabled": normalize_node_sync_mode(node) != "disabled",
-        "remote_pbgui_dir": current_remote_dir,
+        "remote_pbgui_dir": str(node.get("remote_pbgui_dir") or ""),
         "ssh_host": str(node.get("ssh_host") or ""),
         "ssh_user": str(node.get("ssh_user") or ""),
         "ssh_port": int(node.get("ssh_port") or 22),

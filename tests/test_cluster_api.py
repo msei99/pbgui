@@ -254,8 +254,8 @@ def test_get_status_initializes_empty_cluster_identity(monkeypatch, tmp_path: Pa
     assert not (tmp_path / "data" / "cluster" / "desired_state.json").exists()
 
 
-def test_get_nodes_defaults_local_remote_pbgui_dir_from_pbgdir(monkeypatch, tmp_path: Path) -> None:
-    """The nodes API exposes the local checkout path when local membership omits it."""
+def test_get_nodes_defaults_local_connection_metadata(monkeypatch, tmp_path: Path) -> None:
+    """The nodes API exposes local checkout, IP and user defaults when membership omits them."""
 
     home = tmp_path / "home" / "mani"
     pbgui_dir = home / "test" / "pbgui"
@@ -263,6 +263,8 @@ def test_get_nodes_defaults_local_remote_pbgui_dir_from_pbgdir(monkeypatch, tmp_
     root = _init_cluster(pbgui_dir)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(cluster, "PBGDIR", str(pbgui_dir))
+    monkeypatch.setattr(cluster, "_local_ssh_host_value", lambda *args, **kwargs: "10.9.1.31")
+    monkeypatch.setattr(cluster, "_local_ssh_user_value", lambda: "mani")
     monkeypatch.setattr(
         cluster,
         "ensure_local_cluster_ssh_material",
@@ -274,6 +276,8 @@ def test_get_nodes_defaults_local_remote_pbgui_dir_from_pbgdir(monkeypatch, tmp_
     local_node = next(item for item in payload["nodes"] if item["node_id"] == NODE_A)
 
     assert local_node["remote_pbgui_dir"] == "test/pbgui"
+    assert local_node["ssh_host"] == "10.9.1.31"
+    assert local_node["ssh_user"] == "mani"
 
 
 def test_local_pbgui_dir_value_uses_absolute_path_outside_home(monkeypatch, tmp_path: Path) -> None:
@@ -387,8 +391,8 @@ def test_update_node_settings_records_reachable_sync_mode(monkeypatch, tmp_path:
     assert nodes[NODE_B]["sync_peers"] == [NODE_A]
 
 
-def test_update_local_node_settings_persists_detected_pbgui_dir(monkeypatch, tmp_path: Path) -> None:
-    """Saving local node settings fills the local Remote PBGui Dir from PBGDIR."""
+def test_update_local_node_settings_persists_detected_connection_metadata(monkeypatch, tmp_path: Path) -> None:
+    """Saving local node settings fills local path, IP and user metadata."""
 
     home = tmp_path / "home" / "mani"
     pbgui_dir = home / "test" / "pbgui"
@@ -396,6 +400,8 @@ def test_update_local_node_settings_persists_detected_pbgui_dir(monkeypatch, tmp
     root = _init_cluster(pbgui_dir)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(cluster, "PBGDIR", str(pbgui_dir))
+    monkeypatch.setattr(cluster, "_local_ssh_host_value", lambda *args, **kwargs: "10.9.1.31")
+    monkeypatch.setattr(cluster, "_local_ssh_user_value", lambda: "mani")
     append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
     append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "master", "pbname": "upstream-master"}, created_at=102)
 
@@ -413,7 +419,11 @@ def test_update_local_node_settings_persists_detected_pbgui_dir(monkeypatch, tmp
     assert operations[-1]["op"] == "UPDATE_NODE"
     assert operations[-1]["node_id"] == NODE_A
     assert operations[-1]["remote_pbgui_dir"] == "test/pbgui"
+    assert operations[-1]["ssh_host"] == "10.9.1.31"
+    assert operations[-1]["ssh_user"] == "mani"
     assert nodes[NODE_A]["remote_pbgui_dir"] == "test/pbgui"
+    assert nodes[NODE_A]["ssh_host"] == "10.9.1.31"
+    assert nodes[NODE_A]["ssh_user"] == "mani"
     assert nodes[NODE_A]["sync_peers"] == [NODE_B]
 
 
@@ -890,6 +900,8 @@ def test_self_join_adopts_empty_local_identity_and_registers_master(monkeypatch,
         created_at=100,
     )
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(cluster, "_local_ssh_host_value", lambda *args, **kwargs: "10.9.1.31")
+    monkeypatch.setattr(cluster, "_local_ssh_user_value", lambda: "mani")
     monkeypatch.setattr(
         cluster,
         "ensure_local_cluster_ssh_material",
@@ -973,6 +985,8 @@ def test_self_join_adopts_empty_local_identity_and_registers_master(monkeypatch,
     nodes = materialized["cluster_nodes"]["nodes"]
     assert nodes[NODE_C]["sync_mode"] == "outbound_only"
     assert nodes[NODE_C]["remote_pbgui_dir"] == cluster._local_pbgui_dir_value()
+    assert nodes[NODE_C]["ssh_host"] == "10.9.1.31"
+    assert nodes[NODE_C]["ssh_user"] == "mani"
     assert nodes[NODE_C]["sync_peers"] == [NODE_B]
     assert nodes[NODE_C]["cluster_ssh_fingerprint"] == "SHA256:local"
     assert nodes[NODE_B]["ssh_user"] == "mani"
@@ -1028,6 +1042,8 @@ def test_self_join_defers_missing_historical_config_blobs(monkeypatch, tmp_path:
         created_at=100,
     )
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(cluster, "_local_ssh_host_value", lambda *args, **kwargs: "10.9.1.31")
+    monkeypatch.setattr(cluster, "_local_ssh_user_value", lambda: "mani")
     monkeypatch.setattr(
         cluster,
         "ensure_local_cluster_ssh_material",
@@ -1166,6 +1182,8 @@ def test_self_join_uses_password_runner_without_monitor_pool(monkeypatch, tmp_pa
         created_at=100,
     )
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(cluster, "_local_ssh_host_value", lambda *args, **kwargs: "10.9.1.31")
+    monkeypatch.setattr(cluster, "_local_ssh_user_value", lambda: "mani")
     monkeypatch.setattr(
         cluster,
         "ensure_local_cluster_ssh_material",
