@@ -7455,7 +7455,9 @@
 
     function renderClusterNodesImportModal() {
       const flow = store.clusterNodesImport || defaultClusterNodesImportState();
-      prepareAlertModalWindow(980, 760);
+      const modalWidth = Math.min(1540, Math.max(1100, Math.round(window.innerWidth * 0.92)));
+      const modalHeight = Math.min(860, Math.max(760, Math.round(window.innerHeight * 0.86)));
+      prepareAlertModalWindow(modalWidth, modalHeight);
       document.getElementById('alertModalTitle').textContent = 'Import Cluster Nodes';
       const box = document.getElementById('alertModalBody');
       box.className = 'notice modal-scroll-body';
