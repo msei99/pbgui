@@ -1666,16 +1666,34 @@ def test_systemd_migration_playbook_enables_only_configured_optional_units() -> 
 def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> None:
     """PBGui code updates install new systemd units before restarting services."""
     playbook = Path(playbook_path).read_text(encoding="utf-8")
+    systemd_setup_block = playbook.split("register: systemd_setup_result", 1)[1].split("listen: \"restart pbgui\"", 1)[0]
 
+    assert "Check required PBGui systemd units" in playbook
+    assert "pbgui-pbcluster.service pbgui-pbrun.service" in playbook or "pbgui-pbcluster.service" in playbook
+    assert "required_systemd_units" in playbook
     assert "Read PBGui optional service config" in playbook
     assert "pbgui_enabled_services" in playbook
     assert "{{ pbgui_enabled_services | join(',') }}" in playbook
     assert "setup/setup_systemd.sh" in playbook
     assert "--include-pbremote" not in playbook
     assert "--no-start" in playbook
-    assert "failed_when: false" in playbook
+    assert "failed_when: false" not in systemd_setup_block
     assert "setup/vps_service_control.sh restart PBCluster PBRun PBCoinData" in playbook
     assert "setup/vps_service_control.sh restart PBCluster PBRun PBRemote PBCoinData" not in playbook
+
+
+@pytest.mark.parametrize("playbook_path", ["master-update-pbgui.yml", "master-update-pb.yml", "master-switch-pbgui-branch.yml"])
+def test_master_update_playbooks_repair_pbcluster_systemd_unit(playbook_path: str) -> None:
+    """Master updates must repair missing PBCluster systemd units even without git changes."""
+    playbook = Path(playbook_path).read_text(encoding="utf-8")
+    systemd_setup_block = playbook.split("register: systemd_setup_result", 1)[1].split("listen: \"restart pbgui\"", 1)[0]
+
+    assert "Check required PBGui systemd units" in playbook
+    assert "pbgui-pbcluster.service" in playbook
+    assert "required_systemd_units" in playbook
+    assert "setup/setup_systemd.sh" in playbook
+    assert "--no-start" in playbook
+    assert "failed_when: false" not in systemd_setup_block
 
 
 def test_local_master_metrics_are_recorded_in_host_history(monkeypatch: pytest.MonkeyPatch) -> None:

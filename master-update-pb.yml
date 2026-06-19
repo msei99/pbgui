@@ -88,6 +88,22 @@
       register: pb7_repo
       notify: restart pb7
 
+    - name: Check required PBGui systemd units
+      shell: |
+        target_home="$(getent passwd "{{ user }}" | cut -d: -f6)"
+        unit_dir="${target_home:-$HOME}/.config/systemd/user"
+        for unit in pbgui-api.service pbgui-pbcluster.service; do
+          if [ ! -f "$unit_dir/$unit" ]; then
+            echo "missing=$unit"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      when: pbgdir != ""
+      register: required_systemd_units
+      changed_when: "'missing=' in required_systemd_units.stdout"
+      notify: restart pbgui
+
     - name: print pb7_repo
       debug:
         var: pb7_repo
@@ -115,7 +131,6 @@
           - --no-start
       register: systemd_setup_result
       changed_when: systemd_setup_result.rc == 0
-      failed_when: false
       listen: "restart pbgui"
 
     - name: Restart PBCluster and PBCoinData
