@@ -634,6 +634,13 @@
       var lastInstancesPayload = null;
       var lastTombstonesPayload = null;
       var lastOplogPayload = null;
+      var lastStatusSignature = '';
+      var lastNodesSignature = '';
+      var lastDesiredSignature = '';
+      var lastOplogSignature = '';
+      var clusterAutoRefreshTimer = null;
+      var clusterAutoRefreshInFlight = false;
+      var nodesActionsBound = false;
       var pendingJoinNode = null;
       var pendingSelfJoinPayload = null;
       var pendingSettingsNode = null;
@@ -649,6 +656,42 @@
         return String(value === undefined || value === null ? '' : value).replace(/[&<>'"]/g, function (ch) {
           return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[ch];
         });
+      }
+
+      function payloadSignature(value) {
+        try { return JSON.stringify(value || null) || ''; } catch (_) { return ''; }
+      }
+
+      function setTextIfChanged(el, text) {
+        if (!el) return false;
+        text = String(text === undefined || text === null ? '' : text);
+        if (el.textContent === text) return false;
+        el.textContent = text;
+        return true;
+      }
+
+      function setHtmlIfChanged(el, html) {
+        if (!el) return false;
+        html = String(html === undefined || html === null ? '' : html);
+        if (el.innerHTML === html) return false;
+        el.innerHTML = html;
+        return true;
+      }
+
+      function setAttrIfChanged(el, name, value) {
+        if (!el) return false;
+        value = String(value === undefined || value === null ? '' : value);
+        if (el.getAttribute(name) === value) return false;
+        el.setAttribute(name, value);
+        return true;
+      }
+
+      function setClassIfChanged(el, value) {
+        if (!el) return false;
+        value = String(value || '');
+        if (el.className === value) return false;
+        el.className = value;
+        return true;
       }
 
       function shortId(value) {
@@ -1747,16 +1790,25 @@
       function renderStats(status) {
         var counts = status.counts || {};
         var items = [
-          ['Nodes', counts.nodes || 0, ''],
-          ['V7 Instances', counts.instances || 0, 'good'],
-          ['Conflicts', counts.conflicts || 0, counts.conflicts ? 'bad' : 'good'],
-          ['Tombstones', counts.tombstones || 0, counts.tombstones ? 'warn' : ''],
-          ['Oplog Ops', counts.oplog || 0, '']
+          { key: 'nodes', label: 'Nodes', value: counts.nodes || 0, cls: '' },
+          { key: 'instances', label: 'V7 Instances', value: counts.instances || 0, cls: 'good' },
+          { key: 'conflicts', label: 'Conflicts', value: counts.conflicts || 0, cls: counts.conflicts ? 'bad' : 'good' },
+          { key: 'tombstones', label: 'Tombstones', value: counts.tombstones || 0, cls: counts.tombstones ? 'warn' : '' },
+          { key: 'oplog', label: 'Oplog Ops', value: counts.oplog || 0, cls: '' }
         ];
-        document.getElementById('stats-grid').innerHTML = items.map(function (item) {
-          return '<div class="stat-card"><div class="stat-label">' + esc(item[0]) + '</div>'
-               + '<div class="stat-value ' + esc(item[2]) + '">' + esc(item[1]) + '</div></div>';
-        }).join('');
+        var grid = document.getElementById('stats-grid');
+        if (grid && grid.querySelectorAll('[data-stat-key]').length !== items.length) {
+          grid.innerHTML = items.map(function (item) {
+            return '<div class="stat-card" data-stat-key="' + esc(item.key) + '"><div class="stat-label"></div><div class="stat-value"></div></div>';
+          }).join('');
+        }
+        items.forEach(function (item) {
+          var card = grid ? grid.querySelector('[data-stat-key="' + item.key + '"]') : null;
+          setTextIfChanged(card ? card.querySelector('.stat-label') : null, item.label);
+          var valueEl = card ? card.querySelector('.stat-value') : null;
+          setClassIfChanged(valueEl, 'stat-value ' + item.cls);
+          setTextIfChanged(valueEl, item.value);
+        });
         setNavCount('nav-nodes-count', counts.nodes || 0);
         setNavCount('nav-instances-count', counts.instances || 0);
         setNavCount('nav-tombstones-count', counts.tombstones || 0);
@@ -2007,14 +2059,125 @@
         return node.pbname || node.hostname || shortId(nodeId);
       }
 
+      function nodesTableHeaderHtml() {
+        return '<table><thead><tr>'
+          + sortHeader('nodes', 'node', 'Node')
+          + sortHeader('nodes', 'role', 'Role')
+          + sortHeader('nodes', 'pbname', 'PBName')
+          + sortHeader('nodes', 'address', 'Address')
+          + sortHeader('nodes', 'sync', 'Sync')
+          + sortHeader('nodes', 'peers', 'Peers')
+          + sortHeader('nodes', 'key', 'Key')
+          + sortHeader('nodes', 'probe', 'Probe')
+          + '<th>Action</th>'
+          + sortHeader('nodes', 'updated', 'Updated')
+          + '</tr></thead><tbody></tbody></table>';
+      }
+
+      function bindNodesTableActions(container) {
+        if (!container || nodesActionsBound) return;
+        nodesActionsBound = true;
+        container.addEventListener('click', function (event) {
+          var btn = event.target.closest('button[data-node-id]');
+          if (!btn || !container.contains(btn)) return;
+          var node = nodeMap[btn.getAttribute('data-node-id')] || {};
+          if (btn.classList.contains('join-node-btn')) openJoinModal(node);
+          if (btn.classList.contains('preview-node-btn')) openRemotePreview(node);
+          if (btn.classList.contains('edit-node-btn')) openNodeSettingsModal(node);
+          if (btn.classList.contains('repair-node-ssh-btn')) repairNodeClusterSsh(node);
+          if (btn.classList.contains('remove-node-btn')) removeClusterNode(node);
+        });
+      }
+
+      function ensureNodesTable() {
+        var container = document.getElementById('nodes-table');
+        if (!container) return null;
+        bindNodesTableActions(container);
+        if (!container.querySelector('table tbody')) {
+          container.innerHTML = nodesTableHeaderHtml();
+          attachSortHandlers('nodes-table');
+          return container.querySelector('tbody');
+        }
+        var table = container.querySelector('table');
+        var header = nodesTableHeaderHtml();
+        var currentHeader = table ? table.querySelector('thead') : null;
+        var nextHeader = document.createElement('div');
+        nextHeader.innerHTML = header;
+        var nextThead = nextHeader.querySelector('thead');
+        if (table && currentHeader && nextThead && currentHeader.innerHTML !== nextThead.innerHTML) {
+          currentHeader.innerHTML = nextThead.innerHTML;
+          attachSortHandlers('nodes-table');
+        }
+        return container.querySelector('tbody');
+      }
+
+      function nodeActionHtml(node, mode, probeStatus) {
+        var actionParts = [];
+        if (probeStatus === 'not_initialized') {
+          actionParts.push('<button class="btn small warn join-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Join</button>');
+        } else if (probeStatus === 'ok') {
+          actionParts.push('<button class="btn small primary preview-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Preview</button>');
+        }
+        actionParts.push('<button class="btn small primary edit-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Edit</button>');
+        actionParts.push('<button class="btn small primary repair-node-ssh-btn" type="button" data-node-id="' + esc(node.node_id) + '">Repair SSH</button>');
+        if (node.node_id !== localNodeId && mode === 'disabled') {
+          actionParts.push('<button class="btn small warn remove-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Remove</button>');
+        }
+        return actionParts.join(' ');
+      }
+
+      function ensureNodeRow(tbody, nodeId) {
+        var row = Array.prototype.slice.call(tbody.querySelectorAll('tr[data-node-id]')).find(function (item) {
+          return item.getAttribute('data-node-id') === nodeId;
+        });
+        if (row) return row;
+        row = document.createElement('tr');
+        row.setAttribute('data-node-id', nodeId);
+        ['node', 'role', 'pbname', 'address', 'sync', 'peers', 'key', 'probe', 'action', 'updated'].forEach(function (field) {
+          var cell = document.createElement('td');
+          cell.setAttribute('data-field', field);
+          row.appendChild(cell);
+        });
+        return row;
+      }
+
+      function updateNodeCell(row, field, html, title, className) {
+        var cell = row.querySelector('[data-field="' + field + '"]');
+        if (!cell) return;
+        setHtmlIfChanged(cell, html);
+        setAttrIfChanged(cell, 'title', title || '');
+        setClassIfChanged(cell, className || '');
+      }
+
+      function updateNodeRow(row, node) {
+        var mode = syncMode(node);
+        var probe = remoteProbeMap[node.node_id] || {};
+        var probeStatus = probe.status || 'unknown';
+        var probeTitle = probe.error || probe.remote_node_id || probe.remote_cluster_id || probeStatus;
+        var keyKnown = Boolean(node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint);
+        var address = mode === 'reachable'
+          ? ((node.ssh_user ? node.ssh_user + '@' : '') + (node.ssh_host || 'n/a') + ':' + (node.ssh_port || 22))
+          : syncModeLabel(mode);
+        updateNodeCell(row, 'node', esc(shortId(node.node_id)), node.node_id || '', 'mono');
+        updateNodeCell(row, 'role', '<span class="pill blue">' + esc(node.role || 'node') + '</span>');
+        updateNodeCell(row, 'pbname', esc(node.pbname || node.hostname || 'n/a'));
+        updateNodeCell(row, 'address', esc(address), node.remote_pbgui_dir || '');
+        updateNodeCell(row, 'sync', '<span class="pill ' + syncModePill(mode) + '">' + esc(syncModeLabel(mode)) + '</span>');
+        updateNodeCell(row, 'peers', esc(peerSummary(node)), peerSummary(node));
+        updateNodeCell(row, 'key', '<span class="pill ' + (keyKnown ? 'good' : 'warn') + '">' + esc(keySummary(node, probe)) + '</span>', node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint || '');
+        updateNodeCell(row, 'probe', '<span class="pill ' + probePill(probeStatus) + '">' + esc(probeLabel(probeStatus)) + '</span>', probeTitle);
+        updateNodeCell(row, 'action', nodeActionHtml(node, mode, probeStatus));
+        updateNodeCell(row, 'updated', esc(timeText(node.updated_at)));
+      }
+
       function renderNodes(payload) {
         lastNodesPayload = payload;
         var nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
         nodeMap = {};
         nodes.forEach(function (node) { if (node.node_id) nodeMap[node.node_id] = node; });
-        document.getElementById('nodes-note').textContent = nodes.length + ' node(s)';
+        setTextIfChanged(document.getElementById('nodes-note'), nodes.length + ' node(s)');
         if (!nodes.length) {
-          document.getElementById('nodes-table').innerHTML = '<div class="empty">No node membership operations have been materialized yet.</div>';
+          setHtmlIfChanged(document.getElementById('nodes-table'), '<div class="empty">No node membership operations have been materialized yet.</div>');
           return;
         }
         var nodeRows = sortedRows('nodes', nodes, {
@@ -2028,75 +2191,18 @@
           probe: function (node) { return (remoteProbeMap[node.node_id] || {}).status || ''; },
           updated: function (node) { return Number(node.updated_at || 0); }
         });
-        var html = '<table><thead><tr>'
-          + sortHeader('nodes', 'node', 'Node')
-          + sortHeader('nodes', 'role', 'Role')
-          + sortHeader('nodes', 'pbname', 'PBName')
-          + sortHeader('nodes', 'address', 'Address')
-          + sortHeader('nodes', 'sync', 'Sync')
-          + sortHeader('nodes', 'peers', 'Peers')
-          + sortHeader('nodes', 'key', 'Key')
-          + sortHeader('nodes', 'probe', 'Probe')
-          + '<th>Action</th>'
-          + sortHeader('nodes', 'updated', 'Updated')
-          + '</tr></thead><tbody>';
+        var tbody = ensureNodesTable();
+        if (!tbody) return;
+        var seen = new Set();
         nodeRows.forEach(function (node) {
-          var mode = syncMode(node);
-          var probe = remoteProbeMap[node.node_id] || {};
-          var probeStatus = probe.status || 'unknown';
-          var probeTitle = probe.error || probe.remote_node_id || probe.remote_cluster_id || probeStatus;
-          var actionParts = [];
-          if (probeStatus === 'not_initialized') {
-            actionParts.push('<button class="btn small warn join-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Join</button>');
-          } else if (probeStatus === 'ok') {
-            actionParts.push('<button class="btn small primary preview-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Preview</button>');
-          }
-          actionParts.push('<button class="btn small primary edit-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Edit</button>');
-          actionParts.push('<button class="btn small primary repair-node-ssh-btn" type="button" data-node-id="' + esc(node.node_id) + '">Repair SSH</button>');
-          if (node.node_id !== localNodeId && mode === 'disabled') {
-            actionParts.push('<button class="btn small warn remove-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Remove</button>');
-          }
-          var keyKnown = Boolean(node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint);
-          html += '<tr>'
-            + '<td class="mono" title="' + esc(node.node_id) + '">' + esc(shortId(node.node_id)) + '</td>'
-            + '<td><span class="pill blue">' + esc(node.role || 'node') + '</span></td>'
-            + '<td>' + esc(node.pbname || node.hostname || 'n/a') + '</td>'
-            + '<td title="' + esc(node.remote_pbgui_dir || '') + '">' + esc(mode === 'reachable' ? ((node.ssh_user ? node.ssh_user + '@' : '') + (node.ssh_host || 'n/a') + ':' + (node.ssh_port || 22)) : syncModeLabel(mode)) + '</td>'
-            + '<td><span class="pill ' + syncModePill(mode) + '">' + esc(syncModeLabel(mode)) + '</span></td>'
-            + '<td title="' + esc(peerSummary(node)) + '">' + esc(peerSummary(node)) + '</td>'
-            + '<td title="' + esc((node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint || '')) + '"><span class="pill ' + (keyKnown ? 'good' : 'warn') + '">' + esc(keySummary(node, probe)) + '</span></td>'
-            + '<td title="' + esc(probeTitle) + '"><span class="pill ' + probePill(probeStatus) + '">' + esc(probeLabel(probeStatus)) + '</span></td>'
-            + '<td>' + actionParts.join(' ') + '</td>'
-            + '<td>' + esc(timeText(node.updated_at)) + '</td>'
-            + '</tr>';
+          if (!node.node_id) return;
+          seen.add(String(node.node_id));
+          var row = ensureNodeRow(tbody, String(node.node_id));
+          updateNodeRow(row, node);
+          tbody.appendChild(row);
         });
-        html += '</tbody></table>';
-        document.getElementById('nodes-table').innerHTML = html;
-        attachSortHandlers('nodes-table');
-        document.getElementById('nodes-table').querySelectorAll('.join-node-btn').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            openJoinModal(nodeMap[btn.getAttribute('data-node-id')] || {});
-          });
-        });
-        document.getElementById('nodes-table').querySelectorAll('.preview-node-btn').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            openRemotePreview(nodeMap[btn.getAttribute('data-node-id')] || {});
-          });
-        });
-        document.getElementById('nodes-table').querySelectorAll('.edit-node-btn').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            openNodeSettingsModal(nodeMap[btn.getAttribute('data-node-id')] || {});
-          });
-        });
-        document.getElementById('nodes-table').querySelectorAll('.repair-node-ssh-btn').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            repairNodeClusterSsh(nodeMap[btn.getAttribute('data-node-id')] || {});
-          });
-        });
-        document.getElementById('nodes-table').querySelectorAll('.remove-node-btn').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            removeClusterNode(nodeMap[btn.getAttribute('data-node-id')] || {});
-          });
+        Array.prototype.slice.call(tbody.querySelectorAll('tr[data-node-id]')).forEach(function (row) {
+          if (!seen.has(row.getAttribute('data-node-id') || '')) row.remove();
         });
       }
 
@@ -2219,26 +2325,85 @@
         attachSortHandlers('oplog-table');
       }
 
-      function loadCluster() {
-        setMessage('Refreshing cluster state...', '');
-        remoteProbeMap = {};
+      function renderClusterParts(parts, options) {
+        options = options || {};
+        var force = options.force === true;
+        var statusSignature = payloadSignature(parts[0]);
+        var nodesSignature = payloadSignature(parts[1]);
+        var desiredSignature = payloadSignature(parts[2]);
+        var oplogSignature = payloadSignature(parts[3]);
+        var statusChanged = force || statusSignature !== lastStatusSignature;
+        var nodesChanged = force || nodesSignature !== lastNodesSignature;
+        var desiredChanged = force || desiredSignature !== lastDesiredSignature;
+        var oplogChanged = force || oplogSignature !== lastOplogSignature;
+        if (statusChanged) {
+          renderStats(parts[0]);
+          renderSetupState(parts[0]);
+          renderIdentity(parts[0]);
+          lastStatusSignature = statusSignature;
+        }
+        if (nodesChanged) {
+          renderNodes(parts[1]);
+          lastNodesSignature = nodesSignature;
+        }
+        if (desiredChanged || nodesChanged) {
+          renderInstances(parts[2]);
+          renderTombstones(parts[2]);
+          lastDesiredSignature = desiredSignature;
+        }
+        if (oplogChanged || nodesChanged) {
+          renderOplog(parts[3]);
+          lastOplogSignature = oplogSignature;
+        }
+        return statusChanged || nodesChanged || desiredChanged || oplogChanged;
+      }
+
+      function loadCluster(options) {
+        options = options || {};
+        var silent = options.silent === true;
+        if (!silent) setMessage('Refreshing cluster state...', '');
+        if (!options.keepProbes) remoteProbeMap = {};
         return Promise.all([
           fetchJson('/status'),
           fetchJson('/nodes'),
           fetchJson('/desired-state'),
           fetchJson('/oplog?limit=50')
         ]).then(function (parts) {
-          renderStats(parts[0]);
-          renderSetupState(parts[0]);
-          renderIdentity(parts[0]);
-          renderNodes(parts[1]);
-          renderInstances(parts[2]);
-          renderTombstones(parts[2]);
-          renderOplog(parts[3]);
-          setMessage('Cluster state refreshed.', 'ok');
-          loadBootstrapPreview(true).catch(function () {});
+          renderClusterParts(parts, { force: options.force === true });
+          if (!silent) setMessage('Cluster state refreshed.', 'ok');
+          if (!options.auto) loadBootstrapPreview(true).catch(function () {});
+          return parts;
         }).catch(function (err) {
-          setMessage('Failed to load cluster state: ' + err.message, 'err');
+          if (!silent) setMessage('Failed to load cluster state: ' + err.message, 'err');
+          throw err;
+        });
+      }
+
+      function stopClusterAutoRefresh() {
+        if (clusterAutoRefreshTimer) {
+          clearTimeout(clusterAutoRefreshTimer);
+          clusterAutoRefreshTimer = null;
+        }
+      }
+
+      function scheduleClusterAutoRefresh() {
+        stopClusterAutoRefresh();
+        clusterAutoRefreshTimer = setTimeout(runClusterAutoRefresh, 5000);
+      }
+
+      function runClusterAutoRefresh() {
+        if (document.hidden) {
+          scheduleClusterAutoRefresh();
+          return;
+        }
+        if (clusterAutoRefreshInFlight) {
+          scheduleClusterAutoRefresh();
+          return;
+        }
+        clusterAutoRefreshInFlight = true;
+        loadCluster({ silent: true, auto: true, keepProbes: true }).catch(function () {}).finally(function () {
+          clusterAutoRefreshInFlight = false;
+          scheduleClusterAutoRefresh();
         });
       }
 
@@ -2260,7 +2425,7 @@
         });
       }
 
-      document.getElementById('refresh-btn').addEventListener('click', loadCluster);
+      document.getElementById('refresh-btn').addEventListener('click', function () { loadCluster({ force: true }); });
       document.getElementById('probe-btn').addEventListener('click', loadRemoteStatus);
       document.getElementById('bootstrap-apply-btn').addEventListener('click', applyBootstrap);
       document.getElementById('bootstrap-unlock').addEventListener('change', function (event) {
@@ -2290,8 +2455,11 @@
       document.getElementById('preview-materialize-btn').addEventListener('click', confirmAndMaterializeV7);
       document.getElementById('preview-materialize-api-btn').addEventListener('click', confirmAndMaterializeApiKeys);
       window.addEventListener('resize', keepPreviewModalInViewport);
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) runClusterAutoRefresh();
+      });
       setupClusterNavigation();
-      loadCluster();
+      loadCluster().finally(scheduleClusterAutoRefresh);
     })();
   </script>
 </body>
