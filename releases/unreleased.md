@@ -1,5 +1,6 @@
 # Unreleased
 
+- VPS Manager: make Import Cluster Nodes update missing or stale local `/etc/hosts` entries through the normal local sudo prompt during apply, so Cluster-imported hosts become ready without manual file edits.
 - VPS Manager: let Import Cluster Nodes import non-local Cluster nodes with SSH metadata even when their Cluster Sync mode is disabled, because disabled only blocks PBCluster replication and does not mean the host is unreachable for normal VPS Manager SSH workflows.
 - Docs: refreshed the Cluster Sync, Cluster Mode migration and VPS Manager guides for current node modes, self-join metadata auto-detection, disabled-node removal, live Cluster page refresh, PBCluster service restarts and runner/API service boundaries.
 - Cluster Sync: documented the first-runnable automatic `PBCluster` target architecture and added the lightweight PBCluster daemon/worker foundation with state-vector peer reconcile, operation/blob pull and push, local/remote materialization, sync-request wakeups from new oplog writes, sync status output and a PBRun boot-sync warning wait.

@@ -1494,6 +1494,8 @@ class VPSManagerService:
             "action": "skip",
             "reason": "",
             "changes": [],
+            "hosts_action": "none",
+            "hosts_current_ip": "",
         }
         if node_id == local_node_id:
             item.update({"reason": "local Cluster node"})
@@ -1509,6 +1511,10 @@ class VPSManagerService:
         if not ssh_host:
             item.update({"reason": "Cluster node has no ssh_host metadata."})
             return item
+        hosts_status = _hosts_entry_status(hostname, ssh_host)
+        if not hosts_status.get("ok"):
+            item["hosts_action"] = "replace" if hosts_status.get("has_hostname") else "add"
+            item["hosts_current_ip"] = str(hosts_status.get("current_ip") or "")
         current = existing.get(hostname)
         if current is None:
             item.update({"action": "add", "reason": "VPS Manager host is missing."})
@@ -1525,6 +1531,8 @@ class VPSManagerService:
                 changes.append(field_name)
         if changes:
             item.update({"action": "update", "reason": "Safe VPS Manager metadata differs.", "changes": changes})
+        elif item.get("hosts_action") != "none":
+            item.update({"action": "update", "reason": "Local /etc/hosts entry needs updating."})
         else:
             item.update({"reason": "VPS Manager host already matches safe Cluster metadata."})
         return item
@@ -1540,28 +1548,52 @@ class VPSManagerService:
         for item in items:
             action = str(item.get("action") or "skip")
             counts[action] = counts.get(action, 0) + 1
+        hosts_update_count = sum(
+            1
+            for item in items
+            if str(item.get("action") or "") in {"add", "update"}
+            and str(item.get("hosts_action") or "none") != "none"
+        )
+        counts["hosts_update"] = hosts_update_count
         return {
             "items": items,
             "counts": counts,
             "can_apply": bool(counts.get("add") or counts.get("update")) and not bool(counts.get("error")),
+            "hosts_update_required": bool(hosts_update_count),
             "message": "Imports Cluster nodes with SSH metadata into local VPS Manager metadata only. Secrets are not imported.",
         }
 
-    def import_cluster_nodes(self, token: str) -> dict[str, Any]:
+    def import_cluster_nodes(self, token: str, form: dict[str, Any] | None = None) -> dict[str, Any]:
         """Import safe Cluster SSH metadata into VPS Manager host configs."""
 
+        form = form or {}
         plan = self.preview_cluster_nodes_import()
         if plan.get("counts", {}).get("error"):
             raise ValueError("Fix Cluster node import errors before applying.")
+        hosts_items = [
+            item
+            for item in (plan.get("items") or [])
+            if str((item or {}).get("action") or "") in {"add", "update"}
+            and str((item or {}).get("hosts_action") or "none") != "none"
+        ]
+        local_sudo_pw = str(form.get("local_sudo_pw") or "")
+        if hosts_items and not local_sudo_pw:
+            raise ValueError("Local sudo password is required to update /etc/hosts for imported Cluster nodes.")
         existing = {str(item.hostname or "").strip(): item for item in self.vpsmanager.vpss if str(item.hostname or "").strip()}
         imported: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
+        hosts_updated: list[dict[str, Any]] = []
         for item in plan.get("items") or []:
             action = str((item or {}).get("action") or "skip")
             hostname = str((item or {}).get("hostname") or "").strip()
             if action not in {"add", "update"}:
                 skipped.append({"hostname": hostname, "action": action, "reason": str((item or {}).get("reason") or "")})
                 continue
+            if str((item or {}).get("hosts_action") or "none") != "none":
+                hosts_result = self.write_hosts_entry(str((item or {}).get("ssh_host") or ""), hostname, local_sudo_pw)
+                if not hosts_result.get("ok"):
+                    raise ValueError(f"Failed to update /etc/hosts for {hostname}: {hosts_result.get('error') or 'unknown error'}")
+                hosts_updated.append({"hostname": hostname, "ip": str((item or {}).get("ssh_host") or ""), "action": str((item or {}).get("hosts_action") or "")})
             vps = existing.get(hostname)
             is_new = vps is None
             if vps is None:
@@ -1593,11 +1625,13 @@ class VPSManagerService:
             "counts": {
                 "imported": len(imported),
                 "skipped": len(skipped),
+                "hosts_updated": len(hosts_updated),
             },
             "imported": imported,
             "skipped": skipped,
+            "hosts_updated": hosts_updated,
             "preview": plan,
-            "message": f"Imported {len(imported)} Cluster node(s) into VPS Manager.",
+            "message": f"Imported {len(imported)} Cluster node(s) into VPS Manager" + (f" and updated {len(hosts_updated)} /etc/hosts entr{'y' if len(hosts_updated) == 1 else 'ies'}." if hosts_updated else "."),
         }
 
     def _get_monitor_state(self) -> dict[str, Any]:

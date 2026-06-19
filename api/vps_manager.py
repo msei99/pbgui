@@ -33,6 +33,10 @@ class ExistingVpsImportRequest(BaseModel):
     accept_unknown_host: bool = False
     accepted_host_key_fingerprint: str = ""
 
+
+class ClusterNodesImportRequest(BaseModel):
+    local_sudo_pw: str = ""
+
 MASTER_CONTEXT_VIEWS = {
     "master",
     "master-task-log",
@@ -202,10 +206,11 @@ def preview_cluster_nodes_import(
 
 @router.post("/cluster-import/apply")
 def apply_cluster_nodes_import(
+    payload: ClusterNodesImportRequest | None = None,
     session: SessionToken = Depends(require_auth),
 ) -> JSONResponse:
     try:
-        data = _get_service().import_cluster_nodes(session.token)
+        data = _get_service().import_cluster_nodes(session.token, payload.dict() if payload else {})
         return JSONResponse(content=data)
     except Exception as exc:
         _log(SERVICE, f"Cluster node import apply failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
