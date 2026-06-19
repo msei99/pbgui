@@ -1511,6 +1511,9 @@ class VPSManagerService:
         if not ssh_host:
             item.update({"reason": "Cluster node has no ssh_host metadata."})
             return item
+        if not ssh_user:
+            item.update({"action": "error", "reason": "Cluster node has no ssh_user metadata."})
+            return item
         hosts_status = _hosts_entry_status(hostname, ssh_host)
         if not hosts_status.get("ok"):
             item["hosts_action"] = "replace" if hosts_status.get("has_hostname") else "add"
@@ -1570,11 +1573,20 @@ class VPSManagerService:
         plan = self.preview_cluster_nodes_import()
         if plan.get("counts", {}).get("error"):
             raise ValueError("Fix Cluster node import errors before applying.")
-        hosts_items = [
+        import_items = [
             item
             for item in (plan.get("items") or [])
             if str((item or {}).get("action") or "") in {"add", "update"}
-            and str((item or {}).get("hosts_action") or "none") != "none"
+        ]
+        passwords_raw = form.get("passwords") if isinstance(form.get("passwords"), dict) else {}
+        passwords = {str(key or "").strip(): str(value or "") for key, value in passwords_raw.items() if str(key or "").strip()}
+        missing_passwords = [str((item or {}).get("hostname") or "").strip() for item in import_items if not passwords.get(str((item or {}).get("hostname") or "").strip())]
+        if missing_passwords:
+            raise ValueError("VPS user password is required for: " + ", ".join(missing_passwords[:10]) + ("..." if len(missing_passwords) > 10 else ""))
+        hosts_items = [
+            item
+            for item in import_items
+            if str((item or {}).get("hosts_action") or "none") != "none"
         ]
         local_sudo_pw = str(form.get("local_sudo_pw") or "")
         if hosts_items and not local_sudo_pw:
@@ -1583,6 +1595,9 @@ class VPSManagerService:
         imported: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
         hosts_updated: list[dict[str, Any]] = []
+        settings_refreshed: list[str] = []
+        monitoring_ready: list[str] = []
+        warnings: list[str] = []
         for item in plan.get("items") or []:
             action = str((item or {}).get("action") or "skip")
             hostname = str((item or {}).get("hostname") or "").strip()
@@ -1612,13 +1627,38 @@ class VPSManagerService:
             vps.firewall_ssh_port = _safe_int((item or {}).get("ssh_port"), 22) or 22
             if str((item or {}).get("remote_pbgui_dir") or "").strip():
                 vps.remote_pbgui_dir = str((item or {}).get("remote_pbgui_dir") or "").strip()
-            vps.user_pw = None
+            host_password = passwords.get(hostname, "")
+            if host_password:
+                vps.user_pw = host_password
+                self._store_session_secrets(token, hostname, {"user_pw": host_password})
+                try:
+                    info = vps.fetch_vps_info()
+                    vps.coinmarketcap_api_key = str(info.get("coinmarketcap") or vps.coinmarketcap_api_key or "")
+                    vps.swap = info.get("swap", "0") if info.get("swap") in SWAP_OPTIONS else str(vps.swap or "0")
+                    if info.get("firewall_ssh_port") is not None:
+                        vps.firewall_ssh_port = _safe_int(info.get("firewall_ssh_port"), 22)
+                    vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
+                    self._clear_vps_optional_config_pending(vps)
+                    settings_refreshed.append(hostname)
+                except Exception as exc:
+                    warnings.append(f"{hostname}: settings refresh failed: {exc}")
+                key_auth_ok, key_auth_detail = self._test_import_key_login(ssh_host=vps.ip, user=vps.user)
+                if not key_auth_ok:
+                    key_auth_ok, key_auth_detail = self._install_import_monitoring_key(ssh_host=vps.ip, user=vps.user, user_pw=host_password)
+                if key_auth_ok:
+                    monitoring_ready.append(hostname)
+                else:
+                    warnings.append(f"{hostname}: monitoring key setup failed: {key_auth_detail}")
+                vps.user_pw = None
+            else:
+                vps.user_pw = None
             vps.save()
             if is_new:
                 self.vpsmanager.vpss.append(vps)
                 existing[hostname] = vps
-            self._set_vps_monitor_enabled(hostname, enabled=True)
-            imported.append({"hostname": hostname, "action": action, "config": self._build_vps_config(token, vps)})
+            if hostname in monitoring_ready:
+                self._set_vps_monitor_enabled(hostname, enabled=True)
+            imported.append({"hostname": hostname, "action": action, "monitoring_ready": hostname in monitoring_ready, "settings_refreshed": hostname in settings_refreshed, "config": self._build_vps_config(token, vps)})
         self.vpsmanager.vpss.sort(key=lambda entry: entry.hostname or "")
         return {
             "ok": True,
@@ -1626,10 +1666,15 @@ class VPSManagerService:
                 "imported": len(imported),
                 "skipped": len(skipped),
                 "hosts_updated": len(hosts_updated),
+                "settings_refreshed": len(settings_refreshed),
+                "monitoring_ready": len(monitoring_ready),
             },
             "imported": imported,
             "skipped": skipped,
             "hosts_updated": hosts_updated,
+            "settings_refreshed": settings_refreshed,
+            "monitoring_ready": monitoring_ready,
+            "warnings": warnings,
             "preview": plan,
             "message": f"Imported {len(imported)} Cluster node(s) into VPS Manager" + (f" and updated {len(hosts_updated)} /etc/hosts entr{'y' if len(hosts_updated) == 1 else 'ies'}." if hosts_updated else "."),
         }

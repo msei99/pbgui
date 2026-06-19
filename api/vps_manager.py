@@ -36,6 +36,7 @@ class ExistingVpsImportRequest(BaseModel):
 
 class ClusterNodesImportRequest(BaseModel):
     local_sudo_pw: str = ""
+    passwords: dict[str, str] = {}
 
 MASTER_CONTEXT_VIEWS = {
     "master",
