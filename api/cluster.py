@@ -24,6 +24,7 @@ from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, require_auth
 from api.vps import get_monitor, get_monitor_state_snapshot
+from cluster_sync_command import _materialize_v7_configs
 from logging_helpers import human_log as _log
 from master.async_pool import remote_shell_path
 from master.cluster_state import (
@@ -1792,6 +1793,7 @@ async def _self_join_existing_cluster(
             progress_callback=lambda update: report_progress(str(update.get("phase") or "pulling"), 4, pull=update),
         )
         materialized = rebuild_materialized_state(root)
+        local_materialization = _materialize_v7_configs(root, write=True)
         nodes = _node_list(materialized["cluster_nodes"])
         upstream_node = _node_for_id(nodes, upstream_node_id)
         local_node = _node_for_id(nodes, local_node_id)
@@ -1875,6 +1877,7 @@ async def _self_join_existing_cluster(
             "adopted_local_identity": bool(adoption.get("changed")),
             "archived_local_cluster_state": archive_result,
             "pull": pull_result,
+            "local_materialization": local_materialization,
             "membership": {
                 "upstream": upstream_membership,
                 "local": local_membership,

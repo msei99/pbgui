@@ -19,6 +19,7 @@
 - Cluster Sync: moved the self-join SSH password collection into an on-demand modal prompt instead of keeping a password field in the Join Existing Cluster panel.
 - Cluster Sync: added background job polling and visible phase progress for second-master self-join so long SSH pull/push operations no longer look stalled.
 - Cluster Sync: make Bootstrap preview skip empty local run_v7 folders that are already represented in desired state after joining an existing cluster.
+- Cluster Sync: materialize all Desired-State V7 configs on master nodes so joined masters can edit any cluster config, while VPS nodes still receive only assigned configs.
 - VPS Manager: added an Import Cluster Nodes action that previews and imports safe metadata from reachable Cluster Sync nodes without copying passwords, CoinMarketCap keys or private keys.
 - VPS Manager: keep the Cleanup VPS action clickable when no VPS user password is stored so the normal password prompt can collect it.
 - VPS Manager: added PBCluster to remote service monitoring and VPS systemd migration checks, show remote PBGui service states in VPS detail/change views, and sync new PBGui systemd units during normal PBGui update/branch-switch actions.

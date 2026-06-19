@@ -1017,8 +1017,10 @@ def test_self_join_defers_missing_historical_config_blobs(monkeypatch, tmp_path:
     assert payload["pull"]["deferred_missing_config_blobs"] == 1
     assert payload["pull"]["pulled_config_blobs"] == 2
     assert payload["pull"]["pulled_ops"] == 3
+    assert payload["local_materialization"]["counts"]["written_instances"] == 1
     assert cluster._read_cluster_blob(root / "config_blobs", current_manifest_hash) == current_manifest_raw
     assert cluster._read_cluster_blob(root / "config_blobs", current_file_hash) == current_raw
+    assert (root.parent / "run_v7" / "local_inst" / "config.json").read_bytes() == current_raw
     desired = cluster.rebuild_materialized_state(root, write=False)["desired_state"]
     assert desired["instances"]["local_inst"]["config_manifest_hash"] == current_manifest_hash
 

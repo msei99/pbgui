@@ -452,23 +452,25 @@ def _verify_remote_node(cluster_root: Path, remote_node: str, *, allow_join: boo
 
 
 def _materialize_v7_configs(cluster_root: Path, *, write: bool) -> dict[str, Any]:
-    """Preview or write assigned V7 config blobs into data/run_v7."""
+    """Preview or write V7 config blobs into data/run_v7."""
 
     materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=write))
     identity = _safe_state_call(lambda: read_local_identity(cluster_root))
     desired_state = materialized.get("desired_state") if isinstance(materialized, dict) else {}
     desired_state = desired_state if isinstance(desired_state, dict) else {}
     node_id = str(identity["node_id"])
+    role = str(identity.get("role") or "").strip().lower()
+    materialize_all = role == "master"
     run_root = Path(cluster_root).parent / "run_v7"
-    plan = _build_materialize_v7_plan(Path(cluster_root), run_root, node_id, desired_state)
+    plan = _build_materialize_v7_plan(Path(cluster_root), run_root, node_id, desired_state, materialize_all=materialize_all)
     if not write:
         plan.update({"ok": True, "read_only": True})
         return plan
 
     if int((plan.get("counts") or {}).get("error") or 0) > 0:
-        repaired = _repair_local_v7_config_blobs(Path(cluster_root), run_root, node_id, desired_state, plan)
+        repaired = _repair_local_v7_config_blobs(Path(cluster_root), run_root, node_id, desired_state, plan, materialize_all=materialize_all)
         if repaired:
-            plan = _build_materialize_v7_plan(Path(cluster_root), run_root, node_id, desired_state)
+            plan = _build_materialize_v7_plan(Path(cluster_root), run_root, node_id, desired_state, materialize_all=materialize_all)
             plan["repaired_config_blobs"] = repaired
 
     if int((plan.get("counts") or {}).get("error") or 0) > 0:
@@ -511,6 +513,8 @@ def _repair_local_v7_config_blobs(
     node_id: str,
     desired_state: dict[str, Any],
     plan: dict[str, Any],
+    *,
+    materialize_all: bool = False,
 ) -> int:
     """Rebuild missing local config blobs from already-materialized run_v7 files."""
 
@@ -525,7 +529,7 @@ def _repair_local_v7_config_blobs(
     repaired = 0
     for instance in sorted(name for name in error_instances if name):
         item = instances.get(instance) if isinstance(instances.get(instance), dict) else {}
-        if str(item.get("assigned_host") or "") != node_id:
+        if not materialize_all and str(item.get("assigned_host") or "") != node_id:
             continue
         manifest_hash = _validate_hash(str(item.get("config_manifest_hash") or ""))
         instance_dir = run_root / instance
@@ -650,6 +654,8 @@ def _build_materialize_v7_plan(
     run_root: Path,
     node_id: str,
     desired_state: dict[str, Any],
+    *,
+    materialize_all: bool = False,
 ) -> dict[str, Any]:
     """Build a read-only plan for V7 config materialization."""
 
@@ -684,7 +690,7 @@ def _build_materialize_v7_plan(
             _validate_relative_name(str(name), "instance")
             if item.get("conflicted") is True:
                 _mark_materialize_skip(row, counts, "conflicted", "desired state is conflicted")
-            elif str(item.get("assigned_host") or "") != node_id:
+            elif not materialize_all and str(item.get("assigned_host") or "") != node_id:
                 _mark_materialize_skip(row, counts, "not_assigned", "instance is assigned to another node")
             else:
                 _populate_materialize_files(paths.config_blobs, run_root / str(name), row)
@@ -719,11 +725,12 @@ def _build_materialize_v7_plan(
     return {
         "cluster_id": str(desired_state.get("cluster_id") or ""),
         "node_id": node_id,
+        "materialize_all": bool(materialize_all),
         "run_v7_root": str(run_root),
         "counts": counts,
         "items": items,
         "can_apply": counts["error"] == 0 and (counts["add"] + counts["update"]) > 0,
-        "message": "Preview only. Apply writes assigned V7 JSON configs from config blobs without deleting files or starting/stopping bots.",
+        "message": "Preview only. Apply writes V7 JSON configs from config blobs without deleting files or starting/stopping bots.",
     }
 
 

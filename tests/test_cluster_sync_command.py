@@ -396,8 +396,8 @@ def test_get_desired_state_returns_materialized_snapshot(tmp_path: Path) -> None
     assert payload["desired_state"]["instances"]["bybit_BTCUSDT"]["version"] == "7"
 
 
-def test_materialize_v7_preview_and_apply_write_assigned_config_blobs(tmp_path: Path) -> None:
-    """materialize-v7 writes only assigned, clean V7 JSON configs from verified blobs."""
+def test_materialize_v7_preview_and_apply_master_writes_all_config_blobs(tmp_path: Path) -> None:
+    """materialize-v7 writes all clean V7 JSON configs on master nodes."""
 
     root = _init_cluster(tmp_path)
     manifest_hash = _write_config_blob_set(root, {"config.json": b'{"live":{"user":"local"}}'})
@@ -459,19 +459,71 @@ def test_materialize_v7_preview_and_apply_write_assigned_config_blobs(tmp_path: 
     result = run_command(root, NODE_B, "materialize-v7")
 
     assert preview["read_only"] is True
-    assert preview["counts"]["add"] == 1
-    assert preview["counts"]["not_assigned"] == 1
+    assert preview["materialize_all"] is True
+    assert preview["counts"]["add"] == 2
+    assert preview["counts"]["not_assigned"] == 0
     assert preview["counts"]["conflicted"] == 1
     assert preview["counts"]["tombstoned"] == 1
-    assert result["counts"]["written_instances"] == 1
-    assert result["counts"]["written_files"] == 1
+    assert result["counts"]["written_instances"] == 2
+    assert result["counts"]["written_files"] == 2
     assert (root.parent / "run_v7" / "local_inst" / "config.json").read_bytes() == b'{"live":{"user":"local"}}'
-    assert not (root.parent / "run_v7" / "other_inst" / "config.json").exists()
+    assert (root.parent / "run_v7" / "other_inst" / "config.json").read_bytes() == b'{"live":{"user":"other"}}'
     assert not (root.parent / "run_v7" / "conflict_inst" / "config.json").exists()
     assert not (root.parent / "run_v7" / "deleted_inst" / "config.json").exists()
     after = run_command(root, NODE_B, "materialize-v7-preview")
     assert after["counts"]["add"] == 0
     assert after["counts"]["skip"] >= 1
+
+
+def test_materialize_v7_vps_writes_only_assigned_config_blobs(tmp_path: Path) -> None:
+    """VPS nodes materialize only their assigned V7 configs."""
+
+    root = tmp_path / "cluster"
+    ensure_local_identity(
+        root,
+        role="vps",
+        pbname="vps-b",
+        cluster_id=CLUSTER_ID,
+        node_id=NODE_B,
+        created_at=100,
+    )
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master-a"}, created_at=101)
+    manifest_hash = _write_config_blob_set(root, {"config.json": b'{"live":{"user":"local"}}'})
+    other_hash = _write_config_blob_set(root, {"config.json": b'{"live":{"user":"other"}}'})
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "local_inst",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": manifest_hash,
+        },
+        created_at=102,
+    )
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "other_inst",
+            "version": "2",
+            "assigned_host": NODE_A,
+            "desired_state": "running",
+            "config_manifest_hash": other_hash,
+        },
+        created_at=103,
+    )
+
+    preview = run_command(root, NODE_A, "materialize-v7-preview")
+    result = run_command(root, NODE_A, "materialize-v7")
+
+    assert preview["materialize_all"] is False
+    assert preview["counts"]["add"] == 1
+    assert preview["counts"]["not_assigned"] == 1
+    assert result["counts"]["written_instances"] == 1
+    assert (root.parent / "run_v7" / "local_inst" / "config.json").read_bytes() == b'{"live":{"user":"local"}}'
+    assert not (root.parent / "run_v7" / "other_inst" / "config.json").exists()
 
 
 def test_materialize_v7_blocks_when_required_blob_is_missing(tmp_path: Path) -> None:
