@@ -7387,11 +7387,11 @@
       }).join('') : `<tr><td colspan='9'>No Cluster nodes available for import.</td></tr>`;
       return `
         <div style='display:grid;gap:14px'>
-          <div class='notice info'>${esc(payload.message || 'Imports safe metadata from reachable Cluster nodes. Secrets are not imported.')}</div>
+          <div class='notice info'>${esc(payload.message || 'Imports safe SSH metadata from Cluster nodes. Secrets are not imported.')}</div>
           <div class='status-grid'>
             <div class='status-item'><div class='status-label'>Add</div><div class='status-value'>${esc(String(counts.add || 0))}</div><div class='status-sub'>New VPS Manager entries</div></div>
             <div class='status-item'><div class='status-label'>Update</div><div class='status-value'>${esc(String(counts.update || 0))}</div><div class='status-sub'>Safe metadata changes</div></div>
-            <div class='status-item'><div class='status-label'>Skip</div><div class='status-value'>${esc(String(counts.skip || 0))}</div><div class='status-sub'>Local, outbound-only, disabled or current</div></div>
+            <div class='status-item'><div class='status-label'>Skip</div><div class='status-value'>${esc(String(counts.skip || 0))}</div><div class='status-sub'>Local or already current</div></div>
             <div class='status-item'><div class='status-label'>Error</div><div class='status-value'>${esc(String(counts.error || 0))}</div><div class='status-sub'>Must be fixed first</div></div>
           </div>
           <div class='table-wrap'>
@@ -7416,13 +7416,13 @@
       if (flow.loading) {
         body += `<div class='notice info'>Loading Cluster node import preview...</div>`;
       } else if (flow.applying) {
-        body += `<div class='notice info'>Importing reachable Cluster nodes into local VPS Manager metadata...</div>`;
+        body += `<div class='notice info'>Importing Cluster node SSH metadata into local VPS Manager metadata...</div>`;
       } else {
         body += renderClusterNodesImportPreview(flow.preview);
       }
       box.innerHTML = body;
       const canApply = !!(flow.preview && flow.preview.can_apply && !flow.loading && !flow.applying);
-      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" onclick="loadClusterNodesImportPreview()" ' + (flow.loading || flow.applying ? 'disabled' : '') + '>Reload Preview</button> <button class="btn ok" type="button" id="cluster-nodes-import-apply" ' + (canApply ? '' : 'disabled') + '>' + (flow.applying ? 'Importing...' : 'Import Reachable Nodes') + '</button>';
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" onclick="loadClusterNodesImportPreview()" ' + (flow.loading || flow.applying ? 'disabled' : '') + '>Reload Preview</button> <button class="btn ok" type="button" id="cluster-nodes-import-apply" ' + (canApply ? '' : 'disabled') + '>' + (flow.applying ? 'Importing...' : 'Import Cluster Nodes') + '</button>';
       document.getElementById('alertModalOverlay').classList.add('visible');
       const applyBtn = document.getElementById('cluster-nodes-import-apply');
       if (applyBtn) applyBtn.onclick = function () { applyClusterNodesImport(); };
@@ -9629,7 +9629,7 @@
               <div class='side-button-title'>Import Cluster Nodes</div>
               <div class='tag ok'>Local</div>
             </div>
-            <div class='side-button-sub'>Create local VPS Manager entries from reachable Cluster nodes without importing secrets.</div>
+            <div class='side-button-sub'>Create local VPS Manager entries from Cluster SSH metadata without importing secrets.</div>
           </button>
         </div>`;
       if (sidebarList && sidebarList.innerHTML !== html) sidebarList.innerHTML = html;

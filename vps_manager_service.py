@@ -1472,7 +1472,7 @@ class VPSManagerService:
         return result, str(identity.get("node_id") or "")
 
     def _cluster_node_vps_import_item(self, node: dict[str, Any], local_node_id: str, existing: dict[str, VPS]) -> dict[str, Any]:
-        """Build one preview row for importing a reachable Cluster node into VPS Manager."""
+        """Build one preview row for importing Cluster SSH metadata into VPS Manager."""
 
         node_id = str(node.get("node_id") or "").strip()
         hostname = str(node.get("pbname") or node.get("hostname") or "").strip()
@@ -1498,9 +1498,6 @@ class VPSManagerService:
         if node_id == local_node_id:
             item.update({"reason": "local Cluster node"})
             return item
-        if sync_mode != "reachable":
-            item.update({"reason": f"Cluster node sync mode is {sync_mode}."})
-            return item
         if not node_id:
             item.update({"action": "error", "reason": "Cluster node has no node_id."})
             return item
@@ -1510,7 +1507,7 @@ class VPSManagerService:
             item.update({"action": "error", "reason": str(exc)})
             return item
         if not ssh_host:
-            item.update({"action": "error", "reason": "Reachable Cluster node has no ssh_host."})
+            item.update({"reason": "Cluster node has no ssh_host metadata."})
             return item
         current = existing.get(hostname)
         if current is None:
@@ -1533,7 +1530,7 @@ class VPSManagerService:
         return item
 
     def preview_cluster_nodes_import(self) -> dict[str, Any]:
-        """Preview reachable Cluster nodes that can become local VPS Manager hosts."""
+        """Preview Cluster nodes that can become local VPS Manager hosts."""
 
         self._sync_vps_inventory()
         nodes, local_node_id = self._cluster_nodes_for_vps_import()
@@ -1547,11 +1544,11 @@ class VPSManagerService:
             "items": items,
             "counts": counts,
             "can_apply": bool(counts.get("add") or counts.get("update")) and not bool(counts.get("error")),
-            "message": "Imports reachable Cluster nodes into local VPS Manager metadata only. Secrets are not imported.",
+            "message": "Imports Cluster nodes with SSH metadata into local VPS Manager metadata only. Secrets are not imported.",
         }
 
     def import_cluster_nodes(self, token: str) -> dict[str, Any]:
-        """Import safe metadata for reachable Cluster nodes into VPS Manager host configs."""
+        """Import safe Cluster SSH metadata into VPS Manager host configs."""
 
         plan = self.preview_cluster_nodes_import()
         if plan.get("counts", {}).get("error"):

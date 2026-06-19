@@ -178,7 +178,9 @@ PBGui must not remove SSH firewall rules that were not created for Cluster Sync.
 
 The dedicated **Cluster Sync** page is the main place to monitor Cluster Sync.
 
-The first local-only version shows:
+The page is split into Overview, Setup, Nodes, V7 State, Tombstones and Oplog sections. It refreshes local status, nodes, desired state and recent oplog entries in the background, and updates changed cards and node-table fields in place instead of reloading the whole screen.
+
+The page shows:
 
 - cluster identity and local node identity
 - all materialized nodes and their roles
@@ -191,18 +193,28 @@ The first local-only version shows:
 - read-only remote hello probe status for known cluster nodes
 - an explicit Join & Sync action for reachable nodes without cluster identity
 - a read-only Preview action for joined nodes that compares remote state for diagnostics or retry
+- editable node sync mode, SSH endpoint, Remote PBGui Dir and outbound peer allowlist
+- disabled-node removal for stale nodes that no longer own V7 configs
 
 Bootstrap writes explicit local `ADD_NODE` operations for known VPS Manager hosts and `UPSERT_CONFIG` operations for local configs. When VPS Monitor metadata is available, Bootstrap preserves whether a known host is a master or VPS runner. It never infers deletes from missing files or missing VPS entries and it does not clear tombstones. The probe column runs a read-only restricted `hello` command when available; it does not install keys, write remote files, start bots, stop bots, or deploy anything.
 
+Node sync mode controls which nodes PBCluster may contact:
+
+- **Disabled** keeps the node in cluster history but excludes it from sync.
+- **Outbound Only** means the node does not need inbound SSH; it can still initiate sync to allowed peers.
+- **Reachable via SSH** lets allowed peers contact the node through its SSH host, SSH user, SSH port and Remote PBGui Dir.
+
+The local master detects its own Remote PBGui Dir from the running checkout and stores it as a home-relative path when possible. It also fills missing local SSH host/user metadata from the local network and login user. Review remote node metadata after join or import, especially when a private VPN address is preferred over a public address.
+
 When a node shows **No Identity**, **Join & Sync** writes the remote Cluster identity and refuses to overwrite a different existing identity. It then pushes missing local operations, rebuilds remote Cluster state, materializes assigned V7 configs and API keys, and starts PBRun again when the remote is current. On VPS runners, Join stops PBRun first so running bots are not evaluated during the transition; passivbot processes are left alone. On master nodes, PBRun is not stopped or started.
 
-Use **Join Existing Cluster** on a second master that cannot be reached inbound by the primary master but can SSH out to it. Do this before Bootstrap when the master should join an existing cluster. The action uses the VPS Monitor SSH pool when key login already works, or prompts for a one-shot SSH password before keys are installed. It searches for the upstream PBGui directory in the same order as VPS Manager (`remote_pbgui_dir`, `~/software/pbgui`, `~/pbgui`), reads the upstream master, automatically adopts the upstream `cluster_id` when the local oplog is empty, pulls upstream operations and blobs, registers the local master as `outbound_only`, installs the local Cluster SSH key on the upstream master and pushes the registration operations back. The SSH password is used only for that request and is not saved. If this local install already has cluster operations for a different cluster, self-join refuses to overwrite them unless the recovery option is enabled. Recovery archives the previous local cluster state under `data/cluster/archives/` before replacing it with the upstream cluster state.
+Use **Join Existing Cluster** on a second master that cannot be reached inbound by the primary master but can SSH out to it. Do this before Bootstrap when the master should join an existing cluster. The action uses the VPS Monitor SSH pool when key login already works, or prompts for a one-shot SSH password before keys are installed. It searches for the upstream PBGui directory in the same order as VPS Manager (`remote_pbgui_dir`, `~/software/pbgui`, `~/pbgui`), reads the upstream master, automatically adopts the upstream `cluster_id` when the local oplog is empty, pulls upstream operations and blobs, registers the local master as `outbound_only` with detected local path/IP/user metadata, installs the local Cluster SSH key on the upstream master and pushes the registration operations back. The SSH password is used only for that request and is not saved. If this local install already has cluster operations for a different cluster, self-join refuses to overwrite them unless the recovery option is enabled. Recovery archives the previous local cluster state under `data/cluster/archives/` before replacing it with the upstream cluster state. After join, switch that master to **Reachable via SSH** only when other allowed peers should initiate SSH back to it.
 
 PBCluster SSH access is technical setup state. During normal PBGui setup/update on a VPS, PBGui now creates a dedicated local PBCluster SSH key and installs the master's public key on the VPS with a forced command that can only run `cluster_sync_command.py`. PBCluster uses this dedicated key with `IdentitiesOnly=yes`; users do not need to create or copy SSH keys manually.
 
 VPS nodes do not initiate SSH fanout to other peers by default. A runner VPS only contacts explicit `sync_peers`; this avoids accidental VPS-to-VPS meshes. Masters can still push to reachable VPS nodes unless their outbound peer list is explicitly restricted.
 
-Use **Edit** on a node to configure its allowed outbound peers. Use **Repair SSH** after changing peer allowlists or after updating a node: it reads the remote PBCluster public key, stores its fingerprint in cluster metadata, and installs the required restricted keys for the master and any configured peer sources.
+Use **Edit** on a node to configure its sync mode, SSH host/user/port, Remote PBGui Dir and allowed outbound peers. Use **Repair SSH** after changing peer allowlists or after updating a node: it reads the remote PBCluster public key, stores its fingerprint in cluster metadata, and installs the required restricted keys for the master and any configured peer sources. Use **Remove** only for disabled non-local nodes that no longer own any V7 configs; it writes a `REMOVE_NODE` operation and removes the node from materialized membership while keeping oplog history intact.
 
 When a joined node shows **OK**, the **Preview** action reads the remote state vector and desired state. It compares actor sequence numbers, V7 instance metadata, tombstones and API-key metadata against local state. It also calculates which local operations the remote is missing, which remote operation ranges are missing locally, and which hash references a later write phase would need. Preview is read-only; it does not copy operations, blobs or configs.
 

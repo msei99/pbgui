@@ -178,7 +178,9 @@ PBGui darf keine SSH-Firewall-Regeln entfernen, die nicht für Cluster Sync erst
 
 Die dedizierte **Cluster Sync**-Seite ist der zentrale Ort zur Überwachung von Cluster Sync.
 
-Die erste local-only Version zeigt:
+Die Seite ist in Overview, Setup, Nodes, V7 State, Tombstones und Oplog aufgeteilt. Sie aktualisiert lokalen Status, Nodes, Desired State und aktuelle Oplog-Einträge im Hintergrund und ersetzt nur geänderte Karten und Node-Tabellenfelder, statt die ganze Seite neu zu laden.
+
+Die Seite zeigt:
 
 - Cluster-Identität und lokale Node-Identität
 - alle materialisierten Nodes und ihre Rollen
@@ -191,18 +193,28 @@ Die erste local-only Version zeigt:
 - read-only Remote-Hello-Probe-Status für bekannte Cluster-Nodes
 - eine explizite Join-&-Sync-Aktion für erreichbare Nodes ohne Cluster-Identität
 - eine read-only Preview-Aktion für gejointe Nodes, die Remote-State für Diagnose oder Retry vergleicht
+- editierbaren Node-Sync-Modus, SSH-Endpunkt, Remote PBGui Dir und Outbound-Peer-Allowlist
+- Disabled-Node-Removal für stale Nodes, die keine V7-Configs mehr besitzen
 
 Bootstrap schreibt explizite lokale `ADD_NODE`-Operationen für bekannte VPS-Manager-Hosts und `UPSERT_CONFIG`-Operationen für lokale Configs. Wenn VPS-Monitor-Metadaten verfügbar sind, übernimmt Bootstrap, ob ein bekannter Host Master oder VPS-Runner ist. Fehlende Dateien oder fehlende VPS-Einträge werden nie als Delete interpretiert und Tombstones werden dadurch nicht entfernt. Die Probe-Spalte führt, wenn verfügbar, nur ein read-only restricted `hello` aus; sie installiert keine Keys, schreibt keine Remote-Dateien, startet oder stoppt keine Bots und deployed nichts.
 
+Der Node-Sync-Modus steuert, welche Nodes PBCluster kontaktieren darf:
+
+- **Disabled** behält den Node in der Cluster-Historie, schließt ihn aber vom Sync aus.
+- **Outbound Only** bedeutet, dass der Node kein inbound SSH braucht; er kann trotzdem selbst zu erlaubten Peers synchronisieren.
+- **Reachable via SSH** erlaubt zugelassenen Peers, den Node über SSH-Host, SSH-User, SSH-Port und Remote PBGui Dir zu kontaktieren.
+
+Der lokale Master erkennt sein eigenes Remote PBGui Dir aus dem laufenden Checkout und speichert es, wenn möglich, relativ zum Home-Verzeichnis. Fehlende lokale SSH-Host-/User-Metadaten werden außerdem aus lokalem Netzwerk und Login-User ergänzt. Prüfe Remote-Node-Metadaten nach Join oder Import trotzdem, besonders wenn eine private VPN-Adresse statt einer öffentlichen Adresse verwendet werden soll.
+
 Wenn ein Node **No Identity** zeigt, schreibt **Join & Sync** die Remote-Cluster-Identität und überschreibt keine abweichende bestehende Identität. Danach pusht PBGui fehlende lokale Operationen, baut den Remote-Cluster-State neu, materialisiert zugewiesene V7-Configs und API-Keys und startet PBRun wieder, wenn der Remote-State aktuell ist. Auf VPS-Runnern stoppt Join vorher PBRun, damit laufende Bots während der Übergangsphase nicht bewertet werden; passivbot-Prozesse bleiben unangetastet. Auf Master-Nodes wird PBRun nicht gestoppt oder gestartet.
 
-Nutze **Join Existing Cluster** auf einem zweiten Master, der vom primären Master nicht inbound erreichbar ist, aber selbst per SSH zum primären Master verbinden kann. Tue das vor Bootstrap, wenn der Master einem bestehenden Cluster beitreten soll. Die Aktion nutzt den VPS-Monitor-SSH-Pool, wenn Key-Login bereits funktioniert, oder fragt per Prompt ein einmaliges SSH-Passwort ab, solange noch keine Keys installiert sind. Sie sucht das Upstream-PBGui-Verzeichnis in derselben Reihenfolge wie der VPS Manager (`remote_pbgui_dir`, `~/software/pbgui`, `~/pbgui`), liest den Upstream-Master, übernimmt dessen `cluster_id` automatisch bei leerem lokalen Oplog, zieht Upstream-Operationen und Blobs, registriert den lokalen Master als `outbound_only`, installiert den lokalen Cluster-SSH-Key auf dem Upstream-Master und pusht die Registrierungsoperationen zurück. Das SSH-Passwort wird nur für diesen Request verwendet und nicht gespeichert. Wenn diese lokale Installation bereits Cluster-Operationen für einen anderen Cluster hat, verweigert Self-Join das Überschreiben, außer die Recovery-Option ist aktiviert. Recovery archiviert den bisherigen lokalen Cluster-State unter `data/cluster/archives/`, bevor er durch den Upstream-Cluster-State ersetzt wird.
+Nutze **Join Existing Cluster** auf einem zweiten Master, der vom primären Master nicht inbound erreichbar ist, aber selbst per SSH zum primären Master verbinden kann. Tue das vor Bootstrap, wenn der Master einem bestehenden Cluster beitreten soll. Die Aktion nutzt den VPS-Monitor-SSH-Pool, wenn Key-Login bereits funktioniert, oder fragt per Prompt ein einmaliges SSH-Passwort ab, solange noch keine Keys installiert sind. Sie sucht das Upstream-PBGui-Verzeichnis in derselben Reihenfolge wie der VPS Manager (`remote_pbgui_dir`, `~/software/pbgui`, `~/pbgui`), liest den Upstream-Master, übernimmt dessen `cluster_id` automatisch bei leerem lokalen Oplog, zieht Upstream-Operationen und Blobs, registriert den lokalen Master als `outbound_only` mit erkannten lokalen Pfad/IP/User-Metadaten, installiert den lokalen Cluster-SSH-Key auf dem Upstream-Master und pusht die Registrierungsoperationen zurück. Das SSH-Passwort wird nur für diesen Request verwendet und nicht gespeichert. Wenn diese lokale Installation bereits Cluster-Operationen für einen anderen Cluster hat, verweigert Self-Join das Überschreiben, außer die Recovery-Option ist aktiviert. Recovery archiviert den bisherigen lokalen Cluster-State unter `data/cluster/archives/`, bevor er durch den Upstream-Cluster-State ersetzt wird. Stelle diesen Master nach dem Join nur dann auf **Reachable via SSH**, wenn andere erlaubte Peers SSH zurück zu ihm initiieren sollen.
 
 PBCluster-SSH-Zugriff ist technischer Setup-Status. Beim normalen PBGui-Setup/Update auf einem VPS erzeugt PBGui jetzt automatisch einen dedizierten lokalen PBCluster-SSH-Key und installiert den Public Key des Masters auf dem VPS mit einem Forced Command, das nur `cluster_sync_command.py` ausführen kann. PBCluster nutzt diesen dedizierten Key mit `IdentitiesOnly=yes`; User müssen keine SSH-Keys manuell erzeugen oder kopieren.
 
 VPS-Nodes starten standardmäßig keinen SSH-Fanout zu anderen Peers. Ein Runner-VPS kontaktiert nur explizite `sync_peers`; dadurch entsteht kein versehentliches VPS-zu-VPS-Mesh. Master können weiterhin zu erreichbaren VPS-Nodes pushen, solange ihre Outbound-Peer-Liste nicht explizit eingeschränkt wurde.
 
-Nutze **Edit** an einem Node, um erlaubte Outbound-Peers zu konfigurieren. Nutze **Repair SSH** nach Änderungen an Peer-Listen oder nach einem Node-Update: die Aktion liest den remote PBCluster Public Key, speichert den Fingerprint in den Cluster-Metadaten und installiert die nötigen restricted Keys für den Master und konfigurierte Peer-Quellen.
+Nutze **Edit** an einem Node, um Sync-Modus, SSH-Host/User/Port, Remote PBGui Dir und erlaubte Outbound-Peers zu konfigurieren. Nutze **Repair SSH** nach Änderungen an Peer-Listen oder nach einem Node-Update: die Aktion liest den remote PBCluster Public Key, speichert den Fingerprint in den Cluster-Metadaten und installiert die nötigen restricted Keys für den Master und konfigurierte Peer-Quellen. Nutze **Remove** nur für deaktivierte nicht-lokale Nodes, die keine V7-Configs mehr besitzen; die Aktion schreibt eine `REMOVE_NODE`-Operation und entfernt den Node aus der materialisierten Membership, während die Oplog-Historie erhalten bleibt.
 
 Wenn ein gejointer Node **OK** zeigt, liest die **Preview**-Aktion den Remote-State-Vector und Desired State. Sie vergleicht Actor-Sequenzen, V7-Instance-Metadaten, Tombstones und API-Key-Metadaten mit lokalem State. Zusätzlich berechnet sie, welche lokalen Operationen remote fehlen, welche Remote-Operationsbereiche lokal fehlen und welche Hash-Referenzen eine spätere Write-Phase brauchen würde. Preview ist read-only; es kopiert keine Operationen, Blobs oder Configs.
 

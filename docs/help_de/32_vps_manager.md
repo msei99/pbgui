@@ -38,11 +38,11 @@ Linke Sidebar:
 | **Refresh** | Alle VPS-Status- und Versionsdaten über das Refresh-Icon neu laden |
 | **Overview / Settings / History** | Zwischen Live-Übersicht, gemeinsamen Deploy-Einstellungen und letzter Deploy-Historie wechseln |
 | **Import by Hostname** | Den manuellen Hostname-Import aus dem Sidebar-Bereich **Import Host** öffnen; der Hostname muss bereits lokal über `/etc/hosts` auflösbar sein |
-| **Import Cluster Nodes** | Sichere Metadaten aus erreichbaren Cluster-Sync-Nodes als lokale VPS-Manager-Hosts vorab anzeigen und importieren; Secrets werden nicht importiert |
+| **Import Cluster Nodes** | Sichere SSH-Metadaten aus Cluster-Sync-Nodes als lokale VPS-Manager-Hosts vorab anzeigen und importieren; Secrets werden nicht importiert |
 
 Die Übersicht nutzt jetzt die normale gemeinsame PBGui-FastAPI-Shell. Beim Wechsel zu **Master** oder zu einem konkreten **VPS** wird die linke Sidebar zu einer kontextabhängigen Aktionsliste umgeschaltet. Der Hauptbereich der Übersicht bleibt dabei auf die Tabelle fokussiert, während der Host-Import als manuelle Hostname-Aktion oder nach einem Cluster-Sync-Join als **Import Cluster Nodes** in der Sidebar verfügbar bleibt.
 
-**Import Cluster Nodes** liest den lokal materialisierten `cluster_nodes`-State und importiert nur Nodes mit `sync_mode = reachable`. Lokale, outbound-only und deaktivierte Nodes werden übersprungen. Importiert werden nur sichere lokale VPS-Manager-Metadaten wie Hostname, SSH-Host, SSH-User, SSH-Port und Remote PBGui Dir; VPS-Passwörter, sudo-Passwörter, CoinMarketCap-Keys und Private Keys bleiben lokal und werden nicht aus Cluster Sync kopiert.
+**Import Cluster Nodes** liest den lokal materialisierten `cluster_nodes`-State und importiert nicht-lokale Nodes mit SSH-Metadaten, unabhängig vom Cluster-Sync-Modus. Deaktivierte Cluster-Sync-Nodes können trotzdem in den VPS Manager importiert werden; disabled bedeutet nur, dass PBCluster nicht über diesen Node replizieren soll. Importiert werden nur sichere lokale VPS-Manager-Metadaten wie Hostname, SSH-Host, SSH-User, SSH-Port und Remote PBGui Dir; VPS-Passwörter, sudo-Passwörter, CoinMarketCap-Keys und Private Keys bleiben lokal und werden nicht aus Cluster Sync kopiert. Wenn der importierte Host noch Passwort-Login braucht, nutzt der VPS Manager bei der nächsten SSH-Aktion den normalen einmaligen Passwort-Prompt.
 
 Die Seite hält eine Live-WebSocket-Verbindung für Übersicht, Fortschritt und Branch-Status offen.
 
@@ -80,6 +80,8 @@ Der **Master**-Inhaltsbereich enthält zusätzlich:
 - einen **Monitor**-Bereich mit Server-Metriken plus PB7-Aktivität aus laufenden Prozessen, PB7-Logs und Cluster-Sync-Zielzustand
 - einen **Progress**-Bereich mit getrennten Status-Buckets; sobald eine Sidebar-Aktion einen Master-Ansible-Task startet, schaltet die Hauptfläche auf den gemeinsamen **Command Log Viewer** um, und **Home** bringt zurück zur normalen Master-Ansicht
 
+Im Cluster-Modus synchronisieren **Update PBGui** und PBGui-Branch-Wechsel die lokale PBCluster-systemd-User-Unit und starten PBCluster neu. PBCluster ist außerdem in lokaler Service-Überwachung und Service-Control sichtbar. Ein manueller `git pull` startet PBCluster nicht neu; nutze danach `systemctl --user restart pbgui-pbcluster.service`.
+
 ---
 
 ## VPS-Verwaltung
@@ -112,6 +114,8 @@ Der **VPS**-Inhaltsbereich enthält zusätzlich:
 - **PBGui Branch Management** und **PB7 Branch Management** mit demselben Switch-/Update-Workflow wie beim Master
 - einen **Remote Monitor** mit Server-Metriken plus PB7-Aktivität aus laufenden Prozessen, PB7-Logs und Cluster-Sync-Zielzustand
 - einen **Progress**-Bereich mit getrennten Status-Buckets für Init-, Setup- und Update-Läufe; für die vollständige Ansible-Ausgabe werden die Sidebar-Aktionsknöpfe auf den gemeinsamen **Command Log Viewer** umgeschaltet
+
+Im Cluster-Modus synchronisieren **Update PBGui** und PBGui-Branch-Wechsel auf einer VPS die PBCluster-Service-Dateien und starten PBCluster, PBRun und PBCoinData neu, sofern diese Services konfiguriert sind. VPS-systemd-Migrationsprüfungen schließen PBCluster ein, und die Remote-Service-/Host-Log-Ansichten zeigen `PBCluster.log`. Reine VPS-Runner brauchen weiterhin kein `pbgui-api.service` und kein `PBApiServer.py`.
 
 Die Sidebar trennt die Log-Workflows jetzt bewusst von der normalen Host-Ansicht:
 - Utility-Aktionen wie **Task Logs**, **Host Logs**, **Change VPS**, **Initialize** oder **Delete VPS** bleiben oberhalb eines Trenners, während die ausführbaren Ansible-Playbook-Knöpfe darunter gruppiert sind
@@ -159,9 +163,13 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
 1. **Master (local)** klicken → **Update PBGui and PB7** → auf *successful* im Log warten
 2. Für jeden VPS: Hostname klicken → **Update PBGui and PB7**
 
+Der PBGui-Update-Workflow startet PBCluster für Cluster-Mode-Hosts neu. Wenn du einen Host manuell per `git pull` aktualisierst, starte PBCluster dort danach mit `systemctl --user restart pbgui-pbcluster.service` neu.
+
 ### Auf einen Feature-Branch wechseln
 1. Master oder VPS-Detailansicht öffnen
 2. **Branch Management** aufklappen → Zielbranch auswählen → **Switch Branch** klicken
+
+PBGui-Branch-Wechsel nutzen dieselbe PBCluster-Service-Synchronisierung und denselben Restart wie PBGui-Updates.
 
 ### API-Keys materialisieren
 - Verwende **System -> Cluster Sync**, um `api-keys.json` auf erreichbaren Nodes zu prüfen und zu materialisieren.
