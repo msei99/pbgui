@@ -254,6 +254,41 @@ def test_get_status_initializes_empty_cluster_identity(monkeypatch, tmp_path: Pa
     assert not (tmp_path / "data" / "cluster" / "desired_state.json").exists()
 
 
+def test_get_nodes_defaults_local_remote_pbgui_dir_from_pbgdir(monkeypatch, tmp_path: Path) -> None:
+    """The nodes API exposes the local checkout path when local membership omits it."""
+
+    home = tmp_path / "home" / "mani"
+    pbgui_dir = home / "test" / "pbgui"
+    pbgui_dir.mkdir(parents=True)
+    root = _init_cluster(pbgui_dir)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(cluster, "PBGDIR", str(pbgui_dir))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {"ok": True, "fingerprint": "SHA256:local", "public_key_path": str(pbgui_dir / "cluster.pub")},
+    )
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+
+    payload = cluster.get_nodes(session=None)
+    local_node = next(item for item in payload["nodes"] if item["node_id"] == NODE_A)
+
+    assert local_node["remote_pbgui_dir"] == "test/pbgui"
+
+
+def test_local_pbgui_dir_value_uses_absolute_path_outside_home(monkeypatch, tmp_path: Path) -> None:
+    """Local PBGui path detection falls back to an absolute path outside HOME."""
+
+    home = tmp_path / "home" / "mani"
+    pbgui_dir = tmp_path / "opt" / "pbgui"
+    home.mkdir(parents=True)
+    pbgui_dir.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(cluster, "PBGDIR", str(pbgui_dir))
+
+    assert cluster._local_pbgui_dir_value() == str(pbgui_dir.resolve(strict=False))
+
+
 def test_set_node_sync_updates_membership_only(monkeypatch, tmp_path: Path) -> None:
     """Cluster node sync toggles write UPDATE_NODE without changing role metadata."""
 
@@ -350,6 +385,36 @@ def test_update_node_settings_records_reachable_sync_mode(monkeypatch, tmp_path:
     assert nodes[NODE_B]["remote_pbgui_dir"] == "test/pbgui"
     assert nodes[NODE_B]["ssh_host"] == "203.0.113.10"
     assert nodes[NODE_B]["sync_peers"] == [NODE_A]
+
+
+def test_update_local_node_settings_persists_detected_pbgui_dir(monkeypatch, tmp_path: Path) -> None:
+    """Saving local node settings fills the local Remote PBGui Dir from PBGDIR."""
+
+    home = tmp_path / "home" / "mani"
+    pbgui_dir = home / "test" / "pbgui"
+    pbgui_dir.mkdir(parents=True)
+    root = _init_cluster(pbgui_dir)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(cluster, "PBGDIR", str(pbgui_dir))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "master", "pbname": "upstream-master"}, created_at=102)
+
+    result = asyncio.run(
+        cluster.update_node_settings(
+            NODE_A,
+            _JsonRequest({"sync_mode": "outbound_only", "remote_pbgui_dir": "", "ssh_host": "", "ssh_user": "", "ssh_port": 22, "sync_peers": [NODE_B]}),
+            session=None,
+        )
+    )
+    operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
+    nodes = _read_json(pbgui_dir / "data" / "cluster" / "cluster_nodes.json")["nodes"]
+
+    assert result["changed"] is True
+    assert operations[-1]["op"] == "UPDATE_NODE"
+    assert operations[-1]["node_id"] == NODE_A
+    assert operations[-1]["remote_pbgui_dir"] == "test/pbgui"
+    assert nodes[NODE_A]["remote_pbgui_dir"] == "test/pbgui"
+    assert nodes[NODE_A]["sync_peers"] == [NODE_B]
 
 
 def test_update_node_settings_rejects_reachable_without_host(monkeypatch, tmp_path: Path) -> None:
@@ -907,6 +972,7 @@ def test_self_join_adopts_empty_local_identity_and_registers_master(monkeypatch,
     materialized = cluster.rebuild_materialized_state(root, write=False)
     nodes = materialized["cluster_nodes"]["nodes"]
     assert nodes[NODE_C]["sync_mode"] == "outbound_only"
+    assert nodes[NODE_C]["remote_pbgui_dir"] == cluster._local_pbgui_dir_value()
     assert nodes[NODE_C]["sync_peers"] == [NODE_B]
     assert nodes[NODE_C]["cluster_ssh_fingerprint"] == "SHA256:local"
     assert nodes[NODE_B]["ssh_user"] == "mani"

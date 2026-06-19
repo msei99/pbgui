@@ -138,6 +138,36 @@ def _cluster_root() -> Path:
     return default_cluster_root(Path(PBGDIR))
 
 
+def _local_pbgui_dir_value() -> str:
+    """Return the local PBGui checkout path in the form used for Cluster SSH."""
+
+    try:
+        pbgui_dir = Path(PBGDIR).expanduser().resolve(strict=False)
+    except OSError:
+        pbgui_dir = Path(PBGDIR).expanduser().absolute()
+    try:
+        home_dir = Path.home().resolve(strict=False)
+        relative = pbgui_dir.relative_to(home_dir)
+    except (OSError, ValueError):
+        return str(pbgui_dir)
+    return relative.as_posix() if relative.parts else str(pbgui_dir)
+
+
+def _node_with_local_defaults(node: dict[str, Any], local_node_id: str) -> dict[str, Any]:
+    """Overlay local-only defaults onto a materialized node for API/UI use."""
+
+    item = dict(node)
+    if str(item.get("node_id") or "") == str(local_node_id or "") and not str(item.get("remote_pbgui_dir") or "").strip():
+        item["remote_pbgui_dir"] = _local_pbgui_dir_value()
+    return item
+
+
+def _nodes_with_local_defaults(nodes: list[dict[str, Any]], local_node_id: str) -> list[dict[str, Any]]:
+    """Return node rows with the local PBGui path filled when missing."""
+
+    return [_node_with_local_defaults(node, local_node_id) for node in nodes]
+
+
 def _prune_remote_push_jobs() -> None:
     """Forget stale remote-push progress records."""
 
@@ -1852,6 +1882,7 @@ async def _self_join_existing_cluster(
             "hostname": _get_master_pbname(),
             "sync_mode": "outbound_only",
             "sync_enabled": True,
+            "remote_pbgui_dir": _local_pbgui_dir_value(),
             "sync_peers": [upstream_node_id],
             "cluster_ssh_public_key": str(local_key.get("public_key") or ""),
             "cluster_ssh_fingerprint": str(local_key.get("fingerprint") or ""),
@@ -3252,9 +3283,11 @@ def get_nodes(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
         local_cluster_ssh = ensure_local_cluster_ssh_material(Path(PBGDIR), role=str(snapshot["identity"].get("role") or "master"), pbname=_get_master_pbname())
     except Exception as exc:
         local_cluster_ssh = {"ok": False, "error": str(exc)}
+    nodes = _node_list(cluster_nodes)
+    local_node_id = str(snapshot["identity"].get("node_id") or "")
     return {
         "cluster_nodes": cluster_nodes,
-        "nodes": _node_list(cluster_nodes),
+        "nodes": _nodes_with_local_defaults(nodes, local_node_id),
         "local_cluster_ssh": {
             "ok": local_cluster_ssh.get("ok", True) is not False,
             "fingerprint": str(local_cluster_ssh.get("fingerprint") or ""),
@@ -3321,14 +3354,20 @@ async def update_node_settings(
     local_node_id = str(snapshot["identity"].get("node_id") or "")
     if str(node.get("node_id") or "") == local_node_id and settings["sync_mode"] == "disabled":
         raise HTTPException(status_code=400, detail="Local cluster node sync cannot be disabled")
+    is_local_node = str(node.get("node_id") or "") == local_node_id
+    if is_local_node and not str(settings.get("remote_pbgui_dir") or "").strip():
+        settings["remote_pbgui_dir"] = _local_pbgui_dir_value()
     if node.get("enabled") is False and settings["sync_mode"] != "disabled":
         raise HTTPException(status_code=400, detail="Disabled cluster nodes cannot be enabled for sync")
     _validate_sync_peers_for_node(settings, node, nodes)
 
+    current_remote_dir = str(node.get("remote_pbgui_dir") or "")
+    if is_local_node and not current_remote_dir.strip():
+        current_remote_dir = _local_pbgui_dir_value()
     current = {
         "sync_mode": normalize_node_sync_mode(node),
         "sync_enabled": normalize_node_sync_mode(node) != "disabled",
-        "remote_pbgui_dir": str(node.get("remote_pbgui_dir") or ""),
+        "remote_pbgui_dir": current_remote_dir,
         "ssh_host": str(node.get("ssh_host") or ""),
         "ssh_user": str(node.get("ssh_user") or ""),
         "ssh_port": int(node.get("ssh_port") or 22),
