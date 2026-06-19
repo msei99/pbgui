@@ -3345,6 +3345,40 @@ async def update_node_settings(
     return {"ok": True, "changed": True, "node": updated}
 
 
+@router.post("/nodes/{node_id}/remove")
+def remove_cluster_node(node_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Remove a disabled Cluster node from materialized membership."""
+
+    snapshot = _load_cluster_snapshot()
+    nodes = _node_list(snapshot["cluster_nodes"])
+    node = _node_for_id(nodes, str(node_id or ""))
+    if not node:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    if str(node.get("node_id") or "") == str(snapshot["identity"].get("node_id") or ""):
+        raise HTTPException(status_code=400, detail="Local cluster node cannot be removed")
+    if normalize_node_sync_mode(node) != "disabled":
+        raise HTTPException(status_code=400, detail="Only disabled cluster nodes can be removed")
+    desired_state = snapshot["desired_state"] if isinstance(snapshot.get("desired_state"), dict) else {}
+    instances = desired_state.get("instances") if isinstance(desired_state, dict) else {}
+    assigned_instances = [
+        str(name)
+        for name, item in (instances if isinstance(instances, dict) else {}).items()
+        if isinstance(item, dict) and str(item.get("assigned_host") or "") == str(node.get("node_id") or "")
+    ]
+    if assigned_instances:
+        preview = ", ".join(sorted(assigned_instances)[:5])
+        raise HTTPException(status_code=400, detail=f"Node still has assigned V7 configs: {preview}")
+    append_operation(_cluster_root(), "REMOVE_NODE", {"node_id": str(node.get("node_id") or "")})
+    materialized = rebuild_materialized_state(_cluster_root())
+    return {
+        "ok": True,
+        "changed": True,
+        "removed_node_id": str(node.get("node_id") or ""),
+        "node": node,
+        "nodes": _node_list(materialized["cluster_nodes"]),
+    }
+
+
 @router.post("/nodes/{node_id}/cluster-ssh/repair")
 async def repair_node_cluster_ssh(node_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Repair Cluster SSH key trust for one known node."""

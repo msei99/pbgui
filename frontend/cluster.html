@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cluster Sync - PBGui</title>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
+  <script src="/app/js/sidebar_resize.js?v=1"></script>
   <style>
     :root {
       --bg: #0e1117;
@@ -12,12 +14,15 @@
       --border: #1e2736;
       --border2: #2d3748;
       --text: #e2e8f0;
+      --text-dim: #94a3b8;
       --muted: #94a3b8;
       --faint: #64748b;
       --accent: #63b3ed;
+      --blue: #1f77ff;
       --good: #4ade80;
       --warn: #f59e0b;
       --bad: #f87171;
+      --font: 'Segoe UI', system-ui, sans-serif;
       --fs-xs: 11px;
       --fs-sm: 13px;
       --fs-base: 14px;
@@ -27,15 +32,20 @@
       --sp-sm: 8px;
       --sp-md: 12px;
       --sp-lg: 20px;
+      --input-h: 32px;
+      --btn-h: 32px;
     }
 
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
-    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: var(--fs-base); }
+    body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: var(--fs-base); }
     button { font-family: inherit; }
 
-    #page-body { height: calc(100vh - 52px); overflow: auto; padding: var(--sp-lg); }
-    .page-shell { max-width: 1480px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-lg); }
+    #page-body { display: flex; height: calc(100vh - 52px); overflow: hidden; padding: 0; }
+    #main-content { flex: 1; min-width: 0; overflow: auto; padding: var(--sp-lg); }
+    .page-shell { width: 100%; max-width: none; margin: 0; display: flex; flex-direction: column; gap: var(--sp-lg); }
+    .cluster-section { display: none; gap: var(--sp-lg); }
+    .cluster-section.is-active { display: grid; }
 
     .hero {
       display: flex;
@@ -128,6 +138,8 @@
 
     .warning-list { display: flex; flex-direction: column; gap: var(--sp-sm); margin-top: var(--sp-md); }
     .warning-item { border: 1px solid rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); color: #fcd34d; border-radius: 8px; padding: 0.55rem 0.75rem; }
+    .setup-state-note { border: 1px solid rgba(99,179,237,0.22); background: rgba(99,179,237,0.08); color: var(--muted); border-radius: 10px; padding: 0.75rem 0.9rem; line-height: 1.45; }
+    .setup-state-note.warn { border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); color: #fcd34d; }
 
     .bootstrap-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-md); flex-wrap: wrap; margin-bottom: var(--sp-md); }
     .bootstrap-summary { color: var(--muted); line-height: 1.45; }
@@ -261,7 +273,7 @@
     #preview-modal table { min-width: 0; }
 
     @media (max-width: 980px) {
-      #page-body { padding: var(--sp-md); }
+      #main-content { padding: var(--sp-md); }
       .hero { flex-direction: column; }
       .hero-actions { justify-content: flex-start; }
       .stats-grid { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
@@ -277,7 +289,35 @@
 <body>
   <nav id="topnav"></nav>
   <div id="page-body">
-    <div class="page-shell">
+    <div id="sidebar">
+      <div id="sidebar-inner">
+        <div id="sidebar-header">
+          <span class="sb-title">Cluster Sync</span>
+        </div>
+        <button class="sb-section active" type="button" data-cluster-section="overview">
+          Overview
+        </button>
+        <button class="sb-section" type="button" data-cluster-section="setup">
+          Setup
+        </button>
+        <button class="sb-section" type="button" data-cluster-section="nodes">
+          Nodes <span class="sb-count" id="nav-nodes-count" style="margin-left:auto" hidden></span>
+        </button>
+        <button class="sb-section" type="button" data-cluster-section="instances">
+          V7 State <span class="sb-count" id="nav-instances-count" style="margin-left:auto" hidden></span>
+        </button>
+        <button class="sb-section" type="button" data-cluster-section="tombstones">
+          Tombstones <span class="sb-count" id="nav-tombstones-count" style="margin-left:auto" hidden></span>
+        </button>
+        <button class="sb-section" type="button" data-cluster-section="oplog">
+          Oplog <span class="sb-count" id="nav-oplog-count" style="margin-left:auto" hidden></span>
+        </button>
+      </div>
+      <div id="sidebar-resize"></div>
+    </div>
+
+    <div id="main-content">
+      <div class="page-shell">
       <section class="hero">
         <div>
           <div class="hero-title">Cluster Sync</div>
@@ -292,115 +332,135 @@
       <div id="status-msg"></div>
       <section class="stats-grid" id="stats-grid"></section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <div class="panel-title">Local Identity</div>
-          <div class="panel-note">Stable cluster/node identity for this PBGui install.</div>
-        </div>
-        <div class="panel-body">
-          <div class="identity-grid" id="identity-grid"></div>
-          <div class="warning-list" id="warning-list"></div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <div class="panel-title">Join Existing Cluster</div>
-          <div class="panel-note">Use this on a second master that can SSH out to an existing PBGui master.</div>
-        </div>
-        <div class="panel-body">
-          <div class="panel-note" style="margin-bottom:0.75rem;">Self-join preserves this install's local node id, automatically adopts the upstream cluster id when the local oplog is empty, pulls upstream operations/blobs, registers this master as outbound-only, installs the local Cluster SSH key on the upstream master and pushes the registration back. If the local oplog is not empty and belongs to another cluster, self-join is blocked.</div>
-          <div class="modal-form-grid">
-            <div class="modal-field">
-              <label for="self-join-hostname">VPS Monitor Hostname</label>
-              <input class="modal-input" id="self-join-hostname" type="text" placeholder="existing-master">
-            </div>
-            <div class="modal-field">
-              <label for="self-join-remote-dir">Remote PBGui Dir (optional)</label>
-              <input class="modal-input" id="self-join-remote-dir" type="text" placeholder="software/pbgui">
-              <div class="field-help">Leave empty to try VPS Manager metadata, <span class="mono">~/software/pbgui</span>, then <span class="mono">~/pbgui</span>.</div>
-            </div>
-            <div class="modal-field">
-              <label for="self-join-ssh-host">SSH Host/IP</label>
-              <input class="modal-input" id="self-join-ssh-host" type="text" placeholder="203.0.113.10">
-            </div>
-            <div class="modal-field">
-              <label for="self-join-ssh-user">SSH User</label>
-              <input class="modal-input" id="self-join-ssh-user" type="text" placeholder="ssh-user">
-            </div>
-            <div class="modal-field">
-              <label for="self-join-ssh-port">SSH Port</label>
-              <input class="modal-input" id="self-join-ssh-port" type="number" min="1" max="65535" step="1" placeholder="22">
-            </div>
-            <label class="peer-option modal-field-wide" for="self-join-reset">
-              <input id="self-join-reset" type="checkbox">
-              <span>Recovery: archive an existing local Cluster state if it belongs to another cluster, then join the upstream cluster.</span>
-            </label>
-          </div>
-          <div class="bootstrap-toolbar" style="margin-top:0.75rem; margin-bottom:0;">
-            <div class="bootstrap-summary" id="self-join-status">Self-join has not run yet.</div>
-            <div class="push-progress" id="self-join-progress" hidden>
-              <div class="push-progress-label">
-                <span id="self-join-progress-label">Starting self-join...</span>
-                <span class="push-progress-count" id="self-join-progress-count"></span>
+        <main>
+          <div class="cluster-section is-active" data-cluster-section-panel="overview">
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Local Identity</div>
+                <div class="panel-note">Stable cluster/node identity for this PBGui install.</div>
               </div>
-              <div class="push-progress-track"><div class="push-progress-fill" id="self-join-progress-fill"></div></div>
-            </div>
-            <div class="bootstrap-actions">
-              <button class="btn warn" id="self-join-btn" type="button">Join Existing Cluster</button>
-            </div>
+              <div class="panel-body">
+                <div class="identity-grid" id="identity-grid"></div>
+                <div class="warning-list" id="warning-list"></div>
+              </div>
+            </section>
           </div>
-        </div>
-      </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <div class="panel-title">Bootstrap Cluster State</div>
-          <div class="panel-note">Use this only when this master should start a new local Cluster state instead of joining an existing cluster.</div>
-        </div>
-        <div class="panel-body">
-          <div class="bootstrap-toolbar">
-            <div class="bootstrap-summary" id="bootstrap-summary">Bootstrap preview not loaded yet.</div>
-            <div class="bootstrap-actions">
-              <button class="btn warn" id="bootstrap-apply-btn" type="button" disabled>Apply Bootstrap</button>
-            </div>
+          <div class="cluster-section" data-cluster-section-panel="setup">
+            <div class="setup-state-note" id="setup-state-note">Loading setup state...</div>
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Join Existing Cluster</div>
+                <div class="panel-note">Use this on a second master that can SSH out to an existing PBGui master.</div>
+              </div>
+              <div class="panel-body">
+                <div class="panel-note" style="margin-bottom:0.75rem;">Self-join preserves this install's local node id, automatically adopts the upstream cluster id when the local oplog is empty, pulls upstream operations/blobs, registers this master as outbound-only, installs the local Cluster SSH key on the upstream master and pushes the registration back. If the local oplog is not empty and belongs to another cluster, self-join is blocked.</div>
+                <div class="modal-form-grid">
+                  <div class="modal-field">
+                    <label for="self-join-hostname">VPS Monitor Hostname</label>
+                    <input class="modal-input" id="self-join-hostname" type="text" placeholder="existing-master">
+                  </div>
+                  <div class="modal-field">
+                    <label for="self-join-remote-dir">Remote PBGui Dir (optional)</label>
+                    <input class="modal-input" id="self-join-remote-dir" type="text" placeholder="software/pbgui">
+                    <div class="field-help">Leave empty to try VPS Manager metadata, <span class="mono">~/software/pbgui</span>, then <span class="mono">~/pbgui</span>.</div>
+                  </div>
+                  <div class="modal-field">
+                    <label for="self-join-ssh-host">SSH Host/IP</label>
+                    <input class="modal-input" id="self-join-ssh-host" type="text" placeholder="203.0.113.10">
+                  </div>
+                  <div class="modal-field">
+                    <label for="self-join-ssh-user">SSH User</label>
+                    <input class="modal-input" id="self-join-ssh-user" type="text" placeholder="ssh-user">
+                  </div>
+                  <div class="modal-field">
+                    <label for="self-join-ssh-port">SSH Port</label>
+                    <input class="modal-input" id="self-join-ssh-port" type="number" min="1" max="65535" step="1" placeholder="22">
+                  </div>
+                  <label class="peer-option modal-field-wide" for="self-join-reset">
+                    <input id="self-join-reset" type="checkbox">
+                    <span>Recovery: archive an existing local Cluster state if it belongs to another cluster, then join the upstream cluster.</span>
+                  </label>
+                </div>
+                <div class="bootstrap-toolbar" style="margin-top:0.75rem; margin-bottom:0;">
+                  <div class="bootstrap-summary" id="self-join-status">Self-join has not run yet.</div>
+                  <div class="push-progress" id="self-join-progress" hidden>
+                    <div class="push-progress-label">
+                      <span id="self-join-progress-label">Starting self-join...</span>
+                      <span class="push-progress-count" id="self-join-progress-count"></span>
+                    </div>
+                    <div class="push-progress-track"><div class="push-progress-fill" id="self-join-progress-fill"></div></div>
+                  </div>
+                  <div class="bootstrap-actions">
+                    <button class="btn warn" id="self-join-btn" type="button">Join Existing Cluster</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Bootstrap Cluster State</div>
+                <div class="panel-note">Use this only when this master should start a new local Cluster state instead of joining an existing cluster.</div>
+              </div>
+              <div class="panel-body">
+                <div class="bootstrap-toolbar">
+                  <div class="bootstrap-summary" id="bootstrap-summary">Bootstrap preview not loaded yet.</div>
+                  <div class="bootstrap-actions">
+                    <label class="peer-option" id="bootstrap-unlock-wrap" for="bootstrap-unlock" hidden>
+                      <input id="bootstrap-unlock" type="checkbox">
+                      <span>Allow bootstrap writes on this existing cluster</span>
+                    </label>
+                    <button class="btn warn" id="bootstrap-apply-btn" type="button" disabled>Apply Bootstrap</button>
+                  </div>
+                </div>
+                <div class="panel-note" style="margin-bottom:0.75rem;">Bootstrap writes ADD_NODE operations for known VPS hosts and UPSERT_CONFIG operations for local configs. New VPS nodes are candidates with Sync Off until enabled in Cluster Nodes. It never infers deletes from missing files or missing VPS entries. Tombstoned instances stay blocked and must be restored explicitly.</div>
+                <div class="table-wrap" id="bootstrap-table"></div>
+              </div>
+            </section>
           </div>
-          <div class="panel-note" style="margin-bottom:0.75rem;">Bootstrap writes ADD_NODE operations for known VPS hosts and UPSERT_CONFIG operations for local configs. New VPS nodes are candidates with Sync Off until enabled in Cluster Nodes. It never infers deletes from missing files or missing VPS entries. Tombstoned instances stay blocked and must be restored explicitly.</div>
-          <div class="table-wrap" id="bootstrap-table"></div>
-        </div>
-      </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <div class="panel-title">Cluster Nodes</div>
-          <div class="panel-note" id="nodes-note"></div>
-        </div>
-        <div class="table-wrap" id="nodes-table"></div>
-      </section>
+          <div class="cluster-section" data-cluster-section-panel="nodes">
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Cluster Nodes</div>
+                <div class="panel-note" id="nodes-note"></div>
+              </div>
+              <div class="table-wrap" id="nodes-table"></div>
+            </section>
+          </div>
 
-      <section class="panel">
-        <div class="panel-head">
-          <div class="panel-title">V7 Desired State</div>
-          <div class="panel-note" id="instances-note"></div>
-        </div>
-        <div class="table-wrap" id="instances-table"></div>
-      </section>
+          <div class="cluster-section" data-cluster-section-panel="instances">
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">V7 Desired State</div>
+                <div class="panel-note" id="instances-note"></div>
+              </div>
+              <div class="table-wrap" id="instances-table"></div>
+            </section>
+          </div>
 
-      <section class="panel">
-        <div class="panel-head">
-          <div class="panel-title">Tombstones</div>
-          <div class="panel-note">Explicit deletes that prevent stale config resurrection.</div>
-        </div>
-        <div class="table-wrap" id="tombstones-table"></div>
-      </section>
+          <div class="cluster-section" data-cluster-section-panel="tombstones">
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Tombstones</div>
+                <div class="panel-note">Explicit deletes that prevent stale config resurrection.</div>
+              </div>
+              <div class="table-wrap" id="tombstones-table"></div>
+            </section>
+          </div>
 
-      <section class="panel">
-        <div class="panel-head">
-          <div class="panel-title">Recent Oplog</div>
-          <div class="panel-note" id="oplog-note"></div>
-        </div>
-        <div class="table-wrap" id="oplog-table"></div>
-      </section>
+          <div class="cluster-section" data-cluster-section-panel="oplog">
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Recent Oplog</div>
+                <div class="panel-note" id="oplog-note"></div>
+              </div>
+              <div class="table-wrap" id="oplog-table"></div>
+            </section>
+          </div>
+        </main>
+      </div>
     </div>
   </div>
 
@@ -580,6 +640,9 @@
       var lastPreviewPayload = null;
       var pushProgressTimer = null;
       var selfJoinProgressTimer = null;
+      var activeClusterSection = 'overview';
+      var clusterHasExistingState = false;
+      var bootstrapUnlocked = false;
 
       function esc(value) {
         return String(value === undefined || value === null ? '' : value).replace(/[&<>'"]/g, function (ch) {
@@ -604,6 +667,67 @@
         if (!el) return;
         el.className = text ? 'visible ' + (kind || '') : '';
         el.textContent = text || '';
+      }
+
+      function setClusterSection(sectionId) {
+        activeClusterSection = sectionId || 'overview';
+        document.querySelectorAll('.sb-section[data-cluster-section]').forEach(function (btn) {
+          btn.classList.toggle('active', btn.getAttribute('data-cluster-section') === activeClusterSection);
+        });
+        document.querySelectorAll('[data-cluster-section-panel]').forEach(function (panel) {
+          panel.classList.toggle('is-active', panel.getAttribute('data-cluster-section-panel') === activeClusterSection);
+        });
+        var main = document.getElementById('main-content');
+        if (main) main.scrollTop = 0;
+      }
+
+      function setupClusterNavigation() {
+        document.querySelectorAll('.sb-section[data-cluster-section]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            setClusterSection(btn.getAttribute('data-cluster-section') || 'overview');
+          });
+        });
+        if (window.PBGuiSidebarResize && typeof window.PBGuiSidebarResize.init === 'function') {
+          window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
+        }
+      }
+
+      function setNavCount(id, value) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        var count = Number(value || 0);
+        el.hidden = count <= 0;
+        el.textContent = count > 0 ? String(count) : '';
+      }
+
+      function stateHasClusterOperations(status) {
+        var counts = (status || {}).counts || {};
+        return Number(counts.oplog || 0) > 0 || Number(counts.nodes || 0) > 1 || Number(counts.instances || 0) > 0;
+      }
+
+      function selfJoinIdleText() {
+        return clusterHasExistingState ? 'Run Self-Join Recovery' : 'Join Existing Cluster';
+      }
+
+      function renderSetupState(status) {
+        var counts = (status || {}).counts || {};
+        clusterHasExistingState = stateHasClusterOperations(status);
+        var note = document.getElementById('setup-state-note');
+        if (note) {
+          note.className = 'setup-state-note' + (clusterHasExistingState ? ' warn' : '');
+          note.textContent = clusterHasExistingState
+            ? 'This PBGui already has Cluster state (' + Number(counts.oplog || 0) + ' oplog ops, ' + Number(counts.nodes || 0) + ' nodes, ' + Number(counts.instances || 0) + ' V7 configs). Join and Bootstrap are recovery/migration tools now; normal work should use Nodes and V7 State.'
+            : 'This PBGui has no Cluster operations yet. Join an existing master, or bootstrap only if this master should start a new Cluster state.';
+        }
+        var unlockWrap = document.getElementById('bootstrap-unlock-wrap');
+        var unlock = document.getElementById('bootstrap-unlock');
+        if (unlockWrap) unlockWrap.hidden = !clusterHasExistingState;
+        if (!clusterHasExistingState) {
+          bootstrapUnlocked = false;
+          if (unlock) unlock.checked = false;
+        }
+        var selfJoinBtn = document.getElementById('self-join-btn');
+        if (selfJoinBtn && !selfJoinBtn.disabled) selfJoinBtn.textContent = selfJoinIdleText();
       }
 
       function fetchJson(path, options) {
@@ -858,7 +982,7 @@
         var btn = document.getElementById('self-join-btn');
         if (btn) {
           btn.disabled = !!busy;
-          btn.textContent = busy ? 'Joining...' : 'Join Existing Cluster';
+          btn.textContent = busy ? 'Joining...' : selfJoinIdleText();
         }
       }
 
@@ -1165,6 +1289,30 @@
           return loadCluster();
         }).catch(function (err) {
           setMessage('Cluster SSH repair failed for ' + label + ': ' + err.message, 'err');
+        });
+      }
+
+      function removeClusterNode(node) {
+        if (!node || !node.node_id) return;
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        var label = node.pbname || node.hostname || node.node_id;
+        window.PBGuiConfirm({
+          title: 'Remove Cluster Node',
+          message: 'Remove disabled Cluster node ' + label + ' from the materialized node list?',
+          detail: 'This writes a REMOVE_NODE operation to the local oplog. It does not delete oplog history, remove files, stop services or touch the remote host. Nodes with active sync or assigned V7 configs are blocked by the API.',
+          confirmText: 'Remove Node'
+        }).then(function (accepted) {
+          if (!accepted) return;
+          setMessage('Removing Cluster node ' + label + '...', 'warn');
+          fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/remove', { method: 'POST' }).then(function () {
+            setMessage('Cluster node removed from materialized membership: ' + label + '.', 'ok');
+            return loadCluster();
+          }).catch(function (err) {
+            setMessage('Failed to remove Cluster node: ' + err.message, 'err');
+          });
         });
       }
 
@@ -1607,6 +1755,10 @@
           return '<div class="stat-card"><div class="stat-label">' + esc(item[0]) + '</div>'
                + '<div class="stat-value ' + esc(item[2]) + '">' + esc(item[1]) + '</div></div>';
         }).join('');
+        setNavCount('nav-nodes-count', counts.nodes || 0);
+        setNavCount('nav-instances-count', counts.instances || 0);
+        setNavCount('nav-tombstones-count', counts.tombstones || 0);
+        setNavCount('nav-oplog-count', counts.oplog || 0);
       }
 
       function renderIdentity(status) {
@@ -1716,9 +1868,15 @@
         }
         var actionable = (counts.add || 0) + (counts.update || 0);
         var blockers = (counts.blocked_tombstone || 0) + (counts.error || 0);
+        var locked = clusterHasExistingState && !bootstrapUnlocked;
         if (applyBtn) {
-          applyBtn.disabled = actionable === 0;
+          applyBtn.disabled = actionable === 0 || locked;
           applyBtn.style.display = actionable === 0 ? 'none' : '';
+          applyBtn.textContent = locked ? 'Bootstrap Locked' : 'Apply Bootstrap';
+          applyBtn.title = locked ? 'Cluster state already exists. Enable the setup recovery checkbox before writing bootstrap operations.' : '';
+        }
+        if (summary && locked && actionable > 0) {
+          summary.textContent += ' Bootstrap is locked because this cluster already has state.';
         }
         if (!table) return;
         if (!items.length) {
@@ -1806,6 +1964,27 @@
       function applyBootstrap() {
         var btn = document.getElementById('bootstrap-apply-btn');
         if (btn && btn.disabled) return;
+        var counts = (lastBootstrapPlan && lastBootstrapPlan.counts) || {};
+        var writeCount = Number(counts.add || 0) + Number(counts.update || 0);
+        if (writeCount <= 0) return;
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: 'Apply Bootstrap Operations',
+          message: 'Write ' + writeCount + ' bootstrap operation(s) into the local Cluster oplog?',
+          detail: 'Use this only for initial bootstrap or explicit recovery. It writes ADD_NODE/UPSERT_CONFIG operations from local files and VPS metadata. It does not delete configs, stop bots or write to remote hosts.',
+          confirmText: 'Apply Bootstrap'
+        }).then(function (accepted) {
+          if (!accepted) return;
+          runBootstrapApply();
+        });
+      }
+
+      function runBootstrapApply() {
+        var btn = document.getElementById('bootstrap-apply-btn');
+        if (btn && btn.disabled) return;
         if (btn) { btn.disabled = true; btn.textContent = 'Applying...'; }
         setMessage('Applying bootstrap operations...', '');
         return fetchJson('/bootstrap', { method: 'POST' }).then(function (payload) {
@@ -1872,6 +2051,9 @@
           }
           actionParts.push('<button class="btn small primary edit-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Edit</button>');
           actionParts.push('<button class="btn small primary repair-node-ssh-btn" type="button" data-node-id="' + esc(node.node_id) + '">Repair SSH</button>');
+          if (node.node_id !== localNodeId && mode === 'disabled') {
+            actionParts.push('<button class="btn small warn remove-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Remove</button>');
+          }
           var keyKnown = Boolean(node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint);
           html += '<tr>'
             + '<td class="mono" title="' + esc(node.node_id) + '">' + esc(shortId(node.node_id)) + '</td>'
@@ -1907,6 +2089,11 @@
         document.getElementById('nodes-table').querySelectorAll('.repair-node-ssh-btn').forEach(function (btn) {
           btn.addEventListener('click', function () {
             repairNodeClusterSsh(nodeMap[btn.getAttribute('data-node-id')] || {});
+          });
+        });
+        document.getElementById('nodes-table').querySelectorAll('.remove-node-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            removeClusterNode(nodeMap[btn.getAttribute('data-node-id')] || {});
           });
         });
       }
@@ -2040,6 +2227,7 @@
           fetchJson('/oplog?limit=50')
         ]).then(function (parts) {
           renderStats(parts[0]);
+          renderSetupState(parts[0]);
           renderIdentity(parts[0]);
           renderNodes(parts[1]);
           renderInstances(parts[2]);
@@ -2073,6 +2261,10 @@
       document.getElementById('refresh-btn').addEventListener('click', loadCluster);
       document.getElementById('probe-btn').addEventListener('click', loadRemoteStatus);
       document.getElementById('bootstrap-apply-btn').addEventListener('click', applyBootstrap);
+      document.getElementById('bootstrap-unlock').addEventListener('change', function (event) {
+        bootstrapUnlocked = event.target.checked;
+        if (lastBootstrapPlan) renderBootstrap(lastBootstrapPlan);
+      });
       document.getElementById('self-join-btn').addEventListener('click', selfJoinExistingCluster);
       document.getElementById('self-join-password-close-btn').addEventListener('click', closeSelfJoinPasswordPrompt);
       document.getElementById('self-join-password-cancel-btn').addEventListener('click', closeSelfJoinPasswordPrompt);
@@ -2096,6 +2288,7 @@
       document.getElementById('preview-materialize-btn').addEventListener('click', confirmAndMaterializeV7);
       document.getElementById('preview-materialize-api-btn').addEventListener('click', confirmAndMaterializeApiKeys);
       window.addEventListener('resize', keepPreviewModalInViewport);
+      setupClusterNavigation();
       loadCluster();
     })();
   </script>

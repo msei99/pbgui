@@ -30,6 +30,7 @@ MEMBERSHIP_OPS = frozenset({
     "UPDATE_NODE_SSH",
     "UPDATE_NODE_KEY",
     "DISABLE_NODE",
+    "REMOVE_NODE",
 })
 V7_OPS = frozenset({
     "UPSERT_CONFIG",
@@ -447,6 +448,9 @@ def _apply_membership(nodes: dict[str, dict[str, Any]], operation: dict[str, Any
         current["sync_enabled"] = False
         current["updated_at"] = int(operation["created_at"])
         nodes[node_id] = current
+        return
+    if op == "REMOVE_NODE":
+        nodes.pop(node_id, None)
         return
     if "sync_enabled" in operation and "sync_mode" not in operation:
         current.pop("sync_mode", None)

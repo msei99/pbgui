@@ -397,6 +397,65 @@ def test_update_node_settings_rejects_unknown_sync_peer(monkeypatch, tmp_path: P
     assert exc.value.status_code == 400
 
 
+def test_remove_cluster_node_records_remove_operation(monkeypatch, tmp_path: Path) -> None:
+    """Disabled stale nodes can be removed from materialized membership."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(
+        root,
+        "ADD_NODE",
+        {"node_id": NODE_B, "role": "master", "pbname": "old-master", "sync_mode": "disabled", "sync_enabled": False},
+        created_at=102,
+    )
+
+    result = cluster.remove_cluster_node(NODE_B, session=None)
+    operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
+    nodes = _read_json(tmp_path / "data" / "cluster" / "cluster_nodes.json")["nodes"]
+
+    assert result["changed"] is True
+    assert result["removed_node_id"] == NODE_B
+    assert operations[-1]["op"] == "REMOVE_NODE"
+    assert operations[-1]["node_id"] == NODE_B
+    assert NODE_B not in nodes
+
+
+def test_remove_cluster_node_rejects_local_active_or_assigned_nodes(monkeypatch, tmp_path: Path) -> None:
+    """Node removal is limited to disabled non-local nodes without assigned configs."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "active", "sync_mode": "reachable", "ssh_host": "203.0.113.10"}, created_at=102)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_C, "role": "vps", "pbname": "assigned", "sync_mode": "disabled", "sync_enabled": False}, created_at=103)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bybit_BTCUSDT",
+            "version": "1",
+            "assigned_host": NODE_C,
+            "desired_state": "stopped",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=104,
+    )
+
+    with pytest.raises(HTTPException) as local_exc:
+        cluster.remove_cluster_node(NODE_A, session=None)
+    with pytest.raises(HTTPException) as active_exc:
+        cluster.remove_cluster_node(NODE_B, session=None)
+    with pytest.raises(HTTPException) as assigned_exc:
+        cluster.remove_cluster_node(NODE_C, session=None)
+
+    assert local_exc.value.status_code == 400
+    assert active_exc.value.status_code == 400
+    assert "Only disabled" in active_exc.value.detail
+    assert assigned_exc.value.status_code == 400
+    assert "assigned V7 configs" in assigned_exc.value.detail
+
+
 def test_repair_node_cluster_ssh_reads_remote_key_and_installs_master_key(monkeypatch, tmp_path: Path) -> None:
     """Cluster SSH repair stores the remote public key and installs the master key."""
 

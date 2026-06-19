@@ -177,6 +177,22 @@ def test_append_membership_and_rebuild_materializes_nodes(tmp_path: Path) -> Non
     assert saved == materialized["cluster_nodes"]
 
 
+def test_remove_node_operation_hides_materialized_node(tmp_path: Path) -> None:
+    """REMOVE_NODE removes a node from materialized membership without editing history."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "master", "pbname": "old-master"}, created_at=102)
+    append_operation(root, "REMOVE_NODE", {"node_id": NODE_B}, created_at=103)
+
+    materialized = rebuild_materialized_state(root)
+    operations = cluster_state_module.load_operations(root, expected_cluster_id=CLUSTER_ID)
+
+    assert NODE_A in materialized["cluster_nodes"]["nodes"]
+    assert NODE_B not in materialized["cluster_nodes"]["nodes"]
+    assert [op["op"] for op in operations] == ["ADD_NODE", "ADD_NODE", "REMOVE_NODE"]
+
+
 def test_write_operation_requests_cluster_sync_once(monkeypatch, tmp_path: Path) -> None:
     """A new operation wakes PBCluster, while replaying the same operation is idempotent."""
 
