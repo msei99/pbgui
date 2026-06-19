@@ -196,6 +196,8 @@ def test_ssh_cluster_peer_client_uses_dedicated_key_and_forced_command(monkeypat
     assert "-i" in command
     assert str(private_key) in command
     assert "IdentitiesOnly=yes" in command
+    assert f"UserKnownHostsFile={private_key.with_name('known_hosts')}" in command
+    assert "StrictHostKeyChecking=accept-new" in command
     assert command[-1] == "hello"
     assert "cluster_sync_command.py" not in command[-1]
 
