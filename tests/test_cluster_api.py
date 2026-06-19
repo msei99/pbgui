@@ -320,14 +320,14 @@ def test_update_node_settings_records_reachable_sync_mode(monkeypatch, tmp_path:
     result = asyncio.run(
         cluster.update_node_settings(
             NODE_B,
-            _JsonRequest({"sync_mode": "reachable", "ssh_host": "203.0.113.10", "ssh_user": "bot", "ssh_port": "2222", "sync_peers": [NODE_A]}),
+            _JsonRequest({"sync_mode": "reachable", "remote_pbgui_dir": "test/pbgui", "ssh_host": "203.0.113.10", "ssh_user": "bot", "ssh_port": "2222", "sync_peers": [NODE_A]}),
             session=None,
         )
     )
     repeat = asyncio.run(
         cluster.update_node_settings(
             NODE_B,
-            _JsonRequest({"sync_mode": "reachable", "ssh_host": "203.0.113.10", "ssh_user": "bot", "ssh_port": 2222, "sync_peers": [NODE_A]}),
+            _JsonRequest({"sync_mode": "reachable", "remote_pbgui_dir": "test/pbgui", "ssh_host": "203.0.113.10", "ssh_user": "bot", "ssh_port": 2222, "sync_peers": [NODE_A]}),
             session=None,
         )
     )
@@ -339,6 +339,7 @@ def test_update_node_settings_records_reachable_sync_mode(monkeypatch, tmp_path:
     assert operations[-1]["op"] == "UPDATE_NODE"
     assert operations[-1]["sync_mode"] == "reachable"
     assert operations[-1]["sync_enabled"] is True
+    assert operations[-1]["remote_pbgui_dir"] == "test/pbgui"
     assert operations[-1]["ssh_host"] == "203.0.113.10"
     assert operations[-1]["ssh_user"] == "bot"
     assert operations[-1]["ssh_port"] == 2222
@@ -346,6 +347,7 @@ def test_update_node_settings_records_reachable_sync_mode(monkeypatch, tmp_path:
     assert len(operations) == 3
     assert nodes[NODE_B]["sync_mode"] == "reachable"
     assert nodes[NODE_B]["sync_enabled"] is True
+    assert nodes[NODE_B]["remote_pbgui_dir"] == "test/pbgui"
     assert nodes[NODE_B]["ssh_host"] == "203.0.113.10"
     assert nodes[NODE_B]["sync_peers"] == [NODE_A]
 

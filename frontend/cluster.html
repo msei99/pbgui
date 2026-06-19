@@ -533,7 +533,8 @@
           </div>
           <div class="modal-field">
             <label for="node-settings-remote-dir">Remote PBGui Dir</label>
-            <input class="modal-input" id="node-settings-remote-dir" type="text" disabled>
+            <input class="modal-input" id="node-settings-remote-dir" type="text" placeholder="software/pbgui">
+            <div class="field-help">Path used for Cluster SSH commands; relative paths start at the SSH user's home.</div>
           </div>
           <div class="modal-field">
             <label for="node-settings-mode">Sync Mode</label>
@@ -560,7 +561,7 @@
             <div class="peer-list" id="node-settings-peers"></div>
           </div>
         </div>
-        <div class="panel-note">Role and Remote PBGui Dir are set by setup/discovery and are shown for diagnostics only. Outbound peers define which nodes this node is allowed to contact directly.</div>
+        <div class="panel-note">Role is set by setup/discovery and shown for diagnostics only. Remote PBGui Dir tells peers where this PBGui checkout lives. Outbound peers define which nodes this node is allowed to contact directly.</div>
         <div class="modal-error" id="node-settings-error"></div>
       </div>
       <div class="modal-actions">
@@ -1246,6 +1247,7 @@
         var mode = document.getElementById('node-settings-mode').value;
         var payload = {
           sync_mode: mode,
+          remote_pbgui_dir: document.getElementById('node-settings-remote-dir').value.trim(),
           ssh_host: document.getElementById('node-settings-ssh-host').value.trim(),
           ssh_user: document.getElementById('node-settings-ssh-user').value.trim(),
           ssh_port: Number(document.getElementById('node-settings-ssh-port').value || 22),

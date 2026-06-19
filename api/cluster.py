@@ -595,10 +595,14 @@ def _validate_node_sync_settings(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="ssh_port must be between 1 and 65535")
     if sync_mode == "reachable" and not ssh_host:
         raise HTTPException(status_code=400, detail="Reachable nodes require an SSH host")
+    remote_pbgui_dir = str(payload.get("remote_pbgui_dir") or "").strip()
+    if any(ord(ch) < 32 for ch in remote_pbgui_dir):
+        raise HTTPException(status_code=400, detail="remote_pbgui_dir contains invalid control characters")
     sync_peers = _normalize_sync_peers(payload.get("sync_peers", []))
     return {
         "sync_mode": sync_mode,
         "sync_enabled": sync_mode != "disabled",
+        "remote_pbgui_dir": remote_pbgui_dir,
         "ssh_host": ssh_host,
         "ssh_user": ssh_user,
         "ssh_port": ssh_port,
@@ -3324,6 +3328,7 @@ async def update_node_settings(
     current = {
         "sync_mode": normalize_node_sync_mode(node),
         "sync_enabled": normalize_node_sync_mode(node) != "disabled",
+        "remote_pbgui_dir": str(node.get("remote_pbgui_dir") or ""),
         "ssh_host": str(node.get("ssh_host") or ""),
         "ssh_user": str(node.get("ssh_user") or ""),
         "ssh_port": int(node.get("ssh_port") or 22),

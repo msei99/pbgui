@@ -22,6 +22,7 @@
 - Cluster Sync: materialize all Desired-State V7 configs on master nodes so joined masters can edit any cluster config, while VPS nodes still receive only assigned configs.
 - Cluster Sync: added the shared sidebar section switcher to the Cluster page, let the main pane use the remaining window width and locked Bootstrap writes behind an explicit recovery toggle once cluster state already exists.
 - Cluster Sync: added explicit disabled-node removal from the Cluster Nodes UI via a REMOVE_NODE oplog operation, with safeguards for local, active and still-assigned nodes.
+- Cluster Sync: make Remote PBGui Dir editable in Cluster node settings so reachable self-joined masters can advertise non-default checkout paths.
 - VPS Manager: added an Import Cluster Nodes action that previews and imports safe metadata from reachable Cluster Sync nodes without copying passwords, CoinMarketCap keys or private keys.
 - VPS Manager: keep the Cleanup VPS action clickable when no VPS user password is stored so the normal password prompt can collect it.
 - VPS Manager: added PBCluster to remote service monitoring and VPS systemd migration checks, show remote PBGui service states in VPS detail/change views, and sync new PBGui systemd units during normal PBGui update/branch-switch actions.
