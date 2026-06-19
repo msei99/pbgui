@@ -146,10 +146,6 @@ def test_legacy_v7_api_ssh_sync_is_disabled(monkeypatch, tmp_path: Path) -> None
     _write_config(instance_dir, 9, "vps-a")
     monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
 
-    def fail_update_status(name: str) -> None:
-        raise AssertionError("legacy sync must not update status_v7.json")
-
-    monkeypatch.setattr(v7_instances, "_update_status_v7", fail_update_status)
     result = asyncio.run(v7_instances._ssh_sync_instance("test_inst"))
 
     assert result["disabled"] is True
@@ -167,7 +163,6 @@ def test_backup_draft_save_clears_tombstone(monkeypatch, tmp_path: Path) -> None
     (backup_dir / "config.json").write_text(json.dumps({"pbgui": {"version": 7}, "live": {}}), encoding="utf-8")
     monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(v7_instances, "_monitor", None)
-    monkeypatch.setattr(v7_instances, "_update_status_v7", lambda name: None)
     monkeypatch.setattr(v7_instances, "save_pb7_config", lambda cfg, path: path.write_text(json.dumps(cfg), encoding="utf-8"))
 
     async def noop_runtime_check(name: str, cfg: dict) -> None:

@@ -31,7 +31,6 @@ def test_set_instance_forced_mode_panic_saves_and_syncs(monkeypatch, tmp_path):
     monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(v7_instances, "load_pb7_config", fake_load)
     monkeypatch.setattr(v7_instances, "save_pb7_config", fake_save)
-    monkeypatch.setattr(v7_instances, "_update_status_v7", lambda name: None)
     monkeypatch.setattr(v7_instances, "_ssh_sync_instance", fake_sync)
 
     result = asyncio.run(v7_instances.set_instance_forced_mode("test_inst", {"mode": "panic"}, session=None))
@@ -69,7 +68,6 @@ def test_set_instance_forced_mode_graceful_stop(monkeypatch, tmp_path):
     monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(v7_instances, "load_pb7_config", fake_load)
     monkeypatch.setattr(v7_instances, "save_pb7_config", fake_save)
-    monkeypatch.setattr(v7_instances, "_update_status_v7", lambda name: None)
     monkeypatch.setattr(v7_instances, "_ssh_sync_instance", fake_sync)
 
     result = asyncio.run(v7_instances.set_instance_forced_mode("test_inst", {"mode": "graceful_stop"}, session=None))
@@ -135,7 +133,6 @@ def test_set_instance_forced_mode_tp_only(monkeypatch, tmp_path):
     monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(v7_instances, "load_pb7_config", fake_load)
     monkeypatch.setattr(v7_instances, "save_pb7_config", fake_save)
-    monkeypatch.setattr(v7_instances, "_update_status_v7", lambda name: None)
     monkeypatch.setattr(v7_instances, "_ssh_sync_instance", fake_sync)
 
     result = asyncio.run(v7_instances.set_instance_forced_mode("test_inst", {"mode": "tp_only"}, session=None))
