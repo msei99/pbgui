@@ -624,6 +624,81 @@ def test_repair_node_cluster_ssh_installs_node_key_on_sync_peers(monkeypatch, tm
     assert any(hostname == "vps-c" and NODE_B in command and REMOTE_CLUSTER_PUBLIC_KEY in command for hostname, command in calls)
 
 
+def test_repair_local_cluster_ssh_installs_local_key_on_sync_peers(monkeypatch, tmp_path: Path) -> None:
+    """Repairing the local node installs its Cluster SSH key on outbound sync peers."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {
+            "node_id": NODE_A,
+            "public_key": LOCAL_CLUSTER_PUBLIC_KEY,
+            "fingerprint": "SHA256:local",
+            "public_key_path": str(tmp_path / "local.pub"),
+        },
+    )
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master", "sync_peers": [NODE_B]}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(remote_pbgui_dir="software/pbgui"), created_at=102)
+    calls: list[tuple[str, str]] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append((hostname, command))
+            return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "changed": True}), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    result = asyncio.run(cluster.repair_node_cluster_ssh(NODE_A, session=None))
+
+    assert result["local"] is True
+    assert result["outbound_installed"] == [{"target_node_id": NODE_B, "changed": True, "role": "vps"}]
+    assert result["outbound_install_errors"] == []
+    assert any(hostname == "vps-a" and NODE_A in command and LOCAL_CLUSTER_PUBLIC_KEY in command for hostname, command in calls)
+
+
+def test_repair_all_cluster_ssh_repairs_active_nodes(monkeypatch, tmp_path: Path) -> None:
+    """Repair All SSH runs the GUI repair flow for active reachable nodes."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {
+            "node_id": NODE_A,
+            "public_key": LOCAL_CLUSTER_PUBLIC_KEY,
+            "fingerprint": "SHA256:local",
+            "public_key_path": str(tmp_path / "local.pub"),
+        },
+    )
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master", "sync_peers": [NODE_B]}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(remote_pbgui_dir="software/pbgui"), created_at=102)
+    calls: list[tuple[str, str]] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append((hostname, command))
+            if "ensure-local" in command:
+                payload = {"ok": True, "public_key": REMOTE_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:remote"}
+            elif "install-authorized-key" in command:
+                payload = {"ok": True, "changed": True}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    result = asyncio.run(cluster.repair_all_cluster_ssh(session=None))
+
+    assert result["ok"] is True
+    assert result["counts"]["repaired"] == 2
+    assert result["counts"]["failed"] == 0
+    assert result["counts"]["outbound_errors"] == 0
+    assert any(hostname == "vps-a" and NODE_A in command and LOCAL_CLUSTER_PUBLIC_KEY in command for hostname, command in calls)
+
+
 def test_bootstrap_preview_reports_missing_local_config(monkeypatch, tmp_path: Path) -> None:
     """Bootstrap preview lists local V7 configs not yet in desired state without writing state files."""
 

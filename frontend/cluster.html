@@ -324,6 +324,7 @@
           <div class="hero-subtitle">Local visibility, explicit sync membership, remote probes and identity join for the multi-master cluster state. Bootstrap writes local oplog entries only; remote writes happen only through explicit actions such as Join.</div>
         </div>
         <div class="hero-actions">
+          <button class="btn warn" id="repair-all-ssh-btn" type="button">Repair All SSH</button>
           <button class="btn" id="probe-btn" type="button">Probe Active Nodes</button>
           <button class="btn primary" id="refresh-btn" type="button">Refresh</button>
         </div>
@@ -1338,6 +1339,43 @@
           return loadCluster();
         }).catch(function (err) {
           setMessage('Cluster SSH repair failed for ' + label + ': ' + err.message, 'err');
+        });
+      }
+
+      function repairAllClusterSsh() {
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: 'Repair All Cluster SSH',
+          message: 'Repair Cluster SSH trust for all active reachable Cluster nodes?',
+          detail: 'This uses PBGui\'s Cluster SSH setup flow to install the required forced-command Cluster keys on reachable sync peers. It does not copy bot files, change git state, start bots or modify disabled nodes.',
+          confirmText: 'Repair All SSH'
+        }).then(function (accepted) {
+          if (!accepted) return;
+          var btn = document.getElementById('repair-all-ssh-btn');
+          if (btn) { btn.disabled = true; btn.textContent = 'Repairing...'; }
+          setMessage('Repairing Cluster SSH trust for active nodes...', 'warn');
+          fetchJson('/cluster-ssh/repair-all', { method: 'POST' }).then(function (payload) {
+            var counts = payload.counts || {};
+            var failed = Number(counts.failed || 0);
+            var outboundErrors = Number(counts.outbound_errors || 0);
+            var missing = Number(counts.missing_source_keys || 0);
+            var kind = (failed || outboundErrors || missing) ? 'warn' : 'ok';
+            setMessage(
+              'Cluster SSH repair complete: ' + Number(counts.repaired || 0) + ' node(s) repaired, '
+              + Number(counts.outbound_installed || 0) + ' outbound key install(s), '
+              + failed + ' failed node(s), ' + outboundErrors + ' outbound error(s), '
+              + missing + ' missing source key(s).',
+              kind
+            );
+            return loadCluster();
+          }).catch(function (err) {
+            setMessage('Cluster SSH repair failed: ' + err.message, 'err');
+          }).finally(function () {
+            if (btn) { btn.disabled = false; btn.textContent = 'Repair All SSH'; }
+          });
         });
       }
 
@@ -2430,6 +2468,7 @@
       }
 
       document.getElementById('refresh-btn').addEventListener('click', function () { loadCluster({ force: true }); });
+      document.getElementById('repair-all-ssh-btn').addEventListener('click', repairAllClusterSsh);
       document.getElementById('probe-btn').addEventListener('click', loadRemoteStatus);
       document.getElementById('bootstrap-apply-btn').addEventListener('click', applyBootstrap);
       document.getElementById('bootstrap-unlock').addEventListener('change', function (event) {

@@ -2239,21 +2239,31 @@ async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any
         raise HTTPException(status_code=404, detail="Cluster node not found")
     local_key = ensure_local_cluster_ssh_material(Path(PBGDIR), role=str(identity.get("role") or "master"), pbname=_get_master_pbname())
     installed: list[dict[str, Any]] = []
-    outbound_installed: list[dict[str, Any]] = []
-    outbound_install_errors: list[dict[str, str]] = []
     missing_source_keys: list[dict[str, str]] = []
     updates: dict[str, Any] = {}
 
     if node_id == local_node_id:
+        local_public_key = str(local_key.get("public_key") or "").strip()
         updates = {
-            "cluster_ssh_public_key": str(local_key.get("public_key") or ""),
+            "cluster_ssh_public_key": local_public_key,
             "cluster_ssh_fingerprint": str(local_key.get("fingerprint") or ""),
             "cluster_ssh_mode": "forced",
         }
         changed = _append_node_update_if_changed(node_id, node, updates)
         materialized = rebuild_materialized_state(_cluster_root()) if changed else _load_cluster_snapshot()
         updated = _node_for_id(_node_list(materialized["cluster_nodes"]), node_id)
-        return {"ok": True, "node_id": node_id, "local": True, "changed": changed, "node": updated, "installed": []}
+        outbound_installed, outbound_install_errors = await _install_node_key_on_sync_peers(updated or node, identity, nodes, local_public_key)
+        return {
+            "ok": True,
+            "node_id": node_id,
+            "local": True,
+            "changed": changed,
+            "node": updated,
+            "installed": [],
+            "outbound_installed": outbound_installed,
+            "outbound_install_errors": outbound_install_errors,
+            "missing_source_keys": [],
+        }
 
     remote_key = await _run_remote_cluster_ssh_setup(node, identity, ["ensure-local", "--node-id", node_id])
     remote_public_key = str(remote_key.get("public_key") or "").strip()
@@ -2292,27 +2302,7 @@ async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any
         )
         installed.append({"source_node_id": source_id, "changed": bool(result.get("changed")), "role": str(source.get("role") or "node")})
 
-    sync_peer_ids = {str(item) for item in node.get("sync_peers") if str(item)} if isinstance(node.get("sync_peers"), list) else set()
-    for target in nodes:
-        target_id = str(target.get("node_id") or "")
-        if not target_id or target_id == node_id or target_id not in sync_peer_ids:
-            continue
-        try:
-            if target_id == local_node_id:
-                result = install_authorized_cluster_key(
-                    pbgdir=Path(PBGDIR),
-                    source_node_id=node_id,
-                    source_public_key=remote_public_key,
-                )
-            else:
-                result = await _run_remote_cluster_ssh_setup(
-                    target,
-                    identity,
-                    ["install-authorized-key", "--source-node", node_id, "--source-public-key", remote_public_key],
-                )
-            outbound_installed.append({"target_node_id": target_id, "changed": bool(result.get("changed")), "role": str(target.get("role") or "node")})
-        except HTTPException as exc:
-            outbound_install_errors.append({"target_node_id": target_id, "reason": str(exc.detail)})
+    outbound_installed, outbound_install_errors = await _install_node_key_on_sync_peers(node, identity, nodes, remote_public_key)
 
     updates = {
         "cluster_ssh_public_key": remote_public_key,
@@ -2334,6 +2324,37 @@ async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any
         "outbound_install_errors": outbound_install_errors,
         "missing_source_keys": missing_source_keys,
     }
+
+
+async def _install_node_key_on_sync_peers(source_node: dict[str, Any], identity: dict[str, Any], nodes: list[dict[str, Any]], source_public_key: str) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Install one node's Cluster SSH key on its configured outbound sync peers."""
+
+    source_id = str(source_node.get("node_id") or "")
+    local_node_id = str(identity.get("node_id") or "")
+    sync_peer_ids = {str(item) for item in source_node.get("sync_peers") if str(item)} if isinstance(source_node.get("sync_peers"), list) else set()
+    outbound_installed: list[dict[str, Any]] = []
+    outbound_install_errors: list[dict[str, str]] = []
+    for target in nodes:
+        target_id = str(target.get("node_id") or "")
+        if not target_id or target_id == source_id or target_id not in sync_peer_ids:
+            continue
+        try:
+            if target_id == local_node_id:
+                result = install_authorized_cluster_key(
+                    pbgdir=Path(PBGDIR),
+                    source_node_id=source_id,
+                    source_public_key=source_public_key,
+                )
+            else:
+                result = await _run_remote_cluster_ssh_setup(
+                    target,
+                    identity,
+                    ["install-authorized-key", "--source-node", source_id, "--source-public-key", source_public_key],
+                )
+            outbound_installed.append({"target_node_id": target_id, "changed": bool(result.get("changed")), "role": str(target.get("role") or "node")})
+        except HTTPException as exc:
+            outbound_install_errors.append({"target_node_id": target_id, "reason": str(exc.detail)})
+    return outbound_installed, outbound_install_errors
 
 
 def _as_state_vector(value: Any) -> dict[str, int]:
@@ -3545,6 +3566,65 @@ def remove_cluster_node(node_id: str, session: SessionToken = Depends(require_au
         "node": node,
         "nodes": _node_list(materialized["cluster_nodes"]),
     }
+
+
+@router.post("/cluster-ssh/repair-all")
+async def repair_all_cluster_ssh(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Repair Cluster SSH trust for all active reachable nodes."""
+
+    snapshot = _load_cluster_snapshot()
+    nodes = _node_list(snapshot["cluster_nodes"])
+    identity = snapshot["identity"]
+    local_node_id = str(identity.get("node_id") or "")
+    counts = {
+        "repaired": 0,
+        "failed": 0,
+        "skipped": 0,
+        "outbound_installed": 0,
+        "outbound_errors": 0,
+        "missing_source_keys": 0,
+    }
+    results: list[dict[str, Any]] = []
+
+    for node in nodes:
+        node_id = str(node.get("node_id") or "")
+        label = str(node.get("pbname") or node.get("hostname") or node_id)
+        mode = normalize_node_sync_mode(node)
+        if not node_id or node.get("enabled") is False or mode == "disabled":
+            counts["skipped"] += 1
+            results.append({"node_id": node_id, "pbname": label, "ok": True, "status": "skipped", "reason": "sync is disabled"})
+            continue
+        if node_id != local_node_id and mode == "outbound_only":
+            counts["skipped"] += 1
+            results.append({"node_id": node_id, "pbname": label, "ok": True, "status": "skipped", "reason": "node is outbound-only"})
+            continue
+        try:
+            result = await _repair_node_cluster_ssh(node, identity, nodes)
+        except HTTPException as exc:
+            counts["failed"] += 1
+            results.append({"node_id": node_id, "pbname": label, "ok": False, "status": "failed", "reason": str(exc.detail)})
+            continue
+        outbound_installed = result.get("outbound_installed") if isinstance(result.get("outbound_installed"), list) else []
+        outbound_errors = result.get("outbound_install_errors") if isinstance(result.get("outbound_install_errors"), list) else []
+        missing_source_keys = result.get("missing_source_keys") if isinstance(result.get("missing_source_keys"), list) else []
+        counts["repaired"] += 1
+        counts["outbound_installed"] += len(outbound_installed)
+        counts["outbound_errors"] += len(outbound_errors)
+        counts["missing_source_keys"] += len(missing_source_keys)
+        results.append(
+            {
+                "node_id": node_id,
+                "pbname": label,
+                "ok": not outbound_errors and not missing_source_keys,
+                "status": "repaired",
+                "changed": bool(result.get("changed")),
+                "installed": result.get("installed") if isinstance(result.get("installed"), list) else [],
+                "outbound_installed": outbound_installed,
+                "outbound_install_errors": outbound_errors,
+                "missing_source_keys": missing_source_keys,
+            }
+        )
+    return {"ok": counts["failed"] == 0 and counts["outbound_errors"] == 0 and counts["missing_source_keys"] == 0, "counts": counts, "results": results}
 
 
 @router.post("/nodes/{node_id}/cluster-ssh/repair")
