@@ -1471,7 +1471,13 @@ class VPSManagerService:
         result.sort(key=lambda item: str(item.get("pbname") or item.get("hostname") or item.get("node_id") or ""))
         return result, str(identity.get("node_id") or "")
 
-    def _cluster_node_vps_import_item(self, node: dict[str, Any], local_node_id: str, existing: dict[str, VPS]) -> dict[str, Any]:
+    def _cluster_node_vps_import_item(
+        self,
+        node: dict[str, Any],
+        local_node_id: str,
+        existing: dict[str, VPS],
+        monitor_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Build one preview row for importing Cluster SSH metadata into VPS Manager."""
 
         node_id = str(node.get("node_id") or "").strip()
@@ -1532,10 +1538,16 @@ class VPSManagerService:
         for field_name, old_value, new_value in comparisons:
             if new_value and old_value != new_value:
                 changes.append(field_name)
+        host_finalized = True
+        if monitor_state is not None:
+            host_state = self._get_host_telemetry(monitor_state, hostname)
+            host_finalized = self._host_online(host_state) and self._host_telemetry_fresh(host_state)
         if changes:
             item.update({"action": "update", "reason": "Safe VPS Manager metadata differs.", "changes": changes})
         elif item.get("hosts_action") != "none":
             item.update({"action": "update", "reason": "Local /etc/hosts entry needs updating."})
+        elif not host_finalized:
+            item.update({"action": "update", "reason": "VPS Manager host needs finalization; no current live telemetry."})
         else:
             item.update({"reason": "VPS Manager host already matches safe Cluster metadata."})
         return item
@@ -1546,7 +1558,8 @@ class VPSManagerService:
         self._sync_vps_inventory()
         nodes, local_node_id = self._cluster_nodes_for_vps_import()
         existing = {str(item.hostname or "").strip(): item for item in self.vpsmanager.vpss if str(item.hostname or "").strip()}
-        items = [self._cluster_node_vps_import_item(node, local_node_id, existing) for node in nodes]
+        monitor_state = self._get_monitor_state()
+        items = [self._cluster_node_vps_import_item(node, local_node_id, existing, monitor_state) for node in nodes]
         counts: dict[str, int] = {"add": 0, "update": 0, "skip": 0, "error": 0}
         for item in items:
             action = str(item.get("action") or "skip")
