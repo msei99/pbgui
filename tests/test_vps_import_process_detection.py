@@ -232,6 +232,103 @@ def test_existing_vps_probe_allows_missing_local_hosts_entry(monkeypatch: pytest
     assert any("saving the import will add it" in warning for warning in result["warnings"])
 
 
+def test_install_import_monitoring_key_remembers_unknown_host_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Monitoring key install trusts an unknown host key before password SSH connects."""
+
+    import paramiko
+
+    service = object.__new__(VPSManagerService)
+    remembered: list[tuple[str, int]] = []
+    connects: list[dict[str, object]] = []
+
+    class FakeKey:
+        """Minimal SSH key double for known-hosts handling."""
+
+        def get_name(self) -> str:
+            """Return a deterministic key type."""
+            return "ssh-ed25519"
+
+    class FakeChannel:
+        """stdout channel double returning a successful exit code."""
+
+        def recv_exit_status(self) -> int:
+            """Return successful command status."""
+            return 0
+
+    class FakeCommandOutput:
+        """Command output double with Paramiko-like channel."""
+
+        channel = FakeChannel()
+
+        def __init__(self, payload: bytes = b"") -> None:
+            """Store the payload returned by read()."""
+            self._payload = payload
+
+        def read(self) -> bytes:
+            """Return command output bytes."""
+            return self._payload
+
+    class FakeSshClient:
+        """Paramiko SSHClient double for key installation."""
+
+        def load_system_host_keys(self) -> None:
+            """No-op system key load."""
+            return None
+
+        def load_host_keys(self, path: str) -> None:
+            """No-op user key load."""
+            del path
+
+        def set_missing_host_key_policy(self, policy) -> None:
+            """Accept the configured host-key policy."""
+            del policy
+
+        def connect(self, **kwargs) -> None:
+            """Capture SSH connect arguments."""
+            connects.append(dict(kwargs))
+
+        def exec_command(self, command: str, timeout: int = 10, get_pty: bool = False):
+            """Return a successful authorized_keys install result."""
+            del command, timeout, get_pty
+            return _FakeStdin(), FakeCommandOutput(b"SSH key added\n"), FakeCommandOutput()
+
+        def close(self) -> None:
+            """No-op close."""
+            return None
+
+    monkeypatch.setattr(paramiko, "SSHClient", FakeSshClient)
+    monkeypatch.setattr(service_mod, "_ensure_import_public_key", lambda: (Path("/tmp/id_ed25519.pub"), "ssh-ed25519 AAAATEST pbgui"))
+    monkeypatch.setattr(service_mod, "_fetch_remote_host_key", lambda host, port=22, timeout=10: FakeKey())
+    monkeypatch.setattr(service_mod, "_known_host_key_status", lambda host, port, key: "unknown")
+    monkeypatch.setattr(service_mod, "_remember_known_host_key", lambda host, port, key: remembered.append((host, port)))
+    monkeypatch.setattr(VPSManagerService, "_test_import_key_login", lambda self, **kwargs: (True, "Key authentication succeeded."))
+
+    ok, detail = service._install_import_monitoring_key(ssh_host="85.215.157.244", user="mani", user_pw="secret")
+
+    assert ok is True
+    assert "key authentication succeeded" in detail.lower()
+    assert remembered == [("85.215.157.244", 22)]
+    assert connects and connects[0]["hostname"] == "85.215.157.244"
+
+
+def test_install_import_monitoring_key_blocks_host_key_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Monitoring key install does not overwrite mismatched known_hosts entries."""
+
+    service = object.__new__(VPSManagerService)
+
+    class FakeKey:
+        """Minimal SSH key double for known-hosts handling."""
+
+    monkeypatch.setattr(service_mod, "_ensure_import_public_key", lambda: (Path("/tmp/id_ed25519.pub"), "ssh-ed25519 AAAATEST pbgui"))
+    monkeypatch.setattr(service_mod, "_fetch_remote_host_key", lambda host, port=22, timeout=10: FakeKey())
+    monkeypatch.setattr(service_mod, "_known_host_key_status", lambda host, port, key: "mismatch")
+
+    ok, detail = service._install_import_monitoring_key(ssh_host="85.215.157.244", user="mani", user_pw="secret")
+
+    assert ok is False
+    assert "host key mismatch" in detail.lower()
+
+
 def test_save_existing_vps_import_writes_missing_hosts_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     """Saving an import writes /etc/hosts with local sudo when the probe requires it."""
     writes: list[tuple[str, str, str]] = []

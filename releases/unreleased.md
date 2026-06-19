@@ -1,5 +1,6 @@
 # Unreleased
 
+- VPS Manager: remember unknown SSH host keys before installing monitoring keys during Cluster node import, while still blocking known-host mismatches.
 - VPS Manager: let Import Cluster Nodes import only rows with a VPS password entered, leaving other importable rows untouched instead of blocking the whole import.
 - VPS Manager: make the Import Cluster Nodes dialog wider and taller on larger browsers so SSH metadata, password fields and import changes fit with less horizontal scrolling.
 - VPS Manager: keep Cluster Nodes import rows actionable for already-created VPS Manager hosts until the host has current live monitor telemetry, so half-imported hosts can be finalized with passwords instead of being skipped.

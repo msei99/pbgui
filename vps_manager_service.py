@@ -4743,6 +4743,16 @@ printf 'SECTION\tprocesses\tEND\n'
         except Exception as exc:
             return False, str(exc) or "Could not prepare local SSH public key."
 
+        try:
+            remote_key = _fetch_remote_host_key(ssh_host, 22, timeout=8)
+            host_key_status = _known_host_key_status(ssh_host, 22, remote_key)
+            if host_key_status == "mismatch":
+                return False, "SSH host key mismatch. Fix known_hosts intentionally before importing."
+            if host_key_status != "known":
+                _remember_known_host_key(ssh_host, 22, remote_key)
+        except Exception as exc:
+            return False, f"Cannot verify SSH host key for {ssh_host}: {exc}"
+
         ssh = paramiko.SSHClient()
         ssh.load_system_host_keys()
         try:
