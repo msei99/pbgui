@@ -475,14 +475,19 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
         version = inst["version"]
         rv = inst["running_version"]
         has_data = info.get("has_data", False) if info else False
+        desired_stopped_block = inst["cluster_gate"] == "desired_stopped"
 
-        if inst["blocked_on"] and not running_on:
-            inst["status"] = "blocked"
-        elif enabled == "disabled":
+        if enabled == "disabled":
+            if desired_stopped_block:
+                inst["blocked_on"] = []
+                inst["blocked_reason"] = ""
+                inst["cluster_gate"] = ""
             if running_on:
                 inst["status"] = "stop_needed"
             else:
                 inst["status"] = "disabled"
+        elif inst["blocked_on"] and not running_on:
+            inst["status"] = "blocked"
         elif not any_vps_data and not running_on:
             # No VPS host has reported yet (server just restarted) — don't guess
             inst["status"] = "collecting"

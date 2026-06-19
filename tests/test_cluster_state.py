@@ -357,9 +357,17 @@ def test_config_manifest_hash_changes_with_syncable_json(tmp_path: Path) -> None
     (inst_dir / "config.json").write_text('{"version": 1}', encoding="utf-8")
     (inst_dir / "BTC.json").write_text('{"coin": "BTC"}', encoding="utf-8")
     (inst_dir / "ignored_coins.json").write_text('["ETH"]', encoding="utf-8")
+    (inst_dir / "monitor_cache.json").write_text('{"runtime": 1}', encoding="utf-8")
+    (inst_dir / "monitor.json").write_text('{"st": 100}', encoding="utf-8")
     first = compute_config_manifest_hash(build_config_manifest(inst_dir))
 
     (inst_dir / "ignored_coins.json").write_text('["SOL"]', encoding="utf-8")
+    assert compute_config_manifest_hash(build_config_manifest(inst_dir)) == first
+
+    (inst_dir / "monitor_cache.json").write_text('{"runtime": 2}', encoding="utf-8")
+    assert compute_config_manifest_hash(build_config_manifest(inst_dir)) == first
+
+    (inst_dir / "monitor.json").write_text('{"st": 200}', encoding="utf-8")
     assert compute_config_manifest_hash(build_config_manifest(inst_dir)) == first
 
     (inst_dir / "BTC.json").write_text('{"coin": "BTC", "mode": "p"}', encoding="utf-8")

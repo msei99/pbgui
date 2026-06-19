@@ -48,6 +48,8 @@ SYNC_EXCLUDE_FILES = frozenset({
     "approved_coins.json",
     "config_run.json",
     "ignored_coins.json",
+    "monitor_cache.json",
+    "monitor.json",
     "running_version.txt",
 })
 

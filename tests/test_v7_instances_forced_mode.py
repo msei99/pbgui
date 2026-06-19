@@ -111,6 +111,38 @@ def test_enrich_with_vps_data_reports_cluster_block(monkeypatch):
     assert result[0]["cluster_gate"] == "desired_stopped"
 
 
+def test_enrich_with_vps_data_keeps_disabled_desired_stopped_at_bottom(monkeypatch):
+    """Disabled V7 configs are not shown as blocked when Cluster desired state is stopped."""
+
+    store = SimpleNamespace(
+        v7_instances={
+            "manibot90": [
+                {
+                    "name": "bot-disabled",
+                    "running": False,
+                    "cv": 3,
+                    "rv": 0,
+                    "eo": "disabled",
+                    "blocked": True,
+                    "blocked_reason": "Cluster desired state is not running",
+                    "cluster_gate": "desired_stopped",
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(v7_instances, "_monitor", SimpleNamespace(store=store))
+    monkeypatch.setattr(v7_instances, "_load_local_running_v7", lambda: {})
+
+    result = v7_instances._enrich_with_vps_data([
+        {"name": "bot-disabled", "enabled_on": "disabled", "version": 3}
+    ])
+
+    assert result[0]["status"] == "disabled"
+    assert result[0]["blocked_on"] == []
+    assert result[0]["blocked_reason"] == ""
+    assert result[0]["cluster_gate"] == ""
+
+
 def test_set_instance_forced_mode_tp_only(monkeypatch, tmp_path):
     """Take Profit Only action writes the PB7 tp_only forced mode."""
     inst_dir = tmp_path / "data" / "run_v7" / "test_inst"
