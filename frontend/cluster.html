@@ -1326,8 +1326,12 @@
         setMessage('Repairing Cluster SSH for ' + label + '...', 'warn');
         fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/cluster-ssh/repair', { method: 'POST' }).then(function (payload) {
           var missing = Array.isArray(payload.missing_source_keys) ? payload.missing_source_keys.length : 0;
-          if (missing) {
-            setMessage('Cluster SSH repaired for ' + label + ', but ' + missing + ' source key(s) are not known yet. Repair those source nodes first.', 'warn');
+          var outboundErrors = Array.isArray(payload.outbound_install_errors) ? payload.outbound_install_errors.length : 0;
+          if (missing || outboundErrors) {
+            var parts = [];
+            if (missing) parts.push(missing + ' source key(s) are not known yet');
+            if (outboundErrors) parts.push(outboundErrors + ' outbound peer(s) could not receive this node key');
+            setMessage('Cluster SSH repaired for ' + label + ', but ' + parts.join(' and ') + '.', 'warn');
           } else {
             setMessage('Cluster SSH repaired for ' + label + '.', 'ok');
           }

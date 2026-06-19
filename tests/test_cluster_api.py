@@ -579,6 +579,51 @@ def test_repair_node_cluster_ssh_reads_remote_key_and_installs_master_key(monkey
     assert "install-authorized-key" in calls[1]
 
 
+def test_repair_node_cluster_ssh_installs_node_key_on_sync_peers(monkeypatch, tmp_path: Path) -> None:
+    """Cluster SSH repair installs the repaired node key on its outbound sync peers."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {
+            "node_id": NODE_A,
+            "public_key": LOCAL_CLUSTER_PUBLIC_KEY,
+            "fingerprint": "SHA256:local",
+            "public_key_path": str(tmp_path / "local.pub"),
+        },
+    )
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(remote_pbgui_dir="software/pbgui", sync_peers=[NODE_C]), created_at=102)
+    append_operation(
+        root,
+        "ADD_NODE",
+        _reachable_vps_payload(node_id=NODE_C, pbname="vps-c", ssh_host="vps-c", remote_pbgui_dir="software/pbgui"),
+        created_at=103,
+    )
+    calls: list[tuple[str, str]] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            calls.append((hostname, command))
+            if "ensure-local" in command:
+                payload = {"ok": True, "public_key": REMOTE_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:remote"}
+            elif "install-authorized-key" in command:
+                payload = {"ok": True, "changed": True}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    result = asyncio.run(cluster.repair_node_cluster_ssh(NODE_B, session=None))
+
+    assert result["outbound_installed"] == [{"target_node_id": NODE_C, "changed": True, "role": "vps"}]
+    assert result["outbound_install_errors"] == []
+    assert any(hostname == "vps-c" and NODE_B in command and REMOTE_CLUSTER_PUBLIC_KEY in command for hostname, command in calls)
+
+
 def test_bootstrap_preview_reports_missing_local_config(monkeypatch, tmp_path: Path) -> None:
     """Bootstrap preview lists local V7 configs not yet in desired state without writing state files."""
 

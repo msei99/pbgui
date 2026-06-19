@@ -45,7 +45,7 @@ from master.cluster_state import (
     validate_operation,
     write_operation,
 )
-from master.cluster_ssh_keys import ensure_local_cluster_ssh_material, public_key_fingerprint
+from master.cluster_ssh_keys import ensure_local_cluster_ssh_material, install_authorized_cluster_key, public_key_fingerprint
 from pb7_config import load_pb7_config
 from pbgui_purefunc import PBGDIR
 
@@ -2239,6 +2239,8 @@ async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any
         raise HTTPException(status_code=404, detail="Cluster node not found")
     local_key = ensure_local_cluster_ssh_material(Path(PBGDIR), role=str(identity.get("role") or "master"), pbname=_get_master_pbname())
     installed: list[dict[str, Any]] = []
+    outbound_installed: list[dict[str, Any]] = []
+    outbound_install_errors: list[dict[str, str]] = []
     missing_source_keys: list[dict[str, str]] = []
     updates: dict[str, Any] = {}
 
@@ -2290,6 +2292,28 @@ async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any
         )
         installed.append({"source_node_id": source_id, "changed": bool(result.get("changed")), "role": str(source.get("role") or "node")})
 
+    sync_peer_ids = {str(item) for item in node.get("sync_peers") if str(item)} if isinstance(node.get("sync_peers"), list) else set()
+    for target in nodes:
+        target_id = str(target.get("node_id") or "")
+        if not target_id or target_id == node_id or target_id not in sync_peer_ids:
+            continue
+        try:
+            if target_id == local_node_id:
+                result = install_authorized_cluster_key(
+                    pbgdir=Path(PBGDIR),
+                    source_node_id=node_id,
+                    source_public_key=remote_public_key,
+                )
+            else:
+                result = await _run_remote_cluster_ssh_setup(
+                    target,
+                    identity,
+                    ["install-authorized-key", "--source-node", node_id, "--source-public-key", remote_public_key],
+                )
+            outbound_installed.append({"target_node_id": target_id, "changed": bool(result.get("changed")), "role": str(target.get("role") or "node")})
+        except HTTPException as exc:
+            outbound_install_errors.append({"target_node_id": target_id, "reason": str(exc.detail)})
+
     updates = {
         "cluster_ssh_public_key": remote_public_key,
         "cluster_ssh_fingerprint": remote_fingerprint,
@@ -2306,6 +2330,8 @@ async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any
         "node": updated,
         "remote_key": {"fingerprint": remote_fingerprint},
         "installed": installed,
+        "outbound_installed": outbound_installed,
+        "outbound_install_errors": outbound_install_errors,
         "missing_source_keys": missing_source_keys,
     }
 
