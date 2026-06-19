@@ -1592,13 +1592,21 @@ class VPSManagerService:
             if str((item or {}).get("action") or "") in {"add", "update"}
         ]
         passwords_raw = form.get("passwords") if isinstance(form.get("passwords"), dict) else {}
-        passwords = {str(key or "").strip(): str(value or "") for key, value in passwords_raw.items() if str(key or "").strip()}
-        missing_passwords = [str((item or {}).get("hostname") or "").strip() for item in import_items if not passwords.get(str((item or {}).get("hostname") or "").strip())]
-        if missing_passwords:
-            raise ValueError("VPS user password is required for: " + ", ".join(missing_passwords[:10]) + ("..." if len(missing_passwords) > 10 else ""))
-        hosts_items = [
+        passwords = {
+            str(key or "").strip(): str(value or "")
+            for key, value in passwords_raw.items()
+            if str(key or "").strip() and str(value or "")
+        }
+        selected_import_items = [
             item
             for item in import_items
+            if passwords.get(str((item or {}).get("hostname") or "").strip())
+        ]
+        if not selected_import_items:
+            raise ValueError("Enter the VPS user password for at least one Cluster node to import.")
+        hosts_items = [
+            item
+            for item in selected_import_items
             if str((item or {}).get("hosts_action") or "none") != "none"
         ]
         local_sudo_pw = str(form.get("local_sudo_pw") or "")
@@ -1616,6 +1624,10 @@ class VPSManagerService:
             hostname = str((item or {}).get("hostname") or "").strip()
             if action not in {"add", "update"}:
                 skipped.append({"hostname": hostname, "action": action, "reason": str((item or {}).get("reason") or "")})
+                continue
+            host_password = passwords.get(hostname, "")
+            if not host_password:
+                skipped.append({"hostname": hostname, "action": "skip", "reason": "No VPS user password entered."})
                 continue
             if str((item or {}).get("hosts_action") or "none") != "none":
                 hosts_result = self.write_hosts_entry(str((item or {}).get("ssh_host") or ""), hostname, local_sudo_pw)
@@ -1640,7 +1652,6 @@ class VPSManagerService:
             vps.firewall_ssh_port = _safe_int((item or {}).get("ssh_port"), 22) or 22
             if str((item or {}).get("remote_pbgui_dir") or "").strip():
                 vps.remote_pbgui_dir = str((item or {}).get("remote_pbgui_dir") or "").strip()
-            host_password = passwords.get(hostname, "")
             if host_password:
                 vps.user_pw = host_password
                 self._store_session_secrets(token, hostname, {"user_pw": host_password})
@@ -1689,7 +1700,7 @@ class VPSManagerService:
             "monitoring_ready": monitoring_ready,
             "warnings": warnings,
             "preview": plan,
-            "message": f"Imported {len(imported)} Cluster node(s) into VPS Manager" + (f" and updated {len(hosts_updated)} /etc/hosts entr{'y' if len(hosts_updated) == 1 else 'ies'}." if hosts_updated else "."),
+            "message": f"Imported {len(imported)} selected Cluster node(s) into VPS Manager" + (f" and updated {len(hosts_updated)} /etc/hosts entr{'y' if len(hosts_updated) == 1 else 'ies'}." if hosts_updated else "."),
         }
 
     def _get_monitor_state(self) -> dict[str, Any]:

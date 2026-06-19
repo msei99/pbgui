@@ -7410,7 +7410,7 @@
         }
         const hostname = String(item.hostname || '').trim();
         const passwordCell = (action === 'add' || action === 'update')
-          ? `<input type='password' value='${escAttr(passwords[hostname] || '')}' oninput='setClusterImportPassword(${js(hostname)}, this.value)' placeholder='required once'>`
+          ? `<input type='password' value='${escAttr(passwords[hostname] || '')}' oninput='setClusterImportPassword(${js(hostname)}, this.value)' placeholder='leave empty to skip'>`
           : '-';
         return `
           <tr>
@@ -7435,7 +7435,7 @@
         <div style='display:grid;gap:14px'>
           <div class='notice info'>${esc(payload.message || 'Imports safe SSH metadata from Cluster nodes. Secrets are not imported.')}</div>
           ${hostsUpdateRequired ? `<div class='notice warning'>Import will update ${esc(String(counts.hosts_update || 0))} local /etc/hosts entr${Number(counts.hosts_update || 0) === 1 ? 'y' : 'ies'} after asking for the local sudo password.</div>` : ''}
-          ${importableCount ? `<div class='notice warning'>Enter the VPS user password for each imported host. Passwords are used once to refresh settings and install the monitoring SSH key; they are kept only in this browser/API session.</div>
+          ${importableCount ? `<div class='notice warning'>Enter the VPS user password for each host you want to import. Rows without a password are skipped. Passwords are used once to refresh settings and install the monitoring SSH key; they are kept only in this browser/API session.</div>
           <div class='field-grid'><div class='field'><label>Use same VPS password for all rows</label><input type='password' oninput='setClusterImportAllPasswords(this.value)' placeholder='optional shortcut'></div></div>` : ''}
           <div class='status-grid'>
             <div class='status-item'><div class='status-label'>Add</div><div class='status-value'>${esc(String(counts.add || 0))}</div><div class='status-sub'>New VPS Manager entries</div></div>
@@ -7468,7 +7468,7 @@
       if (flow.loading) {
         body += `<div class='notice info'>Loading Cluster node import preview...</div>`;
       } else if (flow.applying) {
-        body += `<div class='notice info'>Importing Cluster node SSH metadata and updating local /etc/hosts where needed...</div>`;
+        body += `<div class='notice info'>Importing selected Cluster node SSH metadata and updating local /etc/hosts where needed...</div>`;
       } else {
         body += renderClusterNodesImportPreview(flow.preview);
       }
@@ -7506,7 +7506,22 @@
     function applyClusterNodesImport() {
       const flow = store.clusterNodesImport || defaultClusterNodesImportState();
       if (!flow.preview || !flow.preview.can_apply || flow.applying) return;
-      if (flow.preview.hosts_update_required && !String(store.master.sudoPw || '').trim()) {
+      const passwords = flow.passwords || {};
+      const selectedItems = (Array.isArray((flow.preview || {}).items) ? flow.preview.items : []).filter(function (item) {
+        const action = String((item || {}).action || 'skip');
+        const hostname = String((item || {}).hostname || '').trim();
+        return hostname && (action === 'add' || action === 'update') && !!passwords[hostname];
+      });
+      if (!selectedItems.length) {
+        flow.error = 'Enter the VPS user password for at least one Cluster node to import.';
+        store.clusterNodesImport = flow;
+        renderClusterNodesImportModal();
+        return;
+      }
+      const selectedHostsUpdateRequired = selectedItems.some(function (item) {
+        return String((item || {}).hosts_action || 'none') !== 'none';
+      });
+      if (selectedHostsUpdateRequired && !String(store.master.sudoPw || '').trim()) {
         openMasterPasswordPrompt(function () {
           setTimeout(function () {
             applyClusterNodesImport();
@@ -7514,7 +7529,7 @@
         }, 'Import Cluster Nodes');
         return;
       }
-      flow.localSudoPw = flow.preview.hosts_update_required ? String(store.master.sudoPw || '') : '';
+      flow.localSudoPw = selectedHostsUpdateRequired ? String(store.master.sudoPw || '') : '';
       flow.applying = true;
       flow.error = '';
       store.clusterNodesImport = flow;
