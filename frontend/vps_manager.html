@@ -1524,6 +1524,10 @@
       white-space: normal;
     }
 
+    .modal-scroll-body.cluster-import-progress-body {
+      overflow: hidden;
+    }
+
     .log-matches-pre {
       margin: 0;
       white-space: pre-wrap;
@@ -2651,11 +2655,22 @@
       opacity: 0.82;
     }
 
+    .cluster-import-progress {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+      margin-top: 0;
+    }
+
     .cluster-import-progress-log {
       display: grid;
+      align-content: start;
+      flex: 1;
       gap: 6px;
       margin-top: 10px;
-      max-height: 340px;
+      min-height: 220px;
+      padding-right: 4px;
       overflow: auto;
     }
 
@@ -7460,7 +7475,11 @@
       const done = Number(payload.done || 0);
       const total = Number(payload.total || 0);
       const label = String(payload.label || (status === 'successful' ? 'Cluster node import completed.' : 'Importing selected Cluster nodes...'));
-      const events = Array.isArray(payload.events) ? payload.events.slice(-36) : [];
+      const events = Array.isArray(payload.events) ? payload.events.filter(function (event) {
+        const rowStatus = String((event || {}).status || '').toLowerCase();
+        const rowLabel = String((event || {}).label || '');
+        return !(rowStatus === 'skipped' && rowLabel.indexOf('No VPS user password') >= 0);
+      }) : [];
       const eventRows = events.length ? events.map(function (event) {
         const rowStatus = String((event || {}).status || 'running');
         const rowClass = clusterImportProgressClass(rowStatus);
@@ -7472,7 +7491,7 @@
           <div>${esc(rowLabel)}</div>
         </div>`;
       }).join('') : `<div class='cluster-import-progress-row running'><div class='cluster-import-progress-host'>-</div><div class='cluster-import-progress-status'>running</div><div>${esc(label)}</div></div>`;
-      return `<div class='read-settings-progress ${statusClass === 'error' ? 'error' : ''}'>
+      return `<div class='read-settings-progress cluster-import-progress ${statusClass === 'error' ? 'error' : ''}'>
         <div class='read-settings-progress-head'>
           <div>
             <div class='read-settings-progress-title'>${status === 'successful' ? 'Cluster node import completed' : statusClass === 'error' ? 'Cluster node import failed' : 'Importing Cluster nodes'}</div>
@@ -7481,8 +7500,15 @@
           <div class='read-settings-progress-percent'>${esc(String(percent))}%</div>
         </div>
         <div class='deploy-progress-bar'><div class='deploy-progress-fill' style='width:${escAttr(String(percent))}%;background:${statusClass === 'error' ? 'var(--danger)' : statusClass === 'done' ? 'var(--ok)' : 'var(--accent)'}'></div></div>
-        <div class='cluster-import-progress-log'>${eventRows}</div>
+        <div class='cluster-import-progress-log' id='cluster-import-progress-log'>${eventRows}</div>
       </div>`;
+    }
+
+    function followClusterImportProgressLog() {
+      window.requestAnimationFrame(function () {
+        const log = document.getElementById('cluster-import-progress-log');
+        if (log) log.scrollTop = log.scrollHeight;
+      });
     }
 
     function pollClusterNodesImportProgress(jobId) {
@@ -7511,7 +7537,7 @@
               flow.error = String((data || {}).error || (data || {}).label || 'Import failed.');
             }
           } else {
-            flow.progressTimer = window.setTimeout(function () { pollClusterNodesImportProgress(cleanJobId); }, 700);
+            flow.progressTimer = window.setTimeout(function () { pollClusterNodesImportProgress(cleanJobId); }, 350);
           }
           store.clusterNodesImport = flow;
           if (isClusterNodesImportModalVisible()) renderClusterNodesImportModal();
@@ -7594,7 +7620,7 @@
       prepareAlertModalWindow(modalWidth, modalHeight);
       document.getElementById('alertModalTitle').textContent = 'Import Cluster Nodes';
       const box = document.getElementById('alertModalBody');
-      box.className = 'notice modal-scroll-body';
+      box.className = 'notice modal-scroll-body' + ((flow.applying || flow.progress) ? ' cluster-import-progress-body' : '');
       let body = '';
       if (flow.error) {
         body += `<div class='notice error'>${esc(flow.error)}</div>`;
@@ -7607,6 +7633,7 @@
         body += renderClusterNodesImportPreview(flow.preview);
       }
       box.innerHTML = body;
+      if (flow.applying || flow.progress) followClusterImportProgressLog();
       const canApply = !!(flow.preview && flow.preview.can_apply && !flow.loading && !flow.applying && !flow.progress);
       document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">' + (flow.applying ? 'Hide' : 'Close') + '</button> <button class="btn primary" type="button" onclick="loadClusterNodesImportPreview()" ' + (flow.loading || flow.applying ? 'disabled' : '') + '>Reload Preview</button> <button class="btn ok" type="button" id="cluster-nodes-import-apply" ' + (canApply ? '' : 'disabled') + '>' + (flow.applying ? 'Importing...' : 'Import Cluster Nodes') + '</button>';
       document.getElementById('alertModalOverlay').classList.add('visible');
