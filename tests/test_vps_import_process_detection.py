@@ -1669,6 +1669,7 @@ def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> N
     systemd_setup_block = playbook.split("register: systemd_setup_result", 1)[1].split("listen: \"restart pbgui\"", 1)[0]
 
     assert "Check required PBGui systemd units" in playbook
+    assert "force_handlers: true" in playbook
     assert "pbgui-pbcluster.service pbgui-pbrun.service" in playbook or "pbgui-pbcluster.service" in playbook
     assert "required_systemd_units" in playbook
     assert 'user: "{{ user }}"' not in playbook
@@ -1692,6 +1693,7 @@ def test_master_update_playbooks_repair_pbcluster_systemd_unit(playbook_path: st
     systemd_setup_block = playbook.split("register: systemd_setup_result", 1)[1].split("listen: \"restart pbgui\"", 1)[0]
 
     assert "Check required PBGui systemd units" in playbook
+    assert "force_handlers: true" in playbook
     assert "pbgui-pbcluster.service" in playbook
     assert "required_systemd_units" in playbook
     assert 'user: "{{ user }}"' not in playbook

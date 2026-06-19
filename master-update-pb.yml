@@ -8,6 +8,7 @@
 
 - hosts: localhost
   gather_facts: "{{ debug }}"
+  force_handlers: true
 
   vars:
     # ansible_ssh_pass: "{{ user_pw }}"

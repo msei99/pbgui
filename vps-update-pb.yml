@@ -8,6 +8,7 @@
 
 - hosts: "{{ hostname }}"
   gather_facts: yes
+  force_handlers: true
 
   vars:
     # ansible_ssh_pass: "{{ user_pw }}"

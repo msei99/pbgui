@@ -10,6 +10,7 @@
 
 - hosts: "{{ hostname }}"
   gather_facts: yes
+  force_handlers: true
 
   vars:
     target_branch: "{{ branch }}"

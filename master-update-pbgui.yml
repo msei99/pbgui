@@ -6,6 +6,7 @@
 
 - hosts: localhost
   gather_facts: "{{ debug }}"
+  force_handlers: true
 
   vars:
     pbgdir: "{{ pbgdir }}"
