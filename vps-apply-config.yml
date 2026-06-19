@@ -15,14 +15,6 @@
         var: ansible_facts
       tags: debug,never
 
-    - name: Sync PBRemote bucket
-      ini_file:
-        path: "{{ install_dir }}/pbgui/pbgui.ini"
-        section: pbremote
-        option: bucket
-        value: "{{ bucket | default('') | string | trim }}"
-      when: apply_optional_config | default(false) | bool
-
     - name: Sync CoinMarketCap API key
       ini_file:
         path: "{{ install_dir }}/pbgui/pbgui.ini"
@@ -32,7 +24,7 @@
       when: apply_optional_config | default(false) | bool
 
     - name: Start or stop optional PBGui services
-      script: setup/vps_service_control.sh restart PBRemote PBCoinData
+      script: setup/vps_service_control.sh restart PBCoinData
       environment:
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"

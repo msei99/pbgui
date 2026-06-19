@@ -494,11 +494,11 @@
       <button class="sb-btn" data-panel="migration">
         <span class="sb-dot" id="dot-migration"></span>Migration
       </button>
+      <button class="sb-btn" data-panel="pbcluster">
+        <span class="sb-dot" id="dot-pbcluster"></span>PBCluster
+      </button>
       <button class="sb-btn" data-panel="pbrun">
         <span class="sb-dot" id="dot-pbrun"></span>PBRun
-      </button>
-      <button class="sb-btn" data-panel="pbremote">
-        <span class="sb-dot" id="dot-pbremote"></span>PBRemote
       </button>
       <button class="sb-btn" data-panel="pbdata">
         <span class="sb-dot" id="dot-pbdata"></span>PBData
@@ -565,6 +565,19 @@
       </div>
     </div>
 
+    <!-- PBCluster panel -->
+    <div id="panel-pbcluster" class="svc-panel">
+      <div class="ctrl-strip">
+        <span class="ctrl-title">PBCluster</span>
+        <div class="ctrl-status">
+          <div class="status-dot" id="cs-pbcluster"></div>
+          <span class="status-label" id="sl-pbcluster">checking…</span>
+        </div>
+        <span id="ctrl-btns-pbcluster"></span>
+      </div>
+      <div class="log-wrap"><div id="log-pbcluster" style="height:100%;"></div></div>
+    </div>
+
     <!-- PBRun panel -->
     <div id="panel-pbrun" class="svc-panel">
       <div class="ctrl-strip">
@@ -576,36 +589,6 @@
         <span id="ctrl-btns-pbrun"></span>
       </div>
       <div class="log-wrap"><div id="log-pbrun" style="height:100%;"></div></div>
-    </div>
-
-    <!-- PBRemote panel -->
-    <div id="panel-pbremote" class="svc-panel">
-      <div class="ctrl-strip">
-        <span class="ctrl-title">PBRemote</span>
-        <div class="ctrl-status">
-          <div class="status-dot" id="cs-pbremote"></div>
-          <span class="status-label" id="sl-pbremote">checking…</span>
-        </div>
-        <span id="ctrl-btns-pbremote"></span>
-      </div>
-      <div class="tab-bar">
-        <button class="tab-btn active" data-svc="pbremote" data-tab="log" onclick="switchTab(this)">&#128203; Log</button>
-        <button class="tab-btn" data-svc="pbremote" data-tab="info" onclick="switchTab(this)">&#127760; Info</button>
-        <button class="tab-btn" data-svc="pbremote" data-tab="settings" onclick="switchTab(this)">&#9881; Settings</button>
-      </div>
-      <div id="pbremote-tab-log" class="tab-pane active log-wrap">
-        <div id="log-pbremote" style="height:100%;"></div>
-      </div>
-      <div id="pbremote-tab-info" class="tab-pane">
-        <div class="settings-wrap" id="pbremote-info-wrap">
-          <div style="color:#4a5568;font-style:italic;">Loading&#8230;</div>
-        </div>
-      </div>
-      <div id="pbremote-tab-settings" class="tab-pane">
-        <div class="settings-wrap" id="pbremote-settings-wrap">
-          <div style="color:#4a5568;font-style:italic;">Loading&#8230;</div>
-        </div>
-      </div>
     </div>
 
     <!-- PBData panel -->
@@ -995,8 +978,8 @@ window.PBGUI_NAV_CONFIG = {
 
   /* ── Service registry ─────────────────────────────────── */
   var SERVICES = [
+    { id: 'pbcluster',  label: 'PBCluster',   logFile: 'PBCluster.log',   isApiServer: false, guideKeyword: 'cluster_sync'       },
     { id: 'pbrun',      label: 'PBRun',       logFile: 'PBRun.log',       isApiServer: false, guideKeyword: 'pbrun_service'      },
-    { id: 'pbremote',   label: 'PBRemote',    logFile: 'PBRemote.log',    isApiServer: false, guideKeyword: 'pbremote_service'   },
     { id: 'pbdata',     label: 'PBData',      logFile: 'PBData.log',      isApiServer: false, guideKeyword: 'pbdata'             },
     { id: 'pbcoindata', label: 'PBCoinData',  logFile: 'PBCoinData.log',  isApiServer: false, guideKeyword: 'pbcoindata_service' },
     { id: 'api-server', label: 'PBAPIServer', logFile: 'PBApiServer.log', isApiServer: true,  guideKeyword: 'pbapiserver'        },
@@ -1292,9 +1275,6 @@ window.PBGUI_NAV_CONFIG = {
     html += data._restart_pending ? '<div class="migration-ok">Migration completed. API restart is in progress; retrying status automatically...</div>' : (data.migration_needed ? '<div class="migration-warn">' + esc(meta.text) + '</div>' : '<div class="migration-ok">' + esc(meta.text) + '</div>');
     if (missing.length) {
       html += '<div class="migration-warn">Missing required units: ' + esc(missing.map(function (row) { return row.unit || row.service; }).join(', ')) + '</div>';
-    }
-    if (data.pbremote_will_be_preserved) {
-      html += '<div class="migration-note">PBRemote usage was detected and will be preserved as a systemd user service.</div>';
     }
     warnings.forEach(function (warning) { html += '<div class="migration-warn">' + esc(warning) + '</div>'; });
     html += '</div>';
@@ -1717,8 +1697,7 @@ window.PBGUI_NAV_CONFIG = {
     var pane = document.getElementById(svc + '-tab-' + tab);
     if (pane) pane.classList.add('active');
     if (tab === 'log') initLogViewer(svc);
-    if (tab === 'settings' && svc === 'pbremote' && !_settingsLoaded['pbremote']) loadPBRemoteSettings();
-    else if (tab === 'settings' && !_settingsLoaded[svc]) loadSettings(svc);
+    if (tab === 'settings' && !_settingsLoaded[svc]) loadSettings(svc);
     if (tab === 'status' && svc === 'pbdata') {
       loadFetchSummary();
       loadPollerMetrics();
@@ -1728,7 +1707,6 @@ window.PBGUI_NAV_CONFIG = {
       clearInterval(_fetchSummaryTimer); _fetchSummaryTimer = null;
       clearInterval(_pollerMetricsTimer); _pollerMetricsTimer = null;
     }
-    if (tab === 'info' && svc === 'pbremote') loadPBRemoteInfo();
     /* persist panel + tab in URL hash */
     history.replaceState(null, '', window.location.pathname + window.location.search + '#' + svc + '/' + tab);
   };
@@ -1996,59 +1974,6 @@ window.PBGUI_NAV_CONFIG = {
     wrap.innerHTML = html;
   }
 
-  /* ── PBRemote settings ─────────────────────────────────── */
-  var _bucketEditOpen = false;
-  var _bucketData = {};  /* current bucket config being edited */
-
-  function loadPBRemoteSettings() {
-    _settingsLoaded['pbremote'] = true;
-    var wrap = document.getElementById('pbremote-settings-wrap');
-    if (wrap) wrap.innerHTML = '<div style="color:#4a5568;font-style:italic;">Loading&#8230;</div>';
-    fetch(API_BASE + '/settings/pbremote/buckets?token=' + TOKEN)
-    .then(function (r) { return r.json(); })
-    .then(function (data) { renderPBRemoteSettings(data, wrap); })
-    .catch(function () { if (wrap) wrap.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Failed to load settings.</div>'; });
-  }
-
-  function renderPBRemoteSettings(bucketsData, wrap) {
-    if (!wrap) return;
-    var buckets = (bucketsData && bucketsData.buckets) || [];
-    var rcloneOk = bucketsData && bucketsData.rclone_available;
-    var selected = (bucketsData && bucketsData.selected) || '';
-
-    var bucketOpts = '<option value="">— select —</option>';
-    buckets.forEach(function (b) {
-      bucketOpts += '<option value="' + _esc(b) + '"' + (b === selected ? ' selected' : '') + '>' + _esc(b) + '</option>';
-    });
-
-    var html = '';
-
-    /* ── Bucket section ── */
-    html += '<div class="form-section-title">Bucket</div>';
-    if (!rcloneOk) {
-      html += '<div style="background:#2d1515;border:1px solid #7f1d1d;border-radius:8px;padding:0.6rem 0.9rem;color:#fca5a5;font-size:var(--fs-xs);margin-bottom:1rem;">'
-           +  '&#9888; rclone not installed. Bucket management is unavailable.</div>';
-    } else {
-      html += '<div class="form-row" style="align-items:flex-end;gap:0.75rem;width:fit-content;">';
-      html += '<div class="form-field"><span class="form-label">Select bucket</span>';
-      html += '<select class="form-select" id="pbremote-bucket-select" style="min-width:200px;" onchange="onBucketSelect(this.value)">' + bucketOpts + '</select></div>';
-      html += '<div style="display:flex;gap:0.5rem;">';
-      html += '<button class="form-btn" onclick="openBucketEdit(true)">&#43; Add</button>';
-      if (buckets.length) {
-        html += '<button class="form-btn" onclick="openBucketEdit(false)">&#9998; Edit</button>';
-      }
-      html += '</div></div>';
-      if (!buckets.length) {
-        html += '<div style="color:#64748b;font-size:var(--fs-xs);margin-top:0.5rem;">No bucket found. Click <b>Add</b> to configure rclone.</div>';
-      }
-    }
-
-    /* Bucket edit form placeholder */
-    html += '<div id="bucket-edit-form" style="display:none;"></div>';
-    html += '<span class="inline-msg" id="bucket-action-msg"></span>';
-    wrap.innerHTML = html;
-  }
-
   function renderMonitorSettingsFields(monitorData) {
     var html = '';
     var groups = [
@@ -2180,149 +2105,6 @@ window.PBGUI_NAV_CONFIG = {
     return body;
   }
 
-  /* ── Bucket select → load config ── */
-  window.onBucketSelect = function (val) {
-    if (!val) return;
-    fetch(API_BASE + '/settings/pbremote/bucket-config?bucket=' + encodeURIComponent(val) + '&token=' + TOKEN)
-      .then(function (r) { return r.json(); })
-      .then(function (d) { if (d.ok) _bucketData = d; });
-  };
-
-  /* ── Open bucket edit form ── */
-  window.openBucketEdit = function (isNew) {
-    var form = document.getElementById('bucket-edit-form');
-    if (!form) return;
-    if (isNew) {
-      _bucketData = { region: '', endpoint: '', access_key_id: '', secret_access_key: '' };
-      _showBucketForm(form, '');
-    } else {
-      var sel = _val('pbremote-bucket-select');
-      if (!sel) return;
-      form.innerHTML = '<div style="color:#4a5568;font-style:italic;">Loading config&#8230;</div>';
-      form.style.display = 'block';
-      fetch(API_BASE + '/settings/pbremote/bucket-config?bucket=' + encodeURIComponent(sel) + '&token=' + TOKEN)
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (d.ok) {
-            _bucketData = d;
-            _showBucketForm(form, sel.replace(/:$/, ''));
-          } else {
-            form.innerHTML = '<div style="color:#fca5a5;">Failed: ' + _esc(d.error || 'unknown') + '</div>';
-          }
-        })
-        .catch(function () { form.innerHTML = '<div style="color:#fca5a5;">Failed to load bucket config.</div>'; });
-    }
-  };
-
-  function _showBucketForm(form, name) {
-    var html = '<div style="background:#0d1621;border:1px solid #1e2736;border-radius:8px;padding:1rem;margin-top:0.75rem;">';
-    html += '<div style="color:#64748b;font-size:var(--fs-xs);margin-bottom:0.75rem;">'
-         +  '1. Get your free 15 GB account at <a href="https://c2.synology.com/en-uk/object-storage/overview" target="_blank" style="color:#63b3ed;">Synology C2</a>.<br>'
-         +  '2. Create a bucket &middot; fill in details &middot; Save &middot; Test.</div>';
-    html += '<div class="form-row">';
-    html += '<div class="form-field"><span class="form-label">Bucket name</span>';
-    html += '<input class="form-input medium" type="text" id="bucket-edit-name" value="' + _esc(name) + '"></div>';
-    html += '</div>';
-    html += '<div class="form-row">';
-    html += '<div class="form-field"><span class="form-label">Region</span>';
-    html += '<input class="form-input" type="text" id="bucket-edit-region" value="' + _esc(_bucketData.region || '') + '"></div>';
-    html += '<div class="form-field"><span class="form-label">Endpoint</span>';
-    html += '<input class="form-input" type="text" id="bucket-edit-endpoint" value="' + _esc(_bucketData.endpoint || '') + '"></div>';
-    html += '</div>';
-    html += '<div class="form-row">';
-    html += '<div class="form-field"><span class="form-label">Access Key ID</span>';
-    html += '<input class="form-input" type="text" id="bucket-edit-access-key" value="' + _esc(_bucketData.access_key_id || '') + '"></div>';
-    html += '<div class="form-field"><span class="form-label">Secret Access Key</span>';
-    html += '<input class="form-input" type="password" id="bucket-edit-secret-key" value="' + _esc(_bucketData.secret_access_key || '') + '"></div>';
-    html += '</div>';
-    html += '<div style="display:flex;gap:0.5rem;margin-top:0.75rem;">';
-    html += '<button class="form-btn save" onclick="saveBucket()">&#128190; Save</button>';
-    html += '<button class="form-btn" onclick="testBucket()">&#128268; Test</button>';
-    html += '<button class="form-btn stop" onclick="deleteBucket()">&#128465; Delete</button>';
-    html += '<button class="form-btn" onclick="closeBucketEdit()">&#10005; Cancel</button>';
-    html += '</div>';
-    html += '</div>';
-    form.innerHTML = html;
-    form.style.display = 'block';
-  }
-
-  window.closeBucketEdit = function () {
-    var form = document.getElementById('bucket-edit-form');
-    if (form) { form.style.display = 'none'; form.innerHTML = ''; }
-  };
-
-  window.saveBucket = function () {
-    var name = _val('bucket-edit-name');
-    if (!name) { _showMsg('bucket-action-msg', 'Bucket name required', true); return; }
-    var body = {
-      bucket_name: name,
-      region: _val('bucket-edit-region'),
-      endpoint: _val('bucket-edit-endpoint'),
-      access_key_id: _val('bucket-edit-access-key'),
-      secret_access_key: _val('bucket-edit-secret-key'),
-    };
-    fetch(API_BASE + '/settings/pbremote/bucket-save?token=' + TOKEN, {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
-    }).then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d.ok) {
-          _resultPopup('Info', 'Bucket saved', d.message || '', true);
-          closeBucketEdit();
-          _settingsLoaded['pbremote'] = false;
-          loadPBRemoteSettings();
-        } else {
-          _resultPopup('Error', d.error || d.detail || 'Save failed', '', false);
-        }
-      }).catch(function () { _showMsg('bucket-action-msg', 'Save failed', true); });
-  };
-
-  window.testBucket = function () {
-    var name = _val('bucket-edit-name');
-    if (!name) { _showMsg('bucket-action-msg', 'Bucket name required', true); return; }
-    var bk = name.endsWith(':') ? name : name + ':';
-    _resultPopup('Info', 'Testing\u2026', '', true, true);
-    fetch(API_BASE + '/settings/pbremote/bucket-test?token=' + TOKEN, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        bucket: bk,
-        region:             _val('bucket-edit-region'),
-        endpoint:           _val('bucket-edit-endpoint'),
-        access_key_id:      _val('bucket-edit-access-key'),
-        secret_access_key:  _val('bucket-edit-secret-key'),
-      }),
-    }).then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d.ok) {
-          _resultPopup('Info', 'Connection successful', d.message || '', true);
-        } else {
-          _resultPopup('Error', 'Test failed', d.message || d.error || '', false);
-        }
-      }).catch(function () { _showMsg('bucket-action-msg', 'Test failed', true); });
-  };
-
-  window.deleteBucket = async function () {
-    var sel = _val('pbremote-bucket-select');
-    if (!sel) { _showMsg('bucket-action-msg', 'No bucket selected', true); return; }
-    if (!(await window.PBGuiDialogs.confirm({
-      title: 'Delete bucket',
-      message: 'Delete bucket "' + sel + '"?',
-      confirmText: 'Delete'
-    }))) return;
-    fetch(API_BASE + '/settings/pbremote/bucket-delete?token=' + TOKEN, {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ bucket: sel }),
-    }).then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d.ok) {
-          _resultPopup('Info', 'Bucket deleted', d.message || '', true);
-          closeBucketEdit();
-          _settingsLoaded['pbremote'] = false;
-          loadPBRemoteSettings();
-        } else {
-          _resultPopup('Error', d.message || d.error || 'Delete failed', '', false);
-        }
-      }).catch(function () { _showMsg('bucket-action-msg', 'Delete failed', true); });
-  };
-
   function _showMsg(id, msg, isError) { _flash(id, msg, isError); }
 
   /* ── Result popup dialog ── */
@@ -2370,227 +2152,6 @@ window.PBGUI_NAV_CONFIG = {
       hdr.addEventListener('mousedown', onMouseDown);
     })();
   }
-
-  /* ── PBRemote info ─────────────────────────────────────── */
-  function loadPBRemoteInfo() {
-    var wrap = document.getElementById('pbremote-info-wrap');
-    if (wrap) wrap.innerHTML = '<div style="color:#4a5568;font-style:italic;">Loading&#8230;</div>';
-    Promise.all([
-      fetch(API_BASE + '/pbremote/info?token=' + TOKEN).then(function (r) { return r.json(); }),
-      fetch(API_BASE + '/pbremote/instances?token=' + TOKEN).then(function (r) { return r.json(); }).catch(function () { return {instances:{},available:false}; }),
-    ]).then(function (results) {
-      renderPBRemoteInfo(results[0], results[1], wrap);
-    }).catch(function () {
-      if (wrap) wrap.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Failed to load PBRemote info.</div>';
-    });
-  }
-
-  function renderPBRemoteInfo(data, instData, wrap) {
-    if (!wrap) return;
-    if (!data.configured) {
-      wrap.innerHTML = '<div style="background:#2d1515;border:1px solid #7f1d1d;border-radius:8px;padding:0.75rem 1rem;color:#fca5a5;font-size:var(--fs-sm);">'
-        + '&#9888; PBRemote not configured: ' + _esc(data.error || 'unknown error') + '</div>'
-        + '<div style="margin-top:0.75rem;color:#64748b;font-size:var(--fs-xs);">Use the &#9881; Settings tab to configure bucket, role and directories.</div>';
-      return;
-    }
-    var syncCls = data.api_synced ? 'color:#4ade80' : 'color:#fca5a5';
-    var syncLbl = data.api_synced ? '&#10003; API all in sync' : '&#10007; API out of sync';
-    var roleColor = data.role === 'master' ? '#fcd34d' : '#93c5fd';
-    var html = '<div class="form-row" style="margin-bottom:1rem;">';
-    html += '<div class="fetch-stat"><div class="fetch-stat-label">Role</div><div class="fetch-stat-val" style="color:' + roleColor + '">' + _esc(data.role || '\u2014') + '</div></div>';
-    html += '<div class="fetch-stat"><div class="fetch-stat-label">Bucket</div><div class="fetch-stat-val" style="font-size:var(--fs-sm);word-break:break-all;">' + _esc(data.bucket || '\u2014') + '</div></div>';
-    html += '</div>';
-    html += '<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1.25rem;">';
-    html += '<span style="font-size:var(--fs-sm);' + syncCls + '">' + syncLbl + '</span>';
-    html += '<button class="form-btn" id="pbremote-sync-btn" onclick="triggerApiSync(this)">&#8635; API Sync</button>';
-    html += '<span class="inline-msg" id="pbremote-sync-msg"></span>';
-    html += '</div>';
-    html += '<hr class="form-divider">';
-
-    /* ── Instance table: one table, collapsible server separator rows ── */
-    var allInst = (instData && instData.instances) || {};
-    var sysMap  = (instData && instData.system)    || {};
-    var vmap = {'7': 'V7', '6': 'Multi', 's': 'Single'};
-    var servers = Array.isArray(data.servers) ? data.servers : [];
-    var sortedServers = servers.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
-    var totalInst = 0;
-    sortedServers.forEach(function (s) { totalInst += (allInst[s.name] || []).length; });
-
-    function _mb(bytes) { return bytes ? (bytes / 1048576).toFixed(0) : '0'; }
-    function _sysCell(label, used, free, total, pct) {
-      var col = pct > 85 ? '#ff4b4b' : pct > 60 ? '#f59e0b' : '#4ade80';
-      return '<div style="display:flex;flex-direction:column;gap:2px;min-width:0;">' +
-        '<div style="font-size:var(--fs-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
-        '<span style="color:#64748b;">' + label + '</span>\u00a0' +
-        '<span style="color:#4ade80;">' + _mb(free) + '</span>' +
-        '<span style="color:#4a5568;">/</span>' +
-        '<span style="color:#ff4b4b;">' + _mb(used) + '</span>' +
-        '<span style="color:#4a5568;">/</span>' +
-        '<span style="color:#93c5fd;">' + _mb(total) + '\u00a0MB</span>\u00a0' +
-        '<span style="color:' + col + ';">' + pct.toFixed(0) + '%</span>' +
-        '</div>' +
-        '<div style="width:100%;height:4px;background:#1e2736;border-radius:2px;">' +
-        '<div style="width:' + Math.min(100, pct).toFixed(0) + '%;height:100%;background:' + col + ';border-radius:2px;"></div>' +
-        '</div></div>';
-    }
-    function _cpuCell(cpu) {
-      var col = cpu > 80 ? '#ff4b4b' : cpu > 50 ? '#f59e0b' : '#4ade80';
-      return '<div style="display:flex;flex-direction:column;gap:2px;min-width:0;">' +
-        '<div style="font-size:var(--fs-xs);white-space:nowrap;">' +
-        '<span style="color:#64748b;">CPU</span>\u00a0' +
-        '<span style="color:' + col + ';">' + cpu.toFixed(1) + '%</span>' +
-        '</div>' +
-        '<div style="width:100%;height:4px;background:#1e2736;border-radius:2px;">' +
-        '<div style="width:' + Math.min(100, cpu).toFixed(0) + '%;height:100%;background:' + col + ';border-radius:2px;"></div>' +
-        '</div></div>';
-    }
-
-    html += '<hr class="form-divider">';
-    html += '<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">';
-    html += '<span class="form-section-title" style="margin:0;">Servers (' + servers.length + ') \u2014 ' + totalInst + ' instances</span>';
-    html += '<button class="form-btn" onclick="pbriExpandAll(true)">Expand all</button>';
-    html += '<button class="form-btn" onclick="pbriExpandAll(false)">Collapse all</button>';
-    html += '<button class="form-btn" id="pbri-sys-btn" onclick="pbriToggleSys(this)">Hide metrics</button>';
-    html += '</div>';
-
-    if (!servers.length) {
-      html += '<div style="color:#4a5568;font-size:var(--fs-sm);">No servers found.</div>';
-    } else {
-      html += '<div style="overflow:auto;max-height:70vh;" id="pbri-table-wrap"><table class="fs-table" style="border-collapse:collapse;">';
-      html += '<thead><tr>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;">Name</th>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;">Ver</th>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;">Start</th>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;">Mem MB</th>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;">Swap MB</th>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;">CPU%</th>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="PNL fills today">PNLs T</th>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="PNL today">PNL T</th>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="PNL fills yesterday">PNLs Y</th>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="PNL yesterday">PNL Y</th>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="Infos today">Info T</th>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="Errors today">Err T</th>' +
-        '<th style="position:sticky;top:0;z-index:2;background:#0f1722;" title="Tracebacks today">TB T</th>' +
-        '</tr></thead><tbody>';
-      sortedServers.forEach(function (s) {
-        var serverInst = allInst[s.name] || [];
-        var sys = sysMap[s.name] || null;
-        var sid = 'pbri-srv-' + s.name.replace(/[^a-zA-Z0-9]/g,'_');
-        var onlineCol = s.online ? '#4ade80' : '#ff4b4b';
-        var onlineLbl = s.online ? 'Online' : 'Offline';
-        var ageStr = '';
-        if (s.last_seen_s != null) {
-          ageStr = s.last_seen_s < 60 ? '(' + Math.round(s.last_seen_s) + 's)' : '(' + Math.round(s.last_seen_s / 60) + 'm)';
-        }
-        var verStr = (s.pbgui_version && s.pbgui_version !== 'N/A') ? 'PBGui: ' + s.pbgui_version : '';
-
-        /* ── server name row (clickable toggle) ── */
-        html += '<tr class="pbri-sep" data-sid="' + _esc(sid) + '" onclick="pbriToggle(this)" style="background:#0d1320;cursor:pointer;">' +
-          '<td colspan="13" style="padding:0.3rem 0.6rem;border-top:2px solid #1e2736;user-select:none;">' +
-          '<div style="display:flex;align-items:center;">' +
-          '<span id="' + sid + '-ico" style="flex-shrink:0;width:14px;font-size:var(--fs-xs);color:#64748b;">\u25bc</span>' +
-          '<span class="card-dot ' + (s.online ? 'running' : 'stopped') + '" style="display:inline-block;flex-shrink:0;vertical-align:middle;"></span>' +
-          '<span style="font-size:var(--fs-sm);color:#e2e8f0;font-weight:600;margin-left:4px;min-width:9rem;">' + _esc(s.name) + '</span>' +
-          '<span style="font-size:var(--fs-xs);color:#64748b;width:3.5rem;text-align:right;font-variant-numeric:tabular-nums;flex-shrink:0;">' + ageStr + '</span>' +
-          '<span style="font-size:var(--fs-xs);color:#64748b;width:4rem;margin-left:0.75rem;flex-shrink:0;">' + _esc(s.role || '') + '</span>' +
-          '<span style="font-size:var(--fs-xs);color:#93c5fd;width:7rem;margin-left:0.75rem;flex-shrink:0;">' + _esc(verStr) + '</span>' +
-          '<span style="font-size:var(--fs-xs);color:' + onlineCol + ';width:4rem;margin-left:0.75rem;flex-shrink:0;">' + onlineLbl + '</span>' +
-          (serverInst.length ? '<span style="font-size:var(--fs-xs);color:#64748b;margin-left:0.75rem;">' + serverInst.length + ' instance' + (serverInst.length !== 1 ? 's' : '') + '</span>' : '') +
-          '</div>' +
-          '</td></tr>';
-
-        /* ── system metrics row (always visible, 4-column grid) ── */
-        if (sys && sys.mem_total) {
-          html += '<tr class="pbri-sys" style="background:#0a1018;">' +
-            '<td colspan="13" style="padding:0.25rem 0.6rem;border-bottom:1px solid #1e2736;">' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:0.4rem 1rem;">' +
-            _sysCell('RAM',  sys.mem_used,  sys.mem_available, sys.mem_total,  sys.mem_percent) +
-            _sysCell('Disk', sys.disk_used, sys.disk_free,     sys.disk_total, sys.disk_percent) +
-            (sys.swap_total ? _sysCell('Swap', sys.swap_used, sys.swap_free, sys.swap_total, sys.swap_percent) : '<div></div>') +
-            _cpuCell(sys.cpu) +
-            '</div></td></tr>';
-        }
-
-        /* ── instance rows (collapsible) ── */
-        if (!serverInst.length) {
-          html += '<tr class="pbri-row ' + sid + '" style="display:none;background:#0d1320;">' +
-            '<td colspan="13" style="padding:0.25rem 0.6rem;color:#4a5568;font-size:var(--fs-xs);">No running instances</td></tr>';
-        }
-        serverInst.forEach(function (inst) {
-          var ver      = vmap[inst.p] || inst.p || '?';
-          var memMB    = inst.m && inst.m[0]  ? (inst.m[0]  / 1048576).toFixed(1) : '0';
-          var swapMB   = inst.m && inst.m.length >= 10 && inst.m[9] ? (inst.m[9] / 1048576).toFixed(1) : '0';
-          var startStr = inst.st ? new Date(inst.st * 1000).toISOString().slice(0,16).replace('T',' ') : '?';
-          var ptv = inst.pt || 0, phv = inst.pnl_hist_total || 0;
-          var pnlT    = ptv.toFixed(6);
-          var pnlH    = phv.toFixed(6);
-          var pnlTCls = ptv > 0 ? 'color:#4ade80' : ptv === 0 ? 'color:#f59e0b' : 'color:#fca5a5';
-          var pnlHCls = phv > 0 ? 'color:#4ade80' : phv === 0 ? 'color:#f59e0b' : 'color:#fca5a5';
-          var cpuVal  = inst.c || 0;
-          var cpuStr  = cpuVal.toFixed(1);
-          var cpuCls  = cpuVal === 0 ? 'color:#f59e0b' : '';
-          html += '<tr class="pbri-row ' + sid + '" style="display:none;">' +
-            '<td>' + _esc(inst.u || '?') + '</td>' +
-            '<td>' + _esc(ver) + '</td>' +
-            '<td>' + startStr + '</td>' +
-            '<td>' + memMB + '</td>' +
-            '<td>' + swapMB + '</td>' +
-            '<td' + (cpuCls ? ' style="' + cpuCls + '"' : '') + '>' + cpuStr + '</td>' +
-            '<td>' + (inst.ct || 0) + '</td>' +
-            '<td style="' + pnlTCls + '">' + pnlT + '</td>' +
-            '<td>' + (inst.pnls_hist_total || 0) + '</td>' +
-            '<td style="' + pnlHCls + '">' + pnlH + '</td>' +
-            '<td>' + (inst.it || 0) + '</td>' +
-            '<td>' + (inst.et || 0) + '</td>' +
-            '<td>' + (inst.tt || 0) + '</td>' +
-            '</tr>';
-        });
-      });
-      html += '</tbody></table></div>';
-    }
-    wrap.innerHTML = html;
-  }
-
-  window.pbriToggle = function (sepRow) {
-    var sid = sepRow.dataset.sid;
-    var rows = document.querySelectorAll('tr.pbri-row.' + sid);
-    var ico  = document.getElementById(sid + '-ico');
-    var collapsed = rows.length && rows[0].style.display === 'none';
-    rows.forEach(function (r) { r.style.display = collapsed ? '' : 'none'; });
-    if (ico) ico.textContent = collapsed ? '\u25b2' : '\u25bc';
-  };
-
-  window.pbriExpandAll = function (expand) {
-    document.querySelectorAll('tr.pbri-row').forEach(function (r) { r.style.display = expand ? '' : 'none'; });
-    document.querySelectorAll('.pbri-sep').forEach(function (sep) {
-      var ico = document.getElementById(sep.dataset.sid + '-ico');
-      if (ico) ico.textContent = expand ? '\u25b2' : '\u25bc';
-    });
-  };
-
-  window.pbriToggleSys = function (btn) {
-    var rows = document.querySelectorAll('tr.pbri-sys');
-    var hidden = rows.length && rows[0].style.display === 'none';
-    rows.forEach(function (r) { r.style.display = hidden ? '' : 'none'; });
-    btn.textContent = hidden ? 'Hide metrics' : 'Show metrics';
-  };
-
-  window.triggerApiSync = function (btn) {
-    btn.disabled = true;
-    fetch(API_BASE + '/pbremote/api-sync?token=' + TOKEN, { method: 'POST' })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        btn.disabled = false;
-        if (d && d.ok === false) {
-          _flash('pbremote-sync-msg', d.error || 'Sync unavailable', true);
-          loadPBRemoteInfo();
-          return;
-        }
-        _flash('pbremote-sync-msg', d.api_synced ? 'API all in sync' : 'Pushed - not yet synced', !d.api_synced);
-        loadPBRemoteInfo();
-      })
-      .catch(function (e) { btn.disabled = false; _flash('pbremote-sync-msg', 'Error', true); });
-  };
 
   /* ── Fetch summary ─────────────────────────────────────── */
   function loadFetchSummary() {

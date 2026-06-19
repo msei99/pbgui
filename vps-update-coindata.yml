@@ -33,8 +33,8 @@
         option: api_key
         value: "{{ api_key }}"
 
-    - name: Start or Restart PBRun, PBRemote and PBCoinData
-      script: setup/vps_service_control.sh restart PBRun PBRemote PBCoinData
+    - name: Start or Restart PBRun and PBCoinData
+      script: setup/vps_service_control.sh restart PBRun PBCoinData
       environment:
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"

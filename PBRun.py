@@ -1,30 +1,38 @@
 """
-PBRun manages v7 passivbot instances.
+PBRun manages local v7 passivbot processes.
 
-It checks for status and activate files, starts and stops v7 bots accordingly.
+It reconciles materialized run_v7 configs against Cluster Sync desired state
+and starts or stops local bots accordingly.
 """
 import psutil
 import subprocess
 import threading
 import configparser
-import shlex
 import sys
 from pathlib import Path, PurePath
-from time import sleep
-import glob
+from time import sleep, time
 import json
-import hjson
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 import platform
-from shutil import copy, copytree, rmtree, ignore_patterns
 import os
 import traceback
-import uuid
-import copy as copy_module
-from Status import InstanceStatus, InstancesStatus
 from PBCoinData import CoinData
 from logging_helpers import human_log as _log, get_rotate_settings, rotate_logfile_if_oversize
+from master.cluster_state import (
+    build_config_manifest,
+    compute_config_manifest_hash,
+    default_cluster_root,
+    read_local_identity,
+)
+
+
+V7_RUNTIME_SIGNATURE_EXCLUDE_FILES = frozenset({
+    "approved_coins.json",
+    "config_run.json",
+    "ignored_coins.json",
+    "running_version.txt",
+})
 
 
 def _arg_matches_path(arg: str, expected_path: Path) -> bool:
@@ -57,19 +65,6 @@ def _atomic_write_text(path: Path, content: str):
         path.parent.mkdir(parents=True, exist_ok=True)
         with tmp_path.open("w", encoding="utf-8") as f:
             f.write(content)
-        tmp_path.replace(path)
-    except Exception:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
-        raise
-
-
-def _atomic_write_config(path: Path, parser: configparser.ConfigParser):
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with tmp_path.open("w", encoding="utf-8") as f:
-            parser.write(f)
         tmp_path.replace(path)
     except Exception:
         if tmp_path.exists():
@@ -124,6 +119,66 @@ def _memory_usage_bytes(memory_info) -> int:
         return int(memory_info[0]) + int(memory_info[9])
     except Exception:
         return 0
+
+
+def _read_json_file(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _cluster_gate_is_configured(cluster_root: Path) -> bool:
+    if not cluster_root.exists():
+        return False
+    markers = (
+        "cluster_id",
+        "node_id",
+        "node_identity.json",
+        "cluster_nodes.json",
+        "desired_state.json",
+        "state_vector.json",
+    )
+    return any((cluster_root / marker).exists() for marker in markers)
+
+
+def _wait_for_cluster_boot_sync(pbgdir: Path, *, timeout: int = 20) -> dict:
+    """Wait briefly for PBCluster boot sync without making stale state fatal."""
+
+    cluster_root = default_cluster_root(Path(pbgdir))
+    if not _cluster_gate_is_configured(cluster_root):
+        return {"status": "not_configured", "waited": 0}
+
+    status_path = cluster_root / "sync_status.json"
+    started_at = int(time())
+    deadline = time() + max(0, int(timeout))
+    last_status: dict = {}
+    first_check = True
+    while first_check or time() <= deadline:
+        first_check = False
+        if status_path.is_file():
+            try:
+                payload = _read_json_file(status_path)
+            except Exception:
+                payload = {}
+            if payload:
+                last_status = payload
+                finished_at = int(payload.get("finished_at") or 0)
+                status = str(payload.get("status") or "")
+                if finished_at >= started_at - 2 and status:
+                    if status not in {"local_reconciled", "not_configured"}:
+                        _log("PBRun", f"PBCluster boot sync status: {status}", level="WARNING")
+                    return {"status": status, "waited": max(0, int(time()) - started_at)}
+        if timeout <= 0:
+            break
+        sleep(1)
+
+    previous_status = str(last_status.get("status") or "missing") if last_status else "missing"
+    _log(
+        "PBRun",
+        f"PBCluster boot sync did not complete within {max(0, int(timeout))}s; continuing with local desired state ({previous_status})",
+        level="WARNING",
+    )
+    return {"status": "timeout", "previous_status": previous_status, "waited": max(0, int(time()) - started_at)}
 
 
 def _kill_process(process: psutil.Process, context: str):
@@ -422,9 +477,108 @@ class RunV7():
         self._dynamic_bootstrap_refresh_ts = 0
         self._dynamic_watch_ts = 0
         self._dynamic_watch_sig = None
+        self._cluster_gate_log_ts = 0
+        self._cluster_gate_log_key = None
+        self.cluster_blocked = False
+        self.cluster_blocked_reason = ""
+        self.cluster_gate = "not_checked"
         self.start_time = 0
         self.memory = None
         self.cpu = None
+
+    def _cluster_gate_result(self) -> dict:
+        """Return whether Cluster Sync desired state allows this V7 bot to run."""
+
+        pbgdir = Path(self.pbgdir or Path.cwd())
+        cluster_root = default_cluster_root(pbgdir)
+        if not _cluster_gate_is_configured(cluster_root):
+            return {"ok": True, "status": "not_configured", "reason": "Cluster Sync is not initialized"}
+
+        try:
+            identity = read_local_identity(cluster_root)
+        except Exception as exc:
+            return {"ok": False, "status": "identity_error", "reason": f"Cluster identity is invalid: {exc}"}
+
+        desired_path = cluster_root / "desired_state.json"
+        if not desired_path.is_file():
+            return {"ok": False, "status": "missing_desired_state", "reason": "Cluster desired_state.json is missing"}
+        try:
+            desired = _read_json_file(desired_path)
+        except Exception as exc:
+            return {"ok": False, "status": "desired_state_error", "reason": f"Cluster desired_state.json is unreadable: {exc}"}
+
+        cluster_id = str(identity.get("cluster_id") or "")
+        if str(desired.get("cluster_id") or "") != cluster_id:
+            return {"ok": False, "status": "foreign_desired_state", "reason": "Cluster desired_state.json belongs to another cluster"}
+
+        instance_name = str(self.user or Path(str(self.path or "")).name)
+        tombstones = desired.get("tombstones") if isinstance(desired.get("tombstones"), dict) else {}
+        if instance_name in tombstones:
+            return {"ok": False, "status": "tombstoned", "reason": "Cluster desired state tombstoned this instance"}
+
+        instances = desired.get("instances") if isinstance(desired.get("instances"), dict) else {}
+        item = instances.get(instance_name)
+        if not isinstance(item, dict):
+            return {"ok": False, "status": "missing_instance", "reason": "Instance is missing from Cluster desired state"}
+        if item.get("conflicted") is True:
+            return {"ok": False, "status": "conflicted", "reason": "Cluster desired state marks this instance as conflicted"}
+        if str(item.get("desired_state") or "") != "running":
+            return {"ok": False, "status": "desired_stopped", "reason": "Cluster desired state is not running"}
+
+        local_node_id = str(identity.get("node_id") or "")
+        assigned_host = str(item.get("assigned_host") or "")
+        if assigned_host != local_node_id:
+            return {"ok": False, "status": "wrong_host", "reason": "Cluster desired state assigns this instance to another node"}
+
+        expected_hash = str(item.get("config_manifest_hash") or "")
+        try:
+            actual_hash = compute_config_manifest_hash(build_config_manifest(Path(str(self.path))))
+        except Exception as exc:
+            return {"ok": False, "status": "manifest_error", "reason": f"Cluster config manifest check failed: {exc}"}
+        if actual_hash != expected_hash:
+            return {"ok": False, "status": "manifest_mismatch", "reason": "Local config manifest does not match Cluster desired state"}
+
+        expected_version = str(item.get("version") or "")
+        if str(self.version or "") != expected_version:
+            return {"ok": False, "status": "version_mismatch", "reason": "Local config version does not match Cluster desired state"}
+
+        return {"ok": True, "status": "allowed", "reason": "Cluster desired state allows start"}
+
+    def _set_cluster_gate_state(self, result: dict) -> None:
+        """Record the last Cluster Sync gate result on this runner."""
+
+        self.cluster_gate = str(result.get("status") or "")
+        self.cluster_blocked = not bool(result.get("ok"))
+        self.cluster_blocked_reason = "" if result.get("ok") else str(result.get("reason") or "")
+
+    def _block_cluster_gate_start(self, result: dict) -> None:
+        """Stop or delay this bot because Cluster Sync desired state blocks it."""
+
+        self._set_cluster_gate_state(result)
+        _atomic_write_text(Path(self.path) / "running_version.txt", "0")
+        now_ts = int(datetime.now().timestamp())
+        log_key = (self.cluster_gate, self.cluster_blocked_reason)
+        quiet_states = {"desired_stopped", "missing_instance", "tombstoned", "wrong_host"}
+        quiet_state = self.cluster_gate in quiet_states
+        should_log = log_key != self._cluster_gate_log_key or (not quiet_state and now_ts - self._cluster_gate_log_ts >= 60)
+        if should_log:
+            _log(
+                "PBRun",
+                f"Cluster gate blocked passivbot_v7 {self.path}/config_run.json: {self.cluster_blocked_reason}",
+                level="INFO" if quiet_state else "WARNING",
+            )
+            self._cluster_gate_log_ts = now_ts
+            self._cluster_gate_log_key = log_key
+
+    def _cluster_gate_allows_run(self) -> bool:
+        """Return True when this bot is allowed to run under Cluster Sync."""
+
+        result = self._cluster_gate_result()
+        self._set_cluster_gate_state(result)
+        if result.get("ok"):
+            return True
+        self._block_cluster_gate_start(result)
+        return False
 
     def _dynamic_watch_signature(self):
         if self.dynamic_ignore is None:
@@ -528,6 +682,9 @@ class RunV7():
 
     def watch(self):
         if self.is_running():
+            if not self._cluster_gate_allows_run():
+                self.stop()
+                return
             version_file = Path(f'{self.path}/running_version.txt')
             current_version = 0
             if version_file.exists():
@@ -589,6 +746,11 @@ class RunV7():
 
     def start(self):
         if not self.is_running():
+            if Path(f'{self.path}/config.json').exists() and not self.load():
+                self.stop()
+                return
+            if not self._cluster_gate_allows_run():
+                return
             if self.dynamic_ignore is not None and not _ensure_dynamic_ignore_ready(self.dynamic_ignore):
                 if not self._dynamic_ignore_api_key_configured():
                     self._delay_dynamic_ignore_start("requires CoinMarketCap API key for dynamic_ignore")
@@ -725,12 +887,11 @@ class RunV7():
                 _log("PBRun", "RunV7.load traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
 
 class PBRun():
-    """PBRun manages v7 passivbot instances, linking PBRemote, PBGui and Passivbot.
+    """PBRun manages v7 passivbot instances, linking PBGui and Passivbot.
 
-    It processes update_status_*.cmd and activate_*.cmd files to install, start and stop v7 bots.
+    It reconciles local data/run_v7 configs against Cluster Sync desired state.
 
     Robustness notes:
-    - Command files are written atomically and malformed files are quarantined after repeated failures.
     - Runtime state files (pid/version/monitor) are written atomically to reduce partial-write corruption.
     """
     def __init__(self):
@@ -741,18 +902,12 @@ class PBRun():
         self.pbgdir = Path.cwd()
         pb_config = configparser.ConfigParser()
         pb_config.read('pbgui.ini')
-        # Init activate_ts and pbname
+        # Init pbname
         if pb_config.has_option("main", "pbname"):
             self.name = pb_config.get("main", "pbname")
         else:
             self.name = platform.node()
-        if pb_config.has_option("main", "activate_v7_ts"):
-            self.activate_v7_ts = int(pb_config.get("main", "activate_v7_ts"))
-        else:
-            self.activate_v7_ts = 0
-        self.instances_status_v7 = InstancesStatus(f'{self.pbgdir}/data/cmd/status_v7.json')
-        self.instances_status_v7.pbname = self.name
-        self.instances_status_v7.activate_ts = self.activate_v7_ts
+        self._v7_runtime_signature = None
         # Init PB7 directory
         self.pb7dir = None
         if pb_config.has_option("main", "pb7dir"):
@@ -777,13 +932,6 @@ class PBRun():
                 return
         # Init paths
         self.v7_path = f'{self.pbgdir}/data/run_v7'
-        self.cmd_path = f'{self.pbgdir}/data/cmd'
-        if not Path(self.cmd_path).exists():
-            Path(self.cmd_path).mkdir(parents=True)            
-        self.failed_cmd_path = Path(f'{self.cmd_path}/failed')
-        self.failed_cmd_path.mkdir(parents=True, exist_ok=True)
-        self._bad_cmd_failures = {}
-        self._bad_cmd_quarantine_after = 3
         # Init pid
         self.piddir = Path(f'{self.pbgdir}/data/pid')
         if not self.piddir.exists():
@@ -945,27 +1093,54 @@ class PBRun():
             except Exception:
                 continue
 
-    def _handle_bad_cmd_file(self, cfile: Path, command_kind: str, error: Exception):
-        key = str(cfile)
-        failures = self._bad_cmd_failures.get(key, 0) + 1
-        self._bad_cmd_failures[key] = failures
-        _log(
-            "PBRun",
-            f"Invalid {command_kind} command file {cfile}: {error} (attempt {failures}/{self._bad_cmd_quarantine_after})",
-            level="WARNING",
-        )
-        if failures < self._bad_cmd_quarantine_after:
-            return
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        quarantine_name = f"{cfile.stem}.failed_{ts}{cfile.suffix}"
-        quarantine_path = self.failed_cmd_path / quarantine_name
+    @staticmethod
+    def _file_signature(path: Path) -> tuple[str, int | None, int | None]:
+        """Return a cheap change signature for one file path."""
+
         try:
-            cfile.replace(quarantine_path)
-            _log("PBRun", f"Quarantined invalid command file {cfile} -> {quarantine_path}", level="WARNING")
-        except Exception as qerr:
-            _log("PBRun", f"Failed to quarantine invalid command file {cfile}: {qerr}", level="ERROR")
-        finally:
-            self._bad_cmd_failures.pop(key, None)
+            stat = path.stat()
+            return (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+        except OSError:
+            return (str(path), None, None)
+
+    def _current_v7_runtime_signature(self) -> tuple:
+        """Return the local Cluster/run_v7 signature PBRun reconciles against."""
+
+        cluster_root = default_cluster_root(Path(self.pbgdir))
+        signature: list[tuple] = [
+            self._file_signature(cluster_root / "cluster_id"),
+            self._file_signature(cluster_root / "node_id"),
+            self._file_signature(cluster_root / "desired_state.json"),
+        ]
+        run_root = Path(self.v7_path)
+        if not run_root.is_dir():
+            signature.append((str(run_root), None, None))
+            return tuple(signature)
+
+        for instance_dir in sorted(run_root.iterdir(), key=lambda item: item.name):
+            if not instance_dir.is_dir():
+                continue
+            signature.append(("instance", instance_dir.name))
+            for item in sorted(instance_dir.glob("*.json"), key=lambda path: path.name):
+                if item.name in V7_RUNTIME_SIGNATURE_EXCLUDE_FILES:
+                    continue
+                file_sig = self._file_signature(item)
+                signature.append((instance_dir.name, item.name, file_sig[1], file_sig[2]))
+        return tuple(signature)
+
+    def has_v7_runtime_changed(self) -> bool:
+        """Poll Cluster desired state and local run_v7 configs for PBRun rescans."""
+
+        signature = self._current_v7_runtime_signature()
+        if self._v7_runtime_signature is None:
+            self._v7_runtime_signature = signature
+            return False
+        if signature == self._v7_runtime_signature:
+            return False
+        self._v7_runtime_signature = signature
+        _log("PBRun", "Cluster/run_v7 state changed — rescanning v7 instances")
+        self.watch_v7()
+        return True
 
     def fetch_cmc_credits(self):
         self.coindata.fetch_api_status()        
@@ -995,196 +1170,46 @@ class PBRun():
                 version = f.read()
         return int(version)
 
-    def update_status(self, status_file : str, rserver : str):
-        """Function only called on PBRemote"""
-        unique = str(uuid.uuid4())
-        cfile = Path(f'{self.cmd_path}/update_status_{unique}.cmd')
-        cfg = ({
-            "rserver": rserver,
-            "status_file": str(status_file)})
-        _atomic_write_json(cfile, cfg)
-
-    def has_update_status(self):
-        """Checks for update_status_*.cmd files and applies v7 status updates."""
-        p = str(Path(f'{self.cmd_path}/update_status_*.cmd'))
-        status_files = glob.glob(p)
-        for cfile in status_files:
-            cfile = Path(cfile)
-            if cfile.exists():
-                try:
-                    with open(cfile, "r", encoding='utf-8') as f:
-                        cfg = json.load(f)
-                    rserver = cfg["rserver"]
-                    status_file = cfg["status_file"]
-                    if status_file.split('/')[-1] == 'status_v7.json':
-                        self.update_from_status_v7(status_file, rserver)
-                    cfile.unlink(missing_ok=True)
-                    self._bad_cmd_failures.pop(str(cfile), None)
-                except Exception as e:
-                    self._handle_bad_cmd_file(cfile, "update status", e)
-
-    def update_from_status_v7(self, status_file : str, rserver : str):
-        """Updates the v7 status based on the provided status file.
-
-        Notes:
-            - Compares per-instance activate_ts to detect changes.
-            - Installs new v7 versions or instances if their activate_ts is newer.
-            - Removes old *.json configuration files.
-            - Removes instances not found in the new status.
-
-        Args:
-            status_file (str): Path to the status file.
-            rserver (str): Name of the remote server.
-        """
-        new_status = InstancesStatus(status_file)
-        _log("PBRun", f"Received v7 status from {new_status.activate_pbname}")
-        changed = False
-        for instance in new_status:
-            local = self.instances_status_v7.find_name(instance.name)
-            if local is not None:
-                # Per-instance activate_ts comparison
-                if instance.activate_ts <= local.activate_ts:
-                    continue
-                if instance.version > local.version:
-                    # Backup old v7 config
-                    source = f'{self.v7_path}/{instance.name}'
-                    if Path(source).exists():
-                        destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{local.version}')
-                        if not destination.exists():
-                            destination.mkdir(parents=True)
-                        copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json'))
-                    # Install new v7 version
-                    _log("PBRun", f"Install: New V7 Version {instance.name} Old: {local.version} New: {instance.version}")
-                    # Remove old *.json configs
-                    dest = f'{self.v7_path}/{instance.name}'
-                    p = str(Path(f'{dest}/*'))
-                    items = glob.glob(p)
-                    for item in items:
-                        if item.endswith('.json'):
-                            Path(item).unlink(missing_ok=True)
-                    src = f'{self.pbgdir}/data/remote/run_v7_{rserver}/{instance.name}'
-                    dest = f'{self.v7_path}/{instance.name}'
-                    if Path(src).exists():
-                        copytree(src, dest, dirs_exist_ok=True)
-                        self.watch_v7([f'{self.v7_path}/{instance.name}'])
-                    changed = True
-                # Update local activate_ts even if version unchanged (enabled_on etc. may differ)
-                local.activate_ts = instance.activate_ts
-                local.enabled_on = instance.enabled_on
-                changed = True
-            else:
-                # Install new v7 instance
-                _log("PBRun", f"Install: New V7 Instance {instance.name} from {rserver} Version: {instance.version}")
-                src = f'{self.pbgdir}/data/remote/run_v7_{rserver}/{instance.name}'
-                dest = f'{self.v7_path}/{instance.name}'
-                if Path(src).exists():
-                    copytree(src, dest, dirs_exist_ok=True)
-                    self.watch_v7([f'{self.v7_path}/{instance.name}'])
-                changed = True
-        remove_instances = []
-        for instance in self.instances_status_v7:
-            status = new_status.find_name(instance.name)
-            if status is None:
-                # Remove v7 instance
-                _log("PBRun", f"Remove: V7 Instance {instance.name}")
-                if instance.running:
-                    for v7 in self.run_v7:
-                        name = v7.path.split('/')[-1]
-                        if name == instance.name:
-                            v7.stop()
-                            self.remove_v7(v7)
-                source = f'{self.v7_path}/{instance.name}'
-                if Path(source).exists():
-                    # Backup v7 config
-                    date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                    destination = Path(f'{self.pbgdir}/data/backup/v7/{instance.name}/{date}')
-                    if not destination.exists():
-                        destination.mkdir(parents=True)
-                    copytree(source, destination, dirs_exist_ok=True, ignore=ignore_patterns('passivbot.log', 'passivbot.log.old', 'ignored_coins.json', 'approved_coins.json', 'config_run.json'))
-                    rmtree(source, ignore_errors=True)
-                    remove_instances.append(instance)
-        if remove_instances:
-            for instance in remove_instances:
-                self.instances_status_v7.remove(instance)
-            changed = True
-
-    def has_status_v7_changed(self):
-        """Poll status_v7.json for mtime changes and rescan v7 instances."""
-        if self.instances_status_v7.has_new_status():
-            _log("PBRun", "status_v7.json changed — rescanning v7 instances")
-            self.watch_v7()
-    
-    def update_activate_v7(self):
-        self._update_activate_timestamp("activate_v7_ts", "instances_status_v7")
-
-    def _update_activate_timestamp(self, key: str, status_attr: str):
-        now_ts = int(datetime.now().timestamp())
-        if key == "activate_v7_ts":
-            self.activate_v7_ts = now_ts
-
-        status = getattr(self, status_attr, None)
-        if status is not None:
-            status.activate_ts = now_ts
-
-        pb_config = configparser.ConfigParser()
-        pb_config.read("pbgui.ini")
-        if not pb_config.has_section("main"):
-            pb_config.add_section("main")
-        pb_config.set("main", key, str(now_ts))
-        _atomic_write_config(Path("pbgui.ini"), pb_config)
-
     def watch_v7(self, v7_instances : list = None):
         """Create or delete v7 instances and activate them or not depending on their status.
 
         Args:
             v7_instances (list, optional): List of v7-instance paths. Defaults to None.
         """
-        # Preserve per-instance activate_ts before clearing
-        old_ts = {}
-        for inst in self.instances_status_v7:
-            if inst.activate_ts:
-                old_ts[inst.name] = inst.activate_ts
         if not v7_instances:
-            p = str(Path(f'{self.v7_path}/*'))
-            v7_instances = glob.glob(p)
-            # Remove all existing instances from status
-            self.instances_status_v7.instances = []
+            run_root = Path(self.v7_path)
+            v7_instances = [str(path) for path in sorted(run_root.iterdir(), key=lambda item: item.name)] if run_root.is_dir() else []
+            active_paths = {str(Path(path)) for path in v7_instances if Path(path).is_dir()}
+            for existing in list(self.run_v7):
+                if str(Path(existing.path or "")) not in active_paths:
+                    existing.stop()
+                    self.remove_v7(existing)
         for v7_instance in v7_instances:
             file = Path(f'{v7_instance}/config.json')
             if file.exists():
                 run_v7 = RunV7()
-                status = InstanceStatus()
                 run_v7.path = v7_instance
                 run_v7.user = v7_instance.split('/')[-1]
-                status.name = run_v7.user
                 run_v7.name = self.name
                 run_v7.pb7dir = self.pb7dir
                 run_v7.pb7venv = self.pb7venv
                 run_v7.pbgdir = self.pbgdir
                 if run_v7.load():
                     if run_v7.is_running():
-                        running_version = self.find_running_version(v7_instance)
-                        if running_version < run_v7.version:
+                        if not run_v7._cluster_gate_allows_run():
                             run_v7.stop()
-                            run_v7.start()
+                        else:
+                            running_version = self.find_running_version(v7_instance)
+                            if running_version < run_v7.version:
+                                run_v7.stop()
+                                run_v7.start()
                     else:
                         run_v7.start()
                     self.add_v7(run_v7)
-                    status.running = run_v7.is_running()
                 else:
                     self.remove_v7(run_v7)
-                    status.running = False
                     run_v7.stop()
-                status.version = run_v7.version
-                status.enabled_on = run_v7.name
-                # Restore per-instance activate_ts
-                status.activate_ts = old_ts.get(status.name, 0)
-                self.instances_status_v7.add(status)
-        # Remove non existing instances from status
-        for instance in self.instances_status_v7:
-            instance_path = f'{self.pbgdir}/data/run_v7/{instance.name}'
-            if not Path(instance_path).exists():
-                self.instances_status_v7.remove(instance)
+        self._v7_runtime_signature = self._current_v7_runtime_signature()
 
     def find_high_memory_bot(self):
         """Finds the bot with the highest memory usage."""
@@ -1276,15 +1301,15 @@ def main():
         sys.exit(1)
     _log("PBRun", "Start: PBRun")
     run.save_pid()
+    _wait_for_cluster_boot_sync(Path(run.pbgdir), timeout=20)
     if run.pb7dir:
         run.watch_v7()
     count = 0
     while True:
         try:
             run.watch_memory()
-            run.has_update_status()
             if run.pb7dir:
-                run.has_status_v7_changed()
+                run.has_v7_runtime_changed()
                 for run_v7 in run.run_v7:
                     run_v7.watch()
                     run_v7.watch_dynamic()

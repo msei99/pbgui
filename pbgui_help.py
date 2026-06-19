@@ -198,36 +198,6 @@ pbrun = """
     source ${venv}/bin/activate
     cd ${pbgui}
     python PBRun.py
-    # python PBRemote.py
-    # python PBStat.py
-    # python PBShare.py
-    # python PBData.py
-    # python PBCoinData.py
-
-    Run "chmod 755 start.sh" and change the path to your needs
-    Run "crontab -e" and add the @reboot with your path
-    ```"""
-
-pbremote = """
-    ```
-    This is the Remote Server Manager from PBGUI.
-    Enable, to start sync Bots running on a Remote Server.
-    To start the Remote Server Manager after reboot your server, you have to
-    start PBRemote.py when your Server starts.
-    This can be done in your crontab with @reboot
-
-    Example crontab
-    @reboot ~/software/pbgui/start.sh
-
-    Example start.sh
-    #!/usr/bin/bash
-    venv=~/software/venv_pb39       #Path to python venv
-    pbgui=~/software/pbgui          #path to pbgui installation
-    source ${venv}/bin/activate
-    cd ${pbgui}
-    # python PBRun.py
-    python PBRemote.py
-    # python PBMOn.py
     # python PBStat.py
     # python PBShare.py
     # python PBData.py
@@ -253,7 +223,7 @@ vps_settings = """
     VPS Settings configures monitoring for your VPS servers.
     The VPS monitoring runs inside the API Server — no separate daemon needed.
     It maintains persistent SSH connections (asyncssh), monitors services
-    (PBRun, PBRemote, PBCoinData), auto-restarts them on failure,
+    (PBRun, PBCluster, PBCoinData), auto-restarts them on failure,
     and sends Telegram alerts on connection loss or service issues.
 
     Requirements:
@@ -268,7 +238,7 @@ vps_settings = """
 vps_auto_restart = """
     ```
     When enabled, the VPS monitor will automatically restart services
-    (PBRun, PBRemote, PBCoinData) that are detected as down.
+    (PBRun, PBCluster, PBCoinData) that are detected as down.
     Rate limited to 3 restarts per service per hour.
     ```"""
 
@@ -294,7 +264,7 @@ vps_monitor_page = """
     
     Dashboard: Live system metrics (CPU, RAM, Disk, Swap) with ~1-3s latency.
     Instances: All bot instances across all VPS with PnL, errors, tracebacks.
-    Services: PBRun, PBRemote, PBCoinData status per VPS with restart buttons.
+    Services: PBRun, PBCluster, PBCoinData status per VPS with restart buttons.
     Live Logs: Real-time log streaming (tail -f) for services and bots.
     
     Requires API Server to be running (start from Services → API Server).
@@ -319,7 +289,6 @@ pbstat = """
     source ${venv}/bin/activate
     cd ${pbgui}
     # python PBRun.py
-    # python PBRemote.py
     python PBStat.py
     # python PBShare.py
     # python PBData.py
@@ -348,7 +317,6 @@ pbdata = """
     source ${venv}/bin/activate
     cd ${pbgui}
     # python PBRun.py
-    # python PBRemote.py
     # python PBStat.py
     # python PBShare.py
     python PBData.py
@@ -381,7 +349,6 @@ pbcoindata = """
     source ${venv}/bin/activate
     cd ${pbgui}
     # python PBRun.py
-    # python PBRemote.py
     # python PBStat.py
     # python PBShare.py
     # python PBData.py
@@ -874,11 +841,6 @@ pbshare_download_index = """
     You can upload it to your webserver to share your grid pictures.
     A simple free way to share it, is using github pages.
     ```"""
-pbremote_bucket = """
-    ```
-    Select the rclone bucket to use for sync.
-    ```"""
-
 worst_drawdown_lower_bound = """
     ```
     will penalize worst_drawdowns greater than %
@@ -1722,16 +1684,15 @@ master_user_pw = """
 role = """
     ```
     If master:
-    - PBRemote will download alive data from the VPS
+    - PBCluster coordinates synchronized cluster state
     If slave:
-    - PBRemote will upload alive data to the VPS
+    - PBCluster applies cluster state for this node
     ```"""
 
 sudo_pw = """
     ```
     The sudo password of your local user
     This is needed for:
-    - install rclone
     - install rustup
     - update PB7 venv
     - install PBGui venv
@@ -1797,11 +1758,11 @@ Prerequisite:
 - Enter the VPS user password under "VPS Setup Settings" (used for SSH + sudo).
 
 What it does:
-- Stops PBRun + PBRemote + PBCoinData
+- Stops PBRun + PBCoinData
 - Installs python3.12-venv (sudo)
 - Deletes and recreates: ~/software/venv_pbgui
 - Installs dependencies from: <pbgui>/requirements_vps.txt
-- Starts PBRun + PBRemote + PBCoinData
+- Starts PBRun + PBCoinData
 
 Note:
 - PBGui services will be restarted during this update (short downtime).
@@ -1841,7 +1802,7 @@ PBGui column
 
 Shows the PBGui version.
 
-If available, the suffix "/3.12" indicates the Python major.minor of the Python environment running PBGui/PBRun/PBRemote (typically venv_pbgui).
+If available, the suffix "/3.12" indicates the Python major.minor of the Python environment running PBGui/PBRun (typically venv_pbgui).
 """
    
 smart_filter = """

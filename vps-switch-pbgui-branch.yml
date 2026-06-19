@@ -6,7 +6,7 @@
 # 3. Checkout specified branch
 # 4. Optionally reset to specific commit (stays on branch)
 # 5. Pull if on branch HEAD (no specific commit)
-# 6. Restart pbgui services
+# 6. Sync PBGui systemd units and restart pbgui services
 
 - hosts: "{{ hostname }}"
   gather_facts: yes
@@ -102,8 +102,85 @@
         state: absent
       listen: "restart pbgui"
 
-    - name: Restart PBRun, PBRemote and PBCoinData
-      script: setup/vps_service_control.sh restart PBRun PBRemote PBCoinData
+    - name: Ensure PBCluster SSH key exists
+      command:
+        argv:
+          - "{{ install_dir }}/venv_pbgui/bin/python"
+          - "{{ install_dir }}/pbgui/cluster_ssh_setup.py"
+          - ensure-local
+          - --pbgdir
+          - "{{ install_dir }}/pbgui"
+      register: cluster_sync_key_setup
+      changed_when: "'\"created\": true' in cluster_sync_key_setup.stdout"
+      listen: "restart pbgui"
+
+    - name: Install master PBCluster authorized key
+      command:
+        argv:
+          - "{{ install_dir }}/venv_pbgui/bin/python"
+          - "{{ install_dir }}/pbgui/cluster_ssh_setup.py"
+          - install-authorized-key
+          - --pbgdir
+          - "{{ install_dir }}/pbgui"
+          - --source-node
+          - "{{ cluster_sync_source_node_id }}"
+          - --source-public-key
+          - "{{ cluster_sync_source_public_key }}"
+      register: cluster_sync_authorized_key
+      changed_when: "'\"changed\": true' in cluster_sync_authorized_key.stdout"
+      when: (cluster_sync_source_node_id | default('') | string | length) > 0 and (cluster_sync_source_public_key | default('') | string | length) > 0
+      listen: "restart pbgui"
+
+    - name: Read PBGui optional service config
+      shell: |
+        PBGUI_CONFIG_PATH={{ install_dir | quote }}/pbgui/pbgui.ini python3 - <<'PY'
+        import configparser
+        import os
+
+        config = configparser.ConfigParser()
+        config.read(os.environ.get('PBGUI_CONFIG_PATH') or '')
+
+        def configured(value):
+            normalized = str(value or '').strip()
+            lowered = normalized.lower()
+            if not normalized or lowered in {'none', 'null', 'false', '<api_key>'}:
+                return False
+            return not normalized.startswith('<')
+
+        print('coindata_configured=' + ('yes' if configured(config.get('coinmarketcap', 'api_key', fallback='')) else 'no'))
+        PY
+      args:
+        executable: /bin/bash
+      register: optional_service_config
+      changed_when: false
+      listen: "restart pbgui"
+
+    - name: Build enabled PBGui service list
+      set_fact:
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun'] + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
+      listen: "restart pbgui"
+
+    - name: Sync PBGui systemd user services
+      command:
+        argv:
+          - /bin/bash
+          - "{{ install_dir }}/pbgui/setup/setup_systemd.sh"
+          - --user
+          - "{{ user }}"
+          - --pbgui-dir
+          - "{{ install_dir }}/pbgui"
+          - --python
+          - "{{ install_dir }}/venv_pbgui/bin/python"
+          - --enable
+          - "{{ pbgui_enabled_services | join(',') }}"
+          - --no-start
+      register: systemd_setup_result
+      changed_when: systemd_setup_result.rc == 0
+      failed_when: false
+      listen: "restart pbgui"
+
+    - name: Restart PBCluster, PBRun and PBCoinData
+      script: setup/vps_service_control.sh restart PBCluster PBRun PBCoinData
       environment:
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"

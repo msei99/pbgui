@@ -1375,7 +1375,7 @@ while True:
 "'''
 
 INSTANCE_COLLECT_SCRIPT = r'''python3 -u -c "
-import json, os, re, subprocess, time
+import hashlib, json, os, re, subprocess, time
 from datetime import datetime, timezone
 
 HOME = os.path.expanduser('~')
@@ -1400,6 +1400,7 @@ YESTERDAY = datetime.fromtimestamp(YESTERDAY_START, timezone.utc).strftime('%Y-%
 # PNL regex (matches PBRun patterns)
 FILL_SUMMARY_RE = re.compile(r'\[fill\]\s+(\d+)\s+fills,\s+pnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\s+\w+')
 FILL_PNL_RE = re.compile(r'\bpnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\b')
+SYNC_EXCLUDE_FILES = {'approved_coins.json', 'config_run.json', 'ignored_coins.json', 'running_version.txt'}
 
 # shared helpers (used by both counting and dump mode)
 
@@ -1429,6 +1430,104 @@ def _extract_fill_summary(line):
     if m:
         return float(m.group(1)), 1
     return None
+
+def _read_json(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            return json.load(handle)
+    except Exception:
+        return None
+
+def _read_text(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            return handle.read().strip()
+    except Exception:
+        return ''
+
+def _load_cluster_context():
+    root = os.path.join(PBGDIR, 'data', 'cluster')
+    node_id = _read_text(os.path.join(root, 'node_id'))
+    cluster_id = _read_text(os.path.join(root, 'cluster_id'))
+    desired = _read_json(os.path.join(root, 'desired_state.json'))
+    desired_loaded = isinstance(desired, dict)
+    desired = desired if isinstance(desired, dict) else {}
+    instances = desired.get('instances') if isinstance(desired.get('instances'), dict) else {}
+    tombstones = desired.get('tombstones') if isinstance(desired.get('tombstones'), dict) else {}
+    configured = bool(node_id and cluster_id)
+    return {
+        'configured': configured,
+        'node_id': node_id,
+        'cluster_id': cluster_id,
+        'desired_loaded': desired_loaded,
+        'desired_cluster_id': str(desired.get('cluster_id') or ''),
+        'instances': instances,
+        'tombstones': tombstones,
+    }
+
+def _config_meta(config_dir):
+    cfg_path = os.path.join(config_dir, 'config.json')
+    cfg = _read_json(cfg_path)
+    pbgui = cfg.get('pbgui', {}) if isinstance(cfg, dict) else {}
+    return {
+        'version': pbgui.get('version', 0),
+        'enabled_on': pbgui.get('enabled_on', 'disabled'),
+        'dynamic_ignore': bool(pbgui.get('dynamic_ignore')),
+    }
+
+def _config_manifest_hash(config_dir):
+    files = {}
+    try:
+        filenames = sorted(os.listdir(config_dir))
+    except Exception:
+        filenames = []
+    for filename in filenames:
+        if filename in SYNC_EXCLUDE_FILES or not filename.endswith('.json'):
+            continue
+        path = os.path.join(config_dir, filename)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, 'rb') as handle:
+                raw = handle.read()
+        except Exception:
+            continue
+        files[filename] = {'sha256': hashlib.sha256(raw).hexdigest(), 'size': len(raw)}
+    manifest = json.dumps({'schema_version': 1, 'files': files}, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    return 'sha256:' + hashlib.sha256(manifest).hexdigest()
+
+def _cluster_gate_status(name, config_dir, version, cluster):
+    if not cluster.get('configured'):
+        return {'blocked': False, 'cluster_gate': 'not_configured', 'blocked_reason': ''}
+    if not cluster.get('desired_loaded'):
+        return {'blocked': True, 'cluster_gate': 'missing_desired_state', 'blocked_reason': 'Cluster desired_state.json is missing'}
+    if str(cluster.get('desired_cluster_id') or '') != str(cluster.get('cluster_id') or ''):
+        return {'blocked': True, 'cluster_gate': 'foreign_desired_state', 'blocked_reason': 'Cluster desired_state.json belongs to another cluster'}
+    tombstones = cluster.get('tombstones') if isinstance(cluster.get('tombstones'), dict) else {}
+    if name in tombstones:
+        return {'blocked': True, 'cluster_gate': 'tombstoned', 'blocked_reason': 'Cluster desired state tombstoned this instance'}
+    instances = cluster.get('instances') if isinstance(cluster.get('instances'), dict) else {}
+    item = instances.get(name)
+    if not isinstance(item, dict):
+        return {'blocked': True, 'cluster_gate': 'missing_instance', 'blocked_reason': 'Instance is missing from Cluster desired state'}
+    if item.get('conflicted') is True:
+        return {'blocked': True, 'cluster_gate': 'conflicted', 'blocked_reason': 'Cluster desired state marks this instance as conflicted'}
+    if str(item.get('desired_state') or '') != 'running':
+        return {'blocked': True, 'cluster_gate': 'desired_stopped', 'blocked_reason': 'Cluster desired state is not running'}
+    if str(item.get('assigned_host') or '') != str(cluster.get('node_id') or ''):
+        return {'blocked': True, 'cluster_gate': 'wrong_host', 'blocked_reason': 'Cluster desired state assigns this instance to another node'}
+    if not os.path.isdir(config_dir):
+        return {'blocked': True, 'cluster_gate': 'missing_local_config', 'blocked_reason': 'Assigned config is not materialized locally'}
+    expected_hash = str(item.get('config_manifest_hash') or '')
+    try:
+        if _config_manifest_hash(config_dir) != expected_hash:
+            return {'blocked': True, 'cluster_gate': 'manifest_mismatch', 'blocked_reason': 'Local config manifest does not match Cluster desired state'}
+    except Exception as exc:
+        return {'blocked': True, 'cluster_gate': 'manifest_error', 'blocked_reason': 'Cluster config manifest check failed: ' + str(exc)}
+    expected_version = str(item.get('version') or '')
+    if str(version or '') != expected_version:
+        return {'blocked': True, 'cluster_gate': 'version_mismatch', 'blocked_reason': 'Local config version does not match Cluster desired state'}
+    return {'blocked': False, 'cluster_gate': 'allowed', 'blocked_reason': ''}
 
 def _count_hourly_occurrences(lines, needle):
     buckets = {}
@@ -1821,6 +1920,8 @@ monitors = []
 v7 = []
 new_cache = {'_version': EXPECTED_CACHE_VERSION}
 
+cluster_context = _load_cluster_context()
+
 # collect bot log files for sidebar selector and history rebuild
 bot_logs = {}
 try:
@@ -1866,7 +1967,18 @@ for name, cfg_dir in sorted(running.items()):
     if os.path.isfile(rvf):
         try: rv = int(open(rvf).read().strip())
         except Exception: pass
-    v7.append({'name': name, 'running': True, 'cv': version, 'eo': enabled_on, 'rv': rv, 'di': dynamic_ignore})
+    gate = _cluster_gate_status(name, cfg_dir, version, cluster_context)
+    v7.append({
+        'name': name,
+        'running': True,
+        'cv': version,
+        'eo': enabled_on,
+        'rv': rv,
+        'di': dynamic_ignore,
+        'blocked': bool(gate.get('blocked', False)),
+        'blocked_reason': str(gate.get('blocked_reason', '') or ''),
+        'cluster_gate': str(gate.get('cluster_gate', '') or ''),
+    })
 
     # passivbot monitor dir (for start time)
     monitor_dir = None
@@ -2021,6 +2133,39 @@ for name, cfg_dir in sorted(running.items()):
         'log_off': bc['log_off'], 'err_off': bc['err_off'], 'log_fp': bc['log_fp'], 'log_sig': bc['log_sig'], 'err_sig': bc['err_sig'],
     }
 
+candidate_names = set()
+run_v7_root = os.path.join(PBGDIR, 'data', 'run_v7')
+try:
+    if os.path.isdir(run_v7_root):
+        for item in os.listdir(run_v7_root):
+            if os.path.isfile(os.path.join(run_v7_root, item, 'config.json')):
+                candidate_names.add(item)
+except Exception:
+    pass
+if cluster_context.get('configured'):
+    node_id = str(cluster_context.get('node_id') or '')
+    for name, item in (cluster_context.get('instances') or {}).items():
+        if isinstance(item, dict) and str(item.get('assigned_host') or '') == node_id:
+            candidate_names.add(str(name))
+
+for name in sorted(candidate_names):
+    if name in running:
+        continue
+    cfg_dir = os.path.join(run_v7_root, name)
+    meta = _config_meta(cfg_dir)
+    gate = _cluster_gate_status(name, cfg_dir, meta.get('version', 0), cluster_context)
+    v7.append({
+        'name': name,
+        'running': False,
+        'cv': meta.get('version', 0),
+        'eo': meta.get('enabled_on', 'disabled'),
+        'rv': 0,
+        'di': bool(meta.get('dynamic_ignore', False)),
+        'blocked': bool(gate.get('blocked', False)),
+        'blocked_reason': str(gate.get('blocked_reason', '') or ''),
+        'cluster_gate': str(gate.get('cluster_gate', '') or ''),
+    })
+
 print(json.dumps({'monitors': monitors, 'v7': v7, 'cache': new_cache,
     'bot_logs': bot_logs}))
 "'''
@@ -2157,7 +2302,7 @@ def configured_text(value):
     if not value:
         return False
     lowered = value.lower()
-    if lowered in ('none', 'null', 'false', '<api_key>', '<bucket_name>:', '<bucket_name>'):
+    if lowered in ('none', 'null', 'false', '<api_key>'):
         return False
     if value.startswith('<') and value.endswith('>'):
         return False
@@ -2225,10 +2370,10 @@ def ignored_process_ids():
 def collect_legacy_pbgui_processes(pbgui_dir):
     target_dir = os.path.realpath(pbgui_dir)
     target_prefix = target_dir + os.sep
-    scripts = ('PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
+    scripts = ('PBCluster.py', 'PBRun.py', 'PBCoinData.py', 'starter.py')
     unit_by_script = {
+        'PBCluster.py': 'pbgui-pbcluster.service',
         'PBRun.py': 'pbgui-pbrun.service',
-        'PBRemote.py': 'pbgui-pbremote.service',
         'PBCoinData.py': 'pbgui-pbcoindata.service',
     }
     ignored = ignored_process_ids()
@@ -2281,16 +2426,14 @@ def collect_legacy_cron_lines(pbgui_dir):
     return [line for line in (res.stdout or '').splitlines() if any(token in line for token in tokens) or line.strip() == '#Ansible: pbgui']
 
 
-def build_systemd_migration_status(pbgui_dir, pbremote_configured, coindata_configured):
+def build_systemd_migration_status(pbgui_dir, coindata_configured):
     pbgui_path = Path(pbgui_dir)
     python_bin = pbgui_path.parent / 'venv_pbgui' / 'bin' / 'python'
     systemctl_path = run(['which', 'systemctl'], timeout=5)
     systemctl_exists = bool(systemctl_path)
     user_manager_ok, user_manager_detail = systemd_user_manager_ok(systemctl_exists)
-    all_unit_names = ['pbgui-pbrun.service', 'pbgui-pbremote.service', 'pbgui-pbcoindata.service']
-    required_unit_names = ['pbgui-pbrun.service']
-    if pbremote_configured:
-        required_unit_names.append('pbgui-pbremote.service')
+    all_unit_names = ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-pbcoindata.service']
+    required_unit_names = ['pbgui-pbcluster.service', 'pbgui-pbrun.service']
     if coindata_configured:
         required_unit_names.append('pbgui-pbcoindata.service')
     units = [systemd_unit_status(unit, systemctl_exists) for unit in all_unit_names]
@@ -2345,13 +2488,11 @@ def build_systemd_migration_status(pbgui_dir, pbremote_configured, coindata_conf
 role = cfg.get('main', 'role', fallback='slave')
 pb7dir = cfg.get('main', 'pb7dir', fallback='')
 pb7venv = cfg.get('main', 'pb7venv', fallback='')
-pbremote_bucket = config_value('pbremote', 'bucket')
 coinmarketcap_api_key = config_value('coinmarketcap', 'api_key')
 firewall_settings_present = cfg.has_section('firewall')
 firewall_enabled = config_bool('firewall', 'enabled', False)
 firewall_ssh_port = config_value('firewall', 'ssh_port') or '22'
 firewall_ssh_ips = config_value('firewall', 'ssh_ips')
-pbremote_configured = configured_text(pbremote_bucket)
 coindata_configured = configured_text(coinmarketcap_api_key)
 
 result = {
@@ -2369,16 +2510,13 @@ result = {
     'pb7c': '',
     'pb7b': 'unknown',
     'pb7py': 'N/A',
-    'pbremote_configured': pbremote_configured,
     'coindata_configured': coindata_configured,
-    'pbremote_bucket': pbremote_bucket,
     'coinmarketcap_api_key': coinmarketcap_api_key,
     'firewall_settings_present': firewall_settings_present,
     'firewall': firewall_enabled,
     'firewall_ssh_port': firewall_ssh_port,
     'firewall_ssh_ips': firewall_ssh_ips,
     'optional_services': {
-        'PBRemote': pbremote_configured,
         'PBCoinData': coindata_configured,
     },
 }
@@ -2437,7 +2575,7 @@ if os.path.isdir(logs_dir):
         if os.path.isfile(full) and (f.endswith('.log') or f.endswith('.log.old')):
             available.append('data/logs/' + f)
 result['available_logs'] = available
-result['systemd_migration'] = build_systemd_migration_status(PBGDIR, pbremote_configured, coindata_configured)
+result['systemd_migration'] = build_systemd_migration_status(PBGDIR, coindata_configured)
 
 print(json.dumps(result))
 PY'''
@@ -2490,25 +2628,23 @@ class ServiceInfo:
 
 
 MONITORED_SERVICES = {
+    "PBCluster": ServiceInfo("PBCluster", "data/pid/pbcluster.pid",
+                             "PBCluster.py", "pbcluster.py"),
     "PBRun": ServiceInfo("PBRun", "data/pid/pbrun.pid",
-                         "PBRun.py", "pbrun.py"),
-    "PBRemote": ServiceInfo("PBRemote", "data/pid/pbremote.pid",
-                             "PBRemote.py", "pbremote.py"),
+                          "PBRun.py", "pbrun.py"),
     "PBCoinData": ServiceInfo("PBCoinData", "data/pid/pbcoindata.pid",
                                "PBCoinData.py", "pbcoindata.py"),
 }
 
 MONITORED_SERVICE_SYSTEMD_UNITS = {
+    "PBCluster": "pbgui-pbcluster.service",
     "PBRun": "pbgui-pbrun.service",
-    "PBRemote": "pbgui-pbremote.service",
     "PBCoinData": "pbgui-pbcoindata.service",
 }
 
+PBCLUSTER_DISABLED_REASON = "Cluster Sync is not enabled for this node"
+
 OPTIONAL_SERVICE_REQUIREMENTS = {
-    "PBRemote": {
-        "config_key": "bucket",
-        "reason": "PBRemote bucket is not configured",
-    },
     "PBCoinData": {
         "config_key": "coinmarketcap_api_key",
         "reason": "CoinMarketCap API key is not configured",
@@ -2652,7 +2788,7 @@ class VPSMonitor:
         if not normalized:
             return False
         lowered = normalized.lower()
-        if lowered in {"none", "null", "false", "<api_key>", "<bucket_name>", "<bucket_name>:"}:
+        if lowered in {"none", "null", "false", "<api_key>"}:
             return False
         return not (normalized.startswith("<") and normalized.endswith(">"))
 
@@ -2680,23 +2816,57 @@ class VPSMonitor:
         return self._configured_optional_value(config.get(requirement["config_key"]))
 
     def _optional_service_expected(self, hostname: str, service_name: str) -> bool:
+        if service_name == "PBCluster":
+            return self._pbcluster_expected(hostname)
         if service_name not in OPTIONAL_SERVICE_REQUIREMENTS:
             return True
         local_expected = self._local_optional_service_expected(hostname, service_name)
-        if local_expected is not None:
-            return local_expected
-
         meta = self.store.host_meta.get(hostname, {}) if self.store else {}
+        remote_expected: bool | None = None
         optional_services = meta.get("optional_services") if isinstance(meta, dict) else None
         if isinstance(optional_services, dict) and service_name in optional_services:
-            return bool(optional_services.get(service_name))
-        if service_name == "PBRemote" and isinstance(meta, dict) and "pbremote_configured" in meta:
-            return bool(meta.get("pbremote_configured"))
-        if service_name == "PBCoinData" and isinstance(meta, dict) and "coindata_configured" in meta:
-            return bool(meta.get("coindata_configured"))
+            remote_expected = bool(optional_services.get(service_name))
+        elif service_name == "PBCoinData" and isinstance(meta, dict) and "coindata_configured" in meta:
+            remote_expected = bool(meta.get("coindata_configured"))
+
+        if local_expected is False or remote_expected is False:
+            return False
+        if local_expected is True:
+            return True
+        if remote_expected is not None:
+            return remote_expected
 
         # Unknown capability should be treated as expected to avoid hiding real failures.
         return True
+
+    def _pbcluster_expected(self, hostname: str) -> bool:
+        safe_host = str(hostname or "").strip()
+        if not safe_host:
+            return False
+        nodes_path = Path(PBGDIR) / "data" / "cluster" / "cluster_nodes.json"
+        try:
+            payload = json.loads(nodes_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return False
+        except Exception as exc:
+            _log(SERVICE, f"[service] Could not read Cluster node membership: {exc}", level="WARNING")
+            return False
+        nodes = payload.get("nodes") if isinstance(payload, dict) else None
+        if not isinstance(nodes, dict):
+            return False
+        for node in nodes.values():
+            if not isinstance(node, dict):
+                continue
+            names = {
+                str(node.get("hostname") or "").strip(),
+                str(node.get("pbname") or "").strip(),
+            }
+            if safe_host not in names:
+                continue
+            if node.get("enabled") is False:
+                return False
+            return bool(node.get("sync_enabled"))
+        return False
 
     def _disabled_service_check(self, service_name: str) -> dict[str, Any]:
         requirement = OPTIONAL_SERVICE_REQUIREMENTS.get(service_name) or {}
@@ -2706,7 +2876,7 @@ class VPSMonitor:
             "error": None,
             "was_restarted": False,
             "expected": False,
-            "reason": str(requirement.get("reason") or "Service is not configured"),
+            "reason": PBCLUSTER_DISABLED_REASON if service_name == "PBCluster" else str(requirement.get("reason") or "Service is not configured"),
         }
 
     @property
@@ -2966,7 +3136,13 @@ class VPSMonitor:
                 alert.active = False
                 alert.last_seen_ts = now
                 changed = True
-                await self._emit_recovery_event(alert)
+                suppress_recovery = (
+                    alert.kind == ALERT_KIND_SERVICE
+                    and alert.name == "PBCluster"
+                    and not self._optional_service_expected(alert.host, alert.name)
+                )
+                if not suppress_recovery:
+                    await self._emit_recovery_event(alert)
 
         if changed:
             self._save_alert_state()
@@ -3265,6 +3441,28 @@ class VPSMonitor:
                 if h in self.pool.hostnames():
                     if await self.pool.connect(h):
                         self._start_metrics_stream(h)
+
+    async def refresh_enabled_host(self, hostname: str) -> bool:
+        """Reload config and reconnect one enabled host after credentials change."""
+
+        host = str(hostname or "").strip()
+        if not host:
+            return False
+        self._enabled_hosts = None
+        enabled = self.enabled_hosts
+        self.pool.load_vps_configs()
+        for h in list(self.pool.hostnames()):
+            if h not in enabled:
+                self.pool.remove_host(h)
+        if host not in enabled or host not in self.pool.hostnames():
+            return False
+        if await self.pool.connect(host):
+            self._start_metrics_stream(host)
+            self._last_host_meta_collect.pop(host, None)
+            self._last_package_status_collect.pop(host, None)
+            _log(SERVICE, f"Refreshed monitor connection for {host}")
+            return True
+        return False
 
     # ── Metric streams ──────────────────────────────────────
 
@@ -3933,8 +4131,7 @@ class VPSMonitor:
         """Public: immediately collect instances from a single VPS.
 
         Unlike _collect_instances_all() this bypasses the interval gate
-        so callers (e.g. V7ConfigSyncWorker) can trigger a refresh right
-        after an activation signal.
+        so callers can trigger a refresh right after an activation signal.
         """
         entry = self.pool.get_connection(hostname)
         if not entry:
@@ -4245,6 +4442,15 @@ class VPSMonitor:
         systemd_status = await self._check_systemd_service(hostname, svc.name)
         if systemd_status is not None:
             return systemd_status
+        if svc.name == "PBCluster":
+            return {
+                "status": ServiceStatus.STOPPED.value,
+                "pid": None,
+                "error": "PBCluster systemd user unit is missing or unavailable",
+                "was_restarted": False,
+                "manager": "systemd",
+                "unit": MONITORED_SERVICE_SYSTEMD_UNITS.get(svc.name),
+            }
 
         result = None
         for base_dir in self.pool.get_remote_pbgui_dirs(hostname):
@@ -4336,6 +4542,13 @@ class VPSMonitor:
             if result and result.exit_status not in (2, 3):
                 _log(SERVICE, f"[service] Failed to restart {service_name} on "
                      f"{hostname} through systemd", level="ERROR")
+                return False
+            if service_name == "PBCluster":
+                _log(
+                    SERVICE,
+                    f"[service] PBCluster restart on {hostname} requires the systemd user unit; not using legacy starter.py fallback",
+                    level="WARNING",
+                )
                 return False
 
         start_cmd = ""

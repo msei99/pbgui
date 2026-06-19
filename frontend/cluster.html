@@ -1,0 +1,2466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cluster Sync - PBGui</title>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
+  <script src="/app/js/sidebar_resize.js?v=1"></script>
+  <style>
+    :root {
+      --bg: #0e1117;
+      --bg2: #131b2b;
+      --bg3: #111827;
+      --border: #1e2736;
+      --border2: #2d3748;
+      --text: #e2e8f0;
+      --text-dim: #94a3b8;
+      --muted: #94a3b8;
+      --faint: #64748b;
+      --accent: #63b3ed;
+      --blue: #1f77ff;
+      --good: #4ade80;
+      --warn: #f59e0b;
+      --bad: #f87171;
+      --font: 'Segoe UI', system-ui, sans-serif;
+      --fs-xs: 11px;
+      --fs-sm: 13px;
+      --fs-base: 14px;
+      --fs-md: 16px;
+      --fs-lg: 20px;
+      --sp-xs: 4px;
+      --sp-sm: 8px;
+      --sp-md: 12px;
+      --sp-lg: 20px;
+      --input-h: 32px;
+      --btn-h: 32px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: var(--fs-base); }
+    button { font-family: inherit; }
+
+    #page-body { display: flex; height: calc(100vh - 52px); overflow: hidden; padding: 0; }
+    #main-content { flex: 1; min-width: 0; overflow: auto; padding: var(--sp-lg); }
+    .page-shell { width: 100%; max-width: none; margin: 0; display: flex; flex-direction: column; gap: var(--sp-lg); }
+    .cluster-section { display: none; gap: var(--sp-lg); }
+    .cluster-section.is-active { display: grid; }
+
+    .hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--sp-lg);
+      background: linear-gradient(135deg, rgba(99,179,237,0.12), rgba(19,27,43,0.92));
+      border: 1px solid rgba(99,179,237,0.22);
+      border-radius: 14px;
+      padding: var(--sp-lg);
+    }
+    .hero-title { font-size: 26px; font-weight: 750; letter-spacing: 0.01em; margin-bottom: 6px; }
+    .hero-subtitle { color: var(--muted); max-width: 780px; line-height: 1.45; }
+    .hero-actions { display: flex; gap: var(--sp-sm); flex-wrap: wrap; justify-content: flex-end; }
+
+    .btn {
+      min-height: 34px;
+      padding: 0.45rem 0.85rem;
+      border-radius: 7px;
+      border: 1px solid var(--border2);
+      background: #1a202c;
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color 0.12s, background 0.12s;
+    }
+    .btn:hover { border-color: var(--accent); background: #16243a; }
+    .btn.primary { border-color: rgba(99,179,237,0.42); color: var(--accent); background: rgba(99,179,237,0.08); }
+    .btn.primary:hover { background: rgba(99,179,237,0.16); }
+    .btn.warn { border-color: rgba(245,158,11,0.38); color: #fcd34d; background: rgba(245,158,11,0.08); }
+    .btn.warn:hover { background: rgba(245,158,11,0.16); }
+    .btn.small { min-height: 28px; padding: 0.28rem 0.55rem; font-size: var(--fs-xs); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; border-color: var(--border2); background: #1a202c; color: var(--faint); }
+
+    #status-msg {
+      display: none;
+      padding: 0.6rem 0.85rem;
+      border-radius: 9px;
+      border: 1px solid var(--border2);
+      background: var(--bg3);
+      color: var(--muted);
+    }
+    #status-msg.visible { display: block; }
+    #status-msg.ok { border-color: rgba(74,222,128,0.32); color: var(--good); background: rgba(74,222,128,0.08); }
+    #status-msg.warn { border-color: rgba(245,158,11,0.35); color: #fcd34d; background: rgba(245,158,11,0.08); }
+    #status-msg.err { border-color: rgba(248,113,113,0.35); color: var(--bad); background: rgba(248,113,113,0.08); }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(5, minmax(140px, 1fr)); gap: var(--sp-md); }
+    .stat-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: var(--sp-md);
+      min-width: 0;
+    }
+    .stat-label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+    .stat-value { font-size: 24px; font-weight: 750; }
+    .stat-value.good { color: var(--good); }
+    .stat-value.warn { color: var(--warn); }
+    .stat-value.bad { color: var(--bad); }
+
+    .panel {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-md);
+      padding: 0.8rem 1rem;
+      background: var(--bg3);
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-title { font-size: var(--fs-md); font-weight: 750; }
+    .panel-note { color: var(--faint); font-size: var(--fs-sm); }
+    .panel-body { padding: 1rem; }
+
+    .identity-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: var(--sp-md); }
+    .field {
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: #101724;
+      padding: var(--sp-md);
+      min-width: 0;
+    }
+    .field-label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px; }
+    .field-value { color: var(--text); word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-sm); }
+
+    .warning-list { display: flex; flex-direction: column; gap: var(--sp-sm); margin-top: var(--sp-md); }
+    .warning-item { border: 1px solid rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); color: #fcd34d; border-radius: 8px; padding: 0.55rem 0.75rem; }
+    .setup-state-note { border: 1px solid rgba(99,179,237,0.22); background: rgba(99,179,237,0.08); color: var(--muted); border-radius: 10px; padding: 0.75rem 0.9rem; line-height: 1.45; }
+    .setup-state-note.warn { border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); color: #fcd34d; }
+
+    .bootstrap-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-md); flex-wrap: wrap; margin-bottom: var(--sp-md); }
+    .bootstrap-summary { color: var(--muted); line-height: 1.45; }
+    .bootstrap-actions { display: flex; gap: var(--sp-sm); flex-wrap: wrap; }
+
+    .table-wrap { overflow: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--bg2);
+      color: var(--muted);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      text-align: left;
+      padding: 0.55rem 0.7rem;
+      border-bottom: 2px solid var(--border);
+    }
+    th.is-sort-active { color: var(--accent); }
+    .sort-btn {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0;
+      font: inherit;
+      letter-spacing: inherit;
+      text-transform: inherit;
+      text-align: left;
+    }
+    .sort-btn:hover { color: var(--accent); }
+    .sort-indicator { min-width: 8px; color: var(--faint); }
+    th.is-sort-active .sort-indicator { color: var(--accent); }
+    td { padding: 0.58rem 0.7rem; border-bottom: 1px solid rgba(30,39,54,0.85); color: #cbd5e1; vertical-align: top; }
+    tr:hover td { background: rgba(255,255,255,0.025); }
+    .empty { color: var(--faint); padding: 1rem; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-sm); }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 8px;
+      border: 1px solid var(--border2);
+      background: #111827;
+      color: var(--muted);
+      font-size: var(--fs-xs);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    .pill.good { color: var(--good); border-color: rgba(74,222,128,0.35); background: rgba(74,222,128,0.08); }
+    .pill.warn { color: #fcd34d; border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); }
+    .pill.bad { color: var(--bad); border-color: rgba(248,113,113,0.35); background: rgba(248,113,113,0.08); }
+    .pill.blue { color: var(--accent); border-color: rgba(99,179,237,0.35); background: rgba(99,179,237,0.08); }
+
+    .hash { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 6000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: var(--sp-lg);
+      background: rgba(0,0,0,0.72);
+      backdrop-filter: blur(2px);
+    }
+    .modal-backdrop[hidden] { display: none; }
+    .modal-card {
+      width: min(560px, 100%);
+      max-width: 92vw;
+      border: 1px solid #2d3748;
+      border-radius: 14px;
+      background: var(--bg2);
+      box-shadow: 0 20px 70px rgba(0,0,0,0.9);
+      overflow: hidden;
+    }
+    .modal-card.preview-modal-card {
+      position: fixed;
+      display: flex;
+      flex-direction: column;
+      width: min(1180px, calc(100vw - 48px));
+      height: min(760px, calc(100vh - 48px));
+      min-width: min(560px, calc(100vw - 48px));
+      min-height: 360px;
+      max-width: calc(100vw - 24px);
+      max-height: calc(100vh - 24px);
+      resize: both;
+    }
+    .modal-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-sm); padding: 0.85rem 1.1rem; background: var(--bg3); border-bottom: 1px solid var(--border); font-weight: 750; }
+    .preview-modal-card .modal-head { cursor: move; user-select: none; flex: 0 0 auto; }
+    .modal-close { background: transparent; border: none; color: var(--faint); font-size: var(--fs-lg); cursor: pointer; padding: 0.2rem 0.35rem; border-radius: 5px; line-height: 1; }
+    .modal-close:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+    .modal-body { padding: var(--sp-lg); color: var(--muted); line-height: 1.45; display: grid; gap: var(--sp-md); max-height: calc(100vh - 160px); overflow: auto; }
+    .preview-modal-card .modal-body { flex: 1 1 auto; min-height: 0; max-height: none; }
+    .modal-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-sm); flex-wrap: wrap; padding: 0 var(--sp-lg) var(--sp-lg); }
+    .preview-modal-card .modal-actions { flex: 0 0 auto; }
+    .modal-error { display: none; color: var(--bad); border: 1px solid rgba(248,113,113,0.35); background: rgba(248,113,113,0.08); border-radius: 8px; padding: 0.55rem 0.75rem; }
+    .modal-error.visible { display: block; }
+    .modal-form-grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: var(--sp-md); }
+    .modal-field { display: grid; gap: 5px; }
+    .modal-field label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; }
+    .field-help { color: var(--faint); font-size: var(--fs-xs); line-height: 1.35; }
+    .modal-input { width: 100%; min-height: 34px; border: 1px solid var(--border2); border-radius: 7px; background: #0f1724; color: var(--text); padding: 0.45rem 0.55rem; }
+    .modal-input:disabled { color: var(--faint); background: #111827; }
+    .modal-field-wide { grid-column: 1 / -1; }
+    .peer-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 7px; }
+    .peer-option { display: flex; align-items: center; gap: 7px; border: 1px solid var(--border2); border-radius: 7px; padding: 0.45rem 0.55rem; background: #0f1724; color: var(--muted); }
+    .peer-option input { accent-color: var(--accent); }
+    .push-progress { flex: 1 1 340px; min-width: min(340px, 100%); margin-right: auto; border: 1px solid var(--border); border-radius: 9px; background: #101724; padding: var(--sp-sm); }
+    .push-progress[hidden] { display: none; }
+    .push-progress-label { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-sm); color: var(--muted); font-size: var(--fs-sm); margin-bottom: 7px; }
+    .push-progress-count { color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .push-progress-track { height: 8px; border-radius: 999px; overflow: hidden; background: rgba(15,23,42,0.95); border: 1px solid rgba(99,179,237,0.16); }
+    .push-progress-fill { width: 0%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, rgba(99,179,237,0.95), rgba(74,222,128,0.9)); transition: width 0.18s ease; }
+    .preview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--sp-sm); }
+    .preview-card { border: 1px solid var(--border); border-radius: 9px; padding: var(--sp-sm); background: #101724; }
+    .preview-label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; }
+    .preview-value { margin-top: 4px; color: var(--text); font-size: var(--fs-md); font-weight: 750; }
+    .preview-section { display: grid; gap: var(--sp-sm); }
+    .preview-list { color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; overflow-wrap: anywhere; }
+    #preview-modal table { min-width: 0; }
+
+    @media (max-width: 980px) {
+      #main-content { padding: var(--sp-md); }
+      .hero { flex-direction: column; }
+      .hero-actions { justify-content: flex-start; }
+      .stats-grid { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
+      .identity-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 560px) {
+      .stats-grid { grid-template-columns: 1fr; }
+      .hero-title { font-size: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <nav id="topnav"></nav>
+  <div id="page-body">
+    <div id="sidebar">
+      <div id="sidebar-inner">
+        <div id="sidebar-header">
+          <span class="sb-title">Cluster Sync</span>
+        </div>
+        <button class="sb-section active" type="button" data-cluster-section="overview">
+          Overview
+        </button>
+        <button class="sb-section" type="button" data-cluster-section="setup">
+          Setup
+        </button>
+        <button class="sb-section" type="button" data-cluster-section="nodes">
+          Nodes <span class="sb-count" id="nav-nodes-count" style="margin-left:auto" hidden></span>
+        </button>
+        <button class="sb-section" type="button" data-cluster-section="instances">
+          V7 State <span class="sb-count" id="nav-instances-count" style="margin-left:auto" hidden></span>
+        </button>
+        <button class="sb-section" type="button" data-cluster-section="tombstones">
+          Tombstones <span class="sb-count" id="nav-tombstones-count" style="margin-left:auto" hidden></span>
+        </button>
+        <button class="sb-section" type="button" data-cluster-section="oplog">
+          Oplog <span class="sb-count" id="nav-oplog-count" style="margin-left:auto" hidden></span>
+        </button>
+      </div>
+      <div id="sidebar-resize"></div>
+    </div>
+
+    <div id="main-content">
+      <div class="page-shell">
+      <section class="hero">
+        <div>
+          <div class="hero-title">Cluster Sync</div>
+          <div class="hero-subtitle">Local visibility, explicit sync membership, remote probes and identity join for the multi-master cluster state. Bootstrap writes local oplog entries only; remote writes happen only through explicit actions such as Join.</div>
+        </div>
+        <div class="hero-actions">
+          <button class="btn" id="probe-btn" type="button">Probe Active Nodes</button>
+          <button class="btn primary" id="refresh-btn" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <div id="status-msg"></div>
+      <section class="stats-grid" id="stats-grid"></section>
+
+        <main>
+          <div class="cluster-section is-active" data-cluster-section-panel="overview">
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Local Identity</div>
+                <div class="panel-note">Stable cluster/node identity for this PBGui install.</div>
+              </div>
+              <div class="panel-body">
+                <div class="identity-grid" id="identity-grid"></div>
+                <div class="warning-list" id="warning-list"></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="cluster-section" data-cluster-section-panel="setup">
+            <div class="setup-state-note" id="setup-state-note">Loading setup state...</div>
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Join Existing Cluster</div>
+                <div class="panel-note">Use this on a second master that can SSH out to an existing PBGui master.</div>
+              </div>
+              <div class="panel-body">
+                <div class="panel-note" style="margin-bottom:0.75rem;">Self-join preserves this install's local node id, automatically adopts the upstream cluster id when the local oplog is empty, pulls upstream operations/blobs, registers this master as outbound-only, installs the local Cluster SSH key on the upstream master and pushes the registration back. If the local oplog is not empty and belongs to another cluster, self-join is blocked.</div>
+                <div class="modal-form-grid">
+                  <div class="modal-field">
+                    <label for="self-join-hostname">VPS Monitor Hostname</label>
+                    <input class="modal-input" id="self-join-hostname" type="text" placeholder="existing-master">
+                  </div>
+                  <div class="modal-field">
+                    <label for="self-join-remote-dir">Remote PBGui Dir (optional)</label>
+                    <input class="modal-input" id="self-join-remote-dir" type="text" placeholder="software/pbgui">
+                    <div class="field-help">Leave empty to try VPS Manager metadata, <span class="mono">~/software/pbgui</span>, then <span class="mono">~/pbgui</span>.</div>
+                  </div>
+                  <div class="modal-field">
+                    <label for="self-join-ssh-host">SSH Host/IP</label>
+                    <input class="modal-input" id="self-join-ssh-host" type="text" placeholder="203.0.113.10">
+                  </div>
+                  <div class="modal-field">
+                    <label for="self-join-ssh-user">SSH User</label>
+                    <input class="modal-input" id="self-join-ssh-user" type="text" placeholder="ssh-user">
+                  </div>
+                  <div class="modal-field">
+                    <label for="self-join-ssh-port">SSH Port</label>
+                    <input class="modal-input" id="self-join-ssh-port" type="number" min="1" max="65535" step="1" placeholder="22">
+                  </div>
+                  <label class="peer-option modal-field-wide" for="self-join-reset">
+                    <input id="self-join-reset" type="checkbox">
+                    <span>Recovery: archive an existing local Cluster state if it belongs to another cluster, then join the upstream cluster.</span>
+                  </label>
+                </div>
+                <div class="bootstrap-toolbar" style="margin-top:0.75rem; margin-bottom:0;">
+                  <div class="bootstrap-summary" id="self-join-status">Self-join has not run yet.</div>
+                  <div class="push-progress" id="self-join-progress" hidden>
+                    <div class="push-progress-label">
+                      <span id="self-join-progress-label">Starting self-join...</span>
+                      <span class="push-progress-count" id="self-join-progress-count"></span>
+                    </div>
+                    <div class="push-progress-track"><div class="push-progress-fill" id="self-join-progress-fill"></div></div>
+                  </div>
+                  <div class="bootstrap-actions">
+                    <button class="btn warn" id="self-join-btn" type="button">Join Existing Cluster</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Bootstrap Cluster State</div>
+                <div class="panel-note">Use this only when this master should start a new local Cluster state instead of joining an existing cluster.</div>
+              </div>
+              <div class="panel-body">
+                <div class="bootstrap-toolbar">
+                  <div class="bootstrap-summary" id="bootstrap-summary">Bootstrap preview not loaded yet.</div>
+                  <div class="bootstrap-actions">
+                    <label class="peer-option" id="bootstrap-unlock-wrap" for="bootstrap-unlock" hidden>
+                      <input id="bootstrap-unlock" type="checkbox">
+                      <span>Allow bootstrap writes on this existing cluster</span>
+                    </label>
+                    <button class="btn warn" id="bootstrap-apply-btn" type="button" disabled>Apply Bootstrap</button>
+                  </div>
+                </div>
+                <div class="panel-note" style="margin-bottom:0.75rem;">Bootstrap writes ADD_NODE operations for known VPS hosts and UPSERT_CONFIG operations for local configs. New VPS nodes are candidates with Sync Off until enabled in Cluster Nodes. It never infers deletes from missing files or missing VPS entries. Tombstoned instances stay blocked and must be restored explicitly.</div>
+                <div class="table-wrap" id="bootstrap-table"></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="cluster-section" data-cluster-section-panel="nodes">
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Cluster Nodes</div>
+                <div class="panel-note" id="nodes-note"></div>
+              </div>
+              <div class="table-wrap" id="nodes-table"></div>
+            </section>
+          </div>
+
+          <div class="cluster-section" data-cluster-section-panel="instances">
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">V7 Desired State</div>
+                <div class="panel-note" id="instances-note"></div>
+              </div>
+              <div class="table-wrap" id="instances-table"></div>
+            </section>
+          </div>
+
+          <div class="cluster-section" data-cluster-section-panel="tombstones">
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Tombstones</div>
+                <div class="panel-note">Explicit deletes that prevent stale config resurrection.</div>
+              </div>
+              <div class="table-wrap" id="tombstones-table"></div>
+            </section>
+          </div>
+
+          <div class="cluster-section" data-cluster-section-panel="oplog">
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Recent Oplog</div>
+                <div class="panel-note" id="oplog-note"></div>
+              </div>
+              <div class="table-wrap" id="oplog-table"></div>
+            </section>
+          </div>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="join-modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="join-modal-title">
+      <div class="modal-head">
+        <div id="join-modal-title">Join Remote Cluster Node</div>
+        <button class="modal-close" id="join-close-btn" type="button" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div id="join-modal-message"></div>
+        <div class="field">
+          <div class="field-label">Remote Node</div>
+          <div class="field-value" id="join-modal-node"></div>
+        </div>
+        <div class="modal-error" id="join-modal-error"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="join-cancel-btn" type="button">Cancel</button>
+        <button class="btn warn" id="join-confirm-btn" type="button">Join &amp; Sync</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="self-join-password-modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="self-join-password-title">
+      <div class="modal-head">
+        <div id="self-join-password-title">SSH Password Required</div>
+        <button class="modal-close" id="self-join-password-close-btn" type="button" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div id="self-join-password-message">Key login is not available yet. Enter the upstream SSH password to retry the join.</div>
+        <div class="field">
+          <div class="field-label">Upstream Master</div>
+          <div class="field-value" id="self-join-password-host"></div>
+        </div>
+        <div class="field">
+          <div class="field-label">SSH User</div>
+          <div class="field-value" id="self-join-password-user"></div>
+        </div>
+        <div class="modal-field">
+          <label for="self-join-password-input">SSH Password</label>
+          <input class="modal-input" id="self-join-password-input" type="password" autocomplete="current-password" placeholder="SSH password">
+          <div class="field-help">Used only for this join request. It is not saved.</div>
+        </div>
+        <div class="modal-error" id="self-join-password-error"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="self-join-password-cancel-btn" type="button">Cancel</button>
+        <button class="btn warn" id="self-join-password-confirm-btn" type="button">Retry Join</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="node-settings-modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="node-settings-title">
+      <div class="modal-head">
+        <div id="node-settings-title">Edit Cluster Node</div>
+        <button class="modal-close" id="node-settings-close-btn" type="button" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <div class="field-label">Node</div>
+          <div class="field-value" id="node-settings-node"></div>
+        </div>
+        <div class="modal-form-grid">
+          <div class="modal-field">
+            <label for="node-settings-role">Role</label>
+            <input class="modal-input" id="node-settings-role" type="text" disabled>
+          </div>
+          <div class="modal-field">
+            <label for="node-settings-remote-dir">Remote PBGui Dir</label>
+            <input class="modal-input" id="node-settings-remote-dir" type="text" placeholder="software/pbgui">
+            <div class="field-help">Path used for Cluster SSH commands; relative paths start at the SSH user's home.</div>
+          </div>
+          <div class="modal-field">
+            <label for="node-settings-mode">Sync Mode</label>
+            <select class="modal-input" id="node-settings-mode">
+              <option value="disabled">Disabled</option>
+              <option value="outbound_only">Outbound only</option>
+              <option value="reachable">Reachable via SSH</option>
+            </select>
+          </div>
+          <div class="modal-field">
+            <label for="node-settings-ssh-port">SSH Port</label>
+            <input class="modal-input" id="node-settings-ssh-port" type="number" min="1" max="65535" step="1">
+          </div>
+          <div class="modal-field">
+            <label for="node-settings-ssh-host">SSH Host</label>
+            <input class="modal-input" id="node-settings-ssh-host" type="text" placeholder="203.0.113.10">
+          </div>
+          <div class="modal-field">
+            <label for="node-settings-ssh-user">SSH User</label>
+            <input class="modal-input" id="node-settings-ssh-user" type="text" placeholder="ssh-user">
+          </div>
+          <div class="modal-field modal-field-wide">
+            <label>Allowed Outbound Peers</label>
+            <div class="peer-list" id="node-settings-peers"></div>
+          </div>
+        </div>
+        <div class="panel-note">Role is set by setup/discovery and shown for diagnostics only. Remote PBGui Dir tells peers where this PBGui checkout lives. Outbound peers define which nodes this node is allowed to contact directly.</div>
+        <div class="modal-error" id="node-settings-error"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="node-settings-cancel-btn" type="button">Cancel</button>
+        <button class="btn primary" id="node-settings-save-btn" type="button">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="preview-modal" hidden>
+    <div class="modal-card preview-modal-card" id="preview-modal-card" role="dialog" aria-modal="true" aria-labelledby="preview-modal-title">
+      <div class="modal-head">
+        <div id="preview-modal-title">Remote State Preview</div>
+        <button class="modal-close" id="preview-close-x-btn" type="button" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div id="preview-modal-message">Loading remote state preview...</div>
+        <div id="preview-modal-content"></div>
+        <div class="modal-error" id="preview-modal-error"></div>
+      </div>
+      <div class="modal-actions">
+        <div class="push-progress" id="preview-push-progress" hidden>
+          <div class="push-progress-label">
+            <span id="preview-push-progress-label">Pushing cluster operations...</span>
+            <span class="push-progress-count" id="preview-push-progress-count"></span>
+          </div>
+          <div class="push-progress-track"><div class="push-progress-fill" id="preview-push-progress-fill"></div></div>
+        </div>
+        <button class="btn warn" id="preview-push-ops-btn" type="button" hidden>Push Missing Ops + Rebuild</button>
+        <button class="btn primary" id="preview-materialize-btn" type="button" hidden>Materialize V7 Configs</button>
+        <button class="btn primary" id="preview-materialize-api-btn" type="button" hidden>Materialize API Keys</button>
+        <button class="btn" id="preview-close-btn" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.TOKEN = "%%TOKEN%%";
+    window.API_BASE = "%%API_BASE%%";
+    window.WS_BASE = "%%WS_BASE%%";
+    window.PBGUI_VERSION = "%%VERSION%%";
+    window.PBGUI_SERIAL = "%%SERIAL%%";
+    window.PBGUI_NAV_CONFIG = { subtitle: 'CLUSTER SYNC', current: 'system_cluster' };
+    window.PBGUI_HELP_OPENER = function () {
+      if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
+      window.PBGuiSharedHelp.open('cluster sync', { token: window.TOKEN || '' });
+    };
+  </script>
+  <script src="/app/js/shared_help_overlay.js?v=4"></script>
+  <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+  <script src="/app/js/pbgui_dialogs.js?v=3"></script>
+  <script>
+    (function () {
+      'use strict';
+
+      var TOKEN = window.TOKEN || '';
+      var API_BASE = window.API_BASE || '';
+      var nodeMap = {};
+      var remoteProbeMap = {};
+      var localNodeId = '';
+      var tableSort = {
+        bootstrap: { key: 'target', dir: 'asc' },
+        nodes: { key: 'pbname', dir: 'asc' },
+        instances: { key: 'instance', dir: 'asc' },
+        tombstones: { key: 'instance', dir: 'asc' },
+        oplog: { key: 'created_at', dir: 'desc' }
+      };
+      var lastBootstrapPlan = null;
+      var lastNodesPayload = null;
+      var lastInstancesPayload = null;
+      var lastTombstonesPayload = null;
+      var lastOplogPayload = null;
+      var lastStatusSignature = '';
+      var lastNodesSignature = '';
+      var lastDesiredSignature = '';
+      var lastOplogSignature = '';
+      var clusterAutoRefreshTimer = null;
+      var clusterAutoRefreshInFlight = false;
+      var nodesActionsBound = false;
+      var pendingJoinNode = null;
+      var pendingSelfJoinPayload = null;
+      var pendingSettingsNode = null;
+      var pendingPreviewNode = null;
+      var lastPreviewPayload = null;
+      var pushProgressTimer = null;
+      var selfJoinProgressTimer = null;
+      var activeClusterSection = 'overview';
+      var clusterHasExistingState = false;
+      var bootstrapUnlocked = false;
+
+      function esc(value) {
+        return String(value === undefined || value === null ? '' : value).replace(/[&<>'"]/g, function (ch) {
+          return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[ch];
+        });
+      }
+
+      function payloadSignature(value) {
+        try { return JSON.stringify(value || null) || ''; } catch (_) { return ''; }
+      }
+
+      function setTextIfChanged(el, text) {
+        if (!el) return false;
+        text = String(text === undefined || text === null ? '' : text);
+        if (el.textContent === text) return false;
+        el.textContent = text;
+        return true;
+      }
+
+      function setHtmlIfChanged(el, html) {
+        if (!el) return false;
+        html = String(html === undefined || html === null ? '' : html);
+        if (el.innerHTML === html) return false;
+        el.innerHTML = html;
+        return true;
+      }
+
+      function setAttrIfChanged(el, name, value) {
+        if (!el) return false;
+        value = String(value === undefined || value === null ? '' : value);
+        if (el.getAttribute(name) === value) return false;
+        el.setAttribute(name, value);
+        return true;
+      }
+
+      function setClassIfChanged(el, value) {
+        if (!el) return false;
+        value = String(value || '');
+        if (el.className === value) return false;
+        el.className = value;
+        return true;
+      }
+
+      function shortId(value) {
+        var text = String(value || '');
+        if (text.length <= 18) return text || 'n/a';
+        return text.slice(0, 12) + '...' + text.slice(-6);
+      }
+
+      function timeText(ts) {
+        var n = Number(ts || 0);
+        if (!n) return 'n/a';
+        try { return new Date(n * 1000).toLocaleString(); } catch (_) { return 'n/a'; }
+      }
+
+      function setMessage(text, kind) {
+        var el = document.getElementById('status-msg');
+        if (!el) return;
+        el.className = text ? 'visible ' + (kind || '') : '';
+        el.textContent = text || '';
+      }
+
+      function setClusterSection(sectionId) {
+        activeClusterSection = sectionId || 'overview';
+        document.querySelectorAll('.sb-section[data-cluster-section]').forEach(function (btn) {
+          btn.classList.toggle('active', btn.getAttribute('data-cluster-section') === activeClusterSection);
+        });
+        document.querySelectorAll('[data-cluster-section-panel]').forEach(function (panel) {
+          panel.classList.toggle('is-active', panel.getAttribute('data-cluster-section-panel') === activeClusterSection);
+        });
+        var main = document.getElementById('main-content');
+        if (main) main.scrollTop = 0;
+      }
+
+      function setupClusterNavigation() {
+        document.querySelectorAll('.sb-section[data-cluster-section]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            setClusterSection(btn.getAttribute('data-cluster-section') || 'overview');
+          });
+        });
+        if (window.PBGuiSidebarResize && typeof window.PBGuiSidebarResize.init === 'function') {
+          window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
+        }
+      }
+
+      function setNavCount(id, value) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        var count = Number(value || 0);
+        el.hidden = count <= 0;
+        el.textContent = count > 0 ? String(count) : '';
+      }
+
+      function stateHasClusterOperations(status) {
+        var counts = (status || {}).counts || {};
+        return Number(counts.oplog || 0) > 0 || Number(counts.nodes || 0) > 1 || Number(counts.instances || 0) > 0;
+      }
+
+      function selfJoinIdleText() {
+        return clusterHasExistingState ? 'Run Self-Join Recovery' : 'Join Existing Cluster';
+      }
+
+      function renderSetupState(status) {
+        var counts = (status || {}).counts || {};
+        clusterHasExistingState = stateHasClusterOperations(status);
+        var note = document.getElementById('setup-state-note');
+        if (note) {
+          note.className = 'setup-state-note' + (clusterHasExistingState ? ' warn' : '');
+          note.textContent = clusterHasExistingState
+            ? 'This PBGui already has Cluster state (' + Number(counts.oplog || 0) + ' oplog ops, ' + Number(counts.nodes || 0) + ' nodes, ' + Number(counts.instances || 0) + ' V7 configs). Join and Bootstrap are recovery/migration tools now; normal work should use Nodes and V7 State.'
+            : 'This PBGui has no Cluster operations yet. Join an existing master, or bootstrap only if this master should start a new Cluster state.';
+        }
+        var unlockWrap = document.getElementById('bootstrap-unlock-wrap');
+        var unlock = document.getElementById('bootstrap-unlock');
+        if (unlockWrap) unlockWrap.hidden = !clusterHasExistingState;
+        if (!clusterHasExistingState) {
+          bootstrapUnlocked = false;
+          if (unlock) unlock.checked = false;
+        }
+        var selfJoinBtn = document.getElementById('self-join-btn');
+        if (selfJoinBtn && !selfJoinBtn.disabled) selfJoinBtn.textContent = selfJoinIdleText();
+      }
+
+      function fetchJson(path, options) {
+        options = options || {};
+        var headers = options.headers || {};
+        headers.Authorization = 'Bearer ' + TOKEN;
+        headers.Accept = 'application/json';
+        options.headers = headers;
+        options.cache = 'no-store';
+        return fetch(API_BASE + path, options).then(function (res) {
+          if (!res.ok) {
+            return res.text().then(function (body) { throw new Error(body || ('HTTP ' + res.status)); });
+          }
+          return res.json();
+        });
+      }
+
+      function setPushProgress(done, total, label) {
+        var box = document.getElementById('preview-push-progress');
+        var labelEl = document.getElementById('preview-push-progress-label');
+        var countEl = document.getElementById('preview-push-progress-count');
+        var fillEl = document.getElementById('preview-push-progress-fill');
+        if (!box || !labelEl || !countEl || !fillEl) return;
+        total = Math.max(0, Number(total || 0));
+        done = Math.min(total, Math.max(0, Number(done || 0)));
+        if (!total && !label) {
+          box.hidden = true;
+          fillEl.style.width = '0%';
+          labelEl.textContent = 'Pushing cluster operations...';
+          countEl.textContent = '';
+          return;
+        }
+        box.hidden = false;
+        var pct = total ? Math.round((done / total) * 100) : 0;
+        labelEl.textContent = label || 'Pushing cluster operations...';
+        countEl.textContent = total ? (done + ' / ' + total) : '';
+        fillEl.style.width = Math.min(100, Math.max(0, pct)) + '%';
+      }
+
+      function resetPushProgress() {
+        setPushProgress(0, 0, '');
+      }
+
+      function stopPushProgressPolling() {
+        if (pushProgressTimer) {
+          clearTimeout(pushProgressTimer);
+          pushProgressTimer = null;
+        }
+      }
+
+      function setSelfJoinProgress(done, total, label) {
+        var box = document.getElementById('self-join-progress');
+        var labelEl = document.getElementById('self-join-progress-label');
+        var countEl = document.getElementById('self-join-progress-count');
+        var fillEl = document.getElementById('self-join-progress-fill');
+        if (!box || !labelEl || !countEl || !fillEl) return;
+        total = Math.max(0, Number(total || 0));
+        done = Math.min(total, Math.max(0, Number(done || 0)));
+        if (!total && !label) {
+          box.hidden = true;
+          fillEl.style.width = '0%';
+          labelEl.textContent = 'Starting self-join...';
+          countEl.textContent = '';
+          return;
+        }
+        box.hidden = false;
+        var pct = total ? Math.round((done / total) * 100) : 0;
+        labelEl.textContent = label || 'Joining existing cluster...';
+        countEl.textContent = total ? (done + ' / ' + total) : '';
+        fillEl.style.width = Math.min(100, Math.max(0, pct)) + '%';
+      }
+
+      function stopSelfJoinProgressPolling() {
+        if (selfJoinProgressTimer) {
+          clearTimeout(selfJoinProgressTimer);
+          selfJoinProgressTimer = null;
+        }
+      }
+
+      function pushProgressLabel(job) {
+        var phase = String((job || {}).phase || 'queued');
+        var status = String((job || {}).status || 'queued');
+        if (status === 'error') return 'Push failed; see error message.';
+        if (phase === 'blobs') return 'Uploading config blobs to remote...';
+        if (phase === 'secrets') return 'Uploading secret blobs to remote...';
+        if (phase === 'rebuilding') return 'Rebuilding remote materialized state...';
+        if (phase === 'done' || status === 'done') return 'Remote oplog push complete. Refreshing preview...';
+        if (phase === 'starting' || phase === 'queued') return 'Starting remote oplog push...';
+        return 'Pushing cluster operations on the backend...';
+      }
+
+      function applyPushJobProgress(job, fallbackTotal) {
+        var total = Number((job || {}).total || fallbackTotal || 0);
+        var done = Number((job || {}).done || 0);
+        var btn = document.getElementById('preview-push-ops-btn');
+        setPushProgress(done, total, pushProgressLabel(job));
+        if (btn) {
+          btn.textContent = total ? ('Pushing ' + Math.min(total, done) + '/' + total + '...') : 'Pushing...';
+        }
+      }
+
+      function pollPushJob(jobId, node, fallbackTotal) {
+        stopPushProgressPolling();
+        fetchJson('/remote-push-jobs/' + encodeURIComponent(jobId)).then(function (job) {
+          applyPushJobProgress(job, fallbackTotal);
+          if (job.status === 'done') {
+            var resultCounts = ((job.result || {}).counts) || {};
+            var pushed = Number(resultCounts.pushed || job.done || 0);
+            setMessage('Pushed ' + pushed + ' operation(s) and rebuilt remote state.', 'ok');
+            var btn = document.getElementById('preview-push-ops-btn');
+            if (btn) btn.textContent = 'Refreshing...';
+            openRemotePreview(node);
+            return;
+          }
+          if (job.status === 'error') {
+            throw new Error(job.error || 'Remote operation push failed.');
+          }
+          pushProgressTimer = setTimeout(function () {
+            pollPushJob(jobId, node, fallbackTotal);
+          }, 500);
+        }).catch(function (err) {
+          setMessage('Remote operation push failed: ' + err.message, 'err');
+          setPushProgress(0, fallbackTotal, 'Push failed; see error message.');
+          var error = document.getElementById('preview-modal-error');
+          if (error) {
+            error.textContent = err.message || 'Remote operation push failed.';
+            error.className = 'modal-error visible';
+          }
+          var btn = document.getElementById('preview-push-ops-btn');
+          if (btn) { btn.disabled = false; btn.textContent = 'Push Missing Ops + Rebuild'; }
+        });
+      }
+
+      function showJoinError(text) {
+        var el = document.getElementById('join-modal-error');
+        if (!el) return;
+        el.textContent = text || '';
+        el.className = text ? 'modal-error visible' : 'modal-error';
+      }
+
+      function openJoinModal(node) {
+        pendingJoinNode = node || null;
+        showJoinError('');
+        var modal = document.getElementById('join-modal');
+        var message = document.getElementById('join-modal-message');
+        var nodeEl = document.getElementById('join-modal-node');
+        if (message) {
+          message.textContent = 'This joins the remote PBGui node. For VPS runner nodes, Join stops PBRun without stopping passivbot processes, syncs Cluster data, materializes assigned V7 configs/API keys and starts PBRun again when safe.';
+        }
+        if (nodeEl) {
+          nodeEl.textContent = (node.pbname || node.hostname || 'unknown') + ' / ' + (node.node_id || 'unknown');
+        }
+        if (modal) modal.hidden = false;
+      }
+
+      function closeJoinModal() {
+        pendingJoinNode = null;
+        var modal = document.getElementById('join-modal');
+        if (modal) modal.hidden = true;
+        showJoinError('');
+      }
+
+      function joinRemoteNode() {
+        if (!pendingJoinNode || !pendingJoinNode.node_id) return;
+        var node = pendingJoinNode;
+        var btn = document.getElementById('join-confirm-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Joining...'; }
+        setMessage('Joining and syncing ' + (node.pbname || node.hostname || node.node_id) + '...', 'warn');
+        fetchJson('/remote-join/' + encodeURIComponent(node.node_id), { method: 'POST' }).then(function (payload) {
+          closeJoinModal();
+          var completion = (payload || {}).completion || {};
+          var start = completion.pbrun_start || {};
+          var stopNote = payload && payload.pbrun_stopped ? ' PBRun was stopped on the VPS.' : '';
+          var completionNote = completion.skipped
+            ? ''
+            : completion.ok === false
+            ? ' Automatic sync/materialization needs attention: ' + (completion.error || 'unknown error')
+            : ' Cluster data synced and materialized.';
+          var startNote = pbrunStartNote(start);
+          setMessage('Remote cluster joined for ' + (node.pbname || node.hostname || node.node_id) + '.' + stopNote + completionNote + startNote, completion.ok === false ? 'warn' : 'ok');
+          return loadCluster();
+        }).catch(function (err) {
+          showJoinError(err.message || 'Remote join failed.');
+          setMessage('Remote join failed: ' + err.message, 'err');
+        }).finally(function () {
+          if (btn) { btn.disabled = false; btn.textContent = 'Join & Sync'; }
+        });
+      }
+
+      function showSelfJoinStatus(text, kind) {
+        var el = document.getElementById('self-join-status');
+        if (!el) return;
+        el.textContent = text || '';
+        el.style.color = kind === 'err' ? 'var(--bad)' : kind === 'ok' ? 'var(--good)' : 'var(--muted)';
+      }
+
+      function selfJoinErrorMessage(err) {
+        var text = String((err && err.message) || err || 'Self-join failed.');
+        try {
+          var payload = JSON.parse(text);
+          if (payload && payload.detail) return String(payload.detail);
+        } catch (_) {}
+        return text;
+      }
+
+      function selfJoinPayload() {
+        var hostname = document.getElementById('self-join-hostname').value.trim();
+        return {
+          hostname: hostname,
+          ssh_host: document.getElementById('self-join-ssh-host').value.trim(),
+          ssh_user: document.getElementById('self-join-ssh-user').value.trim(),
+          ssh_port: Number(document.getElementById('self-join-ssh-port').value || 22),
+          remote_pbgui_dir: document.getElementById('self-join-remote-dir').value.trim(),
+          reset_local_cluster_state: document.getElementById('self-join-reset').checked
+        };
+      }
+
+      function selfJoinNeedsPasswordPrompt(message) {
+        var text = String(message || '').toLowerCase();
+        return text.indexOf('remote host is unreachable') >= 0
+          || text.indexOf('vps monitor ssh pool is unavailable') >= 0
+          || text.indexOf('ssh authentication failed') >= 0
+          || text.indexOf('permission denied') >= 0
+          || text.indexOf('authentication') >= 0;
+      }
+
+      function selfJoinJobLabel(job) {
+        var phase = String((job || {}).phase || 'queued');
+        var status = String((job || {}).status || 'queued');
+        if (status === 'error') return 'Self-join failed; see error message.';
+        if (phase === 'discovering') return 'Finding upstream PBGui directory...';
+        if (phase === 'hello') return 'Reading upstream cluster identity...';
+        if (phase === 'checking_local_state') return 'Checking local Cluster state...';
+        if (phase === 'preparing_keys') return 'Preparing local Cluster SSH key...';
+        if (phase === 'pulling_vector') return 'Reading upstream operation counters...';
+        if (phase === 'pulling_ops') return 'Pulling upstream operations...';
+        if (phase === 'pulling_blobs') return 'Pulling historical config/API blobs...';
+        if (phase === 'pulling_current_blobs') return 'Verifying current desired config/API blobs...';
+        if (phase === 'reading_upstream_key') return 'Reading upstream Cluster SSH key...';
+        if (phase === 'registering_nodes') return 'Recording master membership...';
+        if (phase === 'pushing_registration') return 'Pushing this master registration upstream...';
+        if (phase === 'blobs') return 'Uploading current config blobs upstream...';
+        if (phase === 'secrets') return 'Uploading current secret blobs upstream...';
+        if (phase === 'pushing') return 'Pushing local registration operations upstream...';
+        if (phase === 'rebuilding') return 'Rebuilding upstream materialized state...';
+        if (phase === 'done' || status === 'done') return 'Self-join complete. Refreshing Cluster page...';
+        if (phase === 'starting' || phase === 'queued') return 'Starting self-join job...';
+        return 'Joining existing cluster...';
+      }
+
+      function setSelfJoinButtonBusy(busy) {
+        var btn = document.getElementById('self-join-btn');
+        if (btn) {
+          btn.disabled = !!busy;
+          btn.textContent = busy ? 'Joining...' : selfJoinIdleText();
+        }
+      }
+
+      function startSelfJoinPayload(payload) {
+        return fetchJson('/self-join/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      }
+
+      function applySelfJoinJobProgress(job) {
+        var total = Number((job || {}).total || 9);
+        var done = Number((job || {}).done || 0);
+        var label = selfJoinJobLabel(job);
+        setSelfJoinProgress(done, total, label);
+        showSelfJoinStatus(label, (job || {}).status === 'error' ? 'err' : 'warn');
+      }
+
+      function finishSelfJoinJob(result, options) {
+        options = options || {};
+        stopSelfJoinProgressPolling();
+        setSelfJoinProgress(9, 9, 'Self-join complete. Refreshing Cluster page...');
+        if (options.passwordPrompt) closeSelfJoinPasswordPrompt();
+        setSelfJoinPasswordBusy(false);
+        setSelfJoinButtonBusy(false);
+        return handleSelfJoinSuccess(result || {});
+      }
+
+      function handleSelfJoinJobError(message, payload, options) {
+        options = options || {};
+        stopSelfJoinProgressPolling();
+        if (options.passwordPrompt) {
+          showSelfJoinPasswordError(message);
+          showSelfJoinStatus('Self-join failed: ' + message, 'err');
+          setMessage('Self-join failed: ' + message, 'err');
+          setSelfJoinPasswordBusy(false);
+          setSelfJoinButtonBusy(false);
+          return;
+        }
+        if (selfJoinNeedsPasswordPrompt(message)) {
+          openSelfJoinPasswordPrompt(payload, message);
+          showSelfJoinStatus('SSH key login is not available. Enter the SSH password to continue.', 'warn');
+          setSelfJoinProgress(0, 9, 'Waiting for SSH password...');
+          setSelfJoinButtonBusy(false);
+          return;
+        }
+        showSelfJoinStatus('Self-join failed: ' + message, 'err');
+        setSelfJoinProgress(0, 9, 'Self-join failed; see error message.');
+        setMessage('Self-join failed: ' + message, 'err');
+        setSelfJoinButtonBusy(false);
+      }
+
+      function pollSelfJoinJob(jobId, payload, options) {
+        options = options || {};
+        stopSelfJoinProgressPolling();
+        fetchJson('/self-join-jobs/' + encodeURIComponent(jobId)).then(function (job) {
+          applySelfJoinJobProgress(job);
+          if (job.status === 'done') {
+            return finishSelfJoinJob(job.result || {}, options);
+          }
+          if (job.status === 'error') {
+            handleSelfJoinJobError(job.error || 'Self-join failed.', payload, options);
+            return;
+          }
+          selfJoinProgressTimer = setTimeout(function () {
+            pollSelfJoinJob(jobId, payload, options);
+          }, 500);
+        }).catch(function (err) {
+          handleSelfJoinJobError(selfJoinErrorMessage(err), payload, options);
+        });
+      }
+
+      function beginSelfJoinJob(payload, options) {
+        options = options || {};
+        stopSelfJoinProgressPolling();
+        setSelfJoinProgress(0, 9, 'Starting self-join job...');
+        startSelfJoinPayload(payload).then(function (job) {
+          applySelfJoinJobProgress(job);
+          pollSelfJoinJob(job.job_id, payload, options);
+        }).catch(function (err) {
+          handleSelfJoinJobError(selfJoinErrorMessage(err), payload, options);
+        });
+      }
+
+      function handleSelfJoinSuccess(result) {
+        var pull = (result || {}).pull || {};
+        var push = (result || {}).push || {};
+        var pushCounts = push.counts || {};
+        var text = 'Joined cluster ' + (result.cluster_id || '') + ': pulled ' + (pull.pulled_ops || 0) + ' op(s), pushed ' + (pushCounts.pushed || 0) + ' registration op(s).';
+        if (result.remote_pbgui_dir) text += ' Remote PBGui dir: ' + result.remote_pbgui_dir + '.';
+        if (result.adopted_local_identity) text += ' Local identity adopted.';
+        if (((result || {}).archived_local_cluster_state || {}).changed) text += ' Previous local cluster state archived.';
+        showSelfJoinStatus(text, 'ok');
+        setMessage(text, 'ok');
+        return loadCluster();
+      }
+
+      function showSelfJoinPasswordError(text) {
+        var el = document.getElementById('self-join-password-error');
+        if (!el) return;
+        el.textContent = text || '';
+        el.className = text ? 'modal-error visible' : 'modal-error';
+      }
+
+      function setSelfJoinPasswordBusy(busy) {
+        var input = document.getElementById('self-join-password-input');
+        var confirm = document.getElementById('self-join-password-confirm-btn');
+        var cancel = document.getElementById('self-join-password-cancel-btn');
+        var close = document.getElementById('self-join-password-close-btn');
+        [input, confirm, cancel, close].forEach(function (el) { if (el) el.disabled = !!busy; });
+        if (confirm) confirm.textContent = busy ? 'Joining...' : 'Retry Join';
+      }
+
+      function openSelfJoinPasswordPrompt(payload, reason) {
+        var target = payload || {};
+        pendingSelfJoinPayload = Object.assign({}, target);
+        var modal = document.getElementById('self-join-password-modal');
+        var hostEl = document.getElementById('self-join-password-host');
+        var userEl = document.getElementById('self-join-password-user');
+        var msgEl = document.getElementById('self-join-password-message');
+        var input = document.getElementById('self-join-password-input');
+        if (hostEl) hostEl.textContent = (target.ssh_host || target.hostname || 'unknown') + ':' + (target.ssh_port || 22);
+        if (userEl) userEl.textContent = target.ssh_user || 'unknown';
+        if (msgEl) msgEl.textContent = 'Key login is not available yet. Enter the upstream SSH password to retry the join. Previous error: ' + String(reason || 'SSH connection failed.');
+        if (input) input.value = '';
+        showSelfJoinPasswordError('');
+        setSelfJoinPasswordBusy(false);
+        if (modal) modal.hidden = false;
+        setTimeout(function () { if (input) input.focus(); }, 50);
+      }
+
+      function closeSelfJoinPasswordPrompt() {
+        pendingSelfJoinPayload = null;
+        var input = document.getElementById('self-join-password-input');
+        if (input) input.value = '';
+        var modal = document.getElementById('self-join-password-modal');
+        if (modal) modal.hidden = true;
+        showSelfJoinPasswordError('');
+        setSelfJoinPasswordBusy(false);
+      }
+
+      function submitSelfJoinPasswordPrompt() {
+        if (!pendingSelfJoinPayload) return;
+        var input = document.getElementById('self-join-password-input');
+        var password = input ? input.value : '';
+        if (!password) {
+          showSelfJoinPasswordError('Enter the SSH password first.');
+          return;
+        }
+        var payload = Object.assign({}, pendingSelfJoinPayload, { ssh_password: password });
+        setSelfJoinPasswordBusy(true);
+        setSelfJoinButtonBusy(true);
+        showSelfJoinPasswordError('');
+        showSelfJoinStatus('Joining existing cluster through ' + payload.hostname + ' with password authentication...', 'warn');
+        setMessage('Joining existing cluster through ' + payload.hostname + ' with password authentication...', 'warn');
+        beginSelfJoinJob(payload, { passwordPrompt: true });
+      }
+
+      function selfJoinExistingCluster() {
+        var payload = selfJoinPayload();
+        if (!payload.hostname) {
+          showSelfJoinStatus('Enter the VPS Monitor hostname for the existing master.', 'err');
+          return;
+        }
+        setSelfJoinButtonBusy(true);
+        showSelfJoinStatus('Joining existing cluster through ' + payload.hostname + '...', 'warn');
+        setMessage('Joining existing cluster through ' + payload.hostname + '...', 'warn');
+        beginSelfJoinJob(payload, { passwordPrompt: false });
+      }
+
+      function showNodeSettingsError(text) {
+        var el = document.getElementById('node-settings-error');
+        if (!el) return;
+        el.textContent = text || '';
+        el.className = text ? 'modal-error visible' : 'modal-error';
+      }
+
+      function applyNodeSettingsMode() {
+        var modeEl = document.getElementById('node-settings-mode');
+        var hostEl = document.getElementById('node-settings-ssh-host');
+        var userEl = document.getElementById('node-settings-ssh-user');
+        var portEl = document.getElementById('node-settings-ssh-port');
+        var reachable = modeEl && modeEl.value === 'reachable';
+        [hostEl, userEl, portEl].forEach(function (el) {
+          if (el) el.disabled = !reachable;
+        });
+      }
+
+      function nodePeerList(node) {
+        return Array.isArray((node || {}).sync_peers) ? (node.sync_peers || []).map(String) : null;
+      }
+
+      function renderNodePeerOptions(node) {
+        var box = document.getElementById('node-settings-peers');
+        if (!box) return;
+        var nodeId = String((node || {}).node_id || '');
+        var explicit = nodePeerList(node);
+        var peers = Object.keys(nodeMap).map(function (id) { return nodeMap[id]; }).filter(function (peer) {
+          return peer && peer.node_id && peer.node_id !== nodeId;
+        }).sort(function (a, b) {
+          return String(a.pbname || a.hostname || a.node_id).localeCompare(String(b.pbname || b.hostname || b.node_id));
+        });
+        if (!peers.length) {
+          box.innerHTML = '<div class="empty">No other cluster nodes are known.</div>';
+          return;
+        }
+        var selected = new Set(explicit || []);
+        box.innerHTML = peers.map(function (peer) {
+          var checked = explicit ? selected.has(peer.node_id) : ((node.role || '') === 'master' && syncMode(peer) === 'reachable');
+          return '<label class="peer-option" title="' + esc(peer.node_id) + '">'
+            + '<input type="checkbox" data-peer-id="' + esc(peer.node_id) + '" ' + (checked ? 'checked' : '') + '>'
+            + '<span>' + esc(peer.pbname || peer.hostname || shortId(peer.node_id)) + ' <span class="faint">(' + esc(syncModeLabel(syncMode(peer))) + ')</span></span>'
+            + '</label>';
+        }).join('');
+      }
+
+      function selectedPeerIdsFromModal() {
+        var box = document.getElementById('node-settings-peers');
+        if (!box) return [];
+        return Array.prototype.slice.call(box.querySelectorAll('input[data-peer-id]:checked')).map(function (el) {
+          return el.getAttribute('data-peer-id');
+        }).filter(Boolean);
+      }
+
+      function openNodeSettingsModal(node) {
+        pendingSettingsNode = node || null;
+        showNodeSettingsError('');
+        var modal = document.getElementById('node-settings-modal');
+        var label = (node.pbname || node.hostname || 'unknown') + ' / ' + (node.node_id || 'unknown');
+        var mode = syncMode(node);
+        var nodeEl = document.getElementById('node-settings-node');
+        var roleEl = document.getElementById('node-settings-role');
+        var remoteDirEl = document.getElementById('node-settings-remote-dir');
+        var modeEl = document.getElementById('node-settings-mode');
+        var hostEl = document.getElementById('node-settings-ssh-host');
+        var userEl = document.getElementById('node-settings-ssh-user');
+        var portEl = document.getElementById('node-settings-ssh-port');
+        if (nodeEl) nodeEl.textContent = label;
+        if (roleEl) roleEl.value = node.role || 'node';
+        if (remoteDirEl) remoteDirEl.value = node.remote_pbgui_dir || '';
+        if (modeEl) modeEl.value = mode;
+        if (hostEl) hostEl.value = node.ssh_host || '';
+        if (userEl) userEl.value = node.ssh_user || '';
+        if (portEl) portEl.value = node.ssh_port || 22;
+        renderNodePeerOptions(node);
+        applyNodeSettingsMode();
+        if (modal) modal.hidden = false;
+      }
+
+      function closeNodeSettingsModal() {
+        pendingSettingsNode = null;
+        var modal = document.getElementById('node-settings-modal');
+        if (modal) modal.hidden = true;
+        showNodeSettingsError('');
+      }
+
+      function saveNodeSettings() {
+        if (!pendingSettingsNode || !pendingSettingsNode.node_id) return;
+        var node = pendingSettingsNode;
+        var mode = document.getElementById('node-settings-mode').value;
+        var payload = {
+          sync_mode: mode,
+          remote_pbgui_dir: document.getElementById('node-settings-remote-dir').value.trim(),
+          ssh_host: document.getElementById('node-settings-ssh-host').value.trim(),
+          ssh_user: document.getElementById('node-settings-ssh-user').value.trim(),
+          ssh_port: Number(document.getElementById('node-settings-ssh-port').value || 22),
+          sync_peers: selectedPeerIdsFromModal()
+        };
+        if (mode === 'reachable' && !payload.ssh_host) {
+          showNodeSettingsError('Reachable nodes require an SSH host.');
+          return;
+        }
+        var label = node.pbname || node.hostname || node.node_id;
+        var btn = document.getElementById('node-settings-save-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+        setMessage('Updating Cluster node settings for ' + label + '...', 'warn');
+        fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }).then(function () {
+          closeNodeSettingsModal();
+          setMessage('Cluster node settings updated for ' + label + '.', 'ok');
+          return loadCluster();
+        }).catch(function (err) {
+          showNodeSettingsError(err.message || 'Failed to update node settings.');
+          setMessage('Failed to update node settings: ' + err.message, 'err');
+        }).finally(function () {
+          if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+        });
+      }
+
+      function repairNodeClusterSsh(node) {
+        if (!node || !node.node_id) return;
+        var label = node.pbname || node.hostname || node.node_id;
+        setMessage('Repairing Cluster SSH for ' + label + '...', 'warn');
+        fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/cluster-ssh/repair', { method: 'POST' }).then(function (payload) {
+          var missing = Array.isArray(payload.missing_source_keys) ? payload.missing_source_keys.length : 0;
+          if (missing) {
+            setMessage('Cluster SSH repaired for ' + label + ', but ' + missing + ' source key(s) are not known yet. Repair those source nodes first.', 'warn');
+          } else {
+            setMessage('Cluster SSH repaired for ' + label + '.', 'ok');
+          }
+          return loadCluster();
+        }).catch(function (err) {
+          setMessage('Cluster SSH repair failed for ' + label + ': ' + err.message, 'err');
+        });
+      }
+
+      function removeClusterNode(node) {
+        if (!node || !node.node_id) return;
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        var label = node.pbname || node.hostname || node.node_id;
+        window.PBGuiConfirm({
+          title: 'Remove Cluster Node',
+          message: 'Remove disabled Cluster node ' + label + ' from the materialized node list?',
+          detail: 'This writes a REMOVE_NODE operation to the local oplog. It does not delete oplog history, remove files, stop services or touch the remote host. Nodes with active sync or assigned V7 configs are blocked by the API.',
+          confirmText: 'Remove Node'
+        }).then(function (accepted) {
+          if (!accepted) return;
+          setMessage('Removing Cluster node ' + label + '...', 'warn');
+          fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/remove', { method: 'POST' }).then(function () {
+            setMessage('Cluster node removed from materialized membership: ' + label + '.', 'ok');
+            return loadCluster();
+          }).catch(function (err) {
+            setMessage('Failed to remove Cluster node: ' + err.message, 'err');
+          });
+        });
+      }
+
+      function closePreviewModal() {
+        pendingPreviewNode = null;
+        lastPreviewPayload = null;
+        var modal = document.getElementById('preview-modal');
+        if (modal) modal.hidden = true;
+        var content = document.getElementById('preview-modal-content');
+        if (content) content.innerHTML = '';
+        syncPushOpsButton(null);
+        syncMaterializeButton(null);
+        syncApiKeyMaterializeButton(null);
+        stopPushProgressPolling();
+        resetPushProgress();
+        var error = document.getElementById('preview-modal-error');
+        if (error) {
+          error.textContent = '';
+          error.className = 'modal-error';
+        }
+      }
+
+      function placePreviewModal() {
+        var card = document.getElementById('preview-modal-card');
+        if (!card) return;
+        var width = Math.min(1180, Math.max(560, window.innerWidth - 48));
+        var height = Math.min(760, Math.max(360, window.innerHeight - 48));
+        card.style.width = width + 'px';
+        card.style.height = height + 'px';
+        card.style.left = Math.max(12, Math.round((window.innerWidth - width) / 2)) + 'px';
+        card.style.top = Math.max(12, Math.round((window.innerHeight - height) / 2)) + 'px';
+      }
+
+      function keepPreviewModalInViewport() {
+        var card = document.getElementById('preview-modal-card');
+        if (!card || document.getElementById('preview-modal').hidden) return;
+        var rect = card.getBoundingClientRect();
+        var left = Math.min(Math.max(12, rect.left), Math.max(12, window.innerWidth - 80));
+        var top = Math.min(Math.max(12, rect.top), Math.max(12, window.innerHeight - 80));
+        card.style.left = left + 'px';
+        card.style.top = top + 'px';
+      }
+
+      function bindPreviewWindowDrag() {
+        var card = document.getElementById('preview-modal-card');
+        if (!card || card.dataset.dragBound === '1') return;
+        card.dataset.dragBound = '1';
+        var head = card.querySelector('.modal-head');
+        if (!head) return;
+        head.addEventListener('mousedown', function (event) {
+          if (event.button !== 0) return;
+          if (event.target && event.target.closest && event.target.closest('button')) return;
+          event.preventDefault();
+          var rect = card.getBoundingClientRect();
+          card.style.left = rect.left + 'px';
+          card.style.top = rect.top + 'px';
+          card.style.width = rect.width + 'px';
+          card.style.height = rect.height + 'px';
+          var startX = event.clientX;
+          var startY = event.clientY;
+          var startLeft = rect.left;
+          var startTop = rect.top;
+          function onMove(moveEvent) {
+            var nextLeft = startLeft + moveEvent.clientX - startX;
+            var nextTop = startTop + moveEvent.clientY - startY;
+            var maxLeft = Math.max(12, window.innerWidth - 80);
+            var maxTop = Math.max(12, window.innerHeight - 80);
+            card.style.left = Math.min(Math.max(12, nextLeft), maxLeft) + 'px';
+            card.style.top = Math.min(Math.max(12, nextTop), maxTop) + 'px';
+          }
+          function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          }
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+      }
+
+      function previewList(values) {
+        if (!values || !values.length) return 'none';
+        return values.map(function (value) { return esc(value); }).join(', ');
+      }
+
+      function mismatchList(values) {
+        if (!values || !values.length) return 'none';
+        return values.map(function (item) {
+          return esc(item.name) + ' (' + esc((item.fields || []).join(', ')) + ')';
+        }).join(', ');
+      }
+
+      function operationPreviewList(values) {
+        if (!values || !values.length) return 'none';
+        return values.slice(0, 24).map(function (item) {
+          return esc(item.op_id || '') + ' ' + esc(item.op || '') + ' ' + esc(item.target || '');
+        }).join('<br>') + (values.length > 24 ? '<br>...' + esc(values.length - 24) + ' more' : '');
+      }
+
+      function remotePullList(values) {
+        if (!values || !values.length) return 'none';
+        return values.map(function (item) {
+          return esc(shortId(item.actor)) + ': local ' + esc(item.local_seq) + ', remote ' + esc(item.remote_seq) + ' (' + esc(item.missing_count) + ' missing)';
+        }).join('<br>');
+      }
+
+      function opTypeList(values) {
+        var keys = Object.keys(values || {}).sort();
+        if (!keys.length) return 'none';
+        return keys.map(function (key) { return esc(key) + ': ' + esc(values[key]); }).join(', ');
+      }
+
+      function materializationPreviewList(values) {
+        if (!values || !values.length) return 'none';
+        return values.slice(0, 24).map(function (item) {
+          var files = Array.isArray(item.files) ? item.files.filter(function (file) { return file.action === 'write'; }).length : 0;
+          return esc(item.instance || '') + ' [' + esc(item.status || item.action || '') + '] '
+            + esc(item.reason || '') + (files ? ' (' + files + ' file(s))' : '');
+        }).join('<br>') + (values.length > 24 ? '<br>...' + esc(values.length - 24) + ' more' : '');
+      }
+
+      function renderRemotePreview(payload) {
+        var content = document.getElementById('preview-modal-content');
+        if (!content) return;
+        lastPreviewPayload = payload || null;
+        var vectorCounts = ((payload.state_vector || {}).counts) || {};
+        var desired = payload.desired_state || {};
+        var instances = desired.instances || {};
+        var tombstones = desired.tombstones || {};
+        var operationSync = payload.operation_sync || {};
+        var opCounts = operationSync.counts || {};
+        var materialization = payload.materialization || {};
+        var matCounts = materialization.counts || {};
+        var apiMaterialization = payload.api_key_materialization || {};
+        var apiMatCounts = apiMaterialization.counts || {};
+        var actorRows = (((payload.state_vector || {}).actors) || []).map(function (actor) {
+          return '<tr>'
+            + '<td class="mono" title="' + esc(actor.actor) + '">' + esc(shortId(actor.actor)) + '</td>'
+            + '<td class="mono">' + esc(actor.local_seq) + '</td>'
+            + '<td class="mono">' + esc(actor.remote_seq) + '</td>'
+            + '<td><span class="pill ' + (actor.status === 'equal' ? 'good' : 'warn') + '">' + esc(actor.status) + '</span></td>'
+            + '</tr>';
+        }).join('') || '<tr><td colspan="4" class="empty">No actor state-vector entries.</td></tr>';
+        content.innerHTML = ''
+          + '<div class="preview-grid">'
+          + '<div class="preview-card"><div class="preview-label">Equal Actors</div><div class="preview-value">' + esc(vectorCounts.equal || 0) + '</div></div>'
+          + '<div class="preview-card"><div class="preview-label">Local Ahead</div><div class="preview-value">' + esc(vectorCounts.local_ahead || 0) + '</div></div>'
+          + '<div class="preview-card"><div class="preview-label">Remote Ahead</div><div class="preview-value">' + esc(vectorCounts.remote_ahead || 0) + '</div></div>'
+          + '<div class="preview-card"><div class="preview-label">Ops To Push</div><div class="preview-value">' + esc(opCounts.local_ops_to_push || 0) + '</div></div>'
+          + '<div class="preview-card"><div class="preview-label">Ops To Pull</div><div class="preview-value">' + esc(opCounts.remote_ops_to_pull || 0) + '</div></div>'
+          + '<div class="preview-card"><div class="preview-label">Configs To Write</div><div class="preview-value">' + esc((matCounts.add || 0) + (matCounts.update || 0)) + '</div></div>'
+          + '</div>'
+          + '<div class="preview-section">'
+          + '<div class="field"><div class="field-label">Operation Sync Preview</div><div class="preview-list">Read-only. No operations or blobs are copied here.<br>Push by type: ' + opTypeList(operationSync.push_by_op) + '<br>Hash refs for later push: config ' + esc(opCounts.config_hash_refs || 0) + ', api payload ' + esc(opCounts.api_payload_hash_refs || 0) + ', secrets ' + esc(opCounts.secret_blob_hash_refs || 0) + '<br>Local ops missing on remote:<br>' + operationPreviewList(operationSync.local_ops_missing_on_remote) + '<br>Remote ops missing locally:<br>' + remotePullList(operationSync.remote_ops_missing_locally) + '</div></div>'
+          + '<div class="field"><div class="field-label">V7 Config Materialization Preview</div><div class="preview-list">Read-only. No run_v7 files are written here.<br>' + (materialization.error ? 'Preview error: ' + esc(materialization.error) + '<br>' : '') + 'Run root: ' + esc(materialization.run_v7_root || 'n/a') + '<br>Add: ' + esc(matCounts.add || 0) + ', Update: ' + esc(matCounts.update || 0) + ', Current/Skipped: ' + esc(matCounts.skip || 0) + ', Not assigned: ' + esc(matCounts.not_assigned || 0) + ', Conflicted: ' + esc(matCounts.conflicted || 0) + ', Tombstoned: ' + esc(matCounts.tombstoned || 0) + ', Errors: ' + esc(matCounts.error || 0) + '<br>Files to write: ' + esc(matCounts.files_to_write || 0) + '<br>Items:<br>' + materializationPreviewList(materialization.items) + '</div></div>'
+          + '<div class="field"><div class="field-label">API-key Materialization Preview</div><div class="preview-list">Read-only. No api-keys.json file is written here.<br>' + (apiMaterialization.error ? 'Preview error: ' + esc(apiMaterialization.error) + '<br>' : '') + 'Target: ' + esc(apiMaterialization.path || 'n/a') + '<br>Serial: ' + esc(apiMaterialization.serial || 'n/a') + '<br>Status: ' + esc(apiMaterialization.status || apiMaterialization.action || 'n/a') + '<br>Reason: ' + esc(apiMaterialization.reason || '') + '<br>Write: ' + esc(apiMatCounts.write || 0) + ', Current: ' + esc(apiMatCounts.current || 0) + ', Missing: ' + esc(apiMatCounts.missing || 0) + ', Errors: ' + esc(apiMatCounts.error || 0) + '</div></div>'
+          + '<div class="field"><div class="field-label">Instances</div><div class="preview-list">Local: ' + esc(instances.local_count || 0) + ', Remote: ' + esc(instances.remote_count || 0) + '<br>Missing on remote: ' + previewList(instances.missing_on_remote) + '<br>Missing locally: ' + previewList(instances.missing_locally) + '<br>Mismatches: ' + mismatchList(instances.mismatches) + '</div></div>'
+          + '<div class="field"><div class="field-label">Tombstones</div><div class="preview-list">Local: ' + esc(tombstones.local_count || 0) + ', Remote: ' + esc(tombstones.remote_count || 0) + '<br>Missing on remote: ' + previewList(tombstones.missing_on_remote) + '<br>Missing locally: ' + previewList(tombstones.missing_locally) + '<br>Mismatches: ' + mismatchList(tombstones.mismatches) + '</div></div>'
+          + '<div class="field"><div class="field-label">API Keys</div><div class="preview-list">Metadata match: ' + esc(desired.api_keys_match ? 'yes' : 'no') + '</div></div>'
+          + '</div>'
+          + '<table><thead><tr><th>Actor</th><th>Local Seq</th><th>Remote Seq</th><th>Status</th></tr></thead><tbody>' + actorRows + '</tbody></table>';
+        syncPushOpsButton(payload);
+        syncMaterializeButton(payload);
+        syncApiKeyMaterializeButton(payload);
+      }
+
+      function syncPushOpsButton(payload) {
+        var btn = document.getElementById('preview-push-ops-btn');
+        if (!btn) return;
+        var counts = (((payload || {}).operation_sync || {}).counts) || {};
+        var pushCount = Number(counts.local_ops_to_push || 0);
+        var pullCount = Number(counts.remote_ops_to_pull || 0);
+        btn.hidden = pushCount <= 0;
+        btn.disabled = pullCount > 0;
+        btn.textContent = pullCount > 0 ? 'Cannot Push Yet' : 'Push Missing Ops + Rebuild';
+        btn.title = pullCount > 0
+          ? 'Remote has operations missing locally. Pull/resolve must happen before pushing local operations.'
+          : 'Write missing local operations to the remote oplog and rebuild remote materialized state.';
+      }
+
+      function syncMaterializeButton(payload) {
+        var btn = document.getElementById('preview-materialize-btn');
+        if (!btn) return;
+        var opCounts = (((payload || {}).operation_sync || {}).counts) || {};
+        var materialization = ((payload || {}).materialization) || {};
+        var counts = materialization.counts || {};
+        var writeCount = Number(counts.add || 0) + Number(counts.update || 0);
+        var errorCount = Number(counts.error || 0);
+        var syncBlocked = Number(opCounts.local_ops_to_push || 0) > 0 || Number(opCounts.remote_ops_to_pull || 0) > 0;
+        btn.hidden = writeCount <= 0 && !materialization.error && errorCount <= 0;
+        btn.disabled = !materialization.ok || !materialization.can_apply || syncBlocked || errorCount > 0;
+        btn.textContent = btn.disabled ? 'Cannot Materialize' : 'Materialize V7 Configs';
+        btn.title = syncBlocked
+          ? 'Remote state must be synchronized before materializing run_v7 files.'
+          : (materialization.error || (errorCount > 0 ? 'Resolve missing or invalid config blobs before materializing.' : 'Write assigned V7 JSON configs from remote config blobs into remote data/run_v7.'));
+      }
+
+      function syncApiKeyMaterializeButton(payload) {
+        var btn = document.getElementById('preview-materialize-api-btn');
+        if (!btn) return;
+        var opCounts = (((payload || {}).operation_sync || {}).counts) || {};
+        var materialization = ((payload || {}).api_key_materialization) || {};
+        var counts = materialization.counts || {};
+        var writeCount = Number(counts.write || 0);
+        var errorCount = Number(counts.error || 0);
+        var syncBlocked = Number(opCounts.local_ops_to_push || 0) > 0 || Number(opCounts.remote_ops_to_pull || 0) > 0;
+        btn.hidden = writeCount <= 0 && !materialization.error && errorCount <= 0;
+        btn.disabled = !materialization.ok || !materialization.can_apply || syncBlocked || errorCount > 0;
+        btn.textContent = btn.disabled ? 'Cannot Materialize API Keys' : 'Materialize API Keys';
+        btn.title = syncBlocked
+          ? 'Remote state must be synchronized before materializing api-keys.json.'
+          : (materialization.error || (errorCount > 0 ? 'Resolve missing or invalid secret blobs before materializing api-keys.json.' : 'Write api-keys.json from the replicated Cluster Sync secret blob.'));
+      }
+
+      function pbrunStartNote(start) {
+        var payload = start || {};
+        if (payload.started) return ' PBRun started.';
+        if (payload.reason === 'api_key_materialization_pending') return ' PBRun will start after API-key materialization.';
+        if (payload.reason === 'v7_materialization_pending') return ' PBRun will start after V7 config materialization.';
+        if (payload.attempted && payload.error) return ' PBRun could not be started: ' + payload.error;
+        return '';
+      }
+
+      function confirmAndPushRemoteOps() {
+        if (!pendingPreviewNode || !lastPreviewPayload) return;
+        var counts = ((lastPreviewPayload.operation_sync || {}).counts) || {};
+        var pushCount = Number(counts.local_ops_to_push || 0);
+        var pullCount = Number(counts.remote_ops_to_pull || 0);
+        if (pushCount <= 0 || pullCount > 0) return;
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: 'Push Missing Cluster Ops',
+          message: 'Write ' + pushCount + ' missing local operation(s) to ' + (pendingPreviewNode.pbname || pendingPreviewNode.hostname || pendingPreviewNode.node_id) + ' and rebuild its materialized cluster state?',
+          detail: 'This is a remote write. It sends V7 config blobs, sends oplog entries and runs rebuild. It does not materialize run_v7 files, copy API-key payloads or secret blobs, deploy files, start bots or stop bots.',
+          confirmText: 'Push Ops + Rebuild'
+        }).then(function (accepted) {
+          if (!accepted) return;
+          var btn = document.getElementById('preview-push-ops-btn');
+          var node = pendingPreviewNode;
+          if (btn) { btn.disabled = true; btn.textContent = 'Pushing 0/' + pushCount + '...'; }
+          setPushProgress(0, pushCount, 'Starting remote oplog push...');
+          setMessage('Pushing missing cluster operations to remote...', 'warn');
+          stopPushProgressPolling();
+          fetchJson('/remote-push-ops/' + encodeURIComponent(node.node_id) + '/start', { method: 'POST' }).then(function (job) {
+            applyPushJobProgress(job, pushCount);
+            pollPushJob(job.job_id, node, pushCount);
+          }).catch(function (err) {
+            setMessage('Remote operation push failed: ' + err.message, 'err');
+            setPushProgress(0, pushCount, 'Push failed; see error message.');
+            var error = document.getElementById('preview-modal-error');
+            if (error) {
+              error.textContent = err.message || 'Remote operation push failed.';
+              error.className = 'modal-error visible';
+            }
+            if (btn) { btn.disabled = false; btn.textContent = 'Push Missing Ops + Rebuild'; }
+          });
+        });
+      }
+
+      function confirmAndMaterializeV7() {
+        if (!pendingPreviewNode || !lastPreviewPayload) return;
+        var opCounts = ((lastPreviewPayload.operation_sync || {}).counts) || {};
+        var materialization = lastPreviewPayload.materialization || {};
+        var counts = materialization.counts || {};
+        var writeCount = Number(counts.add || 0) + Number(counts.update || 0);
+        var filesToWrite = Number(counts.files_to_write || 0);
+        if (writeCount <= 0 || !materialization.can_apply) return;
+        if (Number(opCounts.local_ops_to_push || 0) > 0 || Number(opCounts.remote_ops_to_pull || 0) > 0) return;
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: 'Materialize Remote V7 Configs',
+          message: 'Write ' + filesToWrite + ' V7 config file(s) for ' + writeCount + ' assigned instance(s) on ' + (pendingPreviewNode.pbname || pendingPreviewNode.hostname || pendingPreviewNode.node_id) + '?',
+          detail: 'This is a remote write under data/run_v7 only. It writes assigned V7 JSON configs from already replicated config blobs. It does not delete files, copy API-key payloads or secret blobs, or deploy files. If no API-key materialization is pending afterward, PBRun is started automatically on VPS runners.',
+          confirmText: 'Materialize Configs'
+        }).then(function (accepted) {
+          if (!accepted) return;
+          var btn = document.getElementById('preview-materialize-btn');
+          var node = pendingPreviewNode;
+          if (btn) { btn.disabled = true; btn.textContent = 'Materializing...'; }
+          setPushProgress(0, filesToWrite, 'Materializing remote V7 configs...');
+          setMessage('Materializing remote V7 configs...', 'warn');
+          fetchJson('/remote-materialize-v7/' + encodeURIComponent(node.node_id), { method: 'POST' }).then(function (payload) {
+            var mat = (payload || {}).materialization || {};
+            var matCounts = mat.counts || {};
+            setMessage('Materialized ' + (matCounts.written_files || 0) + ' file(s) across ' + (matCounts.written_instances || 0) + ' instance(s).' + pbrunStartNote((payload || {}).pbrun_start), 'ok');
+            setPushProgress(filesToWrite, filesToWrite, 'Remote V7 config materialization complete. Refreshing preview...');
+            openRemotePreview(node);
+          }).catch(function (err) {
+            setMessage('Remote V7 materialization failed: ' + err.message, 'err');
+            setPushProgress(0, filesToWrite, 'Materialization failed; see error message.');
+            var error = document.getElementById('preview-modal-error');
+            if (error) {
+              error.textContent = err.message || 'Remote V7 materialization failed.';
+              error.className = 'modal-error visible';
+            }
+            if (btn) { btn.disabled = false; btn.textContent = 'Materialize V7 Configs'; }
+          });
+        });
+      }
+
+      function confirmAndMaterializeApiKeys() {
+        if (!pendingPreviewNode || !lastPreviewPayload) return;
+        var opCounts = ((lastPreviewPayload.operation_sync || {}).counts) || {};
+        var materialization = lastPreviewPayload.api_key_materialization || {};
+        if (!materialization.can_apply) return;
+        if (Number(opCounts.local_ops_to_push || 0) > 0 || Number(opCounts.remote_ops_to_pull || 0) > 0) return;
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: 'Materialize Remote API Keys',
+          message: 'Write api-keys.json on ' + (pendingPreviewNode.pbname || pendingPreviewNode.hostname || pendingPreviewNode.node_id) + ' from the replicated Cluster Sync secret blob?',
+          detail: 'This is a remote write to api-keys.json only. Existing differing files are backed up on master nodes only; VPS runners skip local backups. It does not deploy files or materialize V7 configs. If V7 configs are current afterward, PBRun is started automatically on VPS runners.',
+          confirmText: 'Materialize API Keys'
+        }).then(function (accepted) {
+          if (!accepted) return;
+          var btn = document.getElementById('preview-materialize-api-btn');
+          var node = pendingPreviewNode;
+          if (btn) { btn.disabled = true; btn.textContent = 'Materializing...'; }
+          setPushProgress(0, 1, 'Materializing remote api-keys.json...');
+          setMessage('Materializing remote api-keys.json...', 'warn');
+          fetchJson('/remote-materialize-api-keys/' + encodeURIComponent(node.node_id), { method: 'POST' }).then(function (payload) {
+            setMessage('Remote api-keys.json materialized.' + pbrunStartNote((payload || {}).pbrun_start), 'ok');
+            setPushProgress(1, 1, 'Remote API-key materialization complete. Refreshing preview...');
+            openRemotePreview(node);
+          }).catch(function (err) {
+            setMessage('Remote API-key materialization failed: ' + err.message, 'err');
+            setPushProgress(0, 1, 'API-key materialization failed; see error message.');
+            var error = document.getElementById('preview-modal-error');
+            if (error) {
+              error.textContent = err.message || 'Remote API-key materialization failed.';
+              error.className = 'modal-error visible';
+            }
+            if (btn) { btn.disabled = false; btn.textContent = 'Materialize API Keys'; }
+          });
+        });
+      }
+
+      function openRemotePreview(node) {
+        pendingPreviewNode = node || null;
+        lastPreviewPayload = null;
+        var modal = document.getElementById('preview-modal');
+        var message = document.getElementById('preview-modal-message');
+        var content = document.getElementById('preview-modal-content');
+        var error = document.getElementById('preview-modal-error');
+        if (content) content.innerHTML = '';
+        syncPushOpsButton(null);
+        syncMaterializeButton(null);
+        syncApiKeyMaterializeButton(null);
+        stopPushProgressPolling();
+        resetPushProgress();
+        if (error) {
+          error.textContent = '';
+          error.className = 'modal-error';
+        }
+        if (message) message.textContent = 'Reading remote state from ' + (node.pbname || node.hostname || node.node_id || 'node') + '. This is read-only and performs no replication writes.';
+        if (modal) {
+          modal.hidden = false;
+          placePreviewModal();
+          bindPreviewWindowDrag();
+        }
+        fetchJson('/remote-preview/' + encodeURIComponent(node.node_id)).then(function (payload) {
+          if (message) message.textContent = 'Remote state preview for ' + (payload.hostname || node.pbname || node.hostname || node.node_id) + '.';
+          renderRemotePreview(payload);
+        }).catch(function (err) {
+          if (error) {
+            error.textContent = err.message || 'Remote preview failed.';
+            error.className = 'modal-error visible';
+          }
+          if (message) message.textContent = 'Remote state preview failed.';
+        });
+      }
+
+      function sortValue(value) {
+        if (typeof value === 'number' && isFinite(value)) return value;
+        if (typeof value === 'boolean') return value ? 1 : 0;
+        return String(value === undefined || value === null ? '' : value).toLowerCase();
+      }
+
+      function compareValues(a, b) {
+        var left = sortValue(a);
+        var right = sortValue(b);
+        if (typeof left === 'number' && typeof right === 'number') return left - right;
+        return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' });
+      }
+
+      function sortedRows(tableId, rows, getters) {
+        var state = tableSort[tableId] || { key: '', dir: 'asc' };
+        var getter = getters[state.key] || function () { return ''; };
+        return rows.slice().sort(function (a, b) {
+          var result = compareValues(getter(a), getter(b));
+          return state.dir === 'desc' ? -result : result;
+        });
+      }
+
+      function sortHeader(tableId, key, label) {
+        var state = tableSort[tableId] || {};
+        var active = state.key === key;
+        var indicator = active ? (state.dir === 'asc' ? '^' : 'v') : '';
+        return '<th class="' + (active ? 'is-sort-active' : '') + '"><button class="sort-btn" type="button" data-sort-table="' + esc(tableId) + '" data-sort-key="' + esc(key) + '"><span>' + esc(label) + '</span><span class="sort-indicator">' + esc(indicator) + '</span></button></th>';
+      }
+
+      function attachSortHandlers(containerId) {
+        var container = document.getElementById(containerId);
+        if (!container) return;
+        container.querySelectorAll('.sort-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var tableId = btn.getAttribute('data-sort-table') || '';
+            var key = btn.getAttribute('data-sort-key') || '';
+            var current = tableSort[tableId] || { key: key, dir: 'asc' };
+            tableSort[tableId] = {
+              key: key,
+              dir: current.key === key && current.dir === 'asc' ? 'desc' : 'asc'
+            };
+            if (tableId === 'bootstrap' && lastBootstrapPlan) renderBootstrap(lastBootstrapPlan);
+            if (tableId === 'nodes' && lastNodesPayload) renderNodes(lastNodesPayload);
+            if (tableId === 'instances' && lastInstancesPayload) renderInstances(lastInstancesPayload);
+            if (tableId === 'tombstones' && lastTombstonesPayload) renderTombstones(lastTombstonesPayload);
+            if (tableId === 'oplog' && lastOplogPayload) renderOplog(lastOplogPayload);
+          });
+        });
+      }
+
+      function renderStats(status) {
+        var counts = status.counts || {};
+        var items = [
+          { key: 'nodes', label: 'Nodes', value: counts.nodes || 0, cls: '' },
+          { key: 'instances', label: 'V7 Instances', value: counts.instances || 0, cls: 'good' },
+          { key: 'conflicts', label: 'Conflicts', value: counts.conflicts || 0, cls: counts.conflicts ? 'bad' : 'good' },
+          { key: 'tombstones', label: 'Tombstones', value: counts.tombstones || 0, cls: counts.tombstones ? 'warn' : '' },
+          { key: 'oplog', label: 'Oplog Ops', value: counts.oplog || 0, cls: '' }
+        ];
+        var grid = document.getElementById('stats-grid');
+        if (grid && grid.querySelectorAll('[data-stat-key]').length !== items.length) {
+          grid.innerHTML = items.map(function (item) {
+            return '<div class="stat-card" data-stat-key="' + esc(item.key) + '"><div class="stat-label"></div><div class="stat-value"></div></div>';
+          }).join('');
+        }
+        items.forEach(function (item) {
+          var card = grid ? grid.querySelector('[data-stat-key="' + item.key + '"]') : null;
+          setTextIfChanged(card ? card.querySelector('.stat-label') : null, item.label);
+          var valueEl = card ? card.querySelector('.stat-value') : null;
+          setClassIfChanged(valueEl, 'stat-value ' + item.cls);
+          setTextIfChanged(valueEl, item.value);
+        });
+        setNavCount('nav-nodes-count', counts.nodes || 0);
+        setNavCount('nav-instances-count', counts.instances || 0);
+        setNavCount('nav-tombstones-count', counts.tombstones || 0);
+        setNavCount('nav-oplog-count', counts.oplog || 0);
+      }
+
+      function renderIdentity(status) {
+        var identity = status.identity || {};
+        localNodeId = identity.node_id || '';
+        var rows = [
+          ['Cluster ID', identity.cluster_id],
+          ['Node ID', identity.node_id],
+          ['Role', identity.role || 'master'],
+          ['Created From PBName', identity.created_from_pbname || 'n/a'],
+          ['Cluster Root', status.cluster_root],
+          ['Generated At', timeText(status.generated_at)]
+        ];
+        document.getElementById('identity-grid').innerHTML = rows.map(function (row) {
+          return '<div class="field"><div class="field-label">' + esc(row[0]) + '</div>'
+               + '<div class="field-value">' + esc(row[1] || 'n/a') + '</div></div>';
+        }).join('');
+
+        var warnings = Array.isArray(status.warnings) ? status.warnings : [];
+        document.getElementById('warning-list').innerHTML = warnings.map(function (text) {
+          return '<div class="warning-item">' + esc(text) + '</div>';
+        }).join('');
+      }
+
+      function actionPill(action) {
+        if (action === 'add') return 'good';
+        if (action === 'update') return 'warn';
+        if (action === 'blocked_tombstone' || action === 'error') return 'bad';
+        return '';
+      }
+
+      function probePill(status) {
+        if (status === 'ok' || status === 'local') return 'good';
+        if (status === 'outbound_only') return 'blue';
+        if (status === 'not_initialized' || status === 'command_unavailable' || status === 'unreachable' || status === 'monitor_unavailable') return 'warn';
+        if (status === 'foreign_cluster' || status === 'node_mismatch' || status === 'auth_failed' || status === 'config_error' || status === 'error') return 'bad';
+        return '';
+      }
+
+      function probeLabel(status) {
+        var labels = {
+          ok: 'OK',
+          local: 'Local',
+          disabled: 'Disabled',
+          not_initialized: 'No Identity',
+          command_unavailable: 'No Command',
+          unreachable: 'Unreachable',
+          monitor_unavailable: 'No Monitor',
+          foreign_cluster: 'Foreign',
+          node_mismatch: 'Mismatch',
+          auth_failed: 'Auth Failed',
+          invalid_response: 'Invalid',
+          missing_hostname: 'No Hostname',
+          outbound_only: 'Outbound Only',
+          config_error: 'Config Error',
+          error: 'Error'
+        };
+        return labels[status] || (status || 'Unknown');
+      }
+
+      function syncMode(node) {
+        var mode = String((node || {}).sync_mode || '').toLowerCase();
+        if (mode === 'disabled' || mode === 'outbound_only' || mode === 'reachable') return mode;
+        if ((node || {}).sync_enabled === false) return 'disabled';
+        return String((node || {}).ssh_host || '').trim() ? 'reachable' : 'outbound_only';
+      }
+
+      function syncModeLabel(mode) {
+        if (mode === 'reachable') return 'Reachable';
+        if (mode === 'outbound_only') return 'Outbound Only';
+        return 'Disabled';
+      }
+
+      function syncModePill(mode) {
+        if (mode === 'reachable') return 'good';
+        if (mode === 'outbound_only') return 'blue';
+        return 'warn';
+      }
+
+      function peerSummary(node) {
+        var peers = nodePeerList(node);
+        if (peers && peers.length) {
+          return peers.map(function (id) { return nodeLabel(id); }).join(', ');
+        }
+        if (peers) return 'None';
+        return (node.role || '') === 'master' ? 'Default reachable' : 'None';
+      }
+
+      function keySummary(node, probe) {
+        var fingerprint = (node || {}).cluster_ssh_fingerprint || (probe || {}).cluster_ssh_fingerprint || '';
+        return fingerprint ? shortId(fingerprint) : 'No key';
+      }
+
+      function renderBootstrap(plan) {
+        lastBootstrapPlan = plan;
+        var counts = plan.counts || {};
+        var items = Array.isArray(plan.items) ? plan.items : [];
+        var nodeItems = items.filter(function (item) { return item.type === 'node'; });
+        var configItems = items.filter(function (item) { return item.type !== 'node'; });
+        var applyBtn = document.getElementById('bootstrap-apply-btn');
+        var summary = document.getElementById('bootstrap-summary');
+        var table = document.getElementById('bootstrap-table');
+        if (summary) {
+          summary.textContent = (counts.add || 0) + ' add, ' + (counts.update || 0) + ' update, '
+            + (counts.skip || 0) + ' already current, ' + (counts.blocked_tombstone || 0) + ' tombstone-blocked, '
+            + (counts.error || 0) + ' error.';
+        }
+        var actionable = (counts.add || 0) + (counts.update || 0);
+        var blockers = (counts.blocked_tombstone || 0) + (counts.error || 0);
+        var locked = clusterHasExistingState && !bootstrapUnlocked;
+        if (applyBtn) {
+          applyBtn.disabled = actionable === 0 || locked;
+          applyBtn.style.display = actionable === 0 ? 'none' : '';
+          applyBtn.textContent = locked ? 'Bootstrap Locked' : 'Apply Bootstrap';
+          applyBtn.title = locked ? 'Cluster state already exists. Enable the setup recovery checkbox before writing bootstrap operations.' : '';
+        }
+        if (summary && locked && actionable > 0) {
+          summary.textContent += ' Bootstrap is locked because this cluster already has state.';
+        }
+        if (!table) return;
+        if (!items.length) {
+          table.innerHTML = '<div class="empty">No known VPS hosts or local V7 configs found for bootstrap.</div>';
+          return;
+        }
+        if (actionable === 0 && blockers === 0) {
+          table.innerHTML = '<div class="empty">Bootstrap complete. ' + esc(nodeItems.length) + ' VPS node(s) and ' + esc(configItems.length) + ' local V7 config(s) are registered in cluster state.</div>';
+          return;
+        }
+        var bootstrapRows = sortedRows('bootstrap', items, {
+          target: function (item) { return item.type === 'node' ? (item.hostname || item.pbname || '') : (item.instance || ''); },
+          type: function (item) { return item.type === 'node' ? 'vps node' : 'v7 config'; },
+          action: function (item) { return item.action || ''; },
+          reason: function (item) { return item.reason || ''; },
+          version: function (item) { return item.type === 'node' ? Number(item.ssh_port || 0) : (item.version || ''); },
+          desired: function (item) { return item.type === 'node' ? (item.node_role || '') : (item.desired_state || ''); },
+          assigned: function (item) { return item.type === 'node' ? (item.ssh_host || item.hostname || '') : (item.assigned_label || item.assigned_host || ''); },
+          manifest: function (item) { return item.type === 'node' ? (item.node_id || '') : (item.config_manifest_hash || ''); }
+        });
+        var html = '<table><thead><tr>'
+          + sortHeader('bootstrap', 'target', 'Target')
+          + sortHeader('bootstrap', 'type', 'Type')
+          + sortHeader('bootstrap', 'action', 'Action')
+          + sortHeader('bootstrap', 'reason', 'Reason')
+          + sortHeader('bootstrap', 'version', 'Version / Port')
+          + sortHeader('bootstrap', 'desired', 'Desired / Role')
+          + sortHeader('bootstrap', 'assigned', 'Assigned / Address')
+          + sortHeader('bootstrap', 'manifest', 'Manifest / Node')
+          + '</tr></thead><tbody>';
+        bootstrapRows.forEach(function (item) {
+          var isNode = item.type === 'node';
+          var target = isNode ? (item.hostname || item.pbname || '') : (item.instance || '');
+          var typeText = isNode ? 'VPS Node' : 'V7 Config';
+          var assigned = item.assigned_label || item.assigned_host || 'n/a';
+          var assignedTitle = item.assigned_host || '';
+          var versionText = item.version || 'n/a';
+          var desiredText = item.desired_state || 'n/a';
+          var desiredClass = item.desired_state === 'running' ? 'good' : '';
+          var manifestText = item.config_manifest_hash || 'n/a';
+          var manifestTitle = item.config_manifest_hash || '';
+          if (isNode) {
+            assigned = (item.ssh_user ? item.ssh_user + '@' : '') + (item.ssh_host || item.hostname || 'n/a');
+            if (item.ssh_port) assigned += ':' + item.ssh_port;
+            if (item.will_create_node_mapping) assigned += ' (new node mapping)';
+            assignedTitle = item.remote_pbgui_dir || item.config_path || '';
+            versionText = item.ssh_port || '22';
+            desiredText = (item.node_role || 'vps') + ' / ' + syncModeLabel(syncMode(item));
+            desiredClass = syncModePill(syncMode(item));
+            manifestText = item.node_id ? shortId(item.node_id) : 'new node';
+            manifestTitle = item.node_id || 'new node id will be generated on apply';
+          } else if (item.will_create_node_mapping) {
+            assigned += ' (new node mapping)';
+          }
+          html += '<tr>'
+            + '<td class="mono">' + esc(target) + '</td>'
+            + '<td><span class="pill blue">' + esc(typeText) + '</span></td>'
+            + '<td><span class="pill ' + actionPill(item.action) + '">' + esc(item.action || 'unknown') + '</span></td>'
+            + '<td>' + esc(item.reason || '') + '</td>'
+            + '<td class="mono">' + esc(versionText) + (item.current_version ? ' / current ' + esc(item.current_version) : '') + '</td>'
+            + '<td><span class="pill ' + esc(desiredClass) + '">' + esc(desiredText) + '</span></td>'
+            + '<td title="' + esc(assignedTitle) + '">' + esc(assigned) + '</td>'
+            + '<td><span class="mono hash" title="' + esc(manifestTitle) + '">' + esc(manifestText) + '</span></td>'
+            + '</tr>';
+        });
+        html += '</tbody></table>';
+        table.innerHTML = html;
+        attachSortHandlers('bootstrap-table');
+      }
+
+      function loadBootstrapPreview(silent) {
+        if (!silent) setMessage('Loading bootstrap preview...', '');
+        return fetchJson('/bootstrap-preview').then(function (plan) {
+          renderBootstrap(plan);
+          if (!silent) setMessage('Bootstrap preview loaded.', 'ok');
+          return plan;
+        }).catch(function (err) {
+          var table = document.getElementById('bootstrap-table');
+          if (table) table.innerHTML = '<div class="empty">Failed to load bootstrap preview: ' + esc(err.message) + '</div>';
+          if (!silent) setMessage('Failed to load bootstrap preview: ' + err.message, 'err');
+          throw err;
+        });
+      }
+
+      function applyBootstrap() {
+        var btn = document.getElementById('bootstrap-apply-btn');
+        if (btn && btn.disabled) return;
+        var counts = (lastBootstrapPlan && lastBootstrapPlan.counts) || {};
+        var writeCount = Number(counts.add || 0) + Number(counts.update || 0);
+        if (writeCount <= 0) return;
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: 'Apply Bootstrap Operations',
+          message: 'Write ' + writeCount + ' bootstrap operation(s) into the local Cluster oplog?',
+          detail: 'Use this only for initial bootstrap or explicit recovery. It writes ADD_NODE/UPSERT_CONFIG operations from local files and VPS metadata. It does not delete configs, stop bots or write to remote hosts.',
+          confirmText: 'Apply Bootstrap'
+        }).then(function (accepted) {
+          if (!accepted) return;
+          runBootstrapApply();
+        });
+      }
+
+      function runBootstrapApply() {
+        var btn = document.getElementById('bootstrap-apply-btn');
+        if (btn && btn.disabled) return;
+        if (btn) { btn.disabled = true; btn.textContent = 'Applying...'; }
+        setMessage('Applying bootstrap operations...', '');
+        return fetchJson('/bootstrap', { method: 'POST' }).then(function (payload) {
+          renderBootstrap(payload.after || {});
+          var counts = (payload.result && payload.result.counts) || {};
+          var kind = counts.failed ? 'warn' : 'ok';
+          setMessage('Bootstrap applied: ' + (counts.applied || 0) + ' written, ' + (counts.skipped || 0) + ' skipped, ' + (counts.failed || 0) + ' failed.', kind);
+          return loadCluster();
+        }).catch(function (err) {
+          setMessage('Bootstrap failed: ' + err.message, 'err');
+        }).finally(function () {
+          if (btn) btn.textContent = 'Apply Bootstrap';
+        });
+      }
+
+      function nodeLabel(nodeId) {
+        var node = nodeMap[nodeId] || {};
+        return node.pbname || node.hostname || shortId(nodeId);
+      }
+
+      function nodesTableHeaderHtml() {
+        return '<table><thead><tr>'
+          + sortHeader('nodes', 'node', 'Node')
+          + sortHeader('nodes', 'role', 'Role')
+          + sortHeader('nodes', 'pbname', 'PBName')
+          + sortHeader('nodes', 'address', 'Address')
+          + sortHeader('nodes', 'sync', 'Sync')
+          + sortHeader('nodes', 'peers', 'Peers')
+          + sortHeader('nodes', 'key', 'Key')
+          + sortHeader('nodes', 'probe', 'Probe')
+          + '<th>Action</th>'
+          + sortHeader('nodes', 'updated', 'Updated')
+          + '</tr></thead><tbody></tbody></table>';
+      }
+
+      function bindNodesTableActions(container) {
+        if (!container || nodesActionsBound) return;
+        nodesActionsBound = true;
+        container.addEventListener('click', function (event) {
+          var btn = event.target.closest('button[data-node-id]');
+          if (!btn || !container.contains(btn)) return;
+          var node = nodeMap[btn.getAttribute('data-node-id')] || {};
+          if (btn.classList.contains('join-node-btn')) openJoinModal(node);
+          if (btn.classList.contains('preview-node-btn')) openRemotePreview(node);
+          if (btn.classList.contains('edit-node-btn')) openNodeSettingsModal(node);
+          if (btn.classList.contains('repair-node-ssh-btn')) repairNodeClusterSsh(node);
+          if (btn.classList.contains('remove-node-btn')) removeClusterNode(node);
+        });
+      }
+
+      function ensureNodesTable() {
+        var container = document.getElementById('nodes-table');
+        if (!container) return null;
+        bindNodesTableActions(container);
+        if (!container.querySelector('table tbody')) {
+          container.innerHTML = nodesTableHeaderHtml();
+          attachSortHandlers('nodes-table');
+          return container.querySelector('tbody');
+        }
+        var table = container.querySelector('table');
+        var header = nodesTableHeaderHtml();
+        var currentHeader = table ? table.querySelector('thead') : null;
+        var nextHeader = document.createElement('div');
+        nextHeader.innerHTML = header;
+        var nextThead = nextHeader.querySelector('thead');
+        if (table && currentHeader && nextThead && currentHeader.innerHTML !== nextThead.innerHTML) {
+          currentHeader.innerHTML = nextThead.innerHTML;
+          attachSortHandlers('nodes-table');
+        }
+        return container.querySelector('tbody');
+      }
+
+      function nodeActionHtml(node, mode, probeStatus) {
+        var actionParts = [];
+        if (probeStatus === 'not_initialized') {
+          actionParts.push('<button class="btn small warn join-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Join</button>');
+        } else if (probeStatus === 'ok') {
+          actionParts.push('<button class="btn small primary preview-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Preview</button>');
+        }
+        actionParts.push('<button class="btn small primary edit-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Edit</button>');
+        actionParts.push('<button class="btn small primary repair-node-ssh-btn" type="button" data-node-id="' + esc(node.node_id) + '">Repair SSH</button>');
+        if (node.node_id !== localNodeId && mode === 'disabled') {
+          actionParts.push('<button class="btn small warn remove-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Remove</button>');
+        }
+        return actionParts.join(' ');
+      }
+
+      function ensureNodeRow(tbody, nodeId) {
+        var row = Array.prototype.slice.call(tbody.querySelectorAll('tr[data-node-id]')).find(function (item) {
+          return item.getAttribute('data-node-id') === nodeId;
+        });
+        if (row) return row;
+        row = document.createElement('tr');
+        row.setAttribute('data-node-id', nodeId);
+        ['node', 'role', 'pbname', 'address', 'sync', 'peers', 'key', 'probe', 'action', 'updated'].forEach(function (field) {
+          var cell = document.createElement('td');
+          cell.setAttribute('data-field', field);
+          row.appendChild(cell);
+        });
+        return row;
+      }
+
+      function updateNodeCell(row, field, html, title, className) {
+        var cell = row.querySelector('[data-field="' + field + '"]');
+        if (!cell) return;
+        setHtmlIfChanged(cell, html);
+        setAttrIfChanged(cell, 'title', title || '');
+        setClassIfChanged(cell, className || '');
+      }
+
+      function updateNodeRow(row, node) {
+        var mode = syncMode(node);
+        var probe = remoteProbeMap[node.node_id] || {};
+        var probeStatus = probe.status || 'unknown';
+        var probeTitle = probe.error || probe.remote_node_id || probe.remote_cluster_id || probeStatus;
+        var keyKnown = Boolean(node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint);
+        var address = mode === 'reachable'
+          ? ((node.ssh_user ? node.ssh_user + '@' : '') + (node.ssh_host || 'n/a') + ':' + (node.ssh_port || 22))
+          : syncModeLabel(mode);
+        updateNodeCell(row, 'node', esc(shortId(node.node_id)), node.node_id || '', 'mono');
+        updateNodeCell(row, 'role', '<span class="pill blue">' + esc(node.role || 'node') + '</span>');
+        updateNodeCell(row, 'pbname', esc(node.pbname || node.hostname || 'n/a'));
+        updateNodeCell(row, 'address', esc(address), node.remote_pbgui_dir || '');
+        updateNodeCell(row, 'sync', '<span class="pill ' + syncModePill(mode) + '">' + esc(syncModeLabel(mode)) + '</span>');
+        updateNodeCell(row, 'peers', esc(peerSummary(node)), peerSummary(node));
+        updateNodeCell(row, 'key', '<span class="pill ' + (keyKnown ? 'good' : 'warn') + '">' + esc(keySummary(node, probe)) + '</span>', node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint || '');
+        updateNodeCell(row, 'probe', '<span class="pill ' + probePill(probeStatus) + '">' + esc(probeLabel(probeStatus)) + '</span>', probeTitle);
+        updateNodeCell(row, 'action', nodeActionHtml(node, mode, probeStatus));
+        updateNodeCell(row, 'updated', esc(timeText(node.updated_at)));
+      }
+
+      function renderNodes(payload) {
+        lastNodesPayload = payload;
+        var nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
+        nodeMap = {};
+        nodes.forEach(function (node) { if (node.node_id) nodeMap[node.node_id] = node; });
+        setTextIfChanged(document.getElementById('nodes-note'), nodes.length + ' node(s)');
+        if (!nodes.length) {
+          setHtmlIfChanged(document.getElementById('nodes-table'), '<div class="empty">No node membership operations have been materialized yet.</div>');
+          return;
+        }
+        var nodeRows = sortedRows('nodes', nodes, {
+          node: function (node) { return node.node_id || ''; },
+          role: function (node) { return node.role || ''; },
+          pbname: function (node) { return node.pbname || node.hostname || ''; },
+          address: function (node) { return syncMode(node) === 'reachable' ? ((node.ssh_host || '') + ':' + (node.ssh_port || '')) : syncMode(node); },
+          sync: function (node) { return syncMode(node); },
+          peers: function (node) { return peerSummary(node); },
+          key: function (node) { return node.cluster_ssh_fingerprint || ''; },
+          probe: function (node) { return (remoteProbeMap[node.node_id] || {}).status || ''; },
+          updated: function (node) { return Number(node.updated_at || 0); }
+        });
+        var tbody = ensureNodesTable();
+        if (!tbody) return;
+        var seen = new Set();
+        nodeRows.forEach(function (node) {
+          if (!node.node_id) return;
+          seen.add(String(node.node_id));
+          var row = ensureNodeRow(tbody, String(node.node_id));
+          updateNodeRow(row, node);
+          tbody.appendChild(row);
+        });
+        Array.prototype.slice.call(tbody.querySelectorAll('tr[data-node-id]')).forEach(function (row) {
+          if (!seen.has(row.getAttribute('data-node-id') || '')) row.remove();
+        });
+      }
+
+      function renderInstances(payload) {
+        lastInstancesPayload = payload;
+        var instances = Array.isArray(payload.instances) ? payload.instances : [];
+        document.getElementById('instances-note').textContent = instances.length + ' instance(s)';
+        if (!instances.length) {
+          document.getElementById('instances-table').innerHTML = '<div class="empty">No V7 desired state has been recorded yet. Existing bots need bootstrap/migration before this becomes complete.</div>';
+          return;
+        }
+        var instanceRows = sortedRows('instances', instances, {
+          instance: function (item) { return item.instance || ''; },
+          desired: function (item) { return item.desired_state || ''; },
+          assigned: function (item) { return nodeLabel(item.assigned_host); },
+          version: function (item) { return item.version || ''; },
+          manifest: function (item) { return item.config_manifest_hash || ''; },
+          updated: function (item) { return Number(item.updated_at || 0); },
+          conflict: function (item) { return item.conflicted === true; }
+        });
+        var html = '<table><thead><tr>'
+          + sortHeader('instances', 'instance', 'Instance')
+          + sortHeader('instances', 'desired', 'Desired')
+          + sortHeader('instances', 'assigned', 'Assigned Node')
+          + sortHeader('instances', 'version', 'Version')
+          + sortHeader('instances', 'manifest', 'Manifest')
+          + sortHeader('instances', 'updated', 'Updated')
+          + sortHeader('instances', 'conflict', 'Conflict')
+          + '</tr></thead><tbody>';
+        instanceRows.forEach(function (item) {
+          var running = item.desired_state === 'running';
+          var conflicted = item.conflicted === true;
+          html += '<tr>'
+            + '<td class="mono">' + esc(item.instance) + '</td>'
+            + '<td><span class="pill ' + (running ? 'good' : '') + '">' + esc(item.desired_state || 'stopped') + '</span></td>'
+            + '<td title="' + esc(item.assigned_host || '') + '">' + esc(nodeLabel(item.assigned_host)) + '</td>'
+            + '<td class="mono">' + esc(item.version || 'n/a') + '</td>'
+            + '<td><span class="mono hash" title="' + esc(item.config_manifest_hash || '') + '">' + esc(item.config_manifest_hash || 'n/a') + '</span></td>'
+            + '<td>' + esc(timeText(item.updated_at)) + '</td>'
+            + '<td><span class="pill ' + (conflicted ? 'bad' : 'good') + '">' + (conflicted ? 'Conflict' : 'Clean') + '</span></td>'
+            + '</tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('instances-table').innerHTML = html;
+        attachSortHandlers('instances-table');
+      }
+
+      function renderTombstones(payload) {
+        lastTombstonesPayload = payload;
+        var tombstones = Array.isArray(payload.tombstones) ? payload.tombstones : [];
+        if (!tombstones.length) {
+          document.getElementById('tombstones-table').innerHTML = '<div class="empty">No tombstones recorded.</div>';
+          return;
+        }
+        var tombstoneRows = sortedRows('tombstones', tombstones, {
+          instance: function (item) { return item.instance || ''; },
+          version: function (item) { return item.version || ''; },
+          deleted_by: function (item) { return nodeLabel(item.deleted_by); },
+          deleted_at: function (item) { return Number(item.deleted_at || 0); },
+          op_id: function (item) { return item.op_id || ''; }
+        });
+        var html = '<table><thead><tr>'
+          + sortHeader('tombstones', 'instance', 'Instance')
+          + sortHeader('tombstones', 'version', 'Version')
+          + sortHeader('tombstones', 'deleted_by', 'Deleted By')
+          + sortHeader('tombstones', 'deleted_at', 'Deleted At')
+          + sortHeader('tombstones', 'op_id', 'Op ID')
+          + '</tr></thead><tbody>';
+        tombstoneRows.forEach(function (item) {
+          html += '<tr>'
+            + '<td class="mono">' + esc(item.instance) + '</td>'
+            + '<td class="mono">' + esc(item.version || 'n/a') + '</td>'
+            + '<td title="' + esc(item.deleted_by || '') + '">' + esc(nodeLabel(item.deleted_by)) + '</td>'
+            + '<td>' + esc(timeText(item.deleted_at)) + '</td>'
+            + '<td class="mono">' + esc(item.op_id || 'n/a') + '</td>'
+            + '</tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('tombstones-table').innerHTML = html;
+        attachSortHandlers('tombstones-table');
+      }
+
+      function renderOplog(payload) {
+        lastOplogPayload = payload;
+        var operations = Array.isArray(payload.operations) ? payload.operations : [];
+        document.getElementById('oplog-note').textContent = operations.length + ' shown of ' + (payload.count || 0);
+        if (!operations.length) {
+          document.getElementById('oplog-table').innerHTML = '<div class="empty">No local cluster operations recorded.</div>';
+          return;
+        }
+        var operationRows = sortedRows('oplog', operations, {
+          created_at: function (op) { return Number(op.created_at || 0); },
+          op: function (op) { return op.op || ''; },
+          target: function (op) { return op.instance || op.node_id || (op.api_serial ? 'api-keys' : 'cluster'); },
+          actor: function (op) { return nodeLabel(op.actor); },
+          seq: function (op) { return Number(op.seq || 0); },
+          op_id: function (op) { return op.op_id || ''; }
+        });
+        var html = '<table><thead><tr>'
+          + sortHeader('oplog', 'created_at', 'Created')
+          + sortHeader('oplog', 'op', 'Operation')
+          + sortHeader('oplog', 'target', 'Target')
+          + sortHeader('oplog', 'actor', 'Actor')
+          + sortHeader('oplog', 'seq', 'Seq')
+          + sortHeader('oplog', 'op_id', 'Op ID')
+          + '</tr></thead><tbody>';
+        operationRows.forEach(function (op) {
+          var target = op.instance || op.node_id || (op.api_serial ? 'api-keys' : 'cluster');
+          html += '<tr>'
+            + '<td>' + esc(timeText(op.created_at)) + '</td>'
+            + '<td><span class="pill blue">' + esc(op.op || 'op') + '</span></td>'
+            + '<td class="mono">' + esc(target) + '</td>'
+            + '<td title="' + esc(op.actor || '') + '">' + esc(nodeLabel(op.actor)) + '</td>'
+            + '<td class="mono">' + esc(op.seq || '') + '</td>'
+            + '<td class="mono">' + esc(op.op_id || '') + '</td>'
+            + '</tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('oplog-table').innerHTML = html;
+        attachSortHandlers('oplog-table');
+      }
+
+      function renderClusterParts(parts, options) {
+        options = options || {};
+        var force = options.force === true;
+        var statusSignature = payloadSignature(parts[0]);
+        var nodesSignature = payloadSignature(parts[1]);
+        var desiredSignature = payloadSignature(parts[2]);
+        var oplogSignature = payloadSignature(parts[3]);
+        var statusChanged = force || statusSignature !== lastStatusSignature;
+        var nodesChanged = force || nodesSignature !== lastNodesSignature;
+        var desiredChanged = force || desiredSignature !== lastDesiredSignature;
+        var oplogChanged = force || oplogSignature !== lastOplogSignature;
+        if (statusChanged) {
+          renderStats(parts[0]);
+          renderSetupState(parts[0]);
+          renderIdentity(parts[0]);
+          lastStatusSignature = statusSignature;
+        }
+        if (nodesChanged) {
+          renderNodes(parts[1]);
+          lastNodesSignature = nodesSignature;
+        }
+        if (desiredChanged || nodesChanged) {
+          renderInstances(parts[2]);
+          renderTombstones(parts[2]);
+          lastDesiredSignature = desiredSignature;
+        }
+        if (oplogChanged || nodesChanged) {
+          renderOplog(parts[3]);
+          lastOplogSignature = oplogSignature;
+        }
+        return statusChanged || nodesChanged || desiredChanged || oplogChanged;
+      }
+
+      function loadCluster(options) {
+        options = options || {};
+        var silent = options.silent === true;
+        if (!silent) setMessage('Refreshing cluster state...', '');
+        if (!options.keepProbes) remoteProbeMap = {};
+        return Promise.all([
+          fetchJson('/status'),
+          fetchJson('/nodes'),
+          fetchJson('/desired-state'),
+          fetchJson('/oplog?limit=50')
+        ]).then(function (parts) {
+          renderClusterParts(parts, { force: options.force === true });
+          if (!silent) setMessage('Cluster state refreshed.', 'ok');
+          if (!options.auto) loadBootstrapPreview(true).catch(function () {});
+          return parts;
+        }).catch(function (err) {
+          if (!silent) setMessage('Failed to load cluster state: ' + err.message, 'err');
+          throw err;
+        });
+      }
+
+      function stopClusterAutoRefresh() {
+        if (clusterAutoRefreshTimer) {
+          clearTimeout(clusterAutoRefreshTimer);
+          clusterAutoRefreshTimer = null;
+        }
+      }
+
+      function scheduleClusterAutoRefresh() {
+        stopClusterAutoRefresh();
+        clusterAutoRefreshTimer = setTimeout(runClusterAutoRefresh, 5000);
+      }
+
+      function runClusterAutoRefresh() {
+        if (document.hidden) {
+          scheduleClusterAutoRefresh();
+          return;
+        }
+        if (clusterAutoRefreshInFlight) {
+          scheduleClusterAutoRefresh();
+          return;
+        }
+        clusterAutoRefreshInFlight = true;
+        loadCluster({ silent: true, auto: true, keepProbes: true }).catch(function () {}).finally(function () {
+          clusterAutoRefreshInFlight = false;
+          scheduleClusterAutoRefresh();
+        });
+      }
+
+      function loadRemoteStatus() {
+        var btn = document.getElementById('probe-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Probing...'; }
+        setMessage('Probing active Cluster Sync nodes...', 'warn');
+        return fetchJson('/remote-status').then(function (payload) {
+          remoteProbeMap = {};
+          ((payload && payload.probes) || []).forEach(function (probe) {
+            if (probe.node_id) remoteProbeMap[probe.node_id] = probe;
+          });
+          if (lastNodesPayload) renderNodes(lastNodesPayload);
+          setMessage('Remote probe complete for active Cluster Sync nodes.', 'ok');
+        }).catch(function (err) {
+          setMessage('Remote probe failed: ' + err.message, 'err');
+        }).finally(function () {
+          if (btn) { btn.disabled = false; btn.textContent = 'Probe Active Nodes'; }
+        });
+      }
+
+      document.getElementById('refresh-btn').addEventListener('click', function () { loadCluster({ force: true }); });
+      document.getElementById('probe-btn').addEventListener('click', loadRemoteStatus);
+      document.getElementById('bootstrap-apply-btn').addEventListener('click', applyBootstrap);
+      document.getElementById('bootstrap-unlock').addEventListener('change', function (event) {
+        bootstrapUnlocked = event.target.checked;
+        if (lastBootstrapPlan) renderBootstrap(lastBootstrapPlan);
+      });
+      document.getElementById('self-join-btn').addEventListener('click', selfJoinExistingCluster);
+      document.getElementById('self-join-password-close-btn').addEventListener('click', closeSelfJoinPasswordPrompt);
+      document.getElementById('self-join-password-cancel-btn').addEventListener('click', closeSelfJoinPasswordPrompt);
+      document.getElementById('self-join-password-confirm-btn').addEventListener('click', submitSelfJoinPasswordPrompt);
+      document.getElementById('self-join-password-input').addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          submitSelfJoinPasswordPrompt();
+        }
+      });
+      document.getElementById('join-close-btn').addEventListener('click', closeJoinModal);
+      document.getElementById('join-cancel-btn').addEventListener('click', closeJoinModal);
+      document.getElementById('join-confirm-btn').addEventListener('click', joinRemoteNode);
+      document.getElementById('node-settings-close-btn').addEventListener('click', closeNodeSettingsModal);
+      document.getElementById('node-settings-cancel-btn').addEventListener('click', closeNodeSettingsModal);
+      document.getElementById('node-settings-save-btn').addEventListener('click', saveNodeSettings);
+      document.getElementById('node-settings-mode').addEventListener('change', applyNodeSettingsMode);
+      document.getElementById('preview-close-x-btn').addEventListener('click', closePreviewModal);
+      document.getElementById('preview-close-btn').addEventListener('click', closePreviewModal);
+      document.getElementById('preview-push-ops-btn').addEventListener('click', confirmAndPushRemoteOps);
+      document.getElementById('preview-materialize-btn').addEventListener('click', confirmAndMaterializeV7);
+      document.getElementById('preview-materialize-api-btn').addEventListener('click', confirmAndMaterializeApiKeys);
+      window.addEventListener('resize', keepPreviewModalInViewport);
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) runClusterAutoRefresh();
+      });
+      setupClusterNavigation();
+      loadCluster().finally(scheduleClusterAutoRefresh);
+    })();
+  </script>
+</body>
+</html>

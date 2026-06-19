@@ -55,14 +55,12 @@ def _configured_secret_value(value: Any) -> bool:
     if not normalized:
         return False
     lowered = normalized.lower()
-    if lowered in {"none", "null", "false", "<api_key>", "<bucket_name>", "<bucket_name>:"}:
+    if lowered in {"none", "null", "false", "<api_key>"}:
         return False
     return not (normalized.startswith("<") and normalized.endswith(">"))
 
 
 def _local_optional_service_blocker(service: str) -> str:
-    if service in {"PBRemote", "pbremote"} and not _configured_secret_value(load_ini("pbremote", "bucket")):
-        return "PBRemote bucket is not configured"
     if service in {"PBCoinData", "pbcoindata"} and not _configured_secret_value(load_ini("coinmarketcap", "api_key")):
         return "CoinMarketCap API key is not configured"
     return ""
@@ -582,9 +580,9 @@ async def _cmd_restart_service(request: dict) -> dict:
 
 # ── Service name mapping: LogViewer name → services API id ──
 _SVC_NAME_MAP = {
-    "PBRun": "pbrun", "PBRemote": "pbremote", "PBCoinData": "pbcoindata",
+    "PBRun": "pbrun", "PBCoinData": "pbcoindata",
     "PBData": "pbdata",
-    "pbrun": "pbrun", "pbremote": "pbremote", "pbcoindata": "pbcoindata",
+    "pbrun": "pbrun", "pbcoindata": "pbcoindata",
     "pbdata": "pbdata",
 }
 

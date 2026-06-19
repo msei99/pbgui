@@ -1517,11 +1517,15 @@
       white-space: normal;
     }
 
-    .bucket-cleanup-body {
+    .modal-scroll-body {
       flex: 1;
       min-height: 0;
       overflow: auto;
       white-space: normal;
+    }
+
+    .modal-scroll-body.cluster-import-progress-body {
+      overflow: hidden;
     }
 
     .log-matches-pre {
@@ -2651,6 +2655,49 @@
       opacity: 0.82;
     }
 
+    .cluster-import-progress {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+      margin-top: 0;
+    }
+
+    .cluster-import-progress-log {
+      display: grid;
+      align-content: start;
+      flex: 1;
+      gap: 6px;
+      margin-top: 10px;
+      min-height: 220px;
+      padding-right: 4px;
+      overflow: auto;
+    }
+
+    .cluster-import-progress-row {
+      display: grid;
+      grid-template-columns: minmax(120px, 180px) 88px 1fr;
+      gap: 10px;
+      align-items: center;
+      padding: 7px 9px;
+      border: 1px solid var(--shell-border-2);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--shell-dim);
+      font-size: var(--fs-sm);
+    }
+
+    .cluster-import-progress-row.done { border-color: rgba(45, 212, 191, 0.28); color: var(--shell-text); }
+    .cluster-import-progress-row.warning { border-color: rgba(245, 158, 11, 0.36); color: var(--warning); }
+    .cluster-import-progress-row.error { border-color: rgba(239, 106, 112, 0.4); color: var(--danger); }
+    .cluster-import-progress-row.running { border-color: rgba(99, 179, 237, 0.34); color: var(--shell-text); }
+
+    .cluster-import-progress-host,
+    .cluster-import-progress-status {
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
     .page-header {
       margin-bottom: 1rem;
     }
@@ -2925,7 +2972,6 @@
   </div>
 
   <script src='/app/js/log_viewer_panel.js?v=24'></script>
-  <script src="/app/js/api_sync_status.js?v=2"></script>
   <script>
     const TOKEN = "%%TOKEN%%";
     const API_BASE = "%%API_BASE%%";
@@ -2964,10 +3010,10 @@
       addDebug: false,
       addForm: defaultAddForm(),
       addVpsReady: { hostsOk: false, sshOk: false, sshError: '', loading: false },
-      addBucketCheck: { ok: false, error: '', loading: false },
       addCmcCheck: { ok: false, error: '', loading: false, credit_limit_monthly: null, credits_used_day: null, credits_used_month: null, credits_left: null, credit_limit_monthly_reset_timestamp: null },
       addPublicIp: { ip: '', loading: false, requested: false, applied: false },
       importExistingVps: defaultExistingVpsImportState(),
+      clusterNodesImport: defaultClusterNodesImportState(),
       pendingAutoSetupSwitch: null,
       master: defaultMasterUi(),
       ufw: defaultUfwState(),
@@ -3056,7 +3102,6 @@
         install_dir: '',
         auto_ip: '',
         firewall_ssh_ips_auto: '',
-        bucket: '',
         coinmarketcap_api_key: '',
         firewall: false,
         firewall_ssh_port: 22,
@@ -3083,6 +3128,21 @@
       };
     }
 
+    function defaultClusterNodesImportState() {
+      return {
+        loading: false,
+        applying: false,
+        error: '',
+        localSudoPw: '',
+        passwords: {},
+        preview: null,
+        jobId: '',
+        progress: null,
+        progressTimer: 0,
+        result: null
+      };
+    }
+
     function defaultMasterUi() {
       return {
         initialized: false,
@@ -3098,11 +3158,7 @@
         pb7ManualBranch: '',
         pb7ManualCommit: '',
         pb7RemoteBranchesKey: '',
-        pb7RemoteCommitsKey: '',
-        bucketCleanupIndicator: { state: 'unknown', count: 0, hostnames: [], error: '', checked_at: 0, running: false },
-        bucketCleanupIndicatorRequested: false,
-        bucketCleanupPreview: null,
-        bucketCleanupPreviewRefreshOnly: false
+        pb7RemoteCommitsKey: ''
       };
     }
 
@@ -3934,25 +3990,19 @@
       if (isMasterContextView()) {
         const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
         const st = (detail && detail.status) || {};
-        const bucketIndicator = store.master.bucketCleanupIndicator || { state: 'unknown' };
         return stableStringify({
           view: store.view,
           pbgui_up: !!st.pbgui_update_available,
           pb7_up: !!st.pb7_update_available,
           pending_updates: st.pending_updates == null ? '' : String(st.pending_updates),
           reboot_required: !!((st.summary_row || {}).reboot_required),
-          bucket_cleanup_state: String(bucketIndicator.state || 'unknown'),
           debug: !!store.master.debug,
           update_reboot: !!store.master.updateReboot
         });
       }
       if (store.view === 'overview' || isOverviewSettingsView() || isDeploysView()) {
-        const apiButtonModel = getOverviewApiSyncButtonModel();
         return stableStringify({
           view: store.view,
-          api_sync_text: apiButtonModel.text,
-          api_sync_class: apiButtonModel.statusClass,
-          api_sync_title: apiButtonModel.title,
           selected_hosts: getSelectedOverviewHosts(),
           vps_deploy: (((store.state || {}).config || {}).vps_deploy) || null,
           vps_logging: (((store.state || {}).config || {}).vps_logging) || null,
@@ -4087,7 +4137,6 @@
           hasV7Fallback: store.view === 'vps' ? (Array.isArray(monitor.v7_running) && monitor.v7_running.length > 0) : false,
           swapOptions: store.view === 'vps-setup' ? (Array.isArray(config.swap_options) ? config.swap_options : []) : [],
           uiSwap: store.view === 'vps-setup' && ui && ui.form ? String(ui.form.swap || '') : '',
-          uiBucket: store.view === 'vps-setup' && ui && ui.form ? String(ui.form.bucket || '') : '',
           uiCmc: store.view === 'vps-setup' && ui && ui.form ? String(ui.form.coinmarketcap_api_key || '') : '',
           uiFirewallIps: store.view === 'vps-setup' && ui && ui.form ? String(ui.form.firewall_ssh_ips || '') : '',
           userPwStored: store.view === 'vps-setup' ? !!(((secretStatus.user_pw) || {}).stored) : false,
@@ -4197,16 +4246,6 @@
       return esc(text);
     }
 
-    function getDetailApiSyncLabel(summary) {
-      if (!summary || summary.nav !== 'vps') return summary && summary.nav === 'master' ? 'local' : '-';
-      const hostname = String(summary.hostname || '');
-      const syncState = (window.overviewApiSyncController && window.overviewApiSyncController.state.syncInfo[hostname]) || {};
-      if (syncState.in_sync === true) return 'OK';
-      if (syncState.in_sync === false) return syncState.disconnected ? 'Out/off' : 'Out';
-      if (syncState.disconnected) return 'Off';
-      return '-';
-    }
-
     function computeUptime(startValue) {
       if (startValue == null || startValue === '') return null;
       let ts = null;
@@ -4262,7 +4301,6 @@
       const pb7Ver = String(summary.pb7 || '-');
       const pbguiBranch = String(summary.pbgui_branch || '-');
       const pb7Branch = String(summary.pb7_branch || '-');
-      const apiSync = getDetailApiSyncLabel(summary);
       const pbguiTone = getOverviewVersionTone(summary.pbgui_github, summary.pbgui);
       const pb7Tone = getOverviewVersionTone(summary.pb7_github, summary.pb7);
       const pbguiSub = getVersionStatusSub(pbguiBranch, summary.pbgui_github, pbguiTone);
@@ -4275,9 +4313,7 @@
           if (!status.last_setup) tags.push(`<span class='tag warning'>Setup Pending</span>`);
         }
       } else {
-        const pbremoteConfigured = Object.prototype.hasOwnProperty.call(status, 'pbremote_configured') ? !!status.pbremote_configured : true;
         const coindataConfigured = Object.prototype.hasOwnProperty.call(status, 'coindata_configured') ? !!status.coindata_configured : true;
-        tags.push(`<span class='tag ${pbremoteConfigured ? (status.rclone_ok ? 'ok' : 'warning') : ''}'>PBRemote ${pbremoteConfigured ? (status.rclone_ok ? 'Ready' : 'Missing') : 'Skipped'}</span>`);
         tags.push(`<span class='tag ${coindataConfigured ? (status.coindata_ok ? 'ok' : 'warning') : ''}'>CoinData ${coindataConfigured ? (status.coindata_ok ? 'Ready' : 'Missing') : 'Skipped'}</span>`);
       }
 
@@ -4297,7 +4333,6 @@
         pb7Branch,
         pbguiSub,
         pb7Sub,
-        apiSync,
         pbguiTone,
         pb7Tone,
         tagsHtml: tags.join(''),
@@ -4327,10 +4362,6 @@
               <div class='system-metric-label'>Reboot</div>
               <div class='system-metric-value'><span class='dot ${model.reboot ? 'error' : 'ok'}' data-role='reboot-dot'></span><span data-role='reboot-value'>${model.reboot ? 'Required' : 'OK'}</span></div>
               <div class='system-metric-sub' data-role='reboot-sub'>${model.reboot ? 'kernel update pending' : 'system current'}</div>
-            </div>
-            <div class='system-metric'>
-              <div class='system-metric-label'>API Sync</div>
-              <div class='system-metric-value' data-role='api-sync'>${esc(model.apiSync)}</div>
             </div>
             <div class='system-metric'>
               <div class='system-metric-label' data-role='pbgui-label'>PBGui ${model.pbguiTone !== 'ok' && model.pbguiVer !== '-' ? '⚠' : ''}</div>
@@ -4366,7 +4397,6 @@
       const rebootDot = header.querySelector('[data-role="reboot-dot"]');
       const rebootValueNode = header.querySelector('[data-role="reboot-value"]');
       const rebootSubNode = header.querySelector('[data-role="reboot-sub"]');
-      const apiSyncNode = header.querySelector('[data-role="api-sync"]');
       const pbguiLabelNode = header.querySelector('[data-role="pbgui-label"]');
       const pbguiDot = header.querySelector('[data-role="pbgui-dot"]');
       const pbguiVerNode = header.querySelector('[data-role="pbgui-ver"]');
@@ -4376,7 +4406,7 @@
       const pb7VerNode = header.querySelector('[data-role="pb7-ver"]');
       const pb7BranchNode = header.querySelector('[data-role="pb7-branch"]');
 
-      if (!onlineDot || !hostnameNode || !tagsNode || !bootTimeNode || !updatesDot || !updatesCountNode || !rebootDot || !apiSyncNode || !pbguiLabelNode || !pbguiDot || !pbguiVerNode || !pbguiBranchNode || !pb7LabelNode || !pb7Dot || !pb7VerNode || !pb7BranchNode) {
+      if (!onlineDot || !hostnameNode || !tagsNode || !bootTimeNode || !updatesDot || !updatesCountNode || !rebootDot || !pbguiLabelNode || !pbguiDot || !pbguiVerNode || !pbguiBranchNode || !pb7LabelNode || !pb7Dot || !pb7VerNode || !pb7BranchNode) {
         container.innerHTML = renderSystemHeader(status, summary, isMaster, rtd);
         return;
       }
@@ -4392,7 +4422,6 @@
       setNodeClassNameIfChanged(rebootDot, 'dot ' + (model.reboot ? 'error' : 'ok'));
       setNodeTextIfChanged(rebootValueNode, model.reboot ? 'Required' : 'OK');
       setNodeTextIfChanged(rebootSubNode, model.reboot ? 'kernel update pending' : 'system current');
-      setNodeTextIfChanged(apiSyncNode, model.apiSync);
       setNodeTextIfChanged(pbguiLabelNode, 'PBGui ' + (model.pbguiTone !== 'ok' && model.pbguiVer !== '-' ? '⚠' : ''));
       setNodeClassNameIfChanged(pbguiDot, 'dot ' + model.pbguiTone);
       setNodeTextIfChanged(pbguiVerNode, model.pbguiVer);
@@ -4404,11 +4433,9 @@
     }
 
     function renderMasterSummaryTags(status) {
-      const pbremoteConfigured = Object.prototype.hasOwnProperty.call(status, 'pbremote_configured') ? !!status.pbremote_configured : true;
       const coindataConfigured = Object.prototype.hasOwnProperty.call(status, 'coindata_configured') ? !!status.coindata_configured : true;
       return `
         <span class='tag ${status.online ? 'ok' : 'error'}'>${status.online ? 'Online' : 'Offline'}</span>
-        <span class='tag ${pbremoteConfigured ? (status.rclone_ok ? 'ok' : 'warning') : ''}'>PBRemote ${pbremoteConfigured ? (status.rclone_ok ? 'Ready' : 'Missing') : 'Skipped'}</span>
         <span class='tag ${coindataConfigured ? (status.coindata_ok ? 'ok' : 'warning') : ''}'>CoinData ${coindataConfigured ? (status.coindata_ok ? 'Ready' : 'Missing') : 'Skipped'}</span>`;
     }
 
@@ -4416,7 +4443,6 @@
       function masterFlagCard(key, label, ok, sub, valueHtml) {
         return `<div class='status-item' data-flag='${escAttr(key)}'><div class='status-label'>${esc(label)}</div><div class='status-value'>${valueHtml || boolDot(ok)}</div><div class='status-sub'>${esc(sub)}</div></div>`;
       }
-      const pbremoteConfigured = Object.prototype.hasOwnProperty.call(status, 'pbremote_configured') ? !!status.pbremote_configured : true;
       const coindataConfigured = Object.prototype.hasOwnProperty.call(status, 'coindata_configured') ? !!status.coindata_configured : true;
       const coindataSub = !coindataConfigured
         ? 'CoinMarketCap API key not configured'
@@ -4430,7 +4456,6 @@
           <div class='status-item' data-field='last-update'><div class='status-label'>Last update</div><div class='status-value'>${esc(status.last_update || '-')}</div></div>
           <div class='status-item' data-field='last-command'><div class='status-label'>Last command</div><div class='status-value code'>${esc(status.last_command || '-')}</div></div>
           ${masterFlagCard('online', 'Online', !!status.online, status.online ? 'Live telemetry received' : 'No current live telemetry')}
-          ${masterFlagCard('rclone_ok', 'Rclone Ready', !!status.rclone_ok, pbremoteConfigured ? (status.rclone_ok ? 'PBRemote bucket available' : 'PBRemote bucket missing') : 'PBRemote bucket not configured', pbremoteConfigured ? '' : `<span class='dot info'></span>Skipped`)}
           ${masterFlagCard('coindata_ok', 'CoinData Ready', !!status.coindata_ok, coindataSub, coindataConfigured ? '' : `<span class='dot info'></span>Skipped`)}
         </div>`;
     }
@@ -4613,16 +4638,12 @@
         const syncedSecrets = syncCurrentVpsSecretsFromDom();
         const ui = ensureVpsUi(store.hostname, store.detail && store.detail.hostname === store.hostname ? store.detail : null);
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
-        const canRunRemote = !!String(getEffectiveVpsUserPw(store.hostname) || '').trim() || hasSessionSecret(store.hostname, 'user_pw') || !!(detail && detail.status && detail.status.update_ready);
         if (syncedSecrets) {
           renderSidebarActions();
           if (detail) {
             setHtmlIfChanged('vps-status-flags', renderStatusFlags(detail.status || {}));
           }
         }
-        document.querySelectorAll('[data-vps-remote-required="true"]').forEach(function (btn) {
-          btn.disabled = !canRunRemote;
-        });
         const setupBtn = document.getElementById('vps-setup-btn');
         if (setupBtn) setupBtn.disabled = !canSetupForm(Object.assign({ hostname: store.hostname }, ui.form || {}));
       }
@@ -4664,7 +4685,6 @@
         { key: 'ssh_ok', okSub: 'SSH port reachable', failSub: 'SSH still not reachable' },
         { key: 'init_ok' },
         { key: 'setup_ok' },
-        { key: 'rclone_ok', okSub: 'PBRemote bucket available', failSub: 'PBRemote bucket missing' },
         { key: 'coindata_ok', okSub: 'CoinData API OK', failSub: 'CoinData API missing/invalid' },
         { key: 'online', okSub: 'Live telemetry received', failSub: 'No current live telemetry' }
       ];
@@ -4858,6 +4878,7 @@
         syncSystemHeader('vps-system-header', status, summary, false, vRtd);
         _liveUpdateStatusFields('vps-status-fields', status, summary, false);
         _liveUpdateStatusFlags('vps-status-flags', status);
+        setHtmlIfChanged('vps-remote-services-panel', renderVpsRemoteServicesContent(detail.hostname, status));
         _liveUpdateServiceRows('vps-monitor-live', (detail.monitor || {}).v7 || []);
         _liveUpdateTelemetry((detail.monitor || {}).server || null);
       }
@@ -4872,8 +4893,8 @@
         'data/logs/PBCoinData.log': 'PBCoinData',
         'logs/PBRun.log': 'PBRun',
         'data/logs/PBRun.log': 'PBRun',
-        'logs/PBRemote.log': 'PBRemote',
-        'data/logs/PBRemote.log': 'PBRemote',
+        'logs/PBCluster.log': 'PBCluster',
+        'data/logs/PBCluster.log': 'PBCluster',
         'logs/PBData.log': 'PBData',
         'data/logs/PBData.log': 'PBData',
         'logs/PBGui.log': 'PBGui',
@@ -4947,9 +4968,6 @@
     }
 
     function optionalServiceStatusFromDetail(status, service) {
-      if (service === 'PBRemote' && Object.prototype.hasOwnProperty.call(status || {}, 'pbremote_configured') && !status.pbremote_configured) {
-        return { status: 'disabled', expected: false, reason: 'PBRemote bucket is not configured' };
-      }
       if (service === 'PBCoinData' && Object.prototype.hasOwnProperty.call(status || {}, 'coindata_configured') && !status.coindata_configured) {
         return { status: 'disabled', expected: false, reason: 'CoinMarketCap API key is not configured' };
       }
@@ -5385,6 +5403,83 @@
     function boolDot(ok) {
       if (ok === 'pending') return `<span class='dot warning'></span>Checking`;
       return `<span class='dot ${ok ? 'ok' : 'error'}'></span>${ok ? 'OK' : 'Missing'}`;
+    }
+
+    const VPS_REMOTE_SERVICE_ORDER = ['PBCluster', 'PBRun', 'PBCoinData'];
+    const VPS_REMOTE_SERVICE_UNITS = {
+      PBCluster: 'pbgui-pbcluster.service',
+      PBRun: 'pbgui-pbrun.service',
+      PBCoinData: 'pbgui-pbcoindata.service'
+    };
+
+    function serviceStatusTone(status) {
+      const normalized = String(status || '').toLowerCase();
+      if (normalized === 'running' || normalized === 'restarting') return 'ok';
+      if (normalized === 'disabled') return 'info';
+      if (normalized === 'stopped' || normalized === 'failed' || normalized === 'missing') return 'error';
+      return 'warning';
+    }
+
+    function unitStatusForService(status, service) {
+      const wanted = VPS_REMOTE_SERVICE_UNITS[service] || '';
+      const migration = (status || {}).systemd_migration || {};
+      const units = Array.isArray(migration.units) ? migration.units : [];
+      for (let i = 0; i < units.length; i += 1) {
+        if (String(units[i].unit || '') === wanted) return units[i];
+      }
+      return { unit: wanted, exists: 'unknown', enabled: 'unknown', active: 'unknown' };
+    }
+
+    function remoteServiceStatus(hostname, status, service) {
+      const state = store.state || {};
+      const hostServices = ((state.services || {})[hostname] || {});
+      const optional = optionalServiceStatusFromDetail(status, service);
+      const monitored = hostServices[service] || optional || {};
+      const unit = unitStatusForService(status, service);
+      if (optional && optional.expected === false) {
+        return { status: 'disabled', label: 'Disabled', sub: optional.reason || 'Optional service is not configured', unit: unit };
+      }
+      if (unit.exists === 'no' || unit.enabled === 'not-found') {
+        return { status: 'missing', label: 'Unit missing', sub: unit.unit || 'systemd unit missing', unit: unit };
+      }
+      const rawStatus = String(monitored.status || '').trim() || (unit.active === 'active' ? 'running' : (unit.active || 'unknown'));
+      const label = rawStatus.charAt(0).toUpperCase() + rawStatus.slice(1);
+      const subParts = [];
+      if (unit.unit) subParts.push(unit.unit);
+      if (unit.enabled && unit.enabled !== 'unknown') subParts.push(unit.enabled);
+      if (monitored.manager) subParts.push(monitored.manager);
+      if (monitored.reason) subParts.push(monitored.reason);
+      if (monitored.error) subParts.push(monitored.error);
+      return { status: rawStatus, label: label, sub: subParts.join(' / ') || 'No live service status yet', unit: unit };
+    }
+
+    function renderVpsRemoteServicesContent(hostname, status) {
+      const migration = (status || {}).systemd_migration || {};
+      const migrationText = migration.migration_complete ? 'Systemd migration complete' : (migration.migration_needed ? 'Systemd migration needed' : 'Systemd migration status unknown');
+      return `<div class='panel-head'>
+          <div>
+            <div class='panel-title'>Remote Services</div>
+            <div class='panel-sub'>Read-only status from VPS Monitor and systemd migration checks. Use Systemd migration in the sidebar to install/update units.</div>
+          </div>
+        </div>
+        <div class='panel-body'>
+          <div class='notice ${migration.migration_complete ? 'ok' : 'warning'}'>${esc(migrationText)}</div>
+          <div class='status-grid'>
+            ${VPS_REMOTE_SERVICE_ORDER.map(function (service) {
+              const item = remoteServiceStatus(hostname, status, service);
+              return `<div class='status-item' data-service='${escAttr(service)}'>
+                <div class='status-label'>${esc(service)}</div>
+                <div class='status-value'><span class='dot ${escAttr(serviceStatusTone(item.status))}'></span>${esc(item.label)}</div>
+                <div class='status-sub'>${esc(item.sub)}</div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+      </div>`;
+    }
+
+    function renderVpsRemoteServices(hostname, status) {
+      return `<div class='panel' id='vps-remote-services-panel'>${renderVpsRemoteServicesContent(hostname, status)}</div>`;
     }
 
     function levelTag(level, label) {
@@ -6072,7 +6167,7 @@
       prepareAlertModalWindow(980, 820);
       document.getElementById('alertModalTitle').textContent = 'Systemd Migration Preview';
       const box = document.getElementById('alertModalBody');
-      box.className = 'notice bucket-cleanup-body';
+      box.className = 'notice modal-scroll-body';
       box.innerHTML = renderVpsSystemdMigrationPreview(payload);
       document.getElementById('alertModalBtnRow').innerHTML = payload.can_migrate
         ? '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" id="systemd-migrate-confirm">Migrate to systemd</button>'
@@ -6086,181 +6181,6 @@
         };
       }
       setTimeout(function() { box.scrollTop = 0; }, 0);
-    }
-
-    function openBucketCleanupPreview() {
-      send({ cmd: 'preview_bucket_cleanup' });
-    }
-
-    function requestBucketCleanupIndicator(force) {
-      if (!store.master) return;
-      if (!store.ws || store.ws.readyState !== WebSocket.OPEN) return;
-      const current = store.master.bucketCleanupIndicator || {};
-      if (current.running) return;
-      store.master.bucketCleanupIndicatorRequested = true;
-      store.master.bucketCleanupIndicator = Object.assign({}, current, { running: true });
-      send({ cmd: 'bucket_cleanup_indicator', force: !!force });
-    }
-
-    function resetBucketCleanupIndicator(options) {
-      const opts = options || {};
-      store.master.bucketCleanupIndicatorRequested = false;
-      store.master.bucketCleanupIndicator = { state: 'unknown', count: 0, hostnames: [], error: '', checked_at: 0, running: false };
-      if (opts.refreshNow) {
-        requestBucketCleanupIndicator(true);
-      }
-    }
-
-    function getBucketCleanupSelectedHosts() {
-      const checked = document.querySelectorAll('[data-bucket-cleanup-host]:checked');
-      return Array.from(checked).map(function (node) {
-        return String(node.getAttribute('data-bucket-cleanup-host') || '').trim();
-      }).filter(Boolean);
-    }
-
-    function setBucketCleanupActionLoading(isLoading) {
-      const dryRunBtn = document.getElementById('bucket-cleanup-dry-run');
-      const confirmBtn = document.getElementById('bucket-cleanup-confirm');
-      if (dryRunBtn) {
-        dryRunBtn.disabled = !!isLoading;
-        dryRunBtn.textContent = isLoading ? 'Dry Run Running...' : 'Dry Run Selected';
-      }
-      if (confirmBtn) {
-        confirmBtn.disabled = !!isLoading;
-      }
-    }
-
-    function renderBucketCleanupDryRunResults(data) {
-      const payload = data || {};
-      const summary = payload.summary || {};
-      const results = Array.isArray(payload.results) ? payload.results : [];
-      const readyCount = results.filter(function (row) { return !!row.ok; }).length;
-      if (!results.length) {
-        return '<div class="notice info">No dry-run results available.</div>';
-      }
-      return `
-        <div style='display:grid;gap:12px'>
-          <div>
-            <div><strong>Bucket:</strong> <span class='code'>${esc(String(payload.bucket || ''))}</span></div>
-            <div><strong>Summary:</strong> ${esc(String(summary.requested || 0))} selected, ${esc(String(summary.ok || 0))} ok, ${esc(String(summary.failed || 0))} failed, ${esc(String(summary.matches || 0))} matched paths.</div>
-            <div class='field-sub info'>${esc(String(readyCount))} host${readyCount === 1 ? '' : 's'} passed dry run and can be deleted directly from this dialog.</div>
-          </div>
-          ${results.map(function (row) {
-            const hostname = String(row.hostname || '');
-            const matches = Array.isArray(row.matches) ? row.matches : [];
-            const rowClass = row.ok ? 'notice success' : 'notice warning';
-            return `
-              <div class='${rowClass}' style='display:grid;gap:8px'>
-                <div><strong>${esc(hostname)}</strong> ${row.ok ? '' : '<span class="tag danger">failed</span>'}</div>
-                <div>Matched paths: <strong>${esc(String(row.match_count || 0))}</strong></div>
-                ${row.error ? `<div>${esc(String(row.error || ''))}</div>` : ''}
-                <pre class='log-matches-pre' style='max-height:260px;overflow:auto'>${esc(matches.join('\n') || '(no matches)')}</pre>
-              </div>`;
-          }).join('')}
-        </div>`;
-    }
-
-    function renderBucketCleanupDeleteResults(data) {
-      const payload = data || {};
-      const summary = payload.summary || {};
-      const results = Array.isArray(payload.results) ? payload.results : [];
-      if (!results.length) {
-        return '<div class="notice info">No cleanup results available.</div>';
-      }
-      return `
-        <div style='display:grid;gap:12px'>
-          <div>
-            <div><strong>Bucket:</strong> <span class='code'>${esc(String(payload.bucket || ''))}</span></div>
-            <div><strong>Summary:</strong> ${esc(String(summary.requested || 0))} requested, ${esc(String(summary.deleted || 0))} ok, ${esc(String(summary.failed || 0))} failed.</div>
-          </div>
-          ${results.map(function (row) {
-            const hostname = String(row.hostname || '');
-            const operations = Array.isArray(row.operations) ? row.operations : [];
-            const deleted = Array.isArray(row.deleted) ? row.deleted : [];
-            const dryRunMatches = Array.isArray(row.dry_run_matches) ? row.dry_run_matches : [];
-            const rowClass = row.ok ? 'notice success' : 'notice warning';
-            return `
-              <div class='${rowClass}' style='display:grid;gap:8px'>
-                <div><strong>${esc(hostname)}</strong> ${row.ok ? '<span class="tag ok">ok</span>' : '<span class="tag danger">failed</span>'}</div>
-                <div>Deleted prefixes: <span class='code'>${esc(deleted.join(', ') || '(none)')}</span></div>
-                ${row.error ? `<div>${esc(String(row.error || ''))}</div>` : ''}
-                <div><strong>Dry-run matches</strong></div>
-                <pre class='log-matches-pre' style='max-height:180px;overflow:auto'>${esc(dryRunMatches.join('\n') || '(no matches)')}</pre>
-                <div><strong>Delete operations</strong></div>
-                <pre class='log-matches-pre' style='max-height:280px;overflow:auto'>${esc(operations.map(function (op) {
-                  const parts = [
-                    '[' + String(op.ok ? 'ok' : 'failed') + '] ' + String(op.prefix || ''),
-                    'command: ' + String(Array.isArray(op.command) ? op.command.join(' ') : ''),
-                    'returncode: ' + String(op.returncode == null ? 'n/a' : op.returncode),
-                    'stdout: ' + String(op.stdout || '(empty)'),
-                    'stderr: ' + String(op.stderr || '(empty)')
-                  ];
-                  return parts.join('\n');
-                }).join('\n\n') || '(no operation log)')}</pre>
-              </div>`;
-          }).join('')}
-        </div>`;
-    }
-
-    function renderBucketCleanupRows(rows) {
-      const items = Array.isArray(rows) ? rows : [];
-      if (!items.length) {
-        return '<div class="notice info">No matching bucket entries found.</div>';
-      }
-      return items.map(function (row) {
-        const hostname = String(row.hostname || '');
-        const category = String(row.category || 'known');
-        const checked = row.eligible ? 'checked' : '';
-        const rowClass = category === 'orphaned' ? 'notice warning' : (category === 'eligible' ? 'notice success' : 'notice');
-        const badge = category === 'eligible' ? 'Eligible' : (category === 'orphaned' ? 'Orphaned' : 'Known but skipped');
-        return `
-          <div class='${rowClass}' style='display:grid;gap:8px;margin-bottom:10px'>
-            <label class='checkbox-row'><input type='checkbox' data-bucket-cleanup-host='${escAttr(hostname)}' ${checked}> Delete bucket entries for <strong>${esc(hostname)}</strong></label>
-            <div><strong>${esc(badge)}</strong></div>
-            <div>Entries: ${row.cmd ? '<span class="tag ok">cmd</span>' : '<span class="tag">cmd</span>'} ${row.run_v7 ? '<span class="tag ok">run_v7</span>' : '<span class="tag">run_v7</span>'}</div>
-            <div>Role: <span class='code'>${esc(String(row.role || 'unknown'))}</span> | PBGui: <span class='code'>${esc(String(row.pbgui_version || 'N/A'))}</span></div>
-            <div>${esc(String(row.reason || ''))}</div>
-          </div>`;
-      }).join('');
-    }
-
-    function openBucketCleanupModal(preview) {
-      prepareAlertModalWindow(980, 820);
-      const data = preview || store.master.bucketCleanupPreview || {};
-      const summary = data.summary || {};
-      const rows = Array.isArray(data.rows) ? data.rows : [];
-      document.getElementById('alertModalTitle').textContent = 'Cleanup Bucket';
-      const box = document.getElementById('alertModalBody');
-      box.className = 'notice bucket-cleanup-body';
-      box.innerHTML = `
-        <div style='display:grid;gap:12px'>
-          <div>
-            <div><strong>Bucket:</strong> <span class='code'>${esc(String(data.bucket || ''))}</span></div>
-            <div class='field-sub info'>Eligible entries are preselected. Known-but-skipped and orphaned entries are unchecked by default. Orphaned entries are highlighted.</div>
-          </div>
-          <div><strong>Summary:</strong> ${esc(String(summary.total || 0))} total, ${esc(String(summary.eligible || 0))} eligible, ${esc(String(summary.known || 0))} known but skipped, ${esc(String(summary.orphaned || 0))} orphaned.</div>
-          <div>${renderBucketCleanupRows(rows)}</div>
-        </div>`;
-      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn ghost" type="button" id="bucket-cleanup-dry-run">Dry Run Selected</button> <button class="btn primary" type="button" id="bucket-cleanup-confirm">Delete Selected</button>';
-      document.getElementById('alertModalOverlay').classList.add('visible');
-      setTimeout(function() { box.scrollTop = 0; }, 0);
-      document.getElementById('bucket-cleanup-dry-run').onclick = function () {
-        const hostnames = getBucketCleanupSelectedHosts();
-        if (!hostnames.length) {
-          toast('Select at least one bucket entry first.', 'warning');
-          return;
-        }
-        setBucketCleanupActionLoading(true);
-        send({ cmd: 'dry_run_bucket_cleanup', hostnames: hostnames });
-      };
-      document.getElementById('bucket-cleanup-confirm').onclick = function () {
-        const hostnames = getBucketCleanupSelectedHosts();
-        if (!hostnames.length) {
-          toast('Select at least one bucket entry first.', 'warning');
-          return;
-        }
-        send({ cmd: 'run_bucket_cleanup', hostnames: hostnames });
-      };
     }
 
     function openBotLog(hostname, botName, pbVersion) {
@@ -6862,19 +6782,6 @@
         openVpsSystemdMigrationPreview(data);
         return;
       }
-      if (msg.type === 'bucket_cleanup_indicator_result') {
-        const data = msg.data || {};
-        store.master.bucketCleanupIndicator = {
-          state: String(data.state || 'unknown'),
-          count: Number(data.count || 0),
-          hostnames: Array.isArray(data.hostnames) ? data.hostnames.slice() : [],
-          error: String(data.error || ''),
-          checked_at: Number(data.checked_at || 0),
-          running: !!data.running
-        };
-        renderUi({ forceSidebarActions: true });
-        return;
-      }
       if (msg.type === 'local_sudo_validation_result') {
         const pending = store.pendingLocalSudoAction;
         const data = msg.data || {};
@@ -6908,9 +6815,6 @@
             }
             return;
           }
-        }
-        if (msg.cmd === 'dry_run_bucket_cleanup' || msg.cmd === 'run_bucket_cleanup') {
-          setBucketCleanupActionLoading(false);
         }
         if (msg.cmd === 'read_vps_settings' && store.hostname && store.vps[store.hostname]) {
           store.vps[store.hostname].readSettingsLoading = false;
@@ -7079,78 +6983,6 @@
         } else {
           toast('Failed to add to /etc/hosts: ' + String(data.error || ''), 'error');
         }
-        return;
-      }
-      if (msg.type === 'bucket_check_result') {
-        const data = msg.data || {};
-        store.addBucketCheck = { ok: !!data.ok, error: String(data.error || ''), loading: false };
-        if (store.view === 'add') {
-          setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
-          setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
-        }
-        return;
-      }
-      if (msg.type === 'bucket_cleanup_preview') {
-        store.master.bucketCleanupPreview = msg.data || null;
-        if (store.master.bucketCleanupPreviewRefreshOnly) {
-          store.master.bucketCleanupPreviewRefreshOnly = false;
-          return;
-        }
-        openBucketCleanupModal(msg.data || null);
-        return;
-      }
-      if (msg.type === 'bucket_cleanup_result') {
-        setBucketCleanupActionLoading(false);
-        const data = msg.data || {};
-        const summary = data.summary || {};
-        const deleted = Number(summary.deleted || 0);
-        const failed = Number(summary.failed || 0);
-        store.master.bucketCleanupPreview = null;
-        prepareAlertModalWindow(980, 820);
-        document.getElementById('alertModalTitle').textContent = 'Cleanup Bucket Result';
-        const box = document.getElementById('alertModalBody');
-        box.className = 'notice bucket-cleanup-body';
-        box.innerHTML = renderBucketCleanupDeleteResults(data);
-        document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Close</button>';
-        document.getElementById('alertModalOverlay').classList.add('visible');
-        setTimeout(function() { box.scrollTop = 0; }, 0);
-        if (failed <= 0) {
-          toast('Bucket cleanup finished for ' + deleted + ' host' + (deleted === 1 ? '' : 's') + '.', 'success');
-        }
-        store.master.bucketCleanupPreviewRefreshOnly = true;
-        send({ cmd: 'preview_bucket_cleanup' });
-        return;
-      }
-      if (msg.type === 'bucket_cleanup_dry_run') {
-        setBucketCleanupActionLoading(false);
-        const data = msg.data || {};
-        const readyHostnames = (Array.isArray(data.results) ? data.results : []).filter(function (row) {
-          return !!(row && row.ok && String(row.hostname || '').trim());
-        }).map(function (row) {
-          return String(row.hostname || '').trim();
-        });
-        prepareAlertModalWindow(980, 820);
-        document.getElementById('alertModalTitle').textContent = 'Cleanup Bucket Dry Run';
-        const box = document.getElementById('alertModalBody');
-        box.className = 'notice bucket-cleanup-body';
-        box.innerHTML = renderBucketCleanupDryRunResults(data);
-        document.getElementById('alertModalBtnRow').innerHTML = readyHostnames.length
-          ? '<button class="btn ghost" type="button" onclick="closeAlertModal()">Close</button> <button class="btn primary" type="button" id="bucket-cleanup-dry-run-confirm">Delete Selected</button>'
-          : '<button class="btn ghost" type="button" onclick="closeAlertModal()">Close</button>';
-        document.getElementById('alertModalOverlay').classList.add('visible');
-        const confirmBtn = document.getElementById('bucket-cleanup-dry-run-confirm');
-        if (confirmBtn) {
-          confirmBtn.onclick = function () {
-            if (!readyHostnames.length) {
-              toast('No successful dry-run entries are available for deletion.', 'warning');
-              return;
-            }
-            confirmBtn.disabled = true;
-            confirmBtn.textContent = 'Deleting...';
-            send({ cmd: 'run_bucket_cleanup', hostnames: readyHostnames });
-          };
-        }
-        setTimeout(function() { box.scrollTop = 0; }, 0);
         return;
       }
       if (msg.type === 'cmc_check_result') {
@@ -7349,7 +7181,6 @@
         toast('Setup started.', 'success');
         const hostname = store.hostname || ((msg.data || {}).hostname || '');
         if (hostname) {
-          resetBucketCleanupIndicator();
           store.pendingAutoSetupSwitch = null;
           openVpsTaskLog(hostname, 'vps-setup', 'Setup VPS');
           scheduleVpsDetailFetch(hostname);
@@ -7357,9 +7188,6 @@
         }
       } else if (cmd === 'refresh') {
         toast('Refreshed.', 'info');
-      } else if (cmd === 'run_bucket_cleanup') {
-        resetBucketCleanupIndicator({ refreshNow: true });
-        return;
       } else if (cmd === 'read_vps_settings') {
         if (isVpsContextView() && store.hostname && msg.data) {
           const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
@@ -7408,7 +7236,6 @@
         return;
       } else if (cmd === 'delete_vps') {
         toast('VPS deleted.', 'success');
-        resetBucketCleanupIndicator();
         store.view = 'overview';
         store.hostname = '';
         store.detail = null;
@@ -7511,7 +7338,6 @@
         store.detail = null;
         ensureAddFormDefaults();
         scheduleVpsReadyCheck();
-        scheduleBucketCheck();
         scheduleCmcCheck();
       }
       if (view !== 'master-task-log' && view !== 'vps-task-log') {
@@ -7519,9 +7345,6 @@
       }
       if (view !== 'vps-task-log' && view !== 'vps-host-logs') {
         history.replaceState(null, '', viewUrl(view, hostname));
-      }
-      if (view === 'overview' && !store.master.bucketCleanupIndicatorRequested) {
-        requestBucketCleanupIndicator(false);
       }
       sendContext();
       renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
@@ -7588,16 +7411,323 @@
       send({ cmd: 'refresh' });
     }
 
-    function getOverviewApiSyncButtonModel() {
-      if (!window.overviewApiSyncController) return { text: 'API Sync', title: '', statusClass: 'ok' };
-      return window.overviewApiSyncController.getButtonModel();
+    function clusterImportActionLevel(action) {
+      const normalized = String(action || '').toLowerCase();
+      if (normalized === 'add' || normalized === 'update') return 'ok';
+      if (normalized === 'error') return 'error';
+      return 'warning';
     }
 
-    function startApiSync() {
-      if (!window.overviewApiSyncController) return;
-      window.overviewApiSyncController.quickSync().then(function () {
-        refreshState();
-      }).catch(function () {});
+    function setClusterImportPassword(hostname, value) {
+      const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+      flow.passwords = flow.passwords || {};
+      const key = String(hostname || '').trim();
+      if (!key) return;
+      const text = String(value || '');
+      if (text) flow.passwords[key] = text;
+      else delete flow.passwords[key];
+      store.clusterNodesImport = flow;
+    }
+
+    function setClusterImportAllPasswords(value) {
+      const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+      const text = String(value || '');
+      flow.passwords = flow.passwords || {};
+      const items = Array.isArray((flow.preview || {}).items) ? flow.preview.items : [];
+      items.forEach(function (item) {
+        const action = String((item || {}).action || 'skip');
+        const hostname = String((item || {}).hostname || '').trim();
+        if (!hostname || (action !== 'add' && action !== 'update')) return;
+        if (text) flow.passwords[hostname] = text;
+        else delete flow.passwords[hostname];
+      });
+      store.clusterNodesImport = flow;
+    }
+
+    function stopClusterNodesImportProgressPolling() {
+      const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+      if (flow.progressTimer) {
+        window.clearTimeout(flow.progressTimer);
+        flow.progressTimer = 0;
+        store.clusterNodesImport = flow;
+      }
+    }
+
+    function isClusterNodesImportModalVisible() {
+      const overlay = document.getElementById('alertModalOverlay');
+      const title = document.getElementById('alertModalTitle');
+      return !!(overlay && overlay.classList.contains('visible') && title && title.textContent === 'Import Cluster Nodes');
+    }
+
+    function clusterImportProgressClass(status) {
+      const normalized = String(status || '').toLowerCase();
+      if (normalized === 'successful' || normalized === 'done') return 'done';
+      if (normalized === 'warning' || normalized === 'skipped') return 'warning';
+      if (normalized === 'error' || normalized === 'failed') return 'error';
+      return 'running';
+    }
+
+    function renderClusterNodesImportProgress(progress) {
+      const payload = progress || {};
+      const status = String(payload.status || 'running');
+      const statusClass = clusterImportProgressClass(status);
+      const percent = Math.max(0, Math.min(100, Math.round(Number(payload.percent || 0))));
+      const done = Number(payload.done || 0);
+      const total = Number(payload.total || 0);
+      const label = String(payload.label || (status === 'successful' ? 'Cluster node import completed.' : 'Importing selected Cluster nodes...'));
+      const events = Array.isArray(payload.events) ? payload.events.filter(function (event) {
+        const rowStatus = String((event || {}).status || '').toLowerCase();
+        const rowLabel = String((event || {}).label || '');
+        return !(rowStatus === 'skipped' && rowLabel.indexOf('No VPS user password') >= 0);
+      }) : [];
+      const eventRows = events.length ? events.map(function (event) {
+        const rowStatus = String((event || {}).status || 'running');
+        const rowClass = clusterImportProgressClass(rowStatus);
+        const rowHost = String((event || {}).hostname || '-');
+        const rowLabel = String((event || {}).label || 'Progress update');
+        return `<div class='cluster-import-progress-row ${escAttr(rowClass)}'>
+          <div class='cluster-import-progress-host'>${esc(rowHost)}</div>
+          <div class='cluster-import-progress-status'>${esc(rowClass)}</div>
+          <div>${esc(rowLabel)}</div>
+        </div>`;
+      }).join('') : `<div class='cluster-import-progress-row running'><div class='cluster-import-progress-host'>-</div><div class='cluster-import-progress-status'>running</div><div>${esc(label)}</div></div>`;
+      return `<div class='read-settings-progress cluster-import-progress ${statusClass === 'error' ? 'error' : ''}'>
+        <div class='read-settings-progress-head'>
+          <div>
+            <div class='read-settings-progress-title'>${status === 'successful' ? 'Cluster node import completed' : statusClass === 'error' ? 'Cluster node import failed' : 'Importing Cluster nodes'}</div>
+            <div class='muted'>${esc(label)}${total ? ` (${esc(String(done))}/${esc(String(total))})` : ''}</div>
+          </div>
+          <div class='read-settings-progress-percent'>${esc(String(percent))}%</div>
+        </div>
+        <div class='deploy-progress-bar'><div class='deploy-progress-fill' style='width:${escAttr(String(percent))}%;background:${statusClass === 'error' ? 'var(--danger)' : statusClass === 'done' ? 'var(--ok)' : 'var(--accent)'}'></div></div>
+        <div class='cluster-import-progress-log' id='cluster-import-progress-log'>${eventRows}</div>
+      </div>`;
+    }
+
+    function followClusterImportProgressLog() {
+      window.requestAnimationFrame(function () {
+        const log = document.getElementById('cluster-import-progress-log');
+        if (log) log.scrollTop = log.scrollHeight;
+      });
+    }
+
+    function pollClusterNodesImportProgress(jobId) {
+      const cleanJobId = String(jobId || '').trim();
+      if (!cleanJobId) return;
+      vpsManagerGet('/cluster-import/progress/' + encodeURIComponent(cleanJobId), {})
+        .then(function (data) {
+          const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+          if (String(flow.jobId || '') !== cleanJobId) return;
+          const status = String((data || {}).status || 'running');
+          const done = status === 'successful' || status === 'error';
+          flow.progress = data || null;
+          flow.applying = !done;
+          flow.progressTimer = 0;
+          if (done) {
+            flow.result = (data || {}).result || null;
+            if (status === 'successful') {
+              const result = flow.result || {};
+              toast(String(result.message || 'Cluster nodes imported.'), 'success');
+              if (Array.isArray(result.warnings) && result.warnings.length) {
+                toast(result.warnings.slice(0, 3).join(' | '), 'warning');
+              }
+              send({ cmd: 'refresh' });
+              renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+            } else {
+              flow.error = String((data || {}).error || (data || {}).label || 'Import failed.');
+            }
+          } else {
+            flow.progressTimer = window.setTimeout(function () { pollClusterNodesImportProgress(cleanJobId); }, 350);
+          }
+          store.clusterNodesImport = flow;
+          if (isClusterNodesImportModalVisible()) renderClusterNodesImportModal();
+        })
+        .catch(function (err) {
+          const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+          if (String(flow.jobId || '') !== cleanJobId) return;
+          flow.applying = false;
+          flow.progressTimer = 0;
+          flow.error = String(err && err.message ? err.message : err || 'Import progress failed.');
+          store.clusterNodesImport = flow;
+          if (isClusterNodesImportModalVisible()) renderClusterNodesImportModal();
+        });
+    }
+
+    function renderClusterNodesImportPreview(preview) {
+      const payload = preview || {};
+      const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+      const passwords = flow.passwords || {};
+      const counts = payload.counts || {};
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      const rows = items.length ? items.map(function (item) {
+        const action = String(item.action || 'skip');
+        const changes = Array.isArray(item.changes) ? item.changes : [];
+        const details = changes.length ? changes.slice() : (item.reason ? [String(item.reason)] : []);
+        const hostsAction = String(item.hosts_action || 'none');
+        if ((action === 'add' || action === 'update') && hostsAction !== 'none') {
+          const currentIp = String(item.hosts_current_ip || '').trim();
+          details.push(hostsAction === 'replace' && currentIp ? 'replace /etc/hosts ' + currentIp + ' -> ' + String(item.ssh_host || '') : 'add /etc/hosts');
+        }
+        const hostname = String(item.hostname || '').trim();
+        const passwordCell = (action === 'add' || action === 'update')
+          ? `<input type='password' value='${escAttr(passwords[hostname] || '')}' oninput='setClusterImportPassword(${js(hostname)}, this.value)' placeholder='leave empty to skip'>`
+          : '-';
+        return `
+          <tr>
+            <td>${levelTag(clusterImportActionLevel(action), action)}</td>
+            <td>${esc(item.hostname || '-')}</td>
+            <td>${esc(item.role || '-')}</td>
+            <td>${esc(item.sync_mode || '-')}</td>
+            <td>${esc(item.ssh_host || '-')}</td>
+            <td>${esc(item.ssh_user || '-')}</td>
+            <td>${esc(item.ssh_port == null ? '-' : String(item.ssh_port))}</td>
+            <td>${esc(item.remote_pbgui_dir || '-')}</td>
+            <td>${passwordCell}</td>
+            <td>${esc(details.join(', '))}</td>
+          </tr>`;
+      }).join('') : `<tr><td colspan='10'>No Cluster nodes available for import.</td></tr>`;
+      const hostsUpdateRequired = !!payload.hosts_update_required;
+      const importableCount = items.filter(function (item) {
+        const action = String((item || {}).action || 'skip');
+        return action === 'add' || action === 'update';
+      }).length;
+      return `
+        <div style='display:grid;gap:14px'>
+          <div class='notice info'>${esc(payload.message || 'Imports safe SSH metadata from Cluster nodes. Secrets are not imported.')}</div>
+          ${hostsUpdateRequired ? `<div class='notice warning'>Import will update ${esc(String(counts.hosts_update || 0))} local /etc/hosts entr${Number(counts.hosts_update || 0) === 1 ? 'y' : 'ies'} after asking for the local sudo password.</div>` : ''}
+          ${importableCount ? `<div class='notice warning'>Enter the VPS user password for each host you want to import. Rows without a password are skipped. Passwords are used once to refresh settings and install the monitoring SSH key; they are kept only in this browser/API session.</div>
+          <div class='field-grid'><div class='field'><label>Use same VPS password for all rows</label><input type='password' oninput='setClusterImportAllPasswords(this.value)' placeholder='optional shortcut'></div></div>` : ''}
+          <div class='status-grid'>
+            <div class='status-item'><div class='status-label'>Add</div><div class='status-value'>${esc(String(counts.add || 0))}</div><div class='status-sub'>New VPS Manager entries</div></div>
+            <div class='status-item'><div class='status-label'>Update</div><div class='status-value'>${esc(String(counts.update || 0))}</div><div class='status-sub'>Safe metadata changes</div></div>
+            <div class='status-item'><div class='status-label'>Hosts</div><div class='status-value'>${esc(String(counts.hosts_update || 0))}</div><div class='status-sub'>Local /etc/hosts changes</div></div>
+            <div class='status-item'><div class='status-label'>Skip</div><div class='status-value'>${esc(String(counts.skip || 0))}</div><div class='status-sub'>Local or already current</div></div>
+            <div class='status-item'><div class='status-label'>Error</div><div class='status-value'>${esc(String(counts.error || 0))}</div><div class='status-sub'>Must be fixed first</div></div>
+          </div>
+          <div class='table-wrap'>
+            <table>
+              <thead><tr><th>Action</th><th>Hostname</th><th>Role</th><th>Sync</th><th>SSH Host</th><th>SSH User</th><th>Port</th><th>Remote PBGui Dir</th><th>VPS Password</th><th>Reason / Changes</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>`;
+    }
+
+    function renderClusterNodesImportModal() {
+      const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+      const modalWidth = Math.min(1540, Math.max(1100, Math.round(window.innerWidth * 0.92)));
+      const modalHeight = Math.min(860, Math.max(760, Math.round(window.innerHeight * 0.86)));
+      prepareAlertModalWindow(modalWidth, modalHeight);
+      document.getElementById('alertModalTitle').textContent = 'Import Cluster Nodes';
+      const box = document.getElementById('alertModalBody');
+      box.className = 'notice modal-scroll-body' + ((flow.applying || flow.progress) ? ' cluster-import-progress-body' : '');
+      let body = '';
+      if (flow.error) {
+        body += `<div class='notice error'>${esc(flow.error)}</div>`;
+      }
+      if (flow.loading) {
+        body += `<div class='notice info'>Loading Cluster node import preview...</div>`;
+      } else if (flow.applying || flow.progress) {
+        body += renderClusterNodesImportProgress(flow.progress || { status: 'queued', label: 'Queued Cluster node import...', percent: 0, done: 0, total: 1 });
+      } else {
+        body += renderClusterNodesImportPreview(flow.preview);
+      }
+      box.innerHTML = body;
+      if (flow.applying || flow.progress) followClusterImportProgressLog();
+      const canApply = !!(flow.preview && flow.preview.can_apply && !flow.loading && !flow.applying && !flow.progress);
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">' + (flow.applying ? 'Hide' : 'Close') + '</button> <button class="btn primary" type="button" onclick="loadClusterNodesImportPreview()" ' + (flow.loading || flow.applying ? 'disabled' : '') + '>Reload Preview</button> <button class="btn ok" type="button" id="cluster-nodes-import-apply" ' + (canApply ? '' : 'disabled') + '>' + (flow.applying ? 'Importing...' : 'Import Cluster Nodes') + '</button>';
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      const applyBtn = document.getElementById('cluster-nodes-import-apply');
+      if (applyBtn) applyBtn.onclick = function () { applyClusterNodesImport(); };
+    }
+
+    function loadClusterNodesImportPreview() {
+      stopClusterNodesImportProgressPolling();
+      const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+      flow.loading = true;
+      flow.applying = false;
+      flow.error = '';
+      flow.jobId = '';
+      flow.progress = null;
+      flow.result = null;
+      store.clusterNodesImport = flow;
+      renderClusterNodesImportModal();
+      vpsManagerGet('/cluster-import/preview', {})
+        .then(function (data) {
+          store.clusterNodesImport = { loading: false, applying: false, error: '', preview: data || null };
+          renderClusterNodesImportModal();
+        })
+        .catch(function (err) {
+          store.clusterNodesImport = { loading: false, applying: false, error: String(err && err.message ? err.message : err || 'Preview failed.'), preview: null };
+          renderClusterNodesImportModal();
+        });
+    }
+
+    function openClusterNodesImportPrompt() {
+      stopClusterNodesImportProgressPolling();
+      store.clusterNodesImport = defaultClusterNodesImportState();
+      loadClusterNodesImportPreview();
+    }
+
+    function applyClusterNodesImport() {
+      const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+      if (!flow.preview || !flow.preview.can_apply || flow.applying) return;
+      const passwords = flow.passwords || {};
+      const selectedItems = (Array.isArray((flow.preview || {}).items) ? flow.preview.items : []).filter(function (item) {
+        const action = String((item || {}).action || 'skip');
+        const hostname = String((item || {}).hostname || '').trim();
+        return hostname && (action === 'add' || action === 'update') && !!passwords[hostname];
+      });
+      if (!selectedItems.length) {
+        flow.error = 'Enter the VPS user password for at least one Cluster node to import.';
+        store.clusterNodesImport = flow;
+        renderClusterNodesImportModal();
+        return;
+      }
+      const selectedHostsUpdateRequired = selectedItems.some(function (item) {
+        return String((item || {}).hosts_action || 'none') !== 'none';
+      });
+      if (selectedHostsUpdateRequired && !String(store.master.sudoPw || '').trim()) {
+        openMasterPasswordPrompt(function () {
+          setTimeout(function () {
+            applyClusterNodesImport();
+          }, 0);
+        }, 'Import Cluster Nodes');
+        return;
+      }
+      flow.localSudoPw = selectedHostsUpdateRequired ? String(store.master.sudoPw || '') : '';
+      flow.applying = true;
+      flow.error = '';
+      flow.jobId = '';
+      flow.progress = { status: 'queued', label: 'Queued Cluster node import...', done: 0, total: 1, percent: 0, events: [] };
+      flow.result = null;
+      store.clusterNodesImport = flow;
+      renderClusterNodesImportModal();
+      vpsManagerPost('/cluster-import/apply', { local_sudo_pw: flow.localSudoPw || '', passwords: flow.passwords || {} })
+        .then(function (data) {
+          const next = store.clusterNodesImport || defaultClusterNodesImportState();
+          next.jobId = String((data || {}).job_id || '');
+          next.progress = data || next.progress;
+          next.applying = true;
+          next.error = '';
+          store.clusterNodesImport = next;
+          renderClusterNodesImportModal();
+          if (next.jobId) {
+            pollClusterNodesImportProgress(next.jobId);
+          } else {
+            next.applying = false;
+            next.error = 'Import did not return a progress job id.';
+            store.clusterNodesImport = next;
+            renderClusterNodesImportModal();
+          }
+        })
+        .catch(function (err) {
+          const next = store.clusterNodesImport || defaultClusterNodesImportState();
+          next.applying = false;
+          next.error = String(err && err.message ? err.message : err || 'Import failed.');
+          store.clusterNodesImport = next;
+          renderClusterNodesImportModal();
+        });
     }
 
     function existingVpsImportPayload(includeLocalSudo) {
@@ -7731,7 +7861,6 @@
           <div class='status-item'><div class='status-label'>PBGui</div><div class='status-value'>${esc(detected.pbgui_dir || '')}</div><div class='status-sub'>Remote PBGui directory</div></div>
           <div class='status-item'><div class='status-label'>PB7</div><div class='status-value'>${esc(detected.pb7_dir || '')}</div><div class='status-sub'>From pbgui.ini or install path</div></div>
           <div class='status-item'><div class='status-label'>Swap</div><div class='status-value'>${esc(detected.swap || '0')}</div><div class='status-sub'>Detected /swapfile size</div></div>
-          <div class='status-item'><div class='status-label'>PBRemote Bucket</div><div class='status-value'>${esc(detected.bucket || '-')}</div><div class='status-sub'>From remote pbgui.ini</div></div>
           <div class='status-item'><div class='status-label'>CoinMarketCap API</div><div class='status-value'>${detected.coinmarketcap_api_key ? boolDot(true) : boolDot(false)}</div><div class='status-sub'>${detected.coinmarketcap_api_key ? 'Detected' : 'Missing'}</div></div>
         </div>`;
       const hostKeyHtml = hostKey.fingerprint
@@ -7784,7 +7913,7 @@
       prepareAlertModalWindow(980, 860);
       document.getElementById('alertModalTitle').textContent = 'Import Existing VPS';
       const box = document.getElementById('alertModalBody');
-      box.className = 'notice bucket-cleanup-body';
+      box.className = 'notice modal-scroll-body';
       const errorHtml = `<div id='existing-vps-import-error'>${flow.error ? `<div class='notice error'>${esc(flow.error)}</div>` : ''}</div>`;
       const probeHtml = flow.saving
         ? renderExistingVpsImportSaving(flow)
@@ -7976,9 +8105,6 @@
       if (['ip', 'hostname', 'init_methode', 'initial_root_pw', 'root_pw', 'user_sudo', 'user_sudo_pw', 'private_key_user', 'private_key_file'].indexOf(name) >= 0) {
         scheduleVpsReadyCheck();
       }
-      if (name === 'bucket') {
-        scheduleBucketCheck();
-      }
       if (name === 'coinmarketcap_api_key') {
         scheduleCmcCheck();
       }
@@ -8016,25 +8142,6 @@
         store.addVpsReady = Object.assign({}, store.addVpsReady, { loading: true, sshError: '' });
         setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
         send({ cmd: 'check_vps_ready', form: Object.assign({}, form) });
-      }, 600);
-    }
-
-    let addBucketCheckTimer = 0;
-
-    function scheduleBucketCheck() {
-      if (addBucketCheckTimer) clearTimeout(addBucketCheckTimer);
-      addBucketCheckTimer = setTimeout(function () {
-        addBucketCheckTimer = 0;
-        if (store.view !== 'add') return;
-        const bucket = String(store.addForm.bucket || '').trim();
-        if (!bucket) {
-          store.addBucketCheck = { ok: false, error: '', loading: false };
-          setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
-          return;
-        }
-        store.addBucketCheck = { ok: false, error: '', loading: true };
-        setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
-        send({ cmd: 'check_bucket', bucket: bucket });
       }, 600);
     }
 
@@ -8088,10 +8195,6 @@
         store.addForm.user = String(config.local_user || '').trim();
         changed = true;
       }
-      if (!String(store.addForm.bucket || '').trim() && String(config.bucket || '').trim()) {
-        store.addForm.bucket = String(config.bucket || '').trim();
-        changed = true;
-      }
       if (!String(store.addForm.coinmarketcap_api_key || '').trim() && String(config.coinmarketcap_api_key || '').trim()) {
         store.addForm.coinmarketcap_api_key = String(config.coinmarketcap_api_key || '').trim();
         changed = true;
@@ -8114,7 +8217,6 @@
       if (changed && store.view === 'add') {
         setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
         setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
-        scheduleBucketCheck();
         scheduleCmcCheck();
       }
     }
@@ -9046,12 +9148,10 @@
       }
       const hasSwap = !!String(form.swap || '').trim();
       const hasInstallDir = !!String(form.install_dir || '').trim();
-      const hasBucket = !!String(form.bucket || '').trim();
       const hasCmc = !!String(form.coinmarketcap_api_key || '').trim();
       if (!hasSwap || !hasInstallDir) return false;
-      const bucketCheckOk = !!(store.addBucketCheck || {}).ok;
       const cmcCheckOk = !!(store.addCmcCheck || {}).ok;
-      if ((hasBucket && !bucketCheckOk) || (hasCmc && !cmcCheckOk)) return false;
+      if (hasCmc && !cmcCheckOk) return false;
       const fwCheck = validateFirewallIps(form.firewall_ssh_ips);
       return fwCheck.ok;
     }
@@ -9661,7 +9761,6 @@
           ${blockedTasksNotice ? `<div class='notice warning'>${esc(blockedTasksNotice)}</div>` : ''}
           <div class='sb-separator'>Tools</div>
           <button class='sb-btn' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='masterActionWithSudo("master-install-rustup", "Install or Update rustup")'>Install or Update rustup</button>
-          <button class='sb-btn' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='masterActionWithSudo("master-install-rclone", "Install or Update rclone")'>Install or Update rclone</button>
           `;
       } else if (isVpsContextView()) {
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
@@ -9669,7 +9768,6 @@
         const selectedHost = store.hostname;
         const st = (detail && detail.status) || {};
         const isRemoteMaster = String(((st.summary_row || {}).role) || '').toLowerCase() === 'master';
-        const canRunRemote = !!String(getEffectiveVpsUserPw(selectedHost) || '').trim() || hasSessionSecret(selectedHost, 'user_pw') || !!(detail && detail.status && detail.status.update_ready);
         const pbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
         const pb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : 'sb-btn ok';
         const bothBtnClass = (st.pbgui_update_available || st.pb7_update_available) ? 'sb-btn warning' : 'sb-btn ok';
@@ -9709,7 +9807,7 @@
           </div>
           <button class='${linuxUpdateBtnClass}' type='button' onclick='updateLinuxVpsAction(${js(selectedHost)})'>Update Linux</button>
           <button class='${rebootBtnClass}' type='button' onclick='vpsActionWithPw(${js(selectedHost)}, "vps-reboot", "Reboot VPS")'>Reboot VPS</button>
-          <button class='sb-btn' data-vps-remote-required='true' type='button' ${canRunRemote ? '' : 'disabled'} onclick='vpsActionWithPw(${js(selectedHost)}, "vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
+          <button class='sb-btn' type='button' onclick='vpsActionWithPw(${js(selectedHost)}, "vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
           <button class='sb-btn' type='button' onclick='openCoinDataPrompt(${js(selectedHost)})'>Update CoinData API</button>
           <button class='${systemdMigrationBtn.className}' type='button' title='${escAttr(systemdMigrationBtn.title)}' onclick='previewVpsSystemdMigration(${js(selectedHost)})'>${esc(systemdMigrationBtn.text)}</button>`;
       } else if (store.view === 'add') {
@@ -9717,11 +9815,6 @@
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>
           <button class='sb-btn info' type='button' onclick='saveAddVps()'>Save VPS</button>`;
       } else if (store.view === 'overview' || isOverviewSettingsView() || isDeploysView()) {
-        const apiModel = getOverviewApiSyncButtonModel();
-        const bucketIndicator = store.master.bucketCleanupIndicator || { state: 'unknown' };
-        const bucketCleanupBtnClass = bucketIndicator.state === 'dirty'
-          ? 'sb-btn warning'
-          : (bucketIndicator.state === 'clean' ? 'sb-btn ok' : 'sb-btn');
         const selectedHosts = getSelectedOverviewHosts();
         const deployConfig = getVpsDeployConfig();
         const hasSelectedHosts = selectedHosts.length > 0;
@@ -9735,8 +9828,8 @@
             <button class='sb-icon-btn' type='button' title='Refresh' aria-label='Refresh' onclick='refreshState()'>↻</button>
             <button class='sb-icon-btn' type='button' title='Add VPS' aria-label='Add VPS' onclick='selectView("add")'>+</button>
           </div>
-          <button class='sb-status-btn ${apiModel.statusClass}' id='overview-api-sync-btn' type='button' title='${escAttr(apiModel.title || '')}' onclick='startApiSync()'>${esc(apiModel.text)}</button>
           <button class='sb-btn info' type='button' onclick='openExistingVpsImportPrompt()'>Import Existing VPS</button>
+          <button class='sb-btn info' type='button' onclick='openClusterNodesImportPrompt()'>Import Cluster Nodes</button>
           ${store.view !== 'overview' ? `<button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>` : ''}
           <button class='${settingsBtnClass}' type='button' onclick='selectView("settings-vps-logging")'>Settings</button>
           <button class='${deployHistoryBtnClass}' type='button' onclick='selectView("deploys-vps-logging")'>History</button>
@@ -9758,8 +9851,7 @@
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pbgui", "Update PBGui")'>Update PBGui</button>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pb7", "Update PB7")'>Update PB7</button>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pb", "Update PBGui and PB7")'>Update PBGui and PB7</button>
-          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
-          <button class='${bucketCleanupBtnClass}' type='button' onclick='openBucketCleanupPreview()'>Cleanup Bucket</button>`;
+          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>`;
       } else {
         html = '';
       }
@@ -9787,6 +9879,13 @@
               <div class='tag ok'>Manual</div>
             </div>
             <div class='side-button-sub'>Probe an existing PBGui VPS over SSH, then save it without init or setup.</div>
+          </button>
+          <button class='side-button' type='button' onclick='openClusterNodesImportPrompt()'>
+            <div class='side-button-row'>
+              <div class='side-button-title'>Import Cluster Nodes</div>
+              <div class='tag ok'>Local</div>
+            </div>
+            <div class='side-button-sub'>Create local VPS Manager entries from Cluster SSH metadata without importing secrets.</div>
           </button>
         </div>`;
       if (sidebarList && sidebarList.innerHTML !== html) sidebarList.innerHTML = html;
@@ -10030,15 +10129,10 @@
         ? `<div style='position:absolute;right:12px;top:50%;transform:translateY(-50%)'><button class='btn primary' type='button' onclick='addHostsEntryAction()'>${esc(addHostsBtnText)}</button></div>`
         : '';
 
-      const bucketCheck = store.addBucketCheck || {};
       const cmcCheck = store.addCmcCheck || {};
-      const hasBucket = !!String(store.addForm.bucket || '').trim();
       const hasCmc = !!String(store.addForm.coinmarketcap_api_key || '').trim();
-      const bucketOk = !hasBucket || bucketCheck.ok;
       const cmcOk = !hasCmc || cmcCheck.ok;
-      const bucketLoading = !!bucketCheck.loading;
       const cmcLoading = !!cmcCheck.loading;
-      const bucketError = String(bucketCheck.error || '');
       const cmcError = String(cmcCheck.error || '');
       const cmcLimit = cmcCheck.credit_limit_monthly;
       const cmcUsedDay = cmcCheck.credits_used_day;
@@ -10051,23 +10145,6 @@
       const fwSub = fwOk
         ? (String(store.addForm.firewall_ssh_ips || '').trim() || 'Empty (any IP)')
         : (fwCheck.error || 'Invalid IP list');
-
-      let bucketLabel = 'PBRemote bucket (optional)';
-      let bucketValue;
-      let bucketSub;
-      if (!hasBucket) {
-        bucketValue = `<span class='dot info'></span>Skipped`;
-        bucketSub = 'PBRemote will not be configured';
-      } else if (bucketLoading) {
-        bucketValue = boolDot('pending');
-        bucketSub = 'Checking bucket...';
-      } else if (bucketOk) {
-        bucketValue = boolDot(true);
-        bucketSub = 'Bucket OK';
-      } else {
-        bucketValue = boolDot(false);
-        bucketSub = bucketError || 'Bucket check failed';
-      }
 
       let cmcLabel = 'CoinData API key (optional)';
       let cmcValue;
@@ -10100,7 +10177,6 @@
           </div>
           <div class='status-item'><div class='status-label'>${esc(sshLabel)}</div><div class='status-value'>${sshValue}</div><div class='status-sub'>${esc(sshSub)}</div></div>
           <div class='status-item'><div class='status-label'>Allowed SSH IPs</div><div class='status-value'>${fwValue}</div><div class='status-sub'>${esc(fwSub)}</div></div>
-          <div class='status-item'><div class='status-label'>${esc(bucketLabel)}</div><div class='status-value'>${bucketValue}</div><div class='status-sub'>${esc(bucketSub)}</div></div>
           <div class='status-item'><div class='status-label'>${esc(cmcLabel)}</div><div class='status-value'>${cmcValue}</div><div class='status-sub'>${esc(cmcSub)}</div>${cmcMeta}</div>
         </div>`;
     }
@@ -10184,7 +10260,7 @@
           <div class='panel-head'>
             <div>
               <div class='panel-title'>Step 4: Initialize &amp; Setup your VPS</div>
-              <div class='panel-sub'>Run only one time after installation. Init creates the user, changes the root password, and installs the SSH key. Setup configures swap, firewall, and optional PBRemote/CoinData services.</div>
+              <div class='panel-sub'>Run only one time after installation. Init creates the user, changes the root password, and installs the SSH key. Setup configures swap, firewall, and optional CoinData services.</div>
             </div>
           </div>
           <div class='panel-body'>
@@ -10218,10 +10294,6 @@
                     return `<option value='${escAttr(option)}'${String(option) === String(form.swap || '0') ? ' selected' : ''}>${esc(option)}</option>`;
                   }).join('')}
                 </select>
-              </div>
-              <div class='field'>
-                <label>PBRemote Bucket (optional)</label>
-                <input type='text' value='${escAttr(form.bucket || config.bucket || '')}' oninput="setAddField('bucket', this.value)">
               </div>
               <div class='field'>
                 <label>CoinMarketCap API Key (optional)</label>
@@ -10281,15 +10353,12 @@
       }
       const userPwInvalid = hasInvalidPasswordChars(currentForm.user_pw);
       const initPwInvalid = initMethod === 'password' ? hasInvalidPasswordChars(currentForm.user_sudo_pw) : (initMethod === 'private_key' ? false : (hasInvalidPasswordChars(currentForm.initial_root_pw) || hasInvalidPasswordChars(currentForm.root_pw)));
-      const bucketCheck = store.addBucketCheck || {};
       const cmcCheck = store.addCmcCheck || {};
-      const hasBucket = !!String(currentForm.bucket || '').trim();
       const hasCmc = !!String(currentForm.coinmarketcap_api_key || '').trim();
-      const bucketOk = !hasBucket || bucketCheck.ok;
       const cmcOk = !hasCmc || cmcCheck.ok;
       const fwCheck = validateFirewallIps(currentForm.firewall_ssh_ips);
       const fwOk = fwCheck.ok;
-      const setupReady = !!installDir && bucketOk && cmcOk && fwOk;
+      const setupReady = !!installDir && cmcOk && fwOk;
       let initReadySub;
       if (canInit) {
         initReadySub = 'All required fields are set';
@@ -10298,8 +10367,6 @@
       } else if (!setupReady) {
         if (!installDir) {
           initReadySub = 'Install path missing';
-        } else if (hasBucket && !bucketOk) {
-          initReadySub = String(bucketCheck.error || '') || 'PBRemote bucket check failed';
         } else if (hasCmc && !cmcOk) {
           initReadySub = String(cmcCheck.error || '') || 'CoinMarketCap API key check failed';
         } else if (!fwOk) {
@@ -11017,12 +11084,6 @@
       if (Object.prototype.hasOwnProperty.call(status, 'setup_ok') && !(status.summary_row || {}).pbgui) {
         cards.push({ key:'setup_ok', label: 'Setup Ready', ok: false, sub: 'No successful setup yet' });
       }
-      if (Object.prototype.hasOwnProperty.call(status, 'rclone_ok')) {
-        const configured = Object.prototype.hasOwnProperty.call(status, 'pbremote_configured') ? !!status.pbremote_configured : true;
-        cards.push(configured
-          ? { key:'rclone_ok', label: 'Rclone Ready', ok: !!status.rclone_ok, sub: status.rclone_ok ? 'PBRemote bucket available' : 'PBRemote bucket missing' }
-          : { key:'rclone_ok', label: 'Rclone Ready', valueHtml: `<span class='dot info'></span>Skipped`, sub: 'PBRemote bucket not configured' });
-      }
       if (Object.prototype.hasOwnProperty.call(status, 'coindata_ok')) {
         const configured = Object.prototype.hasOwnProperty.call(status, 'coindata_configured') ? !!status.coindata_configured : true;
         const credits = status.cmc_credits;
@@ -11374,6 +11435,7 @@
             <div id='vps-status-flags'>${renderStatusFlags(status)}</div>
           </div>
         </div>
+        ${renderVpsRemoteServices(detail.hostname, status)}
         <div id='vps-monitor-live'>${renderMonitorPanel(detail.monitor || {}, false, status)}</div>`;
     }
 
@@ -11427,6 +11489,7 @@
             <div id='vps-status-flags'>${renderStatusFlags(status)}</div>
           </div>
         </div>
+        ${renderVpsRemoteServices(detail.hostname, status)}
         <div class='panel'>
           <div class='panel-head'>
             <div>
@@ -11453,10 +11516,6 @@
                     return `<option value='${escAttr(option)}'${String(option) === String(ui.form.swap || '0') ? ' selected' : ''}>${esc(option)}</option>`;
                   }).join('')}
                 </select>
-              </div>
-              <div class='field'>
-                <label>PBRemote Bucket (optional)</label>
-                <input type='text' value='${escAttr(ui.form.bucket || '')}' data-vps-field='bucket' ${formHostAttr} oninput="setVpsField(${js(detail.hostname)}, 'bucket', this.value)">
               </div>
               <div class='field'>
                 <label>CoinMarketCap API Key (optional)</label>
@@ -11743,16 +11802,18 @@
         return `<div class='empty-state'>No running PB7 instances reported.</div>`;
       }
       return `
-        <div class='notice warning'>Live monitor details are currently unavailable. Running PB7 instances are listed from status_v7.json.</div>
+        <div class='notice warning'>Live monitor details are currently unavailable. Running PB7 instances are listed from process and Cluster Sync telemetry.</div>
         <div class='stack'>
           ${items.map(function (item) {
+            const gate = item.cluster_gate || (item.blocked ? 'blocked' : 'running');
             return `
               <div class='branch-summary'>
                 <span class='tag warning'>Running</span>
                 <span class='pill'><strong>Name</strong> ${esc(item.name || '-')}</span>
                 <span class='pill'><strong>Config Version</strong> ${esc(item.version || '-')}</span>
                 <span class='pill'><strong>Enabled On</strong> ${esc(item.enabled_on || '-')}</span>
-                <span class='pill'><strong>Activated</strong> ${esc(item.activate_ts || '-')}</span>
+                <span class='pill'><strong>Cluster Gate</strong> ${esc(gate || '-')}</span>
+                ${item.blocked_reason ? `<span class='pill'><strong>Blocked</strong> ${esc(item.blocked_reason)}</span>` : ''}
               </div>`;
           }).join('')}
         </div>`;
@@ -11983,25 +12044,6 @@
 
     loadOverviewPrefs();
     restoreViewFromHash();
-    window.overviewApiSyncController = createApiSyncStatusController({
-      apiFetch: apiKeysFetch,
-      buildStreamUrl: function () {
-        return API_BASE.replace('/api/vps-manager', '/api/api-keys') + '/sync/ssh-status/stream?token=' + encodeURIComponent(TOKEN);
-      },
-      getButton: function () {
-        return document.getElementById('overview-api-sync-btn');
-      },
-      showToast: toast,
-      onStateChange: function () {
-        renderSidebarActions();
-        renderSidebarList();
-        if (store.view === 'overview' || store.view === 'master' || isVpsContextView()) {
-          refreshCurrentViewLive();
-        }
-      }
-    });
-    window.overviewApiSyncController.refresh().catch(function () {});
-    window.overviewApiSyncController.openStream();
     renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
     initSidebarResize();
     initAlertModalInteractions();

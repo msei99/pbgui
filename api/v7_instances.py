@@ -1,15 +1,14 @@
 """
-FastAPI router for v7 instance list + SSH activate.
+FastAPI router for v7 instance list and cluster materialization state.
 
 Endpoints:
     GET    /instances                   → list all v7 instances with sync status
-    POST   /activate/{name}             → SSH-push config + activate_cmd to all VPS
-    POST   /activate-all                → SSH-push all instances that need activation
-    DELETE /instances/{name}             → backup + delete instance locally + on VPS
+    POST   /activate-all                → mark instances that need cluster materialization
+    DELETE /instances/{name}             → backup + delete instance locally + record tombstone
     GET    /backups                      → list all instance backups
     POST   /backups/{name}/{timestamp}/draft → load backup as editor draft
-    POST   /restore/{name}/{timestamp}   → restore/rollback instance from backup + SSH activate
-    POST   /instances/{name}/forced-mode → set global PB7 forced mode + SSH activate
+    POST   /restore/{name}/{timestamp}   → restore/rollback instance from backup
+    POST   /instances/{name}/forced-mode → set global PB7 forced mode
     DELETE /backups/{name}/{timestamp}    → delete a specific backup
     GET    /main_page                    → serve the standalone HTML page
 """
@@ -23,7 +22,6 @@ import os
 import platform
 import shutil
 import time
-import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -35,19 +33,23 @@ from fastapi.responses import HTMLResponse
 from api.auth import SessionToken, require_auth, validate_token
 from api.pb7_bridge import get_allowed_override_params, get_template_config
 from logging_helpers import human_log as _log
-from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config, strip_pbgui_param_status
-from master.async_pool import (
-    SFTP_RETRY_ATTEMPTS,
-    SFTP_RETRY_DELAY,
-    _is_transient_error,
-    remote_path_join,
-    remote_shell_path,
+from master.cluster_state import (
+    append_operation,
+    build_config_manifest,
+    compute_config_manifest_hash,
+    default_cluster_root,
+    ensure_local_identity,
+    generate_node_id,
+    rebuild_materialized_state,
 )
-from pbgui_purefunc import (PBGDIR, STATUS_V7_FILE, SYNC_EXCLUDE_FILES,
-                             update_status_v7 as _update_status_v7,
-                             get_syncable_files as _get_syncable_files)
+from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config, strip_pbgui_param_status
+from pbgui_purefunc import PBGDIR
 
 SERVICE = "V7Instances"
+LEGACY_V7_API_SSH_SYNC_DISABLED = True
+LEGACY_V7_API_SSH_SYNC_DISABLED_REASON = (
+    "Legacy V7 API SSH sync is disabled on cluster-mode; use explicit Cluster Sync materialization."
+)
 
 router = APIRouter()
 
@@ -57,19 +59,19 @@ import secrets as _secrets
 _draft_configs: dict[str, tuple[float, dict]] = {}  # id → (created_ts, config)
 _DRAFT_TTL = 300  # 5 minutes
 
+_CLUSTER_HOST_NODE_IDS_FILE = "host_node_ids.json"
+
 
 
 # ── Injected at startup ─────────────────────────────────────
 
 _monitor = None  # VPSMonitor
-_v7_sync = None  # V7ConfigSyncWorker
 
 
-def init(monitor, v7_sync=None):
+def init(monitor):
     """Called by PBApiServer lifespan to inject shared objects."""
-    global _monitor, _v7_sync
+    global _monitor
     _monitor = monitor
-    _v7_sync = v7_sync
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -81,6 +83,215 @@ def _get_master_hostname() -> str:
     if pb_config.has_option("main", "pbname"):
         return pb_config.get("main", "pbname")
     return platform.node()
+
+
+def _cluster_root() -> Path:
+    """Return the local cluster state root for this PBGui install."""
+
+    return default_cluster_root(Path(PBGDIR))
+
+
+def _read_cluster_host_node_ids(cluster_root: Path) -> dict:
+    """Read host→node_id mappings used until remote nodes provide identities."""
+
+    path = cluster_root / _CLUSTER_HOST_NODE_IDS_FILE
+    if not path.is_file():
+        return {"schema_version": 1, "hosts": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"schema_version": 1, "hosts": {}}
+    if not isinstance(data, dict):
+        return {"schema_version": 1, "hosts": {}}
+    hosts = data.get("hosts")
+    if not isinstance(hosts, dict):
+        hosts = {}
+    return {"schema_version": 1, "hosts": hosts}
+
+
+def _write_cluster_host_node_ids(cluster_root: Path, data: dict) -> None:
+    """Atomically write host→node_id mappings."""
+
+    path = cluster_root / _CLUSTER_HOST_NODE_IDS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=4, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _cluster_node_known(cluster_root: Path, node_id: str, pending: set[str]) -> bool:
+    """Return True when a node is already materialized or queued this call."""
+
+    if node_id in pending:
+        return True
+    path = cluster_root / "cluster_nodes.json"
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    nodes = data.get("nodes") if isinstance(data, dict) else None
+    return isinstance(nodes, dict) and node_id in nodes
+
+
+def _cluster_node_payload(node_id: str, hostname: str, role: str) -> dict:
+    """Build a cluster membership payload for a local or known VPS host."""
+
+    payload = {
+        "node_id": node_id,
+        "role": role,
+        "pbname": hostname,
+        "hostname": hostname,
+        "sync_mode": "outbound_only" if role == "master" else "disabled",
+        "sync_enabled": role == "master",
+    }
+    if role == "vps" and _monitor and _monitor.pool:
+        entry = _monitor.pool.get_connection(hostname)
+        if entry:
+            payload.update({
+                "ssh_host": entry.config.ip,
+                "ssh_port": entry.config.ssh_port,
+                "ssh_user": entry.config.user,
+            })
+    return payload
+
+
+def _ensure_cluster_node_record(
+    cluster_root: Path,
+    node_id: str,
+    hostname: str,
+    role: str,
+    pending: set[str],
+) -> None:
+    """Append a membership op for a node when cluster_nodes does not know it yet."""
+
+    if _cluster_node_known(cluster_root, node_id, pending):
+        return
+    append_operation(
+        cluster_root,
+        "ADD_NODE",
+        _cluster_node_payload(node_id, hostname, role),
+    )
+    pending.add(node_id)
+
+
+def _cluster_node_for_enabled_host(
+    cluster_root: Path,
+    identity: dict,
+    enabled_on: str,
+) -> tuple[str, str, str]:
+    """Resolve a PBGui enabled_on host name to a stable cluster node id."""
+
+    hostname = str(enabled_on or "").strip()
+    master_hostname = _get_master_hostname()
+    if not hostname or hostname == "disabled" or hostname == master_hostname:
+        return str(identity["node_id"]), master_hostname, "master"
+
+    mapping = _read_cluster_host_node_ids(cluster_root)
+    hosts = mapping.setdefault("hosts", {})
+    entry = hosts.get(hostname)
+    if not isinstance(entry, dict):
+        entry = {}
+    node_id = str(entry.get("node_id") or "")
+    if not node_id:
+        node_id = generate_node_id()
+        hosts[hostname] = {
+            "node_id": node_id,
+            "created_at": int(time.time()),
+            "role": "vps",
+        }
+        _write_cluster_host_node_ids(cluster_root, mapping)
+    return node_id, hostname, "vps"
+
+
+def _record_cluster_config_upsert(
+    name: str,
+    instance_dir: Path,
+    cfg: dict,
+    *,
+    parent_version: int | str | None = None,
+    allow_tombstone_recreate: bool = False,
+) -> None:
+    """Record a V7 config write in the local cluster oplog without blocking saves."""
+
+    try:
+        cluster_root = _cluster_root()
+        identity = ensure_local_identity(
+            cluster_root,
+            role="master",
+            pbname=_get_master_hostname(),
+        )
+        raw_pbgui = cfg.get("pbgui", {}) if isinstance(cfg, dict) else {}
+        pbgui = raw_pbgui if isinstance(raw_pbgui, dict) else {}
+        enabled_on = str(pbgui.get("enabled_on") or "disabled").strip() or "disabled"
+        version = str(pbgui.get("version", 0))
+        desired_state = "running" if enabled_on != "disabled" else "stopped"
+        assigned_node_id, assigned_hostname, assigned_role = _cluster_node_for_enabled_host(
+            cluster_root,
+            identity,
+            enabled_on,
+        )
+        recorded_nodes: set[str] = set()
+        _ensure_cluster_node_record(
+            cluster_root,
+            str(identity["node_id"]),
+            _get_master_hostname(),
+            "master",
+            recorded_nodes,
+        )
+        _ensure_cluster_node_record(
+            cluster_root,
+            assigned_node_id,
+            assigned_hostname,
+            assigned_role,
+            recorded_nodes,
+        )
+        manifest = build_config_manifest(instance_dir)
+        payload = {
+            "instance": name,
+            "version": version,
+            "assigned_host": assigned_node_id,
+            "desired_state": desired_state,
+            "config_manifest_hash": compute_config_manifest_hash(manifest),
+            "enabled_on": enabled_on,
+        }
+        if parent_version is not None:
+            payload["parent_version"] = str(parent_version)
+        if allow_tombstone_recreate:
+            payload["allow_tombstone_recreate"] = True
+        append_operation(cluster_root, "UPSERT_CONFIG", payload)
+        rebuild_materialized_state(cluster_root)
+    except Exception as exc:
+        _log(SERVICE, f"Cluster oplog update skipped for V7 config '{name}': {exc}", level="WARNING")
+
+
+def _record_cluster_instance_delete(name: str, version: int | str | None) -> None:
+    """Record a V7 instance delete in the local cluster oplog without blocking deletes."""
+
+    try:
+        cluster_root = _cluster_root()
+        identity = ensure_local_identity(
+            cluster_root,
+            role="master",
+            pbname=_get_master_hostname(),
+        )
+        recorded_nodes: set[str] = set()
+        _ensure_cluster_node_record(
+            cluster_root,
+            str(identity["node_id"]),
+            _get_master_hostname(),
+            "master",
+            recorded_nodes,
+        )
+        append_operation(
+            cluster_root,
+            "DELETE_INSTANCE",
+            {"instance": name, "version": str(version if version is not None else 0)},
+        )
+        rebuild_materialized_state(cluster_root)
+    except Exception as exc:
+        _log(SERVICE, f"Cluster oplog delete skipped for V7 instance '{name}': {exc}", level="WARNING")
 
 
 def _load_local_running_v7() -> dict[str, dict]:
@@ -198,16 +409,30 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
     # for this instance (even if running=False). Used to distinguish
     # "confirmed not running" from "no data yet" — the latter must not
     # show "disabled" when the bot might still be running.
-    vps_info = {}  # name → {running_on: [...], rv, cv_remote, has_data}
+    vps_info = {}  # name → {running_on: [...], rv, cv_remote, has_data, blocked...}
     for host, items in v7_data.items():
         for item in items:
             name = item.get("name", "")
             if name not in vps_info:
-                vps_info[name] = {"running_on": [], "rv": 0, "cv_remote": 0, "has_data": False}
+                vps_info[name] = {
+                    "running_on": [],
+                    "rv": 0,
+                    "cv_remote": 0,
+                    "has_data": False,
+                    "blocked_on": [],
+                    "blocked_reason": "",
+                    "cluster_gate": "",
+                }
             vps_info[name]["has_data"] = True
             if item.get("running"):
                 vps_info[name]["running_on"].append(host)
                 vps_info[name]["rv"] = item.get("rv", 0)
+            if item.get("blocked"):
+                vps_info[name]["blocked_on"].append(host)
+                if not vps_info[name]["blocked_reason"]:
+                    vps_info[name]["blocked_reason"] = str(item.get("blocked_reason") or "")
+                if not vps_info[name]["cluster_gate"]:
+                    vps_info[name]["cluster_gate"] = str(item.get("cluster_gate") or "")
             vps_info[name]["cv_remote"] = max(
                 vps_info[name]["cv_remote"], item.get("cv", 0)
             )
@@ -233,10 +458,16 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
             inst["running_on"] = info["running_on"]
             inst["running_version"] = info["rv"]
             inst["config_version_remote"] = info["cv_remote"]
+            inst["blocked_on"] = info.get("blocked_on", [])
+            inst["blocked_reason"] = info.get("blocked_reason", "")
+            inst["cluster_gate"] = info.get("cluster_gate", "")
         else:
             inst["running_on"] = []
             inst["running_version"] = 0
             inst["config_version_remote"] = 0
+            inst["blocked_on"] = []
+            inst["blocked_reason"] = ""
+            inst["cluster_gate"] = ""
 
         # Compute sync status
         enabled = inst["enabled_on"]
@@ -245,7 +476,9 @@ def _enrich_with_vps_data(instances: list[dict]) -> list[dict]:
         rv = inst["running_version"]
         has_data = info.get("has_data", False) if info else False
 
-        if enabled == "disabled":
+        if inst["blocked_on"] and not running_on:
+            inst["status"] = "blocked"
+        elif enabled == "disabled":
             if running_on:
                 inst["status"] = "stop_needed"
             else:
@@ -492,147 +725,24 @@ async def _ensure_target_runtime_compatible(name: str, cfg: dict) -> None:
         raise HTTPException(status_code=409, detail=detail)
 
 
-# ── SSH Sync ─────────────────────────────────────────────────
+# ── Cluster Sync Handoff ─────────────────────────────────────
 
 async def _ssh_sync_instance(name: str) -> dict:
-    """Update status_v7.json + push config files via SFTP to all VPS.
-
-    This replaces the old activate_*.cmd mechanism. PBRun on VPS polls
-    status_v7.json for mtime changes and rescans accordingly.
-    """
+    """Return the legacy activation payload without remote SSH writes."""
     config_path = Path(f"{PBGDIR}/data/run_v7/{name}/config.json")
     if not config_path.is_file():
         return {"name": name, "error": f"Config not found: {name}"}
-
-    try:
-        cfg_for_schema_check = json.loads(config_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        return {"name": name, "error": f"Could not read config for schema check: {exc}"}
-    incompatibility = await _target_schema_incompatibility_detail(name, cfg_for_schema_check)
-    if incompatibility:
-        return {
-            "name": name,
-            "error": incompatibility,
-            "schema_incompatible": True,
-            "ok": 0,
-            "failed": 0,
-        }
-    incompatibility = await _target_dynamic_ignore_incompatibility_detail(name, cfg_for_schema_check)
-    if incompatibility:
-        return {
-            "name": name,
-            "error": incompatibility,
-            "runtime_incompatible": True,
-            "ok": 0,
-            "failed": 0,
-        }
-
-    # 1) Update local status_v7.json (bumps per-instance activate_ts)
-    _update_status_v7(name)
-
-    # 2) Gather all syncable config files for this instance
-    sync_files = _get_syncable_files(name)
-    if not sync_files:
-        return {"name": name, "error": "No config files to sync"}
-
-    # 3) Read status_v7.json content for pushing
-    status_content = STATUS_V7_FILE.read_bytes() if STATUS_V7_FILE.is_file() else None
-
-    if not _monitor or not _monitor.pool:
-        return {"name": name, "local": True,
-                "hosts": {}, "ok": 0, "failed": 0}
-
-    pool = _monitor.pool
-    connected = pool.connected_hosts()
-    if not connected:
-        return {"name": name, "local": True,
-                "hosts": {}, "ok": 0, "failed": 0}
-
-    results = {}
-
-    async def push_to_host(hostname: str):
-        for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
-            sftp = await pool._open_sftp(hostname)
-            if not sftp:
-                return {"success": False, "error": "SFTP failed"}
-
-            try:
-                remote_pbgui_dir = pool.get_remote_pbgui_dir(hostname)
-                remote_inst_dir = remote_path_join(remote_pbgui_dir, "data", "run_v7", name)
-                remote_cmd_dir = remote_path_join(remote_pbgui_dir, "data", "cmd")
-
-                # Ensure dirs exist
-                try:
-                    await sftp.makedirs(remote_inst_dir, exist_ok=True)
-                except Exception:
-                    pass
-                try:
-                    await sftp.makedirs(remote_cmd_dir, exist_ok=True)
-                except Exception:
-                    pass
-
-                # Write all config files
-                for filename, content in sync_files:
-                    async with sftp.open(
-                            f"{remote_inst_dir}/{filename}", "wb") as f:
-                        await f.write(content)
-
-                # Write status_v7.json
-                if status_content:
-                    async with sftp.open(
-                            f"{remote_cmd_dir}/status_v7.json", "wb") as f:
-                        await f.write(status_content)
-
-                return {"success": True}
-            except Exception as e:
-                if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
-                    _log("SSH", f"SSH sync {name} → {hostname} "
-                         f"failed (attempt {attempt}): {e} — retrying",
-                         level="WARNING")
-                    await asyncio.sleep(SFTP_RETRY_DELAY)
-                    continue
-                _log("SSH", f"SSH sync {name} → {hostname} failed: {e}",
-                     level="ERROR", meta={"traceback": traceback.format_exc()})
-                return {"success": False, "error": str(e)}
-            finally:
-                sftp.exit()
-        return {"success": False, "error": "All retry attempts failed"}
-
-    # Push to all connected hosts in parallel
-    tasks = {h: push_to_host(h) for h in connected}
-    raw = await asyncio.gather(*tasks.values(), return_exceptions=True)
-    for hostname, result in zip(tasks.keys(), raw):
-        if isinstance(result, Exception):
-            results[hostname] = {"success": False, "error": str(result)}
-        else:
-            results[hostname] = result
-
-    ok = sum(1 for r in results.values() if r.get("success"))
-    fail = len(results) - ok
-    _log("SSH", f"SSH sync '{name}': {ok}/{len(results)} hosts OK"
-         + (f", {fail} failed" if fail else ""), level="WARNING" if fail else "DEBUG")
-
-    # Schedule a delayed collect on the enabled_on host as fallback
-    if ok > 0 and _monitor:
-        try:
-            cfg = json.loads(config_path.read_bytes())
-            enabled_on = cfg.get("pbgui", {}).get("enabled_on", "")
-        except (json.JSONDecodeError, ValueError):
-            enabled_on = ""
-        if enabled_on and enabled_on != "disabled":
-            async def _delayed_collect(host: str):
-                await asyncio.sleep(8)
-                try:
-                    await _monitor.collect_instances_now(host)
-                except Exception:
-                    pass
-            asyncio.create_task(
-                _delayed_collect(enabled_on),
-                name=f"v7-delayed-collect-{enabled_on}",
-            )
-
-    return {"name": name, "local": True,
-            "hosts": results, "ok": ok, "failed": fail}
+    _log(SERVICE, f"Skipped legacy V7 remote write for '{name}': {LEGACY_V7_API_SSH_SYNC_DISABLED_REASON}")
+    return {
+        "name": name,
+        "local": True,
+        "hosts": {},
+        "ok": 0,
+        "failed": 0,
+        "disabled": True,
+        "cluster_sync": True,
+        "reason": LEGACY_V7_API_SSH_SYNC_DISABLED_REASON,
+    }
 
 
 # ── Endpoints ────────────────────────────────────────────────
@@ -750,7 +860,7 @@ async def activate_instance(
     name: str,
     session: SessionToken = Depends(require_auth),
 ):
-    """Sync config files + status_v7.json to all VPS for a single instance."""
+    """Update local status metadata and return the cluster handoff result."""
     config_path = Path(f"{PBGDIR}/data/run_v7/{name}/config.json")
     if not config_path.is_file():
         raise HTTPException(status_code=404, detail=f"Instance '{name}' not found")
@@ -760,7 +870,7 @@ async def activate_instance(
 
 @router.post("/activate-all")
 async def activate_all(session: SessionToken = Depends(require_auth)):
-    """SSH-push all instances that need activation."""
+    """Mark all locally outdated instances for cluster materialization."""
     instances = _load_local_instances()
     instances = _enrich_with_vps_data(instances)
 
@@ -787,7 +897,7 @@ async def set_instance_forced_mode(
     body: dict = Body(...),
     session: SessionToken = Depends(require_auth),
 ):
-    """Set global PB7 forced mode for all long and short positions, then sync."""
+    """Set global PB7 forced mode for all long and short positions."""
     _validate_name(name)
     requested = str(body.get("mode") or "").strip().lower()
     if requested == "panic":
@@ -835,7 +945,7 @@ async def set_instance_forced_mode(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not save config for '{name}': {exc}") from exc
 
-    _update_status_v7(name)
+    _record_cluster_config_upsert(name, instance_dir, cfg, parent_version=old_version)
     sync_result = await _ssh_sync_instance(name)
     _log(SERVICE, f"Set forced mode '{label}' for all positions on '{name}' (v{cfg['pbgui']['version']})", level="WARNING")
     return {
@@ -853,7 +963,7 @@ async def delete_instance(
     name: str,
     session: SessionToken = Depends(require_auth),
 ):
-    """Delete a v7 instance locally and on all connected VPS hosts."""
+    """Delete a v7 instance locally and record the cluster tombstone."""
     # Sanitise name — must be a plain directory name, no path traversal
     if not name or "/" in name or "\\" in name or name in (".", ".."):
         raise HTTPException(status_code=400, detail="Invalid instance name")
@@ -861,6 +971,7 @@ async def delete_instance(
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     if not instance_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"Instance '{name}' not found")
+    deleted_version = _instance_config_version(name)
 
     # Check if running on any VPS or locally
     instances = _load_local_instances()
@@ -892,91 +1003,15 @@ async def delete_instance(
 
     _log(SERVICE, f"Deleted instance '{name}' locally")
 
-    # 3) Remove from status_v7.json and push to all VPS
-    _update_status_v7(name, remove=True)
-    status_content = STATUS_V7_FILE.read_bytes() if STATUS_V7_FILE.is_file() else None
-
-    vps_results = {}
-    if _monitor and _monitor.pool:
-        pool = _monitor.pool
-        connected = pool.connected_hosts()
-
-        async def delete_on_host(hostname: str):
-            for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
-                try:
-                    remote_pbgui_dir = pool.get_remote_pbgui_dir(hostname)
-                    remote_dir = remote_path_join(remote_pbgui_dir, "data", "run_v7", name)
-                    # Remove instance directory
-                    result = await pool.run(
-                        hostname,
-                        f"rm -rf {remote_shell_path(remote_dir)}",
-                        timeout=15,
-                    )
-                    if result is None:
-                        return {"success": False, "error": "Not connected"}
-
-                    # Push updated status_v7.json (instance removed)
-                    if status_content:
-                        sftp = await pool._open_sftp(hostname)
-                        if sftp:
-                            try:
-                                remote_cmd_dir = remote_path_join(remote_pbgui_dir, "data", "cmd")
-                                try:
-                                    await sftp.makedirs(
-                                        remote_cmd_dir, exist_ok=True)
-                                except Exception:
-                                    pass
-                                async with sftp.open(
-                                        f"{remote_cmd_dir}/status_v7.json",
-                                        "wb") as f:
-                                    await f.write(status_content)
-                            finally:
-                                sftp.exit()
-
-                    return {"success": True}
-                except Exception as e:
-                    if attempt < SFTP_RETRY_ATTEMPTS and _is_transient_error(e):
-                        _log(SERVICE, f"SSH delete {name} → {hostname} "
-                             f"attempt {attempt} failed: {e} — retrying",
-                             level="WARNING")
-                        await asyncio.sleep(SFTP_RETRY_DELAY)
-                        continue
-                    _log(SERVICE, f"SSH delete {name} → {hostname} failed: {e}",
-                         level="ERROR", meta={"traceback": traceback.format_exc()})
-                    return {"success": False, "error": str(e)}
-            return {"success": False, "error": "All retry attempts failed"}
-
-        tasks = {h: delete_on_host(h) for h in connected}
-        raw = await asyncio.gather(*tasks.values(), return_exceptions=True)
-        for hostname, result in zip(tasks.keys(), raw):
-            if isinstance(result, Exception):
-                vps_results[hostname] = {"success": False, "error": str(result)}
-            else:
-                vps_results[hostname] = result
-
-        ok = sum(1 for r in vps_results.values() if r.get("success"))
-        fail = len(vps_results) - ok
-        _log(SERVICE, f"SSH delete '{name}': {ok}/{len(vps_results)} hosts OK"
-             + (f", {fail} failed" if fail else ""), level="INFO")
-
-        # 4) Delayed collect so UI refreshes
-        if ok > 0:
-            async def _delayed_collect():
-                await asyncio.sleep(3)
-                for h in connected:
-                    try:
-                        await _monitor.collect_instances_now(h)
-                    except Exception:
-                        pass
-            asyncio.create_task(
-                _delayed_collect(),
-                name=f"v7-delete-collect-{name}",
-            )
+    # 3) Record the Cluster tombstone; PBRun polls Cluster/run_v7 state locally.
+    _record_cluster_instance_delete(name, deleted_version)
 
     return {
         "ok": True,
         "name": name,
-        "hosts": vps_results,
+        "hosts": {},
+        "cluster_sync": True,
+        "reason": LEGACY_V7_API_SSH_SYNC_DISABLED_REASON,
     }
 
 
@@ -1118,6 +1153,8 @@ def list_backups(session: SessionToken = Depends(require_auth)):
         for backup_dir in inst_dir.iterdir():
             if not backup_dir.is_dir():
                 continue
+            if not (backup_dir / "config.json").is_file():
+                continue
             try:
                 created_ts = backup_dir.stat().st_mtime
             except OSError:
@@ -1211,6 +1248,18 @@ async def restore_instance(
         raise HTTPException(status_code=500, detail=f"Restore failed: {e}")
 
     restored_version = _bump_restored_instance_version(instance_dir, previous_version)
+    if restored_version is not None:
+        try:
+            restored_cfg = load_pb7_config(instance_dir / "config.json", neutralize_added=False)
+            _record_cluster_config_upsert(
+                name,
+                instance_dir,
+                restored_cfg,
+                parent_version=previous_version,
+                allow_tombstone_recreate=not rollback,
+            )
+        except Exception as exc:
+            _log(SERVICE, f"Cluster oplog update skipped for restored V7 config '{name}': {exc}", level="WARNING")
 
     _log(
         SERVICE,
@@ -1218,7 +1267,7 @@ async def restore_instance(
         + (f" as version {restored_version}" if restored_version is not None else ""),
     )
 
-    # Push restored config to all VPS
+    # Return a legacy activation payload; PBCluster owns remote materialization.
     result = await _ssh_sync_instance(name)
     return {
         "ok": True,
@@ -1295,15 +1344,11 @@ def create_backup_draft(
     draft_id = _secrets.token_urlsafe(16)
     _draft_configs[draft_id] = (time.time(), cfg)
 
-    exists = (Path(PBGDIR) / "data" / "run_v7" / name).is_dir()
     params = {
         "token": session.token,
+        "name": name,
         "draft_id": draft_id,
     }
-    if exists:
-        params["name"] = name
-    else:
-        params["new"] = "1"
     edit_url = str(request.url_for("get_edit_page")) + "?" + urlencode(params)
     return {
         "ok": True,
@@ -1384,8 +1429,7 @@ async def save_instance_config(
       - Sets backtest.exchange from user→exchange mapping
       - Creates versioned backup before overwriting
       - Atomic write via temp-file rename
-      - Updates status_v7.json
-      - Triggers SSH sync to all VPS
+      - Records PBCluster desired state for remote materialization
     """
     _validate_name(name)
     body = await request.json()
@@ -1399,6 +1443,7 @@ async def save_instance_config(
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     instance_dir.mkdir(parents=True, exist_ok=True)
     config_path = instance_dir / "config.json"
+    previous_version = _instance_config_version(name)
 
     # Copy coin override files from source backtest config on first save of a new instance.
     # The JS sets pbgui.from_backtest_config when navigating from "Add to Run".
@@ -1449,7 +1494,7 @@ async def save_instance_config(
             draft_version = int(cfg["pbgui"].get("version", 0) or 0)
         except (TypeError, ValueError):
             draft_version = 0
-        cfg["pbgui"]["version"] = max(draft_version, _instance_config_version(name) + 1)
+        cfg["pbgui"]["version"] = max(draft_version, previous_version + 1)
     else:
         cfg["pbgui"]["version"] = cfg["pbgui"].get("version", 0) + 1
 
@@ -1519,10 +1564,15 @@ async def save_instance_config(
 
     version = cfg["pbgui"]["version"]
 
-    # Update status_v7.json
-    _update_status_v7(name)
+    _record_cluster_config_upsert(
+        name,
+        instance_dir,
+        cfg,
+        parent_version=previous_version,
+        allow_tombstone_recreate=backup_src_dir is not None,
+    )
 
-    # Trigger SSH sync
+    # Return a legacy sync payload; PBCluster owns remote materialization.
     sync_result = await _ssh_sync_instance(name)
 
     _log(SERVICE, f"Saved config for '{name}' (v{version})")

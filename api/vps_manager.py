@@ -33,6 +33,11 @@ class ExistingVpsImportRequest(BaseModel):
     accept_unknown_host: bool = False
     accepted_host_key_fingerprint: str = ""
 
+
+class ClusterNodesImportRequest(BaseModel):
+    local_sudo_pw: str = ""
+    passwords: dict[str, str] = {}
+
 MASTER_CONTEXT_VIEWS = {
     "master",
     "master-task-log",
@@ -187,6 +192,45 @@ def save_existing_vps_import(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.get("/cluster-import/preview")
+def preview_cluster_nodes_import(
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    del session
+    try:
+        data = _get_service().preview_cluster_nodes_import()
+        return JSONResponse(content=data)
+    except Exception as exc:
+        _log(SERVICE, f"Cluster node import preview failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/cluster-import/apply")
+def apply_cluster_nodes_import(
+    payload: ClusterNodesImportRequest | None = None,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    try:
+        data = _get_service().start_cluster_nodes_import(session.token, payload.dict() if payload else {})
+        return JSONResponse(content=data)
+    except Exception as exc:
+        _log(SERVICE, f"Cluster node import apply failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/cluster-import/progress/{job_id}")
+def get_cluster_nodes_import_progress(
+    job_id: str,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    del session
+    try:
+        data = _get_service().get_cluster_nodes_import_progress(job_id)
+        return JSONResponse(content=data)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.websocket("/ws")
 async def ws_vps_manager(websocket: WebSocket):
     token = websocket.query_params.get("token", "")
@@ -239,21 +283,6 @@ async def ws_vps_manager(websocket: WebSocket):
                 elif cmd == "init_vps":
                     data = await asyncio.to_thread(service.init_vps, token, msg.get("form") or {}, debug=bool(msg.get("debug")))
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
-                elif cmd == "check_bucket":
-                    data = await asyncio.to_thread(service.check_bucket, str(msg.get("bucket") or ""))
-                    await websocket.send_json({"type": "bucket_check_result", "data": data})
-                elif cmd == "preview_bucket_cleanup":
-                    data = await asyncio.to_thread(service.preview_bucket_cleanup)
-                    await websocket.send_json({"type": "bucket_cleanup_preview", "data": data})
-                elif cmd == "bucket_cleanup_indicator":
-                    data = await asyncio.to_thread(service.get_bucket_cleanup_indicator, force=bool(msg.get("force")))
-                    await websocket.send_json({"type": "bucket_cleanup_indicator_result", "data": data})
-                elif cmd == "run_bucket_cleanup":
-                    data = await asyncio.to_thread(service.cleanup_bucket, msg.get("hostnames") or [])
-                    await websocket.send_json({"type": "bucket_cleanup_result", "cmd": cmd, "success": True, "data": data})
-                elif cmd == "dry_run_bucket_cleanup":
-                    data = await asyncio.to_thread(service.dry_run_bucket_cleanup, msg.get("hostnames") or [])
-                    await websocket.send_json({"type": "bucket_cleanup_dry_run", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "check_cmc_api_key":
                     data = await asyncio.to_thread(service.check_cmc_api_key, str(msg.get("api_key") or ""))
                     await websocket.send_json({"type": "cmc_check_result", "data": data})

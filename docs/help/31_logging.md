@@ -102,8 +102,8 @@ Contains messages from all GUI helper components:
 
 | File | Service | What you find there |
 |------|---------|-------------------|
+| `PBCluster.log` | PBCluster | Cluster Sync daemon activity and peer sync diagnostics |
 | `PBRun.log` | PBRun | Live bot start/stop, order loop |
-| `PBRemote.log` | PBRemote | Remote sync, VPS communication |
 | `PBCoinData.log` | PBCoinData | CMC data updates, symbol lists |
 | `VPSMonitor.log` | VPS Monitor | SSH connections, host metrics, service auto-heal |
 | `PBApiServer.log` | PBAPIServer | FastAPI startup, REST/WebSocket requests |

@@ -8,7 +8,6 @@ All endpoints require auth (Bearer token).
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import threading
 import time
@@ -18,11 +17,10 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Path as PathParam, Query, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from api.auth import SessionToken, require_auth
-from api.vps_manager import _get_service as _get_vps_manager_service
 from api_key_state import (
     RUNTIME_STATE_KEYS,
     clear_user_state,
@@ -32,23 +30,12 @@ from api_key_state import (
     strip_runtime_extra,
     update_user_state,
 )
-from api.vps import get_monitor_state_snapshot
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR as _PBGDIR
 
 SERVICE = "ApiKeys"
 
 router = APIRouter()
-
-# ── FileSyncWorker (injected by PBApiServer at startup) ──────
-
-_file_sync_worker = None
-
-
-def init_file_sync(worker):
-    """Called by PBApiServer._lifespan() to inject the FileSyncWorker."""
-    global _file_sync_worker
-    _file_sync_worker = worker
 
 # ── Pydantic models ───────────────────────────────────────────
 
@@ -612,7 +599,6 @@ def list_exchanges(
         "passphrase_exchanges": Passphrase.list(),
         "v7_exchanges": V7.list(),
     }
-
 
 @router.get("/hl-expiry")
 def get_hl_expiry_all(
@@ -1666,138 +1652,4 @@ def tradfi_get_profiles(
         "provider_links": {p: {"url": url, "label": lbl} for p, (url, lbl) in TRADFI_PROVIDER_LINKS.items()},
         "needs_secret": list(TRADFI_NEEDS_SECRET),
         "profiles": profiles,
-    }
-
-
-# ── API Sync (direct SFTP push via AsyncSSHPool) ─────────────
-
-class SSHPushRequest(BaseModel):
-    hostnames: Optional[list[str]] = None
-    dry_run: bool = False
-    no_propagate: bool = False
-
-
-class RetentionRequest(BaseModel):
-    hostname: str
-    backup_retention_days: int = Field(ge=1, le=3650)
-    backup_min_versions: int = Field(ge=1, le=1000)
-
-
-@router.post("/sync/push-ssh")
-async def push_ssh(
-    req: SSHPushRequest,
-    session: SessionToken = Depends(require_auth),
-) -> dict:
-    """Push api-keys.json to VPS(es) via SSH/SFTP.
-
-    Backs up remote file, pushes with MD5 verify, cleans retention,
-    and kills affected bots (PBRun auto-restarts them).
-    """
-    if not _file_sync_worker:
-        raise HTTPException(status_code=503,
-                            detail="FileSyncWorker not initialized")
-    try:
-        results = await _file_sync_worker.push_api_keys(
-            hostnames=req.hostnames,
-            dry_run=req.dry_run,
-            no_propagate=req.no_propagate,
-        )
-        # push_api_keys returns {"error": "..."} for pre-flight failures
-        # (no local file, no connected VPS). Raise 400 so JS catch handles it.
-        if isinstance(results, dict) and "error" in results and len(results) == 1:
-            raise HTTPException(status_code=400, detail=results["error"])
-        return {"results": results}
-    except Exception as e:
-        _log(SERVICE, f"sync/push-ssh error: {e}", level="ERROR",
-             meta={"traceback": traceback.format_exc()})
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/sync/ssh-status")
-async def get_ssh_sync_status(
-    session: SessionToken = Depends(require_auth),
-) -> dict:
-    """Get SSH sync status: connected hosts, watchers, serial."""
-    if not _file_sync_worker:
-        raise HTTPException(status_code=503,
-                            detail="FileSyncWorker not initialized")
-    managed_hostnames = [
-        str(item.hostname or "")
-        for item in _get_vps_manager_service().vpsmanager.vpss
-        if str(item.hostname or "")
-    ]
-    return _file_sync_worker.get_status(managed_hostnames=managed_hostnames)
-
-
-@router.get("/sync/ssh-status/stream")
-async def stream_ssh_sync_status(
-    session: SessionToken = Depends(require_auth),
-) -> StreamingResponse:
-    """SSE stream that pushes serial-update events when VPS watchers detect changes."""
-    if not _file_sync_worker:
-        raise HTTPException(status_code=503,
-                            detail="FileSyncWorker not initialized")
-    q = _file_sync_worker.subscribe_sse()
-
-    async def event_gen():
-        import json
-        try:
-            # Send initial state so the client can populate all serial cells
-            managed_hostnames = [
-                str(item.hostname or "")
-                for item in _get_vps_manager_service().vpsmanager.vpss
-                if str(item.hostname or "")
-            ]
-            status = _file_sync_worker.get_status(managed_hostnames=managed_hostnames)
-            yield f"data: {json.dumps({'type': 'init', **status})}\n\n"
-            while True:
-                try:
-                    msg = await asyncio.wait_for(q.get(), timeout=25)
-                    msg["type"] = "serial_update"
-                    yield f"data: {json.dumps(msg)}\n\n"
-                except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
-        except (GeneratorExit, asyncio.CancelledError):
-            pass
-        finally:
-            _file_sync_worker.unsubscribe_sse(q)
-
-    return StreamingResponse(
-        event_gen(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.get("/sync/ssh-retention/{hostname}")
-async def get_ssh_retention(
-    hostname: str = PathParam(...),
-    session: SessionToken = Depends(require_auth),
-) -> dict:
-    """Read backup retention settings from a VPS's pbgui.ini."""
-    if not _file_sync_worker:
-        raise HTTPException(status_code=503,
-                            detail="FileSyncWorker not initialized")
-    return await _file_sync_worker.get_retention_settings(hostname)
-
-
-@router.put("/sync/ssh-retention")
-async def set_ssh_retention(
-    req: RetentionRequest,
-    session: SessionToken = Depends(require_auth),
-) -> dict:
-    """Update backup retention settings on a VPS's pbgui.ini."""
-    if not _file_sync_worker:
-        raise HTTPException(status_code=503,
-                            detail="FileSyncWorker not initialized")
-    ok = await _file_sync_worker.set_retention_settings(
-        req.hostname, req.backup_retention_days, req.backup_min_versions)
-    if not ok:
-        raise HTTPException(status_code=500,
-                            detail=f"Failed to write retention to {req.hostname}")
-    return {
-        "success": True,
-        "hostname": req.hostname,
-        "backup_retention_days": req.backup_retention_days,
-        "backup_min_versions": req.backup_min_versions,
     }

@@ -16,8 +16,8 @@ The Overview also includes a dedicated **Workers** card. It opens the admin-only
 
 | Service | Purpose |
 |---|---|
+| **PBCluster** | Replicates Cluster Sync state and materializes approved V7/API-key changes to joined nodes |
 | **PBRun** | Starts/stops local Passivbot bot processes and manages dynamic coin filters |
-| **PBRemote** | Syncs instances and commands between local and remote VPS servers via a cloud bucket |
 | **PBStat** | Collects spot trade statistics for the legacy v6 single bot only |
 | **PBData** | Fetches account data (balances, positions, orders, history, executions) via REST and live prices via public WebSocket |
 | **PBCoinData** | Fetches CoinMarketCap data and builds exchange symbol mappings for dynamic filters |
@@ -36,7 +36,6 @@ Click a service card (or its sidebar entry) to open a dedicated detail panel wit
   - **Log**: Live filtered log viewer
   - **Settings**: Service-specific configuration
   - **Status**: Runtime status (PBData only)
-  - **Info**: Remote server info (PBRemote only)
 
 Use the sidebar on the left to switch between services or return to the Overview.
 
@@ -69,8 +68,8 @@ A healthy setup usually starts services in this order:
 2. **PBRun** — starts bot processes (uses mappings from PBCoinData)
 3. **PBData** — provides live market data for the Dashboard
 4. **PBStat** — collects spot trade statistics (v6 single bot only)
-5. **PBAPIServer** — enables Dashboard, VPS Monitor, Job Queue, and real-time features
-6. **PBRemote** — connects to remote VPS (if used)
+5. **PBCluster** — handles Cluster Sync for joined nodes when cluster mode is enabled
+6. **PBAPIServer** — enables Dashboard, VPS Monitor, Job Queue, and real-time features
 7. **PBAPIServer VPS Monitoring Alerts** — configure Telegram routing and in-GUI alert visibility inside the API server settings when needed
 
 ## Troubleshooting

@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: vps_service_control.sh start|stop|restart PBRun [PBRemote] [PBCoinData]
+Usage: vps_service_control.sh start|stop|restart PBRun [PBCluster] [PBCoinData]
 
 Controls VPS PBGui services. Uses systemd user units when all requested units
 exist and the user manager is available; otherwise falls back to starter.py.
@@ -57,7 +57,7 @@ run_as_service_user() {
 unit_for() {
   case "$1" in
     PBRun) printf '%s\n' 'pbgui-pbrun.service' ;;
-    PBRemote) printf '%s\n' 'pbgui-pbremote.service' ;;
+    PBCluster) printf '%s\n' 'pbgui-pbcluster.service' ;;
     PBCoinData) printf '%s\n' 'pbgui-pbcoindata.service' ;;
     *)
       printf 'Unknown service: %s\n' "$1" >&2
@@ -69,7 +69,7 @@ unit_for() {
 script_for() {
   case "$1" in
     PBRun) printf '%s\n' 'PBRun.py' ;;
-    PBRemote) printf '%s\n' 'PBRemote.py' ;;
+    PBCluster) printf '%s\n' 'PBCluster.py' ;;
     PBCoinData) printf '%s\n' 'PBCoinData.py' ;;
     *) return 1 ;;
   esac
@@ -98,7 +98,7 @@ configured_value() {
   [[ -n "$value" ]] || return 1
   local lowered="${value,,}"
   case "$lowered" in
-    none|null|false|'<api_key>'|'<bucket_name>'|'<bucket_name>:') return 1 ;;
+    none|null|false|'<api_key>') return 1 ;;
   esac
   if [[ "$value" == '<'*'>' ]]; then
     return 1
@@ -109,7 +109,7 @@ configured_value() {
 service_configured() {
   case "$1" in
     PBRun) return 0 ;;
-    PBRemote) configured_value "$(ini_value pbremote bucket)" ;;
+    PBCluster) return 0 ;;
     PBCoinData) configured_value "$(ini_value coinmarketcap api_key)" ;;
     *) return 1 ;;
   esac
@@ -122,9 +122,12 @@ disable_optional_service() {
 
   echo "Skipping $service: required configuration is missing in pbgui.ini"
   if command -v systemctl >/dev/null 2>&1 && [[ -f "$target_home/.config/systemd/user/$unit" ]]; then
+    run_as_service_user systemctl --user daemon-reload >/dev/null 2>&1 || true
     run_as_service_user systemctl --user stop "$unit" >/dev/null 2>&1 || true
     run_as_service_user systemctl --user disable "$unit" >/dev/null 2>&1 || true
+    run_as_service_user systemctl --user reset-failed "$unit" >/dev/null 2>&1 || true
     rm -f "$target_home/.config/systemd/user/default.target.wants/$unit"
+    run_as_service_user systemctl --user daemon-reload >/dev/null 2>&1 || true
   fi
 
   if [[ -x "$python_bin" && -f "$pbgui_dir/starter.py" ]]; then

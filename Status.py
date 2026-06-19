@@ -5,7 +5,7 @@ The collected data are stored in a list of statuses (InsancesStatusList()), wher
 
 Each status includes informations such as the name, the version, where it is supposed to run, whether it is a multi configuration, and whether it is running on the local server. 
 
-This status list is then sent through PBRemote to the remote storage, enabling us to manage bots from the master server.
+This status list is consumed by PBRun and synchronized by PBCluster so PBGui can manage bots from the master server.
 """
 from pathlib import Path
 import json
@@ -20,6 +20,9 @@ class InstanceStatus():
         self.enabled_on = None
         self.running = None
         self.activate_ts = 0
+        self.blocked = False
+        self.blocked_reason = ""
+        self.cluster_gate = ""
 
 class InstancesStatus():
     """Stores every InstanceStatus into status.json, manages and loads them."""
@@ -140,6 +143,9 @@ class InstancesStatus():
                             status.enabled_on = idata["enabled_on"]
                             status.running = idata["running"]
                             status.activate_ts = idata.get("activate_ts", 0)
+                            status.blocked = bool(idata.get("blocked", False))
+                            status.blocked_reason = str(idata.get("blocked_reason", "") or "")
+                            status.cluster_gate = str(idata.get("cluster_gate", "") or "")
                             self.add(status)
                 except json.JSONDecodeError as e:
                     _log('Status', f'Error loading status file: {e}', level='ERROR')
@@ -154,6 +160,9 @@ class InstancesStatus():
                 "multi": instance.multi,
                 "running": instance.running,
                 "activate_ts": instance.activate_ts,
+                "blocked": bool(getattr(instance, "blocked", False)),
+                "blocked_reason": str(getattr(instance, "blocked_reason", "") or ""),
+                "cluster_gate": str(getattr(instance, "cluster_gate", "") or ""),
             })
         status = {
             "activate_ts": self.activate_ts,

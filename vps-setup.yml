@@ -26,7 +26,6 @@
     user: "{{ user }}"
     user_pw: "{{ user_pw }}"
     swap_size: "{{ swap_size }}"
-    bucket_name: "{{ bucket }}"
     api_key: "{{ coinmarketcap_api_key }}"
     firewall: "{{ firewall }}"
     firewall_ssh_port: "{{ firewall_ssh_port }}"
@@ -237,12 +236,11 @@
       become: yes
       when: python312_venv_policy.stdout is search('(?m)^\s*Candidate:\s*\(none\)\s*$')
 
-    - name: Install git, python3.12, rclone, gcc
+    - name: Install git, python3.12 and gcc
       apt:
         pkg:
         - git
         - python3.12-venv
-        - rclone
         - gcc
         clean: yes
       become: yes
@@ -323,6 +321,33 @@
         path: "{{ remote_home }}/.cache/pip"
         state: absent
 
+    - name: Ensure PBCluster SSH key exists
+      command:
+        argv:
+          - "{{ install_dir }}/venv_pbgui/bin/python"
+          - "{{ install_dir }}/pbgui/cluster_ssh_setup.py"
+          - ensure-local
+          - --pbgdir
+          - "{{ install_dir }}/pbgui"
+      register: cluster_sync_key_setup
+      changed_when: "'\"created\": true' in cluster_sync_key_setup.stdout"
+
+    - name: Install master PBCluster authorized key
+      command:
+        argv:
+          - "{{ install_dir }}/venv_pbgui/bin/python"
+          - "{{ install_dir }}/pbgui/cluster_ssh_setup.py"
+          - install-authorized-key
+          - --pbgdir
+          - "{{ install_dir }}/pbgui"
+          - --source-node
+          - "{{ cluster_sync_source_node_id }}"
+          - --source-public-key
+          - "{{ cluster_sync_source_public_key }}"
+      register: cluster_sync_authorized_key
+      changed_when: "'\"changed\": true' in cluster_sync_authorized_key.stdout"
+      when: (cluster_sync_source_node_id | default('') | string | length) > 0 and (cluster_sync_source_public_key | default('') | string | length) > 0
+
     - name: clean apt package cache after setup
       apt:
         autoremove: yes
@@ -356,7 +381,6 @@
       loop:
         - { regexp: '<hostname>', replace: "{{ hostname }}" }
         - { regexp: '<install_dir>', replace: "{{ install_dir }}" }
-        - { regexp: '<bucket_name>:', replace: "{{ bucket_name }}" }
         - { regexp: '<api_key>', replace: "{{ api_key }}" }
 
     - name: store firewall config in pbgui.ini
@@ -375,7 +399,7 @@
 
     - name: Build enabled PBGui service list
       set_fact:
-        pbgui_enabled_services: "{{ ['pbrun'] + (['pbremote'] if (bucket_name | default('') | string | trim) else []) + (['pbcoindata'] if (api_key | default('') | string | trim) else []) }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun'] + (['pbcoindata'] if (api_key | default('') | string | trim) else []) }}"
 
     - name: apply VPS logging max bytes
       ini_file:
@@ -395,12 +419,6 @@
         no_extra_spaces: true
       loop: "{{ vps_logging_services | default([]) }}"
     
-    - name: copy rclone config from local to remote
-      copy:
-        src: "{{ local_home }}/.config/rclone/"
-        dest: "{{ remote_home }}/.config/rclone/"
-      when: bucket_name | default('') | string | trim != ""
-
     - name: install and start PBGui systemd user services
       command:
         argv:

@@ -1,10 +1,29 @@
 import json
 import socket
+import hashlib
+import os
+import uuid
+import configparser
 from pathlib import Path, PurePath
 from datetime import datetime, timezone
 from api_key_state import strip_runtime_extra
+from logging_helpers import human_log as _log
 from pbgui_purefunc import pb7dir, PBGDIR, is_pb7_installed
 import shutil
+
+SERVICE = "User"
+
+_API_KEY_SECRET_FIELDS = frozenset({
+    "key",
+    "apiKey",
+    "api_key",
+    "secret",
+    "api_secret",
+    "passphrase",
+    "password",
+    "private_key",
+    "privateKey",
+})
 
 class User:
     def __init__(self):
@@ -329,3 +348,86 @@ class Users:
                 shutil.copy(PurePath(self.api7_path), destination)
             with Path(f'{self.api7_path}').open("w", encoding="UTF-8") as f:
                 json.dump(save_users, f, indent=4)
+            _record_cluster_api_keys_update(save_users)
+
+
+def _record_cluster_api_keys_update(payload: dict) -> None:
+    """Record an API-key file update in Cluster Sync without blocking saves."""
+
+    try:
+        from master.cluster_state import append_operation, default_cluster_root, ensure_local_identity, rebuild_materialized_state
+
+        cluster_root = default_cluster_root(Path(PBGDIR))
+        ensure_local_identity(cluster_root, role="master", pbname=_cluster_pbname())
+        raw_secret = json.dumps(payload, indent=4).encode("utf-8")
+        redacted = _redact_api_keys_payload(payload)
+        raw_payload = _canonical_json_bytes(redacted)
+        payload_hash = _write_cluster_blob(cluster_root / "config_blobs", raw_payload, secret=False)
+        secret_blob_hash = _write_cluster_blob(cluster_root / "secret_blobs", raw_secret, secret=True)
+        append_operation(
+            cluster_root,
+            "UPSERT_API_KEYS",
+            {
+                "api_serial": int(payload.get("_api_serial") or 1),
+                "payload_hash": payload_hash,
+                "secret_blob_hash": secret_blob_hash,
+            },
+        )
+        rebuild_materialized_state(cluster_root)
+    except Exception as exc:
+        _log(SERVICE, f"Cluster oplog update skipped for api-keys.json: {exc}", level="WARNING")
+
+
+def _redact_api_keys_payload(value):
+    """Return API-key JSON with credential values removed for non-secret hash metadata."""
+
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if str(key) in _API_KEY_SECRET_FIELDS:
+                result[key] = "<redacted>" if item not in {None, ""} else item
+            else:
+                result[key] = _redact_api_keys_payload(item)
+        return result
+    if isinstance(value, list):
+        return [_redact_api_keys_payload(item) for item in value]
+    return value
+
+
+def _canonical_json_bytes(value) -> bytes:
+    """Return canonical JSON bytes for Cluster Sync content hashes."""
+
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _write_cluster_blob(base_dir: Path, raw: bytes, *, secret: bool) -> str:
+    """Write one content-addressed Cluster Sync blob atomically."""
+
+    digest = hashlib.sha256(raw).hexdigest()
+    target = Path(base_dir) / "sha256" / digest[:2] / f"{digest}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f"{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    mode = 0o600 if secret else 0o644
+    try:
+        tmp.write_bytes(raw)
+        os.chmod(tmp, mode)
+        os.replace(tmp, target)
+        os.chmod(target, mode)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return f"sha256:{digest}"
+
+
+def _cluster_pbname() -> str:
+    """Return the configured PBGui name for Cluster Sync identity creation."""
+
+    cfg = configparser.ConfigParser()
+    try:
+        cfg.read(Path(PBGDIR) / "pbgui.ini")
+        if cfg.has_option("main", "pbname"):
+            value = cfg.get("main", "pbname").strip()
+            if value:
+                return value
+    except Exception:
+        pass
+    return socket.gethostname()

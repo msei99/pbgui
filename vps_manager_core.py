@@ -16,6 +16,7 @@ import getpass
 import paramiko
 
 from logging_helpers import human_log as _log
+from master.cluster_ssh_keys import ensure_local_cluster_ssh_material
 from pbgui_purefunc import load_ini, pb7dir, pb7venv, save_ini
 
 PBGDIR = Path(__file__).resolve().parent
@@ -48,6 +49,26 @@ def _ansible_envvars() -> dict[str, str]:
     if ansible_bin_str not in path_parts:
         envvars["PATH"] = ansible_bin_str + (os.pathsep + current_path if current_path else "")
     return envvars
+
+
+def _cluster_sync_extra_vars() -> dict[str, str]:
+    """Return local Cluster Sync key material for remote PBGui update tasks."""
+
+    try:
+        material = ensure_local_cluster_ssh_material(PBGDIR, role="master")
+    except Exception as exc:
+        _log("VPSManager", f"Could not prepare Cluster Sync SSH key for VPS update: {exc}", level="WARNING")
+        return {}
+    return {
+        "cluster_sync_source_node_id": str(material.get("node_id") or ""),
+        "cluster_sync_source_public_key": str(material.get("public_key") or ""),
+    }
+
+
+def _command_updates_pbgui(command: str | None) -> bool:
+    """Return True for playbooks that update or install PBGui files."""
+
+    return str(command or "") in {"vps-setup", "vps-update-pbgui", "vps-update-pb", "vps-switch-pbgui-branch"}
 
 
 def strip_ansi(text: str) -> str:
@@ -201,7 +222,6 @@ class VPS:
         self.init_log = ""
         self.setup_log = ""
         self.update_log = ""
-        self.bucket = None
         self.coinmarketcap_api_key = None
         self.firewall = True
         self.firewall_ssh_port = 22
@@ -278,8 +298,6 @@ class VPS:
             self.init_status = config["init_status"]
         if "update_status" in config:
             self.update_status = config["update_status"]
-        if "bucket" in config:
-            self.bucket = config["bucket"]
         if "coinmarketcap_api_key" in config:
             self.coinmarketcap_api_key = config["coinmarketcap_api_key"]
         if "firewall" in config:
@@ -464,7 +482,7 @@ class VPS:
         return False
 
     def fetch_vps_info(self):
-        result = {"bucket": None, "coinmarketcap": None, "swap": "0", "firewall": None, "firewall_ssh_port": None, "firewall_ssh_ips": None}
+        result = {"coinmarketcap": None, "swap": "0", "firewall": None, "firewall_ssh_port": None, "firewall_ssh_ips": None}
         if not self.ip or not self.user:
             _log("VPSManager", "Missing VPS IP or username.", level="WARNING")
             return result
@@ -530,12 +548,6 @@ class VPS:
             except Exception as exc:
                 _log("VPSManager", f"Error parsing config file from VPS {self.hostname} ({self.ip}): {exc}", level="WARNING")
                 return result
-
-            if config_data.has_section("pbremote") and config_data.has_option("pbremote", "bucket"):
-                result["bucket"] = config_data.get("pbremote", "bucket")
-                _log("VPSManager", f"Successfully fetched PBRemote bucket from {self.hostname}", level="INFO")
-            else:
-                _log("VPSManager", f"'bucket' not found in [pbremote] section on VPS {self.hostname}", level="WARNING")
 
             if config_data.has_section("coinmarketcap") and config_data.has_option("coinmarketcap", "api_key"):
                 result["coinmarketcap"] = config_data.get("coinmarketcap", "api_key")
@@ -913,7 +925,6 @@ PY"""
                 "ip": self.ip,
                 "user": self.user,
                 "swap": self.swap,
-                "bucket": self.bucket,
                 "coinmarketcap_api_key": self.coinmarketcap_api_key,
                 "last_setup": self.last_setup,
                 "last_init": self.last_init,
@@ -1088,7 +1099,6 @@ class VPSManager:
             "user": vps.user,
             "user_pw": vps.user_pw,
             "swap_size": vps.swap,
-            "bucket": str(vps.bucket or ""),
             "coinmarketcap_api_key": str(vps.coinmarketcap_api_key or ""),
             "firewall": vps.firewall,
             "firewall_ssh_port": vps.firewall_ssh_port,
@@ -1097,6 +1107,7 @@ class VPSManager:
             "install_dir": _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user),
             "vps_logging_services": [],
         }
+        ansible_extravars.update(_cluster_sync_extra_vars())
         if extra_vars:
             ansible_extravars.update(extra_vars)
         try:
@@ -1138,7 +1149,6 @@ class VPSManager:
             "user": vps.user,
             "user_pw": vps.user_pw,
             "swap_size": vps.swap,
-            "bucket": str(vps.bucket or ""),
             "coinmarketcap_api_key": str(vps.coinmarketcap_api_key or ""),
             "firewall": vps.firewall,
             "firewall_ssh_port": vps.firewall_ssh_port,
@@ -1147,6 +1157,8 @@ class VPSManager:
             "debug": debug,
             "install_dir": _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user),
         }
+        if _command_updates_pbgui(vps.command):
+            ansible_extravars.update(_cluster_sync_extra_vars())
         if extra_vars:
             ansible_extravars.update(extra_vars)
 

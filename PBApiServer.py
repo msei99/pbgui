@@ -26,6 +26,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path, PurePath
 from time import sleep
 
+_PBGUI_ROOT = Path(__file__).resolve().parent
+try:
+    os.chdir(_PBGUI_ROOT)
+except OSError:
+    pass
+
 import psutil
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -52,6 +58,7 @@ from api.balance_calc import router as balance_calc_router
 from api.coin_data import router as coin_data_router
 from api.backtest_v7 import router as backtest_v7_router
 from api.backtest_v7 import startup as bt7_startup, shutdown as bt7_shutdown
+from api.cluster import router as cluster_router
 from api.optimize_v7 import router as optimize_v7_router
 from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
 from api.pareto_explorer import router as pareto_explorer_router
@@ -103,6 +110,19 @@ async def _restart_block_state() -> tuple[bool, str]:
     restart_blocked = bool(deploy_state.get("active")) if isinstance(deploy_state, dict) else False
     restart_block_reason = str(deploy_state.get("summary") or "") if restart_blocked and isinstance(deploy_state, dict) else ""
     return restart_blocked, restart_block_reason
+
+
+def _local_master_name() -> str:
+    """Return the configured local PBGui master name for UI chrome."""
+
+    configured = str(load_ini("main", "pbname") or "").strip()
+    if configured:
+        return configured
+    try:
+        hostname = str(os.uname().nodename or "").strip()
+    except Exception:
+        hostname = ""
+    return hostname or "local"
 
 
 def _systemd_user_env() -> dict[str, str]:
@@ -341,10 +361,7 @@ async def _lifespan(app: FastAPI):
     _setup_api_logging()
     from master.async_monitor import VPSMonitor
     from master.async_logs import AsyncLogStreamer
-    from master.file_sync import FileSyncWorker
-    from master.v7_config_sync import V7ConfigSyncWorker
     from api.vps import init as vps_init
-    from api.api_keys import init_file_sync
     from api.v7_instances import init as v7_init
 
     global _startup_serial
@@ -363,17 +380,8 @@ async def _lifespan(app: FastAPI):
     monitor = VPSMonitor()
     streamer = AsyncLogStreamer(monitor.pool)
     vps_init(monitor, streamer)
-
-    file_sync = FileSyncWorker(monitor.pool, monitor.store, monitor)
-    init_file_sync(file_sync)
-    v7_sync = V7ConfigSyncWorker(monitor.pool, monitor.store, monitor)
-    v7_init(monitor, v7_sync)
+    v7_init(monitor)
     db_tools_init(monitor)
-
-    # Register on-connect callbacks so inotify watchers start automatically
-    # whenever a VPS connects or reconnects (including after network outages).
-    monitor.pool.add_on_connect_callback(file_sync.start_watchers_single)
-    monitor.pool.add_on_connect_callback(v7_sync.start_watchers_single)
 
     _vps_monitor = monitor
 
@@ -381,12 +389,6 @@ async def _lifespan(app: FastAPI):
     # can accept requests immediately (connections take ~2 min).
     async def _deferred_startup():
         await monitor.start()
-        connected_now = monitor.pool.connected_hosts()
-        if connected_now:
-            await file_sync.start_watchers(connected_now)
-            await v7_sync.start_watchers(connected_now)
-        file_sync.start_watchdog()
-        v7_sync.start_watchdog()
         _log(SERVICE, "[lifespan] deferred startup complete", level="INFO")
 
     bt7_startup()
@@ -410,10 +412,6 @@ async def _lifespan(app: FastAPI):
     opt7_shutdown()
     if _vps_monitor:
         await _vps_monitor.stop()
-    file_sync.stop_watchdog()
-    await file_sync.stop_watchers()
-    v7_sync.stop_watchdog()
-    await v7_sync.stop_watchers()
 
 
 # ── FastAPI app ───────────────────────────────────────────────
@@ -488,6 +486,7 @@ app.include_router(v7_router, prefix="/api/v7", tags=["v7"])
 app.include_router(balance_calc_router, prefix="/api/balance-calc", tags=["balance-calc"])
 app.include_router(coin_data_router, prefix="/api/coin-data", tags=["coin-data"])
 app.include_router(backtest_v7_router, prefix="/api/backtest-v7", tags=["backtest-v7"])
+app.include_router(cluster_router, prefix="/api/cluster", tags=["cluster"])
 app.include_router(optimize_v7_router, prefix="/api/optimize-v7", tags=["optimize-v7"])
 app.include_router(pareto_explorer_router, prefix="/api/pareto-explorer", tags=["pareto-explorer"])
 app.include_router(strategy_explorer_router, prefix="/api/strategy-explorer", tags=["strategy-explorer"])
@@ -1138,6 +1137,7 @@ async def server_status(session: SessionToken = Depends(require_auth)):
         "current_serial": current_serial,
         "restart_blocked": restart_blocked,
         "restart_block_reason": restart_block_reason,
+        "master_name": _local_master_name(),
     }
 
 
@@ -1309,7 +1309,7 @@ class PBApiServer:
             sleep(0.3)
             if self.is_running():
                 return
-            pbgdir = Path.cwd()
+            pbgdir = Path(PBGDIR)
             venv_python = self._get_venv_python()
             cmd = [venv_python, '-u', str(PurePath(f'{pbgdir}/PBApiServer.py'))]
 

@@ -4,9 +4,9 @@ set -euo pipefail
 TARGET_USER="${USER:-}"
 PBGUI_DIR=""
 PYTHON_BIN=""
-ENABLE_SERVICES="api,pbrun,pbdata,pbcoindata"
+ENABLE_SERVICES="api,pbcluster,pbrun,pbdata,pbcoindata"
 START_SERVICES=true
-INSTALL_PBREMOTE=false
+DISABLE_EXCLUDED=true
 
 info() { printf '\033[36m[INFO]\033[0m %s\n' "$*"; }
 success() { printf '\033[32m[ OK ]\033[0m %s\n' "$*"; }
@@ -47,9 +47,9 @@ Options:
   --user USER                 Target Linux user. Default: current user.
   --pbgui-dir PATH            PBGui directory. Default: current directory.
   --python PATH               PBGui venv Python. Default: ../venv_pbgui/bin/python.
-  --enable LIST               Comma-separated services to enable. Default: api,pbrun,pbdata,pbcoindata.
+  --enable LIST               Comma-separated services to enable. Default: api,pbcluster,pbrun,pbdata,pbcoindata.
   --no-start                  Enable services but do not start/restart them now.
-  --include-pbremote          Also install PBRemote unit template.
+  --no-disable-excluded       Do not stop/disable services missing from --enable.
   -h, --help                  Show help.
 EOF
 }
@@ -61,7 +61,7 @@ while [[ $# -gt 0 ]]; do
     --python) PYTHON_BIN="$2"; shift 2 ;;
     --enable) ENABLE_SERVICES="$2"; shift 2 ;;
     --no-start) START_SERVICES=false; shift ;;
-    --include-pbremote) INSTALL_PBREMOTE=true; shift ;;
+    --no-disable-excluded) DISABLE_EXCLUDED=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) err "Unknown option: $1"; usage; exit 2 ;;
   esac
@@ -147,12 +147,10 @@ EOF
 }
 
 write_unit "pbgui-api.service" "PBGui API Server" "PBApiServer.py"
+write_unit "pbgui-pbcluster.service" "PBGui PBCluster Service" "PBCluster.py"
 write_unit "pbgui-pbrun.service" "PBGui PBRun Service" "PBRun.py"
 write_unit "pbgui-pbdata.service" "PBGui PBData Service" "PBData.py"
 write_unit "pbgui-pbcoindata.service" "PBGui PBCoinData Service" "PBCoinData.py"
-if [[ "$INSTALL_PBREMOTE" == true || "$ENABLE_SERVICES" == *pbremote* ]]; then
-  write_unit "pbgui-pbremote.service" "PBGui PBRemote Service" "PBRemote.py"
-fi
 
 if [[ "$RUNNING_AS_ROOT" == true ]]; then
   loginctl enable-linger "$TARGET_USER" >/dev/null 2>&1 || warn "Could not enable linger for $TARGET_USER."
@@ -180,7 +178,7 @@ service_requested() {
   return 1
 }
 
-disable_optional_if_excluded() {
+disable_service_if_excluded() {
   local service="$1"
   local unit="pbgui-$service.service"
   if service_requested "$service"; then
@@ -190,13 +188,32 @@ disable_optional_if_excluded() {
   if [[ -f "$unit_dir/$unit" ]]; then
     run_user_systemctl stop "$unit" >/dev/null 2>&1 || true
     run_user_systemctl disable "$unit" >/dev/null 2>&1 || true
-    success "Disabled optional $unit"
+    success "Disabled $unit"
   fi
 }
 
+remove_obsolete_unit() {
+  local unit="$1"
+  local removed=false
+  if [[ -e "$wants_dir/$unit" || -e "$unit_dir/$unit" ]]; then
+    removed=true
+  fi
+  run_user_systemctl stop "$unit" >/dev/null 2>&1 || true
+  run_user_systemctl disable "$unit" >/dev/null 2>&1 || true
+  run_user_systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+  rm -f "$wants_dir/$unit" "$unit_dir/$unit"
+  if [[ "$removed" == true ]]; then
+    success "Removed obsolete $unit"
+  fi
+}
+
+remove_obsolete_unit "pbgui-pbremote.service"
 run_user_systemctl daemon-reload
-disable_optional_if_excluded pbremote
-disable_optional_if_excluded pbcoindata
+if [[ "$DISABLE_EXCLUDED" == true ]]; then
+  for managed_service in api pbcluster pbrun pbdata pbcoindata; do
+    disable_service_if_excluded "$managed_service"
+  done
+fi
 
 for service in "${enabled[@]}"; do
   service="$(printf '%s' "$service" | tr -d '[:space:]')"

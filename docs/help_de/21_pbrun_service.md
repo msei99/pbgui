@@ -9,7 +9,7 @@ PBRun führt eine Daemon-Schleife alle 5 Sekunden aus:
 - Startet/stoppt lokale Passivbot-Prozesse für konfigurierte Instanzen (PB7, PB6 Multi, PB6 Single)
 - Überwacht den Ressourcenverbrauch (CPU, Speicher) jedes laufenden Bots und sammelt PnL/Error/Traceback-Zähler aus den Log-Dateien
 - Überwacht dynamische Coin-Filter (über PBCoinData-Mappings) und schreibt `ignored_coins.json` / `approved_coins.json`
-- Reagiert auf Aktivierungs- und Status-Dateien von PBRemote (Dateisystem-basierte Nachrichtenwarteschlange in `data/cmd/`)
+- Erzwingt im Cluster Mode den gewünschten Cluster-Sync-Status, bevor V7-Bots gestartet oder weitergeführt werden
 - Führt einen Speicher-Watchdog aus: fällt der freie Systemspeicher unter 250 MB, wird der Bot mit dem höchsten Speicherverbrauch neu gestartet
 - Schreibt Service-Logs nach `data/logs/PBRun.log`
 

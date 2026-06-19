@@ -2,10 +2,11 @@
 # Clenaup vps
 # Steps:
 # 1. Remove snap
-# 2. Clean up apt cache
-# 3. Clean up pip cache
-# 4. Clean up rustup downloads/tmp
-# 5. Clear systemd journal logs
+# 2. Remove legacy PBRemote rclone package
+# 3. Clean up apt cache
+# 4. Clean up pip cache
+# 5. Clean up rustup downloads/tmp
+# 6. Clear systemd journal logs
 
 - hosts: "{{ hostname }}"
   gather_facts: "{{ debug }}"
@@ -124,6 +125,17 @@
     - name: print snap removal result
       debug:
         var: snap_result
+
+    - name: remove legacy rclone package
+      apt:
+        name: rclone
+        state: absent
+      become: yes
+      register: rclone_result
+
+    - name: print rclone removal result
+      debug:
+        var: rclone_result
     
     - name: clean apt cache
       apt:

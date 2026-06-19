@@ -12,9 +12,10 @@
     pbgui_dir: "{{ install_dir }}/pbgui"
     python_bin: "{{ install_dir }}/venv_pbgui/bin/python"
     all_systemd_units:
+      - pbgui-pbcluster.service
       - pbgui-pbrun.service
-      - pbgui-pbremote.service
       - pbgui-pbcoindata.service
+      - pbgui-pbremote.service
 
   tasks:
     - name: display facts
@@ -60,11 +61,10 @@
         def configured(value):
             normalized = str(value or '').strip()
             lowered = normalized.lower()
-            if not normalized or lowered in {'none', 'null', 'false', '<api_key>', '<bucket_name>', '<bucket_name>:'}:
+            if not normalized or lowered in {'none', 'null', 'false', '<api_key>'}:
                 return False
             return not normalized.startswith('<')
 
-        print('pbremote_configured=' + ('yes' if configured(config.get('pbremote', 'bucket', fallback='')) else 'no'))
         print('coindata_configured=' + ('yes' if configured(config.get('coinmarketcap', 'api_key', fallback='')) else 'no'))
         PY
       args:
@@ -74,10 +74,9 @@
 
     - name: build enabled PBGui migration service list
       set_fact:
-        pbgui_pbremote_configured: "{{ 'pbremote_configured=yes' in optional_service_config.stdout_lines }}"
         pbgui_coindata_configured: "{{ 'coindata_configured=yes' in optional_service_config.stdout_lines }}"
-        pbgui_enabled_services: "{{ ['pbrun'] + (['pbremote'] if ('pbremote_configured=yes' in optional_service_config.stdout_lines) else []) + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
-        systemd_units: "{{ ['pbgui-pbrun.service'] + (['pbgui-pbremote.service'] if ('pbremote_configured=yes' in optional_service_config.stdout_lines) else []) + (['pbgui-pbcoindata.service'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun'] + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
+        systemd_units: "{{ ['pbgui-pbcluster.service', 'pbgui-pbrun.service'] + (['pbgui-pbcoindata.service'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
 
     - name: copy systemd setup helper
       copy:
@@ -104,7 +103,6 @@
           - "{{ python_bin }}"
           - --enable
           - "{{ pbgui_enabled_services | join(',') }}"
-          - --include-pbremote
           - --no-start
       become: yes
       register: systemd_preinstall_result
@@ -131,11 +129,12 @@
 
         target_dir = os.path.realpath(os.environ['PBGUI_MIGRATION_DIR'])
         target_prefix = target_dir + os.sep
-        scripts = ('PBRun.py', 'PBRemote.py', 'PBCoinData.py', 'starter.py')
+        scripts = ('PBCluster.py', 'PBRun.py', 'PBCoinData.py', 'PBRemote.py', 'starter.py')
         pidfiles = {
+            'PBCluster.py': 'pbcluster.pid',
             'PBRun.py': 'pbrun.pid',
-            'PBRemote.py': 'pbremote.pid',
             'PBCoinData.py': 'pbcoindata.pid',
+            'PBRemote.py': 'pbremote.pid',
         }
         current = os.getpid()
 
@@ -246,7 +245,6 @@
           - "{{ python_bin }}"
           - --enable
           - "{{ pbgui_enabled_services | join(',') }}"
-          - --include-pbremote
       become: yes
       register: systemd_setup_result
 

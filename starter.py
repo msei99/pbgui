@@ -5,14 +5,15 @@ import sys
 from pathlib import Path
 
 from PBRun import PBRun
-from PBRemote import PBRemote
+from PBCluster import PBCluster
 from PBCoinData import CoinData
 
 SYSTEMD_UNITS = {
     'PBRun': 'pbgui-pbrun.service',
-    'PBRemote': 'pbgui-pbremote.service',
+    'PBCluster': 'pbgui-pbcluster.service',
     'PBCoinData': 'pbgui-pbcoindata.service',
 }
+STARTER_COMMANDS = ['PBRun', 'PBCluster', 'PBCoinData', 'PBRemote']
 
 
 def _systemd_env():
@@ -67,9 +68,9 @@ def _legacy_action(service: str, action: str) -> None:
         if service == 'PBRun':
             print('Start PBRun')
             PBRun().run()
-        elif service == 'PBRemote':
-            print('Start PBRemote')
-            PBRemote().run()
+        elif service == 'PBCluster':
+            print('Start PBCluster')
+            PBCluster().run()
         elif service == 'PBCoinData':
             print('Start PBCoinData')
             CoinData().run()
@@ -77,9 +78,9 @@ def _legacy_action(service: str, action: str) -> None:
         if service == 'PBRun':
             print('Stop PBRun')
             PBRun().stop()
-        elif service == 'PBRemote':
-            print('Stop PBRemote')
-            PBRemote().stop()
+        elif service == 'PBCluster':
+            print('Stop PBCluster')
+            PBCluster().stop()
         elif service == 'PBCoinData':
             print('Stop PBCoinData')
             CoinData().stop()
@@ -88,10 +89,10 @@ def _legacy_action(service: str, action: str) -> None:
             print('Restart PBRun')
             PBRun().stop()
             PBRun().run()
-        elif service == 'PBRemote':
-            print('Restart PBRemote')
-            PBRemote().stop()
-            PBRemote().run()
+        elif service == 'PBCluster':
+            print('Restart PBCluster')
+            PBCluster().stop()
+            PBCluster().run()
         elif service == 'PBCoinData':
             print('Restart PBCoinData')
             CoinData().stop()
@@ -105,13 +106,16 @@ def main():
     group.add_argument('-s', '--start', action='store_true', help='Start')
     group.add_argument('-k', '--stop', action='store_true', help='Stop')
     group.add_argument('-r', '--restart', action='store_true', help='Restart')
-    parser.add_argument('command', choices=['PBRun', 'PBRemote', 'PBCoinData'], nargs='+')
+    parser.add_argument('command', choices=STARTER_COMMANDS, nargs='+')
 
     args = parser.parse_args()
     action = 'start' if args.start else 'stop' if args.stop else 'restart'
     failed = False
 
     for service in args.command:
+        if service == 'PBRemote':
+            print('Skip removed legacy PBRemote service')
+            continue
         handled, ok = _systemd_action(service, action)
         if handled:
             if not ok:

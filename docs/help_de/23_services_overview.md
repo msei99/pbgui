@@ -16,8 +16,8 @@ Die Übersicht enthält jetzt auch eine eigene **Workers**-Kachel. Sie öffnet d
 
 | Service | Funktion |
 |---|---|
+| **PBCluster** | Repliziert Cluster-Sync-Status und materialisiert freigegebene V7/API-Key-Änderungen auf verbundenen Nodes |
 | **PBRun** | Startet/stoppt lokale Passivbot-Prozesse und verwaltet dynamische Coin-Filter |
-| **PBRemote** | Synchronisiert Instanzen und Befehle zwischen lokalem Rechner und Remote-VPS über einen Cloud-Bucket |
 | **PBStat** | Sammelt Spot-Handelsstatistiken – nur für den alten v6 Single Bot |
 | **PBData** | Lädt Account-Daten (Balances, Positionen, Orders, History, Executions) via REST und Live-Preise über öffentliche WebSockets |
 | **PBCoinData** | Ruft CoinMarketCap-Daten ab und erstellt Exchange-Symbol-Mappings für dynamische Filter |
@@ -36,7 +36,6 @@ Klicke auf eine Service-Kachel (oder den Sidebar-Eintrag), um ein dediziertes De
   - **Log**: Live gefilterter Log-Viewer
   - **Settings**: Service-spezifische Konfiguration
   - **Status**: Laufzeit-Status (nur PBData)
-  - **Info**: Remote-Server-Info (nur PBRemote)
 
 Über die Sidebar links zwischen Services wechseln oder zur Übersicht zurückkehren.
 
@@ -69,8 +68,8 @@ Ein stabiles Setup startet die Dienste üblicherweise in dieser Reihenfolge:
 2. **PBRun** — startet Bot-Prozesse (nutzt Mappings von PBCoinData)
 3. **PBData** — liefert Live-Marktdaten für das Dashboard
 4. **PBStat** — sammelt Spot-Handelsstatistiken (nur v6 Single Bot)
-5. **PBAPIServer** — aktiviert Dashboard, VPS Monitor, Job Queue und Echtzeit-Features
-6. **PBRemote** — verbindet mit Remote-VPS (wenn genutzt)
+5. **PBCluster** — übernimmt Cluster Sync für verbundene Nodes, wenn Cluster Mode aktiv ist
+6. **PBAPIServer** — aktiviert Dashboard, VPS Monitor, Job Queue und Echtzeit-Features
 7. **PBAPIServer VPS Monitoring Alerts** — konfiguriert Telegram-Routing und die GUI-Sichtbarkeit der Alarme direkt in den API-Server-Einstellungen, wenn genutzt
 
 ## Schnelle Fehlersuche

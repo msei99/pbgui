@@ -15,15 +15,12 @@ Die Seite läuft als eigenständige FastAPI-Seite mit vollständiger Topnav zur 
 | **+ Add User** | Öffnet das Formular zum Anlegen eines neuen Exchange-Users |
 | **HL Expiry Check** | Prüft den Key-Ablauf aller Hyperliquid-User (Bulk) |
 | **Bybit Expiry Check** | Prüft den Key-Ablauf + IP-Whitelist aller Bybit-User (Bulk) |
-| **API Sync** | Überträgt `api-keys.json` an alle verbundenen VPS |
-| **Advanced API Sync** | Öffnet das vollständige API-Sync-Panel (pro VPS, Dry-Run, Retention) |
 | **Comments** | Öffnet das Kommentar-Panel |
 | **HL Warning Config** | Konfiguriert den Schwellenwert für Hyperliquid-Ablaufwarnungen via Telegram |
 | **TradFi** | Öffnet das TradFi-Data-Provider-Panel |
 | **🗄 Backups** | Öffnet den Backup-Browser mit Diff-Viewer |
 | **📋 Logs** | Öffnet den Live-Log-Viewer (streamt `ApiKeys.log` und weitere Logs) |
 | **Refresh** | Lädt die User-Liste neu von der Festplatte |
-| **API X/Y out of sync** | Sichtbar, wenn ein oder mehrere verbundene VPS nicht synchron sind; Klick löst den Push aus |
 | **🟠 Restart** | Sichtbar, wenn der API-Server ausstehende Code-Änderungen hat; Klick startet neu |
 
 ---
@@ -109,62 +106,13 @@ Beliebige zwei Einträge nebeneinander oder unified vergleichen:
 
 ---
 
-## API Sync
+## Cluster Sync
 
-Verteilt `api-keys.json` per SSH/SFTP an alle VPS-Server.
+Die API-Keys-Seite bearbeitet nur das lokale `api-keys.json`. Remote-Schreibvorgänge für API-Keys gehören zu **Cluster Sync**.
 
-### Schnell-Sync (API Sync)
+Beim Speichern von Credentials legt PBGui die aktualisierten API-Key-Metadaten und den Secret-Blob im Cluster-State ab. Verwende **System -> Cluster Sync**, um `api-keys.json` auf einem erreichbaren Node zu prüfen und explizit zu materialisieren.
 
-Ein Klick überträgt an alle verbundenen VPS — kein Panel nötig. Ein 🔴/🟢-Indikator neben dem Button zeigt den Live-Sync-Status (aktualisiert via SSE).
-
-Wenn der Quick-Button rot ist, zeigt ein Hover an, welche VPS nicht synchron sind und ob der Grund eine abweichende Serial oder ein MD5-Mismatch der übertragenen `api-keys.json` ist.
-
-### Advanced-API-Sync-Panel
-
-Öffnen über **Advanced API Sync** in der Sidebar. Zeigt eine vereinheitlichte VPS-Tabelle:
-
-| Spalte | Beschreibung |
-|---|---|
-| Checkbox | VPS für Bulk-Aktion auswählen |
-| Hostname | VPS-Name |
-| Status | 🟢 synchron / 🔴 nicht synchron (MD5-basiert, live via SSE) |
-| Last Sync | Zeitpunkt und Serial des letzten erfolgreichen Push |
-| Days | Backup-Aufbewahrungsdauer (Tage) |
-| Min Ver | Mindestanzahl an Backups, die immer behalten werden |
-| **Set** | Speichert Retention-Einstellungen für diesen VPS |
-| **Sync Keys** | Überträgt `api-keys.json` an diesen VPS |
-
-**Kopfzeile** wendet Days / Min Ver / Set / Sync Keys auf alle ausgewählten VPS gleichzeitig an.
-
-**Dry Run** — zeigt eine Vorschau ohne tatsächliche Übertragung; Ergebnis in einem Modal.
-
-**Filter + All / None** — filtert sichtbare VPS; All/None schaltet alle Checkboxen um.
-
-#### Was ein Push macht
-
-1. Upload von `api-keys.json` per SFTP auf den konfigurierten PB7- (und PB6-)Pfad
-2. MD5-Verifikation nach dem Upload
-3. Erstellt ein zeitgestempeltes Backup auf dem VPS; entfernt Backups außerhalb des Retention-Fensters
-4. Vergleicht alte und neue Credentials; startet nur die Bots neu, deren API-Keys sich geändert haben
-
-### Sekundäre Master synchron halten
-
-Wenn PBGui auf mehreren Servern läuft (ein primärer + ein oder mehrere sekundäre), erhalten sekundäre Master die Keys **nicht** direkt vom primären Master. Stattdessen holen sie die Keys automatisch vom gemeinsamen VPS:
-
-**Wie es funktioniert:**
-1. Der primäre Master pusht `api-keys.json` wie gewohnt via API Sync an den/die VPS
-2. Jeder sekundäre Master überwacht dieselben VPS mit einem inotify-Watcher. Sobald ein höherer `_api_serial` erkannt wird (höher als die lokale Version), **pullt** der sekundäre Master `api-keys.json` automatisch vom VPS auf seine lokale Festplatte
-3. Der Sekundäre ist damit sofort aktuell — kein manueller Eingriff nötig
-
-**Voraussetzungen auf jedem sekundären Master:**
-- SSH-Public-Key-Authentifizierung zwischen dem sekundären Master und jedem VPS ist eingerichtet (der öffentliche SSH-Schlüssel des Sekundären muss in `~/.ssh/authorized_keys` auf dem VPS stehen)
-- Dieselben VPS sind im VPS Manager des Sekundären mit dem korrekten `pb7dir`-Pfad konfiguriert
-
-**Auf dem sekundären Master:**
-Die API-Keys-Seite liest `api-keys.json` live von der Festplatte. Nach dem automatischen Pull ist der Sekundäre sofort aktuell — ein Neustart von PBGui oder des API-Servers ist nicht erforderlich.
-
-**Propagation an sekundäre Master verhindern:**
-In Advanced API Sync die Option **"Don't sync to other masters"** aktivieren, bevor Sync Keys geklickt wird. Dadurch wird ein `_sync_lock`-Flag in die gepushte Datei gesetzt - sekundäre Master überspringen diesen Push und pullen ihn nicht.
+Die Cluster-Materialisierung erstellt Ersatz-Backups nur auf Master-Nodes, wenn sich die Zieldatei unterscheidet. Diese Backups liegen bei den normalen API-Key-Backups in `data/api-keys/`. VPS-Runner ueberspringen lokale Backups, schreiben den verifizierten Secret-Blob atomar und starten keine Bots neu.
 
 ---
 
@@ -199,7 +147,7 @@ Streamt Logdateien in Echtzeit via WebSocket.
 | **Suchfeld** | Live-Suche / Filter; Checkbox **Filter** blendet nicht passende Zeilen aus; ▲▼ navigiert zwischen Treffern |
 
 Wichtige Logdateien:
-- `ApiKeys.log` — gesamte API-Key- und API-Sync-Aktivität
+- `ApiKeys.log` — Aktivität des API-Key-Editors
 - `VPSMonitor.log` — VPS-Monitoring
 - `PBGui.log` — allgemeine UI-Aktivität
 

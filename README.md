@@ -91,7 +91,7 @@ To test an installer branch, set `PBGUI_INSTALLER_BRANCH` and fetch the same bra
 PBGUI_INSTALLER_BRANCH=test-installer bash -c "$(curl -fsSL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/test-installer/setup/master_installer.sh)"
 ```
 
-OpenVPN and TOTP are mandatory for the remote master installer. PBRemote/rclone is not started by default and remains a legacy/optional setup.
+OpenVPN and TOTP are mandatory for the remote master installer. Cluster Sync/PBCluster is the supported remote sync path.
 
 ### Ubuntu installer
 
@@ -121,10 +121,10 @@ Installed service units:
 
 ```
 pbgui-api.service
+pbgui-pbcluster.service
 pbgui-pbrun.service
 pbgui-pbdata.service
 pbgui-pbcoindata.service
-pbgui-pbremote.service (optional)
 ```
 
 Local Master installs open PBGui on `http://127.0.0.1:8000/` by default. Remote Master VPS installs are intended to be used through the generated OpenVPN profile, usually at `http://10.8.0.1:8000/` unless you selected a different OpenVPN CIDR.
@@ -147,11 +147,11 @@ PBRun manages passivbot instances from the PBGui UI. Enable or restart it from `
 
 PBData fills the dashboard database. Enable or restart it from `Services -> PBData` when you want dashboard history collection. New installer setups manage it with `pbgui-pbdata.service` when enabled.
 
-## PBRemote Server Manager
+## PBCluster Sync
 
-PBRemote is optional and mainly kept for rclone/cloud-storage based workflows. New remote master installs do not start PBRemote by default. Configure and enable it from `Services -> PBRemote` only if you still need that workflow.
+PBCluster replicates Cluster Sync operations and materializes assigned V7 configs/API keys on joined nodes. PBRun remains responsible for starting and stopping local bots from the materialized Cluster desired state.
 
-PBRemote can manage passivbot instances on multiple servers through cloud storage. It requires rclone and a configured bucket. The Services page contains the PBRemote configuration fields; rclone provider details are documented at https://rclone.org/.
+Existing PBRemote/API Sync/V7 SSH Sync installations should follow `docs/help/40_cluster_migration.md` before joining production VPS runners.
 
 ## PBCoinData CoinMarketCap Filters
 
