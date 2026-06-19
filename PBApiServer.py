@@ -26,6 +26,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path, PurePath
 from time import sleep
 
+_PBGUI_ROOT = Path(__file__).resolve().parent
+try:
+    os.chdir(_PBGUI_ROOT)
+except OSError:
+    pass
+
 import psutil
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -1303,7 +1309,7 @@ class PBApiServer:
             sleep(0.3)
             if self.is_running():
                 return
-            pbgdir = Path.cwd()
+            pbgdir = Path(PBGDIR)
             venv_python = self._get_venv_python()
             cmd = [venv_python, '-u', str(PurePath(f'{pbgdir}/PBApiServer.py'))]
 

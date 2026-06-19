@@ -1,5 +1,6 @@
 # Unreleased
 
+- API Server: normalize startup to the PBGui checkout directory before importing routers/logging so launches from `/` or `//` no longer try to use root-level `data` paths.
 - VPS Manager: make the Import Cluster Nodes progress log fill the modal, follow the newest step automatically and hide unselected password-skip noise.
 - VPS Manager: reconnect imported hosts in the running VPS monitor after monitoring key setup succeeds, so hosts stuck in prior `auth_failed` state come online without restarting the API server.
 - VPS Manager: show real Import Cluster Nodes progress by running apply as a tracked job and polling host-level import steps in the modal.
