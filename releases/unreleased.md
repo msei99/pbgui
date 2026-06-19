@@ -1,5 +1,7 @@
 # Unreleased
 
+- VPS Manager: reconnect imported hosts in the running VPS monitor after monitoring key setup succeeds, so hosts stuck in prior `auth_failed` state come online without restarting the API server.
+- VPS Manager: show real Import Cluster Nodes progress by running apply as a tracked job and polling host-level import steps in the modal.
 - VPS Manager: remember unknown SSH host keys before installing monitoring keys during Cluster node import, while still blocking known-host mismatches.
 - VPS Manager: let Import Cluster Nodes import only rows with a VPS password entered, leaving other importable rows untouched instead of blocking the whole import.
 - VPS Manager: make the Import Cluster Nodes dialog wider and taller on larger browsers so SSH metadata, password fields and import changes fit with less horizontal scrolling.

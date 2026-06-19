@@ -211,11 +211,24 @@ def apply_cluster_nodes_import(
     session: SessionToken = Depends(require_auth),
 ) -> JSONResponse:
     try:
-        data = _get_service().import_cluster_nodes(session.token, payload.dict() if payload else {})
+        data = _get_service().start_cluster_nodes_import(session.token, payload.dict() if payload else {})
         return JSONResponse(content=data)
     except Exception as exc:
         _log(SERVICE, f"Cluster node import apply failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/cluster-import/progress/{job_id}")
+def get_cluster_nodes_import_progress(
+    job_id: str,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    del session
+    try:
+        data = _get_service().get_cluster_nodes_import_progress(job_id)
+        return JSONResponse(content=data)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.websocket("/ws")

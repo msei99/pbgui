@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import vps_manager_core
@@ -112,3 +113,40 @@ def test_cluster_nodes_import_writes_only_rows_with_passwords(monkeypatch, tmp_p
     assert not (tmp_path / "data" / "vpsmanager" / "hosts" / "runner-b" / "runner-b.json").exists()
     assert any(item["hostname"] == "runner-b" and item["reason"] == "No VPS user password entered." for item in result["skipped"])
     assert monitor_ini["enabled_hosts"] == "runner-a"
+
+
+def test_cluster_nodes_import_refreshes_monitor_connection(monkeypatch, tmp_path: Path) -> None:
+    """Apply asks the running monitor to reconnect hosts after key setup succeeds."""
+
+    service, _monitor_ini = _prepare_service(monkeypatch, tmp_path)
+    refreshed: list[str] = []
+    monkeypatch.setattr(VPSManagerService, "_refresh_vps_monitor_connection", lambda self, hostname: refreshed.append(hostname))
+
+    service.import_cluster_nodes("test-token", {"passwords": {"runner-a": "secret-pw"}})
+
+    assert refreshed == ["runner-a"]
+
+
+def test_cluster_nodes_import_job_reports_progress(monkeypatch, tmp_path: Path) -> None:
+    """Background Cluster node import exposes real progress events while it runs."""
+
+    service, _monitor_ini = _prepare_service(monkeypatch, tmp_path)
+
+    started = service.start_cluster_nodes_import("test-token", {"passwords": {"runner-a": "secret-pw"}})
+    assert started["job_id"]
+
+    progress = started
+    for _ in range(100):
+        progress = service.get_cluster_nodes_import_progress(started["job_id"])
+        if progress["status"] in {"successful", "error"}:
+            break
+        time.sleep(0.02)
+
+    assert progress["status"] == "successful"
+    assert progress["percent"] == 100
+    assert progress["done"] == progress["total"]
+    assert progress["result"]["counts"]["imported"] == 1
+    labels = [str(item.get("label") or "") for item in progress["events"]]
+    assert any("Prepared 1 selected Cluster node" in label for label in labels)
+    assert any("Refreshing remote settings" in label for label in labels)
+    assert any("Saved VPS Manager host entry" in label for label in labels)

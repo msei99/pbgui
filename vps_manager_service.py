@@ -10,6 +10,7 @@ import json
 import os
 import psutil
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -42,6 +43,7 @@ PB7_UPSTREAM_REMOTE_URL = "https://github.com/enarjord/passivbot.git"
 SWAP_OPTIONS = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"]
 INIT_METHODS = ["root", "password", "private_key"]
 SESSION_SECRET_TTL_SECONDS = 15 * 60
+CLUSTER_IMPORT_JOB_TTL_SECONDS = 30 * 60
 IMPORT_KEY_INSTALL_WARNING = "SSH key login is not available yet; saving the import will attempt to install this master's SSH public key for live monitoring."
 # Guardrail: every field listed here is sensitive bootstrap/auth material and
 # must never be written to host JSON or included in normal config/detail payloads.
@@ -1001,6 +1003,8 @@ class VPSManagerService:
         self._deploy_threads: dict[str, threading.Thread] = {}
         self._deploy_sessions: dict[str, dict[str, Any]] = {}
         self._deploy_sessions_lock = threading.Lock()
+        self._cluster_import_jobs: dict[str, dict[str, Any]] = {}
+        self._cluster_import_jobs_lock = threading.Lock()
         self._host_task_start_locks: dict[str, threading.Lock] = {}
         self._host_task_start_locks_lock = threading.Lock()
         self._deploy_history_lock = threading.Lock()
@@ -1579,10 +1583,159 @@ class VPSManagerService:
             "message": "Imports Cluster nodes with SSH metadata into local VPS Manager metadata only. Secrets are not imported.",
         }
 
-    def import_cluster_nodes(self, token: str, form: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _prune_cluster_import_jobs(self) -> None:
+        cutoff = time.time() - CLUSTER_IMPORT_JOB_TTL_SECONDS
+        with self._cluster_import_jobs_lock:
+            stale = [
+                job_id
+                for job_id, job in self._cluster_import_jobs.items()
+                if float(job.get("updated_at") or job.get("started_at") or 0) < cutoff
+            ]
+            for job_id in stale:
+                self._cluster_import_jobs.pop(job_id, None)
+
+    def _cluster_import_job_snapshot(self, job: dict[str, Any]) -> dict[str, Any]:
+        events = list(job.get("events") or [])
+        return {
+            "job_id": str(job.get("job_id") or ""),
+            "status": str(job.get("status") or "queued"),
+            "label": str(job.get("label") or ""),
+            "hostname": str(job.get("hostname") or ""),
+            "done": int(job.get("done") or 0),
+            "total": int(job.get("total") or 1),
+            "percent": int(job.get("percent") or 0),
+            "events": events[-60:],
+            "result": job.get("result"),
+            "error": str(job.get("error") or ""),
+            "started_at": float(job.get("started_at") or 0),
+            "updated_at": float(job.get("updated_at") or 0),
+        }
+
+    def _update_cluster_import_job(self, job_id: str, update: dict[str, Any]) -> dict[str, Any]:
+        now = time.time()
+        with self._cluster_import_jobs_lock:
+            job = self._cluster_import_jobs.get(job_id)
+            if job is None:
+                raise ValueError("Cluster import job not found.")
+            label = str(update.get("label") or "").strip()
+            hostname = str(update.get("hostname") or "").strip()
+            status = str(update.get("status") or job.get("status") or "running")
+            for key in ("status", "label", "hostname", "done", "total", "percent", "result", "error"):
+                if key in update:
+                    job[key] = update[key]
+            job["updated_at"] = now
+            if label:
+                events = list(job.get("events") or [])
+                events.append({
+                    "ts": now,
+                    "status": status,
+                    "label": label,
+                    "hostname": hostname,
+                    "done": int(update.get("done") if "done" in update else job.get("done") or 0),
+                    "total": int(update.get("total") if "total" in update else job.get("total") or 1),
+                    "percent": int(update.get("percent") if "percent" in update else job.get("percent") or 0),
+                })
+                job["events"] = events[-80:]
+            return self._cluster_import_job_snapshot(job)
+
+    def get_cluster_nodes_import_progress(self, job_id: str) -> dict[str, Any]:
+        self._prune_cluster_import_jobs()
+        with self._cluster_import_jobs_lock:
+            job = self._cluster_import_jobs.get(str(job_id or "").strip())
+            if job is None:
+                raise ValueError("Cluster import job not found.")
+            return self._cluster_import_job_snapshot(job)
+
+    def _run_cluster_nodes_import_job(self, job_id: str, token: str, form: dict[str, Any]) -> None:
+        self._update_cluster_import_job(job_id, {
+            "status": "running",
+            "label": "Preparing Cluster node import...",
+            "done": 0,
+            "total": 1,
+            "percent": 0,
+        })
+        try:
+            result = self.import_cluster_nodes(
+                token,
+                form,
+                progress=lambda update: self._update_cluster_import_job(job_id, update),
+            )
+            self._update_cluster_import_job(job_id, {
+                "status": "successful",
+                "label": str(result.get("message") or "Cluster node import completed."),
+                "percent": 100,
+                "result": result,
+                "error": "",
+            })
+        except Exception as exc:
+            _log(SERVICE, f"Cluster node import job failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
+            self._update_cluster_import_job(job_id, {
+                "status": "error",
+                "label": str(exc) or "Cluster node import failed.",
+                "percent": 100,
+                "error": str(exc) or "Cluster node import failed.",
+            })
+
+    def start_cluster_nodes_import(self, token: str, form: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Start Cluster node import in the background and return its progress handle."""
+
+        self._prune_cluster_import_jobs()
+        job_id = secrets.token_urlsafe(12)
+        now = time.time()
+        with self._cluster_import_jobs_lock:
+            self._cluster_import_jobs[job_id] = {
+                "job_id": job_id,
+                "status": "queued",
+                "label": "Queued Cluster node import...",
+                "hostname": "",
+                "done": 0,
+                "total": 1,
+                "percent": 0,
+                "events": [],
+                "result": None,
+                "error": "",
+                "started_at": now,
+                "updated_at": now,
+            }
+        thread = threading.Thread(
+            target=self._run_cluster_nodes_import_job,
+            args=(job_id, token, dict(form or {})),
+            name=f"cluster-import-{job_id[:8]}",
+            daemon=True,
+        )
+        thread.start()
+        return self.get_cluster_nodes_import_progress(job_id)
+
+    def import_cluster_nodes(
+        self,
+        token: str,
+        form: dict[str, Any] | None = None,
+        progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """Import safe Cluster SSH metadata into VPS Manager host configs."""
 
         form = form or {}
+        progress_cb = progress if callable(progress) else None
+        done_steps = 0
+        total_steps = 1
+
+        def emit_progress(label: str, *, hostname: str = "", status: str = "running", advance: bool = False) -> None:
+            nonlocal done_steps
+            if advance:
+                done_steps = min(total_steps, done_steps + 1)
+            if progress_cb is None:
+                return
+            percent = int(round((done_steps / max(1, total_steps)) * 100))
+            progress_cb({
+                "status": status,
+                "label": label,
+                "hostname": hostname,
+                "done": done_steps,
+                "total": total_steps,
+                "percent": max(0, min(100, percent)),
+            })
+
+        emit_progress("Building Cluster node import plan...")
         plan = self.preview_cluster_nodes_import()
         if plan.get("counts", {}).get("error"):
             raise ValueError("Fix Cluster node import errors before applying.")
@@ -1604,6 +1757,8 @@ class VPSManagerService:
         ]
         if not selected_import_items:
             raise ValueError("Enter the VPS user password for at least one Cluster node to import.")
+        total_steps = (len(selected_import_items) * 5) + 2
+        emit_progress(f"Prepared {len(selected_import_items)} selected Cluster node(s).", advance=True)
         hosts_items = [
             item
             for item in selected_import_items
@@ -1628,14 +1783,20 @@ class VPSManagerService:
             host_password = passwords.get(hostname, "")
             if not host_password:
                 skipped.append({"hostname": hostname, "action": "skip", "reason": "No VPS user password entered."})
+                emit_progress("Skipped because no VPS user password was entered.", hostname=hostname, status="skipped")
                 continue
             if str((item or {}).get("hosts_action") or "none") != "none":
+                emit_progress("Updating local /etc/hosts entry...", hostname=hostname)
                 hosts_result = self.write_hosts_entry(str((item or {}).get("ssh_host") or ""), hostname, local_sudo_pw)
                 if not hosts_result.get("ok"):
                     raise ValueError(f"Failed to update /etc/hosts for {hostname}: {hosts_result.get('error') or 'unknown error'}")
                 hosts_updated.append({"hostname": hostname, "ip": str((item or {}).get("ssh_host") or ""), "action": str((item or {}).get("hosts_action") or "")})
+                emit_progress("Updated local /etc/hosts entry.", hostname=hostname, status="done", advance=True)
+            else:
+                emit_progress("No local /etc/hosts change needed.", hostname=hostname, status="done", advance=True)
             vps = existing.get(hostname)
             is_new = vps is None
+            emit_progress("Writing safe VPS Manager metadata...", hostname=hostname)
             if vps is None:
                 vps = VPS()
                 vps.hostname = hostname
@@ -1652,9 +1813,11 @@ class VPSManagerService:
             vps.firewall_ssh_port = _safe_int((item or {}).get("ssh_port"), 22) or 22
             if str((item or {}).get("remote_pbgui_dir") or "").strip():
                 vps.remote_pbgui_dir = str((item or {}).get("remote_pbgui_dir") or "").strip()
+            emit_progress("Wrote safe VPS Manager metadata.", hostname=hostname, status="done", advance=True)
             if host_password:
                 vps.user_pw = host_password
                 self._store_session_secrets(token, hostname, {"user_pw": host_password})
+                emit_progress("Refreshing remote settings...", hostname=hostname)
                 try:
                     info = vps.fetch_vps_info()
                     vps.coinmarketcap_api_key = str(info.get("coinmarketcap") or vps.coinmarketcap_api_key or "")
@@ -1664,26 +1827,36 @@ class VPSManagerService:
                     vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
                     self._clear_vps_optional_config_pending(vps)
                     settings_refreshed.append(hostname)
+                    emit_progress("Refreshed remote settings.", hostname=hostname, status="done", advance=True)
                 except Exception as exc:
                     warnings.append(f"{hostname}: settings refresh failed: {exc}")
+                    emit_progress(f"Settings refresh failed: {exc}", hostname=hostname, status="warning", advance=True)
+                emit_progress("Checking monitoring SSH key...", hostname=hostname)
                 key_auth_ok, key_auth_detail = self._test_import_key_login(ssh_host=vps.ip, user=vps.user)
                 if not key_auth_ok:
+                    emit_progress("Installing monitoring SSH key...", hostname=hostname)
                     key_auth_ok, key_auth_detail = self._install_import_monitoring_key(ssh_host=vps.ip, user=vps.user, user_pw=host_password)
                 if key_auth_ok:
                     monitoring_ready.append(hostname)
+                    emit_progress("Monitoring SSH key is ready.", hostname=hostname, status="done", advance=True)
                 else:
                     warnings.append(f"{hostname}: monitoring key setup failed: {key_auth_detail}")
+                    emit_progress(f"Monitoring key setup failed: {key_auth_detail}", hostname=hostname, status="warning", advance=True)
                 vps.user_pw = None
             else:
                 vps.user_pw = None
+            emit_progress("Saving VPS Manager host entry...", hostname=hostname)
             vps.save()
             if is_new:
                 self.vpsmanager.vpss.append(vps)
                 existing[hostname] = vps
             if hostname in monitoring_ready:
                 self._set_vps_monitor_enabled(hostname, enabled=True)
+                self._refresh_vps_monitor_connection(hostname)
             imported.append({"hostname": hostname, "action": action, "monitoring_ready": hostname in monitoring_ready, "settings_refreshed": hostname in settings_refreshed, "config": self._build_vps_config(token, vps)})
+            emit_progress("Saved VPS Manager host entry.", hostname=hostname, status="done", advance=True)
         self.vpsmanager.vpss.sort(key=lambda entry: entry.hostname or "")
+        emit_progress("Finalizing Cluster node import...", status="done", advance=True)
         return {
             "ok": True,
             "counts": {
@@ -1882,6 +2055,21 @@ class VPSManagerService:
             asyncio.run_coroutine_threadsafe(monitor.collect_instances_now(host), loop).result(timeout=30)
         except Exception as exc:
             _log(SERVICE, f"immediate instance refresh failed for {host}: {exc}", level="WARNING")
+
+    def _refresh_vps_monitor_connection(self, hostname: str) -> None:
+        monitor = get_monitor()
+        if monitor is None or not hasattr(monitor, "refresh_enabled_host"):
+            return
+        host = str(hostname or "").strip()
+        if not host:
+            return
+        try:
+            loop = getattr(monitor, "loop", None)
+            if loop is None or loop.is_closed():
+                return
+            asyncio.run_coroutine_threadsafe(monitor.refresh_enabled_host(host), loop).result(timeout=30)
+        except Exception as exc:
+            _log(SERVICE, f"monitor reconnect failed for {host}: {exc}", level="WARNING")
 
     def _local_v7_dynamic_ignore_enabled_on(self, name: str, hostname: str) -> bool:
         safe_name = str(name or "").strip()
@@ -5383,6 +5571,7 @@ done"""
         monitor_enabled = bool(detected.get("key_auth_ok"))
         if monitor_enabled:
             self._set_vps_monitor_enabled(hostname, enabled=True)
+            self._refresh_vps_monitor_connection(hostname)
         return {
             "hostname": hostname,
             "config": self._build_vps_config(token, vps),

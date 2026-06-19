@@ -329,6 +329,60 @@ def test_install_import_monitoring_key_blocks_host_key_mismatch(monkeypatch: pyt
     assert "host key mismatch" in detail.lower()
 
 
+def test_vps_monitor_refresh_enabled_host_reconnects_after_auth_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The running monitor can reconnect one enabled host after SSH keys change."""
+
+    monitor = object.__new__(VPSMonitor)
+    monitor._enabled_hosts = {"manibot50"}
+    monitor._last_host_meta_collect = {"manibot50": 1.0}
+    monitor._last_package_status_collect = {"manibot50": 1.0}
+    started: list[str] = []
+
+    class FakePool:
+        """Small pool double for refresh_enabled_host()."""
+
+        def __init__(self) -> None:
+            """Initialize call capture."""
+            self.loaded = False
+            self.removed: list[str] = []
+            self.connected: list[str] = []
+            self._hosts = ["manibot50", "disabled-host"]
+
+        def load_vps_configs(self) -> list[str]:
+            """Pretend configs were reloaded from disk."""
+            self.loaded = True
+            return list(self._hosts)
+
+        def hostnames(self) -> list[str]:
+            """Return currently known hosts."""
+            return list(self._hosts)
+
+        def remove_host(self, hostname: str) -> None:
+            """Capture removed disabled hosts."""
+            self.removed.append(hostname)
+            self._hosts = [host for host in self._hosts if host != hostname]
+
+        async def connect(self, hostname: str) -> bool:
+            """Capture reconnect request."""
+            self.connected.append(hostname)
+            return True
+
+    pool = FakePool()
+    monitor.pool = pool
+    monitor._start_metrics_stream = lambda hostname: started.append(hostname)
+    monkeypatch.setattr(monitor_mod, "load_ini", lambda section, parameter: "manibot50" if (section, parameter) == ("vps_monitor", "enabled_hosts") else "")
+
+    ok = asyncio.run(monitor.refresh_enabled_host("manibot50"))
+
+    assert ok is True
+    assert pool.loaded is True
+    assert pool.removed == ["disabled-host"]
+    assert pool.connected == ["manibot50"]
+    assert started == ["manibot50"]
+    assert monitor._last_host_meta_collect == {}
+    assert monitor._last_package_status_collect == {}
+
+
 def test_save_existing_vps_import_writes_missing_hosts_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     """Saving an import writes /etc/hosts with local sudo when the probe requires it."""
     writes: list[tuple[str, str, str]] = []

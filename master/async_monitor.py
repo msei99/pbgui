@@ -3442,6 +3442,28 @@ class VPSMonitor:
                     if await self.pool.connect(h):
                         self._start_metrics_stream(h)
 
+    async def refresh_enabled_host(self, hostname: str) -> bool:
+        """Reload config and reconnect one enabled host after credentials change."""
+
+        host = str(hostname or "").strip()
+        if not host:
+            return False
+        self._enabled_hosts = None
+        enabled = self.enabled_hosts
+        self.pool.load_vps_configs()
+        for h in list(self.pool.hostnames()):
+            if h not in enabled:
+                self.pool.remove_host(h)
+        if host not in enabled or host not in self.pool.hostnames():
+            return False
+        if await self.pool.connect(host):
+            self._start_metrics_stream(host)
+            self._last_host_meta_collect.pop(host, None)
+            self._last_package_status_collect.pop(host, None)
+            _log(SERVICE, f"Refreshed monitor connection for {host}")
+            return True
+        return False
+
     # ── Metric streams ──────────────────────────────────────
 
     def _start_metrics_stream(self, hostname: str):

@@ -2651,6 +2651,38 @@
       opacity: 0.82;
     }
 
+    .cluster-import-progress-log {
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+      max-height: 340px;
+      overflow: auto;
+    }
+
+    .cluster-import-progress-row {
+      display: grid;
+      grid-template-columns: minmax(120px, 180px) 88px 1fr;
+      gap: 10px;
+      align-items: center;
+      padding: 7px 9px;
+      border: 1px solid var(--shell-border-2);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--shell-dim);
+      font-size: var(--fs-sm);
+    }
+
+    .cluster-import-progress-row.done { border-color: rgba(45, 212, 191, 0.28); color: var(--shell-text); }
+    .cluster-import-progress-row.warning { border-color: rgba(245, 158, 11, 0.36); color: var(--warning); }
+    .cluster-import-progress-row.error { border-color: rgba(239, 106, 112, 0.4); color: var(--danger); }
+    .cluster-import-progress-row.running { border-color: rgba(99, 179, 237, 0.34); color: var(--shell-text); }
+
+    .cluster-import-progress-host,
+    .cluster-import-progress-status {
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
     .page-header {
       margin-bottom: 1rem;
     }
@@ -3088,7 +3120,11 @@
         error: '',
         localSudoPw: '',
         passwords: {},
-        preview: null
+        preview: null,
+        jobId: '',
+        progress: null,
+        progressTimer: 0,
+        result: null
       };
     }
 
@@ -7393,6 +7429,104 @@
       store.clusterNodesImport = flow;
     }
 
+    function stopClusterNodesImportProgressPolling() {
+      const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+      if (flow.progressTimer) {
+        window.clearTimeout(flow.progressTimer);
+        flow.progressTimer = 0;
+        store.clusterNodesImport = flow;
+      }
+    }
+
+    function isClusterNodesImportModalVisible() {
+      const overlay = document.getElementById('alertModalOverlay');
+      const title = document.getElementById('alertModalTitle');
+      return !!(overlay && overlay.classList.contains('visible') && title && title.textContent === 'Import Cluster Nodes');
+    }
+
+    function clusterImportProgressClass(status) {
+      const normalized = String(status || '').toLowerCase();
+      if (normalized === 'successful' || normalized === 'done') return 'done';
+      if (normalized === 'warning' || normalized === 'skipped') return 'warning';
+      if (normalized === 'error' || normalized === 'failed') return 'error';
+      return 'running';
+    }
+
+    function renderClusterNodesImportProgress(progress) {
+      const payload = progress || {};
+      const status = String(payload.status || 'running');
+      const statusClass = clusterImportProgressClass(status);
+      const percent = Math.max(0, Math.min(100, Math.round(Number(payload.percent || 0))));
+      const done = Number(payload.done || 0);
+      const total = Number(payload.total || 0);
+      const label = String(payload.label || (status === 'successful' ? 'Cluster node import completed.' : 'Importing selected Cluster nodes...'));
+      const events = Array.isArray(payload.events) ? payload.events.slice(-36) : [];
+      const eventRows = events.length ? events.map(function (event) {
+        const rowStatus = String((event || {}).status || 'running');
+        const rowClass = clusterImportProgressClass(rowStatus);
+        const rowHost = String((event || {}).hostname || '-');
+        const rowLabel = String((event || {}).label || 'Progress update');
+        return `<div class='cluster-import-progress-row ${escAttr(rowClass)}'>
+          <div class='cluster-import-progress-host'>${esc(rowHost)}</div>
+          <div class='cluster-import-progress-status'>${esc(rowClass)}</div>
+          <div>${esc(rowLabel)}</div>
+        </div>`;
+      }).join('') : `<div class='cluster-import-progress-row running'><div class='cluster-import-progress-host'>-</div><div class='cluster-import-progress-status'>running</div><div>${esc(label)}</div></div>`;
+      return `<div class='read-settings-progress ${statusClass === 'error' ? 'error' : ''}'>
+        <div class='read-settings-progress-head'>
+          <div>
+            <div class='read-settings-progress-title'>${status === 'successful' ? 'Cluster node import completed' : statusClass === 'error' ? 'Cluster node import failed' : 'Importing Cluster nodes'}</div>
+            <div class='muted'>${esc(label)}${total ? ` (${esc(String(done))}/${esc(String(total))})` : ''}</div>
+          </div>
+          <div class='read-settings-progress-percent'>${esc(String(percent))}%</div>
+        </div>
+        <div class='deploy-progress-bar'><div class='deploy-progress-fill' style='width:${escAttr(String(percent))}%;background:${statusClass === 'error' ? 'var(--danger)' : statusClass === 'done' ? 'var(--ok)' : 'var(--accent)'}'></div></div>
+        <div class='cluster-import-progress-log'>${eventRows}</div>
+      </div>`;
+    }
+
+    function pollClusterNodesImportProgress(jobId) {
+      const cleanJobId = String(jobId || '').trim();
+      if (!cleanJobId) return;
+      vpsManagerGet('/cluster-import/progress/' + encodeURIComponent(cleanJobId), {})
+        .then(function (data) {
+          const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+          if (String(flow.jobId || '') !== cleanJobId) return;
+          const status = String((data || {}).status || 'running');
+          const done = status === 'successful' || status === 'error';
+          flow.progress = data || null;
+          flow.applying = !done;
+          flow.progressTimer = 0;
+          if (done) {
+            flow.result = (data || {}).result || null;
+            if (status === 'successful') {
+              const result = flow.result || {};
+              toast(String(result.message || 'Cluster nodes imported.'), 'success');
+              if (Array.isArray(result.warnings) && result.warnings.length) {
+                toast(result.warnings.slice(0, 3).join(' | '), 'warning');
+              }
+              send({ cmd: 'refresh' });
+              renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+            } else {
+              flow.error = String((data || {}).error || (data || {}).label || 'Import failed.');
+            }
+          } else {
+            flow.progressTimer = window.setTimeout(function () { pollClusterNodesImportProgress(cleanJobId); }, 700);
+          }
+          store.clusterNodesImport = flow;
+          if (isClusterNodesImportModalVisible()) renderClusterNodesImportModal();
+        })
+        .catch(function (err) {
+          const flow = store.clusterNodesImport || defaultClusterNodesImportState();
+          if (String(flow.jobId || '') !== cleanJobId) return;
+          flow.applying = false;
+          flow.progressTimer = 0;
+          flow.error = String(err && err.message ? err.message : err || 'Import progress failed.');
+          store.clusterNodesImport = flow;
+          if (isClusterNodesImportModalVisible()) renderClusterNodesImportModal();
+        });
+    }
+
     function renderClusterNodesImportPreview(preview) {
       const payload = preview || {};
       const flow = store.clusterNodesImport || defaultClusterNodesImportState();
@@ -7467,24 +7601,28 @@
       }
       if (flow.loading) {
         body += `<div class='notice info'>Loading Cluster node import preview...</div>`;
-      } else if (flow.applying) {
-        body += `<div class='notice info'>Importing selected Cluster node SSH metadata and updating local /etc/hosts where needed...</div>`;
+      } else if (flow.applying || flow.progress) {
+        body += renderClusterNodesImportProgress(flow.progress || { status: 'queued', label: 'Queued Cluster node import...', percent: 0, done: 0, total: 1 });
       } else {
         body += renderClusterNodesImportPreview(flow.preview);
       }
       box.innerHTML = body;
-      const canApply = !!(flow.preview && flow.preview.can_apply && !flow.loading && !flow.applying);
-      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" onclick="loadClusterNodesImportPreview()" ' + (flow.loading || flow.applying ? 'disabled' : '') + '>Reload Preview</button> <button class="btn ok" type="button" id="cluster-nodes-import-apply" ' + (canApply ? '' : 'disabled') + '>' + (flow.applying ? 'Importing...' : 'Import Cluster Nodes') + '</button>';
+      const canApply = !!(flow.preview && flow.preview.can_apply && !flow.loading && !flow.applying && !flow.progress);
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">' + (flow.applying ? 'Hide' : 'Close') + '</button> <button class="btn primary" type="button" onclick="loadClusterNodesImportPreview()" ' + (flow.loading || flow.applying ? 'disabled' : '') + '>Reload Preview</button> <button class="btn ok" type="button" id="cluster-nodes-import-apply" ' + (canApply ? '' : 'disabled') + '>' + (flow.applying ? 'Importing...' : 'Import Cluster Nodes') + '</button>';
       document.getElementById('alertModalOverlay').classList.add('visible');
       const applyBtn = document.getElementById('cluster-nodes-import-apply');
       if (applyBtn) applyBtn.onclick = function () { applyClusterNodesImport(); };
     }
 
     function loadClusterNodesImportPreview() {
+      stopClusterNodesImportProgressPolling();
       const flow = store.clusterNodesImport || defaultClusterNodesImportState();
       flow.loading = true;
       flow.applying = false;
       flow.error = '';
+      flow.jobId = '';
+      flow.progress = null;
+      flow.result = null;
       store.clusterNodesImport = flow;
       renderClusterNodesImportModal();
       vpsManagerGet('/cluster-import/preview', {})
@@ -7499,6 +7637,7 @@
     }
 
     function openClusterNodesImportPrompt() {
+      stopClusterNodesImportProgressPolling();
       store.clusterNodesImport = defaultClusterNodesImportState();
       loadClusterNodesImportPreview();
     }
@@ -7532,17 +7671,28 @@
       flow.localSudoPw = selectedHostsUpdateRequired ? String(store.master.sudoPw || '') : '';
       flow.applying = true;
       flow.error = '';
+      flow.jobId = '';
+      flow.progress = { status: 'queued', label: 'Queued Cluster node import...', done: 0, total: 1, percent: 0, events: [] };
+      flow.result = null;
       store.clusterNodesImport = flow;
       renderClusterNodesImportModal();
       vpsManagerPost('/cluster-import/apply', { local_sudo_pw: flow.localSudoPw || '', passwords: flow.passwords || {} })
         .then(function (data) {
-          closeAlertModal();
-          toast(String((data && data.message) || 'Cluster nodes imported.'), 'success');
-          if (data && Array.isArray(data.warnings) && data.warnings.length) {
-            toast(data.warnings.slice(0, 3).join(' | '), 'warning');
+          const next = store.clusterNodesImport || defaultClusterNodesImportState();
+          next.jobId = String((data || {}).job_id || '');
+          next.progress = data || next.progress;
+          next.applying = true;
+          next.error = '';
+          store.clusterNodesImport = next;
+          renderClusterNodesImportModal();
+          if (next.jobId) {
+            pollClusterNodesImportProgress(next.jobId);
+          } else {
+            next.applying = false;
+            next.error = 'Import did not return a progress job id.';
+            store.clusterNodesImport = next;
+            renderClusterNodesImportModal();
           }
-          send({ cmd: 'refresh' });
-          renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
         })
         .catch(function (err) {
           const next = store.clusterNodesImport || defaultClusterNodesImportState();
