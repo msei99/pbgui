@@ -2190,22 +2190,64 @@ async def _run_remote_materialize_command(
     return payload
 
 
+async def _run_direct_cluster_ssh_setup(node: dict[str, Any], command: str, *, timeout: int = 15) -> Any:
+    """Run Cluster SSH setup directly via a node's stored SSH metadata."""
+
+    label = str(node.get("pbname") or node.get("hostname") or node.get("node_id") or "remote node")
+    ssh_host = str(node.get("ssh_host") or "").strip()
+    ssh_user = str(node.get("ssh_user") or "").strip() or None
+    try:
+        ssh_port = int(node.get("ssh_port") or 22)
+    except (TypeError, ValueError):
+        ssh_port = 22
+    if not ssh_host:
+        raise HTTPException(status_code=400, detail="Reachable cluster node has no SSH host")
+    conn: asyncssh.SSHClientConnection | None = None
+    try:
+        conn = await asyncio.wait_for(
+            asyncssh.connect(
+                host=ssh_host,
+                port=ssh_port,
+                username=ssh_user,
+                known_hosts=None,
+                keepalive_interval=10,
+            ),
+            timeout=10,
+        )
+        return await asyncio.wait_for(conn.run(command, check=False), timeout=timeout)
+    except asyncssh.PermissionDenied as exc:
+        raise HTTPException(status_code=502, detail=f"SSH authentication failed for {label}") from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=502, detail=f"SSH connection to {label} timed out") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"SSH connection to {label} failed: {exc}") from exc
+    finally:
+        if conn is not None:
+            conn.close()
+            wait_closed = getattr(conn, "wait_closed", None)
+            if callable(wait_closed):
+                try:
+                    await wait_closed()
+                except Exception:
+                    pass
+
+
 async def _run_remote_cluster_ssh_setup(node: dict[str, Any], identity: dict[str, Any], args: list[str], *, timeout: int = 15) -> dict[str, Any]:
-    """Run the remote Cluster SSH setup helper through the existing monitor SSH pool."""
+    """Run the remote Cluster SSH setup helper through monitor SSH or stored node SSH metadata."""
 
     node_id, hostname, _local_node_id = _require_remote_node_ready(node, identity)
     monitor = get_monitor()
     pool = getattr(monitor, "pool", None) if monitor else None
-    if not pool:
-        raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
     command = _cluster_ssh_setup_command(str(node.get("remote_pbgui_dir") or ""), args)
+    result = None
     try:
-        result = await pool.run(hostname, command, timeout=timeout)
+        result = await pool.run(hostname, command, timeout=timeout) if pool else None
     except Exception as exc:
-        _log(SERVICE, f"Remote Cluster SSH setup failed for {hostname}: {exc}", level="ERROR")
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _log(SERVICE, f"Remote Cluster SSH setup via monitor pool failed for {hostname}: {exc}; trying direct SSH metadata", level="WARNING")
     if result is None:
-        raise HTTPException(status_code=502, detail="Remote host is unreachable")
+        result = await _run_direct_cluster_ssh_setup(node, command, timeout=timeout)
     exit_status = int(getattr(result, "exit_status", 1) or 0)
     if exit_status != 0:
         error = _probe_error_text(result)

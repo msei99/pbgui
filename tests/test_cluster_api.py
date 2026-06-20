@@ -699,6 +699,67 @@ def test_repair_all_cluster_ssh_repairs_active_nodes(monkeypatch, tmp_path: Path
     assert any(hostname == "vps-a" and NODE_A in command and LOCAL_CLUSTER_PUBLIC_KEY in command for hostname, command in calls)
 
 
+def test_repair_node_cluster_ssh_falls_back_to_node_ssh_metadata(monkeypatch, tmp_path: Path) -> None:
+    """Cluster SSH repair uses stored SSH metadata when the VPS pool has no host entry."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {
+            "node_id": NODE_A,
+            "public_key": LOCAL_CLUSTER_PUBLIC_KEY,
+            "fingerprint": "SHA256:local",
+            "public_key_path": str(tmp_path / "local.pub"),
+        },
+    )
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(ssh_host="198.51.100.23", ssh_user="bot", ssh_port=2222, remote_pbgui_dir="software/pbgui"), created_at=102)
+    connect_calls: list[dict[str, Any]] = []
+    commands: list[str] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            return None
+
+    class FakeConn:
+        async def run(self, command: str, check: bool = False):
+            commands.append(command)
+            if "ensure-local" in command:
+                payload = {"ok": True, "public_key": REMOTE_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:remote"}
+            elif "install-authorized-key" in command:
+                payload = {"ok": True, "changed": True}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+        def close(self) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            pass
+
+    async def fake_connect(**kwargs):
+        connect_calls.append(kwargs)
+        return FakeConn()
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+    monkeypatch.setattr(cluster.asyncssh, "connect", fake_connect)
+
+    result = asyncio.run(cluster.repair_node_cluster_ssh(NODE_B, session=None))
+
+    assert result["ok"] is True
+    assert result["installed"] == [{"source_node_id": NODE_A, "changed": True, "role": "master"}]
+    assert connect_calls
+    assert connect_calls[0]["host"] == "198.51.100.23"
+    assert connect_calls[0]["username"] == "bot"
+    assert connect_calls[0]["port"] == 2222
+    assert connect_calls[0]["known_hosts"] is None
+    assert any("ensure-local" in command for command in commands)
+    assert any("install-authorized-key" in command for command in commands)
+
+
 def test_bootstrap_preview_reports_missing_local_config(monkeypatch, tmp_path: Path) -> None:
     """Bootstrap preview lists local V7 configs not yet in desired state without writing state files."""
 
