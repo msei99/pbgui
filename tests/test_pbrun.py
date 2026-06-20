@@ -1184,6 +1184,33 @@ class TestClusterDesiredStateGate:
         assert rv7.cluster_blocked is True
         assert rv7.cluster_gate == "desired_stopped"
 
+    def test_watch_v7_skips_config_load_when_cluster_desired_stopped(self, tmp_path, monkeypatch):
+        """Rescans must not rebuild dynamic_ignore files for stopped Cluster instances."""
+
+        instance_dir = tmp_path / "data" / "run_v7" / "bot-a"
+        _write_v7_config(instance_dir)
+        _write_cluster_desired(tmp_path, instance_dir, desired_state="stopped")
+        run = PBRun_mod.PBRun.__new__(PBRun_mod.PBRun)
+        run.name = "test-vps"
+        run.pb7dir = str(tmp_path / "pb7")
+        run.pb7venv = "/usr/bin/python3"
+        run.pbgdir = str(tmp_path)
+        run.v7_path = str(tmp_path / "data" / "run_v7")
+        run.run_v7 = []
+        run._v7_runtime_signature = None
+
+        monkeypatch.setattr(PBRun_mod, "_log", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(PBRun_mod.RunV7, "is_running", lambda _self: False)
+        monkeypatch.setattr(PBRun_mod.RunV7, "load", lambda _self: pytest.fail("load must not run while Cluster desired state is stopped"))
+
+        run.watch_v7([str(instance_dir)])
+
+        assert len(run.run_v7) == 1
+        assert run.run_v7[0].cluster_gate == "desired_stopped"
+        assert not (instance_dir / "approved_coins.json").exists()
+        assert not (instance_dir / "ignored_coins.json").exists()
+        assert not (instance_dir / "config_run.json").exists()
+
     def test_runv7_start_logs_expected_cluster_stop_once(self, tmp_path, monkeypatch):
         """Repeated expected Cluster stop blocks must not spam PBRun warnings."""
 

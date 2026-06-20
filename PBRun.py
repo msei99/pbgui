@@ -34,6 +34,13 @@ V7_RUNTIME_SIGNATURE_EXCLUDE_FILES = frozenset({
     "running_version.txt",
 })
 
+CLUSTER_PRE_LOAD_BLOCK_STATES = frozenset({
+    "desired_stopped",
+    "missing_instance",
+    "tombstoned",
+    "wrong_host",
+})
+
 
 def _arg_matches_path(arg: str, expected_path: Path) -> bool:
     if not arg:
@@ -747,12 +754,7 @@ class RunV7():
     def start(self):
         if not self.is_running():
             pre_load_gate = self._cluster_gate_result()
-            if not pre_load_gate.get("ok") and str(pre_load_gate.get("status") or "") in {
-                "desired_stopped",
-                "missing_instance",
-                "tombstoned",
-                "wrong_host",
-            }:
+            if not pre_load_gate.get("ok") and str(pre_load_gate.get("status") or "") in CLUSTER_PRE_LOAD_BLOCK_STATES:
                 self._block_cluster_gate_start(pre_load_gate)
                 return
             if Path(f'{self.path}/config.json').exists() and not self.load():
@@ -1203,6 +1205,15 @@ class PBRun():
                 run_v7.pb7dir = self.pb7dir
                 run_v7.pb7venv = self.pb7venv
                 run_v7.pbgdir = self.pbgdir
+                pre_load_gate_fn = getattr(run_v7, "_cluster_gate_result", None)
+                if callable(pre_load_gate_fn):
+                    pre_load_gate = pre_load_gate_fn()
+                    if not pre_load_gate.get("ok") and str(pre_load_gate.get("status") or "") in CLUSTER_PRE_LOAD_BLOCK_STATES:
+                        run_v7._block_cluster_gate_start(pre_load_gate)
+                        if run_v7.is_running():
+                            run_v7.stop()
+                        self.add_v7(run_v7)
+                        continue
                 if run_v7.load():
                     if run_v7.is_running():
                         if not run_v7._cluster_gate_allows_run():
