@@ -55,9 +55,11 @@ router = APIRouter()
 
 _REMOTE_PUSH_JOBS: dict[str, dict[str, Any]] = {}
 _SELF_JOIN_JOBS: dict[str, dict[str, Any]] = {}
+_REPAIR_ALL_SSH_JOBS: dict[str, dict[str, Any]] = {}
 _REMOTE_PUSH_JOB_TTL_SECONDS = 3600
 _REMOTE_PUSH_ACTIVE_STATES = frozenset({"queued", "running"})
 _SELF_JOIN_ACTIVE_STATES = frozenset({"queued", "running"})
+_REPAIR_ALL_SSH_ACTIVE_STATES = frozenset({"queued", "running"})
 _CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
 _EDITABLE_NODE_SYNC_MODES = frozenset({"disabled", "outbound_only", "reachable"})
 
@@ -140,6 +142,72 @@ def _cluster_root() -> Path:
     """Return the local cluster state root for this PBGui install."""
 
     return default_cluster_root(Path(PBGDIR))
+
+
+def _request_pbcluster_sync(root: Path | None = None) -> None:
+    """Best-effort notification for PBCluster to run an immediate sync pass."""
+
+    try:
+        cluster_root = Path(root) if root else _cluster_root()
+        cluster_root.mkdir(parents=True, exist_ok=True)
+        (cluster_root / "sync_request").touch()
+    except OSError:
+        pass
+
+
+def _load_sync_status_summary(root: Path) -> dict[str, Any]:
+    """Return the latest PBCluster sync status without failing the status page."""
+
+    path = root / "sync_status.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        return {
+            "ok": False,
+            "status": "unavailable",
+            "reason": f"Failed to read sync_status.json: {exc}",
+            "peers": [],
+        }
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "status": "unavailable",
+            "reason": "sync_status.json is not an object",
+            "peers": [],
+        }
+
+    def as_int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    peers = []
+    for item in payload.get("peers") if isinstance(payload.get("peers"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        peers.append({
+            "node_id": str(item.get("node_id") or ""),
+            "pbname": str(item.get("pbname") or ""),
+            "ok": bool(item.get("ok", False)),
+            "status": str(item.get("status") or ""),
+            "reason": str(item.get("reason") or ""),
+            "remote_node_id": str(item.get("remote_node_id") or ""),
+            "last_seen": as_int(item.get("last_seen")),
+            "next_retry": as_int(item.get("next_retry")),
+            "retry_delay": as_int(item.get("retry_delay")),
+        })
+    return {
+        "ok": bool(payload.get("ok", False)),
+        "status": str(payload.get("status") or ""),
+        "reason": str(payload.get("reason") or ""),
+        "finished_at": as_int(payload.get("finished_at")),
+        "peers_ok": as_int(payload.get("peers_ok")),
+        "peers_total": as_int(payload.get("peers_total")) or len(peers),
+        "peers": peers,
+    }
 
 
 def _local_pbgui_dir_value() -> str:
@@ -393,6 +461,85 @@ def _update_self_join_job(job_id: str, **updates: Any) -> dict[str, Any]:
     """Update and return one local self-join progress record."""
 
     job = _SELF_JOIN_JOBS.get(str(job_id or ""))
+    if not job:
+        return {}
+    job.update(updates)
+    if "done" in job and "total" in job:
+        job["remaining"] = max(0, int(job.get("total") or 0) - int(job.get("done") or 0))
+    job["updated_at"] = int(time.time())
+    return job
+
+
+def _prune_repair_all_ssh_jobs() -> None:
+    """Forget stale Repair All SSH progress records."""
+
+    cutoff = int(time.time()) - _REMOTE_PUSH_JOB_TTL_SECONDS
+    for job_id, job in list(_REPAIR_ALL_SSH_JOBS.items()):
+        if int(job.get("updated_at") or 0) < cutoff:
+            _REPAIR_ALL_SSH_JOBS.pop(job_id, None)
+
+
+def _public_repair_all_ssh_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Return a JSON-safe view of one Repair All SSH progress record."""
+
+    return {
+        "job_id": str(job.get("job_id") or ""),
+        "status": str(job.get("status") or "queued"),
+        "phase": str(job.get("phase") or "queued"),
+        "done": int(job.get("done") or 0),
+        "total": int(job.get("total") or 0),
+        "remaining": int(job.get("remaining") or 0),
+        "current_node_id": str(job.get("current_node_id") or ""),
+        "current_pbname": str(job.get("current_pbname") or ""),
+        "created_at": int(job.get("created_at") or 0),
+        "updated_at": int(job.get("updated_at") or 0),
+        "error": str(job.get("error") or ""),
+        "counts": job.get("counts") if isinstance(job.get("counts"), dict) else {},
+        "result": job.get("result") if isinstance(job.get("result"), dict) else None,
+    }
+
+
+def _find_active_repair_all_ssh_job() -> dict[str, Any] | None:
+    """Return the active Repair All SSH job, if present."""
+
+    _prune_repair_all_ssh_jobs()
+    for job in _REPAIR_ALL_SSH_JOBS.values():
+        if str(job.get("status") or "") in _REPAIR_ALL_SSH_ACTIVE_STATES:
+            return job
+    return None
+
+
+def _create_repair_all_ssh_job() -> dict[str, Any]:
+    """Create a new local progress record for Repair All SSH."""
+
+    active = _find_active_repair_all_ssh_job()
+    if active:
+        raise HTTPException(status_code=409, detail="Repair All SSH is already running")
+    now = int(time.time())
+    job_id = uuid.uuid4().hex
+    job = {
+        "job_id": job_id,
+        "status": "queued",
+        "phase": "queued",
+        "done": 0,
+        "total": 0,
+        "remaining": 0,
+        "current_node_id": "",
+        "current_pbname": "",
+        "created_at": now,
+        "updated_at": now,
+        "error": "",
+        "counts": {},
+        "result": None,
+    }
+    _REPAIR_ALL_SSH_JOBS[job_id] = job
+    return job
+
+
+def _update_repair_all_ssh_job(job_id: str, **updates: Any) -> dict[str, Any]:
+    """Update and return one local Repair All SSH progress record."""
+
+    job = _REPAIR_ALL_SSH_JOBS.get(str(job_id or ""))
     if not job:
         return {}
     job.update(updates)
@@ -3466,6 +3613,7 @@ def get_status(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Return a compact read-only Cluster Sync status summary."""
 
     snapshot = _load_cluster_snapshot()
+    root = _cluster_root()
     cluster_nodes = snapshot["cluster_nodes"]
     desired_state = snapshot["desired_state"]
     nodes = _node_list(cluster_nodes)
@@ -3493,6 +3641,7 @@ def get_status(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
             "oplog": int(cluster_nodes.get("generation") or 0),
         },
         "api_keys": desired_state.get("api_keys"),
+        "sync_status": _load_sync_status_summary(root),
         "warnings": warnings,
     }
 
@@ -3655,12 +3804,17 @@ def remove_cluster_node(node_id: str, session: SessionToken = Depends(require_au
     }
 
 
-@router.post("/cluster-ssh/repair-all")
-async def repair_all_cluster_ssh(request: Request, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
-    """Repair Cluster SSH trust for all active reachable nodes."""
+async def _repair_all_cluster_ssh_run(
+    ssh_passwords: dict[str, str] | None = None,
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Run Repair All SSH and optionally report per-node progress."""
 
-    request_payload = await _optional_json_payload(request)
-    ssh_passwords = _normalize_ssh_passwords(request_payload)
+    def report_progress(update: dict[str, Any]) -> None:
+        if progress_callback:
+            progress_callback(dict(update))
+
     snapshot = _load_cluster_snapshot()
     nodes = _node_list(snapshot["cluster_nodes"])
     identity = snapshot["identity"]
@@ -3674,24 +3828,37 @@ async def repair_all_cluster_ssh(request: Request, session: SessionToken = Depen
         "missing_source_keys": 0,
     }
     results: list[dict[str, Any]] = []
+    total = len(nodes)
+    report_progress({"phase": "starting", "done": 0, "total": total, "counts": dict(counts)})
 
-    for node in nodes:
+    for index, node in enumerate(nodes, start=1):
         node_id = str(node.get("node_id") or "")
         label = str(node.get("pbname") or node.get("hostname") or node_id)
         mode = normalize_node_sync_mode(node)
+        report_progress({
+            "phase": "repairing",
+            "done": index - 1,
+            "total": total,
+            "current_node_id": node_id,
+            "current_pbname": label,
+            "counts": dict(counts),
+        })
         if not node_id or node.get("enabled") is False or mode == "disabled":
             counts["skipped"] += 1
             results.append({"node_id": node_id, "pbname": label, "ok": True, "status": "skipped", "reason": "sync is disabled"})
+            report_progress({"phase": "repairing", "done": index, "total": total, "counts": dict(counts)})
             continue
         if node_id != local_node_id and mode == "outbound_only":
             counts["skipped"] += 1
             results.append({"node_id": node_id, "pbname": label, "ok": True, "status": "skipped", "reason": "node is outbound-only"})
+            report_progress({"phase": "repairing", "done": index, "total": total, "counts": dict(counts)})
             continue
         try:
             result = await _repair_node_cluster_ssh(node, identity, nodes, ssh_passwords=ssh_passwords)
         except HTTPException as exc:
             counts["failed"] += 1
             results.append({"node_id": node_id, "pbname": label, "ok": False, "status": "failed", "reason": str(exc.detail)})
+            report_progress({"phase": "repairing", "done": index, "total": total, "counts": dict(counts)})
             continue
         outbound_installed = result.get("outbound_installed") if isinstance(result.get("outbound_installed"), list) else []
         outbound_errors = result.get("outbound_install_errors") if isinstance(result.get("outbound_install_errors"), list) else []
@@ -3713,19 +3880,93 @@ async def repair_all_cluster_ssh(request: Request, session: SessionToken = Depen
                 "missing_source_keys": missing_source_keys,
             }
         )
-    return {"ok": counts["failed"] == 0 and counts["outbound_errors"] == 0 and counts["missing_source_keys"] == 0, "counts": counts, "results": results}
+        report_progress({"phase": "repairing", "done": index, "total": total, "counts": dict(counts)})
+    _request_pbcluster_sync(_cluster_root())
+    payload = {"ok": counts["failed"] == 0 and counts["outbound_errors"] == 0 and counts["missing_source_keys"] == 0, "counts": counts, "results": results}
+    report_progress({"phase": "done", "done": total, "total": total, "counts": dict(counts)})
+    return payload
+
+
+async def _run_repair_all_ssh_job(job_id: str, ssh_passwords: dict[str, str]) -> None:
+    """Run Repair All SSH in the background and update local progress."""
+
+    def progress(update: dict[str, Any]) -> None:
+        _update_repair_all_ssh_job(
+            job_id,
+            status="running",
+            phase=str(update.get("phase") or "running"),
+            done=int(update.get("done") or 0),
+            total=int(update.get("total") or 0),
+            current_node_id=str(update.get("current_node_id") or ""),
+            current_pbname=str(update.get("current_pbname") or ""),
+            counts=update.get("counts") if isinstance(update.get("counts"), dict) else {},
+        )
+
+    _update_repair_all_ssh_job(job_id, status="running", phase="starting")
+    try:
+        result = await _repair_all_cluster_ssh_run(ssh_passwords, progress_callback=progress)
+    except Exception as exc:
+        _log(SERVICE, f"Repair All SSH job failed: {exc}", level="ERROR")
+        _update_repair_all_ssh_job(job_id, status="error", phase="error", error=str(exc))
+        return
+    counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
+    _update_repair_all_ssh_job(
+        job_id,
+        status="done",
+        phase="done",
+        done=int(_REPAIR_ALL_SSH_JOBS.get(job_id, {}).get("total") or 0),
+        current_node_id="",
+        current_pbname="",
+        counts=counts,
+        result=result,
+    )
+
+
+@router.post("/cluster-ssh/repair-all")
+async def repair_all_cluster_ssh(request: Request, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Repair Cluster SSH trust for all active reachable nodes."""
+
+    request_payload = await _optional_json_payload(request)
+    ssh_passwords = _normalize_ssh_passwords(request_payload)
+    return await _repair_all_cluster_ssh_run(ssh_passwords)
+
+
+@router.post("/cluster-ssh/repair-all/start")
+async def start_repair_all_cluster_ssh(request: Request, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Start a background Repair All SSH job and return its local progress record."""
+
+    request_payload = await _optional_json_payload(request)
+    ssh_passwords = _normalize_ssh_passwords(request_payload)
+    job = _create_repair_all_ssh_job()
+    asyncio.create_task(_run_repair_all_ssh_job(str(job["job_id"]), ssh_passwords))
+    return _public_repair_all_ssh_job(job)
+
+
+@router.get("/cluster-ssh/repair-all-jobs/{job_id}")
+def get_repair_all_cluster_ssh_job(job_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Return local progress for one Repair All SSH job."""
+
+    _prune_repair_all_ssh_jobs()
+    job = _REPAIR_ALL_SSH_JOBS.get(str(job_id or ""))
+    if not job:
+        raise HTTPException(status_code=404, detail="Repair All SSH job not found")
+    return _public_repair_all_ssh_job(job)
 
 
 @router.post("/nodes/{node_id}/cluster-ssh/repair")
-async def repair_node_cluster_ssh(node_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+async def repair_node_cluster_ssh(node_id: str, request: Request, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Repair Cluster SSH key trust for one known node."""
 
+    request_payload = await _optional_json_payload(request)
+    ssh_passwords = _normalize_ssh_passwords(request_payload)
     snapshot = _load_cluster_snapshot()
     nodes = _node_list(snapshot["cluster_nodes"])
     node = _node_for_id(nodes, str(node_id or ""))
     if not node:
         raise HTTPException(status_code=404, detail="Cluster node not found")
-    return await _repair_node_cluster_ssh(node, snapshot["identity"], nodes)
+    result = await _repair_node_cluster_ssh(node, snapshot["identity"], nodes, ssh_passwords=ssh_passwords)
+    _request_pbcluster_sync(_cluster_root())
+    return result
 
 
 @router.get("/remote-status")

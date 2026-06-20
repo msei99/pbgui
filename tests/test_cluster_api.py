@@ -179,6 +179,52 @@ def test_get_status_reports_materialized_counts(monkeypatch, tmp_path: Path) -> 
     assert status["warnings"] == []
 
 
+def test_get_status_includes_pbcluster_sync_status(monkeypatch, tmp_path: Path) -> None:
+    """Cluster status exposes the latest PBCluster peer sync result for UI key-login checks."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    (root / "sync_status.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "status": "local_reconciled",
+                "finished_at": 123,
+                "peers_ok": 1,
+                "peers_total": 2,
+                "peers": [
+                    {
+                        "node_id": NODE_B,
+                        "pbname": "vps-a",
+                        "ok": False,
+                        "status": "error",
+                        "reason": "mani@192.0.2.10: Permission denied (publickey,password).",
+                        "retry_delay": 30,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = cluster.get_status(session=None)
+
+    assert status["sync_status"]["status"] == "local_reconciled"
+    assert status["sync_status"]["peers_ok"] == 1
+    assert status["sync_status"]["peers_total"] == 2
+    assert status["sync_status"]["peers"][0] == {
+        "node_id": NODE_B,
+        "pbname": "vps-a",
+        "ok": False,
+        "status": "error",
+        "reason": "mani@192.0.2.10: Permission denied (publickey,password).",
+        "remote_node_id": "",
+        "last_seen": 0,
+        "next_retry": 0,
+        "retry_delay": 30,
+    }
+
+
 def test_get_desired_state_returns_instances_and_tombstones(monkeypatch, tmp_path: Path) -> None:
     """Desired state endpoint returns V7 instances and explicit delete tombstones."""
 
@@ -565,7 +611,7 @@ def test_repair_node_cluster_ssh_reads_remote_key_and_installs_master_key(monkey
 
     monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
 
-    result = asyncio.run(cluster.repair_node_cluster_ssh(NODE_B, session=None))
+    result = asyncio.run(cluster.repair_node_cluster_ssh(NODE_B, _JsonRequest({}), session=None))
     nodes = _read_json(tmp_path / "data" / "cluster" / "cluster_nodes.json")["nodes"]
 
     assert result["ok"] is True
@@ -617,7 +663,7 @@ def test_repair_node_cluster_ssh_installs_node_key_on_sync_peers(monkeypatch, tm
 
     monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
 
-    result = asyncio.run(cluster.repair_node_cluster_ssh(NODE_B, session=None))
+    result = asyncio.run(cluster.repair_node_cluster_ssh(NODE_B, _JsonRequest({}), session=None))
 
     assert result["outbound_installed"] == [{"target_node_id": NODE_C, "changed": True, "role": "vps"}]
     assert result["outbound_install_errors"] == []
@@ -650,7 +696,7 @@ def test_repair_local_cluster_ssh_installs_local_key_on_sync_peers(monkeypatch, 
 
     monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
 
-    result = asyncio.run(cluster.repair_node_cluster_ssh(NODE_A, session=None))
+    result = asyncio.run(cluster.repair_node_cluster_ssh(NODE_A, _JsonRequest({}), session=None))
 
     assert result["local"] is True
     assert result["outbound_installed"] == [{"target_node_id": NODE_B, "changed": True, "role": "vps"}]
@@ -697,6 +743,47 @@ def test_repair_all_cluster_ssh_repairs_active_nodes(monkeypatch, tmp_path: Path
     assert result["counts"]["failed"] == 0
     assert result["counts"]["outbound_errors"] == 0
     assert any(hostname == "vps-a" and NODE_A in command and LOCAL_CLUSTER_PUBLIC_KEY in command for hostname, command in calls)
+
+
+def test_repair_all_cluster_ssh_reports_progress(monkeypatch, tmp_path: Path) -> None:
+    """Repair All SSH reports real per-node progress for UI polling."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {
+            "node_id": NODE_A,
+            "public_key": LOCAL_CLUSTER_PUBLIC_KEY,
+            "fingerprint": "SHA256:local",
+            "public_key_path": str(tmp_path / "local.pub"),
+        },
+    )
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master", "sync_peers": [NODE_B]}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(remote_pbgui_dir="software/pbgui"), created_at=102)
+    progress: list[dict[str, Any]] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            if "ensure-local" in command:
+                payload = {"ok": True, "public_key": REMOTE_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:remote"}
+            elif "install-authorized-key" in command:
+                payload = {"ok": True, "changed": True}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+
+    result = asyncio.run(cluster._repair_all_cluster_ssh_run({}, progress_callback=progress.append))
+
+    assert result["ok"] is True
+    assert progress[0]["phase"] == "starting"
+    assert progress[0]["total"] == 2
+    assert any(item.get("current_pbname") == "vps-a" for item in progress)
+    assert progress[-1]["phase"] == "done"
+    assert progress[-1]["done"] == progress[-1]["total"] == 2
 
 
 def test_repair_node_cluster_ssh_falls_back_to_node_ssh_metadata(monkeypatch, tmp_path: Path) -> None:
@@ -747,7 +834,7 @@ def test_repair_node_cluster_ssh_falls_back_to_node_ssh_metadata(monkeypatch, tm
     monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
     monkeypatch.setattr(cluster.asyncssh, "connect", fake_connect)
 
-    result = asyncio.run(cluster.repair_node_cluster_ssh(NODE_B, session=None))
+    result = asyncio.run(cluster.repair_node_cluster_ssh(NODE_B, _JsonRequest({"ssh_passwords": {NODE_B: "secret"}}), session=None))
 
     assert result["ok"] is True
     assert result["installed"] == [{"source_node_id": NODE_A, "changed": True, "role": "master"}]
@@ -755,6 +842,7 @@ def test_repair_node_cluster_ssh_falls_back_to_node_ssh_metadata(monkeypatch, tm
     assert connect_calls[0]["host"] == "198.51.100.23"
     assert connect_calls[0]["username"] == "bot"
     assert connect_calls[0]["port"] == 2222
+    assert connect_calls[0]["password"] == "secret"
     assert connect_calls[0]["known_hosts"] is None
     assert any("ensure-local" in command for command in commands)
     assert any("install-authorized-key" in command for command in commands)

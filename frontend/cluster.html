@@ -92,6 +92,18 @@
     #status-msg.ok { border-color: rgba(74,222,128,0.32); color: var(--good); background: rgba(74,222,128,0.08); }
     #status-msg.warn { border-color: rgba(245,158,11,0.35); color: #fcd34d; background: rgba(245,158,11,0.08); }
     #status-msg.err { border-color: rgba(248,113,113,0.35); color: var(--bad); background: rgba(248,113,113,0.08); }
+    .repair-result {
+      padding: 0.6rem 0.85rem;
+      border-radius: 9px;
+      border: 1px solid var(--border2);
+      background: var(--bg3);
+      color: var(--muted);
+      white-space: pre-line;
+    }
+    .repair-result[hidden] { display: none; }
+    .repair-result.ok { border-color: rgba(74,222,128,0.32); color: var(--good); background: rgba(74,222,128,0.08); }
+    .repair-result.warn { border-color: rgba(245,158,11,0.35); color: #fcd34d; background: rgba(245,158,11,0.08); }
+    .repair-result.err { border-color: rgba(248,113,113,0.35); color: var(--bad); background: rgba(248,113,113,0.08); }
 
     .stats-grid { display: grid; grid-template-columns: repeat(5, minmax(140px, 1fr)); gap: var(--sp-md); }
     .stat-card {
@@ -265,6 +277,8 @@
     .push-progress-count { color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .push-progress-track { height: 8px; border-radius: 999px; overflow: hidden; background: rgba(15,23,42,0.95); border: 1px solid rgba(99,179,237,0.16); }
     .push-progress-fill { width: 0%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, rgba(99,179,237,0.95), rgba(74,222,128,0.9)); transition: width 0.18s ease; }
+    #repair-all-progress { flex: 0 0 auto; width: 100%; min-width: 0; margin-right: 0; padding: 0.55rem 0.7rem; }
+    #repair-all-progress .push-progress-label { margin-bottom: 5px; }
     .preview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--sp-sm); }
     .preview-card { border: 1px solid var(--border); border-radius: 9px; padding: var(--sp-sm); background: #101724; }
     .preview-label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; }
@@ -332,6 +346,14 @@
       </section>
 
       <div id="status-msg"></div>
+      <div class="push-progress" id="repair-all-progress" hidden>
+        <div class="push-progress-label">
+          <span id="repair-all-progress-label">Repairing Cluster SSH keys...</span>
+          <span class="push-progress-count" id="repair-all-progress-count"></span>
+        </div>
+        <div class="push-progress-track"><div class="push-progress-fill" id="repair-all-progress-fill"></div></div>
+      </div>
+      <div class="repair-result" id="repair-all-result" hidden></div>
       <section class="stats-grid" id="stats-grid"></section>
 
         <main>
@@ -653,6 +675,8 @@
       var API_BASE = window.API_BASE || '';
       var nodeMap = {};
       var remoteProbeMap = {};
+      var clusterSyncPeerMap = {};
+      var pendingLoginKeyInstallMap = {};
       var localNodeId = '';
       var tableSort = {
         bootstrap: { key: 'target', dir: 'asc' },
@@ -677,15 +701,19 @@
       var pendingSelfJoinPayload = null;
       var pendingRepairPasswordNodeId = '';
       var pendingRepairPasswordReason = '';
+      var pendingRepairPasswordMode = 'all';
       var repairSshPasswords = {};
       var pendingSettingsNode = null;
       var pendingPreviewNode = null;
       var lastPreviewPayload = null;
       var pushProgressTimer = null;
       var selfJoinProgressTimer = null;
+      var repairAllProgressTimer = null;
       var activeClusterSection = 'overview';
+      var CLUSTER_SECTION_STORAGE_KEY = 'pbgui.cluster.activeSection';
       var clusterHasExistingState = false;
       var bootstrapUnlocked = false;
+      var LOGIN_KEY_INSTALL_PENDING_MS = 60000;
 
       function esc(value) {
         return String(value === undefined || value === null ? '' : value).replace(/[&<>'"]/g, function (ch) {
@@ -748,16 +776,47 @@
         el.textContent = text || '';
       }
 
-      function setClusterSection(sectionId) {
-        activeClusterSection = sectionId || 'overview';
+      function knownClusterSections() {
+        return Array.prototype.slice.call(document.querySelectorAll('[data-cluster-section-panel]')).map(function (panel) {
+          return panel.getAttribute('data-cluster-section-panel') || '';
+        }).filter(Boolean);
+      }
+
+      function normalizeClusterSection(sectionId) {
+        var section = String(sectionId || '').replace(/^#/, '').trim() || 'overview';
+        return knownClusterSections().indexOf(section) >= 0 ? section : 'overview';
+      }
+
+      function initialClusterSection() {
+        var hash = String((window.location && window.location.hash) || '').replace(/^#/, '');
+        if (hash) return normalizeClusterSection(hash);
+        try {
+          return normalizeClusterSection(window.localStorage.getItem(CLUSTER_SECTION_STORAGE_KEY) || 'overview');
+        } catch (_) {
+          return 'overview';
+        }
+      }
+
+      function persistClusterSection(sectionId) {
+        try { window.localStorage.setItem(CLUSTER_SECTION_STORAGE_KEY, sectionId); } catch (_) {}
+        if (!window.history || !window.location) return;
+        var nextHash = '#' + encodeURIComponent(sectionId);
+        if (window.location.hash === nextHash) return;
+        window.history.replaceState(null, '', window.location.pathname + window.location.search + nextHash);
+      }
+
+      function setClusterSection(sectionId, options) {
+        options = options || {};
+        activeClusterSection = normalizeClusterSection(sectionId);
         document.querySelectorAll('.sb-section[data-cluster-section]').forEach(function (btn) {
           btn.classList.toggle('active', btn.getAttribute('data-cluster-section') === activeClusterSection);
         });
         document.querySelectorAll('[data-cluster-section-panel]').forEach(function (panel) {
           panel.classList.toggle('is-active', panel.getAttribute('data-cluster-section-panel') === activeClusterSection);
         });
+        if (options.persist !== false) persistClusterSection(activeClusterSection);
         var main = document.getElementById('main-content');
-        if (main) main.scrollTop = 0;
+        if (main && options.scroll !== false) main.scrollTop = 0;
       }
 
       function setupClusterNavigation() {
@@ -766,6 +825,10 @@
             setClusterSection(btn.getAttribute('data-cluster-section') || 'overview');
           });
         });
+        window.addEventListener('hashchange', function () {
+          setClusterSection(initialClusterSection(), { persist: false });
+        });
+        setClusterSection(initialClusterSection(), { persist: false, scroll: false });
         if (window.PBGuiSidebarResize && typeof window.PBGuiSidebarResize.init === 'function') {
           window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
         }
@@ -1355,24 +1418,159 @@
         });
       }
 
-      function repairNodeClusterSsh(node) {
-        if (!node || !node.node_id) return;
+      function repairNodeAuthTarget(node, payload) {
+        var errors = Array.isArray((payload || {}).outbound_install_errors) ? payload.outbound_install_errors : [];
+        var match = null;
+        errors.some(function (entry) {
+          if (!isRepairAuthError(entry && entry.reason)) return false;
+          match = { node_id: entry.target_node_id || node.node_id, reason: entry.reason, mode: 'node' };
+          return true;
+        });
+        return match;
+      }
+
+      function currentLoginKeyStatus(nodeId) {
+        var node = nodeMap[String(nodeId || '')] || {};
+        return loginKeyStatus(node, syncMode(node));
+      }
+
+      function waitForLoginKeyVerification(nodeId, attempts) {
+        attempts = Math.max(1, Number(attempts || 1));
+        var current = currentLoginKeyStatus(nodeId);
+        if (current.status === 'installed' || current.status === 'missing' || current.status === 'error' || attempts <= 1) {
+          return Promise.resolve(current);
+        }
+        return new Promise(function (resolve) {
+          setTimeout(resolve, 2500);
+        }).then(function () {
+          return loadCluster({ silent: true, keepProbes: true, auto: true });
+        }).then(function () {
+          return waitForLoginKeyVerification(nodeId, attempts - 1);
+        }).catch(function () {
+          return currentLoginKeyStatus(nodeId);
+        });
+      }
+
+      function loginKeyBatchSummary(nodeIds) {
+        var counts = { installed: 0, missing: 0, error: 0, pending: 0, other: 0, total: 0 };
+        (Array.isArray(nodeIds) ? nodeIds : []).forEach(function (nodeId) {
+          if (!nodeId) return;
+          counts.total += 1;
+          var status = currentLoginKeyStatus(nodeId).status;
+          if (status === 'installed' || status === 'local') counts.installed += 1;
+          else if (status === 'missing') counts.missing += 1;
+          else if (status === 'error' || status === 'host_key') counts.error += 1;
+          else if (status === 'pending' || status === 'unknown') counts.pending += 1;
+          else counts.other += 1;
+        });
+        return counts;
+      }
+
+      function waitForLoginKeyVerificationBatch(nodeIds, attempts) {
+        attempts = Math.max(1, Number(attempts || 1));
+        var summary = loginKeyBatchSummary(nodeIds);
+        if (!summary.total || summary.pending === 0 || attempts <= 1) return Promise.resolve(summary);
+        setMessage('Verifying Cluster sync keys: ' + summary.installed + '/' + summary.total + ' installed, ' + summary.pending + ' still checking...', 'warn');
+        return new Promise(function (resolve) {
+          setTimeout(resolve, 2500);
+        }).then(function () {
+          return loadCluster({ silent: true, keepProbes: true, auto: true });
+        }).then(function () {
+          return waitForLoginKeyVerificationBatch(nodeIds, attempts - 1);
+        }).catch(function () {
+          return loginKeyBatchSummary(nodeIds);
+        });
+      }
+
+      function verifyClusterKeyInstallBatch(nodeIds, options) {
+        options = options || {};
+        var baseText = String(options.baseText || '');
+        function report(text, kind) {
+          if (options.result === true) {
+            setRepairAllResult(baseText ? baseText + '\n\n' + text : text, kind);
+          } else {
+            setMessage(text, kind);
+          }
+        }
+        nodeIds = (Array.isArray(nodeIds) ? nodeIds : []).filter(Boolean);
+        if (!nodeIds.length) return Promise.resolve();
+        report('Verifying Cluster sync keys for repaired nodes...', 'warn');
+        return loadRemoteStatus({ silent: true }).then(function () {
+          return waitForLoginKeyVerificationBatch(nodeIds, 10);
+        }).then(function (summary) {
+          if (summary.installed === summary.total) {
+            report('Cluster sync keys verified: ' + summary.installed + '/' + summary.total + ' installed.', 'ok');
+          } else {
+            report('Cluster sync key verification: ' + summary.installed + '/' + summary.total + ' installed, ' + summary.missing + ' missing, ' + summary.error + ' error, ' + summary.pending + ' still checking.', 'warn');
+          }
+        }).catch(function (err) {
+          report('Cluster sync key repair finished, but automatic verification failed: ' + err.message, 'warn');
+        });
+      }
+
+      function verifyClusterKeyInstall(node) {
+        if (!node || !node.node_id) return Promise.resolve();
         var label = node.pbname || node.hostname || node.node_id;
-        setMessage('Repairing Cluster SSH for ' + label + '...', 'warn');
-        fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/cluster-ssh/repair', { method: 'POST' }).then(function (payload) {
+        setMessage('Verifying Cluster sync key for ' + label + '...', 'warn');
+        return loadRemoteStatus({ silent: true }).then(function () {
+          return waitForLoginKeyVerification(node.node_id, 8);
+        }).then(function (status) {
+          if (status.status === 'installed' || status.status === 'local') {
+            setMessage('Cluster sync key verified for ' + label + '.', 'ok');
+          } else if (status.status === 'missing') {
+            setMessage('Cluster sync key install finished for ' + label + ', but PBCluster still reports key login missing.', 'warn');
+          } else {
+            setMessage('Cluster sync key install finished for ' + label + '; verification is still pending.', 'warn');
+          }
+        }).catch(function (err) {
+          setMessage('Cluster sync key install finished for ' + label + ', but automatic verification failed: ' + err.message, 'warn');
+        });
+      }
+
+      function repairNodeClusterSsh(node, options) {
+        if (!node || !node.node_id) return;
+        options = options || {};
+        var label = node.pbname || node.hostname || node.node_id;
+        var btn = options.button || null;
+        if (btn) { btn.disabled = true; btn.textContent = 'Installing...'; }
+        setMessage('Installing Cluster sync key for ' + label + '...', 'warn');
+        return fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/cluster-ssh/repair', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ssh_passwords: repairSshPasswords })
+        }).then(function (payload) {
           var missing = Array.isArray(payload.missing_source_keys) ? payload.missing_source_keys.length : 0;
           var outboundErrors = Array.isArray(payload.outbound_install_errors) ? payload.outbound_install_errors.length : 0;
           if (missing || outboundErrors) {
             var parts = [];
             if (missing) parts.push(missing + ' source key(s) are not known yet');
             if (outboundErrors) parts.push(outboundErrors + ' outbound peer(s) could not receive this node key');
-            setMessage('Cluster SSH repaired for ' + label + ', but ' + parts.join(' and ') + '.', 'warn');
+            setMessage('Cluster sync key installed for ' + label + ', but ' + parts.join(' and ') + '.', 'warn');
           } else {
-            setMessage('Cluster SSH repaired for ' + label + '.', 'ok');
+            setMessage('Cluster sync key installed for ' + label + '.', 'ok');
           }
-          return loadCluster({ silent: true });
+          markLoginKeyInstallPending(node.node_id);
+          var authTarget = repairNodeAuthTarget(node, payload || {});
+          if (authTarget) {
+            openRepairPasswordPrompt(authTarget);
+          } else if (options.passwordPrompt) {
+            closeRepairPasswordPrompt();
+          }
+          return loadCluster({ silent: true, keepProbes: true }).then(function () {
+            if (authTarget) return null;
+            return verifyClusterKeyInstall(node);
+          });
         }).catch(function (err) {
-          setMessage('Cluster SSH repair failed for ' + label + ': ' + err.message, 'err');
+          if (options.passwordPrompt) {
+            showRepairPasswordError(err.message || 'Cluster sync key install failed.');
+          }
+          if (isRepairAuthError(err.message || '') && !options.passwordPrompt) {
+            openRepairPasswordPrompt({ node_id: node.node_id, reason: err.message, mode: 'node' });
+          }
+          setMessage('Cluster sync key install failed for ' + label + ': ' + err.message, 'err');
+        }).finally(function () {
+          if (btn) { btn.disabled = false; btn.textContent = 'Install Key'; }
+          if (options.passwordPrompt) setRepairPasswordBusy(false);
         });
       }
 
@@ -1409,6 +1607,73 @@
         return { text: lines.join('\n'), kind: (failed || outboundErrors || missing) ? 'warn' : 'ok' };
       }
 
+      function repairedNodeIdsFromPayload(payload) {
+        return (Array.isArray((payload || {}).results) ? payload.results : []).filter(function (item) {
+          return item && item.node_id && item.status === 'repaired';
+        }).map(function (item) {
+          return String(item.node_id || '');
+        });
+      }
+
+      function setRepairAllResult(text, kind) {
+        var el = document.getElementById('repair-all-result');
+        if (!el) return;
+        el.hidden = !text;
+        el.textContent = text || '';
+        el.className = 'repair-result ' + (kind || '');
+      }
+
+      function setRepairAllProgress(job) {
+        job = job || {};
+        var box = document.getElementById('repair-all-progress');
+        var labelEl = document.getElementById('repair-all-progress-label');
+        var countEl = document.getElementById('repair-all-progress-count');
+        var fillEl = document.getElementById('repair-all-progress-fill');
+        if (!box || !labelEl || !countEl || !fillEl) return;
+        var done = Math.max(0, Number(job.done || 0));
+        var total = Math.max(0, Number(job.total || 0));
+        var status = String(job.status || 'queued');
+        var phase = String(job.phase || status);
+        var current = String(job.current_pbname || job.current_node_id || '');
+        var percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : (status === 'running' ? 5 : 0);
+        box.hidden = false;
+        if (status === 'done') {
+          labelEl.textContent = 'Repair All SSH complete.';
+        } else if (status === 'error') {
+          labelEl.textContent = 'Repair All SSH failed.';
+        } else if (current) {
+          labelEl.textContent = 'Repairing ' + current + '...';
+        } else {
+          labelEl.textContent = phase === 'queued' ? 'Queued Repair All SSH...' : 'Starting Repair All SSH...';
+        }
+        countEl.textContent = total > 0 ? (done + '/' + total) : '';
+        fillEl.style.width = percent + '%';
+      }
+
+      function stopRepairAllProgress() {
+        if (repairAllProgressTimer) {
+          clearTimeout(repairAllProgressTimer);
+          repairAllProgressTimer = null;
+        }
+      }
+
+      function waitForRepairAllJob(jobId) {
+        return fetchJson('/cluster-ssh/repair-all-jobs/' + encodeURIComponent(jobId)).then(function (job) {
+          setRepairAllProgress(job);
+          var btn = document.getElementById('repair-all-ssh-btn');
+          if (btn && (job.status === 'queued' || job.status === 'running')) {
+            btn.textContent = job.total ? ('Repairing ' + Number(job.done || 0) + '/' + Number(job.total || 0)) : 'Repairing...';
+          }
+          if (job.status !== 'queued' && job.status !== 'running') return job;
+          return new Promise(function (resolve) {
+            stopRepairAllProgress();
+            repairAllProgressTimer = setTimeout(resolve, 1000);
+          }).then(function () {
+            return waitForRepairAllJob(jobId);
+          });
+        });
+      }
+
       function isRepairAuthError(reason) {
         var text = String(reason || '').toLowerCase();
         return text.indexOf('ssh authentication failed') >= 0 || text.indexOf('permission denied') >= 0;
@@ -1420,12 +1685,12 @@
         results.some(function (item) {
           if (!item) return false;
           if (item.status === 'failed' && isRepairAuthError(item.reason)) {
-            match = { node_id: item.node_id, reason: item.reason };
+            match = { node_id: item.node_id, reason: item.reason, mode: 'all' };
             return true;
           }
           return (Array.isArray(item.outbound_install_errors) ? item.outbound_install_errors : []).some(function (entry) {
             if (!isRepairAuthError(entry.reason)) return false;
-            match = { node_id: entry.target_node_id, reason: entry.reason };
+            match = { node_id: entry.target_node_id, reason: entry.reason, mode: 'all' };
             return true;
           });
         });
@@ -1445,13 +1710,15 @@
         var cancel = document.getElementById('repair-password-cancel-btn');
         var close = document.getElementById('repair-password-close-btn');
         [input, confirm, cancel, close].forEach(function (el) { if (el) el.disabled = !!busy; });
-        if (confirm) confirm.textContent = busy ? 'Repairing...' : 'Retry Repair';
+        var retryText = pendingRepairPasswordMode === 'node' ? 'Retry Install' : 'Retry Repair';
+        if (confirm) confirm.textContent = busy ? 'Working...' : retryText;
       }
 
       function openRepairPasswordPrompt(target) {
         target = target || {};
         pendingRepairPasswordNodeId = String(target.node_id || '');
         pendingRepairPasswordReason = String(target.reason || 'SSH authentication failed.');
+        pendingRepairPasswordMode = String(target.mode || 'all') === 'node' ? 'node' : 'all';
         var node = nodeMap[pendingRepairPasswordNodeId] || {};
         var modal = document.getElementById('repair-password-modal');
         var nodeEl = document.getElementById('repair-password-node');
@@ -1459,9 +1726,10 @@
         var msgEl = document.getElementById('repair-password-message');
         var input = document.getElementById('repair-password-input');
         var label = node.pbname || node.hostname || shortId(pendingRepairPasswordNodeId);
+        var actionText = pendingRepairPasswordMode === 'node' ? 'Install Key' : 'Cluster SSH repair';
         if (nodeEl) nodeEl.textContent = label + ' / ' + (node.ssh_host || node.hostname || 'unknown') + ':' + (node.ssh_port || 22);
         if (userEl) userEl.textContent = node.ssh_user || 'unknown';
-        if (msgEl) msgEl.textContent = 'Key login is not available for ' + label + '. Enter the SSH password to retry Cluster SSH repair. Previous error: ' + pendingRepairPasswordReason;
+        if (msgEl) msgEl.textContent = 'Key login is not available for ' + label + '. Enter the SSH password to retry ' + actionText + '. Previous error: ' + pendingRepairPasswordReason;
         if (input) input.value = '';
         showRepairPasswordError('');
         setRepairPasswordBusy(false);
@@ -1472,6 +1740,7 @@
       function closeRepairPasswordPrompt() {
         pendingRepairPasswordNodeId = '';
         pendingRepairPasswordReason = '';
+        pendingRepairPasswordMode = 'all';
         repairSshPasswords = {};
         var input = document.getElementById('repair-password-input');
         if (input) input.value = '';
@@ -1492,23 +1761,40 @@
         repairSshPasswords[pendingRepairPasswordNodeId] = password;
         setRepairPasswordBusy(true);
         showRepairPasswordError('');
-        setMessage('Retrying Cluster SSH repair with a temporary SSH password...', 'warn');
-        runRepairAllClusterSsh({ passwordPrompt: true });
+        if (pendingRepairPasswordMode === 'node') {
+          var node = nodeMap[pendingRepairPasswordNodeId] || { node_id: pendingRepairPasswordNodeId };
+          setMessage('Retrying Install Key with a temporary SSH password...', 'warn');
+          repairNodeClusterSsh(node, { passwordPrompt: true });
+        } else {
+          setMessage('Retrying Cluster SSH repair with a temporary SSH password...', 'warn');
+          runRepairAllClusterSsh({ passwordPrompt: true });
+        }
       }
 
       function runRepairAllClusterSsh(options) {
         options = options || {};
         var btn = document.getElementById('repair-all-ssh-btn');
         if (btn) { btn.disabled = true; btn.textContent = 'Repairing...'; }
-        setMessage('Repairing Cluster SSH trust for active nodes...', 'warn');
+        setRepairAllResult('', '');
+        setRepairAllProgress({ status: 'queued', phase: 'queued', done: 0, total: 0 });
+        setMessage('Starting Repair All SSH...', 'warn');
         var headers = { 'Content-Type': 'application/json' };
-        return fetchJson('/cluster-ssh/repair-all', {
+        return fetchJson('/cluster-ssh/repair-all/start', {
           method: 'POST',
           headers: headers,
           body: JSON.stringify({ ssh_passwords: repairSshPasswords })
-        }).then(function (payload) {
+        }).then(function (job) {
+          setRepairAllProgress(job || {});
+          return waitForRepairAllJob((job || {}).job_id || '');
+        }).then(function (job) {
+          if (job.status === 'error') throw new Error(job.error || 'Repair All SSH failed.');
+          var payload = job.result || {};
           var message = repairAllClusterSshMessage(payload || {});
-          setMessage(message.text, message.kind);
+          setRepairAllResult(message.text, message.kind);
+          var repairedNodeIds = repairedNodeIdsFromPayload(payload || {});
+          repairedNodeIds.forEach(function (nodeId) {
+            markLoginKeyInstallPending(nodeId);
+          });
           var authTarget = repairAuthPromptTarget(payload || {});
           if (authTarget) {
             var authNodeId = String(authTarget.node_id || '');
@@ -1522,13 +1808,19 @@
           } else if (options.passwordPrompt) {
             closeRepairPasswordPrompt();
           }
-          return loadCluster({ silent: true });
+          return loadCluster({ silent: true, keepProbes: true }).then(function () {
+            if (authTarget) return loadRemoteStatus({ silent: true }).catch(function () { return null; });
+            return verifyClusterKeyInstallBatch(repairedNodeIds, { result: true, baseText: message.text });
+          });
         }).catch(function (err) {
+          stopRepairAllProgress();
           if (options.passwordPrompt) {
             showRepairPasswordError(err.message || 'Cluster SSH repair failed.');
           }
+          setRepairAllResult('Repair All SSH failed: ' + err.message, 'err');
           setMessage('Cluster SSH repair failed: ' + err.message, 'err');
         }).finally(function () {
+          stopRepairAllProgress();
           if (btn) { btn.disabled = false; btn.textContent = 'Repair All SSH'; }
           if (options.passwordPrompt) setRepairPasswordBusy(false);
         });
@@ -2087,6 +2379,76 @@
         return labels[status] || (status || 'Unknown');
       }
 
+      function updateClusterSyncPeerMap(status) {
+        clusterSyncPeerMap = {};
+        var peers = (((status || {}).sync_status || {}).peers) || [];
+        if (!Array.isArray(peers)) return;
+        peers.forEach(function (peer) {
+          if (peer && peer.node_id) clusterSyncPeerMap[String(peer.node_id)] = peer;
+        });
+      }
+
+      function markLoginKeyInstallPending(nodeId) {
+        var text = String(nodeId || '');
+        if (text) pendingLoginKeyInstallMap[text] = Date.now() + LOGIN_KEY_INSTALL_PENDING_MS;
+      }
+
+      function isLoginKeyInstallPending(nodeId) {
+        var text = String(nodeId || '');
+        var expires = Number(pendingLoginKeyInstallMap[text] || 0);
+        if (!expires) return false;
+        if (Date.now() <= expires) return true;
+        delete pendingLoginKeyInstallMap[text];
+        return false;
+      }
+
+      function loginKeyStatus(node, mode) {
+        node = node || {};
+        if (node.node_id && node.node_id === localNodeId) {
+          return { status: 'local', label: 'Local', title: 'Local Cluster Sync key material is used for outbound peer login.' };
+        }
+        if (mode === 'disabled') {
+          return { status: 'disabled', label: 'Disabled', title: 'Cluster Sync is disabled for this node.' };
+        }
+        if (mode === 'outbound_only') {
+          return { status: 'skipped', label: 'Outbound Only', title: 'This node is not contacted inbound by this PBCluster.' };
+        }
+        var peer = clusterSyncPeerMap[node.node_id] || null;
+        if (!peer) {
+          return { status: 'unknown', label: 'Not Checked', title: 'No PBCluster sync result is available yet.' };
+        }
+        var peerStatus = String(peer.status || '').toLowerCase();
+        var reason = String(peer.reason || '');
+        var lowered = reason.toLowerCase();
+        if (peer.ok && (peerStatus === 'synced' || peerStatus === 'changed')) {
+          delete pendingLoginKeyInstallMap[node.node_id];
+          return { status: 'installed', label: 'Installed', title: 'PBCluster logged in with the dedicated Cluster Sync key.' };
+        }
+        if (peer.ok && (peerStatus === 'topology_skipped' || peerStatus === 'outbound_only')) {
+          return { status: 'skipped', label: 'Skipped', title: reason || 'This node is not part of the local outbound sync topology.' };
+        }
+        if (lowered.indexOf('permission denied') >= 0 || lowered.indexOf('publickey') >= 0 || lowered.indexOf('authentication') >= 0) {
+          if (isLoginKeyInstallPending(node.node_id)) {
+            return { status: 'pending', label: 'Checking', title: 'Cluster Sync key was installed; waiting for PBCluster to retry this host.' };
+          }
+          return { status: 'missing', label: 'Missing', title: reason || 'The dedicated Cluster Sync key is not accepted by this host yet.' };
+        }
+        if (lowered.indexOf('host key') >= 0 || lowered.indexOf('identification has changed') >= 0) {
+          return { status: 'host_key', label: 'Host Key', title: reason || 'Host key verification blocks Cluster Sync login.' };
+        }
+        if (peerStatus === 'backoff') {
+          return { status: 'pending', label: 'Backoff', title: reason || 'PBCluster is waiting before retrying this host.' };
+        }
+        return { status: peer.ok ? 'installed' : 'error', label: peer.ok ? 'Installed' : 'Error', title: reason || peerStatus || 'PBCluster sync status is not OK.' };
+      }
+
+      function loginKeyPill(status) {
+        if (status === 'installed' || status === 'local') return 'good';
+        if (status === 'skipped') return 'blue';
+        if (status === 'unknown' || status === 'pending' || status === 'disabled') return 'warn';
+        return 'bad';
+      }
+
       function syncMode(node) {
         var mode = String((node || {}).sync_mode || '').toLowerCase();
         if (mode === 'disabled' || mode === 'outbound_only' || mode === 'reachable') return mode;
@@ -2282,6 +2644,7 @@
           + sortHeader('nodes', 'sync', 'Sync')
           + sortHeader('nodes', 'peers', 'Peers')
           + sortHeader('nodes', 'key', 'Key')
+          + sortHeader('nodes', 'login_key', 'Login Key')
           + sortHeader('nodes', 'probe', 'Probe')
           + '<th>Action</th>'
           + sortHeader('nodes', 'updated', 'Updated')
@@ -2298,7 +2661,7 @@
           if (btn.classList.contains('join-node-btn')) openJoinModal(node);
           if (btn.classList.contains('preview-node-btn')) openRemotePreview(node);
           if (btn.classList.contains('edit-node-btn')) openNodeSettingsModal(node);
-          if (btn.classList.contains('repair-node-ssh-btn')) repairNodeClusterSsh(node);
+          if (btn.classList.contains('repair-node-ssh-btn')) repairNodeClusterSsh(node, { button: btn });
           if (btn.classList.contains('remove-node-btn')) removeClusterNode(node);
         });
       }
@@ -2333,7 +2696,7 @@
           actionParts.push('<button class="btn small primary preview-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Preview</button>');
         }
         actionParts.push('<button class="btn small primary edit-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Edit</button>');
-        actionParts.push('<button class="btn small primary repair-node-ssh-btn" type="button" data-node-id="' + esc(node.node_id) + '">Repair SSH</button>');
+        actionParts.push('<button class="btn small primary repair-node-ssh-btn" type="button" data-node-id="' + esc(node.node_id) + '" title="Install or refresh the forced-command Cluster Sync key on this host">Install Key</button>');
         if (node.node_id !== localNodeId && mode === 'disabled') {
           actionParts.push('<button class="btn small warn remove-node-btn" type="button" data-node-id="' + esc(node.node_id) + '">Remove</button>');
         }
@@ -2347,7 +2710,7 @@
         if (row) return row;
         row = document.createElement('tr');
         row.setAttribute('data-node-id', nodeId);
-        ['node', 'role', 'pbname', 'address', 'sync', 'peers', 'key', 'probe', 'action', 'updated'].forEach(function (field) {
+        ['node', 'role', 'pbname', 'address', 'sync', 'peers', 'key', 'login_key', 'probe', 'action', 'updated'].forEach(function (field) {
           var cell = document.createElement('td');
           cell.setAttribute('data-field', field);
           row.appendChild(cell);
@@ -2367,6 +2730,7 @@
         var mode = syncMode(node);
         var probe = remoteProbeMap[node.node_id] || {};
         var probeStatus = probe.status || 'unknown';
+        var loginKey = loginKeyStatus(node, mode);
         var probeTitle = probe.error || probe.remote_node_id || probe.remote_cluster_id || probeStatus;
         var keyKnown = Boolean(node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint);
         var address = mode === 'reachable'
@@ -2379,6 +2743,7 @@
         updateNodeCell(row, 'sync', '<span class="pill ' + syncModePill(mode) + '">' + esc(syncModeLabel(mode)) + '</span>');
         updateNodeCell(row, 'peers', esc(peerSummary(node)), peerSummary(node));
         updateNodeCell(row, 'key', '<span class="pill ' + (keyKnown ? 'good' : 'warn') + '">' + esc(keySummary(node, probe)) + '</span>', node.cluster_ssh_fingerprint || probe.cluster_ssh_fingerprint || '');
+        updateNodeCell(row, 'login_key', '<span class="pill ' + loginKeyPill(loginKey.status) + '">' + esc(loginKey.label) + '</span>', loginKey.title || '');
         updateNodeCell(row, 'probe', '<span class="pill ' + probePill(probeStatus) + '">' + esc(probeLabel(probeStatus)) + '</span>', probeTitle);
         updateNodeCell(row, 'action', nodeActionHtml(node, mode, probeStatus));
         updateNodeCell(row, 'updated', esc(timeText(node.updated_at)));
@@ -2402,6 +2767,7 @@
           sync: function (node) { return syncMode(node); },
           peers: function (node) { return peerSummary(node); },
           key: function (node) { return node.cluster_ssh_fingerprint || ''; },
+          login_key: function (node) { return loginKeyStatus(node, syncMode(node)).label || ''; },
           probe: function (node) { return (remoteProbeMap[node.node_id] || {}).status || ''; },
           updated: function (node) { return Number(node.updated_at || 0); }
         });
@@ -2551,13 +2917,16 @@
         var desiredChanged = force || desiredSignature !== lastDesiredSignature;
         var oplogChanged = force || oplogSignature !== lastOplogSignature;
         if (statusChanged) {
+          updateClusterSyncPeerMap(parts[0]);
           renderStats(parts[0]);
           renderSetupState(parts[0]);
           renderIdentity(parts[0]);
           lastStatusSignature = statusSignature;
         }
-        if (nodesChanged) {
+        if (nodesChanged || statusChanged) {
           renderNodes(parts[1]);
+        }
+        if (nodesChanged) {
           lastNodesSignature = nodesSignature;
         }
         if (desiredChanged || nodesChanged) {
@@ -2621,21 +2990,24 @@
         });
       }
 
-      function loadRemoteStatus() {
+      function loadRemoteStatus(options) {
+        options = options || {};
+        var silent = options.silent === true;
         var btn = document.getElementById('probe-btn');
-        if (btn) { btn.disabled = true; btn.textContent = 'Probing...'; }
-        setMessage('Probing active Cluster Sync nodes...', 'warn');
+        if (btn && !silent) { btn.disabled = true; btn.textContent = 'Probing...'; }
+        if (!silent) setMessage('Probing active Cluster Sync nodes...', 'warn');
         return fetchJson('/remote-status').then(function (payload) {
           remoteProbeMap = {};
           ((payload && payload.probes) || []).forEach(function (probe) {
             if (probe.node_id) remoteProbeMap[probe.node_id] = probe;
           });
           if (lastNodesPayload) renderNodes(lastNodesPayload);
-          setMessage('Remote probe complete for active Cluster Sync nodes.', 'ok');
+          if (!silent) setMessage('Remote probe complete for active Cluster Sync nodes.', 'ok');
         }).catch(function (err) {
-          setMessage('Remote probe failed: ' + err.message, 'err');
+          if (!silent) setMessage('Remote probe failed: ' + err.message, 'err');
+          throw err;
         }).finally(function () {
-          if (btn) { btn.disabled = false; btn.textContent = 'Probe Active Nodes'; }
+          if (btn && !silent) { btn.disabled = false; btn.textContent = 'Probe Active Nodes'; }
         });
       }
 

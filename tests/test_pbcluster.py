@@ -113,6 +113,17 @@ def test_cluster_sync_worker_consumes_sync_request_trigger(tmp_path: Path) -> No
     assert worker._consume_trigger_change() is False
 
 
+def test_cluster_sync_worker_event_clears_peer_backoff(tmp_path: Path) -> None:
+    """Explicit sync events retry peers immediately after repair actions."""
+
+    worker = ClusterSyncWorker(tmp_path)
+    worker._peer_backoff[NODE_B] = {"failures": 4, "next_retry": 9999999999, "error": "Permission denied"}
+
+    worker.run_once(reason="event")
+
+    assert worker._peer_backoff == {}
+
+
 def test_cluster_sync_worker_skips_outbound_only_peer(tmp_path: Path) -> None:
     """Outbound-only peers participate in state but are not contacted over SSH."""
 

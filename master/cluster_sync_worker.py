@@ -137,6 +137,8 @@ class ClusterSyncWorker:
     def run_once(self, *, reason: str = "manual") -> dict[str, Any]:
         """Run one local sync pass and return the written status payload."""
 
+        if str(reason or "") == "event":
+            self._peer_backoff.clear()
         started_at = int(time.time())
         base: dict[str, Any] = {
             "schema_version": STATUS_SCHEMA_VERSION,
